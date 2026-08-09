@@ -8,6 +8,9 @@ import {
   ArrowLeft, Mail, Eye, MousePointerClick, AlertTriangle,
   Ban, Send, CheckCircle2, XCircle, Users, RotateCcw, X, Clock, SkipForward, Loader2
 } from 'lucide-react'
+// COMMSFIX.F.4 — per-link click report (mig 510), self-contained so this
+// file's diff stays small while #1314 rewrites the header/controls region.
+import CampaignLinkReport from './CampaignLinkReport.jsx'
 
 // COMMSFIX.D.1a — the header chip used to be a hardcoded green "Sent" for
 // every campaign, including scheduled/queued/sending/cancelled ones — i.e. it
@@ -208,6 +211,7 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
   const tabs = [
     { key: 'overview',   label: 'Overview' },
     { key: 'recipients', label: `Recipients (${totalSent})` },
+    { key: 'links',      label: 'Links' },
     { key: 'preview',    label: 'Preview' },
   ]
 
@@ -502,6 +506,12 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
                 </table>
               </div>
             )}
+          </div>
+        )}
+
+        {tab === 'links' && (
+          <div className="p-6">
+            <CampaignLinkReport campaignId={campaign.id} />
           </div>
         )}
 
