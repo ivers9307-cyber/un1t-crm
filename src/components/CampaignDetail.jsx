@@ -3,12 +3,34 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { createBrowserClient } from '@/lib/supabase'
 import {
   ArrowLeft, Mail, Eye, MousePointerClick, AlertTriangle,
-  Ban, Send, CheckCircle2, XCircle, Users, RotateCcw
+  Ban, Send, CheckCircle2, XCircle, Users, RotateCcw, X, Clock, SkipForward, Loader2
 } from 'lucide-react'
 
+// COMMSFIX.D.1a — the header chip used to be a hardcoded green "Sent" for
+// every campaign, including scheduled/queued/sending/cancelled ones — i.e. it
+// lied in exactly the states where the operator is deciding whether to
+// intervene. Light-theme chip recipe per CLAUDE.md: bg-<c>-500/10 text-<c>-700.
+// 'failed' is included ahead of the campaigns.last_error migration; it renders
+// fine when the column/status don't exist yet (nothing ever has that status).
+const campaignStatusConfig = {
+  draft:     { label: 'Draft',     cls: 'bg-slate-500/10 text-slate-700' },
+  scheduled: { label: 'Scheduled', cls: 'bg-blue-500/10 text-blue-700' },
+  queued:    { label: 'Queued',    cls: 'bg-amber-500/10 text-amber-700' },
+  sending:   { label: 'Sending',   cls: 'bg-amber-500/10 text-amber-700' },
+  sent:      { label: 'Sent',      cls: 'bg-green-500/10 text-green-700' },
+  cancelled: { label: 'Cancelled', cls: 'bg-rose-500/10 text-rose-700' },
+  failed:    { label: 'Failed',    cls: 'bg-red-500/10 text-red-700' },
+}
+
+// COMMSFIX.D.1c — pre-send and terminal-skip statuses were missing, and the
+// lookup fell back to `sent` — so a queued, mid-send, cancelled or
+// frequency-capped recipient all rendered as a green "Sent" row.
 const recipientStatusConfig = {
+  queued:    { label: 'Queued',     icon: Clock,           color: 'text-amber-700' },
+  sending:   { label: 'Sending',    icon: Loader2,         color: 'text-amber-700' },
   sent:      { label: 'Sent',       icon: Send,            color: 'text-blue-400' },
   delivered: { label: 'Delivered',  icon: CheckCircle2,    color: 'text-green-400' },
   opened:    { label: 'Opened',     icon: Eye,             color: 'text-emerald-400' },
@@ -16,6 +38,9 @@ const recipientStatusConfig = {
   bounced:   { label: 'Bounced',    icon: XCircle,         color: 'text-red-400' },
   failed:    { label: 'Failed',     icon: AlertTriangle,   color: 'text-red-400' },
   complained:{ label: 'Complained', icon: Ban,             color: 'text-orange-400' },
+  cancelled: { label: 'Cancelled',  icon: X,               color: 'text-rose-700' },
+  // FREQ-CAP.1 terminal skip — not an error, and never retried.
+  skipped_frequency_cap: { label: 'Skipped (frequency cap)', icon: SkipForward, color: 'text-un1t-subtle' },
 }
 
 function StatCard({ icon: Icon, label, value, subValue, color }) {
@@ -66,7 +91,13 @@ function AbVariantRow({ label, subject, stats, isWinner }) {
 
 export default function CampaignDetail({ campaign, recipients = [], abStats = null, resendChild = null, resendParent = null, locationId: _locationId, userId: _userId }) {
   const router = useRouter()
+  const db = createBrowserClient()
   const [tab, setTab] = useState('overview')  // overview, recipients, preview
+  // COMMSFIX.D.1b — stop/resend state. `status` is local so the header
+  // reflects the write immediately, before router.refresh() lands.
+  const [status, setStatus] = useState(campaign.status)
+  const [stopBusy, setStopBusy] = useState(false)
+  const [actionError, setActionError] = useState(null)
   // CAMPAIGN-RESEND — cancel-pending-resend state (the child doesn't
   // exist yet, so cancelling is just clearing the parent's flag).
   const [resendBusy, setResendBusy] = useState(false)
@@ -87,6 +118,60 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
       }
     } finally {
       setResendBusy(false)
+    }
+  }
+
+  // COMMSFIX.D.1b — stop a scheduled/queued/sending campaign from the page the
+  // composer actually links to. Same mechanism CampaignEditor.handleCancel
+  // uses (browser client, direct campaigns write): 'scheduled' flips back to
+  // draft so the cron stops treating it as a promotion candidate; 'queued' /
+  // 'sending' stamp cancel_requested_at, which the run-campaigns cron sees
+  // between chunks. Until this existed the ONLY cancel control lived behind
+  // the undiscoverable ?edit=1 query param.
+  const stoppable = ['scheduled', 'queued', 'sending'].includes(status)
+  const pendingCount = campaign.total_recipients || campaign.total_sent || 0
+
+  async function stopCampaign() {
+    const who = pendingCount ? `${pendingCount.toLocaleString()} recipients` : 'this audience'
+    const ask = status === 'scheduled'
+      ? `Unschedule "${campaign.name}"? It will go back to draft and will NOT send to ${who}.`
+      : `Stop "${campaign.name}"? Sending to ${who} halts within a minute. Already-sent emails cannot be unsent.`
+    if (!confirm(ask)) return
+    setStopBusy(true)
+    setActionError(null)
+    try {
+      const payload = status === 'scheduled'
+        ? { status: 'draft', scheduled_at: null }
+        : { cancel_requested_at: new Date().toISOString() }
+      const { error } = await db.from('campaigns').update(payload).eq('id', campaign.id)
+      if (error) throw new Error(error.message)
+      if (status === 'scheduled') setStatus('draft')
+      router.refresh()
+    } catch (err) {
+      setActionError(err?.message || 'Could not stop this campaign')
+    } finally {
+      setStopBusy(false)
+    }
+  }
+
+  // COMMSFIX.D.1b — a campaign the cron marked 'failed' (fix/stats-integrity)
+  // lands here, not in the editor, so the re-send path was unreachable. The
+  // send route re-queues it and clears last_error. No-ops harmlessly on a
+  // deployment where nothing is ever marked failed.
+  async function resendFailed() {
+    if (!confirm(`Try sending "${campaign.name}" again?`)) return
+    setStopBusy(true)
+    setActionError(null)
+    try {
+      const res = await fetch(`/api/campaigns/${campaign.id}/send`, { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data?.success === false) throw new Error(data?.error || `Request failed (${res.status})`)
+      setStatus('queued')
+      router.refresh()
+    } catch (err) {
+      setActionError(err?.message || 'Could not re-queue this campaign')
+    } finally {
+      setStopBusy(false)
     }
   }
 
@@ -111,6 +196,8 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
   const openRate = totalSent > 0 ? ((totalOpened / totalSent) * 100).toFixed(1) : '0'
   const clickRate = totalSent > 0 ? ((totalClicked / totalSent) * 100).toFixed(1) : '0'
   const bounceRate = totalSent > 0 ? ((totalBounced / totalSent) * 100).toFixed(1) : '0'
+
+  const statusChip = campaignStatusConfig[status] || campaignStatusConfig.draft
 
   const sentDate = campaign.sent_at
     ? new Date(campaign.sent_at).toLocaleDateString('en-IE', {
@@ -149,11 +236,47 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
         </div>
         <div className="flex items-center gap-3">
           <span className="text-xs text-un1t-subtle">{sentDate}</span>
-          <span className="text-xs bg-green-500/20 text-green-700 px-2 py-0.5 rounded-full">
-            Sent
+          <span
+            data-testid="campaign-status-chip"
+            title={campaign.last_error || undefined}
+            className={`text-xs px-2 py-0.5 rounded-full ${statusChip.cls}`}
+          >
+            {statusChip.label}
           </span>
+          {stoppable && (
+            <button
+              type="button"
+              data-testid="campaign-cancel"
+              onClick={stopCampaign}
+              disabled={stopBusy || !!campaign.cancel_requested_at}
+              className="flex items-center gap-1.5 text-xs text-rose-700 border border-un1t-border hover:border-rose-500/40 px-3 py-1.5 rounded-md transition-colors disabled:opacity-40"
+            >
+              {stopBusy ? <Loader2 size={13} className="animate-spin" /> : <X size={13} />}
+              {campaign.cancel_requested_at
+                ? 'Cancelling…'
+                : status === 'scheduled' ? 'Unschedule' : 'Stop sending'}
+            </button>
+          )}
+          {status === 'failed' && (
+            <button
+              type="button"
+              data-testid="campaign-resend-failed"
+              onClick={resendFailed}
+              disabled={stopBusy}
+              className="flex items-center gap-1.5 text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border hover:border-un1t-text/30 px-3 py-1.5 rounded-md transition-colors disabled:opacity-40"
+            >
+              <RotateCcw size={13} />
+              Try again
+            </button>
+          )}
         </div>
       </div>
+
+      {(actionError || (status === 'failed' && campaign.last_error)) && (
+        <div className="bg-red-500/10 border-b border-red-500/30 text-red-700 text-sm px-5 py-2 shrink-0">
+          {actionError || `This campaign failed to send: ${campaign.last_error}`}
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex border-b border-un1t-border bg-un1t-surface shrink-0">
@@ -339,7 +462,8 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
                   </thead>
                   <tbody className="divide-y divide-un1t-border">
                     {recipients.map(r => {
-                      const config = recipientStatusConfig[r.status] || recipientStatusConfig.sent
+                      const config = recipientStatusConfig[r.status]
+                        || { label: r.status || 'Unknown', icon: AlertTriangle, color: 'text-un1t-subtle' }
                       const StatusIcon = config.icon
                       const contact = r.contacts
 
@@ -357,7 +481,7 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
                             </div>
                           </td>
                           <td className="px-4 py-3">
-                            <span className={`flex items-center gap-1.5 text-xs ${config.color}`}>
+                            <span data-testid={`recipient-status-${r.id}`} className={`flex items-center gap-1.5 text-xs ${config.color}`}>
                               <StatusIcon size={12} />
                               {config.label}
                             </span>

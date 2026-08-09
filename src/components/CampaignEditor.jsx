@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
+import { isoToLocalDatetime, localDatetimeToIso } from '@/lib/datetime-local'
 import { ArrowLeft, Save, Send, Users, Code, Paintbrush, Mail, Loader2, CheckCircle2, AlertCircle, Calendar, X, Trash2 } from 'lucide-react'
 import AudienceBuilder from './AudienceBuilder'
 import Link from 'next/link'
@@ -50,11 +51,13 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
 
   // Schedule-send UI state.
   const [scheduleOpen, setScheduleOpen] = useState(false)
-  const [scheduleAt, setScheduleAt] = useState(
-    campaign?.scheduled_at
-      ? new Date(campaign.scheduled_at).toISOString().slice(0, 16)
-      : ''
-  )
+  // COMMSFIX.D.3b — seed the datetime-local input in LOCAL time. It used to be
+  // `new Date(scheduled_at).toISOString().slice(0, 16)` — a UTC wall clock in a
+  // local-time field, the exact mixing CLAUDE.md bans. handleSchedule then
+  // reinterprets the shown value as local, so a 10:00 Dublin send reopened as
+  // 09:00 and re-confirming (even without touching the time) moved the send an
+  // hour earlier — again on every subsequent edit.
+  const [scheduleAt, setScheduleAt] = useState(isoToLocalDatetime(campaign?.scheduled_at))
   const [audienceCount, setAudienceCount] = useState(null)
   // CAMPAIGN.5 — distinguish "haven't fetched yet" from "fetched but
   // errored" from "in flight". Without this the banner showed the same
@@ -64,7 +67,15 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
   const [audienceError, setAudienceError] = useState(null)
   const [campaignId, setCampaignId] = useState(campaign?.id || null)
   const [error, setError] = useState(null)
-  const [editorMode, setEditorMode] = useState(designJson ? 'visual' : 'visual')  // visual or code
+  // COMMSFIX.D.3a — initialise the mode FROM THE CONTENT. The old ternary was
+  // `designJson ? 'visual' : 'visual'` — vestigial, always visual — so a draft
+  // authored in the Code tab (or created through the Bearer /api/campaigns
+  // n8n path) opened into a blank Unlayer canvas, and Save exported that blank
+  // scaffold over the stored html_content. The branded email was gone with no
+  // warning. html_content without a design_json is by definition code-authored.
+  const [editorMode, setEditorMode] = useState(
+    campaign?.html_content && !campaign?.design_json ? 'code' : 'visual'
+  )  // visual or code
   const [unlayerLoaded, setUnlayerLoaded] = useState(false)
 
   // CAMPAIGN.1 — send-test state. testEmail defaults to the
@@ -327,7 +338,13 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
       setError('Pick a date and time first.')
       return
     }
-    const iso = new Date(scheduleAt).toISOString()
+    // The picker's value is a local wall clock; localDatetimeToIso reads it in
+    // the operator's zone (the exact inverse of the seeding above).
+    const iso = localDatetimeToIso(scheduleAt)
+    if (!iso) {
+      setError('That date and time could not be read. Pick it again.')
+      return
+    }
     if (new Date(iso) <= new Date()) {
       setError('Scheduled time must be in the future.')
       return
@@ -393,7 +410,10 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
     try {
       const { error: e } = await db.from('campaigns').delete().eq('id', campaignId)
       if (e) throw new Error(e.message)
-      router.push('/email/campaigns')
+      // COMMSFIX.D.3c — /email/campaigns has no page.js (the list was retired
+      // to /communications/sent), so deleting a draft landed the operator on
+      // the Next.js 404 and read as "did the delete break something?".
+      router.push('/communications/sent')
     } catch (err) {
       setError(err.message)
     }

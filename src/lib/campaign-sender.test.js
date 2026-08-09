@@ -1387,3 +1387,40 @@ describe('tickCampaignSend — unsubscribe URL carries the campaign id (COMMSFIX
     expect(sendBatch.mock.calls[0][0][0].unsubscribeUrl).toBeNull()
   })
 })
+
+// ── COMMSFIX.D.4b — subject-line merge tags get the same extras the body does
+//
+// The editor's merge-tag panel says "Use these in your subject line or email
+// body" and lists {{location_name}}, {{unsubscribe_url}}, {{preference_url}} —
+// but the subject was merged with applyMergeTags(rawSubject, contact) and NO
+// extras, so applyMergeTags resolved all three to '' fallbacks. A subject of
+// 'News from {{location_name}}' shipped as 'News from ' to the whole audience,
+// while the identical tag in the body worked. Audit 2026-08-09 composer-ux.
+describe('tickCampaignSend — subject merge tags resolve the location (COMMSFIX.D.4b)', () => {
+  it('renders {{location_name}} in the subject, not an empty string', async () => {
+    const { db } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, { ...campaign, subject: 'Your week at {{location_name}}' })
+
+    expect(sendBatch.mock.calls[0][0][0].subject).toBe('Your week at Stillorgan')
+  })
+
+  it('still merges contact fields in the subject (no regression)', async () => {
+    const { db } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, { ...campaign, subject: 'Hi {{first_name}}, news from {{location_name}}' })
+
+    expect(sendBatch.mock.calls[0][0][0].subject).toBe('Hi Alice, news from Stillorgan')
+  })
+
+  it('resolves the preference url in a subject too', async () => {
+    const { db } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, { ...campaign, subject: 'See {{preference_url}}' })
+
+    expect(sendBatch.mock.calls[0][0][0].subject).toContain('https://crm.test/preferences/')
+  })
+})

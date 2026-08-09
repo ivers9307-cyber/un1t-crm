@@ -8,6 +8,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { hasPermissionForLocation } from '@/lib/permissions'
 import { getEmailCapStatus } from '@/lib/usage-caps'
 import { checkSpend } from '@/lib/wallet-enforcement'
 
@@ -21,7 +22,7 @@ export async function POST(_request, props) {
   const db = createServerClient()
   const { data: campaign, error } = await db
     .from('campaigns')
-    .select('id, location_id, status, name')
+    .select('id, location_id, status, name, subject, html_content')
     .eq('id', params.id)
     .single()
   if (error || !campaign) {
@@ -30,7 +31,21 @@ export async function POST(_request, props) {
   const guard = assertLocationAccessOr404(user, campaign.location_id)
   if (guard) return guard
 
-  // Only draft / scheduled / failed campaigns can be sent. 'sending' /
+  // COMMSFIX.D.5 — permission parity across the three email entry points. This
+  // one, the REAL send to the whole audience, was the weakest: getCurrentUser
+  // plus location access only, while send-test requires ADMIN_ROLES and the
+  // composer's email-draft requires hasPermission('email'). A user with
+  // location access but no email permission could broadcast by POSTing here,
+  // yet got 403 'Admin only' on the safer test send — the gates were backwards.
+  // Checked against the CAMPAIGN's location, not the session's active one.
+  // Audit 2026-08-09 composer-ux.
+  if (!hasPermissionForLocation(user, campaign.location_id, 'email')) {
+    return NextResponse.json({ success: false, error: 'No email permission at this location' }, { status: 403 })
+  }
+
+  // Only draft / scheduled / failed campaigns can be sent ('failed' is the
+  // COMMSFIX.C.5 re-send path — the operator fixes the cause and sends
+  // again, which clears last_error). 'sending' /
   // 'sent' / 'cancelled' all reject — the operator should clone
   // the campaign if they want to send it again.
   //
@@ -43,6 +58,19 @@ export async function POST(_request, props) {
       success: false,
       error: `Campaign is '${campaign.status}', cannot send`,
     }, { status: 400 })
+  }
+
+  // COMMSFIX.D.2e — a campaign with no body (or no subject) must never reach
+  // 'queued'. Postmark permanently rejects HtmlBody null, so the entire
+  // audience records as bounced and the run looks like a deliverability
+  // catastrophe rather than an empty draft. This is the same guard the
+  // email-draft route (D.2d) and the cron promote step apply — every path to
+  // 'queued' is covered. Audit 2026-08-09 composer-ux, CONFIRMED high.
+  if (!campaign.subject || !String(campaign.subject).trim()) {
+    return NextResponse.json({ success: false, error: 'This campaign has no subject — add one before sending.' }, { status: 400 })
+  }
+  if (!campaign.html_content || !String(campaign.html_content).trim()) {
+    return NextResponse.json({ success: false, error: 'This campaign has no email body — nothing was queued. Open it in the editor and add content.' }, { status: 400 })
   }
 
   // SAAS4-M2 — optional per-org HARD email-send cap. Mirrors the

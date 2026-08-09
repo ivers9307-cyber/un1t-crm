@@ -105,7 +105,9 @@ export async function GET(request) {
   // per org for the tick; the check fails OPEN inside the helper.
   const { data: due, error: dueErr } = await db
     .from('campaigns')
-    .select('id, location_id')
+    // COMMSFIX.D.2e — subject/html_content are read so the promote step can
+    // refuse a bodyless campaign (see the guard below).
+    .select('id, location_id, subject, html_content')
     .eq('status', 'scheduled')
     .lte('scheduled_at', nowIso)
   if (dueErr) {
@@ -114,6 +116,16 @@ export async function GET(request) {
     const capByLocation = new Map()
     const promotable = []
     for (const c of due) {
+      // COMMSFIX.D.2e — never promote a campaign with no body or no subject.
+      // Postmark permanently rejects HtmlBody null, so promoting one turns the
+      // whole audience into bounces. Held (stays 'scheduled'), not cancelled —
+      // the operator can fix the body and it promotes on the next tick. Logged
+      // via console.error and counted in the response so it is prod-visible.
+      if (!c.subject || !String(c.subject).trim() || !c.html_content || !String(c.html_content).trim()) {
+        console.error(`[cron run-campaigns] campaign ${c.id} NOT promoted — empty subject or body (stays scheduled)`)
+        summary.blocked_empty = (summary.blocked_empty || 0) + 1
+        continue
+      }
       if (!capByLocation.has(c.location_id)) {
         capByLocation.set(c.location_id, await getEmailCapStatus({ locationId: c.location_id }, { db }))
       }

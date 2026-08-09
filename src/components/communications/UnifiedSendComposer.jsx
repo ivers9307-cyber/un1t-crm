@@ -86,7 +86,20 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
 
   // Inline Unlayer editor for the email channel (the full editor stays at
   // /email/campaigns/[id] for advanced options: from-name, preview text, test send).
-  const { ref: unlayerRef, loaded: unlayerLoaded, exportHtml: exportEmailHtml } = useUnlayerEditor({ mountId: 'unlayer-editor-composer', active: channel === 'email' })
+  const { ref: unlayerRef, loaded: unlayerLoaded, dirty: unlayerDirty, exportHtml: exportEmailHtml } = useUnlayerEditor({ mountId: 'unlayer-editor-composer', active: channel === 'email' })
+
+  // COMMSFIX.D.4a — the Unlayer mount div renders only while channel ===
+  // 'email' and the hook re-inits fresh on re-mount, so leaving the email
+  // channel destroys the design outright. Clicking the WhatsApp pill to
+  // double-check a template name and clicking back used to wipe half an hour
+  // of work with no warning. Ask first, and only when there IS work to lose.
+  function switchChannel(next) {
+    if (next === channel) return
+    if (channel === 'email' && unlayerDirty) {
+      if (!confirm('Switching channel discards the email design you have started — it cannot be recovered. Switch anyway?')) return
+    }
+    setChannel(next)
+  }
 
   // Live audience size — debounced. For WhatsApp we ask channel-aware so the
   // number reflects consent + a usable wa_phone (the same gate the send applies).
@@ -160,7 +173,16 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   // failed) and an errored count both disable it. The old `== null` escape
   // let an operator queue a campaign whose audience could never resolve.
   const countReady = typeof sendableCount === 'number' && !countError
-  const canSend = !busy && composeValid && scheduleValid && audienceValid && resendValid && countReady && sendableCount > 0
+  // COMMSFIX.D.2c — the email design lives in the Unlayer iframe, so a send
+  // fired before the designer has loaded can only ever export an empty body.
+  // Send stayed enabled while the UI said "Loading the email designer…".
+  const designerReady = channel !== 'email' || unlayerLoaded
+  // Both gates apply: B.6 answers "is there anyone to send to", D.2c answers
+  // "is there anything to send". Either one missing produced a real incident
+  // class — an unsendable audience queued forever, or a blank body that marked
+  // the entire audience bounced.
+  const canSend = !busy && composeValid && scheduleValid && audienceValid && resendValid
+    && countReady && sendableCount > 0 && designerReady
 
   // ── submit ──────────────────────────────────────────────────────
   async function postJson(url, payload) {
@@ -354,13 +376,13 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
       {channels.length > 1 && (
         <div className="flex gap-2">
           {channels.includes('sms') && (
-            <ChannelPill active={channel === 'sms'} onClick={() => setChannel('sms')} icon={MessageSquare} label="SMS" />
+            <ChannelPill active={channel === 'sms'} onClick={() => switchChannel('sms')} icon={MessageSquare} label="SMS" />
           )}
           {channels.includes('whatsapp') && (
-            <ChannelPill active={channel === 'whatsapp'} onClick={() => setChannel('whatsapp')} icon={MessageCircle} label="WhatsApp" />
+            <ChannelPill active={channel === 'whatsapp'} onClick={() => switchChannel('whatsapp')} icon={MessageCircle} label="WhatsApp" />
           )}
           {channels.includes('email') && (
-            <ChannelPill active={channel === 'email'} onClick={() => setChannel('email')} icon={Mail} label="Email" />
+            <ChannelPill active={channel === 'email'} onClick={() => switchChannel('email')} icon={Mail} label="Email" />
           )}
         </div>
       )}

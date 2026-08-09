@@ -44,6 +44,7 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@/lib/usage-caps', () => ({
   getEmailCapStatus: vi.fn(async () => ({ capped: false })),
 }))
+vi.mock('@/lib/permissions', () => ({ hasPermissionForLocation: vi.fn(() => true) }))
 vi.mock('@/lib/wallet-enforcement', async (importOriginal) => {
   const actual = await importOriginal()
   return { ...actual, checkSpend: vi.fn(actual.checkSpend) }
@@ -52,9 +53,14 @@ vi.mock('@/lib/wallet-enforcement', async (importOriginal) => {
 import { POST } from './route.js'
 import { getEmailCapStatus } from '@/lib/usage-caps'
 import { checkSpend, clearBillingStateCache } from '@/lib/wallet-enforcement'
+import { hasPermissionForLocation } from '@/lib/permissions'
 
 const props = { params: Promise.resolve({ id: 'camp-1' }) }
-const CAMPAIGN = { id: 'camp-1', location_id: 'loc-1', status: 'draft', name: 'July promo' }
+const CAMPAIGN = {
+  id: 'camp-1', location_id: 'loc-1', status: 'draft', name: 'July promo',
+  // COMMSFIX.D.2e — the route now requires a real subject + body to queue.
+  subject: 'July promo', html_content: '<html><body>Hi</body></html>',
+}
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -95,6 +101,7 @@ describe('POST /api/campaigns/[id]/send — wallet gate', () => {
   })
 
   it('composes with the org hard cap: the cap refuses first, independently of the wallet', async () => {
+
     getEmailCapStatus.mockResolvedValueOnce({ capped: true, capSends: 1000, monthSends: 1000 })
     const res = await POST({}, props)
     const body = await res.json()
@@ -103,5 +110,59 @@ describe('POST /api/campaigns/[id]/send — wallet gate', () => {
     expect(body.code).toBe('email_hard_cap')
     expect(checkSpend).not.toHaveBeenCalled()
     expect(updates).toEqual([])
+  })
+})
+
+// COMMSFIX.D.2e — the last backstop before a broadcast. A campaign whose body
+// or subject is empty must never reach 'queued': Postmark permanently rejects
+// HtmlBody null, so the entire audience records as bounced. Audit 2026-08-09
+// composer-ux, CONFIRMED high.
+describe('POST /api/campaigns/[id]/send — refuses a bodyless campaign', () => {
+  it.each([null, '', '   '])('refuses html_content %p', async (html_content) => {
+    tables.campaigns = [{ ...CAMPAIGN, html_content }]
+    const res = await POST({}, props)
+    const body = await res.json()
+
+    expect(res.status).toBe(400)
+    expect(body.error).toMatch(/body|content/i)
+    expect(updates).toEqual([])
+  })
+
+  it.each([null, '', '   '])('refuses subject %p', async (subject) => {
+    tables.campaigns = [{ ...CAMPAIGN, subject }]
+    const res = await POST({}, props)
+    const body = await res.json()
+
+    expect(res.status).toBe(400)
+    expect(body.error).toMatch(/subject/i)
+    expect(updates).toEqual([])
+  })
+})
+
+// COMMSFIX.D.5 — the REAL send was the weakest gate of the three email entry
+// points: getCurrentUser + location access only, while send-test requires
+// ADMIN_ROLES and the composer's email-draft requires hasPermission('email').
+// A user with location access but no email permission could POST this endpoint
+// and broadcast to the full audience. Audit 2026-08-09 composer-ux.
+describe('POST /api/campaigns/[id]/send — requires the email permission', () => {
+  it('403s a user without the email permission, and queues nothing', async () => {
+    hasPermissionForLocation.mockReturnValueOnce(false)
+    const res = await POST({}, props)
+    const body = await res.json()
+
+    expect(res.status).toBe(403)
+    expect(body.error).toMatch(/email/i)
+    expect(updates).toEqual([])
+  })
+
+  it('checks the permission against the CAMPAIGN location, not the active one', async () => {
+    await POST({}, props)
+    expect(hasPermissionForLocation).toHaveBeenCalledWith(expect.anything(), 'loc-1', 'email')
+  })
+
+  it('queues for a user who has it', async () => {
+    const res = await POST({}, props)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: true, queued: true })
   })
 })
