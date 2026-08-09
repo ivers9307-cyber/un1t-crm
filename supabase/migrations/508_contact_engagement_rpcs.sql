@@ -75,10 +75,14 @@ grant  execute on function public.increment_contact_clicks(uuid) to service_role
 -- sidesteps open_count/click_count being capped at 1 since 2026-05-08 by the
 -- over-broad webhook dedup key that COMMSFIX.C.2 has just narrowed.
 --
--- Only contacts WITH email_sends rows are touched. Contacts with no sends keep
--- their column default (0) — nothing has ever incremented these columns, so
--- there is no stale non-zero state to clear, and a blanket UPDATE over all
--- 8,568 contacts to write zeros they already hold is pure churn.
+-- Only contacts WITH email_sends rows are touched. Verified against prod
+-- before applying (2026-08-09): 222 contacts carry a non-zero counter today
+-- (all capped at 1 — a legacy partial write, not these RPCs, which have never
+-- existed), and EVERY ONE of them has email_sends rows, so the join reaches
+-- all of them; 194 get a corrected value and the rest already match. No
+-- contact holds stale non-zero counters outside the join, so there is nothing
+-- for a wider UPDATE to clear, and writing zeros over ~6,400 contacts that
+-- already hold zero is pure churn.
 
 with agg as (
   select contact_id,
