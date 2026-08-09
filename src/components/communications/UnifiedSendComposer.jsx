@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { MessageSquare, MessageCircle, Mail, Send, Clock, Check, AlertTriangle, Users, Loader2, Filter } from 'lucide-react'
+import { MessageSquare, MessageCircle, Mail, Send, Clock, Check, AlertTriangle, Users, Loader2, Filter, Bookmark } from 'lucide-react'
 import { Button } from '@/components/ui'
 import AudienceBuilder from '@/components/AudienceBuilder'
 import ContactMultiSelect from './ContactMultiSelect'
@@ -21,13 +21,17 @@ const EMPTY_FILTER = { logic: 'and', filters: [] }
 const fieldCls =
   'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-subtle/60 focus:outline-none focus:ring-1 focus:ring-un1t-text/30'
 
-export default function UnifiedSendComposer({ locationId, channels = [], templates = [], initialAudienceFilter = null }) {
+export default function UnifiedSendComposer({ locationId, channels = [], templates = [], initialAudienceFilter = null, initialSegmentId = null }) {
   const router = useRouter()
   const [channel, setChannel] = useState(channels[0] || 'sms')
   const [label, setLabel] = useState('')
   const [filter, setFilter] = useState(initialAudienceFilter || EMPTY_FILTER)
   // Explicit "pick people" mode (SMS / WhatsApp only)
   const [audienceMode, setAudienceMode] = useState('filter') // 'filter' | 'people'
+  // SEGPICK.1 — saved segments (contact_segments) for this location. null while
+  // loading so the empty state doesn't flash before the fetch resolves.
+  const [savedSegments, setSavedSegments] = useState(null)
+  const [appliedSegmentId, setAppliedSegmentId] = useState(null)
   const [people, setPeople] = useState([]) // [{ id, name, email, phone }]
   // SMS
   const [body, setBody] = useState('')
@@ -70,6 +74,66 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
+
+  // SEGPICK.1 — one fetch on mount. The route is location-scoped server-side
+  // (assertLocationAccess), so a segment id from another gym simply isn't in
+  // the list and `?segment_id` for it seeds nothing.
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/contacts/segments?location_id=${encodeURIComponent(locationId)}`)
+        const data = await res.json()
+        if (!alive) return
+        const list = data?.success ? (data.segments || []) : []
+        setSavedSegments(list)
+        if (initialSegmentId) {
+          const match = list.find(s => s.id === initialSegmentId)
+          // Seed directly, NOT through handleFilterChange — a seed is an
+          // apply, and applying is what earns the label.
+          if (match) {
+            setFilter(match.filter || EMPTY_FILTER)
+            setAppliedSegmentId(match.id)
+          }
+        }
+      } catch {
+        // Saved segments are an enhancement on top of the filter builder,
+        // never the critical path — fall back to "none" rather than erroring.
+        if (alive) setSavedSegments([])
+      }
+    })()
+    return () => { alive = false }
+  }, [locationId, initialSegmentId])
+
+  const appliedSegment = useMemo(
+    () => (savedSegments || []).find(s => s.id === appliedSegmentId) || null,
+    [savedSegments, appliedSegmentId],
+  )
+
+  // Applying is an assignment: contact_segments.filter is the same JSON as
+  // campaigns.audience_filter, so it drops straight in and the existing
+  // debounced count recomputes with no special-casing. Deliberately NOT
+  // repaired or migrated on the way in — a stale saved filter surfaces as a
+  // visible count error (COMMSFIX.B.6), which is the honest path.
+  function applySegment(segment) {
+    setFilter(segment.filter || EMPTY_FILTER)
+    setAppliedSegmentId(segment.id)
+    setAudienceMode('filter')
+  }
+
+  function clearSegment() {
+    setAppliedSegmentId(null)
+    setFilter(EMPTY_FILTER)
+  }
+
+  // Apply is a ONE-SHOT SEED. The moment the operator edits a row by hand the
+  // working filter has diverged from what's stored, so the UI stops claiming
+  // the segment is applied — a label naming a segment over a filter that no
+  // longer matches it is worse than no label.
+  function handleFilterChange(next) {
+    setFilter(next)
+    setAppliedSegmentId(null)
+  }
 
   const selectedTemplate = useMemo(() => templates.find(t => t.id === templateId) || null, [templates, templateId])
   const waVars = useMemo(() => waBodyVariables(selectedTemplate), [selectedTemplate])
@@ -287,7 +351,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
 
   function reset() {
     setResult(null); setError(null); setBody(''); setTemplateId(''); setVariables({})
-    setLabel(''); setFilter(EMPTY_FILTER); setScheduleMode('now'); setScheduledAtLocal('')
+    setLabel(''); setFilter(EMPTY_FILTER); setAppliedSegmentId(null); setScheduleMode('now'); setScheduledAtLocal('')
     setResendEnabled(false); setResendWaitHours(48); setResendSubject('')
     setWaMode('blast'); setDailyCap(500); setPerTickCap(''); setWindowStart('09:00'); setWindowEnd('20:00')
     setReachable(null); setExcluded(null); setMatched(null); setCountError(null)
@@ -395,9 +459,54 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
             <ChannelPill active={audienceMode === 'people'} onClick={() => setAudienceMode('people')} icon={Users} label="Pick people" small />
           </div>
         )}
+        {/* SEGPICK.1 — saved segments from /contacts. Filter mode only: an
+            explicit people list can't be represented as a stored filter. */}
+        {!useExplicit && (
+          <div className="mb-3">
+            {savedSegments === null ? null : savedSegments.length === 0 ? (
+              <p className="text-xs text-un1t-subtle">
+                No saved segments yet. Build a filter on{' '}
+                <Link href="/contacts" className="underline hover:text-un1t-text">Contacts</Link>{' '}
+                and save it there — it shows up here for every send.
+              </p>
+            ) : (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] uppercase tracking-wider text-un1t-subtle flex items-center gap-1">
+                  <Bookmark size={11} /> Saved segments
+                </span>
+                {savedSegments.map(s => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => applySegment(s)}
+                    title={s.description || 'Apply this saved segment'}
+                    className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+                      appliedSegmentId === s.id
+                        ? 'border-un1t-text/30 bg-un1t-text/[0.06] text-un1t-text font-medium'
+                        : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
+                    }`}
+                  >
+                    {s.name}
+                  </button>
+                ))}
+              </div>
+            )}
+            {appliedSegment && (
+              <p className="mt-2 text-xs text-un1t-subtle flex flex-wrap items-center gap-1.5">
+                <span>
+                  Using saved segment <b className="text-un1t-text">{appliedSegment.name}</b>. Editing the
+                  conditions below drops this — the segment itself is unchanged.
+                </span>
+                <button type="button" onClick={clearSegment} className="underline hover:text-un1t-text">
+                  Clear segment
+                </button>
+              </p>
+            )}
+          </div>
+        )}
         {useExplicit
           ? <ContactMultiSelect locationId={locationId} value={people} onChange={setPeople} />
-          : <AudienceBuilder filter={filter} onChange={setFilter} audienceCount={null} />}
+          : <AudienceBuilder filter={filter} onChange={handleFilterChange} audienceCount={null} />}
         <div className="mt-2 flex flex-col gap-0.5 text-xs text-un1t-subtle">
           <div className="flex items-center gap-1.5">
             <Users size={13} />
