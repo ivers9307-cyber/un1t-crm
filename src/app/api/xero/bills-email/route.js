@@ -8,11 +8,15 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { uuidLike } from '@/lib/validate'
 
 export const runtime = 'nodejs'
 
 const Body = z.object({
-  location_id: z.string().uuid(),
+  // SEGSAVE.1 — same class as the segments route: strict .uuid() rejects
+  // Stillorgan's seeded location id. Latent here (no operator has hit this
+  // route for Stillorgan yet), fixed alongside rather than left armed.
+  location_id: uuidLike,
   bills_email_address: z.string().email().max(320).nullable(),
 })
 

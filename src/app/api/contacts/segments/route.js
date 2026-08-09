@@ -14,7 +14,7 @@ import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { audienceFilterSchema } from '@/lib/schemas'
-import { validateBody } from '@/lib/validate'
+import { validateBody, uuidLike } from '@/lib/validate'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -23,7 +23,13 @@ const CreateBody = z.object({
   name: z.string().min(1).max(120),
   description: z.string().max(2000).nullable().optional(),
   filter: audienceFilterSchema,
-  location_id: z.string().uuid().optional(),
+  // SEGSAVE.1 — uuidLike, NOT z.string().uuid(). Zod 4 enforces the RFC 4122
+  // version digit (1-8); Stillorgan's seeded id (a0000000-…-0001) has version
+  // digit 0, so the strict validator 400'd every save at the ONLY live
+  // location — which is why contact_segments was empty estate-wide. Postgres
+  // accepts any 36-char hex string; validate.js documents this and CLAUDE.md
+  // makes it an invariant.
+  location_id: uuidLike.optional(),
 })
 
 export async function GET(request) {
