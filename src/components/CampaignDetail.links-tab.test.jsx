@@ -13,6 +13,18 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
 }))
 
+// COMMSFIX.D.1b (#1314) gave CampaignDetail stop/unschedule controls that write
+// through the browser Supabase client, so the component now needs one to render
+// at all. This file only cares about the Links tab; the cancel path has its own
+// coverage in CampaignDetail.test.jsx. Added during the #1314/#1315 rebase.
+vi.mock('@/lib/supabase', () => ({
+  createBrowserClient: () => ({
+    from: () => ({
+      update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+    }),
+  }),
+}))
+
 import CampaignDetail from './CampaignDetail.jsx'
 
 const CAMPAIGN = {
