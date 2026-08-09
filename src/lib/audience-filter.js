@@ -444,6 +444,22 @@ export function applyAudienceFilter(query, filter) {
       }
       v = n
     }
+    // FILTER-P1.4 — date fields compared against a real date, or nothing.
+    // gt/lt on a date field with value '' passed validation, persisted onto
+    // the campaign, and only surfaced at SEND time as a raw Postgres
+    // `invalid input syntax for type timestamp`. The builder CREATED that
+    // state: switching a row to a date field defaulted to 'after' with an
+    // empty value. Reject it here so the count 400s visibly and
+    // validateAudienceFilter (which reuses this) refuses to save it.
+    // days_since_* are excluded — they carry a day COUNT, already guarded
+    // by the numeric branch above.
+    if (fieldConfig.type === 'date'
+        && !DAYS_SINCE_OPS.has(op)
+        && (NUMERIC_COMPARE_OPS.has(op) || op === 'eq' || op === 'neq')) {
+      if (typeof v !== 'string' || !v.trim() || Number.isNaN(Date.parse(v))) {
+        throw new InvalidAudienceFilterError(`Filter "${field} ${op}" requires a date value`)
+      }
+    }
     // Boolean fields — the builder sends 'true' / 'false' strings.
     // Coerce to a real boolean for eq / neq; reject anything else.
     if (fieldConfig.type === 'boolean' && (op === 'eq' || op === 'neq')) {

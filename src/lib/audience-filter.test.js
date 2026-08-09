@@ -1109,3 +1109,69 @@ describe('days_since NULL semantics (P1.2)', () => {
     expect(q.calls[1][0]).toBe('or')
   })
 })
+
+// ── FILTER-P1.4 — a blank date value must not be saveable ────────────
+//
+// gt/lt on a date field with value '' passed validation, persisted onto a
+// campaign, and only blew up at SEND time as a raw Postgres
+// `invalid input syntax for type timestamp`. Switching a row to a date field
+// CREATED that state, because the default op is 'after' with an empty value.
+describe('date comparison values must be parseable (P1.4)', () => {
+  let q
+  beforeEach(() => { q = makeMockQuery() })
+
+  for (const op of ['gt', 'lt', 'gte', 'lte', 'eq', 'neq']) {
+    it(`rejects an empty value on a date ${op}`, () => {
+      expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'created_at', op, value: '' }] }))
+        .toThrow(InvalidAudienceFilterError)
+      expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'created_at', op, value: '' }] }))
+        .toThrow(/requires a date/)
+    })
+  }
+
+  it('rejects null / undefined / an unparseable date string', () => {
+    expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'created_at', op: 'gt', value: null }] }))
+      .toThrow(/requires a date/)
+    expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'created_at', op: 'gt' }] }))
+      .toThrow(/requires a date/)
+    expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'created_at', op: 'gt', value: 'not-a-date' }] }))
+      .toThrow(/requires a date/)
+    // A day-count left behind by switching op away from "more than X days ago".
+    expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'created_at', op: 'gt', value: '30' }] }))
+      .toThrow(/requires a date/)
+  })
+
+  it('still accepts a plain YYYY-MM-DD and a full ISO timestamp', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'created_at', op: 'gt', value: '2026-01-01' }] })
+    applyAudienceFilter(q.query, { filters: [{ field: 'created_at', op: 'lte', value: '2026-01-01T10:30:00.000Z' }] })
+    expect(q.calls).toEqual([
+      ['gt', 'created_at', '2026-01-01'],
+      ['lte', 'created_at', '2026-01-01T10:30:00.000Z'],
+    ])
+  })
+
+  it('does not touch value-less date ops or the numeric days_since ops', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'created_at', op: 'is_null' }] })
+    applyAudienceFilter(q.query, { filters: [{ field: 'created_at', op: 'days_since_gt', value: 30 }] })
+    expect(q.calls).toHaveLength(2)
+  })
+
+  it('leaves NON-date fields free to compare against non-date strings', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'label', op: 'eq', value: '' }] })
+    expect(q.calls).toEqual([['eq', 'label', '']])
+  })
+
+  it('validateAudienceFilter rejects the blank-date filter at SAVE time', () => {
+    expect(() => validateAudienceFilter({
+      logic: 'and',
+      filters: [{ field: 'last_attended_at', op: 'gt', value: '' }],
+    })).toThrow(InvalidAudienceFilterError)
+  })
+
+  it('rejects a blank date inside an OR filter too', () => {
+    expect(() => applyAudienceFilter(q.query, {
+      logic: 'or',
+      filters: [{ field: 'created_at', op: 'gt', value: '' }, { field: 'gender', op: 'eq', value: 'male' }],
+    })).toThrow(/requires a date/)
+  })
+})

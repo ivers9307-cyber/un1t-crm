@@ -323,3 +323,53 @@ describe('AudienceBuilder — tags ops say what they do (P1.3)', () => {
     expect(optionValues(opSelect)).toContain('contains')
   })
 })
+
+// ── FILTER-P1.4 — switching to a date field must not create an unsaveable row
+describe('AudienceBuilder — date rows are born saveable (P1.4)', () => {
+  it('seeds a real date when a row is switched to a date field', () => {
+    const onChange = vi.fn()
+    const { container } = render(
+      <AudienceBuilder
+        filter={{ logic: 'and', filters: [{ field: 'gender', op: 'eq', value: 'male' }] }}
+        onChange={onChange}
+        audienceCount={null}
+      />
+    )
+    fireEvent.change(rowSelects(container)[0], { target: { value: 'created_at' } })
+    const row = onChange.mock.calls.at(-1)[0].filters[0]
+    expect(row.field).toBe('created_at')
+    expect(row.op).toBe('gt')
+    expect(row.value).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+
+  it('swaps the value when the op moves between a date compare and a day-count', () => {
+    const onChange = vi.fn()
+    const { container } = render(
+      <AudienceBuilder
+        filter={{ logic: 'and', filters: [{ field: 'created_at', op: 'gt', value: '2026-01-01' }] }}
+        onChange={onChange}
+        audienceCount={null}
+      />
+    )
+    // date compare → day count: an ISO date is not a day count.
+    fireEvent.change(rowSelects(container)[1], { target: { value: 'days_since_gt' } })
+    expect(onChange.mock.calls.at(-1)[0].filters[0]).toEqual({
+      field: 'created_at', op: 'days_since_gt', value: '30',
+    })
+  })
+
+  it('swaps a day-count back to a real date when the op returns to a compare', () => {
+    const onChange = vi.fn()
+    const { container } = render(
+      <AudienceBuilder
+        filter={{ logic: 'and', filters: [{ field: 'created_at', op: 'days_since_gt', value: '30' }] }}
+        onChange={onChange}
+        audienceCount={null}
+      />
+    )
+    fireEvent.change(rowSelects(container)[1], { target: { value: 'lt' } })
+    const row = onChange.mock.calls.at(-1)[0].filters[0]
+    expect(row.op).toBe('lt')
+    expect(row.value).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+})

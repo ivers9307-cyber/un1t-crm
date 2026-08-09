@@ -7,6 +7,9 @@ import { Plus, Trash2, Users, AlertTriangle } from 'lucide-react'
 // against it so the UI can never build a row the count/populate side 400s on
 // (e.g. is_null on email_status, which is eq/neq-only server-side).
 import { AUDIENCE_FIELDS } from '@/lib/audience-filter'
+// FILTER-P1.4 — a seeded date must be the operator's business today, not a
+// UTC one; `new Date().toISOString().split('T')[0]` is lint-banned for this.
+import { dublinTodayStr } from '@/lib/dublin-time'
 
 const FIELD_OPTIONS = [
   // FUNNEL.1 — primary funnel-stage filter (canonical funnel slugs,
@@ -203,6 +206,19 @@ function needsValue(op) {
   return !['is_null', 'not_null'].includes(op)
 }
 
+// FILTER-P1.4 — a date row must be born with a value the server will accept.
+// The old default ('after' + '') validated fine, persisted, and only failed at
+// SEND time as a raw Postgres `invalid input syntax for type timestamp`. The
+// two shapes a date row can hold are NOT interchangeable, so switching between
+// them has to swap the value as well as the op: a date compare wants an ISO
+// day, a days_since op wants a day COUNT.
+const DAYS_SINCE_OPS = ['days_since_gt', 'days_since_lt']
+const DEFAULT_DAY_COUNT = '30'
+
+function defaultValueForDateOp(op) {
+  return DAYS_SINCE_OPS.includes(op) ? DEFAULT_DAY_COUNT : dublinTodayStr()
+}
+
 // FILTER-P1.1 — the row "Add filter" used to hard-code for every host. It is
 // now opt-in: a host that wants a starting guess passes it as defaultFilterRow.
 // Kept here (not inlined at four call sites) so the guess has one definition.
@@ -289,6 +305,22 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
     updateFilter(updated)
   }
 
+  // FILTER-P1.4 — on a date field the value's SHAPE follows the op. Moving
+  // between "after <date>" and "more than X days ago" without swapping the
+  // value leaves a row that cannot be saved (an ISO date is not a day count,
+  // and '30' is not a timestamp) — the server now rejects both, so fix it here
+  // rather than let the operator hit a 400 they did not cause.
+  function handleOpChange(index, newOp) {
+    const current = filters[index]
+    const fieldConfig = getFieldConfig(current?.field)
+    if (fieldConfig?.type === 'date'
+        && DAYS_SINCE_OPS.includes(newOp) !== DAYS_SINCE_OPS.includes(current?.op)) {
+      updateRow(index, { op: newOp, value: defaultValueForDateOp(newOp) })
+      return
+    }
+    updateRow(index, { op: newOp })
+  }
+
   function handleFieldChange(index, newField) {
     // FILTER-P1.1 — back to the placeholder: clear op + value too, or the row
     // keeps a stale predicate that no visible control explains.
@@ -302,6 +334,8 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
     const defaultOp = ops[0]?.value || 'eq'
     const defaultValue = config.type === 'select' ? (config.options?.[0] || '')
       : config.type === 'boolean' ? 'true'
+      // FILTER-P1.4 — never leave a fresh date row on an empty value.
+      : config.type === 'date' ? defaultValueForDateOp(defaultOp)
       : ''
     updateRow(index, { field: newField, op: defaultOp, value: defaultValue })
   }
@@ -441,7 +475,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
               <select
                 value={f.op}
                 disabled={disabled}
-                onChange={e => updateRow(index, { op: e.target.value })}
+                onChange={e => handleOpChange(index, e.target.value)}
                 className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
               >
                 {ops.map(op => (
