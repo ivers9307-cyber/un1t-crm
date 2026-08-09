@@ -175,12 +175,26 @@ export async function tickCampaignSend(db, campaign) {
         contacts.push(...(data || []))
       }
     } else {
+      // CAMPAIGN.14 — .range() pagination is only stable under an explicit
+      // ORDER BY (CLAUDE.md: 1,000-row cap invariant). Without it the 8 Aug
+      // 2026 sale send got overlapping pages: the duplicated contact blew up
+      // the recipient insert on the (campaign_id, contact_id) unique key
+      // after chunk 1, so exactly 1,000 of 3,053 matched contacts were
+      // enrolled and the rest silently never received the campaign. The
+      // Set is belt-and-braces for rows that shift pages mid-pagination.
+      const seenContactIds = new Set()
       for (let from = 0; ; from += AUDIENCE_PAGE_SIZE) {
         const { query } = await buildAudienceQueryAsync(db, campaign.audience_filter, campaign.location_id, { consentField })
-        const { data, error } = await query.range(from, from + AUDIENCE_PAGE_SIZE - 1)
+        const { data, error } = await query
+          .order('id', { ascending: true })
+          .range(from, from + AUDIENCE_PAGE_SIZE - 1)
         if (error) return { phase: 'populate', error: `audience load failed: ${error.message}` }
         if (!data || data.length === 0) break
-        contacts.push(...data)
+        for (const contact of data) {
+          if (seenContactIds.has(contact.id)) continue
+          seenContactIds.add(contact.id)
+          contacts.push(contact)
+        }
         if (data.length < AUDIENCE_PAGE_SIZE) break
       }
     }
@@ -234,7 +248,15 @@ export async function tickCampaignSend(db, campaign) {
       populateUpdate.ab_test_started_at = nowIso
       populateUpdate.ab_decided_at = nowIso
     }
-    await db.from('campaigns').update(populateUpdate).eq('id', campaignId)
+    // CAMPAIGN.14 — surface the status update's error. This update failed
+    // silently on every campaign while campaigns.send_started_at didn't
+    // exist in prod (added in mig 507): the campaign still limped to 'sent'
+    // via finalise + recalculate_campaign_stats, which masked populate
+    // problems like the truncation above.
+    const { error: populateUpdateError } = await db.from('campaigns').update(populateUpdate).eq('id', campaignId)
+    if (populateUpdateError) {
+      return { phase: 'populate', error: `populate status update failed: ${populateUpdateError.message}` }
+    }
 
     return { phase: 'populate', sent: 0 }
   }
