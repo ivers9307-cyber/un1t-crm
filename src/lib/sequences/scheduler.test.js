@@ -182,6 +182,67 @@ describe('isGoalMet', () => {
     ).toBe(true)
   })
 
+  // SEQGAPS.1 Task A — a dunning sequence's WIN is "they paid", i.e. the
+  // membership went back to active. Exiting via the audience would record
+  // left_audience (a drop-out) and under-count the sequence's success, so
+  // the goal has to be able to say this.
+  it('membership_state: true when contact.glofox_membership_state === value', async () => {
+    expect(
+      await isGoalMet({
+        db: {},
+        contact: { glofox_membership_state: 'active' },
+        goalConfig: { type: 'membership_state', value: 'active' },
+      }),
+    ).toBe(true)
+  })
+
+  it('membership_state: false when the state differs', async () => {
+    expect(
+      await isGoalMet({
+        db: {},
+        contact: { glofox_membership_state: 'locked' },
+        goalConfig: { type: 'membership_state', value: 'active' },
+      }),
+    ).toBe(false)
+  })
+
+  it('membership_state: false when value is unset — an unconfigured goal must never auto-exit anyone', async () => {
+    // Same family as the SEQEXIT.1 fail-open rule: uncertainty must not
+    // take the destructive branch. A contact with a null/undefined state
+    // must NOT satisfy a goal whose value was never chosen.
+    expect(
+      await isGoalMet({
+        db: {},
+        contact: { glofox_membership_state: null },
+        goalConfig: { type: 'membership_state' },
+      }),
+    ).toBe(false)
+    expect(
+      await isGoalMet({
+        db: {},
+        contact: { glofox_membership_state: undefined },
+        goalConfig: { type: 'membership_state', value: '' },
+      }),
+    ).toBe(false)
+    expect(
+      await isGoalMet({
+        db: {},
+        contact: { glofox_membership_state: 'active' },
+        goalConfig: { type: 'membership_state', value: null },
+      }),
+    ).toBe(false)
+  })
+
+  it('membership_state: costs no extra DB round trip (the contact is already loaded)', async () => {
+    const db = { from: vi.fn() }
+    await isGoalMet({
+      db,
+      contact: { id: 'c1', glofox_membership_state: 'active' },
+      goalConfig: { type: 'membership_state', value: 'active' },
+    })
+    expect(db.from).not.toHaveBeenCalled()
+  })
+
   it('tag_added: false when tag is empty/whitespace', async () => {
     expect(
       await isGoalMet({

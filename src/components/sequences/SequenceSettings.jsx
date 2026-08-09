@@ -59,6 +59,10 @@ const INACT_SIGNALS = [['last_emailed_at', 'Last emailed'], ['last_email_open_at
 const STAGE_OPTS = [['', 'Any stage'], ...PIPELINE_SLUGS.map(s => [s, s])]
 // Glofox membership states (mig 195). 'locked' = payment arrears (churn radar's Overdue tab).
 const STATE_OPTS = [['', 'Any state'], ['active', 'active'], ['paused', 'paused'], ['locked', 'locked (arrears)']]
+// SEQGAPS.1 — same vocabulary for the membership_state GOAL, minus the
+// '' / "Any state" entry: a goal with no value is the unconfigured goal
+// isGoalMet deliberately refuses to act on, so it must not be selectable.
+const GOAL_STATE_OPTS = STATE_OPTS.filter(([v]) => v !== '')
 
 export default function SequenceSettings({ sequence }) {
   const [open, setOpen] = useState(false)
@@ -94,7 +98,15 @@ export default function SequenceSettings({ sequence }) {
 
   const touch = () => { setDirty(true); setFeedback(null) }
   const goalType = goal?.type || ''
-  const setGoalType = (t) => { setGoal(t === '' ? null : { type: t, ...(t === 'pipeline_stage' ? { value: PIPELINE_SLUGS[0] } : {}) }); touch() }
+  // Seed a value the moment a value-bearing type is picked, so the saved
+  // config is never "type set, value missing" (which the runner treats as
+  // unconfigured and never exits anyone on).
+  const setGoalType = (t) => {
+    const seed = t === 'pipeline_stage' ? { value: PIPELINE_SLUGS[0] }
+      : t === 'membership_state' ? { value: 'active' }
+        : {}
+    setGoal(t === '' ? null : { type: t, ...seed }); touch()
+  }
   const setCfg = (patch) => { setTcfg(prev => ({ ...prev, ...patch })); touch() }
   const toggleSkipDay = (d) => {
     const cur = new Set(win.skip_days || [])
@@ -255,10 +267,15 @@ export default function SequenceSettings({ sequence }) {
 
           {/* Goal */}
           <Labeled label="Goal — auto-exit when…" hint="The contact leaves the sequence early once this is met.">
-            <Select value={goalType} onChange={setGoalType} options={[['', 'No goal'], ['pipeline_stage', 'Reaches a pipeline stage'], ['tag_added', 'Gets a tag'], ['booking_made', 'Books an event']]} />
+            <Select value={goalType} onChange={setGoalType} options={[['', 'No goal'], ['pipeline_stage', 'Reaches a pipeline stage'], ['membership_state', 'Reaches a membership state'], ['tag_added', 'Gets a tag'], ['booking_made', 'Books an event']]} />
           </Labeled>
           {goalType === 'pipeline_stage' && (
             <Labeled label="Stage"><Select value={goal.value || PIPELINE_SLUGS[0]} onChange={v => { setGoal({ ...goal, value: v }); touch() }} options={PIPELINE_SLUGS} /></Labeled>
+          )}
+          {goalType === 'membership_state' && (
+            <Labeled label="Membership state" hint="For a dunning flow, pick active — paying is a win, so the exit is recorded as “Goal met”, not a drop-out.">
+              <Select value={goal.value || 'active'} onChange={v => { setGoal({ ...goal, value: v }); touch() }} options={GOAL_STATE_OPTS} />
+            </Labeled>
           )}
           {goalType === 'tag_added' && (
             <Labeled label="Tag"><Text value={goal.tag} onChange={v => { setGoal({ ...goal, tag: v }); touch() }} placeholder="e.g. race_completed" /></Labeled>
