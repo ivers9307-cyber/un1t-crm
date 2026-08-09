@@ -128,15 +128,35 @@ export async function processPostmarkEvent(db, body) {
           .update({ status: 'delivered', delivered_at: body.DeliveredAt })
           .eq('postmark_message_id', messageId)
           .is('delivered_at', null)
-          .select('id, campaign_id')
+          .select('id, campaign_id, contact_id')
 
         // 'sending' belongs here: the chunk claim flips queued→sending before
         // the batch goes out, and the Delivery webhook regularly beats the
         // per-recipient 'sent' update, so those rows were being skipped.
-        await db.from('campaign_recipients')
+        const { data: stampedRecipients } = await db.from('campaign_recipients')
           .update({ status: 'delivered', delivered_at: body.DeliveredAt })
           .eq('postmark_message_id', messageId)
           .in('status', ['sent', 'queued', 'sending'])
+          .select('id')
+
+        // COMMSFIX.C.1b — …and when even that matches nothing, resolve the
+        // recipient through the send row. C.1 moved the email_sends insert
+        // ahead of the loop that stamps campaign_recipients.postmark_message_id,
+        // so a fast Delivery webhook now lands in a window where the send row
+        // exists but no recipient row carries the id yet. Keying on the send's
+        // (campaign_id, contact_id) — UNIQUE on campaign_recipients — addresses
+        // exactly the right row, so the recipient-level stamp isn't lost to the
+        // very reordering that fixed the campaign counter.
+        if (!(stampedRecipients || []).length) {
+          const viaSend = (deliveredSends || []).find(s => s?.campaign_id && s?.contact_id)
+          if (viaSend) {
+            await db.from('campaign_recipients')
+              .update({ status: 'delivered', delivered_at: body.DeliveredAt })
+              .eq('campaign_id', viaSend.campaign_id)
+              .eq('contact_id', viaSend.contact_id)
+              .in('status', ['sent', 'queued', 'sending'])
+          }
+        }
 
         const campaignId = (deliveredSends || []).find(s => s?.campaign_id)?.campaign_id
         if (campaignId) {

@@ -351,6 +351,39 @@ describe('processPostmarkEvent — Delivery transition guard (COMMSFIX.C.1)', ()
     const statuses = stamp.filters.find(([kind, col]) => kind === 'in' && col === 'status')[2]
     expect(statuses).toEqual(expect.arrayContaining(['sent', 'queued', 'sending']))
   })
+
+  // COMMSFIX.C.1b — email_sends is now inserted BEFORE the per-recipient
+  // update loop stamps postmark_message_id, so a Delivery webhook that beats
+  // that loop finds the send row but NO recipient row keyed by message id.
+  // Without a fallback the recipient-level delivery stamp is silently lost —
+  // the same class of loss C.1 just fixed on the campaign counter, moved one
+  // table over. campaign_recipients is UNIQUE (campaign_id, contact_id), so
+  // resolving through the send row addresses exactly one row.
+  it('falls back to (campaign_id, contact_id) when no recipient row carries the message id yet', async () => {
+    const db = stubDeliveryTransitionDb({
+      updatedRows: [{ id: 's1', campaign_id: 'camp1', contact_id: 'c1' }],
+      recipientRows: [],
+    })
+
+    await processPostmarkEvent(db, DELIVERY)
+
+    expect(db.recipientUpdates).toHaveLength(2)
+    const fallback = db.recipientUpdates[1]
+    expect(fallback.values.status).toBe('delivered')
+    expect(fallback.filters).toContainEqual(['eq', 'campaign_id', 'camp1'])
+    expect(fallback.filters).toContainEqual(['eq', 'contact_id', 'c1'])
+  })
+
+  it('does NOT run the fallback when the message-id match already stamped a row', async () => {
+    const db = stubDeliveryTransitionDb({
+      updatedRows: [{ id: 's1', campaign_id: 'camp1', contact_id: 'c1' }],
+      recipientRows: [{ id: 'r1' }],
+    })
+
+    await processPostmarkEvent(db, DELIVERY)
+
+    expect(db.recipientUpdates).toHaveLength(1)
+  })
 })
 
 // ── COMMSFIX.C.3 — the contact engagement RPCs were failing in total silence ──
