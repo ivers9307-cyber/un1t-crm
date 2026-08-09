@@ -64,7 +64,15 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
   const [audienceError, setAudienceError] = useState(null)
   const [campaignId, setCampaignId] = useState(campaign?.id || null)
   const [error, setError] = useState(null)
-  const [editorMode, setEditorMode] = useState(designJson ? 'visual' : 'visual')  // visual or code
+  // COMMSFIX.D.3a — initialise the mode FROM THE CONTENT. The old ternary was
+  // `designJson ? 'visual' : 'visual'` — vestigial, always visual — so a draft
+  // authored in the Code tab (or created through the Bearer /api/campaigns
+  // n8n path) opened into a blank Unlayer canvas, and Save exported that blank
+  // scaffold over the stored html_content. The branded email was gone with no
+  // warning. html_content without a design_json is by definition code-authored.
+  const [editorMode, setEditorMode] = useState(
+    campaign?.html_content && !campaign?.design_json ? 'code' : 'visual'
+  )  // visual or code
   const [unlayerLoaded, setUnlayerLoaded] = useState(false)
 
   // CAMPAIGN.1 — send-test state. testEmail defaults to the
@@ -393,7 +401,10 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
     try {
       const { error: e } = await db.from('campaigns').delete().eq('id', campaignId)
       if (e) throw new Error(e.message)
-      router.push('/email/campaigns')
+      // COMMSFIX.D.3c — /email/campaigns has no page.js (the list was retired
+      // to /communications/sent), so deleting a draft landed the operator on
+      // the Next.js 404 and read as "did the delete break something?".
+      router.push('/communications/sent')
     } catch (err) {
       setError(err.message)
     }
