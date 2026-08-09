@@ -15,6 +15,37 @@
 import { applyMarketingPreferencesBulk } from './marketing-consent.js'
 import { findBcaSubmissionByMessageId, recordBcaPostmarkEvent } from './bca-events.js'
 import { recordTicketMessageDelivery } from './email-delivery-status.js'
+import { escapeLikePattern } from './like-escape.js'
+
+/**
+ * COMMSFIX.C.7 — which contact a SubscriptionChange reactivation is about.
+ *
+ * Message-bound events resolve through email_sends like every other handler.
+ * A Postmark-SIDE reactivation is not tied to a delivered message, so it
+ * arrives carrying the zero GUID and matches nothing — those carry `Recipient`
+ * instead. (Before COMMSFIX.C.2 every zero-GUID SubscriptionChange also shared
+ * one dedup key, so only the first ever got this far at all.)
+ *
+ * `.ilike` with escapeLikePattern, not `.eq`: contacts are stored mixed-case,
+ * and an unescaped pattern would let `_`/`%` — both legal email characters —
+ * match a DIFFERENT contact (CLAUDE.md, the inbound-email misfiling class).
+ */
+async function resolveReactivationContact(db, body, messageId) {
+  const { data: send } = await db.from('email_sends')
+    .select('contact_id')
+    .eq('postmark_message_id', messageId)
+    .single()
+  if (send?.contact_id) return send.contact_id
+
+  const recipient = typeof body?.Recipient === 'string' ? body.Recipient.trim() : ''
+  if (!recipient) return null
+
+  const { data: contact } = await db.from('contacts')
+    .select('id')
+    .ilike('email', escapeLikePattern(recipient))
+    .maybeSingle()
+  return contact?.id || null
+}
 
 /**
  * COMMSFIX.C.3 — call a best-effort counter RPC and LOG any failure.
@@ -312,7 +343,38 @@ export async function processPostmarkEvent(db, body) {
       }
 
       case 'SubscriptionChange': {
-        if (body.SuppressSending) {
+        if (!body.SuppressSending) {
+          // COMMSFIX.C.7 — REACTIVATION. An operator clearing a suppression in
+          // Postmark (or Postmark clearing one itself) was silently ignored,
+          // so our mirror of that block stayed stuck on forever: a contact
+          // stamped email_status='bounced' by an old hard bounce, or carrying
+          // the engagement-hygiene email_suppressed_at stamp, never came back
+          // even though the address demonstrably works again.
+          //
+          // What this DOES NOT do is re-opt anyone into marketing. Postmark's
+          // suppression is a DELIVERY block; consent is a separate family, and
+          // flipping email_marketing back on off a provider event would be
+          // opting somebody in without their say-so. Marketing consent is
+          // restored only by the person themselves, via the preference centre.
+          const contactId = await resolveReactivationContact(db, body, messageId)
+          if (contactId) {
+            // Same guarded no-op shape as the Open/Click hygiene clear.
+            await db.from('contacts')
+              .update({ email_suppressed_at: null })
+              .eq('id', contactId)
+              .not('email_suppressed_at', 'is', null)
+
+            // email_status is reputation-only (LOCCOMMS.5), and a Postmark
+            // reactivation is precisely a reputation reset. Guarded so an
+            // 'active' row is never rewritten.
+            await db.from('contacts')
+              .update({ email_status: 'active' })
+              .eq('id', contactId)
+              .in('email_status', ['bounced', 'complained'])
+          }
+          break
+        }
+        {
           const { data: unsubSend } = await db.from('email_sends')
             .select('contact_id, campaign_id')
             .eq('postmark_message_id', messageId)
@@ -352,9 +414,14 @@ export async function processPostmarkEvent(db, body) {
       }
 
       default:
-        if (process.env.NODE_ENV !== 'production') {
-          console.log(`[postmark processor] unhandled record_type: ${recordType}`)
-        }
+        // COMMSFIX.C.7 — LOUD IN PROD. This was gated on NODE_ENV !==
+        // 'production', so in prod the queue row was marked processed with
+        // zero trace: no log line, no counter, no dead-letter row. If Postmark
+        // ships a new RecordType, every event of it "succeeds" while doing
+        // nothing and there is no artefact to discover it from. Still returns
+        // ok — the webhook contract is 200 for unrecognised events (CLAUDE.md),
+        // so a provider never auto-disables the hook over one.
+        console.error(`[postmark processor] UNHANDLED record_type: ${recordType} (message ${messageId}) — event acknowledged but nothing was done with it`)
     }
     return { ok: true }
   } catch (error) {

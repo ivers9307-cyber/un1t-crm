@@ -149,14 +149,16 @@ describe('processPostmarkEvent — SubscriptionChange', () => {
     expect(rpcCalls).toEqual([])
   })
 
-  it('ignores a re-subscribe (SuppressSending=false)', async () => {
-    const rpcCalls = []
-    const db = stubDb({ send: { contact_id: 'c1', campaign_id: 'camp1' }, rpcCalls })
+  // COMMSFIX.C.7 changed what a re-subscribe DOES — it now clears our mirror of
+  // Postmark's suppression (see the reactivation block below) rather than being
+  // ignored outright. What must NOT change, and is the reason this test exists,
+  // is that it applies no consent write and moves no campaign counter.
+  it('a re-subscribe (SuppressSending=false) applies no consent change and no counter', async () => {
+    const db = stubReactivationDb({ send: { contact_id: 'c1', campaign_id: 'camp1' } })
 
     const r = await processPostmarkEvent(db, { ...EVENT, SuppressSending: false })
     expect(r.ok).toBe(true)
     expect(applyMarketingPreferencesBulk).not.toHaveBeenCalled()
-    expect(rpcCalls).toEqual([])
   })
 })
 
@@ -427,5 +429,133 @@ describe('processPostmarkEvent — contact engagement RPC failures are logged (C
 
     expect(err).not.toHaveBeenCalled()
     err.mockRestore()
+  })
+})
+
+// ── COMMSFIX.C.7 — events that vanished without a trace ─────────────────────
+//
+// Two prod-silent holes in the same switch:
+//   • The default case logged unknown RecordTypes only when NODE_ENV !==
+//     'production', then returned ok:true. In prod the queue row was marked
+//     processed with ZERO trace — no log line, no counter, no dead-letter. If
+//     Postmark adds a record type, every event of it "succeeds" while doing
+//     nothing, and there is no artefact to ever discover it from.
+//   • SubscriptionChange with SuppressSending=false — an operator REACTIVATING
+//     a suppressed address in Postmark — was explicitly ignored, so our own
+//     mirror of that suppression (contacts.email_status reputation +
+//     email_suppressed_at hygiene stamp) stayed stuck on forever.
+//
+// Consent is deliberately NOT touched by a reactivation: Postmark's suppression
+// is a delivery block, and flipping email_marketing back on would be opting
+// somebody in without their say-so.
+function stubReactivationDb({ send = null, contact = null } = {}) {
+  const contactUpdates = []
+  const contactLookups = []
+
+  function builder(table) {
+    const b = { _op: 'select', _values: null, _filters: [] }
+    const settle = (shape) => {
+      if (b._op === 'update') {
+        if (table === 'contacts') contactUpdates.push({ values: b._values, filters: b._filters })
+        return Promise.resolve({ data: [], error: null })
+      }
+      if (table === 'contacts') {
+        contactLookups.push({ filters: b._filters })
+        return Promise.resolve({ data: shape === 'single' ? contact : (contact ? [contact] : []), error: null })
+      }
+      const row = table === 'email_sends' ? send : null
+      return Promise.resolve({ data: shape === 'single' ? row : [], error: null })
+    }
+    b.select = () => (b._op === 'update' ? settle('list') : b)
+    b.update = (values) => { b._op = 'update'; b._values = values; return b }
+    b.eq = (col, val) => { b._filters.push(['eq', col, val]); return b }
+    b.in = (col, val) => { b._filters.push(['in', col, val]); return b }
+    b.is = (col, val) => { b._filters.push(['is', col, val]); return b }
+    b.not = (col, op, val) => { b._filters.push(['not', col, op, val]); return b }
+    b.ilike = (col, val) => { b._filters.push(['ilike', col, val]); return b }
+    b.limit = () => b
+    b.or = (expr) => { b._filters.push(['or', expr]); return b }
+    b.single = () => settle('single')
+    b.maybeSingle = () => settle('single')
+    b.then = (resolve, reject) => settle('list').then(resolve, reject)
+    return b
+  }
+
+  return { contactUpdates, contactLookups, from: builder, rpc: () => Promise.resolve({ error: null }) }
+}
+
+describe('processPostmarkEvent — unhandled record types are visible in prod (COMMSFIX.C.7)', () => {
+  it('console.errors an unknown RecordType in production', async () => {
+    const prev = process.env.NODE_ENV
+    process.env.NODE_ENV = 'production'
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const db = stubReactivationDb()
+      const r = await processPostmarkEvent(db, { RecordType: 'SomethingPostmarkAdded', MessageID: 'pm-1' })
+      // Still ok — the webhook contract is 200 for unrecognised events, so a
+      // provider never auto-disables the hook over one.
+      expect(r.ok).toBe(true)
+      expect(err.mock.calls.flat().join(' ')).toContain('SomethingPostmarkAdded')
+    } finally {
+      err.mockRestore()
+      process.env.NODE_ENV = prev
+    }
+  })
+})
+
+describe('processPostmarkEvent — SubscriptionChange reactivation (COMMSFIX.C.7)', () => {
+  const REACTIVATE = { RecordType: 'SubscriptionChange', MessageID: 'pm-1', SuppressSending: false, Recipient: 'a@x.ie' }
+
+  it('clears our suppression mirror for the contact behind the message', async () => {
+    const db = stubReactivationDb({ send: { contact_id: 'c1', campaign_id: 'camp1' } })
+
+    const r = await processPostmarkEvent(db, REACTIVATE)
+
+    expect(r.ok).toBe(true)
+    const hygiene = db.contactUpdates.find(u => 'email_suppressed_at' in u.values)
+    expect(hygiene).toBeTruthy()
+    expect(hygiene.filters).toContainEqual(['eq', 'id', 'c1'])
+    expect(hygiene.filters).toContainEqual(['not', 'email_suppressed_at', 'is', null])
+
+    const reputation = db.contactUpdates.find(u => u.values?.email_status === 'active')
+    expect(reputation).toBeTruthy()
+    // Only a bounced/complained address is being reinstated — never a blanket write.
+    expect(reputation.filters).toContainEqual(['in', 'email_status', ['bounced', 'complained']])
+  })
+
+  it('NEVER re-opts anyone into marketing — a delivery block is not consent', async () => {
+    const db = stubReactivationDb({ send: { contact_id: 'c1', campaign_id: 'camp1' } })
+
+    await processPostmarkEvent(db, REACTIVATE)
+
+    expect(applyMarketingPreferencesBulk).not.toHaveBeenCalled()
+    expect(db.contactUpdates.some(u => 'email_marketing' in (u.values || {}))).toBe(false)
+  })
+
+  it('falls back to the Recipient address when the event carries the zero GUID', async () => {
+    // A Postmark-side reactivation is not tied to a delivered message, so it
+    // arrives with MessageID 00000000-... and matches no email_sends row.
+    const db = stubReactivationDb({ send: null, contact: { id: 'c9' } })
+
+    const r = await processPostmarkEvent(db, {
+      ...REACTIVATE,
+      MessageID: '00000000-0000-0000-0000-000000000000',
+    })
+
+    expect(r.ok).toBe(true)
+    // CLAUDE.md: .ilike is a PATTERN match — the value must be escaped, and
+    // .eq is wrong because contacts are stored mixed-case.
+    const lookup = db.contactLookups.find(l => l.filters.some(([kind, col]) => kind === 'ilike' && col === 'email'))
+    expect(lookup).toBeTruthy()
+    expect(db.contactUpdates.length).toBeGreaterThan(0)
+  })
+
+  it('is a clean no-op when neither the message nor the recipient resolves', async () => {
+    const db = stubReactivationDb({ send: null, contact: null })
+
+    const r = await processPostmarkEvent(db, { ...REACTIVATE, Recipient: undefined })
+
+    expect(r.ok).toBe(true)
+    expect(db.contactUpdates).toEqual([])
   })
 })
