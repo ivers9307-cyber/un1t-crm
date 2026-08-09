@@ -106,3 +106,60 @@ describe('CampaignDetail — status chip is driven by the campaign status', () =
     expect(screen.getByTestId('campaign-status-chip').textContent).toMatch(/failed/i)
   })
 })
+
+describe('CampaignDetail — cancel / unschedule', () => {
+  it('offers no cancel control on a sent campaign', () => {
+    renderDetail({ status: 'sent' })
+    expect(screen.queryByTestId('campaign-cancel')).toBeNull()
+  })
+
+  it('offers no cancel control on a cancelled campaign', () => {
+    renderDetail({ status: 'cancelled' })
+    expect(screen.queryByTestId('campaign-cancel')).toBeNull()
+  })
+
+  it('unschedules a scheduled campaign back to draft', () => {
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    renderDetail({ status: 'scheduled', scheduled_at: '2026-08-20T09:00:00.000Z' })
+    fireEvent.click(screen.getByTestId('campaign-cancel'))
+    expect(updates).toEqual([
+      { table: 'campaigns', payload: { status: 'draft', scheduled_at: null } },
+    ])
+    expect(eqSpy).toHaveBeenCalledWith('id', 'camp-1')
+  })
+
+  it.each(['queued', 'sending'])('stamps cancel_requested_at on a %s campaign', (status) => {
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    renderDetail({ status })
+    fireEvent.click(screen.getByTestId('campaign-cancel'))
+    expect(updates).toHaveLength(1)
+    expect(updates[0].table).toBe('campaigns')
+    expect(typeof updates[0].payload.cancel_requested_at).toBe('string')
+  })
+
+  it('names the recipient count in the confirm dialog and writes nothing when declined', () => {
+    const confirmSpy = vi.fn(() => false)
+    vi.stubGlobal('confirm', confirmSpy)
+    renderDetail({ status: 'queued', total_recipients: 3053 })
+    fireEvent.click(screen.getByTestId('campaign-cancel'))
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(confirmSpy.mock.calls[0][0]).toContain('3,053')
+    expect(updates).toHaveLength(0)
+  })
+})
+
+describe('CampaignDetail — a failed campaign can be re-sent', () => {
+  it('offers a re-send control that posts to the send route', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    renderDetail({ status: 'failed', last_error: 'populate failed' })
+    const btn = screen.getByTestId('campaign-resend-failed')
+    fireEvent.click(btn)
+    await Promise.resolve()
+    expect(global.fetch).toHaveBeenCalledWith('/api/campaigns/camp-1/send', { method: 'POST' })
+  })
+
+  it('offers no re-send control on a sent campaign', () => {
+    renderDetail({ status: 'sent' })
+    expect(screen.queryByTestId('campaign-resend-failed')).toBeNull()
+  })
+})

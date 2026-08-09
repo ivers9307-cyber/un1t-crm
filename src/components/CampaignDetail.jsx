@@ -3,9 +3,10 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { createBrowserClient } from '@/lib/supabase'
 import {
   ArrowLeft, Mail, Eye, MousePointerClick, AlertTriangle,
-  Ban, Send, CheckCircle2, XCircle, Users, RotateCcw
+  Ban, Send, CheckCircle2, XCircle, Users, RotateCcw, X, Clock, SkipForward, Loader2
 } from 'lucide-react'
 
 // COMMSFIX.D.1a — the header chip used to be a hardcoded green "Sent" for
@@ -82,7 +83,13 @@ function AbVariantRow({ label, subject, stats, isWinner }) {
 
 export default function CampaignDetail({ campaign, recipients = [], abStats = null, resendChild = null, resendParent = null, locationId: _locationId, userId: _userId }) {
   const router = useRouter()
+  const db = createBrowserClient()
   const [tab, setTab] = useState('overview')  // overview, recipients, preview
+  // COMMSFIX.D.1b — stop/resend state. `status` is local so the header
+  // reflects the write immediately, before router.refresh() lands.
+  const [status, setStatus] = useState(campaign.status)
+  const [stopBusy, setStopBusy] = useState(false)
+  const [actionError, setActionError] = useState(null)
   // CAMPAIGN-RESEND — cancel-pending-resend state (the child doesn't
   // exist yet, so cancelling is just clearing the parent's flag).
   const [resendBusy, setResendBusy] = useState(false)
@@ -103,6 +110,60 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
       }
     } finally {
       setResendBusy(false)
+    }
+  }
+
+  // COMMSFIX.D.1b — stop a scheduled/queued/sending campaign from the page the
+  // composer actually links to. Same mechanism CampaignEditor.handleCancel
+  // uses (browser client, direct campaigns write): 'scheduled' flips back to
+  // draft so the cron stops treating it as a promotion candidate; 'queued' /
+  // 'sending' stamp cancel_requested_at, which the run-campaigns cron sees
+  // between chunks. Until this existed the ONLY cancel control lived behind
+  // the undiscoverable ?edit=1 query param.
+  const stoppable = ['scheduled', 'queued', 'sending'].includes(status)
+  const pendingCount = campaign.total_recipients || campaign.total_sent || 0
+
+  async function stopCampaign() {
+    const who = pendingCount ? `${pendingCount.toLocaleString()} recipients` : 'this audience'
+    const ask = status === 'scheduled'
+      ? `Unschedule "${campaign.name}"? It will go back to draft and will NOT send to ${who}.`
+      : `Stop "${campaign.name}"? Sending to ${who} halts within a minute. Already-sent emails cannot be unsent.`
+    if (!confirm(ask)) return
+    setStopBusy(true)
+    setActionError(null)
+    try {
+      const payload = status === 'scheduled'
+        ? { status: 'draft', scheduled_at: null }
+        : { cancel_requested_at: new Date().toISOString() }
+      const { error } = await db.from('campaigns').update(payload).eq('id', campaign.id)
+      if (error) throw new Error(error.message)
+      if (status === 'scheduled') setStatus('draft')
+      router.refresh()
+    } catch (err) {
+      setActionError(err?.message || 'Could not stop this campaign')
+    } finally {
+      setStopBusy(false)
+    }
+  }
+
+  // COMMSFIX.D.1b — a campaign the cron marked 'failed' (fix/stats-integrity)
+  // lands here, not in the editor, so the re-send path was unreachable. The
+  // send route re-queues it and clears last_error. No-ops harmlessly on a
+  // deployment where nothing is ever marked failed.
+  async function resendFailed() {
+    if (!confirm(`Try sending "${campaign.name}" again?`)) return
+    setStopBusy(true)
+    setActionError(null)
+    try {
+      const res = await fetch(`/api/campaigns/${campaign.id}/send`, { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data?.success === false) throw new Error(data?.error || `Request failed (${res.status})`)
+      setStatus('queued')
+      router.refresh()
+    } catch (err) {
+      setActionError(err?.message || 'Could not re-queue this campaign')
+    } finally {
+      setStopBusy(false)
     }
   }
 
@@ -128,7 +189,7 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
   const clickRate = totalSent > 0 ? ((totalClicked / totalSent) * 100).toFixed(1) : '0'
   const bounceRate = totalSent > 0 ? ((totalBounced / totalSent) * 100).toFixed(1) : '0'
 
-  const statusChip = campaignStatusConfig[campaign.status] || campaignStatusConfig.draft
+  const statusChip = campaignStatusConfig[status] || campaignStatusConfig.draft
 
   const sentDate = campaign.sent_at
     ? new Date(campaign.sent_at).toLocaleDateString('en-IE', {
@@ -174,8 +235,40 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
           >
             {statusChip.label}
           </span>
+          {stoppable && (
+            <button
+              type="button"
+              data-testid="campaign-cancel"
+              onClick={stopCampaign}
+              disabled={stopBusy || !!campaign.cancel_requested_at}
+              className="flex items-center gap-1.5 text-xs text-rose-700 border border-un1t-border hover:border-rose-500/40 px-3 py-1.5 rounded-md transition-colors disabled:opacity-40"
+            >
+              {stopBusy ? <Loader2 size={13} className="animate-spin" /> : <X size={13} />}
+              {campaign.cancel_requested_at
+                ? 'Cancelling…'
+                : status === 'scheduled' ? 'Unschedule' : 'Stop sending'}
+            </button>
+          )}
+          {status === 'failed' && (
+            <button
+              type="button"
+              data-testid="campaign-resend-failed"
+              onClick={resendFailed}
+              disabled={stopBusy}
+              className="flex items-center gap-1.5 text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border hover:border-un1t-text/30 px-3 py-1.5 rounded-md transition-colors disabled:opacity-40"
+            >
+              <RotateCcw size={13} />
+              Try again
+            </button>
+          )}
         </div>
       </div>
+
+      {(actionError || (status === 'failed' && campaign.last_error)) && (
+        <div className="bg-red-500/10 border-b border-red-500/30 text-red-700 text-sm px-5 py-2 shrink-0">
+          {actionError || `This campaign failed to send: ${campaign.last_error}`}
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex border-b border-un1t-border bg-un1t-surface shrink-0">
