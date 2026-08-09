@@ -50,6 +50,11 @@ vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.f
 vi.mock('@/lib/audience-filter', () => ({
   applyAudienceFilterAsync: vi.fn(async ({ query }) => ({ query })),
   InvalidAudienceFilterError: class InvalidAudienceFilterError extends Error {},
+  // FILTER-P1.5 — the campaigns POST/PUT now validate the audience filter at
+  // save time. These org-boundary tests send no filter, so a no-op is right:
+  // the real validation is covered in
+  // src/app/api/campaigns/audience-filter-validation.test.js.
+  validateAudienceFilter: vi.fn(() => {}),
 }))
 vi.mock('@/lib/contact-crossovers', () => ({ crossoverContactIds: vi.fn(async () => []), fetchCrossoverContext: vi.fn(async () => ({})) }))
 vi.mock('@/lib/person-links', () => ({ attachLinkedCounts: vi.fn(async (_db, rows) => rows) }))
