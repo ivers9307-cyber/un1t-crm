@@ -21,6 +21,10 @@ const MERGE_TAGS = [
   { name: 'Year', value: '{{current_year}}' },
 ]
 
+// COMMSFIX.D.2a — the single operator-facing message for a failed export.
+// Exported so callers can compare/re-use it rather than re-wording the reason.
+export const EXPORT_FAILED = "The email designer didn't finish loading — nothing was sent. Wait for the designer, then try again."
+
 export function useUnlayerEditor({ mountId, active = true } = {}) {
   const [loaded, setLoaded] = useState(false)
   const ref = useRef(null)
@@ -67,20 +71,31 @@ export function useUnlayerEditor({ mountId, active = true } = {}) {
   // Export the current HTML + design. The 2.5s timeout mirrors CampaignEditor —
   // the callback never fires if the iframe isn't mounted, which would otherwise
   // hang the send button forever.
-  const exportHtml = useCallback(() => new Promise((resolve) => {
+  //
+  // COMMSFIX.D.2a — every failure path REJECTS. It used to resolve
+  // { html: '', design: null }, and the composer posted that '' straight to
+  // email-draft with action 'send': a bodyless campaign queued to the whole
+  // audience, every recipient permanently rejected by Postmark, and the
+  // operator's design gone. A caller that cannot get real HTML must be forced
+  // to stop, never handed an empty body that looks like a successful export.
+  const exportHtml = useCallback(() => new Promise((resolve, reject) => {
+    const fail = () => reject(new Error(EXPORT_FAILED))
     if (!window.unlayer || typeof window.unlayer.exportHtml !== 'function') {
-      resolve({ html: '', design: null }); return
+      fail(); return
     }
     let done = false
-    const timer = setTimeout(() => { if (!done) { done = true; resolve({ html: '', design: null }) } }, 2500)
+    const timer = setTimeout(() => { if (!done) { done = true; fail() } }, 2500)
     try {
       window.unlayer.exportHtml((data) => {
         if (done) return
         done = true; clearTimeout(timer)
-        resolve({ html: data?.html ?? '', design: data?.design ?? null })
+        const html = data?.html
+        // A blank body is the same failure wearing a success costume.
+        if (typeof html !== 'string' || html.trim() === '') { fail(); return }
+        resolve({ html, design: data?.design ?? null })
       })
     } catch {
-      if (!done) { done = true; clearTimeout(timer); resolve({ html: '', design: null }) }
+      if (!done) { done = true; clearTimeout(timer); fail() }
     }
   }), [])
 
