@@ -601,7 +601,21 @@ export async function tickCampaignSend(db, campaign) {
 
   const results = await sendBatch(emailBatch, { sender: tenantSender })
 
-  // Apply results.
+  // COMMSFIX.C.1 — WRITE email_sends FIRST. This ordering is the whole fix.
+  //
+  // Postmark's Delivery webhook lands within a second or two of this batch
+  // response. The per-recipient UPDATE loop below is sequential over the whole
+  // chunk (up to CHUNK_SIZE rows), so when the insert sat AFTER it the early
+  // webhooks arrived to find no email_sends row, silently no-opped, and
+  // recalculate_campaign_stats then baked the loss in permanently (live:
+  // campaign f66d6576 reported delivered 48/1000 against ~950 real
+  // deliveries). Building the rows and inserting them as the first write after
+  // sendBatch closes that window to roughly nothing.
+  //
+  // The insert's error was also discarded entirely — a failed insert produced
+  // a campaign whose every engagement counter read zero with no trace anywhere.
+  // One retry (the realistic failure is a transient deadlock/timeout), then a
+  // loud console.error plus campaigns.last_error so it surfaces in the UI.
   let sentCount = 0
   let bouncedCount = 0
   let retriedCount = 0
@@ -610,17 +624,7 @@ export async function tickCampaignSend(db, campaign) {
   for (let i = 0; i < results.length; i++) {
     const result = results[i]
     const item = emailBatch[i]
-
     if (result.ErrorCode === 0 || result.MessageID) {
-      sentCount++
-      await db.from('campaign_recipients')
-        .update({
-          status: 'sent',
-          postmark_message_id: result.MessageID,
-          sent_at: new Date().toISOString(),
-        })
-        .eq('id', item._recipientId)
-
       sendRecords.push({
         contact_id: item._contactId,
         location_id: campaign.location_id,
@@ -635,6 +639,45 @@ export async function tickCampaignSend(db, campaign) {
         postmark_stream: stream,
         status: 'sent',
       })
+    }
+  }
+
+  if (sendRecords.length > 0) {
+    let insertErr = (await db.from('email_sends').insert(sendRecords))?.error || null
+    if (insertErr) {
+      console.error('[campaign-sender] email_sends insert failed, retrying once:', insertErr.message)
+      insertErr = (await db.from('email_sends').insert(sendRecords))?.error || null
+    }
+    if (insertErr) {
+      const msg = `email_sends insert failed for ${sendRecords.length} recipients — delivery/open webhooks for this chunk will find no row: ${insertErr.message}`
+      console.error('[campaign-sender]', msg)
+      await db.from('campaigns').update({ last_error: msg }).eq('id', campaignId)
+    }
+    // FREQ-CAP.1 — batch marketing-touch stamp for this chunk's successful
+    // sends. Marketing stream only (utility campaigns never stamp); stamped
+    // even while the cap is DISABLED so enabling it later has history.
+    // Best-effort inside the helper — a stamp failure never fails the tick.
+    // Runs whatever the insert did: Postmark accepted the mail, so the contact
+    // WAS touched, and the frequency cap must know that either way.
+    if (stream === 'broadcast') {
+      await stampMarketingTouch(db, sendRecords.map(r => r.contact_id))
+    }
+  }
+
+  // Apply the per-recipient results.
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i]
+    const item = emailBatch[i]
+
+    if (result.ErrorCode === 0 || result.MessageID) {
+      sentCount++
+      await db.from('campaign_recipients')
+        .update({
+          status: 'sent',
+          postmark_message_id: result.MessageID,
+          sent_at: new Date().toISOString(),
+        })
+        .eq('id', item._recipientId)
     } else if (isTransientSendError(result)) {
       // CAMPAIGN-REL.1 — transient (network/-1, HTTP 429/5xx, Postmark
       // rate-limit/maintenance): retry on a later tick, bounded by
@@ -665,17 +708,6 @@ export async function tickCampaignSend(db, campaign) {
           last_error: result.Message || null,
         })
         .eq('id', item._recipientId)
-    }
-  }
-
-  if (sendRecords.length > 0) {
-    await db.from('email_sends').insert(sendRecords)
-    // FREQ-CAP.1 — batch marketing-touch stamp for this chunk's successful
-    // sends. Marketing stream only (utility campaigns never stamp); stamped
-    // even while the cap is DISABLED so enabling it later has history.
-    // Best-effort inside the helper — a stamp failure never fails the tick.
-    if (stream === 'broadcast') {
-      await stampMarketingTouch(db, sendRecords.map(r => r.contact_id))
     }
   }
 

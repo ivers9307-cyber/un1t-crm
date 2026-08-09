@@ -193,6 +193,8 @@ function stubDeliveryDb({ send = null, stampError = null } = {}) {
     b.update = (values) => { b._op = 'update'; b._values = values; return b }
     b.eq = (col, val) => { b._filters.push(['eq', col, val]); return b }
     b.in = (col, val) => { b._filters.push(['in', col, val]); return b }
+    // COMMSFIX.C.1 — the Delivery handler now guards on .is('delivered_at', null).
+    b.is = (col, val) => { b._filters.push(['is', col, val]); return b }
     b.not = (col, op, val) => { b._filters.push(['not', col, op, val]); return b }
     b.or = (expr) => { b._filters.push(['or', expr]); return b }
     b.single = () => settle('single')
@@ -258,5 +260,93 @@ describe('processPostmarkEvent — ticket delivery stamping (EMAIL-DELIVERY.1)',
     const r = await processPostmarkEvent(db, { RecordType: 'Delivery' })
     expect(r).toEqual({ ok: false, error: 'missing_message_id' })
     expect(db.messageUpdates).toEqual([])
+  })
+})
+
+// ── COMMSFIX.C.1 — Delivery is a transition, not an event ──────────────────
+//
+// Two properties, both prod-driven:
+//   • total_delivered may only increment when THIS event is the one that moved
+//     delivered_at from NULL to a timestamp. Narrowing the webhook dedup key
+//     (COMMSFIX.C.2) lets repeats through, so an unguarded increment would
+//     start double-counting the moment that lands.
+//   • The recipient stamp must also match rows still in 'sending'. The chunk
+//     claim flips queued→sending and the Delivery webhook routinely beats the
+//     per-recipient 'sent' update, so a 'sending' row was silently skipped.
+function stubDeliveryTransitionDb({ updatedRows = [], recipientRows = [] } = {}) {
+  const rpcCalls = []
+  const sendUpdates = []
+  const recipientUpdates = []
+
+  function builder(table) {
+    const b = { _op: 'select', _values: null, _filters: [] }
+    const settle = (shape) => {
+      if (b._op === 'update' && table === 'email_sends') {
+        sendUpdates.push({ values: b._values, filters: b._filters })
+        return Promise.resolve({ data: updatedRows, error: null })
+      }
+      if (b._op === 'update' && table === 'campaign_recipients') {
+        recipientUpdates.push({ values: b._values, filters: b._filters })
+        return Promise.resolve({ data: recipientRows, error: null })
+      }
+      if (b._op === 'update') return Promise.resolve({ data: null, error: null })
+      return Promise.resolve({ data: shape === 'single' ? null : [], error: null })
+    }
+    b.select = () => (b._op === 'update' ? settle('list') : b)
+    b.update = (values) => { b._op = 'update'; b._values = values; return b }
+    b.eq = (col, val) => { b._filters.push(['eq', col, val]); return b }
+    b.in = (col, val) => { b._filters.push(['in', col, val]); return b }
+    b.is = (col, val) => { b._filters.push(['is', col, val]); return b }
+    b.not = (col, op, val) => { b._filters.push(['not', col, op, val]); return b }
+    b.or = (expr) => { b._filters.push(['or', expr]); return b }
+    b.single = () => settle('single')
+    b.maybeSingle = () => settle('single')
+    b.then = (resolve, reject) => settle('list').then(resolve, reject)
+    return b
+  }
+
+  return {
+    rpcCalls, sendUpdates, recipientUpdates,
+    from: builder,
+    rpc: (fn, args) => { rpcCalls.push([fn, args]); return Promise.resolve({ error: null }) },
+  }
+}
+
+const DELIVERY = { RecordType: 'Delivery', MessageID: 'pm-d1', DeliveredAt: '2026-08-09T10:00:00Z' }
+
+describe('processPostmarkEvent — Delivery transition guard (COMMSFIX.C.1)', () => {
+  it('increments total_delivered when the update actually flipped delivered_at NULL → set', async () => {
+    const db = stubDeliveryTransitionDb({ updatedRows: [{ id: 's1', campaign_id: 'camp1' }] })
+
+    const r = await processPostmarkEvent(db, DELIVERY)
+
+    expect(r.ok).toBe(true)
+    expect(db.rpcCalls).toContainEqual([
+      'increment_campaign_metric',
+      { p_campaign_id: 'camp1', p_field: 'total_delivered' },
+    ])
+    // The guard has to be on the wire, not in JS — a second worker must lose.
+    const stamp = db.sendUpdates.find(u => u.values?.status === 'delivered')
+    expect(stamp.filters).toContainEqual(['is', 'delivered_at', null])
+  })
+
+  it('does NOT increment when the row was already delivered (replayed event)', async () => {
+    const db = stubDeliveryTransitionDb({ updatedRows: [] })
+
+    const r = await processPostmarkEvent(db, DELIVERY)
+
+    expect(r.ok).toBe(true)
+    expect(db.rpcCalls).toEqual([])
+  })
+
+  it('stamps campaign_recipients rows still in sending, not just sent/queued', async () => {
+    const db = stubDeliveryTransitionDb({ updatedRows: [{ id: 's1', campaign_id: null }] })
+
+    await processPostmarkEvent(db, DELIVERY)
+
+    const stamp = db.recipientUpdates.find(u => u.values?.status === 'delivered')
+    expect(stamp).toBeTruthy()
+    const statuses = stamp.filters.find(([kind, col]) => kind === 'in' && col === 'status')[2]
+    expect(statuses).toEqual(expect.arrayContaining(['sent', 'queued', 'sending']))
   })
 })

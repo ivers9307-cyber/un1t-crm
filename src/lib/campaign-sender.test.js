@@ -1281,3 +1281,86 @@ describe('tickCampaignSend — audience populate pagination (CAMPAIGN.14)', () =
     expect(result.error).toMatch(/send_started_at/)
   })
 })
+
+// ── COMMSFIX.C.1 — email_sends must exist before the webhook arrives ────────
+//
+// Prod evidence (campaign f66d6576): delivered 48/1000 while ~950 really
+// delivered. Postmark's Delivery webhook lands within a second or two of the
+// batch response; the email_sends rows were written only AFTER a sequential
+// per-recipient UPDATE loop over the whole 500-row chunk, so the early
+// webhooks found no row, silently no-opped, and recalculate_campaign_stats
+// then baked the loss in. The insert must be the FIRST write after sendBatch,
+// and its error must be checked — it was thrown away entirely.
+describe('tickCampaignSend — email_sends insert ordering + error handling (COMMSFIX.C.1)', () => {
+  const indexOfInsert = (statements) =>
+    statements.findIndex(s => s.table === 'email_sends' && s.ops[0]?.method === 'insert')
+  const indexOfSentUpdate = (statements) =>
+    statements.findIndex(s =>
+      s.table === 'campaign_recipients' &&
+      s.ops[0]?.method === 'update' &&
+      s.ops[0].args[0]?.status === 'sent')
+
+  it('inserts the email_sends rows BEFORE the per-recipient status-update loop', async () => {
+    const { db, statements } = makeDb(routeFor({
+      candidates: [makeRecipient('r1', 0), makeRecipient('r2', 0)],
+    }))
+    sendBatch.mockResolvedValue([
+      { ErrorCode: 0, MessageID: 'pm-1' },
+      { ErrorCode: 0, MessageID: 'pm-2' },
+    ])
+
+    await tickCampaignSend(db, campaign)
+
+    const insertIdx = indexOfInsert(statements)
+    const sentIdx = indexOfSentUpdate(statements)
+    expect(insertIdx).toBeGreaterThan(-1)
+    expect(sentIdx).toBeGreaterThan(-1)
+    expect(insertIdx).toBeLessThan(sentIdx)
+    // Both successful sends are in that single insert.
+    expect(statements[insertIdx].ops[0].args[0].map(r => r.postmark_message_id))
+      .toEqual(['pm-1', 'pm-2'])
+  })
+
+  it('retries the email_sends insert once when it fails, and stays quiet if the retry works', async () => {
+    let attempts = 0
+    const base = routeFor({ candidates: [makeRecipient('r1', 0)] })
+    const { db, statements } = makeDb((state) => {
+      if (state.table === 'email_sends' && state.ops[0]?.method === 'insert') {
+        attempts++
+        return attempts === 1 ? { error: { message: 'deadlock detected' } } : { error: null }
+      }
+      return base(state)
+    })
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, campaign)
+
+    expect(attempts).toBe(2)
+    const stamped = statements.filter(s =>
+      s.table === 'campaigns' && s.ops[0]?.method === 'update' && 'last_error' in (s.ops[0].args[0] || {}))
+    expect(stamped).toHaveLength(0)
+  })
+
+  it('records the failure loudly on the campaign when both insert attempts fail', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const base = routeFor({ candidates: [makeRecipient('r1', 0)] })
+    const { db, statements } = makeDb((state) => {
+      if (state.table === 'email_sends' && state.ops[0]?.method === 'insert') {
+        return { error: { message: 'permission denied for table email_sends' } }
+      }
+      return base(state)
+    })
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, campaign)
+
+    const inserts = statements.filter(s => s.table === 'email_sends' && s.ops[0]?.method === 'insert')
+    expect(inserts).toHaveLength(2)
+    const stamped = statements.find(s =>
+      s.table === 'campaigns' && s.ops[0]?.method === 'update' && 'last_error' in (s.ops[0].args[0] || {}))
+    expect(stamped).toBeTruthy()
+    expect(stamped.ops[0].args[0].last_error).toMatch(/email_sends/)
+    expect(err).toHaveBeenCalled()
+    err.mockRestore()
+  })
+})

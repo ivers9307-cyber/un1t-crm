@@ -67,23 +67,33 @@ export async function processPostmarkEvent(db, body) {
   try {
     switch (recordType) {
       case 'Delivery': {
-        await db.from('email_sends')
+        // COMMSFIX.C.1 — the increment rides the TRANSITION, not the event.
+        //
+        // `.is('delivered_at', null)` makes the UPDATE itself the guard: the
+        // returned rows are exactly the ones this event moved from NULL to a
+        // timestamp, so a replayed Delivery (now possible — COMMSFIX.C.2
+        // narrows the webhook dedup key) matches zero rows and increments
+        // nothing. Two concurrent workers race on the row lock and only one
+        // sees a row back. Reading campaign_id off the returned row also drops
+        // the follow-up SELECT the old code needed.
+        const { data: deliveredSends } = await db.from('email_sends')
           .update({ status: 'delivered', delivered_at: body.DeliveredAt })
           .eq('postmark_message_id', messageId)
+          .is('delivered_at', null)
+          .select('id, campaign_id')
 
+        // 'sending' belongs here: the chunk claim flips queued→sending before
+        // the batch goes out, and the Delivery webhook regularly beats the
+        // per-recipient 'sent' update, so those rows were being skipped.
         await db.from('campaign_recipients')
           .update({ status: 'delivered', delivered_at: body.DeliveredAt })
           .eq('postmark_message_id', messageId)
-          .in('status', ['sent', 'queued'])
+          .in('status', ['sent', 'queued', 'sending'])
 
-        const { data: send } = await db.from('email_sends')
-          .select('campaign_id')
-          .eq('postmark_message_id', messageId)
-          .single()
-
-        if (send?.campaign_id) {
+        const campaignId = (deliveredSends || []).find(s => s?.campaign_id)?.campaign_id
+        if (campaignId) {
           const { error } = await db.rpc('increment_campaign_metric', {
-            p_campaign_id: send.campaign_id,
+            p_campaign_id: campaignId,
             p_field: 'total_delivered',
           })
           if (error) console.error('[postmark processor] total_delivered increment failed:', error.message)
