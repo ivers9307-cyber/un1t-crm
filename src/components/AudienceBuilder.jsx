@@ -1,7 +1,10 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Users, AlertTriangle } from 'lucide-react'
+import { Plus, Trash2, Users, AlertTriangle, Sparkles } from 'lucide-react'
+// FILTER-A.1 — the verified preset definitions live in their own module so the
+// counts they produce can be checked against the spec table without rendering.
+import { presetFilter } from '@/lib/audience-presets'
 // COMMSFIX.B.3 — the server-side allowlist is the single source of truth for
 // which ops a field supports. The per-type op lists below are filtered
 // against it so the UI can never build a row the count/populate side 400s on
@@ -11,7 +14,7 @@ import { AUDIENCE_FIELDS } from '@/lib/audience-filter'
 // UTC one; `new Date().toISOString().split('T')[0]` is lint-banned for this.
 import { dublinTodayStr } from '@/lib/dublin-time'
 
-const FIELD_OPTIONS = [
+export const FIELD_OPTIONS = [
   // FUNNEL.1 — primary funnel-stage filter (canonical funnel slugs,
   // mig 350). Denormalised onto contacts.pipeline_stage_slug (originally
   // mig 155, synced from deals.stage_id via trigger). Stage placement is
@@ -235,7 +238,7 @@ export const STAGE_MEMBER_DEFAULT_ROW = Object.freeze({
   field: 'pipeline_stage_slug', op: 'eq', value: 'member',
 })
 
-export default function AudienceBuilder({ filter, onChange, audienceCount, disabled = false, defaultFilterRow = null }) {
+export default function AudienceBuilder({ filter, onChange, audienceCount, disabled = false, defaultFilterRow = null, presets = null }) {
   const filters = filter?.filters || []
   const logic = filter?.logic || 'and'
 
@@ -349,8 +352,45 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
     updateRow(index, { field: newField, op: defaultOp, value: defaultValue })
   }
 
+  // FILTER-A.1 — a preset REPLACES the working filter with its rows. It is not
+  // a mode: nothing is remembered, nothing is locked, and the operator is left
+  // looking at ordinary editable rows. Deliberately no count on the chip — the
+  // composer's count path is the only thing allowed to state a number, and it
+  // states it after the rows land (see src/lib/audience-presets.js).
+  function applyPreset(preset) {
+    updateFilter(presetFilter(preset).filters, 'and')
+  }
+
   return (
     <div className="space-y-4">
+      {/* FILTER-A.1 — preset audiences. Opt-in per host: the send composer
+          passes them, sequences and /contacts must not (a sequence audience is
+          a CONTINUING condition, so these rows would mean something else). */}
+      {presets?.length > 0 && (
+        <div
+          role="group"
+          aria-label="Preset audiences"
+          data-testid="audience-presets"
+          className="flex flex-wrap items-center gap-1.5"
+        >
+          <span className="text-[11px] uppercase tracking-wider text-un1t-subtle flex items-center gap-1">
+            <Sparkles size={11} aria-hidden="true" /> Presets
+          </span>
+          {presets.map(preset => (
+            <button
+              key={preset.id}
+              type="button"
+              disabled={disabled}
+              onClick={() => applyPreset(preset)}
+              title={preset.description}
+              className="rounded-full border border-un1t-border px-3 py-1 text-xs text-un1t-subtle transition-colors hover:text-un1t-text focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text disabled:opacity-50"
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Logic toggle */}
       {filters.length > 1 && (
         <div className="flex items-center gap-2 text-sm">
