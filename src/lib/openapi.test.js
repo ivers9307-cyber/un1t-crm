@@ -61,6 +61,18 @@ describe('getOpenApiSpec', () => {
     }
   })
 
+  // SEQGAPS.1 — the manual exit is irreversible and 409s on the second
+  // call; both facts belong in the spec, not just in the route header.
+  it('documents the manual enrolment exit, including its 409', () => {
+    const p = '/api/sequences/{id}/enrollments/{enrollmentId}/exit'
+    expect(spec.paths, `missing ${p}`).toHaveProperty(p)
+    const op = spec.paths[p].post
+    expect(op.tags).toContain('Automations')
+    expect(op.security).toContainEqual({ CookieAuth: [] })
+    expect(op.responses).toHaveProperty('409')
+    expect(op.responses).toHaveProperty('404')
+  })
+
   it('caches the spec object across calls (same reference)', async () => {
     expect(await getOpenApiSpec()).toBe(spec)
   })

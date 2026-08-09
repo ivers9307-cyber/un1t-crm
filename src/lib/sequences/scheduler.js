@@ -154,6 +154,15 @@ export function clampToSendWindow(candidate, window) {
  *   { type: 'pipeline_stage',  value: '<slug>'   }
  *   { type: 'booking_made',    event_type_id?: '<uuid>' }
  *
+ * SEQGAPS.1:
+ *   { type: 'membership_state', value: 'active'|'paused'|'locked' }
+ *   For dunning, "they paid" is a WIN, not a drop-out. Without this the
+ *   only way to stop chasing a contact who went back to active was the
+ *   audience filter, which records exit_reason='left_audience' and
+ *   under-counts the sequence's actual success (SEQEXIT.1 runs the goal
+ *   check FIRST for exactly this reason). Reads the already-loaded
+ *   contact — no DB round trip.
+ *
  * Deprecated goal-type alias (CLASSIFY.2):
  *   { type: 'lead_status', value: '<slug>' } — kept for back-compat
  *   with existing sequence rows. Reads pipeline_stage_slug. Emits a
@@ -180,6 +189,14 @@ export async function isGoalMet({ db, contact, goalConfig }) {
         '[sequences] goal type "lead_status" is deprecated; use "pipeline_stage" — reading pipeline_stage_slug'
       )
       return contact.pipeline_stage_slug === goalConfig.value
+    }
+    if (goalConfig.type === 'membership_state') {
+      // An UNCONFIGURED goal must never auto-exit anyone: without this
+      // guard a null value would match every contact whose state is also
+      // null/undefined and silently empty the sequence. Same instinct as
+      // the fail-open rule — uncertainty never takes the exit branch.
+      if (!goalConfig.value) return false
+      return contact.glofox_membership_state === goalConfig.value
     }
     if (goalConfig.type === 'tag_added') {
       const tag = String(goalConfig.tag || '').trim()

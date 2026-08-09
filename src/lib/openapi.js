@@ -3585,6 +3585,67 @@ registry.registerPath({
   },
 })
 
+// SEQGAPS.1 — manual exit for one enrolment. The operator override for when
+// neither auto-exit (goal_met / left_audience) fires.
+registry.registerPath({
+  method: 'post',
+  path: '/api/sequences/{id}/enrollments/{enrollmentId}/exit',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Exit one enrolment from a sequence by hand (exit_reason=manual_exit)',
+  description:
+    'Compare-and-set on status IN (active, paused): the enrolment is marked exited with '
+    + "exit_reason='manual_exit' and next_step_at=null, so the scheduler never picks it up again. "
+    + 'IRREVERSIBLE — there is no un-exit; re-entry means enrolling the contact again. '
+    + 'Bounded honesty: the scheduler ticks every ~5 minutes and may already be mid-step for this '
+    + 'enrolment, so a step already handed to the email/WhatsApp/SMS provider will still be delivered. '
+    + 'This makes the database state correct; it does not recall a send in flight. '
+    + 'Requires the email permission and access to the parent sequence’s location.',
+  request: { params: z.object({ id: uuidLike, enrollmentId: uuidLike }) },
+  responses: {
+    200: {
+      description: 'Exited',
+      content: {
+        'application/json': {
+          schema: SuccessResponse(z.object({
+            id: uuidLike,
+            status: z.literal('exited'),
+            exit_reason: z.literal('manual_exit'),
+          }).openapi('SequenceEnrollmentExited')),
+        },
+      },
+    },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Email permission required, or the sequence is outside the caller’s locations', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Sequence or enrolment not found (404 not 403, so ids cannot be enumerated)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'The enrolment is no longer active or paused — already exited or completed. Benign (a double-click or a cron race), not a failure.', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// SEQ-RESUME.1 — registered here by SEQGAPS.1. The route has existed since the
+// 2026-07-10 comms-audit remediation but was never added to the spec, so the
+// sibling of /exit was missing from /api-docs. Repo convention is that every
+// route is registered; recording it now rather than leaving the pair asymmetric.
+registry.registerPath({
+  method: 'post',
+  path: '/api/sequences/{id}/enrollments/{enrollmentId}/resume',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Resume a PAUSED enrolment (clears the error ledger, due now)',
+  description:
+    'Compare-and-set on status=paused: the enrolment goes active and due immediately with its '
+    + 'consecutive-error count cleared — the shape the scheduler expects after MAX_ERRORS auto-paused it. '
+    + 'Requires the email permission and access to the parent sequence’s location.',
+  request: { params: z.object({ id: uuidLike, enrollmentId: uuidLike }) },
+  responses: {
+    200: { description: 'Resumed', content: { 'application/json': { schema: SuccessResponse(z.object({ id: uuidLike, status: z.literal('active') }).openapi('SequenceEnrollmentResumed')) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Email permission required, or the sequence is outside the caller’s locations', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Sequence or enrolment not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'The enrolment is no longer paused — a double-click or a concurrent resume.', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Tapo devices (TAPO-T1) — staff registry/config/toggle, gated by the
 // device_control permission. Lives under the Automations tag: the UI
 // surface is /automations/devices. Note: these routes return
