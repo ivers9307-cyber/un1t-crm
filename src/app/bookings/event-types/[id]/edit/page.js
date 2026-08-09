@@ -2,7 +2,7 @@
 // See src/app/bookings/event-types/page.js header for context.
 
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import EventForm from '@/components/EventForm'
 import Link from 'next/link'
@@ -16,7 +16,10 @@ export default async function EditBookingTypePage(props) {
   const db = createServerClient()
   const { data: event } = await db.from('event_types').select('*').eq('id', params.id).single()
 
-  if (!event) {
+  // IDOR guard — a foreign-location row renders the SAME panel as a
+  // missing one, so foreign ids aren't enumerable. Sibling of the detail
+  // page's guard (found by the PAGE-SCOPE.1 scan).
+  if (!event || assertLocationAccess(user, event.location_id)) {
     return (
       <div className="p-8">
         <p className="text-un1t-subtle">Booking type not found.</p>
