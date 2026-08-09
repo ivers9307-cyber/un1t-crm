@@ -1,10 +1,16 @@
 // PILLAR2 Phase 1 — live "how many contacts match" count for the unified send
-// surface. Single-table count on contacts (the campaigns count pattern —
-// head:true returns the TRUE count, uncapped). Deliberately channel-agnostic:
-// it counts contacts matching the audience filter at the location; the actual
-// per-channel consent + reachability gates apply at send time (the send result
-// reports the real recipient count). Avoids the brittle embedded-resource
-// count-under-inner-join (see CLAUDE.md PostgREST lesson).
+// surface. Single-table counts (head:true returns the TRUE count, uncapped);
+// avoids the brittle embedded-resource count-under-inner-join (see CLAUDE.md
+// PostgREST lesson).
+//
+// COMMSFIX.B.5 — the email and SMS branches are SEND-PARITY: `count` is the
+// number the send would actually reach (per-location consent + status +
+// suppression via contact_location_audience, exactly like populate), with
+// `matched` (filter-only) and an `excluded` breakdown alongside — the
+// WhatsApp branch has worked this way all along and is the template. The old
+// channel-agnostic email/SMS count overstated the audience ~2.5x (raw
+// contacts at the location, no gates) and its email 'suppressed' sub-count
+// read the retired GLOBAL contacts.email_marketing column.
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -13,6 +19,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { applyAudienceFilterAsync } from '@/lib/audience-filter'
 import { computeWhatsAppReachabilitySummary } from '@/lib/whatsapp'
+import { buildAudienceQueryAsync } from '@/lib/postmark'
 
 export const runtime = 'nodejs'
 
@@ -42,6 +49,69 @@ export async function POST(request) {
         await computeWhatsAppReachabilitySummary(db, audience_filter || { logic: 'and', filters: [] }, location_id)
       return NextResponse.json({ success: true, count: matched, reachable, excluded })
     }
+    const filter = audience_filter || { logic: 'and', filters: [] }
+
+    // Filter-scoped count over the per-location audience view, optionally
+    // refined with extra gates. Single-table (mig 491 view), head:true safe.
+    const viewCount = async (refine) => {
+      let base = db
+        .from('contact_location_audience')
+        .select('id', { count: 'exact', head: true })
+        .eq('audience_location_id', location_id)
+      if (refine) base = refine(base)
+      const { query: q } = await applyAudienceFilterAsync({ db, query: base, filter, locationId: location_id })
+      const { count: c, error: e } = await q
+      if (e) throw new Error(e.message)
+      return c || 0
+    }
+
+    if (channel === 'email') {
+      // Order matters — keep aligned with the route test's count sequence.
+      const matched = await viewCount(null)
+      const not_opted_in = await viewCount((q) => q.eq('loc_email_marketing', false))
+      const bounced_or_complained = await viewCount((q) => q.in('email_status', ['bounced', 'complained']))
+      // EMAIL-HYGIENE.1 — inactivity suppression (email_suppressed_at, mig
+      // 395), gated on the PER-LOCATION consent column (the old sub-count
+      // read the retired global contacts.email_marketing): consented AND
+      // stamped, matching buildAudienceQuery's marketing gate.
+      const suppressed = await viewCount((q) => q.eq('loc_email_marketing', true).not('email_suppressed_at', 'is', null))
+      // The will-receive number comes from the EXACT send-path builder the
+      // populate step uses (view + loc_email_marketing + email_status +
+      // suppression), so this count equals what a send would enrol.
+      const { query: eligibleQuery } = await buildAudienceQueryAsync(db, filter, location_id, {
+        columns: 'id',
+        selectOpts: { count: 'exact', head: true },
+      })
+      const { count: eligible, error: eligibleErr } = await eligibleQuery
+      if (eligibleErr) return NextResponse.json({ success: false, error: eligibleErr.message }, { status: 400 })
+      return NextResponse.json({
+        success: true,
+        count: eligible || 0,   // eligible / will receive (back-compat key)
+        matched,                // filter-only
+        suppressed,             // back-compat top-level key (pre-B5 consumers)
+        excluded: { not_opted_in, bounced_or_complained, suppressed },
+      })
+    }
+
+    if (channel === 'sms') {
+      // Mirror the SMS send gate (sms.js smsAudienceBase): per-location
+      // consent + active sms_status + a phone number. Order matters — keep
+      // aligned with the route test's count sequence.
+      const matched = await viewCount(null)
+      const eligible = await viewCount((q) => q.eq('loc_sms_marketing', true).eq('sms_status', 'active').not('phone', 'is', null))
+      const no_phone = await viewCount((q) => q.is('phone', null))
+      const not_opted_in = await viewCount((q) => q.eq('loc_sms_marketing', false))
+      const opted_out = await viewCount((q) => q.neq('sms_status', 'active'))
+      return NextResponse.json({
+        success: true,
+        count: eligible,        // eligible / will receive (back-compat key)
+        matched,
+        excluded: { no_phone, not_opted_in, opted_out },
+      })
+    }
+
+    // No channel — the original channel-agnostic raw-contacts count (kept
+    // for callers that want filter reach, not deliverability).
     // Count on the FIRST .select() (postgrest-js only reads head/count there).
     const baseQuery = db.from('contacts').select('id', { count: 'exact', head: true }).eq('location_id', location_id)
     // Async path resolves virtual fields (event_registration + tag) into the
@@ -49,35 +119,11 @@ export async function POST(request) {
     const { query } = await applyAudienceFilterAsync({
       db,
       query: baseQuery,
-      filter: audience_filter || { logic: 'and', filters: [] },
+      filter,
       locationId: location_id,
     })
     const { count, error } = await query
     if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-
-    // EMAIL-HYGIENE.1 — for the email channel, also count the matches the
-    // marketing send gate will exclude for inactivity (email_suppressed_at
-    // stamped by the email-engagement-sweep cron, mig 395) so the composer
-    // can show "N excluded for inactivity" before the send. Mirrors the
-    // WhatsApp branch's excluded breakdown above. The suppression filter
-    // matches buildAudienceQuery's marketing gate: consented AND stamped.
-    if (channel === 'email') {
-      const suppressedBase = db
-        .from('contacts')
-        .select('id', { count: 'exact', head: true })
-        .eq('location_id', location_id)
-        .eq('email_marketing', true)
-        .not('email_suppressed_at', 'is', null)
-      const { query: suppressedQuery } = await applyAudienceFilterAsync({
-        db,
-        query: suppressedBase,
-        filter: audience_filter || { logic: 'and', filters: [] },
-        locationId: location_id,
-      })
-      const { count: suppressedCount, error: suppressedErr } = await suppressedQuery
-      if (suppressedErr) return NextResponse.json({ success: false, error: suppressedErr.message }, { status: 400 })
-      return NextResponse.json({ success: true, count: count || 0, suppressed: suppressedCount || 0 })
-    }
 
     return NextResponse.json({ success: true, count: count || 0 })
   } catch (e) {
