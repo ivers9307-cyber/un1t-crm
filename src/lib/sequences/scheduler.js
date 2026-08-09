@@ -7,7 +7,8 @@
 // State machine:
 //   active    — currently in the sequence; next_step_at <= now() means due
 //   paused    — admin-paused, or auto-paused after MAX_ERRORS consecutive failures
-//   exited    — contact left (unsubscribe, goal met, or sequence/contact deleted)
+//   exited    — contact left (unsubscribe, goal met, no longer matches the
+//               sequence's audience filter, or sequence/contact deleted)
 //   completed — every step has been sent
 //
 // Failure handling: if a step send throws, the error is recorded on
@@ -16,7 +17,9 @@
 // broken contact (e.g. invalid email) can't fill the cron logs forever.
 
 import { createServerClient } from '@/lib/supabase'
+import { logWarn } from '@/lib/log'
 import { getLocationFrequencyCap, FrequencyCapDeferral } from '@/lib/frequency-cap'
+import { evaluateSequenceAudience } from './audience.js'
 import {
   sendEmailStep,
   sendWhatsappStep,
@@ -314,6 +317,45 @@ export async function runSequences({ now = new Date() } = {}) {
           }).eq('id', enrollment.id)
           stats.skipped++
           continue
+        }
+      }
+
+      // SEQEXIT.1: the audience filter is a CONTINUING condition, not
+      // just an entry gate. A dunning chase must stop when the member
+      // pays and drops out of the arrears segment. Runs AFTER the goal
+      // check on purpose — if someone both converted and drifted out of
+      // the audience, 'goal_met' is the truer story and the one the
+      // operator's funnel should count.
+      //
+      // FAILS OPEN. The evaluator's third state, 'unknown', covers a
+      // malformed filter, a failed query and any unexpected throw.
+      // Exiting an enrolment is irreversible and there is no manual
+      // re-entry, so "we could not tell" must never terminate someone
+      // mid-sequence — only a definite 'no_match' exits.
+      //
+      // The guard skips the query entirely for the common case (no
+      // filter, or an empty one) rather than buying a round trip per
+      // step for a filter that matches everyone.
+      if (sequence.audience_filter?.filters?.length) {
+        const audienceState = await evaluateSequenceAudience(
+          db, enrollment.contact_id, sequence.audience_filter,
+        )
+        if (audienceState === 'no_match') {
+          await db.from('sequence_enrollments').update({
+            status: 'exited',
+            exit_reason: 'left_audience',
+            last_processed_at: now.toISOString(),
+            next_step_at: null,
+          }).eq('id', enrollment.id)
+          stats.skipped++
+          continue
+        }
+        if (audienceState === 'unknown') {
+          logWarn('sequences', 'could not evaluate sequence audience, leaving enrolment active', {
+            sequenceId: sequence.id,
+            contactId: enrollment.contact_id,
+            enrollmentId: enrollment.id,
+          })
         }
       }
 

@@ -34,6 +34,19 @@ const SOURCE_LABELS = {
 }
 const sourceLabel = (s) => SOURCE_LABELS[s] || (s ? s.replace(/_/g, ' ') : '—')
 
+// Friendly labels for sequence_enrollments.exit_reason (why they left).
+// The /stats route groups by this column and it is FREE TEXT, so the map
+// can never be exhaustive — anything unmapped still renders legibly.
+const EXIT_REASON_LABELS = {
+  goal_met: 'Goal met',
+  // SEQEXIT.1 — the audience filter is re-checked before every step.
+  left_audience: 'No longer matched the audience',
+  unsubscribed: 'Unsubscribed',
+  unspecified: 'Unspecified',
+}
+export const exitReasonLabel = (r) =>
+  EXIT_REASON_LABELS[r] || (r ? r.replace(/_/g, ' ') : 'Unspecified')
+
 // Light-theme status ramps (-700 text per the palette convention).
 const STATUS_CHIP = {
   active: 'bg-blue-500/15 text-blue-700',
@@ -177,7 +190,7 @@ export default function AutomationPerformance({ sequenceId, steps = [] }) {
 
           {Object.keys(exitReasons).length > 0 && (
             <p className="text-xs text-un1t-subtle mb-6">
-              Exits: {Object.entries(exitReasons).map(([r, n]) => `${r.replace(/_/g, ' ')} (${n})`).join(' · ')}
+              Exits: {Object.entries(exitReasons).map(([r, n]) => `${exitReasonLabel(r)} (${n})`).join(' · ')}
             </p>
           )}
         </>
