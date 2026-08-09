@@ -279,6 +279,10 @@ function pgArrayLiteral(v) {
 function applyArrayFieldOp(query, field, op, v) {
   switch (op) {
     case 'eq':
+    // FILTER-P1.3 — `contains` is the SAME operation as `eq` here (exact
+    // element membership, not substring: typing "PT" never finds "PTC").
+    // The builder no longer offers both, but the server keeps accepting the
+    // old name so filters saved under it still resolve identically.
     case 'contains':
       return query.contains(field, [String(v ?? '')])
     case 'neq':
@@ -286,11 +290,19 @@ function applyArrayFieldOp(query, field, op, v) {
       // COMMSFIX.B.1 — NULL-inclusive: "doesn't have this tag" must also
       // match contacts whose tags column is NULL (never tagged at all).
       return query.or(`${field}.not.cs.${orValue(pgArrayLiteral(v))},${field}.is.null`)
+    // FILTER-P1.3 — REAL emptiness, not a NULL test. contacts.tags is
+    // TEXT[] DEFAULT '{}' (mig 005), so `.is(field, null)` matched almost
+    // nobody and `.not(field,'is',null)` matched almost everybody — both
+    // silent, both wrong. `cd` (contained-by) against the empty array is
+    // true only for an empty array, which is what "has no tags" means.
+    // NULL is folded in on the empty side because a never-tagged contact
+    // has no tags either; on the non-empty side a NULL row fails
+    // `not.cd.{}` on its own (NULL <@ '{}' is NULL), so no extra clause.
     case 'is_null':
-      return query.is(field, null)
+      return query.or(`${field}.cd.{},${field}.is.null`)
     case 'is_not_null':
     case 'not_null':
-      return query.not(field, 'is', null)
+      return query.not(field, 'cd', '{}')
     default:
       throw new InvalidAudienceFilterError(`Operator "${op}" is not supported on array field "${field}"`)
   }
@@ -308,11 +320,12 @@ function toOrCondition(field, op, v, fieldConfig) {
       case 'not_contains':
         // COMMSFIX.B.1 — NULL-inclusive nested disjunct.
         return `or(${field}.not.cs.${orValue(pgArrayLiteral(v))},${field}.is.null)`
+      // FILTER-P1.3 — real emptiness; see applyArrayFieldOp for the reasoning.
       case 'is_null':
-        return `${field}.is.null`
+        return `or(${field}.cd.{},${field}.is.null)`
       case 'is_not_null':
       case 'not_null':
-        return `${field}.not.is.null`
+        return `${field}.not.cd.{}`
       default:
         throw new InvalidAudienceFilterError(`Operator "${op}" is not supported on array field "${field}"`)
     }

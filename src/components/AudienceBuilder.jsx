@@ -56,7 +56,12 @@ const FIELD_OPTIONS = [
   { value: 'lead_source',           label: 'Lead Source',           type: 'select',
     options: ['booking', 'meta', 'tiktok', 'walkin', 'referral', 'website', 'whatsapp', 'classpass', 'other'] },
   { value: 'label',                 label: 'Label',                 type: 'text' },
-  { value: 'tags',                  label: 'Free-text tag',         type: 'text' },
+  // FILTER-P1.3 — contacts.tags is TEXT[], not text. Its own builder type so
+  // it stops borrowing the scalar text op list, which offered "contains" (an
+  // exact element match here, so typing PT never found PTC — the same
+  // operation as "equals" under a second name) and is-empty/is-not-empty
+  // NULL tests that were meaningless against a DEFAULT '{}' column.
+  { value: 'tags',                  label: 'Free-text tag',         type: 'tag-array' },
   // Phase 3 (mig 085): machine-derived retargeting tags. Resolved
   // server-side via contact_tags. The select options are loaded
   // dynamically from /api/segments at mount time.
@@ -127,6 +132,15 @@ const OPS_BY_TYPE = {
     { value: 'neq',      label: 'is not' },
     { value: 'not_null', label: 'has any plan' },
     { value: 'is_null',  label: 'has no plan' },
+  ],
+  // FILTER-P1.3 — the array tag field. Four ops, each one distinct:
+  // membership (cs) in both directions, and REAL emptiness (contained-by
+  // '{}') rather than a NULL test the column's '{}' default made useless.
+  'tag-array': [
+    { value: 'eq',       label: 'has tag' },
+    { value: 'neq',      label: 'does not have tag' },
+    { value: 'not_null', label: 'has any tag' },
+    { value: 'is_null',  label: 'has no tags' },
   ],
   text:    [
     { value: 'eq',           label: 'equals' },

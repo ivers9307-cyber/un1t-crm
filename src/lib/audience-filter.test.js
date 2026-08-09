@@ -470,12 +470,41 @@ describe('applyAudienceFilter — array field (contacts.tags)', () => {
     expect(q.calls).toEqual([['or', `tags.not.cs.${quoted},tags.is.null`]])
   })
 
-  it('is_null / not_null still pass through', () => {
+  // FILTER-P1.3 — the old `.is(tags, null)` / `.not(tags,'is',null)` pair was
+  // silently useless: contacts.tags is TEXT[] DEFAULT '{}' (mig 005), so
+  // essentially no row is NULL. "is empty" matched nobody and "is not empty"
+  // matched everybody. Emptiness is now a real containment test.
+  it('is_null on tags tests real emptiness (contained-by {}), NULL-inclusively', () => {
     applyAudienceFilter(q.query, { filters: [{ field: 'tags', op: 'is_null', value: null }] })
+    expect(q.calls).toEqual([['or', 'tags.cd.{},tags.is.null']])
+  })
+
+  it('not_null on tags tests real NON-emptiness (not contained-by {})', () => {
     applyAudienceFilter(q.query, { filters: [{ field: 'tags', op: 'not_null', value: null }] })
+    applyAudienceFilter(q.query, { filters: [{ field: 'tags', op: 'is_not_null', value: null }] })
     expect(q.calls).toEqual([
-      ['is', 'tags', null],
-      ['not', 'tags', 'is', null],
+      ['not', 'tags', 'cd', '{}'],
+      ['not', 'tags', 'cd', '{}'],
+    ])
+  })
+
+  it('OR renders the tags emptiness ops the same way', () => {
+    applyAudienceFilter(q.query, { logic: 'or', filters: [{ field: 'tags', op: 'is_null' }] })
+    applyAudienceFilter(q.query, { logic: 'or', filters: [{ field: 'tags', op: 'not_null' }] })
+    expect(q.calls).toEqual([
+      ['or', 'or(tags.cd.{},tags.is.null)'],
+      ['or', 'tags.not.cd.{}'],
+    ])
+  })
+
+  // The scalar text fields must keep the plain NULL check — only the array
+  // field has the '{}' default that made is_null meaningless.
+  it('leaves is_null / not_null on a scalar text field alone', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'label', op: 'is_null' }] })
+    applyAudienceFilter(q.query, { filters: [{ field: 'label', op: 'not_null' }] })
+    expect(q.calls).toEqual([
+      ['is', 'label', null],
+      ['not', 'label', 'is', null],
     ])
   })
 
@@ -498,6 +527,17 @@ describe('applyAudienceFilter — array field (contacts.tags)', () => {
       filters: [{ field: 'tags', op: 'neq', value: 'PTC' }],
     })
     expect(q.calls).toEqual([['or', 'or(tags.not.cs."{\\"PTC\\"}",tags.is.null)']])
+  })
+
+  // FILTER-P1.3 — eq and contains are the SAME operation (exact element
+  // membership). The builder no longer offers both, but the server keeps
+  // accepting contains / not_contains so filters saved under the old labels
+  // still resolve identically instead of 400ing.
+  it('keeps contains / not_contains as server-side aliases of eq / neq', () => {
+    const a = makeMockQuery(); const b = makeMockQuery()
+    applyAudienceFilter(a.query, { filters: [{ field: 'tags', op: 'eq', value: 'PTC' }] })
+    applyAudienceFilter(b.query, { filters: [{ field: 'tags', op: 'contains', value: 'PTC' }] })
+    expect(b.calls).toEqual(a.calls)
   })
 })
 

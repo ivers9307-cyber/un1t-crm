@@ -280,3 +280,46 @@ describe('AudienceBuilder — host-supplied default row (P1.1)', () => {
     expect(onChange).toHaveBeenCalledWith({ logic: 'and', filters: [{ field: '', op: '', value: '' }] })
   })
 })
+
+// ── FILTER-P1.3 — the tags field stops lying ─────────────────────────
+//
+// contacts.tags is TEXT[] DEFAULT '{}', and eq/contains compiled to the same
+// `cs` element-membership test. So the field offered six ops that were really
+// four, two of which ("is empty" / "is not empty") matched nobody and
+// everybody respectively.
+describe('AudienceBuilder — tags ops say what they do (P1.3)', () => {
+  function tagsRow() {
+    return render(
+      <AudienceBuilder
+        filter={{ logic: 'and', filters: [{ field: 'tags', op: 'eq', value: 'PTC' }] }}
+        onChange={() => {}}
+        audienceCount={null}
+      />
+    )
+  }
+
+  it('offers exactly four ops — no duplicate contains pair', () => {
+    const { container } = tagsRow()
+    const [, opSelect] = rowSelects(container)
+    expect(optionValues(opSelect)).toEqual(['eq', 'neq', 'not_null', 'is_null'])
+  })
+
+  it('labels membership as "has tag" / "does not have tag", not equals/contains', () => {
+    const { container } = tagsRow()
+    const [, opSelect] = rowSelects(container)
+    const labels = Array.from(opSelect.querySelectorAll('option')).map(o => o.textContent)
+    expect(labels).toEqual(['has tag', 'does not have tag', 'has any tag', 'has no tags'])
+  })
+
+  it('leaves a scalar text field (Label) with its full contains-capable op list', () => {
+    const { container } = render(
+      <AudienceBuilder
+        filter={{ logic: 'and', filters: [{ field: 'label', op: 'eq', value: 'x' }] }}
+        onChange={() => {}}
+        audienceCount={null}
+      />
+    )
+    const [, opSelect] = rowSelects(container)
+    expect(optionValues(opSelect)).toContain('contains')
+  })
+})
