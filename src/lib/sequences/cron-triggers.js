@@ -19,7 +19,8 @@
 // contact, sourceRef) dedup before enrol.
 
 import { createServerClient } from '@/lib/supabase'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
+import { dublinDayStr } from '@/lib/dublin-time'
 import { selectAll, selectAllByKeys } from '@/lib/select-all'
 import { contactMatchesSequenceAudience } from './audience.js'
 import { enrolContacts } from './enrol.js'
@@ -134,11 +135,21 @@ export async function runEventReminderTriggers() {
  * trigger_config.days_after days ago.
  *
  * trigger_config:
- *   - from_field: 'lead_created_at' | 'last_emailed_at' (default lead_created_at)
+ *   - from_field: 'lead_created_at' | 'last_emailed_at' | 'joined_at' | 'dob'
+ *     (default lead_created_at; an UNKNOWN field is a config error — the
+ *     sequence is skipped with a logged error, never silently remapped.
+ *     COMMSFIX.E.3: the old silent fallback to lead_created_at is how the
+ *     birthday template greeted every freshly-created lead instead.)
  *   - days_after: number (required)
  *
- * Dedup: source_ref is `${from_field}:${days_after}` so a contact
- * isn't re-enrolled in the same sequence on the same anniversary.
+ * 'dob' is special-cased: it matches on month+day in Dublin wall-clock
+ * (year-modulo — any birth year), so birthdays actually fire on
+ * birthdays. Feb-29 birthdays match only in leap years.
+ *
+ * Dedup: source_ref is `${from_field}:${days_after}:${occurrenceYear}`
+ * so a contact isn't re-enrolled for the SAME occurrence, but next
+ * year's occurrence is a fresh ref and re-fires — still subject to
+ * re_enrolment_cooldown_days (enforced inside enrolContacts).
  * Different anniversaries (different sequences or different
  * days_after) are independent enrolments.
  *
@@ -147,7 +158,7 @@ export async function runEventReminderTriggers() {
 export async function runAnniversaryTriggers() {
   const db = createServerClient()
   const stats = { fired: 0, skipped: 0 }
-  const ALLOWED_FIELDS = new Set(['lead_created_at', 'last_emailed_at'])
+  const ALLOWED_FIELDS = new Set(['lead_created_at', 'last_emailed_at', 'joined_at', 'dob'])
 
   const { data: sequences } = await db
     .from('email_sequences')
@@ -161,27 +172,59 @@ export async function runAnniversaryTriggers() {
 
   for (const seq of sequences) {
     const cfg = seq.trigger_config || {}
-    const fromField = ALLOWED_FIELDS.has(cfg.from_field) ? cfg.from_field : 'lead_created_at'
+    const fromField = cfg.from_field || 'lead_created_at'
+    // COMMSFIX.E.3 — an unknown field is a CONFIG ERROR, not a hint. The
+    // old silent fallback to lead_created_at made the birthday template
+    // ({ from_field: 'dob' }) greet every lead created that day instead
+    // of anyone on their birthday. Reject loudly; the operator must fix
+    // the trigger config.
+    if (!ALLOWED_FIELDS.has(fromField)) {
+      logError('sequences', `anniversary sequence ${seq.id}: unknown from_field '${fromField}' — sequence skipped until its trigger_config is fixed`, { sequenceId: seq.id, fromField })
+      continue
+    }
     const daysAfter = Number(cfg.days_after)
     if (!Number.isFinite(daysAfter) || daysAfter < 0) continue
 
-    const targetMs = now - daysAfter * 24 * 3600_000
-    const lo = new Date(targetMs - TOLERANCE_MS)
-    const hi = new Date(targetMs + TOLERANCE_MS)
-    const sourceRef = `${fromField}:${daysAfter}`
+    // Occurrence year (Dublin wall-clock) — part of the dedup ref so the
+    // same anniversary re-fires next year (COMMSFIX.E.3).
+    const occurrenceYear = dublinDayStr(now).slice(0, 4)
+    const sourceRef = `${fromField}:${daysAfter}:${occurrenceYear}`
 
-    // COMMSFIX.E.2 — page the FULL matching set (.order('id') + .range(),
-    // the selectAll/CAMPAIGN.14 recipe). The old unordered .limit(500)
-    // returned the DB's arbitrary first 500 rows every tick; contacts
-    // beyond row 500 were never swept.
-    const contacts = await selectAll((from, to) => db
-      .from('contacts')
-      .select(`id, ${fromField}`)
-      .eq('location_id', seq.location_id)
-      .gte(fromField, lo.toISOString())
-      .lte(fromField, hi.toISOString())
-      .order('id')
-      .range(from, to))
+    let contacts
+    if (fromField === 'dob') {
+      // Birthdays match on month+day in the Dublin calendar, any birth
+      // year — a gte/lte window on the raw date can never express that.
+      // The target day is `days_after` days before today (days_after: 0
+      // = the birthday itself). dob is a DATE column ('YYYY-MM-DD'), so
+      // compare string month-day slices; no Date parsing, no TZ drift.
+      const targetDay = dublinDayStr(now - daysAfter * 24 * 3600_000)
+      const targetMonthDay = targetDay.slice(5) // 'MM-DD'
+      const withDob = await selectAll((from, to) => db
+        .from('contacts')
+        .select('id, dob')
+        .eq('location_id', seq.location_id)
+        .not('dob', 'is', null)
+        .order('id')
+        .range(from, to))
+      contacts = withDob.filter((c) => typeof c.dob === 'string' && c.dob.slice(5, 10) === targetMonthDay)
+    } else {
+      const targetMs = now - daysAfter * 24 * 3600_000
+      const lo = new Date(targetMs - TOLERANCE_MS)
+      const hi = new Date(targetMs + TOLERANCE_MS)
+
+      // COMMSFIX.E.2 — page the FULL matching set (.order('id') + .range(),
+      // the selectAll/CAMPAIGN.14 recipe). The old unordered .limit(500)
+      // returned the DB's arbitrary first 500 rows every tick; contacts
+      // beyond row 500 were never swept.
+      contacts = await selectAll((from, to) => db
+        .from('contacts')
+        .select(`id, ${fromField}`)
+        .eq('location_id', seq.location_id)
+        .gte(fromField, lo.toISOString())
+        .lte(fromField, hi.toISOString())
+        .order('id')
+        .range(from, to))
+    }
 
     for (const c of (contacts || [])) {
       if (!c.id) continue

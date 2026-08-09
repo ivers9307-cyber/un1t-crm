@@ -20,11 +20,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('./audience.js', () => ({ contactMatchesSequenceAudience: vi.fn() }))
 vi.mock('./enrol.js', () => ({ enrolContacts: vi.fn() }))
 
 const { createServerClient } = await import('@/lib/supabase')
+const { logError } = await import('@/lib/log')
 const { contactMatchesSequenceAudience } = await import('./audience.js')
 const { enrolContacts } = await import('./enrol.js')
 const cronTriggers = await import('./cron-triggers.js')
@@ -62,6 +63,7 @@ function mockDb(tables) {
         gte: record('gte'),
         lte: record('lte'),
         lt: record('lt'),
+        not: record('not'),
         limit: record('limit'),
         order: record('order'),
         range: record('range'),
@@ -203,51 +205,132 @@ describe('runAnniversaryTriggers', () => {
     expect(enrolContacts).not.toHaveBeenCalled()
   })
 
-  it('falls back to lead_created_at when from_field is not in the allowlist', async () => {
-    let queriedField
-    createServerClient.mockReturnValue({
-      from: vi.fn((table) => {
-        const builder = {
-          select: vi.fn(function (cols) {
-            // Capture which field was selected from contacts.
-            if (table === 'contacts' && /id, /.test(cols)) {
-              queriedField = cols.replace('id, ', '')
-            }
-            return this
-          }),
-          eq: vi.fn().mockReturnThis(),
-          gte: vi.fn().mockReturnThis(),
-          lte: vi.fn().mockReturnThis(),
-          limit: vi.fn().mockReturnThis(),
-          order: vi.fn().mockReturnThis(),
-          range: vi.fn().mockReturnThis(),
-          then: (onF) => Promise.resolve({
-            data: table === 'email_sequences' ? [
-              { id: 's1', location_id: 'loc-1', trigger_config: { from_field: 'created_at_im_evil', days_after: 30 }, audience_filter: null },
-            ] : [],
-            error: null,
-          }).then(onF),
-        }
-        return builder
-      }),
+  // COMMSFIX.E.3 — an unknown from_field used to silently FALL BACK to
+  // lead_created_at, which is how the birthday template ({ from_field:
+  // 'dob' }) sent 'Happy birthday' to every lead created that day and
+  // never to anyone on their birthday. Unknown fields now REJECT the
+  // sequence's config with a logged error — no query, no enrolments.
+  it('COMMSFIX.E.3 — unknown from_field rejects the config with a logged error (no silent fallback)', async () => {
+    const db = mockDb({
+      email_sequences: { list: [
+        { id: 's1', location_id: 'loc-1', trigger_config: { from_field: 'created_at_im_evil', days_after: 30 }, audience_filter: null },
+      ] },
     })
-    await cronTriggers.runAnniversaryTriggers()
-    expect(queriedField).toBe('lead_created_at')
+    createServerClient.mockReturnValue(db)
+    const stats = await cronTriggers.runAnniversaryTriggers()
+    expect(stats).toEqual({ fired: 0, skipped: 0 })
+    expect(enrolContacts).not.toHaveBeenCalled()
+    // No contacts query at all — the config is rejected before the sweep.
+    expect(db.calls.some((c) => c.table === 'contacts')).toBe(false)
+    expect(logError).toHaveBeenCalledWith(
+      'sequences',
+      expect.stringMatching(/created_at_im_evil/),
+      expect.anything(),
+    )
   })
 
-  it('uses sourceRef = `${from_field}:${days_after}` for dedup', async () => {
-    createServerClient.mockReturnValue(mockDb({
-      email_sequences: { list: [
-        { id: 's1', location_id: 'loc-1', trigger_config: { from_field: 'last_emailed_at', days_after: 365 }, audience_filter: null },
-      ] },
-      contacts: { list: [{ id: 'c1' }] },
-      sequence_enrollments: { list: [] }, // no existing enrolment
-    }))
-    await cronTriggers.runAnniversaryTriggers()
-    expect(enrolContacts).toHaveBeenCalledWith(expect.objectContaining({
-      sourceType: 'anniversary',
-      sourceRef: 'last_emailed_at:365',
-    }))
+  // COMMSFIX.E.3 — the dedup source_ref now carries the occurrence YEAR so
+  // the same anniversary re-fires next year (still subject to
+  // re_enrolment_cooldown_days, enforced inside enrolContacts).
+  it('uses sourceRef = `${from_field}:${days_after}:${year}` for dedup (yearly re-fire)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-08-09T10:00:00Z') })
+    try {
+      createServerClient.mockReturnValue(mockDb({
+        email_sequences: { list: [
+          { id: 's1', location_id: 'loc-1', trigger_config: { from_field: 'last_emailed_at', days_after: 365 }, audience_filter: null },
+        ] },
+        contacts: { list: [{ id: 'c1' }] },
+        sequence_enrollments: { list: [] }, // no existing enrolment
+      }))
+      await cronTriggers.runAnniversaryTriggers()
+      expect(enrolContacts).toHaveBeenCalledWith(expect.objectContaining({
+        sourceType: 'anniversary',
+        sourceRef: 'last_emailed_at:365:2026',
+      }))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('COMMSFIX.E.3 — joined_at is an allowed from_field', async () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-08-09T10:00:00Z') })
+    try {
+      createServerClient.mockReturnValue(mockDb({
+        email_sequences: { list: [
+          { id: 's1', location_id: 'loc-1', trigger_config: { from_field: 'joined_at', days_after: 365 }, audience_filter: null },
+        ] },
+        contacts: { list: [{ id: 'c1' }] },
+        sequence_enrollments: { list: [] },
+      }))
+      const stats = await cronTriggers.runAnniversaryTriggers()
+      expect(stats.fired).toBe(1)
+      expect(enrolContacts).toHaveBeenCalledWith(expect.objectContaining({
+        sourceType: 'anniversary',
+        sourceRef: 'joined_at:365:2026',
+      }))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('COMMSFIX.E.3 — dob matches on month+day in Dublin wall-clock, any birth year', async () => {
+    // 23:30 UTC on 9 Aug is ALREADY 10 Aug in Dublin (BST, UTC+1) — a
+    // process-local-date implementation run under a US TZ would compute
+    // 08-09 and match the wrong contact. The Dublin calendar day is the
+    // business day for birthdays (repo TZ rule).
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-08-09T23:30:00Z') })
+    try {
+      createServerClient.mockReturnValue(mockDb({
+        email_sequences: { list: [
+          { id: 's1', location_id: 'loc-1', trigger_config: { from_field: 'dob', days_after: 0 }, audience_filter: null },
+        ] },
+        contacts: { list: [
+          { id: 'c-birthday-1990', dob: '1990-08-10' },  // birthday today (Dublin) — matches despite the birth year
+          { id: 'c-birthday-2001', dob: '2001-08-10' },  // also matches — year-modulo
+          { id: 'c-yesterday', dob: '1990-08-09' },      // Dublin yesterday — no match
+          { id: 'c-no-dob', dob: null },                 // no dob — no match
+        ] },
+        sequence_enrollments: { list: [] },
+      }))
+      const stats = await cronTriggers.runAnniversaryTriggers()
+      expect(stats.fired).toBe(2)
+      expect(enrolContacts).toHaveBeenCalledWith(expect.objectContaining({
+        contactIds: ['c-birthday-1990'],
+        sourceType: 'anniversary',
+        sourceRef: 'dob:0:2026',
+      }))
+      expect(enrolContacts).toHaveBeenCalledWith(expect.objectContaining({
+        contactIds: ['c-birthday-2001'],
+        sourceRef: 'dob:0:2026',
+      }))
+      const enrolledIds = enrolContacts.mock.calls.flatMap(([args]) => args.contactIds)
+      expect(enrolledIds).not.toContain('c-yesterday')
+      expect(enrolledIds).not.toContain('c-no-dob')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('COMMSFIX.E.3 — dob dedup carries the occurrence year, so the same birthday re-fires next year', async () => {
+    // Same contact, same config, one year later → a DIFFERENT sourceRef,
+    // so the all-statuses dedup lookup no longer blocks the enrolment
+    // (the cooldown knob, enforced in enrolContacts, is the remaining gate).
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2027-08-09T23:30:00Z') })
+    try {
+      createServerClient.mockReturnValue(mockDb({
+        email_sequences: { list: [
+          { id: 's1', location_id: 'loc-1', trigger_config: { from_field: 'dob', days_after: 0 }, audience_filter: null },
+        ] },
+        contacts: { list: [{ id: 'c-birthday-1990', dob: '1990-08-10' }] },
+        sequence_enrollments: { list: [] },
+      }))
+      await cronTriggers.runAnniversaryTriggers()
+      expect(enrolContacts).toHaveBeenCalledWith(expect.objectContaining({
+        sourceRef: 'dob:0:2027',
+      }))
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('skips contact when (sequence, contact, sourceRef) already exists', async () => {

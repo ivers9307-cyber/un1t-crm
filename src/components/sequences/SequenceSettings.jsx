@@ -40,7 +40,15 @@ const TRIGGER_OPTIONS = [
   ['achievement_unlocked', 'When an achievement is unlocked'],
   ['webhook', 'When an inbound webhook fires'],
 ]
-const ANNIV_FIELDS = [['lead_created_at', 'Lead created date'], ['last_emailed_at', 'Last emailed date']]
+// COMMSFIX.E.3 — must mirror the cron's ALLOWED_FIELDS (cron-triggers.js
+// runAnniversaryTriggers): an option offered here but not allowed there is
+// rejected at run time with a logged error (no silent fallback any more).
+const ANNIV_FIELDS = [
+  ['lead_created_at', 'Lead created date'],
+  ['last_emailed_at', 'Last emailed date'],
+  ['joined_at', 'Joined date'],
+  ['dob', 'Birthday (date of birth)'],
+]
 const INACT_SIGNALS = [['last_emailed_at', 'Last emailed'], ['last_email_open_at', 'Last email open'], ['last_booking_at', 'Last booking']]
 const STAGE_OPTS = [['', 'Any stage'], ...PIPELINE_SLUGS.map(s => [s, s])]
 // Glofox membership states (mig 195). 'locked' = payment arrears (churn radar's Overdue tab).
