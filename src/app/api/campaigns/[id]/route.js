@@ -4,6 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { authenticateApiKey, assertRowInOrg } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, email, audienceFilterSchema } from '@/lib/schemas'
+import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
 
 const CampaignUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -64,6 +65,19 @@ export async function PUT(request, props) {
   const validation = await validateBody(request, CampaignUpdateSchema)
   if (!validation.ok) return validation.response
   const updates = { ...validation.data }
+
+  // FILTER-P1.5 — reject an audience filter that can never resolve at SAVE
+  // time, not when the send tries to populate. Mirrors COMMSFIX.B.7, which
+  // closed this on email-draft, the SMS/WA broadcast creates and the
+  // sequences PUT and missed these routes.
+  try {
+    validateAudienceFilter(updates.audience_filter)
+  } catch (e) {
+    if (e instanceof InvalidAudienceFilterError) {
+      return NextResponse.json({ success: false, error: e.message }, { status: 400 })
+    }
+    throw e
+  }
   // API speaks email_type (marketing/utility); the column is postmark_stream.
   if (updates.email_type !== undefined) {
     updates.postmark_stream = updates.email_type === 'utility' ? 'outbound' : 'broadcast'

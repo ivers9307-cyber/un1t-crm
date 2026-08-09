@@ -86,3 +86,51 @@ describe('POST /api/contacts/segments — location id shape (SEGSAVE.1)', () => 
     expect(inserted[0].filter).toEqual(FILTER)
   })
 })
+
+// ── FILTER-P1.5 — a named segment must be resolvable ─────────────────
+//
+// The route accepted the loose audienceFilterSchema (shape only), so a filter
+// that can never resolve — OR + a tag row, an unpicked segment tag, a blank
+// numeric — could be stored as a named segment and handed to a campaign later.
+// COMMSFIX.B.7 closed this on the send routes; this one was missed.
+describe('POST /api/contacts/segments — filter validated at save time (P1.5)', () => {
+  const save = (filter) => POST(req({ name: 'S', filter, location_id: STILLORGAN }))
+
+  it('rejects an OR + tag combination with the library message', async () => {
+    const res = await save({
+      logic: 'or',
+      filters: [
+        { field: 'tag', op: 'eq', value: 'glofox_trial_engaged' },
+        { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
+      ],
+    })
+    expect(res.status).toBe(400)
+    expect(inserted).toHaveLength(0)
+    expect((await res.json()).error).toMatch(/OR logic is not supported together with tag or event filters/)
+  })
+
+  it('rejects an unpicked segment-tag row', async () => {
+    const res = await save({ logic: 'and', filters: [{ field: 'tag', op: 'eq', value: '' }] })
+    expect(res.status).toBe(400)
+    expect(inserted).toHaveLength(0)
+    expect((await res.json()).error).toMatch(/tag filter requires a non-empty string value/)
+  })
+
+  it('rejects a blank numeric', async () => {
+    const res = await save({ logic: 'and', filters: [{ field: 'total_emails_sent', op: 'gt', value: '' }] })
+    expect(res.status).toBe(400)
+    expect(inserted).toHaveLength(0)
+  })
+
+  it('rejects a blank date (the P1.4 class) before it becomes a named segment', async () => {
+    const res = await save({ logic: 'and', filters: [{ field: 'created_at', op: 'gt', value: '' }] })
+    expect(res.status).toBe(400)
+    expect(inserted).toHaveLength(0)
+  })
+
+  it('still saves a valid filter', async () => {
+    const res = await save(FILTER)
+    expect(res.status).toBe(200)
+    expect(inserted).toHaveLength(1)
+  })
+})
