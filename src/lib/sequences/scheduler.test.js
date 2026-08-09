@@ -14,6 +14,31 @@ vi.mock('@/lib/supabase', () => ({
   createServerClient: vi.fn(),
 }))
 
+// SEQEXIT.1 — the runSequences-level tests at the bottom of this file
+// drive the per-step audience re-check, so the step handlers, the
+// evaluator and the logger all have to be controllable.
+vi.mock('./steps.js', () => ({
+  sendEmailStep: vi.fn(),
+  sendWhatsappStep: vi.fn(),
+  sendSmsStep: vi.fn(),
+  applyTagStep: vi.fn(),
+  updateFieldStep: vi.fn(),
+  webhookStep: vi.fn(),
+  internalTaskStep: vi.fn(),
+  processBranchStep: vi.fn(),
+  movePipelineStageStep: vi.fn(),
+  glofoxProvisionStep: vi.fn(),
+}))
+vi.mock('./audience.js', () => ({
+  evaluateSequenceAudience: vi.fn(),
+  contactMatchesSequenceAudience: vi.fn(),
+}))
+vi.mock('@/lib/log', () => ({
+  logWarn: vi.fn(),
+  logInfo: vi.fn(),
+  logError: vi.fn(),
+}))
+
 import {
   nextStepDelayMs,
   clampToSendWindow,
@@ -324,5 +349,200 @@ describe('module constants', () => {
 
   it('exports PROCESS_BATCH_SIZE = 100 (cron tick cap)', () => {
     expect(PROCESS_BATCH_SIZE).toBe(100)
+  })
+})
+
+// ── SEQEXIT.1 — the audience as a CONTINUING condition ───────────
+//
+// The operator case: "Overdue payment → dunning chase" enrols on
+// entering the arrears segment. The member pays, Glofox flips them out
+// of it — and before this the chase kept sending. The audience filter
+// is now re-checked before every step and a contact who no longer
+// matches leaves the sequence with exit_reason='left_audience'.
+//
+// The property that matters more than the feature: the check FAILS
+// OPEN. An exit is irreversible with no manual re-entry, so an
+// evaluator that answers 'unknown' — bad filter, DB hiccup, anything
+// unexpected — must leave the contact enrolled.
+
+import { runSequences } from './scheduler.js'
+import { evaluateSequenceAudience } from './audience.js'
+import { sendEmailStep } from './steps.js'
+import { logWarn } from '@/lib/log'
+
+// Chainable recorder db (graph-advance-scheduler.test.js idiom).
+function makeExitDb(route) {
+  const statements = []
+  const db = {
+    from(table) {
+      const state = { table, ops: [] }
+      statements.push(state)
+      const b = new Proxy({}, {
+        get(_, method) {
+          if (method === 'then') {
+            const p = Promise.resolve(route(state) ?? {})
+            return p.then.bind(p)
+          }
+          return (...args) => { state.ops.push({ method, args }); return b }
+        },
+      })
+      return b
+    },
+    rpc(...args) {
+      statements.push({ table: '__rpc__', ops: [{ method: 'rpc', args }] })
+      return Promise.resolve({ error: null })
+    },
+  }
+  return { db, statements }
+}
+
+const hasOp = (state, method) => state.ops.some(o => o.method === method)
+const eqArgOf = (state, col) => state.ops.find(o => o.method === 'eq' && o.args[0] === col)?.args[1]
+
+const exitEnrollment = {
+  id: 'en-1', sequence_id: 'seq-1', contact_id: 'c1',
+  current_step_order: 1, error_count: 0, status: 'active', metadata: null,
+}
+
+const REAL_FILTER = {
+  logic: 'and',
+  filters: [{ field: 'glofox_membership_state', op: 'eq', value: 'locked' }],
+}
+
+// One due enrolment, an active sequence carrying the given
+// audience_filter/goal_config, and a single email step at order 2.
+function exitRouteFor({ audienceFilter = null, goalConfig = null, contact = { id: 'c1', location_id: 'loc-1' } } = {}) {
+  const steps = [
+    { id: 'st-2', step_order: 2, step_type: 'email', subject: 'chase', config: { next_step_order: 'end' }, delay_days: 0, delay_hours: 0, delay_minutes: 0 },
+  ]
+  return (state) => {
+    if (state.table === 'sequence_enrollments') {
+      const first = state.ops[0]
+      if (first.method === 'select') return { data: [exitEnrollment] }
+      if (first.method === 'update' && hasOp(state, 'lte')) return { data: [{ id: exitEnrollment.id }] }
+      return {}
+    }
+    if (state.table === 'email_sequences') {
+      return {
+        data: {
+          id: 'seq-1', status: 'active', location_id: 'loc-1',
+          goal_config: goalConfig, send_window: null, audience_filter: audienceFilter,
+        },
+      }
+    }
+    if (state.table === 'contacts') return { data: contact }
+    if (state.table === 'locations') return { data: { settings: {} } }
+    if (state.table === 'sequence_steps') {
+      const order = eqArgOf(state, 'step_order')
+      return { data: steps.find(s => s.step_order === order) ?? null }
+    }
+    return {}
+  }
+}
+
+// The enrolment update that carries an exit_reason.
+function exitUpdate(statements) {
+  return statements.find(s =>
+    s.table === 'sequence_enrollments' &&
+    s.ops[0]?.method === 'update' &&
+    'exit_reason' in (s.ops[0].args[0] || {})
+  )
+}
+
+describe('runSequences — audience re-check before each step', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("exits the enrolment with exit_reason='left_audience' on 'no_match' and sends nothing", async () => {
+    const { db, statements } = makeExitDb(exitRouteFor({ audienceFilter: REAL_FILTER }))
+    createServerClient.mockReturnValue(db)
+    evaluateSequenceAudience.mockResolvedValue('no_match')
+
+    const stats = await runSequences({ now: new Date('2026-08-09T10:00:00Z') })
+
+    expect(sendEmailStep).not.toHaveBeenCalled()
+    const exit = exitUpdate(statements)
+    expect(exit).toBeTruthy()
+    const payload = exit.ops[0].args[0]
+    // Mirrors the mig 088 goal_met exit exactly.
+    expect(payload.exit_reason).toBe('left_audience')
+    expect(payload.status).toBe('exited')
+    expect(payload.next_step_at).toBeNull()
+    expect(payload.last_processed_at).toBe('2026-08-09T10:00:00.000Z')
+    expect(stats.skipped).toBe(1)
+    expect(stats.sent).toBe(0)
+    expect(stats.errored).toBe(0)
+  })
+
+  it("carries on and sends when the contact still matches ('match')", async () => {
+    const { db, statements } = makeExitDb(exitRouteFor({ audienceFilter: REAL_FILTER }))
+    createServerClient.mockReturnValue(db)
+    evaluateSequenceAudience.mockResolvedValue('match')
+    sendEmailStep.mockResolvedValue('send-1')
+
+    const stats = await runSequences()
+
+    expect(evaluateSequenceAudience).toHaveBeenCalledTimes(1)
+    expect(sendEmailStep).toHaveBeenCalledTimes(1)
+    expect(exitUpdate(statements)).toBeFalsy()
+    expect(stats.sent).toBe(1)
+  })
+
+  it("FAILS OPEN on 'unknown': the contact stays enrolled, the step still sends, and it logs", async () => {
+    // THE guarantee. An invalid filter or a transient DB error resolves
+    // to 'unknown'; treating that as no_match would irreversibly
+    // terminate a live enrolment on a hiccup. Never exit on "we could
+    // not tell" — carry on and leave an operator signal.
+    const { db, statements } = makeExitDb(exitRouteFor({ audienceFilter: REAL_FILTER }))
+    createServerClient.mockReturnValue(db)
+    evaluateSequenceAudience.mockResolvedValue('unknown')
+    sendEmailStep.mockResolvedValue('send-1')
+
+    const stats = await runSequences()
+
+    expect(exitUpdate(statements)).toBeFalsy()
+    expect(sendEmailStep).toHaveBeenCalledTimes(1)
+    expect(stats.sent).toBe(1)
+    expect(stats.skipped).toBe(0)
+    expect(logWarn).toHaveBeenCalledWith(
+      'sequences',
+      expect.any(String),
+      expect.objectContaining({ sequenceId: 'seq-1', contactId: 'c1' }),
+    )
+  })
+
+  it('never queries the audience when the sequence has no real filter', async () => {
+    // The common case (prod 2026-08-09: 5 of 6 sequences null, 1 empty,
+    // 0 with a real filter) — don't buy a query per step for nothing.
+    for (const audienceFilter of [null, undefined, {}, { logic: 'and' }, { logic: 'and', filters: [] }]) {
+      vi.clearAllMocks()
+      const { db } = makeExitDb(exitRouteFor({ audienceFilter }))
+      createServerClient.mockReturnValue(db)
+      sendEmailStep.mockResolvedValue('send-1')
+
+      const stats = await runSequences()
+
+      expect(evaluateSequenceAudience).not.toHaveBeenCalled()
+      expect(stats.sent).toBe(1)
+    }
+  })
+
+  it("goal_met wins when the contact both converted AND left the audience", async () => {
+    // Order matters: a converted contact's truer story is 'goal_met',
+    // and that's the number the operator's funnel should count.
+    const { db, statements } = makeExitDb(exitRouteFor({
+      audienceFilter: REAL_FILTER,
+      goalConfig: { type: 'pipeline_stage', value: 'active_member' },
+      contact: { id: 'c1', location_id: 'loc-1', pipeline_stage_slug: 'active_member' },
+    }))
+    createServerClient.mockReturnValue(db)
+    evaluateSequenceAudience.mockResolvedValue('no_match')
+
+    await runSequences()
+
+    expect(exitUpdate(statements).ops[0].args[0].exit_reason).toBe('goal_met')
+    // The goal check short-circuits — the audience is never even asked.
+    expect(evaluateSequenceAudience).not.toHaveBeenCalled()
   })
 })
