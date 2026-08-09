@@ -160,7 +160,16 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   // failed) and an errored count both disable it. The old `== null` escape
   // let an operator queue a campaign whose audience could never resolve.
   const countReady = typeof sendableCount === 'number' && !countError
-  const canSend = !busy && composeValid && scheduleValid && audienceValid && resendValid && countReady && sendableCount > 0
+  // COMMSFIX.D.2c — the email design lives in the Unlayer iframe, so a send
+  // fired before the designer has loaded can only ever export an empty body.
+  // Send stayed enabled while the UI said "Loading the email designer…".
+  const designerReady = channel !== 'email' || unlayerLoaded
+  // Both gates apply: B.6 answers "is there anyone to send to", D.2c answers
+  // "is there anything to send". Either one missing produced a real incident
+  // class — an unsendable audience queued forever, or a blank body that marked
+  // the entire audience bounced.
+  const canSend = !busy && composeValid && scheduleValid && audienceValid && resendValid
+    && countReady && sendableCount > 0 && designerReady
 
   // ── submit ──────────────────────────────────────────────────────
   async function postJson(url, payload) {
