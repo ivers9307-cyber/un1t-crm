@@ -17,7 +17,23 @@ import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/re
 const push = vi.fn()
 const refresh = vi.fn()
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push, refresh }) }))
-vi.mock('./AudienceBuilder', () => ({ default: () => <div data-testid="audience-builder" /> }))
+let editSeq = 0
+vi.mock('./AudienceBuilder', () => ({
+  // FILTER-P1.6 — the stand-in exposes an onChange trigger, because the
+  // double-count bug only appears on an EDIT: the old code called
+  // refreshAudienceCount() from onChange AND had a useEffect on the same
+  // state, so one edit produced two POSTs.
+  default: ({ onChange }) => (
+    <div data-testid="audience-builder">
+      <button type="button" onClick={() => onChange({
+        logic: 'and', filters: [{ field: 'gender', op: 'eq', value: `v${++editSeq}` }],
+      })}>mock edit filter</button>
+    </div>
+  ),
+  // FILTER-P1.1 — the real module exports this named default row; the mock
+  // must too, or every host importing it fails to resolve.
+  STAGE_MEMBER_DEFAULT_ROW: { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
+}))
 
 let deleteError = null
 vi.mock('@/lib/supabase', () => ({
@@ -114,5 +130,100 @@ describe('CampaignEditor — deleting a draft lands somewhere real', () => {
     renderEditor({ html_content: CODE_HTML })
     fireEvent.click(screen.getByTitle('Delete this draft'))
     await waitFor(() => expect(push).toHaveBeenCalledWith('/communications/sent'))
+  })
+})
+
+// ── FILTER-P1.6 — counts that don't lie ──────────────────────────────
+//
+// (a) The banner claimed the audience was "already filtered for marketing
+//     opt-in, valid email, non-ClassPass". There is NO ClassPass exclusion
+//     anywhere in the send path, and "valid email" is vacuous (contacts.email
+//     is NOT NULL). buildAudienceQueryAsync gates on: this location, the
+//     per-location consent flag for the stream, email_status not
+//     bounced/complained, and (marketing only) not inactivity-suppressed.
+// (b) The count fired from BOTH the builder's onChange and a useEffect on the
+//     same state — two POSTs per keystroke, no debounce, no abort, no
+//     sequence guard, so a slow earlier response could overwrite a later one
+//     and the Send confirm dialog then quoted the stale number.
+describe('CampaignEditor — the audience banner states the real gates (P1.6a)', () => {
+  async function bannerText(overrides = {}) {
+    renderEditor(overrides)
+    fireEvent.click(screen.getByRole('button', { name: /audience/i }))
+    return await screen.findByText(/already filtered for/i)
+  }
+
+  it('does not claim a ClassPass exclusion that the send path does not apply', async () => {
+    const el = await bannerText()
+    expect(el.textContent).not.toMatch(/classpass/i)
+  })
+
+  it('does not claim a vacuous "valid email" check', async () => {
+    const el = await bannerText()
+    expect(el.textContent).not.toMatch(/valid email/i)
+  })
+
+  it('names the gates that are really applied for a marketing send', async () => {
+    const el = await bannerText()
+    expect(el.textContent).toMatch(/marketing opt-in/i)
+    expect(el.textContent).toMatch(/bounce/i)
+    expect(el.textContent).toMatch(/complaint/i)
+    expect(el.textContent).toMatch(/suppress/i)
+  })
+})
+
+describe('CampaignEditor — the count is debounced and last-request-wins (P1.6b)', () => {
+  beforeEach(() => { vi.useFakeTimers(); editSeq = 0 })
+  afterEach(() => { vi.useRealTimers() })
+
+  const previewCalls = () => fetch.mock.calls.filter(([url]) => String(url).includes('/preview'))
+
+  it('fires ONE preview POST per edit, not two', async () => {
+    renderEditor()
+    await vi.advanceTimersByTimeAsync(1000)
+    const before = previewCalls().length
+    fireEvent.click(screen.getByRole('button', { name: /audience/i }))
+    await vi.advanceTimersByTimeAsync(0)   // switchTab awaits before setTab
+    fireEvent.click(screen.getByRole('button', { name: /mock edit filter/i }))
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(previewCalls().length - before).toBe(1)
+  })
+
+  it('debounces a burst of edits into a single POST', async () => {
+    renderEditor()
+    await vi.advanceTimersByTimeAsync(1000)
+    const before = previewCalls().length
+    fireEvent.click(screen.getByRole('button', { name: /audience/i }))
+    await vi.advanceTimersByTimeAsync(0)   // switchTab awaits before setTab
+    const edit = screen.getByRole('button', { name: /mock edit filter/i })
+    for (let i = 0; i < 5; i++) {
+      fireEvent.click(edit)
+      await vi.advanceTimersByTimeAsync(50)
+    }
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(previewCalls().length - before).toBe(1)
+  })
+
+  it('lets the LAST response win when an earlier one resolves late', async () => {
+    // The first in-flight POST resolves SLOWLY with a stale 999; the later one
+    // resolves fast with the real 10. The banner must never settle on 999 —
+    // the Send confirm dialog quotes this number verbatim.
+    let call = 0
+    vi.stubGlobal('fetch', vi.fn(() => {
+      call += 1
+      const n = call === 1 ? 999 : 10
+      const delay = call === 1 ? 3000 : 0
+      return new Promise(resolve => setTimeout(
+        () => resolve({ ok: true, json: async () => ({ success: true, audience_count: n }) }),
+        delay,
+      ))
+    }))
+    renderEditor()
+    fireEvent.click(screen.getByRole('button', { name: /audience/i }))
+    await vi.advanceTimersByTimeAsync(600)          // first POST in flight (slow)
+    fireEvent.click(screen.getByRole('button', { name: /mock edit filter/i }))
+    await vi.advanceTimersByTimeAsync(600)          // second POST fires + resolves 10
+    expect(screen.getByTestId('audience-count').textContent).toBe('10')
+    await vi.advanceTimersByTimeAsync(5000)         // the stale 999 lands late
+    expect(screen.getByTestId('audience-count').textContent).toBe('10')
   })
 })

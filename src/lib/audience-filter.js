@@ -221,6 +221,28 @@ export class InvalidAudienceFilterError extends Error {
   }
 }
 
+// FILTER-P1.1 — an UNSET builder row: the operator clicked "Add filter" but
+// has not chosen a field yet ({ field: '', op: '', value: '' }).
+//
+// Before this, addFilter() seeded every new row with `Stage = member`. In the
+// send composer that was a defensible guess; in a sequence it was not —
+// SEQEXIT.1 made the audience filter a CONTINUING condition, re-checked before
+// every step, so one click of "Add filter" both restricted enrolment to
+// members AND exited every non-member mid-sequence. The host now supplies the
+// default; with none, the row starts unset and must be INERT: no predicate, no
+// validation error, no persisted meaning. Only a BLANK field is skipped — any
+// other unrecognised field still throws (a typo must never widen an audience).
+export function isUnsetFilterRow(f) {
+  return !f || typeof f !== 'object' || f.field == null || f.field === ''
+}
+
+// Drop unset rows before a filter leaves the builder for the count endpoint or
+// the database, so neither ever sees a half-built row.
+export function stripUnsetFilterRows(filter) {
+  if (!filter || !Array.isArray(filter.filters)) return filter
+  return { ...filter, filters: filter.filters.filter(f => !isUnsetFilterRow(f)) }
+}
+
 // ── OR support (PostgREST .or()) ─────────────────────────────────
 // When filter.logic === 'or', the scalar predicates must be combined with
 // OR, not chained (chaining ANDs). PostgREST expresses OR as a single
@@ -257,6 +279,10 @@ function pgArrayLiteral(v) {
 function applyArrayFieldOp(query, field, op, v) {
   switch (op) {
     case 'eq':
+    // FILTER-P1.3 — `contains` is the SAME operation as `eq` here (exact
+    // element membership, not substring: typing "PT" never finds "PTC").
+    // The builder no longer offers both, but the server keeps accepting the
+    // old name so filters saved under it still resolve identically.
     case 'contains':
       return query.contains(field, [String(v ?? '')])
     case 'neq':
@@ -264,11 +290,19 @@ function applyArrayFieldOp(query, field, op, v) {
       // COMMSFIX.B.1 — NULL-inclusive: "doesn't have this tag" must also
       // match contacts whose tags column is NULL (never tagged at all).
       return query.or(`${field}.not.cs.${orValue(pgArrayLiteral(v))},${field}.is.null`)
+    // FILTER-P1.3 — REAL emptiness, not a NULL test. contacts.tags is
+    // TEXT[] DEFAULT '{}' (mig 005), so `.is(field, null)` matched almost
+    // nobody and `.not(field,'is',null)` matched almost everybody — both
+    // silent, both wrong. `cd` (contained-by) against the empty array is
+    // true only for an empty array, which is what "has no tags" means.
+    // NULL is folded in on the empty side because a never-tagged contact
+    // has no tags either; on the non-empty side a NULL row fails
+    // `not.cd.{}` on its own (NULL <@ '{}' is NULL), so no extra clause.
     case 'is_null':
-      return query.is(field, null)
+      return query.or(`${field}.cd.{},${field}.is.null`)
     case 'is_not_null':
     case 'not_null':
-      return query.not(field, 'is', null)
+      return query.not(field, 'cd', '{}')
     default:
       throw new InvalidAudienceFilterError(`Operator "${op}" is not supported on array field "${field}"`)
   }
@@ -286,11 +320,12 @@ function toOrCondition(field, op, v, fieldConfig) {
       case 'not_contains':
         // COMMSFIX.B.1 — NULL-inclusive nested disjunct.
         return `or(${field}.not.cs.${orValue(pgArrayLiteral(v))},${field}.is.null)`
+      // FILTER-P1.3 — real emptiness; see applyArrayFieldOp for the reasoning.
       case 'is_null':
-        return `${field}.is.null`
+        return `or(${field}.cd.{},${field}.is.null)`
       case 'is_not_null':
       case 'not_null':
-        return `${field}.not.is.null`
+        return `${field}.not.cd.{}`
       default:
         throw new InvalidAudienceFilterError(`Operator "${op}" is not supported on array field "${field}"`)
     }
@@ -314,11 +349,14 @@ function toOrCondition(field, op, v, fieldConfig) {
     case 'is_null': return `${field}.is.null`
     case 'is_not_null':
     case 'not_null': return `${field}.not.is.null`
+    // FILTER-P1.2 — NULL-INCLUSIVE, as a nested or() disjunct. See the
+    // asymmetry note on the AND branch in applyAudienceFilter.
     case 'days_since_gt': {
       const cutoff = new Date()
       cutoff.setDate(cutoff.getDate() - v)
-      return `${field}.lt.${cutoff.toISOString()}`
+      return `or(${field}.lt.${cutoff.toISOString()},${field}.is.null)`
     }
+    // FILTER-P1.2 — NULL-EXCLUSIVE on purpose. Do not add `.is.null` here.
     case 'days_since_lt': {
       const cutoff = new Date()
       cutoff.setDate(cutoff.getDate() - v)
@@ -358,6 +396,9 @@ export function applyAudienceFilter(query, filter) {
     if (!f || typeof f !== 'object') {
       throw new InvalidAudienceFilterError('Each filter must be an object')
     }
+
+    // FILTER-P1.1 — a row with no field chosen yet is inert, not an error.
+    if (isUnsetFilterRow(f)) continue
 
     const { field, op, value } = f
     const fieldConfig = AUDIENCE_FIELDS[field]
@@ -402,6 +443,22 @@ export function applyAudienceFilter(query, filter) {
         throw new InvalidAudienceFilterError(`Filter "${field} ${op}" requires a numeric value`)
       }
       v = n
+    }
+    // FILTER-P1.4 — date fields compared against a real date, or nothing.
+    // gt/lt on a date field with value '' passed validation, persisted onto
+    // the campaign, and only surfaced at SEND time as a raw Postgres
+    // `invalid input syntax for type timestamp`. The builder CREATED that
+    // state: switching a row to a date field defaulted to 'after' with an
+    // empty value. Reject it here so the count 400s visibly and
+    // validateAudienceFilter (which reuses this) refuses to save it.
+    // days_since_* are excluded — they carry a day COUNT, already guarded
+    // by the numeric branch above.
+    if (fieldConfig.type === 'date'
+        && !DAYS_SINCE_OPS.has(op)
+        && (NUMERIC_COMPARE_OPS.has(op) || op === 'eq' || op === 'neq')) {
+      if (typeof v !== 'string' || !v.trim() || Number.isNaN(Date.parse(v))) {
+        throw new InvalidAudienceFilterError(`Filter "${field} ${op}" requires a date value`)
+      }
     }
     // Boolean fields — the builder sends 'true' / 'false' strings.
     // Coerce to a real boolean for eq / neq; reject anything else.
@@ -469,12 +526,28 @@ export function applyAudienceFilter(query, filter) {
       case 'not_null':
         query = query.not(field, 'is', null)
         break
+      // FILTER-P1.2 — THE ASYMMETRY BELOW IS DELIBERATE. Do not "tidy" it
+      // into symmetry; each direction means something different about a NULL.
+      //
+      // days_since_gt = "more than N days ago" → NULL-INCLUSIVE.
+      //   Product decision: "more than N days ago" MEANS "or never". A
+      //   contact with no last_attended_at has not attended in 30 days, and
+      //   dropping them removes precisely the cohort a re-engagement send
+      //   exists for. The bare .lt() this replaced is the same NULL-dropping
+      //   bug class COMMSFIX.B.1 fixed for neq, never extended to date ops;
+      //   there is no operator workaround because the AND/OR toggle is global.
+      //   Chained .or() calls AND together in PostgREST, so this stays an
+      //   AND-composed predicate exactly like the neq case above.
       case 'days_since_gt': {
         const cutoff = new Date()
         cutoff.setDate(cutoff.getDate() - v)
-        query = query.lt(field, cutoff.toISOString())
+        query = query.or(`${field}.lt.${cutoff.toISOString()},${field}.is.null`)
         break
       }
+      // days_since_lt = "less than N days ago" → NULL-EXCLUSIVE, unchanged.
+      //   Never-happened does NOT satisfy "happened recently". Adding
+      //   `.is.null` here would silently widen every "recently active"
+      //   audience to the whole list — the inverse of the gt bug.
       case 'days_since_lt': {
         const cutoff = new Date()
         cutoff.setDate(cutoff.getDate() - v)

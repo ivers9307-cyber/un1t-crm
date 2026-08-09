@@ -7,6 +7,9 @@ import { Plus, Trash2, Users, AlertTriangle } from 'lucide-react'
 // against it so the UI can never build a row the count/populate side 400s on
 // (e.g. is_null on email_status, which is eq/neq-only server-side).
 import { AUDIENCE_FIELDS } from '@/lib/audience-filter'
+// FILTER-P1.4 — a seeded date must be the operator's business today, not a
+// UTC one; `new Date().toISOString().split('T')[0]` is lint-banned for this.
+import { dublinTodayStr } from '@/lib/dublin-time'
 
 const FIELD_OPTIONS = [
   // FUNNEL.1 — primary funnel-stage filter (canonical funnel slugs,
@@ -56,7 +59,12 @@ const FIELD_OPTIONS = [
   { value: 'lead_source',           label: 'Lead Source',           type: 'select',
     options: ['booking', 'meta', 'tiktok', 'walkin', 'referral', 'website', 'whatsapp', 'classpass', 'other'] },
   { value: 'label',                 label: 'Label',                 type: 'text' },
-  { value: 'tags',                  label: 'Free-text tag',         type: 'text' },
+  // FILTER-P1.3 — contacts.tags is TEXT[], not text. Its own builder type so
+  // it stops borrowing the scalar text op list, which offered "contains" (an
+  // exact element match here, so typing PT never found PTC — the same
+  // operation as "equals" under a second name) and is-empty/is-not-empty
+  // NULL tests that were meaningless against a DEFAULT '{}' column.
+  { value: 'tags',                  label: 'Free-text tag',         type: 'tag-array' },
   // Phase 3 (mig 085): machine-derived retargeting tags. Resolved
   // server-side via contact_tags. The select options are loaded
   // dynamically from /api/segments at mount time.
@@ -128,6 +136,15 @@ const OPS_BY_TYPE = {
     { value: 'not_null', label: 'has any plan' },
     { value: 'is_null',  label: 'has no plan' },
   ],
+  // FILTER-P1.3 — the array tag field. Four ops, each one distinct:
+  // membership (cs) in both directions, and REAL emptiness (contained-by
+  // '{}') rather than a NULL test the column's '{}' default made useless.
+  'tag-array': [
+    { value: 'eq',       label: 'has tag' },
+    { value: 'neq',      label: 'does not have tag' },
+    { value: 'not_null', label: 'has any tag' },
+    { value: 'is_null',  label: 'has no tags' },
+  ],
   text:    [
     { value: 'eq',           label: 'equals' },
     { value: 'neq',          label: 'does not equal' },
@@ -189,7 +206,27 @@ function needsValue(op) {
   return !['is_null', 'not_null'].includes(op)
 }
 
-export default function AudienceBuilder({ filter, onChange, audienceCount, disabled = false }) {
+// FILTER-P1.4 — a date row must be born with a value the server will accept.
+// The old default ('after' + '') validated fine, persisted, and only failed at
+// SEND time as a raw Postgres `invalid input syntax for type timestamp`. The
+// two shapes a date row can hold are NOT interchangeable, so switching between
+// them has to swap the value as well as the op: a date compare wants an ISO
+// day, a days_since op wants a day COUNT.
+const DAYS_SINCE_OPS = ['days_since_gt', 'days_since_lt']
+const DEFAULT_DAY_COUNT = '30'
+
+function defaultValueForDateOp(op) {
+  return DAYS_SINCE_OPS.includes(op) ? DEFAULT_DAY_COUNT : dublinTodayStr()
+}
+
+// FILTER-P1.1 — the row "Add filter" used to hard-code for every host. It is
+// now opt-in: a host that wants a starting guess passes it as defaultFilterRow.
+// Kept here (not inlined at four call sites) so the guess has one definition.
+export const STAGE_MEMBER_DEFAULT_ROW = Object.freeze({
+  field: 'pipeline_stage_slug', op: 'eq', value: 'member',
+})
+
+export default function AudienceBuilder({ filter, onChange, audienceCount, disabled = false, defaultFilterRow = null }) {
   const filters = filter?.filters || []
   const logic = filter?.logic || 'and'
 
@@ -246,13 +283,16 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
   }
 
   function addFilter() {
-    // FUNNEL.1 — default new rows to Stage = member (established
-    // members: the most common broadcast audience). lead_status is no
-    // longer in FIELD_OPTIONS; the audience-filter allowlist would
-    // reject it.
+    // FILTER-P1.1 — the HOST decides the starting row. FUNNEL.1's blanket
+    // `Stage = member` default was a defensible guess in a send composer and
+    // actively harmful in a sequence: since SEQEXIT.1 the audience filter is a
+    // CONTINUING condition re-checked before every step, so a click of "Add
+    // filter" both narrowed enrolment to members and exited every non-member
+    // mid-sequence. With no defaultFilterRow the row starts UNSET — inert
+    // until the operator picks a field (see isUnsetFilterRow).
     updateFilter([
       ...filters,
-      { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
+      defaultFilterRow ? { ...defaultFilterRow } : { field: '', op: '', value: '' },
     ])
   }
 
@@ -265,13 +305,37 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
     updateFilter(updated)
   }
 
+  // FILTER-P1.4 — on a date field the value's SHAPE follows the op. Moving
+  // between "after <date>" and "more than X days ago" without swapping the
+  // value leaves a row that cannot be saved (an ISO date is not a day count,
+  // and '30' is not a timestamp) — the server now rejects both, so fix it here
+  // rather than let the operator hit a 400 they did not cause.
+  function handleOpChange(index, newOp) {
+    const current = filters[index]
+    const fieldConfig = getFieldConfig(current?.field)
+    if (fieldConfig?.type === 'date'
+        && DAYS_SINCE_OPS.includes(newOp) !== DAYS_SINCE_OPS.includes(current?.op)) {
+      updateRow(index, { op: newOp, value: defaultValueForDateOp(newOp) })
+      return
+    }
+    updateRow(index, { op: newOp })
+  }
+
   function handleFieldChange(index, newField) {
+    // FILTER-P1.1 — back to the placeholder: clear op + value too, or the row
+    // keeps a stale predicate that no visible control explains.
+    if (!newField) {
+      updateRow(index, { field: '', op: '', value: '' })
+      return
+    }
     const config = getFieldConfig(newField)
     if (!config) return // only reachable if the <select> ever carries an unknown value
     const ops = opsForField(config)
     const defaultOp = ops[0]?.value || 'eq'
     const defaultValue = config.type === 'select' ? (config.options?.[0] || '')
       : config.type === 'boolean' ? 'true'
+      // FILTER-P1.4 — never leave a fresh date row on an empty value.
+      : config.type === 'date' ? defaultValueForDateOp(defaultOp)
       : ''
     updateRow(index, { field: newField, op: defaultOp, value: defaultValue })
   }
@@ -317,6 +381,40 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
       <div className="space-y-2">
         {filters.map((f, index) => {
           const fieldConfig = getFieldConfig(f.field)
+
+          // FILTER-P1.1 — a row the operator has not given a field to yet.
+          // Renders as a bare "Choose a field…" picker: no operator, no value,
+          // and applyAudienceFilter compiles it to nothing, so it can neither
+          // narrow an audience nor fail validation while it sits half-built.
+          if (!f.field) {
+            return (
+              <div key={index} className="flex items-center gap-2 bg-un1t-surface border border-un1t-border rounded-lg p-3">
+                {index > 0 && (
+                  <span className="text-xs text-un1t-muted font-medium w-10 text-center uppercase">{logic}</span>
+                )}
+                {index === 0 && filters.length > 1 && <span className="w-10" />}
+                <select
+                  value=""
+                  disabled={disabled}
+                  onChange={e => handleFieldChange(index, e.target.value)}
+                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted flex-1"
+                >
+                  <option value="">Choose a field…</option>
+                  {FIELD_OPTIONS.map(opt => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => removeFilter(index)}
+                  className="p-1.5 text-un1t-muted hover:text-red-400 transition-colors rounded disabled:opacity-50"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            )
+          }
 
           // COMMSFIX.B.3 — unknown/legacy saved field (lead_status, or a
           // library field not in FIELD_OPTIONS): render an inert warning row
@@ -365,6 +463,9 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
                 onChange={e => handleFieldChange(index, e.target.value)}
                 className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
               >
+                {/* FILTER-P1.1 — reachable "unset" so a row can be emptied
+                    without deleting it (and so a saved unset row round-trips). */}
+                <option value="">Choose a field…</option>
                 {FIELD_OPTIONS.map(opt => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
                 ))}
@@ -374,7 +475,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
               <select
                 value={f.op}
                 disabled={disabled}
-                onChange={e => updateRow(index, { op: e.target.value })}
+                onChange={e => handleOpChange(index, e.target.value)}
                 className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
               >
                 {ops.map(op => (

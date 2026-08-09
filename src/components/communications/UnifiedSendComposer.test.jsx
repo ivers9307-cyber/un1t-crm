@@ -11,6 +11,9 @@ import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/re
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }))
 vi.mock('@/components/AudienceBuilder', () => ({
   default: () => <div data-testid="audience-builder" />,
+  // FILTER-P1.1 — the real module exports this named default row; the mock
+  // must too, or every host importing it fails to resolve.
+  STAGE_MEMBER_DEFAULT_ROW: { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
 }))
 vi.mock('./ContactMultiSelect', () => ({ default: () => <div /> }))
 

@@ -4,6 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { authenticateApiKey, orgScopeLocationIds, assertCreateInOrg } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, email, audienceFilterSchema } from '@/lib/schemas'
+import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
 
 const CampaignCreateSchema = z.object({
   location_id: uuidLike,
@@ -59,6 +60,19 @@ export async function POST(request) {
   const validation = await validateBody(request, CampaignCreateSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
+
+  // FILTER-P1.5 — reject an audience filter that can never resolve at SAVE
+  // time, not when the send tries to populate. Mirrors COMMSFIX.B.7, which
+  // closed this on email-draft, the SMS/WA broadcast creates and the
+  // sequences PUT and missed these routes.
+  try {
+    validateAudienceFilter(body.audience_filter)
+  } catch (e) {
+    if (e instanceof InvalidAudienceFilterError) {
+      return NextResponse.json({ success: false, error: e.message }, { status: 400 })
+    }
+    throw e
+  }
   const db = createServerClient()
 
   // APIKEYS.3 — per-org key may only create a campaign at a location in its org.

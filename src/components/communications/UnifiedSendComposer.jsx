@@ -10,7 +10,8 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { MessageSquare, MessageCircle, Mail, Send, Clock, Check, AlertTriangle, Users, Loader2, Filter, Bookmark } from 'lucide-react'
 import { Button } from '@/components/ui'
-import AudienceBuilder from '@/components/AudienceBuilder'
+import AudienceBuilder, { STAGE_MEMBER_DEFAULT_ROW } from '@/components/AudienceBuilder'
+import { stripUnsetFilterRows } from '@/lib/audience-filter'
 import ContactMultiSelect from './ContactMultiSelect'
 import { useUnlayerEditor } from './useUnlayerEditor'
 import { smsSegmentInfo, SMS_MAX_LEN, SMS_MERGE_TAGS, waBodyVariables, WA_VARIABLE_FIELDS } from '@/lib/communications/compose'
@@ -142,10 +143,13 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   // Explicit "pick people" mode is SMS/WhatsApp only — email hands off to the
   // campaign editor, whose AudienceBuilder can't represent an id-in filter yet.
   const useExplicit = audienceMode === 'people' && channel !== 'email'
+  // FILTER-P1.1 — strip half-built rows here, at the single point the filter
+  // leaves the builder for the count endpoint AND for every persist path
+  // below, so an unset row can neither be counted nor saved.
   const effectiveFilter = useMemo(() => (
     useExplicit
       ? { logic: 'and', filters: [{ field: 'id', op: 'in', value: people.map(p => p.id) }] }
-      : filter
+      : stripUnsetFilterRows(filter)
   ), [useExplicit, people, filter])
 
   // Inline Unlayer editor for the email channel (the full editor stays at
@@ -233,6 +237,13 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   // For WhatsApp the meaningful gate is the reachable count, not raw matches —
   // an audience of 1 with 0 reachable has nobody to send to.
   const sendableCount = channel === 'whatsapp' ? reachable : count
+  // FILTER-P1.6c — the MATCH count, as opposed to the sendable one. For email
+  // and SMS the route reports raw matches as `matched` and eligibles as
+  // `count`; for WhatsApp `count` IS the match count and `reachable` is the
+  // sendable one. Keeping the two apart is the whole point: "nobody matched"
+  // and "matched, none reachable" are different problems with different fixes.
+  const matchedCount = channel === 'whatsapp' ? count : (matched ?? count)
+  const channelNoun = channel === 'whatsapp' ? 'on WhatsApp' : channel === 'sms' ? 'by SMS' : 'by email'
   // COMMSFIX.B.6 — Send requires a REAL positive count: null (still loading /
   // failed) and an errored count both disable it. The old `== null` escape
   // let an operator queue a campaign whose audience could never resolve.
@@ -506,7 +517,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         )}
         {useExplicit
           ? <ContactMultiSelect locationId={locationId} value={people} onChange={setPeople} />
-          : <AudienceBuilder filter={filter} onChange={handleFilterChange} audienceCount={null} />}
+          : <AudienceBuilder filter={filter} onChange={handleFilterChange} audienceCount={null} defaultFilterRow={STAGE_MEMBER_DEFAULT_ROW} />}
         <div className="mt-2 flex flex-col gap-0.5 text-xs text-un1t-subtle">
           <div className="flex items-center gap-1.5">
             <Users size={13} />
@@ -784,7 +795,16 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
           loading={busy} disabled={!canSend}>
           {isSchedule ? 'Schedule' : isDrip ? 'Start drip' : 'Send now'}
         </Button>
-        {count === 0 && <span className="text-xs text-amber-700">No contacts match this filter.</span>}
+        {/* FILTER-P1.6c — this used to read "No contacts match this filter"
+            whenever count === 0, while the line above said "N match · 0 will
+            receive it". Same screen, contradictory claims. */}
+        {countReady && sendableCount === 0 && (
+          <span className="text-xs text-amber-700">
+            {(matchedCount ?? 0) > 0
+              ? `${matchedCount.toLocaleString()} contact${matchedCount === 1 ? '' : 's'} match this filter, but none can be reached ${channelNoun} — check consent, bounces and suppression.`
+              : 'No contacts match this filter.'}
+          </span>
+        )}
       </div>
     </div>
   )

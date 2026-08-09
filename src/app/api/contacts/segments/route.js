@@ -14,6 +14,7 @@ import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { audienceFilterSchema } from '@/lib/schemas'
+import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
 import { validateBody, uuidLike } from '@/lib/validate'
 
 export const runtime = 'nodejs'
@@ -60,6 +61,19 @@ export async function POST(request) {
   const validation = await validateBody(request, CreateBody)
   if (!validation.ok) return validation.response
   const parsed = { data: validation.data }
+
+  // FILTER-P1.5 — reject an audience filter that can never resolve at SAVE
+  // time, not when the send tries to populate. Mirrors COMMSFIX.B.7, which
+  // closed this on email-draft, the SMS/WA broadcast creates and the
+  // sequences PUT and missed these routes.
+  try {
+    validateAudienceFilter(parsed.data.filter)
+  } catch (e) {
+    if (e instanceof InvalidAudienceFilterError) {
+      return NextResponse.json({ success: false, error: e.message }, { status: 400 })
+    }
+    throw e
+  }
 
   const locationId = parsed.data.location_id || user.activeLocation?.id
   if (!locationId) return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })

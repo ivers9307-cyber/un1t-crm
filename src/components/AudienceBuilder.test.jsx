@@ -190,3 +190,186 @@ describe('AudienceBuilder — disabled prop (B3.4)', () => {
     expect(onChange).toHaveBeenCalled()
   })
 })
+
+// ── FILTER-P1.1 — the dangerous default ──────────────────────────────
+//
+// addFilter used to hard-code `Stage = member` for every host. Since
+// SEQEXIT.1 made a sequence's audience a CONTINUING condition (re-checked
+// before every step), one click of "Add filter" in SequenceSettings both
+// restricted enrolment to members AND exited every non-member mid-sequence.
+// The host now supplies the default; with none, the row starts UNSET and is
+// inert until a field is chosen.
+describe('AudienceBuilder — host-supplied default row (P1.1)', () => {
+  function addRow(props = {}) {
+    const onChange = vi.fn()
+    const { container } = render(
+      <AudienceBuilder filter={{ logic: 'and', filters: [] }} onChange={onChange} audienceCount={null} {...props} />
+    )
+    const addBtn = Array.from(container.querySelectorAll('button')).find(b => /add filter/i.test(b.textContent))
+    fireEvent.click(addBtn)
+    return onChange
+  }
+
+  it('adds an UNSET row when the host supplies no default (sequences, contacts)', () => {
+    const onChange = addRow()
+    expect(onChange).toHaveBeenCalledWith({ logic: 'and', filters: [{ field: '', op: '', value: '' }] })
+  })
+
+  it('adds the host default row when one is supplied (send composers keep their guess)', () => {
+    const onChange = addRow({ defaultFilterRow: { field: 'pipeline_stage_slug', op: 'eq', value: 'member' } })
+    expect(onChange).toHaveBeenCalledWith({
+      logic: 'and',
+      filters: [{ field: 'pipeline_stage_slug', op: 'eq', value: 'member' }],
+    })
+  })
+
+  it('renders an unset row as a "choose a field" placeholder with no operator or value control', () => {
+    const { container } = render(
+      <AudienceBuilder
+        filter={{ logic: 'and', filters: [{ field: '', op: '', value: '' }] }}
+        onChange={() => {}}
+        audienceCount={null}
+      />
+    )
+    const selects = rowSelects(container)
+    // Exactly one select: the field picker. No op select, no value control.
+    expect(selects).toHaveLength(1)
+    expect(container.querySelectorAll('input')).toHaveLength(0)
+    expect(selects[0].value).toBe('')
+    expect(optionValues(selects[0])[0]).toBe('')
+    expect(selects[0].querySelector('option').textContent).toMatch(/choose a field/i)
+  })
+
+  it('does NOT render the unknown-field warning for an unset row', () => {
+    const { container } = render(
+      <AudienceBuilder
+        filter={{ logic: 'and', filters: [{ field: '', op: '', value: '' }] }}
+        onChange={() => {}}
+        audienceCount={null}
+      />
+    )
+    expect(container.textContent).not.toMatch(/unsupported field/i)
+  })
+
+  it('choosing a field on an unset row fills in a usable op + value', () => {
+    const onChange = vi.fn()
+    const { container } = render(
+      <AudienceBuilder
+        filter={{ logic: 'and', filters: [{ field: '', op: '', value: '' }] }}
+        onChange={onChange}
+        audienceCount={null}
+      />
+    )
+    fireEvent.change(rowSelects(container)[0], { target: { value: 'pipeline_stage_slug' } })
+    expect(onChange).toHaveBeenCalledWith({
+      logic: 'and',
+      filters: [{ field: 'pipeline_stage_slug', op: 'eq', value: 'new_lead' }],
+    })
+  })
+
+  it('lets an operator revert a chosen row back to unset', () => {
+    const onChange = vi.fn()
+    const { container } = render(
+      <AudienceBuilder
+        filter={{ logic: 'and', filters: [{ field: 'pipeline_stage_slug', op: 'eq', value: 'member' }] }}
+        onChange={onChange}
+        audienceCount={null}
+      />
+    )
+    fireEvent.change(rowSelects(container)[0], { target: { value: '' } })
+    expect(onChange).toHaveBeenCalledWith({ logic: 'and', filters: [{ field: '', op: '', value: '' }] })
+  })
+})
+
+// ── FILTER-P1.3 — the tags field stops lying ─────────────────────────
+//
+// contacts.tags is TEXT[] DEFAULT '{}', and eq/contains compiled to the same
+// `cs` element-membership test. So the field offered six ops that were really
+// four, two of which ("is empty" / "is not empty") matched nobody and
+// everybody respectively.
+describe('AudienceBuilder — tags ops say what they do (P1.3)', () => {
+  function tagsRow() {
+    return render(
+      <AudienceBuilder
+        filter={{ logic: 'and', filters: [{ field: 'tags', op: 'eq', value: 'PTC' }] }}
+        onChange={() => {}}
+        audienceCount={null}
+      />
+    )
+  }
+
+  it('offers exactly four ops — no duplicate contains pair', () => {
+    const { container } = tagsRow()
+    const [, opSelect] = rowSelects(container)
+    expect(optionValues(opSelect)).toEqual(['eq', 'neq', 'not_null', 'is_null'])
+  })
+
+  it('labels membership as "has tag" / "does not have tag", not equals/contains', () => {
+    const { container } = tagsRow()
+    const [, opSelect] = rowSelects(container)
+    const labels = Array.from(opSelect.querySelectorAll('option')).map(o => o.textContent)
+    expect(labels).toEqual(['has tag', 'does not have tag', 'has any tag', 'has no tags'])
+  })
+
+  it('leaves a scalar text field (Label) with its full contains-capable op list', () => {
+    const { container } = render(
+      <AudienceBuilder
+        filter={{ logic: 'and', filters: [{ field: 'label', op: 'eq', value: 'x' }] }}
+        onChange={() => {}}
+        audienceCount={null}
+      />
+    )
+    const [, opSelect] = rowSelects(container)
+    expect(optionValues(opSelect)).toContain('contains')
+  })
+})
+
+// ── FILTER-P1.4 — switching to a date field must not create an unsaveable row
+describe('AudienceBuilder — date rows are born saveable (P1.4)', () => {
+  it('seeds a real date when a row is switched to a date field', () => {
+    const onChange = vi.fn()
+    const { container } = render(
+      <AudienceBuilder
+        filter={{ logic: 'and', filters: [{ field: 'gender', op: 'eq', value: 'male' }] }}
+        onChange={onChange}
+        audienceCount={null}
+      />
+    )
+    fireEvent.change(rowSelects(container)[0], { target: { value: 'created_at' } })
+    const row = onChange.mock.calls.at(-1)[0].filters[0]
+    expect(row.field).toBe('created_at')
+    expect(row.op).toBe('gt')
+    expect(row.value).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+
+  it('swaps the value when the op moves between a date compare and a day-count', () => {
+    const onChange = vi.fn()
+    const { container } = render(
+      <AudienceBuilder
+        filter={{ logic: 'and', filters: [{ field: 'created_at', op: 'gt', value: '2026-01-01' }] }}
+        onChange={onChange}
+        audienceCount={null}
+      />
+    )
+    // date compare → day count: an ISO date is not a day count.
+    fireEvent.change(rowSelects(container)[1], { target: { value: 'days_since_gt' } })
+    expect(onChange.mock.calls.at(-1)[0].filters[0]).toEqual({
+      field: 'created_at', op: 'days_since_gt', value: '30',
+    })
+  })
+
+  it('swaps a day-count back to a real date when the op returns to a compare', () => {
+    const onChange = vi.fn()
+    const { container } = render(
+      <AudienceBuilder
+        filter={{ logic: 'and', filters: [{ field: 'created_at', op: 'days_since_gt', value: '30' }] }}
+        onChange={onChange}
+        audienceCount={null}
+      />
+    )
+    fireEvent.change(rowSelects(container)[1], { target: { value: 'lt' } })
+    const row = onChange.mock.calls.at(-1)[0].filters[0]
+    expect(row.op).toBe('lt')
+    expect(row.value).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+})

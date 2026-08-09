@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { applyAudienceFilter, AUDIENCE_FIELDS, InvalidAudienceFilterError, resolveTagFilters, resolveEventFilters, applyAudienceFilterAsync, mergeRegistrationContactIds, LIVE_REGISTRATION_STATUSES, validateAudienceFilter } from './audience-filter.js'
+import { applyAudienceFilter, AUDIENCE_FIELDS, InvalidAudienceFilterError, resolveTagFilters, resolveEventFilters, applyAudienceFilterAsync, mergeRegistrationContactIds, LIVE_REGISTRATION_STATUSES, validateAudienceFilter, isUnsetFilterRow, stripUnsetFilterRows } from './audience-filter.js'
 
 // Mock Supabase query builder — every method returns `this` and records the call.
 function makeMockQuery() {
@@ -129,13 +129,13 @@ describe('applyAudienceFilter', () => {
     expect(() => applyAudienceFilter(q.query, { filters: [null] })).toThrow(/Each filter must be an object/)
   })
 
-  it('handles days_since_gt by computing a cutoff and applying lt', () => {
+  // FILTER-P1.2 — "more than N days ago" compiles to a NULL-INCLUSIVE .or()
+  // (see the days_since asymmetry block below for the full reasoning).
+  it('handles days_since_gt by computing a cutoff and applying a NULL-inclusive or()', () => {
     applyAudienceFilter(q.query, { filters: [{ field: 'last_emailed_at', op: 'days_since_gt', value: '30' }] })
     expect(q.calls).toHaveLength(1)
-    expect(q.calls[0][0]).toBe('lt')
-    expect(q.calls[0][1]).toBe('last_emailed_at')
-    // Cutoff should be ~30 days ago, ISO string
-    expect(q.calls[0][2]).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    expect(q.calls[0][0]).toBe('or')
+    expect(q.calls[0][1]).toMatch(/^last_emailed_at\.lt\.\d{4}-\d{2}-\d{2}T.*,last_emailed_at\.is\.null$/)
   })
 
   it('handles is_null and is_not_null', () => {
@@ -243,8 +243,10 @@ describe('applyAudienceFilter', () => {
   it('still coerces the day-count for a date field days_since op', () => {
     applyAudienceFilter(q.query, { filters: [{ field: 'glofox_membership_expiry', op: 'days_since_gt', value: '14' }] })
     expect(q.calls).toHaveLength(1)
-    expect(q.calls[0][0]).toBe('lt')
-    expect(q.calls[0][1]).toBe('glofox_membership_expiry')
+    // FILTER-P1.2 — days_since_gt is NULL-inclusive, so the coerced cutoff
+    // now rides inside an or() rather than a bare .lt().
+    expect(q.calls[0][0]).toBe('or')
+    expect(q.calls[0][1]).toMatch(/^glofox_membership_expiry\.lt\.\d{4}-\d{2}-\d{2}T/)
   })
 
   it('applies emergency_contact is_null to find members missing one', () => {
@@ -468,12 +470,41 @@ describe('applyAudienceFilter — array field (contacts.tags)', () => {
     expect(q.calls).toEqual([['or', `tags.not.cs.${quoted},tags.is.null`]])
   })
 
-  it('is_null / not_null still pass through', () => {
+  // FILTER-P1.3 — the old `.is(tags, null)` / `.not(tags,'is',null)` pair was
+  // silently useless: contacts.tags is TEXT[] DEFAULT '{}' (mig 005), so
+  // essentially no row is NULL. "is empty" matched nobody and "is not empty"
+  // matched everybody. Emptiness is now a real containment test.
+  it('is_null on tags tests real emptiness (contained-by {}), NULL-inclusively', () => {
     applyAudienceFilter(q.query, { filters: [{ field: 'tags', op: 'is_null', value: null }] })
+    expect(q.calls).toEqual([['or', 'tags.cd.{},tags.is.null']])
+  })
+
+  it('not_null on tags tests real NON-emptiness (not contained-by {})', () => {
     applyAudienceFilter(q.query, { filters: [{ field: 'tags', op: 'not_null', value: null }] })
+    applyAudienceFilter(q.query, { filters: [{ field: 'tags', op: 'is_not_null', value: null }] })
     expect(q.calls).toEqual([
-      ['is', 'tags', null],
-      ['not', 'tags', 'is', null],
+      ['not', 'tags', 'cd', '{}'],
+      ['not', 'tags', 'cd', '{}'],
+    ])
+  })
+
+  it('OR renders the tags emptiness ops the same way', () => {
+    applyAudienceFilter(q.query, { logic: 'or', filters: [{ field: 'tags', op: 'is_null' }] })
+    applyAudienceFilter(q.query, { logic: 'or', filters: [{ field: 'tags', op: 'not_null' }] })
+    expect(q.calls).toEqual([
+      ['or', 'or(tags.cd.{},tags.is.null)'],
+      ['or', 'tags.not.cd.{}'],
+    ])
+  })
+
+  // The scalar text fields must keep the plain NULL check — only the array
+  // field has the '{}' default that made is_null meaningless.
+  it('leaves is_null / not_null on a scalar text field alone', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'label', op: 'is_null' }] })
+    applyAudienceFilter(q.query, { filters: [{ field: 'label', op: 'not_null' }] })
+    expect(q.calls).toEqual([
+      ['is', 'label', null],
+      ['not', 'label', 'is', null],
     ])
   })
 
@@ -496,6 +527,17 @@ describe('applyAudienceFilter — array field (contacts.tags)', () => {
       filters: [{ field: 'tags', op: 'neq', value: 'PTC' }],
     })
     expect(q.calls).toEqual([['or', 'or(tags.not.cs."{\\"PTC\\"}",tags.is.null)']])
+  })
+
+  // FILTER-P1.3 — eq and contains are the SAME operation (exact element
+  // membership). The builder no longer offers both, but the server keeps
+  // accepting contains / not_contains so filters saved under the old labels
+  // still resolve identically instead of 400ing.
+  it('keeps contains / not_contains as server-side aliases of eq / neq', () => {
+    const a = makeMockQuery(); const b = makeMockQuery()
+    applyAudienceFilter(a.query, { filters: [{ field: 'tags', op: 'eq', value: 'PTC' }] })
+    applyAudienceFilter(b.query, { filters: [{ field: 'tags', op: 'contains', value: 'PTC' }] })
+    expect(b.calls).toEqual(a.calls)
   })
 })
 
@@ -907,5 +949,229 @@ describe('resolveTagFilters / resolveEventFilters — paginate past the 1000-row
     const inCall = calls.find(c => c[0] === 'in' && c[1] === 'id')
     expect(inCall).toBeTruthy()
     expect(inCall[2]).toHaveLength(1800)
+  })
+})
+
+// ── FILTER-P1.1 — unset rows are inert ───────────────────────────────
+//
+// The builder can now hold a row the operator has not yet given a field to
+// ({ field: '', op: '', value: '' }). It must produce NO predicate, NO
+// validation error and NO count change anywhere — otherwise "Add filter"
+// would 400 the count endpoint the moment it was clicked.
+describe('unset filter rows (P1.1)', () => {
+  let q
+  beforeEach(() => { q = makeMockQuery() })
+
+  it('applies no predicate for a row with an empty field', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: '', op: '', value: '' }] })
+    expect(q.calls).toHaveLength(0)
+  })
+
+  it('applies no predicate for a row with a missing field', () => {
+    applyAudienceFilter(q.query, { filters: [{ op: 'eq', value: 'x' }] })
+    expect(q.calls).toHaveLength(0)
+  })
+
+  it('still applies the set rows alongside an unset one', () => {
+    applyAudienceFilter(q.query, {
+      filters: [
+        { field: '', op: '', value: '' },
+        { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
+      ],
+    })
+    expect(q.calls).toEqual([['eq', 'pipeline_stage_slug', 'member']])
+  })
+
+  it('still rejects a NON-empty unknown field (only blank fields are skipped)', () => {
+    expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'password', op: 'eq', value: 'x' }] }))
+      .toThrow(/Unknown audience field/)
+  })
+
+  it('validateAudienceFilter accepts a filter containing an unset row', () => {
+    expect(() => validateAudienceFilter({ logic: 'and', filters: [{ field: '', op: '', value: '' }] })).not.toThrow()
+  })
+
+  it('isUnsetFilterRow identifies blank rows only', () => {
+    expect(isUnsetFilterRow({ field: '', op: '', value: '' })).toBe(true)
+    expect(isUnsetFilterRow({ op: 'eq' })).toBe(true)
+    expect(isUnsetFilterRow(null)).toBe(true)
+    expect(isUnsetFilterRow({ field: 'pipeline_stage_slug', op: 'eq', value: 'member' })).toBe(false)
+  })
+
+  it('stripUnsetFilterRows drops unset rows before a filter is counted or persisted', () => {
+    const filter = {
+      logic: 'and',
+      filters: [
+        { field: '', op: '', value: '' },
+        { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
+      ],
+    }
+    expect(stripUnsetFilterRows(filter)).toEqual({
+      logic: 'and',
+      filters: [{ field: 'pipeline_stage_slug', op: 'eq', value: 'member' }],
+    })
+  })
+
+  it('stripUnsetFilterRows passes null / empty filters straight through', () => {
+    expect(stripUnsetFilterRows(null)).toBe(null)
+    expect(stripUnsetFilterRows(undefined)).toBe(undefined)
+    const clean = { logic: 'and', filters: [{ field: 'gender', op: 'eq', value: 'male' }] }
+    expect(stripUnsetFilterRows(clean)).toEqual(clean)
+  })
+})
+
+// ── FILTER-P1.2 — the days_since NULL asymmetry ──────────────────────
+//
+// THE ASYMMETRY IS DELIBERATE. Do not "fix" it into symmetry:
+//
+//   days_since_gt = "more than N days ago"  → NULL-INCLUSIVE.
+//     A contact who has NEVER attended has not attended in 30 days. Dropping
+//     them removes exactly the cohort a re-engagement send exists for.
+//
+//   days_since_lt = "less than N days ago"  → NULL-EXCLUSIVE.
+//     A contact who has NEVER attended did NOT attend in the last 30 days.
+//     Including them would silently widen a "recently active" audience to
+//     the entire list.
+//
+// Same bug class as the neq NULL-drop that #1310 fixed; it was never
+// extended to the date ops, and there is no operator workaround because the
+// AND/OR toggle is global.
+describe('days_since NULL semantics (P1.2)', () => {
+  let q
+  beforeEach(() => { q = makeMockQuery() })
+
+  // ── PROOF: days_since_gt is NULL-INCLUSIVE ──
+  it('days_since_gt (AND) matches never-happened: emits or(field.lt.cutoff, field.is.null)', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'last_attended_at', op: 'days_since_gt', value: 30 }] })
+    expect(q.calls).toHaveLength(1)
+    const [method, cond] = q.calls[0]
+    expect(method).toBe('or')
+    expect(cond).toContain('last_attended_at.is.null')
+    expect(cond).toMatch(/^last_attended_at\.lt\.\d{4}-\d{2}-\d{2}T/)
+  })
+
+  it('days_since_gt (OR) matches never-happened: nested or(...) disjunct carries is.null', () => {
+    applyAudienceFilter(q.query, {
+      logic: 'or',
+      filters: [
+        { field: 'last_attended_at', op: 'days_since_gt', value: 30 },
+        { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
+      ],
+    })
+    expect(q.calls).toHaveLength(1)
+    const [method, cond] = q.calls[0]
+    expect(method).toBe('or')
+    expect(cond).toMatch(/^or\(last_attended_at\.lt\.[^,]+,last_attended_at\.is\.null\),pipeline_stage_slug\.eq\.member$/)
+  })
+
+  // ── PROOF: days_since_lt stayed NULL-EXCLUSIVE ──
+  it('days_since_lt (AND) stays NULL-EXCLUSIVE: a bare .gte, never an or() with is.null', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'last_attended_at', op: 'days_since_lt', value: 30 }] })
+    expect(q.calls).toHaveLength(1)
+    expect(q.calls[0][0]).toBe('gte')
+    expect(q.calls[0][1]).toBe('last_attended_at')
+    expect(q.calls[0][2]).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    expect(JSON.stringify(q.calls)).not.toContain('is.null')
+  })
+
+  it('days_since_lt (OR) stays NULL-EXCLUSIVE: a bare field.gte.cutoff disjunct', () => {
+    applyAudienceFilter(q.query, {
+      logic: 'or',
+      filters: [
+        { field: 'last_attended_at', op: 'days_since_lt', value: 30 },
+        { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
+      ],
+    })
+    expect(q.calls).toHaveLength(1)
+    const [, cond] = q.calls[0]
+    expect(cond).toMatch(/^last_attended_at\.gte\.[^,]+,pipeline_stage_slug\.eq\.member$/)
+    expect(cond).not.toContain('is.null')
+  })
+
+  it('the two directions compile differently — the asymmetry is the point', () => {
+    const gt = makeMockQuery()
+    const lt = makeMockQuery()
+    applyAudienceFilter(gt.query, { filters: [{ field: 'last_emailed_at', op: 'days_since_gt', value: 60 }] })
+    applyAudienceFilter(lt.query, { filters: [{ field: 'last_emailed_at', op: 'days_since_lt', value: 60 }] })
+    expect(gt.calls[0][0]).toBe('or')
+    expect(lt.calls[0][0]).toBe('gte')
+  })
+
+  it('still chains as AND alongside another predicate (chained .or() calls AND in PostgREST)', () => {
+    applyAudienceFilter(q.query, {
+      filters: [
+        { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
+        { field: 'last_attended_at', op: 'days_since_gt', value: 30 },
+      ],
+    })
+    expect(q.calls).toHaveLength(2)
+    expect(q.calls[0][0]).toBe('eq')
+    expect(q.calls[1][0]).toBe('or')
+  })
+})
+
+// ── FILTER-P1.4 — a blank date value must not be saveable ────────────
+//
+// gt/lt on a date field with value '' passed validation, persisted onto a
+// campaign, and only blew up at SEND time as a raw Postgres
+// `invalid input syntax for type timestamp`. Switching a row to a date field
+// CREATED that state, because the default op is 'after' with an empty value.
+describe('date comparison values must be parseable (P1.4)', () => {
+  let q
+  beforeEach(() => { q = makeMockQuery() })
+
+  for (const op of ['gt', 'lt', 'gte', 'lte', 'eq', 'neq']) {
+    it(`rejects an empty value on a date ${op}`, () => {
+      expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'created_at', op, value: '' }] }))
+        .toThrow(InvalidAudienceFilterError)
+      expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'created_at', op, value: '' }] }))
+        .toThrow(/requires a date/)
+    })
+  }
+
+  it('rejects null / undefined / an unparseable date string', () => {
+    expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'created_at', op: 'gt', value: null }] }))
+      .toThrow(/requires a date/)
+    expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'created_at', op: 'gt' }] }))
+      .toThrow(/requires a date/)
+    expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'created_at', op: 'gt', value: 'not-a-date' }] }))
+      .toThrow(/requires a date/)
+    // A day-count left behind by switching op away from "more than X days ago".
+    expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'created_at', op: 'gt', value: '30' }] }))
+      .toThrow(/requires a date/)
+  })
+
+  it('still accepts a plain YYYY-MM-DD and a full ISO timestamp', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'created_at', op: 'gt', value: '2026-01-01' }] })
+    applyAudienceFilter(q.query, { filters: [{ field: 'created_at', op: 'lte', value: '2026-01-01T10:30:00.000Z' }] })
+    expect(q.calls).toEqual([
+      ['gt', 'created_at', '2026-01-01'],
+      ['lte', 'created_at', '2026-01-01T10:30:00.000Z'],
+    ])
+  })
+
+  it('does not touch value-less date ops or the numeric days_since ops', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'created_at', op: 'is_null' }] })
+    applyAudienceFilter(q.query, { filters: [{ field: 'created_at', op: 'days_since_gt', value: 30 }] })
+    expect(q.calls).toHaveLength(2)
+  })
+
+  it('leaves NON-date fields free to compare against non-date strings', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'label', op: 'eq', value: '' }] })
+    expect(q.calls).toEqual([['eq', 'label', '']])
+  })
+
+  it('validateAudienceFilter rejects the blank-date filter at SAVE time', () => {
+    expect(() => validateAudienceFilter({
+      logic: 'and',
+      filters: [{ field: 'last_attended_at', op: 'gt', value: '' }],
+    })).toThrow(InvalidAudienceFilterError)
+  })
+
+  it('rejects a blank date inside an OR filter too', () => {
+    expect(() => applyAudienceFilter(q.query, {
+      logic: 'or',
+      filters: [{ field: 'created_at', op: 'gt', value: '' }, { field: 'gender', op: 'eq', value: 'male' }],
+    })).toThrow(/requires a date/)
   })
 })
