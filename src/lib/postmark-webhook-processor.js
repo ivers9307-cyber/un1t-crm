@@ -215,6 +215,28 @@ export async function processPostmarkEvent(db, body) {
           // Atomic open counter (best-effort) — replaces the read-modify-write.
           try { await db.rpc('increment_email_send_opens', { p_send_id: openSend.id }) } catch {}
 
+          // GAPS-P1 (mig 511) — engagement RECENCY, the signal the inactivity
+          // cron and both win-back templates have been driving against a
+          // column that did not exist.
+          //
+          // Deliberately OUTSIDE the FirstOpen gate below, and deliberately
+          // reusing `now` — the same instant written to email_sends.opened_at
+          // three statements up. mig 511 backfilled the column as
+          // max(email_sends.opened_at) per contact, and opened_at is rewritten
+          // on EVERY Open, so anything else here (a second clock read, a
+          // FirstOpen gate, body.ReceivedAt) makes the stamp a different
+          // quantity from the backfill and the two drift apart silently.
+          //
+          // The never-move-backwards guard lives in the RPC, not here: it is
+          // atomic against a concurrent worker replaying an older event, where
+          // a read-modify-write in JS would be the same lost-update race
+          // COMMSFIX.F.2 removed from clicked_links. A regressed stamp would
+          // make "opened in the last 30 days" quietly wrong.
+          await reportRpc(db, 'stamp_contact_email_open', {
+            p_contact_id: openSend.contact_id,
+            p_at: now,
+          })
+
           if (body.FirstOpen) {
             // supabase-js builders are thenables, not Promises — they
             // have .then but no .catch. Wrap in try/catch around await.
@@ -325,6 +347,15 @@ export async function processPostmarkEvent(db, body) {
 
           // COMMSFIX.C.3 — see the Open handler; best-effort but logged.
           await reportRpc(db, 'increment_contact_clicks', { p_contact_id: clickSend.contact_id })
+
+          // GAPS-P1 (mig 511) — click recency, mirroring the Open handler.
+          // Same `now` that email_sends.clicked_at got, so the column stays
+          // equal to max(email_sends.clicked_at) — what the backfill computed.
+          // Monotonic guard inside the RPC.
+          await reportRpc(db, 'stamp_contact_email_click', {
+            p_contact_id: clickSend.contact_id,
+            p_at: now,
+          })
         }
         break
       }
