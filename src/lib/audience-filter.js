@@ -336,11 +336,14 @@ function toOrCondition(field, op, v, fieldConfig) {
     case 'is_null': return `${field}.is.null`
     case 'is_not_null':
     case 'not_null': return `${field}.not.is.null`
+    // FILTER-P1.2 — NULL-INCLUSIVE, as a nested or() disjunct. See the
+    // asymmetry note on the AND branch in applyAudienceFilter.
     case 'days_since_gt': {
       const cutoff = new Date()
       cutoff.setDate(cutoff.getDate() - v)
-      return `${field}.lt.${cutoff.toISOString()}`
+      return `or(${field}.lt.${cutoff.toISOString()},${field}.is.null)`
     }
+    // FILTER-P1.2 — NULL-EXCLUSIVE on purpose. Do not add `.is.null` here.
     case 'days_since_lt': {
       const cutoff = new Date()
       cutoff.setDate(cutoff.getDate() - v)
@@ -494,12 +497,28 @@ export function applyAudienceFilter(query, filter) {
       case 'not_null':
         query = query.not(field, 'is', null)
         break
+      // FILTER-P1.2 — THE ASYMMETRY BELOW IS DELIBERATE. Do not "tidy" it
+      // into symmetry; each direction means something different about a NULL.
+      //
+      // days_since_gt = "more than N days ago" → NULL-INCLUSIVE.
+      //   Product decision: "more than N days ago" MEANS "or never". A
+      //   contact with no last_attended_at has not attended in 30 days, and
+      //   dropping them removes precisely the cohort a re-engagement send
+      //   exists for. The bare .lt() this replaced is the same NULL-dropping
+      //   bug class COMMSFIX.B.1 fixed for neq, never extended to date ops;
+      //   there is no operator workaround because the AND/OR toggle is global.
+      //   Chained .or() calls AND together in PostgREST, so this stays an
+      //   AND-composed predicate exactly like the neq case above.
       case 'days_since_gt': {
         const cutoff = new Date()
         cutoff.setDate(cutoff.getDate() - v)
-        query = query.lt(field, cutoff.toISOString())
+        query = query.or(`${field}.lt.${cutoff.toISOString()},${field}.is.null`)
         break
       }
+      // days_since_lt = "less than N days ago" → NULL-EXCLUSIVE, unchanged.
+      //   Never-happened does NOT satisfy "happened recently". Adding
+      //   `.is.null` here would silently widen every "recently active"
+      //   audience to the whole list — the inverse of the gt bug.
       case 'days_since_lt': {
         const cutoff = new Date()
         cutoff.setDate(cutoff.getDate() - v)

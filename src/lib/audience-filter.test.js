@@ -129,13 +129,13 @@ describe('applyAudienceFilter', () => {
     expect(() => applyAudienceFilter(q.query, { filters: [null] })).toThrow(/Each filter must be an object/)
   })
 
-  it('handles days_since_gt by computing a cutoff and applying lt', () => {
+  // FILTER-P1.2 — "more than N days ago" compiles to a NULL-INCLUSIVE .or()
+  // (see the days_since asymmetry block below for the full reasoning).
+  it('handles days_since_gt by computing a cutoff and applying a NULL-inclusive or()', () => {
     applyAudienceFilter(q.query, { filters: [{ field: 'last_emailed_at', op: 'days_since_gt', value: '30' }] })
     expect(q.calls).toHaveLength(1)
-    expect(q.calls[0][0]).toBe('lt')
-    expect(q.calls[0][1]).toBe('last_emailed_at')
-    // Cutoff should be ~30 days ago, ISO string
-    expect(q.calls[0][2]).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    expect(q.calls[0][0]).toBe('or')
+    expect(q.calls[0][1]).toMatch(/^last_emailed_at\.lt\.\d{4}-\d{2}-\d{2}T.*,last_emailed_at\.is\.null$/)
   })
 
   it('handles is_null and is_not_null', () => {
@@ -243,8 +243,10 @@ describe('applyAudienceFilter', () => {
   it('still coerces the day-count for a date field days_since op', () => {
     applyAudienceFilter(q.query, { filters: [{ field: 'glofox_membership_expiry', op: 'days_since_gt', value: '14' }] })
     expect(q.calls).toHaveLength(1)
-    expect(q.calls[0][0]).toBe('lt')
-    expect(q.calls[0][1]).toBe('glofox_membership_expiry')
+    // FILTER-P1.2 — days_since_gt is NULL-inclusive, so the coerced cutoff
+    // now rides inside an or() rather than a bare .lt().
+    expect(q.calls[0][0]).toBe('or')
+    expect(q.calls[0][1]).toMatch(/^glofox_membership_expiry\.lt\.\d{4}-\d{2}-\d{2}T/)
   })
 
   it('applies emergency_contact is_null to find members missing one', () => {
@@ -975,5 +977,95 @@ describe('unset filter rows (P1.1)', () => {
     expect(stripUnsetFilterRows(undefined)).toBe(undefined)
     const clean = { logic: 'and', filters: [{ field: 'gender', op: 'eq', value: 'male' }] }
     expect(stripUnsetFilterRows(clean)).toEqual(clean)
+  })
+})
+
+// ── FILTER-P1.2 — the days_since NULL asymmetry ──────────────────────
+//
+// THE ASYMMETRY IS DELIBERATE. Do not "fix" it into symmetry:
+//
+//   days_since_gt = "more than N days ago"  → NULL-INCLUSIVE.
+//     A contact who has NEVER attended has not attended in 30 days. Dropping
+//     them removes exactly the cohort a re-engagement send exists for.
+//
+//   days_since_lt = "less than N days ago"  → NULL-EXCLUSIVE.
+//     A contact who has NEVER attended did NOT attend in the last 30 days.
+//     Including them would silently widen a "recently active" audience to
+//     the entire list.
+//
+// Same bug class as the neq NULL-drop that #1310 fixed; it was never
+// extended to the date ops, and there is no operator workaround because the
+// AND/OR toggle is global.
+describe('days_since NULL semantics (P1.2)', () => {
+  let q
+  beforeEach(() => { q = makeMockQuery() })
+
+  // ── PROOF: days_since_gt is NULL-INCLUSIVE ──
+  it('days_since_gt (AND) matches never-happened: emits or(field.lt.cutoff, field.is.null)', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'last_attended_at', op: 'days_since_gt', value: 30 }] })
+    expect(q.calls).toHaveLength(1)
+    const [method, cond] = q.calls[0]
+    expect(method).toBe('or')
+    expect(cond).toContain('last_attended_at.is.null')
+    expect(cond).toMatch(/^last_attended_at\.lt\.\d{4}-\d{2}-\d{2}T/)
+  })
+
+  it('days_since_gt (OR) matches never-happened: nested or(...) disjunct carries is.null', () => {
+    applyAudienceFilter(q.query, {
+      logic: 'or',
+      filters: [
+        { field: 'last_attended_at', op: 'days_since_gt', value: 30 },
+        { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
+      ],
+    })
+    expect(q.calls).toHaveLength(1)
+    const [method, cond] = q.calls[0]
+    expect(method).toBe('or')
+    expect(cond).toMatch(/^or\(last_attended_at\.lt\.[^,]+,last_attended_at\.is\.null\),pipeline_stage_slug\.eq\.member$/)
+  })
+
+  // ── PROOF: days_since_lt stayed NULL-EXCLUSIVE ──
+  it('days_since_lt (AND) stays NULL-EXCLUSIVE: a bare .gte, never an or() with is.null', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'last_attended_at', op: 'days_since_lt', value: 30 }] })
+    expect(q.calls).toHaveLength(1)
+    expect(q.calls[0][0]).toBe('gte')
+    expect(q.calls[0][1]).toBe('last_attended_at')
+    expect(q.calls[0][2]).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    expect(JSON.stringify(q.calls)).not.toContain('is.null')
+  })
+
+  it('days_since_lt (OR) stays NULL-EXCLUSIVE: a bare field.gte.cutoff disjunct', () => {
+    applyAudienceFilter(q.query, {
+      logic: 'or',
+      filters: [
+        { field: 'last_attended_at', op: 'days_since_lt', value: 30 },
+        { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
+      ],
+    })
+    expect(q.calls).toHaveLength(1)
+    const [, cond] = q.calls[0]
+    expect(cond).toMatch(/^last_attended_at\.gte\.[^,]+,pipeline_stage_slug\.eq\.member$/)
+    expect(cond).not.toContain('is.null')
+  })
+
+  it('the two directions compile differently — the asymmetry is the point', () => {
+    const gt = makeMockQuery()
+    const lt = makeMockQuery()
+    applyAudienceFilter(gt.query, { filters: [{ field: 'last_emailed_at', op: 'days_since_gt', value: 60 }] })
+    applyAudienceFilter(lt.query, { filters: [{ field: 'last_emailed_at', op: 'days_since_lt', value: 60 }] })
+    expect(gt.calls[0][0]).toBe('or')
+    expect(lt.calls[0][0]).toBe('gte')
+  })
+
+  it('still chains as AND alongside another predicate (chained .or() calls AND in PostgREST)', () => {
+    applyAudienceFilter(q.query, {
+      filters: [
+        { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
+        { field: 'last_attended_at', op: 'days_since_gt', value: 30 },
+      ],
+    })
+    expect(q.calls).toHaveLength(2)
+    expect(q.calls[0][0]).toBe('eq')
+    expect(q.calls[1][0]).toBe('or')
   })
 })
