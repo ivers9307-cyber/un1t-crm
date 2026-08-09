@@ -3435,6 +3435,39 @@ registry.registerPath({
   },
 })
 
+// COMMSFIX.F.3 (mig 510) — per-link click report. Aggregated in Postgres by
+// campaign_link_click_stats; unique_clickers is the honest headline (one
+// person clicking five times is not five people), total clicks sits beside it.
+registry.registerPath({
+  method: 'get',
+  path: '/api/campaigns/{id}/links',
+  tags: ['Marketing'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Per-link click report for a campaign',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: {
+      description: 'Links ordered by unique clickers, descending',
+      content: {
+        'application/json': {
+          schema: z.object({
+            success: z.literal(true),
+            data: z.array(z.object({
+              url: z.string(),
+              clicks: z.number(),
+              unique_clickers: z.number(),
+            })),
+          }),
+        },
+      },
+    },
+    404: {
+      description: 'No such campaign, or it belongs to another location (404 not 403 — ids are not enumerable)',
+      content: { 'application/json': { schema: ErrorResponse } },
+    },
+  },
+})
+
 // Schedule reports
 registry.registerPath({
   method: 'post',
