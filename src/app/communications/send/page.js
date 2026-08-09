@@ -44,6 +44,14 @@ export default async function SendPage(props) {
     ? { logic: 'and', filters: [{ field: 'tag', op: 'eq', value: String(seg) }] }
     : null
 
+  // SEGPICK.1 — ?segment_id=<uuid> deep-link (from the Saved segments cards on
+  // /communications/segments). A DIFFERENT thing from ?segment=<tag> above:
+  // this applies a whole saved contact_segments filter, the tag form seeds one
+  // clause. Resolved client-side against the location-scoped
+  // GET /api/contacts/segments the composer already fetches, so a foreign id
+  // resolves to nothing rather than leaking a filter across locations.
+  const initialSegmentId = searchParams?.segment_id ? String(searchParams.segment_id) : null
+
   return (
     <div>
       <div className="mb-5">
@@ -51,7 +59,7 @@ export default async function SendPage(props) {
         <h1 className="text-xl font-semibold text-un1t-text mt-1">Send a message</h1>
         <p className="text-sm text-un1t-subtle">Pick who, write once, send now{(channels.includes('sms') || channels.includes('email')) ? ' or schedule' : ''}.</p>
       </div>
-      <UnifiedSendComposer locationId={locationId} channels={channels} templates={templates} initialAudienceFilter={initialAudienceFilter} />
+      <UnifiedSendComposer locationId={locationId} channels={channels} templates={templates} initialAudienceFilter={initialAudienceFilter} initialSegmentId={initialSegmentId} />
     </div>
   )
 }
