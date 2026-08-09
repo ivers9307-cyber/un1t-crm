@@ -8,6 +8,22 @@ import {
   Ban, Send, CheckCircle2, XCircle, Users, RotateCcw
 } from 'lucide-react'
 
+// COMMSFIX.D.1a — the header chip used to be a hardcoded green "Sent" for
+// every campaign, including scheduled/queued/sending/cancelled ones — i.e. it
+// lied in exactly the states where the operator is deciding whether to
+// intervene. Light-theme chip recipe per CLAUDE.md: bg-<c>-500/10 text-<c>-700.
+// 'failed' is included ahead of the campaigns.last_error migration; it renders
+// fine when the column/status don't exist yet (nothing ever has that status).
+const campaignStatusConfig = {
+  draft:     { label: 'Draft',     cls: 'bg-slate-500/10 text-slate-700' },
+  scheduled: { label: 'Scheduled', cls: 'bg-blue-500/10 text-blue-700' },
+  queued:    { label: 'Queued',    cls: 'bg-amber-500/10 text-amber-700' },
+  sending:   { label: 'Sending',   cls: 'bg-amber-500/10 text-amber-700' },
+  sent:      { label: 'Sent',      cls: 'bg-green-500/10 text-green-700' },
+  cancelled: { label: 'Cancelled', cls: 'bg-rose-500/10 text-rose-700' },
+  failed:    { label: 'Failed',    cls: 'bg-red-500/10 text-red-700' },
+}
+
 const recipientStatusConfig = {
   sent:      { label: 'Sent',       icon: Send,            color: 'text-blue-400' },
   delivered: { label: 'Delivered',  icon: CheckCircle2,    color: 'text-green-400' },
@@ -112,6 +128,8 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
   const clickRate = totalSent > 0 ? ((totalClicked / totalSent) * 100).toFixed(1) : '0'
   const bounceRate = totalSent > 0 ? ((totalBounced / totalSent) * 100).toFixed(1) : '0'
 
+  const statusChip = campaignStatusConfig[campaign.status] || campaignStatusConfig.draft
+
   const sentDate = campaign.sent_at
     ? new Date(campaign.sent_at).toLocaleDateString('en-IE', {
         weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
@@ -149,8 +167,12 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
         </div>
         <div className="flex items-center gap-3">
           <span className="text-xs text-un1t-subtle">{sentDate}</span>
-          <span className="text-xs bg-green-500/20 text-green-700 px-2 py-0.5 rounded-full">
-            Sent
+          <span
+            data-testid="campaign-status-chip"
+            title={campaign.last_error || undefined}
+            className={`text-xs px-2 py-0.5 rounded-full ${statusChip.cls}`}
+          >
+            {statusChip.label}
           </span>
         </div>
       </div>
