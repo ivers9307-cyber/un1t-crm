@@ -190,10 +190,15 @@ export async function PUT(request, props) {
     // gate already excludes them; if they re-consent later this branch
     // clears it then).
     if (updates.email_marketing === true) contactUpdate.email_suppressed_at = null
-    await db
-      .from('contacts')
-      .update(contactUpdate)
-      .eq('id', pref.contact_id)
+    // COMMSFIX.A.3 — on an opt-out contactUpdate is null (nothing to write
+    // since LOCCOMMS.5 retired the 'unsubscribed' stamp); running
+    // .update(null) anyway was a guaranteed-failing PATCH on every opt-out.
+    if (contactUpdate) {
+      await db
+        .from('contacts')
+        .update(contactUpdate)
+        .eq('id', pref.contact_id)
+    }
   }
 
   return NextResponse.json({ success: true, message: 'Preferences updated' })
