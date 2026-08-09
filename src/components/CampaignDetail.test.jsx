@@ -163,3 +163,35 @@ describe('CampaignDetail — a failed campaign can be re-sent', () => {
     expect(screen.queryByTestId('campaign-resend-failed')).toBeNull()
   })
 })
+
+describe('CampaignDetail — recipient rows label their real status', () => {
+  const recipients = [
+    { id: 'r1', contact_id: 'c1', status: 'queued', contacts: { name: 'Ann', email: 'ann@x.ie' } },
+    { id: 'r2', contact_id: 'c2', status: 'sending', contacts: { name: 'Ben', email: 'ben@x.ie' } },
+    { id: 'r3', contact_id: 'c3', status: 'cancelled', contacts: { name: 'Cara', email: 'cara@x.ie' } },
+    { id: 'r4', contact_id: 'c4', status: 'skipped_frequency_cap', contacts: { name: 'Dan', email: 'dan@x.ie' } },
+    { id: 'r5', contact_id: 'c5', status: 'sent', contacts: { name: 'Eve', email: 'eve@x.ie' } },
+  ]
+
+  function renderRecipients() {
+    render(<CampaignDetail campaign={{ ...BASE, status: 'sending' }} recipients={recipients} />)
+    fireEvent.click(screen.getByRole('button', { name: /^Recipients \(/ }))
+  }
+
+  it.each([
+    ['r1', /queued/i],
+    ['r2', /sending/i],
+    ['r3', /cancelled/i],
+    ['r4', /frequency cap|capped/i],
+    ['r5', /^sent$/i],
+  ])('labels %s correctly', (id, label) => {
+    renderRecipients()
+    expect(screen.getByTestId(`recipient-status-${id}`).textContent).toMatch(label)
+  })
+
+  it('no longer renders every unknown status as "Sent"', () => {
+    renderRecipients()
+    const labels = ['r1', 'r2', 'r3', 'r4'].map(id => screen.getByTestId(`recipient-status-${id}`).textContent.trim())
+    expect(labels).not.toContain('Sent')
+  })
+})

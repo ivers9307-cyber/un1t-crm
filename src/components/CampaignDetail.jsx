@@ -25,7 +25,12 @@ const campaignStatusConfig = {
   failed:    { label: 'Failed',    cls: 'bg-red-500/10 text-red-700' },
 }
 
+// COMMSFIX.D.1c — pre-send and terminal-skip statuses were missing, and the
+// lookup fell back to `sent` — so a queued, mid-send, cancelled or
+// frequency-capped recipient all rendered as a green "Sent" row.
 const recipientStatusConfig = {
+  queued:    { label: 'Queued',     icon: Clock,           color: 'text-amber-700' },
+  sending:   { label: 'Sending',    icon: Loader2,         color: 'text-amber-700' },
   sent:      { label: 'Sent',       icon: Send,            color: 'text-blue-400' },
   delivered: { label: 'Delivered',  icon: CheckCircle2,    color: 'text-green-400' },
   opened:    { label: 'Opened',     icon: Eye,             color: 'text-emerald-400' },
@@ -33,6 +38,9 @@ const recipientStatusConfig = {
   bounced:   { label: 'Bounced',    icon: XCircle,         color: 'text-red-400' },
   failed:    { label: 'Failed',     icon: AlertTriangle,   color: 'text-red-400' },
   complained:{ label: 'Complained', icon: Ban,             color: 'text-orange-400' },
+  cancelled: { label: 'Cancelled',  icon: X,               color: 'text-rose-700' },
+  // FREQ-CAP.1 terminal skip — not an error, and never retried.
+  skipped_frequency_cap: { label: 'Skipped (frequency cap)', icon: SkipForward, color: 'text-un1t-subtle' },
 }
 
 function StatCard({ icon: Icon, label, value, subValue, color }) {
@@ -454,7 +462,8 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
                   </thead>
                   <tbody className="divide-y divide-un1t-border">
                     {recipients.map(r => {
-                      const config = recipientStatusConfig[r.status] || recipientStatusConfig.sent
+                      const config = recipientStatusConfig[r.status]
+                        || { label: r.status || 'Unknown', icon: AlertTriangle, color: 'text-un1t-subtle' }
                       const StatusIcon = config.icon
                       const contact = r.contacts
 
@@ -472,7 +481,7 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
                             </div>
                           </td>
                           <td className="px-4 py-3">
-                            <span className={`flex items-center gap-1.5 text-xs ${config.color}`}>
+                            <span data-testid={`recipient-status-${r.id}`} className={`flex items-center gap-1.5 text-xs ${config.color}`}>
                               <StatusIcon size={12} />
                               {config.label}
                             </span>
