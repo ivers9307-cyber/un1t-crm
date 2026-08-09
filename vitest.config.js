@@ -2,6 +2,18 @@ import { defineConfig } from 'vitest/config'
 import path from 'node:path'
 
 export default defineConfig({
+  // App-dir pages/components are `.js` files containing JSX (Next compiles
+  // them fine, but Vite's Oxc transform only covers ts/jsx/tsx by default —
+  // and its default `exclude` is /\.js$/, which still applies when only
+  // `include` is set, so BOTH must be overridden). Adding src `.js` lets
+  // page-level tests (e.g. the TPL-IDOR.1 guard tests) import page.js
+  // directly; `lang: 'jsx'` makes Oxc parse the JSX (a superset of js, and
+  // the repo has no .ts/.tsx, so applying it to every matched file is safe).
+  oxc: {
+    include: ['src/**/*.js', /\.(m?ts|[jt]sx)$/],
+    exclude: [],
+    lang: 'jsx',
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
