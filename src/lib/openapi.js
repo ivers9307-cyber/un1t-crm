@@ -178,6 +178,19 @@ const CampaignCreate = z.object({
     .openapi({ description: 'Hours to wait before auto-picking the winner by open rate (default 4)' }),
 }).openapi('CampaignCreate')
 
+// GAPS-P8 — copy assist input. Deliberately narrow: the operator's own brief
+// and their own draft, nothing about the audience or its contacts.
+const CopyAssistRequest = z.object({
+  location_id: uuidLike,
+  kind: z.enum(['subject', 'body']),
+  brief: z.string().max(600).optional()
+    .openapi({ description: 'One or two lines from the operator on what this email is about' }),
+  subject: z.string().max(500).optional().openapi({ description: 'The draft subject line, if any' }),
+  body: z.string().max(200_000).optional()
+    .openapi({ description: 'The draft body (HTML accepted; flattened to plain text server-side before the prompt)' }),
+  count: z.number().int().min(1).max(3).optional(),
+}).openapi('CopyAssistRequest')
+
 const ScheduledReport = z.object({
   location_id: uuidLike.optional(),
   report_type: reportTypeSchema,
@@ -3484,6 +3497,49 @@ registry.registerPath({
   responses: {
     200: { description: 'Send complete' },
     400: { description: 'Send failed (e.g. invalid audience filter)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// GAPS-P8 — AI copy assist for the composer. Session-only (it costs money per
+// call), rate-limited per user and per location, and it fails soft: no API key
+// or an upstream error still answers 200 with available:false so the composer
+// keeps working. Nothing is applied or sent.
+registry.registerPath({
+  method: 'post',
+  path: '/api/campaigns/copy-assist',
+  tags: ['Marketing'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Suggest alternative subject lines or body copy in the house style',
+  description:
+    'Takes the operator brief plus whatever they are already writing and returns a few alternatives. The model is a '
+    + 'REWRITER, not a source of studio facts: everything it returns is scrubbed deterministically (em dashes via '
+    + 'stripEmDashes, emoji, exclamation pile-ups, ALL-CAPS shouting) and any suggestion that invents a price, date, '
+    + 'time or offer, or that surfaces class capacity, is dropped before the operator sees it. Requires the `email` '
+    + 'permission at the target location. Suggestions are never auto-applied and never sent.',
+  request: { body: { content: { 'application/json': { schema: CopyAssistRequest } } } },
+  responses: {
+    200: {
+      description: 'Suggestions, or available:false when the assist is unconfigured or upstream is down',
+      content: {
+        'application/json': {
+          schema: z.object({
+            success: z.literal(true),
+            data: z.object({
+              available: z.boolean(),
+              reason: z.string().optional(),
+              kind: z.enum(['subject', 'body']).optional(),
+              suggestions: z.array(z.string()),
+              dropped: z.array(z.object({ reason: z.string() })),
+              generated_by: z.literal('model'),
+              reviewed: z.literal(false),
+            }),
+          }),
+        },
+      },
+    },
+    400: { description: 'Nothing supplied to rewrite', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No email permission at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited (20 per 15 min per user, 120 per day per location)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

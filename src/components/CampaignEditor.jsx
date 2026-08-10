@@ -7,6 +7,7 @@ import { isoToLocalDatetime, localDatetimeToIso } from '@/lib/datetime-local'
 import { ArrowLeft, Save, Send, Users, Code, Paintbrush, Mail, Loader2, CheckCircle2, AlertCircle, Calendar, X, Trash2 } from 'lucide-react'
 import AudienceBuilder, { STAGE_MEMBER_DEFAULT_ROW } from './AudienceBuilder'
 import SendQuietHoursNotice from './communications/SendQuietHoursNotice'
+import CopyAssist from './communications/CopyAssist'
 import { stripUnsetFilterRows } from '@/lib/audience-filter'
 import Link from 'next/link'
 
@@ -938,6 +939,16 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                   onChange={e => setSubject(e.target.value)}
                   placeholder="Your subject line — use {{first_name}} for personalisation"
                   className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
+                />
+                {/* GAPS-P8 — suggestions only. Nothing is applied until the
+                    operator clicks Use; body variants copy to the clipboard
+                    rather than overwrite the Unlayer design. */}
+                <CopyAssist
+                  className="mt-2"
+                  locationId={locationId}
+                  subject={subject}
+                  getBody={async () => (await stashUnlayerToState()).html || ''}
+                  onUseSubject={setSubject}
                 />
               </div>
 

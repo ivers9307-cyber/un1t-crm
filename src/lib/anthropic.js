@@ -26,7 +26,8 @@ export const ANTHROPIC_VERSION = '2023-06-01'
  * @param {{ apiKey?: string, locationId?: string|null, organizationId?: string|null,
  *           source: string, signal?: AbortSignal }} meta
  *   source: stable call-site key ('mia_auto_reply' | 'assistant_chat' | 'invoice_ocr'
- *   | 'followups' | 'approval_suggest' | 'hunt_scoring' | 'flow_agent' | 'hyrox_generation').
+ *   | 'followups' | 'approval_suggest' | 'hunt_scoring' | 'flow_agent' | 'hyrox_generation'
+ *   | 'campaign_copy_assist').
  */
 export async function anthropicMessages(body, meta = {}) {
   const apiKey = meta.apiKey || process.env.ANTHROPIC_API_KEY
