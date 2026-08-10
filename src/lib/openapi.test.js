@@ -73,6 +73,27 @@ describe('getOpenApiSpec', () => {
     expect(op.responses).toHaveProperty('404')
   })
 
+  // FILTER-C.4 — the two audience routes an operator's whole pre-send check
+  // runs on. audience-count predates the spec and audience-preview (FILTER-B.6)
+  // never got registered, so /api-docs documented neither — the one place an
+  // integrator would look to learn that a preview exists at all.
+  it('documents the audience count and preview routes', () => {
+    for (const p of ['/api/communications/audience-count', '/api/communications/audience-preview']) {
+      expect(spec.paths, `missing ${p}`).toHaveProperty(p)
+      const op = spec.paths[p].post
+      expect(op, `${p} is not registered as POST`).toBeTruthy()
+      expect(op.tags).toContain('Marketing')
+      expect(op.security).toContainEqual({ CookieAuth: [] })
+      expect(op.responses).toHaveProperty('200')
+      expect(op.responses).toHaveProperty('400')
+      expect(op.responses).toHaveProperty('401')
+    }
+    // The preview returns customer PII, so its tenant guard 404s rather than
+    // 403s (ids must not be enumerable) — that is a documented response, not
+    // an implementation detail.
+    expect(spec.paths['/api/communications/audience-preview'].post.responses).toHaveProperty('404')
+  })
+
   it('caches the spec object across calls (same reference)', async () => {
     expect(await getOpenApiSpec()).toBe(spec)
   })

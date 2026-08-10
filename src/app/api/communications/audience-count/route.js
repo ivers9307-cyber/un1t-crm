@@ -50,8 +50,19 @@ export async function POST(request) {
   const db = createServerClient()
   try {
     if (channel === 'whatsapp') {
-      // Single-table reachability counts (safe post mig 422) — keep the pre-send
-      // number honest about WhatsApp consent + a usable wa_phone.
+      // FILTER-C.5 — `reachable` (the will-receive number) is now built by
+      // buildWhatsAppAudienceAsync, the same send builder
+      // buildEligibleAudienceQuery delegates to for this channel, so all three
+      // channels take their will-receive number from their own send path. Fixed
+      // inside the helper rather than here on purpose: the blast writes the
+      // same summary to whatsapp_broadcasts.delivery_summary, and a route-only
+      // fix would have left that second consumer on the old definition.
+      //
+      // Note the RESPONSE SHAPE is deliberately different from email/SMS and is
+      // not being changed here: `count` is the MATCH set and `reachable` the
+      // will-receive set, which AudienceCount reads channel-by-channel
+      // (sendable = reachable for WhatsApp, count everywhere else). Renaming
+      // them to match would move a number that hosts gate Send on.
       const { matched, reachable, excluded } =
         await computeWhatsAppReachabilitySummary(db, audience_filter || { logic: 'and', filters: [] }, location_id)
       return NextResponse.json({ success: true, count: matched, reachable, excluded })

@@ -18,21 +18,22 @@ const push = vi.fn()
 const refresh = vi.fn()
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push, refresh }) }))
 let editSeq = 0
+let builderProps = null
 vi.mock('./AudienceBuilder', () => ({
   // FILTER-P1.6 — the stand-in exposes an onChange trigger, because the
   // double-count bug only appears on an EDIT: the old code called
   // refreshAudienceCount() from onChange AND had a useEffect on the same
   // state, so one edit produced two POSTs.
-  default: ({ onChange }) => (
-    <div data-testid="audience-builder">
-      <button type="button" onClick={() => onChange({
-        logic: 'and', filters: [{ field: 'gender', op: 'eq', value: `v${++editSeq}` }],
-      })}>mock edit filter</button>
-    </div>
-  ),
-  // FILTER-P1.1 — the real module exports this named default row; the mock
-  // must too, or every host importing it fails to resolve.
-  STAGE_MEMBER_DEFAULT_ROW: { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
+  default: (props) => {
+    builderProps = props
+    return (
+      <div data-testid="audience-builder">
+        <button type="button" onClick={() => props.onChange({
+          logic: 'and', filters: [{ field: 'gender', op: 'eq', value: `v${++editSeq}` }],
+        })}>mock edit filter</button>
+      </div>
+    )
+  },
 }))
 
 let deleteError = null
@@ -61,6 +62,7 @@ const CODE_HTML = '<html><body><h1>UN1T branded email</h1></body></html>'
 
 beforeEach(() => {
   vi.clearAllMocks()
+  builderProps = null
   deleteError = null
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ success: true, audience_count: 10 }) })))
 })
@@ -72,6 +74,31 @@ afterEach(() => {
 function renderEditor(overrides = {}) {
   return render(<CampaignEditor campaign={{ ...BASE, ...overrides }} locationId="loc-1" userId="user-1" />)
 }
+
+// FILTER-C.3 — no guessed starting row. FILTER-B.3 removed the seeded
+// `Stage = member` from the WhatsApp and SMS editors on the argument that an
+// audience the operator did not choose is a trap: it renders as an ordinary
+// row, indistinguishable from a deliberate filter, and quietly excludes every
+// lead from a campaign built by someone who never touched the builder.
+// The campaign editor and the unified composer were the last two seeding it.
+describe('CampaignEditor — "Add filter" seeds nothing', () => {
+  async function openAudienceTab(overrides = {}) {
+    renderEditor(overrides)
+    fireEvent.click(screen.getByRole('button', { name: /audience/i }))
+    await screen.findByTestId('audience-builder')
+  }
+
+  it('passes no defaultFilterRow to the audience builder', async () => {
+    await openAudienceTab()
+    expect(builderProps).toBeTruthy()
+    expect(builderProps.defaultFilterRow ?? null).toBeNull()
+  })
+
+  it('opens an empty draft with an empty filter, not a one-row guess', async () => {
+    await openAudienceTab({ audience_filter: null })
+    expect(builderProps.filter?.filters ?? []).toHaveLength(0)
+  })
+})
 
 describe('CampaignEditor — a code-authored draft opens in code mode', () => {
   it('opens the HTML Code tab with the stored html when there is no design_json', () => {

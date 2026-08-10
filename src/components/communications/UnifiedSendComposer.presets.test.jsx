@@ -27,7 +27,6 @@ vi.mock('@/components/AudienceBuilder', () => ({
       </div>
     )
   },
-  STAGE_MEMBER_DEFAULT_ROW: { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
 }))
 vi.mock('./ContactMultiSelect', () => ({ default: () => <div /> }))
 vi.mock('./useUnlayerEditor', async () => {
@@ -57,6 +56,18 @@ afterEach(() => {
 })
 
 describe('UnifiedSendComposer — presets are mounted here', () => {
+  // FILTER-C.3 — a preset is a CHOSEN audience; a seeded default row is not.
+  // FILTER-B.3 stripped the `Stage = member` seed from the WhatsApp and SMS
+  // editors because a guess the operator never made renders identically to a
+  // deliberate filter. The composer was one of the last two hosts still
+  // passing it.
+  it('seeds no guessed filter row — the operator starts from nothing', async () => {
+    render(<UnifiedSendComposer locationId="loc-1" channels={['sms']} templates={[]} />)
+    await waitFor(() => expect(builderProps).toBeTruthy())
+    expect(builderProps.defaultFilterRow ?? null).toBeNull()
+    expect(builderProps.filter?.filters ?? []).toHaveLength(0)
+  })
+
   it('hands the verified preset registry to the builder', async () => {
     render(<UnifiedSendComposer locationId="loc-1" channels={['sms']} templates={[]} />)
     await waitFor(() => expect(builderProps).toBeTruthy())

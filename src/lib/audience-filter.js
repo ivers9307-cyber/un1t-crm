@@ -113,30 +113,46 @@ export const AUDIENCE_FIELDS = Object.freeze({
   emergency_contact:         { type: 'text',    ops: ['eq', 'neq', 'contains', 'not_contains', 'is_null', 'is_not_null', 'not_null'] },
 
   // Numeric
+  //
+  // FILTER-C.1 — `notNull: true` marks a counter the SCHEMA guarantees can
+  // never be NULL (mig 519 backfills 0 and pins SET NOT NULL). It is why these
+  // fields carry no is_null / is_not_null, unlike every date field: with the
+  // guarantee, "never opened" is exactly `= 0` and there is no second,
+  // invisible cohort — the NULL-dropping class COMMSFIX.B.1 and FILTER-P1.2
+  // spent their time removing.
+  //
+  // The alternative (add the null ops) was rejected on the live evidence: at
+  // 2026-08-10 all ten counters were DEFAULT 0 with ZERO NULLs across 8,572
+  // contacts, and every writer coalesces (`?? 0`). Offering "opened is empty"
+  // would have shipped an operator-visible filter that matches nobody and
+  // cannot say why — a new trap of the same family, not a fix for the old one.
+  // audience-filter-counter-nullability.test.js keeps this marker, the op list
+  // and mig 519 in step. Nullable numbers (trial_credits_remaining: 6,530
+  // NULLs live; glofox_membership_price_cents: 4,886) keep the null ops.
   trial_credits_remaining:   { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'is_null', 'is_not_null', 'not_null'] },
-  total_emails_sent:         { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
+  total_emails_sent:         { type: 'number',  notNull: true, ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
   // GLOFOX2.1.14 — booking aggregates (mig 137). Powers re-engagement
   // audiences ("haven't attended in N days") and welcome sequences
   // ("first attendance"). Refreshed by per-member sync + future
   // BOOKING_* webhook handler + daily cron safety net.
-  total_bookings_30d:        { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
-  total_attended_30d:        { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
-  total_noshow_30d:          { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
+  total_bookings_30d:        { type: 'number',  notNull: true, ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
+  total_attended_30d:        { type: 'number',  notNull: true, ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
+  total_noshow_30d:          { type: 'number',  notNull: true, ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
   // GLOFOX2.1.20 — Lifetime Value from INVOICE_UPDATED webhook
   // (mig 140). Powers VIP segmentation, at-risk audiences (high
   // LTV + lapsed), and revenue-cohort analysis.
   // Stored as cents (BIGINT) so the operator filters with
   // "lifetime_value_cents > 50000" (= €500).
-  lifetime_value_cents:        { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
-  lifetime_transaction_count:  { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
+  lifetime_value_cents:        { type: 'number',  notNull: true, ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
+  lifetime_transaction_count:  { type: 'number',  notNull: true, ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
   // GLOFOX-PROFILE (mig 196) — effective membership price in cents.
   // Powers price-band targeting (premium-tier upsell, win-back of
   // lapsed high-value plans).
   glofox_membership_price_cents: { type: 'number', ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'is_null', 'is_not_null', 'not_null'] },
-  total_emails_opened:       { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
-  total_emails_clicked:      { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
-  total_wa_sent:             { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
-  total_wa_received:         { type: 'number',  ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
+  total_emails_opened:       { type: 'number',  notNull: true, ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
+  total_emails_clicked:      { type: 'number',  notNull: true, ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
+  total_wa_sent:             { type: 'number',  notNull: true, ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
+  total_wa_received:         { type: 'number',  notNull: true, ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte'] },
 
   // Date / timestamp
   created_at:                { type: 'date',    ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'is_null', 'is_not_null', 'not_null', 'days_since_gt', 'days_since_lt'] },

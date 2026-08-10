@@ -684,6 +684,25 @@ export function applyWhatsAppReachability(query) {
  * Reason counts (no_number / no_consent / opted_out / undeliverable) are
  * independent and may overlap; the true excluded total is matched - reachable.
  *
+ * FILTER-C.5 — `reachable` is built by the SEND builder itself
+ * (buildWhatsAppAudienceAsync — the same function buildEligibleAudienceQuery
+ * delegates to for this channel), not by re-applying the gates here. It used to
+ * be the latter: the same five predicates, spelled at a second call site and
+ * applied in a different order relative to the operator's filter. That is two
+ * definitions of one number, which is how a pre-send count and a send drift
+ * apart — FILTER-B.8 removed exactly this for SMS, whose three gates had been
+ * hand-copied from sms.js. WhatsApp's extra gates are no obstacle: wa_status,
+ * the wa_phone-presence test and the per-location consent column all live
+ * INSIDE applyWhatsAppReachability, which the send builder already applies.
+ * Template/session rules are not audience predicates (a broadcast sends a
+ * template, so there is no 24h window to filter on), and the blast-time
+ * frequency cap / resume set are decisions the sender makes over the rows this
+ * query returns — the same shape of post-query gate every channel has.
+ *
+ * The `excluded` sub-counts below stay hand-built on purpose: they are
+ * diagnostic breakdowns of WHY people fell out, not the number anything sends
+ * on, and each one deliberately isolates a single reason.
+ *
  * @returns {Promise<{matched:number, reachable:number, excluded:{no_number:number,no_consent:number,opted_out:number,undeliverable:number}}>}
  */
 export async function computeWhatsAppReachabilitySummary(db, filter, locationId) {
@@ -697,7 +716,11 @@ export async function computeWhatsAppReachabilitySummary(db, filter, locationId)
   }
   // Order matters — keep aligned with the test's call sequence.
   const matched = await countOf(null)
-  const reachable = await countOf((q) => applyWhatsAppReachability(q))
+  const { query: eligible } = await buildWhatsAppAudienceAsync(db, filter, locationId, {
+    columns: 'id', selectOpts: { count: 'exact', head: true },
+  })
+  const { count: reachableCount } = await eligible
+  const reachable = reachableCount || 0
   const no_number = await countOf((q) => q.is('wa_phone', null))
   const no_consent = await countOf((q) => q.eq('loc_whatsapp_marketing', false))
   const opted_out = await countOf((q) => q.in('wa_status', ['blocked', 'opted_out']))
