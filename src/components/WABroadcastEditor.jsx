@@ -4,7 +4,8 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Save, Send, Users, CheckCircle2, XCircle, Ban, Clock } from 'lucide-react'
-import AudienceBuilder, { STAGE_MEMBER_DEFAULT_ROW } from './AudienceBuilder'
+import AudienceBuilder from './AudienceBuilder'
+import AudienceCount from './communications/AudienceCount'
 import { estimateDripDays } from '@/lib/whatsapp-drip'
 import { groupWaTemplates, UNGROUPED_LABEL } from '@shared/wa-template-groups'
 
@@ -609,15 +610,24 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
               <p className="text-xs text-un1t-muted mb-4">
                 Only contacts with a WhatsApp number who have opted in to WhatsApp marketing will receive this broadcast.
               </p>
-              {/* FILTER-P1.1 — a send surface keeps the legacy Stage = member
-                  starting guess; only the sequence + contacts builders start
-                  unset (an unset default here would WIDEN a broadcast). */}
+              {/* FILTER-B.3 (FILTER-FOUND row 1) — the legacy Stage = member
+                  starting guess is GONE here. P1 kept it only because this
+                  surface was blind: an unset row would have widened a
+                  broadcast with nothing on screen to say so. The count below
+                  now shows the audience live AND names any unfinished row,
+                  so the widening failure is stated out loud — while the
+                  narrowing the default caused was silent and, on a
+                  broadcast to leads and trials, usually wrong. */}
               <AudienceBuilder
                 filter={audienceFilter}
                 onChange={setAudienceFilter}
-                audienceCount={null}
                 locationId={locationId}
-                defaultFilterRow={STAGE_MEMBER_DEFAULT_ROW}
+              />
+              <AudienceCount
+                className="mt-3"
+                locationId={locationId}
+                filter={audienceFilter}
+                channel="whatsapp"
               />
             </div>
           </div>

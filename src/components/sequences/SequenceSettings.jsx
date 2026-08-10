@@ -10,6 +10,7 @@ import { ChevronDown, ChevronRight, Save, Check, AlertTriangle, Settings as Sett
 import { Button } from '@/components/ui'
 import { Labeled, Text, Area, Num, Select } from './nodeEditing'
 import AudienceBuilder from '@/components/AudienceBuilder'
+import AudienceCount from '@/components/communications/AudienceCount'
 
 const PIPELINE_SLUGS = [
   'new_lead', 'first_class', 'second_class', 'trial_done',
@@ -259,10 +260,21 @@ export default function SequenceSettings({ sequence }) {
               <span className="block text-[11px] text-un1t-subtle/80">Only enrol contacts who match these conditions when the trigger fires. Leave empty to allow anyone.</span>
               <span className="block text-[11px] text-un1t-subtle/80 mt-1">{AUDIENCE_CONTINUOUS_HINT}</span>
             </div>
-            {/* COMMSFIX.B.6 — audienceCount={null}: no live count is wired
-                here, and an omitted prop rendered the dangling
-                "<undefined> contacts match" footer. */}
-            <AudienceBuilder filter={audienceFilter || { logic: 'and', filters: [] }} onChange={f => { setAudienceFilter(f); touch() }} audienceCount={null} />
+            <AudienceBuilder filter={audienceFilter || { logic: 'and', filters: [] }} onChange={f => { setAudienceFilter(f); touch() }} />
+            {/* FILTER-B.3 — a MATCHING count, deliberately not a send count.
+                Since SEQEXIT.1 this filter is a continuing condition: it
+                decides who enrols AND who stays, re-checked before every
+                step. "N will receive it" would be a recipient count for a
+                send that does not exist, so mode="matching" asks
+                channel-agnostically and labels the number honestly. */}
+            {sequence?.location_id && (
+              <AudienceCount
+                className="mt-2"
+                locationId={sequence.location_id}
+                filter={audienceFilter || { logic: 'and', filters: [] }}
+                mode="matching"
+              />
+            )}
           </div>
 
           {/* Goal */}

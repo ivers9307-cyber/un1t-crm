@@ -834,10 +834,14 @@ export async function markUndeliverableIfPermanent(db, contactId, { code, messag
  * that whatsapp_marketing is denormalized (mig 422) — no contact_preferences
  * embed, so head:true counts over this gate are safe.
  */
-function whatsAppAudienceBase(db, locationId) {
+function whatsAppAudienceBase(db, locationId, { columns = '*', selectOpts } = {}) {
   return applyWhatsAppReachability(
     // LOCCOMMS.3 — per-location audience via the view (mig 491).
-    db.from('contact_location_audience').select('*').eq('audience_location_id', locationId)
+    // FILTER-B.4 — columns/selectOpts are overridable so a count (head:true)
+    // and a preview projection travel through THIS builder rather than a
+    // parallel query. They must ride the FIRST select() after .from() or
+    // postgrest-js silently drops them (buildAudienceQuery's CAMPAIGN.10 note).
+    db.from('contact_location_audience').select(columns, selectOpts).eq('audience_location_id', locationId)
   )
 }
 
@@ -852,8 +856,8 @@ export function buildWhatsAppAudience(db, filter, locationId) {
 // the contacts.id constraint, then applies scalar filters. Returns the
 // wrapped { query } so the caller can chain .order()/.range() (paged path)
 // or await it directly (single-shot).
-export async function buildWhatsAppAudienceAsync(db, filter, locationId) {
-  return applyAudienceFilterAsync({ db, query: whatsAppAudienceBase(db, locationId), filter, locationId })
+export async function buildWhatsAppAudienceAsync(db, filter, locationId, opts) {
+  return applyAudienceFilterAsync({ db, query: whatsAppAudienceBase(db, locationId, opts), filter, locationId })
 }
 
 // Paginate the full WhatsApp-eligible audience (consent + opt-out + wa_phone + the
