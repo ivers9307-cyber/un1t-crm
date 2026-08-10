@@ -46,6 +46,10 @@ beforeEach(() => {
  * Tables that are queried multiple times (e.g. contacts twice in
  * inactivity.last_booking_at) accept arrays — successive calls
  * shift() one config off.
+ *
+ * `error: 'msg'` makes the awaited chain resolve { data: null, error }
+ * — the shape PostgREST returns for a bad column / transient failure,
+ * and the shape selectAll turns into a throw.
  */
 function mockDb(tables) {
   const calls = []
@@ -69,7 +73,11 @@ function mockDb(tables) {
         range: record('range'),
         maybeSingle: vi.fn().mockResolvedValue({ data: cfg.maybeSingle ?? null, error: null }),
         single: vi.fn().mockResolvedValue({ data: cfg.single ?? null, error: null }),
-        then: (onF) => Promise.resolve({ data: cfg.list ?? [], error: null }).then(onF),
+        then: (onF) => Promise.resolve(
+          cfg.error
+            ? { data: null, error: { message: cfg.error } }
+            : { data: cfg.list ?? [], error: null },
+        ).then(onF),
       }
       return builder
     }),
@@ -81,7 +89,7 @@ function mockDb(tables) {
 describe('runEventReminderTriggers', () => {
   it('returns zero stats when there are no active event_reminder sequences', async () => {
     createServerClient.mockReturnValue(mockDb({ email_sequences: { list: [] } }))
-    expect(await cronTriggers.runEventReminderTriggers()).toEqual({ fired: 0, skipped: 0 })
+    expect(await cronTriggers.runEventReminderTriggers()).toEqual({ fired: 0, skipped: 0, errored: 0 })
     expect(enrolContacts).not.toHaveBeenCalled()
   })
 
@@ -93,7 +101,7 @@ describe('runEventReminderTriggers', () => {
         { id: 's3', location_id: 'loc-1', trigger_config: { hours_before: -1 }, audience_filter: null },
       ] },
     }))
-    expect(await cronTriggers.runEventReminderTriggers()).toEqual({ fired: 0, skipped: 0 })
+    expect(await cronTriggers.runEventReminderTriggers()).toEqual({ fired: 0, skipped: 0, errored: 3 })
     expect(enrolContacts).not.toHaveBeenCalled()
   })
 
@@ -190,7 +198,7 @@ describe('runEventReminderTriggers', () => {
 describe('runAnniversaryTriggers', () => {
   it('returns zero stats when no active sequences', async () => {
     createServerClient.mockReturnValue(mockDb({ email_sequences: { list: [] } }))
-    expect(await cronTriggers.runAnniversaryTriggers()).toEqual({ fired: 0, skipped: 0 })
+    expect(await cronTriggers.runAnniversaryTriggers()).toEqual({ fired: 0, skipped: 0, errored: 0 })
   })
 
   it('skips a sequence with non-numeric / negative days_after', async () => {
@@ -201,7 +209,7 @@ describe('runAnniversaryTriggers', () => {
         { id: 's3', location_id: 'loc-1', trigger_config: { days_after: -5 }, audience_filter: null },
       ] },
     }))
-    expect(await cronTriggers.runAnniversaryTriggers()).toEqual({ fired: 0, skipped: 0 })
+    expect(await cronTriggers.runAnniversaryTriggers()).toEqual({ fired: 0, skipped: 0, errored: 3 })
     expect(enrolContacts).not.toHaveBeenCalled()
   })
 
@@ -218,7 +226,7 @@ describe('runAnniversaryTriggers', () => {
     })
     createServerClient.mockReturnValue(db)
     const stats = await cronTriggers.runAnniversaryTriggers()
-    expect(stats).toEqual({ fired: 0, skipped: 0 })
+    expect(stats).toEqual({ fired: 0, skipped: 0, errored: 1 })
     expect(enrolContacts).not.toHaveBeenCalled()
     // No contacts query at all — the config is rejected before the sweep.
     expect(db.calls.some((c) => c.table === 'contacts')).toBe(false)
@@ -342,7 +350,7 @@ describe('runAnniversaryTriggers', () => {
       sequence_enrollments: { list: [{ id: 'enr-existing' }] },
     }))
     const stats = await cronTriggers.runAnniversaryTriggers()
-    expect(stats).toEqual({ fired: 0, skipped: 1 })
+    expect(stats).toEqual({ fired: 0, skipped: 1, errored: 0 })
     expect(enrolContacts).not.toHaveBeenCalled()
   })
 })
@@ -352,7 +360,7 @@ describe('runAnniversaryTriggers', () => {
 describe('runInactivityTriggers', () => {
   it('returns zero stats when no active sequences', async () => {
     createServerClient.mockReturnValue(mockDb({ email_sequences: { list: [] } }))
-    expect(await cronTriggers.runInactivityTriggers()).toEqual({ fired: 0, skipped: 0 })
+    expect(await cronTriggers.runInactivityTriggers()).toEqual({ fired: 0, skipped: 0, errored: 0 })
   })
 
   it('skips a sequence with non-numeric / non-positive days_inactive', async () => {
@@ -363,7 +371,7 @@ describe('runInactivityTriggers', () => {
         { id: 's3', location_id: 'loc-1', trigger_config: { days_inactive: -7 }, audience_filter: null },
       ] },
     }))
-    expect(await cronTriggers.runInactivityTriggers()).toEqual({ fired: 0, skipped: 0 })
+    expect(await cronTriggers.runInactivityTriggers()).toEqual({ fired: 0, skipped: 0, errored: 3 })
     expect(enrolContacts).not.toHaveBeenCalled()
   })
 
@@ -373,7 +381,7 @@ describe('runInactivityTriggers', () => {
         { id: 's1', location_id: 'loc-1', trigger_config: { signal: 'last_login_at', days_inactive: 30 }, audience_filter: null },
       ] },
     }))
-    expect(await cronTriggers.runInactivityTriggers()).toEqual({ fired: 0, skipped: 0 })
+    expect(await cronTriggers.runInactivityTriggers()).toEqual({ fired: 0, skipped: 0, errored: 1 })
     expect(enrolContacts).not.toHaveBeenCalled()
   })
 
@@ -503,7 +511,7 @@ describe('runInactivityTriggers', () => {
       ] },
       contacts: { list: [] },
     }))
-    expect(await cronTriggers.runInactivityTriggers()).toEqual({ fired: 0, skipped: 0 })
+    expect(await cronTriggers.runInactivityTriggers()).toEqual({ fired: 0, skipped: 0, errored: 0 })
     expect(enrolContacts).not.toHaveBeenCalled()
   })
 })
@@ -583,5 +591,169 @@ describe('runAnniversaryTriggers — the from_field whitelist is exported (GAPS-
       expect(AUDIENCE_FIELDS[field], `contacts.${field} is not a registered field`).toBeDefined()
       expect(AUDIENCE_FIELDS[field].type, `contacts.${field} is not a date field`).toBe('date')
     }
+  })
+})
+
+// ── CRONISO.1 — per-sequence isolation (blast radius) ───────────
+//
+// All three cron runners walked their sequences in a bare for-loop with
+// no inner try/catch. selectAll throws on a query error, enrolContacts
+// can throw, and the audience check hits the DB — so ANY failure on ONE
+// sequence (a bad signal column, a transient PostgREST error, one
+// location's data) propagated straight out of the runner and aborted the
+// sweep. Every REMAINING sequence at every OTHER location was silently
+// skipped for that tick, and the only symptom was a console.warn at the
+// cron boundary.
+//
+// The contract these tests pin: one bad sequence costs exactly one
+// sequence, it is counted in stats.errored, and it is logged with its
+// own id so the operator can find it without a log dive.
+describe('cron triggers — one failing sequence must not stop the others (CRONISO.1)', () => {
+  it('runInactivityTriggers — a sweep query error is contained to its own sequence', async () => {
+    const db = mockDb({
+      email_sequences: { list: [
+        { id: 'seq-bad', location_id: 'loc-1', trigger_config: { signal: 'last_emailed_at', days_inactive: 60 }, audience_filter: null },
+        { id: 'seq-good', location_id: 'loc-2', trigger_config: { signal: 'last_emailed_at', days_inactive: 60 }, audience_filter: null },
+      ] },
+      // First sequence's sweep 42703s (the GAPS-P1 class); second is fine.
+      contacts: [
+        { error: 'column contacts.last_emailed_at does not exist' },
+        { list: [{ id: 'c1' }] },
+      ],
+      sequence_enrollments: { list: [] },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const stats = await cronTriggers.runInactivityTriggers()
+
+    expect(stats.errored).toBe(1)
+    expect(stats.fired).toBe(1)
+    expect(enrolContacts).toHaveBeenCalledTimes(1)
+    expect(enrolContacts).toHaveBeenCalledWith(expect.objectContaining({ sequenceId: 'seq-good' }))
+    expect(logError).toHaveBeenCalledWith(
+      'sequences',
+      expect.stringContaining('seq-bad'),
+      expect.objectContaining({ sequenceId: 'seq-bad' }),
+    )
+  })
+
+  it('runInactivityTriggers — the derived last_booking_at branch is contained too', async () => {
+    const db = mockDb({
+      email_sequences: { list: [
+        { id: 'seq-bad', location_id: 'loc-1', trigger_config: { signal: 'last_booking_at', days_inactive: 60 }, audience_filter: null },
+        { id: 'seq-good', location_id: 'loc-2', trigger_config: { signal: 'last_emailed_at', days_inactive: 60 }, audience_filter: null },
+      ] },
+      contacts: [
+        { list: [{ id: 'c1' }] },        // seq-bad: contacts fine…
+        { list: [{ id: 'c9' }] },        // seq-good sweep
+      ],
+      bookings: { error: 'timeout' },    // …bookings lookup blows up
+      sequence_enrollments: { list: [] },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const stats = await cronTriggers.runInactivityTriggers()
+
+    expect(stats.errored).toBe(1)
+    expect(stats.fired).toBe(1)
+    expect(enrolContacts).toHaveBeenCalledWith(expect.objectContaining({ sequenceId: 'seq-good' }))
+  })
+
+  it('runAnniversaryTriggers — an enrol failure is contained to its own sequence', async () => {
+    enrolContacts.mockRejectedValueOnce(new Error('enrol exploded'))
+    const db = mockDb({
+      email_sequences: { list: [
+        { id: 'seq-bad', location_id: 'loc-1', trigger_config: { from_field: 'joined_at', days_after: 365 }, audience_filter: null },
+        { id: 'seq-good', location_id: 'loc-2', trigger_config: { from_field: 'joined_at', days_after: 365 }, audience_filter: null },
+      ] },
+      contacts: [{ list: [{ id: 'c1' }] }, { list: [{ id: 'c2' }] }],
+      sequence_enrollments: { list: [] },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const stats = await cronTriggers.runAnniversaryTriggers()
+
+    expect(stats.errored).toBe(1)
+    expect(stats.fired).toBe(1)
+    expect(enrolContacts).toHaveBeenCalledTimes(2)
+    expect(logError).toHaveBeenCalledWith(
+      'sequences',
+      expect.stringContaining('seq-bad'),
+      expect.objectContaining({ sequenceId: 'seq-bad' }),
+    )
+  })
+
+  it('runAnniversaryTriggers — a sweep query error is contained to its own sequence', async () => {
+    const db = mockDb({
+      email_sequences: { list: [
+        { id: 'seq-bad', location_id: 'loc-1', trigger_config: { from_field: 'joined_at', days_after: 365 }, audience_filter: null },
+        { id: 'seq-good', location_id: 'loc-2', trigger_config: { from_field: 'joined_at', days_after: 365 }, audience_filter: null },
+      ] },
+      contacts: [{ error: 'statement timeout' }, { list: [{ id: 'c2' }] }],
+      sequence_enrollments: { list: [] },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const stats = await cronTriggers.runAnniversaryTriggers()
+
+    expect(stats.errored).toBe(1)
+    expect(stats.fired).toBe(1)
+  })
+
+  it('runEventReminderTriggers — an audience-check failure is contained to its own sequence', async () => {
+    contactMatchesSequenceAudience.mockRejectedValueOnce(new Error('audience lookup failed'))
+    const target = new Date(Date.now() + 24 * 3600_000)
+    const booking = (id) => ({
+      id, contact_id: `c-${id}`,
+      booking_date: target.toISOString().slice(0, 10),
+      start_time: target.toISOString().slice(11, 19),
+      event_type_id: 'evt-A',
+    })
+    const db = mockDb({
+      email_sequences: { list: [
+        { id: 'seq-bad', location_id: 'loc-1', trigger_config: { hours_before: 24 }, audience_filter: null },
+        { id: 'seq-good', location_id: 'loc-2', trigger_config: { hours_before: 24 }, audience_filter: null },
+      ] },
+      bookings: [{ list: [booking('b1')] }, { list: [booking('b2')] }],
+      sequence_enrollments: { maybeSingle: null },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const stats = await cronTriggers.runEventReminderTriggers()
+
+    expect(stats.errored).toBe(1)
+    expect(stats.fired).toBe(1)
+    expect(enrolContacts).toHaveBeenCalledWith(expect.objectContaining({ sequenceId: 'seq-good' }))
+    expect(logError).toHaveBeenCalledWith(
+      'sequences',
+      expect.stringContaining('seq-bad'),
+      expect.objectContaining({ sequenceId: 'seq-bad' }),
+    )
+  })
+
+  it('every runner reports errored: 0 on a clean tick', async () => {
+    createServerClient.mockReturnValue(mockDb({ email_sequences: { list: [] } }))
+    expect(await cronTriggers.runEventReminderTriggers()).toEqual({ fired: 0, skipped: 0, errored: 0 })
+    createServerClient.mockReturnValue(mockDb({ email_sequences: { list: [] } }))
+    expect(await cronTriggers.runAnniversaryTriggers()).toEqual({ fired: 0, skipped: 0, errored: 0 })
+    createServerClient.mockReturnValue(mockDb({ email_sequences: { list: [] } }))
+    expect(await cronTriggers.runInactivityTriggers()).toEqual({ fired: 0, skipped: 0, errored: 0 })
+  })
+
+  // A misconfigured-but-active sequence does nothing on every tick,
+  // forever. Before CRONISO.1 that was invisible in the stats (and, for
+  // the numeric knobs and the unknown inactivity signal, not even
+  // logged) — it counts as errored now.
+  it('a config-rejected sequence is counted and logged, not silently skipped', async () => {
+    createServerClient.mockReturnValue(mockDb({
+      email_sequences: { list: [
+        { id: 'seq-no-days', location_id: 'loc-1', trigger_config: {}, audience_filter: null },
+        { id: 'seq-bad-signal', location_id: 'loc-1', trigger_config: { signal: 'last_login_at', days_inactive: 30 }, audience_filter: null },
+      ] },
+    }))
+    const stats = await cronTriggers.runInactivityTriggers()
+    expect(stats.errored).toBe(2)
+    expect(logError).toHaveBeenCalledWith('sequences', expect.stringContaining('seq-no-days'), expect.objectContaining({ sequenceId: 'seq-no-days' }))
+    expect(logError).toHaveBeenCalledWith('sequences', expect.stringContaining('seq-bad-signal'), expect.objectContaining({ sequenceId: 'seq-bad-signal' }))
   })
 })

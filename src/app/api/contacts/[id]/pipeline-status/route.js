@@ -99,6 +99,19 @@ export async function POST(request, props) {
     deal = { action: 'error', error: e?.message || 'deal placement threw' }
   }
 
+  // STAGETRIG.1 — a Cold dismissal (or restore) is a real, operator-driven
+  // pipeline stage move, and it was invisible to the sequence engine: the
+  // pipeline_stage_change trigger only ever ran from contact CREATION. Fires
+  // only when ensureDealForContact reports action 'move' with two different
+  // slugs, so a re-click that lands on the same stage enrols nobody.
+  // Best-effort — the dismissal itself is already saved.
+  try {
+    const { triggerSequencesForDealPlacement } = await import('@/lib/sequences/triggers')
+    await triggerSequencesForDealPlacement(id, deal)
+  } catch {
+    // The helper swallows its own errors; this only guards the import.
+  }
+
   // Actor attribution — the deals trigger logs "Pipeline: moved to Cold"
   // with no user context, which made "who dismissed this lead?" unanswerable.
   // Record WHO on the contact timeline + in the unified audit log. Both

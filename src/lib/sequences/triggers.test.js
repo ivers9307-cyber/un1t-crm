@@ -646,3 +646,89 @@ describe('triggerSequencesForSegmentRemoved', () => {
     expect(triggerTypeCall[1]).toBe('segment_removed')
   })
 })
+
+// ── STAGETRIG.1 — deal-placement wiring ─────────────────────────
+//
+// triggerSequencesForPipelineStageChange was called from exactly ONE
+// place: POST /api/contacts, where the old stage is always null. Every
+// real stage MOVE — the Glofox sync/webhook reclassification, the
+// operator Cold dismissal, a manual PUT /api/deals/[id] — wrote
+// deals.stage_id and let the mig-155 trigger update
+// contacts.pipeline_stage_slug without telling the sequence engine.
+// So no pipeline_stage_change sequence with a to_status other than the
+// creation stage could ever fire, which made the shipped
+// `lead_status_member_welcome` template ({ to_status: 'converted' })
+// permanently inert.
+//
+// ensureDealForContact already returns the diff — { action: 'move',
+// from_slug, to_slug } — so this adapter is the one place that decides
+// when a placement result is a stage change worth firing.
+describe('triggerSequencesForDealPlacement (STAGETRIG.1)', () => {
+  const movedDb = () => mockDb({
+    contacts: { single: { id: 'c1', location_id: 'loc-1' } },
+    email_sequences: { list: [
+      { id: 's-welcome', trigger_config: { to_status: 'converted' }, audience_filter: null },
+    ] },
+  })
+
+  it('fires on a real move, with the from/to slugs the placement reported', async () => {
+    createServerClient.mockReturnValue(movedDb())
+    await triggers.triggerSequencesForDealPlacement('c1', {
+      action: 'move', deal_id: 'd1', from_slug: 'active_trial', to_slug: 'converted',
+    })
+    expect(enrolContacts).toHaveBeenCalledWith(expect.objectContaining({
+      sequenceId: 's-welcome',
+      contactIds: ['c1'],
+      sourceType: 'pipeline_stage_change',
+      sourceRef: 'active_trial→converted',
+    }))
+  })
+
+  // The no-op guard. The classifier is idempotent, so every sync of an
+  // unchanged member returns 'leave' — firing on those would enrol the
+  // whole membership on every nightly tick.
+  it.each([
+    ['leave', { action: 'leave', deal_id: 'd1', stage_slug: 'converted' }],
+    ['create', { action: 'create', deal_id: 'd1', stage_slug: 'new_lead' }],
+    ['error', { action: 'error', error: 'stage not found' }],
+    ['skipped', { action: 'skipped', reason: 'reclassify skipped (no booking signal)' }],
+    ['null', null],
+    ['undefined', undefined],
+  ])('does not fire for a %s placement result', async (_label, dealResult) => {
+    await triggers.triggerSequencesForDealPlacement('c1', dealResult)
+    expect(createServerClient).not.toHaveBeenCalled()
+    expect(enrolContacts).not.toHaveBeenCalled()
+  })
+
+  it('does not fire when a move reports the same slug on both sides', async () => {
+    await triggers.triggerSequencesForDealPlacement('c1', {
+      action: 'move', from_slug: 'converted', to_slug: 'converted',
+    })
+    expect(enrolContacts).not.toHaveBeenCalled()
+  })
+
+  it('does not fire without a contactId', async () => {
+    await triggers.triggerSequencesForDealPlacement(null, {
+      action: 'move', from_slug: 'a', to_slug: 'b',
+    })
+    expect(createServerClient).not.toHaveBeenCalled()
+  })
+
+  // Same best-effort contract as every other trigger: it is called from
+  // sync/webhook/route paths whose primary write has already landed.
+  it('never throws — a broken sequence cannot fail the caller', async () => {
+    createServerClient.mockImplementation(() => { throw new Error('db down') })
+    await expect(triggers.triggerSequencesForDealPlacement('c1', {
+      action: 'move', from_slug: 'a', to_slug: 'b',
+    })).resolves.toBeUndefined()
+  })
+
+  it('goes through the same enrolment guards as any other trigger (audience gate honoured)', async () => {
+    contactMatchesSequenceAudience.mockResolvedValue(false)
+    createServerClient.mockReturnValue(movedDb())
+    await triggers.triggerSequencesForDealPlacement('c1', {
+      action: 'move', from_slug: 'active_trial', to_slug: 'converted',
+    })
+    expect(enrolContacts).not.toHaveBeenCalled()
+  })
+})

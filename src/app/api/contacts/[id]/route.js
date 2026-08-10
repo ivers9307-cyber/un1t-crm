@@ -8,6 +8,7 @@ import { triggerSequencesForTagsAdded } from '@/lib/sequences'
 import { getCurrentUser } from '@/lib/auth'
 import { redactWhatsAppForContact, redactInBodyForContact } from '@/lib/contact-merge'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
+import { emailStatusResetForAddressChange } from '@/lib/email-reputation'
 import { logWarn } from '@/lib/log'
 
 const ContactUpdateSchema = z.object({
@@ -71,7 +72,7 @@ export async function PUT(request, props) {
   // contact PUTs. Contact PUTs no longer accept a status field.
   const { data: oldRow } = await db
     .from('contacts')
-    .select('tags, location_id, email, glofox_member_id')
+    .select('tags, location_id, email, email_status, glofox_member_id')
     .eq('id', id)
     .single()
 
@@ -94,6 +95,23 @@ export async function PUT(request, props) {
   for (const [key, value] of Object.entries(body)) {
     updates[key] = value
   }
+
+  // EMAILREP.1 — contacts.email_status is reputation for a specific
+  // MAILBOX. Correcting a typo'd address here used to leave the old
+  // address's `bounced` stamp on the row, and every send path (marketing,
+  // transactional, manual staff email, booking + event reminders) blocks
+  // on it — so the contact stayed permanently unmailable on an address
+  // that had been fixed, with no symptom but a greyed-out button. Folded
+  // into THIS update rather than a follow-up write: the reset cannot
+  // land without the address change that justifies it. Reputation only —
+  // marketing still needs per-location consent, which the hard-bounce
+  // handler revoked and nothing here restores.
+  const emailStatusReset = emailStatusResetForAddressChange({
+    oldEmail: oldRow?.email,
+    newEmail: body.email,
+    currentStatus: oldRow?.email_status,
+  })
+  if (emailStatusReset) updates.email_status = emailStatusReset
 
   const { data, error } = await db.from('contacts').update(updates).eq('id', id).select().single()
 

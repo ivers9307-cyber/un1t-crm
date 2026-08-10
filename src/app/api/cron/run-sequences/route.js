@@ -76,8 +76,20 @@ export async function GET(request) {
     // Heartbeat AFTER all phases ran. If runSequences threw we
     // skip the stamp — that's the signal a downstream alert needs.
     await stampHeartbeat('run-sequences')
+    // CRONISO.1 — the three trigger runners no longer abort their whole
+    // sweep when one sequence fails; they contain it and count it. The
+    // *_error fields above only ever caught a runner dying wholesale, so
+    // a single broken sequence looked like a clean tick. Surface the
+    // per-runner counts as one number the cron response leads with.
+    const triggerErrors =
+      (triggerStats?.errored || 0) +
+      (anniversaryStats?.errored || 0) +
+      (inactivityStats?.errored || 0)
     return NextResponse.json({
       success: true,
+      // Non-zero means N individual sequences did nothing this tick —
+      // each one logged with its id via logError('sequences', …).
+      trigger_errors: triggerErrors,
       stats,
       triggers: triggerStats,
       trigger_error: triggerErr,
