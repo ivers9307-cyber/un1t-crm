@@ -32,6 +32,15 @@ import WABroadcastEditor from '../WABroadcastEditor.jsx'
 import SMSBroadcastEditor from '../SMSBroadcastEditor.jsx'
 import SequenceSettings from '../sequences/SequenceSettings.jsx'
 
+// The component debounces its count by 400ms on REAL timers, so every
+// assertion here is waiting on a scheduled callback. testing-library's
+// default find timeout is 1000ms, which under a loaded CI box (or a full
+// 857-file suite) is close enough to the debounce to race — this file went
+// flaky roughly 1 run in 8 before these were widened. Give the waits real
+// headroom rather than trusting timer scheduling luck.
+vi.setConfig({ testTimeout: 20000 })
+const WAIT = { timeout: 8000 }
+
 const FILTER = { logic: 'and', filters: [{ field: 'pipeline_stage_slug', op: 'eq', value: 'member' }] }
 
 let countCalls
@@ -58,10 +67,10 @@ describe('WABroadcastEditor mounts the shared count (channel=whatsapp)', () => {
         templates={[]} locationId="loc-1" userId="u1"
       />,
     )
-    await waitFor(() => expect(countCalls.length).toBeGreaterThan(0), { timeout: 2000 })
+    await waitFor(() => expect(countCalls.length).toBeGreaterThan(0), WAIT)
     expect(countCalls[0].channel).toBe('whatsapp')
     expect(countCalls[0].location_id).toBe('loc-1')
-    await findByText(/reachable on WhatsApp/)
+    await findByText(/reachable on WhatsApp/, undefined, WAIT)
   })
 })
 
@@ -73,9 +82,9 @@ describe('SMSBroadcastEditor mounts the shared count (channel=sms)', () => {
         recipients={[]} locationId="loc-1" locationSenderId="s1" userId="u1"
       />,
     )
-    await waitFor(() => expect(countCalls.length).toBeGreaterThan(0), { timeout: 2000 })
+    await waitFor(() => expect(countCalls.length).toBeGreaterThan(0), WAIT)
     expect(countCalls[0].channel).toBe('sms')
-    await findByText(/will receive it/)
+    await findByText(/will receive it/, undefined, WAIT)
   })
 })
 
@@ -90,10 +99,10 @@ describe('SequenceSettings mounts a MATCHING count, never a send count (SEQEXIT.
 
   it('asks channel-agnostically and labels the number a match', async () => {
     const { findByText, queryByText } = openSettings()
-    await waitFor(() => expect(countCalls.length).toBeGreaterThan(0), { timeout: 2000 })
+    await waitFor(() => expect(countCalls.length).toBeGreaterThan(0), WAIT)
     expect(countCalls[0].channel).toBeUndefined()
     expect(countCalls[0].location_id).toBe('loc-1')
-    await findByText(/currently match this audience/i)
+    await findByText(/currently match this audience/i, undefined, WAIT)
     expect(queryByText(/will receive it/i)).toBeNull()
   })
 })
@@ -116,6 +125,6 @@ describe('WA and SMS no longer seed Stage = member on "Add filter"', () => {
     // No row silently carrying the member stage.
     expect(fieldSelects.some(s => s.value === 'pipeline_stage_slug')).toBe(false)
     expect(container.textContent).toContain('Choose a field…')
-    await findByText(/unfinished filter row is being ignored/i)
+    await findByText(/unfinished filter row is being ignored/i, undefined, WAIT)
   })
 })

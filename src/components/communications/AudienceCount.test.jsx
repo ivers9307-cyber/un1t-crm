@@ -25,6 +25,15 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+// The component debounces its count by 400ms on REAL timers, so every
+// assertion here is waiting on a scheduled callback. testing-library's
+// default find timeout is 1000ms, which under a loaded CI box (or a full
+// 857-file suite) is close enough to the debounce to race — this file went
+// flaky roughly 1 run in 8 before these were widened. Give the waits real
+// headroom rather than trusting timer scheduling luck.
+vi.setConfig({ testTimeout: 20000 })
+const WAIT = { timeout: 8000 }
+
 const FILTER = { logic: 'and', filters: [{ field: 'pipeline_stage_slug', op: 'eq', value: 'member' }] }
 
 // Captures every POST body so the channel-parity assertions can read it.
@@ -47,7 +56,7 @@ describe('AudienceCount — channel parity', () => {
   it.each(['email', 'sms', 'whatsapp'])('asks the count route for its OWN channel (%s)', async (channel) => {
     const calls = stubCount(() => ok({ count: 1, matched: 1 }))
     render(<AudienceCount locationId="loc-1" filter={FILTER} channel={channel} />)
-    await waitFor(() => expect(calls.length).toBeGreaterThan(0), { timeout: 2000 })
+    await waitFor(() => expect(calls.length).toBeGreaterThan(0), WAIT)
     expect(calls[0].channel).toBe(channel)
     expect(calls[0].location_id).toBe('loc-1')
   })
@@ -61,7 +70,7 @@ describe('AudienceCount — channel parity', () => {
         filter={{ logic: 'and', filters: [FILTER.filters[0], { field: '', op: '', value: '' }] }}
       />,
     )
-    await waitFor(() => expect(calls.length).toBeGreaterThan(0), { timeout: 2000 })
+    await waitFor(() => expect(calls.length).toBeGreaterThan(0), WAIT)
     expect(calls[0].audience_filter.filters).toEqual(FILTER.filters)
   })
 })
@@ -76,7 +85,7 @@ describe('AudienceCount — states', () => {
   it('surfaces the server error message rather than the placeholder', async () => {
     stubCount(() => bad('OR logic is not supported together with tag or event filters.'))
     render(<AudienceCount locationId="loc-1" filter={FILTER} channel="sms" />)
-    await screen.findByText(/OR logic is not supported together with tag or event filters/)
+    await screen.findByText(/OR logic is not supported together with tag or event filters/, undefined, WAIT)
     expect(screen.queryByText(/Add a condition to see how many contacts match/)).toBeNull()
   })
 })
@@ -88,10 +97,10 @@ describe('AudienceCount — send mode reports match vs will-receive', () => {
       excluded: { not_opted_in: 1200, bounced_or_complained: 24, suppressed: 300 },
     }))
     render(<AudienceCount locationId="loc-1" filter={FILTER} channel="email" />)
-    await screen.findByText(/will receive it/)
+    await screen.findByText(/will receive it/, undefined, WAIT)
     expect(screen.getByText('4,900')).toBeTruthy()
     expect(screen.getByText('2,300')).toBeTruthy()
-    await screen.findByText(/1,200 no marketing opt-in/)
+    await screen.findByText(/1,200 no marketing opt-in/, undefined, WAIT)
     screen.getByText(/24 bounced or complained/)
     screen.getByText(/300 inactive/)
   })
@@ -99,8 +108,8 @@ describe('AudienceCount — send mode reports match vs will-receive', () => {
   it('sms: renders the excluded breakdown the composer never showed', async () => {
     stubCount(() => ok({ count: 5, matched: 9, excluded: { no_phone: 2, not_opted_in: 1, opted_out: 1 } }))
     render(<AudienceCount locationId="loc-1" filter={FILTER} channel="sms" />)
-    await screen.findByText(/will receive it/)
-    await screen.findByText(/2 no phone number/)
+    await screen.findByText(/will receive it/, undefined, WAIT)
+    await screen.findByText(/2 no phone number/, undefined, WAIT)
     screen.getByText(/1 no marketing opt-in/)
     screen.getByText(/1 opted out/)
   })
@@ -111,10 +120,10 @@ describe('AudienceCount — send mode reports match vs will-receive', () => {
       excluded: { no_number: 3, no_consent: 2, opted_out: 1, undeliverable: 0 },
     }))
     render(<AudienceCount locationId="loc-1" filter={FILTER} channel="whatsapp" />)
-    await screen.findByText(/reachable on WhatsApp/)
+    await screen.findByText(/reachable on WhatsApp/, undefined, WAIT)
     expect(screen.getByText('10')).toBeTruthy()
     expect(screen.getByText('6')).toBeTruthy()
-    await screen.findByText(/3 no WhatsApp number/)
+    await screen.findByText(/3 no WhatsApp number/, undefined, WAIT)
   })
 })
 
@@ -122,7 +131,7 @@ describe('AudienceCount — matching mode is NOT a recipient count (SEQEXIT.1)',
   it('asks channel-agnostically and labels the number as a match, not a send', async () => {
     const calls = stubCount(() => ok({ count: 812 }))
     render(<AudienceCount locationId="loc-1" filter={FILTER} mode="matching" />)
-    await screen.findByText('812')
+    await screen.findByText('812', undefined, WAIT)
     expect(calls[0].channel).toBeUndefined()
     expect(screen.getByText(/currently match/i)).toBeTruthy()
     // The words that would make it a recipient count must NOT appear.
@@ -133,7 +142,7 @@ describe('AudienceCount — matching mode is NOT a recipient count (SEQEXIT.1)',
   it('says the condition is re-checked, so the number is not a one-off send list', async () => {
     stubCount(() => ok({ count: 812 }))
     render(<AudienceCount locationId="loc-1" filter={FILTER} mode="matching" />)
-    await screen.findByText('812')
+    await screen.findByText('812', undefined, WAIT)
     expect(screen.getByText(/re-checked before every step/i)).toBeTruthy()
   })
 })
@@ -148,13 +157,13 @@ describe('AudienceCount — half-built rows are called out, not silently ignored
         filter={{ logic: 'and', filters: [{ field: '', op: '', value: '' }] }}
       />,
     )
-    await screen.findByText(/1 unfinished filter row is being ignored/i)
+    await screen.findByText(/1 unfinished filter row is being ignored/i, undefined, WAIT)
   })
 
   it('stays quiet when every row is complete', async () => {
     stubCount(() => ok({ count: 10, matched: 10 }))
     render(<AudienceCount locationId="loc-1" filter={FILTER} channel="email" />)
-    await screen.findByText(/will receive it/)
+    await screen.findByText(/will receive it/, undefined, WAIT)
     expect(screen.queryByText(/unfinished filter row/i)).toBeNull()
   })
 })
@@ -164,7 +173,7 @@ describe('AudienceCount — onResult lets a host gate Send on the same number', 
     stubCount(() => ok({ count: 10, reachable: 6, excluded: {} }))
     const seen = []
     render(<AudienceCount locationId="loc-1" filter={FILTER} channel="whatsapp" onResult={r => seen.push(r)} />)
-    await waitFor(() => expect(seen.some(r => r.status === 'ready')).toBe(true), { timeout: 2000 })
+    await waitFor(() => expect(seen.some(r => r.status === 'ready')).toBe(true), WAIT)
     const ready = seen.find(r => r.status === 'ready')
     expect(ready.matched).toBe(10)
     expect(ready.reachable).toBe(6)
@@ -176,7 +185,7 @@ describe('AudienceCount — onResult lets a host gate Send on the same number', 
     stubCount(() => bad('tag filter requires a non-empty string value'))
     const seen = []
     render(<AudienceCount locationId="loc-1" filter={FILTER} channel="sms" onResult={r => seen.push(r)} />)
-    await waitFor(() => expect(seen.some(r => r.status === 'error')).toBe(true), { timeout: 2000 })
+    await waitFor(() => expect(seen.some(r => r.status === 'error')).toBe(true), WAIT)
     const err = seen.find(r => r.status === 'error')
     expect(err.sendable).toBeNull()
     expect(err.error).toMatch(/tag filter requires/)
@@ -188,21 +197,21 @@ describe('AudienceCount — mounts the preview behind the number', () => {
   it('offers "who matches" once a count has arrived', async () => {
     stubCount(() => ok({ count: 10, matched: 10 }))
     render(<AudienceCount locationId="loc-1" filter={FILTER} channel="email" />)
-    await screen.findByText(/will receive it/)
+    await screen.findByText(/will receive it/, undefined, WAIT)
     expect(screen.getByRole('button', { name: /who matches/i })).toBeTruthy()
   })
 
   it('does not offer it while the count is failing — there is no audience to show', async () => {
     stubCount(() => bad('Unknown audience field: nope'))
     render(<AudienceCount locationId="loc-1" filter={FILTER} channel="email" />)
-    await screen.findByText(/Unknown audience field/)
+    await screen.findByText(/Unknown audience field/, undefined, WAIT)
     expect(screen.getByRole('button', { name: /who matches/i }).disabled).toBe(true)
   })
 
   it('can be suppressed by a host that does not want it', async () => {
     stubCount(() => ok({ count: 10, matched: 10 }))
     render(<AudienceCount locationId="loc-1" filter={FILTER} channel="email" showPreview={false} />)
-    await screen.findByText(/will receive it/)
+    await screen.findByText(/will receive it/, undefined, WAIT)
     expect(screen.queryByRole('button', { name: /who matches/i })).toBeNull()
   })
 })
