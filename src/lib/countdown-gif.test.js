@@ -115,6 +115,15 @@ describe('buildCountdownGif', () => {
     expect(meta.width).toBe(L.width)
   })
 
+  // A scalar `delay` reaches only frame 1; the rest get 0 and flash past, so
+  // the clock ticks once and stops. EVERY frame must hold for one second.
+  it('holds every frame for one second, not just the first', async () => {
+    const gif = await buildCountdownGif({ msLeft: 5 * 3600e3, frames: 6 })
+    const { delay } = await sharp(gif, { animated: true }).metadata()
+    expect(delay).toHaveLength(6)
+    expect(delay.every((d) => d === 1000)).toBe(true)
+  })
+
   it('collapses to a single frame once expired', async () => {
     const many = await buildCountdownGif({ msLeft: 5 * 3600e3, frames: 30 })
     const expired = await buildCountdownGif({ msLeft: 0, frames: 30 })
