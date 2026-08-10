@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
 import { isoToLocalDatetime, localDatetimeToIso } from '@/lib/datetime-local'
 import { ArrowLeft, Save, Send, Users, Code, Paintbrush, Mail, Loader2, CheckCircle2, AlertCircle, Calendar, X, Trash2 } from 'lucide-react'
-import AudienceBuilder, { STAGE_MEMBER_DEFAULT_ROW } from './AudienceBuilder'
+import AudienceBuilder from './AudienceBuilder'
 import SendQuietHoursNotice from './communications/SendQuietHoursNotice'
 import CopyAssist from './communications/CopyAssist'
 import { stripUnsetFilterRows } from '@/lib/audience-filter'
@@ -921,7 +921,10 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
               onChange={setAudienceFilter}
               audienceCount={audienceCount}
               locationId={locationId}
-              defaultFilterRow={STAGE_MEMBER_DEFAULT_ROW}
+              // FILTER-C.3 — no seeded starting row. `Stage = member` looked
+              // like a filter the operator had chosen and silently kept every
+              // lead out of the campaign; FILTER-B.3 removed it from the
+              // WhatsApp/SMS editors on the same argument.
             />
           </div>
         )}

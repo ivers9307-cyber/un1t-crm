@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { Plus, Trash2, Users, AlertTriangle, Sparkles } from 'lucide-react'
 // FILTER-A.1 — the verified preset definitions live in their own module so the
 // counts they produce can be checked against the spec table without rendering.
@@ -391,41 +391,104 @@ function RowConnector({ index, logic }) {
   )
 }
 
-// FILTER-A.2 — the grouped field picker.
+// FILTER-C.2 — does this field match what the operator typed? Label first
+// (what they see) and group second, so "money" reaches the Money fields whose
+// own labels never say the word. Deliberately NOT the hint text: a hint is a
+// paragraph, and matching on it makes the result set look arbitrary.
+function fieldMatchesSearch(opt, term) {
+  if (!term) return true
+  return opt.label.toLowerCase().includes(term) || opt.group.toLowerCase().includes(term)
+}
+
+// FILTER-A.2 / FILTER-C.2 — the grouped, searchable field picker.
 //
-// DELIBERATELY a native <select> with <optgroup>, not a custom searchable
-// combobox. A native select already gives keyboard navigation, type-ahead,
-// mobile's native picker and correct screen-reader semantics (including group
-// announcement) for free; a hand-rolled combobox has to re-earn all of that,
-// and one that gets it wrong is a worse outcome than the flat select it
-// replaces. The grouping is what actually fixes the reported problem — the
-// first-letter type-ahead collisions ("Membership …" ×4, "Last …" ×5) come
-// from 39 options in one undifferentiated list, not from the lack of a search
-// box. Tradeoff recorded rather than hidden: there is still no substring
-// search, so an operator who does not know which group a field lives in must
-// open the list and scan nine short groups instead of one long one.
-function FieldSelect({ value, onChange, disabled, describedBy, className, inputRef }) {
+// The CONTROL is still a native <select> with <optgroup>, deliberately: it
+// supplies keyboard navigation, type-ahead, the mobile picker and correct
+// screen-reader semantics (including group announcement) for free, and a
+// hand-rolled combobox that re-earns all of that imperfectly is a worse
+// outcome than the list it replaces. FILTER-A.2 added the grouping, which
+// fixed the first-letter type-ahead collisions ("Membership …" ×4, "Last …"
+// ×5), and recorded the gap it did not close: with 40+ fields an operator who
+// does not already know a field's exact LABEL — or which of nine groups it
+// lives in — can only open the list and scan.
+//
+// FILTER-C.2 closes it with a plain text input in FRONT of the select that
+// narrows which options the select renders. Nothing about the select's
+// semantics changes; the groups are re-derived from the surviving options, so
+// grouping cannot regress, and an empty group simply stops rendering. Two
+// details are load-bearing:
+//
+//  - The row's OWN saved field is always rendered, even when it does not
+//    match. A <select> whose value matches no <option> renders BLANK, which
+//    reads as an unset row while still filtering — the exact failure
+//    FILTER-A.2 hit with the retired `active_member` stage value.
+//  - Enter is swallowed. These pickers sit inside host <form>s (the campaign
+//    editor), where Enter in a text input submits.
+function FieldSelect({ value, onChange, disabled, describedBy, className, cellClassName, inputRef }) {
+  const uid = useId()
+  const selectId = `${uid}-field`
+  const [search, setSearch] = useState('')
+  const term = search.trim().toLowerCase()
+
+  const matchCount = term ? FIELD_OPTIONS.filter(o => fieldMatchesSearch(o, term)).length : FIELD_OPTIONS.length
+  const isVisible = (opt) => fieldMatchesSearch(opt, term) || opt.value === value
+  const groups = FIELD_GROUPS
+    .map(group => ({ group, options: FIELD_OPTIONS.filter(o => o.group === group && isVisible(o)) }))
+    .filter(g => g.options.length > 0)
+
   return (
-    <select
-      ref={inputRef}
-      value={value || ''}
-      disabled={disabled}
-      onChange={onChange}
-      aria-label="Field"
-      aria-describedby={describedBy || undefined}
-      className={className}
-    >
-      {/* FILTER-P1.1 — reachable "unset" so a row can be emptied without
-          deleting it (and so a saved unset row round-trips). */}
-      <option value="">Choose a field…</option>
-      {FIELD_GROUPS.map(group => (
-        <optgroup key={group} label={group}>
-          {FIELD_OPTIONS.filter(o => o.group === group).map(opt => (
-            <option key={opt.value} value={opt.value}>{opt.label}</option>
-          ))}
-        </optgroup>
-      ))}
-    </select>
+    <div className={`flex flex-col gap-1 min-w-0 ${cellClassName || ''}`}>
+      <input
+        type="search"
+        value={search}
+        disabled={disabled}
+        aria-label="Search fields"
+        aria-controls={selectId}
+        placeholder="Search fields…"
+        onChange={e => setSearch(e.target.value)}
+        onKeyDown={e => {
+          // Enter must not submit the host form, and Escape is the expected
+          // way out of a search box for a keyboard user.
+          if (e.key === 'Enter') e.preventDefault()
+          else if (e.key === 'Escape') setSearch('')
+        }}
+        className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-xs text-un1t-text placeholder:text-un1t-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text focus-visible:border-un1t-text disabled:opacity-50"
+      />
+      <select
+        id={selectId}
+        ref={inputRef}
+        value={value || ''}
+        disabled={disabled}
+        // Picking a field ends the search — the row's picker goes back to the
+        // full list rather than staying silently narrowed for the next visit.
+        onChange={e => { setSearch(''); onChange(e) }}
+        aria-label="Field"
+        aria-describedby={describedBy || undefined}
+        className={className}
+      >
+        {/* FILTER-P1.1 — reachable "unset" so a row can be emptied without
+            deleting it (and so a saved unset row round-trips). */}
+        <option value="">Choose a field…</option>
+        {groups.map(({ group, options }) => (
+          <optgroup key={group} label={group}>
+            {options.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+      {/* Mounted unconditionally, empty when idle — FILTER-A.4's lesson was
+          that a live region which only appears once it has something to say is
+          not announced when that first thing arrives. role="status" carries an
+          implicit aria-live="polite"; the attribute is deliberately NOT spelled
+          out, so the builder's ONE explicitly-polite region stays the audience
+          count at the foot of the list. */}
+      <span role="status" className="text-[10px] text-un1t-muted min-h-[0.75rem]">
+        {term
+          ? (matchCount === 0 ? 'No fields match' : `${matchCount} field${matchCount === 1 ? '' : 's'} match`)
+          : ''}
+      </span>
+    </div>
   )
 }
 
@@ -461,12 +524,17 @@ export function euroTextToCents(text) {
   return Number.isFinite(n) ? String(Math.round(n * 100)) : ''
 }
 
-// FILTER-P1.1 — the row "Add filter" used to hard-code for every host. It is
-// now opt-in: a host that wants a starting guess passes it as defaultFilterRow.
-// Kept here (not inlined at four call sites) so the guess has one definition.
-export const STAGE_MEMBER_DEFAULT_ROW = Object.freeze({
-  field: 'pipeline_stage_slug', op: 'eq', value: 'member',
-})
+// FILTER-P1.1 / FILTER-B.3 / FILTER-C.3 — the row "Add filter" used to
+// hard-code for every host became opt-in via `defaultFilterRow`, and then went
+// away entirely. The shared STAGE_MEMBER_DEFAULT_ROW constant that carried it
+// is deleted: FILTER-B.3 removed the seed from the WhatsApp and SMS editors and
+// FILTER-C.3 from its last two hosts (the unified composer and the campaign
+// editor), leaving nothing to define. The argument is the same one each time —
+// a guessed audience the operator never chose renders as an ordinary row,
+// indistinguishable from a deliberate filter, so `Stage = member` silently
+// excluded every lead from any campaign built by someone who never opened the
+// builder. The `defaultFilterRow` PROP survives for a host that genuinely wants
+// to seed a row; with none the row starts UNSET and inert (isUnsetFilterRow).
 
 // FILTER-A.3 / FILTER-FOUND row 3 — field types whose value comes from a
 // lookup the operator has not made yet. Committing the row on field-choice
@@ -832,7 +900,8 @@ export default function AudienceBuilder({ filter, onChange, audienceCount = null
                   inputRef={registerField(rowKey)}
                   describedBy={pendingConfig?.hint ? `${rowKey}-hint` : null}
                   onChange={e => handleFieldChange(index, e.target.value)}
-                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text focus-visible:border-un1t-text flex-1"
+                  cellClassName="flex-1"
+                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text focus-visible:border-un1t-text w-full"
                 />
                 {pendingConfig && (
                   <DynamicValueSelect
@@ -917,7 +986,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount = null
                 inputRef={registerField(rowKey)}
                 describedBy={hintId}
                 onChange={e => handleFieldChange(index, e.target.value)}
-                className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text focus-visible:border-un1t-text"
+                className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text focus-visible:border-un1t-text w-full"
               />
 
               {/* Operator */}

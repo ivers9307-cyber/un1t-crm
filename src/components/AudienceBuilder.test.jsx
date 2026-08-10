@@ -235,7 +235,10 @@ describe('AudienceBuilder — host-supplied default row (P1.1)', () => {
     const selects = rowSelects(container)
     // Exactly one select: the field picker. No op select, no value control.
     expect(selects).toHaveLength(1)
-    expect(container.querySelectorAll('input')).toHaveLength(0)
+    // FILTER-C.2 — the field picker now carries a search box, so "no value
+    // control" is "no input other than that search box", not "no inputs".
+    const inputs = Array.from(container.querySelectorAll('input'))
+    expect(inputs.map(i => i.getAttribute('aria-label'))).toEqual(['Search fields'])
     expect(selects[0].value).toBe('')
     expect(optionValues(selects[0])[0]).toBe('')
     expect(selects[0].querySelector('option').textContent).toMatch(/choose a field/i)

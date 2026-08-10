@@ -10,7 +10,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { MessageSquare, MessageCircle, Mail, Send, Clock, Check, AlertTriangle, Users, Filter, Bookmark } from 'lucide-react'
 import { Button } from '@/components/ui'
-import AudienceBuilder, { STAGE_MEMBER_DEFAULT_ROW } from '@/components/AudienceBuilder'
+import AudienceBuilder from '@/components/AudienceBuilder'
 import AudienceCount from './AudienceCount'
 import { stripUnsetFilterRows } from '@/lib/audience-filter'
 // FILTER-A.1 — presets are a SEND-composer affordance only. Sequences and
@@ -500,7 +500,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         )}
         {useExplicit
           ? <ContactMultiSelect locationId={locationId} value={people} onChange={setPeople} />
-          : <AudienceBuilder filter={filter} onChange={handleFilterChange} defaultFilterRow={STAGE_MEMBER_DEFAULT_ROW} presets={AUDIENCE_PRESETS} locationId={locationId} />}
+          : <AudienceBuilder filter={filter} onChange={handleFilterChange} presets={AUDIENCE_PRESETS} locationId={locationId} />}
         {/* FILTER-B.3 — the shared count block, replacing this surface's own
             inline count. Same component, same request and same wording as the
             WhatsApp/SMS/sequence builders, so the four can no longer drift.

@@ -3619,6 +3619,114 @@ registry.registerPath({
   },
 })
 
+// FILTER-C.4 — the two audience routes. Both are POSTs despite being reads:
+// an audience filter is a nested JSON document, and putting it in a query
+// string would both blow the URL length on a real filter and put targeting
+// criteria into access logs. Neither was registered here — audience-count
+// predates the spec, and audience-preview (FILTER-B.6) shipped without an
+// entry — so /api-docs did not show that a preview exists at all.
+registry.registerPath({
+  method: 'post',
+  path: '/api/communications/audience-count',
+  tags: ['Marketing'],
+  security: [{ CookieAuth: [] }],
+  summary: 'How many contacts match an audience filter, and how many would actually receive a send',
+  description:
+    'Counts an audience_filter at one location. WITHOUT a channel this is the raw match set at the location — no '
+    + 'deliverability gate — which is the only honest answer for a sequence, whose audience is a continuing '
+    + 'condition rather than a recipient list (SEQEXIT.1). WITH a channel the will-receive number comes from that '
+    + "channel's own SEND builder, so the count, the preview and the send resolve one query path by construction. "
+    + 'Response shape differs per channel and this is deliberate: for email and SMS, `count` is the will-receive '
+    + 'number and `matched` the filter-only total; for WhatsApp, `count` is the match set and `reachable` the '
+    + 'will-receive number. `excluded` breaks down WHY contacts fell out — the reasons are INDEPENDENT counts that '
+    + 'may overlap, so never sum them; the true excluded total is matched minus will-receive. An invalid filter '
+    + '(unknown field, off-allowlist operator, OR logic combined with a tag/event filter) answers 400, not 500 — '
+    + "it is the caller's filter being wrong, not the server failing.",
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            location_id: uuidLike,
+            audience_filter: audienceFilterSchema.optional(),
+            channel: z.enum(['sms', 'whatsapp', 'email']).optional()
+              .describe('Omit for a channel-agnostic match count (the sequence case).'),
+          }).openapi('AudienceCountRequest'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Audience counts',
+      content: { 'application/json': { schema: z.object({
+        success: z.literal(true),
+        count: z.number().int().describe('Will-receive for email/SMS; the match set for WhatsApp and for no channel.'),
+        matched: z.number().int().optional().describe('Filter-only total (email + SMS branches).'),
+        reachable: z.number().int().optional().describe('Will-receive total (WhatsApp branch).'),
+        suppressed: z.number().int().optional().describe('Back-compat top-level key, email only.'),
+        excluded: z.record(z.string(), z.number().int()).optional()
+          .describe('Independent, possibly-overlapping reason counts. Never sum them.'),
+      }).openapi('AudienceCountResult') } },
+    },
+    400: { description: 'Invalid audience filter, or the count query failed', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Location outside the caller\'s access', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/communications/audience-preview',
+  tags: ['Marketing'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List who an audience filter selects, without sending to it',
+  description:
+    'The "show me who matches" spot-check. Rows come from the same per-channel SEND builder the count uses, so a '
+    + 'preview cannot disagree with the send it is checking; `basis` says which question was answered — '
+    + "'will_receive' with a channel (consent, status and suppression applied), 'matching' without one. "
+    + 'RETURNS CUSTOMER PII, so the tenant guard answers 404 rather than 403 and location ids are not enumerable. '
+    + 'The page is clamped (50 rows, hard max 200) and contact details are masked: this is a spot-check, and an '
+    + 'export of a marketing audience is a different feature with different consent implications. `total` is the '
+    + 'exact count and rides the same query as the page, so the two cannot disagree.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            location_id: uuidLike,
+            audience_filter: audienceFilterSchema.optional(),
+            channel: z.enum(['sms', 'whatsapp', 'email']).optional(),
+            limit: z.number().int().positive().optional().describe('Clamped to the 200-row maximum.'),
+            offset: z.number().int().min(0).optional(),
+          }).openapi('AudiencePreviewRequest'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'A masked page of matching contacts',
+      content: { 'application/json': { schema: SuccessResponse(z.object({
+        rows: z.array(z.object({
+          id: uuidLike,
+          name: z.string().nullable(),
+          email: z.string().nullable().describe('Masked'),
+          phone: z.string().nullable().describe('Masked'),
+        }).passthrough()),
+        total: z.number().int(),
+        offset: z.number().int(),
+        limit: z.number().int(),
+        channel: z.enum(['sms', 'whatsapp', 'email']).nullable(),
+        basis: z.enum(['will_receive', 'matching']),
+      }).openapi('AudiencePreview')) } },
+    },
+    400: { description: 'Invalid audience filter, or the preview query failed', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location outside the caller\'s access (404 not 403 — ids are not enumerable)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // GAPS-P5 (mig 515) — undo a repeat-bounce escalation. The only write surface
 // the feature exposes; the decision itself is made by the nightly
 // repeat-bounce-sweep cron.
