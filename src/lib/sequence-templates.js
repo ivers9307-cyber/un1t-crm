@@ -321,9 +321,13 @@ export const SEQUENCE_TEMPLATES = [
     id: 'glofox_membership_cancelled_winback',
     category: 'Recovery',
     name: 'Glofox membership ended → win-back',
-    description: 'Fires when Glofox sends a membership.cancelled or membership.ended webhook (tags: glofox_membership_cancelled OR glofox_membership_ended). Three-touch comeback drip starting two days after cancellation: ask why, offer a return path, then a final discount. 180-day cooldown so the same ex-member doesn\'t keep getting cycled through.',
+    description: 'Fires when Glofox sends a MEMBERSHIP_DELETED webhook (tag: glofox_membership_deleted). Glofox does not distinguish a cancellation from an expiry, so both arrive as the same event. Three-touch comeback drip starting two days after the membership ends: ask why, offer a return path, then a final discount. 180-day cooldown so the same ex-member doesn\'t keep getting cycled through.',
     trigger_type: 'tag_added',
-    trigger_config: { tag: 'glofox_membership_cancelled' },
+    // Repointed from 'glofox_membership_cancelled', which nothing writes and
+    // which no Glofox event corresponds to — see the note in
+    // sequence-templates.test.js. This is the tag EVENT_TYPE_TAGS
+    // (src/lib/glofox.js) applies for MEMBERSHIP_DELETED.
+    trigger_config: { tag: 'glofox_membership_deleted' },
     // FUNNEL.1 — goal is the win-back SUCCEEDING (rejoin stamps
     // converted_at → 'converted'). The old 'dormant' goal inverted under
     // the funnel classifier: ex_member → dormant IMMEDIATELY, so every

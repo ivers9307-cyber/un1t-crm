@@ -182,3 +182,77 @@ describe('consent sources written beside a consent write in src/', () => {
     expect(unmapped).toEqual([])
   })
 })
+
+// ── The consent_log INSERT scan (GAPS-P7.2) ──────────────────────────
+//
+// `consent_log.source` is unconstrained free text, the same drift class that
+// `action` carried until GAPS-P6. It is deliberately NOT getting a DB CHECK
+// constraint: `action` has exactly two legal values forever, whereas a source
+// is the name of a capture point and new ones legitimately ship with new
+// forms, imports and webhooks. A constraint there would turn "we added a
+// signup form" into "the insert 500s in production".
+//
+// So the enforcement is a machine test instead, in the GAPS-P6 idiom but
+// keyed on the WRITER rather than on a proximity window: find every file that
+// actually inserts into consent_log, and require every `source:` literal in
+// it to be a registered source. Missing a registry entry then fails in CI,
+// where it is free, instead of landing in the column and quietly reading as
+// 'unknown' on the list-health page months later.
+//
+// This complements, rather than replaces, the proximity scan above: that one
+// also covers the applyMarketingPreferences* helpers, which are not
+// consent_log writers themselves.
+
+const CONSENT_LOG_WRITERS = walk(SRC).filter((f) =>
+  /\.from\(\s*['"]consent_log['"]\s*\)[\s\S]{0,400}?\.(insert|upsert)\(/.test(readFileSync(f, 'utf8')))
+
+describe('every consent_log insert in src/ writes a registered source', () => {
+  it('finds the writers (the scan is not silently matching nothing)', () => {
+    // 6 today. A refactor may legitimately move writes behind a helper and
+    // shrink this, but it must never reach zero unnoticed — that would turn
+    // the assertion below into a green no-op, which is the failure mode this
+    // whole file exists to prevent.
+    expect(CONSENT_LOG_WRITERS.length).toBeGreaterThan(0)
+  })
+
+  it.each(CONSENT_LOG_WRITERS.map((f) => [path.relative(SRC, f), f]))(
+    '%s names only registered sources',
+    (_rel, file) => {
+      const literals = [...readFileSync(file, 'utf8').matchAll(/\bsource:\s*['"]([a-zA-Z0-9_]+)['"]/g)]
+        .map((m) => m[1])
+      const unmapped = [...new Set(literals)].filter((s) => categoriseConsentSource(s) === 'unknown')
+      expect(unmapped).toEqual([])
+    },
+  )
+})
+
+// ── The operator-facing label map ────────────────────────────────────
+//
+// ContactConsentHistoryCard renders the consent history a compliance officer
+// reads. Its SOURCE_LABELS map had an entry for `unsubscribe_one_click`, a
+// transposition of the real `one_click_unsubscribe` that nothing has ever
+// written. A label for a source that cannot occur is dead weight that reads
+// as evidence the value exists; worse, the same typo sat in CUSTOMER_SOURCES,
+// so anyone copying from there would have written the wrong slug.
+
+describe('the contact consent-history label map', () => {
+  const CARD = path.join(process.cwd(), 'src', 'components', 'ContactConsentHistoryCard.jsx')
+
+  it('labels only sources that are in the registry', () => {
+    const src = readFileSync(CARD, 'utf8')
+    const block = src.slice(src.indexOf('const SOURCE_LABELS'), src.indexOf('const CHANNEL_LABELS'))
+    const keys = [...block.matchAll(/^\s{2}([a-z0-9_]+):\s*\{/gm)].map((m) => m[1])
+    expect(keys.length).toBeGreaterThan(10)
+    const unregistered = keys.filter((k) => categoriseConsentSource(k) === 'unknown')
+    expect(unregistered).toEqual([])
+  })
+
+  it('lists only registered sources as customer-driven', () => {
+    const src = readFileSync(CARD, 'utf8')
+    const block = src.slice(src.indexOf('const CUSTOMER_SOURCES'), src.indexOf('function fmtSource'))
+    const keys = [...block.matchAll(/'([a-z0-9_]+)'/g)].map((m) => m[1])
+    expect(keys.length).toBeGreaterThan(5)
+    const unregistered = keys.filter((k) => categoriseConsentSource(k) === 'unknown')
+    expect(unregistered).toEqual([])
+  })
+})

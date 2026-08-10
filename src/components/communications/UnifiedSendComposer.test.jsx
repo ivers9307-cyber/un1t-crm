@@ -162,3 +162,39 @@ describe('UnifiedSendComposer — switching away from email guards the design', 
     expect(emailPanel()).toBeTruthy()
   })
 })
+
+// ── COPYCLAIM.1 — no unevidenced performance claims in composer copy ──
+//
+// The resend panel's helper text used to read "A fresh subject usually lifts
+// second-send opens." Nothing in this estate supports that: nine campaigns,
+// with open rates that track content type rather than wording. It is the
+// exact claim src/lib/copy-assist.js refuses to make ("It does not predict or
+// rank what will perform ... Claiming otherwise would be fabrication") — so
+// the composer should not make it in a label either.
+//
+// A source scan rather than a render, because the offending strings sit in
+// panels that need several pieces of state to appear, and the point is that
+// none of the composer's copy should carry a claim like this.
+
+describe('composer helper copy makes no unevidenced performance claim', () => {
+  const CLAIMS = [
+    /\b(usually|typically|generally|on average)\b[^.]{0,60}\b(lift|lifts|boost|boosts|increase|increases|improve|improves)\b/i,
+    /\b(lifts|boosts|increases|improves)\b[^.]{0,40}\b(opens|open rates?|clicks|click rates?|replies|conversions?)\b/i,
+    /\b(higher|better|more)\b[^.]{0,30}\b(open rates?|click rates?)\b[^.]{0,30}\b(when|if)\b/i,
+  ]
+
+  it.each([
+    'UnifiedSendComposer.jsx',
+    'CopyAssist.jsx',
+  ])('%s', async (file) => {
+    const { readFileSync } = await import('node:fs')
+    const path = await import('node:path')
+    const src = readFileSync(path.join(process.cwd(), 'src/components/communications', file), 'utf8')
+    const offenders = src
+      .split('\n')
+      .map((line, i) => [i + 1, line])
+      .filter(([, line]) => CLAIMS.some((re) => re.test(line)))
+      .map(([n, line]) => `${n}: ${line.trim()}`)
+    expect(offenders).toEqual([])
+  })
+})

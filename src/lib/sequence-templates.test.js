@@ -324,30 +324,14 @@ describe('GAPS-P3.4 — new gym recipes', () => {
     }
   })
 
-  // KNOWN INERT, recorded rather than quietly fixed.
-  //
-  // glofox_membership_cancelled_winback triggers on the tag
-  // 'glofox_membership_cancelled', which NO code writes: the webhook's
-  // EVENT_TYPE_TAGS maps MEMBERSHIP_DELETED to 'glofox_membership_deleted'
-  // and there is no 'cancelled'/'ended' tag anywhere in the repo. The
-  // template's own description names two tags that do not exist. So the
-  // packaged win-back drip can never fire, however the operator clones and
-  // activates it.
-  //
-  // Not repointed here because that is a live behaviour change to an
-  // ex-member win-back (it would start sending on every MEMBERSHIP_DELETED
-  // webhook) and it needs someone to confirm what Glofox actually emits for
-  // a cancellation versus an expiry. Listed, not skipped, so the guard below
-  // still fails for anything new.
-  const KNOWN_UNWRITTEN_TRIGGER_TAGS = { glofox_membership_cancelled_winback: 'glofox_membership_cancelled' }
-
   it('every tag-triggered template names a tag the platform actually writes', async () => {
     // A tag_added trigger on a tag nothing writes is an inert sequence —
     // the exact class of bug PLATFORM_TAGS was built to catch in the flow
-    // builder. Hold the packaged templates to the same bar.
+    // builder. Hold the packaged templates to the same bar. There are no
+    // exceptions: the last one (the win-back below) was repointed rather
+    // than recorded.
     const { PLATFORM_TAGS } = await import('@/lib/sequences/tag-vocabulary')
     for (const tpl of SEQUENCE_TEMPLATES.filter((t) => t.trigger_type === 'tag_added')) {
-      if (KNOWN_UNWRITTEN_TRIGGER_TAGS[tpl.id] === tpl.trigger_config?.tag) continue
       expect(
         PLATFORM_TAGS.includes(tpl.trigger_config?.tag),
         `${tpl.id} triggers on '${tpl.trigger_config?.tag}', which is not in PLATFORM_TAGS`,
@@ -355,13 +339,47 @@ describe('GAPS-P3.4 — new gym recipes', () => {
     }
   })
 
-  it('the known-inert win-back is still inert (delete this test when it is repointed)', async () => {
-    // Pins the finding so it cannot be lost: the day someone points this
-    // template at a real tag, this test fails and the exception above goes.
+  // WAS INERT, NOW REPOINTED.
+  //
+  // glofox_membership_cancelled_winback used to trigger on the tag
+  // 'glofox_membership_cancelled', which nothing in this repo writes, so the
+  // packaged win-back drip could never fire however an operator cloned and
+  // activated it. Its description named a second invented tag,
+  // 'glofox_membership_ended'.
+  //
+  // WHY 'cancelled' WAS NEVER A REAL SIGNAL. It was assumed, not observed.
+  // The live Glofox event vocabulary for this account is twelve strings —
+  // BOOKING_CREATED / _UPDATED / _DELETED, EVENT_CREATED / _UPDATED /
+  // _DELETED, INVOICE_UPDATED, MEMBER_CREATED / _UPDATED, MEMBERSHIP_CREATED
+  // / _UPDATED / _DELETED — and none of them is a cancellation or an expiry.
+  // Glofox does not distinguish the two: a membership that is cancelled and
+  // one that runs out both arrive as MEMBERSHIP_DELETED (34 delivered, most
+  // recently 2026-08-06). So there was no semantic difference being
+  // preserved by waiting, only a template that could not fire. The webhook
+  // maps that event through EVENT_TYPE_TAGS in src/lib/glofox.js to exactly
+  // one tag, 'glofox_membership_deleted', which is what the template names
+  // now.
+  it('the ex-member win-back triggers on the tag the webhook actually writes', async () => {
     const { PLATFORM_TAGS } = await import('@/lib/sequences/tag-vocabulary')
+    const { tagsForGlofoxEvent } = await import('@/lib/glofox')
     const tpl = getTemplate('glofox_membership_cancelled_winback')
-    expect(tpl.trigger_config.tag).toBe('glofox_membership_cancelled')
-    expect(PLATFORM_TAGS).not.toContain('glofox_membership_cancelled')
+    expect(tpl.trigger_config.tag).toBe('glofox_membership_deleted')
+    expect(PLATFORM_TAGS).toContain('glofox_membership_deleted')
+    // The end-to-end claim: the event Glofox really sends produces this tag.
+    expect(tagsForGlofoxEvent('MEMBERSHIP_DELETED')).toContain(tpl.trigger_config.tag)
+  })
+
+  it('the win-back description names no tag the platform does not write', async () => {
+    // The old description advertised 'glofox_membership_cancelled OR
+    // glofox_membership_ended', neither of which exists. An operator reading
+    // the template picker was being told the wrong thing twice.
+    const { PLATFORM_TAGS } = await import('@/lib/sequences/tag-vocabulary')
+    const { description } = getTemplate('glofox_membership_cancelled_winback')
+    const named = [...description.matchAll(/\bglofox_[a-z_]+\b/g)].map((m) => m[0])
+    expect(named.length).toBeGreaterThan(0)
+    for (const tag of named) {
+      expect(PLATFORM_TAGS, `description names '${tag}', which nothing writes`).toContain(tag)
+    }
   })
 
   it('every audience_filter field is a registered AUDIENCE_FIELDS entry with that operator', async () => {

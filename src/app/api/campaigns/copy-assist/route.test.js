@@ -14,6 +14,7 @@ let currentUser
 let permission
 let anthropicImpl
 let rateLimitImpl
+let spendImpl
 
 vi.mock('@/lib/auth', async () => {
   const actual = await vi.importActual('@/lib/auth')
@@ -29,9 +30,14 @@ vi.mock('@/lib/rate-limit', async () => {
   return { ...actual, checkRateLimit: vi.fn((...args) => rateLimitImpl(...args)) }
 })
 vi.mock('@/lib/anthropic', () => ({ anthropicMessages: vi.fn((...args) => anthropicImpl(...args)) }))
+vi.mock('@/lib/wallet-enforcement', async () => {
+  const actual = await vi.importActual('@/lib/wallet-enforcement')
+  return { ...actual, checkSpend: vi.fn((...args) => spendImpl(...args)) }
+})
 
 import { anthropicMessages } from '@/lib/anthropic'
 import { checkRateLimit } from '@/lib/rate-limit'
+import { checkSpend } from '@/lib/wallet-enforcement'
 import { POST } from './route.js'
 
 const post = (body) =>
@@ -59,6 +65,7 @@ beforeEach(() => {
   permission = () => true
   rateLimitImpl = async () => ({ allowed: true, remaining: 9, resetAt: new Date(Date.now() + 60_000), retryAfterSec: 60 })
   anthropicImpl = async () => modelReply('["Membership is open again", "Back at UN1T this weekend"]')
+  spendImpl = async () => ({ allow: true, reason: 'unpinned' })
   vi.clearAllMocks()
 })
 
@@ -224,5 +231,95 @@ describe('what reaches the operator', () => {
     const sent = JSON.stringify(seen.messages)
     expect(sent).not.toMatch(/<p>/)
     expect(sent).toContain('One')
+  })
+})
+
+// ── COPYCAP.1 — the wallet spend cap ─────────────────────────────────
+//
+// The route already meters what it spends into usage_events, but it never
+// asked whether the location was allowed to spend it. Every other Anthropic
+// caller in the estate (the campaign send path, the WhatsApp broadcasts,
+// Mia's auto-reply) goes through checkSpend first; this one billed straight
+// through an empty wallet.
+//
+// A capped call is NOT an error. It takes the route's existing soft shape —
+// HTTP 200, available:false, a reason — because the composer must keep
+// working exactly as it did before the assist existed. That is the same
+// contract as an unset API key.
+
+describe('the wallet spend cap', () => {
+  it('checks the cap BEFORE the model is called', async () => {
+    const order = []
+    spendImpl = async () => { order.push('spend'); return { allow: true, reason: 'unpinned' } }
+    anthropicImpl = async () => { order.push('model'); return modelReply('["ok"]') }
+    await POST(post(validBody))
+    expect(order).toEqual(['spend', 'model'])
+  })
+
+  it('asks about the ai_message meter at the TARGET location, as an ai spend', async () => {
+    let seen
+    spendImpl = async (_db, locationId, meter, sendClass) => {
+      seen = { locationId, meter, sendClass }
+      return { allow: true, reason: 'unpinned' }
+    }
+    await POST(post(validBody))
+    expect(seen).toEqual({ locationId: LOC, meter: 'ai_message', sendClass: 'ai' })
+  })
+
+  it('fails SOFT when the wallet is empty: 200, available:false, no model call', async () => {
+    spendImpl = async () => ({ allow: false, reason: 'wallet_empty' })
+    const res = await POST(post(validBody))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.data.available).toBe(false)
+    expect(body.data.reason).toBe('wallet_empty')
+    expect(body.data.suggestions).toEqual([])
+    expect(body.data.dropped).toEqual([])
+    expect(anthropicMessages).not.toHaveBeenCalled()
+  })
+
+  it('returns the SAME response shape as an unset API key', async () => {
+    vi.stubEnv('ANTHROPIC_API_KEY', '')
+    const unconfigured = await (await POST(post(validBody))).json()
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test')
+    spendImpl = async () => ({ allow: false, reason: 'wallet_empty' })
+    const capped = await (await POST(post(validBody))).json()
+    expect(Object.keys(capped.data).sort()).toEqual(Object.keys(unconfigured.data).sort())
+  })
+
+  it('an unpinned location (every UN1T location today) is unaffected', async () => {
+    spendImpl = async () => ({ allow: true, reason: 'unpinned' })
+    const res = await POST(post(validBody))
+    const body = await res.json()
+    expect(body.data.available).toBe(true)
+    expect(anthropicMessages).toHaveBeenCalledTimes(1)
+  })
+
+  it('fails OPEN if the cap check itself throws', async () => {
+    // checkSpend is documented never to throw, but the assist must not
+    // become the thing that breaks the composer if that ever changes.
+    spendImpl = async () => { throw new Error('billing is down') }
+    const res = await POST(post(validBody))
+    const body = await res.json()
+    expect(body.data.available).toBe(true)
+    expect(anthropicMessages).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves the rate limiter failing OPEN — the cap did not change that', async () => {
+    // Explicitly declined: a limiter that fails closed takes the compose
+    // screen down with the rate_limits table. The real helper answers
+    // allowed:true on any RPC error, and the cap sits AFTER it, so a DB
+    // outage still reaches the model rather than turning into a refusal.
+    const { checkRateLimit: real } = await vi.importActual('@/lib/rate-limit')
+    const broken = { rpc: async () => { throw new Error('db down') } }
+    expect((await real(broken, 'k', { max: 1, windowMs: 1000 })).allowed).toBe(true)
+
+    const order = []
+    rateLimitImpl = async (...args) => { order.push('limit'); return real(broken, ...args.slice(1)) }
+    spendImpl = async () => { order.push('spend'); return { allow: true, reason: 'unpinned' } }
+    const body = await (await POST(post(validBody))).json()
+    expect(order).toEqual(['limit', 'limit', 'spend'])
+    expect(body.data.available).toBe(true)
   })
 })

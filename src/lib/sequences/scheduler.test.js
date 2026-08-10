@@ -607,3 +607,195 @@ describe('runSequences — audience re-check before each step', () => {
     expect(evaluateSequenceAudience).not.toHaveBeenCalled()
   })
 })
+
+// ── SEQ-QUIET.1 — a sequence with no send_window inherits the
+//    location's quiet hours ─────────────────────────────────────────
+//
+// clampToSendWindow only ever honoured a window configured on the sequence
+// itself, so a sequence without one could fire a step at 03:00. Live state
+// when this was written: exactly one active sequence, and it has no window.
+//
+// The fallback is the per-location quiet hours from GAPS-P4
+// (company_settings.send_quiet_hours_*). Those are ADVISORY on the campaign
+// composer — it warns and offers a later slot, and never defers. Here they
+// DEFER, which is deliberate: a sequence step already gets pushed by
+// clampToSendWindow, so deferring is what the surface already does, and there
+// is no operator watching a cron tick to read a warning.
+
+import { hasSendWindow } from './scheduler.js'
+
+// One due enrolment on a sequence carrying `sendWindow`, at a location whose
+// company_settings row is `quietHours`. Two steps, so the runner computes a
+// real next-fire time for step 3 rather than completing.
+function quietRouteFor({ sendWindow = null, quietHours = undefined } = {}) {
+  const steps = [
+    { id: 'st-2', step_order: 2, step_type: 'email', subject: 'one', config: {}, delay_days: 0, delay_hours: 0, delay_minutes: 0 },
+    { id: 'st-3', step_order: 3, step_type: 'email', subject: 'two', config: {}, delay_days: 0, delay_hours: 1, delay_minutes: 0 },
+  ]
+  return (state) => {
+    if (state.table === 'sequence_enrollments') {
+      const first = state.ops[0]
+      if (first.method === 'select') return { data: [exitEnrollment] }
+      if (first.method === 'update' && hasOp(state, 'lte')) return { data: [{ id: exitEnrollment.id }] }
+      return {}
+    }
+    if (state.table === 'email_sequences') {
+      return {
+        data: {
+          id: 'seq-1', status: 'active', location_id: 'loc-1',
+          goal_config: null, send_window: sendWindow, audience_filter: null,
+        },
+      }
+    }
+    if (state.table === 'contacts') return { data: { id: 'c1', location_id: 'loc-1' } }
+    if (state.table === 'company_settings') return { data: quietHours === undefined ? [] : [quietHours] }
+    if (state.table === 'locations') return { data: { settings: {} } }
+    if (state.table === 'sequence_steps') {
+      const order = eqArgOf(state, 'step_order')
+      return { data: steps.find(s => s.step_order === order) ?? null }
+    }
+    return {}
+  }
+}
+
+// The cursor advance carries the computed next_step_at.
+function advanceUpdate(statements) {
+  return statements.find(s =>
+    s.table === 'sequence_enrollments' &&
+    s.ops[0]?.method === 'update' &&
+    'current_step_order' in (s.ops[0].args[0] || {})
+  )?.ops[0].args[0]
+}
+
+describe('hasSendWindow', () => {
+  it('is false for nothing and for a window that constrains nothing', () => {
+    // clampToSendWindow already no-ops on all of these; the predicate has to
+    // agree with it or an empty object would block the quiet-hours fallback.
+    expect(hasSendWindow(null)).toBe(false)
+    expect(hasSendWindow(undefined)).toBe(false)
+    expect(hasSendWindow({})).toBe(false)
+    expect(hasSendWindow({ start_hour: null, end_hour: null, skip_days: [] })).toBe(false)
+    expect(hasSendWindow('09:00')).toBe(false)
+  })
+
+  it('is true for any real constraint', () => {
+    expect(hasSendWindow({ start_hour: 9 })).toBe(true)
+    expect(hasSendWindow({ end_hour: 19 })).toBe(true)
+    expect(hasSendWindow({ skip_days: [0, 6] })).toBe(true)
+  })
+})
+
+describe('runSequences — quiet-hours fallback for a windowless sequence', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  it('defers a 03:00 step to the end of the location quiet window', async () => {
+    // now = 02:00 UTC = 03:00 Dublin (August is IST). The following step is
+    // +1h, so the raw next fire is 04:00 Dublin — inside the default
+    // 21:00-08:00 quiet window. It must land at 08:00 Dublin = 07:00 UTC.
+    const { db, statements } = makeExitDb(quietRouteFor({ quietHours: null }))
+    createServerClient.mockReturnValue(db)
+    sendEmailStep.mockResolvedValue('send-1')
+
+    await runSequences({ now: new Date('2026-08-10T02:00:00Z') })
+
+    expect(advanceUpdate(statements).next_step_at).toBe('2026-08-10T07:00:00.000Z')
+  })
+
+  it('leaves a daytime step exactly where it fell', async () => {
+    // now 10:00 UTC = 11:00 Dublin; the following step is +1h, so the raw
+    // next fire is 11:00 UTC = 12:00 Dublin. Nothing to defer.
+    const { db, statements } = makeExitDb(quietRouteFor({ quietHours: null }))
+    createServerClient.mockReturnValue(db)
+    sendEmailStep.mockResolvedValue('send-1')
+
+    await runSequences({ now: new Date('2026-08-10T10:00:00Z') })
+
+    expect(advanceUpdate(statements).next_step_at).toBe('2026-08-10T11:00:00.000Z')
+  })
+
+  it("honours the location's own window, not just the default", async () => {
+    const { db, statements } = makeExitDb(quietRouteFor({
+      quietHours: {
+        send_quiet_hours_enabled: true, send_quiet_hours_start: 20, send_quiet_hours_end: 10,
+      },
+    }))
+    createServerClient.mockReturnValue(db)
+    sendEmailStep.mockResolvedValue('send-1')
+
+    await runSequences({ now: new Date('2026-08-10T02:00:00Z') })
+
+    // 10:00 Dublin = 09:00 UTC.
+    expect(advanceUpdate(statements).next_step_at).toBe('2026-08-10T09:00:00.000Z')
+  })
+
+  it('defers nothing when the operator has turned quiet hours off', async () => {
+    const { db, statements } = makeExitDb(quietRouteFor({
+      quietHours: { send_quiet_hours_enabled: false, send_quiet_hours_start: 21, send_quiet_hours_end: 8 },
+    }))
+    createServerClient.mockReturnValue(db)
+    sendEmailStep.mockResolvedValue('send-1')
+
+    await runSequences({ now: new Date('2026-08-10T02:00:00Z') })
+
+    // Raw next fire, untouched: 03:00 UTC = 04:00 Dublin.
+    expect(advanceUpdate(statements).next_step_at).toBe('2026-08-10T03:00:00.000Z')
+  })
+
+  it('a sequence-level send_window WINS OUTRIGHT — the two are never merged', async () => {
+    // The sequence says 00:00-06:00 Dublin, which sits entirely inside the
+    // default quiet window. If the two were merged (or the quiet hours
+    // applied afterwards) this would be pushed to 08:00. It must not be:
+    // an operator who configured a window on the sequence has said what they
+    // want, and the fallback exists only for the sequences that said nothing.
+    const { db, statements } = makeExitDb(quietRouteFor({
+      sendWindow: { start_hour: 0, end_hour: 6, skip_days: [] },
+    }))
+    createServerClient.mockReturnValue(db)
+    sendEmailStep.mockResolvedValue('send-1')
+
+    await runSequences({ now: new Date('2026-08-10T02:00:00Z') })
+
+    // 04:00 Dublin is inside 00:00-06:00, so it is untouched. 03:00 UTC.
+    expect(advanceUpdate(statements).next_step_at).toBe('2026-08-10T03:00:00.000Z')
+  })
+
+  it('never reads company_settings when the sequence has its own window', async () => {
+    const { db, statements } = makeExitDb(quietRouteFor({
+      sendWindow: { start_hour: 9, end_hour: 19, skip_days: [] },
+    }))
+    createServerClient.mockReturnValue(db)
+    sendEmailStep.mockResolvedValue('send-1')
+
+    await runSequences({ now: new Date('2026-08-10T10:00:00Z') })
+
+    expect(statements.some(s => s.table === 'company_settings')).toBe(false)
+  })
+
+  it('falls back to the default window when the location has no settings row', async () => {
+    // A missing row must not silently mean "no quiet hours" — the same
+    // posture normalizeQuietHours takes.
+    const { db, statements } = makeExitDb(quietRouteFor({ quietHours: undefined }))
+    createServerClient.mockReturnValue(db)
+    sendEmailStep.mockResolvedValue('send-1')
+
+    await runSequences({ now: new Date('2026-08-10T02:00:00Z') })
+
+    expect(advanceUpdate(statements).next_step_at).toBe('2026-08-10T07:00:00.000Z')
+  })
+
+  it('bypasses the fallback for a test enrolment, exactly as the window is bypassed', async () => {
+    const route = quietRouteFor({ quietHours: null })
+    const { db, statements } = makeExitDb((state) => {
+      if (state.table === 'sequence_enrollments' && state.ops[0].method === 'select') {
+        return { data: [{ ...exitEnrollment, metadata: { test: true, accelerated_delay_seconds: 30 } }] }
+      }
+      return route(state)
+    })
+    createServerClient.mockReturnValue(db)
+    sendEmailStep.mockResolvedValue('send-1')
+
+    await runSequences({ now: new Date('2026-08-10T02:00:00Z') })
+
+    expect(advanceUpdate(statements).next_step_at).toBe('2026-08-10T02:00:30.000Z')
+  })
+})

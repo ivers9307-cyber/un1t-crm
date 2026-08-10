@@ -5,7 +5,10 @@
 // Settings -> Locations -> <name> -> Details, alongside the marketing
 // frequency cap. Two hour pickers and an on/off switch, backed by
 // company_settings.send_quiet_hours_* (mig 514). The window is what the
-// composers warn against; nothing here changes what a send does.
+// composers warn against — a manual send is never blocked or moved. SEQ-QUIET.1
+// added one reader that DEFERS rather than warns: a sequence with no
+// send_window of its own (src/lib/sequences/scheduler.js), where there is no
+// operator watching a cron tick to read a warning.
 //
 // Deliberately operator-editable rather than a constant in the source: the
 // hours a studio considers antisocial are a business decision, and a second
@@ -109,8 +112,10 @@ export default function SendQuietHoursCard({ locationId }) {
           </div>
           <p className="text-xs text-un1t-subtle mt-1 max-w-md">
             When a campaign or broadcast would land inside this window, the
-            composer says so and offers the next slot outside it. Nothing is
-            blocked, delayed or rescheduled. Times are Europe/Dublin.
+            composer says so and offers the next slot outside it. Nothing you
+            send by hand is blocked or rescheduled. Automated sequence steps
+            are different: a sequence with no send window of its own waits
+            until the window ends. Times are Europe/Dublin.
           </p>
         </div>
         {canEdit && (
