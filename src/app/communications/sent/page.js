@@ -8,6 +8,9 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { MessageSquare, MessageCircle, Mail, Send } from 'lucide-react'
 import { sendStatusChip } from './send-status.js'
+// REPORT-SOT.2 — the email rows on this list are counted from
+// campaign_recipients, not from campaigns.total_*.
+import { loadCampaignRecipientStats, campaignDisplayStats } from '@/lib/campaign-display-stats'
 
 export const dynamic = 'force-dynamic'
 
@@ -60,7 +63,22 @@ export default async function SendsHistoryPage() {
     const { data } = await db.from('campaigns')
       .select('id, name, status, total_recipients, total_sent, total_bounced, created_at, scheduled_at, sent_at, parent_campaign_id, resend_enabled, last_error')
       .eq('location_id', locationId).order('created_at', { ascending: false }).limit(100)
-    for (const c of data || []) rows.push({ ...c, channel: 'email', total_failed: c.total_bounced || 0, detail: `/email/campaigns/${c.id}` })
+    // REPORT-SOT.2 — the displayed counts come from campaign_recipients, one
+    // RPC for the whole page rather than one per row. The stored counters stay
+    // in the select: campaignDisplayStats falls back to them if the RPC fails,
+    // so a degraded render is the OLD behaviour rather than a third answer.
+    const stats = await loadCampaignRecipientStats(db, (data || []).map((c) => c.id))
+    for (const c of data || []) {
+      const d = campaignDisplayStats(c, stats)
+      rows.push({
+        ...c,
+        channel: 'email',
+        total_recipients: d.recipients,
+        total_sent: d.sent,
+        total_failed: d.bounced,
+        detail: `/email/campaigns/${c.id}`,
+      })
+    }
   }
   rows.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
 

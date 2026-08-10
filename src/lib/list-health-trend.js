@@ -192,7 +192,7 @@ export function buildListHealthTrend(rows) {
       // Recomputed rather than trusted, so the headline can never disagree
       // with the two numbers printed beside it.
       net_list_change: opt_ins - unsubscribes,
-      ...readings(sends, { bounce_rate, complaint_rate, open_rate }),
+      ...rateReadings(sends, { bounce_rate, complaint_rate, open_rate }),
     }
   })
 
@@ -249,7 +249,7 @@ export function buildListHealthTrend(rows) {
   }
   // The pooled denominator is the one figure that can usually carry a band
   // even when an individual month cannot.
-  Object.assign(totals, readings(totalSends, totals))
+  Object.assign(totals, rateReadings(totalSends, totals))
 
   return { months, totals }
 }
@@ -258,8 +258,14 @@ export function buildListHealthTrend(rows) {
  * The three readings for one denominator. `rates_readable` gates the whole
  * rate column: below the floor the page shows counts and says why, rather
  * than printing a percentage nobody should act on.
+ *
+ * EXPORTED for REPORT-SOT.1 (email-source-trend.js), which reports the same
+ * three quantities for non-campaign email off a different table. The threshold
+ * is deliberately not re-derived there: one floor, one set of bands, one place
+ * that decides whether a sample can carry a rate. A second copy is how the two
+ * halves of one page end up disagreeing about what 500 sends means.
  */
-function readings(sends, r) {
+export function rateReadings(sends, r) {
   const readable = sends >= MIN_RATE_SENDS
   return {
     rates_readable: readable,

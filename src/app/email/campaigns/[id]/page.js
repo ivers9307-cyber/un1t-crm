@@ -3,6 +3,7 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
 import CampaignDetail from '@/components/CampaignDetail'
 import CampaignEditor from '@/components/CampaignEditor'
+import { loadCampaignRecipientStats, campaignDisplayStats } from '@/lib/campaign-display-stats'
 
 export const dynamic = 'force-dynamic'
 
@@ -47,6 +48,14 @@ export default async function CampaignDetailPage(props) {
     .order('sent_at', { ascending: false })
     .limit(100)
 
+  // REPORT-SOT.2 — the displayed figures come from campaign_recipients, not
+  // from campaigns.total_*. The counters miss every send-time rejection (they
+  // are counted from email_sends, which never gets a row for one), so this
+  // page was reporting 0 bounces on a campaign that refused 40 addresses. The
+  // rpc is safe to call with this id: the IDOR guard above already resolved
+  // the campaign through assertLocationAccess.
+  const recipientStats = await loadCampaignRecipientStats(db, [params.id])
+
   // CAMPAIGN-AB — per-variant sends/opens for the A/B panel (mig 398).
   // Same email_sends-sourced rollup the send cron uses at decide time.
   let abStats = null
@@ -74,6 +83,7 @@ export default async function CampaignDetailPage(props) {
     <CampaignDetail
       campaign={campaign}
       recipients={recipients || []}
+      stats={campaignDisplayStats(campaign, recipientStats)}
       abStats={abStats}
       resendChild={resendChild}
       resendParent={resendParent}
