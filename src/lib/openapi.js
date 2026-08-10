@@ -3333,7 +3333,7 @@ registry.registerPath({
   tags: ['Communications'],
   security: [{ CookieAuth: [] }],
   summary: 'Send-time quiet window for a location',
-  description: 'Returns { enabled, start_hour, end_hour, default_start_hour, default_end_hour, can_edit } (company_settings.send_quiet_hours_*, mig 514; defaults enabled=true, 21:00 to 08:00 Europe/Dublin). ADVISORY ONLY: the composers warn when a send would land inside the window and offer the next slot outside it. No send path reads this and nothing is clamped, deferred or blocked. A location with no company_settings row returns the defaults rather than 404.',
+  description: 'Returns { enabled, start_hour, end_hour, default_start_hour, default_end_hour, can_edit } (company_settings.send_quiet_hours_*, mig 514; defaults enabled=true, 21:00 to 08:00 Europe/Dublin). ADVISORY on every MANUAL path: the composers warn when a send would land inside the window and offer the next slot outside it, and nothing an operator sends by hand is clamped, deferred or blocked. One automated reader DEFERS (SEQ-QUIET.1): the sequence runner falls back to this window for a sequence that has no send_window of its own, since no operator is watching a cron tick to read a warning. A sequence-level send_window still wins outright and the two are never merged. A location with no company_settings row returns the defaults rather than 404.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: 'Current quiet-hours setting' },
@@ -3512,9 +3512,10 @@ registry.registerPath({
 })
 
 // GAPS-P8 — AI copy assist for the composer. Session-only (it costs money per
-// call), rate-limited per user and per location, and it fails soft: no API key
-// or an upstream error still answers 200 with available:false so the composer
-// keeps working. Nothing is applied or sent.
+// call), rate-limited per user and per location, capped by the per-location
+// prepaid wallet (COPYCAP.1), and it fails soft: no API key, an exhausted
+// wallet or an upstream error all still answer 200 with available:false so the
+// composer keeps working. Nothing is applied or sent.
 registry.registerPath({
   method: 'post',
   path: '/api/campaigns/copy-assist',
@@ -3526,11 +3527,12 @@ registry.registerPath({
     + 'REWRITER, not a source of studio facts: everything it returns is scrubbed deterministically (em dashes via '
     + 'stripEmDashes, emoji, exclamation pile-ups, ALL-CAPS shouting) and any suggestion that invents a price, date, '
     + 'time or offer, or that surfaces class capacity, is dropped before the operator sees it. Requires the `email` '
-    + 'permission at the target location. Suggestions are never auto-applied and never sent.',
+    + 'permission at the target location, and passes the same per-location prepaid wallet check as the send paths '
+    + '(checkSpend, meter ai_message) BEFORE the model is called. Suggestions are never auto-applied and never sent.',
   request: { body: { content: { 'application/json': { schema: CopyAssistRequest } } } },
   responses: {
     200: {
-      description: 'Suggestions, or available:false when the assist is unconfigured or upstream is down',
+      description: 'Suggestions, or available:false when the assist is unconfigured, the location wallet is empty, or upstream is down',
       content: {
         'application/json': {
           schema: z.object({

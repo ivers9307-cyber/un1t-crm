@@ -20,7 +20,10 @@ const SOURCE_LABELS = {
   admin_panel:              { label: 'Admin panel',               tone: 'amber' },
   auto_classpass:           { label: 'Auto (ClassPass)',          tone: 'purple' },
   auto_classpass_backfill:  { label: 'Auto (ClassPass backfill)', tone: 'purple' },
-  unsubscribe_one_click:    { label: 'One-click unsubscribe',     tone: 'blue' },
+  // `one_click_unsubscribe` is the slug the unsubscribe route actually writes
+  // (src/app/api/unsubscribe/[token]/route.js). A transposed
+  // `unsubscribe_one_click` sat here too until GAPS-P7.2 — a label for a value
+  // nothing has ever written, which read as evidence that the value exists.
   one_click_unsubscribe:    { label: 'One-click unsubscribe',     tone: 'blue' },
   // CONSENT.4 — public-form soft opt-in / explicit opt-out captured
   // alongside a booking or event registration submission.
@@ -66,7 +69,7 @@ const TONE_CLASS = {
 // Sources where the person themselves acted — the "By" column says
 // "customer" rather than "system" for these.
 const CUSTOMER_SOURCES = new Set([
-  'preference_centre', 'unsubscribe_one_click', 'one_click_unsubscribe',
+  'preference_centre', 'one_click_unsubscribe',
   'postmark_one_click_unsubscribe', 'whatsapp_keyword', 'meta_user_preferences',
   'booking_form', 'event_form', 'waitlist_form', 'host_mailing_list', 'whatsapp_flow',
 ])

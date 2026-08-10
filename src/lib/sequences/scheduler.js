@@ -19,6 +19,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { logWarn } from '@/lib/log'
 import { getLocationFrequencyCap, FrequencyCapDeferral } from '@/lib/frequency-cap'
+import { nextAcceptableSend, QUIET_HOURS_COLUMNS } from '@/lib/send-quiet-hours'
 import { evaluateSequenceAudience } from './audience.js'
 import {
   sendEmailStep,
@@ -143,6 +144,81 @@ export function clampToSendWindow(candidate, window) {
   return attempt
 }
 
+/**
+ * Does this send_window actually constrain anything?
+ *
+ * Deliberately the same predicate clampToSendWindow uses to decide it has
+ * nothing to do: null/undefined, `{}`, and `{ start_hour: null, end_hour:
+ * null, skip_days: [] }` all mean "the operator configured no window". They
+ * must agree, or an empty object would count as a sequence-level window and
+ * silently block the quiet-hours fallback below.
+ *
+ * @param {object|null|undefined} window
+ * @returns {boolean}
+ */
+export function hasSendWindow(window) {
+  if (!window || typeof window !== 'object') return false
+  if (Number.isFinite(window.start_hour)) return true
+  if (Number.isFinite(window.end_hour)) return true
+  return Array.isArray(window.skip_days) && window.skip_days.length > 0
+}
+
+// ─── SEQ-QUIET.1: the location's quiet hours as a fallback ────────
+//
+// A sequence with no send_window of its own used to be able to fire a step at
+// 03:00, because clampToSendWindow only ever honoured a window on the
+// sequence. The per-location quiet hours from GAPS-P4 (mig 514,
+// company_settings.send_quiet_hours_*) already encode when a studio considers
+// it antisocial to message someone, so a windowless sequence inherits them.
+//
+// TWO DELIBERATE ASYMMETRIES, both intended to read as choices:
+//
+//  1. A sequence-level send_window WINS OUTRIGHT — the two are never merged
+//     and quiet hours are not applied on top. An operator who configured a
+//     window on the sequence has already said what they want; the fallback
+//     exists only for the sequences that said nothing.
+//
+//  2. Here quiet hours DEFER. On the campaign composer (GAPS-P4) they are
+//     ADVISORY: they warn and offer a later slot, and never move a send,
+//     because a manual "Send now" that quietly does not go out reads as a
+//     broken button. A sequence step has neither property — nobody is
+//     watching a cron tick to read a warning, and the step is ALREADY
+//     deferrable (clampToSendWindow has pushed windowed sequences forward
+//     since mig 089). Deferring is therefore what this surface already does,
+//     and warning would go nowhere.
+//
+// nextAcceptableSend, not clampToSendWindow: the quiet window WRAPS midnight
+// (the default is 21:00 to 08:00) and clampToSendWindow's `hour < start ||
+// hour >= end` comparison cannot express that. send-quiet-hours.js also
+// handles the DST edges, including the spring-forward Sunday where 01:00 does
+// not exist.
+
+const QUIET_HOURS_SELECT =
+  `${QUIET_HOURS_COLUMNS.enabled}, ${QUIET_HOURS_COLUMNS.start}, ${QUIET_HOURS_COLUMNS.end}`
+
+/**
+ * The company_settings quiet-hours row for a location, or null.
+ *
+ * A missing row (or a read failure) returns null, which normalizeQuietHours
+ * reads as "use the code-side default" — the same posture as the settings
+ * route. A location with no settings row must not silently mean "no quiet
+ * hours"; that is the whole point of the default existing in two places.
+ */
+async function loadQuietHours(db, locationId) {
+  if (!locationId) return null
+  try {
+    const { data, error } = await db
+      .from('company_settings')
+      .select(QUIET_HOURS_SELECT)
+      .eq('location_id', locationId)
+      .limit(1)
+    if (error) return null
+    return (data && data[0]) || null
+  } catch {
+    return null
+  }
+}
+
 // ─── Tier 1C: goal-tracking helper (mig 088) ─────────────────────
 
 /**
@@ -247,6 +323,16 @@ export async function runSequences({ now = new Date() } = {}) {
       capCache.set(locationId, await getLocationFrequencyCap(db, locationId))
     }
     return capCache.get(locationId)
+  }
+
+  // SEQ-QUIET.1 — same per-location, per-tick caching as the frequency cap.
+  // Only read for sequences that have no send_window of their own.
+  const quietCache = new Map()
+  const quietHoursFor = async (locationId) => {
+    if (!quietCache.has(locationId)) {
+      quietCache.set(locationId, await loadQuietHours(db, locationId))
+    }
+    return quietCache.get(locationId)
   }
 
   // Pick due rows. Order by next_step_at so older deliveries fire
@@ -506,12 +592,20 @@ export async function runSequences({ now = new Date() } = {}) {
         const rawNext = isTest
           ? new Date(now.getTime() + accelSeconds * 1000)
           : new Date(now.getTime() + nextStepDelayMs(followingStep.data))
-        // Mig 089: respect the per-sequence send window. Test
-        // enrolments bypass the window so QA isn't blocked by
-        // weekend/night hours.
-        const clamped = isTest
-          ? rawNext
-          : clampToSendWindow(rawNext, sequence.send_window || null)
+        // Mig 089: respect the per-sequence send window. SEQ-QUIET.1: a
+        // sequence with no window of its own falls back to the location's
+        // quiet hours (see the block comment above loadQuietHours — the
+        // sequence-level window wins outright; the two are never merged).
+        // Test enrolments bypass BOTH so QA isn't blocked by weekend/night
+        // hours.
+        let clamped
+        if (isTest) {
+          clamped = rawNext
+        } else if (hasSendWindow(sequence.send_window)) {
+          clamped = clampToSendWindow(rawNext, sequence.send_window)
+        } else {
+          clamped = nextAcceptableSend(rawNext, await quietHoursFor(sequence.location_id))
+        }
         nextFireAt = clamped.toISOString()
       }
       const newStatus = followingStep.data ? 'active' : 'completed'

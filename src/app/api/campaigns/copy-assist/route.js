@@ -9,16 +9,18 @@
 //
 //  1. It spends money per call, so it is session-guarded (never an API key, and
 //     never public), gated on the same `email` permission as the send paths,
-//     checked at the TARGET location, and metered by two rate-limit buckets
-//     before the model is touched: per user and per location. The limiter fails
-//     open on a DB outage by design (src/lib/rate-limit.js) — auth and the
-//     permission gate, not the limiter, are what stop an anonymous bill.
+//     checked at the TARGET location, metered by two rate-limit buckets before
+//     the model is touched (per user and per location), and — since COPYCAP.1 —
+//     held to the same per-location prepaid wallet cap the send paths enforce.
+//     The limiter fails open on a DB outage by design (src/lib/rate-limit.js) —
+//     auth and the permission gate, not the limiter, are what stop an
+//     anonymous bill.
 //
-//  2. It fails SOFT. No key, a 529 from Anthropic, a socket reset: the response
-//     is still 200 with `available:false` and an empty list, because the
-//     composer must keep working exactly as it did before this feature existed.
-//     An assist that can break the compose screen is a dependency, not an
-//     assist.
+//  2. It fails SOFT. No key, an exhausted wallet, a 529 from Anthropic, a
+//     socket reset: the response is still 200 with `available:false` and an
+//     empty list, because the composer must keep working exactly as it did
+//     before this feature existed. An assist that can break the compose screen
+//     is a dependency, not an assist.
 //
 //  3. It does not trust its own model. Everything comes back through
 //     parseSuggestions() in src/lib/copy-assist.js, which scrubs deterministically
@@ -36,6 +38,7 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { checkRateLimit, rateLimitResponse } from '@/lib/rate-limit'
+import { checkSpend } from '@/lib/wallet-enforcement'
 import { anthropicMessages } from '@/lib/anthropic'
 import {
   COPY_ASSIST_MODEL,
@@ -112,6 +115,35 @@ export async function POST(request) {
       return rateLimitResponse(result, 'That is a lot of suggestions in a short time. Try again shortly.')
     }
   }
+
+  // COPYCAP.1 — the per-location prepaid wallet cap (INTEG-C3), the same gate
+  // every other Anthropic caller in the estate already passes through: the
+  // campaign send path, the WhatsApp broadcasts, and Mia's auto-reply. This
+  // route metered its spend into usage_events from day one but never asked
+  // whether the location was allowed to spend it, so a tier-pinned location
+  // with an exhausted ai_message allowance and an empty wallet kept billing.
+  //
+  // BEFORE the model, obviously — a cap checked afterwards is a report.
+  //
+  // A capped call takes the route's existing SOFT shape (200 + available:
+  // false + a reason), not an error, for the same reason an unset API key
+  // does: the composer must keep working exactly as it did before this
+  // feature existed. The operator writes their own subject line; they do not
+  // get a broken screen because billing said no.
+  //
+  // Fails OPEN on any throw. checkSpend is documented never to throw and
+  // answers allow:true on any infrastructure failure, but an assist must not
+  // be the thing that breaks the composer if that ever changes. Unpinned
+  // locations — every UN1T location today — answer 'unpinned' and are
+  // completely unaffected.
+  //
+  // NOT extended to the rate limiter above, which still fails open by design
+  // (src/lib/rate-limit.js): a limiter that fails closed takes the compose
+  // screen down with the rate_limits table.
+  try {
+    const spend = await checkSpend(db, input.location_id, 'ai_message', 'ai')
+    if (!spend.allow) return unavailable(spend.reason || 'wallet_empty')
+  } catch { /* fail open — checkSpend already never throws */ }
 
   // Fail soft #1: not configured. Checked AFTER the guards so an unauthorised
   // caller cannot use the response shape to probe whether the key is set.

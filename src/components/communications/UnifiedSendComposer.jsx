@@ -670,7 +670,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
                 <span className="block text-xs font-medium text-un1t-subtle mb-1">New subject <span className="text-un1t-subtle/60">(optional)</span></span>
                 <input className={fieldCls} value={resendSubject} maxLength={500}
                   onChange={e => setResendSubject(e.target.value)} placeholder={subject || 'Reuses the original subject if left blank'} />
-                <span className="block text-[11px] text-un1t-subtle mt-1">A fresh subject usually lifts second-send opens. Leave blank to reuse the original.</span>
+                <span className="block text-[11px] text-un1t-subtle mt-1">The subject the resend goes out with. Leave blank to reuse the original.</span>
               </label>
               <p className="text-[11px] text-un1t-subtle">Open counts undercount slightly — some inboxes preload images, so a few real openers still look unopened and the odd non-opener looks opened.</p>
             </div>
