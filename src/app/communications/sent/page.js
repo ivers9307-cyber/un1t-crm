@@ -1,6 +1,7 @@
-// PILLAR2 Phase 1 — unified "Sends" history. One list across SMS + WhatsApp
-// one-off sends for the active location (replaces the two per-channel broadcast
-// list pages, which now redirect here). Email campaigns join in Phase 2.
+// PILLAR2 — unified "Sends" history. One list across SMS, WhatsApp and email
+// sends for the active location (replaces the three per-channel list pages,
+// which now redirect here). Email campaigns joined in Phase 2 and this is the
+// parent every channel detail view links back to (COMMSLAYOUT.4).
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
@@ -88,7 +89,9 @@ export default async function SendsHistoryPage() {
         <div>
           <Link href="/communications" className="text-xs text-un1t-subtle hover:text-un1t-text">← Communications</Link>
           <h1 className="text-xl font-semibold text-un1t-text mt-1">Sends</h1>
-          <p className="text-sm text-un1t-subtle">One-off SMS &amp; WhatsApp sends at this location.</p>
+          {/* COMMSLAYOUT.1 — email campaigns have been in this list since
+              PILLAR2 Phase 2; the subtitle still said SMS + WhatsApp only. */}
+          <p className="text-sm text-un1t-subtle">One-off SMS, WhatsApp and email sends at this location.</p>
         </div>
         <Link href="/communications/send"
           className="inline-flex items-center gap-1.5 rounded-lg bg-un1t-text text-un1t-bg px-3 py-2 text-sm font-medium hover:bg-un1t-accent shrink-0">

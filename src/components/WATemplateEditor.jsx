@@ -411,7 +411,9 @@ export default function WATemplateEditor({ template, locationId, userId, events 
       {/* Top bar */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-border bg-un1t-surface shrink-0">
         <div className="flex items-center gap-4">
-          <Link href="/whatsapp/templates" className="text-un1t-subtle hover:text-un1t-text transition-colors">
+          {/* COMMSLAYOUT.4 — was `/whatsapp/templates`, a stub that redirects to
+              this same URL. Go straight to the list the editor opened from. */}
+          <Link href="/communications/templates?channel=whatsapp" className="text-un1t-subtle hover:text-un1t-text transition-colors">
             <ArrowLeft size={20} />
           </Link>
           <h2 className="text-lg font-semibold">

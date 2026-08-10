@@ -573,7 +573,9 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
       {/* Top Bar */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-border bg-un1t-surface shrink-0">
         <div className="flex items-center gap-4">
-          <Link href="/email" className="text-un1t-subtle hover:text-un1t-text transition-colors">
+          {/* COMMSLAYOUT.4 — was `/email`, the retired hub stub. A draft is
+              opened from the Sends list, so that is where "back" belongs. */}
+          <Link href="/communications/sent" className="text-un1t-subtle hover:text-un1t-text transition-colors">
             <ArrowLeft size={20} />
           </Link>
           <input

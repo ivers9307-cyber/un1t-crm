@@ -148,7 +148,9 @@ export default function WhatsappTemplatesList({ locationId }) {
                     loading={deletingId === t.id}
                     onClick={() => handleDelete(t)}
                     title="Delete template"
-                    className="text-un1t-muted hover:text-red-400"
+                    // COMMSLAYOUT.5 — light surface: the destructive hover needs
+                    // the -700 ramp, same as every other red on this page.
+                    className="text-un1t-muted hover:text-red-700"
                   />
                 </div>
               </div>
