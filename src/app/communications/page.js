@@ -234,6 +234,18 @@ export default async function CommunicationsHub() {
           title="Templates"
           desc="Reusable email + WhatsApp content"
         />
+        {/* GAPS-P5 — the only entry point to the list-health surface. A
+            sixth sub-tab would push the tab bar past its width; this is a
+            page operators visit occasionally, not one they work in. */}
+        {canEmail && (
+          <ActionCard
+            href="/communications/list-health"
+            icon={ShieldCheck}
+            color="bg-amber-500/20 text-amber-700"
+            title="List health"
+            desc="Who can be emailed, bounces, and suppressed contacts"
+          />
+        )}
       </div>
     </div>
   )

@@ -3533,6 +3533,40 @@ registry.registerPath({
   },
 })
 
+// GAPS-P5 (mig 515) — undo a repeat-bounce escalation. The only write surface
+// the feature exposes; the decision itself is made by the nightly
+// repeat-bounce-sweep cron.
+registry.registerPath({
+  method: 'post',
+  path: '/api/communications/list-health/{id}/release',
+  tags: ['Marketing'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Undo a repeat-bounce suppression, or dismiss one flagged for review',
+  description:
+    'Closes the email_bounce_escalations row and, for a suppression, clears contacts.email_suppressed_at so the '
+    + 'contact rejoins the marketing audience immediately. The release is recorded as release_reason=operator, '
+    + 'which is permanent: the nightly sweep never re-suppresses that contact for repeat bounces again. Note that '
+    + 'email_suppressed_at is shared with the engagement-hygiene sweep (mig 395), so clearing it also clears an '
+    + 'inactivity suppression the contact was carrying; if they still qualify as a 90-day non-opener the hygiene '
+    + 'sweep re-stamps them that night, with its own reason. A review row never carried a stamp, so dismissing one '
+    + 'only records that an operator looked. Requires access to the escalation\'s location; answers 404 (never 403) '
+    + 'so ids cannot be enumerated. Repeating the call is a no-op that reports alreadyReleased.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Released (or already released)', content: { 'application/json': { schema: SuccessResponse(z.object({
+      id: uuidLike,
+      released_at: z.string().optional(),
+      decision: z.enum(['suppress', 'review']).optional(),
+      stampCleared: z.boolean().optional(),
+      alreadyReleased: z.boolean().optional(),
+    }).openapi('BounceEscalationRelease')) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No email permission', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such escalation, or outside the caller\'s locations', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Release failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Schedule reports
 registry.registerPath({
   method: 'post',
