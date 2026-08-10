@@ -341,7 +341,7 @@ function needsValue(op) {
 // identical control. Without the extraction the pending row would need its own
 // copy and the two would drift.
 function DynamicValueSelect({ type, value, disabled, onChange, tagOptions, planOptions, eventOptions, className }) {
-  const cls = className || 'bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted flex-1'
+  const cls = className || 'bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text focus-visible:border-un1t-text flex-1'
   if (type === 'tag-select') {
     return (
       <select value={value || ''} disabled={disabled} onChange={onChange} aria-label="Tag" className={cls}>
@@ -378,6 +378,19 @@ function DynamicValueSelect({ type, value, disabled, onChange, tagOptions, planO
   )
 }
 
+// FILTER-A.4 — the connector column. It is DECORATIVE for assistive tech: the
+// row group's accessible name already says "AND — Filter 2 of 3", so repeating
+// the word here would double-announce. It stays visible, and now carries the
+// row NUMBER, which is what makes a 30-row list navigable at all.
+function RowConnector({ index, logic }) {
+  return (
+    <span data-testid="row-connector" aria-hidden="true" className="w-10 shrink-0 text-center leading-tight">
+      <span className="block text-[10px] text-un1t-muted tabular-nums">{index + 1}</span>
+      {index > 0 && <span className="block text-xs text-un1t-muted font-medium uppercase">{logic}</span>}
+    </span>
+  )
+}
+
 // FILTER-A.2 — the grouped field picker.
 //
 // DELIBERATELY a native <select> with <optgroup>, not a custom searchable
@@ -391,9 +404,10 @@ function DynamicValueSelect({ type, value, disabled, onChange, tagOptions, planO
 // box. Tradeoff recorded rather than hidden: there is still no substring
 // search, so an operator who does not know which group a field lives in must
 // open the list and scan nine short groups instead of one long one.
-function FieldSelect({ value, onChange, disabled, describedBy, className }) {
+function FieldSelect({ value, onChange, disabled, describedBy, className, inputRef }) {
   return (
     <select
+      ref={inputRef}
       value={value || ''}
       disabled={disabled}
       onChange={onChange}
@@ -500,6 +514,25 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
   const [pendingFields, setPendingFields] = useState({})
   const pendingList = Object.values(pendingFields)
 
+  // FILTER-A.4 — FOCUS MANAGEMENT. Adding a row left focus on the "Add filter"
+  // button, so a keyboard user had to tab back through the whole list to reach
+  // the row they had just created; deleting one dropped focus to <body>
+  // entirely. The map is written from ref callbacks and read only inside the
+  // effect, never during render.
+  const fieldNodes = useRef(new Map())
+  const addButtonRef = useRef(null)
+  const [focusRowKey, setFocusRowKey] = useState(null)
+  useEffect(() => {
+    if (!focusRowKey) return
+    const node = focusRowKey === '__add__' ? addButtonRef.current : fieldNodes.current.get(focusRowKey)
+    node?.focus()
+    setFocusRowKey(null)
+  }, [focusRowKey])
+  const registerField = (key) => (node) => {
+    if (node) fieldNodes.current.set(key, node)
+    else fieldNodes.current.delete(key)
+  }
+
   // Tag options loaded once at mount from /api/segments (Phase 3,
   // mig 085). Only fetched if the user actually opens a tag-select
   // row — keeps the page free for callers that don't use tags.
@@ -565,7 +598,9 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
     // mid-sequence. With no defaultFilterRow the row starts UNSET — inert
     // until the operator picks a field (see isUnsetFilterRow).
     if (disabled) return
-    setRowKeyState(k => [...k, mintRowKey()])
+    const newKey = mintRowKey()
+    setRowKeyState(k => [...k, newKey])
+    setFocusRowKey(newKey)
     updateFilter([
       ...filters,
       defaultFilterRow ? { ...defaultFilterRow } : { field: '', op: '', value: '' },
@@ -576,7 +611,17 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
     if (disabled) return
     const goneKey = rowKeys[index]
     setRowKeyState(k => k.filter((_, i) => i !== index))
-    if (goneKey) setEuroDrafts(d => { const next = { ...d }; delete next[goneKey]; return next })
+    if (goneKey) {
+      setEuroDrafts(d => { const next = { ...d }; delete next[goneKey]; return next })
+      setPendingFields(p => { const next = { ...p }; delete next[goneKey]; return next })
+      fieldNodes.current.delete(goneKey)
+    }
+    // FILTER-A.4 — land focus somewhere deterministic and MEANINGFUL: the row
+    // that took this one's place if there is one, otherwise the row above,
+    // otherwise "Add filter". Because rows carry stable keys, that target is
+    // the filter the operator can see — not whatever inherited the index.
+    const nextKey = rowKeys[index + 1] || rowKeys[index - 1] || '__add__'
+    setFocusRowKey(nextKey)
     updateFilter(filters.filter((_, i) => i !== index))
   }
 
@@ -637,6 +682,13 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
     updateRow(index, { field: newField, op: defaultOp, value: defaultValue })
   }
 
+  // FILTER-A.4 — the accessible name for a row. "Filter 2 of 12" is the piece
+  // a screen-reader user had NO way to get before: the row was a bare div, so
+  // twelve identically-unnamed comboboxes were all the list amounted to.
+  const rowLabel = (index) => (index > 0
+    ? `${logic.toUpperCase()} — Filter ${index + 1} of ${filters.length}`
+    : `Filter ${index + 1} of ${filters.length}`)
+
   // FILTER-FOUND row 3 — the pending field becomes a real row only now, once
   // it has a value the server resolvers will accept. Picking the blank option
   // leaves it pending rather than writing an empty row back.
@@ -646,6 +698,16 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
     if (!config) return
     setPendingFields(p => { const next = { ...p }; delete next[rowKeys[index]]; return next })
     updateRow(index, { field, op: opsForField(config)[0]?.value || 'eq', value })
+  }
+
+  function clearAllFilters() {
+    if (disabled) return
+    setRowKeyState([])
+    setEuroDrafts({})
+    setPendingFields({})
+    fieldNodes.current.clear()
+    setFocusRowKey('__add__')
+    updateFilter([])
   }
 
   // FILTER-A.1 — a preset REPLACES the working filter with its rows. It is not
@@ -692,15 +754,24 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
         </div>
       )}
 
-      {/* Logic toggle */}
+      {/* FILTER-A.4 — the governing ALL/ANY. It used to convey its state by
+          BACKGROUND COLOUR alone with no aria-pressed and no group label, and
+          at 30+ rows it scrolled off the top of the list while still governing
+          every row below. Now: a named group of toggle buttons, and sticky. */}
       {filters.length > 1 && (
-        <div className="flex items-center gap-2 text-sm">
+        <div
+          role="group"
+          aria-label="How these filters combine"
+          data-testid="logic-toggle"
+          className="sticky top-0 z-10 flex items-center gap-2 text-sm bg-un1t-bg py-1"
+        >
           <span className="text-un1t-subtle">Match</span>
           <button
             type="button"
+            aria-pressed={logic === 'and'}
             disabled={disabled}
             onClick={() => updateFilter(filters, 'and')}
-            className={`px-3 py-1 rounded-md text-xs font-medium transition-colors disabled:opacity-50 ${
+            className={`px-3 py-1 rounded-md text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text disabled:opacity-50 ${
               logic === 'and' ? 'bg-un1t-text text-un1t-bg' : 'border border-un1t-border text-un1t-subtle hover:text-un1t-text'
             }`}
           >
@@ -708,9 +779,10 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
           </button>
           <button
             type="button"
+            aria-pressed={logic === 'or'}
             disabled={disabled}
             onClick={() => updateFilter(filters, 'or')}
-            className={`px-3 py-1 rounded-md text-xs font-medium transition-colors disabled:opacity-50 ${
+            className={`px-3 py-1 rounded-md text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text disabled:opacity-50 ${
               logic === 'or' ? 'bg-un1t-text text-un1t-bg' : 'border border-un1t-border text-un1t-subtle hover:text-un1t-text'
             }`}
           >
@@ -744,18 +816,16 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
             const pending = pendingFields[rowKey] || ''
             const pendingConfig = pending ? getFieldConfig(pending) : null
             return (
-              <div key={rowKey} className="bg-un1t-surface border border-un1t-border rounded-lg p-3">
+              <div key={rowKey} role="group" aria-label={rowLabel(index)} className="bg-un1t-surface border border-un1t-border rounded-lg p-3">
                <div className="flex flex-wrap items-center gap-2">
-                {index > 0 && (
-                  <span className="text-xs text-un1t-muted font-medium w-10 text-center uppercase">{logic}</span>
-                )}
-                {index === 0 && filters.length > 1 && <span className="w-10" />}
+                <RowConnector index={index} logic={logic} />
                 <FieldSelect
                   value={pending}
                   disabled={disabled}
+                  inputRef={registerField(rowKey)}
                   describedBy={pendingConfig?.hint ? `${rowKey}-hint` : null}
                   onChange={e => handleFieldChange(index, e.target.value)}
-                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted flex-1"
+                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text focus-visible:border-un1t-text flex-1"
                 />
                 {pendingConfig && (
                   <DynamicValueSelect
@@ -768,11 +838,12 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
                 )}
                 <button
                   type="button"
+                  aria-label={`Remove filter ${index + 1}`}
                   disabled={disabled}
                   onClick={() => removeFilter(index)}
-                  className="p-1.5 text-un1t-muted hover:text-red-400 transition-colors rounded disabled:opacity-50"
+                  className="p-1.5 text-un1t-muted hover:text-red-400 transition-colors rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text disabled:opacity-50"
                 >
-                  <Trash2 size={14} />
+                  <Trash2 size={14} aria-hidden="true" />
                 </button>
                </div>
                {pendingConfig?.hint && (
@@ -789,22 +860,22 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
           // 'Unknown audience field' on this row anyway.
           if (!fieldConfig) {
             return (
-              <div key={rowKeys[index]} className="flex items-center gap-2 bg-un1t-surface border border-amber-500/40 rounded-lg p-3">
-                {index > 0 && (
-                  <span className="text-xs text-un1t-muted font-medium w-10 text-center uppercase">{logic}</span>
-                )}
-                {index === 0 && filters.length > 1 && <span className="w-10" />}
-                <AlertTriangle size={14} className="text-amber-700 shrink-0" />
+              <div key={rowKeys[index]} role="group" aria-label={rowLabel(index)} className="bg-un1t-surface border border-amber-500/40 rounded-lg p-3">
+               <div className="flex flex-wrap items-center gap-2">
+                <RowConnector index={index} logic={logic} />
+                <AlertTriangle size={14} className="text-amber-700 shrink-0" aria-hidden="true" />
                 <span className="text-sm font-mono text-un1t-text">{f.field}</span>
                 <span className="text-xs text-amber-700 flex-1">Saved with an unsupported field — remove this row</span>
                 <button
                   type="button"
+                  aria-label={`Remove filter ${index + 1}`}
                   disabled={disabled}
                   onClick={() => removeFilter(index)}
-                  className="p-1.5 text-un1t-muted hover:text-red-400 transition-colors rounded disabled:opacity-50"
+                  className="p-1.5 text-un1t-muted hover:text-red-400 transition-colors rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text disabled:opacity-50"
                 >
-                  <Trash2 size={14} />
+                  <Trash2 size={14} aria-hidden="true" />
                 </button>
+               </div>
               </div>
             )
           }
@@ -827,31 +898,28 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
             ? f.value : null
 
           return (
-            <div key={rowKey} className="bg-un1t-surface border border-un1t-border rounded-lg p-3">
+            <div key={rowKey} role="group" aria-label={rowLabel(index)} className="bg-un1t-surface border border-un1t-border rounded-lg p-3">
              <div className="flex flex-wrap items-center gap-2">
               {/* Connector */}
-              {index > 0 && (
-                <span className="text-xs text-un1t-muted font-medium w-10 text-center uppercase">
-                  {logic}
-                </span>
-              )}
-              {index === 0 && filters.length > 1 && <span className="w-10" />}
+              <RowConnector index={index} logic={logic} />
 
               {/* Field */}
               <FieldSelect
                 value={f.field}
                 disabled={disabled}
+                inputRef={registerField(rowKey)}
                 describedBy={hintId}
                 onChange={e => handleFieldChange(index, e.target.value)}
-                className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
+                className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text focus-visible:border-un1t-text"
               />
 
               {/* Operator */}
               <select
                 value={f.op}
+                aria-label="Condition"
                 disabled={disabled}
                 onChange={e => handleOpChange(index, e.target.value)}
-                className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
+                className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text focus-visible:border-un1t-text"
               >
                 {ops.map(op => (
                   <option key={op.value} value={op.value}>{op.label}</option>
@@ -862,8 +930,9 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
               {showValue && fieldConfig.type === 'select' ? (
                 <select
                   value={f.value}
+                  aria-label="Value"
                   disabled={disabled} onChange={e => updateRow(index, { value: e.target.value })}
-                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted flex-1"
+                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text focus-visible:border-un1t-text flex-1"
                 >
                   {/* FILTER-A.2 — explicit display names. The old
                       replace(/_/g,' ') produced "classpass" and "pack member",
@@ -888,9 +957,10 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
               ) : showValue && fieldConfig.type === 'number' ? (
                 <input
                   type="number"
+                  aria-label="Value"
                   value={f.value}
                   disabled={disabled} onChange={e => updateRow(index, { value: e.target.value })}
-                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted w-24"
+                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text focus-visible:border-un1t-text w-24"
                 />
               ) : showValue && fieldConfig.type === 'money' ? (
                 // FILTER-A.2 — the operator types 120, we store 12000. The
@@ -906,6 +976,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
                   <input
                     type="text"
                     inputMode="decimal"
+                    aria-label="Value in euro"
                     data-testid="money-input"
                     value={euroDrafts[rowKey] ?? centsToEuroText(f.value)}
                     disabled={disabled}
@@ -914,7 +985,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
                       setEuroDrafts(d => ({ ...d, [rowKey]: text }))
                       updateRow(index, { value: euroTextToCents(text) })
                     }}
-                    className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted w-28"
+                    className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text focus-visible:border-un1t-text w-28"
                   />
                 </div>
               ) : showValue && fieldConfig.type === 'date' ? (
@@ -922,26 +993,29 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
                   <div className="flex items-center gap-1.5">
                     <input
                       type="number"
+                      aria-label="Number of days"
                       value={f.value}
                       disabled={disabled} onChange={e => updateRow(index, { value: e.target.value })}
                       placeholder="30"
-                      className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted w-20"
+                      className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text focus-visible:border-un1t-text w-20"
                     />
                     <span className="text-xs text-un1t-muted">days</span>
                   </div>
                 ) : (
                   <input
                     type="date"
+                    aria-label="Value"
                     value={f.value}
                     disabled={disabled} onChange={e => updateRow(index, { value: e.target.value })}
-                    className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
+                    className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text focus-visible:border-un1t-text"
                   />
                 )
               ) : showValue && fieldConfig.type === 'boolean' ? (
                 <select
                   value={f.value === true || f.value === 'true' ? 'true' : 'false'}
+                  aria-label="Value"
                   disabled={disabled} onChange={e => updateRow(index, { value: e.target.value })}
-                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted flex-1"
+                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text focus-visible:border-un1t-text flex-1"
                 >
                   <option value="true">Yes</option>
                   <option value="false">No</option>
@@ -949,21 +1023,23 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
               ) : showValue ? (
                 <input
                   type="text"
+                  aria-label="Value"
                   value={f.value}
                   disabled={disabled} onChange={e => updateRow(index, { value: e.target.value })}
                   placeholder="Value..."
-                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted flex-1"
+                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text focus-visible:border-un1t-text flex-1"
                 />
               ) : null}
 
               {/* Remove */}
               <button
                 type="button"
+                aria-label={`Remove filter ${index + 1}`}
                 disabled={disabled}
                 onClick={() => removeFilter(index)}
-                className="p-1.5 text-un1t-muted hover:text-red-400 transition-colors rounded disabled:opacity-50"
+                className="p-1.5 text-un1t-muted hover:text-red-400 transition-colors rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text disabled:opacity-50"
               >
-                <Trash2 size={14} />
+                <Trash2 size={14} aria-hidden="true" />
               </button>
              </div>
 
@@ -999,23 +1075,43 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
       </div>
 
       {/* Add filter + count */}
-      <div className="flex items-center justify-between">
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={addFilter}
-          className="flex items-center gap-1.5 text-xs text-un1t-subtle hover:text-un1t-text transition-colors disabled:opacity-50"
-        >
-          <Plus size={14} />
-          Add filter
-        </button>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            ref={addButtonRef}
+            disabled={disabled}
+            onClick={addFilter}
+            className="flex items-center gap-1.5 text-xs text-un1t-subtle hover:text-un1t-text transition-colors rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text disabled:opacity-50"
+          >
+            <Plus size={14} aria-hidden="true" />
+            Add filter
+          </button>
+          {/* FILTER-A.4 — at 30 rows the only way out was 30 clicks. */}
+          {filters.length > 0 && (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={clearAllFilters}
+              className="text-xs text-un1t-muted hover:text-un1t-text transition-colors rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text disabled:opacity-50"
+            >
+              Clear all
+            </button>
+          )}
+        </div>
 
-        {audienceCount !== null && (
-          <span className="text-sm text-un1t-subtle">
-            <Users size={14} className="inline mr-1.5" />
-            <strong className="text-un1t-text">{audienceCount}</strong> contacts match
-          </span>
-        )}
+        {/* FILTER-A.4 — a LIVE region, and mounted unconditionally. A screen
+            reader user editing a filter never heard the audience change, and a
+            region that only appears once there is a number to show is not
+            announced when that first number arrives. */}
+        <span aria-live="polite" aria-atomic="true" className="text-sm text-un1t-subtle">
+          {audienceCount !== null && audienceCount !== undefined && (
+            <>
+              <Users size={14} className="inline mr-1.5" aria-hidden="true" />
+              <strong className="text-un1t-text">{audienceCount}</strong> contacts match
+            </>
+          )}
+        </span>
       </div>
     </div>
   )
