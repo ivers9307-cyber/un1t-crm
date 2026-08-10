@@ -6,6 +6,7 @@ import { createBrowserClient } from '@/lib/supabase'
 import { isoToLocalDatetime, localDatetimeToIso } from '@/lib/datetime-local'
 import { ArrowLeft, Save, Send, Users, Code, Paintbrush, Mail, Loader2, CheckCircle2, AlertCircle, Calendar, X, Trash2 } from 'lucide-react'
 import AudienceBuilder, { STAGE_MEMBER_DEFAULT_ROW } from './AudienceBuilder'
+import SendQuietHoursNotice from './communications/SendQuietHoursNotice'
 import { stripUnsetFilterRows } from '@/lib/audience-filter'
 import Link from 'next/link'
 
@@ -706,6 +707,25 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
           )}
         </div>
       </div>
+
+      {/* GAPS-P4 — quiet-hours advisory, sitting under the action bar so it is
+          in the same glance as "Send Campaign" and the schedule tray. Only on
+          a draft: that is the only state either control can fire from. When
+          the tray holds a valid future time we judge THAT instant; otherwise
+          we judge now, which is what "Send Campaign" would do. It never
+          disables the button. */}
+      {campaignStatus === 'draft' && (
+        <div className="px-5 pt-3">
+          <SendQuietHoursNotice
+            locationId={locationId}
+            at={scheduleOpen && scheduleAt ? localDatetimeToIso(scheduleAt) : null}
+            onSuggest={(iso) => {
+              setScheduleOpen(true)
+              setScheduleAt(isoToLocalDatetime(iso))
+            }}
+          />
+        </div>
+      )}
 
       {/* CAMPAIGN.13 — schedule tray (mirrors the test-send tray). */}
       {scheduleOpen && (

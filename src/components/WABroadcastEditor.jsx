@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { ArrowLeft, Save, Send, Users, CheckCircle2, XCircle, Ban, Clock } from 'lucide-react'
 import AudienceBuilder from './AudienceBuilder'
 import AudienceCount from './communications/AudienceCount'
+import SendQuietHoursNotice from './communications/SendQuietHoursNotice'
 import { estimateDripDays } from '@/lib/whatsapp-drip'
 import { groupWaTemplates, UNGROUPED_LABEL } from '@shared/wa-template-groups'
 
@@ -279,6 +280,18 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
           </div>
         )}
       </div>
+
+      {/* GAPS-P4 — quiet-hours advisory for "Send Broadcast", which fires
+          immediately. This page has NO schedule picker (WhatsApp scheduling is
+          created from /communications/send), so there is nothing to set and
+          the notice states the next acceptable slot instead of offering a
+          button. A drip is exempt: it paces itself inside its own daily
+          window, so pressing send does not put a message on a phone now. */}
+      {!isTerminal && !isScheduled && !isDripInFlight && broadcast?.delivery_mode !== 'drip' && (
+        <div className="px-5 pt-3">
+          <SendQuietHoursNotice locationId={locationId} />
+        </div>
+      )}
 
       {/* WA-SCHEDULE — scheduled banner: when it goes out + how to stop it. */}
       {isScheduled && (

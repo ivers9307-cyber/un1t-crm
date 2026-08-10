@@ -30,6 +30,7 @@ import NotificationConfigCard from '@/components/settings/NotificationConfigCard
 import EmailMailboxesCard from '@/components/settings/EmailMailboxesCard'
 import CommsFrequencyCapCard from '@/components/settings/CommsFrequencyCapCard'
 import GeofenceAttendanceCard from '@/components/settings/GeofenceAttendanceCard'
+import SendQuietHoursCard from '@/components/settings/SendQuietHoursCard'
 
 export const dynamic = 'force-dynamic'
 
@@ -165,6 +166,10 @@ export default async function EditLocationPage(props) {
               Details (not Integrations — it carries no credentials and
               spans email + WhatsApp, so no single integration tab fits). */}
           <CommsFrequencyCapCard locationId={location.id} />
+          {/* GAPS-P4 — send-time quiet hours (mig 514). Sits next to the
+              frequency cap for the same reason: it is comms config that
+              carries no credentials and spans every channel. Advisory only. */}
+          <SendQuietHoursCard locationId={location.id} />
           {/* GEO-ATT.5 — mobile geofence attendance config (mig 463).
               Coordinates + radius + the permission-gate copy staff see
               in the mobile app. */}

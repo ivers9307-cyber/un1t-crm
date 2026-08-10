@@ -3283,6 +3283,39 @@ registry.registerPath({
   },
 })
 
+// Send-time quiet hours (GAPS-P4, mig 514)
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/send-quiet-hours',
+  tags: ['Communications'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Send-time quiet window for a location',
+  description: 'Returns { enabled, start_hour, end_hour, default_start_hour, default_end_hour, can_edit } (company_settings.send_quiet_hours_*, mig 514; defaults enabled=true, 21:00 to 08:00 Europe/Dublin). ADVISORY ONLY: the composers warn when a send would land inside the window and offer the next slot outside it. No send path reads this and nothing is clamped, deferred or blocked. A location with no company_settings row returns the defaults rather than 404.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Current quiet-hours setting' },
+    403: { description: 'Forbidden — no access to this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/send-quiet-hours',
+  tags: ['Communications'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Save the send-time quiet window (owner or master)',
+  description: 'Hours are 0-23, Europe/Dublin wall clock. The window is half-open [start, end): start_hour > end_hour wraps past midnight (the default 21 to 8 does). start_hour must differ from end_hour — switch enabled off instead of setting a zero-length window.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ enabled: z.boolean(), start_hour: z.number().int().min(0).max(23), end_hour: z.number().int().min(0).max(23) }).openapi('SendQuietHoursSave') } } },
+  },
+  responses: {
+    200: { description: 'Quiet hours saved' },
+    400: { description: 'start_hour equals end_hour, or an hour is out of range', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owner or master', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Geofence attendance (GEO-ATT, mig 463)
 registry.registerPath({
   method: 'get',

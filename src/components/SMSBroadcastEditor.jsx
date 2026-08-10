@@ -20,6 +20,7 @@ import {
 } from 'lucide-react'
 import AudienceBuilder from './AudienceBuilder'
 import AudienceCount from './communications/AudienceCount'
+import SendQuietHoursNotice from './communications/SendQuietHoursNotice'
 
 // SMS segment math — single GSM7 fits 160 chars; multi-segment
 // concatenation is 153 per segment (7 lost to UDH per segment).
@@ -390,6 +391,18 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
               min={isoToLocalDatetime(new Date().toISOString())}
               className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted disabled:opacity-60"
             />
+            {/* GAPS-P4 — quiet-hours advisory. Covers both buttons in the
+                action bar below: an empty picker means "Send now", which is
+                judged against the current time; a filled one is judged against
+                the picked instant. Advisory only, nothing is disabled. */}
+            {!isLocked && !isScheduled && (
+              <SendQuietHoursNotice
+                className="mt-3"
+                locationId={locationId}
+                at={scheduledAtLocal ? localDatetimeToIso(scheduledAtLocal) : null}
+                onSuggest={(iso) => setScheduledAtLocal(isoToLocalDatetime(iso))}
+              />
+            )}
           </div>
 
           {/* Action bar */}
