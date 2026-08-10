@@ -144,7 +144,10 @@ export async function buildCountdownGif({ msLeft, frames = 60, layout } = {}) {
   // of `raw` is silently accepted and yields ONE tall static frame instead of
   // an animation (it encodes, it's a valid GIF, it just doesn't move). Assert
   // page count in tests, never just the magic bytes.
+  // delay MUST be a per-frame array. A scalar is accepted but only reaches
+  // frame 1 — every later frame gets delay 0, which clients render as fast
+  // as possible, so the clock ticks once and then blurs to a stop.
   return sharp(stacked, { raw: { width: W, height: H * count, channels: 3, pageHeight: H } })
-    .gif({ loop: 1, delay: 1000, colours: 8 })
+    .gif({ loop: 1, delay: new Array(count).fill(1000), colours: 8 })
     .toBuffer()
 }
