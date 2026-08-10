@@ -89,3 +89,47 @@ describe('Goal editor — membership_state (SEQGAPS.1)', () => {
     expect(stateValueSelectIn(container).value).toBe('paused')
   })
 })
+
+// GAPS-P3.2 — the anniversary "Anniversary of" dropdown and the cron's
+// allowed from_field list are one contract, not two lists kept in sync by
+// hand. An option offered here that the cron rejects produces a sequence
+// that logs an error and skips on every tick, forever; a field the cron
+// supports but the dropdown hides is simply unreachable.
+describe('Anniversary from_field dropdown mirrors the cron whitelist (GAPS-P3.2)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+  })
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+  })
+
+  const optionValues = (select) => Array.from(select.querySelectorAll('option')).map(o => o.value)
+
+  function openAnniversarySettings() {
+    const { container, getByText } = render(
+      <SequenceSettings sequence={{ id: 'seq-1', location_id: 'loc-1', name: 'Anniversary', status: 'draft', trigger_type: 'anniversary' }} />,
+    )
+    fireEvent.click(getByText('Settings & trigger'))
+    return container
+  }
+
+  it('renders the from_field select with exactly the cron-allowed fields, in order', async () => {
+    const { ANNIVERSARY_FROM_FIELDS } = await import('@/lib/sequences/anniversary-fields')
+    const container = openAnniversarySettings()
+    const select = Array.from(container.querySelectorAll('select'))
+      .find(s => optionValues(s).includes('dob'))
+    expect(select, 'no anniversary from_field select rendered').toBeTruthy()
+    expect(optionValues(select)).toEqual([...ANNIVERSARY_FROM_FIELDS])
+  })
+
+  it('every option carries a human label (no raw column names in the UI)', () => {
+    const container = openAnniversarySettings()
+    const select = Array.from(container.querySelectorAll('select'))
+      .find(s => optionValues(s).includes('dob'))
+    for (const opt of select.querySelectorAll('option')) {
+      expect(opt.textContent.trim().length, `option ${opt.value} has no label`).toBeGreaterThan(0)
+      expect(opt.textContent, `option ${opt.value} shows its raw column name`).not.toBe(opt.value)
+    }
+  })
+})

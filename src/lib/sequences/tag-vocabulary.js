@@ -23,6 +23,14 @@ export const PLATFORM_TAGS = [
   'glofox_service_created', 'glofox_service_updated', 'glofox_service_deleted',
   // Once-ever first booking (webhook step 6c, SEQ-GLOFOX.2)
   'glofox_first_booking',
+  // GAPS-P3.4 — written by glofox-push.js step 6 (writeContactTag) when
+  // the CRM creates a Glofox account, and driven by the packaged
+  // glofox_welcome_passcode template. It has been a real platform tag
+  // since GLOFOX3.5 and was simply never registered here, so the flow
+  // builder called it a phantom tag and a has_tag branch on it looked
+  // wrong. Found by the GAPS-P3.4 test that holds every tag-triggered
+  // template against this list.
+  'glofox_account_created',
   // Trial-lifecycle transitions (glofox-sync.js GLOFOX4.2)
   'glofox_trial_ended', 'glofox_trial_converted', 'glofox_trial_credits_low', 'glofox_trial_engaged',
   // Race / event behaviour rules (contact-events.js TAG_RULES)

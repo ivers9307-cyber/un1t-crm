@@ -24,6 +24,13 @@ import { dublinDayStr } from '@/lib/dublin-time'
 import { selectAll, selectAllByKeys } from '@/lib/select-all'
 import { contactMatchesSequenceAudience } from './audience.js'
 import { enrolContacts } from './enrol.js'
+import { ANNIVERSARY_FROM_FIELDS, DEFAULT_ANNIVERSARY_FROM_FIELD } from './anniversary-fields.js'
+
+// GAPS-P3.2 — re-exported so callers that already import the runner get
+// the whitelist from the same place. The list itself lives in the
+// import-free ./anniversary-fields.js because the settings dropdown is a
+// client component and this module pulls the service-role client.
+export { ANNIVERSARY_FROM_FIELDS }
 
 // ── event_reminder ──────────────────────────────────────────────
 
@@ -158,7 +165,6 @@ export async function runEventReminderTriggers() {
 export async function runAnniversaryTriggers() {
   const db = createServerClient()
   const stats = { fired: 0, skipped: 0 }
-  const ALLOWED_FIELDS = new Set(['lead_created_at', 'last_emailed_at', 'joined_at', 'dob'])
 
   const { data: sequences } = await db
     .from('email_sequences')
@@ -172,13 +178,16 @@ export async function runAnniversaryTriggers() {
 
   for (const seq of sequences) {
     const cfg = seq.trigger_config || {}
-    const fromField = cfg.from_field || 'lead_created_at'
+    const fromField = cfg.from_field || DEFAULT_ANNIVERSARY_FROM_FIELD
     // COMMSFIX.E.3 — an unknown field is a CONFIG ERROR, not a hint. The
     // old silent fallback to lead_created_at made the birthday template
     // ({ from_field: 'dob' }) greet every lead created that day instead
     // of anyone on their birthday. Reject loudly; the operator must fix
     // the trigger config.
-    if (!ALLOWED_FIELDS.has(fromField)) {
+    // GAPS-P3.2 — one shared whitelist (./anniversary-fields.js), so the
+    // dropdown that offers a field and the packaged templates that drive
+    // one are testable against the list this guard enforces.
+    if (!ANNIVERSARY_FROM_FIELDS.includes(fromField)) {
       logError('sequences', `anniversary sequence ${seq.id}: unknown from_field '${fromField}' — sequence skipped until its trigger_config is fixed`, { sequenceId: seq.id, fromField })
       continue
     }
