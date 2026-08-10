@@ -270,6 +270,9 @@ export const EXEMPT = {
   'src/app/api/public/offers/[slug]/checkout/route.js': {
     sale_offers: 'Public sale catalogue (OFFERS.4): the row is looked up by its globally-unique slug and every active offer is deliberately world-readable — it IS the product page data. The only sensitive field the route touches is price_cents, which it reads server-side precisely so the client can never supply an amount.',
   },
+  'src/app/api/public/countdown.gif/route.js': {
+    sale_offers: 'Countdown image for marketing email (COUNTDOWN.1): reads ONLY ends_at of the latest active offer — the same deadline already rendered publicly on /offers and printed in the email itself. No location context exists (it is an <img> fetched by a mail client), and the response is pixels, not data.',
+  },
   'src/app/api/public/offer-purchases/[id]/route.js': {
     offer_purchases: 'Public paid-purchase status poll (OFFERS.4): the row is resolved by its own unguessable UUID (the purchaseId handed to the payer in the checkout response) — the id IS the capability token, not enumerable. Returns only { paid, state }, no buyer PII. Mirrors public/class-booking-payments/[id].',
   },

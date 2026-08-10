@@ -328,6 +328,17 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'get',
+  path: '/api/public/countdown.gif',
+  tags: ['Public'],
+  summary: 'Live sale countdown as an animated GIF (for marketing email)',
+  description: 'Anonymous image endpoint. Renders the time remaining to the active sale deadline (sale_offers.ends_at — the same source as the website countdown) as a 30-frame animated GIF, re-rendered per request with caches defeated. Falls back to a 1×1 transparent GIF when no sale is active or rendering fails, so a failure never shows a broken image. NOTE: Gmail proxies and caches images, so the timer is reliable on first open only — the deadline must also appear as text in the email.',
+  responses: {
+    200: { description: 'image/gif — the countdown, or a 1×1 transparent pixel on fallback' },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
   path: '/api/public/branding',
   tags: ['Public'],
   summary: 'Branding config for a location by publicPath',
