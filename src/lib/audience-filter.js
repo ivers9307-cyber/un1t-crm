@@ -393,7 +393,23 @@ function toOrCondition(field, op, v, fieldConfig) {
  * @returns {object} Modified query
  */
 export function applyAudienceFilter(query, filter) {
-  if (!filter?.filters?.length) return query
+  if (filter == null) return query
+
+  // FILTER-A.5 / FILTER-FOUND row 4 — `logic` was never validated. The
+  // `filter.logic === 'or'` test below means ANY, and EVERYTHING ELSE meant
+  // AND: 'OR', 'Or', 'any', a typo, a number. So a filter that was built to
+  // mean ANY and arrived spelled 'OR' silently became ALL — a strictly
+  // narrower audience, produced with no error anywhere, which is precisely the
+  // failure mode this programme exists to remove. Checked BEFORE the
+  // empty-filters early return, so a broken logic cannot be persisted on a
+  // filter that merely has no rows yet and then start lying once rows arrive.
+  if (filter.logic != null && filter.logic !== 'and' && filter.logic !== 'or') {
+    throw new InvalidAudienceFilterError(
+      `audience_filter.logic must be "and" or "or" (got ${JSON.stringify(filter.logic)})`,
+    )
+  }
+
+  if (!filter.filters?.length) return query
 
   if (!Array.isArray(filter.filters)) {
     throw new InvalidAudienceFilterError('audience_filter.filters must be an array')

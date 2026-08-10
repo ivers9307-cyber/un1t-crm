@@ -1190,3 +1190,64 @@ describe('date comparison values must be parseable (P1.4)', () => {
     })).toThrow(/requires a date/)
   })
 })
+
+// FILTER-A.5 / FILTER-FOUND row 4 — `filter.logic` was never validated.
+// Anything that was not exactly the string 'or' silently meant AND: 'OR',
+// 'any', a typo, a number. A saved filter meaning ANY that arrived as 'OR'
+// became ALL, quietly, and nothing anywhere reported it — the audience simply
+// came back smaller than the operator built.
+describe('applyAudienceFilter — logic is validated, not assumed (FILTER-A.5)', () => {
+  let q
+  beforeEach(() => { q = makeMockQuery() })
+
+  it.each(['and', 'or'])('accepts the two real values (%s)', (logic) => {
+    expect(() => applyAudienceFilter(q.query, {
+      logic, filters: [{ field: 'gender', op: 'eq', value: 'male' }],
+    })).not.toThrow()
+  })
+
+  it.each([undefined, null])('treats a missing logic as AND, as it always has (%s)', (logic) => {
+    expect(() => applyAudienceFilter(q.query, {
+      logic, filters: [{ field: 'gender', op: 'eq', value: 'male' }],
+    })).not.toThrow()
+  })
+
+  it.each([
+    ['OR', 'the uppercase that silently flipped ANY to ALL'],
+    ['Or', 'mixed case'],
+    ['any', 'the word an operator would guess'],
+    ['all', 'its counterpart'],
+    ['', 'empty string'],
+    [1, 'a number'],
+    [true, 'a boolean'],
+  ])('rejects %s (%s) instead of silently meaning AND', (logic) => {
+    expect(() => applyAudienceFilter(q.query, {
+      logic, filters: [{ field: 'gender', op: 'eq', value: 'male' }],
+    })).toThrow(InvalidAudienceFilterError)
+  })
+
+  it('names the offending value so the operator can see what happened', () => {
+    expect(() => applyAudienceFilter(q.query, {
+      logic: 'OR', filters: [{ field: 'gender', op: 'eq', value: 'male' }],
+    })).toThrow(/OR/)
+  })
+
+  it('catches it even when there are no filter rows to apply', () => {
+    // The early "nothing to do" return used to skip every check, so a filter
+    // could be SAVED with a broken logic and only misbehave once rows were
+    // added to it later.
+    expect(() => applyAudienceFilter(q.query, { logic: 'any', filters: [] }))
+      .toThrow(InvalidAudienceFilterError)
+  })
+
+  it('validateAudienceFilter refuses to persist it', () => {
+    expect(() => validateAudienceFilter({
+      logic: 'OR', filters: [{ field: 'gender', op: 'eq', value: 'male' }],
+    })).toThrow(InvalidAudienceFilterError)
+  })
+
+  it('leaves a null filter alone (still means "everyone")', () => {
+    expect(() => validateAudienceFilter(null)).not.toThrow()
+    expect(applyAudienceFilter(q.query, null)).toBe(q.query)
+  })
+})
