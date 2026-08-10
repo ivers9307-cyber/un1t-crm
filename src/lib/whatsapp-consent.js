@@ -12,13 +12,21 @@
 //     drip / audience gate: buildWhatsAppAudience filters on it)
 //   - contacts.wa_status → 'opted_out' (the hard signal every WA send
 //     path checks — broadcasts exclude blocked/opted_out)
-//   - consent_log row (channel whatsapp_marketing, action opted_out,
+//   - consent_log row (channel whatsapp_marketing, action opt_out,
 //     source whatsapp_keyword) — the audit trail
 //   - best-effort acknowledgement text (their keyword just opened the
 //     24h window, so a plain text reply is allowed)
-// START reverses it (opted_in / wa_status 'active').
+// START reverses it (opt_in / wa_status 'active').
+//
+// GAPS-P6 — the consent_log rows written here used to say 'opted_out' /
+// 'opted_in', which is the `contacts.wa_status` vocabulary, not the
+// `consent_log.action` one. 83 real opt-outs were invisible to every report
+// filtering `action = 'opt_out'`. The two columns are adjacent in this file
+// and mean different things: wa_status KEEPS 'opted_out' (it is correct
+// there), the log action moves to the canonical CONSENT_ACTIONS.
 
 import { sendTextMessage } from './whatsapp'
+import { consentActionFor } from './consent-actions'
 
 const ACK_STOP =
   "You've been unsubscribed from WhatsApp marketing messages. Reply START at any time to opt back in."
@@ -44,7 +52,7 @@ export async function applyWhatsappConsentKeyword({ db, contact, waPhone, locati
   if (!contact?.id || !['stop', 'start'].includes(keyword)) return { applied: false }
 
   const optingOut = keyword === 'stop'
-  const action = optingOut ? 'opted_out' : 'opted_in'
+  const action = consentActionFor(!optingOut)
 
   try {
     // 1. The marketing consent flag (source of truth for audiences).
@@ -150,12 +158,12 @@ export async function applyMetaUserPreference(db, pref = {}) {
     await db.from('consent_log').insert({
       contact_id: contact.id,
       channel: 'whatsapp_marketing',
-      action: optingOut ? 'opted_out' : 'opted_in',
+      action: consentActionFor(!optingOut),
       source: 'meta_user_preferences',
     })
   } catch (e) {
     console.error(`[wa-consent] user_preferences write failed for contact ${contact.id}:`, e?.message || e)
     return { applied: false, reason: 'write_failed' }
   }
-  return { applied: true, action: optingOut ? 'opted_out' : 'opted_in', contactId: contact.id }
+  return { applied: true, action: consentActionFor(!optingOut), contactId: contact.id }
 }

@@ -26,6 +26,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { parseCsv } from '@/lib/csv-parse'
 import { getClientIp } from '@/lib/rate-limit'
+import { consentActionFor } from '@/lib/consent-actions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -377,7 +378,7 @@ export async function POST(request) {
       logRows.push({
         contact_id: contactId,
         channel: ch,
-        action: changed[ch] ? 'opt_in' : 'opt_out',
+        action: consentActionFor(changed[ch]),
         source: 'bulk_import',
         ip_address: ip,
       })

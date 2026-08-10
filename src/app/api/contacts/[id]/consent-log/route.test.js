@@ -30,10 +30,17 @@ const LOC_B = 'loc-b'
 // ─── DB mock ─────────────────────────────────────────────────────
 //
 // GET reads:
-//   1. from('contacts').select('location_id').eq('id', x).maybeSingle()
-//   2. from('consent_log').select(...).eq('contact_id', x).order(...).limit(N)
-function mockDb({ contact, contactError = null, rows = [], rowsError = null } = {}) {
+//   1. from('contacts').select(...).eq('id', x).maybeSingle()
+//   2. from('consent_log').select(...).eq('contact_id', x)
+//        .order('created_at').order('id').range(from, to)   ← paginated
+//
+// The mock SERVES the range rather than ignoring it, so a test can hand it
+// 2,500 rows and prove the route actually walks past the 1,000-row select cap
+// instead of silently returning the first page. `rangeCalls` records the
+// windows asked for, which is how we pin the paging itself.
+function mockDb({ contact, contactError = null, rows = [], rowsError = null, rangeCalls = [] } = {}) {
   return {
+    rangeCalls,
     from: vi.fn((table) => {
       if (table === 'contacts') {
         const maybeSingle = vi.fn(() =>
@@ -44,10 +51,13 @@ function mockDb({ contact, contactError = null, rows = [], rowsError = null } = 
         return { select }
       }
       if (table === 'consent_log') {
-        const limit = vi.fn(() =>
-          Promise.resolve(rowsError ? { data: null, error: rowsError } : { data: rows, error: null })
-        )
-        const order = vi.fn(() => ({ limit }))
+        const range = vi.fn((from, to) => {
+          rangeCalls.push([from, to])
+          if (rowsError) return Promise.resolve({ data: null, error: rowsError })
+          return Promise.resolve({ data: rows.slice(from, to + 1), error: null })
+        })
+        const order2 = vi.fn(() => ({ range }))
+        const order = vi.fn(() => ({ order: order2, range }))
         const eq = vi.fn(() => ({ order }))
         const select = vi.fn(() => ({ eq }))
         return { select }
@@ -125,5 +135,180 @@ describe('GET /api/contacts/[id]/consent-log', () => {
     }))
     const res = await GET(FAKE_REQUEST, { params: { id: 'c1' } })
     expect(res.status).toBe(200)
+  })
+})
+
+// ─── GAPS-P6: the CSV export ──────────────────────────────────────
+//
+// The export is the subject-access-request tool, so it is bolted onto the
+// SAME route and therefore the same location gate — a parallel route would
+// have been a second place for the IDOR above to come back. These tests pin
+// (a) that the gate really does cover the csv path, (b) that a history
+// longer than the 1,000-row select cap comes out whole, and (c) that a
+// formula-triggering character cannot reach the file un-neutralised.
+
+const CSV_REQUEST = new Request('https://example.com/api/contacts/c1/consent-log?format=csv')
+
+function consentRow(i, over = {}) {
+  return {
+    id: `cl${i}`,
+    created_at: `2026-01-01T00:00:${String(i % 60).padStart(2, '0')}.000Z`,
+    channel: 'email_marketing',
+    action: 'opt_out',
+    source: 'one_click_unsubscribe',
+    ip_address: null,
+    performed_by: null,
+    profiles: null,
+    location_id: null,
+    locations: null,
+    ...over,
+  }
+}
+
+describe('GET /api/contacts/[id]/consent-log?format=csv', () => {
+  it('returns 401 with no user — the export is not more public than the feed', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await GET(CSV_REQUEST, { params: { id: 'c1' } })
+    expect(res.status).toBe(401)
+  })
+
+  it('returns 404 for a contact in another location, and ships no CSV body', async () => {
+    getCurrentUser.mockResolvedValue(userAtA)
+    createServerClient.mockReturnValue(mockDb({
+      contact: { location_id: LOC_B },
+      rows: [consentRow(1, { ip_address: '1.2.3.4' })],
+    }))
+    const res = await GET(CSV_REQUEST, { params: { id: 'c1' } })
+    expect(res.status).toBe(404)
+    expect(res.headers.get('content-type')).not.toMatch(/text\/csv/)
+    expect(await res.text()).not.toContain('1.2.3.4')
+  })
+
+  it('returns 404 for a contact that does not exist', async () => {
+    getCurrentUser.mockResolvedValue(userAtA)
+    createServerClient.mockReturnValue(mockDb({ contact: null }))
+    const res = await GET(CSV_REQUEST, { params: { id: 'nope' } })
+    expect(res.status).toBe(404)
+  })
+
+  it('serves a CSV download with the contact-named attachment filename', async () => {
+    getCurrentUser.mockResolvedValue(userAtA)
+    createServerClient.mockReturnValue(mockDb({
+      contact: { location_id: LOC_A, first_name: 'Ada', last_name: 'Lovelace' },
+      rows: [consentRow(1, {
+        profiles: { full_name: 'Sam Staff', email: 'sam@un1t.com' },
+        locations: { name: 'Stillorgan' },
+      })],
+    }))
+    const res = await GET(CSV_REQUEST, { params: { id: 'c1' } })
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toMatch(/text\/csv/)
+    expect(res.headers.get('content-disposition')).toBe('attachment; filename="consent-log-ada-lovelace.csv"')
+    const body = await res.text()
+    expect(body).toContain('recorded_at,channel,action,source,location,performed_by_name,performed_by_email,ip_address')
+    expect(body).toContain('Sam Staff')
+    expect(body).toContain('Stillorgan')
+    expect(body).toContain('one_click_unsubscribe')
+  })
+
+  it('paginates past the 1,000-row select cap instead of truncating the evidence', async () => {
+    const rangeCalls = []
+    getCurrentUser.mockResolvedValue(userAtA)
+    createServerClient.mockReturnValue(mockDb({
+      contact: { location_id: LOC_A, first_name: 'Ada', last_name: 'Lovelace' },
+      rows: Array.from({ length: 2500 }, (_, i) => consentRow(i)),
+      rangeCalls,
+    }))
+    const res = await GET(CSV_REQUEST, { params: { id: 'c1' } })
+    const body = await res.text()
+    // header + 2500 data rows (trailing EOL leaves an empty final element).
+    expect(body.split('\r\n').filter((l) => l !== '')).toHaveLength(2501)
+    expect(rangeCalls.slice(0, 3)).toEqual([[0, 999], [1000, 1999], [2000, 2999]])
+  })
+
+  it('normalises a legacy opted_out row so the export cannot lose a withdrawal', async () => {
+    getCurrentUser.mockResolvedValue(userAtA)
+    createServerClient.mockReturnValue(mockDb({
+      contact: { location_id: LOC_A, first_name: 'Ada', last_name: 'Lovelace' },
+      rows: [consentRow(1, { action: 'opted_out', source: 'whatsapp_keyword' })],
+    }))
+    const res = await GET(CSV_REQUEST, { params: { id: 'c1' } })
+    const body = await res.text()
+    expect(body).toContain(',opt_out,whatsapp_keyword,')
+    expect(body).not.toContain('opted_out')
+  })
+
+  it('neutralises a formula-triggering staff name before it reaches the file', async () => {
+    getCurrentUser.mockResolvedValue(userAtA)
+    createServerClient.mockReturnValue(mockDb({
+      contact: { location_id: LOC_A, first_name: 'Ada', last_name: 'Lovelace' },
+      rows: [consentRow(1, { profiles: { full_name: '=cmd|calc!A1', email: 'x@y.com' } })],
+    }))
+    const res = await GET(CSV_REQUEST, { params: { id: 'c1' } })
+    const body = await res.text()
+    expect(body).toContain("'=cmd|calc!A1")
+    expect(body).not.toMatch(/(^|,)=cmd/m)
+  })
+
+  it('leads with a UTF-8 BOM so Excel does not mangle accented names', async () => {
+    getCurrentUser.mockResolvedValue(userAtA)
+    createServerClient.mockReturnValue(mockDb({
+      contact: { location_id: LOC_A, first_name: 'Aoífe', last_name: 'Ní Bhriain' },
+      rows: [consentRow(1)],
+    }))
+    const res = await GET(CSV_REQUEST, { params: { id: 'c1' } })
+    // Asserted on the BYTES, not res.text(): the WHATWG "UTF-8 decode" that
+    // backs Response.text() strips a leading BOM, so a text assertion here
+    // can never fail and would be a decorative test. The bytes are what
+    // Excel actually reads.
+    const bytes = new Uint8Array(await res.arrayBuffer())
+    expect([bytes[0], bytes[1], bytes[2]]).toEqual([0xef, 0xbb, 0xbf])
+  })
+
+  it('fails loudly rather than shipping a half-built export when a page errors', async () => {
+    getCurrentUser.mockResolvedValue(userAtA)
+    createServerClient.mockReturnValue(mockDb({
+      contact: { location_id: LOC_A, first_name: 'Ada', last_name: 'Lovelace' },
+      rowsError: { message: 'boom' },
+    }))
+    const res = await GET(CSV_REQUEST, { params: { id: 'c1' } })
+    expect(res.status).toBe(500)
+    expect(res.headers.get('content-type')).not.toMatch(/text\/csv/)
+  })
+
+  it('ignores an unknown format and serves the JSON feed', async () => {
+    getCurrentUser.mockResolvedValue(userAtA)
+    createServerClient.mockReturnValue(mockDb({
+      contact: { location_id: LOC_A },
+      rows: [consentRow(1)],
+    }))
+    const req = new Request('https://example.com/api/contacts/c1/consent-log?format=pdf')
+    const res = await GET(req, { params: { id: 'c1' } })
+    expect(res.headers.get('content-type')).toMatch(/application\/json/)
+  })
+})
+
+describe('the JSON feed keeps working after the paging refactor', () => {
+  it('caps at 500 and reports truncation honestly', async () => {
+    getCurrentUser.mockResolvedValue(userAtA)
+    createServerClient.mockReturnValue(mockDb({
+      contact: { location_id: LOC_A },
+      rows: Array.from({ length: 900 }, (_, i) => consentRow(i)),
+    }))
+    const res = await GET(FAKE_REQUEST, { params: { id: 'c1' } })
+    const body = await res.json()
+    expect(body.rows).toHaveLength(500)
+    expect(body.truncated).toBe(true)
+  })
+
+  it('normalises the legacy spelling on the feed too', async () => {
+    getCurrentUser.mockResolvedValue(userAtA)
+    createServerClient.mockReturnValue(mockDb({
+      contact: { location_id: LOC_A },
+      rows: [consentRow(1, { action: 'opted_in' })],
+    }))
+    const res = await GET(FAKE_REQUEST, { params: { id: 'c1' } })
+    const body = await res.json()
+    expect(body.rows[0].action).toBe('opt_in')
   })
 })
