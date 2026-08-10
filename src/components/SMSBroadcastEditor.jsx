@@ -348,6 +348,7 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
               filter={audienceFilter}
               onChange={setAudienceFilter}
               audienceCount={null}
+              locationId={locationId}
               disabled={isLocked || isScheduled}
               defaultFilterRow={STAGE_MEMBER_DEFAULT_ROW}
             />

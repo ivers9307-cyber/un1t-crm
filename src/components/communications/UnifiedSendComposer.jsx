@@ -12,6 +12,10 @@ import { MessageSquare, MessageCircle, Mail, Send, Clock, Check, AlertTriangle, 
 import { Button } from '@/components/ui'
 import AudienceBuilder, { STAGE_MEMBER_DEFAULT_ROW } from '@/components/AudienceBuilder'
 import { stripUnsetFilterRows } from '@/lib/audience-filter'
+// FILTER-A.1 — presets are a SEND-composer affordance only. Sequences and
+// /contacts render the same builder without them (a sequence audience is a
+// continuing condition, so a preset would carry a meaning it does not have).
+import { AUDIENCE_PRESETS } from '@/lib/audience-presets'
 import ContactMultiSelect from './ContactMultiSelect'
 import { useUnlayerEditor } from './useUnlayerEditor'
 import { smsSegmentInfo, SMS_MAX_LEN, SMS_MERGE_TAGS, waBodyVariables, WA_VARIABLE_FIELDS } from '@/lib/communications/compose'
@@ -517,7 +521,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         )}
         {useExplicit
           ? <ContactMultiSelect locationId={locationId} value={people} onChange={setPeople} />
-          : <AudienceBuilder filter={filter} onChange={handleFilterChange} audienceCount={null} defaultFilterRow={STAGE_MEMBER_DEFAULT_ROW} />}
+          : <AudienceBuilder filter={filter} onChange={handleFilterChange} audienceCount={null} defaultFilterRow={STAGE_MEMBER_DEFAULT_ROW} presets={AUDIENCE_PRESETS} locationId={locationId} />}
         <div className="mt-2 flex flex-col gap-0.5 text-xs text-un1t-subtle">
           <div className="flex items-center gap-1.5">
             <Users size={13} />

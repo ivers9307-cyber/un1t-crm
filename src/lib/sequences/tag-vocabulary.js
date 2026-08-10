@@ -30,6 +30,44 @@ export const PLATFORM_TAGS = [
   'lapsed_payer', 'race_starts_soon', 'race_recently_completed',
 ]
 
+// FILTER-A.3 — plain-English descriptions for the platform vocabulary.
+//
+// /api/segments has always returned a `description` for the six behavioural
+// TAG_RULES and the audience builder threw it away; now that the builder shows
+// it, the other 26 tags need one too or the dropdown reads as a list of column
+// names. Only the behaviourally meaningful tags get bespoke copy — the raw
+// webhook echoes genuinely mean no more than "this webhook fired for them",
+// and describeTag() says exactly that rather than inventing significance.
+export const PLATFORM_TAG_DESCRIPTIONS = Object.freeze({
+  glofox_first_booking: 'Made their very first booking (applied once, ever).',
+  glofox_trial_ended: 'Their trial has finished.',
+  glofox_trial_converted: 'Converted from a trial to a paid membership.',
+  glofox_trial_credits_low: 'On a trial and nearly out of credits — the moment to convert them.',
+  glofox_trial_engaged: 'On a trial and actively booking classes.',
+  glofox_member_created: 'A member record was created for them in the booking system.',
+  glofox_membership_created: 'A membership was added to their account.',
+  glofox_membership_updated: 'Their membership changed (plan, price, state or dates).',
+  glofox_membership_deleted: 'A membership was removed from their account.',
+  glofox_booking_created: 'Booked a class.',
+  glofox_booking_cancelled: 'Cancelled a booking.',
+  glofox_invoice_updated: 'An invoice on their account changed status.',
+  glofox_access_created: 'Was issued door access.',
+  glofox_eagreement_created: 'Was sent an agreement to sign.',
+  glofox_eagreement_updated: 'Their signed agreement changed.',
+})
+
+// Human description for any tag, whichever registry it came from.
+// Unknown tags (an operator's own sequence wrote them) are labelled as such
+// rather than given a fabricated meaning.
+export function describeTag(tag, ruleDescription) {
+  if (ruleDescription) return ruleDescription
+  if (PLATFORM_TAG_DESCRIPTIONS[tag]) return PLATFORM_TAG_DESCRIPTIONS[tag]
+  if (PLATFORM_TAGS.includes(tag)) {
+    return `Applied automatically when the booking system reports "${String(tag).replace(/^glofox_/, '').replace(/_/g, ' ')}".`
+  }
+  return 'Added by a sequence or by staff — not one of the automatic tags.'
+}
+
 /**
  * Every tag a contact could plausibly carry from THIS flow's perspective:
  * the platform vocabulary plus any tag an apply_tag node in the given graph

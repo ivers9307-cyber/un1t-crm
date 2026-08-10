@@ -398,6 +398,7 @@ export default function ContactsView({
             filter={filter}
             onChange={handleFilterChange}
             audienceCount={apiActive ? count : null}
+            locationId={locationId}
           />
 
           {/* Save-as-segment row. Only visible when there's at least

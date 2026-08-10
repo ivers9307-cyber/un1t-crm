@@ -899,6 +899,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
               // the count; calling it here too is what made it fire twice.
               onChange={setAudienceFilter}
               audienceCount={audienceCount}
+              locationId={locationId}
               defaultFilterRow={STAGE_MEMBER_DEFAULT_ROW}
             />
           </div>
