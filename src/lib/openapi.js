@@ -3761,6 +3761,39 @@ registry.registerPath({
   },
 })
 
+// BACKLOG-4 (mig 520) — escalate a REVIEW row to a suppression. The sweep
+// deliberately never acts on review rows (the contact HAS been delivered to at
+// some point, so the bounces could be a mailbox that was full for a stretch),
+// which left an operator who disagreed with no way to act short of SQL.
+registry.registerPath({
+  method: 'post',
+  path: '/api/communications/list-health/{id}/suppress',
+  tags: ['Marketing'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Suppress a contact the sweep flagged for review',
+  description:
+    'Closes the review row as release_reason=operator_suppressed (mig 520) and opens a NEW decision=suppress row '
+    + 'carrying the stamp, rather than flipping the review row in place: the record that the rule said review must '
+    + 'survive, which is the whole point of the audit table. Stamps contacts.email_suppressed_at, so the contact '
+    + 'leaves the marketing audience but still receives administrative mail. The new row is releasable through the '
+    + 'release endpoint like any automatic suppression, and because the review row closed as operator_suppressed '
+    + 'rather than operator, the nightly sweep is NOT permanently blocked from re-evaluating the contact. Requires '
+    + 'access to the escalation\'s location; answers 404 (never 403) so ids cannot be enumerated. Only a review row '
+    + 'can be suppressed; calling it on a suppression is a no-op.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Suppressed (or already suppressed)', content: { 'application/json': { schema: SuccessResponse(z.object({
+      id: uuidLike,
+      suppressed_at: z.string().optional(),
+      alreadySuppressed: z.boolean().optional(),
+    }).openapi('BounceEscalationSuppress')) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No email permission', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such escalation, or outside the caller\'s locations', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Suppress failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Schedule reports
 registry.registerPath({
   method: 'post',

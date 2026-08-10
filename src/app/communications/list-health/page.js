@@ -264,7 +264,9 @@ export default async function ListHealthPage() {
         <h3 className="text-sm font-semibold text-un1t-text mb-1">Repeat bounces to review</h3>
         <p className="text-xs text-un1t-subtle mb-3">
           These addresses have accepted mail before, so the bounces may be a full mailbox or a temporary
-          server problem. They are still being emailed. Dismiss a row once you have looked at it.
+          server problem. They are still being emailed, and nothing here happens automatically. Dismiss a
+          row if the address looks fine, or Suppress it to stop marketing email to that address and record
+          why. A suppression made here appears in the table above and can be undone from there.
         </p>
         <ListHealthEscalations rows={reviewRows} mode="review" />
         {awaitingReview > MAX_ROWS && (

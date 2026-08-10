@@ -7,6 +7,14 @@
 // them back in the marketing audience); a review row is dismissed (nothing was
 // ever applied to it, so dismissing only records that someone looked).
 //
+// LISTHEALTH-ACT.1 — a review row can now also be ACTED on. Dismiss was the
+// only verb, so an operator who read the evidence and concluded the address was
+// dead had to write SQL against contacts.email_suppressed_at, which leaves no
+// audit row. Suppress goes through /suppress, which closes the review row and
+// opens a real decision='suppress' escalation (mig 520) before stamping, and
+// what it creates is undone by the same Restore button on the table above.
+// Nothing here acts on its own: one row, one click, one operator.
+//
 // Dates arrive pre-formatted from the server. Formatting them here would
 // render under the server's UTC clock during SSR and the browser's Dublin
 // clock on hydration, which is a mismatch for no benefit.
@@ -22,11 +30,11 @@ export default function ListHealthEscalations({ rows = [], mode = 'suppress' }) 
 
   const actionLabel = mode === 'suppress' ? 'Restore' : 'Dismiss'
 
-  async function release(id) {
+  async function act(id, action) {
     setBusyId(id)
     setError(null)
     try {
-      const res = await fetch(`/api/communications/list-health/${id}/release`, { method: 'POST' })
+      const res = await fetch(`/api/communications/list-health/${id}/${action}`, { method: 'POST' })
       const body = await res.json().catch(() => ({}))
       if (!res.ok || !body.success) {
         setError(body.error || 'Could not update that contact. Try again.')
@@ -62,16 +70,34 @@ export default function ListHealthEscalations({ rows = [], mode = 'suppress' }) 
       header: '',
       align: 'right',
       render: (row) => (
-        <Button
-          type="button"
-          variant="secondary"
-          size="sm"
-          loading={busyId === row.id}
-          disabled={busyId != null && busyId !== row.id}
-          onClick={() => release(row.id)}
-        >
-          {actionLabel}
-        </Button>
+        <div className="flex items-center justify-end gap-2">
+          {/* Suppress sits FIRST and secondary-styled, so the destructive-ish
+              action is not the one a fast hand lands on by muscle memory from
+              the Restore table above. */}
+          {mode === 'review' && (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              loading={busyId === row.id}
+              disabled={busyId != null && busyId !== row.id}
+              onClick={() => act(row.id, 'suppress')}
+              title="Stop sending marketing email to this address, and record why"
+            >
+              Suppress
+            </Button>
+          )}
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            loading={busyId === row.id}
+            disabled={busyId != null && busyId !== row.id}
+            onClick={() => act(row.id, 'release')}
+          >
+            {actionLabel}
+          </Button>
+        </div>
       ),
     },
   ]

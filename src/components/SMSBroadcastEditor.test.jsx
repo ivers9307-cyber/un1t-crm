@@ -56,3 +56,42 @@ describe('SMSBroadcastEditor — saved audience filter renders (B4)', () => {
     expect(fieldSelect).toBeTruthy()
   })
 })
+
+// DTLOCAL.1 — the editor carried private copies of isoToLocalDatetime /
+// localDatetimeToIso, duplicating the extracted, TZ-tested pair in
+// src/lib/datetime-local.js. They agreed on every value the pickers actually
+// produce; they disagreed on unparseable input, where the copies rendered
+// "NaN-NaN-NaNTNaN:NaN" and threw a RangeError respectively. These pin the
+// behaviour that has to survive the swap.
+describe('SMSBroadcastEditor — scheduling uses the shared datetime helpers', () => {
+  const scheduleInput = (container) => container.querySelector('input[type="datetime-local"]')
+
+  it('seeds the picker with the LOCAL wall clock of the saved instant, not the UTC slice', async () => {
+    const { isoToLocalDatetime } = await import('@/lib/datetime-local.js')
+    const iso = '2026-08-20T09:00:00.000Z'
+    const { container } = render(
+      <SMSBroadcastEditor broadcast={{ ...DRAFT, scheduled_at: iso }} recipients={[]} locationId="loc-1" locationSenderId="s1" userId="u1" />
+    )
+    const input = scheduleInput(container)
+    expect(input.value).toBe(isoToLocalDatetime(iso))
+    if (new Date(iso).getTimezoneOffset() !== 0) {
+      expect(input.value).not.toBe(iso.slice(0, 16))
+    }
+  })
+
+  it('renders a usable min attribute rather than a NaN string', () => {
+    const { container } = render(
+      <SMSBroadcastEditor broadcast={DRAFT} recipients={[]} locationId="loc-1" locationSenderId="s1" userId="u1" />
+    )
+    const min = scheduleInput(container).getAttribute('min')
+    expect(min).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/)
+    expect(min).not.toContain('NaN')
+  })
+
+  it('leaves the picker empty for an unsaved schedule instead of writing NaN into it', () => {
+    const { container } = render(
+      <SMSBroadcastEditor broadcast={{ ...DRAFT, scheduled_at: null }} recipients={[]} locationId="loc-1" locationSenderId="s1" userId="u1" />
+    )
+    expect(scheduleInput(container).value).toBe('')
+  })
+})
