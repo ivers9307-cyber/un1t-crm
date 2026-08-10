@@ -5,6 +5,9 @@
 //  .2  Six `flex-1` tabs in a no-wrap, no-scroll row squash to unreadable at
 //      375px. The row now scrolls horizontally on narrow screens and keeps the
 //      even-width desktop layout via `min-w-full` + `flex-1`.
+//  COMMS-IA.3 renamed two of the six labels: "Sends" → "Sent" (the route was
+//      always /communications/sent) and "Email" → "Email inbox". The label
+//      list below is the guard that both landed.
 //  .3  The Segments tab used to render on `canEmail || canWhatsapp` while
 //      /communications/segments itself is manager-gated, so a `staff` user with
 //      the email permission was ejected to `/`. The tab now takes its own
@@ -41,7 +44,7 @@ describe('CommunicationsTabs — 375px survivability (COMMSLAYOUT.2)', () => {
   it('renders all six tabs when every permission is held', () => {
     const { container } = render(<CommunicationsTabs {...ALL} />)
     const labels = within(container).getAllByRole('link').map((a) => a.textContent)
-    expect(labels).toEqual(['Send', 'Sends', 'Inbox', 'Email', 'Templates', 'Segments'])
+    expect(labels).toEqual(['Send', 'Sent', 'Inbox', 'Email inbox', 'Templates', 'Segments'])
   })
 
   it('puts the row in a horizontal scroll container', () => {
@@ -71,7 +74,7 @@ describe('CommunicationsTabs — 375px survivability (COMMSLAYOUT.2)', () => {
 
   it('keeps the active-state styling', () => {
     const { container } = render(<CommunicationsTabs {...ALL} />)
-    const active = within(container).getByRole('link', { name: /^Sends$/ })
+    const active = within(container).getByRole('link', { name: /^Sent$/ })
     expect(active.className).toContain('bg-un1t-text')
     expect(active.className).toContain('text-un1t-bg')
     const inactive = within(container).getByRole('link', { name: /^Templates$/ })

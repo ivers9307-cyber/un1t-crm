@@ -17,6 +17,12 @@
 //
 // The assertion is deliberately "the first link in the header", because that is
 // the affordance the user actually clicks.
+//
+// COMMS-IA.1 moved the first three views to /communications/sent/[channel]/[id]
+// and gave all three ONE header (SendDetailHeader), so the four send back-links
+// are now a single implementation rather than four. These tests still assert
+// per-component, on purpose: they are what would catch a body dropping the
+// shared header on its way to re-rolling a bespoke one.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
@@ -51,7 +57,7 @@ function firstLink(container) {
 beforeEach(() => cleanup())
 
 describe('channel detail back-links (COMMSLAYOUT.4)', () => {
-  it('email campaign detail goes back to the Sends list', () => {
+  it('email campaign detail goes back to the Sent list', () => {
     const { container } = render(
       <CampaignDetail
         campaign={{ id: 'c1', name: 'Spring', subject: 'Hi', status: 'sent', location_id: 'loc-1' }}
@@ -67,7 +73,7 @@ describe('channel detail back-links (COMMSLAYOUT.4)', () => {
     expect(firstLink(container)).toBe(SENDS)
   })
 
-  it('email campaign editor goes back to the Sends list', () => {
+  it('email campaign editor goes back to the Sent list', () => {
     const { container } = render(
       <CampaignEditor
         campaign={{ id: 'c1', name: 'Draft', status: 'draft', location_id: 'loc-1' }}
@@ -78,7 +84,7 @@ describe('channel detail back-links (COMMSLAYOUT.4)', () => {
     expect(firstLink(container)).toBe(SENDS)
   })
 
-  it('WhatsApp broadcast detail goes back to the Sends list', () => {
+  it('WhatsApp broadcast detail goes back to the Sent list', () => {
     const { container } = render(
       <WABroadcastEditor
         broadcast={{ id: 'b1', name: 'Blast', status: 'draft', location_id: 'loc-1', whatsapp_broadcast_recipients: [] }}
@@ -90,7 +96,7 @@ describe('channel detail back-links (COMMSLAYOUT.4)', () => {
     expect(firstLink(container)).toBe(SENDS)
   })
 
-  it('SMS broadcast detail goes back to the Sends list', () => {
+  it('SMS broadcast detail goes back to the Sent list', () => {
     const { container } = render(
       <SMSBroadcastEditor
         broadcast={{ id: 's1', name: 'Blast', status: 'draft', location_id: 'loc-1' }}

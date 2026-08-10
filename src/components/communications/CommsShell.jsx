@@ -8,7 +8,7 @@
 // sit at the same left position on every tab — otherwise the toolbar jumps
 // horizontally between a centred content tab and the full-width Inbox. The
 // Inbox route spans the full main-content width (everything right of the
-// sidebar); the content tabs (Send, Sends, Templates, Segments) keep the
+// sidebar); the content tabs (Send, Sent, Templates, Segments) keep the
 // readable `max-w-7xl` cap, just left-aligned. The tab bar caps itself
 // (max-w-3xl) so it never stretches.
 

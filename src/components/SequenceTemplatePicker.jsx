@@ -1,6 +1,9 @@
 'use client'
 
 // SequenceTemplatePicker — modal that lists every sequence
+// recipe. COMMS-IA.4: the operator-facing word is RECIPE (content
+// templates keep the plain word); the component name, the API and
+// SEQUENCE_TEMPLATES are deliberately unchanged.
 // recipe in src/lib/sequence-templates.js + clones the picked one
 // into a fresh draft sequence (Tier 3B).
 //
@@ -28,7 +31,7 @@ export default function SequenceTemplatePicker() {
       const r = await fetch('/api/sequences/from-template', { cache: 'no-store' })
       const j = await r.json()
       if (!j?.success) {
-        setLoadError(j?.error || 'Could not load templates')
+        setLoadError(j?.error || 'Could not load recipes')
       } else {
         setTemplates(j.data || [])
       }
@@ -77,7 +80,7 @@ export default function SequenceTemplatePicker() {
         className="inline-flex items-center gap-2 border border-un1t-border text-un1t-subtle text-sm font-medium px-4 py-2 rounded-lg hover:text-un1t-text hover:border-un1t-muted transition-colors"
       >
         <LayoutTemplate size={16} />
-        Use template
+        Use a recipe
       </button>
 
       {open && (
@@ -88,7 +91,7 @@ export default function SequenceTemplatePicker() {
           >
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h3 className="text-base font-semibold text-un1t-text">Pick a template</h3>
+                <h3 className="text-base font-semibold text-un1t-text">Pick a recipe</h3>
                 <p className="text-xs text-un1t-subtle mt-0.5">
                   Clones into a fresh draft you can rename, edit, and activate.
                 </p>

@@ -3,7 +3,8 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Save, Send, Users, CheckCircle2, XCircle, Ban, Clock } from 'lucide-react'
+import { Save, Send, Users, CheckCircle2, XCircle, Ban, Clock } from 'lucide-react'
+import SendDetailHeader from './communications/SendDetailHeader'
 import AudienceBuilder from './AudienceBuilder'
 import AudienceCount from './communications/AudienceCount'
 import SendQuietHoursNotice from './communications/SendQuietHoursNotice'
@@ -88,7 +89,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
 
       if (!broadcastId && result.broadcast?.id) {
         setBroadcastId(result.broadcast.id)
-        window.history.replaceState(null, '', `/whatsapp/broadcasts/${result.broadcast.id}`)
+        window.history.replaceState(null, '', `/communications/sent/whatsapp/${result.broadcast.id}`)
       }
     } catch (err) {
       setError(err.message)
@@ -117,7 +118,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
 
       if (!result.success) throw new Error(result.error)
 
-      router.push(`/whatsapp/broadcasts/${broadcastId}`)
+      router.push(`/communications/sent/whatsapp/${broadcastId}`)
       router.refresh()
     } catch (err) {
       setError(err.message)
@@ -215,39 +216,35 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
   const recipients = broadcast?.whatsapp_broadcast_recipients || []
 
   return (
-    <div className="flex flex-col h-screen">
-      {/* Top bar */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-border bg-un1t-surface shrink-0">
-        <div className="flex items-center gap-4">
-          {/* COMMSLAYOUT.4 — was `/whatsapp/broadcasts`, which redirects to
-              /communications/broadcasts, which redirects again to
-              /communications/sent. Two hops to reach the page the user came
-              from; go there directly. */}
-          <Link href="/communications/sent" className="text-un1t-subtle hover:text-un1t-text transition-colors">
-            <ArrowLeft size={20} />
-          </Link>
+    <div>
+      {/* COMMS-IA.1 — the shared send-detail chrome. This view used to render
+          bare, outside the Communications shell, with its own full-viewport
+          top bar; the name field and the send controls are body state, so they
+          ride in as slots. Back-link target unchanged (COMMSLAYOUT.4). */}
+      <SendDetailHeader
+        channel="whatsapp"
+        title={
           <input
             type="text"
             value={name}
             onChange={e => setName(e.target.value)}
             placeholder="Broadcast name..."
             disabled={isTerminal}
-            className="bg-transparent text-lg font-semibold text-un1t-text placeholder:text-un1t-muted focus:outline-none w-64 disabled:opacity-70"
+            className="bg-transparent text-lg font-semibold text-un1t-text placeholder:text-un1t-muted focus:outline-none w-64 max-w-full disabled:opacity-70"
           />
-          {broadcast?.status && (
-            <span className={`text-xs px-2 py-0.5 rounded-full ${
-              broadcast.status === 'sent' ? 'bg-green-500/20 text-green-700'
-                : broadcast.status === 'cancelled' ? 'bg-rose-500/20 text-rose-700'
-                : broadcast.status === 'scheduled' ? 'bg-blue-500/15 text-blue-700'
-                : 'bg-gray-500/20 text-gray-700'
-            }`}>
-              {broadcast.status}
-            </span>
-          )}
-        </div>
-
-        {!isTerminal && !isDripInFlight && (
-          <div className="flex items-center gap-2">
+        }
+        status={broadcast?.status ? (
+          <span className={`text-xs px-2 py-0.5 rounded-full ${
+            broadcast.status === 'sent' ? 'bg-green-500/20 text-green-700'
+              : broadcast.status === 'cancelled' ? 'bg-rose-500/20 text-rose-700'
+              : broadcast.status === 'scheduled' ? 'bg-blue-500/15 text-blue-700'
+              : 'bg-gray-500/20 text-gray-700'
+          }`}>
+            {broadcast.status}
+          </span>
+        ) : null}
+        actions={!isTerminal && !isDripInFlight ? (
+          <>
             <button
               type="button"
               onClick={handleSave}
@@ -281,9 +278,9 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
                 {sending ? 'Sending...' : 'Send Broadcast'}
               </button>
             )}
-          </div>
-        )}
-      </div>
+          </>
+        ) : null}
+      />
 
       {/* GAPS-P4 — quiet-hours advisory for "Send Broadcast", which fires
           immediately. This page has NO schedule picker (WhatsApp scheduling is
@@ -292,14 +289,14 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
           button. A drip is exempt: it paces itself inside its own daily
           window, so pressing send does not put a message on a phone now. */}
       {!isTerminal && !isScheduled && !isDripInFlight && broadcast?.delivery_mode !== 'drip' && (
-        <div className="px-5 pt-3">
+        <div className="mb-4">
           <SendQuietHoursNotice locationId={locationId} />
         </div>
       )}
 
       {/* WA-SCHEDULE — scheduled banner: when it goes out + how to stop it. */}
       {isScheduled && (
-        <div className="bg-blue-500/10 border-b border-blue-500/30 text-blue-700 text-sm px-5 py-2 flex items-center gap-2">
+        <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg text-blue-700 text-sm px-3 py-2 mb-4 flex items-center gap-2">
           <Clock size={14} className="shrink-0" />
           <span>
             Scheduled — goes out {broadcast?.scheduled_at
@@ -312,14 +309,14 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
       )}
 
       {error && (
-        <div className="bg-red-500/10 border-b border-red-500/30 text-red-700 text-sm px-5 py-2">
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg text-red-700 text-sm px-3 py-2 mb-4">
           {error}
         </div>
       )}
 
       {/* Tabs for sent broadcasts */}
       {isTerminal && (
-        <div className="flex border-b border-un1t-border bg-un1t-surface shrink-0">
+        <div className="flex border-b border-un1t-border mb-4">
           {[
             { key: 'results', label: 'Results' },
             { key: 'recipients', label: `Recipients (${broadcast.total_sent || 0})` },
@@ -328,7 +325,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
               type="button"
               key={t.key}
               onClick={() => setTab(t.key)}
-              className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+              className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
                 tab === t.key ? 'text-un1t-text border-un1t-text' : 'text-un1t-subtle border-transparent hover:text-un1t-text'
               }`}
             >
@@ -339,7 +336,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
       )}
 
       {/* Content */}
-      <div className="flex-1 overflow-auto p-6">
+      <div>
         {isTerminal && tab === 'results' && (
           <div className="max-w-3xl space-y-4">
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

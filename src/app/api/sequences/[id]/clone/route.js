@@ -2,7 +2,7 @@
 //
 // Clones an existing sequence (and all its steps) into a fresh
 // draft so the operator can dup-and-tweak instead of starting
-// over. Pairs with the Flow templates gallery: templates seed
+// over. Pairs with the Automation recipes gallery: recipes seed
 // new sequences from canned recipes, clone seeds new sequences
 // from the operator's already-customised ones.
 //

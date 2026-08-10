@@ -223,7 +223,7 @@ export default async function CommunicationsHub() {
             href="/communications/sent"
             icon={Megaphone}
             color="bg-cyan-500/20 text-cyan-700"
-            title="Sends"
+            title="Sent"
             desc={
               smsScheduled > 0
                 ? `${smsScheduled} scheduled · history of one-off sends`
