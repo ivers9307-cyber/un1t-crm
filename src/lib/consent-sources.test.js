@@ -1,0 +1,184 @@
+// GAPS-P7 — the source registry. These tests pin the thing that broke:
+// a `consent_log` opt_out row is not automatically a departure, and summing
+// the column blind turned a one-day data migration into a 5,536-person list
+// collapse in May 2026.
+//
+// The live vocabulary below is the fixture. If a new source appears in the
+// column and nobody maps it, `categoriseConsentSource` must answer 'unknown'
+// and the surface must show it, rather than the source quietly joining churn.
+
+import { describe, it, expect } from 'vitest'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
+import path from 'node:path'
+
+import {
+  CONSENT_SOURCE_CATEGORIES,
+  CONSENT_SOURCE_CATEGORY,
+  NET_LIST_CHANGE_CATEGORIES,
+  categoriseConsentSource,
+  sourcesInCategory,
+  countsTowardNetListChange,
+  consentSourceRpcArgs,
+} from './consent-sources.js'
+
+// Every source live in consent_log for channel email_marketing since
+// 2026-05-01, with its row count, as measured 2026-08-10.
+const LIVE_VOCABULARY = [
+  ['bulk_import', 3963, 'bulk'],
+  ['auto_classpass_backfill', 1533, 'bulk'],
+  ['auto_classpass', 82, 'policy'],
+  ['postmark_one_click_unsubscribe', 56, 'voluntary'],
+  ['event_form', 38, 'voluntary'],
+  ['one_click_unsubscribe', 27, 'voluntary'],
+  ['postmark_suppression_backfill', 23, 'bulk'],
+  ['postmark_hard_bounce', 18, 'deliverability'],
+  ['admin_panel', 4, 'voluntary'],
+  ['booking_form', 2, 'voluntary'],
+  ['leadcap1_scope_correction', 2, 'bulk'],
+  ['postmark_spam_complaint', 1, 'deliverability'],
+]
+
+describe('the live vocabulary is completely mapped', () => {
+  it.each(LIVE_VOCABULARY)('%s is categorised as %s', (source, _rows, category) => {
+    expect(categoriseConsentSource(source)).toBe(category)
+  })
+
+  it('leaves nothing in the live column unclassified', () => {
+    const unmapped = LIVE_VOCABULARY
+      .map(([source]) => source)
+      .filter((s) => categoriseConsentSource(s) === 'unknown')
+    expect(unmapped).toEqual([])
+  })
+
+  it('excludes the 5,521 bulk rows from the headline', () => {
+    // 3,963 + 1,533 + 23 on 2026-05-13, plus 2 corrections on 2026-08-06.
+    const bulkRows = LIVE_VOCABULARY
+      .filter(([, , c]) => c === 'bulk')
+      .reduce((t, [, rows]) => t + rows, 0)
+    expect(bulkRows).toBe(5521)
+    for (const [source] of LIVE_VOCABULARY.filter(([, , c]) => c === 'bulk')) {
+      expect(countsTowardNetListChange(source)).toBe(false)
+    }
+  })
+
+  it('counts 146 real departures across the window, not 5,749', () => {
+    const counted = LIVE_VOCABULARY
+      .filter(([source]) => countsTowardNetListChange(source))
+      .reduce((t, [, rows]) => t + rows, 0)
+    expect(counted).toBe(146)
+    const all = LIVE_VOCABULARY.reduce((t, [, rows]) => t + rows, 0)
+    expect(all).toBe(5749)
+  })
+})
+
+describe('what moves the net', () => {
+  it('is voluntary and deliverability, and only those', () => {
+    expect([...NET_LIST_CHANGE_CATEGORIES].sort()).toEqual(['deliverability', 'voluntary'])
+  })
+
+  it('keeps the ClassPass standing rule out of the headline', () => {
+    // A membership transition, one-way, written unconditionally rather than on
+    // a flip. It is shown on the page in its own column, not netted.
+    expect(categoriseConsentSource('auto_classpass')).toBe('policy')
+    expect(countsTowardNetListChange('auto_classpass')).toBe(false)
+  })
+
+  it('counts a permanent bounce and a spam report as real lost reach', () => {
+    expect(countsTowardNetListChange('postmark_hard_bounce')).toBe(true)
+    expect(countsTowardNetListChange('postmark_spam_complaint')).toBe(true)
+  })
+})
+
+describe('an unmapped source', () => {
+  it('answers unknown rather than falling into a category', () => {
+    expect(categoriseConsentSource('some_future_import_2027')).toBe('unknown')
+    expect(countsTowardNetListChange('some_future_import_2027')).toBe(false)
+  })
+
+  it('answers unknown for a null, a number or an empty string', () => {
+    for (const bad of [null, undefined, 42, '', {}]) {
+      expect(categoriseConsentSource(bad)).toBe(CONSENT_SOURCE_CATEGORIES.UNKNOWN)
+    }
+  })
+
+  it('is never included in any category array, so the RPC sees it as unknown', () => {
+    const everyListed = Object.values(consentSourceRpcArgs()).flat()
+    expect(everyListed).not.toContain('some_future_import_2027')
+    // The arrays together are exactly the registry, with nothing dropped.
+    expect(everyListed.slice().sort()).toEqual(Object.keys(CONSENT_SOURCE_CATEGORY).sort())
+  })
+
+  it('tolerates casing and padding rather than inventing a second unknown', () => {
+    expect(categoriseConsentSource('  BULK_IMPORT ')).toBe('bulk')
+  })
+})
+
+describe('the RPC arguments', () => {
+  it('name every parameter the function takes', () => {
+    expect(Object.keys(consentSourceRpcArgs()).sort()).toEqual([
+      'p_bulk_sources', 'p_deliverability_sources', 'p_policy_sources', 'p_voluntary_sources',
+    ])
+  })
+
+  it('are sorted, so the same call produces the same argument', () => {
+    const bulk = sourcesInCategory('bulk')
+    expect(bulk).toEqual([...bulk].sort())
+  })
+
+  it('put each source in exactly one array', () => {
+    const all = Object.values(consentSourceRpcArgs()).flat()
+    expect(new Set(all).size).toBe(all.length)
+  })
+})
+
+// ── Source scan: a new writer cannot introduce an unmapped source ────
+//
+// Same idiom as the consent-actions writer scan (GAPS-P6), and the same
+// honesty about its reach: this is a FLOOR, not proof. It finds a `source:`
+// literal sitting near a consent write in the same file, which today catches
+// 12 of the live sources. It does not see a source assembled into a variable,
+// passed down from a caller, or written by a Postgres trigger
+// (`auto_classpass` is invisible to any source scan). The live-vocabulary
+// fixture above is what covers those; this catches the common case, where
+// somebody adds a form or an import next to an existing one.
+
+const SRC = path.join(process.cwd(), 'src')
+
+function walk(dir, out = []) {
+  for (const entry of readdirSync(dir)) {
+    const full = path.join(dir, entry)
+    if (statSync(full).isDirectory()) walk(full, out)
+    else if (/\.(js|jsx)$/.test(entry) && !/\.test\.(js|jsx)$/.test(entry)) out.push(full)
+  }
+  return out
+}
+
+// A `source: '<literal>'` sitting within ~700 characters after something that
+// writes consent. The \b before `source` keeps `lead_source:` and `utm_source:`
+// out, since `_` is a word character.
+const CONSENT_CONTEXT = /(?:consent_log|applyMarketingPreferences(?:Bulk)?|applyFormMarketingConsent)[\s\S]{0,700}/g
+const SOURCE_LITERAL = /\bsource:\s*['"]([a-z0-9_]+)['"]/g
+
+function consentSourceLiterals() {
+  const found = new Set()
+  for (const file of walk(SRC)) {
+    const src = readFileSync(file, 'utf8')
+    for (const context of src.matchAll(CONSENT_CONTEXT)) {
+      for (const hit of context[0].matchAll(SOURCE_LITERAL)) found.add(hit[1])
+    }
+  }
+  return [...found].sort()
+}
+
+describe('consent sources written beside a consent write in src/', () => {
+  it('finds writers at all (the scan is not silently matching nothing)', () => {
+    // 12 today. If this drops the scan has stopped seeing the writers, which
+    // would turn the assertion below into a green no-op.
+    expect(consentSourceLiterals().length).toBeGreaterThanOrEqual(10)
+  })
+
+  it('maps all of them', () => {
+    const unmapped = consentSourceLiterals().filter((s) => categoriseConsentSource(s) === 'unknown')
+    expect(unmapped).toEqual([])
+  })
+})
