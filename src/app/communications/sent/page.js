@@ -1,7 +1,12 @@
-// PILLAR2 — unified "Sends" history. One list across SMS, WhatsApp and email
-// sends for the active location (replaces the three per-channel list pages,
-// which now redirect here). Email campaigns joined in Phase 2 and this is the
-// parent every channel detail view links back to (COMMSLAYOUT.4).
+// PILLAR2 — the unified "Sent" history. One list across SMS, WhatsApp and
+// email sends for the active location (replaces the three per-channel list
+// pages, which now redirect here). Email campaigns joined in Phase 2 and this
+// is the parent every channel detail view links back to (COMMSLAYOUT.4).
+//
+// COMMS-IA.1 — every row now opens a child of THIS route
+// (/communications/sent/[channel]/[id]) instead of one of three unrelated URL
+// spaces, so the detail views inherit this hub's shell and tab strip.
+// COMMS-IA.3 — the label is "Sent", matching the route it has always had.
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
@@ -37,13 +42,13 @@ export default async function SendsHistoryPage() {
   if (canSms && locationId) {
     const { data } = await db.from('sms_broadcasts').select(SELECT)
       .eq('location_id', locationId).order('created_at', { ascending: false }).limit(100)
-    for (const b of data || []) rows.push({ ...b, channel: 'sms', detail: `/communications/sms/broadcasts/${b.id}` })
+    for (const b of data || []) rows.push({ ...b, channel: 'sms', detail: `/communications/sent/sms/${b.id}` })
   }
   if (canWa && locationId) {
     const { data } = await db.from('whatsapp_broadcasts').select(`${SELECT}, delivery_summary, delivery_mode`)
       .eq('location_id', locationId).order('created_at', { ascending: false }).limit(100)
     for (const b of data || []) {
-      const row = { ...b, channel: 'whatsapp', detail: `/whatsapp/broadcasts/${b.id}` }
+      const row = { ...b, channel: 'whatsapp', detail: `/communications/sent/whatsapp/${b.id}` }
       // An in-flight drip's total_sent is a per-tick snapshot that lags the live
       // "dispatched" (sent+delivered+read) count the detail page shows. Recompute
       // it here so the list and the detail agree. Bounded — only in-flight drips.
@@ -77,7 +82,7 @@ export default async function SendsHistoryPage() {
         total_recipients: d.recipients,
         total_sent: d.sent,
         total_failed: d.bounced,
-        detail: `/email/campaigns/${c.id}`,
+        detail: `/communications/sent/email/${c.id}`,
       })
     }
   }
@@ -88,7 +93,7 @@ export default async function SendsHistoryPage() {
       <div className="flex items-start justify-between gap-4 mb-5">
         <div>
           <Link href="/communications" className="text-xs text-un1t-subtle hover:text-un1t-text">← Communications</Link>
-          <h1 className="text-xl font-semibold text-un1t-text mt-1">Sends</h1>
+          <h1 className="text-xl font-semibold text-un1t-text mt-1">Sent</h1>
           {/* COMMSLAYOUT.1 — email campaigns have been in this list since
               PILLAR2 Phase 2; the subtitle still said SMS + WhatsApp only. */}
           <p className="text-sm text-un1t-subtle">One-off SMS, WhatsApp and email sends at this location.</p>

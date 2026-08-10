@@ -13,11 +13,11 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import Link from 'next/link'
 import {
-  ArrowLeft, Save, Send, Users, MessageSquare,
+  Save, Send, Users,
   CheckCircle2, XCircle, Trash2, Ban, Calendar, Clock,
 } from 'lucide-react'
+import SendDetailHeader from './communications/SendDetailHeader'
 import AudienceBuilder from './AudienceBuilder'
 import AudienceCount from './communications/AudienceCount'
 import SendQuietHoursNotice from './communications/SendQuietHoursNotice'
@@ -117,7 +117,7 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
 
       if (!broadcastId && data.broadcast?.id) {
         setBroadcastId(data.broadcast.id)
-        window.history.replaceState(null, '', `/communications/sms/broadcasts/${data.broadcast.id}`)
+        window.history.replaceState(null, '', `/communications/sent/sms/${data.broadcast.id}`)
       }
     } catch (e) {
       setError(e.message)
@@ -201,7 +201,7 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
 
   async function handleCancel() {
     if (!broadcastId) {
-      router.push('/communications/sms/broadcasts')
+      router.push('/communications/sent')
       return
     }
     if (!confirm('Cancel this draft? It will be marked cancelled and no longer editable.')) return
@@ -226,7 +226,7 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
       const res = await fetch(`/api/sms/broadcasts/${broadcastId}`, { method: 'DELETE' })
       const data = await res.json()
       if (!data.success) throw new Error(data.error || 'Delete failed')
-      router.push('/communications/sms/broadcasts')
+      router.push('/communications/sent')
     } catch (e) {
       setError(e.message)
     }
@@ -234,27 +234,22 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
 
   return (
     <div>
-      {/* COMMSLAYOUT.4 — was `/communications/sms/broadcasts`, a retired list
-          that redirects to /communications/sent. Skip the hop, and name the
-          page it actually lands on. */}
-      <Link
-        href="/communications/sent"
-        className="inline-flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text mb-4"
-      >
-        <ArrowLeft size={16} /> Back to Sends
-      </Link>
-
-      <div className="flex items-start justify-between mb-4">
-        <div>
-          <h2 className="text-lg font-semibold flex items-center gap-2">
-            <MessageSquare size={20} className="text-cyan-400" />
-            {broadcastId ? (name || 'Untitled') : 'New SMS Broadcast'}
+      {/* COMMS-IA.1 — the shared send-detail chrome. Was a bespoke back-link
+          plus a bespoke title block here; the back-link target is unchanged
+          (COMMSLAYOUT.4 pointed it straight at the list with no stub hop). */}
+      <SendDetailHeader
+        channel="sms"
+        title={
+          <h2 className="text-lg font-semibold text-un1t-text truncate">
+            {broadcastId ? (name || 'Untitled') : 'New SMS broadcast'}
           </h2>
-          <p className="text-xs text-un1t-subtle mt-0.5">
-            Sender ID: <code className="text-un1t-text">{locationSenderId || 'not set — falling back to env'}</code>
+        }
+        meta={
+          <p className="text-xs text-un1t-subtle">
+            Sender ID: <code className="text-un1t-text">{locationSenderId || 'not set, falling back to env'}</code>
           </p>
-        </div>
-      </div>
+        }
+      />
 
       {/* Tabs */}
       <div className="flex gap-1 mb-4 border-b border-un1t-border">

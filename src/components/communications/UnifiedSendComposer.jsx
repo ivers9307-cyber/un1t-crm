@@ -159,7 +159,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   ), [useExplicit, people, filter])
 
   // Inline Unlayer editor for the email channel (the full editor stays at
-  // /email/campaigns/[id] for advanced options: from-name, preview text, test send).
+  // /communications/sent/email/[id] for advanced options: from-name, preview text, test send).
   const { ref: unlayerRef, loaded: unlayerLoaded, dirty: unlayerDirty, exportHtml: exportEmailHtml } = useUnlayerEditor({ mountId: 'unlayer-editor-composer', active: channel === 'email' })
 
   // COMMSFIX.D.4a — the Unlayer mount div renders only while channel ===
@@ -264,10 +264,10 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
           ...(scheduleMode === 'later' ? { scheduled_at: scheduledIso, status: 'scheduled' } : {}),
         })
         if (scheduleMode === 'later') {
-          setResult({ channel, mode: 'scheduled', when: scheduledIso, id: broadcast.id, detail: `/communications/sms/broadcasts/${broadcast.id}` })
+          setResult({ channel, mode: 'scheduled', when: scheduledIso, id: broadcast.id, detail: `/communications/sent/sms/${broadcast.id}` })
         } else {
           const data = await postJson(`/api/sms/broadcasts/${broadcast.id}/send`, {})
-          setResult({ channel, mode: 'sent', id: broadcast.id, detail: `/communications/sms/broadcasts/${broadcast.id}`, ...data })
+          setResult({ channel, mode: 'sent', id: broadcast.id, detail: `/communications/sent/sms/${broadcast.id}`, ...data })
         }
       } else if (channel === 'whatsapp') {
         const drip = waMode === 'drip'
@@ -290,15 +290,15 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
           ...(scheduled ? { scheduled_at: scheduledIso, status: 'scheduled' } : {}),
         })
         if (scheduled) {
-          setResult({ channel, mode: 'scheduled', when: scheduledIso, drip, id: broadcast.id, detail: `/whatsapp/broadcasts/${broadcast.id}` })
+          setResult({ channel, mode: 'scheduled', when: scheduledIso, drip, id: broadcast.id, detail: `/communications/sent/whatsapp/${broadcast.id}` })
         } else if (drip) {
           // Create set status='sending'; the run-whatsapp-broadcasts cron drives
           // it during the window. No /send call for a drip.
-          setResult({ channel, mode: 'drip', id: broadcast.id, detail: `/whatsapp/broadcasts/${broadcast.id}`,
+          setResult({ channel, mode: 'drip', id: broadcast.id, detail: `/communications/sent/whatsapp/${broadcast.id}`,
             dailyCap: Number(dailyCap) || 500, windowStart, windowEnd })
         } else {
           const data = await postJson(`/api/whatsapp/broadcasts/${broadcast.id}/send`, {})
-          setResult({ channel, mode: 'sent', id: broadcast.id, detail: `/whatsapp/broadcasts/${broadcast.id}`, ...data })
+          setResult({ channel, mode: 'sent', id: broadcast.id, detail: `/communications/sent/whatsapp/${broadcast.id}`, ...data })
         }
       } else {
         // Email — design inline with Unlayer, create the campaign, then queue
@@ -317,7 +317,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
           ...(action === 'schedule' ? { scheduled_at: scheduledIso } : {}),
         })
         setResult({
-          channel, id: data.id, detail: `/email/campaigns/${data.id}`,
+          channel, id: data.id, detail: `/communications/sent/email/${data.id}`,
           mode: action === 'schedule' ? 'scheduled' : 'sent', when: scheduledIso, queued: action === 'send',
           resendWait: useResend ? Number(resendWaitHours) : null,
         })
@@ -339,7 +339,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         name: defaultLabel(), subject, audience_filter: effectiveFilter, location_id: locationId,
         html_content: html, design_json: design, action: 'draft', email_type: emailType,
       })
-      router.push(`/email/campaigns/${data.id}?edit=1`)
+      router.push(`/communications/sent/email/${data.id}?edit=1`)
     } catch (e) { setError(e?.message || 'Could not open the editor'); setBusy(false) }
   }
 

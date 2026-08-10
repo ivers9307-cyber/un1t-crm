@@ -1,94 +1,24 @@
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { redirect, notFound } from 'next/navigation'
-import CampaignDetail from '@/components/CampaignDetail'
-import CampaignEditor from '@/components/CampaignEditor'
-import { loadCampaignRecipientStats, campaignDisplayStats } from '@/lib/campaign-display-stats'
+// COMMS-IA.1 — RETIRED. The email campaign detail/editor moved into the
+// consolidated send-detail route, /communications/sent/email/[id], so all three
+// channels share one chrome under the list they were opened from.
+//
+// Kept as a redirect stub — the same mechanism the retired hubs (/email,
+// /whatsapp) and lists (/communications/campaigns, /communications/broadcasts)
+// already use — because these are live URLs: operators bookmark them and
+// campaign notification email links straight at them. `?edit=1` is carried
+// across so a bookmarked draft still opens in the editor.
+//
+// No auth check here on purpose: this file reads nothing and renders nothing,
+// and the destination carries the gate (the /communications layout's auth
+// redirect, the `email` permission check, and the location IDOR guard).
+
+import { redirect } from 'next/navigation'
 
 export const dynamic = 'force-dynamic'
 
-export default async function CampaignDetailPage(props) {
-  const searchParams = await props.searchParams;
-  const params = await props.params;
-  const user = await getCurrentUser()
-  if (!user) redirect('/login')
-
-  const db = createServerClient()
-  const { data: campaign } = await db.from('campaigns')
-    .select('*')
-    .eq('id', params.id)
-    .single()
-
-  // IDOR guard — campaign (and its recipients) must belong to a location the user
-  // can access. 404 (not 403) so foreign ids aren't enumerable. Must run BEFORE the
-  // draft/edit branch below, or a foreign draft would open in the editor.
-  if (!campaign || assertLocationAccess(user, campaign.location_id)) notFound()
-
-  // CAMPAIGN.4 — drafts (and any URL with ?edit=1) open in the editor.
-  // Previously this rendered <CampaignDetail> for drafts, which then
-  // tried to router.replace(...?edit=1) — but nothing actually reads
-  // ?edit=1 to render the editor, so the page sat blank.
-  const editRequested = searchParams?.edit === '1' || searchParams?.edit === 'true'
-  const isDraft = campaign.status === 'draft'
-
-  if (isDraft || editRequested) {
-    return (
-      <CampaignEditor
-        campaign={campaign}
-        locationId={campaign.location_id || user.activeLocation?.id}
-        userId={user.id}
-      />
-    )
-  }
-
-  // Get recipients for sent campaigns
-  const { data: recipients } = await db.from('campaign_recipients')
-    .select('*, contacts(name, email)')
-    .eq('campaign_id', params.id)
-    .order('sent_at', { ascending: false })
-    .limit(100)
-
-  // REPORT-SOT.2 — the displayed figures come from campaign_recipients, not
-  // from campaigns.total_*. The counters miss every send-time rejection (they
-  // are counted from email_sends, which never gets a row for one), so this
-  // page was reporting 0 bounces on a campaign that refused 40 addresses. The
-  // rpc is safe to call with this id: the IDOR guard above already resolved
-  // the campaign through assertLocationAccess.
-  const recipientStats = await loadCampaignRecipientStats(db, [params.id])
-
-  // CAMPAIGN-AB — per-variant sends/opens for the A/B panel (mig 398).
-  // Same email_sends-sourced rollup the send cron uses at decide time.
-  let abStats = null
-  if (campaign.ab_subject_b) {
-    const { data } = await db.rpc('campaign_ab_variant_stats', { p_campaign_id: params.id })
-    abStats = data || []
-  }
-
-  // CAMPAIGN-RESEND (mig 506) — parent/child linkage for the banner and
-  // the "Resend of …" header line. At most one child (partial unique idx).
-  const { data: resendChild } = await db.from('campaigns')
-    .select('id, name, status')
-    .eq('parent_campaign_id', params.id)
-    .maybeSingle()
-  let resendParent = null
-  if (campaign.parent_campaign_id) {
-    const { data } = await db.from('campaigns')
-      .select('id, name')
-      .eq('id', campaign.parent_campaign_id)
-      .maybeSingle()
-    resendParent = data
-  }
-
-  return (
-    <CampaignDetail
-      campaign={campaign}
-      recipients={recipients || []}
-      stats={campaignDisplayStats(campaign, recipientStats)}
-      abStats={abStats}
-      resendChild={resendChild}
-      resendParent={resendParent}
-      locationId={user.activeLocation?.id}
-      userId={user.id}
-    />
-  )
+export default async function CampaignDetailRedirect(props) {
+  const params = await props.params
+  const searchParams = (await props.searchParams) || {}
+  const edit = searchParams.edit === '1' || searchParams.edit === 'true'
+  redirect(`/communications/sent/email/${params.id}${edit ? '?edit=1' : ''}`)
 }

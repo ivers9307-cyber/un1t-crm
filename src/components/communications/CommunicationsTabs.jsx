@@ -37,7 +37,7 @@ export default function CommunicationsTabs({ canSms, canEmail, canWhatsapp, canE
     // PILLAR2: the unified audience-first send + its history replace the old
     // per-channel Campaigns / Broadcasts tabs.
     canSend     && { id: 'send',       label: 'Send',       href: '/communications/send' },
-    canSend     && { id: 'sent',       label: 'Sends',      href: '/communications/sent' },
+    canSend     && { id: 'sent',       label: 'Sent',       href: '/communications/sent' },
     // UIX-P1b: one unified WhatsApp + Instagram queue — the separate
     // Instagram tab retired (/communications/instagram redirects here).
     canWhatsapp && { id: 'inbox',      label: 'Inbox',      href: '/communications/inbox', badge: inboxActionCount },
@@ -45,12 +45,16 @@ export default function CommunicationsTabs({ canSms, canEmail, canWhatsapp, canE
     // not the marketing `email` one, so it appears for the people who
     // actually answer accounts@/sales@ and for nobody else.
     //
-    // INBOX-SPLIT.1 — labelled "Email", not "Tickets": operators think in
-    // channels, and this is now the ONLY place email is worked (the unified
-    // Inbox is WhatsApp + Instagram only). "Ticket" stays the name of the
-    // DATA MODEL — the route, the API and the `email_tickets` table are all
-    // deliberately unchanged.
-    canEmailInbox && { id: 'tickets',  label: 'Email',      href: '/communications/tickets', badge: emailNeedsReplyCount },
+    // INBOX-SPLIT.1 chose "Email" over "Tickets" on the grounds that operators
+    // think in channels. COMMS-IA.3 REVERSES the label (not the reasoning): the
+    // hub now has "Send", "Sent" and "Templates" all sitting next to it, and a
+    // bare "Email" beside them reads as "email sending" rather than "the studio
+    // mailbox" — it was the one tab whose name did not say what you do there.
+    // "Email inbox" keeps the channel word operators look for and adds the
+    // thing that distinguishes it. "Tickets" is still rejected for the original
+    // reason, and "Ticket" still stays the name of the DATA MODEL — the route,
+    // the API and the `email_tickets` table are deliberately unchanged.
+    canEmailInbox && { id: 'tickets',  label: 'Email inbox', href: '/communications/tickets', badge: emailNeedsReplyCount },
     (canEmail || canWhatsapp) && { id: 'templates', label: 'Templates', href: '/communications/templates' },
     // Segments tab (mig 085, moved from top-level /segments).
     //

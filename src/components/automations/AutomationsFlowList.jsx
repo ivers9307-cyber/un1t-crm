@@ -39,7 +39,7 @@ export default function AutomationsFlowList({ sequences }) {
             className="inline-flex items-center gap-2 border border-un1t-border text-un1t-subtle text-sm font-medium px-4 py-2 rounded-lg hover:text-un1t-text hover:border-un1t-muted transition-colors"
           >
             <LayoutTemplate size={16} />
-            Browse templates
+            Browse recipes
           </Link>
           <SequenceTemplatePicker />
           <NewSequenceButton className="flex items-center gap-2 bg-un1t-text text-un1t-bg text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors disabled:opacity-60" />

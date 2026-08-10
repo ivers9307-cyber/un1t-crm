@@ -3,7 +3,7 @@
 // CloneSequenceButton — small icon button on each sequence row
 // in /automations. Posts to /api/sequences/[id]/clone
 // and routes the operator into the freshly-created draft so they
-// can rename and tweak. Pairs with the Flow templates gallery:
+// can rename and tweak. Pairs with the Automation recipes gallery:
 // templates seed new sequences from canned recipes; this clones
 // the operator's already-customised sequences for dup-and-tweak.
 //

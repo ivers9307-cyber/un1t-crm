@@ -4,12 +4,12 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
 import { isoToLocalDatetime, localDatetimeToIso } from '@/lib/datetime-local'
-import { ArrowLeft, Save, Send, Users, Code, Paintbrush, Mail, Loader2, CheckCircle2, AlertCircle, Calendar, X, Trash2 } from 'lucide-react'
+import { Save, Send, Users, Code, Paintbrush, Mail, Loader2, CheckCircle2, AlertCircle, Calendar, X, Trash2 } from 'lucide-react'
+import SendDetailHeader from './communications/SendDetailHeader'
 import AudienceBuilder from './AudienceBuilder'
 import SendQuietHoursNotice from './communications/SendQuietHoursNotice'
 import CopyAssist from './communications/CopyAssist'
 import { stripUnsetFilterRows } from '@/lib/audience-filter'
-import Link from 'next/link'
 
 // FILTER-P1.6 — what the send path ACTUALLY gates on, per
 // buildAudienceQueryAsync (src/lib/postmark.js): the campaign's location, the
@@ -284,7 +284,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
       if (!campaignId) {
         setCampaignId(result.data.id)
         // Update URL without navigation
-        window.history.replaceState(null, '', `/email/campaigns/${result.data.id}`)
+        window.history.replaceState(null, '', `/communications/sent/email/${result.data.id}`)
       }
 
       // CAMPAIGN.2 — visible save confirmation. Cleared after 3s.
@@ -428,9 +428,10 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
     try {
       const { error: e } = await db.from('campaigns').delete().eq('id', campaignId)
       if (e) throw new Error(e.message)
-      // COMMSFIX.D.3c — /email/campaigns has no page.js (the list was retired
-      // to /communications/sent), so deleting a draft landed the operator on
-      // the Next.js 404 and read as "did the delete break something?".
+      // COMMSFIX.D.3c — deleting a draft used to land the operator on
+      // /email/campaigns, which has no page.js (the list was retired), so they
+      // got the Next.js 404 and read it as "did the delete break something?".
+      // The Sent list is where the draft was opened from; go straight there.
       router.push('/communications/sent')
     } catch (err) {
       setError(err.message)
@@ -569,26 +570,26 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
   ]
 
   return (
-    <div className="flex flex-col h-screen">
-      {/* Top Bar */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-border bg-un1t-surface shrink-0">
-        <div className="flex items-center gap-4">
-          {/* COMMSLAYOUT.4 — was `/email`, the retired hub stub. A draft is
-              opened from the Sends list, so that is where "back" belongs. */}
-          <Link href="/communications/sent" className="text-un1t-subtle hover:text-un1t-text transition-colors">
-            <ArrowLeft size={20} />
-          </Link>
+    <div>
+      {/* COMMS-IA.1 — the shared send-detail chrome. This editor used to take
+          the full viewport with a top bar of its own; it now renders inside the
+          Communications shell like its SMS and WhatsApp siblings. The name
+          field and the whole action rail are body state, so they ride in as
+          slots. Back-link target unchanged (COMMSLAYOUT.4). */}
+      <SendDetailHeader
+        channel="email"
+        title={
           <input
             type="text"
             value={name}
             onChange={e => setName(e.target.value)}
             placeholder="Campaign name..."
-            className="bg-transparent text-lg font-semibold text-un1t-text placeholder:text-un1t-muted focus:outline-none w-64"
+            className="bg-transparent text-lg font-semibold text-un1t-text placeholder:text-un1t-muted focus:outline-none w-64 max-w-full"
           />
-          <span className="text-xs bg-un1t-border text-un1t-subtle px-2 py-0.5 rounded-full">Draft</span>
-        </div>
-
-        <div className="flex items-center gap-2">
+        }
+        status={<span className="text-xs bg-un1t-border text-un1t-subtle px-2 py-0.5 rounded-full">Draft</span>}
+        actions={
+          <div className="flex items-center gap-2 flex-wrap justify-end">
           {audienceCount !== null && (
             <span className="text-xs text-un1t-subtle mr-2">
               <Users size={12} className="inline mr-1" />
@@ -708,8 +709,9 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                 : 'Cancelled'}
             </span>
           )}
-        </div>
-      </div>
+          </div>
+        }
+      />
 
       {/* GAPS-P4 — quiet-hours advisory, sitting under the action bar so it is
           in the same glance as "Send Campaign" and the schedule tray. Only on
@@ -718,7 +720,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
           we judge now, which is what "Send Campaign" would do. It never
           disables the button. */}
       {campaignStatus === 'draft' && (
-        <div className="px-5 pt-3">
+        <div className="mb-4">
           <SendQuietHoursNotice
             locationId={locationId}
             at={scheduleOpen && scheduleAt ? localDatetimeToIso(scheduleAt) : null}
@@ -732,7 +734,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
 
       {/* CAMPAIGN.13 — schedule tray (mirrors the test-send tray). */}
       {scheduleOpen && (
-        <div className="bg-un1t-surface border-b border-un1t-border px-5 py-3 flex items-center gap-3">
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg px-3 py-3 mb-4 flex items-center gap-3 flex-wrap">
           <Calendar size={14} className="text-un1t-subtle" />
           <span className="text-sm text-un1t-subtle">Send at:</span>
           <input
@@ -764,7 +766,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
           if blank), fire it, and see the status without leaving the
           editor view. */}
       {testOpen && (
-        <div className="bg-un1t-surface border-b border-un1t-border px-5 py-3 flex items-center gap-3">
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg px-3 py-3 mb-4 flex items-center gap-3 flex-wrap">
           <Mail size={14} className="text-un1t-subtle" />
           <span className="text-sm text-un1t-subtle">Send a test copy to:</span>
           <input
@@ -798,19 +800,19 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
       )}
 
       {error && (
-        <div className="bg-red-500/10 border-b border-red-500/30 text-red-700 text-sm px-5 py-2">
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg text-red-700 text-sm px-3 py-2 mb-4">
           {error}
         </div>
       )}
 
       {/* Tabs */}
-      <div className="flex border-b border-un1t-border bg-un1t-surface shrink-0">
+      <div className="flex border-b border-un1t-border">
         {tabs.map(t => (
           <button
             type="button"
             key={t.key}
             onClick={() => switchTab(t.key)}
-            className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
               tab === t.key
                 ? 'text-un1t-text border-un1t-text'
                 : 'text-un1t-subtle border-transparent hover:text-un1t-text'
@@ -822,7 +824,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-auto">
+      <div>
         {tab === 'design' && (
           <div className="h-full flex flex-col">
             {/* Visual/Code toggle */}

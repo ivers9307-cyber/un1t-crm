@@ -5,9 +5,10 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
 import {
-  ArrowLeft, Mail, Eye, MousePointerClick, AlertTriangle,
+  Mail, Eye, MousePointerClick, AlertTriangle,
   Ban, Send, CheckCircle2, XCircle, Users, RotateCcw, X, Clock, SkipForward, Loader2
 } from 'lucide-react'
+import SendDetailHeader from './communications/SendDetailHeader'
 // COMMSFIX.F.4 — per-link click report (mig 510), self-contained so this
 // file's diff stays small while #1314 rewrites the header/controls region.
 import CampaignLinkReport from './CampaignLinkReport.jsx'
@@ -200,10 +201,10 @@ export default function CampaignDetail({ campaign, recipients = [], stats = null
   // explicitly rather than returning null and showing a blank page.
   if (campaign.status === 'draft') {
     if (typeof window !== 'undefined') {
-      router.replace(`/email/campaigns/${campaign.id}?edit=1`)
+      router.replace(`/communications/sent/email/${campaign.id}?edit=1`)
     }
     return (
-      <div className="flex items-center justify-center h-screen text-un1t-subtle">
+      <div className="py-16 text-center text-un1t-subtle">
         Opening draft editor…
       </div>
     )
@@ -231,33 +232,20 @@ export default function CampaignDetail({ campaign, recipients = [], stats = null
   ]
 
   return (
-    <div className="flex flex-col h-screen">
-      {/* Top bar */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-border bg-un1t-surface shrink-0">
-        <div className="flex items-center gap-4">
-          {/* COMMSLAYOUT.4 — was `/email`, a retired hub whose stub redirects to
-              /communications: a hop, and one level too high. This campaign was
-              opened from the unified Sends list, so that is one level up. */}
-          <Link href="/communications/sent" className="text-un1t-subtle hover:text-un1t-text transition-colors">
-            <ArrowLeft size={20} />
-          </Link>
-          <div>
-            <h2 className="text-lg font-semibold">{campaign.name}</h2>
-            <p className="text-xs text-un1t-subtle">{campaign.subject || 'No subject'}</p>
-            {resendParent && (
-              <p className="text-xs text-un1t-subtle flex items-center gap-1 mt-0.5">
-                <RotateCcw size={11} />
-                Resend of{' '}
-                <Link href={`/email/campaigns/${resendParent.id}`} className="underline hover:text-un1t-text">
-                  {resendParent.name}
-                </Link>
-                {' '}— non-openers only
-              </p>
-            )}
+    <div>
+      {/* COMMS-IA.1 — the shared send-detail chrome. This view used to take the
+          full viewport with a top bar of its own; it now renders inside the
+          Communications shell like its SMS and WhatsApp siblings. The campaign
+          controls (stop / retry) are body state, so they ride in as actions. */}
+      <SendDetailHeader
+        channel="email"
+        title={
+          <div className="min-w-0">
+            <h2 className="text-lg font-semibold text-un1t-text truncate">{campaign.name}</h2>
+            <p className="text-xs text-un1t-subtle truncate">{campaign.subject || 'No subject'}</p>
           </div>
-        </div>
-        <div className="flex items-center gap-3">
-          <span className="text-xs text-un1t-subtle">{sentDate}</span>
+        }
+        status={
           <span
             data-testid="campaign-status-chip"
             title={campaign.last_error || undefined}
@@ -265,49 +253,68 @@ export default function CampaignDetail({ campaign, recipients = [], stats = null
           >
             {statusChip.label}
           </span>
-          {stoppable && (
-            <button
-              type="button"
-              data-testid="campaign-cancel"
-              onClick={stopCampaign}
-              disabled={stopBusy || !!campaign.cancel_requested_at}
-              className="flex items-center gap-1.5 text-xs text-rose-700 border border-un1t-border hover:border-rose-500/40 px-3 py-1.5 rounded-md transition-colors disabled:opacity-40"
-            >
-              {stopBusy ? <Loader2 size={13} className="animate-spin" /> : <X size={13} />}
-              {campaign.cancel_requested_at
-                ? 'Cancelling…'
-                : status === 'scheduled' ? 'Unschedule' : 'Stop sending'}
-            </button>
-          )}
-          {status === 'failed' && (
-            <button
-              type="button"
-              data-testid="campaign-resend-failed"
-              onClick={resendFailed}
-              disabled={stopBusy}
-              className="flex items-center gap-1.5 text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border hover:border-un1t-text/30 px-3 py-1.5 rounded-md transition-colors disabled:opacity-40"
-            >
-              <RotateCcw size={13} />
-              Try again
-            </button>
-          )}
-        </div>
-      </div>
+        }
+        meta={
+          <>
+            <p className="text-xs text-un1t-subtle">{sentDate}</p>
+            {resendParent && (
+              <p className="text-xs text-un1t-subtle flex items-center gap-1 mt-0.5">
+                <RotateCcw size={11} />
+                Resend of{' '}
+                <Link href={`/communications/sent/email/${resendParent.id}`} className="underline hover:text-un1t-text">
+                  {resendParent.name}
+                </Link>
+                {' '}(non-openers only)
+              </p>
+            )}
+          </>
+        }
+        actions={
+          <>
+            {stoppable && (
+              <button
+                type="button"
+                data-testid="campaign-cancel"
+                onClick={stopCampaign}
+                disabled={stopBusy || !!campaign.cancel_requested_at}
+                className="flex items-center gap-1.5 text-xs text-rose-700 border border-un1t-border hover:border-rose-500/40 px-3 py-1.5 rounded-md transition-colors disabled:opacity-40"
+              >
+                {stopBusy ? <Loader2 size={13} className="animate-spin" /> : <X size={13} />}
+                {campaign.cancel_requested_at
+                  ? 'Cancelling…'
+                  : status === 'scheduled' ? 'Unschedule' : 'Stop sending'}
+              </button>
+            )}
+            {status === 'failed' && (
+              <button
+                type="button"
+                data-testid="campaign-resend-failed"
+                onClick={resendFailed}
+                disabled={stopBusy}
+                className="flex items-center gap-1.5 text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border hover:border-un1t-text/30 px-3 py-1.5 rounded-md transition-colors disabled:opacity-40"
+              >
+                <RotateCcw size={13} />
+                Try again
+              </button>
+            )}
+          </>
+        }
+      />
 
       {(actionError || (status === 'failed' && campaign.last_error)) && (
-        <div className="bg-red-500/10 border-b border-red-500/30 text-red-700 text-sm px-5 py-2 shrink-0">
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg text-red-700 text-sm px-3 py-2 mb-4">
           {actionError || `This campaign failed to send: ${campaign.last_error}`}
         </div>
       )}
 
       {/* Tabs */}
-      <div className="flex border-b border-un1t-border bg-un1t-surface shrink-0">
+      <div className="flex border-b border-un1t-border">
         {tabs.map(t => (
           <button
             type="button"
             key={t.key}
             onClick={() => setTab(t.key)}
-            className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
               tab === t.key
                 ? 'text-un1t-text border-un1t-text'
                 : 'text-un1t-subtle border-transparent hover:text-un1t-text'
@@ -319,7 +326,7 @@ export default function CampaignDetail({ campaign, recipients = [], stats = null
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-auto">
+      <div>
         {tab === 'overview' && (
           <div className="p-6 space-y-6">
             {/* CAMPAIGN-RESEND — pending / fired resend state */}
@@ -352,7 +359,7 @@ export default function CampaignDetail({ campaign, recipients = [], stats = null
                 <RotateCcw size={16} className="text-un1t-subtle shrink-0" />
                 <span className="text-un1t-subtle">
                   Resent to non-openers —{' '}
-                  <Link href={`/email/campaigns/${resendChild.id}`} className="text-un1t-text underline">
+                  <Link href={`/communications/sent/email/${resendChild.id}`} className="text-un1t-text underline">
                     {resendChild.name}
                   </Link>
                   {resendChild.status !== 'sent' && <span className="capitalize"> ({resendChild.status})</span>}

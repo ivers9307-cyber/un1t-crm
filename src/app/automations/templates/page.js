@@ -1,14 +1,21 @@
-// /automations/templates — flow templates gallery.
+// /automations/templates — the Automation recipes gallery.
 //
 // Operator-facing browse-and-install surface for the pre-built
 // sequence recipes in src/lib/sequence-templates.js. Server-
 // rendered list of cards grouped by category; each card has an
-// "Install" button that clones the template into a fresh draft
+// "Install" button that clones the recipe into a fresh draft
 // automation and lands the operator in the editor.
+//
+// COMMS-IA.4 — the operator-facing word here is RECIPE, not template.
+// "Templates" means email + WhatsApp content (/communications/templates),
+// and one word for two unrelated things sent people to the wrong page.
+// The route, the API, SEQUENCE_TEMPLATES and every identifier are
+// deliberately unchanged — this was a labels-only rename, and "recipe" is
+// the word sequence-templates.js and this page's own copy already used.
 //
 // The older SequenceTemplatePicker modal on the automations home
 // still works for muscle-memory; this page is the discoverable
-// home for templates so operators can scan + compare without
+// home for recipes so operators can scan + compare without
 // being inside the modal.
 
 import Link from 'next/link'
@@ -63,14 +70,14 @@ const stepMeta = {
   // through to the generic chip below.
 }
 
-export default async function FlowTemplatesGallery() {
+export default async function AutomationRecipesGallery() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   // Same permission gate as the sequences list page — operators
-  // who can manage email sequences can install templates.
+  // who can manage email sequences can install recipes.
   if (!hasPermission(user, 'email')) redirect('/communications')
 
-  // Group templates by category, preserving the order declared in
+  // Group recipes by category, preserving the order declared in
   // TEMPLATE_CATEGORIES. Anything with a category not in the list
   // ends up in a trailing "Other" bucket so it's still visible.
   const groups = new Map()
@@ -93,7 +100,7 @@ export default async function FlowTemplatesGallery() {
           >
             <ChevronLeft size={12} /> Back to automations
           </Link>
-          <h2 className="text-lg font-semibold">Flow templates</h2>
+          <h2 className="text-lg font-semibold">Automation recipes</h2>
           <p className="text-xs text-un1t-subtle mt-0.5">
             Pre-built automation recipes. Install one, then edit it like any other automation — triggers, steps, copy, timing all yours to change.
           </p>
@@ -106,7 +113,7 @@ export default async function FlowTemplatesGallery() {
             <div className="text-[11px] uppercase tracking-wider text-un1t-subtle mb-3">{cat}</div>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
               {items.map((t) => (
-                <TemplateCard key={t.id} template={t} />
+                <RecipeCard key={t.id} template={t} />
               ))}
             </div>
           </section>
@@ -116,7 +123,7 @@ export default async function FlowTemplatesGallery() {
   )
 }
 
-function TemplateCard({ template }) {
+function RecipeCard({ template }) {
   // Build a compact summary of the steps as a row of chips.
   const stepChips = (template.steps || []).map((s, i) => {
     const meta = stepMeta[s.step_type] || { icon: Zap, label: s.step_type }
