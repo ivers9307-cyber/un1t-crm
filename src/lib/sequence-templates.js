@@ -417,6 +417,69 @@ export const SEQUENCE_TEMPLATES = [
     ],
   },
 
+  // GAPS-P3.4 — first class booked, now get them to the second one.
+  //
+  // Triggers on the glofox_first_booking PLATFORM tag, which the Glofox
+  // webhook stamps once-ever on the first booking it sees for a contact
+  // (route.js step 6c, then step 8 fires the tag_added sequences). That
+  // is deliberately NOT the same signal as the first_booking trigger
+  // used by first_booking_welcome: triggerSequencesForFirstBooking is
+  // called only from the CRM's own booking routes, so a class booked in
+  // the Glofox app never reaches it. This recipe covers the Glofox side,
+  // which is where members actually book classes.
+  //
+  // Goal is the classifier-derived 'second_class' stage (mig 350), so a
+  // contact who attends their second class exits as goal_met rather than
+  // being chased through the rest of the drip.
+  //
+  // COMMSFIX.E.4 discipline: every offset below is relative to the
+  // BOOKING, which may be days before the class itself. No step may say
+  // "hope you enjoyed yesterday" or name a day.
+  {
+    id: 'first_class_booked_second_class_push',
+    category: 'Lead conversion',
+    name: 'First class booked → push for the second',
+    description: 'Fires on the platform tag glofox_first_booking, stamped once ever on a contact\'s first booking in the booking system. Three touches: what to expect before the class, a prompt to get the next one in the diary, then a short SMS nudge. Exits automatically once they reach the 2nd Class stage. The separate first-booking welcome template only sees bookings made in the CRM, so this is the one that covers classes booked in the Glofox app.',
+    trigger_type: 'tag_added',
+    trigger_config: { tag: 'glofox_first_booking' },
+    goal_config: { type: 'pipeline_stage', value: 'second_class' },
+    re_enrolment_cooldown_days: 365,
+    send_window: { start_hour: 9, end_hour: 20, skip_days: [] },
+    steps: [
+      {
+        step_type: 'email',
+        delay_days: 0,
+        delay_hours: 2,
+        subject: 'You\'re booked in, {{first_name}}',
+        html_content: `<p>Hi {{first_name}},</p>
+<p>Your first class is booked. Two things worth knowing before you come in.</p>
+<ul>
+  <li>Get there 10 minutes early so a coach can walk you round the floor and set your station up.</li>
+  <li>Bring water and normal gym kit. Everything else is here.</li>
+</ul>
+<p>Scale anything you want to. Nobody is watching the clock but you.</p>
+<p>UN1T {{location_name}}</p>`,
+      },
+      {
+        step_type: 'email',
+        delay_days: 4,
+        delay_hours: 0,
+        subject: 'The second class is the one that sticks',
+        html_content: `<p>Hi {{first_name}},</p>
+<p>One class tells you what the room feels like. The second one is where it starts turning into a habit, and it is the one most people never get round to booking.</p>
+<p>Pick a slot that fits your week and get it in the diary now, while you still remember how it felt.</p>
+<p>Stuck on which class to try next? Reply and a coach will point you at one.</p>
+<p>UN1T {{location_name}}</p>`,
+      },
+      {
+        step_type: 'sms',
+        delay_days: 5,
+        delay_hours: 0,
+        sms_body: 'UN1T: {{first_name}}, got your next class booked yet? Reply with a day that suits and we\'ll sort it.',
+      },
+    ],
+  },
+
   // ─── Race ────────────────────────────────────────────────────
   {
     id: 'race_welcome',
@@ -542,7 +605,112 @@ export const SEQUENCE_TEMPLATES = [
     ],
   },
 
+  // GAPS-P3.4 — the 30-day check-in, filling the gap between the welcome
+  // drip (days 0 to 7) and the 1-year anniversary.
+  //
+  // Anniversary trigger on joined_at, which is the real membership start
+  // date and populated for 98% of contacts. NOT lead_created_at: that is
+  // the CRM row-import timestamp and would fire this for everyone at
+  // once (see anniversary_one_year's comment).
+  //
+  // The audience gate keeps it honest. "One month in, nice work" landing
+  // on someone who cancelled or paused in week two reads as a system
+  // that is not paying attention, so the recipe only continues for
+  // contacts whose membership is still active. SEQEXIT.1: the audience
+  // is re-checked before every step, so someone who cancels mid-drip
+  // leaves rather than getting the rest of it.
+  {
+    id: 'new_member_30_day_checkin',
+    category: 'Welcome',
+    name: 'New member: 30-day check-in',
+    description: 'Fires 30 days after the contact joined (contacts.joined_at). A short check-in email asking how the first month went, then an SMS nudge to get the next few classes booked. Only continues for members whose membership is still active, so it will not congratulate someone who has already cancelled or paused.',
+    trigger_type: 'anniversary',
+    trigger_config: { from_field: 'joined_at', days_after: 30 },
+    audience_filter: { logic: 'and', filters: [{ field: 'glofox_membership_state', op: 'eq', value: 'active' }] },
+    goal_config: null,
+    re_enrolment_cooldown_days: 365,
+    send_window: { start_hour: 9, end_hour: 20, skip_days: [] },
+    steps: [
+      {
+        step_type: 'email',
+        delay_days: 0,
+        delay_hours: 0,
+        subject: 'One month in, {{first_name}}',
+        html_content: `<p>Hi {{first_name}},</p>
+<p>You have been training with us a month. That is usually the point where it stops being a new thing you are trying and starts being part of the week.</p>
+<p>Two questions, and a one-line reply is plenty:</p>
+<ul>
+  <li>Are you getting in as often as you planned to?</li>
+  <li>Is anything getting in the way? Times, classes, injuries, anything.</li>
+</ul>
+<p>A coach reads every reply and will sort what they can.</p>
+<p>UN1T {{location_name}}</p>`,
+      },
+      {
+        step_type: 'sms',
+        delay_days: 3,
+        delay_hours: 0,
+        sms_body: 'UN1T: {{first_name}}, month one done. Worth getting next week\'s classes in the diary now. Reply if you want a hand picking them.',
+      },
+    ],
+  },
+
   // ─── Recovery / Win-back ────────────────────────────────────
+  // GAPS-P3.4 — the paused membership, which is the quietest way a gym
+  // loses someone: nothing fails, nothing gets cancelled, they just stop
+  // being on the floor and eventually stop coming back.
+  //
+  // membership_state_change fires from applyMemberSync (glofox-sync.js)
+  // and the Glofox MEMBERSHIP webhook, both of which call
+  // triggerSequencesForMembershipStateChange with the old and new
+  // glofox_membership_state. cfg.to_state: 'paused' narrows it to the
+  // pause itself. Separate from overdue_payment_dunning, which chases
+  // 'locked' (payment arrears) and is a different conversation entirely.
+  //
+  // Goal is membership_state 'active' (SEQGAPS.1): resuming is a WIN, so
+  // it exits as goal_met rather than being recorded as a drop-out.
+  {
+    id: 'membership_paused_return',
+    category: 'Recovery',
+    name: 'Membership paused → return nudge',
+    description: 'Fires when a membership moves to paused in the booking system. Three low-key touches over about five weeks: acknowledge the pause and ask if anything is wrong, check in later, then a short SMS when they are due back. Exits the moment the membership goes active again, which is recorded as the goal being met. Separate from the overdue-payment chase, which handles arrears.',
+    trigger_type: 'membership_state_change',
+    trigger_config: { to_state: 'paused' },
+    goal_config: { type: 'membership_state', value: 'active' },
+    re_enrolment_cooldown_days: 180,
+    send_window: { start_hour: 10, end_hour: 19, skip_days: [0, 6] },
+    steps: [
+      {
+        step_type: 'email',
+        delay_days: 1,
+        delay_hours: 0,
+        subject: 'Your membership is paused, {{first_name}}',
+        html_content: `<p>Hi {{first_name}},</p>
+<p>Your membership is paused, so nothing is being charged and your spot is held.</p>
+<p>If the pause is for the obvious reasons, travel, work, an injury, that is completely fine and we will see you when you are back.</p>
+<p>If it is because something here was not working, we would rather hear it. Reply to this email and a coach will read it.</p>
+<p>UN1T {{location_name}}</p>`,
+      },
+      {
+        step_type: 'email',
+        delay_days: 20,
+        delay_hours: 0,
+        subject: 'Still here when you\'re ready',
+        html_content: `<p>Hi {{first_name}},</p>
+<p>Quick check in. Your membership is still paused and there is no rush on our side.</p>
+<p>When you do want to start again, the easiest way back is to pick one class and book it. The rest sorts itself out after that.</p>
+<p>Reply with a day that suits and we will get you in.</p>
+<p>UN1T {{location_name}}</p>`,
+      },
+      {
+        step_type: 'sms',
+        delay_days: 14,
+        delay_hours: 0,
+        sms_body: 'UN1T: {{first_name}}, ready to unpause? Reply with a day that works and we\'ll book your first one back.',
+      },
+    ],
+  },
+
   // RADAR-DUNNING.1 — automates the churn radar's Overdue chase-list.
   // Build a segment with filter "Membership State = locked" on the
   // Contacts page, clone this template, point its segment trigger at
@@ -716,9 +884,21 @@ export const SEQUENCE_TEMPLATES = [
     id: 'anniversary_one_year',
     category: 'Anniversary',
     name: '1-year anniversary',
-    description: 'Fires 365 days after lead_created_at. Re-fires every year.',
+    description: 'Fires 365 days after the contact joined (contacts.joined_at, the membership start date). Re-fires every year.',
     trigger_type: 'anniversary',
-    trigger_config: { from_field: 'lead_created_at', days_after: 365 },
+    // GAPS-P3.1 — this used to fire from lead_created_at. That column is
+    // NOT a real lead date: it is the CRM ROW-IMPORT timestamp. Live at
+    // Stillorgan its date equals created_at's date for all 8,509
+    // contacts, so "365 days after lead_created_at" is the anniversary of
+    // a bulk import, not of anything that happened to the person. As
+    // shipped it would have emailed "a year ago today you signed up" to
+    // thousands of people on the same morning, most of whom joined on a
+    // completely different date and some of whom never joined at all.
+    // joined_at is the Glofox-side membership start date (operator-set,
+    // backdatable) and is populated for 98% of contacts, so it is the
+    // only field this recipe can honestly claim an anniversary from.
+    // Do not put lead_created_at back.
+    trigger_config: { from_field: 'joined_at', days_after: 365 },
     // Mig 090: lets the sequence fire once a year. 350 leaves a safety
     // buffer so next year's enrolment isn't blocked by clock drift.
     re_enrolment_cooldown_days: 350,
@@ -739,7 +919,13 @@ export const SEQUENCE_TEMPLATES = [
     // COMMSFIX.E.3/E.4 — the anniversary cron now genuinely supports dob:
     // it matches on the month and day of contact.dob (any birth year, Dublin
     // wall-clock) and the year-scoped dedup ref lets it re-fire each year.
-    description: 'Fires on each contact\'s birthday, matching the month and day of contact.dob in any year. Email from 9am plus an SMS two hours later so the message lands on both channels. Re-fires every year, subject to the 350-day cooldown.',
+    // GAPS-P3.3 — the reach caveat is operator-facing on purpose. Date of
+    // birth is only on file for a minority of contacts (it arrives with a
+    // Glofox profile, not with a lead), so this recipe quietly covers a
+    // fraction of the list. Stating the CONDITION, not a percentage: the
+    // share moves every time dob gets filled in, and a stale number in
+    // shipped copy is worse than none.
+    description: 'Fires on each contact\'s birthday, matching the month and day of contact.dob in any year. Only reaches contacts whose date of birth is on file, so it covers a smaller audience than most recipes. Email from 9am plus an SMS two hours later so the message lands on both channels. Re-fires every year, subject to the 350-day cooldown.',
     trigger_type: 'anniversary',
     trigger_config: { from_field: 'dob', days_after: 0 },
     re_enrolment_cooldown_days: 350,

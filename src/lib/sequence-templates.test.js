@@ -207,6 +207,175 @@ describe('COMMSFIX.E.4 — customer-facing template copy house rules', () => {
   })
 })
 
+// GAPS-P3 — the anniversary templates and the cron whitelist they drive.
+//
+// Nothing used to hold the SHIPPED templates against
+// runAnniversaryTriggers' allowed from_field list. A typo in a template
+// ships a sequence the cron refuses to run: it logs an error and skips,
+// once per tick, forever, and the only place that shows up is the log.
+// These tests make the whitelist a machine-checked contract instead.
+describe('GAPS-P3 — anniversary templates drive a from_field the cron accepts', () => {
+  const anniversaryTemplates = SEQUENCE_TEMPLATES.filter((t) => t.trigger_type === 'anniversary')
+
+  it('the catalog actually ships anniversary templates (sanity)', () => {
+    expect(anniversaryTemplates.length).toBeGreaterThan(0)
+  })
+
+  it('every anniversary template names a from_field in ANNIVERSARY_FROM_FIELDS', async () => {
+    const { ANNIVERSARY_FROM_FIELDS } = await import('@/lib/sequences/anniversary-fields')
+    for (const tpl of anniversaryTemplates) {
+      const field = tpl.trigger_config?.from_field
+      expect(field, `${tpl.id} has no trigger_config.from_field`).toBeTruthy()
+      expect(
+        ANNIVERSARY_FROM_FIELDS.includes(field),
+        `${tpl.id} drives from_field '${field}', which runAnniversaryTriggers rejects — the sequence would never fire`,
+      ).toBe(true)
+    }
+  })
+
+  it('every anniversary template sets a numeric days_after', () => {
+    for (const tpl of anniversaryTemplates) {
+      const days = tpl.trigger_config?.days_after
+      expect(Number.isFinite(days), `${tpl.id} days_after is not a number`).toBe(true)
+      expect(days, `${tpl.id} days_after is negative`).toBeGreaterThanOrEqual(0)
+    }
+  })
+
+  it('the cron guard and the template catalog read the SAME allowed list', async () => {
+    const cronTriggers = await import('@/lib/sequences/cron-triggers')
+    const { ANNIVERSARY_FROM_FIELDS } = await import('@/lib/sequences/anniversary-fields')
+    expect(cronTriggers.ANNIVERSARY_FROM_FIELDS).toBe(ANNIVERSARY_FROM_FIELDS)
+  })
+})
+
+// GAPS-P3.1 — the 1-year anniversary template fired on lead_created_at,
+// which at Stillorgan is the CRM ROW-IMPORT timestamp: its date equals
+// created_at's date for all 8,509 contacts. Shipped as it was, the
+// template would have greeted thousands of people at once on the
+// anniversary of a bulk import, for nothing.
+describe('GAPS-P3.1 — 1-year anniversary fires on the real membership start date', () => {
+  const tpl = getTemplate('anniversary_one_year')
+
+  it('exists', () => {
+    expect(tpl).not.toBeNull()
+  })
+
+  it('fires on joined_at, NOT the poisoned lead_created_at import stamp', () => {
+    expect(tpl.trigger_config).toEqual({ from_field: 'joined_at', days_after: 365 })
+  })
+
+  it('describes joining rather than naming the import column', () => {
+    expect(tpl.description).toMatch(/join/i)
+    expect(tpl.description).not.toMatch(/lead_created_at/)
+  })
+})
+
+// GAPS-P3.3 — dob is on file for a minority of contacts, so the birthday
+// recipe reaches a fraction of the list. That is not a bug, but an
+// operator choosing it from the picker had no way to know. The note
+// states the CONDITION, never a percentage (which drifts as dob fills in).
+describe('GAPS-P3.3 — birthday template is honest about who it can reach', () => {
+  const tpl = getTemplate('birthday_wishes')
+
+  it('says it only reaches contacts whose date of birth is on file', () => {
+    expect(tpl.description).toMatch(/date of birth/i)
+    expect(tpl.description).toMatch(/on file|on record|recorded/i)
+  })
+
+  it('quotes no coverage percentage (the number drifts, the condition does not)', () => {
+    expect(tpl.description).not.toMatch(/\d+(\.\d+)?\s?%/)
+  })
+})
+
+// GAPS-P3.4 — three recipes added for a single-site HIIT gym. Each one is
+// pinned to the trigger + config the ENGINE actually reads, so a rename on
+// either side fails here rather than shipping an inert sequence.
+describe('GAPS-P3.4 — new gym recipes', () => {
+  it('30-day check-in fires on the joined_at anniversary at day 30', () => {
+    const tpl = getTemplate('new_member_30_day_checkin')
+    expect(tpl, 'new_member_30_day_checkin missing').not.toBeNull()
+    expect(tpl.category).toBe('Welcome')
+    expect(tpl.trigger_type).toBe('anniversary')
+    expect(tpl.trigger_config).toEqual({ from_field: 'joined_at', days_after: 30 })
+  })
+
+  it('paused-membership nudge fires on a membership_state_change TO paused', () => {
+    const tpl = getTemplate('membership_paused_return')
+    expect(tpl, 'membership_paused_return missing').not.toBeNull()
+    expect(tpl.category).toBe('Recovery')
+    expect(tpl.trigger_type).toBe('membership_state_change')
+    expect(tpl.trigger_config).toEqual({ to_state: 'paused' })
+    // Resuming is the win, so it exits as goal_met, not a drop-out.
+    expect(tpl.goal_config).toEqual({ type: 'membership_state', value: 'active' })
+  })
+
+  it('second-class push fires on the glofox_first_booking platform tag', () => {
+    const tpl = getTemplate('first_class_booked_second_class_push')
+    expect(tpl, 'first_class_booked_second_class_push missing').not.toBeNull()
+    expect(tpl.category).toBe('Lead conversion')
+    expect(tpl.trigger_type).toBe('tag_added')
+    expect(tpl.trigger_config).toEqual({ tag: 'glofox_first_booking' })
+    expect(tpl.goal_config).toEqual({ type: 'pipeline_stage', value: 'second_class' })
+  })
+
+  it('every new recipe carries a re-enrolment cooldown', () => {
+    for (const id of ['new_member_30_day_checkin', 'membership_paused_return', 'first_class_booked_second_class_push']) {
+      expect(getTemplate(id).re_enrolment_cooldown_days, `${id} has no cooldown`).toBeGreaterThan(0)
+    }
+  })
+
+  // KNOWN INERT, recorded rather than quietly fixed.
+  //
+  // glofox_membership_cancelled_winback triggers on the tag
+  // 'glofox_membership_cancelled', which NO code writes: the webhook's
+  // EVENT_TYPE_TAGS maps MEMBERSHIP_DELETED to 'glofox_membership_deleted'
+  // and there is no 'cancelled'/'ended' tag anywhere in the repo. The
+  // template's own description names two tags that do not exist. So the
+  // packaged win-back drip can never fire, however the operator clones and
+  // activates it.
+  //
+  // Not repointed here because that is a live behaviour change to an
+  // ex-member win-back (it would start sending on every MEMBERSHIP_DELETED
+  // webhook) and it needs someone to confirm what Glofox actually emits for
+  // a cancellation versus an expiry. Listed, not skipped, so the guard below
+  // still fails for anything new.
+  const KNOWN_UNWRITTEN_TRIGGER_TAGS = { glofox_membership_cancelled_winback: 'glofox_membership_cancelled' }
+
+  it('every tag-triggered template names a tag the platform actually writes', async () => {
+    // A tag_added trigger on a tag nothing writes is an inert sequence —
+    // the exact class of bug PLATFORM_TAGS was built to catch in the flow
+    // builder. Hold the packaged templates to the same bar.
+    const { PLATFORM_TAGS } = await import('@/lib/sequences/tag-vocabulary')
+    for (const tpl of SEQUENCE_TEMPLATES.filter((t) => t.trigger_type === 'tag_added')) {
+      if (KNOWN_UNWRITTEN_TRIGGER_TAGS[tpl.id] === tpl.trigger_config?.tag) continue
+      expect(
+        PLATFORM_TAGS.includes(tpl.trigger_config?.tag),
+        `${tpl.id} triggers on '${tpl.trigger_config?.tag}', which is not in PLATFORM_TAGS`,
+      ).toBe(true)
+    }
+  })
+
+  it('the known-inert win-back is still inert (delete this test when it is repointed)', async () => {
+    // Pins the finding so it cannot be lost: the day someone points this
+    // template at a real tag, this test fails and the exception above goes.
+    const { PLATFORM_TAGS } = await import('@/lib/sequences/tag-vocabulary')
+    const tpl = getTemplate('glofox_membership_cancelled_winback')
+    expect(tpl.trigger_config.tag).toBe('glofox_membership_cancelled')
+    expect(PLATFORM_TAGS).not.toContain('glofox_membership_cancelled')
+  })
+
+  it('every audience_filter field is a registered AUDIENCE_FIELDS entry with that operator', async () => {
+    const { AUDIENCE_FIELDS } = await import('@/lib/audience-filter')
+    for (const tpl of SEQUENCE_TEMPLATES) {
+      for (const f of (tpl.audience_filter?.filters || [])) {
+        const def = AUDIENCE_FIELDS[f.field]
+        expect(def, `${tpl.id} filters on unregistered field '${f.field}'`).toBeDefined()
+        expect(def.ops.includes(f.op), `${tpl.id}: op '${f.op}' invalid for '${f.field}'`).toBe(true)
+      }
+    }
+  })
+})
+
 // RADAR-DUNNING.1 — the overdue-payment dunning template. Locks down
 // the segment_added trigger + multi-channel shape so a refactor can't
 // silently break the automated arrears chase.

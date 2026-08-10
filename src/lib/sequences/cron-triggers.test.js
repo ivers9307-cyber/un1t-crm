@@ -541,3 +541,47 @@ describe('runInactivityTriggers — stored signals are real contacts columns (GA
     expect(cronTriggers.INACTIVITY_SIGNAL_FIELDS.last_email_open_at).toBe('last_email_open_at')
   })
 })
+
+// GAPS-P3.2 — the anniversary from_field whitelist is now an EXPORTED
+// contract rather than a literal buried in the runner, so the shipped
+// templates and the SequenceSettings dropdown can be held against the
+// same list by test. Same reasoning as GAPS-P1.4 above: a field name
+// that gets into one list and not the others produces a sequence that
+// logs an error and skips on every tick, forever, with no UI symptom.
+describe('runAnniversaryTriggers — the from_field whitelist is exported (GAPS-P3.2)', () => {
+  it('exports ANNIVERSARY_FROM_FIELDS as a frozen list of field names', () => {
+    expect(Array.isArray(cronTriggers.ANNIVERSARY_FROM_FIELDS)).toBe(true)
+    expect(cronTriggers.ANNIVERSARY_FROM_FIELDS.length).toBeGreaterThan(0)
+    expect(Object.isFrozen(cronTriggers.ANNIVERSARY_FROM_FIELDS)).toBe(true)
+  })
+
+  it('re-exports the shared constant (one source, not a copy)', async () => {
+    const shared = await import('./anniversary-fields.js')
+    expect(cronTriggers.ANNIVERSARY_FROM_FIELDS).toBe(shared.ANNIVERSARY_FROM_FIELDS)
+  })
+
+  it('the guard accepts every field in the exported list', async () => {
+    for (const field of cronTriggers.ANNIVERSARY_FROM_FIELDS) {
+      logError.mockClear()
+      enrolContacts.mockClear()
+      createServerClient.mockReturnValue(mockDb({
+        email_sequences: { list: [
+          { id: 's1', location_id: 'loc-1', trigger_config: { from_field: field, days_after: 1 }, audience_filter: null },
+        ] },
+        contacts: { list: [] },
+      }))
+      await cronTriggers.runAnniversaryTriggers()
+      expect(logError, `${field} was rejected by the guard`).not.toHaveBeenCalled()
+    }
+  })
+
+  it('every non-dob field is a registered date field in AUDIENCE_FIELDS', async () => {
+    // dob is a DATE column matched by month+day string slice, not a
+    // timestamp window, and is deliberately not an audience field.
+    const { AUDIENCE_FIELDS } = await import('@/lib/audience-filter')
+    for (const field of cronTriggers.ANNIVERSARY_FROM_FIELDS.filter((f) => f !== 'dob')) {
+      expect(AUDIENCE_FIELDS[field], `contacts.${field} is not a registered field`).toBeDefined()
+      expect(AUDIENCE_FIELDS[field].type, `contacts.${field} is not a date field`).toBe('date')
+    }
+  })
+})

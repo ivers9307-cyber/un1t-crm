@@ -11,6 +11,7 @@ import { Button } from '@/components/ui'
 import { Labeled, Text, Area, Num, Select } from './nodeEditing'
 import AudienceBuilder from '@/components/AudienceBuilder'
 import AudienceCount from '@/components/communications/AudienceCount'
+import { ANNIVERSARY_FROM_FIELD_OPTIONS, DEFAULT_ANNIVERSARY_FROM_FIELD } from '@/lib/sequences/anniversary-fields'
 
 const PIPELINE_SLUGS = [
   'new_lead', 'first_class', 'second_class', 'trial_done',
@@ -47,15 +48,16 @@ const TRIGGER_OPTIONS = [
   ['achievement_unlocked', 'When an achievement is unlocked'],
   ['webhook', 'When an inbound webhook fires'],
 ]
-// COMMSFIX.E.3 — must mirror the cron's ALLOWED_FIELDS (cron-triggers.js
+// COMMSFIX.E.3 — must mirror the cron's whitelist (cron-triggers.js
 // runAnniversaryTriggers): an option offered here but not allowed there is
 // rejected at run time with a logged error (no silent fallback any more).
-const ANNIV_FIELDS = [
-  ['lead_created_at', 'Lead created date'],
-  ['last_emailed_at', 'Last emailed date'],
-  ['joined_at', 'Joined date'],
-  ['dob', 'Birthday (date of birth)'],
-]
+// GAPS-P3.2 — so stop restating it. The list is imported from
+// ./anniversary-fields.js, which the runner also imports; a test renders
+// this select and asserts the option values equal that list exactly.
+// The constant lives in its own import-free module rather than in
+// cron-triggers.js because this is a client component and that module
+// pulls createServerClient + the whole enrol path.
+const ANNIV_FIELDS = ANNIVERSARY_FROM_FIELD_OPTIONS
 const INACT_SIGNALS = [['last_emailed_at', 'Last emailed'], ['last_email_open_at', 'Last email open'], ['last_booking_at', 'Last booking']]
 const STAGE_OPTS = [['', 'Any stage'], ...PIPELINE_SLUGS.map(s => [s, s])]
 // Glofox membership states (mig 195). 'locked' = payment arrears (churn radar's Overdue tab).
@@ -216,7 +218,7 @@ export default function SequenceSettings({ sequence }) {
             )}
             {triggerType === 'anniversary' && (
               <div className="grid grid-cols-2 gap-2">
-                <Labeled label="Anniversary of"><Select value={tcfg.from_field || 'lead_created_at'} onChange={v => setCfg({ from_field: v })} options={ANNIV_FIELDS} /></Labeled>
+                <Labeled label="Anniversary of"><Select value={tcfg.from_field || DEFAULT_ANNIVERSARY_FROM_FIELD} onChange={v => setCfg({ from_field: v })} options={ANNIV_FIELDS} /></Labeled>
                 <Labeled label="Days after"><Num value={tcfg.days_after ?? 365} onChange={v => setCfg({ days_after: v })} max={3650} /></Labeled>
               </div>
             )}
