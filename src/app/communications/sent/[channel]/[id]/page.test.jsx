@@ -139,3 +139,49 @@ describe('/communications/sent/[channel]/[id] — bodies stay distinct', () => {
     expect(screen.getByTestId('email-editor')).toBeTruthy()
   })
 })
+
+// COMMS-DETAIL-FIX.5 — the SMS loader selected no contacts, so the recipients
+// list had nothing but contact_id to render. FIX.1 — the WhatsApp loader now
+// counts the recipient rows live for every finished broadcast, not only for a
+// drip, so the stat cards and the failed-sends box read one source.
+function recordingDb(byTable) {
+  const selects = []
+  const from = (table) => {
+    const call = { table, selects: [], filters: [] }
+    const o = new Proxy({}, {
+      get(_t, prop) {
+        if (prop === 'then') return (resolve) => resolve(byTable[table] ?? { data: null, count: 0 })
+        if (prop === 'single' || prop === 'maybeSingle') return async () => byTable[table] ?? { data: null }
+        return (...args) => {
+          if (prop === 'select') { call.selects.push(args[0]); selects.push({ table, arg: args[0], opts: args[1] }) }
+          if (prop === 'eq' || prop === 'in') call.filters.push([prop, ...args])
+          return o
+        }
+      },
+    })
+    return o
+  }
+  return { db: { from, rpc: async () => ({ data: [] }) }, selects }
+}
+
+describe('/communications/sent/[channel]/[id] — the loaders feed the bodies real data', () => {
+  it('joins the contact onto every SMS recipient row', async () => {
+    const { db, selects } = recordingDb({ sms_broadcasts: { data: SMS_ROW } })
+    createServerClient.mockReturnValue(db)
+    await SendDetailPage(args('sms', 's1'))
+    const recipSelect = selects.find(s => s.table === 'sms_broadcast_recipients')
+    expect(recipSelect).toBeTruthy()
+    expect(recipSelect.arg).toMatch(/contacts\s*\(/)
+    expect(recipSelect.arg).toMatch(/name/)
+    expect(recipSelect.arg).toMatch(/phone/)
+  })
+
+  it('counts WhatsApp recipient rows live even for a finished bulk broadcast', async () => {
+    const { db, selects } = recordingDb({ whatsapp_broadcasts: { data: WA_ROW } })
+    createServerClient.mockReturnValue(db)
+    await SendDetailPage(args('whatsapp', 'b1'))
+    const counts = selects.filter(s => s.table === 'whatsapp_broadcast_recipients' && s.opts?.head === true)
+    // rows + sent + delivered + read + failed, all count-only.
+    expect(counts.length).toBeGreaterThanOrEqual(5)
+  })
+})

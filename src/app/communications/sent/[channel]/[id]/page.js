@@ -31,6 +31,11 @@ import { hasPermission } from '@/lib/permissions'
 import { overlayConnections } from '@/lib/connection-registry'
 import { dripWindowStatus } from '@/lib/whatsapp-drip'
 import { loadCampaignRecipientStats, campaignDisplayStats } from '@/lib/campaign-display-stats'
+import {
+  loadWhatsappBroadcastRecipientStats,
+  countWhatsappSentToday,
+  whatsappBroadcastDisplayStats,
+} from '@/lib/whatsapp-broadcast-stats'
 import SMSBroadcastEditor from '@/components/SMSBroadcastEditor'
 import WABroadcastEditor from '@/components/WABroadcastEditor'
 import CampaignDetail from '@/components/CampaignDetail'
@@ -84,9 +89,14 @@ async function renderSms(db, user, id) {
     broadcast.locations = await overlayConnections(db, broadcast.locations, ['twilio_sender'])
   }
 
+  // COMMS-DETAIL-FIX.5 — the contact join. Without it the recipients list had
+  // nothing but contact_id and rendered a truncated UUID for every row, while
+  // the email and WhatsApp lists both showed a person. `sms_broadcast_recipients`
+  // has exactly one FK to contacts, so the bare embed is unambiguous (the
+  // PGRST201 trap needs ≥2).
   const { data: recipients } = await db
     .from('sms_broadcast_recipients')
-    .select('id, contact_id, status, twilio_message_sid, error_message, sent_at, failed_at')
+    .select('id, contact_id, status, twilio_message_sid, error_message, sent_at, failed_at, contacts(name, phone)')
     .eq('broadcast_id', id)
     .order('created_at', { ascending: false })
     .limit(500)
@@ -128,34 +138,28 @@ async function renderWhatsapp(db, user, id) {
     .eq('status', 'failed')
     .order('failed_at', { ascending: false })
     .limit(200)
-  const { count: failedCount } = await db.from('whatsapp_broadcast_recipients')
-    .select('id', { count: 'exact', head: true })
-    .eq('broadcast_id', id)
-    .eq('status', 'failed')
 
-  // Live drip progress — computed at page load from the recipient rows so it
-  // never shows the stale per-tick `total_sent` snapshot, plus delivered/read
-  // engagement, today's rolling-24h cap usage, and the send-window state.
-  // Drip only.
+  // COMMS-DETAIL-FIX.1 — the live recipient-row counts, for EVERY broadcast,
+  // not just a drip. They were computed for an in-flight drip only, while the
+  // finished-broadcast cards read whatsapp_broadcasts.total_* — which is how
+  // one screen came to show "FAILED 0" above "Failed sends (22)". Everything
+  // the body renders (cards, drip panel, recipients tab count, the failed-box
+  // header) now comes off this one object, so they cannot disagree.
+  //
+  // The status column PROGRESSES in place, so "sent" is counted as
+  // sent|delivered|read and "delivered" as delivered|read — see
+  // whatsapp-broadcast-stats.js. No migration: five count-only queries need no
+  // aggregate rpc, and code that depended on an unapplied one would 500.
+  const recipientStats = await loadWhatsappBroadcastRecipientStats(db, id)
+  const stats = whatsappBroadcastDisplayStats(broadcast, recipientStats)
+
+  // The drip panel additionally needs today's rolling-24h cap usage and the
+  // send-window state; the counts themselves come from `stats` like everything
+  // else.
   let dripProgress = null
   if (broadcast.delivery_mode === 'drip') {
-    const DISPATCHED = ['sent', 'delivered', 'read']
-    const countRecips = async (apply) => {
-      const { count } = await apply(
-        db.from('whatsapp_broadcast_recipients').select('id', { count: 'exact', head: true }).eq('broadcast_id', id)
-      )
-      return count || 0
-    }
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-    const [dispatched, reached, read, failed, sentToday] = await Promise.all([
-      countRecips(q => q.in('status', DISPATCHED)),
-      countRecips(q => q.in('status', ['delivered', 'read'])),
-      countRecips(q => q.eq('status', 'read')),
-      countRecips(q => q.eq('status', 'failed')),
-      countRecips(q => q.in('status', DISPATCHED).gt('sent_at', since)),
-    ])
     dripProgress = {
-      dispatched, reached, read, failed, sentToday,
+      sentToday: await countWhatsappSentToday(db, id),
       window: dripWindowStatus(new Date(), {
         start: broadcast.send_window_start, end: broadcast.send_window_end,
         tz: broadcast.send_window_tz, paused: !!broadcast.paused_at,
@@ -170,7 +174,7 @@ async function renderWhatsapp(db, user, id) {
       locationId={user.activeLocation?.id}
       userId={user.id}
       failedRecipients={failedRecipients || []}
-      failedCount={failedCount || 0}
+      stats={stats}
       dripProgress={dripProgress}
     />
   )
