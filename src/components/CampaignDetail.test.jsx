@@ -195,3 +195,64 @@ describe('CampaignDetail — recipient rows label their real status', () => {
     expect(labels).not.toContain('Sent')
   })
 })
+
+// ABHONEST.1 — the A/B panel used to print "Winner: Subject A" whenever
+// ab_winner was stamped, and the sender stamped 'a' for a tie, for a slice
+// nobody opened, and for an empty stats set. Zero A/B tests have ever run, so
+// nothing live was wrong yet; the first operator to try one would have been
+// handed a fabricated result. campaigns.ab_winner records what was SENT (mig
+// 398's CHECK allows only 'a'|'b'|NULL), so the panel re-reads the stats.
+describe('CampaignDetail — A/B panel refuses to invent a winner', () => {
+  const AB = {
+    ab_subject_b: 'Or maybe this one',
+    ab_winner: 'a',
+    ab_test_started_at: '2026-08-08T09:00:00.000Z',
+    ab_decided_at: '2026-08-08T13:00:00.000Z',
+  }
+  const stats = (a, b) => ([
+    { ab_variant: 'a', sent_count: a.sent, opened_count: a.opened },
+    { ab_variant: 'b', sent_count: b.sent, opened_count: b.opened },
+  ])
+  const renderAb = (abStats, overrides = {}) => render(
+    <CampaignDetail campaign={{ ...BASE, ...AB, ...overrides }} recipients={[]} abStats={abStats} />
+  )
+
+  it('says nobody opened either subject instead of crowning A', () => {
+    renderAb(stats({ sent: 20, opened: 0 }, { sent: 20, opened: 0 }))
+    expect(screen.getByText(/no clear winner/i)).toBeTruthy()
+    expect(screen.queryByText(/^Winner: Subject/i)).toBeNull()
+    expect(screen.queryByText('Winner')).toBeNull()
+    expect(screen.getByText(/nobody opened either subject/i)).toBeTruthy()
+  })
+
+  it('says nothing was learned on a tie', () => {
+    renderAb(stats({ sent: 20, opened: 4 }, { sent: 20, opened: 4 }))
+    expect(screen.getByText(/no clear winner/i)).toBeTruthy()
+    expect(screen.queryByText('Winner')).toBeNull()
+  })
+
+  it('says nothing was learned when the stats never arrived', () => {
+    renderAb(null)
+    expect(screen.getByText(/no clear winner/i)).toBeTruthy()
+  })
+
+  it('still tells the operator which subject the remainder went out with', () => {
+    renderAb(stats({ sent: 20, opened: 0 }, { sent: 20, opened: 0 }))
+    expect(screen.getByText(/sent with subject a/i)).toBeTruthy()
+  })
+
+  it('does call a genuine, large difference a winner', () => {
+    renderAb(stats({ sent: 50, opened: 5 }, { sent: 50, opened: 20 }), { ab_winner: 'b' })
+    expect(screen.getByText(/winner: subject b/i)).toBeTruthy()
+    expect(screen.getByText('Winner')).toBeTruthy()
+    expect(screen.queryByText(/no clear winner/i)).toBeNull()
+  })
+
+  it('shows both readings when opens moved past the decision', () => {
+    // Stamped A at decide time; B has since pulled clearly ahead.
+    renderAb(stats({ sent: 50, opened: 5 }, { sent: 50, opened: 20 }), { ab_winner: 'a' })
+    const chip = screen.getByText(/numbers now favour subject b/i)
+    expect(chip).toBeTruthy()
+    expect(chip.textContent).toMatch(/sent with subject a/i)
+  })
+})

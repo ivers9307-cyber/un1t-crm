@@ -49,6 +49,18 @@ export const ESCALATION_TABLE = 'email_bounce_escalations'
 export const RELEASE_REASON_OPERATOR = 'operator'
 /** The stamp went away underneath us; the record is closed to match reality. */
 export const RELEASE_REASON_STAMP_CLEARED = 'stamp_cleared_externally'
+/**
+ * LISTHEALTH-ACT.1 (mig 520) — an operator escalated a `review` row to a
+ * suppression. The review row closes with THIS reason, not RELEASE_REASON_
+ * OPERATOR, and the difference is load-bearing: 'operator' means a human said
+ * no and is treated as permanent below, which would both misrecord the
+ * decision and stop this sweep refreshing the counts on the suppression the
+ * operator just created.
+ */
+export const RELEASE_REASON_OPERATOR_SUPPRESSED = 'operator_suppressed'
+
+/** `reason` written on an escalation a human created rather than the rule. */
+export const REASON_OPERATOR_REVIEW_SUPPRESSED = 'operator_suppressed_after_review'
 
 // Mirrors the PostgREST 1,000-row select cap (CLAUDE.md): every scan
 // .range()-paginates with an explicit .order().

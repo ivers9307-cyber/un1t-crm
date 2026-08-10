@@ -21,6 +21,16 @@ import {
 import AudienceBuilder from './AudienceBuilder'
 import AudienceCount from './communications/AudienceCount'
 import SendQuietHoursNotice from './communications/SendQuietHoursNotice'
+// DTLOCAL.1 — these were private copies here, byte-equivalent to the extracted
+// pair on every input the pickers actually produce. The shared versions add the
+// two NaN guards the copies lacked: an unparseable ISO used to render
+// "NaN-NaN-NaNTNaN:NaN" into the picker's min attribute, and an unparseable
+// picker value made localDatetimeToIso THROW a RangeError out of handleSchedule
+// (toISOString on an Invalid Date) instead of returning null and failing the
+// future-time check. Datetime conversion is exactly the code that should have
+// one tested implementation; the shared pair is exercised under Dublin and a US
+// timezone in datetime-local.test.js.
+import { isoToLocalDatetime, localDatetimeToIso } from '@/lib/datetime-local'
 
 // SMS segment math — single GSM7 fits 160 chars; multi-segment
 // concatenation is 153 per segment (7 lost to UDH per segment).
@@ -36,23 +46,6 @@ const MERGE_TAGS = [
   { tag: '{{name}}', label: 'Full name' },
   { tag: '{{location_name}}', label: 'Location' },
 ]
-
-// Convert ISO 8601 to the format datetime-local expects (yyyy-MM-ddTHH:mm).
-// Hardcoded to LOCAL time — datetime-local has no tz, so what the
-// user picks is interpreted in their browser's tz, then we serialise
-// back to ISO with the local offset before sending.
-function isoToLocalDatetime(iso) {
-  if (!iso) return ''
-  const d = new Date(iso)
-  const pad = n => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
-function localDatetimeToIso(local) {
-  if (!local) return null
-  // new Date() interprets local-form strings in the browser's tz.
-  return new Date(local).toISOString()
-}
 
 export default function SMSBroadcastEditor({ broadcast, recipients = [], locationId, locationSenderId, userId: _userId, initialAudienceFilter = null }) {
   const router = useRouter()

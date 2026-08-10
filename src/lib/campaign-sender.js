@@ -52,10 +52,19 @@
 //               pick order instead of hogging a per-tick slot).
 //   decide    — open rates per variant come from the
 //               campaign_ab_variant_stats RPC (email_sends joined
-//               via campaign_recipients.ab_variant); ties/zero-data
-//               go to A. ab_winner is CAS-stamped (…IS NULL) so
-//               exactly one overlapping tick decides; the winner
-//               falls through and starts sending the remainder.
+//               via campaign_recipients.ab_variant), read by
+//               decideAbOutcome. ABHONEST.1: an INCONCLUSIVE reading
+//               (too few opens, a tie, or a difference under the 1.5x
+//               bar) is a real third outcome, and it resolves to
+//               sendWith 'a' so the remainder still goes out with
+//               campaigns.subject rather than the campaign hanging on
+//               a decision it can never make. ab_winner is CAS-stamped
+//               (…IS NULL) so exactly one overlapping tick decides;
+//               the decider falls through and starts the remainder.
+//               NOTE ab_winner records what was SENT: mig 398's CHECK
+//               allows only 'a'|'b'|NULL, so "inconclusive" is not
+//               storable and is instead re-derived for display from
+//               the same stat rows by CampaignDetail.
 //   final     — the normal chunked path, each row's subject resolved
 //               via subjectForVariant (remainder → winning subject;
 //               retried slice rows keep their own variant).
@@ -68,10 +77,11 @@
 import { buildAudienceQueryAsync, applyMergeTags, buildUnsubscribeUrl, appendUnsubscribeFooter, sendBatch, consentFieldForStream, consentColumnFor, isTransientSendError, getDefaultMailboxAddress } from './postmark.js'
 import { resolveEmailSender } from './tenant-email.js'
 import { injectPreheader, htmlToPlainText } from './email-content.js'
-import { resolveAbPhase, assignAbVariants, clampAbTestPct, decideAbWinner, subjectForVariant } from './campaign-ab.js'
+import { resolveAbPhase, assignAbVariants, clampAbTestPct, decideAbOutcome, subjectForVariant, AB_FALLBACK_VARIANT } from './campaign-ab.js'
 import { frequencyCapFromLocationSettings, capCutoffIso, stampMarketingTouch, CAMPAIGN_CAP_SKIP_AFTER_MS } from './frequency-cap.js'
 import { loadNonOpenerContactIds } from './campaign-resend.js'
 import { getAppUrl } from './app-url.js'
+import { logInfo } from './log.js'
 
 const CHUNK_SIZE = 500             // recipients per cron tick per campaign
 const AUDIENCE_PAGE_SIZE = 1000    // audience load page (CAMPAIGN.11)
@@ -319,7 +329,17 @@ export async function tickCampaignSend(db, campaign) {
       .rpc('campaign_ab_variant_stats', { p_campaign_id: campaignId })
     if (statsErr) return { phase: 'ab_decide', error: `variant stats failed: ${statsErr.message}` }
 
-    const winner = decideAbWinner(statRows || [])
+    const reading = decideAbOutcome(statRows || [])
+    // ABHONEST.1 — sendWith is ALWAYS 'a' or 'b', including when the reading is
+    // inconclusive (it falls back to AB_FALLBACK_VARIANT). That is what keeps a
+    // campaign that learned nothing from stalling before its remainder: the
+    // stamp is what unblocks the 'final' phase.
+    const winner = reading.sendWith || AB_FALLBACK_VARIANT
+    if (reading.outcome === 'inconclusive') {
+      logInfo('campaign-sender', 'A/B test inconclusive; remainder sends with subject A', {
+        campaignId, reason: reading.reason,
+      })
+    }
     // CAS on ab_winner IS NULL — exactly one overlapping tick decides.
     const { data: won } = await db.from('campaigns')
       .update({ ab_winner: winner, ab_decided_at: new Date().toISOString() })

@@ -11,7 +11,13 @@ import { Button } from '@/components/ui'
 import { Labeled, Text, Area, Num, Select } from './nodeEditing'
 import AudienceBuilder from '@/components/AudienceBuilder'
 import AudienceCount from '@/components/communications/AudienceCount'
-import { ANNIVERSARY_FROM_FIELD_OPTIONS, DEFAULT_ANNIVERSARY_FROM_FIELD } from '@/lib/sequences/anniversary-fields'
+import {
+  ANNIVERSARY_FROM_FIELD_OPTIONS,
+  DEFAULT_ANNIVERSARY_FROM_FIELD,
+  SUGGESTED_ANNIVERSARY_FROM_FIELD,
+  UNRELIABLE_ANNIVERSARY_FIELD_WARNINGS,
+  isUnreliableAnniversaryFromField,
+} from '@/lib/sequences/anniversary-fields'
 
 const PIPELINE_SLUGS = [
   'new_lead', 'first_class', 'second_class', 'trial_done',
@@ -111,6 +117,27 @@ export default function SequenceSettings({ sequence }) {
     setGoal(t === '' ? null : { type: t, ...seed }); touch()
   }
   const setCfg = (patch) => { setTcfg(prev => ({ ...prev, ...patch })); touch() }
+
+  // ANNIVSAFE.1 — picking the anniversary trigger SEEDS from_field, the same
+  // way setGoalType seeds a goal value above and for the same reason: an
+  // operator who never touches the dropdown otherwise saves a trigger_config
+  // with no from_field, and the runner's legacy default for that is
+  // lead_created_at, the CRM import stamp. The dropdown shows what gets saved
+  // before it is saved. An EXISTING sequence is left alone — showing it
+  // joined_at when the runner will use lead_created_at would be a nicer lie
+  // than the one this replaces, so those render the warning instead.
+  const changeTrigger = (v) => {
+    setTriggerType(v)
+    if (v === 'anniversary') {
+      setTcfg(prev => (prev?.from_field ? prev : { ...prev, from_field: SUGGESTED_ANNIVERSARY_FROM_FIELD }))
+    }
+    touch()
+  }
+
+  const annivFromField = tcfg.from_field || DEFAULT_ANNIVERSARY_FROM_FIELD
+  const annivWarning = isUnreliableAnniversaryFromField(annivFromField)
+    ? UNRELIABLE_ANNIVERSARY_FIELD_WARNINGS[annivFromField]
+    : null
   const toggleSkipDay = (d) => {
     const cur = new Set(win.skip_days || [])
     cur.has(d) ? cur.delete(d) : cur.add(d)
@@ -172,7 +199,7 @@ export default function SequenceSettings({ sequence }) {
           {/* Trigger */}
           <div className="rounded-lg border border-un1t-border/70 bg-un1t-bg/40 p-3 space-y-2">
             <Labeled label="Trigger — what starts this flow">
-              <Select value={triggerType} onChange={v => { setTriggerType(v); touch() }} options={TRIGGER_OPTIONS} />
+              <Select value={triggerType} onChange={changeTrigger} options={TRIGGER_OPTIONS} />
             </Labeled>
             {triggerType === 'contact_created' && (
               <p className="text-[11px] text-un1t-subtle leading-relaxed">
@@ -217,9 +244,20 @@ export default function SequenceSettings({ sequence }) {
               </div>
             )}
             {triggerType === 'anniversary' && (
-              <div className="grid grid-cols-2 gap-2">
-                <Labeled label="Anniversary of"><Select value={tcfg.from_field || DEFAULT_ANNIVERSARY_FROM_FIELD} onChange={v => setCfg({ from_field: v })} options={ANNIV_FIELDS} /></Labeled>
-                <Labeled label="Days after"><Num value={tcfg.days_after ?? 365} onChange={v => setCfg({ days_after: v })} max={3650} /></Labeled>
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <Labeled label="Anniversary of"><Select value={annivFromField} onChange={v => setCfg({ from_field: v })} options={ANNIV_FIELDS} /></Labeled>
+                  <Labeled label="Days after"><Num value={tcfg.days_after ?? 365} onChange={v => setCfg({ days_after: v })} max={3650} /></Labeled>
+                </div>
+                {annivWarning && (
+                  <p
+                    data-testid="anniversary-field-warning"
+                    className="flex items-start gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[11px] leading-relaxed text-amber-700"
+                  >
+                    <AlertTriangle size={12} className="mt-0.5 shrink-0" aria-hidden="true" />
+                    <span>{annivWarning}</span>
+                  </p>
+                )}
               </div>
             )}
             {triggerType === 'inactivity' && (

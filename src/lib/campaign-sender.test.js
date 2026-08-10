@@ -760,7 +760,10 @@ describe('tickCampaignSend — A/B decide phase', () => {
     expect(result.sent).toBe(1)
   })
 
-  it('ties (and zero-open data) go to A', async () => {
+  // ABHONEST.1 — the campaign must NOT hang waiting for a decision it can
+  // never make. An inconclusive reading still stamps ab_winner (the only value
+  // mig 398's CHECK allows for "carry on") and the remainder goes out with A.
+  it('an inconclusive test still stamps A and sends the remainder', async () => {
     const { db, statements } = makeDb(abRouteFor({
       candidates: [abRecipient('r9', null)],
       statRows: [

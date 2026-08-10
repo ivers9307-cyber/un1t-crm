@@ -12,6 +12,11 @@ import {
 // file's diff stays small while #1314 rewrites the header/controls region.
 import CampaignLinkReport from './CampaignLinkReport.jsx'
 import CampaignOutcomeReport from './CampaignOutcomeReport.jsx'
+// ABHONEST.1 — the panel re-reads the same variant stats the sender decided on,
+// because campaigns.ab_winner cannot record "inconclusive" (mig 398's CHECK
+// allows only 'a'|'b'|NULL). The stamp says what was SENT; this says what the
+// numbers support, and the two are shown separately when they disagree.
+import { decideAbOutcome } from '@/lib/campaign-ab'
 
 // COMMSFIX.D.1a — the header chip used to be a hardcoded green "Sent" for
 // every campaign, including scheduled/queued/sending/cancelled ones — i.e. it
@@ -358,13 +363,32 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
             {campaign.ab_subject_b && (() => {
               const state = abStateFor(campaign)
               const statsFor = (v) => (abStats || []).find(r => r.ab_variant === v)
+              // ABHONEST.1 — a tie, a slice nobody opened, or a gap under the
+              // 1.5x bar is NOT a winner. Before this the panel printed
+              // "Winner: Subject A" for all three, which is the product telling
+              // an operator it learned something it did not.
+              const reading = decideAbOutcome(abStats || [])
+              const sentLetter = campaign.ab_winner === 'b' ? 'B' : 'A'
+              const readingLetter = reading.outcome === 'b' ? 'B' : 'A'
               return (
                 <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Subject A/B Test</h3>
-                    {state === 'decided' && (
+                    {state === 'decided' && reading.outcome === 'inconclusive' && (
+                      <span className="text-xs bg-slate-500/10 text-slate-700 px-2 py-0.5 rounded-full">
+                        No clear winner. The rest were sent with Subject {sentLetter}
+                      </span>
+                    )}
+                    {state === 'decided' && reading.outcome !== 'inconclusive' && readingLetter === sentLetter && (
                       <span className="text-xs bg-emerald-500/10 text-emerald-700 px-2 py-0.5 rounded-full">
-                        Winner: Subject {campaign.ab_winner === 'b' ? 'B' : 'A'}
+                        Winner: Subject {sentLetter}
+                      </span>
+                    )}
+                    {/* Opens keep arriving after the decision, so the reading
+                        can move past the stamp. Say both rather than pick. */}
+                    {state === 'decided' && reading.outcome !== 'inconclusive' && readingLetter !== sentLetter && (
+                      <span className="text-xs bg-amber-500/10 text-amber-700 px-2 py-0.5 rounded-full">
+                        Sent with Subject {sentLetter}. The numbers now favour Subject {readingLetter}
                       </span>
                     )}
                     {state === 'waiting' && (
@@ -379,22 +403,29 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
                     )}
                   </div>
                   <div className="divide-y divide-un1t-border">
+                    {/* The Winner pill follows the READING, not the stamp: a
+                        pill on a variant that only won by default is the same
+                        false claim in a smaller box. */}
                     <AbVariantRow
                       label="Subject A"
                       subject={campaign.subject}
                       stats={statsFor('a')}
-                      isWinner={campaign.ab_winner === 'a'}
+                      isWinner={reading.outcome === 'a'}
                     />
                     <AbVariantRow
                       label="Subject B"
                       subject={campaign.ab_subject_b}
                       stats={statsFor('b')}
-                      isWinner={campaign.ab_winner === 'b'}
+                      isWinner={reading.outcome === 'b'}
                     />
                   </div>
+                  {state === 'decided' && (
+                    <p className="mt-2 text-xs text-un1t-muted">{reading.reason}</p>
+                  )}
                   {campaign.ab_decided_at && (
-                    <p className="mt-2 text-xs text-un1t-muted">
-                      Decided {new Date(campaign.ab_decided_at).toLocaleString('en-IE')} — the rest of the audience received the winning subject.
+                    <p className="mt-1 text-xs text-un1t-muted">
+                      Decided {new Date(campaign.ab_decided_at).toLocaleString('en-IE')}. The rest of the audience
+                      received Subject {sentLetter}.
                     </p>
                   )}
                 </div>

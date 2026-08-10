@@ -8,8 +8,10 @@
 //   2. assignAbVariants — deterministic populate-time slice assignment
 //      (hash-ordered so it's independent of audience load order),
 //      half A / half B, pct-bounded, tiny audiences get no test.
-//   3. decideAbWinner — open rate per variant; strict-greater B wins,
-//      ties and zero-open/zero-send data go to A.
+//   3. decideAbOutcome — open rate per variant, with an explicit
+//      INCONCLUSIVE outcome (ABHONEST.1). A tie, a slice nobody opened,
+//      and a gap under the 1.5x bar are all "we learned nothing"; they
+//      still resolve sendWith 'a' so the remainder is never stranded.
 //   4. subjectForVariant — per-recipient subject resolution, including
 //      the remainder (winner's subject) and the off/default path.
 
@@ -17,13 +19,15 @@ import { describe, it, expect } from 'vitest'
 import {
   resolveAbPhase,
   assignAbVariants,
-  decideAbWinner,
+  decideAbOutcome,
   subjectForVariant,
   clampAbTestPct,
   clampAbWaitHours,
   AB_TEST_PCT_DEFAULT,
   AB_WAIT_HOURS_DEFAULT,
   AB_MIN_AUDIENCE,
+  AB_FALLBACK_VARIANT,
+  AB_MIN_DECIDING_OPENS,
 } from './campaign-ab.js'
 
 const HOUR = 3600_000
@@ -147,50 +151,103 @@ describe('assignAbVariants', () => {
   })
 })
 
-describe('decideAbWinner', () => {
+describe('decideAbOutcome', () => {
   const rows = (a, b) => ([
     { ab_variant: 'a', sent_count: a.sent, opened_count: a.opened },
     { ab_variant: 'b', sent_count: b.sent, opened_count: b.opened },
   ])
 
-  it('picks B when its open rate is strictly higher', () => {
-    expect(decideAbWinner(rows({ sent: 50, opened: 10 }, { sent: 50, opened: 20 }))).toBe('b')
+  it('picks B when its open rate clears the bar', () => {
+    const r = decideAbOutcome(rows({ sent: 50, opened: 10 }, { sent: 50, opened: 20 }))
+    expect(r.outcome).toBe('b')
+    expect(r.sendWith).toBe('b')
   })
 
-  it('picks A when its open rate is higher', () => {
-    expect(decideAbWinner(rows({ sent: 50, opened: 25 }, { sent: 50, opened: 20 }))).toBe('a')
+  it('picks A when its open rate clears the bar', () => {
+    const r = decideAbOutcome(rows({ sent: 50, opened: 30 }, { sent: 50, opened: 10 }))
+    expect(r.outcome).toBe('a')
+    expect(r.sendWith).toBe('a')
   })
 
-  it('open RATE not raw count — fewer sends with higher rate wins', () => {
-    // A: 10/40 = 25%; B: 12/30 = 40% — B wins despite similar counts.
-    expect(decideAbWinner(rows({ sent: 40, opened: 10 }, { sent: 30, opened: 12 }))).toBe('b')
+  it('open RATE not raw count — fewer sends with a higher rate wins', () => {
+    // A: 10/100 = 10%; B: 12/30 = 40% — B wins despite similar counts.
+    expect(decideAbOutcome(rows({ sent: 100, opened: 10 }, { sent: 30, opened: 12 })).outcome).toBe('b')
   })
 
-  it('tie goes to A', () => {
-    expect(decideAbWinner(rows({ sent: 50, opened: 10 }, { sent: 50, opened: 10 }))).toBe('a')
+  // ── the whole point of ABHONEST.1 ─────────────────────────────────
+  it('a TIE is inconclusive, never a win for A', () => {
+    const r = decideAbOutcome(rows({ sent: 50, opened: 10 }, { sent: 50, opened: 10 }))
+    expect(r.outcome).toBe('inconclusive')
+    expect(r.reason).toMatch(/same rate/i)
   })
 
-  it('zero opens on both sides goes to A', () => {
-    expect(decideAbWinner(rows({ sent: 50, opened: 0 }, { sent: 50, opened: 0 }))).toBe('a')
+  it('a slice NOBODY opened is inconclusive, not a win for A', () => {
+    const r = decideAbOutcome(rows({ sent: 50, opened: 0 }, { sent: 50, opened: 0 }))
+    expect(r.outcome).toBe('inconclusive')
+    expect(r.reason).toMatch(/nobody opened/i)
   })
 
-  it('zero sends (rate undefined) counts as rate 0 — B with no sends cannot win', () => {
-    expect(decideAbWinner(rows({ sent: 50, opened: 5 }, { sent: 0, opened: 0 }))).toBe('a')
-    expect(decideAbWinner(rows({ sent: 0, opened: 0 }, { sent: 0, opened: 0 }))).toBe('a')
+  it('too few opens to split is inconclusive, however lopsided', () => {
+    // 1 open against 0 is a 100% "lift" on a two-person slice.
+    const r = decideAbOutcome(rows({ sent: 2, opened: 0 }, { sent: 2, opened: 1 }))
+    expect(r.outcome).toBe('inconclusive')
+    expect(r.reason).toMatch(/too few/i)
   })
 
-  it('missing/empty stats rows go to A', () => {
-    expect(decideAbWinner([])).toBe('a')
-    expect(decideAbWinner(null)).toBe('a')
-    expect(decideAbWinner([{ ab_variant: 'b', sent_count: 10, opened_count: 5 }])).toBe('b')
-    expect(decideAbWinner([{ ab_variant: 'b', sent_count: 10, opened_count: 0 }])).toBe('a')
+  it('a real but small difference is inconclusive (the 1.5x bar)', () => {
+    // 20% vs 24% is 1.2x — the same ratio CampaignOutcomeReport refuses to
+    // call a result.
+    const r = decideAbOutcome(rows({ sent: 50, opened: 10 }, { sent: 50, opened: 12 }))
+    expect(r.outcome).toBe('inconclusive')
+    expect(r.reason).toMatch(/not a big enough difference/i)
+  })
+
+  it('a zero-open loser is still decisive once the winner clears the opens floor', () => {
+    const r = decideAbOutcome(rows({ sent: 50, opened: 0 }, { sent: 50, opened: AB_MIN_DECIDING_OPENS }))
+    expect(r.outcome).toBe('b')
+  })
+
+  it('a variant that reached nobody is inconclusive, not a loss', () => {
+    expect(decideAbOutcome(rows({ sent: 50, opened: 25 }, { sent: 0, opened: 0 })).outcome).toBe('inconclusive')
+    expect(decideAbOutcome(rows({ sent: 0, opened: 0 }, { sent: 0, opened: 0 })).outcome).toBe('inconclusive')
+  })
+
+  it('missing/empty stats rows are inconclusive', () => {
+    expect(decideAbOutcome([]).outcome).toBe('inconclusive')
+    expect(decideAbOutcome(null).outcome).toBe('inconclusive')
+    expect(decideAbOutcome([{ ab_variant: 'b', sent_count: 10, opened_count: 5 }]).outcome).toBe('inconclusive')
+  })
+
+  // ── the remainder must never be stranded ──────────────────────────
+  it('ALWAYS names a concrete subject to send with, and it is A when undecided', () => {
+    const cases = [
+      [], null,
+      rows({ sent: 50, opened: 0 }, { sent: 50, opened: 0 }),
+      rows({ sent: 50, opened: 10 }, { sent: 50, opened: 10 }),
+      rows({ sent: 2, opened: 0 }, { sent: 2, opened: 1 }),
+      rows({ sent: 50, opened: 10 }, { sent: 50, opened: 12 }),
+      rows({ sent: 0, opened: 0 }, { sent: 0, opened: 0 }),
+    ]
+    for (const c of cases) {
+      const r = decideAbOutcome(c)
+      expect(r.outcome).toBe('inconclusive')
+      expect(r.sendWith).toBe(AB_FALLBACK_VARIANT)
+      expect(['a', 'b']).toContain(r.sendWith)
+      expect(r.reason).toBeTruthy()
+    }
+  })
+
+  it('carries the numbers it decided on, so the reading can be shown', () => {
+    const r = decideAbOutcome(rows({ sent: 50, opened: 10 }, { sent: 50, opened: 20 }))
+    expect(r.a).toEqual({ sent: 50, opened: 10, rate: 0.2 })
+    expect(r.b).toEqual({ sent: 50, opened: 20, rate: 0.4 })
   })
 
   it('handles string counts (PostgREST returns BIGINT as string in some paths)', () => {
-    expect(decideAbWinner([
+    expect(decideAbOutcome([
       { ab_variant: 'a', sent_count: '50', opened_count: '5' },
       { ab_variant: 'b', sent_count: '50', opened_count: '15' },
-    ])).toBe('b')
+    ]).outcome).toBe('b')
   })
 })
 

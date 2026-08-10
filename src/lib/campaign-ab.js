@@ -16,6 +16,29 @@
 //   started, winner NULL, inside wait window   → 'waiting' (no-op ticks)
 //   started, winner NULL, wait elapsed         → 'decide'  (CAS ab_winner)
 //   ab_winner set                              → 'final'  (send remainder)
+//
+// ABHONEST.1 — the decision now has THREE outcomes, not two. The original
+// `rate('b') > rate('a') ? 'b' : 'a'` had no way to say "the numbers cannot
+// tell these apart", so a slice where nobody opened either subject stamped
+// ab_winner='a' and the campaign detail page announced "Winner: Subject A" as
+// if the test had taught the operator something. With AB_MIN_AUDIENCE at 3 the
+// slice can be two people, where that is guaranteed. decideAbOutcome returns
+// 'a' | 'b' | 'inconclusive'.
+//
+// THE FALLBACK IS VARIANT A, AND IT IS UNCONDITIONAL. An inconclusive test
+// still resolves sendWith:'a' and the sender still CAS-stamps ab_winner='a', so
+// the phase machine still reaches 'final' and the remainder still goes out. A
+// campaign that waits for a decision it can never get is a campaign that never
+// sends, which is a far worse failure than sending with the subject the
+// operator wrote first (campaigns.subject, the same line every non-test
+// campaign uses). The DB cannot hold a third value anyway: mig 398's
+// campaigns_ab_winner_valid CHECK allows only 'a' | 'b' | NULL, and NULL is
+// what the phase machine reads as "not decided yet".
+//
+// So ab_winner records WHAT WAS SENT, not what won. The honesty lives in the
+// reading: CampaignDetail re-derives decideAbOutcome from the same
+// campaign_ab_variant_stats rows and refuses to print "Winner" unless the
+// outcome is conclusive.
 
 export const AB_TEST_PCT_MIN = 5
 export const AB_TEST_PCT_MAX = 50
@@ -119,22 +142,98 @@ export function assignAbVariants(contactIds, testPct) {
 }
 
 /**
- * Pick the winner by open rate. B must be STRICTLY better — ties,
- * zero-send and zero-open data all go to A (the operator's primary
- * subject is the safe default).
+ * The subject the remainder goes out with when the test settled nothing:
+ * campaigns.subject, the line the operator wrote first.
+ */
+export const AB_FALLBACK_VARIANT = 'a'
+
+/**
+ * Combined opens (A + B) below which no split between the two means anything.
+ * Five is not a significance test and does not pretend to be one; it is the
+ * floor under which arithmetic on the ratio is theatre. A 10% slice of a
+ * 40-person audience is four people, so most small sends land here and
+ * correctly report that they learned nothing.
+ */
+export const AB_MIN_DECIDING_OPENS = 5
+
+/**
+ * How much better the winning rate has to be. 1.5x is lifted deliberately from
+ * readOutcome in CampaignOutcomeReport.jsx, which uses the same bar before it
+ * will say a word about a difference. Two panels in the same product disagreeing
+ * about what counts as a result would be worse than either threshold being
+ * slightly wrong.
+ */
+export const AB_MIN_DECIDING_LIFT = 1.5
+
+const asPct = (rate) => `${((rate || 0) * 100).toFixed(1)}%`
+
+/**
+ * Read the A/B test. Three outcomes, and only two of them are a winner.
+ *
+ * OPENS ONLY, DELIBERATELY — clicks are NOT a secondary signal here. The thing
+ * under test is the subject line, and a subject line's entire causal reach ends
+ * at the open: both variants carry the identical body, so a click is an open
+ * followed by a second, unrelated decision. Adding clicks would import the
+ * body's variance into a measurement of the subject and would need mig 398's
+ * campaign_ab_variant_stats altered to return a click count it does not have
+ * today. The one real argument the other way is that Apple Mail Privacy
+ * Protection pre-fetches tracking pixels and inflates opens; but it inflates
+ * BOTH variants, so it compresses the difference rather than inventing one,
+ * and on a test slice measured in tens the click count would be 0 or 1 and
+ * would land inconclusive every time regardless. A migration to reach the same
+ * verdict is not worth it. If subject testing ever runs at a volume where
+ * clicks could separate two variants, revisit with a real significance test
+ * rather than a second ratio.
  *
  * @param {Array<{ab_variant: string, sent_count: number|string, opened_count: number|string}>} statRows
- *   — output of the campaign_ab_variant_stats RPC (mig 398)
- * @returns {'a'|'b'}
+ *   output of the campaign_ab_variant_stats RPC (mig 398)
+ * @returns {{
+ *   outcome: 'a'|'b'|'inconclusive',
+ *   sendWith: 'a'|'b',
+ *   reason: string,
+ *   a: {sent: number, opened: number, rate: number|null},
+ *   b: {sent: number, opened: number, rate: number|null},
+ * }}
  */
-export function decideAbWinner(statRows) {
-  const rate = (variant) => {
+export function decideAbOutcome(statRows) {
+  const stat = (variant) => {
     const row = (statRows || []).find(r => r.ab_variant === variant)
-    const sent = Number(row?.sent_count) || 0
-    const opened = Number(row?.opened_count) || 0
-    return sent > 0 ? opened / sent : 0
+    const sent = Math.max(0, Number(row?.sent_count) || 0)
+    const opened = Math.max(0, Number(row?.opened_count) || 0)
+    return { sent, opened, rate: sent > 0 ? opened / sent : null }
   }
-  return rate('b') > rate('a') ? 'b' : 'a'
+  const a = stat('a')
+  const b = stat('b')
+  const undecided = (reason) => ({ outcome: 'inconclusive', sendWith: AB_FALLBACK_VARIANT, reason, a, b })
+
+  if (a.sent === 0 || b.sent === 0) {
+    return undecided('One of the two subjects reached nobody, so there is nothing to compare.')
+  }
+
+  const opens = a.opened + b.opened
+  if (opens === 0) return undecided('Nobody opened either subject.')
+  if (opens < AB_MIN_DECIDING_OPENS) {
+    return undecided(`Only ${opens} open${opens === 1 ? '' : 's'} across both subjects, which is too few to tell them apart.`)
+  }
+  if (a.rate === b.rate) return undecided('Both subjects opened at the same rate.')
+
+  const outcome = b.rate > a.rate ? 'b' : 'a'
+  const won = outcome === 'b' ? b : a
+  const lost = outcome === 'b' ? a : b
+  // A zero-open loser cannot produce a finite ratio. It is still a decision:
+  // the opens gate above guarantees the winner cleared the floor on its own.
+  const lift = lost.rate > 0 ? won.rate / lost.rate : Infinity
+  if (lift < AB_MIN_DECIDING_LIFT) {
+    return undecided(`${asPct(won.rate)} against ${asPct(lost.rate)} is not a big enough difference to call.`)
+  }
+
+  return {
+    outcome,
+    sendWith: outcome,
+    reason: `Subject ${outcome.toUpperCase()} opened at ${asPct(won.rate)} against ${asPct(lost.rate)}.`,
+    a,
+    b,
+  }
 }
 
 /**
@@ -143,8 +242,10 @@ export function decideAbWinner(statRows) {
  * - variant 'a' → campaigns.subject
  * - variant 'b' → campaigns.ab_subject_b (blank falls back to subject —
  *   an email must never go out subjectless)
- * - remainder (null) → the winner's subject; before a decision (which
- *   the phase machine prevents reaching) it falls back to A.
+ * - remainder (null) → the decided subject; before a decision (which
+ *   the phase machine prevents reaching) it falls back to A. An
+ *   inconclusive test stamps ab_winner='a', so this path resolves to
+ *   campaigns.subject and the remainder still goes out.
  * - non-A/B campaigns always resolve to campaigns.subject, keeping the
  *   default path byte-identical to today.
  *

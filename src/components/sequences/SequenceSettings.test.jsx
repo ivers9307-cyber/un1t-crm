@@ -133,3 +133,95 @@ describe('Anniversary from_field dropdown mirrors the cron whitelist (GAPS-P3.2)
     }
   })
 })
+
+// ANNIVSAFE.1 — "Lead created date" was the first option in this dropdown AND
+// the runner's default, and it is the CRM row-import timestamp: identical to
+// created_at for all 8,509 Stillorgan contacts. An operator reaching for the
+// plausibly-named option rebuilds the exact bug GAPS-P3.1 fixed in the
+// packaged 1-year anniversary recipe.
+//
+// The runner default is deliberately NOT changed (see the comment on
+// DEFAULT_ANNIVERSARY_FROM_FIELD). These tests pin the two things that close
+// the trap without touching it: a new sequence writes a safe field explicitly,
+// and any sequence that IS on the poisoned field says so on screen.
+describe('Anniversary from_field — the import stamp is unmistakable (ANNIVSAFE.1)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+  })
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+  })
+
+  const optionValues = (select) => Array.from(select.querySelectorAll('option')).map(o => o.value)
+  const fromFieldSelect = (container) =>
+    Array.from(container.querySelectorAll('select')).find(s => optionValues(s).includes('dob'))
+
+  function openSettings(sequence = {}) {
+    const rendered = render(
+      <SequenceSettings sequence={{ id: 'seq-1', location_id: 'loc-1', name: 'Anniversary', status: 'draft', ...sequence }} />,
+    )
+    fireEvent.click(rendered.getByText('Settings & trigger'))
+    return rendered
+  }
+
+  it('does not label the import stamp as a lead date', () => {
+    const { container } = openSettings({ trigger_type: 'anniversary' })
+    const opt = Array.from(fromFieldSelect(container).querySelectorAll('option'))
+      .find(o => o.value === 'lead_created_at')
+    expect(opt).toBeTruthy()
+    expect(opt.textContent.toLowerCase()).toContain('import')
+    expect(opt.textContent).not.toBe('Lead created date')
+  })
+
+  it('offers the field an operator actually wants first', () => {
+    const { container } = openSettings({ trigger_type: 'anniversary' })
+    expect(optionValues(fromFieldSelect(container))[0]).toBe('joined_at')
+  })
+
+  it('picking the anniversary trigger seeds joined_at rather than leaving the runner default', () => {
+    const { container } = openSettings({ trigger_type: 'manual' })
+    const triggerSelect = Array.from(container.querySelectorAll('select'))
+      .find(s => optionValues(s).includes('anniversary'))
+    fireEvent.change(triggerSelect, { target: { value: 'anniversary' } })
+    expect(fromFieldSelect(container).value).toBe('joined_at')
+  })
+
+  it('does not warn on a safe field', () => {
+    const { container, queryByTestId } = openSettings({
+      trigger_type: 'anniversary', trigger_config: { from_field: 'joined_at', days_after: 365 },
+    })
+    expect(fromFieldSelect(container).value).toBe('joined_at')
+    expect(queryByTestId('anniversary-field-warning')).toBeNull()
+  })
+
+  it('warns when a saved sequence is on the import stamp', () => {
+    const { getByTestId } = openSettings({
+      trigger_type: 'anniversary', trigger_config: { from_field: 'lead_created_at', days_after: 365 },
+    })
+    const warning = getByTestId('anniversary-field-warning').textContent.toLowerCase()
+    expect(warning).toContain('imported')
+    expect(warning).toContain('joined date')
+  })
+
+  it('warns on a LEGACY sequence with no from_field, because the runner still uses the import stamp there', () => {
+    const { container, getByTestId } = openSettings({ trigger_type: 'anniversary', trigger_config: { days_after: 365 } })
+    // It must show what the runner will actually do, not a flattering default.
+    expect(fromFieldSelect(container).value).toBe('lead_created_at')
+    expect(getByTestId('anniversary-field-warning')).toBeTruthy()
+  })
+
+  it('the warning explains the failure, not just that the field is bad', () => {
+    const { getByTestId } = openSettings({
+      trigger_type: 'anniversary', trigger_config: { from_field: 'lead_created_at' },
+    })
+    expect(getByTestId('anniversary-field-warning').textContent).toMatch(/thousands of people at once/i)
+  })
+
+  it('carries no em-dashes in the operator-facing warning', () => {
+    const { getByTestId } = openSettings({
+      trigger_type: 'anniversary', trigger_config: { from_field: 'lead_created_at' },
+    })
+    expect(getByTestId('anniversary-field-warning').textContent).not.toContain('—')
+  })
+})

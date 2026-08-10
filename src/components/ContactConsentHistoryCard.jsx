@@ -231,10 +231,16 @@ export default function ContactConsentHistoryCard({ contactId }) {
                   </tbody>
                 </table>
               </div>
+              {/* CONSENT-COPY.1 — this used to tell the operator to query
+                  consent_log directly, which was the only answer before GAPS-P6
+                  shipped the export. It is now wrong advice on the page that
+                  answers subject-access requests: the person reading it has a
+                  button two inches away that returns the whole history,
+                  uncapped, and does not have database access anyway. */}
               {truncated && (
                 <p className="text-[11px] text-amber-700 mt-2">
-                  Showing the most recent 500 events. Older entries exist in the
-                  database — query <code>consent_log</code> directly if you need them.
+                  Showing the most recent 500 events. Use <b>Export CSV</b> above for this
+                  contact&apos;s complete history.
                 </p>
               )}
             </>

@@ -47,16 +47,34 @@ export async function PUT(request) {
 
   const db = createServerClient()
 
+  // BRANDMERGE.1 — MERGE, don't overwrite. This used to build every column as
+  // `body.x ?? null`, and all three are `.optional()` in the schema above, so a
+  // caller that sent only `{ company_name }` silently wiped the logo and the
+  // favicon and got a 200 back. It was safe only because the one caller today
+  // (the branding settings form) happens to post all three every time, which is
+  // a property of a component, not of this contract.
+  //
+  // Merge rather than "require all three": the schema has advertised these as
+  // optional since the route shipped, so demanding them would break the
+  // contract to fix a bug in it, and it would force any partial caller to GET
+  // first and echo back values it does not care about, which is its own way to
+  // clobber branding (a stale read wins). Merging keeps the two intents
+  // distinct and both expressible: KEY ABSENT means leave it alone, an explicit
+  // `null` means clear it, which is how the UI removes a logo.
+  //
+  // PostgREST's upsert compiles to INSERT … ON CONFLICT DO UPDATE SET over
+  // exactly the columns in the payload, so an omitted key is untouched on the
+  // update path and NULL on the insert path — no read-modify-write, no race.
   const record = {
     location_id: locationId,
-    logo_url: body.logo_url ?? null,
-    favicon_url: body.favicon_url ?? null,
-    company_name: body.company_name ?? null,
     updated_at: new Date().toISOString(),
     updated_by: user.id,
   }
+  for (const field of ['logo_url', 'favicon_url', 'company_name']) {
+    if (field in body) record[field] = body[field]
+  }
 
-  // Upsert — create if doesn't exist, update if it does
+  // Upsert — create if it doesn't exist, update the supplied columns if it does
   const { data, error } = await db.from('company_settings')
     .upsert(record, { onConflict: 'location_id' })
     .select()
