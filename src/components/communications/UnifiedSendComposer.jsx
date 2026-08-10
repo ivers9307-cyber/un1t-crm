@@ -24,6 +24,7 @@ import { isoToLocalDatetime } from '@/lib/datetime-local'
 import { useUnlayerEditor } from './useUnlayerEditor'
 import { smsSegmentInfo, SMS_MAX_LEN, SMS_MERGE_TAGS, waBodyVariables, WA_VARIABLE_FIELDS } from '@/lib/communications/compose'
 import { groupWaTemplates, UNGROUPED_LABEL } from '@shared/wa-template-groups'
+import { dynamicUrlButtonIndex, URL_BUTTON_MAPPING_KEY } from '@/lib/whatsapp-template-buttons'
 
 const EMPTY_FILTER = { logic: 'and', filters: [] }
 
@@ -144,6 +145,11 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
 
   const selectedTemplate = useMemo(() => templates.find(t => t.id === templateId) || null, [templates, templateId])
   const waVars = useMemo(() => waBodyVariables(selectedTemplate), [selectedTemplate])
+  // A dynamic URL button needs its per-send value or the send is refused.
+  const waUrlButton = useMemo(() => {
+    const idx = dynamicUrlButtonIndex(selectedTemplate?.components)
+    return idx < 0 ? null : selectedTemplate.components.find(c => c.type === 'BUTTONS').buttons[idx]
+  }, [selectedTemplate])
   const seg = smsSegmentInfo(body)
 
   // Explicit "pick people" mode is SMS/WhatsApp only — email hands off to the
@@ -582,6 +588,21 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
                   </label>
                 ))}
                 <datalist id="wa-fields">{WA_VARIABLE_FIELDS.map(f => <option key={f} value={f} />)}</datalist>
+              </div>
+            )}
+            {selectedTemplate && waUrlButton && (
+              <div className="mt-3">
+                <label className="block">
+                  <span className="block text-xs font-medium text-un1t-subtle mb-1">
+                    Link value for the &ldquo;{waUrlButton.text}&rdquo; button
+                  </span>
+                  <input className={fieldCls} list="wa-fields" value={variables[URL_BUTTON_MAPPING_KEY] || ''}
+                    onChange={e => setVariables(v => ({ ...v, [URL_BUTTON_MAPPING_KEY]: e.target.value }))}
+                    placeholder="summer2026, or a contact field like id" />
+                </label>
+                <p className="mt-1 text-[11px] text-un1t-muted">
+                  Goes on the end of {waUrlButton.url}. Required — the send is refused without it.
+                </p>
               </div>
             )}
           </>

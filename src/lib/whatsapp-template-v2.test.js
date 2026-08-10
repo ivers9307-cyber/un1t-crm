@@ -182,3 +182,54 @@ describe('buildTemplateComponents — positional path unchanged', () => {
     expect(comps).toEqual([{ type: 'body', parameters: [{ type: 'text', text: 'Ann' }] }])
   })
 })
+
+describe('buildTemplateComponents — dynamic URL button (WA-TPL-URL)', () => {
+  const urlTpl = {
+    components: [
+      { type: 'BODY', text: 'Your offer is ready' },
+      { type: 'BUTTONS', buttons: [
+        { type: 'QUICK_REPLY', text: 'No thanks' },
+        { type: 'URL', text: 'Get the offer', url: 'https://un1t.com/offer?c={{1}}', example: ['summer'] },
+      ] },
+    ],
+  }
+
+  it('attaches the url parameter at the button index, from the reserved mapping key', () => {
+    const comps = buildTemplateComponents(urlTpl, { id: 'c1' }, { url_button: 'summer2026' }, null, {})
+    expect(comps.find(c => c.type === 'button')).toEqual({
+      type: 'button',
+      sub_type: 'url',
+      index: '1',
+      parameters: [{ type: 'text', text: 'summer2026' }],
+    })
+  })
+
+  it('resolves a contact field just like a body variable', () => {
+    const comps = buildTemplateComponents(urlTpl, { id: 'c1', email: 'a@b.com' }, { url_button: 'email' }, null, {})
+    expect(comps.find(c => c.type === 'button').parameters[0].text).toBe('a@b.com')
+  })
+
+  it('attaches nothing when no value is mapped (the send gate refuses this upstream)', () => {
+    expect(buildTemplateComponents(urlTpl, { id: 'c1' }, {}, null, {}).find(c => c.type === 'button')).toBeUndefined()
+  })
+
+  it('leaves a fixed-URL template alone', () => {
+    const fixed = { components: [{ type: 'BODY', text: 'Hi' }, { type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Book', url: 'https://un1t.com/book' }] }] }
+    expect(buildTemplateComponents(fixed, { id: 'c1' }, { url_button: 'x' }, null, {}).find(c => c.type === 'button')).toBeUndefined()
+  })
+
+  it('a FLOW button and a dynamic URL button can coexist, each at its own index', () => {
+    const both = {
+      components: [
+        { type: 'BODY', text: 'Hi' },
+        { type: 'BUTTONS', buttons: [
+          { type: 'FLOW', text: 'Book', flow_id: 'F1' },
+          { type: 'URL', text: 'Offer', url: 'https://un1t.com/o?c={{1}}', example: ['x'] },
+        ] },
+      ],
+    }
+    const comps = buildTemplateComponents(both, { id: 'c1' }, { url_button: 'v' }, null, { locationId: 'l1' })
+    const buttons = comps.filter(c => c.type === 'button')
+    expect(buttons.map(b => [b.sub_type, b.index])).toEqual([['flow', '0'], ['url', '1']])
+  })
+})

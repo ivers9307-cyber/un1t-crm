@@ -12,6 +12,7 @@ import { getLocationFrequencyCap, isFrequencyCapped, stampMarketingTouch } from 
 import { getLocationBranding } from './location-branding'
 import { extractNamedVariables } from './whatsapp-template-samples.js'
 import { formatMetaError } from './whatsapp-meta-error.js'
+import { dynamicUrlButtonIndex, urlButtonSendBlock, URL_BUTTON_MAPPING_KEY } from './whatsapp-template-buttons.js'
 import { sendPushToRolesAtLocation } from './push'
 import { MANAGER_ROLES } from './schemas'
 
@@ -1001,6 +1002,11 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
   if (bErr || !broadcast) throw new Error('Broadcast not found')
   if (!broadcast.whatsapp_templates) throw new Error('No template selected')
   if (broadcast.whatsapp_templates.status !== 'APPROVED') throw new Error('Template not approved by Meta')
+  // A dynamic-URL template with no link value would fail per recipient at Meta
+  // (132012), draining the list into errors. Refuse here — before the status
+  // flip, like the wallet gate — so a refusal leaves the broadcast as it was.
+  const urlSendBlock = urlButtonSendBlock(broadcast.whatsapp_templates, broadcast.variable_mapping || {})
+  if (urlSendBlock) throw new Error(urlSendBlock)
 
   // Guard the entry state: only a draft (operator clicked Send) or a
   // 'sending' broadcast left mid-flight by an earlier crash may run.
@@ -1143,6 +1149,10 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
 
   const template = broadcast.whatsapp_templates
   const variableMapping = broadcast.variable_mapping || {}
+  // A dynamic-URL template with no link value set would fail per recipient at
+  // Meta — refuse the whole send instead, the way the budget gate does above.
+  const urlBlock = urlButtonSendBlock(template, variableMapping)
+  if (urlBlock) throw new Error(urlBlock)
   const branding = await getLocationBranding(db, broadcast.location_id)
   let sentCount = 0
   let failedCount = 0
@@ -1394,6 +1404,15 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
       .update({ paused_at: new Date().toISOString() })
       .eq('id', broadcastId)
     return { status: 'sending', skipped: 'template_not_approved', paused: true, sent: 0, failed: 0 }
+  }
+  // Same posture for a dynamic-URL template with no link value: pause rather
+  // than throw, so the cron doesn't error-loop every tick, and the operator
+  // sees a paused broadcast instead of a drained list of 132012s.
+  if (urlButtonSendBlock(template, broadcast.variable_mapping || {})) {
+    await db.from('whatsapp_broadcasts')
+      .update({ paused_at: new Date().toISOString() })
+      .eq('id', broadcastId)
+    return { status: 'sending', skipped: 'url_button_value_missing', paused: true, sent: 0, failed: 0 }
   }
 
   // Resolve the location's WA config once for the whole tick (as the blast
@@ -1671,6 +1690,21 @@ export function buildTemplateComponents(template, contact, variableMapping, head
     const flowToken = opts.flowToken || (contact?.id && opts.locationId ? `${contact.id}.${opts.locationId}` : null)
     if (flowToken) {
       components.push({ type: 'button', sub_type: 'flow', index: String(flowIdx), parameters: [{ type: 'action', action: { flow_token: flowToken } }] })
+    }
+  }
+
+  // Dynamic URL buttons: the approved template's link ends in a variable, so
+  // every send must carry its value or Meta rejects the message (132012). The
+  // value comes from the reserved mapping key and resolves like a body variable
+  // — a contact field, or a literal (a campaign code) via the literal fallback.
+  // Sends with nothing mapped are refused upstream by urlButtonSendBlock(); the
+  // omission here is the belt to that braces.
+  const urlIdx = dynamicUrlButtonIndex(templateComponents)
+  if (urlIdx >= 0) {
+    const mapped = (variableMapping || {})[URL_BUTTON_MAPPING_KEY]
+    const value = String(mapped ?? '').trim() ? resolveContactField(mapped, contact, opts) : ''
+    if (value) {
+      components.push({ type: 'button', sub_type: 'url', index: String(urlIdx), parameters: [{ type: 'text', text: value }] })
     }
   }
 

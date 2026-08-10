@@ -11,6 +11,7 @@ import AudienceBuilder from './AudienceBuilder'
 import AudienceCount from './communications/AudienceCount'
 import SendQuietHoursNotice from './communications/SendQuietHoursNotice'
 import { estimateDripDays } from '@/lib/whatsapp-drip'
+import { dynamicUrlButtonIndex, URL_BUTTON_MAPPING_KEY } from '@/lib/whatsapp-template-buttons'
 // COMMS-DETAIL-FIX.1 — every figure on this page is counted from
 // whatsapp_broadcast_recipients. whatsapp_broadcasts.total_* is still written
 // and still on disk; it is just no longer what an operator reads. See
@@ -54,6 +55,12 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
   const bodyComp = selectedTemplate?.components?.find(c => c.type === 'BODY')
   const headerComp = selectedTemplate?.components?.find(c => c.type === 'HEADER')
   const bodyVars = bodyComp?.text?.match(/\{\{\d+\}\}/g) || []
+  // A dynamic URL button needs its per-send value or Meta rejects every message
+  // (132012) — sendBroadcast refuses the send outright without one.
+  const urlBtnIdx = dynamicUrlButtonIndex(selectedTemplate?.components)
+  const urlBtn = urlBtnIdx >= 0
+    ? selectedTemplate.components.find(c => c.type === 'BUTTONS').buttons[urlBtnIdx]
+    : null
 
   const VARIABLE_OPTIONS = [
     { value: 'first_name', label: 'First Name' },
@@ -647,6 +654,29 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
                       </div>
                     )
                   })}
+                </div>
+              )}
+
+              {/* Dynamic URL button value — a contact field or a literal */}
+              {urlBtn && (
+                <div className="space-y-1">
+                  <label className="block text-xs text-un1t-subtle">
+                    Link value for the &ldquo;{urlBtn.text}&rdquo; button
+                  </label>
+                  <input
+                    type="text"
+                    list="wa-url-button-fields"
+                    value={variableMapping[URL_BUTTON_MAPPING_KEY] || ''}
+                    onChange={e => setVariableMapping({ ...variableMapping, [URL_BUTTON_MAPPING_KEY]: e.target.value })}
+                    placeholder="summer2026, or a contact field like id"
+                    className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
+                  />
+                  <datalist id="wa-url-button-fields">
+                    {VARIABLE_OPTIONS.map(opt => <option key={opt.value} value={opt.value} />)}
+                  </datalist>
+                  <p className="text-[11px] text-un1t-muted">
+                    Goes on the end of {urlBtn.url}. A contact field personalises it per recipient; anything else is sent as typed. Required — the send is refused without it.
+                  </p>
                 </div>
               )}
 

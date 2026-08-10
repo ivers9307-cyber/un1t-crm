@@ -70,7 +70,7 @@ export function templateButtonsError(buttons = [], { ignoreEmptyLabels = false }
         if ((url.match(/\{\{\s*[^{}]+\s*\}\}/g) || []).length > 1) return `${where}'s URL can contain only one variable.`
         if (!/\{\{\s*[^{}]+\s*\}\}$/.test(url)) return `${where}'s URL can only use a variable at the very end of the link.`
         if (!exampleValues(btn).length) {
-          return `${where}'s URL uses a variable, which Meta accepts only with an example value — the template builder can't supply one yet, so use a fixed link.`
+          return `${where}'s link ends in a variable, so Meta needs a sample value for it — fill in the sample field under the button.`
         }
       }
     }
@@ -94,6 +94,80 @@ export function templateButtonsError(buttons = [], { ignoreEmptyLabels = false }
   if (count('PHONE_NUMBER') > MAX_PHONE_BUTTONS) return `A template can have only one phone-number button (this one has ${count('PHONE_NUMBER')}).`
 
   return null
+}
+
+// What Meta accepts on each button type. The editor mutates one button object
+// in place as the operator switches its type, so a URL typed before switching
+// to QUICK_REPLY would otherwise ride along to Meta as a stray field.
+const FIELDS_BY_TYPE = {
+  QUICK_REPLY: ['type', 'text'],
+  URL: ['type', 'text', 'url', 'example'],
+  PHONE_NUMBER: ['type', 'text', 'phone_number'],
+  FLOW: ['type', 'text', 'flow_id', 'navigate_screen', 'flow_action'],
+  COPY_CODE: ['type', 'text', 'example'],
+}
+
+/**
+ * Drop every field that doesn't belong to the button's type, and carry `example`
+ * on a URL button ONLY when its link actually ends in a variable — the sample
+ * lives on the button object so it round-trips through a synced template, which
+ * means a stale one outlives the operator deleting the variable from the link.
+ */
+export function normalizeButtonsForMeta(buttons = []) {
+  const list = Array.isArray(buttons) ? buttons : []
+  return list.map((btn) => {
+    const type = String(btn?.type || '').toUpperCase()
+    const allowed = FIELDS_BY_TYPE[type]
+    if (!allowed) return btn      // unknown type — the validator rejects it by name
+    const out = {}
+    for (const key of allowed) {
+      if (key === 'example') continue
+      if (btn?.[key] !== undefined) out[key] = btn[key]
+    }
+    const wantsExample = type === 'COPY_CODE' || (type === 'URL' && VARIABLE.test(String(btn?.url || '')))
+    const example = exampleValues(btn)
+    if (wantsExample && example.length) out.example = example
+    return out
+  })
+}
+
+/**
+ * The variable-mapping key that carries a dynamic URL button's per-send value.
+ * Deliberately not a number: Meta numbers a button's variables independently of
+ * the body's, so a bare "1" would collide with the body's {{1}}.
+ */
+export const URL_BUTTON_MAPPING_KEY = 'url_button'
+
+/** Buttons out of a Meta components array (never null). */
+function buttonsOf(components) {
+  const list = Array.isArray(components) ? components : []
+  const comp = list.find((c) => String(c?.type || '').toUpperCase() === 'BUTTONS')
+  return Array.isArray(comp?.buttons) ? comp.buttons : []
+}
+
+/**
+ * Position of the URL button whose link carries a variable, or -1. The position
+ * is the button's index inside BUTTONS — which is exactly the `index` Meta wants
+ * on the per-send button parameter.
+ */
+export function dynamicUrlButtonIndex(components) {
+  return buttonsOf(components).findIndex(
+    (b) => String(b?.type || '').toUpperCase() === 'URL' && VARIABLE.test(String(b?.url || ''))
+  )
+}
+
+/**
+ * Why this template must not be sent yet, or null. A dynamic URL button needs a
+ * per-send value: without it Meta rejects every single message with 132012, so
+ * the blast fails one recipient at a time (how the video-header bug played out
+ * on 2026-06-11). Refuse the whole send instead, naming the button.
+ */
+export function urlButtonSendBlock(template, variableMapping) {
+  const idx = dynamicUrlButtonIndex(template?.components)
+  if (idx < 0) return null
+  if (String(variableMapping?.[URL_BUTTON_MAPPING_KEY] ?? '').trim()) return null
+  const label = buttonsOf(template.components)[idx]?.text || `button ${idx + 1}`
+  return `The "${label}" button's link ends in a variable with no value set. Set the link value on this send before sending — Meta rejects every message without it.`
 }
 
 /**

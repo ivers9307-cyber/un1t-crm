@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { templateButtonsError, componentsButtonsError } from './whatsapp-template-buttons.js'
+import {
+  templateButtonsError, componentsButtonsError,
+  dynamicUrlButtonIndex, urlButtonSendBlock, URL_BUTTON_MAPPING_KEY, normalizeButtonsForMeta,
+} from './whatsapp-template-buttons.js'
 
 const quickReply = (text) => ({ type: 'QUICK_REPLY', text })
 
@@ -47,8 +50,8 @@ describe('templateButtonsError — the rules behind Meta subcode 2388060', () =>
 
   it('rejects a URL variable with no example value, and says why', () => {
     const err = templateButtonsError([{ type: 'URL', text: 'Shop', url: 'https://un1t.com/shop?promo={{1}}' }])
-    expect(err).toMatch(/example value/i)
-    expect(err).toMatch(/URL/i)
+    expect(err).toMatch(/sample value/i)
+    expect(err).toMatch(/URL|link/i)
   })
 
   it('accepts a Meta-synced dynamic URL button that carries its example', () => {
@@ -111,5 +114,92 @@ describe('componentsButtonsError — the server-side view of the same payload', 
 
   it('rejects a BUTTONS component with no buttons array', () => {
     expect(componentsButtonsError([body, { type: 'BUTTONS' }])).toMatch(/buttons/i)
+  })
+})
+
+describe('dynamicUrlButtonIndex', () => {
+  const btns = (buttons) => [{ type: 'BODY', text: 'Hi' }, { type: 'BUTTONS', buttons }]
+
+  it('finds the position of a URL button whose link ends in a variable', () => {
+    expect(dynamicUrlButtonIndex(btns([
+      { type: 'QUICK_REPLY', text: 'No thanks' },
+      { type: 'URL', text: 'Shop', url: 'https://un1t.com/shop?promo={{1}}', example: ['summer'] },
+    ]))).toBe(1)
+  })
+
+  it('is -1 for a fixed URL, no buttons, or no components', () => {
+    expect(dynamicUrlButtonIndex(btns([{ type: 'URL', text: 'Book', url: 'https://un1t.com/book' }]))).toBe(-1)
+    expect(dynamicUrlButtonIndex([{ type: 'BODY', text: 'Hi' }])).toBe(-1)
+    expect(dynamicUrlButtonIndex(null)).toBe(-1)
+  })
+})
+
+describe('urlButtonSendBlock — refuse the send rather than let Meta reject each message', () => {
+  const dynamic = { components: [{ type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Shop', url: 'https://un1t.com/s?p={{1}}', example: ['x'] }] }] }
+  const fixed = { components: [{ type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Book', url: 'https://un1t.com/book' }] }] }
+
+  it('blocks when the link variable has no mapped value', () => {
+    const block = urlButtonSendBlock(dynamic, {})
+    expect(block).toMatch(/link/i)
+    expect(block).toContain('Shop')
+  })
+
+  it('blocks on a blank or whitespace-only value', () => {
+    expect(urlButtonSendBlock(dynamic, { [URL_BUTTON_MAPPING_KEY]: '   ' })).toBeTruthy()
+  })
+
+  it('passes once a value is mapped', () => {
+    expect(urlButtonSendBlock(dynamic, { [URL_BUTTON_MAPPING_KEY]: 'summer2026' })).toBeNull()
+    expect(urlButtonSendBlock(dynamic, { [URL_BUTTON_MAPPING_KEY]: 'id' })).toBeNull()
+  })
+
+  it('never blocks a template without a dynamic URL button', () => {
+    expect(urlButtonSendBlock(fixed, {})).toBeNull()
+    expect(urlButtonSendBlock({ components: [] }, {})).toBeNull()
+    expect(urlButtonSendBlock(null, null)).toBeNull()
+  })
+})
+
+describe('normalizeButtonsForMeta', () => {
+  it('keeps the example on a genuinely dynamic URL button', () => {
+    const btns = [{ type: 'URL', text: 'Shop', url: 'https://un1t.com/s?p={{1}}', example: ['summer'] }]
+    expect(normalizeButtonsForMeta(btns)).toEqual(btns)
+  })
+
+  it('drops a stale example once the variable leaves the link', () => {
+    const out = normalizeButtonsForMeta([{ type: 'URL', text: 'Shop', url: 'https://un1t.com/shop', example: ['summer'] }])
+    expect(out[0]).toEqual({ type: 'URL', text: 'Shop', url: 'https://un1t.com/shop' })
+    expect('example' in out[0]).toBe(false)
+  })
+
+  it('drops a blank example and normalises a scalar one to an array', () => {
+    expect('example' in normalizeButtonsForMeta([{ type: 'URL', text: 'S', url: 'https://u.com/{{1}}', example: ['  '] }])[0]).toBe(false)
+    expect(normalizeButtonsForMeta([{ type: 'URL', text: 'S', url: 'https://u.com/{{1}}', example: 'x' }])[0].example).toEqual(['x'])
+  })
+
+  it('passes a well-formed button of each type through unchanged', () => {
+    const btns = [{ type: 'QUICK_REPLY', text: 'Yes' }, { type: 'FLOW', text: 'Book', flow_id: '1', navigate_screen: 'PATH' }]
+    expect(normalizeButtonsForMeta(btns)).toEqual(btns)
+    expect(normalizeButtonsForMeta()).toEqual([])
+  })
+
+  it('drops fields left behind when the operator switches a button type', () => {
+    // Typed a URL + sample, then switched the type to Quick Reply.
+    expect(normalizeButtonsForMeta([
+      { type: 'QUICK_REPLY', text: 'No thanks', url: 'https://un1t.com/x?c={{1}}', example: ['summer'] },
+    ])).toEqual([{ type: 'QUICK_REPLY', text: 'No thanks' }])
+    expect(normalizeButtonsForMeta([
+      { type: 'PHONE_NUMBER', text: 'Call', phone_number: '+35312345678', flow_id: 'F1' },
+    ])).toEqual([{ type: 'PHONE_NUMBER', text: 'Call', phone_number: '+35312345678' }])
+  })
+
+  it('keeps COPY_CODE examples and Meta-synced flow_action', () => {
+    expect(normalizeButtonsForMeta([{ type: 'COPY_CODE', text: 'Copy', example: ['UN1T20'] }])[0].example).toEqual(['UN1T20'])
+    const flow = { type: 'FLOW', text: 'Book', flow_id: 1343015528022374, flow_action: 'NAVIGATE', navigate_screen: 'PATH' }
+    expect(normalizeButtonsForMeta([flow])).toEqual([flow])
+  })
+
+  it('leaves an unknown type alone for the validator to name', () => {
+    expect(normalizeButtonsForMeta([{ type: 'MAGIC', text: 'Hi' }])).toEqual([{ type: 'MAGIC', text: 'Hi' }])
   })
 })

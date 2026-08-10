@@ -7,7 +7,10 @@ import { ArrowLeft, Save, Send, Trash2, Upload, FileText, Video, X } from 'lucid
 import { createBrowserClient } from '@/lib/supabase'
 import { validateTemplateMedia } from '@/lib/template-media'
 import { extractVariableIndexes, extractNamedVariables, buildBodyExample, buildNamedBodyExample, buildHeaderTextExample, missingSampleError, samplesFromExample, samplesFromNamedExample } from '@/lib/whatsapp-template-samples'
-import { templateButtonsError } from '@/lib/whatsapp-template-buttons'
+import { templateButtonsError, normalizeButtonsForMeta } from '@/lib/whatsapp-template-buttons'
+
+// Meta accepts one variable in a URL button, at the very end of the link.
+const URL_VARIABLE_AT_END = /\{\{\s*[^{}]+\s*\}\}$/
 import { listWaTemplateGroups } from '@shared/wa-template-groups'
 
 // Parse a route response defensively. Infra layers answer in plain text
@@ -268,7 +271,9 @@ export default function WATemplateEditor({ template, locationId, userId, events 
     }
 
     if (buttons.length > 0) {
-      components.push({ type: 'BUTTONS', buttons })
+      // Drops a sample left behind after the operator removed the variable from
+      // a link — Meta rejects an example on a static URL button.
+      components.push({ type: 'BUTTONS', buttons: normalizeButtonsForMeta(buttons) })
     }
 
     return components
@@ -790,14 +795,31 @@ export default function WATemplateEditor({ template, locationId, userId, events 
                       />
                     </div>
                     {btn.type === 'URL' && (
-                      <input
-                        type="url"
-                        value={btn.url || ''}
-                        onChange={e => updateButton(i, { url: e.target.value })}
-                        placeholder="https://..."
-                        disabled={(isSubmitted && !canResubmit)}
-                        className="w-full bg-un1t-surface border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted focus:outline-none disabled:opacity-50"
-                      />
+                      <>
+                        <input
+                          type="url"
+                          value={btn.url || ''}
+                          onChange={e => updateButton(i, { url: e.target.value })}
+                          placeholder="https://... or https://un1t.com/offer?c={{1}} for a personalised link"
+                          disabled={(isSubmitted && !canResubmit)}
+                          className="w-full bg-un1t-surface border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted focus:outline-none disabled:opacity-50"
+                        />
+                        {URL_VARIABLE_AT_END.test(btn.url || '') && (
+                          <>
+                            <input
+                              type="text"
+                              value={btn.example?.[0] || ''}
+                              onChange={e => updateButton(i, { example: [e.target.value] })}
+                              placeholder="Sample value for the link variable, e.g. summer2026"
+                              disabled={(isSubmitted && !canResubmit)}
+                              className="w-full bg-un1t-surface border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted focus:outline-none disabled:opacity-50"
+                            />
+                            <p className="text-[11px] text-un1t-muted">
+                              Meta reviews the link against this sample. The real value is set per send, on the broadcast.
+                            </p>
+                          </>
+                        )}
+                      </>
                     )}
                     {btn.type === 'PHONE_NUMBER' && (
                       <input
