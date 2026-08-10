@@ -145,7 +145,10 @@ export default function TemplateEditor({ template, locationId, userId }) {
       {/* Top bar */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-border bg-un1t-surface shrink-0">
         <div className="flex items-center gap-4">
-          <Link href="/email/templates" className="text-un1t-subtle hover:text-un1t-text transition-colors">
+          {/* COMMSLAYOUT.4 — was `/email/templates`, a stub that redirects to
+              this same URL. The editor is opened from /communications/templates,
+              so link straight there with the channel filter it arrived on. */}
+          <Link href="/communications/templates?channel=email" className="text-un1t-subtle hover:text-un1t-text transition-colors">
             <ArrowLeft size={20} />
           </Link>
           <input

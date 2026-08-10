@@ -44,3 +44,24 @@ describe('/communications/segments', () => {
     expect(headings).toContain('Tag audiences')
   })
 })
+
+// COMMSLAYOUT.3 — the manager gate stays (GET /api/segments, which feeds the
+// tag cards, is Manager+ too), but a direct hit must not dump the user on the
+// dashboard: they came from Communications and should land back in it.
+describe('/communications/segments — non-manager landing', () => {
+  it('keeps the manager gate', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u2', role: 'staff', activeLocation: { id: 'loc-1' } })
+    await expect(SegmentsTabPage()).rejects.toThrow(/NEXT_REDIRECT/)
+  })
+
+  it('ejects to /communications, not the dashboard', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u2', role: 'staff', activeLocation: { id: 'loc-1' } })
+    await expect(SegmentsTabPage()).rejects.toThrow('NEXT_REDIRECT:/communications')
+  })
+
+  it('still lets a manager through', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u3', role: 'manager', activeLocation: { id: 'loc-1' } })
+    render(await SegmentsTabPage())
+    expect(screen.getByTestId('tag-cards')).toBeTruthy()
+  })
+})

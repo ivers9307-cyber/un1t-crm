@@ -20,7 +20,13 @@ export const dynamic = 'force-dynamic'
 export default async function SegmentsTabPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!MANAGER_ROLES.includes(user.role)) redirect('/')
+  // COMMSLAYOUT.3 — this manager gate is the correct one (the tag cards are fed
+  // by GET /api/segments, which is Manager+ itself), so the Segments TAB now
+  // matches it instead of rendering for anyone with a channel permission. A
+  // direct hit by someone who slipped past still has to be turned away, but it
+  // lands back on the Communications hub rather than `/`, which threw the user
+  // out of the section they were working in.
+  if (!MANAGER_ROLES.includes(user.role)) redirect('/communications')
 
   const locationId = user.activeLocation?.id
 

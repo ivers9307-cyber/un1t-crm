@@ -234,11 +234,14 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
 
   return (
     <div>
+      {/* COMMSLAYOUT.4 — was `/communications/sms/broadcasts`, a retired list
+          that redirects to /communications/sent. Skip the hop, and name the
+          page it actually lands on. */}
       <Link
-        href="/communications/sms/broadcasts"
+        href="/communications/sent"
         className="inline-flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text mb-4"
       >
-        <ArrowLeft size={16} /> Back to SMS broadcasts
+        <ArrowLeft size={16} /> Back to Sends
       </Link>
 
       <div className="flex items-start justify-between mb-4">

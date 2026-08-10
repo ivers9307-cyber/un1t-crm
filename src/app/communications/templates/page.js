@@ -106,7 +106,9 @@ export default async function TemplatesListPage(props) {
               >
                 <div className="flex items-center gap-4 min-w-0">
                   <div className="w-9 h-9 rounded-lg bg-blue-500/15 flex items-center justify-center shrink-0">
-                    <Mail size={16} className="text-blue-400" />
+                    {/* COMMSLAYOUT.5 — -700 on the light `bg-blue-500/15` tile;
+                        -400 was the dark-theme ramp and barely showed. */}
+                    <Mail size={16} className="text-blue-700" />
                   </div>
                   <div className="min-w-0">
                     <p className="text-sm font-medium truncate">{t.name}</p>

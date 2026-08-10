@@ -219,7 +219,11 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
       {/* Top bar */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-border bg-un1t-surface shrink-0">
         <div className="flex items-center gap-4">
-          <Link href="/whatsapp/broadcasts" className="text-un1t-subtle hover:text-un1t-text transition-colors">
+          {/* COMMSLAYOUT.4 — was `/whatsapp/broadcasts`, which redirects to
+              /communications/broadcasts, which redirects again to
+              /communications/sent. Two hops to reach the page the user came
+              from; go there directly. */}
+          <Link href="/communications/sent" className="text-un1t-subtle hover:text-un1t-text transition-colors">
             <ArrowLeft size={20} />
           </Link>
           <input

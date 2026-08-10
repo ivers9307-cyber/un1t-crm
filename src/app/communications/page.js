@@ -14,6 +14,10 @@ import { Mail, MessageCircle, MessageSquare, Megaphone, Repeat, FileText, Inbox,
 
 export const dynamic = 'force-dynamic'
 
+// COMMSLAYOUT.5 — `accent` is text on a `bg-un1t-surface` card, i.e. a LIGHT
+// surface: it must be the -700 ramp. Every caller below used -400/-500, which
+// is the dark-theme idiom and washes out here. The ActionCards underneath
+// already had it right (`bg-<c>-500/20 text-<c>-700`).
 function StatCard({ label, value, icon: Icon, accent }) {
   return (
     <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-5">
@@ -139,13 +143,13 @@ export default async function CommunicationsHub() {
         {canEmail && (
           <>
             <StatCard label="Emails sent" value={totalSent.toLocaleString()} icon={Mail} />
-            <StatCard label="Open rate" value={`${openRate}%`} accent="text-green-500" />
+            <StatCard label="Open rate" value={`${openRate}%`} accent="text-green-700" />
             <StatCard label="Active sequences" value={activeSequences} icon={Repeat} />
           </>
         )}
         {canWhatsapp && (
           <>
-            <StatCard label="Unread WhatsApp" value={unreadConvos} icon={Inbox} accent={unreadConvos > 0 ? 'text-amber-400' : undefined} />
+            <StatCard label="Unread WhatsApp" value={unreadConvos} icon={Inbox} accent={unreadConvos > 0 ? 'text-amber-700' : undefined} />
             {waHealth && (
               <>
                 <StatCard
@@ -164,20 +168,20 @@ export default async function CommunicationsHub() {
         )}
         {canSms && (
           <>
-            <StatCard label="SMS sent" value={smsSent.toLocaleString()} icon={MessageSquare} accent={smsSent > 0 ? 'text-cyan-400' : undefined} />
-            <StatCard label="SMS · last 30 days" value={smsSent30d.toLocaleString()} accent={smsSent30d > 0 ? 'text-cyan-400' : undefined} />
+            <StatCard label="SMS sent" value={smsSent.toLocaleString()} icon={MessageSquare} accent={smsSent > 0 ? 'text-cyan-700' : undefined} />
+            <StatCard label="SMS · last 30 days" value={smsSent30d.toLocaleString()} accent={smsSent30d > 0 ? 'text-cyan-700' : undefined} />
             {smsDeliveryRate !== null && (
               <StatCard
                 label="Delivered (carrier-confirmed)"
                 value={`${smsDeliveryRate}%`}
-                accent={smsDeliveryRate >= 70 ? 'text-emerald-400' : 'text-amber-400'}
+                accent={smsDeliveryRate >= 70 ? 'text-emerald-700' : 'text-amber-700'}
               />
             )}
             {smsFailureRate !== null && (
               <StatCard
                 label="SMS failure rate"
                 value={`${smsFailureRate}%`}
-                accent={smsFailureRate > 5 ? 'text-red-400' : 'text-un1t-subtle'}
+                accent={smsFailureRate > 5 ? 'text-red-700' : 'text-un1t-subtle'}
               />
             )}
           </>
