@@ -11,6 +11,7 @@ import {
   OFFER_SALE_TAG,
   offerIsOpen,
   formatEuro,
+  formatSaleDeadline,
   resolveOfferPurchaseByOrderId,
   markOfferPurchaseState,
   linkOrCreateContactForPurchase,
@@ -52,6 +53,23 @@ describe('formatEuro', () => {
     expect(formatEuro(49700)).toBe('€497')
     expect(formatEuro(104400)).toBe('€1,044')
     expect(formatEuro(206800)).toBe('€2,068')
+  })
+})
+
+describe('formatSaleDeadline', () => {
+  it('renders the Dublin wall-clock weekday/date/time, uppercased', () => {
+    // 2026-08-10 23:59:59+01 (Dublin summer time) = 22:59:59Z
+    expect(formatSaleDeadline('2026-08-10T22:59:59Z')).toBe('MONDAY 10 AUGUST, 23:59')
+  })
+  it('uses Dublin time, not UTC (an instant just past Dublin midnight is the NEXT day)', () => {
+    expect(formatSaleDeadline('2026-08-10T23:30:00Z')).toBe('TUESDAY 11 AUGUST, 00:30')
+  })
+  it('honours uppercase:false for sentence copy', () => {
+    expect(formatSaleDeadline('2026-08-10T22:59:59Z', { uppercase: false })).toBe('Monday 10 August, 23:59')
+  })
+  it('empty for missing or unparseable input', () => {
+    expect(formatSaleDeadline(null)).toBe('')
+    expect(formatSaleDeadline('not a date')).toBe('')
   })
 })
 

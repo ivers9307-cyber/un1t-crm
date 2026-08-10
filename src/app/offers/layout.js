@@ -4,6 +4,8 @@
 // in src/lib/brands.js + src/proxy.js + AppShell PUBLIC_PATHS (all three, or
 // a logged-out visitor bounces — the /free-class lesson).
 import { Archivo, Archivo_Black } from 'next/font/google'
+import { createServerClient } from '@/lib/supabase'
+import { formatSaleDeadline } from '@/lib/sale-offers'
 import './offers.css'
 
 const archivo = Archivo({ subsets: ['latin'], weight: ['500', '600', '700'], variable: '--font-archivo' })
@@ -14,13 +16,26 @@ export const metadata = {
   robots: { index: false, follow: false },
 }
 
-export default function OffersLayout({ children }) {
+export default async function OffersLayout({ children }) {
+  // Deadline is DERIVED from the live sale window, never hard-coded — see
+  // formatSaleDeadline(). A literal date here disagreed with the countdown
+  // the moment the operator moved ends_at in SQL.
+  const db = createServerClient()
+  const { data } = await db
+    .from('sale_offers')
+    .select('ends_at')
+    .eq('active', true)
+    .order('ends_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  const deadline = formatSaleDeadline(data?.ends_at)
+
   return (
     <div className={`ofr ${archivo.variable} ${archivoBlack.variable}`}>
       <div className="ofr-frame">
         {children}
         <footer style={{ padding: '40px 32px', color: '#666', fontSize: 12, letterSpacing: '.12em', borderTop: '1px solid var(--ofr-line)' }}>
-          UN1T STILLORGAN · SALE ENDS MONDAY 11 AUGUST, 23:59 · CHAMP CHAMP FITNESS LIMITED, DUBLIN, IRELAND
+          UN1T STILLORGAN{deadline ? ` · SALE ENDS ${deadline}` : ''} · CHAMP CHAMP FITNESS LIMITED, DUBLIN, IRELAND
         </footer>
       </div>
     </div>
