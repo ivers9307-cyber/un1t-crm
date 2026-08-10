@@ -7,6 +7,7 @@ import { ArrowLeft, Save, Send, Trash2, Upload, FileText, Video, X } from 'lucid
 import { createBrowserClient } from '@/lib/supabase'
 import { validateTemplateMedia } from '@/lib/template-media'
 import { extractVariableIndexes, extractNamedVariables, buildBodyExample, buildNamedBodyExample, buildHeaderTextExample, missingSampleError, samplesFromExample, samplesFromNamedExample } from '@/lib/whatsapp-template-samples'
+import { templateButtonsError } from '@/lib/whatsapp-template-buttons'
 import { listWaTemplateGroups } from '@shared/wa-template-groups'
 
 // Parse a route response defensively. Infra layers answer in plain text
@@ -126,6 +127,11 @@ export default function WATemplateEditor({ template, locationId, userId, events 
   const [headerSamples, setHeaderSamples] = useState(() => samplesFromExample(existingHeader?.example?.header_text))
   const bodyVars = [...extractVariableIndexes(bodyText), ...extractNamedVariables(bodyText)]
   const headerVars = headerFormat === 'TEXT' ? [...extractVariableIndexes(headerText), ...extractNamedVariables(headerText)] : []
+  // Gates both submit paths; the live variant drives the inline hint, so the
+  // operator sees a broken button while typing rather than after a round trip
+  // to Meta (which answers with a bare, unactionable "Invalid parameter").
+  const buttonError = templateButtonsError(buttons)
+  const liveButtonError = templateButtonsError(buttons, { ignoreEmptyLabels: true })
 
   // Header media — handle is what Meta needs at template-approval time;
   // url is what we feed Meta at SEND time. Both come back from
@@ -277,8 +283,10 @@ export default function WATemplateEditor({ template, locationId, userId, events 
       setError(`A ${headerFormat.toLowerCase()} file must be uploaded before submitting — Meta requires a real example asset for media headers.`)
       return
     }
-    if (buttons.some(b => b.type === 'FLOW' && (!b.flow_id?.trim() || !b.navigate_screen?.trim() || !b.text?.trim()))) {
-      setError('Flow buttons need text, a Flow ID and an entry screen')
+    // Meta answers a malformed button with a bare "Invalid parameter" that names
+    // neither the button nor the rule — check the whole rule set here instead.
+    if (buttonError) {
+      setError(buttonError)
       return
     }
     // Meta rejects a body that mixes parameter formats — force one style.
@@ -351,6 +359,10 @@ export default function WATemplateEditor({ template, locationId, userId, events 
     })
     if (sampleError) {
       setError(sampleError)
+      return
+    }
+    if (buttonError) {
+      setError(buttonError)
       return
     }
     setResubmitting(true)
@@ -743,6 +755,14 @@ export default function WATemplateEditor({ template, locationId, userId, events 
             {/* Buttons */}
             <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-3">
               <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Buttons (optional, max 3)</h3>
+              {buttons.length > 0 && (
+                <p className="text-xs text-un1t-muted">
+                  Button labels are plain text only — no variables, emoji, line breaks or {'*'}formatting{'*'}. Meta rejects the whole template otherwise.
+                </p>
+              )}
+              {liveButtonError && (
+                <p className="text-xs text-red-700 bg-red-500/10 border border-red-500/30 rounded-md px-2.5 py-1.5">{liveButtonError}</p>
+              )}
 
               {buttons.map((btn, i) => (
                 <div key={i} className="flex items-start gap-2 p-3 bg-un1t-surface rounded-lg border border-un1t-border">

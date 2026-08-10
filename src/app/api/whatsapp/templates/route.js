@@ -5,6 +5,7 @@ import { createTemplate as createMetaTemplate, getTemplates as getMetaTemplates 
 import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
+import { componentsButtonsError } from '@/lib/whatsapp-template-buttons'
 
 const WaTemplateCreateSchema = z.object({
   name: z.string().min(1).max(200),
@@ -106,6 +107,11 @@ export async function POST(request) {
   const locationId = body.location_id || user.activeLocation?.id
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+
+  // Meta refuses a malformed button with a generic code-100 "Invalid parameter"
+  // that names neither the button nor the rule. Fail here instead, with both.
+  const buttonError = componentsButtonsError(body.components)
+  if (buttonError) return NextResponse.json({ success: false, error: buttonError }, { status: 400 })
 
   const db = createServerClient()
 
