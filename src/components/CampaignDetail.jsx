@@ -17,6 +17,10 @@ import CampaignOutcomeReport from './CampaignOutcomeReport.jsx'
 // allows only 'a'|'b'|NULL). The stamp says what was SENT; this says what the
 // numbers support, and the two are shown separately when they disagree.
 import { decideAbOutcome } from '@/lib/campaign-ab'
+// REPORT-SOT.2 — every figure on this page is counted from campaign_recipients.
+// campaigns.total_* is still written and still on disk; it is just no longer
+// what an operator reads. See campaign-display-stats.js for the measurements.
+import { campaignDisplayStats, NO_RECIPIENT_STATS, pct } from '@/lib/campaign-display-stats'
 
 // COMMSFIX.D.1a — the header chip used to be a hardcoded green "Sent" for
 // every campaign, including scheduled/queued/sending/cancelled ones — i.e. it
@@ -98,7 +102,7 @@ function AbVariantRow({ label, subject, stats, isWinner }) {
   )
 }
 
-export default function CampaignDetail({ campaign, recipients = [], abStats = null, resendChild = null, resendParent = null, locationId: _locationId, userId: _userId }) {
+export default function CampaignDetail({ campaign, recipients = [], stats = null, abStats = null, resendChild = null, resendParent = null, locationId: _locationId, userId: _userId }) {
   const router = useRouter()
   const db = createBrowserClient()
   const [tab, setTab] = useState('overview')  // overview, recipients, preview
@@ -138,7 +142,14 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
   // between chunks. Until this existed the ONLY cancel control lived behind
   // the undiscoverable ?edit=1 query param.
   const stoppable = ['scheduled', 'queued', 'sending'].includes(status)
-  const pendingCount = campaign.total_recipients || campaign.total_sent || 0
+  // REPORT-SOT.2 — every displayed figure on this page comes from
+  // campaign_recipients via the server page. `stats` is never absent in the
+  // app; the fallback keeps the component renderable on its own (and in the
+  // tests that predate the prop), and campaignDisplayStats records which
+  // source answered so the page can label a fallback rather than pass stored
+  // counters off as recipient figures.
+  const figures = stats || campaignDisplayStats(campaign, NO_RECIPIENT_STATS)
+  const pendingCount = figures.recipients || figures.sent || 0
 
   async function stopCampaign() {
     const who = pendingCount ? `${pendingCount.toLocaleString()} recipients` : 'this audience'
@@ -198,13 +209,10 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
     )
   }
 
-  const totalSent = campaign.total_sent || campaign.total_recipients || 0
-  const totalOpened = campaign.total_opened || 0
-  const totalClicked = campaign.total_clicked || 0
-  const totalBounced = campaign.total_bounced || 0
-  const openRate = totalSent > 0 ? ((totalOpened / totalSent) * 100).toFixed(1) : '0'
-  const clickRate = totalSent > 0 ? ((totalClicked / totalSent) * 100).toFixed(1) : '0'
-  const bounceRate = totalSent > 0 ? ((totalBounced / totalSent) * 100).toFixed(1) : '0'
+  const totalSent = figures.sent
+  const totalOpened = figures.opened
+  const totalClicked = figures.clicked
+  const totalBounced = figures.bounced
 
   const statusChip = campaignStatusConfig[status] || campaignStatusConfig.draft
 
@@ -352,10 +360,22 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
             {/* Stat cards */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <StatCard icon={Send}              label="Sent"       value={totalSent} />
-              <StatCard icon={Eye}               label="Opened"     value={totalOpened}  subValue={`${openRate}% open rate`}   color="text-emerald-400" />
-              <StatCard icon={MousePointerClick} label="Clicked"    value={totalClicked} subValue={`${clickRate}% click rate`} color="text-cyan-400" />
-              <StatCard icon={AlertTriangle}     label="Bounced"    value={totalBounced} subValue={`${bounceRate}% bounce rate`} color="text-red-400" />
+              <StatCard icon={Eye}               label="Opened"     value={totalOpened}  subValue={`${pct(figures.open_rate)} open rate`}   color="text-emerald-400" />
+              <StatCard icon={MousePointerClick} label="Clicked"    value={totalClicked} subValue={`${pct(figures.click_rate)} click rate`} color="text-cyan-400" />
+              <StatCard icon={AlertTriangle}     label="Bounced"    value={totalBounced} subValue={`${pct(figures.bounce_rate)} bounce rate`} color="text-red-400" />
             </div>
+
+            {/* REPORT-SOT.2 — the figures above are counted from the recipient
+                rows. Said once, plainly, because they will not match a number
+                an operator remembers from before this change: the campaign
+                counters missed every address the provider refused at send
+                time. When the count could not be read the page says which
+                source it fell back to rather than showing two sets. */}
+            <p className="text-xs text-un1t-muted" data-testid="campaign-stats-source">
+              {figures.source === 'recipients'
+                ? 'Counted from the recipient list for this campaign, including addresses the provider refused at send time.'
+                : 'Recipient figures could not be read just now. Showing the stored campaign counters, which do not include addresses the provider refused at send time.'}
+            </p>
 
             {/* CAMPAIGN-AB — subject-line test panel (only when a
                 variant B exists). Per-variant numbers come from the
@@ -450,7 +470,7 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
                 </div>
                 <div>
                   <span className="text-un1t-muted">Total Recipients</span>
-                  <p>{campaign.total_recipients || totalSent}</p>
+                  <p>{figures.recipients || totalSent}</p>
                 </div>
               </div>
             </div>

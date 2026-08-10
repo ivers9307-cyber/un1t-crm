@@ -35,7 +35,9 @@ import { ESCALATION_TABLE } from '@/lib/bounce-escalation-sweep'
 import { BOUNCE_ESCALATION_MIN_CAMPAIGNS } from '@/lib/bounce-escalation'
 import ListHealthEscalations from '@/components/communications/ListHealthEscalations'
 import ListHealthTrend from '@/components/communications/ListHealthTrend'
+import OtherEmailDeliverability from '@/components/communications/OtherEmailDeliverability'
 import { buildListHealthTrend } from '@/lib/list-health-trend'
+import { buildEmailSourceTrend } from '@/lib/email-source-trend'
 import { consentSourceRpcArgs } from '@/lib/consent-sources'
 
 export const dynamic = 'force-dynamic'
@@ -142,6 +144,21 @@ export default async function ListHealthPage() {
   if (trendError) console.error('[list health] list_health_monthly_stats failed:', trendError.message)
   const trend = buildListHealthTrend(trendRows)
 
+  // REPORT-SOT.1 — the other half of the sending domain. The table above reads
+  // campaign_recipients and therefore covers CAMPAIGNS ONLY; sequence,
+  // transactional and inbox-reply mail lives in email_sends and had no
+  // deliverability view anywhere in the product. Same tenant boundary as the
+  // call above: the RPC takes a bare location uuid and does no access check of
+  // its own, so locationId must stay the active location resolved from the
+  // session. Aggregated in Postgres (mig 521) because email_sends carries
+  // 19,207 rows and the 1,000-row select cap would under-report it silently.
+  const { data: sourceRows, error: sourceError } = await db.rpc('email_sends_monthly_stats', {
+    p_location_id: locationId,
+    p_months: TREND_MONTHS,
+  })
+  if (sourceError) console.error('[list health] email_sends_monthly_stats failed:', sourceError.message)
+  const sourceTrend = buildEmailSourceTrend(sourceRows)
+
   const escalationCount = async (decision) => {
     const { count } = await db
       .from(ESCALATION_TABLE)
@@ -189,6 +206,10 @@ export default async function ListHealthPage() {
       </div>
 
       <ListHealthTrend trend={trend} />
+
+      <div className="mb-8">
+        <OtherEmailDeliverability trend={sourceTrend} />
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
         <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-5">

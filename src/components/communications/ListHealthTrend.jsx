@@ -25,20 +25,14 @@
 // there is no rate. Same posture as readOutcome in CampaignOutcomeReport.
 
 import { MIN_RATE_SENDS } from '@/lib/list-health-trend'
+// REPORT-SOT.1 — the chip moved to its own file so this table and the
+// non-campaign panel below it render an identical reading identically.
+import ReadingChip from './ReadingChip'
 
 const n = (v) => Number(v || 0).toLocaleString()
 const signed = (v) => (v > 0 ? `+${n(v)}` : v < 0 ? `-${n(Math.abs(v))}` : '0')
 
-function readingChip(reading) {
-  const cls = reading.level === 'serious'
-    ? 'bg-rose-500/10 text-rose-700'
-    : reading.level === 'warn'
-      ? 'bg-amber-500/10 text-amber-700'
-      : reading.level === 'ok'
-        ? 'bg-emerald-500/10 text-emerald-700'
-        : 'bg-slate-500/10 text-slate-700'
-  return <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] ${cls}`}>{reading.text}</span>
-}
+const readingChip = (reading) => <ReadingChip reading={reading} />
 
 function Headline({ label, value, hint, tone }) {
   const valueCls = tone === 'down' ? 'text-rose-700' : tone === 'up' ? 'text-emerald-700' : 'text-un1t-text'
