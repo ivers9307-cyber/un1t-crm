@@ -19,7 +19,14 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { applyAudienceFilterAsync } from '@/lib/audience-filter'
 import { computeWhatsAppReachabilitySummary } from '@/lib/whatsapp'
-import { buildAudienceQueryAsync } from '@/lib/postmark'
+// FILTER-B.8 — the will-receive number for EVERY channel comes from the
+// shared per-channel eligibility builder, which delegates to that channel's
+// SEND builder. /api/communications/audience-preview calls the same function,
+// so the count, the preview and the send resolve one query path by
+// construction. The SMS branch previously re-spelled its three send gates
+// inline: identical to sms.js by hand, which is exactly how a preview and a
+// send drift apart later.
+import { buildEligibleAudienceQuery } from '@/lib/audience-eligibility'
 
 export const runtime = 'nodejs'
 
@@ -77,10 +84,11 @@ export async function POST(request) {
       const suppressed = await viewCount((q) => q.eq('loc_email_marketing', true).not('email_suppressed_at', 'is', null))
       // The will-receive number comes from the EXACT send-path builder the
       // populate step uses (view + loc_email_marketing + email_status +
-      // suppression), so this count equals what a send would enrol.
-      const { query: eligibleQuery } = await buildAudienceQueryAsync(db, filter, location_id, {
-        columns: 'id',
-        selectOpts: { count: 'exact', head: true },
+      // suppression), so this count equals what a send would enrol — and
+      // equals what the preview lists, which calls the same helper.
+      const { query: eligibleQuery } = await buildEligibleAudienceQuery({
+        db, channel: 'email', filter, locationId: location_id,
+        columns: 'id', selectOpts: { count: 'exact', head: true },
       })
       const { count: eligible, error: eligibleErr } = await eligibleQuery
       if (eligibleErr) return NextResponse.json({ success: false, error: eligibleErr.message }, { status: 400 })
@@ -94,11 +102,20 @@ export async function POST(request) {
     }
 
     if (channel === 'sms') {
-      // Mirror the SMS send gate (sms.js smsAudienceBase): per-location
-      // consent + active sms_status + a phone number. Order matters — keep
-      // aligned with the route test's count sequence.
+      // FILTER-B.8 — the eligible number now comes from the SMS SEND builder
+      // itself (sms.js smsAudienceBase via buildEligibleAudienceQuery) rather
+      // than a hand-copy of its three gates. The excluded sub-counts below
+      // stay as view counts: they are diagnostic breakdowns, not the number
+      // anything sends on. Order matters — keep aligned with the route test's
+      // count sequence (matched → no_phone → not_opted_in → opted_out).
       const matched = await viewCount(null)
-      const eligible = await viewCount((q) => q.eq('loc_sms_marketing', true).eq('sms_status', 'active').not('phone', 'is', null))
+      const { query: eligibleQuery } = await buildEligibleAudienceQuery({
+        db, channel: 'sms', filter, locationId: location_id,
+        columns: 'id', selectOpts: { count: 'exact', head: true },
+      })
+      const { count: eligibleCount, error: eligibleErr } = await eligibleQuery
+      if (eligibleErr) return NextResponse.json({ success: false, error: eligibleErr.message }, { status: 400 })
+      const eligible = eligibleCount || 0
       const no_phone = await viewCount((q) => q.is('phone', null))
       const not_opted_in = await viewCount((q) => q.eq('loc_sms_marketing', false))
       const opted_out = await viewCount((q) => q.neq('sms_status', 'active'))

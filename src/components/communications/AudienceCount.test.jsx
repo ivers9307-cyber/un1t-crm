@@ -182,3 +182,27 @@ describe('AudienceCount — onResult lets a host gate Send on the same number', 
     expect(err.error).toMatch(/tag filter requires/)
   })
 })
+
+// ── FILTER-B.9 — the preview rides with the count, in every host ──────
+describe('AudienceCount — mounts the preview behind the number', () => {
+  it('offers "who matches" once a count has arrived', async () => {
+    stubCount(() => ok({ count: 10, matched: 10 }))
+    render(<AudienceCount locationId="loc-1" filter={FILTER} channel="email" />)
+    await screen.findByText(/will receive it/)
+    expect(screen.getByRole('button', { name: /who matches/i })).toBeTruthy()
+  })
+
+  it('does not offer it while the count is failing — there is no audience to show', async () => {
+    stubCount(() => bad('Unknown audience field: nope'))
+    render(<AudienceCount locationId="loc-1" filter={FILTER} channel="email" />)
+    await screen.findByText(/Unknown audience field/)
+    expect(screen.getByRole('button', { name: /who matches/i }).disabled).toBe(true)
+  })
+
+  it('can be suppressed by a host that does not want it', async () => {
+    stubCount(() => ok({ count: 10, matched: 10 }))
+    render(<AudienceCount locationId="loc-1" filter={FILTER} channel="email" showPreview={false} />)
+    await screen.findByText(/will receive it/)
+    expect(screen.queryByRole('button', { name: /who matches/i })).toBeNull()
+  })
+})

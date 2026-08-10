@@ -29,6 +29,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Users, AlertTriangle, Loader2 } from 'lucide-react'
 import { stripUnsetFilterRows } from '@/lib/audience-filter'
+import AudiencePreview from './AudiencePreview'
 
 const EMPTY_FILTER = { logic: 'and', filters: [] }
 
@@ -75,6 +76,7 @@ function countUnsetRows(filter) {
  * @param {'send'|'matching'} mode  'matching' = a continuing condition, not a send.
  * @param {(result)=>void} onResult  optional — lets a host gate Send on this
  *        exact number instead of counting a second time.
+ * @param {boolean} showPreview  render the "show me who matches" drawer.
  */
 export default function AudienceCount({
   locationId,
@@ -82,6 +84,7 @@ export default function AudienceCount({
   channel = null,
   mode = 'send',
   onResult = null,
+  showPreview = true,
   className = '',
 }) {
   const matching = mode === 'matching'
@@ -222,6 +225,20 @@ export default function AudienceCount({
           operator meant to narrow the audience and it did not happen. This is
           the guardrail that makes an unset starting row safe on a send
           surface — the widening failure is now stated, not merely countable. */}
+      {showPreview && (
+        /* FILTER-B.9 — the preview is fed the SAME stripped filter and the
+           SAME channel the count above just used, so the list it shows is the
+           list that number stands for. Disabled until a count has arrived:
+           there is nothing honest to preview against a failing filter. */
+        <AudiencePreview
+          locationId={locationId}
+          filter={sent}
+          channel={askChannel}
+          mode={mode}
+          disabled={state !== 'ready'}
+        />
+      )}
+
       {unsetRows > 0 && (
         <div className="flex items-start gap-1.5 text-amber-700">
           <AlertTriangle size={13} className="mt-0.5 shrink-0" />
