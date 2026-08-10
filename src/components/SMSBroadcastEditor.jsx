@@ -18,6 +18,7 @@ import {
   CheckCircle2, XCircle, Trash2, Ban, Calendar, Clock,
 } from 'lucide-react'
 import SendDetailHeader from './communications/SendDetailHeader'
+import SendStatusPill from './communications/SendStatusPill'
 import AudienceBuilder from './AudienceBuilder'
 import AudienceCount from './communications/AudienceCount'
 import SendQuietHoursNotice from './communications/SendQuietHoursNotice'
@@ -244,6 +245,11 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
             {broadcastId ? (name || 'Untitled') : 'New SMS broadcast'}
           </h2>
         }
+        // COMMS-DETAIL-FIX.4 — SMS passed no status slot, so a sent, a
+        // cancelled and a scheduled broadcast rendered an identical header
+        // while the other two channels showed theirs. An unsaved new
+        // broadcast has no status yet and the pill renders nothing.
+        status={<SendStatusPill status={broadcast?.status} />}
         meta={
           <p className="text-xs text-un1t-subtle">
             Sender ID: <code className="text-un1t-text">{locationSenderId || 'not set, falling back to env'}</code>
@@ -518,9 +524,21 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
             <div className="bg-un1t-surface border border-un1t-border rounded-2xl divide-y divide-un1t-border">
               <div className="px-5 py-3 text-xs text-un1t-subtle uppercase tracking-wider">Recipients</div>
               {recipients.slice(0, 200).map(r => (
-                <div key={r.id} className="px-5 py-2 flex items-center justify-between text-sm">
-                  <div className="font-mono text-xs text-un1t-subtle truncate">
-                    {r.contact_id.slice(0, 8)}…
+                <div key={r.id} className="px-5 py-2 flex items-center justify-between gap-3 text-sm">
+                  {/* COMMS-DETAIL-FIX.5 — this printed `contact_id.slice(0,8)…`
+                      because the loader joined no contacts, while email and
+                      WhatsApp both showed a person. A truncated UUID identifies
+                      nobody: an operator looking at a failed send could not
+                      tell who to ring. Name, else the number they were texted
+                      at, and only then the id — which now only appears when the
+                      contact row is genuinely gone (a redacted/deleted
+                      contact), where it is the honest answer. */}
+                  <div className="min-w-0 truncate">
+                    {r.contacts?.name || r.contacts?.phone || (
+                      <span className="font-mono text-xs text-un1t-muted" title="Contact record no longer available">
+                        {String(r.contact_id || '').slice(0, 8)}…
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     {r.status === 'delivered' ? (

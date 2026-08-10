@@ -9,6 +9,7 @@ import {
   Ban, Send, CheckCircle2, XCircle, Users, RotateCcw, X, Clock, SkipForward, Loader2
 } from 'lucide-react'
 import SendDetailHeader from './communications/SendDetailHeader'
+import SendStatusPill from './communications/SendStatusPill'
 // COMMSFIX.F.4 — per-link click report (mig 510), self-contained so this
 // file's diff stays small while #1314 rewrites the header/controls region.
 import CampaignLinkReport from './CampaignLinkReport.jsx'
@@ -26,18 +27,10 @@ import { campaignDisplayStats, NO_RECIPIENT_STATS, pct } from '@/lib/campaign-di
 // COMMSFIX.D.1a — the header chip used to be a hardcoded green "Sent" for
 // every campaign, including scheduled/queued/sending/cancelled ones — i.e. it
 // lied in exactly the states where the operator is deciding whether to
-// intervene. Light-theme chip recipe per CLAUDE.md: bg-<c>-500/10 text-<c>-700.
-// 'failed' is included ahead of the campaigns.last_error migration; it renders
-// fine when the column/status don't exist yet (nothing ever has that status).
-const campaignStatusConfig = {
-  draft:     { label: 'Draft',     cls: 'bg-slate-500/10 text-slate-700' },
-  scheduled: { label: 'Scheduled', cls: 'bg-blue-500/10 text-blue-700' },
-  queued:    { label: 'Queued',    cls: 'bg-amber-500/10 text-amber-700' },
-  sending:   { label: 'Sending',   cls: 'bg-amber-500/10 text-amber-700' },
-  sent:      { label: 'Sent',      cls: 'bg-green-500/10 text-green-700' },
-  cancelled: { label: 'Cancelled', cls: 'bg-rose-500/10 text-rose-700' },
-  failed:    { label: 'Failed',    cls: 'bg-red-500/10 text-red-700' },
-}
+// intervene. COMMS-DETAIL-FIX.4 moved the map itself to
+// src/lib/send-status-display.js (values unchanged) so SMS and WhatsApp render
+// the same labels and the same light-theme chip recipe instead of each doing
+// their own thing; SendStatusPill is the shared renderer.
 
 // COMMSFIX.D.1c — pre-send and terminal-skip statuses were missing, and the
 // lookup fell back to `sent` — so a queued, mid-send, cancelled or
@@ -215,8 +208,6 @@ export default function CampaignDetail({ campaign, recipients = [], stats = null
   const totalClicked = figures.clicked
   const totalBounced = figures.bounced
 
-  const statusChip = campaignStatusConfig[status] || campaignStatusConfig.draft
-
   const sentDate = campaign.sent_at
     ? new Date(campaign.sent_at).toLocaleDateString('en-IE', {
         weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
@@ -245,15 +236,12 @@ export default function CampaignDetail({ campaign, recipients = [], stats = null
             <p className="text-xs text-un1t-subtle truncate">{campaign.subject || 'No subject'}</p>
           </div>
         }
-        status={
-          <span
-            data-testid="campaign-status-chip"
-            title={campaign.last_error || undefined}
-            className={`text-xs px-2 py-0.5 rounded-full ${statusChip.cls}`}
-          >
-            {statusChip.label}
-          </span>
-        }
+        // COMMS-DETAIL-FIX.4 — the map this used to read privately now lives
+        // in src/lib/send-status-display.js and all three channels render it
+        // through SendStatusPill. Values are byte-identical, so email's chip
+        // is unchanged; SMS and WhatsApp moved onto it. The test handle is
+        // kept so the COMMSFIX.D.1a guard still has its target.
+        status={<SendStatusPill status={campaign.status} title={campaign.last_error || undefined} testId="campaign-status-chip" />}
         meta={
           <>
             <p className="text-xs text-un1t-subtle">{sentDate}</p>

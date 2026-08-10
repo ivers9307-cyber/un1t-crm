@@ -5,13 +5,22 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Save, Send, Users, CheckCircle2, XCircle, Ban, Clock } from 'lucide-react'
 import SendDetailHeader from './communications/SendDetailHeader'
+import SendStatusPill from './communications/SendStatusPill'
+import EditableSendTitle from './communications/EditableSendTitle'
 import AudienceBuilder from './AudienceBuilder'
 import AudienceCount from './communications/AudienceCount'
 import SendQuietHoursNotice from './communications/SendQuietHoursNotice'
 import { estimateDripDays } from '@/lib/whatsapp-drip'
+// COMMS-DETAIL-FIX.1 — every figure on this page is counted from
+// whatsapp_broadcast_recipients. whatsapp_broadcasts.total_* is still written
+// and still on disk; it is just no longer what an operator reads. See
+// whatsapp-broadcast-stats.js for the measurements and the two traps.
+import { whatsappBroadcastDisplayStats } from '@/lib/whatsapp-broadcast-stats'
 import { groupWaTemplates, UNGROUPED_LABEL } from '@shared/wa-template-groups'
 
-export default function WABroadcastEditor({ broadcast, templates, locationId, userId, failedRecipients = [], failedCount = 0, dripProgress = null }) {
+const nf = (n) => Number(n || 0).toLocaleString()
+
+export default function WABroadcastEditor({ broadcast, templates, locationId, userId, failedRecipients = [], stats = null, dripProgress = null }) {
   const router = useRouter()
   const isSent = broadcast?.status === 'sent'
   const isCancelled = broadcast?.status === 'cancelled'
@@ -215,6 +224,14 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
 
   const recipients = broadcast?.whatsapp_broadcast_recipients || []
 
+  // The ONE set of numbers this page renders — cards, drip panel, tab counts
+  // and the failed-sends box all read it, so they cannot disagree. The page
+  // passes the display object built from live recipient-row counts; with none
+  // (an unsaved draft) it degrades to the stored counters and says so.
+  const figures = stats || whatsappBroadcastDisplayStats(broadcast, null)
+  const failedCount = figures.failed
+  const fromCounters = figures.source === 'counters'
+
   return (
     <div>
       {/* COMMS-IA.1 — the shared send-detail chrome. This view used to render
@@ -224,24 +241,26 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
       <SendDetailHeader
         channel="whatsapp"
         title={
-          <input
-            type="text"
+          // COMMS-DETAIL-FIX.4 — was a fixed `w-64` borderless input: nothing
+          // said it was editable, and the status pill after it sat at a
+          // constant 256px offset (dead gap after a short name, clipping on a
+          // long one). EditableSendTitle sizes to its content and shows it.
+          <EditableSendTitle
             value={name}
-            onChange={e => setName(e.target.value)}
-            placeholder="Broadcast name..."
+            onChange={setName}
             disabled={isTerminal}
-            className="bg-transparent text-lg font-semibold text-un1t-text placeholder:text-un1t-muted focus:outline-none w-64 max-w-full disabled:opacity-70"
+            placeholder="Broadcast name…"
           />
         }
-        status={broadcast?.status ? (
-          <span className={`text-xs px-2 py-0.5 rounded-full ${
-            broadcast.status === 'sent' ? 'bg-green-500/20 text-green-700'
-              : broadcast.status === 'cancelled' ? 'bg-rose-500/20 text-rose-700'
-              : broadcast.status === 'scheduled' ? 'bg-blue-500/15 text-blue-700'
-              : 'bg-gray-500/20 text-gray-700'
-          }`}>
-            {broadcast.status}
-          </span>
+        // COMMS-DETAIL-FIX.4 — was the raw lowercase column value ("sent") in
+        // a bg-green-500/20 pill, beside email's title-cased "Sent" in the /10
+        // recipe. One pill for all three channels now.
+        status={<SendStatusPill status={broadcast?.status} />}
+        meta={broadcast?.sent_at ? (
+          <p className="text-xs text-un1t-subtle">
+            {isCancelled ? 'Started' : 'Sent'}{' '}
+            {new Date(broadcast.sent_at).toLocaleString('en-IE', { dateStyle: 'medium', timeStyle: 'short' })}
+          </p>
         ) : null}
         actions={!isTerminal && !isDripInFlight ? (
           <>
@@ -319,7 +338,9 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
         <div className="flex border-b border-un1t-border mb-4">
           {[
             { key: 'results', label: 'Results' },
-            { key: 'recipients', label: `Recipients (${broadcast.total_sent || 0})` },
+            // Counts the rows the tab actually lists, not the stored
+            // total_sent it used to print beside a different-length table.
+            { key: 'recipients', label: `Recipients (${nf(figures.queued)})` },
           ].map(t => (
             <button
               type="button"
@@ -338,25 +359,46 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
       {/* Content */}
       <div>
         {isTerminal && tab === 'results' && (
-          <div className="max-w-3xl space-y-4">
+          <div className="space-y-4">
+            {/* COMMS-DETAIL-FIX.1 — every card is now counted from the
+                recipient rows, the same source the failed-sends box below
+                uses. Before, the cards read whatsapp_broadcasts.total_* and
+                produced "FAILED 0" directly above "Failed sends (22)". */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
-                <p className="text-xs text-un1t-subtle uppercase">Sent</p>
-                <p className="text-2xl font-bold mt-1">{(dripProgress?.dispatched ?? broadcast.total_sent ?? 0).toLocaleString()}</p>
-              </div>
-              <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
-                <p className="text-xs text-un1t-subtle uppercase">Delivered</p>
-                <p className="text-2xl font-bold mt-1 text-green-400">{broadcast.total_delivered || 0}</p>
-              </div>
-              <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
-                <p className="text-xs text-un1t-subtle uppercase">Read</p>
-                <p className="text-2xl font-bold mt-1 text-blue-400">{broadcast.total_read || 0}</p>
-              </div>
-              <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
-                <p className="text-xs text-un1t-subtle uppercase">Failed</p>
-                <p className="text-2xl font-bold mt-1 text-red-400">{broadcast.total_failed || 0}</p>
-              </div>
+              <ResultStat
+                label="Sent"
+                value={nf(figures.sent)}
+                sub={figures.audience > 0 ? `of ${nf(figures.audience)} in the audience` : null}
+              />
+              <ResultStat label="Delivered" value={nf(figures.delivered)} valueClass="text-green-700" />
+              <ResultStat label="Read" value={nf(figures.read)} valueClass="text-blue-700" />
+              <ResultStat label="Failed" value={nf(figures.failed)} valueClass="text-red-700" />
             </div>
+
+            {/* A cancelled broadcast has TWO true totals and this says both.
+                The audience was recorded when the send started; the recipient
+                rows are what actually got queued before it stopped. Neither is
+                a correction of the other, so neither is quietly swapped in. */}
+            {figures.stoppedShort && (
+              <div
+                data-testid="wa-cancelled-note"
+                className="bg-rose-500/10 border border-rose-500/30 rounded-lg text-rose-700 text-sm px-3 py-2"
+              >
+                Cancelled part-way. {nf(figures.queued)} of the {nf(figures.audience)} contacts this
+                broadcast was aimed at had been queued when it stopped; the other {nf(figures.neverQueued)} were
+                never queued and never will be.
+              </div>
+            )}
+
+            {/* The fallback is labelled rather than presented as measurement —
+                showing the second source silently is how this started. */}
+            {fromCounters && (
+              <p className="text-[11px] text-un1t-subtle">
+                Recipient rows could not be counted just now, so these figures come from the broadcast&apos;s
+                stored counters. Those lag behind delivery and can under-report failures.
+              </p>
+            )}
+
             {broadcast.delivery_summary && (broadcast.delivery_summary.matched - broadcast.delivery_summary.reachable) > 0 && (
               <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
                 <p className="text-xs text-un1t-subtle uppercase">Excluded from this send</p>
@@ -429,7 +471,10 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
         )}
 
         {isDripInFlight && (
-          <div className="max-w-2xl space-y-4">
+          // COMMS-DETAIL-FIX.3 — was max-w-2xl here and max-w-3xl on the
+          // terminal panel, so the page visibly narrowed the moment a drip
+          // finished. Both caps are gone; CommsShell owns the column.
+          <div className="space-y-4">
             <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2 min-w-0">
@@ -466,11 +511,14 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
               </div>
               {(() => {
                 const dp = dripProgress
-                const sent = dp ? dp.dispatched : (broadcast.total_sent || 0)
-                const reached = dp ? dp.reached : (broadcast.total_delivered || 0)
-                const read = dp ? dp.read : (broadcast.total_read || 0)
-                const failed = dp ? dp.failed : (broadcast.total_failed || 0)
-                const total = broadcast.total_recipients || 0
+                // Same display object as the terminal panel — the drip used to
+                // read its own five counts while the cards read the counters,
+                // which is how the two halves of one page drifted apart.
+                const sent = figures.sent
+                const reached = figures.delivered
+                const read = figures.read
+                const failed = figures.failed
+                const total = figures.audience
                 const done = sent + failed
                 const remaining = Math.max(0, total - done)
                 const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0
@@ -490,7 +538,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
                       <DripStat label="Est. days left" value={remaining === 0 ? '0' : `~${days}`} />
                     </div>
                     <p className="text-xs text-un1t-muted">
-                      {dp ? `${dp.sentToday.toLocaleString()} of ${cap.toLocaleString()} sent today · ` : `Up to ${cap.toLocaleString()}/day · `}
+                      {dp?.sentToday != null ? `${nf(dp.sentToday)} of ${nf(cap)} sent today · ` : `Up to ${nf(cap)}/day · `}
                       {String(broadcast.send_window_start).slice(0, 5)}–{String(broadcast.send_window_end).slice(0, 5)} {broadcast.send_window_tz}
                     </p>
                     <div className="pt-1">
@@ -532,7 +580,9 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
         )}
 
         {!isTerminal && !isDripInFlight && (
-          <div className="max-w-3xl space-y-6">
+          // COMMS-DETAIL-FIX.3 — no inner cap: the setup form fills the same
+          // column the header rule spans, as the SMS setup form already did.
+          <div className="space-y-6">
             {/* Template selection */}
             <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
               <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Template</h3>
@@ -647,6 +697,18 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// One results card. `sub` carries the denominator the headline number is
+// counted against, so "Sent 976" is never read as "976 was the audience".
+function ResultStat({ label, value, sub = null, valueClass = '' }) {
+  return (
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+      <p className="text-xs text-un1t-subtle uppercase">{label}</p>
+      <p className={`text-2xl font-bold mt-1 ${valueClass}`}>{value}</p>
+      {sub ? <p className="text-[11px] text-un1t-muted mt-0.5">{sub}</p> : null}
     </div>
   )
 }

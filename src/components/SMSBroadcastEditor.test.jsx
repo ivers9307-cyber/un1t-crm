@@ -95,3 +95,67 @@ describe('SMSBroadcastEditor — scheduling uses the shared datetime helpers', (
     expect(scheduleInput(container).value).toBe('')
   })
 })
+
+// COMMS-DETAIL-FIX.5 — the recipients list rendered `r.contact_id.slice(0,8)…`
+// because the dispatcher's SMS query joined no contacts. Email and WhatsApp
+// both show a person. A truncated UUID identifies nobody: an operator looking
+// at a failed send cannot tell who to ring.
+//
+// COMMS-DETAIL-FIX.4 — SMS also passed no status slot, so a sent, a cancelled
+// and a scheduled broadcast rendered an identical header.
+const SENT = {
+  id: 'bc-9', status: 'sent', name: 'Class moved', body: 'Saturday 09:00 is now 09:30',
+  total_recipients: 3, total_sent: 3, total_delivered: 2, total_undelivered: 0, total_failed: 1,
+}
+
+describe('SMSBroadcastEditor — recipients are people, not UUID stubs (FIX.5)', () => {
+  const RECIPIENTS = [
+    { id: 'r1', contact_id: 'aaaa1111-1111-2222-3333-444455556666', status: 'delivered', contacts: { name: 'Aoife Byrne', phone: '+353871234567' } },
+    { id: 'r2', contact_id: 'bbbb2222-aaaa-bbbb-cccc-ddddeeeeffff', status: 'failed', contacts: { name: null, phone: '+353879999999' } },
+    // The contact row is genuinely gone (redacted/deleted) — an id is the
+    // only honest answer left, and the ONLY case that may show one.
+    { id: 'r3', contact_id: '6f1c2a44-9999-8888-7777-666655554444', status: 'sent', contacts: null },
+  ]
+
+  function renderResults() {
+    return render(<SMSBroadcastEditor broadcast={SENT} recipients={RECIPIENTS} locationId="loc-1" locationSenderId="UN1T" userId="u1" />)
+  }
+
+  it('shows the contact name when there is one', () => {
+    const { getByText } = renderResults()
+    expect(getByText('Aoife Byrne')).toBeTruthy()
+  })
+
+  it('falls back to the phone number when the contact has no name', () => {
+    const { getByText } = renderResults()
+    expect(getByText('+353879999999')).toBeTruthy()
+  })
+
+  it('only falls back to an id when there is nothing else at all', () => {
+    const { getByText } = renderResults()
+    expect(getByText(/6f1c2a44/)).toBeTruthy()
+  })
+
+  it('never prints a uuid for a contact it could name or number', () => {
+    const { container } = renderResults()
+    expect(container.textContent).not.toContain('aaaa1111')
+    expect(container.textContent).not.toContain('bbbb2222')
+  })
+})
+
+describe('SMSBroadcastEditor — the header shows its status (FIX.4)', () => {
+  it('renders a status pill for a sent broadcast', () => {
+    const { getByTestId } = render(<SMSBroadcastEditor broadcast={SENT} recipients={[]} locationId="loc-1" locationSenderId="UN1T" userId="u1" />)
+    expect(getByTestId('send-status-pill').textContent).toBe('Sent')
+  })
+
+  it('does not render "Sent" for a cancelled broadcast', () => {
+    const { getByTestId } = render(<SMSBroadcastEditor broadcast={{ ...SENT, status: 'cancelled' }} recipients={[]} locationId="loc-1" locationSenderId="UN1T" userId="u1" />)
+    expect(getByTestId('send-status-pill').textContent).toBe('Cancelled')
+  })
+
+  it('omits the pill entirely for an unsaved new broadcast', () => {
+    const { queryByTestId } = render(<SMSBroadcastEditor broadcast={null} recipients={[]} locationId="loc-1" locationSenderId="UN1T" userId="u1" />)
+    expect(queryByTestId('send-status-pill')).toBeNull()
+  })
+})

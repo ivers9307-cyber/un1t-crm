@@ -41,12 +41,28 @@ export default function SendDetailHeader({ channel, title, status = null, meta =
       </Link>
 
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 mt-2">
-        <div className="flex items-center gap-3 min-w-0 flex-wrap">
-          <span className="inline-flex items-center gap-1.5 shrink-0 text-[11px] font-medium px-2 py-0.5 rounded-full bg-un1t-border/40 text-un1t-subtle">
-            <Icon size={12} /> {label}
+        {/* COMMS-DETAIL-FIX.4 — this row was `items-center`, which is right for
+            a one-line title and wrong for email's two-line one (name +
+            preheader): the chip and the status pill centred on the whole block
+            and landed BETWEEN the two lines, reading as labels for the subject.
+            It is now top-aligned, and the chip and pill are each centred inside
+            an h-7 box — 28px, the line box of the text-lg title — so they sit
+            on the title's FIRST line however many lines it grows to. */}
+        <div
+          data-testid="send-detail-title-row"
+          className="flex items-start gap-3 min-w-0 flex-wrap"
+        >
+          <span data-testid="send-detail-channel-chip" className="flex h-7 items-center shrink-0">
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded-full bg-un1t-border/40 text-un1t-subtle">
+              <Icon size={12} /> {label}
+            </span>
           </span>
           <div className="min-w-0">{title}</div>
-          {status}
+          {status ? (
+            <span data-testid="send-detail-status" className="flex h-7 items-center shrink-0">
+              {status}
+            </span>
+          ) : null}
         </div>
         {actions ? <div className="flex items-center gap-2 shrink-0">{actions}</div> : null}
       </div>
