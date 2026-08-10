@@ -13,6 +13,17 @@
 //
 // The suppression tables below are the audit trail for GAPS-P5's repeat-bounce
 // escalation (mig 515), and each row can be undone from here.
+//
+// GAPS-P7 adds the SLOPE. Everything above was a snapshot, and a snapshot
+// cannot show that the list lost 110 people net over four months while every
+// number on the page looked fine. list_health_monthly_stats (mig 517)
+// aggregates that in Postgres for the same reason as the bounce summary: June
+// alone carries 9,739 recipient rows, and counting them in this page would
+// return the first 1,000 and report a confident, wrong number.
+//
+// The consent side is CATEGORISED, not summed: 5,521 of the 5,749 opt-out rows
+// since May are one-off migrations, 5,519 of them from a single day. The
+// mapping lives in consent-sources.js and is passed to the RPC on every call.
 
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
@@ -23,8 +34,15 @@ import { buildAudienceQueryAsync } from '@/lib/postmark'
 import { ESCALATION_TABLE } from '@/lib/bounce-escalation-sweep'
 import { BOUNCE_ESCALATION_MIN_CAMPAIGNS } from '@/lib/bounce-escalation'
 import ListHealthEscalations from '@/components/communications/ListHealthEscalations'
+import ListHealthTrend from '@/components/communications/ListHealthTrend'
+import { buildListHealthTrend } from '@/lib/list-health-trend'
+import { consentSourceRpcArgs } from '@/lib/consent-sources'
 
 export const dynamic = 'force-dynamic'
+
+// Twelve months of history. Long enough to see a season, short enough that the
+// table stays readable in one glance.
+const TREND_MONTHS = 12
 
 // Bounded: the tables are a working list, not an export. If a location ever
 // carries more than this, the counts above still tell the true story.
@@ -107,6 +125,23 @@ export default async function ListHealthPage() {
   // than through a PostgREST embed, which would break the count.
   const { data: bounceSummary } = await db.rpc('email_bounce_type_summary', { p_location_id: locationId })
 
+  // GAPS-P7 — the monthly slope. Same shape of call and the same tenant
+  // boundary: the RPC takes a bare location uuid and does no access check of
+  // its own, so locationId must be the active location this page already
+  // resolved from the session, never a value off the request.
+  //
+  // The consent-source categories travel WITH the call. The RPC holds no copy
+  // of the vocabulary, so consent-sources.js is the only place a source is
+  // classified; omitting these arrays would land every consent row in the
+  // unclassified bucket, which the surface shows rather than swallows.
+  const { data: trendRows, error: trendError } = await db.rpc('list_health_monthly_stats', {
+    p_location_id: locationId,
+    p_months: TREND_MONTHS,
+    ...consentSourceRpcArgs(),
+  })
+  if (trendError) console.error('[list health] list_health_monthly_stats failed:', trendError.message)
+  const trend = buildListHealthTrend(trendRows)
+
   const escalationCount = async (decision) => {
     const { count } = await db
       .from(ESCALATION_TABLE)
@@ -138,7 +173,8 @@ export default async function ListHealthPage() {
       <div className="mb-5">
         <h2 className="text-lg font-semibold text-un1t-text">List health</h2>
         <p className="text-sm text-un1t-subtle mt-1 max-w-3xl">
-          Who this studio can email today, and what happened to everyone else. Sending to addresses that
+          Who this studio can email today, how the list has moved month by month, and what happened to
+          everyone else. Sending to addresses that
           keep failing is what damages the sending domain, so contacts are removed when nothing has ever
           reached them.
         </p>
@@ -151,6 +187,8 @@ export default async function ListHealthPage() {
         <Stat label="Bounced or complained" value={bouncedOrComplained.toLocaleString()} hint="Hard bounce or spam report" />
         <Stat label="Suppressed" value={suppressed.toLocaleString()} hint="Opted in, but held back for list hygiene" />
       </div>
+
+      <ListHealthTrend trend={trend} />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
         <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-5">
