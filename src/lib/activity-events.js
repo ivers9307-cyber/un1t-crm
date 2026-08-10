@@ -7,69 +7,20 @@
 // caller doesn't await — the response can ship while the
 // activity row gets written in the background.
 //
-// Phase 1 demonstrates the pattern with logPipelineEvent. Phase 2
-// will add deposit-paid, sequence-enrolled, swap-approved,
-// roster-published-to-coach (once we figure out the staff-vs-
-// contact wiring for that one).
+// DEAD-DOCSTRING.1 — `logPipelineEvent` used to live here. It was the
+// phase-1 demo writer, and its docstring said it was "called from
+// PUT /api/contacts/[id] alongside the existing
+// triggerSequencesForPipelineStageChange path". It was not: nothing in
+// the repo (src, mobile, shared, scripts) ever imported it outside its
+// own test file. Deleted rather than wired up, because the lie was the
+// harm — a reader auditing the timeline saw a stage-change writer that
+// looked live and concluded pipeline moves were being logged, when no
+// row was ever written by it. Restoring it means restoring the CALL first
+// (see docs/CHANGELOG.md #76 for the phase-1 evaluation it belonged to).
+//
+// logPipelineDismissal below IS live (operator Cold dismissal/restore).
 
 import { logWarn } from '@/lib/log'
-
-// FUNNEL.1 taxonomy. Historical timeline rows may carry retired slugs
-// (active_trial et al) — humanise() falls back to title-casing them.
-const STATUS_LABELS = {
-  new_lead: 'New Lead',
-  first_class: '1st Class Completed',
-  second_class: '2nd Class Completed',
-  trial_done: 'Trial Done',
-  converted: 'Converted',
-  member: 'Member',
-  pack_member: 'Class Pack',
-  classpass: 'ClassPass',
-  gympass: 'Gympass',
-  cold_lead: 'Cold',
-  dormant: 'Dormant',
-}
-
-function humanise(status) {
-  if (STATUS_LABELS[status]) return STATUS_LABELS[status]
-  return String(status).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
-}
-
-/**
- * Log a "pipeline stage changed" event to the contact timeline.
- * Called from PUT /api/contacts/[id] alongside the existing
- * triggerSequencesForPipelineStageChange path.
- *
- * @param {SupabaseClient} db   service-role client
- * @param {object} args
- * @param {string} args.contactId
- * @param {string} args.locationId
- * @param {string} args.oldStatus
- * @param {string} args.newStatus
- * @param {string} [args.userId] — who flipped the stage; goes
- *                                 into the note for audit context.
- */
-export async function logPipelineEvent(db, { contactId, locationId, oldStatus, newStatus, userId }) {
-  if (!contactId || !locationId) return
-  if (oldStatus === newStatus) return
-
-  const subject = `Stage: ${humanise(oldStatus)} → ${humanise(newStatus)}`
-  const note = userId ? `Updated by ${userId}` : null
-
-  try {
-    await db.from('activities').insert({
-      contact_id: contactId,
-      location_id: locationId,
-      kind: 'event',
-      type: 'pipeline',
-      subject,
-      note,
-      done: false,
-    })
-  } catch (e) {
-    logWarn('activity-events', 'logPipelineEvent failed', { contactId, err: e })
-  }
-}
 
 /**
  * Log an operator Cold dismissal (or restore) with actor attribution.

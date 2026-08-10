@@ -235,3 +235,99 @@ describe('email_status mirror — reputation only, opt-out never writes it (mig 
     expect(bounced.calls.contactUpdates).toHaveLength(0)
   })
 })
+
+// CONSENTLOC.1 — consent_log.location_id (added by mig 487) was NULL for
+// every row these two helpers wrote, which is most of the estate's rows:
+// the Postmark webhook unsubscribe/bounce/complaint paths all run through
+// applyMarketingPreferencesBulk. Mig 517's reporting RPC had to paper over
+// it with coalesce(consent_log.location_id, contacts.location_id) — a guess
+// that is wrong for anyone whose consent decision was made at a location
+// other than the one they are filed under, which is precisely the case
+// LOCCOMMS.2 exists for.
+//
+// The rule these tests lock in: record the location we KNOW, or record
+// nothing. A wrong location on a GDPR evidence row is worse than a missing
+// one, so no caller may substitute contacts.location_id as a stand-in.
+describe('consent_log.location_id (CONSENTLOC.1)', () => {
+  it('stamps the FORM location on the consent_log rows, not the contact location', async () => {
+    const { db, calls } = makeDb({
+      contact: { id: 'c20', location_id: STILLORGAN, email_status: 'active' },
+      prefs: { email_marketing: false, sms_marketing: false, whatsapp_marketing: false },
+    })
+
+    await applyFormMarketingConsent(db, {
+      contactId: 'c20', consent: true, source: 'waitlist_form', locationId: HATCH,
+    })
+
+    expect(calls.consentLog).toHaveLength(3)
+    for (const row of calls.consentLog) expect(row.location_id).toBe(HATCH)
+  })
+
+  it('records NULL rather than guessing when the form has no location', async () => {
+    const { db, calls } = makeDb({
+      contact: { id: 'c21', location_id: STILLORGAN, email_status: 'active' },
+      prefs: { email_marketing: false, sms_marketing: false, whatsapp_marketing: false },
+    })
+
+    // host_mailing_list is the real caller that cannot supply one: hosts
+    // have their own suppression mechanism and no CRM location.
+    await applyFormMarketingConsent(db, {
+      contactId: 'c21', consent: true, source: 'host_mailing_list',
+    })
+
+    expect(calls.consentLog).toHaveLength(3)
+    for (const row of calls.consentLog) expect(row.location_id).toBeNull()
+    // Explicitly NOT the contact's own location — that would be a guess.
+    expect(calls.consentLog.some((r) => r.location_id === STILLORGAN)).toBe(false)
+  })
+
+  it('bulk: stamps the supplied location on every audit row', async () => {
+    const { db, calls } = makeDb({
+      contact: { id: 'c22', location_id: STILLORGAN, email_status: 'active' },
+      prefs: { email_marketing: true, sms_marketing: true, whatsapp_marketing: true },
+    })
+
+    await applyMarketingPreferencesBulk(db, {
+      contactId: 'c22',
+      prefs: { email_marketing: false },
+      source: 'postmark_one_click_unsubscribe',
+      locationId: HATCH,
+    })
+
+    expect(calls.consentLog).toHaveLength(1)
+    expect(calls.consentLog[0]).toMatchObject({
+      channel: 'email_marketing', action: 'opt_out', location_id: HATCH,
+    })
+  })
+
+  it('bulk: records NULL when the caller has no location', async () => {
+    const { db, calls } = makeDb({
+      contact: { id: 'c23', location_id: STILLORGAN, email_status: 'active' },
+      prefs: { email_marketing: true, sms_marketing: true, whatsapp_marketing: true },
+    })
+
+    await applyMarketingPreferencesBulk(db, {
+      contactId: 'c23', prefs: { email_marketing: false }, source: 'bulk_import',
+    })
+
+    expect(calls.consentLog).toHaveLength(1)
+    expect(calls.consentLog[0].location_id).toBeNull()
+  })
+
+  it('threading a location changes only what is RECORDED, never who is opted in/out', async () => {
+    const base = { email_marketing: true, sms_marketing: true, whatsapp_marketing: true }
+    const withLoc = makeDb({ contact: { id: 'c24', location_id: STILLORGAN, email_status: 'active' }, prefs: base })
+    const withoutLoc = makeDb({ contact: { id: 'c24', location_id: STILLORGAN, email_status: 'active' }, prefs: base })
+
+    const a = await applyMarketingPreferencesBulk(withLoc.db, {
+      contactId: 'c24', prefs: { email_marketing: false }, source: 'postmark_hard_bounce', locationId: HATCH,
+    })
+    const b = await applyMarketingPreferencesBulk(withoutLoc.db, {
+      contactId: 'c24', prefs: { email_marketing: false }, source: 'postmark_hard_bounce',
+    })
+
+    expect(a).toEqual(b)
+    expect(withLoc.calls.prefUpserts).toEqual(withoutLoc.calls.prefUpserts)
+    expect(withLoc.calls.contactUpdates).toEqual(withoutLoc.calls.contactUpdates)
+  })
+})

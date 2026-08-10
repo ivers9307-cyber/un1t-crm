@@ -50,8 +50,9 @@ const MARKETING_CHANNELS = ['email_marketing', 'sms_marketing', 'whatsapp_market
  * @param {string}  [args.ipAddress]      caller IP for the audit row
  * @param {string}  [args.locationId]     LOCCOMMS.2 — the location the FORM belongs to,
  *        which is often NOT contacts.location_id. Supplying it records the decision in
- *        contact_location_preferences for that location; omitting it writes only the
- *        global row. Every public form should pass it — a form that forgets records the
+ *        contact_location_preferences for that location AND on consent_log.location_id
+ *        (CONSENTLOC.1, mig 487); omitting it writes only the global row, with a NULL
+ *        on the audit rows. Every public form should pass it — a form that forgets records the
  *        consent globally and the location can never send to that person (row absent =
  *        never send). Host-list signups deliberately omit it: hosts have their own
  *        mechanism (host_contacts + host_email_suppressions).
@@ -154,12 +155,21 @@ export async function applyFormMarketingConsent(db, args) {
     }
 
     // 5. Audit one row per channel that flipped.
+    //
+    // CONSENTLOC.1 — location_id (mig 487) is the location this decision was
+    // made AT, and it is the same locationId the contact_location_preferences
+    // row above was written for: those two rows describe one event and must
+    // not disagree. NULL when the caller has none — see the note on the
+    // locationId param. Never contacts.location_id as a stand-in: the whole
+    // point of LOCCOMMS.2 is that the two routinely differ, so substituting
+    // it would file a real consent decision against the wrong gym.
     const logRows = changed.map((ch) => ({
-      contact_id: contactId,
-      channel:    ch,
-      action:     consentActionFor(consent),
+      contact_id:  contactId,
+      channel:     ch,
+      action:      consentActionFor(consent),
       source,
-      ip_address: ipAddress,
+      ip_address:  ipAddress,
+      location_id: locationId,
     }))
     await db.from('consent_log').insert(logRows)
   }
@@ -201,6 +211,16 @@ export async function applyFormMarketingConsent(db, args) {
  *   omitted channels are LEFT UNCHANGED.
  * @param {string} args.source           consent_log.source string
  * @param {string} [args.ipAddress]
+ * @param {string} [args.locationId]     CONSENTLOC.1 — the location this consent
+ *        decision belongs to, recorded on consent_log.location_id (mig 487).
+ *        Pass it whenever the triggering event names one: the Postmark
+ *        webhook paths read it off the email_sends row the event refers to.
+ *        Omit it (→ NULL) when the caller genuinely has none — a CSV import of
+ *        somebody else's list carries no location, and a NULL that reads
+ *        "unknown" is safer than contacts.location_id, which is a guess that
+ *        is wrong for exactly the cross-location cases LOCCOMMS.2 exists for.
+ *        This ONLY affects what is recorded; it never changes which channels
+ *        flip or who ends up opted in.
  *
  * @returns {Promise<{
  *   ok: boolean, skipped: string|null,
@@ -208,7 +228,7 @@ export async function applyFormMarketingConsent(db, args) {
  * }>}
  */
 export async function applyMarketingPreferencesBulk(db, args) {
-  const { contactId, prefs, source, ipAddress = null } = args || {}
+  const { contactId, prefs, source, ipAddress = null, locationId = null } = args || {}
   if (!db || !contactId || !prefs || typeof prefs !== 'object' || !source) {
     return { ok: false, error: 'invalid args', skipped: null, changed: [] }
   }
@@ -268,13 +288,16 @@ export async function applyMarketingPreferencesBulk(db, args) {
   }
 
   // 5. Audit one row per channel that flipped — action mirrors the
-  //    direction the channel went.
+  //    direction the channel went. CONSENTLOC.1 — location_id records WHERE
+  //    the decision happened; NULL when the caller can't know (see the param
+  //    doc), never a substituted contacts.location_id.
   const logRows = changed.map((ch) => ({
-    contact_id: contactId,
-    channel:    ch,
-    action:     consentActionFor(wantedPrefs[ch]),
+    contact_id:  contactId,
+    channel:     ch,
+    action:      consentActionFor(wantedPrefs[ch]),
     source,
-    ip_address: ipAddress,
+    ip_address:  ipAddress,
+    location_id: locationId,
   }))
   await db.from('consent_log').insert(logRows)
 

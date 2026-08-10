@@ -728,11 +728,23 @@ export async function tickCampaignSend(db, campaign) {
     } else {
       // Permanent rejection (300 invalid email, 406 inactive recipient,
       // ...): retrying can never succeed. Terminal immediately.
+      //
+      // BOUNCEDAT.1 — bounced_at is stamped HERE as well as in the Postmark
+      // webhook. It was omitted originally, and the omission was invisible
+      // because the row still read status='bounced' everywhere it was
+      // counted by status. But every reader keyed on the TIMESTAMP silently
+      // skipped these rows: the contact timeline's Bounced chip
+      // (contacts/[id]/page.js), the sequence bounce count
+      // (/api/sequences/[id]/stats), integration-health's
+      // `.not('bounced_at','is',null)`. Live that was 42 events over 11
+      // contacts reading as zero. `now` is the truthful instant — Postmark
+      // rejected the address on this call, milliseconds ago.
       bouncedCount++
       await db.from('campaign_recipients')
         .update({
           status: 'bounced',
           bounce_type: 'rejected',
+          bounced_at: new Date().toISOString(),
           attempts: (item._attempts || 0) + 1,
           last_error: result.Message || null,
         })

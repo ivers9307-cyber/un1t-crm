@@ -359,11 +359,13 @@ describe('runRepeatBounceSweep — safety rails', () => {
     expect(argOf(scan, 'range')).toEqual([0, 999])
   })
 
-  it('scans on bounce_type, not bounced_at — send-time rejections carry no timestamp', async () => {
-    // campaign-sender's permanent-rejection branch writes status='bounced'
-    // and bounce_type='rejected' with NO bounced_at. A bounced_at filter
-    // would drop every one of them, and a send-time rejection is the
-    // strongest evidence an address is dead.
+  it('scans on bounce_type, not bounced_at — some historical rejections carry no timestamp', async () => {
+    // campaign-sender's permanent-rejection branch used to write
+    // status='bounced' and bounce_type='rejected' with NO bounced_at.
+    // BOUNCEDAT.1 stamps it going forward and mig 518 recovered every
+    // historical row with a defensible source, but 19 pre-mig-392 rows stay
+    // permanently NULL. A bounced_at filter would drop those, and a send-time
+    // rejection is the strongest evidence an address is dead.
     const { db, statements } = makeDb(routeFor({ bounceRows: [], contacts: {} }))
     await runRepeatBounceSweep({ db, now: NOW })
     const scan = statements.find((s) => s.table === 'campaign_recipients')

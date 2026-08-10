@@ -189,6 +189,25 @@ describe('tickCampaignSend — transient vs permanent errors (CAMPAIGN-REL.1)', 
     expect(result.retried).toBe(0)
   })
 
+  it('stamps bounced_at on a permanent rejection so the event can be placed on a timeline', async () => {
+    // BOUNCEDAT.1 — the rejection branch wrote status/bounce_type/attempts/
+    // last_error but no timestamp, so 42 real rejection events across 11
+    // contacts sat in campaign_recipients with bounced_at NULL. Anything
+    // keyed on bounced_at (the contact timeline's Bounced chip, the sequence
+    // stats bounce count, integration-health's `.not('bounced_at','is',null)`)
+    // under-reported by exactly that number, silently. The Postmark webhook
+    // path has always stamped it; this is the one writer that didn't.
+    const { db, statements } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 300, Message: 'Invalid email address' }])
+
+    await tickCampaignSend(db, campaign)
+
+    const bounce = recipientUpdates(statements, 'r1').find(u => u.status === 'bounced')
+    expect(bounce).toBeTruthy()
+    expect(bounce.bounced_at).toEqual(expect.any(String))
+    expect(Number.isNaN(Date.parse(bounce.bounced_at))).toBe(false)
+  })
+
   it('handles a mixed batch — success sent+logged, transient requeued', async () => {
     const { db, statements } = makeDb(routeFor({
       candidates: [makeRecipient('r1', 0), makeRecipient('r2', 0)],

@@ -76,3 +76,62 @@ describe('fetchAllRows (SAAS4-C3 — DSAR export paginator)', () => {
     expect(truncated).toBe(false)
   })
 })
+
+// DSAR-CONSENT.1 — the bundle read consent_log.action straight off the row
+// without going through normaliseConsentAction, so a bundle built from data
+// written before mig 516 (or restored from an older dump) shows two spellings
+// of one fact: `opted_out` next to `opt_out`.
+function exportDb(rowsByTable) {
+  function builder(table) {
+    const state = { table, from: 0, to: 0 }
+    const b = {
+      select: () => b,
+      eq: () => b,
+      order: () => b,
+      range: (from, to) => { state.from = from; state.to = to; return b },
+      then(resolve) {
+        const all = rowsByTable[table] || []
+        resolve({ data: all.slice(state.from, state.to + 1), error: null })
+      },
+    }
+    return b
+  }
+  return { from: (table) => builder(table) }
+}
+
+const CONTACT = { id: 'c1', name: 'Alice M', email: 'a@x.ie', phone: null, created_at: '2026-01-01T00:00:00.000Z', location_id: 'loc-1' }
+
+describe('buildContactExport — consent_log action vocabulary (DSAR-CONSENT.1)', () => {
+  it('renders one spelling of each fact, and keeps the stored value visible', async () => {
+    const { buildContactExport } = await import('./contact-export.js')
+    const db = exportDb({
+      consent_log: [
+        { channel: 'email_marketing', action: 'opted_out', source: 'whatsapp_stop', created_at: '2026-02-01T00:00:00.000Z' },
+        { channel: 'sms_marketing', action: 'opt_out', source: 'preference_centre', created_at: '2026-03-01T00:00:00.000Z' },
+        { channel: 'email_marketing', action: 'opted_in', source: 'booking_form', created_at: '2026-04-01T00:00:00.000Z' },
+      ],
+    })
+
+    const bundle = await buildContactExport(db, CONTACT)
+    const rows = bundle.sections.consent_log.rows
+
+    expect(rows.map((r) => r.action)).toEqual(['opt_out', 'opt_out', 'opt_in'])
+    // Non-lossy: where the stored value differed it is still in the bundle.
+    expect(rows[0].action_raw).toBe('opted_out')
+    expect(rows[2].action_raw).toBe('opted_in')
+    // Where it did not differ, no redundant field is emitted.
+    expect(rows[1]).not.toHaveProperty('action_raw')
+  })
+
+  it('passes an unrecognised action through verbatim rather than guessing', async () => {
+    const { buildContactExport } = await import('./contact-export.js')
+    const db = exportDb({
+      consent_log: [{ channel: 'email_marketing', action: 'who_knows', source: 'legacy', created_at: '2026-02-01T00:00:00.000Z' }],
+    })
+
+    const bundle = await buildContactExport(db, CONTACT)
+    const [row] = bundle.sections.consent_log.rows
+    expect(row.action).toBe('who_knows')
+    expect(row).not.toHaveProperty('action_raw')
+  })
+})

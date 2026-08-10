@@ -129,14 +129,19 @@ async function reconcileClearedSuppressions(db, nowIso, dry, errors) {
  * Every bounced recipient row in the estate, grouped by contact.
  *
  * Keyed on bounce_type, NOT bounced_at, and that difference is load-bearing.
- * Two code paths write a bounce and only one of them writes a timestamp: the
- * Postmark webhook sets status/bounced_at/bounce_type together, while
- * campaign-sender's permanent-rejection branch (Postmark 300 invalid email,
- * 406 inactive recipient) sets status='bounced' and bounce_type='rejected'
- * with NO bounced_at. Filtering on bounced_at would silently drop every
- * rejection — 42 events over 11 contacts at Stillorgan alone, and a
- * send-time rejection is the STRONGEST evidence an address is dead.
- * mig 515's email_bounce_type_summary uses the same predicate so the
+ * Two code paths write a bounce, and until BOUNCEDAT.1 only one of them wrote
+ * a timestamp: the Postmark webhook set status/bounced_at/bounce_type
+ * together, while campaign-sender's permanent-rejection branch (Postmark 300
+ * invalid email, 406 inactive recipient) set status='bounced' and
+ * bounce_type='rejected' with NO bounced_at. That is fixed at the writer, and
+ * mig 518 recovered the timestamp for every historical row that had a
+ * defensible source (claimed_at, the send attempt that got rejected).
+ *
+ * The predicate stays on bounce_type anyway, for two reasons. 19 pre-mig-392
+ * rejected rows have no recoverable timestamp and are deliberately still NULL
+ * — a send-time rejection is the STRONGEST evidence an address is dead, and
+ * dropping those would weaken exactly the signal this sweep exists for. And
+ * mig 515's email_bounce_type_summary uses the same predicate, so the
  * operator-facing breakdown and this scan can never disagree.
  */
 async function loadBounceHistory(db) {

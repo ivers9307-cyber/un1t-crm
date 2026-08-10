@@ -374,8 +374,13 @@ export async function processPostmarkEvent(db, body) {
 
         // Hard bounce only — mark contact + auto-unsubscribe (UNSUB.2).
         if (bounceType === 'hard') {
+          // CONSENTLOC.1 — location_id rides along so the auto-unsubscribe's
+          // consent_log row records WHERE the decision belongs. email_sends
+          // carries it on every row (populated 19,206/19,206 live), and it is
+          // the honest answer: the mail that bounced was sent by that
+          // location, so that is the list the address is being taken off.
           const { data: bounceSend } = await db.from('email_sends')
-            .select('contact_id, campaign_id')
+            .select('contact_id, campaign_id, location_id')
             .eq('postmark_message_id', messageId)
             .single()
 
@@ -388,6 +393,7 @@ export async function processPostmarkEvent(db, body) {
               contactId: bounceSend.contact_id,
               prefs: { email_marketing: false },
               source: 'postmark_hard_bounce',
+              locationId: bounceSend.location_id || null,
             })
             if (!unsubResult.ok) {
               console.error('[postmark processor] auto-unsubscribe on hard bounce failed:', unsubResult.error, { contactId: bounceSend.contact_id })
@@ -416,8 +422,10 @@ export async function processPostmarkEvent(db, body) {
           .update({ status: 'complained', complained_at: now })
           .eq('postmark_message_id', messageId)
 
+        // CONSENTLOC.1 — see the HardBounce handler; location_id feeds the
+        // auto-unsubscribe's consent_log row.
         const { data: complaintSend } = await db.from('email_sends')
-          .select('contact_id, campaign_id')
+          .select('contact_id, campaign_id, location_id')
           .eq('postmark_message_id', messageId)
           .single()
 
@@ -430,6 +438,7 @@ export async function processPostmarkEvent(db, body) {
             contactId: complaintSend.contact_id,
             prefs: { email_marketing: false },
             source: 'postmark_spam_complaint',
+            locationId: complaintSend.location_id || null,
           })
           if (!unsubResult.ok) {
             console.error('[postmark processor] auto-unsubscribe on spam complaint failed:', unsubResult.error, { contactId: complaintSend.contact_id })
@@ -479,8 +488,11 @@ export async function processPostmarkEvent(db, body) {
           break
         }
         {
+          // CONSENTLOC.1 — see the HardBounce handler. This is the biggest
+          // consent_log writer in the estate, and the one whose rows mig 517
+          // had to coalesce a location onto.
           const { data: unsubSend } = await db.from('email_sends')
-            .select('contact_id, campaign_id')
+            .select('contact_id, campaign_id, location_id')
             .eq('postmark_message_id', messageId)
             .single()
 
@@ -492,6 +504,7 @@ export async function processPostmarkEvent(db, body) {
               contactId: unsubSend.contact_id,
               prefs: { email_marketing: false },
               source: 'postmark_one_click_unsubscribe',
+              locationId: unsubSend.location_id || null,
             })
             if (!unsubResult.ok) {
               console.error('[postmark processor] auto-unsubscribe on one-click failed:', unsubResult.error)

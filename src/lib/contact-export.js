@@ -11,6 +11,8 @@
 // MAX_ROWS_PER_SECTION with an honest `truncated` flag in the bundle
 // meta rather than silently dropping rows.
 
+import { normaliseConsentAction } from './consent-actions.js'
+
 export const MAX_ROWS_PER_SECTION = 5000
 const PAGE = 1000
 
@@ -56,6 +58,36 @@ export async function buildContactExport(db, contact) {
     byContact('activities', 'type, title, notes, created_at'),
     byContact('notes', 'content, created_at'),
   ])
+
+  // DSAR-CONSENT.1 — consent_log.action carried two spellings of the same two
+  // facts until mig 516 unified them (opt_out/opted_out, opt_in/opted_in).
+  //
+  // DECISION: emit the NORMALISED action, and keep the stored string beside it
+  // as `action_raw` whenever the two differ.
+  //
+  // The case for a raw dump is real — this bundle answers a subject access
+  // request, it is evidence about what the controller holds, and quietly
+  // rewriting a stored value is the kind of thing that makes an export
+  // unusable as evidence. But the case against showing `opted_out` next to
+  // `opt_out` is stronger: Article 15 entitles the subject to their personal
+  // data in an intelligible form, and two spellings of one fact are not
+  // intelligible — a subject (or a regulator reading over their shoulder)
+  // cannot tell whether two different things happened to them. That is a
+  // misleading export, which is a worse failure than a cosmetic one.
+  //
+  // Emitting both settles it without choosing: the reader gets one vocabulary,
+  // and nothing that was stored is hidden. `action_raw` is omitted when it
+  // would just duplicate `action`, so for current data (everything post-mig-516,
+  // held to the vocabulary by a CHECK constraint) the bundle is byte-identical
+  // to before — the divergence only surfaces on a bundle built from an older
+  // dump, which is the only case where it matters. An action the vocabulary
+  // does not recognise passes through verbatim, per normaliseConsentAction's
+  // own rule: rendering an unknown string as if it were an opt-in would be the
+  // worst outcome of the three.
+  consentLog.rows = consentLog.rows.map((row) => {
+    const action = normaliseConsentAction(row.action)
+    return action === row.action ? row : { ...row, action, action_raw: row.action }
+  })
 
   // Message history hangs off conversations, not the contact directly.
   const messages = {}
