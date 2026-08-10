@@ -49,7 +49,13 @@ function buildStatusCallback(broadcastId, contactId) {
  * @param {string} locationId
  * @returns {object} a Supabase query builder. Caller awaits it.
  */
-function smsAudienceBase(db, locationId) {
+// FILTER-B.4 — the columns/selectOpts the SEND path uses. A caller that wants
+// a head:true count or a narrower preview projection overrides them; the gates
+// below never move, so a count, a preview and a send all resolve the same set.
+const SMS_SEND_COLUMNS =
+  'id, name, first_name, last_name, email, phone, pipeline_stage_slug, sms_status, location_id, audience_location_id, loc_sms_marketing'
+
+function smsAudienceBase(db, locationId, { columns = SMS_SEND_COLUMNS, selectOpts } = {}) {
   // Inner-join contact_preferences so we filter on sms_marketing in
   // the same query (mig 064). Mirrors buildWhatsAppAudience' use of
   // !inner. Contacts without a preferences row are excluded — same
@@ -69,7 +75,9 @@ function smsAudienceBase(db, locationId) {
   // location cannot appear at all — row absent = that location may never send.
   return db
     .from('contact_location_audience')
-    .select('id, name, first_name, last_name, email, phone, pipeline_stage_slug, sms_status, location_id, audience_location_id, loc_sms_marketing')
+    // Count/head options are only honoured on the FIRST select() after
+    // .from() (see buildAudienceQuery's CAMPAIGN.10 note) — which is here.
+    .select(columns, selectOpts)
     .eq('audience_location_id', locationId)
     .eq('sms_status', 'active')
     .eq('loc_sms_marketing', true)
@@ -84,8 +92,8 @@ export function buildSmsAudience(db, filter, locationId) {
 // the contacts.id constraint before applying scalar filters. Returns the
 // wrapped { query } (thenable-unwrap guard) so the caller can chain
 // .order()/.range() (paged path) or await it directly.
-export async function buildSmsAudienceAsync(db, filter, locationId) {
-  return applyAudienceFilterAsync({ db, query: smsAudienceBase(db, locationId), filter, locationId })
+export async function buildSmsAudienceAsync(db, filter, locationId, opts) {
+  return applyAudienceFilterAsync({ db, query: smsAudienceBase(db, locationId, opts), filter, locationId })
 }
 
 // Paginate the full SMS-eligible audience (consent + sms_status + phone + the
