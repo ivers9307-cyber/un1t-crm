@@ -19,6 +19,7 @@ import { stripUnsetFilterRows } from '@/lib/audience-filter'
 import { AUDIENCE_PRESETS } from '@/lib/audience-presets'
 import ContactMultiSelect from './ContactMultiSelect'
 import SendQuietHoursNotice from './SendQuietHoursNotice'
+import CopyAssist from './CopyAssist'
 import { isoToLocalDatetime } from '@/lib/datetime-local'
 import { useUnlayerEditor } from './useUnlayerEditor'
 import { smsSegmentInfo, SMS_MAX_LEN, SMS_MERGE_TAGS, waBodyVariables, WA_VARIABLE_FIELDS } from '@/lib/communications/compose'
@@ -610,6 +611,16 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
               <span className="block text-xs font-medium text-un1t-subtle mb-1">Subject</span>
               <input className={fieldCls} value={subject} onChange={e => setSubject(e.target.value)} placeholder="Email subject" />
             </label>
+            {/* GAPS-P8 — suggestions only. Nothing is applied until the operator
+                clicks Use; body variants copy to the clipboard rather than
+                overwrite the design in the Unlayer iframe. */}
+            <CopyAssist
+              className="mb-3"
+              locationId={locationId}
+              subject={subject}
+              getBody={async () => (await exportEmailHtml()).html || ''}
+              onUseSubject={setSubject}
+            />
             <div id="unlayer-editor-composer" ref={unlayerRef} className="h-[560px] rounded-lg overflow-hidden border border-un1t-border bg-un1t-bg" />
             {!unlayerLoaded && <p className="text-[11px] text-un1t-subtle mt-1">Loading the email designer…</p>}
             <div className="mt-2 text-right">
