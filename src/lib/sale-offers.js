@@ -23,6 +23,25 @@ export function formatEuro(cents) {
   return '€' + (cents / 100).toLocaleString('en-IE', { maximumFractionDigits: 0 })
 }
 
+// Human deadline for customer-facing copy, e.g. "MONDAY 10 AUGUST, 23:59".
+// DERIVED from the offer's ends_at, never hard-coded — the sale window is
+// operator-editable in SQL, and a hard-coded date silently disagrees with
+// the live countdown the moment the window moves (it did: the footer read
+// "MONDAY 11 AUGUST" while ends_at was a Tuesday). Formats an absolute
+// instant into Dublin wall-clock via Intl, so no naive Date parsing.
+export function formatSaleDeadline(endsAt, { uppercase = true } = {}) {
+  if (!endsAt) return ''
+  const d = new Date(endsAt)
+  if (Number.isNaN(d.getTime())) return ''
+  const parts = new Intl.DateTimeFormat('en-IE', {
+    timeZone: 'Europe/Dublin',
+    weekday: 'long', day: 'numeric', month: 'long',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(d).reduce((acc, p) => { acc[p.type] = p.value; return acc }, {})
+  const text = `${parts.weekday} ${parts.day} ${parts.month}, ${parts.hour}:${parts.minute}`
+  return uppercase ? text.toUpperCase() : text
+}
+
 export async function resolveOfferPurchaseByOrderId(db, orderId) {
   const { data } = await db
     .from('offer_purchases')

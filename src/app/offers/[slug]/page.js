@@ -5,7 +5,7 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
-import { offerIsOpen, formatEuro } from '@/lib/sale-offers'
+import { offerIsOpen, formatEuro, formatSaleDeadline } from '@/lib/sale-offers'
 import SaleCountdown from '@/components/offers/SaleCountdown'
 import OfferCheckout from '@/components/offers/OfferCheckout'
 
@@ -78,7 +78,7 @@ export default async function OfferPage(props) {
           <div style={{ paddingTop: 24 }}>
             <p className="ofr-display" style={{ fontSize: 28 }}>The sale has ended</p>
             <p style={{ color: '#9a9a9a', marginTop: 12, fontSize: 14, lineHeight: 1.6 }}>
-              This offer closed at midnight on Monday 11 August. Keep an eye on your inbox for the next one.
+              This offer closed on {formatSaleDeadline(offer.ends_at, { uppercase: false })}. Keep an eye on your inbox for the next one.
             </p>
           </div>
         )}
