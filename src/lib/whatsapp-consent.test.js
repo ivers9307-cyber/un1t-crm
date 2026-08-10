@@ -68,7 +68,7 @@ describe('applyWhatsappConsentKeyword — STOP', () => {
       conversationId: 'conv1',
       keyword: 'stop',
     })
-    expect(r).toMatchObject({ applied: true, action: 'opted_out' })
+    expect(r).toMatchObject({ applied: true, action: 'opt_out' })
 
     const prefWrite = writes.find(w => w.table === 'contact_preferences')
     expect(prefWrite?.op).toBe('upsert')
@@ -93,7 +93,10 @@ describe('applyWhatsappConsentKeyword — STOP', () => {
     expect(logWrite?.row).toMatchObject({
       contact_id: 'c1',
       channel: 'whatsapp_marketing',
-      action: 'opted_out',
+      // GAPS-P6: the consent_log vocabulary is opt_out / opt_in. The
+      // wa_status assertion two lines up still says 'opted_out' — that is
+      // the point: two adjacent columns, two different vocabularies.
+      action: 'opt_out',
       source: 'whatsapp_keyword',
     })
 
@@ -112,7 +115,7 @@ describe('applyWhatsappConsentKeyword — STOP', () => {
       db, contact: { id: 'c1' }, waPhone: '353871234567',
       locationId: 'loc1', conversationId: 'conv1', keyword: 'start',
     })
-    expect(r).toMatchObject({ applied: true, action: 'opted_in' })
+    expect(r).toMatchObject({ applied: true, action: 'opt_in' })
 
     const prefWrite = writes.find(w => w.table === 'contact_preferences')
     expect(prefWrite?.op).toBe('upsert')
@@ -137,7 +140,7 @@ describe('applyMetaUserPreference — same upsert semantics', () => {
     const r = await applyMetaUserPreference(db, {
       wa_id: '353871234567', category: 'marketing_messages', value: 'stop',
     })
-    expect(r).toMatchObject({ applied: true, action: 'opted_out' })
+    expect(r).toMatchObject({ applied: true, action: 'opt_out' })
 
     const prefWrite = writes.find(w => w.table === 'contact_preferences')
     expect(prefWrite?.op).toBe('upsert')

@@ -2,6 +2,7 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { getRequestOrigin } from '@/lib/app-url'
+import { CONSENT_ACTIONS } from '@/lib/consent-actions'
 
 export const runtime = 'nodejs'
 
@@ -123,7 +124,7 @@ export async function POST(request, props) {
       logEntries.push({
         contact_id: pref.contact_id,
         channel,
-        action: 'opt_out',
+        action: CONSENT_ACTIONS.OPT_OUT,
         source: 'one_click_unsubscribe',
         ip_address: ipAddress,
       })

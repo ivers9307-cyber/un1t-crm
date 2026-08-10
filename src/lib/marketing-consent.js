@@ -35,6 +35,7 @@
 //     the funnel they came from.
 
 import { logWarn } from './log.js'
+import { consentActionFor } from './consent-actions.js'
 
 const MARKETING_CHANNELS = ['email_marketing', 'sms_marketing', 'whatsapp_marketing']
 
@@ -156,7 +157,7 @@ export async function applyFormMarketingConsent(db, args) {
     const logRows = changed.map((ch) => ({
       contact_id: contactId,
       channel:    ch,
-      action:     consent ? 'opt_in' : 'opt_out',
+      action:     consentActionFor(consent),
       source,
       ip_address: ipAddress,
     }))
@@ -271,7 +272,7 @@ export async function applyMarketingPreferencesBulk(db, args) {
   const logRows = changed.map((ch) => ({
     contact_id: contactId,
     channel:    ch,
-    action:     wantedPrefs[ch] ? 'opt_in' : 'opt_out',
+    action:     consentActionFor(wantedPrefs[ch]),
     source,
     ip_address: ipAddress,
   }))

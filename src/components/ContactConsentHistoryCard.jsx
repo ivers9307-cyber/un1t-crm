@@ -9,21 +9,41 @@
 // paying for it. Once loaded, stays in memory for the session.
 
 import { useState, useCallback } from 'react'
-import { ChevronDown, ChevronRight, ShieldCheck, Loader2, AlertCircle, ArrowDown, ArrowUp } from 'lucide-react'
+import { ChevronDown, ChevronRight, ShieldCheck, Loader2, AlertCircle, ArrowDown, ArrowUp, Download } from 'lucide-react'
 
+// Every `source` string a live consent_log row actually carries, as of the
+// GAPS-P6 audit. An unmapped source falls back to the raw slug (fmtSource) —
+// readable, but a compliance officer should not have to decode
+// `leadcap1_scope_correction` on their own, so the known set is spelled out.
 const SOURCE_LABELS = {
   preference_centre:        { label: 'Customer self-service',     tone: 'blue' },
   admin_panel:              { label: 'Admin panel',               tone: 'amber' },
   auto_classpass:           { label: 'Auto (ClassPass)',          tone: 'purple' },
   auto_classpass_backfill:  { label: 'Auto (ClassPass backfill)', tone: 'purple' },
   unsubscribe_one_click:    { label: 'One-click unsubscribe',     tone: 'blue' },
+  one_click_unsubscribe:    { label: 'One-click unsubscribe',     tone: 'blue' },
   // CONSENT.4 — public-form soft opt-in / explicit opt-out captured
   // alongside a booking or event registration submission.
   booking_form:             { label: 'Booking form',              tone: 'emerald' },
   event_form:               { label: 'Event registration form',   tone: 'emerald' },
+  waitlist_form:            { label: 'Waitlist form',             tone: 'emerald' },
+  host_mailing_list:        { label: 'Host mailing list',         tone: 'emerald' },
   // CONSENT.5 — operator-driven CSV import migrating consent from
   // an external platform (Mailchimp / Klaviyo / etc).
   bulk_import:              { label: 'Bulk import',               tone: 'amber' },
+  // WhatsApp: an inbound STOP/START keyword, Meta's own in-app marketing
+  // preference control, and the Flow booking form's consent tick.
+  whatsapp_keyword:         { label: 'WhatsApp STOP/START',       tone: 'blue' },
+  meta_user_preferences:    { label: 'Meta in-app preference',    tone: 'blue' },
+  whatsapp_flow:            { label: 'WhatsApp Flow',             tone: 'emerald' },
+  // Postmark-side signals: the recipient told the ESP, not us.
+  postmark_one_click_unsubscribe: { label: 'One-click unsubscribe (Postmark)', tone: 'blue' },
+  postmark_hard_bounce:     { label: 'Hard bounce (Postmark)',    tone: 'gray' },
+  postmark_spam_complaint:  { label: 'Spam complaint (Postmark)', tone: 'gray' },
+  postmark_suppression_backfill: { label: 'Postmark suppression backfill', tone: 'gray' },
+  // An administrative correction, not a decision the customer made — mig 488
+  // deliberately excludes it when deciding whether someone withdrew consent.
+  leadcap1_scope_correction: { label: 'Scope correction (admin)', tone: 'amber' },
 }
 
 const CHANNEL_LABELS = {
@@ -42,6 +62,14 @@ const TONE_CLASS = {
   emerald: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/30',
   gray:    'bg-un1t-border/30 text-un1t-subtle border-un1t-border',
 }
+
+// Sources where the person themselves acted — the "By" column says
+// "customer" rather than "system" for these.
+const CUSTOMER_SOURCES = new Set([
+  'preference_centre', 'unsubscribe_one_click', 'one_click_unsubscribe',
+  'postmark_one_click_unsubscribe', 'whatsapp_keyword', 'meta_user_preferences',
+  'booking_form', 'event_form', 'waitlist_form', 'host_mailing_list', 'whatsapp_flow',
+])
 
 function fmtSource(s) {
   return SOURCE_LABELS[s] || { label: s || 'unknown', tone: 'gray' }
@@ -93,12 +121,12 @@ export default function ContactConsentHistoryCard({ contactId }) {
 
   return (
     <div className="bg-un1t-surface border border-un1t-border rounded-lg">
-      <button
-        type="button"
-        onClick={toggle}
-        className="w-full flex items-center justify-between gap-2 p-4 text-left hover:bg-un1t-border/10"
-      >
-        <div className="flex items-center gap-2">
+      <div className="w-full flex items-center justify-between gap-2 hover:bg-un1t-border/10 rounded-lg">
+        <button
+          type="button"
+          onClick={toggle}
+          className="flex-1 flex items-center gap-2 p-4 text-left"
+        >
           {open
             ? <ChevronDown size={14} className="text-un1t-subtle" />
             : <ChevronRight size={14} className="text-un1t-subtle" />}
@@ -111,11 +139,23 @@ export default function ContactConsentHistoryCard({ contactId }) {
               {rows.length}{truncated ? '+' : ''} event{rows.length === 1 ? '' : 's'}
             </span>
           )}
-        </div>
-        <span className="text-[11px] text-un1t-muted">
-          {open ? 'hide' : 'show'}
-        </span>
-      </button>
+        </button>
+        {/* GAPS-P6 — the subject-access-request download. A plain <a> with
+            `download`, deliberately NOT <Link> and not a fetch: this points at
+            an /api route that answers with a text/csv attachment, so the
+            client router has nothing to render and would only get in the way,
+            while the browser streams it straight to disk with the session
+            cookie attached. Always available — answering a SAR must not
+            require expanding a collapsed card first. */}
+        <a
+          href={`/api/contacts/${contactId}/consent-log?format=csv`}
+          download
+          className="mr-4 inline-flex items-center gap-1.5 px-2 py-1 rounded border border-un1t-border text-[11px] text-un1t-subtle hover:bg-un1t-border/20"
+          title="Download this contact's full consent history as CSV (subject-access request)"
+        >
+          <Download size={11} /> Export CSV
+        </a>
+      </div>
 
       {open && (
         <div className="px-4 pb-4 border-t border-un1t-border">
@@ -148,6 +188,7 @@ export default function ContactConsentHistoryCard({ contactId }) {
                       <th className="py-1.5 pr-3 font-medium">Action</th>
                       <th className="py-1.5 pr-3 font-medium">Channel</th>
                       <th className="py-1.5 pr-3 font-medium">Source</th>
+                      <th className="py-1.5 pr-3 font-medium">Location</th>
                       <th className="py-1.5 pr-3 font-medium">By</th>
                     </tr>
                   </thead>
@@ -175,11 +216,12 @@ export default function ContactConsentHistoryCard({ contactId }) {
                             </span>
                           </td>
                           <td className="py-1.5 pr-3 text-un1t-subtle">
+                            {r.location_name || <span className="text-un1t-muted">—</span>}
+                          </td>
+                          <td className="py-1.5 pr-3 text-un1t-subtle">
                             {r.performed_by_name || (
                               <span className="text-un1t-muted italic">
-                                {r.source === 'preference_centre' || r.source === 'unsubscribe_one_click'
-                                  ? 'customer'
-                                  : 'system'}
+                                {CUSTOMER_SOURCES.has(r.source) ? 'customer' : 'system'}
                               </span>
                             )}
                           </td>

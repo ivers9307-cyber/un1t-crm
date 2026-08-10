@@ -23,6 +23,7 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { getClientIp } from '@/lib/rate-limit'
+import { consentActionFor } from '@/lib/consent-actions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -142,7 +143,7 @@ export async function PATCH(request, props) {
     logEntries.push({
       contact_id: params.id,
       channel,
-      action:  body[channel] ? 'opt_in' : 'opt_out',
+      action:  consentActionFor(body[channel]),
       source:  'admin_panel',
       ip_address: ip,
       performed_by: user.id || null,

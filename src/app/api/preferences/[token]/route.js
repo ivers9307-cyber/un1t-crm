@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validate'
+import { consentActionFor } from '@/lib/consent-actions'
 
 const PreferencesUpdateSchema = z.object({
   // LOCCOMMS.4 — when present, the update applies to THAT location's list only.
@@ -141,7 +142,7 @@ export async function PUT(request, props) {
       logEntries.push({
         contact_id: pref.contact_id,
         channel,
-        action: body[channel] ? 'opt_in' : 'opt_out',
+        action: consentActionFor(body[channel]),
         source: 'preference_centre',
         ip_address: ip,
         location_id: body.locationId || null,

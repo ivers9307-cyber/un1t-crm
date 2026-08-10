@@ -2939,6 +2939,25 @@ registry.registerPath({
   },
 })
 
+// CONSENT.3 + GAPS-P6 — consent history feed and its CSV export
+registry.registerPath({
+  method: 'get',
+  path: '/api/contacts/{id}/consent-log',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Consent history for one contact (JSON feed, or CSV via ?format=csv)',
+  description: "Append-only consent_log rows joined to the acting profile and the location, newest first. `?format=csv` returns the subject-access-request download (UTF-8 BOM, RFC-4180, formula-injection neutralised); the JSON feed caps at 500 rows and flags `truncated`, the CSV paginates the full history past the 1k select cap. Legacy 'opted_out'/'opted_in' rows written before mig 516 are normalised to opt_out/opt_in on read, so a report can never lose a withdrawal to a spelling. Service-role route: location-gated in app code, 404 (not 403) on cross-tenant ids.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    query: z.object({ format: z.enum(['csv']).optional() }),
+  },
+  responses: {
+    200: { description: 'JSON feed, or a text/csv attachment when format=csv' },
+    404: { description: 'Not found (incl. cross-tenant ids)', content: { 'application/json': { schema: ErrorResponse } } },
+    413: { description: 'History too large to export safely — refused rather than truncated', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // CONTRACTS-EDIT.1 — resend the issue-notification email
 registry.registerPath({
   method: 'post',
