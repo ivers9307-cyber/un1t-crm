@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import sharp from 'sharp'
 import {
   remainingParts, pad2, frameDigits, layoutFor, renderFrame, buildCountdownGif, COLOURS,
 } from './countdown-gif'
@@ -101,10 +102,24 @@ describe('buildCountdownGif', () => {
     expect(gif.subarray(0, 6).toString('latin1')).toBe('GIF89a')
     expect(gif.length).toBeGreaterThan(100)
   })
+
+  // THE test that matters: a mis-set pageHeight still produces a valid GIF of
+  // the right byte-size — it is just one tall motionless frame. Magic bytes
+  // and length cannot tell the two apart; page count can.
+  it('genuinely ANIMATES — one page per frame, each the canvas height', async () => {
+    const L = layoutFor()
+    const gif = await buildCountdownGif({ msLeft: 5 * 3600e3, frames: 5, layout: L })
+    const meta = await sharp(gif, { animated: true }).metadata()
+    expect(meta.pages).toBe(5)
+    expect(meta.pageHeight).toBe(L.height)
+    expect(meta.width).toBe(L.width)
+  })
+
   it('collapses to a single frame once expired', async () => {
     const many = await buildCountdownGif({ msLeft: 5 * 3600e3, frames: 30 })
     const expired = await buildCountdownGif({ msLeft: 0, frames: 30 })
     expect(expired.length).toBeLessThan(many.length)
     expect(expired.subarray(0, 6).toString('latin1')).toBe('GIF89a')
+    expect((await sharp(expired, { animated: true }).metadata()).pages).toBe(1)
   })
 })

@@ -140,7 +140,11 @@ export async function buildCountdownGif({ msLeft, frames = 60, layout } = {}) {
     renderFrame(frameDigits(msLeft, f), L).copy(stacked, f * W * H * 3)
   }
 
-  return sharp(stacked, { raw: { width: W, height: H * count, channels: 3 }, pageHeight: H })
+  // pageHeight MUST live inside the `raw` options — passing it as a sibling
+  // of `raw` is silently accepted and yields ONE tall static frame instead of
+  // an animation (it encodes, it's a valid GIF, it just doesn't move). Assert
+  // page count in tests, never just the magic bytes.
+  return sharp(stacked, { raw: { width: W, height: H * count, channels: 3, pageHeight: H } })
     .gif({ loop: 1, delay: 1000, colours: 8 })
     .toBuffer()
 }
