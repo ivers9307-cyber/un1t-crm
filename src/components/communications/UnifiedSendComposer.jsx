@@ -18,6 +18,8 @@ import { stripUnsetFilterRows } from '@/lib/audience-filter'
 // continuing condition, so a preset would carry a meaning it does not have).
 import { AUDIENCE_PRESETS } from '@/lib/audience-presets'
 import ContactMultiSelect from './ContactMultiSelect'
+import SendQuietHoursNotice from './SendQuietHoursNotice'
+import { isoToLocalDatetime } from '@/lib/datetime-local'
 import { useUnlayerEditor } from './useUnlayerEditor'
 import { smsSegmentInfo, SMS_MAX_LEN, SMS_MERGE_TAGS, waBodyVariables, WA_VARIABLE_FIELDS } from '@/lib/communications/compose'
 import { groupWaTemplates, UNGROUPED_LABEL } from '@shared/wa-template-groups'
@@ -728,6 +730,24 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         )}
         {scheduleMode === 'later' && channel === 'whatsapp' && isDrip && (
           <p className="text-[11px] text-un1t-subtle mt-1">The drip starts at this time, then paces itself inside the daily window above.</p>
+        )}
+        {/* GAPS-P4 — quiet-hours advisory. Both modes: a "Send now" pressed at
+            22:44 (the 994-recipient live incident) and a picker set to 23:00
+            are the same problem. A drip is exempt: it already paces itself
+            inside its own daily window, so the start time is not the send
+            time. Pressing the suggestion flips the composer into schedule mode
+            at the next acceptable slot; it never rewrites anything by itself,
+            and Send stays enabled either way. */}
+        {!isDrip && (scheduleMode === 'now' || scheduleValid) && (
+          <SendQuietHoursNotice
+            className="mt-2"
+            locationId={locationId}
+            at={scheduleMode === 'later' ? scheduledIso : null}
+            onSuggest={(iso) => {
+              setScheduleMode('later')
+              setScheduledAtLocal(isoToLocalDatetime(iso))
+            }}
+          />
         )}
       </Section>
 
