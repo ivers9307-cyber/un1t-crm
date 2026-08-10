@@ -11,6 +11,7 @@ import { sliceBlastChunk } from './whatsapp-schedule.js'
 import { getLocationFrequencyCap, isFrequencyCapped, stampMarketingTouch } from './frequency-cap.js'
 import { getLocationBranding } from './location-branding'
 import { extractNamedVariables } from './whatsapp-template-samples.js'
+import { formatMetaError } from './whatsapp-meta-error.js'
 import { sendPushToRolesAtLocation } from './push'
 import { MANAGER_ROLES } from './schemas'
 
@@ -555,7 +556,9 @@ export async function createTemplate({ name, category, language, components, par
   const result = await response.json()
   if (result.error) {
     console.error('Template creation error:', result.error)
-    throw new Error(result.error.message || 'Failed to create template')
+    // Meta's `message` here is the useless generic "Invalid parameter" —
+    // formatMetaError digs out the title/user message that says what to fix.
+    throw new Error(formatMetaError(result.error, 'Failed to create template'))
   }
 
   return {
@@ -647,7 +650,7 @@ export async function editTemplate(metaTemplateId, { category, components }, opt
   const result = await response.json()
   if (result.error) {
     console.error('Template edit error:', result.error)
-    throw new Error(result.error.message || 'Failed to edit template')
+    throw new Error(formatMetaError(result.error, 'Failed to edit template'))
   }
 
   return { success: result.success !== false }

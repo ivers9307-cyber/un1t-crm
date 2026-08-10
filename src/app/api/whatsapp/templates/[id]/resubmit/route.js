@@ -9,6 +9,7 @@ import { editTemplate } from '@/lib/whatsapp'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { componentsButtonsError } from '@/lib/whatsapp-template-buttons'
 
 const ResubmitSchema = z.object({
   category: z.enum(['MARKETING', 'UTILITY', 'AUTHENTICATION']).optional(),
@@ -42,6 +43,10 @@ export async function POST(request, props) {
   const validation = await validateBody(request, ResubmitSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
+
+  // Same button rules as a fresh submit — a resubmit hits the same Meta wall.
+  const buttonError = componentsButtonsError(body.components)
+  if (buttonError) return NextResponse.json({ success: false, error: buttonError }, { status: 400 })
 
   try {
     await editTemplate(tmpl.meta_template_id, { category: body.category, components: body.components })
