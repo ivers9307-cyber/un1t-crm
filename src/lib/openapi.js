@@ -3468,6 +3468,38 @@ registry.registerPath({
   },
 })
 
+// GAPS-P2 — the outcome report. Aggregates only: a per-contact outcome list is
+// a different feature with different PII implications.
+registry.registerPath({
+  method: 'get',
+  path: '/api/campaigns/{id}/outcomes',
+  tags: ['Campaigns'],
+  security: [{ CookieAuth: [] }],
+  summary: 'What a campaign produced, attributed through clickers, against a control cohort',
+  description:
+    'Counts event registrations, class attendances and DISCRETE purchases for the contacts who CLICKED a link in '
+    + 'this campaign, alongside the sent-but-never-opened cohort as a control — an attributed number without a '
+    + 'control is a correlation, not a result. The window opens at each contact\'s first click (send time for the '
+    + 'control) and defaults to 7 days; window_days is echoed back because the answer genuinely depends on it. '
+    + 'Recurring membership revenue is deliberately EXCLUDED: it runs on monthly direct debit and does not follow a '
+    + 'click, so a windowed figure would credit the campaign with unrelated income. Requires access to the '
+    + 'campaign\'s location; answers 404 (never 403) so ids cannot be enumerated.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    query: z.object({ window_days: z.coerce.number().int().min(1).max(90).optional() }),
+  },
+  responses: {
+    200: { description: 'Outcome comparison', content: { 'application/json': { schema: SuccessResponse(z.object({
+      window_days: z.number().int(),
+      clicked: z.object({ contacts: z.number(), event_registrations: z.number(), class_attendances: z.number(), purchases: z.number(), purchase_cents: z.number() }).passthrough(),
+      not_opened: z.object({ contacts: z.number(), event_registrations: z.number(), class_attendances: z.number(), purchases: z.number(), purchase_cents: z.number() }).passthrough(),
+    }).openapi('CampaignOutcomeStats')) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Campaign not found, or outside the caller\'s locations', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Outcome aggregation failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Schedule reports
 registry.registerPath({
   method: 'post',

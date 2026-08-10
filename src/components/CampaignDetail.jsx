@@ -11,6 +11,7 @@ import {
 // COMMSFIX.F.4 — per-link click report (mig 510), self-contained so this
 // file's diff stays small while #1314 rewrites the header/controls region.
 import CampaignLinkReport from './CampaignLinkReport.jsx'
+import CampaignOutcomeReport from './CampaignOutcomeReport.jsx'
 
 // COMMSFIX.D.1a — the header chip used to be a hardcoded green "Sent" for
 // every campaign, including scheduled/queued/sending/cancelled ones — i.e. it
@@ -212,6 +213,7 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
     { key: 'overview',   label: 'Overview' },
     { key: 'recipients', label: `Recipients (${totalSent})` },
     { key: 'links',      label: 'Links' },
+    { key: 'outcomes',   label: 'Outcomes' },
     { key: 'preview',    label: 'Preview' },
   ]
 
@@ -514,6 +516,12 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
         {tab === 'links' && (
           <div className="p-6">
             <CampaignLinkReport campaignId={campaign.id} />
+          </div>
+        )}
+
+        {tab === 'outcomes' && (
+          <div className="p-6">
+            <CampaignOutcomeReport campaignId={campaign.id} />
           </div>
         )}
 
