@@ -259,6 +259,58 @@ export async function triggerSequencesForPipelineStageChange(contactId, oldStage
   }
 }
 
+/**
+ * STAGETRIG.1 — adapter from a deal-PLACEMENT result to the
+ * pipeline_stage_change trigger.
+ *
+ * The trigger above was wired at exactly one call site: POST
+ * /api/contacts, where oldStage is always null. Every actual stage MOVE
+ * wrote deals.stage_id and let the mig-155 trigger re-derive
+ * contacts.pipeline_stage_slug in the database, which the sequence
+ * engine never hears about. Net effect: no pipeline_stage_change
+ * sequence with a to_status other than the creation stage could fire at
+ * all — including the shipped `lead_status_member_welcome` template
+ * ({ to_status: 'converted' }), which has been inert since it shipped.
+ *
+ * `ensureDealForContact` (glofox-sync.js) already computes the diff and
+ * returns it, so the callers that place deals pass their result straight
+ * in rather than each re-deriving "was this a move?".
+ *
+ * Fires ONLY for action === 'move' with two genuinely different slugs:
+ *   • 'leave'   — the classifier is idempotent, so an unchanged member
+ *                 returns 'leave' on EVERY sync. Firing on those would
+ *                 re-enrol the entire membership on every tick.
+ *   • 'create'  — a first deal is contact creation, already covered by
+ *                 POST /api/contacts (oldStage null); firing here as
+ *                 well would double-enrol.
+ *   • 'error' / 'skipped' — no write happened.
+ *
+ * Beyond that, enrolment keeps its own guards (active-enrolment dedup,
+ * re-enrolment cooldown, automations_exempt, the sequence's audience
+ * filter) — this adapter adds a gate, it doesn't bypass any.
+ *
+ * Best-effort and never throws: every caller has already committed its
+ * primary write.
+ *
+ * @param {string} contactId
+ * @param {{action: string, from_slug?: string|null, to_slug?: string|null}|null} dealResult
+ *   the return value of ensureDealForContact.
+ */
+export async function triggerSequencesForDealPlacement(contactId, dealResult) {
+  if (!contactId || dealResult?.action !== 'move') return
+  const from = dealResult.from_slug ?? null
+  const to = dealResult.to_slug ?? null
+  if (from === to) return
+  try {
+    await triggerSequencesForPipelineStageChange(contactId, from, to)
+  } catch (e) {
+    // triggerSequencesForPipelineStageChange swallows its own errors;
+    // this catches the createServerClient/import-level case so a sync
+    // or route can never fail on account of a sequence.
+    logWarn('sequences', `deal placement trigger failed for ${contactId}`, { err: e })
+  }
+}
+
 // ── membership_state_change ──────────────────────────────────────
 
 /**

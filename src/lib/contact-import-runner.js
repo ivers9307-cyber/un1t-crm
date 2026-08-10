@@ -24,6 +24,7 @@
 import { validateRow, deriveName, fieldsTouchedByMapping } from './contact-import.js'
 import { logWarn } from './log.js'
 import { selectAllByKeys } from './select-all.js'
+import { emailStatusResetForAddressChange } from './email-reputation.js'
 
 export async function runImportCommit(db, {
   importId,
@@ -76,7 +77,9 @@ export async function runImportCommit(db, {
   // wrongly takes the INSERT branch → a DUPLICATE contact (the exact failure
   // this PR fixes). selectAllByKeys chunks the keys (~300/query) and pages each
   // chunk's matches.
-  const lookupCols = ['id', 'email', 'glofox_member_id', ...touchedFields].filter(Boolean)
+  // EMAILREP.1 — email_status is read (never imported) so an update that
+  // replaces the address can clear the OLD address's bounce stamp.
+  const lookupCols = ['id', 'email', 'email_status', 'glofox_member_id', ...touchedFields].filter(Boolean)
   const colExpr = [...new Set(lookupCols)].join(', ')
   const existingByEmail = new Map()
   const existingByGlofox = new Map()
@@ -149,6 +152,21 @@ export async function runImportCommit(db, {
           const prior = Array.isArray(matched.tags) ? matched.tags : []
           update.tags = [...new Set([...prior, ...p.payload.tags])]
         }
+
+        // EMAILREP.1 — an import that supplies a corrected address must not
+        // leave the OLD address's `bounced`/`complained` stamp behind: every
+        // send path blocks on contacts.email_status, so the contact would
+        // stay unmailable on an address that is now fine. Folded into the
+        // same UPDATE as the address itself. Reputation only — marketing
+        // consent is untouched, so a bounced contact still needs to re-opt-in.
+        // Deliberately computed AFTER the preserve_existing / tag merging
+        // above, so it reads the address this write actually sets.
+        const emailStatusReset = emailStatusResetForAddressChange({
+          oldEmail: matched.email,
+          newEmail: update.email,
+          currentStatus: matched.email_status,
+        })
+        if (emailStatusReset) update.email_status = emailStatusReset
 
         const writableKeys = Object.keys(update).filter(k => update[k] !== undefined)
         if (writableKeys.length === 0) {

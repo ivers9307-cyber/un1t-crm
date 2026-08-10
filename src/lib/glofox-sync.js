@@ -2165,6 +2165,37 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
   // above: best-effort, never rolls back the contact write. preview.changes
   // already carries { from, to } and is only populated on a real update with
   // the single-member detail payload, so a create / no-op sync won't fire.
+  // STAGETRIG.1 (pipeline_stage_change) — fire when the classifier actually
+  // MOVED the deal. Same best-effort shape as the membership_state trigger
+  // below and driven off the same kind of pre-computed diff: dealResult is
+  // ensureDealForContact's return value, which already carries
+  // { action: 'move', from_slug, to_slug }.
+  //
+  // Until now triggerSequencesForPipelineStageChange was called ONLY from
+  // POST /api/contacts (old stage always null), so every stage move an
+  // operator or a sync performed was invisible to the sequence engine and no
+  // pipeline_stage_change sequence with a to_status other than the creation
+  // stage could ever fire.
+  //
+  // The adapter fires on 'move' only — NOT on 'leave' (the classifier is
+  // idempotent, so an unchanged member returns 'leave' on every single sync)
+  // and NOT on 'create' (that's contact creation, already covered). Volume is
+  // therefore bounded by real reclassifications of members Glofox reports as
+  // modified, which is the same population the membership_state trigger
+  // already fires for. The NIGHTLY BULK reclassify (pipeline-reclassify.js,
+  // /api/cron/pipeline-classify) is deliberately NOT wired — it moves
+  // thousands of deals in one pass.
+  let stageChangeTriggerResult = null
+  if (dealResult?.action === 'move') {
+    try {
+      const { triggerSequencesForDealPlacement } = await import('./sequences/triggers.js')
+      await triggerSequencesForDealPlacement(contactId, dealResult)
+      stageChangeTriggerResult = { fired: true, from: dealResult.from_slug ?? null, to: dealResult.to_slug ?? null }
+    } catch (e) {
+      stageChangeTriggerResult = { error: e?.message || 'pipeline_stage_change trigger threw' }
+    }
+  }
+
   let membershipStateTriggerResult = null
   const stateChange = preview.changes?.glofox_membership_state
   if (stateChange && stateChange.from !== stateChange.to) {
@@ -2184,6 +2215,7 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     interactions: interactionsResult,
     transition_tags: transitionTagsResult,
     gympass_tag: gympassTagResult,
+    stage_change_trigger: stageChangeTriggerResult,
     membership_state_trigger: membershipStateTriggerResult,
   }
 }

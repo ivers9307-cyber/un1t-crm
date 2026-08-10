@@ -166,3 +166,65 @@ describe('PUT /api/contacts/[id] — automations_exempt gating', () => {
     expect(db.update).toHaveBeenCalledWith({ automations_exempt: false })
   })
 })
+
+// EMAILREP.1 — contacts.email_status is reputation for a MAILBOX, and
+// nothing reset it when the mailbox changed. Every send path blocks on
+// it (marketing + transactional audiences, campaign sender, manual staff
+// email, booking + event reminders), so a contact whose typo'd address
+// hard-bounced stayed permanently unmailable after staff corrected it —
+// no error, just a greyed-out button. The reset rides the SAME update as
+// the address change.
+describe('PUT /api/contacts/[id] — email_status reset on address change (EMAILREP.1)', () => {
+  const asManager = () => requireApiKeyOrManager.mockResolvedValue({
+    ok: true, orgId: null, user: { role: 'manager', locations: [{ id: 'loc-1' }] },
+  })
+
+  it('clears a bounce when staff correct the address', async () => {
+    asManager()
+    const db = mockDb({ oldRow: { tags: [], location_id: 'loc-1', email: 'typo@gmial.com', email_status: 'bounced', glofox_member_id: null } })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req({ email: 'real@gmail.com' }), props)
+    expect(res.status).toBe(200)
+    expect(db.update).toHaveBeenCalledWith({ email: 'real@gmail.com', email_status: 'active' })
+  })
+
+  it('clears a complaint when the address is replaced', async () => {
+    asManager()
+    const db = mockDb({ oldRow: { tags: [], location_id: 'loc-1', email: 'old@x.com', email_status: 'complained', glofox_member_id: null } })
+    createServerClient.mockReturnValue(db)
+    await PUT(req({ email: 'new@x.com' }), props)
+    expect(db.update).toHaveBeenCalledWith(expect.objectContaining({ email_status: 'active' }))
+  })
+
+  it('does NOT clear the bounce when the update leaves the address alone', async () => {
+    asManager()
+    const db = mockDb({ oldRow: { tags: [], location_id: 'loc-1', email: 'a@x.com', email_status: 'bounced', glofox_member_id: null } })
+    createServerClient.mockReturnValue(db)
+    await PUT(req({ first_name: 'Ada' }), props)
+    expect(db.update).toHaveBeenCalledWith({ first_name: 'Ada' })
+  })
+
+  it('does NOT clear the bounce on a casing-only re-save of the same address', async () => {
+    asManager()
+    const db = mockDb({ oldRow: { tags: [], location_id: 'loc-1', email: 'Ann@X.com', email_status: 'bounced', glofox_member_id: null } })
+    createServerClient.mockReturnValue(db)
+    await PUT(req({ email: 'ann@x.com' }), props)
+    expect(db.update).toHaveBeenCalledWith({ email: 'ann@x.com' })
+  })
+
+  // The load-bearing half: an address change restores REPUTATION, never
+  // CONSENT. The hard-bounce handler revoked email_marketing when it
+  // stamped 'bounced'; a corrected address must not silently re-add the
+  // contact to a marketing audience.
+  it('never writes a consent field alongside the reset', async () => {
+    asManager()
+    const db = mockDb({ oldRow: { tags: [], location_id: 'loc-1', email: 'a@x.com', email_status: 'bounced', glofox_member_id: null } })
+    createServerClient.mockReturnValue(db)
+    await PUT(req({ email: 'b@x.com' }), props)
+    const written = db.update.mock.calls[0][0]
+    expect(written).toEqual({ email: 'b@x.com', email_status: 'active' })
+    for (const k of ['email_marketing', 'email_administrative', 'email_suppressed_at']) {
+      expect(written).not.toHaveProperty(k)
+    }
+  })
+})
