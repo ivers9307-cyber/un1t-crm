@@ -521,7 +521,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         )}
         {useExplicit
           ? <ContactMultiSelect locationId={locationId} value={people} onChange={setPeople} />
-          : <AudienceBuilder filter={filter} onChange={handleFilterChange} audienceCount={null} defaultFilterRow={STAGE_MEMBER_DEFAULT_ROW} presets={AUDIENCE_PRESETS} />}
+          : <AudienceBuilder filter={filter} onChange={handleFilterChange} audienceCount={null} defaultFilterRow={STAGE_MEMBER_DEFAULT_ROW} presets={AUDIENCE_PRESETS} locationId={locationId} />}
         <div className="mt-2 flex flex-col gap-0.5 text-xs text-un1t-subtle">
           <div className="flex items-center gap-1.5">
             <Users size={13} />

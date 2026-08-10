@@ -175,11 +175,23 @@ export const FIELD_OPTIONS = [
   // exact element match here, so typing PT never found PTC — the same
   // operation as "equals" under a second name) and is-empty/is-not-empty
   // NULL tests that were meaningless against a DEFAULT '{}' column.
-  { value: 'tags',                  label: 'Free-text tag',         type: 'tag-array', group: 'Tags & labels' },
+  //
+  // FILTER-A.3 — "Free-text tag" vs "Segment tag" told an operator nothing
+  // about which of the two they wanted. They CANNOT honestly be collapsed
+  // into one field: they are different columns with different writers
+  // (contacts.tags TEXT[] vs the contact_tags table), and a single field that
+  // matched either would need applyAudienceFilter to OR across both storages
+  // — a query-layer change this work is explicitly not making. So the split
+  // stays, named by the only thing an operator actually needs to decide
+  // between them: HOW the tag got there. Adjacent in the same group so the
+  // choice is presented rather than stumbled into.
+  { value: 'tags',                  label: 'Manual tag',            type: 'tag-array', group: 'Tags & labels',
+    hint: 'Typed onto the contact by staff, or set during an import. Free text — spell it exactly as it was entered.' },
   // Phase 3 (mig 085): machine-derived retargeting tags. Resolved
   // server-side via contact_tags. The select options are loaded
   // dynamically from /api/segments at mount time.
-  { value: 'tag',                   label: 'Segment tag',           type: 'tag-select', group: 'Tags & labels' },
+  { value: 'tag',                   label: 'Behaviour tag',         type: 'tag-select', group: 'Tags & labels',
+    hint: 'Applied automatically by the platform and by sequences (first booking, trial running low, race finished). Pick from the list.' },
   { value: 'label',                 label: 'Label',                 type: 'text', group: 'Tags & labels' },
   // ── Events ──────────────────────────────────────────────────────
   // EVENT-FILTER — virtual field. Resolved server-side via
@@ -324,6 +336,48 @@ function needsValue(op) {
   return !['is_null', 'not_null'].includes(op)
 }
 
+// FILTER-A.3 — the three value pickers whose options are fetched, extracted so
+// a PENDING row (field chosen, value not yet) and a committed row render the
+// identical control. Without the extraction the pending row would need its own
+// copy and the two would drift.
+function DynamicValueSelect({ type, value, disabled, onChange, tagOptions, planOptions, eventOptions, className }) {
+  const cls = className || 'bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted flex-1'
+  if (type === 'tag-select') {
+    return (
+      <select value={value || ''} disabled={disabled} onChange={onChange} aria-label="Tag" className={cls}>
+        <option value="">{tagOptions === null ? 'Loading tags…' : '— pick a tag —'}</option>
+        {(tagOptions || []).map(opt => (
+          // FILTER-A.3 — the count says how much reach the tag has; the
+          // description is what /api/segments has always returned and the
+          // builder used to throw away.
+          <option key={opt.tag} value={opt.tag} title={opt.description || undefined}>
+            {opt.tag} ({opt.count})
+          </option>
+        ))}
+      </select>
+    )
+  }
+  if (type === 'plan-select') {
+    return (
+      <select value={value || ''} disabled={disabled} onChange={onChange} aria-label="Membership plan" className={cls}>
+        <option value="">{planOptions === null ? 'Loading plans…' : '— pick a plan —'}</option>
+        {(planOptions || []).map(plan => <option key={plan} value={plan}>{plan}</option>)}
+      </select>
+    )
+  }
+  return (
+    <select value={value || ''} disabled={disabled} onChange={onChange} aria-label="Event" className={cls}>
+      <option value="">{eventOptions === null ? 'Loading events…' : '— pick an event —'}</option>
+      {(eventOptions || []).map(ev => (
+        <option key={ev.id} value={ev.id}>
+          {ev.name} — {ev.kind} — {ev.race_date}
+          {typeof ev.registration_count === 'number' ? ` (${ev.registration_count})` : ''}
+        </option>
+      ))}
+    </select>
+  )
+}
+
 // FILTER-A.2 — the grouped field picker.
 //
 // DELIBERATELY a native <select> with <optgroup>, not a custom searchable
@@ -400,7 +454,15 @@ export const STAGE_MEMBER_DEFAULT_ROW = Object.freeze({
   field: 'pipeline_stage_slug', op: 'eq', value: 'member',
 })
 
-export default function AudienceBuilder({ filter, onChange, audienceCount, disabled = false, defaultFilterRow = null, presets = null }) {
+// FILTER-A.3 / FILTER-FOUND row 3 — field types whose value comes from a
+// lookup the operator has not made yet. Committing the row on field-choice
+// seeds `value: ''`, which the tag/event resolvers reject outright ("tag
+// filter requires a non-empty string value") and which a plan row compiles to
+// `plan = ''` — a filter that matches nobody, silently. Either way the row is
+// born broken. It stays UNSET (and therefore inert) until a value is picked.
+const AWAITS_A_VALUE = ['tag-select', 'event-select', 'plan-select']
+
+export default function AudienceBuilder({ filter, onChange, audienceCount, disabled = false, defaultFilterRow = null, presets = null, locationId = null }) {
   const filters = filter?.filters || []
   const logic = filter?.logic || 'and'
 
@@ -430,26 +492,38 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
   // render and a decimal amount is literally untypeable.
   const [euroDrafts, setEuroDrafts] = useState({})
 
+  // FILTER-FOUND row 3 — the field an operator has PICKED but not yet given a
+  // value to. Held here rather than on the row so the row itself stays unset
+  // (inert to validation, the count endpoint and the DB) while the operator
+  // is mid-choice. Keyed by stable row key, so a delete elsewhere in the list
+  // cannot transplant it onto another row.
+  const [pendingFields, setPendingFields] = useState({})
+  const pendingList = Object.values(pendingFields)
+
   // Tag options loaded once at mount from /api/segments (Phase 3,
   // mig 085). Only fetched if the user actually opens a tag-select
   // row — keeps the page free for callers that don't use tags.
   const [tagOptions, setTagOptions] = useState(null)
-  const usesTagField = filters.some(f => f.field === 'tag')
+  const usesTagField = filters.some(f => f.field === 'tag') || pendingList.includes('tag')
   useEffect(() => {
     if (!usesTagField || tagOptions !== null) return
     let cancelled = false
-    fetch('/api/segments').then(r => r.json()).then(j => {
+    // FILTER-A.3 / finding #15 — the counts must describe the location being
+    // composed for. Without this the route falls back to the operator's ACTIVE
+    // location, so a send built for one gym showed another gym's tag counts.
+    const url = locationId ? `/api/segments?location_id=${encodeURIComponent(locationId)}` : '/api/segments'
+    fetch(url).then(r => r.json()).then(j => {
       if (!cancelled && j?.success) setTagOptions(j.data || [])
       else if (!cancelled) setTagOptions([])
     }).catch(() => { if (!cancelled) setTagOptions([]) })
     return () => { cancelled = true }
-  }, [usesTagField, tagOptions])
+  }, [usesTagField, tagOptions, locationId])
 
   // CHURN-PREP.2 — membership-plan options, loaded once the user
   // adds a "Membership Plan" row. The plan list is operator-defined,
   // so it's fetched live rather than hardcoded as an enum.
   const [planOptions, setPlanOptions] = useState(null)
-  const usesPlanField = filters.some(f => f.field === 'glofox_membership_plan')
+  const usesPlanField = filters.some(f => f.field === 'glofox_membership_plan') || pendingList.includes('glofox_membership_plan')
   useEffect(() => {
     if (!usesPlanField || planOptions !== null) return
     let cancelled = false
@@ -463,7 +537,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
   // EVENT-FILTER — event options, loaded once the user adds a
   // "Registered for event" row. Mirrors the tag/plan dynamic loaders.
   const [eventOptions, setEventOptions] = useState(null)
-  const usesEventField = filters.some(f => f.field === 'event_registration')
+  const usesEventField = filters.some(f => f.field === 'event_registration') || pendingList.includes('event_registration')
   useEffect(() => {
     if (!usesEventField || eventOptions !== null) return
     let cancelled = false
@@ -528,14 +602,31 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
   }
 
   function handleFieldChange(index, newField) {
+    if (disabled) return
+    const rowKey = rowKeys[index]
+    const clearPending = () => setPendingFields(p => {
+      if (!(rowKey in p)) return p
+      const next = { ...p }; delete next[rowKey]; return next
+    })
     // FILTER-P1.1 — back to the placeholder: clear op + value too, or the row
     // keeps a stale predicate that no visible control explains.
     if (!newField) {
+      clearPending()
       updateRow(index, { field: '', op: '', value: '' })
       return
     }
     const config = getFieldConfig(newField)
     if (!config) return // only reachable if the <select> ever carries an unknown value
+    // FILTER-FOUND row 3 — a field whose value comes from a lookup is PENDING,
+    // not applied. Writing the row now would seed value: '' and the count
+    // endpoint would 400 the instant the field was picked, before the operator
+    // touched anything else.
+    if (AWAITS_A_VALUE.includes(config.type)) {
+      setPendingFields(p => ({ ...p, [rowKey]: newField }))
+      if (filters[index]?.field) updateRow(index, { field: '', op: '', value: '' })
+      return
+    }
+    clearPending()
     const ops = opsForField(config)
     const defaultOp = ops[0]?.value || 'eq'
     const defaultValue = config.type === 'select' ? (config.options?.[0] || '')
@@ -544,6 +635,17 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
       : config.type === 'date' ? defaultValueForDateOp(defaultOp)
       : ''
     updateRow(index, { field: newField, op: defaultOp, value: defaultValue })
+  }
+
+  // FILTER-FOUND row 3 — the pending field becomes a real row only now, once
+  // it has a value the server resolvers will accept. Picking the blank option
+  // leaves it pending rather than writing an empty row back.
+  function commitPendingRow(index, field, value) {
+    if (disabled || !value) return
+    const config = getFieldConfig(field)
+    if (!config) return
+    setPendingFields(p => { const next = { ...p }; delete next[rowKeys[index]]; return next })
+    updateRow(index, { field, op: opsForField(config)[0]?.value || 'eq', value })
   }
 
   // FILTER-A.1 — a preset REPLACES the working filter with its rows. It is not
@@ -635,18 +737,35 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
           // and applyAudienceFilter compiles it to nothing, so it can neither
           // narrow an audience nor fail validation while it sits half-built.
           if (!f.field) {
+            // FILTER-FOUND row 3 — the row may still be UNSET while carrying a
+            // PENDING field: the operator picked "Behaviour tag" and has not
+            // chosen which tag. Show the picker, keep the row inert.
+            const rowKey = rowKeys[index]
+            const pending = pendingFields[rowKey] || ''
+            const pendingConfig = pending ? getFieldConfig(pending) : null
             return (
-              <div key={rowKeys[index]} className="flex items-center gap-2 bg-un1t-surface border border-un1t-border rounded-lg p-3">
+              <div key={rowKey} className="bg-un1t-surface border border-un1t-border rounded-lg p-3">
+               <div className="flex flex-wrap items-center gap-2">
                 {index > 0 && (
                   <span className="text-xs text-un1t-muted font-medium w-10 text-center uppercase">{logic}</span>
                 )}
                 {index === 0 && filters.length > 1 && <span className="w-10" />}
                 <FieldSelect
-                  value=""
+                  value={pending}
                   disabled={disabled}
+                  describedBy={pendingConfig?.hint ? `${rowKey}-hint` : null}
                   onChange={e => handleFieldChange(index, e.target.value)}
                   className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted flex-1"
                 />
+                {pendingConfig && (
+                  <DynamicValueSelect
+                    type={pendingConfig.type}
+                    value=""
+                    disabled={disabled}
+                    tagOptions={tagOptions} planOptions={planOptions} eventOptions={eventOptions}
+                    onChange={e => commitPendingRow(index, pending, e.target.value)}
+                  />
+                )}
                 <button
                   type="button"
                   disabled={disabled}
@@ -655,6 +774,10 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
                 >
                   <Trash2 size={14} />
                 </button>
+               </div>
+               {pendingConfig?.hint && (
+                 <p id={`${rowKey}-hint`} className="mt-1.5 text-xs text-un1t-muted">{pendingConfig.hint}</p>
+               )}
               </div>
             )
           }
@@ -695,6 +818,9 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
           // three live campaigns carrying the retired `active_member` stage
           // looked like an unset row while still filtering on it. Keep the
           // value selectable and say so out loud.
+          const selectedTagDescription = fieldConfig.type === 'tag-select'
+            ? (tagOptions || []).find(t => t.tag === f.value)?.description || null
+            : null
           const retiredValue = fieldConfig.options && showValue
             && typeof f.value === 'string' && f.value !== ''
             && !fieldConfig.options.includes(f.value)
@@ -751,48 +877,14 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
                   ))}
                   {retiredValue && <option value={retiredValue}>{retiredValue} (retired)</option>}
                 </select>
-              ) : showValue && fieldConfig.type === 'tag-select' ? (
-                <select
-                  value={f.value || ''}
-                  disabled={disabled} onChange={e => updateRow(index, { value: e.target.value })}
-                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted flex-1"
-                >
-                  <option value="">— pick a tag —</option>
-                  {(tagOptions || []).map(opt => (
-                    <option key={opt.tag} value={opt.tag}>
-                      {opt.tag} ({opt.count})
-                    </option>
-                  ))}
-                </select>
-              ) : showValue && fieldConfig.type === 'plan-select' ? (
-                <select
-                  value={f.value || ''}
-                  disabled={disabled} onChange={e => updateRow(index, { value: e.target.value })}
-                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted flex-1"
-                >
-                  <option value="">
-                    {planOptions === null ? 'Loading plans…' : '— pick a plan —'}
-                  </option>
-                  {(planOptions || []).map(plan => (
-                    <option key={plan} value={plan}>{plan}</option>
-                  ))}
-                </select>
-              ) : showValue && fieldConfig.type === 'event-select' ? (
-                <select
-                  value={f.value || ''}
-                  disabled={disabled} onChange={e => updateRow(index, { value: e.target.value })}
-                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted flex-1"
-                >
-                  <option value="">
-                    {eventOptions === null ? 'Loading events…' : '— pick an event —'}
-                  </option>
-                  {(eventOptions || []).map(ev => (
-                    <option key={ev.id} value={ev.id}>
-                      {ev.name} — {ev.kind} — {ev.race_date}
-                      {typeof ev.registration_count === 'number' ? ` (${ev.registration_count})` : ''}
-                    </option>
-                  ))}
-                </select>
+              ) : showValue && AWAITS_A_VALUE.includes(fieldConfig.type) ? (
+                <DynamicValueSelect
+                  type={fieldConfig.type}
+                  value={f.value}
+                  disabled={disabled}
+                  tagOptions={tagOptions} planOptions={planOptions} eventOptions={eventOptions}
+                  onChange={e => updateRow(index, { value: e.target.value })}
+                />
               ) : showValue && fieldConfig.type === 'number' ? (
                 <input
                   type="number"
@@ -884,6 +976,13 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
                   lead_created_at is poisoned, and the invoice table is stale. */}
               {fieldConfig.hint && (
                 <p id={hintId} className="mt-1.5 text-xs text-un1t-muted">{fieldConfig.hint}</p>
+              )}
+              {/* FILTER-A.3 — the chosen tag's own description. /api/segments
+                  has always returned it; the builder threw it away, leaving a
+                  dropdown of bare column-like strings. A title attribute alone
+                  would not reach a keyboard or screen-reader user. */}
+              {fieldConfig.type === 'tag-select' && selectedTagDescription && (
+                <p className="mt-1.5 text-xs text-un1t-subtle">{selectedTagDescription}</p>
               )}
               {retiredValue && (
                 <p className="mt-1.5 text-xs text-amber-700 flex items-start gap-1.5">

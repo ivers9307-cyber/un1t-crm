@@ -616,6 +616,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
                 filter={audienceFilter}
                 onChange={setAudienceFilter}
                 audienceCount={null}
+                locationId={locationId}
                 defaultFilterRow={STAGE_MEMBER_DEFAULT_ROW}
               />
             </div>
