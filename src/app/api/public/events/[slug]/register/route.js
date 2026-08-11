@@ -212,7 +212,11 @@ export async function POST(request, props) {
     } else {
       const { data: ins, error: teamErr } = await db.from('teams').insert({ location_id: race.location_id, name: leadTeamName, size: 1, captain_contact_id: contactId }).select('id').single()
       if (teamErr && teamErr.code === '23505') {
-        const { data: re } = await db.from('teams').select('id').eq('location_id', race.location_id).eq('name', leadTeamName).single()
+        // K8 — `.maybeSingle()`, matching the find-first query above: the
+        // conflicting row can be gone again by the time we re-read, and the
+        // `if (!teamId)` path below is what handles that. (location_id, name)
+        // is uniquely indexed — it is the very constraint we just tripped.
+        const { data: re } = await db.from('teams').select('id').eq('location_id', race.location_id).eq('name', leadTeamName).maybeSingle()
         teamId = re?.id
       } else if (teamErr) {
         return NextResponse.json({ success: false, error: 'Could not capture your details. Please try again.' }, { status: 500 })
@@ -395,12 +399,15 @@ export async function POST(request, props) {
     if (teamErr) {
       // UNIQUE violation race — refetch and continue.
       if (teamErr.code === '23505') {
+        // K8 — `.maybeSingle()`: see the solo branch above. 0 rows is handled
+        // by the `if (!teamId)` 500 immediately below, so it must not arrive
+        // as a discarded error. (location_id, name) is uniquely indexed.
         const { data: raceFound } = await db
           .from('teams')
           .select('id')
           .eq('location_id', race.location_id)
           .eq('name', teamName)
-          .single()
+          .maybeSingle()
         teamId = raceFound?.id
       }
       if (!teamId) {

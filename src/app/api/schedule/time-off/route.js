@@ -99,11 +99,14 @@ export async function POST(request) {
   // If it's a holiday, check remaining allowance
   if (type === 'holiday') {
     const year = new Date(start_date).getFullYear()
+    // K8 — `.maybeSingle()`: staff with no allowance row for the year skip the
+    // remaining-days check entirely (`if (allowance)` below), so 0 rows is the
+    // designed path, not an error. (profile_id, year) is uniquely indexed.
     const { data: allowance } = await db.from('staff_allowances')
       .select('*')
       .eq('profile_id', user.id)
       .eq('year', year)
-      .single()
+      .maybeSingle()
 
     if (allowance) {
       const remaining = allowance.total_days + allowance.carried_over - allowance.used_days

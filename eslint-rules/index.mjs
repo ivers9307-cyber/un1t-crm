@@ -398,12 +398,39 @@ const noUntypedButtonInForm = {
 // house style here, so trust the rule, not the grep). Pinning the exemption
 // below takes it to 14, which is what this landed against. The dangerous shape
 // is `.single()` on a filter that is NOT provably unique. Deliberate non-flags:
-//   - the chain pins an ID-LIKE column (`.eq('id', …)`, `.eq('<x>_id', …)`,
-//     `.match({ id })`, `.filter('id','eq',…)`) or caps the row count with
-//     `.limit(1)`. There `.single()` can only see 0 or 1 rows, so a discarded
-//     error means "treat not-found as null" — normally exactly what the caller
-//     wants. (`.limit(1)` was added after the baseline scan flagged the
+//   - the chain pins the PRIMARY KEY (`.eq('id', …)`, `.match({ id })`,
+//     `.filter('id','eq',…)`) or caps the row count with `.limit(1)`. There
+//     `.single()` can only see 0 or 1 rows, so a discarded error means "treat
+//     not-found as null" — normally exactly what the caller wants.
+//     (`.limit(1)` was added after the baseline scan flagged the
 //     anonymous-branding lookup, which is structurally at-most-one.)
+//
+// K8 (2026-08-11) — the exemption used to accept ANY `<x>_id` column, not just
+// `id`, and that edge was documented as the rule's weakest. It has now been
+// audited against prod's actual unique indexes, and the honest finding is that
+// it was barely load-bearing: of the 209 sites the exemption suppressed, 190
+// pinned the real primary key and 3 capped with `.limit(1)`. Only **16** rested
+// on the `<x>_id` widening — and of those, 8 were pinned by nothing at all
+// (`email_sends.postmark_message_id` ×6, `whatsapp_messages.wa_message_id`,
+// `whatsapp_templates.meta_template_id`: all de-facto unique in the live data,
+// none carrying an index that says so). The other 8 were pinned, but by
+// COMPOSITE uniques the rule cannot see and was not reasoning about
+// — `teams (location_id, name)`, `staff_allowances (profile_id, year)`,
+// `company_settings (location_id)`, `whatsapp_conversations (location_id,
+// wa_phone)`. It was right by luck, on a heuristic that could not have known.
+//
+// So the widening bought 8 accidental passes and 8 genuine misses. All 16 now
+// say `.maybeSingle()` in the source instead — in every one of them 0 rows was
+// already the designed answer, guarded by an `if (row)` on the next line — and
+// the exemption is narrowed to `id`. That deliberately drops the 1:1-table case
+// (`contact_preferences.contact_id` and friends are genuinely unique), because
+// the fix there is `.maybeSingle()` too and costs one word. NOT attempted:
+// teaching the rule composite uniques by parsing `supabase/migrations` the way
+// check:location-scoping derives its tenant tables. It is buildable, but it
+// fails in the FALSE-NEGATIVE direction — a mis-parsed `UNIQUE (a, b)` silently
+// suppresses a real defect — and after this narrowing the whole class it would
+// serve is 8 sites that read better as `.maybeSingle()` anyway. Uniqueness lives
+// in the schema; the rule's job is to make the source state its own intent.
 //   - `.maybeSingle()`, which returns null for 0 rows WITHOUT an error. It still
 //     hides the >1-row and query-failed cases, but that is a much noisier class
 //     and a different argument; this rule is about the outcome-collapse that
@@ -413,6 +440,7 @@ const noUntypedButtonInForm = {
 //   - a `...rest` element, which may bind `error`, or a computed key that may
 //     spell it. Same precision-first reasoning as the `{...spread}` bail-out in
 //     no-untyped-button-in-form: a false positive at ERROR level is worse.
+// A non-`id` `<x>_id` column is NOT treated as unique (see the K8 note above).
 // `.in()`, `.or()` and a `.filter()` with a non-`eq` operator are NOT treated as
 // unique — a list and a disjunction both widen the match rather than pin it.
 // `.single()` straight after `.insert()`/`.update()`/`.upsert()` with no id
@@ -423,18 +451,21 @@ const noUntypedButtonInForm = {
 // or through a variable (`const q = db.from(t).eq(…); const { data } = await
 // q.single()`), a `.single()` consumed by `.then(({ data }) => …)`, or one
 // wrapped in a helper the caller destructures, are all invisible. It is a floor,
-// not proof — and the id-like exemption is a HEURISTIC: `.eq('location_id', l)`
-// alone pins nothing, so a chain filtered only by a non-unique foreign key
-// passes. Uniqueness lives in the SCHEMA, which an AST rule cannot read, and it
-// cuts both ways: `.eq('slug', …)` on `race_events` is at-most-one because of a
-// global unique index (mig 451), and the rule flagged it anyway. Where 0 rows is
-// a legitimate answer the fix is `.maybeSingle()`, which says so in the source.
+// not proof. Uniqueness still lives in the SCHEMA, which an AST rule cannot
+// read, and it cuts both ways: `.eq('slug', …)` on `race_events` is at-most-one
+// because of a global unique index (mig 451), and the rule flags it anyway; so
+// is any chain matching a composite unique (`.eq('location_id').eq('name')` on
+// `teams`). Those are ACCEPTED false positives now — the fix in every audited
+// instance was `.maybeSingle()`, which is the better source anyway. Where 0 rows
+// is a legitimate answer that is the fix; where it is not, destructure `error`.
 const UNIQUE_HINT_FILTERS = new Set(['eq', 'match', 'filter', 'limit'])
 
-// `id` or anything ending `_id` — the columns whose equality plausibly makes
-// "at most one row" structural rather than incidental.
+// The PRIMARY KEY column, and only it. Every table in this schema keys on `id`,
+// so `.eq('id', …)` is the one filter whose at-most-one-row property an AST can
+// assert without reading the schema. Narrowed from "`id` or anything ending
+// `_id`" by the K8 audit — see the note above for the measurement.
 function isIdLikeColumn(name) {
-  return typeof name === 'string' && (name === 'id' || name.endsWith('_id'))
+  return name === 'id'
 }
 
 function literalString(node) {
@@ -511,7 +542,7 @@ const noDiscardedSingleError = {
     schema: [],
     messages: {
       discarded:
-        '.single() errors whenever the row count is not exactly 1, so discarding `error` collapses "no rows", "many rows" and "the query failed" into the same `data = null` — the caller cannot tell a silent no-op from success (S2/#1357: a stage slug matching five locations). This chain is not pinned to an id-like column, so >1 row is reachable: destructure `error` and handle it, or use .maybeSingle() if 0 rows is a legitimate answer.',
+        '.single() errors whenever the row count is not exactly 1, so discarding `error` collapses "no rows", "many rows" and "the query failed" into the same `data = null` — the caller cannot tell a silent no-op from success (S2/#1357: a stage slug matching five locations). This chain is not pinned to the primary key (`.eq(\'id\', …)`) or capped with `.limit(1)`, so >1 row is reachable: destructure `error` and handle it, or use .maybeSingle() if 0 rows is a legitimate answer. If the filter IS unique in the schema (a composite unique, or a unique non-`id` column), the rule cannot see that — say it with .maybeSingle() and a comment rather than a disable.',
     },
   },
   create(context) {

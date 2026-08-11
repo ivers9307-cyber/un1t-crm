@@ -590,11 +590,18 @@ async function handleStatusUpdate(db, status) {
     .update(updates)
     .eq('wa_message_id', messageId)
 
-  // Update broadcast recipient if this was a broadcast message
-  const { data: msg } = await db.from('whatsapp_messages')
+  // Update broadcast recipient if this was a broadcast message.
+  // K8 — `.maybeSingle()`, not `.single()`: Meta sends status callbacks for
+  // messages this system never recorded (anything sent on the number outside
+  // the broadcast path), so "no row" is the ordinary case and must not be an
+  // error we then discard. `wa_message_id` has no unique index — it is unique
+  // in the live data but nothing enforces it — so a >1-row result stays an
+  // anomaly worth logging rather than a silent null.
+  const { data: msg, error: msgErr } = await db.from('whatsapp_messages')
     .select('broadcast_id, contact_id')
     .eq('wa_message_id', messageId)
-    .single()
+    .maybeSingle()
+  if (msgErr) console.error('[wa-webhook] status message lookup failed:', msgErr.message)
 
   if (msg?.broadcast_id) {
     // Prior recipient status — so counter adjustments fire once per real

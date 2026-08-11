@@ -22,10 +22,13 @@ export async function GET(request) {
   if (guard) return guard
 
   const db = createServerClient()
+  // K8 — `.maybeSingle()`: a location that has never had branding saved has no
+  // company_settings row, and `data || null` below is the intended answer for
+  // it. location_id is uniquely indexed, so at most one row is real.
   const { data } = await db.from('company_settings')
     .select('*')
     .eq('location_id', locationId)
-    .single()
+    .maybeSingle()
 
   return NextResponse.json({ success: true, data: data || null })
 }

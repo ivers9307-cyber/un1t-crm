@@ -230,12 +230,16 @@ export async function POST(request, props) {
     if (teamErr) {
       // UNIQUE violation race — refetch and continue.
       if (teamErr.code === '23505') {
+        // K8 — `.maybeSingle()`: the unique-violation refetch. 0 rows is
+        // handled by the `if (!teamId)` 500 below and must not arrive as a
+        // discarded error. (location_id, name) is uniquely indexed — it is the
+        // constraint the insert just tripped.
         const { data: raceFound } = await db
           .from('teams')
           .select('id')
           .eq('location_id', race.location_id)
           .eq('name', teamName)
-          .single()
+          .maybeSingle()
         teamId = raceFound?.id
       }
       if (!teamId) {

@@ -25,9 +25,15 @@ function stubDb({ send, rpcCalls }) {
   return {
     from: (table) => ({
       select: () => ({
-        eq: () => ({
-          single: () => Promise.resolve({ data: table === 'email_sends' ? send : null, error: null }),
-        }),
+        eq: () => {
+          // K8 — the send lookup is `.maybeSingle()` now (0 rows is the normal
+          // case for a Postmark event about mail this system never recorded);
+          // `.single()` stays modelled so the fake keeps working if a caller
+          // uses it. Both resolve the same way: this fake's `send: null` IS the
+          // no-row case, which `.maybeSingle()` reports as data null, no error.
+          const settle = () => Promise.resolve({ data: table === 'email_sends' ? send : null, error: null })
+          return { single: settle, maybeSingle: settle }
+        },
       }),
       update: () => ({
         eq: () => ({
@@ -63,12 +69,14 @@ function stubEngagementDb({ send }) {
     contactUpdates,
     from: (table) => ({
       select: () => ({
-        eq: () => ({
-          single: () => Promise.resolve({
+        eq: () => {
+          // K8 — see stubDb: the send lookup uses `.maybeSingle()`.
+          const settle = () => Promise.resolve({
             data: table === 'email_sends' ? send : null,
             error: null,
-          }),
-        }),
+          })
+          return { single: settle, maybeSingle: settle }
+        },
       }),
       update: (values) => {
         const filters = []

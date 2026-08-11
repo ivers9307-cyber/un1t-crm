@@ -205,11 +205,10 @@ ruleTester.run('no-discarded-single-error', plugin.rules['no-discarded-single-er
     // primary-key lookup — .single() can only see 0 or 1 rows, so a discarded
     // error reads as "not found → null", which is normally the intent
     'async () => { const { data } = await db.from("x").select("*").eq("id", id).single() }',
-    // foreign-key lookup — same at-most-one-row shape
-    'async () => { const { data } = await db.from("x").select("*").eq("contact_id", cid).single() }',
     // .match({ id }) is .eq("id", …) spelled as an object
     'async () => { const { data } = await db.from("x").select("*").match({ id }).single() }',
-    'async () => { const { data } = await db.from("x").select("*").match({ contact_id: c, kind: k }).single() }',
+    // a composite .match() still counts when one of its keys is the pk
+    'async () => { const { data } = await db.from("x").select("*").match({ id, kind: k }).single() }',
     // .filter(col, "eq", v) is the long form of .eq
     'async () => { const { data } = await db.from("x").select("*").filter("id", "eq", v).single() }',
     // .limit(1) caps the row count structurally — same at-most-one shape as a
@@ -254,6 +253,27 @@ ruleTester.run('no-discarded-single-error', plugin.rules['no-discarded-single-er
     // a non-id equality: emails duplicate, and .single() errors when they do
     {
       code: 'async () => { const { data } = await db.from("contacts").select("id").eq("email", e).single() }',
+      errors: [{ messageId: 'discarded' }],
+    },
+    // K8 — a FOREIGN KEY is not a unique key. `.eq("contact_id", …)` on a
+    // one-to-many table pins nothing, which is the whole defect class; the
+    // exemption used to accept any `<x>_id` and this was its worst case.
+    // Genuinely-1:1 tables (contact_preferences.contact_id) are false positives
+    // now, and that is the accepted trade: the fix there is `.maybeSingle()`.
+    {
+      code: 'async () => { const { data } = await db.from("x").select("*").eq("contact_id", cid).single() }',
+      errors: [{ messageId: 'discarded' }],
+    },
+    // …and the same via .match()
+    {
+      code: 'async () => { const { data } = await db.from("x").select("*").match({ contact_id: c, kind: k }).single() }',
+      errors: [{ messageId: 'discarded' }],
+    },
+    // a COMPOSITE unique (teams(location_id, name)) is real uniqueness the AST
+    // cannot see — deliberately flagged rather than guessed at. Audited: all 8
+    // live instances read better as .maybeSingle() anyway.
+    {
+      code: 'async () => { const { data } = await db.from("teams").select("id").eq("location_id", l).eq("name", n).single() }',
       errors: [{ messageId: 'discarded' }],
     },
     // rpc returning a set

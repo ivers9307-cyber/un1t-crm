@@ -70,12 +70,18 @@ export async function POST(request) {
       .single()
 
     if (convErr) {
-      // Might be a unique constraint conflict — try fetching by phone
+      // Might be a unique constraint conflict — try fetching by phone.
+      // K8 — `.maybeSingle()`: the insert may have failed for a reason OTHER
+      // than the conflict (an FK violation, say), in which case there is no row
+      // to find and the 500 below is the right answer. 0 rows is therefore a
+      // legitimate outcome and must not arrive as an error we discard. At most
+      // one row is real: idx_wa_conv_location_phone is unique on (location_id,
+      // wa_phone) where wa_phone is not null, and normalizedPhone is non-null.
       const { data: byPhone } = await db.from('whatsapp_conversations')
         .select('id')
         .eq('wa_phone', normalizedPhone)
         .eq('location_id', contact.location_id)
-        .single()
+        .maybeSingle()
 
       if (byPhone) {
         // Link it to the contact if it wasn't already
