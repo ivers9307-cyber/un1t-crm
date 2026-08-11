@@ -23,6 +23,9 @@ vi.mock('@/lib/supabase', () => ({
   }),
 }))
 
+const sendOfferPurchaseEmail = vi.fn(async () => ({ status: 'sent' }))
+vi.mock('@/lib/offer-purchase-emails', () => ({ sendOfferPurchaseEmail: (...a) => sendOfferPurchaseEmail(...a) }))
+
 import { POST } from './route'
 
 const props = { params: Promise.resolve({ id: 'p1' }) }
@@ -34,6 +37,8 @@ beforeEach(() => {
   state.row = paidRow
   state.updates = []
   state.updateError = null
+  sendOfferPurchaseEmail.mockClear()
+  sendOfferPurchaseEmail.mockResolvedValue({ status: 'sent' })
 })
 
 describe('POST /api/offer-purchases/[id]/fulfil', () => {
@@ -55,10 +60,19 @@ describe('POST /api/offer-purchases/[id]/fulfil', () => {
     state.row = { ...paidRow, state: 'created' }
     expect((await POST(new Request('http://t'), props)).status).toBe(409)
   })
-  it('stamps fulfilled_at + fulfilled_by', async () => {
+  it('stamps fulfilled_at + fulfilled_by and tells the buyer it is live', async () => {
     const json = await (await POST(new Request('http://t'), props)).json()
-    expect(json).toEqual({ success: true, data: { fulfilled: true } })
+    expect(json).toEqual({ success: true, data: { fulfilled: true, emailed: true } })
     expect(state.updates[0].fulfilled_by).toBe('u1')
+    expect(state.updates[0].fulfilled_at).toBeTruthy()
+    expect(sendOfferPurchaseEmail.mock.calls[0][1].kind).toBe('ready')
+  })
+
+  it('records the fulfilment even when the buyer email fails — marking must not read as broken', async () => {
+    sendOfferPurchaseEmail.mockRejectedValueOnce(new Error('postmark down'))
+    const res = await POST(new Request('http://t'), props)
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toEqual({ fulfilled: true, emailed: false })
     expect(state.updates[0].fulfilled_at).toBeTruthy()
   })
   it('second call is a 200 no-op that keeps the original stamp', async () => {

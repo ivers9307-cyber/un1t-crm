@@ -22,6 +22,7 @@ import {
   linkOrCreateContactForPurchase,
   notifyStaffOfPaidPurchase,
 } from '@/lib/sale-offers'
+import { sendOfferPurchaseEmail } from '@/lib/offer-purchase-emails'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 import { logWarn } from '@/lib/log'
 
@@ -86,8 +87,15 @@ export async function POST(request) {
   if (changed && state === 'paid') {
     // Fire-and-forget: a contact/notify failure must never 500 the webhook.
     try {
-      await linkOrCreateContactForPurchase(db, purchase)
+      const { contactId } = await linkOrCreateContactForPurchase(db, purchase)
       await notifyStaffOfPaidPurchase(db, purchase, purchase.offer || {})
+      // Buyer receipt. Deliberately says "within 24 hours", NOT "it's ready" —
+      // fulfilment is a manual Glofox step that has not happened yet.
+      await sendOfferPurchaseEmail(db, {
+        purchase: { ...purchase, contact_id: purchase.contact_id || contactId || null },
+        offer: purchase.offer || {},
+        kind: 'paid',
+      })
     } catch (e) {
       logWarn('offer-webhook', `paid side-effects failed for ${purchase.id}`, { err: e })
     }

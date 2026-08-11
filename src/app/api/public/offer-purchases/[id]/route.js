@@ -12,6 +12,7 @@ import {
   linkOrCreateContactForPurchase,
   notifyStaffOfPaidPurchase,
 } from '@/lib/sale-offers'
+import { sendOfferPurchaseEmail } from '@/lib/offer-purchase-emails'
 import { checkRateLimit } from '@/lib/rate-limit'
 import { logWarn } from '@/lib/log'
 
@@ -39,8 +40,13 @@ export async function GET(_request, props) {
         if (changed) current = { ...row, state: next }
         if (changed && next === 'paid') {
           try {
-            await linkOrCreateContactForPurchase(db, row)
+            const { contactId } = await linkOrCreateContactForPurchase(db, row)
             await notifyStaffOfPaidPurchase(db, row, row.offer || {})
+            await sendOfferPurchaseEmail(db, {
+              purchase: { ...row, contact_id: row.contact_id || contactId || null },
+              offer: row.offer || {},
+              kind: 'paid',
+            })
           } catch (e) {
             logWarn('offer-status', `paid side-effects failed for ${id}`, { err: e })
           }
