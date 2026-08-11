@@ -95,7 +95,7 @@ const EXEMPT = {
   'src/app/api/preferences/[token]/route.js':
     'Capability-token URL (per-contact preference token) + rate-limited — public by design.',
   'src/app/api/preferences/hr-emails/route.js':
-    'Public one-click HR-email unsubscribe (flips a single boolean off) — public by design.',
+    'Capability-token URL (per-contact unsubscribe token, or the legacy contact+session PAIR whose session must belong to the contact) + tiered rate limit and refusal logging — public by design, same guard as the sibling consent endpoints (HRPREF-AUTH.1).',
   'src/app/api/webhooks/sequence/[token]/route.js':
     'URL token (32-hex, unguessable, per-sequence) + optional constant-time X-Webhook-Secret + 100/min rate limit — the token IS the credential.',
   'src/app/api/webhooks/strava/route.js':

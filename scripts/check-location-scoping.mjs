@@ -237,7 +237,11 @@ export const EXEMPT = {
   },
   'src/app/api/preferences/hr-emails/route.js': {
     contacts:
-      'Deliberate tokenless one-click unsubscribe (documented in-route): cid can only FLIP hr_post_class_emails_enabled to false — worst case is someone silencing a stranger\'s HR emails, no data returned. Same trade-off as /api/unsubscribe.',
+      'Public one-click HR-email unsubscribe. The contacts row is reached ONLY via a resolved per-contact capability (contact_preferences.unsubscribe_token, or the legacy contact+session pair whose session must belong to that contact), which names exactly one contact — the capability IS the scoping, exactly as on /api/unsubscribe/[token] (HRPREF-AUTH.1). Was genuinely unscoped before: it took a bare contact id.',
+    contact_preferences:
+      'Token lookup that resolves the capability to its one contact. Scoped by the token itself.',
+    heart_rate_sessions:
+      'Legacy-link second factor: the session must exist AND name the same contact the link claims. Read-only, two columns, no rows returned to the caller.',
   },
 
   // Public catalog surfaces — the slug/public_path IS the published public
