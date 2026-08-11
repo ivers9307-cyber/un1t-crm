@@ -35,11 +35,24 @@
 // IDEMPOTENT. A contact with an active escalation row is never re-inserted;
 // the row's counts are rewritten only when the contact has actually bounced in
 // more campaigns since. A settled estate produces zero writes.
+//
+// TWO LEDGERS (BOUNCEEV.1). Delivery evidence is gathered from BOTH
+// campaign_recipients (broadcasts) and email_sends (everything else:
+// confirmations, reminders, ticket replies). Reading only the first meant a
+// contact who reliably receives transactional mail could still be suppressed
+// on the strength of broadcast bounces — an error in the UNSAFE direction,
+// because it makes the suppressed set larger than the evidence supports.
+// Evidence can only ever move a verdict from `suppress` to `review`
+// (decideBounceEscalation branches on totalDeliveries > 0 before it can reach
+// the suppress branch), so this change cannot suppress anyone it did not
+// suppress before. Measured live 2026-08-11 against the 21 active
+// suppressions: 1 spared by the transactional ledger, 1 more by reading a
+// later-bounced row's surviving delivery timestamps, 19 unchanged.
 
 import {
-  SUCCESSFUL_RECIPIENT_STATUSES,
   decideBounceEscalation,
   groupBouncesByContact,
+  isDeliveryEvidence,
 } from './bounce-escalation.js'
 import { logInfo, logError } from './log.js'
 
@@ -165,17 +178,69 @@ async function loadBounceHistory(db) {
   return groupBouncesByContact(rows)
 }
 
-/** contact ids with at least one recipient row that proves a delivery. */
+/**
+ * Per-contact delivery evidence from the BROADCAST ledger.
+ *
+ * BOUNCEEV.1 dropped the `.in('status', …)` filter this used to carry. The
+ * status column is terminal-overwritten, so a deferred bounce arriving after
+ * the recipient opened and clicked leaves the row reading 'bounced' with the
+ * delivered_at / opened_at / clicked_at still on it — filtering in the query
+ * threw exactly that evidence away. The rows come back whole and
+ * isDeliveryEvidence decides, which also keeps one definition of "delivered"
+ * for both ledgers.
+ *
+ * The wider fetch is bounded by the caller: this only ever runs over the
+ * shortlist (contacts with 3+ distinct bounced campaigns and no hard bounce —
+ * 46 of 8,573 contacts live on 2026-08-11), and every page still goes through
+ * fetchAllPages.
+ */
 async function loadDeliveryCounts(db, contactIds) {
   const counts = new Map()
   for (const ids of chunked(contactIds)) {
     const rows = await fetchAllPages(() => db
       .from('campaign_recipients')
-      .select('contact_id')
+      .select('contact_id, status, delivered_at, opened_at, clicked_at')
       .in('contact_id', ids)
-      .in('status', SUCCESSFUL_RECIPIENT_STATUSES)
       .order('id'))
-    for (const row of rows) counts.set(row.contact_id, (counts.get(row.contact_id) || 0) + 1)
+    for (const row of rows) {
+      if (!isDeliveryEvidence(row)) continue
+      counts.set(row.contact_id, (counts.get(row.contact_id) || 0) + 1)
+    }
+  }
+  return counts
+}
+
+/**
+ * Per-contact delivery evidence from the TRANSACTIONAL ledger (BOUNCEEV.1).
+ *
+ * The whole defect: "never delivered to" was decided from campaign_recipients
+ * alone, so a contact who reliably receives booking confirmations, reminders
+ * and ticket replies could be suppressed on the strength of broadcast bounces.
+ * That is the unsafe direction — it makes the suppressed set larger than the
+ * evidence supports.
+ *
+ * source_type='campaign' rows are EXCLUDED, and that exclusion is not an
+ * optimisation. A campaign send writes both a campaign_recipients row and an
+ * email_sends row for the same message (22,282 of 22,282 campaign-sourced rows
+ * had a mirror on 2026-08-11), so counting both would report two deliveries
+ * for one send in a column the list-health table renders as "Delivered to".
+ * Excluding by NAME rather than allowlisting the other source types is
+ * deliberate: a future source_type is transactional-ish until proven otherwise,
+ * and the failure mode of counting it is a spared contact, not a suppressed one.
+ */
+async function loadTransactionalDeliveryCounts(db, contactIds) {
+  const counts = new Map()
+  for (const ids of chunked(contactIds)) {
+    const rows = await fetchAllPages(() => db
+      .from('email_sends')
+      .select('contact_id, status, delivered_at, opened_at, clicked_at')
+      .in('contact_id', ids)
+      .neq('source_type', 'campaign')
+      .order('id'))
+    for (const row of rows) {
+      if (!isDeliveryEvidence(row)) continue
+      counts.set(row.contact_id, (counts.get(row.contact_id) || 0) + 1)
+    }
   }
   return counts
 }
@@ -265,9 +330,14 @@ export async function runRepeatBounceSweep({ db, now = new Date(), dry = false }
     return result
   }
 
-  let deliveryCounts, existing, contacts
+  let deliveryCounts, transactionalCounts, existing, contacts
   try {
     deliveryCounts = await loadDeliveryCounts(db, shortlist)
+    // Inside the same try as everything else, so a failed read ABORTS before
+    // any write. Missing evidence is not evidence of absence: defaulting a
+    // failed email_sends scan to zero would suppress precisely the contacts
+    // this evidence exists to spare.
+    transactionalCounts = await loadTransactionalDeliveryCounts(db, shortlist)
     existing = await loadExistingEscalations(db, shortlist)
     contacts = await loadRows(db, 'contacts', 'id, email, location_id, email_suppressed_at', shortlist)
   } catch (err) {
@@ -284,7 +354,11 @@ export async function runRepeatBounceSweep({ db, now = new Date(), dry = false }
 
   for (const contactId of shortlist) {
     const decision = decideBounceEscalation(
-      { bounces: byContact.get(contactId), successfulDeliveries: deliveryCounts.get(contactId) || 0 },
+      {
+        bounces: byContact.get(contactId),
+        successfulDeliveries: deliveryCounts.get(contactId) || 0,
+        transactionalDeliveries: transactionalCounts.get(contactId) || 0,
+      },
       { now },
     )
     if (decision.outcome === 'keep') continue
@@ -351,7 +425,7 @@ export async function runRepeatBounceSweep({ db, now = new Date(), dry = false }
       bounced_campaign_ids: decision.campaignIds,
       bounce_types: decision.bounceTypes,
       bounce_events: decision.bounceEvents,
-      successful_deliveries: decision.successfulDeliveries,
+      successful_deliveries: decision.totalDeliveries,
       first_bounce_at: decision.firstBounceAt,
       last_bounce_at: decision.lastBounceAt,
       evaluated_at: decision.evaluatedAt,
@@ -377,7 +451,7 @@ export async function runRepeatBounceSweep({ db, now = new Date(), dry = false }
       bounced_campaign_ids: decision.campaignIds,
       bounce_types: decision.bounceTypes,
       bounce_events: decision.bounceEvents,
-      successful_deliveries: decision.successfulDeliveries,
+      successful_deliveries: decision.totalDeliveries,
       last_bounce_at: decision.lastBounceAt,
       evaluated_at: decision.evaluatedAt,
     }).eq('id', id)

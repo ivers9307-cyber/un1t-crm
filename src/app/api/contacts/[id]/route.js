@@ -106,6 +106,22 @@ export async function PUT(request, props) {
   // land without the address change that justifies it. Reputation only —
   // marketing still needs per-location consent, which the hard-bounce
   // handler revoked and nothing here restores.
+  //
+  // EMAILREP.3 — mig 528 now enforces the SAME rule as a BEFORE UPDATE OF
+  // email trigger, covering the three write paths this one never reached
+  // (merge, import rollback, the agent's fill-when-empty tools). This call is
+  // KEPT rather than deleted:
+  //   • the trigger is a migration, and migrations land before the code that
+  //     depends on them — deleting this would make correctness on the busiest
+  //     write path conditional on a deploy ordering nobody would notice
+  //     getting wrong;
+  //   • it costs nothing. When it fires it sets email_status='active' in this
+  //     same UPDATE, so the trigger's NEW.email_status guard is already false
+  //     and the trigger does nothing. One row write either way.
+  //   • the two cannot drift silently: src/lib/email-status-reset-trigger.test
+  //     pins mig 528's status list to ADDRESS_BOUND_EMAIL_STATUSES, and
+  //     email_status is in no Zod schema, so no request body can reach one
+  //     implementation with a value the other would judge differently.
   const emailStatusReset = emailStatusResetForAddressChange({
     oldEmail: oldRow?.email,
     newEmail: body.email,
