@@ -37,6 +37,7 @@ import {
   renderTemplateBody,
 } from '@/lib/whatsapp'
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
+import { logWarn } from '@/lib/log'
 import { getLocationBranding } from '@/lib/location-branding'
 import { isFrequencyCapped, frequencyCapDeferUntil, FrequencyCapDeferral, stampMarketingTouch } from '@/lib/frequency-cap'
 import { overlayConnections } from '@/lib/connection-registry'
@@ -345,7 +346,7 @@ export async function sendWhatsappStep(db, { step, sequence, contact, frequencyC
   const conversationId = await getOrCreateConversation(db, contact, sequence.location_id)
   let sendRowId = null
   if (conversationId && result?.messageId) {
-    const { data: msgRow } = await db.from('whatsapp_messages').insert({
+    const { data: msgRow, error: msgErr } = await db.from('whatsapp_messages').insert({
       conversation_id: conversationId,
       contact_id: contact.id,
       location_id: sequence.location_id,
@@ -358,6 +359,15 @@ export async function sendWhatsappStep(db, { step, sequence, contact, frequencyC
       status: 'sent',
       sent_at: new Date().toISOString(),
     }).select('id').single()
+    // SINGLEERR.1 — this row's id IS the step's send id (see above), so a
+    // rejected insert silently returns null and the runner advances its cursor
+    // with no send to point at. Best-effort — the WhatsApp message HAS gone out,
+    // so we must not throw — but never silent.
+    if (msgErr) {
+      logWarn('sequences', 'whatsapp_messages insert failed after a successful send', {
+        err: msgErr.message, stepId: step.id, contactId: contact.id,
+      })
+    }
     sendRowId = msgRow?.id || null
   }
 
@@ -446,13 +456,21 @@ export async function sendSmsStep(db, { step, sequence, contact }) {
   // activityIcons map). Its id doubles as the step's send id — a Twilio
   // "SM…" sid is NOT a uuid and would hit the same 22P02 re-send loop
   // the WhatsApp step did (last_step_send_id is a uuid column).
-  const { data: activityRow } = await db.from('activities').insert({
+  const { data: activityRow, error: activityErr } = await db.from('activities').insert({
     contact_id: contact.id,
     location_id: sequence.location_id,
     type: 'sms_sent',
     subject: `SMS sequence step: ${sequence.name || 'Untitled sequence'}`,
     note: renderedBody,
   }).select('id').single()
+  // SINGLEERR.1 — same as the WhatsApp step: this id doubles as the step's send
+  // id, so a rejected insert returned null and said nothing. The SMS is already
+  // out, so log rather than throw.
+  if (activityErr) {
+    logWarn('sequences', 'sms activity insert failed after a successful send', {
+      err: activityErr.message, stepId: step.id, contactId: contact.id,
+    })
+  }
 
   // Bump per-step metric.
   // supabase-js builders don't have .catch — try/catch around await.

@@ -148,3 +148,83 @@ jsxRuleTester.run('no-untyped-button-in-form', plugin.rules['no-untyped-button-i
     },
   ],
 })
+
+ruleTester.run('no-discarded-single-error', plugin.rules['no-discarded-single-error'], {
+  valid: [
+    // the error IS destructured — the whole point
+    'async () => { const { data, error } = await db.from("x").select("*").eq("slug", s).single() }',
+    // …including renamed
+    'async () => { const { data: stage, error: stageErr } = await db.from("p").select("id").eq("slug", s).single() }',
+    // primary-key lookup — .single() can only see 0 or 1 rows, so a discarded
+    // error reads as "not found → null", which is normally the intent
+    'async () => { const { data } = await db.from("x").select("*").eq("id", id).single() }',
+    // foreign-key lookup — same at-most-one-row shape
+    'async () => { const { data } = await db.from("x").select("*").eq("contact_id", cid).single() }',
+    // .match({ id }) is .eq("id", …) spelled as an object
+    'async () => { const { data } = await db.from("x").select("*").match({ id }).single() }',
+    'async () => { const { data } = await db.from("x").select("*").match({ contact_id: c, kind: k }).single() }',
+    // .filter(col, "eq", v) is the long form of .eq
+    'async () => { const { data } = await db.from("x").select("*").filter("id", "eq", v).single() }',
+    // .limit(1) caps the row count structurally — same at-most-one shape as a
+    // primary-key filter, so .single() can only ever error on 0 rows
+    'async () => { const { data } = await db.from("y").select("*").limit(1).single() }',
+    // a write pinned to one row by id — same structural at-most-one
+    'async () => { const { data } = await db.from("x").update(u).eq("id", id).select().single() }',
+    // .maybeSingle() does not error on 0 rows — a different, much noisier class
+    'async () => { const { data } = await db.from("x").select("*").eq("slug", s).maybeSingle() }',
+    // not destructured — the error is still reachable on the result object
+    'async () => { const res = await db.from("x").select("*").eq("slug", s).single() }',
+    // a rest element may carry `error` (same reasoning as the {...spread} in
+    // no-untyped-button-in-form)
+    'async () => { const { data, ...rest } = await db.from("x").select("*").eq("slug", s).single() }',
+    // a computed key may be "error" — unprovable, so we stay silent
+    'async () => { const { [k]: v } = await db.from("x").select("*").eq("slug", s).single() }',
+    // not a supabase builder chain
+    'async () => { const { data } = await someClient.query(q).single() }',
+  ],
+  invalid: [
+    // THE S2 bug (#1357): every core slug exists on five locations, so this
+    // matched 5 rows, errored, and the caller got null + a 200
+    {
+      code: 'async () => { const { data: stage } = await db.from("pipeline_stages").select("id").eq("slug", s).single() }',
+      errors: [{ messageId: 'discarded' }],
+    },
+    // a fire-and-forget audit insert — a FAILED WRITE is silent
+    {
+      code: 'async () => { const { data } = await db.from("glofox_push_events").insert(row).select("id").single() }',
+      errors: [{ messageId: 'discarded' }],
+    },
+    // .in() takes a LIST — it implies nothing about uniqueness
+    {
+      code: 'async () => { const { data } = await db.from("x").select("*").in("id", ids).single() }',
+      errors: [{ messageId: 'discarded' }],
+    },
+    // .or() is a disjunction — it widens, it does not pin
+    {
+      code: 'async () => { const { data } = await db.from("x").select("*").or("id.eq.1,id.eq.2").single() }',
+      errors: [{ messageId: 'discarded' }],
+    },
+    // a non-id equality: emails duplicate, and .single() errors when they do
+    {
+      code: 'async () => { const { data } = await db.from("contacts").select("id").eq("email", e).single() }',
+      errors: [{ messageId: 'discarded' }],
+    },
+    // rpc returning a set
+    { code: 'async () => { const { data } = await db.rpc("f", a).single() }', errors: [{ messageId: 'discarded' }] },
+    // assignment form, not a declaration
+    {
+      code: 'async () => { let data; ({ data } = await db.from("x").select("*").eq("slug", s).single()) }',
+      errors: [{ messageId: 'discarded' }],
+    },
+    // .filter with a non-eq operator does not pin a row
+    {
+      code: 'async () => { const { data } = await db.from("x").select("*").filter("id", "in", v).single() }',
+      errors: [{ messageId: 'discarded' }],
+    },
+    // .limit(2) leaves >1 row reachable — only limit(1) caps it
+    {
+      code: 'async () => { const { data } = await db.from("x").select("*").limit(2).single() }',
+      errors: [{ messageId: 'discarded' }],
+    },
+  ],
+})

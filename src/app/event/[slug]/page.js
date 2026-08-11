@@ -36,7 +36,10 @@ export async function generateMetadata(props) {
       .eq('slug', params.slug)
       .eq('active', true)
       .eq('status', 'published')
-      .single()
+      // SINGLEERR.1 — maybeSingle, not single: race_events.slug carries a GLOBAL
+      // unique index (mig 451), so this is 0-or-1 rows and 0 (no such event, or
+      // unpublished) is a real answer rather than an error to discard.
+      .maybeSingle()
     if (!data) return {}
     const title = `${data.name} — UN1T Dublin`
     const desc = data.description

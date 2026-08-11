@@ -49,6 +49,7 @@ const config = [
       'guardrails/no-low-contrast-chip': 'error',
       'guardrails/no-unescaped-ilike-pattern': 'error',
       'guardrails/no-untyped-button-in-form': 'error',
+      'guardrails/no-discarded-single-error': 'error',
     },
   },
   {

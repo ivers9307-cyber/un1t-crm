@@ -95,7 +95,7 @@ export async function reclassifyAllContacts(db, args) {
   //    log a row — they're just diagnostic.
   let runId = null
   if (!dryRun) {
-    const { data: runRow } = await db
+    const { data: runRow, error: runErr } = await db
       .from('pipeline_classification_runs')
       .insert({
         location_id: locationId,
@@ -106,6 +106,12 @@ export async function reclassifyAllContacts(db, args) {
       })
       .select('id')
       .single()
+    // SINGLEERR.1 — best-effort audit row, but never silent. The error comes back
+    // in the result object, so discarding it meant a rejected insert produced
+    // runId=null and every later markRun() no-op'd against nothing.
+    if (runErr) {
+      logWarn('pipeline-reclassify', 'audit run row insert failed', { err: runErr.message, locationId })
+    }
     runId = runRow?.id || null
   }
 

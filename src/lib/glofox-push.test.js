@@ -321,3 +321,51 @@ describe('findOrCreateGlofoxMember — create-and-trial (createIfMissing=true)',
     expect(purchaseGlofoxMembership).toHaveBeenCalledWith(VALID_CREDS, 'gx-new', 'mem-trial', 999)
   })
 })
+
+// SINGLEERR.1 — the audit insert discarded its error.
+//
+// `const { data } = await db.from('glofox_push_events').insert(row).select('id')
+// .single()` covered only ONE of the two failure channels: the try/catch caught a
+// throw, but a PostgREST/Postgres error comes back in the RESULT object, so a
+// rejected insert returned `data = null` and said nothing. Every audit row in
+// this file is fire-and-forget, which the repo defines as best-effort-but-LOGGED
+// (see reportRpc in postmark-webhook-processor) — "never fail the caller" is not
+// "never tell anyone". The push itself must still succeed either way.
+describe('findOrCreateGlofoxMember — a failed audit insert is logged, never silent', () => {
+  it('logs the insert error and still returns the push result', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null })
+    const db = makeFakeDb({
+      pushEventsInsert: { data: null, error: { message: 'null value in column "status"' } },
+    })
+
+    const out = await findOrCreateGlofoxMember({
+      db, locationId: 'loc1', source: 'dup_check',
+      contact: { id: 'c1', email: 'a@b.com' },
+    })
+
+    // best-effort: the caller's own outcome is unchanged
+    expect(out.status).toBe('failed')
+    expect(out.error).toMatch(/credentials/)
+    expect(out.push_event_id).toBeFalsy()
+    // …but the failure was reported
+    expect(warn).toHaveBeenCalled()
+    expect(JSON.stringify(warn.mock.calls)).toMatch(/null value in column/)
+    warn.mockRestore()
+  })
+
+  it('stays quiet when the audit insert succeeds', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null })
+    const db = makeFakeDb()
+
+    const out = await findOrCreateGlofoxMember({
+      db, locationId: 'loc1', source: 'dup_check',
+      contact: { id: 'c1', email: 'a@b.com' },
+    })
+
+    expect(out.push_event_id).toBe('evt-1')
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+})

@@ -272,7 +272,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId) {
       }
     }
   } else {
-    const { data: newConv } = await db.from('whatsapp_conversations').insert({
+    const { data: newConv, error: convErr } = await db.from('whatsapp_conversations').insert({
       location_id: locationId,
       contact_id: contact?.id || null,  // null if unknown sender
       wa_phone: senderPhone,
@@ -281,6 +281,12 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId) {
       // CTWA: a click-to-WhatsApp ad's first message carries referral.ctwa_clid
       ctwa_clid: message.referral?.ctwa_clid || null,
     }).select('id').single()
+    // SINGLEERR.1 — the guard below already caught the failure, but the REASON
+    // was discarded, so an operator saw "could not create" with nothing to act
+    // on. The error lives in the result object, not in a throw.
+    if (convErr) {
+      console.error('[whatsapp webhook] conversation insert failed:', convErr.message)
+    }
     conversationId = newConv?.id
   }
 
