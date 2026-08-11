@@ -1,23 +1,41 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
-import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
+import { getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { getRequestOrigin } from '@/lib/app-url'
 import { CONSENT_ACTIONS } from '@/lib/consent-actions'
+import {
+  REFUSAL_REASONS,
+  guardBeforeTokenLookup,
+  penaliseInvalidToken,
+  guardResolvedToken,
+  recordRefusedOptOut,
+} from '@/lib/consent-token-guard'
 
 export const runtime = 'nodejs'
 
-// 10 attempts per IP per 15 minutes. The token is a UUID (122 bits of
-// entropy), so brute force is hopeless even without a limiter — this mainly
-// slows down a misconfigured email client looping on the unsubscribe URL.
-// SAAS-6: deliberately tenant-UNSCOPED — the tenant is only knowable AFTER
-// resolving the token, so an anti-enumeration limiter must key on IP alone.
-const RL = { max: 10, windowMs: 15 * 60_000 }
+// UNSUB-RL.1 — this route used to open with a flat per-IP limiter
+// (`checkRateLimit(db, \`unsubscribe:${ip}\`, { max: 10, windowMs: 15*60_000 })`),
+// which is the wrong axis for an RFC 8058 endpoint and was a live compliance
+// risk: one-click POSTs come from the recipient's MAIL PROVIDER, and Gmail
+// sends them from a shared proxy pool, so many different people unsubscribing
+// from one campaign share a source IP. The 11th got a 429 before the token was
+// even read, so their opt-out was dropped with nothing written anywhere.
+// Measured live: 9 in a single 15-minute window on 2026-08-05, against a
+// limit of 10.
+//
+// The budgets now live in @/lib/consent-token-guard, split by whether the
+// token resolves — read that module's header for the full rationale, including
+// what the old limiter defended and how each of those is still covered.
 
 // Channels accepted by the unified unsubscribe POST. Any subset can
 // be passed in the body; missing body = email_marketing only
 // (back-compat with Gmail's List-Unsubscribe header which POSTs
 // with no body).
 const UNSUB_CHANNELS = ['email_marketing', 'whatsapp_marketing', 'sms_marketing']
+
+// `contact_preferences.unsubscribe_token` is `UUID DEFAULT gen_random_uuid()`
+// (mig 005). Postgres-permissive on purpose, matching `uuidLike` in schemas.js.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 // One-click unsubscribe.
 //
@@ -40,8 +58,7 @@ export async function POST(request, props) {
   const { token } = params
 
   const ip = getClientIp(request)
-  const limit = await checkRateLimit(db, `unsubscribe:${ip}`, RL)
-  if (!limit.allowed) return rateLimitResponse(limit)
+  const userAgent = request.headers.get('user-agent') || null
 
   // Parse the body if any. Tolerate empty / non-JSON for the
   // List-Unsubscribe path which doesn't always send a content-type.
@@ -66,8 +83,16 @@ export async function POST(request, props) {
   // back-compat: emails already delivered carry the old location-less URL, and
   // someone clicking one expects to be removed. Removing them from everything
   // is the only direction that cannot generate a spam complaint.
+  //
+  // UNSUB-RL.1 — shape-checked, for the same reason `?c=` already is just
+  // below. It is caller-supplied and reaches `.eq('location_id', …)` and a
+  // location_id FK; a non-UUID raises on the cast, which on this route means a
+  // 500 in place of somebody's opt-out. A garbage value now falls back to the
+  // global (unscoped) opt-out, which is the direction that cannot leave
+  // someone subscribed against their wishes.
   const requestUrl = new URL(request.url)
-  const scopeLocationId = requestUrl.searchParams.get('l') || null
+  const rawScopeLocationId = requestUrl.searchParams.get('l')
+  const scopeLocationId = UUID_RE.test(rawScopeLocationId || '') ? rawScopeLocationId : null
 
   // COMMSFIX.C.4 — `?c=` names the campaign whose email carried this link.
   // Shape-checked, not looked up: a garbage value must be IGNORED, never
@@ -75,9 +100,50 @@ export async function POST(request, props) {
   // row, but a non-uuid would raise on the cast and fail the request — for a
   // metric, on the unsubscribe path, which must never fail).
   const rawCampaignId = requestUrl.searchParams.get('c')
-  const campaignId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawCampaignId || '')
-    ? rawCampaignId
-    : null
+  const campaignId = UUID_RE.test(rawCampaignId || '') ? rawCampaignId : null
+
+  // UNSUB-RL.1 tier 0 — shape. `contact_preferences.unsubscribe_token` is a
+  // UUID (mig 005), so anything that is not one cannot possibly resolve.
+  // Rejecting on shape means the cheapest form of enumeration — spraying
+  // arbitrary strings — costs us no database read at all, which is the load
+  // protection the old per-IP limiter was really buying. It is still recorded
+  // and still charged, so a sprayer burns their per-IP budget just as fast.
+  if (!UUID_RE.test(token || '')) {
+    await penaliseInvalidToken(db, 'unsubscribe', ip)
+    await recordRefusedOptOut(db, {
+      endpoint: 'unsubscribe',
+      reason: REFUSAL_REASONS.INVALID_TOKEN,
+      ip, token, campaignId, locationId: scopeLocationId, channels, userAgent,
+    })
+    return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 404 })
+  }
+
+  // UNSUB-RL.1 tier 1 — anti-enumeration, per IP, PEEKED not spent.
+  //
+  // NOTE ON THE ONE CASE THIS STILL REFUSES: a valid token arriving from an IP
+  // that has *already* burned its invalid-token budget is refused before the
+  // lookup. That is deliberate — dropping the pre-lookup gate entirely would
+  // leave an unauthenticated caller able to drive unbounded service-role
+  // queries. It cannot be reached by a mail provider, whose POSTs carry the
+  // tokens WE minted and therefore never spend invalid budget; reaching it
+  // requires an active enumerator on the very same egress IP. And unlike
+  // before, when it does happen it is written to unsubscribe_refusals with the
+  // token fingerprint, so the opt-out can be found and honoured by hand.
+  //
+  // Spending here is what broke one-click unsubscribe: it charged legitimate
+  // holders for the crime of sharing Gmail's proxy with each other. The budget
+  // is only charged below, once we know the token did not resolve. A caller
+  // who has already exhausted it is refused before we run a single query,
+  // which is exactly the DB-load protection the old limiter provided.
+  const ipBudget = await guardBeforeTokenLookup(db, 'unsubscribe', ip)
+  if (!ipBudget.allowed) {
+    await recordRefusedOptOut(db, {
+      endpoint: 'unsubscribe',
+      reason: REFUSAL_REASONS.IP_ENUMERATION,
+      ip, token, campaignId, locationId: scopeLocationId, channels, userAgent,
+    })
+    return rateLimitResponse(ipBudget)
+  }
 
   // Find the contact preference by token
   const { data: pref, error } = await db
@@ -87,7 +153,32 @@ export async function POST(request, props) {
     .single()
 
   if (error || !pref) {
+    // Charge the per-IP budget: this caller is guessing. Twenty of these in a
+    // window and the peek above starts refusing them outright.
+    await penaliseInvalidToken(db, 'unsubscribe', ip)
+    await recordRefusedOptOut(db, {
+      endpoint: 'unsubscribe',
+      reason: REFUSAL_REASONS.INVALID_TOKEN,
+      ip, token, campaignId, locationId: scopeLocationId, channels, userAgent,
+    })
     return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 404 })
+  }
+
+  // UNSUB-RL.1 tier 2 — per TOKEN, with no IP component at all, so a shared
+  // provider proxy can never reach it. This is what caps the original
+  // limiter's stated target: a misconfigured mail client looping on one
+  // unsubscribe URL. It caps that client on that one token and leaves every
+  // other recipient behind the same egress IP completely untouched.
+  const tokenBudget = await guardResolvedToken(db, 'unsubscribe', token)
+  if (!tokenBudget.allowed) {
+    await recordRefusedOptOut(db, {
+      endpoint: 'unsubscribe',
+      reason: REFUSAL_REASONS.TOKEN_FLOOD,
+      ip, token, campaignId, channels, userAgent,
+      contactId: pref.contact_id,
+      locationId: scopeLocationId,
+    })
+    return rateLimitResponse(tokenBudget)
   }
 
   // Build the patch + audit log entries together. Only flip channels
@@ -195,10 +286,22 @@ export async function POST(request, props) {
   //   PR 4 note retained: on a SCOPED opt-out this stamp was already skipped,
   //   because it would have blocked manual sends from every other location too.
 
+  // UNSUB-RL.1 — a REPEAT opt-out is a success, not an error.
+  //
+  // Mail providers retry a one-click POST (network blips, and Gmail will
+  // re-issue on a user's second tap), and people click the link in two
+  // different emails. None of that is a failure: the requested end state —
+  // "stop marketing to me on these channels" — already holds. Saying so
+  // explicitly keeps the provider's retry from looking like a rejection,
+  // which is what gets a sender's one-click support marked unreliable.
+  //
+  // This is also why the per-token budget can be generous: the common repeat
+  // case costs one read and no writes.
   return NextResponse.json({
     success: true,
     message: 'Unsubscribed successfully',
     unsubscribed_channels: channels.filter(c => updates[c] === false),
+    already_unsubscribed: !hasChanges,
   })
 }
 

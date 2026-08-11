@@ -18,13 +18,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: vi.fn(async () => ({ allowed: false, remaining: 0, resetAt: new Date(0), retryAfterSec: 60 })),
+  // UNSUB-RL.1 — the consent token endpoints PEEK a per-IP invalid-token
+  // budget before resolving the token, and only spend it when the token turns
+  // out not to resolve. Blocking here is what makes them return 429.
+  peekRateLimit: vi.fn(async () => ({ allowed: false, remaining: 0, resetAt: new Date(0), retryAfterSec: 60 })),
   getClientIp: vi.fn((request) => request.headers.get('x-forwarded-for') || 'unknown'),
   rateLimitResponse: vi.fn(() => new Response(JSON.stringify({ success: false, error: 'rate limited' }), { status: 429 })),
 }))
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
 
-import { checkRateLimit } from '@/lib/rate-limit'
+import { checkRateLimit, peekRateLimit } from '@/lib/rate-limit'
 import { createServerClient } from '@/lib/supabase'
 
 import { GET as availabilityGET } from './bookings/[slug]/availability/route.js'
@@ -397,16 +401,32 @@ describe('H2a — remaining public routes are rate limited', () => {
   })
 })
 
-describe('SAAS-6 — deliberately tenant-UNSCOPED sites stay IP-keyed', () => {
-  it('preferences token endpoint keys on IP alone (anti-enumeration)', async () => {
-    const res = await preferencesGET(req('/api/preferences/some-token'), props({ token: 'some-token' }))
+// UNSUB-RL.1 — the consent token endpoints used to sit in the block above,
+// pinned to a flat `preferences:<ip>` / `unsubscribe:<ip>` key. That key was
+// the defect: an RFC 8058 one-click POST comes from the recipient's MAIL
+// PROVIDER (Gmail uses a shared proxy pool), so budgeting valid opt-outs per
+// IP throttles unrelated people's withdrawals of consent and drops them
+// silently. They keep an IP-keyed bucket — but it is now spent ONLY by callers
+// whose token did not resolve, which is the population it was ever meant for.
+describe('UNSUB-RL.1 — consent token endpoints budget invalid tokens per IP', () => {
+  const UUID_TOKEN = '9f1c7c0e-0000-4000-8000-000000000001'
+
+  it('preferences peeks a per-IP INVALID-token bucket', async () => {
+    const res = await preferencesGET(req(`/api/preferences/${UUID_TOKEN}`), props({ token: UUID_TOKEN }))
     expect(res.status).toBe(429)
-    expect(limiterKey()).toBe(`preferences:${IP}`)
+    expect(peekRateLimit.mock.calls[0][1]).toBe(`preferences:invalid:${IP}`)
   })
 
-  it('unsubscribe token endpoint keys on IP alone (anti-enumeration)', async () => {
-    const res = await unsubscribePOST(req('/api/unsubscribe/some-token', { method: 'POST', body: {} }), props({ token: 'some-token' }))
+  it('unsubscribe peeks a per-IP INVALID-token bucket', async () => {
+    const res = await unsubscribePOST(req(`/api/unsubscribe/${UUID_TOKEN}`, { method: 'POST', body: {} }), props({ token: UUID_TOKEN }))
     expect(res.status).toBe(429)
-    expect(limiterKey()).toBe(`unsubscribe:${IP}`)
+    expect(peekRateLimit.mock.calls[0][1]).toBe(`unsubscribe:invalid:${IP}`)
+  })
+
+  it('neither ever keys a VALID-token bucket on the caller IP', async () => {
+    await unsubscribePOST(req(`/api/unsubscribe/${UUID_TOKEN}`, { method: 'POST', body: {} }), props({ token: UUID_TOKEN }))
+    for (const [, key] of checkRateLimit.mock.calls) {
+      if (key.includes(':token:')) expect(key).not.toContain(IP)
+    }
   })
 })

@@ -7,7 +7,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // campaign could strip members off the list of the gym they actually attend.
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+// UNSUB-RL.1 — the route now peeks a per-IP invalid-token budget before the
+// lookup and spends a per-TOKEN budget after it. Both allow here; the
+// budgeting behaviour itself is pinned in unsubscribe-rate-limit.test.js.
 vi.mock('@/lib/rate-limit', () => ({
+  peekRateLimit: vi.fn(async () => ({ allowed: true })),
   checkRateLimit: vi.fn(async () => ({ allowed: true })),
   getClientIp: vi.fn(() => '1.2.3.4'),
   rateLimitResponse: vi.fn(),
@@ -17,7 +21,9 @@ vi.mock('@/lib/app-url', () => ({ getRequestOrigin: vi.fn(() => 'https://crm.exa
 import { createServerClient } from '@/lib/supabase'
 import { POST } from './[token]/route'
 
-const HATCH = 'loc-hatch'
+// UNSUB-RL.1 — ?l= is now shape-checked before it reaches .eq('location_id')
+// and the location_id FK, so the fixture has to be a real UUID.
+const HATCH = '22222222-3333-4444-8555-666666666666'
 
 // Records every write so the test can assert WHICH table was touched — the
 // distinction that matters, because writing contact_preferences would let the
@@ -51,7 +57,10 @@ const req = (url, body) => new Request(url, {
   body: body ? JSON.stringify(body) : undefined,
 })
 
-const props = { params: Promise.resolve({ token: 'tok' }) }
+// UNSUB-RL.1 — the route now shape-checks the token before any lookup, so
+// the fixture has to be a real UUID like the one mig 005 mints.
+const TOK = '9f1c7c0e-0000-4000-8000-000000000001'
+const props = { params: Promise.resolve({ token: TOK }) }
 
 beforeEach(() => vi.clearAllMocks())
 
@@ -63,7 +72,7 @@ describe('LOCCOMMS.4 — per-location unsubscribe', () => {
     })
     createServerClient.mockReturnValue(db)
 
-    await POST(req(`https://crm.example/api/unsubscribe/tok?l=${HATCH}`), props)
+    await POST(req(`https://crm.example/api/unsubscribe/${TOK}?l=${HATCH}`), props)
 
     expect(writes.contact_location_preferences).toHaveLength(1)
     expect(writes.contact_location_preferences[0]).toMatchObject({ email_marketing: false })
@@ -81,7 +90,7 @@ describe('LOCCOMMS.4 — per-location unsubscribe', () => {
     })
     createServerClient.mockReturnValue(db)
 
-    await POST(req('https://crm.example/api/unsubscribe/tok'), props)
+    await POST(req(`https://crm.example/api/unsubscribe/${TOK}`), props)
 
     expect(writes.contact_preferences).toHaveLength(1)
     expect(writes.contact_location_preferences).toHaveLength(0)
@@ -102,7 +111,7 @@ describe('LOCCOMMS.4 — per-location unsubscribe', () => {
     })
     createServerClient.mockReturnValue(db)
 
-    await POST(req(`https://crm.example/api/unsubscribe/tok?l=${HATCH}`), props)
+    await POST(req(`https://crm.example/api/unsubscribe/${TOK}?l=${HATCH}`), props)
 
     expect(writes.contact_location_preferences).toHaveLength(1)
     expect(writes.contact_location_preferences[0]).toMatchObject({ email_marketing: false })
@@ -115,7 +124,7 @@ describe('LOCCOMMS.4 — per-location unsubscribe', () => {
     })
     createServerClient.mockReturnValue(db)
 
-    await POST(req(`https://crm.example/api/unsubscribe/tok?l=${HATCH}`), props)
+    await POST(req(`https://crm.example/api/unsubscribe/${TOK}?l=${HATCH}`), props)
 
     expect(writes.consent_log[0]).toMatchObject({
       contact_id: 'c1', channel: 'email_marketing', action: 'opt_out', location_id: HATCH,
@@ -129,7 +138,7 @@ describe('LOCCOMMS.4 — per-location unsubscribe', () => {
     })
     createServerClient.mockReturnValue(db)
 
-    await POST(req(`https://crm.example/api/unsubscribe/tok?l=${HATCH}`), props)
+    await POST(req(`https://crm.example/api/unsubscribe/${TOK}?l=${HATCH}`), props)
 
     const patch = writes.contact_location_preferences[0]
     expect(patch.email_marketing).toBe(false)
@@ -155,7 +164,7 @@ describe('COMMSFIX.C.4 — campaign attribution on unsubscribe', () => {
     })
     createServerClient.mockReturnValue(db)
 
-    await POST(req(`https://crm.example/api/unsubscribe/tok?l=${HATCH}&c=${CAMP}`), props)
+    await POST(req(`https://crm.example/api/unsubscribe/${TOK}?l=${HATCH}&c=${CAMP}`), props)
 
     expect(rpcCalls).toContainEqual([
       'increment_campaign_metric',
@@ -170,7 +179,7 @@ describe('COMMSFIX.C.4 — campaign attribution on unsubscribe', () => {
     })
     createServerClient.mockReturnValue(db)
 
-    const res = await POST(req(`https://crm.example/api/unsubscribe/tok?l=${HATCH}&c=${CAMP}`), props)
+    const res = await POST(req(`https://crm.example/api/unsubscribe/${TOK}?l=${HATCH}&c=${CAMP}`), props)
 
     expect(res.status).toBe(200)
     expect(rpcCalls).toEqual([])
@@ -184,7 +193,7 @@ describe('COMMSFIX.C.4 — campaign attribution on unsubscribe', () => {
     createServerClient.mockReturnValue(db)
 
     await POST(
-      req(`https://crm.example/api/unsubscribe/tok?l=${HATCH}&c=${CAMP}`, { channels: ['sms_marketing'] }),
+      req(`https://crm.example/api/unsubscribe/${TOK}?l=${HATCH}&c=${CAMP}`, { channels: ['sms_marketing'] }),
       props,
     )
 
@@ -198,7 +207,7 @@ describe('COMMSFIX.C.4 — campaign attribution on unsubscribe', () => {
     })
     createServerClient.mockReturnValue(db)
 
-    await POST(req(`https://crm.example/api/unsubscribe/tok?l=${HATCH}&c=not-a-uuid`), props)
+    await POST(req(`https://crm.example/api/unsubscribe/${TOK}?l=${HATCH}&c=not-a-uuid`), props)
 
     expect(rpcCalls).toEqual([])
   })
@@ -210,7 +219,7 @@ describe('COMMSFIX.C.4 — campaign attribution on unsubscribe', () => {
     })
     createServerClient.mockReturnValue(db)
 
-    await POST(req(`https://crm.example/api/unsubscribe/tok?l=${HATCH}`), props)
+    await POST(req(`https://crm.example/api/unsubscribe/${TOK}?l=${HATCH}`), props)
 
     expect(rpcCalls).toEqual([])
     expect(writes.contact_location_preferences).toHaveLength(1)

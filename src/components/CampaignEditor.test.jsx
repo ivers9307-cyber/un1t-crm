@@ -254,3 +254,48 @@ describe('CampaignEditor — the count is debounced and last-request-wins (P1.6b
     expect(screen.getByTestId('audience-count').textContent).toBe('10')
   })
 })
+
+// CAMPHIST.1 — the editor is the component that actually wrote over sent
+// campaigns, and it did it OUTSIDE the API: `handleSave` calls
+// `db.from('campaigns').update(payload).eq('id', campaignId)` on the browser
+// Supabase client. So the 409 on PUT /api/campaigns/[id] never applied, and
+// the mig 014 RLS policy (FOR ALL, no status predicate) allowed the write.
+//
+// The page no longer routes a sent campaign here, but the editor is reached
+// from two other places (UnifiedSendComposer's "open full editor", and
+// CampaignDetail's draft redirect), so the refusal belongs here too.
+describe('CampaignEditor — a campaign whose content is locked is read-only', () => {
+  it('shows the real status, not a hard-coded "Draft" pill', () => {
+    renderEditor({ status: 'sent' })
+    expect(screen.getByTestId('campaign-status-pill').textContent).toMatch(/sent/i)
+  })
+
+  it('still shows "Draft" for an actual draft', () => {
+    renderEditor({ status: 'draft' })
+    expect(screen.getByTestId('campaign-status-pill').textContent).toMatch(/draft/i)
+  })
+
+  it.each(['sent', 'sending', 'queued', 'cancelled', 'failed'])(
+    'offers no Save button for a %s campaign',
+    (status) => {
+      renderEditor({ status })
+      expect(screen.queryByRole('button', { name: /^Save$/i })).toBeNull()
+    },
+  )
+
+  it('explains why, and points at duplicating', () => {
+    renderEditor({ status: 'sent' })
+    const notice = screen.getByTestId('campaign-locked-notice')
+    expect(notice.textContent.toLowerCase()).toContain('duplicate')
+  })
+
+  it('keeps Save for a draft', () => {
+    renderEditor({ status: 'draft' })
+    expect(screen.getByRole('button', { name: /^Save$/i })).toBeTruthy()
+  })
+
+  it('keeps Save for a scheduled campaign', () => {
+    renderEditor({ status: 'scheduled' })
+    expect(screen.getByRole('button', { name: /^Save$/i })).toBeTruthy()
+  })
+})

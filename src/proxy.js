@@ -166,7 +166,11 @@ export async function proxy(request) {
   // /h/ — public host mailing-list signup pages (HOST-EMAIL.2); their backing
   // API (/api/public/host-list/) rides the existing /api/public/ prefix. The
   // per-host unsubscribe page (/unsubscribe/host/[token]) rides /unsubscribe/.
-  const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/event/', '/event-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/api/fleet/', '/deposit/', '/welcome', '/free-class', '/start', '/offers', '/.well-known/', '/privacy', '/terms', '/legal/', '/technical', '/ccf', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/']
+  // /view-email/ — WEBVIEW.1, the hosted "view in browser" copy of a campaign
+  // (Gmail clips a message over ~102KB, taking the footer and its unsubscribe
+  // link with it). Authorised by an HMAC token that names one campaign and no
+  // contact, so there is no session to gate on and nothing personal behind it.
+  const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/event/', '/event-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/api/fleet/', '/deposit/', '/welcome', '/free-class', '/start', '/offers', '/.well-known/', '/privacy', '/terms', '/legal/', '/technical', '/ccf', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/']
   const isPublic = publicPaths.some(p => request.nextUrl.pathname.startsWith(p))
   if (isPublic) return NextResponse.next()
 

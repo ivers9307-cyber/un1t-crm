@@ -87,6 +87,60 @@ export async function checkRateLimit(db, key, { max, windowMs }) {
 }
 
 /**
+ * Read the bucket for `key` in the current window WITHOUT spending from it.
+ *
+ * UNSUB-RL.1 — `checkRateLimit` fuses "read the budget" with "spend from the
+ * budget", which is wrong wherever the decision to charge a caller depends on
+ * something we only learn *after* the check. The consent token endpoints are
+ * exactly that shape: whether a request counts against the anti-enumeration
+ * budget depends on whether its token resolves, and resolving it costs a
+ * query we must not run for a caller who is already over budget. So: peek
+ * first, and charge later (via `checkRateLimit` on the same key) only if the
+ * caller turned out to belong to the population being budgeted.
+ *
+ * Window boundaries are computed identically to `checkRateLimit`, so the two
+ * always address the same row.
+ *
+ * Fail-open, for the same reason `checkRateLimit` is: a limiter outage must
+ * not become an outage of the endpoint it protects — and on the unsubscribe
+ * path, failing closed would mean silently dropping withdrawals of consent.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} db  Service-role Supabase client
+ * @param {string} key
+ * @param {{ max: number, windowMs: number }} opts
+ * @returns {Promise<RateLimitResult>}
+ */
+export async function peekRateLimit(db, key, { max, windowMs }) {
+  const now = Date.now()
+  const windowStartMs = Math.floor(now / windowMs) * windowMs
+  const windowStart = new Date(windowStartMs)
+  const resetAt = new Date(windowStartMs + windowMs)
+  const retryAfterSec = Math.max(1, Math.ceil((resetAt.getTime() - now) / 1000))
+
+  try {
+    const { data, error } = await db
+      .from('rate_limit_buckets')
+      .select('count')
+      .eq('bucket_key', key)
+      .eq('window_start', windowStart.toISOString())
+      .maybeSingle()
+
+    if (error) {
+      console.error('[rate-limit] peek error, failing open:', error.message)
+      return { allowed: true, remaining: max, resetAt, retryAfterSec }
+    }
+
+    const count = Number(data?.count ?? 0)
+    // Same comparison as checkRateLimit: a bucket sitting exactly ON max has
+    // had its last allowed request, so the NEXT one is the first refusal.
+    return { allowed: count <= max, remaining: Math.max(0, max - count), resetAt, retryAfterSec }
+  } catch (err) {
+    console.error('[rate-limit] peek threw, failing open:', err?.message || err)
+    return { allowed: true, remaining: max, resetAt, retryAfterSec }
+  }
+}
+
+/**
  * Build a 429 NextResponse with the standard headers. Use when checkRateLimit
  * returns { allowed: false }.
  *

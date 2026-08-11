@@ -263,6 +263,69 @@ registry.registerPath({
 // Public surface — anonymous, no security
 // ============================================================================
 
+// UNSUB-RL.1 / WEBVIEW.1 — the consent + hosted-copy surface. All three are
+// authorised by a capability token in the path and nothing else, so they carry
+// no `security` entry. Registered here because they were missing from the spec
+// entirely, which is how the /api/unsubscribe rate-limit defect stayed
+// invisible to anyone reading the API surface.
+registry.registerPath({
+  method: 'post',
+  path: '/api/unsubscribe/{token}',
+  tags: ['Public'],
+  summary: 'One-click unsubscribe (RFC 8058)',
+  description: 'Anonymous. `token` is the per-contact contact_preferences.unsubscribe_token. POSTs arrive from the recipient\'s mail provider, so this is NOT rate-limited per IP: an invalid token spends a per-IP budget, a valid one spends a generous per-token budget. A repeat opt-out is a 200 no-op. Optional `?l=` scopes the opt-out to one location; `?c=` attributes it to a campaign.',
+  request: {
+    params: z.object({ token: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ channels: z.array(z.string()).optional() }).openapi('UnsubscribeChannels') } } },
+  },
+  responses: {
+    200: { description: 'Unsubscribed (or already unsubscribed)' },
+    404: { description: 'Invalid token', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/preferences/{token}',
+  tags: ['Public'],
+  summary: 'Read a contact\'s marketing preferences',
+  description: 'Anonymous, authorised by the per-contact preference token.',
+  request: { params: z.object({ token: uuidLike }) },
+  responses: {
+    200: { description: 'Current preferences and per-location lists' },
+    404: { description: 'Invalid token', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/preferences/{token}',
+  tags: ['Public'],
+  summary: 'Update a contact\'s marketing preferences',
+  description: 'Anonymous, authorised by the per-contact preference token. `locationId` scopes the change to one location\'s list; omitting it writes the global row, which fans out to every location.',
+  request: { params: z.object({ token: uuidLike }) },
+  responses: {
+    200: { description: 'Preferences updated' },
+    404: { description: 'Invalid token', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/view-email/{token}',
+  tags: ['Public'],
+  summary: 'Hosted "view in browser" copy of a campaign',
+  description: 'Anonymous. `token` is an HMAC-signed identifier naming ONE campaign and no contact, so the page renders no recipient data and is safe to forward. Returns text/html. 404 for a bad signature, an unknown campaign, or any campaign that has not been sent.',
+  request: { params: z.object({ token: z.string() }) },
+  responses: {
+    200: { description: 'The campaign HTML' },
+    404: { description: 'Not a valid link', content: { 'text/html': { schema: z.string() } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/public/leads',
@@ -3508,6 +3571,25 @@ registry.registerPath({
   responses: {
     200: { description: 'Send complete' },
     400: { description: 'Send failed (e.g. invalid audience filter)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// CAMPHIST.1 — duplicate a campaign into a fresh draft. The reuse path that
+// `?edit=1` was being abused as: editing a sent campaign in place leaves its
+// recipients, opens and clicks describing an email that was never sent.
+registry.registerPath({
+  method: 'post',
+  path: '/api/campaigns/{id}/duplicate',
+  tags: ['Marketing'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Duplicate a campaign into a new draft',
+  description: 'Copies subject, preview text, sender fields, design, HTML, audience filter and A/B setup into a new campaign with status=draft. Carries none of the source campaign\'s recipients, counters, send timestamps, A/B outcome or resend state.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Duplicate created' },
+    400: { description: 'Invalid campaign id', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No email permission at the campaign location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Campaign not found or not accessible', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

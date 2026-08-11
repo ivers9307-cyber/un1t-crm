@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { getClientIp, checkRateLimit, rateLimitResponse } from './rate-limit.js'
+import { getClientIp, checkRateLimit, peekRateLimit, rateLimitResponse } from './rate-limit.js'
 
 describe('getClientIp', () => {
   it('returns the first IP from x-forwarded-for', () => {
@@ -62,6 +62,70 @@ describe('checkRateLimit', () => {
     const db = mockDb(async () => ({ data: 100, error: null }))
     const r = await checkRateLimit(db, 'k', { max: 5, windowMs: 60_000 })
     expect(r.retryAfterSec).toBeGreaterThanOrEqual(1)
+  })
+})
+
+// UNSUB-RL.1 — peekRateLimit reads a bucket WITHOUT spending from it.
+//
+// Needed by the consent token endpoints, where the budget must only be
+// consumed by callers that presented a token which did not resolve. Reading
+// and spending have to be separable for that, because the read happens before
+// we know which population the caller is in.
+describe('peekRateLimit', () => {
+  function mockDb(row, error = null) {
+    const chain = {
+      select: vi.fn(() => chain),
+      eq: vi.fn(() => chain),
+      maybeSingle: vi.fn(async () => ({ data: row, error })),
+    }
+    return { from: vi.fn(() => chain), chain }
+  }
+
+  it('allows when no bucket row exists yet', async () => {
+    const db = mockDb(null)
+    const r = await peekRateLimit(db, 'k', { max: 5, windowMs: 60_000 })
+    expect(r.allowed).toBe(true)
+    expect(r.remaining).toBe(5)
+  })
+
+  it('allows while count is at or under max', async () => {
+    const db = mockDb({ count: 5 })
+    const r = await peekRateLimit(db, 'k', { max: 5, windowMs: 60_000 })
+    expect(r.allowed).toBe(true)
+    expect(r.remaining).toBe(0)
+  })
+
+  it('blocks once count has passed max', async () => {
+    const db = mockDb({ count: 6 })
+    const r = await peekRateLimit(db, 'k', { max: 5, windowMs: 60_000 })
+    expect(r.allowed).toBe(false)
+  })
+
+  it('does NOT increment — it must never call the rate_limit_hit RPC', async () => {
+    const db = mockDb({ count: 1 })
+    db.rpc = vi.fn()
+    await peekRateLimit(db, 'k', { max: 5, windowMs: 60_000 })
+    expect(db.rpc).not.toHaveBeenCalled()
+  })
+
+  it('fails OPEN when the read errors', async () => {
+    const db = mockDb(null, { message: 'boom' })
+    const r = await peekRateLimit(db, 'k', { max: 5, windowMs: 60_000 })
+    expect(r.allowed).toBe(true)
+  })
+
+  it('fails OPEN when the read throws', async () => {
+    const db = { from: () => { throw new Error('network down') } }
+    const r = await peekRateLimit(db, 'k', { max: 5, windowMs: 60_000 })
+    expect(r.allowed).toBe(true)
+  })
+
+  it('reads the same window boundary checkRateLimit writes', async () => {
+    const db = mockDb({ count: 1 })
+    const windowMs = 60_000
+    await peekRateLimit(db, 'k', { max: 5, windowMs })
+    const expected = new Date(Math.floor(Date.now() / windowMs) * windowMs).toISOString()
+    expect(db.chain.eq).toHaveBeenCalledWith('window_start', expected)
   })
 })
 
