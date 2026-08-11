@@ -180,3 +180,60 @@ describe('the legacy spellings are gone from src/', () => {
     expect(offenders).toEqual([])
   })
 })
+
+// ─── K6: the fossil in mig 488 ────────────────────────────────────────
+//
+// Mig 488 carries `where cl.action in ('opt_out', 'opted_out')`. That was
+// correct when it ran: the vocabulary was still split, and matching only
+// 'opt_out' would have silently ignored 69 WhatsApp-keyword and 13 one-click
+// unsubscribes when building contact_location_preferences.
+//
+// It is now dead code in a dead file. Mig 488 is a ONE-OFF BACKFILL — two
+// INSERTs and an assertion block, no view, no function, nothing that runs
+// again — and mig 516 rewrote every legacy row and added a CHECK that makes
+// the spelling unreachable. So it is deliberately NOT rewritten: migrations
+// are forward-only, the file is a record of what was executed on a given day,
+// and editing it would make the record false without changing any behaviour.
+//
+// The risk it leaves behind is a reader, not a runtime: someone copies the
+// dual-spelling `in (...)` into new SQL believing both spellings are live, and
+// carries a defensive branch forward forever. This scan is the answer to that.
+// It permits the historical file by name and fails on any NEW migration that
+// executes against a legacy spelling of consent_log.action.
+
+describe('K6 — no new migration copies the mig 488 dual-spelling workaround', () => {
+  const MIGRATIONS = path.resolve(process.cwd(), 'supabase/migrations')
+
+  // Executed SQL only: `--` line comments and /* */ blocks are prose, and the
+  // prose in 005/516/517 legitimately discusses the legacy spellings.
+  const stripComments = (sql) =>
+    sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ')
+
+  // Grandfathered, by name and with the reason. Nothing else may join this.
+  const HISTORICAL = {
+    '488_contact_location_preferences_backfill.sql':
+      'one-off backfill, executed before mig 516 unified the vocabulary; forward-only migrations are not rewritten',
+    '516_consent_log_action_vocabulary.sql':
+      'the migration that DID the unification — its pre-flight and backfill must name the legacy spellings',
+  }
+
+  const offenders = readdirSync(MIGRATIONS)
+    .filter((f) => f.endsWith('.sql'))
+    .filter((f) => !HISTORICAL[f])
+    .filter((f) => {
+      const sql = stripComments(readFileSync(path.join(MIGRATIONS, f), 'utf8'))
+      // A legacy spelling within reach of the word `action` — i.e. used as a
+      // consent_log action value, not as the contacts.wa_status / sms_status
+      // value 'opted_out', which is correct and out of scope.
+      return /'opted_(in|out)'/.test(sql) && /\baction\b/i.test(sql)
+    })
+
+  it('finds no migration outside the two historical ones', () => {
+    expect(offenders).toEqual([])
+  })
+
+  it('still recognises the fossil, so the scan is not vacuous', () => {
+    const sql = stripComments(readFileSync(path.join(MIGRATIONS, '488_contact_location_preferences_backfill.sql'), 'utf8'))
+    expect(sql).toMatch(/action in \('opt_out', 'opted_out'\)/)
+  })
+})

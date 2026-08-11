@@ -3437,6 +3437,39 @@ registry.registerPath({
   },
 })
 
+// Recipient-facing email copy (K7, mig 530)
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/email-copy',
+  tags: ['Communications'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Operator-editable broadcast copy for a location',
+  description: 'Returns { view_in_browser_label, hosted_copy_note, default_view_in_browser_label, default_hosted_copy_note, can_edit } (company_settings, mig 530). Two strings a RECIPIENT reads: the "view in browser" link prepended to every broadcast (WEBVIEW.1) and the note at the foot of the hosted web copy. Both columns are nullable and NULL means "use the code-side default" in src/lib/campaign-web-view.js, so a location with no company_settings row returns the defaults rather than 404 and needs no backfill.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Current email copy' },
+    403: { description: 'Forbidden — no access to this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/email-copy',
+  tags: ['Communications'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Save the broadcast copy (owner or master)',
+  description: 'An EMPTY string stores NULL, which restores the default — it never ships an empty link label. Values are trimmed, capped at 120 / 400 characters (matching the CHECK constraints in mig 530) and HTML-escaped at render.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ view_in_browser_label: z.string().max(120), hosted_copy_note: z.string().max(400) }).openapi('EmailCopySave') } } },
+  },
+  responses: {
+    200: { description: 'Email copy saved' },
+    400: { description: 'A value is over its length cap', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owner or master', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Geofence attendance (GEO-ATT, mig 463)
 registry.registerPath({
   method: 'get',

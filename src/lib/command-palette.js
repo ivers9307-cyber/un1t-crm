@@ -33,7 +33,10 @@ export const NAV_COMMANDS = [
   { id: 'events', label: 'Events', href: '/events', permission: 'races' },
   // EQUIP-MAINT.1 — mirrors the nav-items.js Sidebar entry's gate.
   { id: 'maintenance', label: 'Maintenance', href: '/maintenance', anyPermission: ['equipment_admin', 'equipment_inspect'] },
-  { id: 'cars', label: 'Car Processing', href: '/cars', permission: 'car_processing' },
+  // K5 — /cars is a redirect-only stub to /cars/active. Same wasted hop as
+  // the broadcast entry below; the palette is the fast path, so it lands on
+  // the page that actually renders.
+  { id: 'cars', label: 'Car Processing', href: '/cars/active', permission: 'car_processing' },
   { id: 'orders', label: 'Orders', href: '/orders', permission: 'orders' },
   { id: 'invoices', label: 'Invoices', href: '/invoices', permission: 'invoices_inbox' },
   { id: 'approvals', label: 'Approvals', href: '/approvals', permission: 'approvals_inbox' },
@@ -51,7 +54,15 @@ export const CREATE_COMMANDS = [
   // FEAT-LAUNCH.1 — quick actions beyond new-contact. All are real standalone
   // destinations (verified routes), permission-gated like the nav commands.
   { id: 'send-message', label: 'Send a message', href: '/communications/send', anyPermission: ['email', 'whatsapp', 'sms'] },
-  { id: 'new-broadcast', label: 'New WhatsApp broadcast', href: '/whatsapp/broadcasts/new', permission: 'whatsapp' },
+  // K5 — was /whatsapp/broadcasts/new, retired by PILLAR2 Phase 1b and kept
+  // only as a redirect here. The same href as 'send-message' is deliberate,
+  // not a leftover: the unified composer IS where a WhatsApp broadcast is
+  // written now, and operators still search the palette for "whatsapp" and
+  // "broadcast". Two labels onto one destination is the cheapest way to keep
+  // those words findable. (Recents dedupe by href, so this cannot double up
+  // there.) If /communications/send ever takes a channel preselect, this is
+  // the entry that should pass it.
+  { id: 'new-broadcast', label: 'New WhatsApp broadcast', href: '/communications/send', permission: 'whatsapp' },
   { id: 'new-event', label: 'New event', href: '/events/new', permission: 'races' },
 ]
 
@@ -124,7 +135,13 @@ export function entityResult(type, row) {
     case 'staff':
       return { type, key: `staff:${row.id}`, label: row.full_name || row.email || 'Staff', sublabel: row.email || '', href: `/settings/staff/${row.id}` }
     case 'event':
-      return { type, key: `event:${row.id}`, label: row.name || 'Event', sublabel: row.sublabel || '', href: `/events/${row.id}` }
+      // K5 — `/events/<id>` was a hard 404, not a redirect: there is no
+      // src/app/events/[id]/page.js, only the checkin/control/edit/teams
+      // sub-routes. Every event picked out of the launcher landed on
+      // not-found. `/teams` is the entrants view and the first link the
+      // Events list itself offers per event, so it is the "open this event"
+      // target the palette was reaching for.
+      return { type, key: `event:${row.id}`, label: row.name || 'Event', sublabel: row.sublabel || '', href: `/events/${row.id}/teams` }
     default:
       return null
   }

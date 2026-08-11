@@ -455,15 +455,23 @@ export async function sendBatch(emails, { locationId, sender } = {}) {
 // ============================================================
 
 /**
- * Replace merge tags in HTML with contact data
- * Supported tags: {{first_name}}, {{name}}, {{email}}, {{phone}},
- *   {{pipeline_stage}} (canonical, CLASSIFY.2 — reads
- *   contacts.pipeline_stage_slug), {{lead_status}} (deprecated alias,
- *   kept for back-compat with existing campaign HTML — also reads
- *   pipeline_stage_slug), {{location_name}}, {{unsubscribe_url}},
- *   {{glofox_passcode}} (GLOFOX3.5; one-time Glofox passcode minted
- *   when CRM creates a new Glofox account — read by the welcome
- *   sequence; stored on contacts.glofox_passcode by glofox-push.js).
+ * Replace merge tags in HTML with contact data.
+ *
+ * The `replacements` table below is the source of truth for WHICH tags
+ * substitute. K3 — src/lib/merge-tags.js is the operator-facing mirror of it
+ * (labels, descriptions, and which tags the editors offer), and
+ * merge-tags.test.js fails if the two drift apart in either direction. This
+ * docblock used to try to list the tags by hand and had itself fallen three
+ * behind; adding a tag here now means adding it to the registry too.
+ *
+ * Two notes that are not obvious from the table:
+ *   {{lead_status}} is a deprecated alias of {{pipeline_stage}} (CLASSIFY.2)
+ *     — both read contacts.pipeline_stage_slug. Kept so email bodies written
+ *     before the rename keep rendering.
+ *   {{glofox_passcode}} (GLOFOX3.5) is the one-time passcode minted when CRM
+ *     creates a Glofox account; glofox-push.js stores it on
+ *     contacts.glofox_passcode and the welcome sequence reads it. It is empty
+ *     for everyone else, so it is not offered in the editors.
  */
 export function applyMergeTags(html, contact, extras = {}) {
   if (!html) return html

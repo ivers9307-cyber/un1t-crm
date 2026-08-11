@@ -11,6 +11,7 @@ import SendQuietHoursNotice from './communications/SendQuietHoursNotice'
 import CopyAssist from './communications/CopyAssist'
 import { stripUnsetFilterRows } from '@/lib/audience-filter'
 import { isCampaignContentEditable, campaignLockedReason, campaignUndeletableReason } from '@/lib/campaign-editability'
+import { UNLAYER_MERGE_TAGS, MERGE_TAG_REFERENCE } from '@/lib/merge-tags'
 
 // FILTER-P1.6 — what the send path ACTUALLY gates on, per
 // buildAudienceQueryAsync (src/lib/postmark.js): the campaign's location, the
@@ -162,18 +163,9 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
           timer: { enabled: true },
           video: { enabled: true },
         },
-        mergeTags: [
-          { name: 'First Name', value: '{{first_name}}' },
-          { name: 'Last Name', value: '{{last_name}}' },
-          { name: 'Full Name', value: '{{name}}' },
-          { name: 'Email', value: '{{email}}' },
-          { name: 'Phone', value: '{{phone}}' },
-          { name: 'Pipeline Stage', value: '{{pipeline_stage}}' },
-          { name: 'Location', value: '{{location_name}}' },
-          { name: 'Unsubscribe', value: '{{unsubscribe_url}}' },
-          { name: 'Preferences', value: '{{preference_url}}' },
-          { name: 'Year', value: '{{current_year}}' },
-        ],
+        // K3 — from @/lib/merge-tags, which is checked against what
+        // applyMergeTags() actually substitutes. Do not re-inline this list.
+        mergeTags: [...UNLAYER_MERGE_TAGS],
         features: {
           textEditor: {
             spellChecker: true,
@@ -1177,15 +1169,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
               <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider mb-3">Merge Tags</h3>
               <p className="text-xs text-un1t-muted mb-3">Use these in your subject line or email body for personalisation:</p>
               <div className="grid grid-cols-2 gap-2 text-xs">
-                {[
-                  ['{{first_name}}', "Contact's first name"],
-                  ['{{name}}', "Contact's full name"],
-                  ['{{email}}', "Contact's email"],
-                  ['{{location_name}}', 'Your location name'],
-                  ['{{unsubscribe_url}}', 'Unsubscribe link'],
-                  ['{{preference_url}}', 'Preference centre link'],
-                  ['{{current_year}}', 'Current year'],
-                ].map(([tag, desc]) => (
+                {MERGE_TAG_REFERENCE.map(([tag, desc]) => (
                   <div key={tag} className="flex items-center gap-2 p-2 bg-un1t-surface rounded">
                     <code className="text-blue-400">{tag}</code>
                     <span className="text-un1t-muted">{desc}</span>

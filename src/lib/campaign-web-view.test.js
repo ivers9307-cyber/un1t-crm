@@ -28,7 +28,9 @@ const {
   buildCampaignViewUrl,
   renderCampaignWebView,
   prependViewInBrowserLink,
-  VIEW_IN_BROWSER_LABEL,
+  DEFAULT_VIEW_IN_BROWSER_LABEL,
+  DEFAULT_HOSTED_COPY_NOTE,
+  resolveEmailCopy,
 } = await import('./campaign-web-view.js')
 
 const CAMPAIGN_ID = '11111111-2222-4333-8444-555555555555'
@@ -99,7 +101,7 @@ describe('prependViewInBrowserLink — it goes at the TOP', () => {
   it('links to the given url and uses the shared label', () => {
     const out = prependViewInBrowserLink(HTML, 'https://crm.example/view-email/tok')
     expect(out).toContain('href="https://crm.example/view-email/tok"')
-    expect(out).toContain(VIEW_IN_BROWSER_LABEL)
+    expect(out).toContain(DEFAULT_VIEW_IN_BROWSER_LABEL)
   })
 
   it('is idempotent — a second pass adds nothing', () => {
@@ -118,7 +120,7 @@ describe('prependViewInBrowserLink — it goes at the TOP', () => {
   })
 
   it('uses no em-dash in the label', () => {
-    expect(VIEW_IN_BROWSER_LABEL).not.toContain('—')
+    expect(DEFAULT_VIEW_IN_BROWSER_LABEL).not.toContain('—')
   })
 })
 
@@ -167,7 +169,7 @@ describe('renderCampaignWebView — no recipient PII, ever', () => {
 
   it('does not re-add the view-in-browser strip to the hosted copy itself', () => {
     const out = renderCampaignWebView(CAMPAIGN)
-    expect(out).not.toContain(VIEW_IN_BROWSER_LABEL)
+    expect(out).not.toContain(DEFAULT_VIEW_IN_BROWSER_LABEL)
   })
 
   it('returns null for a campaign with no html', () => {
@@ -196,5 +198,95 @@ describe('missing SUPABASE_SERVICE_ROLE_KEY degrades softly', () => {
   it('and the email simply carries no strip', () => {
     const html = '<html><body><h1>Sale</h1></body></html>'
     expect(prependViewInBrowserLink(html, buildCampaignViewUrl(CAMPAIGN_ID, 'https://crm.example'))).toBe(html)
+  })
+})
+
+// ─── K7: the copy is operator-editable, with the default as fallback ──
+//
+// Both strings were hard-coded, against the standing rule that customer-facing
+// copy lives on a settings field with a default fallback. They are now backed
+// by two NULLABLE company_settings columns (mig 530) where NULL means "use the
+// default", so a location that never opens the settings card is byte-identical
+// to before — which is what the "falls back" cases below pin.
+
+describe('resolveEmailCopy', () => {
+  it('falls back to both defaults for a missing row', () => {
+    for (const raw of [null, undefined, {}, 'nonsense']) {
+      expect(resolveEmailCopy(raw)).toEqual({
+        viewInBrowserLabel: DEFAULT_VIEW_IN_BROWSER_LABEL,
+        hostedCopyNote: DEFAULT_HOSTED_COPY_NOTE,
+      })
+    }
+  })
+
+  it('falls back per FIELD, so a half-written row cannot blank the other', () => {
+    const out = resolveEmailCopy({ view_in_browser_label: 'Read it online' })
+    expect(out.viewInBrowserLabel).toBe('Read it online')
+    expect(out.hostedCopyNote).toBe(DEFAULT_HOSTED_COPY_NOTE)
+  })
+
+  it('treats an empty or whitespace-only value as unset', () => {
+    // An operator clearing the box means "back to the default". Honouring ''
+    // literally would render <a></a>: an invisible, unclickable link, on the
+    // exact feature that exists so a clipped recipient can still read the mail.
+    expect(resolveEmailCopy({ view_in_browser_label: '   ' }).viewInBrowserLabel)
+      .toBe(DEFAULT_VIEW_IN_BROWSER_LABEL)
+    expect(resolveEmailCopy({ hosted_copy_note: '' }).hostedCopyNote)
+      .toBe(DEFAULT_HOSTED_COPY_NOTE)
+  })
+
+  it('accepts the camelCase shape the client hands back, and trims', () => {
+    expect(resolveEmailCopy({ viewInBrowserLabel: '  Open in browser  ' }).viewInBrowserLabel)
+      .toBe('Open in browser')
+  })
+})
+
+describe('the operator copy actually reaches the recipient', () => {
+  const HTML_DOC = '<html><body><h1>Sale</h1></body></html>'
+
+  it('renders the operator label in the view-in-browser strip', () => {
+    const out = prependViewInBrowserLink(HTML_DOC, 'https://crm.example/view-email/tok', {
+      view_in_browser_label: 'Read this online',
+    })
+    expect(out).toContain('Read this online')
+    expect(out).not.toContain(DEFAULT_VIEW_IN_BROWSER_LABEL)
+  })
+
+  it('renders the operator note on the hosted copy', () => {
+    const out = renderCampaignWebView(
+      { id: CAMPAIGN_ID, html_content: HTML_DOC },
+      { copy: { hosted_copy_note: 'This page is a copy of an email we sent.' } },
+    )
+    expect(out).toContain('This page is a copy of an email we sent.')
+    expect(out).not.toContain(DEFAULT_HOSTED_COPY_NOTE)
+  })
+
+  it('is unchanged when no copy is supplied', () => {
+    expect(prependViewInBrowserLink(HTML_DOC, 'https://x/y'))
+      .toBe(prependViewInBrowserLink(HTML_DOC, 'https://x/y', null))
+  })
+
+  it('escapes operator copy — it is interpolated into markup, not rendered by React', () => {
+    // This copy lands in a public page AND in every recipient's inbox. An
+    // operator must not be able to close the surrounding tag, let alone
+    // inject one.
+    const out = prependViewInBrowserLink(HTML_DOC, 'https://x/y', {
+      view_in_browser_label: '</a><script>alert(1)</script>',
+    })
+    expect(out).not.toContain('<script>')
+    expect(out).toContain('&lt;script&gt;')
+
+    const page = renderCampaignWebView(
+      { id: CAMPAIGN_ID, html_content: HTML_DOC },
+      { copy: { hosted_copy_note: '<img src=x onerror=alert(1)>' } },
+    )
+    expect(page).not.toContain('<img src=x')
+    expect(page).toContain('&lt;img')
+  })
+
+  it('keeps the customer-copy conventions on both defaults', () => {
+    for (const s of [DEFAULT_VIEW_IN_BROWSER_LABEL, DEFAULT_HOSTED_COPY_NOTE]) {
+      expect(s).not.toContain('—')
+    }
   })
 })

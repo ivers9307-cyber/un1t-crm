@@ -26,7 +26,7 @@
 // which campaigns exist.
 
 import { createServerClient } from '@/lib/supabase'
-import { verifyCampaignViewToken, renderCampaignWebView } from '@/lib/campaign-web-view'
+import { verifyCampaignViewToken, renderCampaignWebView, fetchLocationEmailCopy } from '@/lib/campaign-web-view'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -60,7 +60,13 @@ export async function GET(_request, props) {
   if (error || !campaign) return notFound()
   if (!VIEWABLE_STATUSES.includes(campaign.status)) return notFound()
 
-  const html = renderCampaignWebView(campaign)
+  // K7 — the note at the foot of this page is operator-editable per location
+  // (company_settings, mig 530), defaulting to the copy in campaign-web-view.js.
+  // The lookup is keyed on the campaign's OWN location_id, never on anything in
+  // the URL, so it widens nothing: the token already resolved to this one row.
+  const copy = await fetchLocationEmailCopy(db, campaign.location_id)
+
+  const html = renderCampaignWebView(campaign, { copy })
   if (!html) return notFound()
 
   return new Response(html, {

@@ -82,7 +82,7 @@ import { frequencyCapFromLocationSettings, capCutoffIso, stampMarketingTouch, CA
 import { loadNonOpenerContactIds } from './campaign-resend.js'
 import { getAppUrl } from './app-url.js'
 import { logInfo } from './log.js'
-import { buildCampaignViewUrl, prependViewInBrowserLink } from './campaign-web-view.js'
+import { buildCampaignViewUrl, prependViewInBrowserLink, fetchLocationEmailCopy } from './campaign-web-view.js'
 
 const CHUNK_SIZE = 500             // recipients per cron tick per campaign
 const AUDIENCE_PAGE_SIZE = 1000    // audience load page (CAMPAIGN.11)
@@ -571,6 +571,12 @@ export async function tickCampaignSend(db, campaign) {
   // WEBVIEW.1 — one hosted-copy URL for the whole send. Signed HMAC over the
   // campaign id only; no DB round-trip, no column, no per-recipient variation.
   const campaignViewUrl = buildCampaignViewUrl(campaignId, baseUrl)
+  // K7 — the "view in browser" label is operator-editable per location
+  // (company_settings, mig 530). Resolved ONCE per chunk like the Reply-To
+  // above, not per recipient: it is a property of the studio, not the person.
+  // Falls back to the code-side default on a missing row or a failed read, so
+  // a settings hiccup can never fail a send.
+  const emailCopy = await fetchLocationEmailCopy(db, campaign.location_id)
 
   const emailBatch = queuedRows.map(row => {
     const contact = row.contact
@@ -615,7 +621,7 @@ export async function tickCampaignSend(db, campaign) {
     // view-in-browser link is the most-forwarded link in any email, so it must
     // not resolve to anybody's personal data.
     const htmlWithWebView = stream === 'broadcast'
-      ? prependViewInBrowserLink(personalizedHtml, campaignViewUrl)
+      ? prependViewInBrowserLink(personalizedHtml, campaignViewUrl, emailCopy)
       : personalizedHtml
 
     const finalHtml = previewText ? injectPreheader(htmlWithWebView, previewText) : htmlWithWebView
