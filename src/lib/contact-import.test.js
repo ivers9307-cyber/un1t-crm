@@ -11,6 +11,7 @@ import {
   deriveName,
   fieldsTouchedByMapping,
   buildCsvTemplate,
+  pickRestorableSnapshot,
   IMPORT_FIELD_KEYS,
 } from './contact-import.js'
 
@@ -204,5 +205,95 @@ describe('buildCsvTemplate', () => {
       expect(mapped[h], `template header '${h}' should auto-map`).toBeTruthy()
     }
     expect(new Set(Object.values(mapped))).toEqual(new Set(IMPORT_FIELD_KEYS))
+  })
+})
+
+describe('pickRestorableSnapshot — the rollback column allowlist', () => {
+  // ROLLBACK-ALLOW.1. `POST /api/contacts/imports/[id]/rollback` used to
+  // write `before_snapshot` into `contacts` verbatim. The snapshot is
+  // built by the import runner from `fieldsTouchedByMapping(mapping)`
+  // (+ tags), so today it only ever carries import fields — but nothing
+  // structurally stopped a future writer, or a snapshot taken under an
+  // older schema, from putting an arbitrary column in there and having
+  // rollback write it back unfiltered. These tests pin the allowlist to
+  // its real source (IMPORT_FIELD_KEYS) and pin the "tell someone"
+  // behaviour for a key that falls outside it.
+
+  it('restores the four keys live snapshots actually carry', () => {
+    const { patch, unknownKeys } = pickRestorableSnapshot({
+      email: 'old@x.com',
+      first_name: 'Ada',
+      last_name: 'Lovelace',
+      tags: ['vip'],
+    })
+    expect(patch).toEqual({
+      email: 'old@x.com',
+      first_name: 'Ada',
+      last_name: 'Lovelace',
+      tags: ['vip'],
+    })
+    expect(unknownKeys).toEqual([])
+  })
+
+  it('accepts every import field — the allowlist IS the import surface', () => {
+    const snapshot = Object.fromEntries(IMPORT_FIELD_KEYS.map(k => [k, 'v']))
+    const { patch, unknownKeys } = pickRestorableSnapshot(snapshot)
+    expect(Object.keys(patch).sort()).toEqual([...IMPORT_FIELD_KEYS].sort())
+    expect(unknownKeys).toEqual([])
+  })
+
+  it('REFUSES email_status — restoring it would bypass mig 528', () => {
+    // Mig 528's BEFORE UPDATE OF email trigger clears a stale
+    // bounced/complained stamp when the address changes, and rollback
+    // changes the address. An email_status in the snapshot written back
+    // in the same UPDATE would make the trigger's NEW-guard false and
+    // silently reinstate a stamp from a different mailbox — permanently,
+    // with no symptom. The interaction is intended; this keeps it intact.
+    const { patch, unknownKeys } = pickRestorableSnapshot({
+      email: 'old@x.com',
+      email_status: 'bounced',
+    })
+    expect(patch).toEqual({ email: 'old@x.com' })
+    expect(patch.email_status).toBeUndefined()
+    expect(unknownKeys).toEqual(['email_status'])
+  })
+
+  it('refuses identity + tenancy columns', () => {
+    const { patch, unknownKeys } = pickRestorableSnapshot({
+      id: 'other-contact',
+      location_id: 'other-location',
+      created_via_import_id: 'other-import',
+      pipeline_stage_slug: 'member',
+      email: 'old@x.com',
+    })
+    expect(patch).toEqual({ email: 'old@x.com' })
+    expect(unknownKeys.sort()).toEqual(
+      ['created_via_import_id', 'id', 'location_id', 'pipeline_stage_slug'],
+    )
+  })
+
+  it('REPORTS unexpected keys rather than dropping them silently', () => {
+    // A snapshot key nobody can restore is worth knowing about — it means
+    // a writer and this allowlist have drifted apart.
+    const { unknownKeys } = pickRestorableSnapshot({ some_future_column: 1 })
+    expect(unknownKeys).toEqual(['some_future_column'])
+  })
+
+  it('preserves falsy and null values — a snapshot null is a real prior value', () => {
+    const { patch } = pickRestorableSnapshot({ phone: null, label: '', first_name: 'Ada' })
+    expect(patch).toEqual({ phone: null, label: '', first_name: 'Ada' })
+    expect('phone' in patch).toBe(true)
+  })
+
+  it('survives a null / non-object / array snapshot without throwing', () => {
+    for (const bad of [null, undefined, 'nope', 42, ['email']]) {
+      expect(pickRestorableSnapshot(bad)).toEqual({ patch: {}, unknownKeys: [] })
+    }
+  })
+
+  it('does not mutate the snapshot it was handed', () => {
+    const snapshot = { email: 'old@x.com', email_status: 'bounced' }
+    pickRestorableSnapshot(snapshot)
+    expect(snapshot).toEqual({ email: 'old@x.com', email_status: 'bounced' })
   })
 })

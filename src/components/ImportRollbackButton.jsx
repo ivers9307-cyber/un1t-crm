@@ -112,6 +112,15 @@ export default function ImportRollbackButton({ importId }) {
                   {result.failed > 0 && (
                     <li className="text-amber-700">{result.failed} row{result.failed === 1 ? '' : 's'} could not be reversed (already deleted or modified by hand — see server logs)</li>
                   )}
+                  {result.unrestorable_keys > 0 && (
+                    // ROLLBACK-ALLOW.1 — expected to be 0 forever. A non-zero
+                    // count means a snapshot carried a column rollback is not
+                    // allowed to write back, i.e. a writer and the allowlist
+                    // have drifted. Worth an operator seeing, not just a log line.
+                    <li className="text-amber-700">
+                      {result.unrestorable_keys} snapshot field{result.unrestorable_keys === 1 ? '' : 's'} could not be restored (outside the import field set — see server logs)
+                    </li>
+                  )}
                 </ul>
                 <button
                   type="button"
