@@ -171,10 +171,84 @@ describe('entityResult', () => {
   })
   it('shapes an event row with a passed-through sublabel', () => {
     expect(entityResult('event', { id: 'e1', name: 'Hyrox', sublabel: '12 Aug' }))
-      .toEqual({ type: 'event', key: 'event:e1', label: 'Hyrox', sublabel: '12 Aug', href: '/events/e1' })
+      .toEqual({ type: 'event', key: 'event:e1', label: 'Hyrox', sublabel: '12 Aug', href: '/events/e1/teams' })
   })
   it('returns null for an unknown type or an id-less row', () => {
     expect(entityResult('invoice', { id: 'x' })).toBeNull()
     expect(entityResult('contact', {})).toBeNull()
+  })
+})
+
+// ─── K5: every jump target must be a real, final destination ──────────
+//
+// "New WhatsApp broadcast" pointed at /whatsapp/broadcasts/new, retired by
+// PILLAR2 Phase 1b and kept only as a redirect to /communications/send. The
+// palette exists to be the fast path, and a redirect is a wasted hop on it.
+// The IA consolidation moved a lot of paths and the palette was never swept,
+// so this walks src/app and fails on ANY palette href that is missing or is a
+// redirect-only stub — the check the original entry needed and did not have.
+
+import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
+import path from 'node:path'
+
+const APP = path.resolve(process.cwd(), 'src/app')
+
+// A page whose whole job is redirect() — the retired-stub shape.
+function isRedirectStub(file) {
+  const source = readFileSync(file, 'utf8')
+  if (!/from ['"]next\/navigation['"]/.test(source)) return false
+  if (!/\bredirect\(/.test(source)) return false
+  // A page that redirects CONDITIONALLY (auth bounce, permission gate,
+  // session-dependent target resolution) still renders for someone — only a
+  // bare unconditional redirect is a retired stub. /dashboard is the case
+  // that matters: it resolves a per-user target rather than being retired.
+  return !/\breturn\b|\bif\s*\(|&&|\?\?|\?\s/.test(
+    source.replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, ''),
+  )
+}
+
+// Resolve a URL path to its page file, honouring [dynamic] segments.
+function pageFileFor(urlPath) {
+  const segments = urlPath.split('?')[0].split('/').filter(Boolean)
+  let dir = APP
+  for (const segment of segments) {
+    const direct = path.join(dir, segment)
+    if (existsSync(direct) && statSync(direct).isDirectory()) { dir = direct; continue }
+    const dynamic = readdirSync(dir).find((e) => /^\[.+\]$/.test(e))
+    if (!dynamic) return null
+    dir = path.join(dir, dynamic)
+  }
+  for (const name of ['page.js', 'page.jsx']) {
+    const file = path.join(dir, name)
+    if (existsSync(file)) return file
+  }
+  return null
+}
+
+// Every href the palette can navigate to, including the search results'.
+const SAMPLE_ROW = { id: 'ID', name: 'N', full_name: 'N' }
+const ALL_HREFS = [
+  ...NAV_COMMANDS.map((c) => [c.id, c.href]),
+  ...CREATE_COMMANDS.map((c) => [c.id, c.href]),
+  ...['contact', 'staff', 'event'].map((t) => [`search:${t}`, entityResult(t, SAMPLE_ROW).href]),
+]
+
+describe('K5 — palette targets are real final destinations', () => {
+  it.each(ALL_HREFS)('%s → %s resolves to a page', (_id, href) => {
+    expect(pageFileFor(href), `${href} has no page in src/app`).not.toBeNull()
+  })
+
+  it.each(ALL_HREFS)('%s → %s is not a retired redirect stub', (_id, href) => {
+    const file = pageFileFor(href)
+    expect(file).not.toBeNull()
+    expect(isRedirectStub(file), `${href} only redirects — point the palette at the destination`).toBe(false)
+  })
+
+  it('recognises a known retired stub, so the check above is not vacuous', () => {
+    // If this ever stops being a redirect the guard has gone blind.
+    expect(isRedirectStub(pageFileFor('/whatsapp/broadcasts/new'))).toBe(true)
+    expect(isRedirectStub(pageFileFor('/cars'))).toBe(true)
+    // …and does not misread the session-resolving dashboard index as retired.
+    expect(isRedirectStub(pageFileFor('/dashboard'))).toBe(false)
   })
 })

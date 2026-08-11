@@ -20,13 +20,18 @@
 //
 // Best-effort per-row: a single contact that was already deleted /
 // edited by hand won't fail the whole rollback.
+//
+// C9 — the two closing stamps report failure as `data.stamp_failed`
+// (a list of 'rows' / 'batch') rather than being discarded. A batch
+// whose stamp failed stays at status='rolling_back'; re-running the
+// rollback is the recovery, and it is safe to do.
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { redactWhatsAppForContact } from '@/lib/contact-merge'
 import { pickRestorableSnapshot } from '@/lib/contact-import'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
 import { selectAll } from '@/lib/select-all'
 
 export const runtime = 'nodejs'
@@ -147,24 +152,56 @@ export async function POST(_request, props) {
     }
   }
 
+  // C9 — the two closing stamps used to be bare `await`s with the error
+  // discarded. supabase-js does not throw on a failed write, it resolves
+  // with `{ error }`, so a failed stamp was invisible: the route returned
+  // success while the batch sat at status='rolling_back' forever. Nothing
+  // retries a stuck batch and no surface showed it was stuck.
+  //
+  // They are attempted independently — a failed row stamp must not skip the
+  // batch stamp, or one fault strands the batch for two reasons.
+  const stampFailed = []
+
   // 3. Mark per-row outcomes as rolled_back so the drill-in page
   // reflects the new state.
-  await db.from('contact_import_rows')
+  const { error: rowStampError } = await db.from('contact_import_rows')
     .update({ action: 'rolled_back' })
     .eq('import_id', params.id)
     .in('action', ['created', 'updated'])
+  if (rowStampError) {
+    stampFailed.push('rows')
+    logError('contact-import', 'rollback row stamp failed — drill-in rows still read created/updated', {
+      importId: params.id, err: rowStampError,
+    })
+  }
 
   // 4. Stamp the batch.
-  await db.from('contact_imports')
+  const { error: batchStampError } = await db.from('contact_imports')
     .update({
       status: 'rolled_back',
       rolled_back_at: new Date().toISOString(),
       rolled_back_by: user.id,
     })
     .eq('id', params.id)
+  if (batchStampError) {
+    stampFailed.push('batch')
+    logError('contact-import', 'rollback batch stamp failed — batch is stranded at rolling_back', {
+      importId: params.id, err: batchStampError,
+    })
+  }
 
+  // Deliberately still a 200 with `success: true`. By this point the deletes
+  // and restores have genuinely happened, so a 500 would tell the operator
+  // nothing was reversed — the opposite of the truth, and it would hide the
+  // counts that say what WAS. The honest answer is the real counts plus a
+  // named list of which stamps did not land; the UI turns that into "run it
+  // again". Re-running is safe: the deletes/restores find nothing left to do
+  // (created contacts are gone, rows are either already stamped or still
+  // 'updated' with the same snapshot) and both stamps are re-attempted. The
+  // in-progress guard at the top only 400s on status='rolled_back', so a
+  // batch stuck at 'rolling_back' can always be re-run.
   return NextResponse.json({
     success: true,
-    data: { deleted, restored, failed, unrestorable_keys: unrestorableKeys },
+    data: { deleted, restored, failed, unrestorable_keys: unrestorableKeys, stamp_failed: stampFailed },
   })
 }

@@ -122,6 +122,21 @@ export default function ImportRollbackButton({ importId }) {
                     </li>
                   )}
                 </ul>
+                {Array.isArray(result.stamp_failed) && result.stamp_failed.length > 0 && (
+                  // C9 — the reversal happened but a closing stamp did not
+                  // land. Without this the batch just sits at "Rolling back"
+                  // with nothing to retry it and nothing saying it is stuck.
+                  <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2 space-y-1">
+                    <p className="font-medium">The reversal finished, but the record of it did not save.</p>
+                    {result.stamp_failed.includes('batch') && (
+                      <p>This import will keep showing as &ldquo;Rolling back&rdquo; until it saves.</p>
+                    )}
+                    {result.stamp_failed.includes('rows') && (
+                      <p>The row list will keep showing the original created and updated outcomes.</p>
+                    )}
+                    <p>Run the rollback again to finish it. Nothing is reversed twice.</p>
+                  </div>
+                )}
                 <button
                   type="button"
                   onClick={close}

@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { ArrowLeft, Save, Code, Paintbrush } from 'lucide-react'
 import Link from 'next/link'
+import { UNLAYER_MERGE_TAGS } from '@/lib/merge-tags'
 
 export default function TemplateEditor({ template, locationId, userId }) {
   const editorRef = useRef(null)
@@ -54,15 +55,10 @@ export default function TemplateEditor({ template, locationId, userId }) {
           timer: { enabled: true },
           video: { enabled: true },
         },
-        mergeTags: [
-          { name: 'First Name', value: '{{first_name}}' },
-          { name: 'Full Name', value: '{{name}}' },
-          { name: 'Email', value: '{{email}}' },
-          { name: 'Location', value: '{{location_name}}' },
-          { name: 'Unsubscribe', value: '{{unsubscribe_url}}' },
-          { name: 'Preferences', value: '{{preference_url}}' },
-          { name: 'Year', value: '{{current_year}}' },
-        ],
+        // K3 — from @/lib/merge-tags, which is checked against what
+        // applyMergeTags() actually substitutes. Do not re-inline this list:
+        // this copy had drifted five tags behind the substitution table.
+        mergeTags: [...UNLAYER_MERGE_TAGS],
       })
 
       if (designJson) {
