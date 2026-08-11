@@ -34,6 +34,7 @@ import { applyMemberSync } from './glofox-sync.js'
 import { glofoxFetch } from './glofox.js'
 import { writeContactTag } from './contact-tags.js'
 import { getGlofoxConfig } from './connection-registry.js'
+import { logWarn } from './log.js'
 
 // Per-location trial config — what membership + plan to attach
 // to a freshly-created Glofox account. Operator picks via the
@@ -308,12 +309,31 @@ async function linkExistingGlofoxMember({ db, locationId, contact, creds, glofox
   return null
 }
 
+/**
+ * SINGLEERR.1 — write the fire-and-forget audit row, and LOG any failure.
+ *
+ * Best-effort means "never fail the push", not "never tell anyone" (the
+ * reportRpc convention in postmark-webhook-processor). Both failure channels
+ * have to be covered: supabase-js builders are thenables with no .catch, so the
+ * await needs a try/catch, AND a PostgREST/Postgres error arrives in the RESULT
+ * object rather than as a throw. This used to destructure `data` alone, so a
+ * rejected insert returned null and said nothing — every caller then reported
+ * `push_event_id: undefined` for an audit row that was never written.
+ */
 async function audit(db, row) {
   try {
-    const { data } = await db.from('glofox_push_events').insert(row).select('id').single()
+    const { data, error } = await db.from('glofox_push_events').insert(row).select('id').single()
+    if (error) {
+      logWarn('glofox-push', 'audit insert failed', {
+        err: error, contactId: row.contact_id, locationId: row.location_id, status: row.status,
+      })
+      return null
+    }
     return data
   } catch (e) {
-    console.warn('[glofox-push] audit insert failed:', e?.message)
+    logWarn('glofox-push', 'audit insert threw', {
+      err: e, contactId: row.contact_id, locationId: row.location_id, status: row.status,
+    })
     return null
   }
 }

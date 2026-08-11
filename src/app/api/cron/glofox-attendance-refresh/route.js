@@ -104,7 +104,7 @@ async function refreshLocation(db, location, startedAt) {
   let budgetExhausted = false
 
   // Audit row up-front so a mid-run timeout still leaves a trace.
-  const { data: runRow } = await db
+  const { data: runRow, error: runErr } = await db
     .from('glofox_sync_runs')
     .insert({
       location_id: location.id,
@@ -113,6 +113,12 @@ async function refreshLocation(db, location, startedAt) {
     })
     .select('id')
     .single()
+  // SINGLEERR.1 — the audit row is best-effort, but a rejected insert used to be
+  // SILENT: the error lives in the result object, so `const { data } =` threw it
+  // away and the whole run then wrote its progress to runId=null.
+  if (runErr) {
+    console.warn(`[cron][glofox-attendance-refresh] audit run row insert failed for ${location.id}: ${runErr.message}`)
+  }
   const runId = runRow?.id
 
   try {

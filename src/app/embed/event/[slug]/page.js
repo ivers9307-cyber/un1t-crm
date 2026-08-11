@@ -33,7 +33,10 @@ export async function generateMetadata(props) {
       .eq('slug', params.slug)
       .eq('active', true)
       .eq('status', 'published')
-      .single()
+      // SINGLEERR.1 — maybeSingle, not single: race_events.slug carries a GLOBAL
+      // unique index (mig 451), so this is 0-or-1 rows and 0 (no such event, or
+      // unpublished) is a real answer rather than an error to discard.
+      .maybeSingle()
     const title = data?.name ? `${data.name} — Sign up` : 'UN1T Dublin — Sign up'
     // Embeds shouldn't be indexed as standalone pages; the canonical
     // signup lives at /event/<slug>.
@@ -52,7 +55,10 @@ export default async function EventEmbedPage(props) {
     .eq('slug', params.slug)
     .eq('active', true)
     .eq('status', 'published')
-    .single()
+    // SINGLEERR.1 — maybeSingle, not single: race_events.slug carries a GLOBAL
+    // unique index (mig 451), so this is 0-or-1 rows and 0 (no such event, or
+    // unpublished) is a real answer rather than an error to discard.
+    .maybeSingle()
   if (!ev) notFound()
 
   return (

@@ -59,8 +59,10 @@ export async function createGroup(db, { contactIds, method, confidence, actorId,
   const primary = pickPrimary(rows || [])
   if (!primary) throw new Error('createGroup requires at least one existing contact')
 
-  // Insert group row
-  const { data: group } = await db
+  // Insert group row. SINGLEERR.1 — `group.id` is dereferenced unguarded two
+  // lines down, so a rejected insert used to surface as "Cannot read properties
+  // of null" with the real Postgres reason discarded. Fail with the reason.
+  const { data: group, error: groupErr } = await db
     .from('person_groups')
     .insert({
       location_id: locationId,
@@ -70,6 +72,9 @@ export async function createGroup(db, { contactIds, method, confidence, actorId,
     })
     .select()
     .single()
+  if (groupErr || !group) {
+    throw new Error(`createGroup could not create the person_groups row: ${groupErr?.message || 'no row returned'}`)
+  }
 
   // Insert member rows — one per contactId
   const memberRows = contactIds.map(cid => ({

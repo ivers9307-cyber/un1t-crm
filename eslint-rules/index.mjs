@@ -379,6 +379,163 @@ const noUntypedButtonInForm = {
   },
 }
 
+// `const { data } = await db.from(t)…single()` — the error is discarded, and on
+// `.single()` that is not the usual harmless shortcut. `.single()` errors
+// whenever the row count is anything other than EXACTLY one, so throwing the
+// error away collapses three different outcomes into the same `data = null`:
+// "no rows", "many rows", and "the query failed".
+//
+// Live 2026-08-11 (S2, #1357): `PUT /api/deals/[id]` resolved a stage with
+// `.eq('slug', …).single()`. Every core slug already exists on FIVE locations,
+// so the query matched five rows, PostgREST errored, the error was discarded,
+// and `stage` came back null — the caller got a 200 and the deal never moved.
+// A silent no-op an integration cannot tell apart from success.
+//
+// Scoped hard, because a blanket "always destructure error" would hit ~1,000
+// call sites that are almost all fine, and even ".single() with a discarded
+// error" is 223 (AST-measured across src/ + shared/ at edf60904 — a line-based
+// grep puts it near 44, but it cannot see the multi-line chains that are the
+// house style here, so trust the rule, not the grep). Pinning the exemption
+// below takes it to 14, which is what this landed against. The dangerous shape
+// is `.single()` on a filter that is NOT provably unique. Deliberate non-flags:
+//   - the chain pins an ID-LIKE column (`.eq('id', …)`, `.eq('<x>_id', …)`,
+//     `.match({ id })`, `.filter('id','eq',…)`) or caps the row count with
+//     `.limit(1)`. There `.single()` can only see 0 or 1 rows, so a discarded
+//     error means "treat not-found as null" — normally exactly what the caller
+//     wants. (`.limit(1)` was added after the baseline scan flagged the
+//     anonymous-branding lookup, which is structurally at-most-one.)
+//   - `.maybeSingle()`, which returns null for 0 rows WITHOUT an error. It still
+//     hides the >1-row and query-failed cases, but that is a much noisier class
+//     and a different argument; this rule is about the outcome-collapse that
+//     `.single()` uniquely creates.
+//   - a result that is not destructured at all (`const res = await …`) — the
+//     error is still reachable on the object.
+//   - a `...rest` element, which may bind `error`, or a computed key that may
+//     spell it. Same precision-first reasoning as the `{...spread}` bail-out in
+//     no-untyped-button-in-form: a false positive at ERROR level is worse.
+// `.in()`, `.or()` and a `.filter()` with a non-`eq` operator are NOT treated as
+// unique — a list and a disjunction both widen the match rather than pin it.
+// `.single()` straight after `.insert()`/`.update()`/`.upsert()` with no id
+// filter IS flagged: exactly one row is expected there, so a discarded error is
+// a silent FAILED WRITE (that is the glofox-push audit bug).
+//
+// KNOWN LIMITS: this reads one expression. A chain assembled across statements
+// or through a variable (`const q = db.from(t).eq(…); const { data } = await
+// q.single()`), a `.single()` consumed by `.then(({ data }) => …)`, or one
+// wrapped in a helper the caller destructures, are all invisible. It is a floor,
+// not proof — and the id-like exemption is a HEURISTIC: `.eq('location_id', l)`
+// alone pins nothing, so a chain filtered only by a non-unique foreign key
+// passes. Uniqueness lives in the SCHEMA, which an AST rule cannot read, and it
+// cuts both ways: `.eq('slug', …)` on `race_events` is at-most-one because of a
+// global unique index (mig 451), and the rule flagged it anyway. Where 0 rows is
+// a legitimate answer the fix is `.maybeSingle()`, which says so in the source.
+const UNIQUE_HINT_FILTERS = new Set(['eq', 'match', 'filter', 'limit'])
+
+// `id` or anything ending `_id` — the columns whose equality plausibly makes
+// "at most one row" structural rather than incidental.
+function isIdLikeColumn(name) {
+  return typeof name === 'string' && (name === 'id' || name.endsWith('_id'))
+}
+
+function literalString(node) {
+  return node && node.type === 'Literal' && typeof node.value === 'string' ? node.value : null
+}
+
+// Does THIS call pin an id-like column to a single value?
+function callPinsIdColumn(call) {
+  const name = call.callee.property && call.callee.property.name
+  if (!UNIQUE_HINT_FILTERS.has(name)) return false
+  const args = call.arguments || []
+  if (name === 'eq') return isIdLikeColumn(literalString(args[0]))
+  // .limit(1) caps the row count structurally — PostgREST can return at most one
+  // row, so .single() can only ever error on 0 rows. Same shape as a pk filter.
+  if (name === 'limit') return args[0] && args[0].type === 'Literal' && args[0].value === 1
+  // .filter(column, operator, value) — only the eq operator pins a row.
+  if (name === 'filter') return literalString(args[1]) === 'eq' && isIdLikeColumn(literalString(args[0]))
+  // .match({ id, contact_id }) — an object of equality filters.
+  if (name === 'match') {
+    const obj = args[0]
+    if (!obj || obj.type !== 'ObjectExpression') return false
+    return (obj.properties || []).some((p) => {
+      if (p.type !== 'Property' || p.computed) return false
+      const key = p.key.type === 'Identifier' ? p.key.name : literalString(p.key)
+      return isIdLikeColumn(key)
+    })
+  }
+  return false
+}
+
+// Walk DOWN the chain; true if any link pins an id-like column.
+function chainPinsIdColumn(node) {
+  let cur = node
+  while (cur) {
+    if (cur.type === 'CallExpression') {
+      const c = cur.callee
+      if (c && c.type === 'MemberExpression') {
+        if (callPinsIdColumn(cur)) return true
+        cur = c.object
+      } else {
+        cur = null
+      }
+    } else if (cur.type === 'MemberExpression') {
+      cur = cur.object
+    } else {
+      cur = null
+    }
+  }
+  return false
+}
+
+// The ObjectPattern this expression's result is destructured into, if any.
+function destructuringTarget(node, ancestors) {
+  let idx = ancestors.length - 1
+  let child = node
+  let parent = ancestors[idx]
+  if (parent && parent.type === 'AwaitExpression' && parent.argument === child) {
+    child = parent
+    parent = ancestors[--idx]
+  }
+  if (!parent) return null
+  if (parent.type === 'VariableDeclarator' && parent.init === child) return parent.id
+  if (parent.type === 'AssignmentExpression' && parent.right === child) return parent.left
+  return null
+}
+
+const noDiscardedSingleError = {
+  meta: {
+    type: 'problem',
+    docs: {
+      description:
+        'Disallow destructuring a .single() result without `error` unless the chain pins an id-like column. .single() errors on any row count other than exactly one, so a discarded error collapses "no rows", "many rows" and "query failed" into data = null.',
+    },
+    schema: [],
+    messages: {
+      discarded:
+        '.single() errors whenever the row count is not exactly 1, so discarding `error` collapses "no rows", "many rows" and "the query failed" into the same `data = null` — the caller cannot tell a silent no-op from success (S2/#1357: a stage slug matching five locations). This chain is not pinned to an id-like column, so >1 row is reachable: destructure `error` and handle it, or use .maybeSingle() if 0 rows is a legitimate answer.',
+    },
+  },
+  create(context) {
+    return {
+      'CallExpression[callee.type="MemberExpression"][callee.property.name="single"]'(node) {
+        if (!chainRootIsSupabase(node.callee.object)) return
+        // Pinned to an id-like column → at most one row is structural, and a
+        // discarded error there reads as "not found → null".
+        if (chainPinsIdColumn(node.callee.object)) return
+        const target = destructuringTarget(node, context.sourceCode.getAncestors(node))
+        if (!target || target.type !== 'ObjectPattern') return
+        for (const prop of target.properties || []) {
+          // A rest element may bind `error`; a computed key may spell it.
+          if (prop.type !== 'Property') return
+          if (prop.computed) return
+          const key = prop.key.type === 'Identifier' ? prop.key.name : literalString(prop.key)
+          if (key === 'error') return
+        }
+        context.report({ node, messageId: 'discarded' })
+      },
+    }
+  },
+}
+
 export default {
   rules: {
     'no-catch-on-supabase-builder': noCatchOnSupabaseBuilder,
@@ -388,5 +545,6 @@ export default {
     'no-low-contrast-chip': noLowContrastChip,
     'no-unescaped-ilike-pattern': noUnescapedIlikePattern,
     'no-untyped-button-in-form': noUntypedButtonInForm,
+    'no-discarded-single-error': noDiscardedSingleError,
   },
 }

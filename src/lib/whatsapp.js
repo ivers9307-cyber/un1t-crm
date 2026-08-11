@@ -1866,12 +1866,18 @@ export async function getOrCreateConversation(db, contact, locationId) {
     .eq('contact_id', contact.id)
     .maybeSingle()
   if (existing) return existing.id
-  const { data: created } = await db.from('whatsapp_conversations').insert({
+  // SINGLEERR.1 — the wa_phone branch above already reads `error`; this
+  // fallback discarded it, so a rejected insert returned undefined and the
+  // caller reported "no conversation" with no reason.
+  const { data: created, error: createErr } = await db.from('whatsapp_conversations').insert({
     location_id: locationId,
     contact_id: contact.id,
     wa_phone: null,
     status: 'active',
   }).select('id').single()
+  if (createErr) {
+    console.error('[whatsapp] conversation insert (no wa_phone) failed:', createErr.message)
+  }
   return created?.id
 }
 

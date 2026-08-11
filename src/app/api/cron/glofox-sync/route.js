@@ -133,7 +133,7 @@ async function syncOneLocation(db, location, filters, lookbackSec) {
 
   // Insert the audit row up-front so a mid-run timeout still leaves
   // a "running" row visible (operator sees the run was attempted).
-  const { data: runRow } = await db
+  const { data: runRow, error: runErr } = await db
     .from('glofox_sync_runs')
     .insert({
       location_id: location.id,
@@ -142,6 +142,12 @@ async function syncOneLocation(db, location, filters, lookbackSec) {
     })
     .select('id')
     .single()
+  // SINGLEERR.1 — best-effort audit row, but never silent: the error arrives in
+  // the result object, so discarding it left the run writing progress to
+  // runId=null with nothing to say why.
+  if (runErr) {
+    console.warn(`[cron][glofox-sync] audit run row insert failed for ${location.id}: ${runErr.message}`)
+  }
   const runId = runRow?.id
 
   try {
