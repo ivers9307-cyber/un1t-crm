@@ -69,6 +69,9 @@ function mockDb({ deal, stageRows = STAGE_ROWS, updateError = null } = {}) {
           eq: vi.fn(() => builder),
           in: vi.fn(() => builder),
           single: vi.fn(async () => ({ data: stageRows[1] ?? null, error: null })),
+          // DEALSCOPE.1 — scoping by location makes 0-or-1 rows the correct
+          // expectation, so the route uses maybeSingle rather than single.
+          maybeSingle: vi.fn(async () => ({ data: stageRows[1] ?? null, error: null })),
           then: (onF) => Promise.resolve({ data: stageRows, error: null }).then(onF),
         }
         return builder
@@ -160,5 +163,61 @@ describe('PUT /api/deals/[id] — pipeline_stage_change trigger (STAGETRIG.1)', 
     const res = await PUT(req({ stage_id: STAGE_CONV }), props)
     expect(res.status).toBe(200)
     expect((await res.json()).success).toBe(true)
+  })
+})
+
+// DEALSCOPE.1 — the stage lookup was location-blind.
+//
+// `.eq('slug', …).single()` with no location filter is not a future risk: every
+// core slug ALREADY exists on 5 locations (measured live), so `.single()` matches
+// 5 rows, PostgREST errors, the error was discarded, `stage` came back null and
+// `updates.stage_id` was never set. The caller got a 200 and the deal did not
+// move. A silent no-op on a live endpoint, not a cross-tenant read.
+//
+// `stage_id` had the mirror problem in the other direction: accepted verbatim,
+// with nothing checking the stage belonged to the deal's location at all.
+describe('PUT /api/deals/[id] — stage lookups are location-scoped (DEALSCOPE.1)', () => {
+  it('scopes a stage_slug lookup to the deal own location', async () => {
+    const db = mockDb({
+      deal: { location_id: 'loc-1', contact_id: 'c1', stage_id: STAGE_TRIAL },
+      stageRows: [{ id: STAGE_TRIAL, slug: 'trial_done' }, { id: STAGE_CONV, slug: 'converted' }],
+    })
+    createServerClient.mockReturnValue(db)
+
+    await PUT(req({ stage_slug: 'converted' }), props)
+
+    const stageBuilder = db.from.mock.results
+      .filter((r, i) => db.from.mock.calls[i][0] === 'pipeline_stages')
+      .map((r) => r.value)[0]
+    const eqCalls = stageBuilder.eq.mock.calls
+    expect(eqCalls).toContainEqual(['slug', 'converted'])
+    expect(eqCalls).toContainEqual(['location_id', 'loc-1'])
+  })
+
+  it('refuses a stage_slug that does not resolve, instead of silently not moving the deal', async () => {
+    const db = mockDb({
+      deal: { location_id: 'loc-1', contact_id: 'c1', stage_id: STAGE_TRIAL },
+      stageRows: [null, null],
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await PUT(req({ stage_slug: 'no_such_stage' }), props)
+
+    expect(res.status).toBe(400)
+    // The deal must not be updated at all when the requested stage is unknown.
+    expect(db.update).not.toHaveBeenCalled()
+  })
+
+  it('refuses a stage_id belonging to another location', async () => {
+    const db = mockDb({
+      deal: { location_id: 'loc-1', contact_id: 'c1', stage_id: STAGE_TRIAL },
+      stageRows: [null, null],   // the id resolves to nothing under loc-1
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await PUT(req({ stage_id: STAGE_CONV }), props)
+
+    expect(res.status).toBe(400)
+    expect(db.update).not.toHaveBeenCalled()
   })
 })
