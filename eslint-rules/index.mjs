@@ -536,6 +536,102 @@ const noDiscardedSingleError = {
   },
 }
 
+// Plain accent TEXT at a ramp too low to read on a light card. The sibling rule
+// no-low-contrast-chip only fires on a bg+text PAIRING in the same string, so a
+// bare `text-emerald-400` on a `bg-un1t-surface` card — no chip background at
+// all — is invisible to it. That gap is why 52 of them shipped across the six
+// Communications editors (CampaignEditor, SMSBroadcastEditor, CampaignDetail,
+// WABroadcastEditor, WATemplateEditor, TemplateEditor) and why COMMSLAYOUT.5 had
+// to police the rest of that tree with a bespoke file-scanning vitest instead of
+// a lint rule. This rule subsumes that scan.
+//
+// The palette is a LIGHT theme with INVERTED token names (`un1t-black` is white),
+// so the dark-theme instinct of "accent at -300/-400" lands washed-out grey on
+// white. CLAUDE.md settles it: status/accent text on light cards uses the -700
+// ramp. -500 is included because it is the same mistake one stop up and the
+// bright hues (yellow/lime/green/cyan) fail AA badly there.
+//
+// Deliberate non-flags:
+//   - `un1t-*` tokens — intent-named, they carry their own light/dark semantics.
+//   - a `dark:` variant — that prefix is by definition a dark-surface ramp.
+//   - a string that ALSO names an explicit dark background (`bg-black`, or an
+//     arbitrary near-black `bg-[#0..]`). That is the dark panel embedded in a
+//     light page: the HTML-source textareas in CampaignEditor/TemplateEditor are
+//     `bg-black text-green-400`, which is correct and must not be "fixed" into
+//     invisibility. Note `bg-*-900/950` is deliberately NOT an escape here —
+//     no-low-contrast-chip already owns that pairing and calls it the bug.
+//   - `bg-*` / `border-*` / `ring-*` at a low ramp: only `text-` is judged.
+//
+// KNOWN LIMIT — this rule cannot see the surface. It reads a class string, not a
+// rendered DOM, so it cannot tell `text-cyan-400` on white from the same class
+// on a black panel whose background is set by a PARENT element, a sibling
+// string, or a CSS variable. Two things compensate, and neither is proof:
+//   1. SCOPE. It is armed per-path in eslint.guardrails.config.mjs, only on
+//      directories whose surfaces have actually been surveyed as light. Adding a
+//      cleaned area later is one line in that list. It is deliberately NOT
+//      repo-wide: ~500 low-ramp sites exist outside the armed paths and an
+//      unknown share of them are correct dark-surface idiom.
+//   2. The same-string `bg-black` escape above, which only works when the dark
+//      background is written on the SAME element. A dark island whose background
+//      lives on a parent will false-positive — the fix is to move the background
+//      onto the element, not to disable the rule.
+// It is also a RAMP heuristic, not a contrast calculation: Tailwind's ramps are
+// not iso-luminant, so `text-yellow-700` passes this rule and is still marginal
+// on white, while `text-slate-500` is flagged and is merely mediocre.
+const ACCENT_PALETTES =
+  'red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|slate|gray|zinc|neutral|stone'
+// A `text-<palette>-300|400|500` utility, with any variant prefixes in front of
+// it (hover:, focus:, md:, group-hover:, …). The leading boundary keeps us off
+// substrings of longer identifiers.
+const LOW_RAMP_ACCENT_TEXT = new RegExp(
+  `(?:^|[\\s"'\`:])((?:[a-z-]+:)*)text-(?:${ACCENT_PALETTES})-(?:300|400|500)\\b`,
+)
+// An explicitly dark background on the SAME element — the dark-panel escape.
+const DARK_SURFACE_BG = /\bbg-black\b|\bbg-\[#0[0-9a-fA-F]{2,5}\]/
+
+function accentTextViolation(str) {
+  if (typeof str !== 'string' || !str.includes('text-')) return false
+  if (DARK_SURFACE_BG.test(str)) return false
+  const hit = str.match(LOW_RAMP_ACCENT_TEXT)
+  if (!hit) return false
+  // `dark:text-slate-400` is a dark-mode ramp by construction.
+  if (/(?:^|:)dark:$/.test(hit[1])) return false
+  return true
+}
+
+const noLowContrastAccentText = {
+  meta: {
+    type: 'problem',
+    docs: {
+      description:
+        'Disallow accent text at the -300/-400/-500 ramp on light surfaces. Complements no-low-contrast-chip, which only sees a bg+text chip pairing and is blind to plain accent text. Armed per-path (surveyed-light directories only); does not know what surface a class renders on beyond a same-string bg-black escape.',
+    },
+    schema: [],
+    messages: {
+      lowRamp:
+        "Accent text on a light card needs the -700 ramp (CLAUDE.md: the palette is a light theme with inverted token names, so text-<colour>-300/400/500 is the dark-theme recipe and reads as washed-out grey). Change the ramp, keep the hue — red still means destructive, amber still means warning. If this genuinely sits on a dark panel inside a light page, put the dark background on the SAME element (`bg-black …`), which is how the HTML-source textareas stay legal.",
+    },
+  },
+  create(context) {
+    function check(node, value) {
+      if (accentTextViolation(value)) context.report({ node, messageId: 'lowRamp' })
+    }
+    return {
+      Literal(node) {
+        if (typeof node.value === 'string') check(node, node.value)
+      },
+      TemplateLiteral(node) {
+        // Join the static parts, same as no-low-contrast-chip: a `bg-black` and
+        // the text class sitting either side of a `${…}` still pair up.
+        const joined = (node.quasis || [])
+          .map((q) => (q.value && q.value.cooked) || '')
+          .join(' ')
+        check(node, joined)
+      },
+    }
+  },
+}
+
 export default {
   rules: {
     'no-catch-on-supabase-builder': noCatchOnSupabaseBuilder,
@@ -543,6 +639,7 @@ export default {
     'no-zulu-template-date': noZuluTemplateDate,
     'no-utc-today': noUtcToday,
     'no-low-contrast-chip': noLowContrastChip,
+    'no-low-contrast-accent-text': noLowContrastAccentText,
     'no-unescaped-ilike-pattern': noUnescapedIlikePattern,
     'no-untyped-button-in-form': noUntypedButtonInForm,
     'no-discarded-single-error': noDiscardedSingleError,

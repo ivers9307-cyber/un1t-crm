@@ -690,7 +690,7 @@ export default function WATemplateEditor({ template, locationId, userId, events 
                         <button
                           type="button"
                           onClick={clearMedia}
-                          className="text-un1t-muted hover:text-red-400 p-1"
+                          className="text-un1t-muted hover:text-red-700 p-1"
                           title="Remove and re-upload"
                         >
                           <X size={14} />
@@ -700,7 +700,7 @@ export default function WATemplateEditor({ template, locationId, userId, events 
                   )}
 
                   {uploadError && (
-                    <p className="text-xs text-red-400">{uploadError}</p>
+                    <p className="text-xs text-red-700">{uploadError}</p>
                   )}
                 </div>
               )}
@@ -853,7 +853,7 @@ export default function WATemplateEditor({ template, locationId, userId, events 
                     )}
                   </div>
                   {!(isSubmitted && !canResubmit) && (
-                    <button type="button" onClick={() => removeButton(i)} className="p-1 text-un1t-muted hover:text-red-400">
+                    <button type="button" onClick={() => removeButton(i)} className="p-1 text-un1t-muted hover:text-red-700">
                       <Trash2 size={14} />
                     </button>
                   )}
@@ -889,7 +889,7 @@ export default function WATemplateEditor({ template, locationId, userId, events 
                     <p className="text-sm font-bold text-gray-900 mb-1">{headerText}</p>
                   )}
                   {['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerFormat) && (
-                    <div className="bg-gray-200 rounded h-32 flex items-center justify-center text-gray-400 text-xs mb-2">
+                    <div className="bg-gray-200 rounded h-32 flex items-center justify-center text-gray-600 text-xs mb-2">
                       [{headerFormat}]
                     </div>
                   )}
@@ -897,15 +897,15 @@ export default function WATemplateEditor({ template, locationId, userId, events 
                     {bodyText || 'Your message body here...'}
                   </p>
                   {footerText && (
-                    <p className="text-xs text-gray-500 mt-2">{footerText}</p>
+                    <p className="text-xs text-gray-600 mt-2">{footerText}</p>
                   )}
-                  <p className="text-[10px] text-gray-400 text-right mt-1">12:00</p>
+                  <p className="text-[10px] text-gray-600 text-right mt-1">12:00</p>
                 </div>
                 {buttons.length > 0 && (
                   <div className="mt-1 space-y-1 max-w-[260px]">
                     {buttons.map((btn, i) => (
                       <div key={i} className="bg-white rounded-lg py-2 text-center shadow-sm">
-                        <span className="text-sm text-blue-500">{btn.text || 'Button'}</span>
+                        <span className="text-sm text-blue-600">{btn.text || 'Button'}</span>
                       </div>
                     ))}
                   </div>

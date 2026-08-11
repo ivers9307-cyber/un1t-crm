@@ -53,6 +53,46 @@ const config = [
     },
   },
   {
+    // COMMSLAYOUT.6 — `guardrails/no-low-contrast-accent-text` is armed
+    // PER-PATH, not repo-wide. The rule cannot see what surface a class renders
+    // on (see its doc comment), so the only honest scope is "areas whose
+    // surfaces have actually been surveyed and cleaned". Repo-wide it would
+    // need ~500 sites audited, an unknown share of which are correct
+    // dark-surface idiom — and an allowlist of individual violations would rot.
+    //
+    // This list is the Communications area: its route trees, the components
+    // that only ever render inside them, and the ten root-level components its
+    // pages import. Every one was scanned to zero at ERROR before this landed,
+    // with the two genuine dark islands (the `bg-black` HTML-source textareas
+    // in CampaignEditor/TemplateEditor) passing on the rule's same-string
+    // escape rather than a disable comment.
+    //
+    // TO ARM ANOTHER AREA: clean it, then add its path here. One line.
+    files: [
+      'src/app/communications/**',
+      'src/app/email/templates/**',
+      'src/app/whatsapp/templates/**',
+      'src/components/communications/**',
+      'src/components/tickets/**',
+      // Root-level components rendered by the Communications pages. Named
+      // individually because src/components/ as a whole is the entire app.
+      'src/components/CampaignDetail.jsx',
+      'src/components/CampaignEditor.jsx',
+      'src/components/SMSBroadcastEditor.jsx',
+      'src/components/SavedSegmentsList.jsx',
+      'src/components/SegmentsGrid.jsx',
+      'src/components/TemplateEditor.jsx',
+      'src/components/UnifiedInbox.jsx',
+      'src/components/WABroadcastEditor.jsx',
+      'src/components/WATemplateEditor.jsx',
+      'src/components/WhatsappTemplatesList.jsx',
+    ],
+    plugins: { guardrails },
+    rules: {
+      'guardrails/no-low-contrast-accent-text': 'error',
+    },
+  },
+  {
     // Genuinely DARK surfaces — TV boards + the presentation screen render on
     // black; low text ramps are the correct idiom there, so the light-theme
     // chip-contrast rule does not apply. The public event booking flow

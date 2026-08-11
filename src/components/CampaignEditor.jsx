@@ -661,7 +661,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
           {/* CAMPAIGN.2 — visible save confirmation. Without this the
               operator hit Save and got no signal anything happened. */}
           {savedAt && !saving && (
-            <span className="inline-flex items-center gap-1 text-xs text-emerald-400">
+            <span className="inline-flex items-center gap-1 text-xs text-emerald-700">
               <CheckCircle2 size={12} />
               Saved {savedAt.toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' })}
             </span>
@@ -705,7 +705,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                 type="button"
                 onClick={handleDelete}
                 data-testid="campaign-delete"
-                className="flex items-center gap-1.5 text-sm text-red-400 hover:text-red-300 border border-un1t-border hover:border-red-400/40 px-3 py-1.5 rounded-md transition-colors"
+                className="flex items-center gap-1.5 text-sm text-red-700 hover:text-red-800 border border-un1t-border hover:border-red-700/40 px-3 py-1.5 rounded-md transition-colors"
                 title="Delete this draft"
               >
                 <Trash2 size={14} />
@@ -714,7 +714,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
           )}
           {campaignStatus === 'scheduled' && (
             <>
-              <span className="text-xs text-emerald-400 flex items-center gap-1">
+              <span className="text-xs text-emerald-700 flex items-center gap-1">
                 <Calendar size={12} />
                 Scheduled {campaign?.scheduled_at ? new Date(campaign.scheduled_at).toLocaleString('en-IE') : ''}
               </span>
@@ -731,7 +731,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                 onClick={handleDelete}
                 data-testid="campaign-delete"
                 title="Delete this campaign"
-                className="flex items-center gap-1.5 text-sm text-red-400 hover:text-red-300 border border-un1t-border hover:border-red-400/40 px-3 py-1.5 rounded-md transition-colors"
+                className="flex items-center gap-1.5 text-sm text-red-700 hover:text-red-800 border border-un1t-border hover:border-red-700/40 px-3 py-1.5 rounded-md transition-colors"
               >
                 <Trash2 size={14} />
               </button>
@@ -751,7 +751,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                 type="button"
                 onClick={handleCancel}
                 disabled={!!progress.cancel_requested_at}
-                className="flex items-center gap-1.5 text-sm text-red-400 hover:text-red-300 border border-un1t-border hover:border-red-400/40 px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
+                className="flex items-center gap-1.5 text-sm text-red-700 hover:text-red-800 border border-un1t-border hover:border-red-700/40 px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
               >
                 <X size={14} />
                 Cancel
@@ -856,12 +856,12 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
               : <><Send size={14} /> Send</>}
           </button>
           {testStatus.kind === 'sent' && (
-            <span className="inline-flex items-center gap-1.5 text-xs text-emerald-400">
+            <span className="inline-flex items-center gap-1.5 text-xs text-emerald-700">
               <CheckCircle2 size={12} /> {testStatus.msg}
             </span>
           )}
           {testStatus.kind === 'error' && (
-            <span className="inline-flex items-center gap-1.5 text-xs text-rose-400">
+            <span className="inline-flex items-center gap-1.5 text-xs text-rose-700">
               <AlertCircle size={12} /> {testStatus.msg}
             </span>
           )}
@@ -963,7 +963,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
               const tone = isError
                 ? 'bg-red-500/10 border-red-500/40'
                 : 'bg-emerald-500/10 border-emerald-500/40'
-              const iconColor = isError ? 'text-red-400' : 'text-emerald-400'
+              const iconColor = isError ? 'text-red-700' : 'text-emerald-700'
               const showCount = audienceState === 'ready' && audienceCount !== null
               return (
                 <div className={`${tone} border rounded-lg p-4 mb-6 flex items-center gap-3`}>
@@ -1171,7 +1171,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
               <div className="grid grid-cols-2 gap-2 text-xs">
                 {MERGE_TAG_REFERENCE.map(([tag, desc]) => (
                   <div key={tag} className="flex items-center gap-2 p-2 bg-un1t-surface rounded">
-                    <code className="text-blue-400">{tag}</code>
+                    <code className="text-blue-700">{tag}</code>
                     <span className="text-un1t-muted">{desc}</span>
                   </div>
                 ))}

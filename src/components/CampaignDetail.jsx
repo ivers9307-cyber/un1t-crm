@@ -38,13 +38,13 @@ import { campaignDisplayStats, NO_RECIPIENT_STATS, pct } from '@/lib/campaign-di
 const recipientStatusConfig = {
   queued:    { label: 'Queued',     icon: Clock,           color: 'text-amber-700' },
   sending:   { label: 'Sending',    icon: Loader2,         color: 'text-amber-700' },
-  sent:      { label: 'Sent',       icon: Send,            color: 'text-blue-400' },
-  delivered: { label: 'Delivered',  icon: CheckCircle2,    color: 'text-green-400' },
-  opened:    { label: 'Opened',     icon: Eye,             color: 'text-emerald-400' },
-  clicked:   { label: 'Clicked',    icon: MousePointerClick, color: 'text-cyan-400' },
-  bounced:   { label: 'Bounced',    icon: XCircle,         color: 'text-red-400' },
-  failed:    { label: 'Failed',     icon: AlertTriangle,   color: 'text-red-400' },
-  complained:{ label: 'Complained', icon: Ban,             color: 'text-orange-400' },
+  sent:      { label: 'Sent',       icon: Send,            color: 'text-blue-700' },
+  delivered: { label: 'Delivered',  icon: CheckCircle2,    color: 'text-green-700' },
+  opened:    { label: 'Opened',     icon: Eye,             color: 'text-emerald-700' },
+  clicked:   { label: 'Clicked',    icon: MousePointerClick, color: 'text-cyan-700' },
+  bounced:   { label: 'Bounced',    icon: XCircle,         color: 'text-red-700' },
+  failed:    { label: 'Failed',     icon: AlertTriangle,   color: 'text-red-700' },
+  complained:{ label: 'Complained', icon: Ban,             color: 'text-orange-700' },
   cancelled: { label: 'Cancelled',  icon: X,               color: 'text-rose-700' },
   // FREQ-CAP.1 terminal skip — not an error, and never retried.
   skipped_frequency_cap: { label: 'Skipped (frequency cap)', icon: SkipForward, color: 'text-un1t-subtle' },
@@ -395,9 +395,9 @@ export default function CampaignDetail({ campaign, recipients = [], stats = null
             {/* Stat cards */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <StatCard icon={Send}              label="Sent"       value={totalSent} />
-              <StatCard icon={Eye}               label="Opened"     value={totalOpened}  subValue={`${pct(figures.open_rate)} open rate`}   color="text-emerald-400" />
-              <StatCard icon={MousePointerClick} label="Clicked"    value={totalClicked} subValue={`${pct(figures.click_rate)} click rate`} color="text-cyan-400" />
-              <StatCard icon={AlertTriangle}     label="Bounced"    value={totalBounced} subValue={`${pct(figures.bounce_rate)} bounce rate`} color="text-red-400" />
+              <StatCard icon={Eye}               label="Opened"     value={totalOpened}  subValue={`${pct(figures.open_rate)} open rate`}   color="text-emerald-700" />
+              <StatCard icon={MousePointerClick} label="Clicked"    value={totalClicked} subValue={`${pct(figures.click_rate)} click rate`} color="text-cyan-700" />
+              <StatCard icon={AlertTriangle}     label="Bounced"    value={totalBounced} subValue={`${pct(figures.bounce_rate)} bounce rate`} color="text-red-700" />
             </div>
 
             {/* REPORT-SOT.2 — the figures above are counted from the recipient
@@ -525,7 +525,7 @@ export default function CampaignDetail({ campaign, recipients = [], stats = null
                       <span className="text-un1t-text">{f.field.replace(/_/g, ' ')}</span>
                       <span className="text-un1t-muted">{f.op.replace(/_/g, ' ')}</span>
                       {!['is_null', 'not_null'].includes(f.op) && (
-                        <span className="text-blue-400">{f.value}</span>
+                        <span className="text-blue-700">{f.value}</span>
                       )}
                     </div>
                   ))}
@@ -631,7 +631,7 @@ export default function CampaignDetail({ campaign, recipients = [], stats = null
                     sandbox="allow-same-origin"
                   />
                 ) : (
-                  <div className="p-12 text-center text-gray-400">
+                  <div className="p-12 text-center text-gray-600">
                     <Mail size={40} className="mx-auto mb-3" />
                     <p>No email content</p>
                   </div>
