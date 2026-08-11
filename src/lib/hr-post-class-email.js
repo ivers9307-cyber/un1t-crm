@@ -135,6 +135,26 @@ export async function loadContextForSession(db, sessionId) {
     zones_seconds: session.zones_seconds,
   }
 
+  // HRPREF-AUTH.1 — the per-contact capability the stop-emails link carries.
+  // Its own query rather than an embed on the contacts join: `contacts` is
+  // reached here through an aliased FK embed already, and stacking a nested
+  // embed on an aliased one is exactly the PGRST201 shape the repo keeps
+  // getting bitten by. One extra indexed lookup on a path that then sends an
+  // email is not worth the cleverness.
+  //
+  // Missing is tolerated (one live contact has no contact_preferences row):
+  // unsubscribeUrl falls back to the legacy cid+sid pair rather than shipping
+  // an email with no working opt-out.
+  let unsubscribeToken = null
+  if (session.contact_id) {
+    const { data: pref } = await db
+      .from('contact_preferences')
+      .select('unsubscribe_token')
+      .eq('contact_id', session.contact_id)
+      .maybeSingle()
+    unsubscribeToken = pref?.unsubscribe_token || null
+  }
+
   return {
     ok: true,
     session,
@@ -143,6 +163,7 @@ export async function loadContextForSession(db, sessionId) {
     eventTypeName: className,
     cta,
     contact: session.contact,
+    unsubscribeToken,
   }
 }
 
@@ -208,6 +229,7 @@ export function composeEmail(ctx, { nowMs = Date.now() } = {}) {
     html: renderHtml({
       firstName, classLabel, startedAt, points, peak, avg, durationMin,
       breakdown, analytics, vcLine, sessionUrl, contact, sessionId: session.id, na,
+      unsubscribeToken: ctx.unsubscribeToken || null,
     }),
     analytics,
   }
@@ -289,7 +311,7 @@ function renderText({ firstName, classLabel, startedAt, points, peak, avg, durat
   return lines.join('\n')
 }
 
-function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durationMin, breakdown, analytics, vcLine, sessionUrl, contact, sessionId, na }) {
+function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durationMin, breakdown, analytics, vcLine, sessionUrl, contact, sessionId, na, unsubscribeToken }) {
   const ctLabel = classTypeLabel(analytics.classType)
   const tPoints = trendLabel(analytics.overall.pointsTrend)
   const tPeak = trendLabel(analytics.overall.peakTrend)
@@ -345,7 +367,7 @@ function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durat
       </ul>
     </div>`
 
-  const unsubUrl = unsubscribeUrl({ contactId: contact?.id, sessionId })
+  const unsubUrl = unsubscribeUrl({ contactId: contact?.id, sessionId, unsubscribeToken })
 
   return `
 <!doctype html>
@@ -408,12 +430,26 @@ function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durat
 </body></html>`.trim()
 }
 
-function unsubscribeUrl({ contactId, sessionId }) {
-  // The handler we'll add in a follow-up cleans the flag. For
-  // now we just embed both ids; if the URL is hit before the
-  // handler exists, the click 404s but the user gave consent at
-  // signup so this is acceptable.
-  const params = new URLSearchParams({ scope: 'hr', cid: contactId || '', sid: sessionId || '' })
+/**
+ * HRPREF-AUTH.1 — the stop-emails link carries a CAPABILITY, not an id.
+ *
+ * It used to be `?cid=<contact_id>`, and the endpoint accepted that alone. A
+ * contact id is a database key that shows up in admin URLs, exports and log
+ * lines; treating it as the credential meant anyone who came across one could
+ * switch off that person's HR emails. `contact_preferences.unsubscribe_token`
+ * (mig 005) is the credential every other public preference link uses, so use
+ * it here too.
+ *
+ * FALLBACK: one live contact has no `contact_preferences` row and an import
+ * could create more. Rather than ship an email with a dead unsubscribe link
+ * (which is both a support burden and a deliverability problem), fall back to
+ * the legacy `cid`+`sid` PAIR, which the endpoint still accepts — the session
+ * has to belong to the contact, so the pair is a capability too.
+ */
+function unsubscribeUrl({ contactId, sessionId, unsubscribeToken }) {
+  const params = unsubscribeToken
+    ? new URLSearchParams({ scope: 'hr', token: unsubscribeToken })
+    : new URLSearchParams({ scope: 'hr', cid: contactId || '', sid: sessionId || '' })
   return `${CRM_URL}/api/preferences/hr-emails?${params.toString()}`
 }
 

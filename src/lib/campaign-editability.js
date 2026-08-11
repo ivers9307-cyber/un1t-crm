@@ -65,3 +65,26 @@ export function campaignLockedReason(status) {
   const label = status || 'in an unknown state'
   return `This campaign is ${label}, so its content is locked. Its recipients, opens and clicks are the record of what was actually sent. Duplicate it to send a new version.`
 }
+
+/**
+ * CAMPDEL.1 — the same rule applied to DELETION, or null when the campaign may
+ * still be deleted.
+ *
+ * Deliberately the SAME predicate as the content lock: a campaign is deletable
+ * exactly while it is still a plan rather than a record. Deleting is in fact
+ * the stronger act, because campaign_recipients and campaign_link_clicks are
+ * ON DELETE CASCADE, so it destroys the very rows the content lock exists to
+ * keep honest.
+ *
+ * Separate copy from campaignLockedReason because the two say different things
+ * to an operator: "duplicate it instead" is the answer to a blocked edit and
+ * means nothing to somebody trying to tidy a list. No em-dashes.
+ *
+ * @param {string|null|undefined} status
+ * @returns {string|null}
+ */
+export function campaignUndeletableReason(status) {
+  if (isCampaignContentEditable(status)) return null
+  const label = status || 'in an unknown state'
+  return `This campaign is ${label}, so it cannot be deleted. Its recipients, opens and clicks are the record of what was actually sent, and deleting it would take them with it.`
+}

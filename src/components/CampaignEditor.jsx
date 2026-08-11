@@ -10,7 +10,7 @@ import AudienceBuilder from './AudienceBuilder'
 import SendQuietHoursNotice from './communications/SendQuietHoursNotice'
 import CopyAssist from './communications/CopyAssist'
 import { stripUnsetFilterRows } from '@/lib/audience-filter'
-import { isCampaignContentEditable, campaignLockedReason } from '@/lib/campaign-editability'
+import { isCampaignContentEditable, campaignLockedReason, campaignUndeletableReason } from '@/lib/campaign-editability'
 
 // FILTER-P1.6 — what the send path ACTUALLY gates on, per
 // buildAudienceQueryAsync (src/lib/postmark.js): the campaign's location, the
@@ -438,12 +438,39 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
     }
   }
 
-  // CAMPAIGN.13 — delete the campaign. Only allowed for
-  // draft/scheduled/cancelled; if it's queued/sending we refuse
-  // and tell the operator to cancel first.
+  // CAMPAIGN.13 — delete the campaign.
+  //
+  // CAMPDEL.1 — this used to refuse only ['queued','sending'] and then delete
+  // straight from the browser Supabase client. Two problems, the same pair
+  // CAMPHIST.1 found on save:
+  //
+  //   • The 409 on DELETE /api/campaigns/[id] never runs, because this does not
+  //     call that route. It cannot: `authenticateApiKey` is Bearer-only, so an
+  //     operator's session cookie gets a 401 there. And campaigns_location_scoped
+  //     (mig 014) is `FOR ALL ... USING auth_is_in_location(location_id)` with no
+  //     status predicate, so the database allows the delete too.
+  //   • `campaignStatus` is React state read at load. An operator sitting on a
+  //     'scheduled' campaign while the run-campaigns cron sends it still holds
+  //     'scheduled' here, so the old check would have happily deleted a campaign
+  //     that had just gone out, cascading away every campaign_recipients and
+  //     campaign_link_clicks row with it.
+  //
+  // So re-read the status from the database immediately before deleting and
+  // apply the same predicate the route does. If the re-read yields nothing
+  // (row gone, transient error) fall back to the loaded status: that is the
+  // freshest thing we have, and failing closed on a blip would block a
+  // legitimate draft delete for no safety gain.
   async function handleDelete() {
-    if (['queued', 'sending'].includes(campaignStatus)) {
-      setError('Cancel the send first, then delete.')
+    setError(null)
+    const { data: fresh } = await db.from('campaigns').select('status').eq('id', campaignId).single()
+    const status = fresh?.status ?? campaignStatus
+    if (!isCampaignContentEditable(status)) {
+      if (['queued', 'sending'].includes(status)) {
+        setError('This campaign is sending. Cancel the send first, then delete.')
+      } else {
+        setError(campaignUndeletableReason(status))
+      }
+      setCampaignStatus(status)
       return
     }
     if (!confirm(`Delete "${name}"? This can't be undone.`)) return
@@ -685,6 +712,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
               <button
                 type="button"
                 onClick={handleDelete}
+                data-testid="campaign-delete"
                 className="flex items-center gap-1.5 text-sm text-red-400 hover:text-red-300 border border-un1t-border hover:border-red-400/40 px-3 py-1.5 rounded-md transition-colors"
                 title="Delete this draft"
               >
@@ -709,6 +737,8 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
               <button
                 type="button"
                 onClick={handleDelete}
+                data-testid="campaign-delete"
+                title="Delete this campaign"
                 className="flex items-center gap-1.5 text-sm text-red-400 hover:text-red-300 border border-un1t-border hover:border-red-400/40 px-3 py-1.5 rounded-md transition-colors"
               >
                 <Trash2 size={14} />

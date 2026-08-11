@@ -116,7 +116,7 @@ export function tokenFingerprint(token) {
  * caller belongs to, and charging a valid holder is the entire defect.
  *
  * @param {import('@supabase/supabase-js').SupabaseClient} db
- * @param {'unsubscribe'|'preferences'} scope
+ * @param {'unsubscribe'|'preferences'|'hr-emails'} scope
  * @param {string} ip
  */
 export function guardBeforeTokenLookup(db, scope, ip) {
@@ -128,7 +128,7 @@ export function guardBeforeTokenLookup(db, scope, ip) {
  * did not resolve.
  *
  * @param {import('@supabase/supabase-js').SupabaseClient} db
- * @param {'unsubscribe'|'preferences'} scope
+ * @param {'unsubscribe'|'preferences'|'hr-emails'} scope
  * @param {string} ip
  */
 export function penaliseInvalidToken(db, scope, ip) {
@@ -142,7 +142,7 @@ export function penaliseInvalidToken(db, scope, ip) {
  * whole point is that a mail provider's shared egress IP is invisible here.
  *
  * @param {import('@supabase/supabase-js').SupabaseClient} db
- * @param {'unsubscribe'|'preferences'} scope
+ * @param {'unsubscribe'|'preferences'|'hr-emails'} scope
  * @param {string} token
  */
 export function guardResolvedToken(db, scope, token) {
@@ -166,7 +166,7 @@ export function guardResolvedToken(db, scope, token) {
  *
  * @param {import('@supabase/supabase-js').SupabaseClient} db
  * @param {{
- *   endpoint: 'unsubscribe'|'preferences',
+ *   endpoint: 'unsubscribe'|'preferences'|'hr-emails',
  *   reason: string,
  *   ip?: string|null,
  *   token?: string|null,

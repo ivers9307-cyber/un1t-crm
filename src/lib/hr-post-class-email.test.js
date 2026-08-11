@@ -13,7 +13,12 @@ import { sendTransactionalEmail } from '@/lib/postmark'
 
 const NOW = new Date('2026-05-08T19:00:00Z').getTime()
 
+// HRPREF-AUTH.1 — contact_preferences.unsubscribe_token (mig 005 mints one
+// UUID per contact); the composer embeds it in the stop-emails link.
+const UNSUB_TOKEN = '9f1c7c0e-0000-4000-8000-0000000000aa'
+
 function ctx({
+  unsubscribeToken = UNSUB_TOKEN,
   thisPoints = 100,
   thisPeak = 175,
   thisAvg = 145,
@@ -53,6 +58,7 @@ function ctx({
     history,
     eventTypeName,
     contact: { id: 'c-1', name: contactName, email: 'sarah@test.com', hr_post_class_emails_enabled: true },
+    unsubscribeToken,
   }
 }
 
@@ -110,10 +116,26 @@ describe('composeEmail', () => {
     expect(out.html).toContain('Threshold')
   })
 
-  it('HTML includes a stop-emails link', () => {
+  // HRPREF-AUTH.1 — the stop-emails link now carries the per-contact
+  // capability token, not the raw contact id. A contact id is an identifier
+  // that leaks through exports, logs and support threads; the token is a
+  // credential minted per contact by mig 005, and it is what every sibling
+  // public preference endpoint authenticates with.
+  it('HTML includes a stop-emails link carrying the unsubscribe token', () => {
     const out = composeEmail(ctx(), { nowMs: NOW })
     expect(out.html).toContain('/api/preferences/hr-emails')
+    expect(out.html).toContain(`token=${UNSUB_TOKEN}`)
+    expect(out.html).not.toContain('cid=c-1')
+  })
+
+  // Belt and braces: one contact in prod has no contact_preferences row, and a
+  // future import could create more. The email must still ship a working link,
+  // so the builder falls back to the legacy cid+sid PAIR (which the endpoint
+  // still accepts, because the session has to belong to the contact).
+  it('falls back to the cid+sid pair when the contact has no token', () => {
+    const out = composeEmail(ctx({ unsubscribeToken: null }), { nowMs: NOW })
     expect(out.html).toContain('cid=c-1')
+    expect(out.html).toContain('sid=sess-1')
   })
 
   it('text includes total UN1T Points in headline', () => {
@@ -140,7 +162,7 @@ describe('composeEmail', () => {
 describe('sendPostClassEmail', () => {
   // Build a minimal Supabase mock that returns canned shapes for
   // the three select calls + an update.
-  function mockDb({ session, history = [], stampError = null, claimedRows = [{ id: 'sess-1' }] }) {
+  function mockDb({ session, history = [], stampError = null, claimedRows = [{ id: 'sess-1' }], unsubscribeToken = UNSUB_TOKEN }) {
     // Records every email_sent_at stamp (real send OR permanent-skip
     // markProcessed) so tests can assert the row leaves the auto-end sweep.
     const stamps = []
@@ -197,6 +219,21 @@ describe('sendPostClassEmail', () => {
               }
               return { eq: vi.fn(() => eqNode) }
             }),
+          }
+        }
+        // HRPREF-AUTH.1 — loadContextForSession now also fetches the contact's
+        // unsubscribe_token, which the stop-emails link carries instead of the
+        // raw contact id.
+        if (table === 'contact_preferences') {
+          return {
+            select: vi.fn(() => ({
+              eq: vi.fn(() => ({
+                maybeSingle: vi.fn(() => Promise.resolve({
+                  data: unsubscribeToken ? { unsubscribe_token: unsubscribeToken } : null,
+                  error: null,
+                })),
+              })),
+            })),
           }
         }
         throw new Error(`unexpected table ${table}`)
