@@ -1106,6 +1106,26 @@ describe('normalizePhone', () => {
     expect(normalizePhone('+353871234567')).toBe('+353871234567')
   })
 
+  // CLASSPASS-PHONE.2 — the '+' fast-path used to return these untouched,
+  // which is how the ClassPass filler reached 1,620 contacts and made every
+  // one of them look phone-reachable.
+  it('rejects the ClassPass placeholder rather than passing it through', () => {
+    expect(normalizePhone('+10000000000')).toBeNull()
+    expect(normalizePhone('+1 000 000 0000')).toBeNull()
+    expect(normalizePhone('10000000000')).toBeNull()
+  })
+
+  it('rejects repeated-digit filler in any format', () => {
+    expect(normalizePhone('+0000000')).toBeNull()
+    expect(normalizePhone('0000000000')).toBeNull()
+    expect(normalizePhone('+1111111111')).toBeNull()
+  })
+
+  it('does NOT reject real numbers that merely contain zeros', () => {
+    expect(normalizePhone('+353830000000')).toBe('+353830000000')
+    expect(normalizePhone('+447300093740')).toBe('+447300093740')
+  })
+
   it('strips whitespace from E.164 numbers', () => {
     expect(normalizePhone('+44 7310 018668')).toBe('+447310018668')
   })
@@ -1304,8 +1324,13 @@ describe('mapGlofoxMember (real Glofox payload — ClassPass PAYG)', () => {
     expect(mapGlofoxMember(shanicePayload).glofox_membership_status).not.toBe('lead')
   })
 
-  it('preserves the +-prefixed phone passthrough', () => {
-    expect(mapGlofoxMember(shanicePayload).phone).toBe('+10000000000')
+  // CLASSPASS-PHONE.2 — this previously asserted the placeholder was
+  // PRESERVED, using the ClassPass filler itself as the fixture, so the test
+  // locked the bug in: '+10000000000' reached 1,620 contacts and made every
+  // one look phone-reachable. A ClassPass member has no shareable phone, so
+  // the correct mapping is null.
+  it('maps the ClassPass placeholder phone to null, not through', () => {
+    expect(mapGlofoxMember(shanicePayload).phone).toBeNull()
   })
 
   it('maps ClassPass origin to lead_source=classpass (GLOFOX2.1.8)', () => {

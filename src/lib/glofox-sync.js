@@ -161,10 +161,27 @@ export function parseGlofoxDate(value) {
  * No third-party libraries — libphonenumber is overkill for the
  * two countries UN1T actually serves.
  */
+// CLASSPASS-PHONE.2 — numbers that carry no information. ClassPass does not
+// share a member's real phone, so Glofox stores the constant '+10000000000'
+// and it synced through to 1,620 contacts (19% of the base), every one of
+// them looking phone-reachable when none were. It survived because the
+// '+' fast-path below returns anything E.164-shaped untouched. Repeated-digit
+// strings ('+0000000') are the same class of filler.
+function isPlaceholderNumber(raw) {
+  const digits = String(raw || '').replace(/\D/g, '')
+  if (!digits) return true
+  if (digits === '10000000000') return true          // ClassPass/Glofox filler
+  if (/^(\d)\1+$/.test(digits)) return true          // 0000000, 1111111, …
+  return false
+}
+
 export function normalizePhone(phone) {
   if (typeof phone !== 'string') return null
   const trimmed = phone.trim()
   if (!trimmed) return null
+  // Reject fillers BEFORE the E.164 fast-path — that path is what let the
+  // ClassPass placeholder through untouched for months.
+  if (isPlaceholderNumber(trimmed)) return null
   // Already E.164-ish.
   if (trimmed.startsWith('+')) return trimmed.replace(/\s+/g, '')
   // International prefix via 00.
