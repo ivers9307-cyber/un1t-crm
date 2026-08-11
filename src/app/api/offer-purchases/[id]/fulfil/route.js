@@ -9,6 +9,8 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
+import { sendOfferPurchaseEmail } from '@/lib/offer-purchase-emails'
+import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
@@ -23,7 +25,7 @@ export async function POST(_request, props) {
   const db = createServerClient()
   const { data: row } = await db
     .from('offer_purchases')
-    .select('id, state, location_id, fulfilled_at')
+    .select('id, state, location_id, fulfilled_at, contact_id, buyer_name, buyer_email, amount_cents, offer:offer_id ( name, bonus_headline )')
     .eq('id', id)
     .maybeSingle()
 
@@ -43,5 +45,15 @@ export async function POST(_request, props) {
     .eq('id', id)
   if (error) return NextResponse.json({ success: false, error: 'Could not mark fulfilled' }, { status: 500 })
 
-  return NextResponse.json({ success: true, data: { fulfilled: true } })
+  // Tell the buyer it's live. Fire-and-forget: the fulfilment is recorded
+  // either way, and a mail failure must not read as "marking didn't work".
+  let emailed = false
+  try {
+    const r = await sendOfferPurchaseEmail(db, { purchase: row, offer: row.offer || {}, kind: 'ready' })
+    emailed = r.status === 'sent'
+  } catch (e) {
+    logWarn('offer-fulfil', `ready email failed for ${id}`, { err: e })
+  }
+
+  return NextResponse.json({ success: true, data: { fulfilled: true, emailed } })
 }

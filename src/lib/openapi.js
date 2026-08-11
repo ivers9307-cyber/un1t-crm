@@ -403,6 +403,21 @@ registry.registerPath({
 })
 
 registry.registerPath({
+  method: 'post',
+  path: '/api/offer-purchases/{id}/send-confirmation',
+  tags: ['Approvals'],
+  summary: "Send (or re-send) the buyer's purchase confirmation email",
+  description: "Session auth + the approvals_offer_purchases grant. Transactional: honours the email_administrative opt-out and refuses bounced/complained addresses, but is NOT blocked by a marketing unsubscribe. The fulfil route sends this automatically; this endpoint covers purchases fulfilled before it existed and 'I never got it' re-sends. Ids outside the caller's locations return 404.",
+  responses: {
+    200: { description: 'Sent; returns { sent: true, to }' },
+    401: { description: 'No session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing approvals_offer_purchases', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Unknown or inaccessible purchase', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Not paid, or the send was skipped (reason returned)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
   method: 'get',
   path: '/api/public/countdown.gif',
   tags: ['Public'],
