@@ -104,8 +104,11 @@ export async function registerSoloEventEntry(db, { race, waveId, contact }) {
       .single()
     if (teamErr) {
       if (teamErr.code === '23505') {
+        // K8 — `.maybeSingle()`: the unique-violation refetch. 0 rows falls
+        // through to the `if (!teamId)` db_error return below, so it must not
+        // arrive as a discarded error. (location_id, name) is uniquely indexed.
         const { data: again } = await db.from('teams')
-          .select('id').eq('location_id', race.location_id).eq('name', fullName).single()
+          .select('id').eq('location_id', race.location_id).eq('name', fullName).maybeSingle()
         teamId = again?.id
       }
       if (!teamId) return { ok: false, reason: 'db_error', message: teamErr.message }

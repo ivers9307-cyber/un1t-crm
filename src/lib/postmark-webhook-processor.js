@@ -18,6 +18,38 @@ import { recordTicketMessageDelivery } from './email-delivery-status.js'
 import { escapeLikePattern } from './like-escape.js'
 
 /**
+ * K8 — the one way this file resolves "which send is this event about".
+ *
+ * Every handler below needs the same row: the `email_sends` record carrying
+ * this event's Postmark MessageID. Six copies of the lookup had drifted onto
+ * `.single()` with a discarded error, which is wrong here in a specific way:
+ * **a missing row is the NORMAL case, not an anomaly.** Postmark delivers
+ * events for mail this system never recorded — the zero-GUID SubscriptionChange
+ * documented on resolveReactivationContact below, and any message sent on the
+ * server outside the campaign path. `.single()` turns that expected miss into a
+ * PGRST116 error, and discarding it collapsed "no such send", "duplicate
+ * message id" and "the query failed" into one `data = null` that every call
+ * site then read as "no such send".
+ *
+ * `.maybeSingle()` says the intent in the source (0 rows → null, no error) and
+ * leaves `error` meaning only the two things that ARE anomalies, which we log.
+ * Note `postmark_message_id` carries NO unique index — it is unique in the live
+ * data (22,404/22,404 distinct) but nothing enforces it, so the >1-row case is
+ * reachable in principle and worth a line in the log rather than a silent null.
+ */
+async function findSendByMessageId(db, messageId, columns) {
+  const { data, error } = await db.from('email_sends')
+    .select(columns)
+    .eq('postmark_message_id', messageId)
+    .maybeSingle()
+  if (error) {
+    console.error('[postmark processor] email_sends lookup failed:', error.message)
+    return null
+  }
+  return data
+}
+
+/**
  * COMMSFIX.C.7 — which contact a SubscriptionChange reactivation is about.
  *
  * Message-bound events resolve through email_sends like every other handler.
@@ -31,10 +63,7 @@ import { escapeLikePattern } from './like-escape.js'
  * match a DIFFERENT contact (CLAUDE.md, the inbound-email misfiling class).
  */
 async function resolveReactivationContact(db, body, messageId) {
-  const { data: send } = await db.from('email_sends')
-    .select('contact_id')
-    .eq('postmark_message_id', messageId)
-    .single()
+  const send = await findSendByMessageId(db, messageId, 'contact_id')
   if (send?.contact_id) return send.contact_id
 
   const recipient = typeof body?.Recipient === 'string' ? body.Recipient.trim() : ''
@@ -197,10 +226,7 @@ export async function processPostmarkEvent(db, body) {
           .update({ status: 'opened', opened_at: now })
           .eq('postmark_message_id', messageId)
 
-        const { data: openSend } = await db.from('email_sends')
-          .select('id, contact_id, campaign_id')
-          .eq('postmark_message_id', messageId)
-          .single()
+        const openSend = await findSendByMessageId(db, messageId, 'id, contact_id, campaign_id')
 
         if (openSend) {
           // EMAIL-HYGIENE.1 — an open is engagement: clear the hygiene
@@ -268,10 +294,7 @@ export async function processPostmarkEvent(db, body) {
         const now = new Date().toISOString()
         const clickedUrl = body.OriginalLink
 
-        const { data: clickSend } = await db.from('email_sends')
-          .select('id, contact_id, campaign_id, location_id')
-          .eq('postmark_message_id', messageId)
-          .single()
+        const clickSend = await findSendByMessageId(db, messageId, 'id, contact_id, campaign_id, location_id')
 
         if (clickSend) {
           // EMAIL-HYGIENE.1 — a click is engagement: clear the hygiene
@@ -379,10 +402,7 @@ export async function processPostmarkEvent(db, body) {
           // carries it on every row (populated 19,206/19,206 live), and it is
           // the honest answer: the mail that bounced was sent by that
           // location, so that is the list the address is being taken off.
-          const { data: bounceSend } = await db.from('email_sends')
-            .select('contact_id, campaign_id, location_id')
-            .eq('postmark_message_id', messageId)
-            .single()
+          const bounceSend = await findSendByMessageId(db, messageId, 'contact_id, campaign_id, location_id')
 
           if (bounceSend) {
             await db.from('contacts')
@@ -424,10 +444,7 @@ export async function processPostmarkEvent(db, body) {
 
         // CONSENTLOC.1 — see the HardBounce handler; location_id feeds the
         // auto-unsubscribe's consent_log row.
-        const { data: complaintSend } = await db.from('email_sends')
-          .select('contact_id, campaign_id, location_id')
-          .eq('postmark_message_id', messageId)
-          .single()
+        const complaintSend = await findSendByMessageId(db, messageId, 'contact_id, campaign_id, location_id')
 
         if (complaintSend) {
           await db.from('contacts')
@@ -491,10 +508,7 @@ export async function processPostmarkEvent(db, body) {
           // CONSENTLOC.1 — see the HardBounce handler. This is the biggest
           // consent_log writer in the estate, and the one whose rows mig 517
           // had to coalesce a location onto.
-          const { data: unsubSend } = await db.from('email_sends')
-            .select('contact_id, campaign_id, location_id')
-            .eq('postmark_message_id', messageId)
-            .single()
+          const unsubSend = await findSendByMessageId(db, messageId, 'contact_id, campaign_id, location_id')
 
           if (unsubSend) {
             // UNSUB.2 follow-up — route through applyMarketingPreferencesBulk

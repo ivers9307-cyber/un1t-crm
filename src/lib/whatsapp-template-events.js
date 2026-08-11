@@ -74,10 +74,22 @@ export async function applyTemplateEvent(db, field, value) {
   if (!update) return { skipped: 'unknown_field' }
 
   const metaId = String(value.message_template_id)
-  const { data: template } = await db.from('whatsapp_templates')
+  // K8 — `.maybeSingle()`, not `.single()`: `no_match` below is a DESIGNED
+  // outcome (Meta sends events for templates created outside this CRM), so 0
+  // rows must resolve to null rather than to an error we discard. With
+  // `.single()` a genuinely failed query was indistinguishable from a real
+  // no-match and got reported as one; `meta_template_id` carries no unique
+  // index either, so the >1-row case is reachable in principle. Both now
+  // surface as `lookup_failed`, which the caller treats as "do nothing" the
+  // same way but which is honest in the logs.
+  const { data: template, error: templateErr } = await db.from('whatsapp_templates')
     .select('id, location_id, name, status, quality_rating, category, rejection_reason')
     .eq('meta_template_id', metaId)
-    .single()
+    .maybeSingle()
+  if (templateErr) {
+    console.error('[wa-template-events] template lookup failed:', templateErr.message)
+    return { skipped: 'lookup_failed' }
+  }
   if (!template) return { skipped: 'no_match' }
 
   // Idempotent: if every target column already equals the new value, no-op.

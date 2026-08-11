@@ -282,11 +282,17 @@ export async function executeTool(toolName, input, context) {
         if (!link) return { error: 'Staff member not found in your active location.' }
       }
       const year = input.year || new Date().getFullYear()
+      // K8 — `.maybeSingle()`: no allowance row for this person/year is the
+      // ordinary case (the defaults below ARE the answer), so 0 rows must not
+      // arrive as an error we discard. (profile_id, year) is uniquely indexed,
+      // so at most one row is real; the discarded error was hiding only the
+      // query-failed case, which now surfaces as an error instead of silently
+      // handing back the 20-day default.
       const { data } = await db.from('staff_allowances')
         .select('total_days, used_days, carried_over')
         .eq('profile_id', profileId)
         .eq('year', year)
-        .single()
+        .maybeSingle()
       if (!data) return { total_days: 20, used_days: 0, carried_over: 0, remaining: 20, year }
       return { ...data, remaining: data.total_days + data.carried_over - data.used_days, year }
     }
