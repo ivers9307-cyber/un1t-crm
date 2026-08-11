@@ -125,3 +125,104 @@ describe('WABroadcastEditor — body width matches the other two channels (.3)',
     expect(container.querySelector('.max-w-3xl, .max-w-2xl')).toBeNull()
   })
 })
+
+// ── WACAPPED.1 — the capped park has to be visible somewhere ────────────────
+//
+// Sent / Delivered / Read / Failed are counted from a status column that also
+// holds 'capped' (Meta's cross-business frequency cap, 131049 — a retryable
+// park, not an outcome). Mid-cap the cards are short of the queued total with
+// nothing on screen to explain the difference. Fix the explanation, not the
+// arithmetic.
+const DRIP_LIVE = {
+  source: 'recipients',
+  audience: 100, queued: 100, neverQueued: 0, stoppedShort: false,
+  sent: 60, delivered: 55, read: 10, failed: 5, capped: 12, unaccounted: 23,
+}
+
+const SENDING = {
+  ...SENT,
+  id: 'b9',
+  status: 'sent',
+  total_recipients: 100,
+}
+
+describe('WABroadcastEditor — the capped park is stated, never reclassified', () => {
+  it('accounts for the queued total once the capped park is named', () => {
+    render(
+      <WABroadcastEditor
+        broadcast={SENDING} templates={[]} locationId="loc-1" userId="u1"
+        stats={DRIP_LIVE}
+      />,
+    )
+    const note = screen.getByTestId('wa-capped-note')
+    // Every figure the reader needs to add it up themselves.
+    expect(note.textContent).toContain('12')   // parked by the cap
+    expect(note.textContent).toContain('23')   // not attempted yet
+    expect(note.textContent).toContain('100')  // the queued total
+    // Low-key and factual: no em-dashes anywhere in operator copy.
+    expect(note.textContent).not.toContain('—')
+  })
+
+  it('leaves the cards alone — a capped row is not folded into Sent or Failed', () => {
+    render(
+      <WABroadcastEditor
+        broadcast={SENDING} templates={[]} locationId="loc-1" userId="u1"
+        stats={DRIP_LIVE}
+      />,
+    )
+    expect(statCard('Sent')).toBe('60')
+    expect(statCard('Failed')).toBe('5')
+  })
+
+  it('says nothing when nothing is parked', () => {
+    render(
+      <WABroadcastEditor
+        broadcast={SENDING} templates={[]} locationId="loc-1" userId="u1"
+        stats={{ ...DRIP_LIVE, sent: 95, failed: 5, capped: 0, unaccounted: 0 }}
+      />,
+    )
+    expect(screen.queryByTestId('wa-capped-note')).toBeNull()
+  })
+
+  it('says nothing on the counters fallback, which cannot count a park', () => {
+    render(
+      <WABroadcastEditor
+        broadcast={SENDING} templates={[]} locationId="loc-1" userId="u1"
+        stats={{ ...DRIP_LIVE, source: 'counters', capped: 0, unaccounted: 0 }}
+      />,
+    )
+    expect(screen.queryByTestId('wa-capped-note')).toBeNull()
+  })
+})
+
+describe('WABroadcastEditor — the drip panel names the parked share of Remaining', () => {
+  const DRIP = {
+    id: 'b10', name: 'Drip', status: 'sending', delivery_mode: 'drip',
+    daily_cap: 500, send_window_start: '09:00:00', send_window_end: '20:00:00',
+    send_window_tz: 'Europe/Dublin',
+    total_recipients: 100,
+    whatsapp_broadcast_recipients: [],
+  }
+
+  it('states the capped count beside the pacing line', () => {
+    render(
+      <WABroadcastEditor
+        broadcast={DRIP} templates={[]} locationId="loc-1" userId="u1"
+        stats={DRIP_LIVE}
+      />,
+    )
+    const note = screen.getByTestId('wa-drip-capped')
+    expect(note.textContent).toContain('12')
+    expect(note.textContent).not.toContain('—')
+  })
+
+  it('stays silent when nothing is parked', () => {
+    render(
+      <WABroadcastEditor
+        broadcast={DRIP} templates={[]} locationId="loc-1" userId="u1"
+        stats={{ ...DRIP_LIVE, capped: 0 }}
+      />,
+    )
+    expect(screen.queryByTestId('wa-drip-capped')).toBeNull()
+  })
+})

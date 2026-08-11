@@ -161,6 +161,14 @@ export async function runImportCommit(db, {
         // consent is untouched, so a bounced contact still needs to re-opt-in.
         // Deliberately computed AFTER the preserve_existing / tag merging
         // above, so it reads the address this write actually sets.
+        //
+        // EMAILREP.3 — mig 528 enforces the same rule as a BEFORE UPDATE OF
+        // email trigger, so this is now belt AND braces. Kept for the reason
+        // spelled out in full at the /api/contacts/[id] call site: the trigger
+        // is a migration, this is code, and the two ship independently. When
+        // this fires it writes 'active' into the same UPDATE, which makes the
+        // trigger's guard false and the trigger a no-op — the redundancy is
+        // free, not doubled.
         const emailStatusReset = emailStatusResetForAddressChange({
           oldEmail: matched.email,
           newEmail: update.email,

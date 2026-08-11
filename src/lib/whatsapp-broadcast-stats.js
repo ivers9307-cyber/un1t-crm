@@ -55,12 +55,30 @@ export const WA_REACHED_SENT = Object.freeze(['sent', 'delivered', 'read'])
 /** Reached at least 'delivered'. A read message was necessarily delivered. */
 export const WA_REACHED_DELIVERED = Object.freeze(['delivered', 'read'])
 
+// ── TRAP 3: 'capped' IS NEITHER SENT NOR FAILED, AND NOTHING SAID SO ───────
+// Meta 131049 is the recipient's CROSS-BUSINESS marketing frequency cap:
+// temporary saturation of a perfectly good number, not a bad one.
+// classifyBlastFailure (whatsapp.js) parks those rows as 'capped', keeps them
+// out of the circuit breaker, and fetchDripDoneContactIds re-opens them for a
+// retry after CAPPED_RETRY_HOURS. Counting a park as an outcome would be the
+// bug; it is deliberately in neither WA_REACHED_SENT nor the failed count.
+//
+// The consequence is arithmetic the panel never explained: mid-cap,
+// sent + failed is SHORT of the queued row count, and the four cards look like
+// they have lost people. So the count is surfaced as its own figure and the
+// surface states it in words. Nothing is reclassified.
+//
+// Exact match, not a reached-at-least set: 'capped' is a park beside the
+// progression, not a stage along it. A row that later succeeds is overwritten
+// with 'sent' and stops being capped, which is the correct reading — the park
+// is over.
+
 /**
  * Count one broadcast's recipient rows by how far each one got.
  *
  * Count-only (`head: true`) on every query: a drip can carry thousands of
  * recipient rows, the 1,000-row select cap would silently truncate a fetch,
- * and nothing here needs the rows themselves. Five parallel counts is one
+ * and nothing here needs the rows themselves. Six parallel counts is one
  * round trip's worth of latency and needs no migration — which matters,
  * because an aggregate rpc could not ship ahead of being applied.
  *
@@ -85,14 +103,15 @@ export async function loadWhatsappBroadcastRecipientStats(db, broadcastId) {
   }
 
   try {
-    const [rows, sent, delivered, read, failed] = await Promise.all([
+    const [rows, sent, delivered, read, failed, capped] = await Promise.all([
       countRows(q => q),
       countRows(q => q.in('status', WA_REACHED_SENT)),
       countRows(q => q.in('status', WA_REACHED_DELIVERED)),
       countRows(q => q.eq('status', 'read')),
       countRows(q => q.eq('status', 'failed')),
+      countRows(q => q.eq('status', 'capped')),
     ])
-    return { ok: true, counts: { rows, sent, delivered, read, failed }, error: null }
+    return { ok: true, counts: { rows, sent, delivered, read, failed, capped }, error: null }
   } catch (e) {
     console.error('[wa broadcast stats] recipient counts failed:', e?.message || e)
     return { ok: false, counts: null, error: e?.message || 'recipient counts failed' }
@@ -136,6 +155,11 @@ export function whatsappBroadcastDisplayStats(broadcast, stats) {
     delivered: num(b.total_delivered),
     read: num(b.total_read),
     failed: num(b.total_failed),
+    // The stored counters have no capped column at all, so a fallback render
+    // cannot know. Zero here means "not measured", and `unaccounted` below is
+    // held at zero too rather than inventing a shortfall out of counters that
+    // are already known to lag.
+    capped: 0,
   }
 
   const audience = num(b.total_recipients)
@@ -161,5 +185,15 @@ export function whatsappBroadcastDisplayStats(broadcast, stats) {
     delivered: num(c.delivered),
     read: num(c.read),
     failed: num(c.failed),
+    // Parked by Meta's frequency cap: neither sent nor failed, retried later.
+    capped: num(c.capped),
+    // Queued rows that Sent, Failed and the capped park between them still do
+    // not name: 'pending' rows the drip has not reached yet, plus any status a
+    // later migration adds that this module has not been taught. Named here
+    // rather than re-derived at each surface so the results panel and the drip
+    // block cannot disagree about it.
+    unaccounted: live
+      ? Math.max(0, num(c.rows) - num(c.sent) - num(c.failed) - num(c.capped))
+      : 0,
   }
 }

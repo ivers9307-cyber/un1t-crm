@@ -31,6 +31,22 @@
 // So: reset the reputation when — and only when — the address it refers
 // to is replaced.
 //
+// EMAILREP.3 — where this rule is ENFORCED. Five write paths change
+// contacts.email:
+//   1. PUT /api/contacts/[id]                    calls the helper below
+//   2. src/lib/contact-import-runner.js          calls the helper below
+//   3. mergeContacts (src/lib/contact-merge.js)
+//   4. POST /api/contacts/imports/[id]/rollback
+//   5. the agent's fill-when-empty tools — save_lead_details
+//      (agent/booking-tools.js), register_for_event (agent/event-tools.js)
+// 3-5 never called it, so mig 528 puts the same rule in a BEFORE UPDATE OF
+// email trigger, which covers all five and any sixth. This module stays the
+// single JS definition of "address-bound", and
+// src/lib/email-status-reset-trigger.test.js pins the migration to it so the
+// two cannot drift. Sites 1 and 2 keep their call: it folds 'active' into the
+// update they were already writing, which makes the trigger a no-op there, and
+// it means neither path depends on a migration having been applied first.
+//
 // This does NOT make an invalid address newly mailable for marketing.
 // Marketing needs, on top of `email_status`:
 //   • per-location consent (contact_location_audience.loc_email_marketing,

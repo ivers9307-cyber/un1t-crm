@@ -68,16 +68,30 @@ const bouncesFor = (contactId, n, type = 'soft') =>
  *  existing    — pre-existing email_bounce_escalations rows
  *  contacts    — id -> { location_id, email, email_suppressed_at }
  */
-function routeFor({ bounceRows = [], deliveries = [], existing = [], contacts = {}, campaigns = {} } = {}) {
+function routeFor({
+  bounceRows = [], deliveries = [], deliveryRows = null, transactionalRows = {},
+  existing = [], contacts = {}, campaigns = {},
+} = {}) {
   return (state) => {
     if (state.table === 'campaign_recipients') {
-      // The delivery-count scan filters on status; the bounce scan does not.
-      const statusFilter = state.ops.find((o) => o.method === 'in' && o.args[0] === 'status')
-      if (statusFilter) {
-        const ids = state.ops.find((o) => o.method === 'in' && o.args[0] === 'contact_id')?.args[1] || []
-        return { data: deliveries.filter((id) => ids.includes(id)).map((id) => ({ contact_id: id })), error: null }
+      // The delivery-evidence scan pins a contact-id list; the bounce scan
+      // sweeps the estate and pins nothing. (Before BOUNCEEV.1 the evidence
+      // scan was told apart by its status filter — it no longer has one,
+      // because a later-bounced row still carrying a delivered_at is evidence.)
+      const ids = state.ops.find((o) => o.method === 'in' && o.args[0] === 'contact_id')?.args[1]
+      if (ids) {
+        // `deliveries` is the shorthand: contact ids with one plain delivery.
+        const rows = deliveryRows || deliveries.map((id) => ({ contact_id: id, status: 'delivered' }))
+        return { data: rows.filter((r) => ids.includes(r.contact_id)), error: null }
       }
       return { data: bounceRows, error: null }
+    }
+    if (state.table === 'email_sends') {
+      const ids = state.ops.find((o) => o.method === 'in' && o.args[0] === 'contact_id')?.args[1] || []
+      return {
+        data: ids.flatMap((id) => (transactionalRows[id] || []).map((r) => ({ contact_id: id, ...r }))),
+        error: null,
+      }
     }
     if (state.table === ESCALATION_TABLE) {
       if (has(state, 'insert') || has(state, 'update')) return { data: null, error: null }
@@ -406,5 +420,106 @@ describe('runRepeatBounceSweep — safety rails', () => {
     const out = await runRepeatBounceSweep({ db, now: NOW })
     expect(out.ok).toBe(false)
     expect(inserts(statements)).toHaveLength(0)
+  })
+})
+
+// ── BOUNCEEV.1 — the sweep must look at BOTH ledgers ────────────────────────
+//
+// The decision rule is pinned in bounce-escalation.test.js; these pin that the
+// applier actually GOES AND GETS the second kind of evidence, and that it can
+// only ever shrink the suppressed set.
+describe('runRepeatBounceSweep — transactional delivery evidence', () => {
+  it('does not suppress a repeat-bouncer who reliably receives transactional mail', async () => {
+    const { db, statements } = makeDb(routeFor({
+      bounceRows: bouncesFor('a', 3),
+      deliveries: [],                                   // nothing in the broadcast ledger
+      transactionalRows: { a: [{ status: 'delivered' }, { status: 'opened' }] },
+      contacts: withContact('a'),
+    }))
+    const out = await runRepeatBounceSweep({ db, now: NOW })
+
+    expect(out.suppressed).toBe(0)
+    expect(out.review).toBe(1)
+    const row = inserts(statements)[0]
+    expect(row.decision).toBe('review')
+    expect(row.reason).toBe('repeat_bounce_previously_delivered')
+    // The stamp is the whole point: a review row must never suppress.
+    expect(row.suppressed_at).toBeNull()
+    expect(updates(statements, 'contacts')).toHaveLength(0)
+  })
+
+  it('excludes campaign-sourced email_sends rows so the delivery count is not doubled', async () => {
+    const { db, statements } = makeDb(routeFor({
+      bounceRows: bouncesFor('a', 3),
+      deliveries: ['a'],
+      transactionalRows: { a: [{ status: 'delivered' }] },
+      contacts: withContact('a'),
+    }))
+    await runRepeatBounceSweep({ db, now: NOW })
+
+    // Every campaign-sourced email_sends row mirrors a campaign_recipients row
+    // (22,282 of 22,282 live on 2026-08-11), so counting both would report two
+    // deliveries for one send on a column the operator reads as "Delivered to".
+    const scan = statements.find((s) => s.table === 'email_sends')
+    expect(scan, 'the sweep never looked at email_sends').toBeTruthy()
+    expect(argOf(scan, 'neq')).toEqual(['source_type', 'campaign'])
+
+    expect(inserts(statements)[0].successful_deliveries).toBe(2)
+  })
+
+  it('counts a later-bounced row that still carries proof it was delivered', async () => {
+    const { db, statements } = makeDb(routeFor({
+      bounceRows: bouncesFor('a', 3),
+      // Status overwritten by a deferred bounce; the delivery timestamp survives.
+      deliveryRows: [{ contact_id: 'a', status: 'bounced', delivered_at: '2026-06-08T19:29:14.000Z' }],
+      contacts: withContact('a'),
+    }))
+    const out = await runRepeatBounceSweep({ db, now: NOW })
+
+    expect(out.suppressed).toBe(0)
+    expect(inserts(statements)[0].decision).toBe('review')
+  })
+
+  it('still suppresses when neither ledger has ever delivered', async () => {
+    const { db, statements } = makeDb(routeFor({
+      bounceRows: bouncesFor('a', 3),
+      deliveryRows: [{ contact_id: 'a', status: 'bounced', bounced_at: '2026-06-08T19:53:12.000Z' }],
+      transactionalRows: { a: [{ status: 'bounced', bounced_at: '2026-06-08T19:53:12.000Z' }] },
+      contacts: withContact('a'),
+    }))
+    const out = await runRepeatBounceSweep({ db, now: NOW })
+
+    expect(out.suppressed).toBe(1)
+    expect(inserts(statements)[0].reason).toBe('repeat_bounce_never_delivered')
+  })
+
+  it('suppresses nobody new when the second ledger is empty (the set cannot grow)', async () => {
+    const { db, statements } = makeDb(routeFor({
+      // Two contacts below the campaign threshold, one over it.
+      bounceRows: [...bouncesFor('a', 3), ...bouncesFor('b', 2), ...bouncesFor('c', 1)],
+      transactionalRows: {},
+      contacts: { ...withContact('a'), ...withContact('b'), ...withContact('c') },
+    }))
+    const out = await runRepeatBounceSweep({ db, now: NOW })
+    expect(out.suppressed).toBe(1)
+    expect(inserts(statements).map((r) => r.contact_id)).toEqual(['a'])
+  })
+
+  it('treats an email_sends read failure as a hard abort, never as "no deliveries"', async () => {
+    // Missing evidence is not evidence of absence. Failing open here would
+    // suppress exactly the contacts the new evidence exists to spare.
+    const { db, statements } = makeDb((state) => {
+      if (state.table === 'email_sends') return { data: null, error: { message: 'email_sends exploded' } }
+      return routeFor({
+        bounceRows: bouncesFor('a', 3),
+        contacts: withContact('a'),
+      })(state)
+    })
+    const out = await runRepeatBounceSweep({ db, now: NOW })
+
+    expect(out.ok).toBe(false)
+    expect(out.errors.join(' ')).toContain('email_sends exploded')
+    expect(inserts(statements)).toHaveLength(0)
+    expect(updates(statements, 'contacts')).toHaveLength(0)
   })
 })

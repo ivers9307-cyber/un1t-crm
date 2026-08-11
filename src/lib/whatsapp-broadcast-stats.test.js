@@ -172,3 +172,70 @@ describe('whatsappBroadcastDisplayStats — a cancelled broadcast', () => {
     expect(d.stoppedShort).toBe(false)
   })
 })
+
+// ── WACAPPED.1 — the fifth status nobody counted ────────────────────────────
+//
+// A recipient parked by Meta's cross-business frequency cap (131049) is
+// recorded 'capped': neither sent nor failed, and correctly so — it is a
+// retryable park, not an outcome (classifyBlastFailure, whatsapp.js). But the
+// four cards are counted from a status column that has five terminal-ish
+// values, so mid-cap Sent + Failed is short of the queued total and no surface
+// says why. The arithmetic is right; the explanation was missing.
+describe('whatsappBroadcastDisplayStats — the capped park', () => {
+  const DRIP = { id: 'b4', status: 'sending', total_recipients: 100 }
+  const live = (counts) => ({ ok: true, counts: { rows: 100, sent: 0, delivered: 0, read: 0, failed: 0, capped: 0, ...counts }, error: null })
+
+  it('carries the capped count through as its own figure', () => {
+    const d = whatsappBroadcastDisplayStats(DRIP, live({ sent: 60, delivered: 55, read: 10, failed: 5, capped: 12 }))
+    expect(d.capped).toBe(12)
+  })
+
+  it('never reclassifies a capped row as sent or failed', () => {
+    const d = whatsappBroadcastDisplayStats(DRIP, live({ sent: 60, failed: 5, capped: 12 }))
+    expect(d.sent).toBe(60)
+    expect(d.failed).toBe(5)
+  })
+
+  it('reports the shortfall the four cards leave against the queued total', () => {
+    // 100 queued, 60 sent, 5 failed, 12 capped → 23 not yet attempted.
+    const d = whatsappBroadcastDisplayStats(DRIP, live({ sent: 60, failed: 5, capped: 12 }))
+    expect(d.unaccounted).toBe(23)
+  })
+
+  it('reads a missing capped count as zero rather than NaN', () => {
+    const d = whatsappBroadcastDisplayStats(DRIP, { ok: true, counts: { rows: 12, sent: 12, delivered: 2, read: 0, failed: 0 }, error: null })
+    expect(d.capped).toBe(0)
+    expect(d.unaccounted).toBe(0)
+  })
+
+  it('claims no capped rows on the counters fallback, which cannot know', () => {
+    // The stored counters have no capped column at all, so a number here would
+    // be invented — the same rule neverQueued already follows.
+    const d = whatsappBroadcastDisplayStats(
+      { id: 'b5', status: 'sent', total_recipients: 50, total_sent: 40, total_failed: 2 },
+      { ok: false, counts: null, error: 'boom' },
+    )
+    expect(d.capped).toBe(0)
+    expect(d.unaccounted).toBe(0)
+  })
+})
+
+describe('loadWhatsappBroadcastRecipientStats — counting capped', () => {
+  it('counts capped rows with an exact-status match, not a reached-at-least set', () => {
+    // 'capped' is a park, not a stage on the way to delivered, so it takes the
+    // same .eq treatment as 'failed'.
+    const applied = []
+    const q = {
+      eq: (...a) => { applied.push(['eq', ...a]); return q },
+      in: (...a) => { applied.push(['in', ...a]); return q },
+      select: () => q,
+      then: (res) => Promise.resolve({ count: 0, error: null }).then(res),
+    }
+    const db = { from: () => q }
+    return loadWhatsappBroadcastRecipientStats(db, 'b1').then((out) => {
+      expect(out.ok).toBe(true)
+      expect(out.counts.capped).toBe(0)
+      expect(applied).toContainEqual(['eq', 'status', 'capped'])
+    })
+  })
+})

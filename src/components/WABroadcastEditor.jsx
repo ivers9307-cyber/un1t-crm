@@ -382,6 +382,25 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
               <ResultStat label="Failed" value={nf(figures.failed)} valueClass="text-red-700" />
             </div>
 
+            {/* WACAPPED.1 — the four cards are counted from a status column
+                that also holds 'capped': a recipient parked by Meta's
+                cross-business frequency cap (131049). That is a retryable
+                park, not an outcome, so it is deliberately in neither Sent nor
+                Failed — which left the cards quietly short of the queued total
+                with nothing on screen to say why. Explain it; do not
+                reclassify it. Live-counted rows only: the stored counters have
+                no capped column, so a fallback render cannot know. */}
+            {!fromCounters && figures.capped > 0 && (
+              <p data-testid="wa-capped-note" className="text-[11px] text-un1t-subtle">
+                {nf(figures.capped)} of the {nf(figures.queued)} queued are parked by WhatsApp&apos;s
+                per-recipient frequency cap, so they count as neither sent nor failed. A later tick
+                retries them.
+                {figures.unaccounted > 0
+                  ? ` The other ${nf(figures.unaccounted)} have not been attempted yet.`
+                  : ''}
+              </p>
+            )}
+
             {/* A cancelled broadcast has TWO true totals and this says both.
                 The audience was recorded when the send started; the recipient
                 rows are what actually got queued before it stopped. Neither is
@@ -547,6 +566,16 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
                     <p className="text-xs text-un1t-muted">
                       {dp?.sentToday != null ? `${nf(dp.sentToday)} of ${nf(cap)} sent today · ` : `Up to ${nf(cap)}/day · `}
                       {String(broadcast.send_window_start).slice(0, 5)}–{String(broadcast.send_window_end).slice(0, 5)} {broadcast.send_window_tz}
+                      {/* WACAPPED.1 — Remaining is audience minus sent minus
+                          failed, so a frequency-cap park is silently folded
+                          into it. That is the right arithmetic (the tick does
+                          retry them) but it reads as "still to start". Name
+                          the share of Remaining that is already waiting. */}
+                      {!fromCounters && figures.capped > 0 ? (
+                        <span data-testid="wa-drip-capped">
+                          {' · '}{nf(figures.capped)} of those parked by the frequency cap, retried later
+                        </span>
+                      ) : null}
                     </p>
                     <div className="pt-1">
                       {!editingDrip ? (

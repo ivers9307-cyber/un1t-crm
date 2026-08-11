@@ -323,3 +323,89 @@ describe('groupBouncesByContact', () => {
     expect(groupBouncesByContact([]).size).toBe(0)
   })
 })
+
+// ── BOUNCEEV.1 — delivery evidence is not only campaign_recipients ──────────
+//
+// A contact who reliably receives TRANSACTIONAL mail (email_sends) but bounces
+// on broadcasts could still be suppressed, because "never delivered to" was
+// read off campaign_recipients alone. That fails in the UNSAFE direction: it
+// makes the suppressed set larger than the evidence supports.
+//
+// Measured live 2026-08-11 (project iyvtbjjxdggiadzwwvdj): of the 21 contacts
+// the sweep currently suppresses, contact 091d56fd… has six email_sends rows
+// (source_type transactional + inbox_reply), every one of them delivered, and
+// four of the six opened or clicked. Nothing in campaign_recipients says so.
+import {
+  SUCCESSFUL_EMAIL_SEND_STATUSES,
+  isDeliveryEvidence,
+} from './bounce-escalation.js'
+
+describe('email_sends as delivery evidence', () => {
+  it('reads email_sends.status with the same progressing-column rule as campaign_recipients', () => {
+    // email_sends.status is ONE column the Postmark processor overwrites in
+    // place (verified live: status='opened' rows carry no 'delivered'), exactly
+    // like campaign_recipients.status and whatsapp_broadcast_recipients.status.
+    // So evidence means "reached AT LEAST sent", never status = 'delivered'.
+    expect(SUCCESSFUL_EMAIL_SEND_STATUSES).toEqual(['sent', 'delivered', 'opened', 'clicked'])
+  })
+
+  it('a transactional delivery keeps a repeat-bouncer out of the suppressed set', () => {
+    const bounces = [bounce('c1'), bounce('c2'), bounce('c3')]
+    expect(decide({ bounces, successfulDeliveries: 0, transactionalDeliveries: 1 }).outcome).toBe('review')
+  })
+
+  it('still suppresses when no source has ever delivered', () => {
+    const bounces = [bounce('c1'), bounce('c2'), bounce('c3')]
+    expect(decide({ bounces, successfulDeliveries: 0, transactionalDeliveries: 0 }).outcome).toBe('suppress')
+  })
+
+  it('reports the two evidence sources separately and as one total', () => {
+    const bounces = [bounce('c1'), bounce('c2'), bounce('c3')]
+    const d = decide({ bounces, successfulDeliveries: 2, transactionalDeliveries: 3 })
+    expect(d.successfulDeliveries).toBe(2)
+    expect(d.transactionalDeliveries).toBe(3)
+    expect(d.totalDeliveries).toBe(5)
+  })
+
+  it('treats a missing transactional count as no evidence, never as a reason to suppress harder', () => {
+    const bounces = [bounce('c1'), bounce('c2'), bounce('c3')]
+    // Absent field — the old call shape. Same verdict as before this change.
+    expect(decide({ bounces, successfulDeliveries: 1 }).outcome).toBe('review')
+    expect(decide({ bounces, successfulDeliveries: 0 }).outcome).toBe('suppress')
+    expect(decide({ bounces, successfulDeliveries: 0, transactionalDeliveries: 'nonsense' }).outcome).toBe('suppress')
+  })
+})
+
+describe('isDeliveryEvidence — a row that proves the address accepted mail', () => {
+  it('accepts any status that has reached at least sent', () => {
+    for (const status of ['sent', 'delivered', 'opened', 'clicked']) {
+      expect(isDeliveryEvidence({ status })).toBe(true)
+    }
+  })
+
+  it('rejects a row that never got out the door', () => {
+    expect(isDeliveryEvidence({ status: 'queued' })).toBe(false)
+    expect(isDeliveryEvidence({ status: 'sending' })).toBe(false)
+    expect(isDeliveryEvidence({ status: 'cancelled' })).toBe(false)
+    expect(isDeliveryEvidence({ status: 'bounced' })).toBe(false)
+    expect(isDeliveryEvidence({})).toBe(false)
+    expect(isDeliveryEvidence(null)).toBe(false)
+  })
+
+  it('accepts a LATER-bounced row that still carries proof it was delivered, opened or clicked', () => {
+    // The status column is terminal-overwritten, so a deferred bounce erases
+    // 'clicked' and leaves 'bounced' — but the timestamps survive. Live case
+    // 2026-08-11: contact 6ad8921c… has four sends delivered, opened AND
+    // clicked minutes before a transient bounce arrived, on both
+    // campaign_recipients and email_sends. Reading status alone calls that
+    // person never-delivered and suppresses a demonstrably engaged reader.
+    expect(isDeliveryEvidence({ status: 'bounced', delivered_at: '2026-06-08T19:29:14Z' })).toBe(true)
+    expect(isDeliveryEvidence({ status: 'bounced', opened_at: '2026-06-08T19:52:22Z' })).toBe(true)
+    expect(isDeliveryEvidence({ status: 'bounced', clicked_at: '2026-06-08T19:52:24Z' })).toBe(true)
+    expect(isDeliveryEvidence({ status: 'complained', delivered_at: '2026-06-08T19:29:14Z' })).toBe(true)
+  })
+
+  it('ignores a bounced_at on its own — a bounce is not a delivery', () => {
+    expect(isDeliveryEvidence({ status: 'bounced', bounced_at: '2026-06-08T19:53:12Z' })).toBe(false)
+  })
+})
