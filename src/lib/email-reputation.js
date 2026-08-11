@@ -86,3 +86,36 @@ export function emailStatusResetForAddressChange({ oldEmail, newEmail, currentSt
   if (!ADDRESS_BOUND_EMAIL_STATUSES.includes(currentStatus)) return null
   return 'active'
 }
+
+/**
+ * EMAILREP.2 — the one rule for "a marketing OPT-IN is about to be recorded;
+ * may it write contacts.email_status?".
+ *
+ * It may only ever NORMALISE, never clear. mig 492 retired 'unsubscribed' and
+ * mig 501 CHECK-bans it, so rows predating those carry either NULL (the mig
+ * 005 default, read as 'active' everywhere) or leftover 'unsubscribed' —
+ * residue an opt-in is welcome to tidy to 'active'. `bounced` / `complained`
+ * are NOT residue: they are a hard send-time gate that
+ * buildAudienceQuery applies unconditionally, to administrative mail as well
+ * as marketing, and consent is not evidence the mailbox works. The address
+ * itself has to change (emailStatusResetForAddressChange), the recipient has
+ * to engage, or Postmark has to lift its own suppression.
+ *
+ * Extracted from the three inline copies that already implemented it
+ * (marketing-consent.js ×2, the bulk-import route) so there is one rule and
+ * one place to change it — a fourth writer, the admin marketing-preferences
+ * PATCH, had no guard at all and was un-suppressing bounced addresses.
+ *
+ * Deliberately says nothing about the OPT-OUT direction: an opt-out has
+ * nothing to write here at all, and callers must not call this for one.
+ *
+ * @param {string|null|undefined} currentStatus contacts.email_status now.
+ *   `undefined` means "not selected" and is treated as unknown — the caller
+ *   gets `null` rather than a stamp made on missing evidence.
+ * @returns {'active'|null} 'active' to write, null to leave the column alone
+ *   (which includes the already-'active' no-op — never spend a PATCH on it).
+ */
+export function emailStatusNormaliseForOptIn(currentStatus) {
+  if (currentStatus === null || currentStatus === 'unsubscribed') return 'active'
+  return null
+}

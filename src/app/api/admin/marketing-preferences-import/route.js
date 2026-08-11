@@ -27,6 +27,7 @@ import { createServerClient } from '@/lib/supabase'
 import { parseCsv } from '@/lib/csv-parse'
 import { getClientIp } from '@/lib/rate-limit'
 import { consentActionFor } from '@/lib/consent-actions'
+import { emailStatusNormaliseForOptIn } from '@/lib/email-reputation'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -383,16 +384,19 @@ export async function POST(request) {
         ip_address: ip,
       })
     }
-    // Email status mirror — same reputation-state guard as the helper.
+    // Email status mirror — EMAILREP.2, the shared rule from
+    // email-reputation.js. An opt-IN may only normalise legacy residue
+    // (NULL / retired 'unsubscribed'); 'bounced' / 'complained' survive an
+    // import, and an opt-OUT has nothing to write here at all (see the
+    // LOCCOMMS.5 note at the emailToUnsub write below).
     if (Object.prototype.hasOwnProperty.call(changed, 'email_marketing')) {
       const cur = emailStatusByContact.get(contactId)
-      const flipReputationOk = (cur === 'active' || cur === 'unsubscribed' || cur === null)
-      if (flipReputationOk) {
-        const target = changed.email_marketing ? 'active' : 'unsubscribed'
-        if (cur !== target) {
-          if (target === 'active') emailToActive.push(contactId)
-          else emailToUnsub.push(contactId)
-        }
+      if (changed.email_marketing) {
+        // `cur` is undefined only if the snapshot select missed the row —
+        // unknown reputation, so the helper returns null and we skip it.
+        if (emailStatusNormaliseForOptIn(cur)) emailToActive.push(contactId)
+      } else if (cur === 'active' || cur === null) {
+        emailToUnsub.push(contactId)
       }
     }
   }

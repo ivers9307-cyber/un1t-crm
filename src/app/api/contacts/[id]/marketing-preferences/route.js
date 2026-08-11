@@ -24,6 +24,7 @@ import { validateBody } from '@/lib/validate'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { getClientIp } from '@/lib/rate-limit'
 import { consentActionFor } from '@/lib/consent-actions'
+import { emailStatusNormaliseForOptIn } from '@/lib/email-reputation'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -105,9 +106,13 @@ export async function PATCH(request, props) {
   // caller's studios before mutating its consent / writing consent_log.
   // assertLocationAccess returns owned ∪ master; a contact owned by
   // another studio is a 403 even for an admin here.
+  //
+  // email_status rides along on the gate's existing round trip — the
+  // EMAILREP.2 guard at the bottom needs the CURRENT reputation to decide
+  // whether an opt-in may normalise it, and reading it here costs nothing.
   const { data: contact, error: contactErr } = await db
     .from('contacts')
-    .select('location_id')
+    .select('location_id, email_status')
     .eq('id', params.id)
     .maybeSingle()
   if (contactErr) {
@@ -170,16 +175,37 @@ export async function PATCH(request, props) {
     await db.from('consent_log').insert(logEntries)
   }
 
-  // Mirror the customer preference centre's side-effect: when
-  // email_marketing flips to false, set contacts.email_status to
-  // 'unsubscribed' so the broadcast/audience builder filters
-  // correctly (some queries gate on email_status rather than the
-  // contact_preferences flag).
-  if (typeof updates.email_marketing === 'boolean') {
-    await db
-      .from('contacts')
-      .update({ email_status: 'active' })   // LOCCOMMS.5 — reputation only; never stamp 'unsubscribed'
-      .eq('id', params.id)
+  // EMAILREP.2 — contacts.email_status is REPUTATION, not consent, and this
+  // route used to stamp it 'active' on ANY change to email_marketing. An
+  // operator toggling a contact OFF therefore cleared a `bounced` /
+  // `complained` flag, and that flag is a hard send-time gate:
+  // buildAudienceQuery applies .not('email_status','in','("bounced",
+  // "complained")') unconditionally, to administrative mail as well as
+  // marketing. So a routine preference edit silently put dead and
+  // complaining mailboxes back into the sendable audience (3 live rows;
+  // mig 524 repairs them).
+  //
+  // The rule is now the shared one every other consent writer already used
+  // (marketing-consent.js ×2, the bulk-import route): an opt-OUT never
+  // touches reputation — it is fully recorded in contact_preferences +
+  // consent_log above — and an opt-IN may only normalise legacy residue
+  // (NULL / retired 'unsubscribed') to 'active'.
+  //
+  // Opting someone in is not evidence the mailbox works, and this is a
+  // STAFF action on a contact record — nobody has confirmed anything about
+  // the address. That is what separates it from the customer preference
+  // centre, where the contact themselves re-consents. Reputation comes back
+  // via a corrected address (emailStatusResetForAddressChange), real
+  // engagement, or a Postmark un-suppression — never a toggle in the admin
+  // panel.
+  if (updates.email_marketing === true) {
+    const nextStatus = emailStatusNormaliseForOptIn(contact.email_status)
+    if (nextStatus) {
+      await db
+        .from('contacts')
+        .update({ email_status: nextStatus })
+        .eq('id', params.id)
+    }
   }
 
   return NextResponse.json({
