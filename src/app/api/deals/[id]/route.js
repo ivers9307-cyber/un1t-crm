@@ -52,11 +52,39 @@ export async function PUT(request, props) {
   if (body.status !== undefined) updates.status = body.status
   if (body.value !== undefined) updates.value = body.value
 
-  // Allow stage update by slug or ID
-  if (body.stage_id) updates.stage_id = body.stage_id
-  if (body.stage_slug) {
-    const { data: stage } = await db.from('pipeline_stages').select('id').eq('slug', body.stage_slug).single()
-    if (stage) updates.stage_id = stage.id
+  // Allow stage update by slug or ID — DEALSCOPE.1, both scoped to the deal's
+  // OWN location.
+  //
+  // The slug lookup used to be `.eq('slug', …).single()` with no location
+  // filter. That is not a latent risk: every core slug already exists on five
+  // locations, so the query matched five rows, PostgREST errored, the error was
+  // discarded, and `updates.stage_id` was never set. The caller got a 200 and
+  // the deal did not move — a silent no-op, which is worse than a loud failure
+  // because an integration cannot tell the difference from success.
+  //
+  // `stage_id` had the mirror problem: taken verbatim, with nothing checking the
+  // stage belonged to this deal's location. Both now resolve through the same
+  // scoped lookup, and an unresolvable stage is a 400 rather than a quiet skip.
+  // maybeSingle, not single: slug is unique PER LOCATION (mig 150), so once the
+  // location is pinned the answer is exactly 0 or 1 rows.
+  if (body.stage_id || body.stage_slug) {
+    if (!existing) {
+      return NextResponse.json({ success: false, error: 'not_found' }, { status: 404 })
+    }
+    const scoped = db
+      .from('pipeline_stages')
+      .select('id')
+      .eq('location_id', existing.location_id)
+    const { data: stage } = body.stage_slug
+      ? await scoped.eq('slug', body.stage_slug).maybeSingle()
+      : await scoped.eq('id', body.stage_id).maybeSingle()
+    if (!stage) {
+      return NextResponse.json(
+        { success: false, error: 'unknown_stage_for_location' },
+        { status: 400 },
+      )
+    }
+    updates.stage_id = stage.id
   }
 
   const { data, error } = await db.from('deals').update(updates).eq('id', id).select().single()
