@@ -302,7 +302,7 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <label className="text-sm">Message body</label>
-                <span className={`text-[11px] ${seg.segments > 1 ? 'text-amber-500' : 'text-un1t-subtle'}`}>
+                <span className={`text-[11px] ${seg.segments > 1 ? 'text-amber-700' : 'text-un1t-subtle'}`}>
                   {seg.len} chars · {seg.segments} segment{seg.segments === 1 ? '' : 's'}
                 </span>
               </div>
@@ -487,29 +487,29 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
             </div>
             <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-4">
               <div className="text-xs text-un1t-subtle uppercase tracking-wider flex items-center gap-1.5">
-                <CheckCircle2 size={12} className="text-green-400" /> Sent
+                <CheckCircle2 size={12} className="text-green-700" /> Sent
               </div>
-              <div className="text-2xl font-bold mt-1 text-green-400">{broadcast?.total_sent ?? 0}</div>
+              <div className="text-2xl font-bold mt-1 text-green-700">{broadcast?.total_sent ?? 0}</div>
             </div>
             <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-4">
               <div className="text-xs text-un1t-subtle uppercase tracking-wider flex items-center gap-1.5">
-                <CheckCircle2 size={12} className="text-emerald-400" /> Delivered
+                <CheckCircle2 size={12} className="text-emerald-700" /> Delivered
               </div>
-              <div className="text-2xl font-bold mt-1 text-emerald-400">{broadcast?.total_delivered ?? 0}</div>
+              <div className="text-2xl font-bold mt-1 text-emerald-700">{broadcast?.total_delivered ?? 0}</div>
               <div className="text-[10px] text-un1t-muted mt-1">carrier-confirmed</div>
             </div>
             <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-4">
               <div className="text-xs text-un1t-subtle uppercase tracking-wider flex items-center gap-1.5">
-                <XCircle size={12} className="text-amber-400" /> Undelivered
+                <XCircle size={12} className="text-amber-700" /> Undelivered
               </div>
-              <div className="text-2xl font-bold mt-1 text-amber-400">{broadcast?.total_undelivered ?? 0}</div>
+              <div className="text-2xl font-bold mt-1 text-amber-700">{broadcast?.total_undelivered ?? 0}</div>
               <div className="text-[10px] text-un1t-muted mt-1">carrier rejected</div>
             </div>
             <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-4">
               <div className="text-xs text-un1t-subtle uppercase tracking-wider flex items-center gap-1.5">
-                <XCircle size={12} className="text-red-400" /> Failed
+                <XCircle size={12} className="text-red-700" /> Failed
               </div>
-              <div className="text-2xl font-bold mt-1 text-red-400">{broadcast?.total_failed ?? 0}</div>
+              <div className="text-2xl font-bold mt-1 text-red-700">{broadcast?.total_failed ?? 0}</div>
             </div>
           </div>
 
@@ -542,19 +542,19 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
                   </div>
                   <div className="flex items-center gap-2">
                     {r.status === 'delivered' ? (
-                      <span className="flex items-center gap-1 text-emerald-400 text-xs">
+                      <span className="flex items-center gap-1 text-emerald-700 text-xs">
                         <CheckCircle2 size={12} /> Delivered
                       </span>
                     ) : r.status === 'sent' ? (
-                      <span className="flex items-center gap-1 text-green-400 text-xs" title="Twilio accepted; awaiting delivery receipt">
+                      <span className="flex items-center gap-1 text-green-700 text-xs" title="Twilio accepted; awaiting delivery receipt">
                         <CheckCircle2 size={12} /> Sent
                       </span>
                     ) : r.status === 'undelivered' ? (
-                      <span className="flex items-center gap-1 text-amber-400 text-xs" title={r.error_message}>
+                      <span className="flex items-center gap-1 text-amber-700 text-xs" title={r.error_message}>
                         <XCircle size={12} /> Undelivered
                       </span>
                     ) : r.status === 'failed' ? (
-                      <span className="flex items-center gap-1 text-red-400 text-xs" title={r.error_message}>
+                      <span className="flex items-center gap-1 text-red-700 text-xs" title={r.error_message}>
                         <XCircle size={12} /> Failed
                       </span>
                     ) : (

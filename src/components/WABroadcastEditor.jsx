@@ -464,9 +464,9 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
                     </td>
                     <td className="px-4 py-3">
                       <span className={`flex items-center gap-1 text-xs ${
-                        r.status === 'read' ? 'text-blue-400' :
-                        r.status === 'delivered' ? 'text-green-400' :
-                        r.status === 'failed' ? 'text-red-400' :
+                        r.status === 'read' ? 'text-blue-700' :
+                        r.status === 'delivered' ? 'text-green-700' :
+                        r.status === 'failed' ? 'text-red-700' :
                         'text-un1t-subtle'
                       }`}>
                         {r.status === 'failed' ? <XCircle size={12} /> : <CheckCircle2 size={12} />}
@@ -626,7 +626,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
               {templates.length === 0 ? (
                 <div className="text-center py-4">
                   <p className="text-sm text-un1t-subtle mb-2">No approved templates available</p>
-                  <Link href="/whatsapp/templates/new" className="text-sm text-blue-400 hover:underline">
+                  <Link href="/whatsapp/templates/new" className="text-sm text-blue-700 hover:underline">
                     Create a template first
                   </Link>
                 </div>
@@ -788,7 +788,7 @@ function FailedSendsBox({ failedRecipients = [], failedCount = 0 }) {
   return (
     <div className="bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden">
       <div className="px-4 py-3 border-b border-un1t-border flex items-center gap-2">
-        <XCircle size={14} className="text-red-400" />
+        <XCircle size={14} className="text-red-700" />
         <p className="text-sm font-medium text-un1t-text">Failed sends ({failedCount.toLocaleString()})</p>
       </div>
       <div className="overflow-x-auto">

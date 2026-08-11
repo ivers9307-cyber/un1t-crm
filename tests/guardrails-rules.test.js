@@ -116,6 +116,53 @@ ruleTester.run('no-low-contrast-chip', plugin.rules['no-low-contrast-chip'], {
   ],
 })
 
+// COMMSLAYOUT.6 — the plain-accent-text half of the same problem. This rule
+// subsumes the file-scanning tests/comms-light-theme-contrast.test.js that used
+// to police the Communications tree (deleted with this rule, so one mechanism
+// enforces this rather than two that can drift apart).
+ruleTester.run('no-low-contrast-accent-text', plugin.rules['no-low-contrast-accent-text'], {
+  valid: [
+    // the light-theme ramp
+    '"text-emerald-700"',
+    '"flex items-center gap-1 text-xs text-red-700"',
+    // -600 is a legitimate muted grey on white (email/WhatsApp preview mocks)
+    '"text-xs text-gray-600 mt-2"',
+    // un1t-* tokens are intent-named and carry their own semantics
+    '"text-un1t-subtle hover:text-un1t-text"',
+    '"text-un1t-muted"',
+    // a low ramp used for something that is not TEXT
+    '"bg-emerald-500/10 border-red-400/40 ring-blue-300"',
+    // the dark panel inside a light page: the HTML-source textareas
+    '"flex-1 w-full bg-black text-green-400 font-mono text-sm p-5"',
+    '"bg-[#0b0b0b] text-slate-400"',
+    // an explicit dark-mode variant is a dark-surface ramp by construction
+    '"dark:text-slate-400"',
+    // not a Tailwind colour utility — a substring of a longer identifier
+    '"context-red-400"',
+    // -600/-700 hover pair
+    '"text-red-700 hover:text-red-800"',
+  ],
+  invalid: [
+    // the shipped CampaignEditor / SMSBroadcastEditor shapes
+    { code: '"inline-flex items-center gap-1 text-xs text-emerald-400"', errors: [{ messageId: 'lowRamp' }] },
+    { code: '"text-2xl font-bold mt-1 text-red-400"', errors: [{ messageId: 'lowRamp' }] },
+    // -500 is the same mistake one stop up
+    { code: '"text-[11px] text-amber-500"', errors: [{ messageId: 'lowRamp' }] },
+    { code: '"text-sm text-blue-500"', errors: [{ messageId: 'lowRamp' }] },
+    // -300 too
+    { code: '"text-sm text-red-400 hover:text-red-300"', errors: [{ messageId: 'lowRamp' }] },
+    // a variant prefix does not exempt it
+    { code: '"text-un1t-muted hover:text-red-400 p-1"', errors: [{ messageId: 'lowRamp' }] },
+    { code: '"md:text-cyan-400"', errors: [{ messageId: 'lowRamp' }] },
+    // the class living in a config map rather than on JSX
+    { code: "const cfg = { color: 'text-orange-400' }", errors: [{ messageId: 'lowRamp' }] },
+    // template literal — the static half is judged
+    { code: 'const c = `flex ${x} text-cyan-400 text-xs`', errors: [{ messageId: 'lowRamp' }] },
+    // neutrals count: gray-400 on white is ~2.8:1
+    { code: '"p-12 text-center text-gray-400"', errors: [{ messageId: 'lowRamp' }] },
+  ],
+})
+
 jsxRuleTester.run('no-untyped-button-in-form', plugin.rules['no-untyped-button-in-form'], {
   valid: [
     // no <form> ancestor in this file — outside a form the default is inert
