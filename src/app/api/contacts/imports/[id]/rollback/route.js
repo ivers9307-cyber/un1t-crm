@@ -8,7 +8,11 @@
 //   - For every contact_import_rows row with action='updated' AND
 //     a non-null `before_snapshot` → UPDATE the contact back to the
 //     snapshotted values. Limited to fields the import actually
-//     touched (the snapshot only carries those keys).
+//     touched (the snapshot only carries those keys) AND, since
+//     ROLLBACK-ALLOW.1, filtered through pickRestorableSnapshot() so
+//     only columns an import can legitimately own are written back.
+//     Anything outside that allowlist is left alone, logged, and
+//     counted into `unrestorable_keys` on the response.
 //   - Stamps the batch as status='rolled_back' + records actor +
 //     timestamp.
 //   - Marks the per-row outcomes as action='rolled_back' so the
@@ -21,6 +25,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { redactWhatsAppForContact } from '@/lib/contact-merge'
+import { pickRestorableSnapshot } from '@/lib/contact-import'
 import { logWarn } from '@/lib/log'
 import { selectAll } from '@/lib/select-all'
 
@@ -61,6 +66,11 @@ export async function POST(_request, props) {
   let deleted = 0
   let restored = 0
   let failed = 0
+  // ROLLBACK-ALLOW.1 — snapshot keys this rollback refused to write back.
+  // Surfaced to the operator rather than dropped silently: a non-zero
+  // count means a snapshot writer and the allowlist have drifted apart,
+  // and someone should look. Expected to be 0 forever.
+  let unrestorableKeys = 0
 
   // 1. Delete created contacts (with the existing GDPR scrub).
   //    PAGED: an un-paginated select caps at 1000, so a rollback of a
@@ -80,7 +90,7 @@ export async function POST(_request, props) {
       deleted += 1
     } catch (e) {
       failed += 1
-      logWarn('rollback ${params.id}', `delete ${c.id} failed`, { err: e })
+      logWarn(`rollback ${params.id}`, `delete ${c.id} failed`, { err: e })
     }
   }
 
@@ -98,16 +108,42 @@ export async function POST(_request, props) {
     .range(from, to))
   for (const r of updatedRows) {
     if (!r.contact_id || !r.before_snapshot) continue
+
+    // ROLLBACK-ALLOW.1 — never write the snapshot verbatim. The allowlist
+    // is derived from IMPORT_FIELD_KEYS (see pickRestorableSnapshot), i.e.
+    // exactly the columns the import runner can put in a snapshot. Today
+    // every live snapshot is inside it, so this changes no behaviour; it
+    // removes the possibility that a future writer, or a snapshot taken
+    // under an older schema, gets a column written back into `contacts`
+    // unchecked. Notably `email_status` can never come through, which is
+    // what keeps mig 528's BEFORE UPDATE OF email trigger effective.
+    const { patch, unknownKeys } = pickRestorableSnapshot(r.before_snapshot)
+    if (unknownKeys.length > 0) {
+      unrestorableKeys += unknownKeys.length
+      logWarn(`rollback ${params.id}`, 'snapshot keys outside the restorable allowlist — not written', {
+        rowId: r.id, contactId: r.contact_id, keys: unknownKeys,
+      })
+    }
+    if (Object.keys(patch).length === 0) {
+      // Nothing writable at all — the operator asked for a restore that
+      // did not happen, so say so rather than counting it as restored.
+      failed += 1
+      logWarn(`rollback ${params.id}`, `restore ${r.contact_id} skipped — nothing restorable in the snapshot`, {
+        rowId: r.id, keys: unknownKeys,
+      })
+      continue
+    }
+
     try {
       const { error } = await db
         .from('contacts')
-        .update(r.before_snapshot)
+        .update(patch)
         .eq('id', r.contact_id)
       if (error) throw new Error(error.message)
       restored += 1
     } catch (e) {
       failed += 1
-      logWarn('rollback ${params.id}', `restore ${r.contact_id} failed`, { err: e })
+      logWarn(`rollback ${params.id}`, `restore ${r.contact_id} failed`, { err: e })
     }
   }
 
@@ -129,6 +165,6 @@ export async function POST(_request, props) {
 
   return NextResponse.json({
     success: true,
-    data: { deleted, restored, failed },
+    data: { deleted, restored, failed, unrestorable_keys: unrestorableKeys },
   })
 }

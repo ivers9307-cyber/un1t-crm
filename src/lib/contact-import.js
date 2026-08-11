@@ -244,6 +244,55 @@ export function fieldsTouchedByMapping(mapping) {
 }
 
 /**
+ * ROLLBACK-ALLOW.1 — filter a rollback `before_snapshot` down to the
+ * columns an import is allowed to write back into `contacts`.
+ *
+ * The allowlist is IMPORT_FIELD_KEYS, which is not a list invented
+ * here: `runImportCommit` builds every snapshot by walking
+ * `fieldsTouchedByMapping(mapping)` (+ 'tags' when a batch tag is
+ * set), and `fieldsTouchedByMapping` already filters to
+ * IMPORT_FIELD_KEYS. So this IS the set of keys the runner can
+ * produce — the two cannot drift, because they read the same constant.
+ *
+ * Measured live 2026-08-11: every stored snapshot holds exactly
+ * `email`, `first_name`, `last_name`, `tags` — all inside the
+ * allowlist. This is prevention, not repair. Nothing on disk is
+ * corrupt; what it removes is the *structural* possibility of a future
+ * writer, or a snapshot captured under an older schema, having a
+ * column written back into `contacts` verbatim.
+ *
+ * Two consequences worth stating:
+ *   - `email` stays restorable, so rollback keeps firing mig 528's
+ *     BEFORE UPDATE OF email trigger, which clears a stale
+ *     bounced/complained stamp. That interaction was reasoned about
+ *     when 528 landed and is intended.
+ *   - `email_status` is NOT in IMPORT_FIELD_KEYS and so can never be
+ *     restored. That is load-bearing rather than incidental: an
+ *     `email_status` written in the same UPDATE would make 528's
+ *     NEW-guard false, turn the trigger into a no-op, and silently
+ *     reinstate a stamp belonging to a different mailbox.
+ *
+ * Returns `{ patch, unknownKeys }` rather than just the filtered
+ * object: a snapshot key nobody can restore means a writer and this
+ * allowlist have drifted, and the caller is expected to make that
+ * visible instead of dropping it silently.
+ */
+export function pickRestorableSnapshot(snapshot) {
+  const patch = {}
+  const unknownKeys = []
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+    return { patch, unknownKeys }
+  }
+  for (const [key, value] of Object.entries(snapshot)) {
+    // `value` is passed through untouched — a snapshot null/'' is a real
+    // prior value ("this field was empty before the import"), not a gap.
+    if (IMPORT_FIELD_KEYS.includes(key)) patch[key] = value
+    else unknownKeys.push(key)
+  }
+  return { patch, unknownKeys }
+}
+
+/**
  * CSV template content as a string. One header row, no body. Used
  * by the wizard's "Download template" button so operators see the
  * exact column names autoMapHeaders will recognise.
