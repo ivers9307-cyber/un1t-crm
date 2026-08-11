@@ -36,6 +36,7 @@
 
 import { logWarn } from './log.js'
 import { consentActionFor } from './consent-actions.js'
+import { emailStatusNormaliseForOptIn } from './email-reputation.js'
 
 const MARKETING_CHANNELS = ['email_marketing', 'sms_marketing', 'whatsapp_marketing']
 
@@ -181,12 +182,15 @@ export async function applyFormMarketingConsent(db, args) {
   //    in contact_location_preferences + contact_preferences above.
   //    'bounced' / 'complained' are never cleared — reputation states a
   //    form submission must not reset.
+  //    EMAILREP.2 — the rule itself now lives in email-reputation.js, shared
+  //    with applyMarketingPreferencesBulk, the bulk-import route and the
+  //    admin marketing-preferences PATCH (which had no guard at all).
   const emailFlipped = changed.includes('email_marketing')
-  const flipReputationOk = (
-    contact.email_status === 'active' || contact.email_status === 'unsubscribed' || contact.email_status === null
-  )
-  if (emailFlipped && consent && flipReputationOk && contact.email_status !== 'active') {
-    await db.from('contacts').update({ email_status: 'active' }).eq('id', contactId)
+  if (emailFlipped && consent) {
+    const nextStatus = emailStatusNormaliseForOptIn(contact.email_status)
+    if (nextStatus) {
+      await db.from('contacts').update({ email_status: nextStatus }).eq('id', contactId)
+    }
   }
 
   return { ok: true, skipped: null, changed }
@@ -306,13 +310,9 @@ export async function applyMarketingPreferencesBulk(db, args) {
   //    never stamp 'unsubscribed'. The opt-out lives in the preference
   //    rows written above.
   if (changed.includes('email_marketing') && wantedPrefs.email_marketing) {
-    const flipReputationOk = (
-      contact.email_status === 'active'
-      || contact.email_status === 'unsubscribed'
-      || contact.email_status === null
-    )
-    if (flipReputationOk && contact.email_status !== 'active') {
-      await db.from('contacts').update({ email_status: 'active' }).eq('id', contactId)
+    const nextStatus = emailStatusNormaliseForOptIn(contact.email_status)
+    if (nextStatus) {
+      await db.from('contacts').update({ email_status: nextStatus }).eq('id', contactId)
     }
   }
 

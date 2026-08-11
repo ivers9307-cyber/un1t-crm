@@ -10,7 +10,11 @@
 //     reputation ONLY — never consent.
 
 import { describe, it, expect } from 'vitest'
-import { emailStatusResetForAddressChange, ADDRESS_BOUND_EMAIL_STATUSES } from './email-reputation.js'
+import {
+  emailStatusResetForAddressChange,
+  emailStatusNormaliseForOptIn,
+  ADDRESS_BOUND_EMAIL_STATUSES,
+} from './email-reputation.js'
 
 describe('emailStatusResetForAddressChange', () => {
   it('clears a bounce when the address is actually corrected', () => {
@@ -92,5 +96,48 @@ describe('emailStatusResetForAddressChange', () => {
     })
     expect(out).toBe('active')
     expect(typeof out).toBe('string')
+  })
+})
+
+// EMAILREP.2 — the opt-in half of the same column. Four writers record a
+// marketing opt-in (form consent, bulk consent, the CSV import route and the
+// admin marketing-preferences PATCH); the PATCH had no guard and stamped
+// 'active' on every edit, opt-OUTS included, which un-suppressed bounced
+// addresses. One rule now, and it may only ever normalise legacy residue.
+describe('emailStatusNormaliseForOptIn', () => {
+  it('normalises a legacy NULL to active', () => {
+    expect(emailStatusNormaliseForOptIn(null)).toBe('active')
+  })
+
+  it("normalises retired 'unsubscribed' residue to active (mig 492/501)", () => {
+    expect(emailStatusNormaliseForOptIn('unsubscribed')).toBe('active')
+  })
+
+  it('NEVER clears a bounce — consent is not evidence the mailbox works', () => {
+    expect(emailStatusNormaliseForOptIn('bounced')).toBeNull()
+  })
+
+  it('NEVER clears a spam complaint', () => {
+    expect(emailStatusNormaliseForOptIn('complained')).toBeNull()
+  })
+
+  it('is a no-op on an already-active row — no pointless PATCH', () => {
+    expect(emailStatusNormaliseForOptIn('active')).toBeNull()
+  })
+
+  it('leaves an unknown status alone rather than guessing', () => {
+    expect(emailStatusNormaliseForOptIn('quarantined')).toBeNull()
+  })
+
+  it('treats undefined (column not selected) as unknown, not as NULL', () => {
+    // A caller that forgot to select email_status must not get a stamp
+    // made on missing evidence — that is exactly how a bounce gets wiped.
+    expect(emailStatusNormaliseForOptIn(undefined)).toBeNull()
+  })
+
+  it('every blocked status is one the send paths actually gate on', () => {
+    for (const s of ADDRESS_BOUND_EMAIL_STATUSES) {
+      expect(emailStatusNormaliseForOptIn(s)).toBeNull()
+    }
   })
 })
