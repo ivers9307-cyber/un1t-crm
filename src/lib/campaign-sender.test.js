@@ -20,7 +20,7 @@
 // The Supabase client is faked with a chainable thenable recorder
 // (mirrors the style of sms.test.js / postmark.test.js) — no DB.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('./app-url.js', () => ({ getAppUrl: () => 'https://crm.test' }))
 vi.mock('./postmark.js', async (importOriginal) => {
@@ -1656,5 +1656,61 @@ describe('tickCampaignSend — subject merge tags resolve the location (COMMSFIX
     await tickCampaignSend(db, { ...campaign, subject: 'See {{preference_url}}' })
 
     expect(sendBatch.mock.calls[0][0][0].subject).toContain('https://crm.test/preferences/')
+  })
+})
+
+// WEBVIEW.1 — the view-in-browser link has to actually reach the wire, at the
+// top of the body, or it does not solve the problem it exists for (Gmail
+// clipping the bottom of the message together with the unsubscribe footer).
+describe('tickCampaignSend — view in browser (WEBVIEW.1)', () => {
+  const ORIGINAL_SECRET = process.env.SUPABASE_SERVICE_ROLE_KEY
+  beforeEach(() => { process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-signing-secret' })
+  afterEach(() => {
+    if (ORIGINAL_SECRET === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY
+    else process.env.SUPABASE_SERVICE_ROLE_KEY = ORIGINAL_SECRET
+  })
+
+  it('puts a /view-email/ link in the html of a broadcast', async () => {
+    const { db } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, campaign)
+
+    const { htmlBody } = sendBatch.mock.calls[0][0][0]
+    expect(htmlBody).toContain('https://crm.test/view-email/')
+  })
+
+  it('places it ABOVE the unsubscribe footer — a footer link would be clipped too', async () => {
+    const { db } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, campaign)
+
+    const { htmlBody } = sendBatch.mock.calls[0][0][0]
+    expect(htmlBody.indexOf('/view-email/')).toBeLessThan(htmlBody.indexOf('/unsubscribe/'))
+  })
+
+  it('carries no contact id — the same URL for every recipient on the send', async () => {
+    const { db } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0), makeRecipient('r2', 0)] }))
+    sendBatch.mockResolvedValue([
+      { ErrorCode: 0, MessageID: 'pm-1' },
+      { ErrorCode: 0, MessageID: 'pm-2' },
+    ])
+
+    await tickCampaignSend(db, campaign)
+
+    const urls = sendBatch.mock.calls[0][0].map(
+      e => e.htmlBody.match(/https:\/\/crm\.test\/view-email\/[A-Za-z0-9_.-]+/)[0],
+    )
+    expect(urls[0]).toBe(urls[1])
+  })
+
+  it('adds nothing to a utility (outbound) email', async () => {
+    const { db } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, { ...campaign, postmark_stream: 'outbound' })
+
+    expect(sendBatch.mock.calls[0][0][0].htmlBody).not.toContain('/view-email/')
   })
 })

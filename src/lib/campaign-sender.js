@@ -82,6 +82,7 @@ import { frequencyCapFromLocationSettings, capCutoffIso, stampMarketingTouch, CA
 import { loadNonOpenerContactIds } from './campaign-resend.js'
 import { getAppUrl } from './app-url.js'
 import { logInfo } from './log.js'
+import { buildCampaignViewUrl, prependViewInBrowserLink } from './campaign-web-view.js'
 
 const CHUNK_SIZE = 500             // recipients per cron tick per campaign
 const AUDIENCE_PAGE_SIZE = 1000    // audience load page (CAMPAIGN.11)
@@ -567,6 +568,10 @@ export async function tickCampaignSend(db, campaign) {
     : (await getDefaultMailboxAddress(db, campaign.location_id))
       || campaign.locations?.email_inbox_reply_to
       || null
+  // WEBVIEW.1 — one hosted-copy URL for the whole send. Signed HMAC over the
+  // campaign id only; no DB round-trip, no column, no per-recipient variation.
+  const campaignViewUrl = buildCampaignViewUrl(campaignId, baseUrl)
+
   const emailBatch = queuedRows.map(row => {
     const contact = row.contact
     // Utility (outbound) emails carry no marketing chrome — no unsubscribe
@@ -596,7 +601,24 @@ export async function tickCampaignSend(db, campaign) {
     const previewText = campaign.preview_text
       ? applyMergeTags(campaign.preview_text, contact, { location_name: campaign.locations?.name || '' })
       : null
-    const finalHtml = previewText ? injectPreheader(personalizedHtml, previewText) : personalizedHtml
+    // WEBVIEW.1 — "view in browser", inserted AFTER the plain-text part is
+    // derived (the text alternative is never clipped, so it does not need the
+    // link) and BEFORE the preheader, so the hidden preheader still leads the
+    // body for inbox preview.
+    //
+    // Broadcast only, like the unsubscribe footer: a utility/transactional
+    // email is small enough that Gmail never clips it, and hosting a public
+    // copy of one would be a step backwards.
+    //
+    // The URL is per-CAMPAIGN, not per-recipient — identical for everyone on
+    // this send. That is the whole PII design (see campaign-web-view.js): a
+    // view-in-browser link is the most-forwarded link in any email, so it must
+    // not resolve to anybody's personal data.
+    const htmlWithWebView = stream === 'broadcast'
+      ? prependViewInBrowserLink(personalizedHtml, campaignViewUrl)
+      : personalizedHtml
+
+    const finalHtml = previewText ? injectPreheader(htmlWithWebView, previewText) : htmlWithWebView
 
     // CAMPAIGN-AB — per-recipient subject: variant A/B in the test
     // slice, the winning subject for the remainder. Non-A/B campaigns

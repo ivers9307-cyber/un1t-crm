@@ -1,9 +1,16 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
+import { getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validate'
 import { consentActionFor } from '@/lib/consent-actions'
+import {
+  REFUSAL_REASONS,
+  guardBeforeTokenLookup,
+  penaliseInvalidToken,
+  guardResolvedToken,
+  recordRefusedOptOut,
+} from '@/lib/consent-token-guard'
 
 const PreferencesUpdateSchema = z.object({
   // LOCCOMMS.4 — when present, the update applies to THAT location's list only.
@@ -21,24 +28,49 @@ const PreferencesUpdateSchema = z.object({
 
 export const runtime = 'nodejs'
 
-// 20 attempts per IP per 15 minutes. The preference centre legitimately
-// sends a few requests per session (load + toggle a few channels), so this
-// is more lenient than the unsubscribe endpoint while still blunting any
-// brute-force enumeration.
-// SAAS-6: deliberately tenant-UNSCOPED — this limiter blunts token
-// enumeration from one IP; the tenant is only knowable AFTER resolving the
-// token, and keying on caller-supplied input would mint a fresh window per guess.
-const RL = { max: 20, windowMs: 15 * 60_000 }
+// UNSUB-RL.1 — this route carried the same defect as /api/unsubscribe: a flat
+// per-IP limiter (20 / 15 min) shared by GET and PUT, spent before the token
+// was resolved. The preference centre is reached by a human clicking a link in
+// an email, so it is less exposed than the RFC 8058 POST — but a corporate NAT
+// or carrier CGNAT still puts many recipients of one campaign behind one
+// egress IP, and 20 requests covers roughly four visits between them. Past
+// that, somebody adjusting their consent got a 429 and their change was lost
+// with nothing written.
+//
+// Same split as the unsubscribe route: per-IP budget for tokens that do NOT
+// resolve, per-token budget for tokens that do. See @/lib/consent-token-guard.
+//
+// `contact_preferences.unsubscribe_token` is `UUID DEFAULT gen_random_uuid()`
+// (mig 005), so a non-UUID cannot resolve and is rejected without a query.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-// GET /api/preferences/[token] — fetch current preferences
-export async function GET(request, props) {
-  const params = await props.params;
-  const db = createServerClient()
-  const { token } = params
-
+/**
+ * The shared front half of both handlers: shape-check, per-IP peek, resolve,
+ * per-token budget. Returns either `{ refused: Response }` or `{ pref }`.
+ *
+ * Factored out because GET and PUT must budget identically — when they were
+ * two copies sharing one IP bucket, loading the page spent from the same
+ * allowance as saving it.
+ */
+async function resolveTokenOrRefuse(db, request, token) {
   const ip = getClientIp(request)
-  const limit = await checkRateLimit(db, `preferences:${ip}`, RL)
-  if (!limit.allowed) return rateLimitResponse(limit)
+  const userAgent = request.headers.get('user-agent') || null
+  const refusal = (reason, extra = {}) => recordRefusedOptOut(db, {
+    endpoint: 'preferences', reason, ip, token, userAgent, ...extra,
+  })
+  const notFound = () => NextResponse.json({ success: false, error: 'Invalid token' }, { status: 404 })
+
+  if (!UUID_RE.test(token || '')) {
+    await penaliseInvalidToken(db, 'preferences', ip)
+    await refusal(REFUSAL_REASONS.INVALID_TOKEN)
+    return { refused: notFound() }
+  }
+
+  const ipBudget = await guardBeforeTokenLookup(db, 'preferences', ip)
+  if (!ipBudget.allowed) {
+    await refusal(REFUSAL_REASONS.IP_ENUMERATION)
+    return { refused: rateLimitResponse(ipBudget) }
+  }
 
   const { data: pref, error } = await db
     .from('contact_preferences')
@@ -47,8 +79,29 @@ export async function GET(request, props) {
     .single()
 
   if (error || !pref) {
-    return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 404 })
+    await penaliseInvalidToken(db, 'preferences', ip)
+    await refusal(REFUSAL_REASONS.INVALID_TOKEN)
+    return { refused: notFound() }
   }
+
+  const tokenBudget = await guardResolvedToken(db, 'preferences', token)
+  if (!tokenBudget.allowed) {
+    await refusal(REFUSAL_REASONS.TOKEN_FLOOD, { contactId: pref.contact_id })
+    return { refused: rateLimitResponse(tokenBudget) }
+  }
+
+  return { pref, ip }
+}
+
+// GET /api/preferences/[token] — fetch current preferences
+export async function GET(request, props) {
+  const params = await props.params;
+  const db = createServerClient()
+  const { token } = params
+
+  const gate = await resolveTokenOrRefuse(db, request, token)
+  if (gate.refused) return gate.refused
+  const { pref } = gate
 
   // LOCCOMMS.4 — every list this person is actually on. Each location is a
   // standalone business, so leaving one must not remove them from the others;
@@ -92,23 +145,13 @@ export async function PUT(request, props) {
   const db = createServerClient()
   const { token } = params
 
-  const ip = getClientIp(request)
-  const limit = await checkRateLimit(db, `preferences:${ip}`, RL)
-  if (!limit.allowed) return rateLimitResponse(limit)
+  const gate = await resolveTokenOrRefuse(db, request, token)
+  if (gate.refused) return gate.refused
+  const { pref, ip } = gate
 
   const validation = await validateBody(request, PreferencesUpdateSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
-
-  const { data: pref, error } = await db
-    .from('contact_preferences')
-    .select('*, contacts(id)')
-    .eq('unsubscribe_token', token)
-    .single()
-
-  if (error || !pref) {
-    return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 404 })
-  }
 
   const allowed = [
     'email_marketing', 'email_administrative',

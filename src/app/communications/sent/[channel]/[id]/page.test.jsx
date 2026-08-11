@@ -134,10 +134,31 @@ describe('/communications/sent/[channel]/[id] — bodies stay distinct', () => {
     expect(screen.getByTestId('email-editor')).toBeTruthy()
   })
 
-  it('renders the campaign editor when ?edit=1 is on the URL', async () => {
+  it('renders the campaign editor when ?edit=1 is on a DRAFT', async () => {
+    createServerClient.mockReturnValue(dbWith({ campaigns: { data: { ...CAMPAIGN_ROW, status: 'draft' } } }))
     render(await SendDetailPage(args('email', 'c1', { edit: '1' })))
     expect(screen.getByTestId('email-editor')).toBeTruthy()
   })
+
+  it('renders the campaign editor when ?edit=1 is on a SCHEDULED campaign', async () => {
+    createServerClient.mockReturnValue(dbWith({ campaigns: { data: { ...CAMPAIGN_ROW, status: 'scheduled' } } }))
+    render(await SendDetailPage(args('email', 'c1', { edit: '1' })))
+    expect(screen.getByTestId('email-editor')).toBeTruthy()
+  })
+
+  // CAMPHIST.1 — the integrity hole. `?edit=1` opened the full editor on ANY
+  // status, so a sent campaign could be overwritten while its recipients,
+  // opens and clicks stayed pointed at it. The editor persists via the browser
+  // Supabase client, so neither the PUT route's 409 nor RLS stopped it.
+  it.each(['sent', 'sending', 'queued', 'cancelled', 'failed'])(
+    'refuses to open the editor for a %s campaign, even with ?edit=1',
+    async (status) => {
+      createServerClient.mockReturnValue(dbWith({ campaigns: { data: { ...CAMPAIGN_ROW, status } } }))
+      render(await SendDetailPage(args('email', 'c1', { edit: '1' })))
+      expect(screen.queryByTestId('email-editor')).toBeNull()
+      expect(screen.getByTestId('email-detail')).toBeTruthy()
+    },
+  )
 })
 
 // COMMS-DETAIL-FIX.5 — the SMS loader selected no contacts, so the recipients

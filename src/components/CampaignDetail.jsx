@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
 import {
   Mail, Eye, MousePointerClick, AlertTriangle,
-  Ban, Send, CheckCircle2, XCircle, Users, RotateCcw, X, Clock, SkipForward, Loader2
+  Ban, Send, CheckCircle2, XCircle, Users, RotateCcw, X, Clock, SkipForward, Loader2, Copy
 } from 'lucide-react'
 import SendDetailHeader from './communications/SendDetailHeader'
 import SendStatusPill from './communications/SendStatusPill'
@@ -136,6 +136,32 @@ export default function CampaignDetail({ campaign, recipients = [], stats = null
   // between chunks. Until this existed the ONLY cancel control lived behind
   // the undiscoverable ?edit=1 query param.
   const stoppable = ['scheduled', 'queued', 'sending'].includes(status)
+
+  // CAMPHIST.1 — the reuse control. Before this the ONLY way to reuse a
+  // campaign was to hand-type ?edit=1, which opened the editor on the sent
+  // campaign itself and saved over it, leaving its recipients, opens and
+  // clicks describing an email that was never sent. Duplicating gives a fresh
+  // draft with the same creative and none of the parent's history, which is
+  // what the send route's own comment has told operators to do since
+  // CAMPAIGN.13 for a capability that did not exist.
+  const [duplicating, setDuplicating] = useState(false)
+  async function duplicateCampaign() {
+    setDuplicating(true)
+    setActionError(null)
+    try {
+      const res = await fetch(`/api/campaigns/${campaign.id}/duplicate`, { method: 'POST' })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json?.success) {
+        setActionError(json?.error || 'Could not duplicate this campaign.')
+        return
+      }
+      router.push(`/communications/sent/email/${json.data.id}?edit=1`)
+    } catch {
+      setActionError('Could not duplicate this campaign.')
+    } finally {
+      setDuplicating(false)
+    }
+  }
   // REPORT-SOT.2 — every displayed figure on this page comes from
   // campaign_recipients via the server page. `stats` is never absent in the
   // app; the fallback keeps the component renderable on its own (and in the
@@ -273,6 +299,17 @@ export default function CampaignDetail({ campaign, recipients = [], stats = null
                   : status === 'scheduled' ? 'Unschedule' : 'Stop sending'}
               </button>
             )}
+            <button
+              type="button"
+              data-testid="campaign-duplicate"
+              onClick={duplicateCampaign}
+              disabled={duplicating}
+              title="Create an editable draft with the same subject, design and audience"
+              className="flex items-center gap-1.5 text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border hover:border-un1t-text/30 px-3 py-1.5 rounded-md transition-colors disabled:opacity-40"
+            >
+              {duplicating ? <Loader2 size={13} className="animate-spin" /> : <Copy size={13} />}
+              Duplicate
+            </button>
             {status === 'failed' && (
               <button
                 type="button"

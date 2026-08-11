@@ -10,6 +10,7 @@ import AudienceBuilder from './AudienceBuilder'
 import SendQuietHoursNotice from './communications/SendQuietHoursNotice'
 import CopyAssist from './communications/CopyAssist'
 import { stripUnsetFilterRows } from '@/lib/audience-filter'
+import { isCampaignContentEditable, campaignLockedReason } from '@/lib/campaign-editability'
 
 // FILTER-P1.6 — what the send path ACTUALLY gates on, per
 // buildAudienceQueryAsync (src/lib/postmark.js): the campaign's location, the
@@ -61,6 +62,19 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
   // OR a value the polling effect refreshed from the DB while
   // a send is in flight. Progress counts come from the same poll.
   const [campaignStatus, setCampaignStatus] = useState(campaign?.status || 'draft')
+
+  // CAMPHIST.1 — may this campaign's content still change?
+  //
+  // This editor persists by writing the `campaigns` row DIRECTLY from the
+  // browser Supabase client (see handleSave), so neither the 409 guard on
+  // PUT /api/campaigns/[id] nor the mig 014 RLS policy (FOR ALL, no status
+  // predicate) constrains it. That is how `?edit=1` on a sent campaign came to
+  // silently overwrite the record its recipients, opens and clicks describe.
+  // The detail page no longer routes a locked campaign here at all; this is
+  // the second lock, for the two other entry points (UnifiedSendComposer's
+  // "open full editor" and CampaignDetail's draft redirect).
+  const contentEditable = isCampaignContentEditable(campaignStatus)
+  const lockedReason = campaignLockedReason(campaignStatus)
   const [progress, setProgress] = useState({
     total_sent: campaign?.total_sent || 0,
     total_recipients: campaign?.total_recipients || 0,
@@ -243,6 +257,14 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
   }, [tab, editorMode, exportFromUnlayer, htmlContent, designJson])
 
   async function handleSave() {
+    // CAMPHIST.1 — last line of defence before the direct browser write. The
+    // Save button is not rendered when the content is locked, but this runs
+    // whatever called it, and the cost of being wrong here is an unrecoverable
+    // rewrite of what was actually sent.
+    if (!contentEditable) {
+      setError(lockedReason)
+      return
+    }
     setSaving(true)
     setError(null)
 
@@ -587,7 +609,17 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
             className="bg-transparent text-lg font-semibold text-un1t-text placeholder:text-un1t-muted focus:outline-none w-64 max-w-full"
           />
         }
-        status={<span className="text-xs bg-un1t-border text-un1t-subtle px-2 py-0.5 rounded-full">Draft</span>}
+        /* CAMPHIST.1 — was hard-coded to "Draft". A sent campaign opened via
+           ?edit=1 therefore LOOKED like a draft while being edited, which is
+           what made the corruption invisible to the operator doing it. */
+        status={(
+          <span
+            data-testid="campaign-status-pill"
+            className="text-xs bg-un1t-border text-un1t-subtle px-2 py-0.5 rounded-full capitalize"
+          >
+            {campaignStatus || 'draft'}
+          </span>
+        )}
         actions={
           <div className="flex items-center gap-2 flex-wrap justify-end">
           {audienceCount !== null && (
@@ -596,15 +628,17 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
               {audienceCount} recipients
             </span>
           )}
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={saving}
-            className="flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text border border-un1t-border hover:border-un1t-text/30 px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
-          >
-            <Save size={14} />
-            {saving ? 'Saving...' : 'Save'}
-          </button>
+          {contentEditable && (
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={saving}
+              className="flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text border border-un1t-border hover:border-un1t-text/30 px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
+            >
+              <Save size={14} />
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          )}
           {/* CAMPAIGN.2 — visible save confirmation. Without this the
               operator hit Save and got no signal anything happened. */}
           {savedAt && !saving && (
@@ -712,6 +746,19 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
           </div>
         }
       />
+
+      {/* CAMPHIST.1 — say plainly why nothing can be saved, and where to go
+          instead. Without this the editor just silently has no Save button,
+          which reads as a bug rather than a rule. */}
+      {lockedReason && (
+        <div
+          data-testid="campaign-locked-notice"
+          className="mb-4 flex items-start gap-2 rounded-md border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-700"
+        >
+          <AlertCircle size={14} className="mt-0.5 shrink-0" />
+          <span>{lockedReason}</span>
+        </div>
+      )}
 
       {/* GAPS-P4 — quiet-hours advisory, sitting under the action bar so it is
           in the same glance as "Send Campaign" and the schedule tray. Only on

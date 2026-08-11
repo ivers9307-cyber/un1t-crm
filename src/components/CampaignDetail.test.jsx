@@ -8,7 +8,7 @@
 // the page operators are steered to".
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, cleanup, screen, fireEvent } from '@testing-library/react'
+import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react'
 
 const refresh = vi.fn()
 const replace = vi.fn()
@@ -254,5 +254,41 @@ describe('CampaignDetail — A/B panel refuses to invent a winner', () => {
     const chip = screen.getByText(/numbers now favour subject b/i)
     expect(chip).toBeTruthy()
     expect(chip.textContent).toMatch(/sent with subject a/i)
+  })
+})
+
+// CAMPHIST.1 — the reuse control that replaces hand-typing ?edit=1.
+describe('CampaignDetail — Duplicate', () => {
+  it('offers Duplicate on a sent campaign', () => {
+    renderDetail({ status: 'sent' })
+    expect(screen.getByTestId('campaign-duplicate')).toBeTruthy()
+  })
+
+  it('POSTs to the duplicate route and opens the new draft in the editor', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true, json: async () => ({ success: true, data: { id: 'new-id' } }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    renderDetail({ status: 'sent' })
+
+    fireEvent.click(screen.getByTestId('campaign-duplicate'))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/campaigns/camp-1/duplicate')
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'POST' })
+    // ?edit=1 is legitimate here: the clone is a draft.
+    await waitFor(() => expect(push).toHaveBeenCalledWith('/communications/sent/email/new-id?edit=1'))
+  })
+
+  it('surfaces a failure instead of navigating', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false, json: async () => ({ success: false, error: 'No email permission at this location' }),
+    })))
+    renderDetail({ status: 'sent' })
+
+    fireEvent.click(screen.getByTestId('campaign-duplicate'))
+
+    await waitFor(() => expect(screen.getByText(/No email permission/i)).toBeTruthy())
+    expect(push).not.toHaveBeenCalled()
   })
 })

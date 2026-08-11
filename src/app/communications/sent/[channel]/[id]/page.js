@@ -31,6 +31,7 @@ import { hasPermission } from '@/lib/permissions'
 import { overlayConnections } from '@/lib/connection-registry'
 import { dripWindowStatus } from '@/lib/whatsapp-drip'
 import { loadCampaignRecipientStats, campaignDisplayStats } from '@/lib/campaign-display-stats'
+import { isCampaignContentEditable } from '@/lib/campaign-editability'
 import {
   loadWhatsappBroadcastRecipientStats,
   countWhatsappSentToday,
@@ -194,10 +195,20 @@ async function renderEmail(db, user, id, searchParams) {
   if (!campaign || assertLocationAccess(user, campaign.location_id)) notFound()
 
   // CAMPAIGN.4 — drafts (and any URL with ?edit=1) open in the editor.
+  //
+  // CAMPHIST.1 — but ONLY while the campaign's content may still change.
+  // `?edit=1` used to open the full editor on any status, including 'sent'.
+  // That is not a cosmetic problem: CampaignEditor saves by writing the
+  // `campaigns` row directly from the browser Supabase client, so the 409
+  // guard on PUT /api/campaigns/[id] never runs and the mig 014 RLS policy
+  // (FOR ALL, no status predicate) permits it. The campaign's recipients,
+  // opens, clicks and monthly rollups then describe an email nobody was sent,
+  // with no copy of the real one anywhere. Reuse goes through
+  // POST /api/campaigns/[id]/duplicate instead.
   const editRequested = searchParams?.edit === '1' || searchParams?.edit === 'true'
   const isDraft = campaign.status === 'draft'
 
-  if (isDraft || editRequested) {
+  if ((isDraft || editRequested) && isCampaignContentEditable(campaign.status)) {
     return (
       <CampaignEditor
         campaign={campaign}

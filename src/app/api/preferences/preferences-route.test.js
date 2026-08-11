@@ -9,7 +9,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // email_suppressed_at: null } (EMAIL-HYGIENE.1).
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+// UNSUB-RL.1 — the route now peeks a per-IP invalid-token budget before the
+// lookup and spends a per-TOKEN budget after it. Both allow here.
 vi.mock('@/lib/rate-limit', () => ({
+  peekRateLimit: vi.fn(async () => ({ allowed: true })),
   checkRateLimit: vi.fn(async () => ({ allowed: true })),
   getClientIp: vi.fn(() => '1.2.3.4'),
   rateLimitResponse: vi.fn(),
@@ -40,13 +43,17 @@ function makeDb({ pref, locRow = null }) {
   return { db, writes }
 }
 
-const req = (body) => new Request('https://crm.example/api/preferences/tok', {
+// UNSUB-RL.1 — the route shape-checks the token before any lookup, so the
+// fixture has to be a real UUID like the one mig 005 mints.
+const TOK = '9f1c7c0e-0000-4000-8000-000000000001'
+
+const req = (body) => new Request(`https://crm.example/api/preferences/${TOK}`, {
   method: 'PUT',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(body),
 })
 
-const props = { params: Promise.resolve({ token: 'tok' }) }
+const props = { params: Promise.resolve({ token: TOK }) }
 
 beforeEach(() => vi.clearAllMocks())
 
