@@ -58,7 +58,7 @@
 // a warning shown on every merge is one the operator learns to click past, and
 // then it is not there on the merge that actually widens access.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Merge, AlertTriangle, AlertCircle, ArrowRight, Undo2, ExternalLink, Search,
 } from 'lucide-react'
@@ -112,6 +112,20 @@ export default function TicketMerge({
   const [survivor, setSurvivor] = useState(null)
   const [undoing, setUndoing] = useState(false)
 
+  // ── Focus follows the step ────────────────────────────────────────
+  // The dialog swaps its ENTIRE contents between pick and confirm, so the
+  // element the operator just activated unmounts — and the browser resolves
+  // focus to <body>, OUTSIDE the dialog. Modal moves focus in on OPEN only, and
+  // deliberately so (UI-MODAL-FOCUS.1: re-running it on every render is the
+  // focus-steal bug), so nothing brings it back. Left alone, an operator who
+  // picks a candidate with Enter is dropped at the top of the document with no
+  // focus trap to walk them back in — they tab through the whole page behind
+  // the dialog to reach Merge, on the one flow in this feature that moves a
+  // conversation. Re-focusing the step container also gives a screen reader
+  // something to announce, since the title changing is silent.
+  const stepRef = useRef(null)
+  const prevStep = useRef(null)
+
   const ticketId = ticket?.id
   const mergedIntoId = ticket?.merged_into_id || null
   const locationId = ticket?.location_id
@@ -162,6 +176,16 @@ export default function TicketMerge({
       setLoadingList(false)
     }
   }, [locationId])
+
+  // ON A CHANGE BETWEEN STEPS ONLY, never on open: opening is Modal's own move
+  // (its panelRef.focus() is what announces the dialog and its title), and this
+  // effect runs after it — a parent's effect flushes after its children's — so
+  // firing here on open would take that announcement away.
+  useEffect(() => {
+    const step = picking ? (chosen ? 'confirm' : 'pick') : null
+    if (step && prevStep.current && step !== prevStep.current) stepRef.current?.focus()
+    prevStep.current = step
+  }, [picking, chosen])
 
   function openPicker() {
     setPicking(true)
@@ -300,28 +324,32 @@ export default function TicketMerge({
             )
           }
         >
-          {chosen ? (
-            <ConfirmStep
-              source={ticket}
-              target={chosen}
-              messageCount={messageCount}
-              crossMailbox={crossMailbox}
-              sourceMailbox={sourceMailbox}
-              targetMailbox={targetMailbox}
-              error={error}
-            />
-          ) : (
-            <PickStep
-              options={options}
-              loading={loadingList}
-              error={listError}
-              filter={filter}
-              onFilter={setFilter}
-              onPick={setChosen}
-              mailboxes={mailboxes}
-              showMailbox={mailboxes.length > 1}
-            />
-          )}
+          {/* tabIndex -1 so the step can RECEIVE focus without entering the tab
+              order — see the stepRef effect above. */}
+          <div ref={stepRef} tabIndex={-1} className="outline-none">
+            {chosen ? (
+              <ConfirmStep
+                source={ticket}
+                target={chosen}
+                messageCount={messageCount}
+                crossMailbox={crossMailbox}
+                sourceMailbox={sourceMailbox}
+                targetMailbox={targetMailbox}
+                error={error}
+              />
+            ) : (
+              <PickStep
+                options={options}
+                loading={loadingList}
+                error={listError}
+                filter={filter}
+                onFilter={setFilter}
+                onPick={setChosen}
+                mailboxes={mailboxes}
+                showMailbox={mailboxes.length > 1}
+              />
+            )}
+          </div>
         </Modal>
       )}
     </>

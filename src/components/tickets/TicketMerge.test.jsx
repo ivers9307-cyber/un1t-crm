@@ -180,6 +180,74 @@ describe('TicketMerge — the confirm step', () => {
   })
 })
 
+describe('TicketMerge — the picker reads the whole studio queue', () => {
+  it('asks for this ticket’s location and does NOT narrow to a mailbox', async () => {
+    const fetchMock = stubFetch({ tickets: [SOURCE, TARGET_OTHER_MAILBOX] })
+    renderMerge()
+    fireEvent.click(screen.getByRole('button', { name: /merge into/i }))
+    await screen.findByRole('button', { name: /Direct debit bounced/i })
+
+    const url = new URL(
+      String(fetchMock.mock.calls.find(([u]) => String(u).startsWith('/api/email/tickets?'))[0]),
+      'http://localhost'
+    )
+    // The SOURCE ticket's studio, not the operator's active one — a candidate
+    // at another studio is a merge the route refuses anyway.
+    expect(url.searchParams.get('location_id')).toBe(LOC)
+    // AND DELIBERATELY NO mailbox_id. This is the decision that makes the
+    // cross-mailbox case reachable at all: TicketInbox's own list is narrowed
+    // by whichever mailbox tab the operator is on, so reusing it would hide
+    // exactly the duplicate they are hunting — while the confirm step's warning
+    // goes on talking about a case the picker could never produce. Anyone
+    // "tidying" this into the tab's list breaks that silently, so it is pinned.
+    expect(url.searchParams.get('mailbox_id')).toBeNull()
+  })
+})
+
+// FOCUS FOLLOWS THE STEP.
+//
+// The dialog swaps its entire contents between pick and confirm, so the button
+// the operator just activated unmounts and the browser resolves focus to
+// <body> — outside the dialog. Modal moves focus in on OPEN only (deliberately;
+// re-running it on every render is the UI-MODAL-FOCUS.1 focus-steal bug) and
+// has no focus trap, so nothing brings it back: a keyboard operator who picks a
+// candidate with Enter lands at the top of the document and tabs through the
+// whole page behind the dialog to reach Merge.
+describe('TicketMerge — keyboard focus across the two steps', () => {
+  it('keeps focus inside the dialog when the step changes, both ways', async () => {
+    stubFetch({ tickets: [SOURCE, TARGET_SAME_MAILBOX] })
+    renderMerge()
+    fireEvent.click(screen.getByRole('button', { name: /merge into/i }))
+    const dialog = await screen.findByRole('dialog')
+
+    // THE .focus() CALLS ARE THE TEST. jsdom's fireEvent.click does not move
+    // focus to what it clicks, so without them activeElement is still the
+    // Modal panel and `dialog.contains` passes on a component that has lost
+    // focus completely — the assertion would be about nothing. Focusing first
+    // is what a keyboard operator's Enter actually does.
+    const candidate = await screen.findByRole('button', { name: /Commercial rates 2026/i })
+    candidate.focus()
+    fireEvent.click(candidate)
+    expect(dialog.contains(document.activeElement)).toBe(true)
+
+    // …and back again, so Back is not a one-way trip out of the dialog either.
+    const back = screen.getByRole('button', { name: /back/i })
+    back.focus()
+    fireEvent.click(back)
+    expect(dialog.contains(document.activeElement)).toBe(true)
+  })
+
+  it('leaves the OPENING focus to the Modal, which announces the dialog', async () => {
+    // The step effect runs after Modal's own (a parent's effect flushes after
+    // its children's), so firing it on open would take that announcement away.
+    stubFetch({ tickets: [SOURCE, TARGET_SAME_MAILBOX] })
+    renderMerge()
+    fireEvent.click(screen.getByRole('button', { name: /merge into/i }))
+
+    expect(document.activeElement).toBe(await screen.findByRole('dialog'))
+  })
+})
+
 // THE WARNING THAT MUST NOT BECOME WALLPAPER.
 //
 // email_tickets.mailbox_id is the access unit — mig 502 keys message RLS on the
