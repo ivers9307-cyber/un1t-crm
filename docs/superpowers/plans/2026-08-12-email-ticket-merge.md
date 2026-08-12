@@ -26,7 +26,7 @@
 
 | File | Responsibility |
 |---|---|
-| `supabase/migrations/535_email_ticket_merge.sql` | **Create.** Tombstone columns, the reparent stamp, two indexes. |
+| `supabase/migrations/536_email_ticket_merge.sql` | **Create.** Tombstone columns, the reparent stamp, two indexes. |
 | `src/lib/email-ticket-merge.js` | **Create.** Pure rules: what may merge into what, and the merged denormalised fields. |
 | `src/lib/email-ticket-merge.test.js` | **Create.** Those rules. |
 | `src/app/api/email/tickets/_helpers.js` | **Modify.** Add `scopeToUnmerged(query)` — the single place tombstones are hidden. |
@@ -42,14 +42,14 @@
 ## Task 1: Migration
 
 **Files:**
-- Create: `supabase/migrations/535_email_ticket_merge.sql`
+- Create: `supabase/migrations/536_email_ticket_merge.sql`
 
-534 is taken by PR 1. **If PR 1 has not merged, confirm the next free number** against the live `supabase_migrations.schema_migrations` before writing the file.
+534 is taken by PR 1; **535 was taken by `535_email_hygiene_release.sql` (HYGREL.1) while PR 1 was in flight**, which is exactly why this number is checked rather than assumed. **Confirm 536 is still free** against the live `supabase_migrations.schema_migrations` before writing the file — another branch may have landed in the meantime.
 
 - [ ] **Step 1: Write the migration**
 
 ```sql
--- 535 — EMAIL-MERGE.1
+-- 536 — EMAIL-MERGE.1
 -- Two tickets that are really one conversation, folded reversibly.
 --
 -- WHY status STAYS 'open|pending|solved|closed'
@@ -79,12 +79,12 @@ create index if not exists idx_email_msgs_merged_from
   on email_inbox_messages (merged_from_ticket_id);
 
 comment on column email_tickets.merged_into_id is
-  'Set when this ticket was folded into another (mig 535). Non-null = tombstone: hidden from lists, opening it redirects to the survivor.';
+  'Set when this ticket was folded into another (mig 536). Non-null = tombstone: hidden from lists, opening it redirects to the survivor.';
 ```
 
 - [ ] **Step 2: Apply via Supabase MCP**
 
-`apply_migration` against `iyvtbjjxdggiadzwwvdj` (un1t-crm — **not** sentinel `tpttqakxmyxrwnqjepfm`). Name: `535_email_ticket_merge`.
+`apply_migration` against `iyvtbjjxdggiadzwwvdj` (un1t-crm — **not** sentinel `tpttqakxmyxrwnqjepfm`). Name: `536_email_ticket_merge`.
 
 - [ ] **Step 3: Verify**
 
@@ -103,8 +103,8 @@ Expected: four rows.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add supabase/migrations/535_email_ticket_merge.sql
-git commit -m "EMAIL-MERGE.1 — mig 535: reversible ticket merge columns"
+git add supabase/migrations/536_email_ticket_merge.sql
+git commit -m "EMAIL-MERGE.1 — mig 536: reversible ticket merge columns"
 ```
 
 ---
