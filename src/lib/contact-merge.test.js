@@ -171,64 +171,32 @@ describe('redactInBodyForContact — GDPR erasure gap (audit M3)', () => {
   })
 })
 
-// ── mergeContacts — the destructive path ────────────────────────────────
+
+// ── mergeContacts — now a thin RPC wrapper (MERGE-TX.1) ─────────────────
 //
-// MERGE-LOSS.1. The survivor stamp used to be a bare `await` with no error
-// binding while every other write in mergeContacts throws. A failed stamp
-// therefore fell straight through to `DELETE FROM contacts WHERE id =
-// loser`: the loser was destroyed, everything folded into it was gone
-// unrecoverably, and the caller got back a success object listing merged
-// fields that were never written. These tests pin the ordering AND the
-// refusal.
-
-// A fake supabase client rich enough to drive the whole mergeContacts()
-// flow. Every builder is a thenable (like the real one), so the terminal
-// `await` resolves through one handler that can see the accumulated chain.
-// `results` keys are `<table>.<op>` and may be a value or a function.
-function makeMergeDb({ survivor, loser, results = {} } = {}) {
-  const ops = []
-
-  function resultFor(ctx) {
-    const key = `${ctx.table}.${ctx.op}`
-    if (key in results) {
-      const r = results[key]
-      return typeof r === 'function' ? r(ctx) : r
-    }
-    if (ctx.table === 'contacts' && ctx.op === 'select') {
-      const id = ctx.filters.find(f => f[0] === 'eq' && f[1] === 'id')?.[2]
-      if (id === survivor?.id) return { data: survivor, error: null }
-      if (id === loser?.id) return { data: loser, error: null }
-      return { data: null, error: { message: 'no rows' } }
-    }
-    // dedupePreUpdate's reads: survivor has no conflicting rows by default.
-    if (ctx.op === 'select') return { data: ctx.maybeSingle ? null : [], error: null }
-    if (ctx.op === 'update') return { data: null, error: null, count: 1 }
-    return { data: null, error: null }
-  }
-
-  return {
-    ops,
-    opKeys: () => ops.map(o => `${o.table}.${o.op}`),
-    from(table) {
-      const ctx = { table, op: null, payload: null, opts: null, filters: [] }
-      const builder = {
-        select(cols) { if (!ctx.op) { ctx.op = 'select'; ctx.cols = cols } return builder },
-        update(payload, opts) { ctx.op = 'update'; ctx.payload = payload; ctx.opts = opts; return builder },
-        delete() { ctx.op = 'delete'; return builder },
-        eq(c, v) { ctx.filters.push(['eq', c, v]); return builder },
-        in(c, v) { ctx.filters.push(['in', c, v]); return builder },
-        is(c, v) { ctx.filters.push(['is', c, v]); return builder },
-        single() { ctx.single = true; return builder },
-        maybeSingle() { ctx.maybeSingle = true; return builder },
-        then(onOk, onErr) {
-          ops.push(ctx)
-          return Promise.resolve().then(() => resultFor(ctx)).then(onOk, onErr)
-        },
-      }
-      return builder
-    },
-  }
-}
+// WHAT CHANGED AND WHY THE COVERAGE IS NOT WEAKER
+// ───────────────────────────────────────────────
+// mergeContacts used to run ~25 unprotected statements from JS: dedupe deletes,
+// then FK re-points, then the survivor stamp, then the loser delete. The old
+// tests here pinned that sequence — the stamp lands after the re-points, an
+// errored or zero-row stamp throws before the delete, a failed dedupe read
+// aborts before anything folds. All of it existed to make a HALF-MERGE
+// survivable, because there was no transaction.
+//
+// Migration 533 moves the whole merge into public.merge_contacts(), so it runs
+// in one implicit transaction. Those orderings still exist — they are asserted
+// against the migration text in tests/migration-533-merge-contacts.test.js —
+// but they are no longer JS behaviour, so pinning them against a fake supabase
+// client here would be testing a mock.
+//
+// What replaces them is stronger where it counts: the tests below prove the JS
+// issues NO writes at all. The entire class of bug the old tests guarded
+// against — a partial write from this function — is now structurally
+// unreachable rather than carefully handled.
+//
+// Honest gap: nothing here EXECUTES the SQL. This repo has no local Postgres
+// and no pgTAP (supabase/ has no config.toml), so the migration is covered by
+// text assertions only, exactly as migrations 510-512 are.
 
 const SURVIVOR = {
   id: 'survivor-1', location_id: 'loc-1',
@@ -241,126 +209,146 @@ const LOSER = {
   email: 'ada2@x.com', phone: '+353871234567', tags: ['newsletter'],
 }
 
-describe('mergeContacts — a failed survivor stamp must not delete the loser', () => {
-  it('happy path: stamps the survivor, then deletes the loser', async () => {
-    const db = makeMergeDb({ survivor: SURVIVOR, loser: LOSER })
-    const out = await mergeContacts(db, { survivorId: SURVIVOR.id, loserId: LOSER.id })
+// Fake client: reads of `contacts` resolve the two fixtures; db.rpc records the
+// call and returns whatever the test configured.
+function makeRpcDb({ survivor = SURVIVOR, loser = LOSER, rpc } = {}) {
+  const ops = []
+  const rpcCalls = []
+  return {
+    ops,
+    rpcCalls,
+    rpc(name, params) {
+      rpcCalls.push({ name, params })
+      return Promise.resolve(
+        rpc ?? {
+          data: {
+            survivor: { ...survivor, last_name: 'Lovelace', phone: '+353871234567', tags: ['vip', 'newsletter'] },
+            folded: { 'activities.contact_id': 3, 'deals.contact_id': 1 },
+          },
+          error: null,
+        },
+      )
+    },
+    from(table) {
+      const ctx = { table, op: null, filters: [] }
+      const builder = {
+        select(cols) { if (!ctx.op) { ctx.op = 'select'; ctx.cols = cols } return builder },
+        update(payload) { ctx.op = 'update'; ctx.payload = payload; return builder },
+        delete() { ctx.op = 'delete'; return builder },
+        eq(c, v) { ctx.filters.push(['eq', c, v]); return builder },
+        in(c, v) { ctx.filters.push(['in', c, v]); return builder },
+        is(c, v) { ctx.filters.push(['is', c, v]); return builder },
+        single() { ctx.single = true; return builder },
+        maybeSingle() { ctx.maybeSingle = true; return builder },
+        then(onOk, onErr) {
+          ops.push(ctx)
+          const id = ctx.filters.find(f => f[0] === 'eq' && f[1] === 'id')?.[2]
+          let res = { data: null, error: null }
+          if (table === 'contacts' && ctx.op === 'select') {
+            if (id === survivor?.id) res = { data: survivor, error: null }
+            else if (id === loser?.id) res = { data: loser, error: null }
+            else res = { data: null, error: { message: 'no rows' } }
+          }
+          return Promise.resolve().then(() => res).then(onOk, onErr)
+        },
+      }
+      return builder
+    },
+  }
+}
 
-    expect(out.survivor.last_name).toBe('Lovelace')      // loser filled the gap
+describe('mergeContacts — delegates the whole merge to one transaction', () => {
+  it('calls the merge_contacts RPC with both ids and the merged field payload', async () => {
+    const db = makeRpcDb()
+    await mergeContacts(db, { survivorId: 'survivor-1', loserId: 'loser-1' })
+
+    expect(db.rpcCalls).toHaveLength(1)
+    expect(db.rpcCalls[0].name).toBe('merge_contacts')
+    expect(db.rpcCalls[0].params.p_survivor_id).toBe('survivor-1')
+    expect(db.rpcCalls[0].params.p_loser_id).toBe('loser-1')
+    // The field-merge rule stays in JS (pickMergedFields), so its output rides
+    // along rather than being reimplemented in SQL.
+    expect(db.rpcCalls[0].params.p_merged_fields).toMatchObject({
+      last_name: 'Lovelace',
+      phone: '+353871234567',
+      email: 'ada@x.com',
+    })
+    expect(db.rpcCalls[0].params.p_merged_tags).toEqual(['vip', 'newsletter'])
+  })
+
+  it('issues NO writes of its own — a half-merge is structurally impossible here', async () => {
+    // This is the replacement for every old ordering test. The JS cannot leave
+    // a partial merge because the JS does not write.
+    const db = makeRpcDb()
+    await mergeContacts(db, { survivorId: 'survivor-1', loserId: 'loser-1' })
+
+    expect(db.ops.filter(o => o.op === 'update')).toEqual([])
+    expect(db.ops.filter(o => o.op === 'delete')).toEqual([])
+    expect(db.ops.every(o => o.op === 'select')).toBe(true)
+  })
+
+  it('returns the { survivor, folded } contract the route and UI depend on', async () => {
+    const db = makeRpcDb()
+    const out = await mergeContacts(db, { survivorId: 'survivor-1', loserId: 'loser-1' })
+
+    expect(out.survivor.last_name).toBe('Lovelace')
     expect(out.survivor.phone).toBe('+353871234567')
     expect(out.survivor.tags).toEqual(['vip', 'newsletter'])
-    expect(db.opKeys()).toContain('contacts.delete')
-
-    const stamp = db.ops.find(o => o.table === 'contacts' && o.op === 'update')
-    const del = db.ops.find(o => o.table === 'contacts' && o.op === 'delete')
-    expect(db.ops.indexOf(stamp)).toBeLessThan(db.ops.indexOf(del))
+    expect(out.folded).toEqual({ 'activities.contact_id': 3, 'deals.contact_id': 1 })
   })
 
-  it('stamps AFTER the FK updates — the documented ordering stays', async () => {
-    // The comment above the stamp explains why: a partial FK failure must
-    // not leave the survivor's fields modified while the loser still owns
-    // its dependents. Fixing the stamp must not "fix" it by moving it up.
-    const db = makeMergeDb({ survivor: SURVIVOR, loser: LOSER })
-    await mergeContacts(db, { survivorId: SURVIVOR.id, loserId: LOSER.id })
-
-    const stampIdx = db.ops.findIndex(o => o.table === 'contacts' && o.op === 'update')
-    const lastFkIdx = db.ops.map((o, i) => (o.op === 'update' && o.table !== 'contacts' ? i : -1))
-      .filter(i => i >= 0).pop()
-    expect(lastFkIdx).toBeGreaterThan(-1)
-    expect(stampIdx).toBeGreaterThan(lastFkIdx)
+  it('throws with the database message when the transaction aborts', async () => {
+    const db = makeRpcDb({ rpc: { data: null, error: { message: 'duplicate key value violates unique constraint' } } })
+    await expect(mergeContacts(db, { survivorId: 'survivor-1', loserId: 'loser-1' }))
+      .rejects.toThrow(/duplicate key value/)
   })
 
-  it('an ERRORED survivor stamp throws and the loser survives', async () => {
-    const db = makeMergeDb({
-      survivor: SURVIVOR,
-      loser: LOSER,
-      results: {
-        'contacts.update': { data: null, error: { message: 'deadlock detected' }, count: null },
-      },
-    })
-    await expect(mergeContacts(db, { survivorId: SURVIVOR.id, loserId: LOSER.id }))
-      .rejects.toThrow(/deadlock detected/)
-    expect(db.opKeys()).not.toContain('contacts.delete')
+  it('says the merge was rolled back — the operator must not go hunting for a half-merge', async () => {
+    const db = makeRpcDb({ rpc: { data: null, error: { message: 'deadlock detected' } } })
+    await expect(mergeContacts(db, { survivorId: 'survivor-1', loserId: 'loser-1' }))
+      .rejects.toThrow(/rolled back|nothing (has )?changed/i)
   })
 
-  it('a ZERO-ROW survivor stamp throws too — a silent no-op is still a failed stamp', async () => {
-    // PostgREST reports no error when an UPDATE matches nothing. "The
-    // survivor's fields were never written" is the state being guarded,
-    // however it arose.
-    const db = makeMergeDb({
-      survivor: SURVIVOR,
-      loser: LOSER,
-      results: { 'contacts.update': { data: null, error: null, count: 0 } },
-    })
-    await expect(mergeContacts(db, { survivorId: SURVIVOR.id, loserId: LOSER.id }))
-      .rejects.toThrow(/mergeContacts/)
-    expect(db.opKeys()).not.toContain('contacts.delete')
+  it('treats a null RPC payload as a failure rather than reporting an empty success', async () => {
+    const db = makeRpcDb({ rpc: { data: null, error: null } })
+    await expect(mergeContacts(db, { survivorId: 'survivor-1', loserId: 'loser-1' })).rejects.toThrow(/mergeContacts/)
   })
 
-  it('the thrown message names the half-merged state so the operator can act', async () => {
-    // The FK updates have already run and cannot be undone, so the honest
-    // report is: nothing was destroyed, the loser is still there, re-run.
-    const db = makeMergeDb({
-      survivor: SURVIVOR,
-      loser: LOSER,
-      results: { 'contacts.update': { data: null, error: { message: 'boom' }, count: null } },
-    })
-    const err = await mergeContacts(db, { survivorId: SURVIVOR.id, loserId: LOSER.id })
-      .catch(e => e)
-    expect(err).toBeInstanceOf(Error)
-    expect(err.message).toMatch(/not been deleted/i)
-    expect(err.message).toMatch(/re-run/i)
-    expect(err.message).toContain(LOSER.id)
+  it.each([
+    [{ survivorId: '', loserId: 'l' }, /survivorId and loserId required/],
+    [{ survivorId: 's', loserId: '' }, /survivorId and loserId required/],
+    [{ survivorId: 'x', loserId: 'x' }, /cannot merge a contact with itself/],
+  ])('keeps the argument guards (%#) — and never reaches the RPC', async (args, re) => {
+    const db = makeRpcDb()
+    await expect(mergeContacts(db, args)).rejects.toThrow(re)
+    expect(db.rpcCalls).toEqual([])
   })
 
-  it('does not report success for fields it never wrote', async () => {
-    const db = makeMergeDb({
-      survivor: SURVIVOR,
-      loser: LOSER,
-      results: { 'contacts.update': { data: null, error: { message: 'boom' }, count: null } },
-    })
-    // The old code resolved with { survivor: { ...survivor, ...mergedFields } }
-    // — a success object describing a write that never landed.
-    await expect(mergeContacts(db, { survivorId: SURVIVOR.id, loserId: LOSER.id })).rejects.toThrow()
-  })
-})
-
-describe('dedupePreUpdate — its reads and writes report failure', () => {
-  // A discarded read error here is not harmless: it yields "the survivor
-  // has none of these", the dedupe is skipped, and the FK update that
-  // follows hits the very UNIQUE index this function exists to clear — so
-  // the merge dies at a confusing 23505 on an unrelated-looking table
-  // instead of at the read that actually failed.
-  const cases = [
-    ['contact_preferences', 'contact_preferences.select'],
-    ['sequence_enrollments', 'sequence_enrollments.select'],
-    ['contact_tags', 'contact_tags.select'],
-  ]
-
-  it.each(cases)('a failed %s read aborts the merge before anything is folded', async (table, key) => {
-    const db = makeMergeDb({
-      survivor: SURVIVOR,
-      loser: LOSER,
-      results: { [key]: { data: null, error: { message: `read failed: ${table}` } } },
-    })
-    await expect(mergeContacts(db, { survivorId: SURVIVOR.id, loserId: LOSER.id }))
-      .rejects.toThrow(new RegExp(table))
-    // Nothing destructive, and no FK re-pointing, may have happened.
-    expect(db.opKeys()).not.toContain('contacts.delete')
-    expect(db.ops.filter(o => o.op === 'update')).toEqual([])
+  it('still refuses a cross-location merge before calling anything', async () => {
+    const db = makeRpcDb({ loser: { ...LOSER, location_id: 'loc-2' } })
+    await expect(mergeContacts(db, { survivorId: 'survivor-1', loserId: 'loser-1' }))
+      .rejects.toThrow(/same location/)
+    expect(db.rpcCalls).toEqual([])
   })
 
-  it('a failed dedupe DELETE aborts too — the conflict it was clearing is still there', async () => {
-    const db = makeMergeDb({
-      survivor: SURVIVOR,
-      loser: LOSER,
-      results: {
-        'contact_preferences.select': { data: { id: 'pref-1' }, error: null },
-        'contact_preferences.delete': { data: null, error: { message: 'delete refused' } },
-      },
-    })
-    await expect(mergeContacts(db, { survivorId: SURVIVOR.id, loserId: LOSER.id }))
-      .rejects.toThrow(/contact_preferences/)
-    expect(db.opKeys()).not.toContain('contacts.delete')
+  it.each([
+    ['survivor', 'nope-1', 'loser-1', /survivor nope-1 not found/],
+    ['loser', 'survivor-1', 'nope-2', /loser nope-2 not found/],
+  ])('still reports a missing %s', async (_which, survivorId, loserId, re) => {
+    const db = makeRpcDb()
+    await expect(mergeContacts(db, { survivorId, loserId })).rejects.toThrow(re)
+    expect(db.rpcCalls).toEqual([])
+  })
+
+  it('never sends last_active_at — contacts has no such column, and it 400d every merge', async () => {
+    // pickMergedFields listed last_active_at from the day merge shipped
+    // (36e49302). public.contacts has never had that column (verified against
+    // information_schema 2026-08-12; the string appears in no migration), so
+    // PostgREST rejected the stamp with PGRST204 on EVERY merge — after the
+    // dedupe deletes and FK re-points had already landed. That is the
+    // half-merged state migration 532 had to repair.
+    const db = makeRpcDb()
+    await mergeContacts(db, { survivorId: 'survivor-1', loserId: 'loser-1' })
+    expect(db.rpcCalls[0].params.p_merged_fields).not.toHaveProperty('last_active_at')
   })
 })
