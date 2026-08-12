@@ -71,8 +71,9 @@ export default function TicketInbox({ locationId, locationName, userId }) {
   const [sending, setSending] = useState(false)
   const [statusSaving, setStatusSaving] = useState(false)
   const [assignSaving, setAssignSaving] = useState(false)
-  // EMAIL-PARTICIPANTS.7 — a removal is in flight. Re-entrancy guard only (see
-  // handleRemoveRecipient): the column is read-modify-written server-side.
+  // EMAIL-PARTICIPANTS.7 — a remove/restore is in flight. Both the re-entrancy
+  // guard (see patchParticipants) and what disables the chip buttons: a guard
+  // nothing renders is a click that silently does nothing.
   const [participantSaving, setParticipantSaving] = useState(false)
   // EMAIL-ASSIGN.1 — whether the viewer may reassign; the queue route says.
   const [viewerIsElevated, setViewerIsElevated] = useState(false)
@@ -664,6 +665,7 @@ export default function TicketInbox({ locationId, locationName, userId }) {
             sending={sending}
             onRemoveRecipient={handleRemoveRecipient}
             onRestoreRecipient={handleRestoreRecipient}
+            participantSaving={participantSaving}
             onForward={setForwarding}
           />
         </div>

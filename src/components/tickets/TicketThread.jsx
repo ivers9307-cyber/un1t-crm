@@ -93,6 +93,7 @@ export default function TicketThread({
   // …and puts one back. Same path, same guards; the participants route is the
   // only thing that writes the exclusion either way.
   onRestoreRecipient,
+  participantSaving = false,
   // EMAIL-FORWARD.1 — opens the forward composer for ONE message. Owned by the
   // inbox (like compose), because a forward is a modal over the whole surface
   // rather than something a bubble can render inside itself.
@@ -302,6 +303,7 @@ export default function TicketThread({
         onSend={onSend}
         onRemoveRecipient={onRemoveRecipient}
         onRestoreRecipient={onRestoreRecipient}
+        participantSaving={participantSaving}
         sending={sending}
       />
     </>

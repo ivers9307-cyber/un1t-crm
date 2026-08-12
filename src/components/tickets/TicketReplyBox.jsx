@@ -91,6 +91,9 @@ export default function TicketReplyBox({
   onSend,
   onRemoveRecipient,
   onRestoreRecipient,
+  // A remove/restore is in flight. Separate from `sending` because it disables
+  // a different, much smaller thing: the chip buttons, and nothing else.
+  participantSaving = false,
   sending = false,
   signature,
 }) {
@@ -216,6 +219,7 @@ export default function TicketReplyBox({
             // sits on the chips that were already on screen rather than beside
             // a second copy of them. Absent (compose, forward) there is no ×.
             onRemoveLocked={onRemoveRecipient}
+            lockedBusy={participantSaving}
             disabled={sending}
           />
         </div>
@@ -259,10 +263,12 @@ export default function TicketReplyBox({
                   <button
                     type="button"
                     onClick={() => onRestoreRecipient(address)}
-                    disabled={sending}
+                    // Same reason the × is: the two writes are serialised
+                    // against each other, so both have to say when one is out.
+                    disabled={sending || participantSaving}
                     aria-label={`Restore ${address}`}
                     title="Put this person back on the reply"
-                    className="text-un1t-subtle hover:text-un1t-text"
+                    className="text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
                   >
                     <RotateCcw size={11} aria-hidden="true" />
                   </button>

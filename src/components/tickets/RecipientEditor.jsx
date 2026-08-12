@@ -59,6 +59,9 @@ const BOX_CLASSES =
  * @param {(address: string) => void} [props.onRemoveLocked]  omit for no × on the
  *   locked chips. Given one, it is handed the address and owns the write; this
  *   component never drops the chip itself.
+ * @param {boolean} [props.lockedBusy]  a locked-chip write is in flight. Disables
+ *   those × only — NOT the Cc/Bcc fields, which have nothing to do with it and
+ *   may well have a half-typed address in them.
  * @param {boolean} [props.disabled]
  * @param {string} props.idPrefix  unique per mounted editor
  */
@@ -68,6 +71,7 @@ export default function RecipientEditor({
   lockedTo = [],
   lockedHint,
   onRemoveLocked,
+  lockedBusy = false,
   disabled = false,
   idPrefix,
 }) {
@@ -202,9 +206,12 @@ export default function RecipientEditor({
                   <button
                     type="button"
                     onClick={() => onRemoveLocked(address)}
-                    disabled={disabled}
+                    // The caller serialises these writes, so a second click
+                    // during one is dropped. Disabled says that, instead of
+                    // leaving a live-looking × that silently does nothing.
+                    disabled={disabled || lockedBusy}
                     aria-label={`Remove ${address}`}
-                    className="text-un1t-subtle hover:text-un1t-text"
+                    className="text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
                   >
                     <X size={11} aria-hidden="true" />
                   </button>

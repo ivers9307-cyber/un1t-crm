@@ -182,6 +182,21 @@ describe('TicketReplyBox — the people taken off it', () => {
     expect(screen.queryByRole('button', { name: /^Restore / })).toBeNull()
   })
 
+  it('disables both chip actions while a participants write is in flight', () => {
+    renderBox({
+      ticket: { ...TICKET, excluded_participants: ['gone@x.com'] },
+      replyRecipients: audience(['a@x.com']),
+      participantSaving: true,
+    })
+
+    // The writes are serialised, so a second click during one is dropped. The
+    // controls have to say that: this composer's own send button was fixed for
+    // exactly this reason, and a live-looking × that does nothing is the same
+    // defect one component deeper.
+    expect(screen.getByRole('button', { name: 'Remove a@x.com' }).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Restore gone@x.com' }).disabled).toBe(true)
+  })
+
   it("calls onRestoreRecipient with the chip's own address", () => {
     const onRestoreRecipient = vi.fn()
     renderBox({
