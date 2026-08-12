@@ -183,6 +183,25 @@ export async function POST(request, props) {
   // operators merging the same ticket into DIFFERENT targets would otherwise
   // both stamp it: the pointer would name one survivor while the messages sat
   // split across two, and the undo would restore half a conversation.
+  //
+  // THE RACE THIS CONDITION CANNOT CATCH, AND WHY THAT IS ACCEPTED. Two
+  // operators merging the same PAIR in OPPOSITE directions at the same moment
+  // (A→B and B→A) both succeed: each stamps a DIFFERENT row, so each finds its
+  // own source's merged_into_id still null and the condition holds for both.
+  // The result is two tombstones pointing at each other, and since
+  // scopeToUnmerged hides both, the conversation disappears from every list and
+  // count. No PostgREST condition can close it — the guard would have to assert
+  // something about the OTHER ticket in the same statement, which only a DB
+  // trigger (or a real transaction) could do.
+  //
+  // Accepted rather than fixed, deliberately: it needs two operators merging
+  // the same pair, in opposite directions, inside the few milliseconds between
+  // one request's absorbed-merge read and its stamp — and this is a
+  // single-operator system today. It is also fully recoverable without a
+  // migration: DELETE on EITHER tombstone unmerges that side and brings the
+  // conversation back. If a second concurrent operator ever becomes normal,
+  // the fix is a BEFORE UPDATE trigger on email_tickets refusing a stamp whose
+  // target is itself already a tombstone, not more client-side conditions.
   const { error: sourceError } = await db.from('email_tickets')
     .update({
       merged_into_id: target.id,
