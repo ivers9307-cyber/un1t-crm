@@ -174,6 +174,208 @@ export function ticketMessageRecipients(message) {
   return out
 }
 
+// ── Reply audience (EMAIL-PARTICIPANTS.9) ────────────────────────────
+//
+// GET .../[id] derives the reply audience from the WHOLE thread and answers
+// it as reply_recipients = { to, mode, over_cap, empty } — the same shape
+// TicketReplyBox.jsx reads on web. Before this, the composer footer below
+// said "Sends an email to <requester>" unconditionally, even though a reply
+// from this screen has ALWAYS gone to everyone the server derives (this
+// file's own header — mobile posts { text, internal } and the route adds the
+// rest). On any multi-party thread that told the operator the reply reached
+// one person when it reached several: a known standing defect (2026-08-09
+// audit).
+//
+// MOBILE IS READ-ONLY HERE, DELIBERATELY. There is no chip editor on this
+// screen (see the file header) — removing a participant is a web-only act —
+// so this function only ever DESCRIBES the audience the server already
+// settled on; it never changes it. What it adds beyond description is the two
+// refusals the reply route enforces server-side: over_cap and empty. Both are
+// answered by this same GET, so the operator can be told BEFORE typing rather
+// than after pressing a send button the route would 400.
+//
+// PRIORITY, most specific first:
+//   1. no requester_email at all — cannot be replied to, full stop.
+//   2. empty — every participant was excluded (a web-only act); nobody left.
+//   3. over_cap — more recipients than one email may carry.
+//   4. the normal case — name them.
+// (1) is checked first regardless of what reply_recipients says, matching
+// TicketReplyBox.jsx's `canReply` gate on web exactly.
+
+/**
+ * The composer footer's text and whether Send must be disabled, for a reply
+ * (never call this in note mode — a note has no audience).
+ *
+ * `replyRecipients` is null when the route could not derive one (an
+ * own-address lookup blip) — the fallback is the requester address alone,
+ * exactly like `lockedTo` on web, and null must never be misread as an
+ * over_cap/empty ANSWER.
+ *
+ * WITH SEVERAL RECIPIENTS THIS NAMES ONLY THE FIRST. Deliberately: the first
+ * entry is the live counterparty — the person the reply is answering, which
+ * ticketParticipants (src/lib/email-recipients.js) reads off the newest real
+ * message in whichever direction it went: its From when they wrote to us, its
+ * first To when we wrote to them. The GET derives `to` the same way the reply
+ * route does, so this line and the send agree. Everyone else becomes a count:
+ * naming all of them on a phone-width line is the mistake this exists to
+ * avoid, not a shortcut; it is the same idiom web's placeholder and
+ * send-button label already use.
+ *
+ * (Until EMAIL-PARTICIPANTS.12 that lead was the newest From either way — one
+ * of OUR OWN addresses on an outbound message, excluded a line later — so the
+ * order reverted to first appearance the moment staff answered, and this line
+ * named whoever happened to be earliest rather than whoever was being
+ * answered.)
+ *
+ * @param {{requester_email?: string, mailbox?: {address?: string}}|null} ticket
+ * @param {{to: string[], mode: string, over_cap: boolean, empty: boolean}|null} replyRecipients
+ * @returns {{ text: string, disabled: boolean }}
+ */
+export function ticketReplyAudienceMeta(ticket, replyRecipients) {
+  if (!ticket?.requester_email) {
+    return {
+      disabled: true,
+      text: 'This ticket has no requester address, so it cannot be replied to. You can still add an internal note.',
+    }
+  }
+
+  if (replyRecipients?.empty) {
+    return {
+      disabled: true,
+      text: 'Every recipient has been removed from this thread, so there is nobody to reply to. '
+        + 'You can still add an internal note.',
+    }
+  }
+
+  const to = ticketReplyAudience(ticket, replyRecipients)
+
+  if (replyRecipients?.over_cap) {
+    return {
+      disabled: true,
+      text: `This thread has ${to.length} recipients — too many for one reply. Remove some on the web before replying.`,
+    }
+  }
+
+  const mailboxNote = ticket?.mailbox?.address ? ` · replies come back to ${ticket.mailbox.address}` : ''
+  const text = to.length === 1
+    ? `Sends an email to ${to[0]}${mailboxNote}`
+    : `Sends an email to ${to[0]} and ${to.length - 1} ${to.length === 2 ? 'other' : 'others'}${mailboxNote}`
+
+  return { disabled: false, text }
+}
+
+/**
+ * THE audience for this screen — one derivation, three strings.
+ *
+ * The footer, the composer placeholder and the header line all answer "who
+ * does this reach", and three of them working it out separately is three
+ * chances to disagree about one ticket. That is not hypothetical: it is
+ * precisely what shipped. Web keeps its equivalent in ONE place too
+ * (TicketReplyBox's `lockedTo`, read by both its placeholder and its
+ * sentence), and the server keeps its own in ticketParticipants().
+ *
+ * THE EMPTY RULE, which is the whole reason this is a function and not an
+ * inline `?:`. `empty: true` means the operator removed everybody (a web-only
+ * act — see the file header). Falling back to the requester there would name
+ * the person they had just taken off, in a prompt, above a send the route
+ * would 400. "We could not derive anybody" (`replyRecipients` null, an
+ * own-address lookup blip) is a DIFFERENT answer and the only one the
+ * requester fills.
+ *
+ * @param {{requester_email?: string}|null} ticket
+ * @param {{to?: string[], empty?: boolean}|null} replyRecipients
+ * @returns {string[]}  possibly empty, never holding a hole
+ */
+export function ticketReplyAudience(ticket, replyRecipients) {
+  if (replyRecipients?.empty) return []
+  const derived = (Array.isArray(replyRecipients?.to) ? replyRecipients.to : []).filter(Boolean)
+  if (derived.length) return derived
+  return ticket?.requester_email ? [ticket.requester_email] : []
+}
+
+/**
+ * What the composer's text box says before anything is typed.
+ *
+ * It read `Reply to ${ticket.requester_email}…` — the address the FIRST
+ * message arrived from — until EMAIL-PARTICIPANTS.12. On the 2026-08-12
+ * ticket that put "Reply to ratesoffice@dublincity.ie" in the box an operator
+ * types into, directly above a footer saying the mail goes to Eleanor and one
+ * other: the composer contradicting itself in two adjacent lines, on the
+ * screen where the wrong name is most expensive. Web fixed the same string in
+ * EMAIL-PARTICIPANTS.8 and mobile was left behind.
+ *
+ * NAMES ONLY THE FIRST, then a count — the idiom the footer and web's own
+ * placeholder already use, and the reason the first entry has to be the live
+ * counterparty rather than whoever appeared earliest.
+ *
+ * @param {{requester_email?: string}|null} ticket
+ * @param {{to?: string[], empty?: boolean}|null} replyRecipients
+ * @returns {string}
+ */
+export function ticketReplyPlaceholder(ticket, replyRecipients) {
+  // Checked first, exactly like ticketReplyAudienceMeta and web's `canReply`:
+  // a ticket with no requester address cannot be replied to at all, whatever
+  // reply_recipients says.
+  if (!ticket?.requester_email) return 'No requester address — add an internal note instead'
+
+  const to = ticketReplyAudience(ticket, replyRecipients)
+  if (to.length === 0) return 'Reply…'
+  if (to.length === 1) return `Reply to ${to[0]}…`
+  return `Reply to ${to[0]} and ${to.length - 1} ${to.length === 2 ? 'other' : 'others'}…`
+}
+
+/**
+ * WHO THE TICKET IS ACTUALLY WITH — the line under the subject, and the
+ * "Opened by" line beneath it (mobile's half of EMAIL-PARTICIPANTS.8/.12).
+ *
+ * This line was `ticket.requester_email` raw: the person the FIRST message
+ * came from and nothing more. When a shared mailbox hands a thread to a named
+ * person — a rates office forwarding to an officer, 2026-08-12 — every message
+ * afterwards is with somebody this header never named, and an operator reading
+ * it answers the wrong person. That is the incident, and it cost a duplicate
+ * reply.
+ *
+ * "OPENED BY …" APPEARS ONLY WHEN THE TWO HAVE DIVERGED, i.e. the requester is
+ * not the live counterparty. On an ordinary ticket they are the same address
+ * and the line would be noise on every ticket — which is exactly how the one
+ * ticket that needed it would get skipped over. The requester's NAME rides on
+ * their own address rather than sitting on a line of its own, for the same
+ * reason web does it: a name floating above the participants is the wrong name
+ * in the most prominent place the moment the thread moves to somebody else.
+ *
+ * @param {{requester_email?: string, requester_name?: string}|null} ticket
+ * @param {{to?: string[], empty?: boolean}|null} replyRecipients
+ * @returns {{ primary: string, opener: string|null }}
+ */
+export function ticketThreadAudienceLines(ticket, replyRecipients) {
+  const requester = ticket?.requester_email || ''
+
+  if (replyRecipients?.empty) {
+    return { primary: 'Nobody is left on this thread — every recipient was removed.', opener: null }
+  }
+
+  const people = (Array.isArray(replyRecipients?.to) ? replyRecipients.to : []).filter(Boolean)
+  // No derived audience at all: the plain requester line this header has
+  // always shown, which is the honest answer when nothing else is known.
+  if (people.length === 0) return { primary: requester || 'No requester address', opener: null }
+
+  // Compared normalised, because these two come from different places: one is
+  // a stored column, the other is derived off message headers a stranger's
+  // mail client wrote. A case difference is not a change of counterparty.
+  const norm = (a) => String(a || '').trim().toLowerCase()
+  const name = ticket?.requester_name || ''
+  const withName = (address) => (
+    name && norm(address) === norm(requester) ? `${name} <${address}>` : address
+  )
+
+  return {
+    primary: `On this thread: ${people.map(withName).join(', ')}`,
+    opener: requester && norm(people[0]) !== norm(requester)
+      ? `Opened by ${withName(requester)}`
+      : null,
+  }
+}
+
 // ── Delivery status (EMAIL-DELIVERY.1) ───────────────────────────────
 //
 // A re-statement of src/lib/ticket-display.js's deliveryMeta, for the reason

@@ -2,13 +2,11 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { emailHtmlDocument } from '@/lib/email-html'
-import {
-  threadParticipants,
-  latestCorrespondence,
-  replyMode,
-} from '@/lib/email-recipients'
 import { attachmentPreviewKind } from '@/lib/email-attachment-preview'
-import { loadTicketForUser, loadOwnAddresses, isElevatedAtLocation } from '../_helpers'
+import {
+  loadTicketForUser, loadOwnAddresses, isElevatedAtLocation,
+  loadParticipantMessages, resolveReplyAudience,
+} from '../_helpers'
 
 // GET /api/email/tickets/[id] — one ticket and its thread (EMAIL-TICKET.4).
 //
@@ -132,26 +130,42 @@ export async function GET(request, props) {
 
   const { messages, attachmentsUnavailable } = await shapeMessages(db, messagesDesc || [])
 
-  // ── Who a reply would reach (EMAIL-CC.1) ──────────────────────────
-  // Computed HERE, with the SAME functions the reply route uses, so the button
-  // that says "Reply All (4 people)" and the send that actually happens cannot
-  // disagree. The composer must never have to re-derive this from the message
-  // list: a second implementation is a second chance to include a bcc.
+  // ── Who a reply would reach (EMAIL-CC.1, EMAIL-PARTICIPANTS.4) ─────
+  // Computed HERE so the composer never re-derives it from the message list: a
+  // second implementation is a second chance to include a bcc.
+  //
+  // The audience is the WHOLE thread — every correspondent it accumulated, not
+  // just whoever happened to write last — via resolveReplyAudience() over its
+  // OWN query. Deliberately not a reuse of `messagesDesc`: that list is capped
+  // for RENDERING (MESSAGE_LIMIT), and an audience derived from a render cap is
+  // how a long ticket silently loses recipients.
+  //
+  // THE REPLY ROUTE DERIVES THROUGH THE SAME PAIR (EMAIL-PARTICIPANTS.5), so
+  // this IS parity, not an approximation of it: both routes call
+  // loadParticipantMessages() for the window and resolveReplyAudience() for the
+  // set, and both feed it the same ticket. A label saying "Reply All (4
+  // people)" and the send that follows cannot name different sets — there is
+  // one derivation and they share it. Keep it that way: a second implementation
+  // on either side is a second chance to disagree, and the disagreement is
+  // invisible until a member never gets the answer.
   //
   // NULL is a real answer, not a failure to handle. Without the own-address
   // list the set would wrongly contain our own mailbox, and a label naming an
   // extra recipient who will in fact be excluded is worse than no label — the
-  // UI falls back to "reply to the requester" and the reply route recomputes
-  // the truth at send time regardless.
+  // UI falls back to "reply to the requester".
   const own = await loadOwnAddresses(db)
   let replyRecipients = null
   if (!own.response) {
-    const participants = threadParticipants(
-      latestCorrespondence(messagesDesc || []),
-      { exclude: own.addresses },
-    )
-    const to = participants.length ? participants : [ticket.requester_email].filter(Boolean)
-    replyRecipients = { to, mode: replyMode(to) }
+    const { data: participantRows, error: participantErr } = await loadParticipantMessages(db, ticket.id)
+    if (participantErr) {
+      console.error('[tickets/:id] participant lookup failed:', participantErr.message)
+      return NextResponse.json({ success: false, error: participantErr.message }, { status: 500 })
+    }
+    replyRecipients = resolveReplyAudience({
+      messages: participantRows || [],
+      ticket,
+      ownAddresses: own.addresses,
+    })
   }
 
   // EMAIL-ASSIGN.1 — assignee display name, best-effort: `profiles` has no
@@ -177,9 +191,16 @@ export async function GET(request, props) {
       // EMAIL-ASSIGN.1 — the reassign control gates on this; claiming needs
       // no elevation, assigning somebody ELSE does.
       viewer_is_elevated: isElevatedAtLocation(user, ticket.location_id),
-      // { to: string[], mode: 'reply' | 'reply_all' }, or null — see above.
-      // `to` is derived from From/To/Cc only; bcc_emails is never a
-      // participant, so it can never appear here.
+      // { to: string[], mode: 'reply' | 'reply_all', over_cap, empty }, or
+      // null — see above. `to` is derived from From/To/Cc only; bcc_emails is
+      // never a participant, so it can never appear here.
+      //
+      // over_cap and empty (EMAIL-PARTICIPANTS.4) are the reply route's two
+      // refusals, answered HERE so the composer can say so before the operator
+      // types rather than after they hit send: over_cap means the derived
+      // audience exceeds MAX_RECIPIENTS and the reply will 400; empty means
+      // every participant has been excluded and there is nobody left to
+      // reply to.
       reply_recipients: replyRecipients,
       // True when the attachment query failed. The thread is complete; the
       // FILE list is not, and the UI must say so rather than imply there were

@@ -42,7 +42,9 @@ import { NextResponse } from 'next/server'
 import { assertLocationAccessOr404, guardMasterOrOwner } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { visibleMailboxes, orderMailboxTabs } from '@/lib/email-mailboxes'
-import { normalizeAddressList } from '@/lib/email-recipients'
+import {
+  ticketParticipants, normalizeAddressList, replyMode, MAX_RECIPIENTS,
+} from '@/lib/email-recipients'
 
 const MAILBOX_COLUMNS = 'id, location_id, address, label, is_default, active'
 
@@ -385,4 +387,80 @@ export function statusTimestamps(status, ticket, now) {
   if (status === 'solved') return { solved_at: ticket?.solved_at || now, closed_at: null }
   if (status === 'closed') return { solved_at: ticket?.solved_at || null, closed_at: ticket?.closed_at || now }
   return { solved_at: null, closed_at: null }
+}
+
+/**
+ * How many messages the audience is derived from.
+ *
+ * The reply route used to scan 10, which on a ticket with 11+ internal notes
+ * could push every real correspondent out of the window and silently narrow
+ * "Reply All (N)". A union has to see the whole conversation. 500 is far above
+ * any real support thread and still bounded — an unbounded select would hit
+ * PostgREST's 1,000-row cap and truncate without saying so.
+ */
+export const PARTICIPANT_SCAN_LIMIT = 500
+
+// bcc_emails IS NOT SELECTED, so no caller can leak it into a recipient list
+// even if the derivation changed. forwarded_message_id IS, because a forward
+// row must be recognisable in order to be skipped. `direction` IS
+// (EMAIL-PARTICIPANTS.12) because ticketParticipants reads the newest message
+// two different ways — inbound leads with its From, outbound with its first To
+// — and without the column that decision falls back to the weaker signal
+// (is the From one of ours), which is right but only as far as `ownAddresses`
+// happens to be complete.
+const PARTICIPANT_COLUMNS =
+  'direction, from_email, to_email, to_emails, cc_emails, is_internal_note, forwarded_message_id, created_at, sent_at'
+
+/**
+ * The one message window both the detail route and the reply route derive from.
+ * Two windows would be two answers to "who does this reach".
+ *
+ * Deliberately returns the raw supabase result rather than the
+ * `{ response } | { ... }` shape used by loadOwnAddresses/loadTicketForUser:
+ * those wrap access/visibility failures into one canonical refusal, but a
+ * content-query failure here logs a route-specific message at each call site
+ * (as the pre-existing message queries in both routes already did), so the
+ * error stays in the caller's hands.
+ *
+ * @param {object} db  service-role client
+ * @param {string} ticketId
+ * @returns {Promise<{ data: object[]|null, error: object|null }>}
+ */
+export async function loadParticipantMessages(db, ticketId) {
+  return db.from('email_inbox_messages')
+    .select(PARTICIPANT_COLUMNS)
+    .eq('ticket_id', ticketId)
+    .order('created_at', { ascending: false })
+    .limit(PARTICIPANT_SCAN_LIMIT)
+}
+
+/**
+ * Who a reply reaches, and whether it may be sent at all.
+ *
+ * `empty` is a real answer, not a failure: an operator who removes every
+ * participant has said something deliberate, and mailing someone they took off
+ * is not an acceptable way to avoid an error message.
+ *
+ * @returns {{ to: string[], mode: 'reply'|'reply_all', over_cap: boolean, empty: boolean }}
+ */
+export function resolveReplyAudience({ messages, ticket, ownAddresses }) {
+  const removed = ticket?.excluded_participants || []
+  const off = new Set(normalizeAddressList(removed).valid)
+
+  const derived = ticketParticipants(messages || [], {
+    exclude: ownAddresses || [],
+    removed,
+  })
+  // Exclusions apply to the fallback too — see _helpers.test.js: 'does not
+  // resurrect an excluded requester through the fallback'.
+  const fallback = normalizeAddressList([ticket?.requester_email])
+    .valid.filter(a => !off.has(a))
+
+  const to = derived.length ? derived : fallback
+  return {
+    to,
+    mode: replyMode(to),
+    over_cap: to.length > MAX_RECIPIENTS,
+    empty: to.length === 0,
+  }
 }

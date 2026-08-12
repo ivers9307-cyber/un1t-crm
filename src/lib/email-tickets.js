@@ -79,6 +79,78 @@ export function ticketSubject(existingSubject, inboundSubject) {
 }
 
 /**
+ * The message id at which each address first appears on the thread, so the UI
+ * can say WHERE someone joined. Derived, never stored — first appearance is a
+ * property of the messages that arrived.
+ *
+ * WHY THIS EXISTS (EMAIL-PARTICIPANTS.8)
+ * A ticket opened by ratesoffice@dublincity.ie was forwarded internally to a
+ * named officer, who replied. From that message on the conversation was with
+ * her — and nothing on screen said so, so an operator answered the wrong
+ * person twice. The recipient half of that is fixed upstream; this is the fact
+ * the thread needs to SHOW it, against the message she actually arrived on.
+ *
+ * THE OPENING MESSAGE REPORTS NOBODY, and that is a rule about the thread
+ * rather than a rendering preference, which is why it lives here where the
+ * pure tests can pin it. The people on the first message did not JOIN the
+ * conversation — they started it. Saying they joined claims an arrival at
+ * something that already existed, and a marker that fires on every ticket's
+ * first message means "is present" rather than "is new", which is neither what
+ * it says nor what it is for. Their addresses are still consumed, so nobody
+ * gets announced later for having been there from the start.
+ *
+ * The opener is the first message that NAMES anybody: a row carrying no
+ * addresses at all started nothing, and counting it would hand the opening
+ * message's silence to the real first message instead.
+ *
+ * Internal notes and forwards are skipped for the same reason they are skipped
+ * when building the audience: a note names nobody, and a forward shows the
+ * thread to someone rather than adding them to it. Skipped, note, means the
+ * addresses on them are not consumed either — someone first seen on a forward
+ * still joins properly on the message they themselves write — and it means
+ * neither can be the opening message.
+ *
+ * `bcc_emails` IS DELIBERATELY ABSENT from the field list. A Bcc'd person is
+ * not visibly on the thread, and announcing them would leak the Bcc to
+ * everyone reading the ticket. Do not add it.
+ *
+ * @param {object[]} messages  ascending by created_at
+ * @returns {Map<string, string[]>}  message id → addresses first seen there
+ */
+export function joinPointsByMessage(messages) {
+  const seen = new Set()
+  const out = new Map()
+  let opened = false
+  for (const m of Array.isArray(messages) ? messages : []) {
+    if (!m || m.is_internal_note || m.forwarded_message_id) continue
+    // The legacy scalar fallback, mirroring messageRecipients() and
+    // envelopeLines() (src/lib/ticket-display.js, TicketThread.jsx). Migrations
+    // backfilled `to_emails`, so a scalar-only row should not exist — but two
+    // functions in the same feature disagreeing about whether to trust that is
+    // the smell, and the failure is not inert: an unread recipient on the
+    // OPENING message stays unconsumed, and the requester's own first reply
+    // then raises a false "joined this thread".
+    const toList = Array.isArray(m.to_emails) ? m.to_emails.filter(Boolean) : []
+    const to = toList.length ? toList : (m.to_email ? [m.to_email] : [])
+    const here = []
+    for (const raw of [m.from_email, ...to, ...(m.cc_emails || [])]) {
+      const a = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
+      if (!a || seen.has(a)) continue
+      seen.add(a)
+      here.push(a)
+    }
+    if (!here.length) continue
+    // Consumed above, reported nowhere: this is the message they started.
+    if (!opened) {
+      opened = true
+      continue
+    }
+    out.set(m.id, here)
+  }
+  return out
+}
+
+/**
  * Which ticket a set of threading-matched message rows belongs to.
  *
  * A long reply chain touches many of our messages, so several rows can match

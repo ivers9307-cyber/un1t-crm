@@ -47,6 +47,36 @@ describe('getTicket', () => {
     expect(res.success).toBe(false)
     expect(res.error).toBe('nope')
   })
+
+  // EMAIL-PARTICIPANTS.9 — reply_recipients used to be dropped here, so the
+  // composer footer fell back to a hard-coded "Sends an email to <requester>"
+  // even though a reply from this screen has always gone to everyone the
+  // server derives (this file's replyToTicket doc — `{ text, internal }` only,
+  // the route adds the rest). That understated the true audience on every
+  // multi-party thread (2026-08-09 audit).
+  it('passes reply_recipients through — the footer needs the real audience, not just the requester', async () => {
+    api.mockResolvedValue({
+      success: true,
+      data: {
+        ticket: { id: 'T-1' },
+        messages: [],
+        reply_recipients: { to: ['a@x.com', 'b@x.com'], mode: 'reply_all', over_cap: false, empty: false },
+      },
+    })
+    const res = await getTicket('T-1', 'loc-1')
+    expect(res.reply_recipients).toEqual({
+      to: ['a@x.com', 'b@x.com'], mode: 'reply_all', over_cap: false, empty: false,
+    })
+  })
+
+  it('defaults reply_recipients to null when the route could not derive one — not an invented empty/over_cap answer', async () => {
+    api.mockResolvedValue({
+      success: true,
+      data: { ticket: { id: 'T-1' }, messages: [] },
+    })
+    const res = await getTicket('T-1', 'loc-1')
+    expect(res.reply_recipients).toBeNull()
+  })
 })
 
 // EMAIL-ASSIGN.1 — the mobile claim path. Mirrors the web contract exactly:

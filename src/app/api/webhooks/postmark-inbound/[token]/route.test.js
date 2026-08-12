@@ -441,6 +441,91 @@ describe('sender → contact matching resists LIKE wildcards', () => {
   })
 })
 
+// ── EMAIL-PARTICIPANTS.10 ───────────────────────────────────────────
+// A threading header is supplied by the SENDER, and it used to decide which
+// contact an inbound was attributed to — resolved from the email_sends row it
+// named, BEFORE the route ever looked at who actually sent the mail. A member
+// forwards one of our emails to a friend; the friend replies; their References
+// still names our original send; their message is written onto the MEMBER's
+// contact record, and from there into that member's DSAR export.
+//
+// It cannot be fixed by looking at From first: "From matches no contact, and a
+// header names a send to contact X" describes BOTH a member writing in from a
+// second address and a stranger who was forwarded our mail, and nothing in the
+// payload separates them. Contact linkage is now the From address or nothing.
+describe('contact linkage ignores threading headers (EMAIL-PARTICIPANTS.10)', () => {
+  // The send the forwarded copy still carries. email_sends stores Postmark's
+  // bare id while the RFC header is `<that-id>@mtasv.net` —
+  // extractCandidateMessageIds contributes both forms, so this matches.
+  const OUR_SEND = { contact_id: 'c-1', postmark_message_id: 'ours-1', sent_at: '2026-08-06T08:00:00Z' }
+
+  /** Our send in References, a stranger in From. */
+  const forwardedReply = (overrides = {}) => inbound({
+    MessageID: 'pm-inbound-3',
+    From: 'friend@elsewhere.org',
+    FromFull: { Email: 'friend@elsewhere.org', Name: 'A Friend' },
+    Subject: 'Re: Billing question',
+    Headers: [
+      { Name: 'Message-ID', Value: '<inbound-3@mail.example.com>' },
+      { Name: 'References', Value: '<ours-1@mtasv.net>' },
+    ],
+    ...overrides,
+  })
+
+  it('does not inherit the contact of a send named by References', async () => {
+    db = makeDb({ sends: [OUR_SEND] })
+    createServerClient.mockImplementation(() => db)
+
+    const res = await post(forwardedReply())
+
+    // Filed — and honestly unlinked, because the From address is nobody we know.
+    expect(res.status).toBe(200)
+    const [ticket] = insertsInto(db, 'email_tickets')
+    expect(ticket.payload.requester_email).toBe('friend@elsewhere.org')
+    expect(ticket.payload.contact_id).toBeNull()
+    const [message] = insertsInto(db, 'email_inbox_messages')
+    expect(message.payload.contact_id).toBeNull()
+    // The diagnostic is untouched: the header really did name one of our sends,
+    // and saying so is useful. It just no longer confers an identity.
+    expect((await res.json()).matched_via).toBe('in_reply_to')
+  })
+
+  it('links on the From address even when a header names a send for someone else', async () => {
+    db = makeDb({ sends: [{ ...OUR_SEND, contact_id: 'c-someone-else' }] })
+    createServerClient.mockImplementation(() => db)
+
+    const res = await post(forwardedReply({
+      From: 'member@example.com',
+      FromFull: { Email: 'member@example.com', Name: 'Ada Member' },
+    }))
+
+    const [ticket] = insertsInto(db, 'email_tickets')
+    expect(ticket.payload.contact_id).toBe('c-1')
+    expect(ticket.payload.contact_id).not.toBe('c-someone-else')
+    expect(insertsInto(db, 'email_inbox_messages')[0].payload.contact_id).toBe('c-1')
+    expect((await res.json()).matched_via).toBe('in_reply_to')
+  })
+
+  // WHY the email_sends query survived a change that took away its only
+  // consumer. Deriving the diagnostic from `candidates.length` — "this payload
+  // carries a threading header" — reads like the same statement and is not.
+  // email_sends.contact_id is NOT NULL, so a staff reply to an UNLINKED
+  // requester writes NO email_sends row at all (compose/reply both build
+  // sendLogRow as `contact ? {…} : null`). That requester's later reply then
+  // carries a perfectly real In-Reply-To with nothing of ours behind it, and
+  // the cheaper test would report it as 'in_reply_to' — quietly widening the
+  // diagnostic from "replies to one of OUR SENDS" to "has a header".
+  // The row's EXISTENCE is the signal; this test is what says so.
+  it('reports from_address when a threading header names no send of ours', async () => {
+    // Default fixture: sends is empty, so the In-Reply-To matches nothing.
+    const res = await post(reply())
+
+    expect((await res.json()).matched_via).toBe('from_address')
+    // …and the linkage still came off the From address, as it now always does.
+    expect(insertsInto(db, 'email_tickets')[0].payload.contact_id).toBe('c-1')
+  })
+})
+
 describe('ticket write (the dual-write is GONE — EMAIL-CONV-STOP.1)', () => {
   it('writes a ticket and a message, and NOTHING into email_conversations', async () => {
     const res = await post(inbound())

@@ -3,7 +3,7 @@
 // THE FILE THIS TESTS IS THE ONE PLACE A BCC CAN LEAK INTO A LATER SEND, so
 // the Bcc block below is written as a MUTATION CHECK, not a happy-path
 // assertion: every test in it fails if the guard it names is deleted. The
-// guard here is negative space — `threadParticipants()` not reading
+// guard here is negative space — `ticketParticipants()` not reading
 // `bcc_emails` — and negative space is exactly what a test suite normally
 // fails to notice disappearing, so the fixtures put a Bcc address on every
 // message the function is handed and assert on the ABSENCE of it.
@@ -15,13 +15,12 @@ import {
   normalizeAddress,
   normalizeAddressList,
   inboundAddresses,
-  threadParticipants,
-  latestCorrespondence,
   replyMode,
   resolveRecipients,
   toPostmarkFields,
   newRecipients,
   recipientCount,
+  ticketParticipants,
 } from './email-recipients'
 
 const OURS = ['studio@un1tdublin.com', 'UN1T <hello@un1t.ie>']
@@ -205,126 +204,6 @@ describe('resolveRecipients — validation and the cap', () => {
   })
 })
 
-// ── THE BCC GUARANTEE ────────────────────────────────────────────────
-//
-// Deleting the guard must turn one of these red. The guard is that
-// threadParticipants() does not read `bcc_emails`; each fixture below carries
-// a Bcc address, and each assertion is that it is NOT in the result. A change
-// that adds `...message.bcc_emails` to that function fails every one of them.
-describe('threadParticipants — bcc NEVER becomes a recipient', () => {
-  const OUTBOUND_WITH_BCC = {
-    direction: 'outbound',
-    from_email: 'hello@un1t.ie',
-    to_emails: ['ada@example.com'],
-    cc_emails: ['bob@example.com'],
-    bcc_emails: ['secret@example.com', 'auditor@example.com'],
-    is_internal_note: false,
-    created_at: '2026-08-07T10:00:00Z',
-  }
-
-  it('omits every bcc address from the participant set', () => {
-    const out = threadParticipants(OUTBOUND_WITH_BCC, { exclude: OURS })
-    expect(out).toEqual(['ada@example.com', 'bob@example.com'])
-    expect(out).not.toContain('secret@example.com')
-    expect(out).not.toContain('auditor@example.com')
-  })
-
-  it('omits a bcc address even when it is ALSO the only other plausible recipient', () => {
-    const bccOnly = { ...OUTBOUND_WITH_BCC, to_emails: [], to_email: null, cc_emails: [] }
-    expect(threadParticipants(bccOnly, { exclude: OURS })).toEqual([])
-  })
-
-  // The one that catches a "helpfully" merged implementation: a bcc address
-  // that also appears in Cc is on the thread because of the Cc, and removing
-  // the Cc must remove it.
-  it('a bcc address is not resurrected by appearing in an earlier list', () => {
-    const overlap = { ...OUTBOUND_WITH_BCC, cc_emails: [], bcc_emails: ['bob@example.com'] }
-    expect(threadParticipants(overlap, { exclude: OURS })).toEqual(['ada@example.com'])
-  })
-
-  it('is unaffected by bcc when deciding reply vs reply-all', () => {
-    const soloWithBcc = {
-      ...OUTBOUND_WITH_BCC,
-      cc_emails: [],
-      bcc_emails: ['a@example.com', 'b@example.com', 'c@example.com'],
-    }
-    const out = threadParticipants(soloWithBcc, { exclude: OURS })
-    expect(out).toEqual(['ada@example.com'])
-    // Three blind copies must NOT make this a four-person reply-all.
-    expect(replyMode(out)).toBe('reply')
-  })
-})
-
-describe('threadParticipants — everybody on the thread', () => {
-  const INBOUND = {
-    direction: 'inbound',
-    from_email: 'ada@example.com',
-    to_emails: ['studio@un1tdublin.com'],
-    cc_emails: ['bob@example.com', 'carol@example.com'],
-    is_internal_note: false,
-    created_at: '2026-08-07T09:00:00Z',
-  }
-
-  it('is From + To + Cc of the message, minus our own addresses', () => {
-    expect(threadParticipants(INBOUND, { exclude: OURS }))
-      .toEqual(['ada@example.com', 'bob@example.com', 'carol@example.com'])
-  })
-
-  // One rule has to cover both directions, or "reply-all on a ticket nobody
-  // has answered yet" becomes a special case nobody tested.
-  it('works the same on an OUTBOUND message, where the From is ours', () => {
-    const outbound = {
-      direction: 'outbound',
-      from_email: 'hello@un1t.ie',
-      to_emails: ['ada@example.com', 'bob@example.com'],
-      cc_emails: [],
-      bcc_emails: [],
-      is_internal_note: false,
-    }
-    expect(threadParticipants(outbound, { exclude: OURS }))
-      .toEqual(['ada@example.com', 'bob@example.com'])
-  })
-
-  it('falls back to the scalar to_email on a row written before mig 499', () => {
-    const legacy = {
-      direction: 'outbound', from_email: 'hello@un1t.ie',
-      to_email: 'ada@example.com', cc_emails: [], is_internal_note: false,
-    }
-    expect(threadParticipants(legacy, { exclude: OURS })).toEqual(['ada@example.com'])
-  })
-
-  it('drops malformed stored addresses rather than putting them on the wire', () => {
-    const junk = { from_email: 'ada@example.com', to_emails: ['', null, 'not-an-address'], cc_emails: [] }
-    expect(threadParticipants(junk)).toEqual(['ada@example.com'])
-  })
-
-  it('returns [] for no message at all', () => {
-    expect(threadParticipants(null)).toEqual([])
-  })
-})
-
-describe('latestCorrespondence', () => {
-  const older = { id: 'a', created_at: '2026-08-07T09:00:00Z', is_internal_note: false }
-  const newer = { id: 'b', created_at: '2026-08-07T11:00:00Z', is_internal_note: false }
-  const note = { id: 'c', created_at: '2026-08-07T12:00:00Z', is_internal_note: true }
-
-  it('picks the newest message whatever order they arrive in', () => {
-    expect(latestCorrespondence([older, newer]).id).toBe('b')
-    expect(latestCorrespondence([newer, older]).id).toBe('b')
-  })
-
-  // A note was sent to nobody, so it names no participants — a thread that
-  // ends in one must still reply-all to the people on the mail before it.
-  it('skips internal notes, even when a note is the newest thing on the ticket', () => {
-    expect(latestCorrespondence([older, newer, note]).id).toBe('b')
-  })
-
-  it('is null when there is nothing but notes', () => {
-    expect(latestCorrespondence([note])).toBeNull()
-    expect(latestCorrespondence([])).toBeNull()
-  })
-})
-
 describe('replyMode', () => {
   it('is a plain reply for one recipient', () => {
     expect(replyMode(['ada@example.com'])).toBe('reply')
@@ -370,5 +249,264 @@ describe('newRecipients', () => {
 
   it('is the whole set when nothing was known — a composed email', () => {
     expect(newRecipients({ to: ['ada@example.com'] }, [])).toEqual(['ada@example.com'])
+  })
+})
+
+// ── THE BCC GUARANTEE ────────────────────────────────────────────────
+//
+// ticketParticipants() is THE function that derives recipients from stored
+// correspondence, so it is the one place a Bcc can leak into a later send.
+// Deleting the guard must turn one of these red. The guard is NEGATIVE SPACE —
+// the function not naming `bcc_emails` — and negative space is exactly what a
+// suite normally fails to notice disappearing, so every fixture below carries
+// a Bcc address and every assertion is that it is NOT in the result. A change
+// that adds `...m.bcc_emails` to the loop fails all four.
+//
+// STRICTLY MORE EXPOSED THAN THE PER-MESSAGE DERIVATION IT REPLACED. This
+// function unions the WHOLE thread, so a Bcc typed once, months ago, on a
+// message nobody is replying to is still in the window it walks. The
+// cross-message case below is that hazard, and it has no counterpart in a
+// latest-message-only derivation.
+describe('ticketParticipants — bcc NEVER becomes a recipient', () => {
+  const bccMsg = (over = {}) => ({
+    from_email: 'hello@un1t.ie',
+    to_emails: ['ada@example.com'],
+    cc_emails: ['bob@example.com'],
+    bcc_emails: ['secret@example.com', 'auditor@example.com'],
+    is_internal_note: false, forwarded_message_id: null,
+    created_at: '2026-08-07T10:00:00Z', ...over,
+  })
+
+  it('omits every bcc address from the participant set', () => {
+    const out = ticketParticipants([bccMsg()], { exclude: OURS })
+    expect(out).toEqual(['ada@example.com', 'bob@example.com'])
+    expect(out).not.toContain('secret@example.com')
+    expect(out).not.toContain('auditor@example.com')
+  })
+
+  it('omits a bcc address even when it is ALSO the only other plausible recipient', () => {
+    const bccOnly = bccMsg({ to_emails: [], to_email: null, cc_emails: [] })
+    expect(ticketParticipants([bccOnly], { exclude: OURS })).toEqual([])
+  })
+
+  // THE UNION-SPECIFIC ONE. A bcc on an OLD message is inside the window this
+  // function walks, so "we only look at the latest message" is no longer any
+  // part of why it stays out — the only reason is that the column is never
+  // read. Nothing else in this file would catch a bcc leaking in through a
+  // message that is not the newest.
+  it('does not resurrect a bcc address from an EARLIER message in the thread', () => {
+    const out = ticketParticipants([
+      bccMsg({ bcc_emails: ['ghost@example.com'], created_at: '2026-03-01T00:00:00Z' }),
+      bccMsg({ from_email: 'ada@example.com', to_emails: ['hello@un1t.ie'], cc_emails: [],
+               bcc_emails: [], created_at: '2026-08-07T10:00:00Z' }),
+    ], { exclude: OURS })
+    expect(out).not.toContain('ghost@example.com')
+  })
+
+  // The one that catches a "helpfully" merged implementation: an address that
+  // is on the thread BECAUSE of a Cc is there on the Cc's account, and taking
+  // the Cc away must take the person away.
+  it('a bcc address is not resurrected by appearing in an earlier list', () => {
+    const overlap = bccMsg({ cc_emails: [], bcc_emails: ['bob@example.com'] })
+    expect(ticketParticipants([overlap], { exclude: OURS })).toEqual(['ada@example.com'])
+  })
+
+  it('is unaffected by bcc when deciding reply vs reply-all', () => {
+    const soloWithBcc = bccMsg({
+      cc_emails: [],
+      bcc_emails: ['a@example.com', 'b@example.com', 'c@example.com'],
+    })
+    const out = ticketParticipants([soloWithBcc], { exclude: OURS })
+    expect(out).toEqual(['ada@example.com'])
+    // Three blind copies must NOT make this a four-person reply-all.
+    expect(replyMode(out)).toBe('reply')
+  })
+})
+
+describe('ticketParticipants', () => {
+  const msg = (over = {}) => ({
+    from_email: 'a@x.com', to_emails: [], cc_emails: [],
+    is_internal_note: false, forwarded_message_id: null,
+    created_at: '2026-08-01T00:00:00Z', ...over,
+  })
+
+  it('unions across the whole thread, not just the newest message', () => {
+    const out = ticketParticipants([
+      msg({ from_email: 'us@ours.com', to_emails: ['rates@council.ie'], created_at: '2026-08-01T00:00:00Z' }),
+      msg({ from_email: 'eleanor@council.ie', to_emails: ['us@ours.com'], created_at: '2026-08-02T00:00:00Z' }),
+    ], { exclude: ['us@ours.com'] })
+    expect(out).toEqual(['eleanor@council.ie', 'rates@council.ie'])
+  })
+
+  it('unions cc_emails across the thread too, not just to_emails', () => {
+    // The cc'd address appears only on the FIRST (non-latest) message — this
+    // proves the cc_emails line inside the loop is actually reached, not just
+    // present in the source. Every fixture above this leaves cc_emails empty.
+    const out = ticketParticipants([
+      msg({ from_email: 'us@ours.com', to_emails: ['member@x.com'], cc_emails: ['watcher@council.ie'],
+            created_at: '2026-08-01T00:00:00Z' }),
+      msg({ from_email: 'member@x.com', to_emails: ['us@ours.com'], created_at: '2026-08-02T00:00:00Z' }),
+    ], { exclude: ['us@ours.com'] })
+    expect(out).toContain('watcher@council.ie')
+  })
+
+  it('puts the latest correspondent first', () => {
+    const out = ticketParticipants([
+      msg({ from_email: 'old@x.com', created_at: '2026-08-01T00:00:00Z' }),
+      msg({ from_email: 'new@x.com', created_at: '2026-08-05T00:00:00Z' }),
+    ])
+    expect(out[0]).toBe('new@x.com')
+  })
+
+  // ── THE LEAD SURVIVES OUR OWN REPLY (EMAIL-PARTICIPANTS.12) ────────
+  //
+  // The lead used to be `newest.from_email` unconditionally. On an OUTBOUND
+  // newest message that is one of OUR addresses, which `exclude` then drops —
+  // so the lead silently evaporated and the order reverted to first
+  // appearance the instant staff answered. `to[0]` is not decoration: web's
+  // placeholder, mobile's footer and the header's "Opened by" divergence
+  // marker all key on it, so the marker built to say the counterparty had
+  // changed disappeared on the reply to the very ticket it existed for.
+  //
+  // The rule now reads the newest message BOTH WAYS: inbound → who wrote to
+  // us, outbound → who we wrote to. Same question ("who am I answering"),
+  // asked of a header whose direction decides which field holds the answer.
+  it('leads with the person WE last wrote to when the newest message is outbound', () => {
+    const out = ticketParticipants([
+      msg({ from_email: 'us@ours.com', to_emails: ['rates@council.ie'], created_at: '2026-08-01T00:00:00Z' }),
+      msg({ from_email: 'eleanor@council.ie', to_emails: ['us@ours.com'], created_at: '2026-08-02T00:00:00Z' }),
+      // Our reply-all: Eleanor first, because she is who we were answering.
+      msg({ from_email: 'us@ours.com', to_emails: ['eleanor@council.ie', 'rates@council.ie'],
+            direction: 'outbound', created_at: '2026-08-03T00:00:00Z' }),
+    ], { exclude: ['us@ours.com'] })
+    expect(out).toEqual(['eleanor@council.ie', 'rates@council.ie'])
+  })
+
+  it('holds the lead STABLE across an inbound followed by our outbound reply', () => {
+    const thread = [
+      msg({ from_email: 'us@ours.com', to_emails: ['rates@council.ie'], created_at: '2026-08-01T00:00:00Z' }),
+      msg({ from_email: 'eleanor@council.ie', to_emails: ['us@ours.com'], created_at: '2026-08-02T00:00:00Z' }),
+    ]
+    const beforeWeAnswer = ticketParticipants(thread, { exclude: ['us@ours.com'] })
+    const afterWeAnswer = ticketParticipants([
+      ...thread,
+      msg({ from_email: 'us@ours.com', to_emails: beforeWeAnswer,
+            direction: 'outbound', created_at: '2026-08-03T00:00:00Z' }),
+    ], { exclude: ['us@ours.com'] })
+
+    // Answering a ticket is not a change of counterparty, so it must not be a
+    // change of audience ORDER either. Same set, same order, same to[0].
+    expect(afterWeAnswer).toEqual(beforeWeAnswer)
+  })
+
+  // Direction is not always on the row: the participant query projects a
+  // narrow column list, and pre-EMAIL-CC.1 rows predate parts of it. Our own
+  // address in the From is the same fact stated another way, so the rule reads
+  // both signals and needs only one of them.
+  it('recognises an outbound newest message from the exclusions alone, with no direction column', () => {
+    const out = ticketParticipants([
+      msg({ from_email: 'member@x.com', to_emails: ['us@ours.com'], created_at: '2026-08-01T00:00:00Z' }),
+      msg({ from_email: 'us@ours.com', to_email: 'later@x.com', to_emails: null,
+            created_at: '2026-08-02T00:00:00Z' }),
+    ], { exclude: ['us@ours.com'] })
+    expect(out[0]).toBe('later@x.com')
+  })
+
+  it('falls back to first appearance when the newest outbound message named nobody usable', () => {
+    const out = ticketParticipants([
+      msg({ from_email: 'member@x.com', to_emails: ['us@ours.com'], created_at: '2026-08-01T00:00:00Z' }),
+      msg({ from_email: 'us@ours.com', to_emails: [], to_email: null,
+            direction: 'outbound', created_at: '2026-08-02T00:00:00Z' }),
+    ], { exclude: ['us@ours.com'] })
+    expect(out).toEqual(['member@x.com'])
+  })
+
+  // The lead is a To, never a Cc: "who we last wrote to" is the addressee.
+  // A Cc'd watcher leading the list would put the wrong name in the
+  // placeholder, the footer and the divergence check all at once.
+  it('leads with the outbound To, not a Cc on the same message', () => {
+    const out = ticketParticipants([
+      msg({ from_email: 'member@x.com', to_emails: ['us@ours.com'], created_at: '2026-08-01T00:00:00Z' }),
+      msg({ from_email: 'us@ours.com', to_emails: ['member@x.com'], cc_emails: ['watcher@x.com'],
+            direction: 'outbound', created_at: '2026-08-02T00:00:00Z' }),
+    ], { exclude: ['us@ours.com'] })
+    expect(out[0]).toBe('member@x.com')
+  })
+
+  it('skips internal notes', () => {
+    const out = ticketParticipants([
+      msg({ from_email: 'member@x.com' }),
+      msg({ from_email: 'staff@ours.com', to_emails: ['nobody@x.com'], is_internal_note: true }),
+    ])
+    expect(out).not.toContain('nobody@x.com')
+  })
+
+  it('skips forward rows — a forward shows the thread, it does not add someone', () => {
+    const out = ticketParticipants([
+      msg({ from_email: 'member@x.com' }),
+      msg({ from_email: 'staff@ours.com', to_emails: ['accountant@third.com'], forwarded_message_id: 'm1' }),
+    ])
+    expect(out).not.toContain('accountant@third.com')
+  })
+
+  // (bcc has its own mutation-checked block above — see THE BCC GUARANTEE.)
+
+  it('applies sticky exclusions case-insensitively', () => {
+    const out = ticketParticipants(
+      [msg({ from_email: 'member@x.com', to_emails: ['Rates@Council.IE'] })],
+      { removed: ['rates@council.ie'] },
+    )
+    expect(out).toEqual(['member@x.com'])
+  })
+
+  it('reads the legacy scalar to_email on pre-EMAIL-CC.1 rows', () => {
+    const out = ticketParticipants([
+      { from_email: 'a@x.com', to_email: 'b@x.com', to_emails: null, cc_emails: null,
+        is_internal_note: false, forwarded_message_id: null, created_at: '2026-08-01T00:00:00Z' },
+    ])
+    expect(out).toEqual(['a@x.com', 'b@x.com'])
+  })
+
+  // EMAIL-PARTICIPANTS.12 — a NON-EMPTY array of nothing is still nothing.
+  // The three places that render a message's To (TicketThread's envelopeLines,
+  // src/lib/email-tickets.js's messageRecipients, mobile's
+  // ticketMessageRecipients) all filter the array before asking whether it has
+  // anything in it, so `to_emails: [null]` takes the scalar fallback there.
+  // This one asked `.length` of the raw array, took the [null] branch, and
+  // dropped the address the other three show. No current writer produces the
+  // shape; four readers disagreeing about the same row is the defect.
+  it('takes the scalar fallback for a to_emails array holding nothing usable', () => {
+    const out = ticketParticipants([
+      { from_email: 'a@x.com', to_email: 'b@x.com', to_emails: [null], cc_emails: null,
+        is_internal_note: false, forwarded_message_id: null, created_at: '2026-08-01T00:00:00Z' },
+    ])
+    expect(out).toEqual(['a@x.com', 'b@x.com'])
+  })
+
+  it('dedupes case variants across messages', () => {
+    const out = ticketParticipants([
+      msg({ from_email: 'Member@X.com', created_at: '2026-08-01T00:00:00Z' }),
+      msg({ from_email: 'member@x.com', created_at: '2026-08-02T00:00:00Z' }),
+    ])
+    expect(out).toEqual(['member@x.com'])
+  })
+
+  it('returns [] for no usable input', () => {
+    expect(ticketParticipants(null)).toEqual([])
+    expect(ticketParticipants([])).toEqual([])
+  })
+
+  // THE LIVE INCIDENT, 2026-08-12. Eleanor replied on a chain the rates office
+  // forwarded to her; the reply that followed reached her alone and dropped
+  // ratesoffice@ off their own thread.
+  it('regression: keeps ratesoffice@ on the audience after Eleanor joins', () => {
+    const out = ticketParticipants([
+      msg({ from_email: 'accounts@hatchstreetfitness.com', to_emails: ['ratesoffice@dublincity.ie'],
+            created_at: '2026-08-12T09:10:26Z' }),
+      msg({ from_email: 'eleanor.brennan@dublincity.ie', to_emails: ['accounts@hatchstreetfitness.com'],
+            created_at: '2026-08-12T10:06:43Z' }),
+    ], { exclude: ['accounts@hatchstreetfitness.com'] })
+    expect(out).toContain('ratesoffice@dublincity.ie')
+    expect(out).toContain('eleanor.brennan@dublincity.ie')
   })
 })

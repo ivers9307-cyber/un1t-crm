@@ -32,12 +32,30 @@
 // own download button is the path that has to work for every type. Which types
 // may be previewed at all is the SERVER's answer (`preview_kind` on the
 // attachment row); this file never forms that judgement.
+//
+// IT IS AN EMAIL INBOX, SO IT HAS TO READ LIKE ONE (EMAIL-PARTICIPANTS.8)
+// On 2026-08-12 a ticket whose requester_email was a council's rates office
+// was forwarded internally to a named officer, who replied. Every message
+// afterwards was with her — and this pane still showed the rates office in the
+// header, with nothing anywhere saying a new person had joined. The operator
+// answered the wrong name, opened a second ticket, and sent the same reply
+// twice. Tasks 2-7 fixed who a reply REACHES; none of that is visible, so none
+// of it would have stopped this. Three things here are the visible half:
+//   • the header names the LIVE audience (ThreadParticipants), not the address
+//     the first message happened to arrive from;
+//   • every message can show its real envelope (MessageEnvelope), so a reply
+//     from a different person at the same organisation cannot look identical
+//     to one from the requester;
+//   • the message somebody first appears on is marked (JoinMarkers), so the
+//     change of counterparty has a place on the page rather than being
+//     something you work out by comparing addresses.
+// None of it is stored: it is derived from the messages already on screen.
 
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import {
   ArrowLeft, Lock, Mail, AlertCircle, MailCheck, ImageOff, Maximize2, Minimize2,
-  ShieldAlert, Download, FileWarning, Check, MailX, ShieldX, Forward,
+  ShieldAlert, Download, FileWarning, Check, MailX, ShieldX, Forward, UserPlus,
 } from 'lucide-react'
 import { EmptyState, Loading } from '@/components/ui'
 import { formatBytes, SKIPPED_REASON_LABEL } from '@/lib/email-attachment-quota'
@@ -59,6 +77,7 @@ import {
   canForwardMessage,
   forwardedMarker,
 } from '@/lib/ticket-display'
+import { joinPointsByMessage } from '@/lib/email-tickets'
 import TicketReplyBox from './TicketReplyBox'
 
 export default function TicketThread({
@@ -85,6 +104,15 @@ export default function TicketThread({
   viewerIsElevated = false,
   onSend,
   sending = false,
+  // EMAIL-PARTICIPANTS.7 — takes ONE address off the reply audience, stickily.
+  // Owned by the inbox like every other mutation here: the audience is derived
+  // server-side and re-read, so reflecting a removal is a thread refresh, and
+  // this pane has no refresh of its own. Its failures land in `error` above.
+  onRemoveRecipient,
+  // …and puts one back. Same path, same guards; the participants route is the
+  // only thing that writes the exclusion either way.
+  onRestoreRecipient,
+  participantSaving = false,
   // EMAIL-FORWARD.1 — opens the forward composer for ONE message. Owned by the
   // inbox (like compose), because a forward is a modal over the whole surface
   // rather than something a bubble can render inside itself.
@@ -125,6 +153,9 @@ export default function TicketThread({
   // Built once per render rather than inside the map, which would be quadratic
   // on a thread at the 200-message cap.
   const messagesById = new Map(messages.map(m => [m.id, m]))
+  // EMAIL-PARTICIPANTS.8 — message id → the addresses first seen on it. Pure,
+  // derived, and computed once per render for the same reason as the map above.
+  const joinPoints = joinPointsByMessage(messages)
 
   return (
     <>
@@ -159,12 +190,11 @@ export default function TicketThread({
               )}
             </div>
 
-            <p className="mt-0.5 truncate text-xs text-un1t-subtle">
-              {name}
-              {ticket?.requester_email && ticket.requester_email !== name && (
-                <span className="text-un1t-muted"> · {ticket.requester_email}</span>
-              )}
-            </p>
+            <ThreadParticipants
+              ticket={ticket}
+              name={name}
+              replyRecipients={replyRecipients}
+            />
 
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-un1t-muted">
               {ticket?.mailbox ? (
@@ -249,14 +279,20 @@ export default function TicketThread({
           )
         ) : (
           messages.map(m => (
-            <ThreadMessage
-              key={m.id}
-              message={m}
-              ticketId={ticketId}
-              onOpenAttachment={setOpenAttachment}
-              onForward={onForward}
-              messagesById={messagesById}
-            />
+            // The marker is a sibling of the bubble, not part of it: someone
+            // joining is a fact about the THREAD that happens to be datable to
+            // a message, and putting it inside the bubble would attribute it to
+            // whoever wrote that message.
+            <Fragment key={m.id}>
+              <JoinMarkers addresses={joinPoints.get(m.id)} />
+              <ThreadMessage
+                message={m}
+                ticketId={ticketId}
+                onOpenAttachment={setOpenAttachment}
+                onForward={onForward}
+                messagesById={messagesById}
+              />
+            </Fragment>
           ))
         )}
         <div ref={endRef} />
@@ -292,6 +328,9 @@ export default function TicketThread({
         ticket={ticket}
         replyRecipients={replyRecipients}
         onSend={onSend}
+        onRemoveRecipient={onRemoveRecipient}
+        onRestoreRecipient={onRestoreRecipient}
+        participantSaving={participantSaving}
         sending={sending}
       />
     </>
@@ -581,33 +620,248 @@ function DeliveryFailureNotice({ delivery, stamp }) {
 }
 
 /**
- * The To / Cc / Bcc lines under a message (EMAIL-CC.1).
+ * WHO THE TICKET IS ACTUALLY WITH (EMAIL-PARTICIPANTS.8).
  *
- * BCC IS VISUALLY SEPARATED, not just labelled. It is rendered with a lock and
- * the sentence "only staff on this ticket can see this" — because the whole
- * risk of showing it at all is someone reading a Bcc line as though the other
- * recipients could see it too. On the accent bubble the muted ramp is
- * unreadable, hence the two colour sets.
+ * This line used to be the requester: `requester_name || requester_email`,
+ * plus the address, on every ticket unconditionally. That is the person the
+ * FIRST message came from and nothing more. When a shared mailbox hands a
+ * thread to a named person — a rates office forwarding to an officer,
+ * 2026-08-12 — every message afterwards is with somebody this header never
+ * named, and an operator reading it answers the wrong person.
+ *
+ * So it shows the LIVE audience: `replyRecipients.to`, exactly as the server
+ * derived it from the whole thread and exactly as the composer below will send
+ * to. It is never re-derived here. A second implementation of the audience is
+ * a second chance to disagree with the one that actually sends — the same rule
+ * that keeps the composer off `messages`.
+ *
+ * "OPENED BY …" APPEARS ONLY WHEN THE TWO HAVE DIVERGED, i.e. when the
+ * requester is not the first person on that list. On an ordinary ticket they
+ * are the same address and the line would be noise on every ticket — which is
+ * exactly how the one ticket that needed it would get skipped over.
+ *
+ * With no derived audience (the server could not work one out — an own-address
+ * lookup blip) this falls back to the requester line it replaced. That is the
+ * honest answer at that point, and it is what the header always showed.
+ *
+ * THE FALLBACK STOPS AT `empty` (EMAIL-PARTICIPANTS.12). "We could not derive
+ * anybody" and "the operator took everybody off" are different answers and
+ * only the first one is a gap the requester fills. Falling back on the second
+ * printed the person who had just been removed at the top of the pane, named
+ * as who the ticket is with, directly above a composer saying nobody is left
+ * and a route that 400s the send. TicketReplyBox.jsx has forbidden exactly
+ * that since EMAIL-PARTICIPANTS.7 — never name somebody who will not be
+ * mailed — and this header was contradicting it one component up. It says the
+ * true thing instead, in the composer's own words, and the removed addresses
+ * stay visible where they are restorable: on the composer's own chips.
  */
-function RecipientLines({ message, onAccent = false }) {
-  const lines = messageRecipients(message)
+function ThreadParticipants({ ticket, name, replyRecipients }) {
+  const people = (Array.isArray(replyRecipients?.to) ? replyRecipients.to : []).filter(Boolean)
+  const requester = ticket?.requester_email || ''
+
+  if (replyRecipients?.empty) {
+    return (
+      <p className="mt-0.5 truncate text-xs text-un1t-subtle">
+        Nobody is left on this thread — every recipient was removed.
+      </p>
+    )
+  }
+
+  if (people.length === 0) {
+    return (
+      <p className="mt-0.5 truncate text-xs text-un1t-subtle">
+        {name}
+        {requester && requester !== name && (
+          <span className="text-un1t-muted"> · {requester}</span>
+        )}
+      </p>
+    )
+  }
+
+  // Compared normalised, because these two come from different places: one is
+  // a stored column, the other is derived off message headers a stranger's
+  // mail client wrote. A case difference is not a change of counterparty, and
+  // announcing it as one is the same noise the condition exists to avoid.
+  const norm = (a) => String(a || '').trim().toLowerCase()
+  const diverged = !!requester && norm(people[0]) !== norm(requester)
+
+  // THE REQUESTER'S NAME GOES ON THEIR ADDRESS, not on a line of its own.
+  // A human name is what an operator actually scans this header for, so
+  // dropping it for raw addresses reads worse — but a name floating above the
+  // participants is the wrong name in the most prominent place the moment the
+  // thread moves to somebody else, which is the bug this task exists for.
+  // Mail-client form ("Ada Lovelace <ada@x.com>") attributes it to exactly one
+  // participant and leaves everyone else as the address they are. It is the
+  // only name we hold: requester_name is a column, the rest are bare addresses
+  // off message headers.
+  const requesterName = ticket?.requester_name || ''
+  const withName = (address) => (
+    requesterName && norm(address) === norm(requester)
+      ? `${requesterName} <${address}>`
+      : address
+  )
+  const onThread = people.map(withName).join(', ')
+
+  return (
+    <>
+      {/* Label and addresses in ONE text run, deliberately: the composer below
+          renders this same joined list as its "sends to" summary, and a line
+          that is only the addresses is indistinguishable from it — on screen
+          and to a test. The words are what make this the header's answer. */}
+      {/* `title` because this line truncates: a wide audience clips at the
+          pane edge, and a clipped participant is an invisible one — the whole
+          failure this header exists to prevent, reintroduced by CSS. */}
+      <p className="mt-0.5 truncate text-xs text-un1t-subtle" title={onThread}>
+        On this thread: {onThread}
+      </p>
+      {diverged && (
+        <p className="truncate text-[11px] text-un1t-muted">Opened by {withName(requester)}</p>
+      )}
+    </>
+  )
+}
+
+/**
+ * "<address> joined this thread" (EMAIL-PARTICIPANTS.8).
+ *
+ * A thread EVENT, rendered between the bubbles rather than inside one: someone
+ * joining is a fact about the conversation that happens to be datable to a
+ * message, and putting it in the bubble would read as something its author
+ * did. Centred and quiet for the same reason — it is punctuation in the
+ * thread, not correspondence.
+ *
+ * The addresses come from joinPointsByMessage(), which never reads
+ * `bcc_emails`: a Bcc'd person is not visibly on the thread, and a marker
+ * naming them would leak the Bcc to everyone reading the ticket.
+ */
+function JoinMarkers({ addresses }) {
+  if (!addresses || addresses.length === 0) return null
+  return (
+    <div className="space-y-1">
+      {addresses.map(address => (
+        <p
+          key={address}
+          className="flex items-center justify-center gap-1.5 text-[11px] text-un1t-muted"
+        >
+          <UserPlus size={11} className="shrink-0" aria-hidden="true" />
+          {address} joined this thread
+        </p>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * The envelope lines for one message, in header order: From, To, then whatever
+ * messageRecipients() has to add.
+ *
+ * Cc and Bcc are taken from that helper rather than rebuilt, so the sentence
+ * that says a Bcc was never on the delivered message keeps exactly one home.
+ * Its own To line is dropped: it is conditional on there being more than one
+ * address, and an envelope that sometimes omits the To is not an envelope.
+ */
+function envelopeLines(message) {
+  const list = (v) => (Array.isArray(v) ? v.filter(Boolean) : [])
+  // Pre-EMAIL-CC.1 rows carry only the scalar to_email.
+  const to = list(message?.to_emails).length
+    ? list(message.to_emails)
+    : (message?.to_email ? [message.to_email] : [])
+
+  const out = []
+  if (message?.from_email) {
+    out.push({ key: 'from', label: 'From', addresses: [message.from_email], staffOnly: false })
+  }
+  if (to.length) out.push({ key: 'to', label: 'To', addresses: to, staffOnly: false })
+  for (const line of messageRecipients(message)) {
+    if (line.key !== 'to') out.push(line)
+  }
+  return out
+}
+
+/**
+ * A message's real envelope, COLLAPSED BY DEFAULT (EMAIL-PARTICIPANTS.8,
+ * replacing EMAIL-CC.1's always-open recipient lines).
+ *
+ * What was here before showed a Cc list, and a To only when it had more than
+ * one address — on the reasoning that a single To was already stated by the
+ * bubble's own "Sent to …" line. That reasoning held right up until the
+ * address on the far end CHANGED: with no From and no single-recipient To to
+ * read, a reply arriving from a different person at the same organisation
+ * looked identical to one from the requester. That is how a thread moved to
+ * somebody nobody noticed.
+ *
+ * Collapsed, because an envelope permanently open on every bubble is what
+ * every mail client learned not to do — three lines of addresses above two
+ * lines of message, and an operator stops reading either. One click and it is
+ * the real header.
+ *
+ * BCC IS THE EXCEPTION AND STAYS AT THE TOP LEVEL, never behind the toggle. It
+ * is the highest-consequence line on a message in this system — there is a
+ * whole invariant about a Bcc address never re-entering a recipient list — so
+ * putting it one click further away is the wrong direction even with the lock
+ * and the sentence retained. It is also rare, so on an ordinary message this
+ * costs nothing and keeps the thing that matters in front of the operator.
+ *
+ * The split is on `staffOnly`, which messageRecipients() already sets, rather
+ * than on the literal key 'bcc': the flag means "this line is not what the
+ * recipients saw", and any future line carrying it wants the same treatment.
+ *
+ * Bcc lives here and nowhere else: never on the header's participant list,
+ * never a join marker. On the accent bubble the muted ramp is unreadable,
+ * hence the two colour sets.
+ */
+function MessageEnvelope({ message, onAccent = false }) {
+  const [open, setOpen] = useState(false)
+  const lines = envelopeLines(message)
   if (lines.length === 0) return null
+
+  const collapsible = lines.filter(l => !l.staffOnly)
+  const alwaysOn = lines.filter(l => l.staffOnly)
 
   const label = onAccent ? 'text-white/60' : 'text-un1t-muted'
   const body = onAccent ? 'text-white/85' : 'text-un1t-subtle'
+  const toggle = onAccent ? 'text-white/80 hover:text-white' : 'text-un1t-subtle hover:text-un1t-text'
+
+  const renderLine = (line) => (
+    <p key={line.key} className={`flex flex-wrap items-baseline gap-x-1.5 text-[11px] ${body}`}>
+      <span className={`inline-flex items-center gap-1 font-medium uppercase tracking-wide ${label}`}>
+        {line.staffOnly && <Lock size={9} className="shrink-0" aria-hidden="true" />}
+        {line.label}
+      </span>
+      <span className="break-all">{line.addresses.join(', ')}</span>
+      {line.note && <span className={label}>· {line.note}</span>}
+    </p>
+  )
 
   return (
-    <div className="mb-1 space-y-0.5">
-      {lines.map(line => (
-        <p key={line.key} className={`flex flex-wrap items-baseline gap-x-1.5 text-[11px] ${body}`}>
-          <span className={`inline-flex items-center gap-1 font-medium uppercase tracking-wide ${label}`}>
-            {line.staffOnly && <Lock size={9} className="shrink-0" aria-hidden="true" />}
-            {line.label}
-          </span>
-          <span className="break-all">{line.addresses.join(', ')}</span>
-          {line.note && <span className={label}>· {line.note}</span>}
-        </p>
-      ))}
+    <div className="mb-1">
+      {collapsible.length > 0 && (
+        <>
+          {/* NAMED BY ITS MESSAGE, not just "Details". A twenty-message thread
+              renders twenty of these, and a screen reader listing twenty
+              identically-named buttons gives no way to tell which message each
+              one opens — on the surface whose entire purpose is making it
+              obvious WHICH message came from whom. The visible label stays
+              short; the accessible name carries the sender. */}
+          <button
+            type="button"
+            onClick={() => setOpen(v => !v)}
+            aria-expanded={open}
+            aria-label={`${open ? 'Hide details for' : 'Details for'} the message from ${message?.from_email || 'an unknown sender'}`}
+            className={`text-[11px] ${toggle}`}
+          >
+            {open ? 'Hide details' : 'Details'}
+          </button>
+          {open && <div className="mt-1 space-y-0.5">{collapsible.map(renderLine)}</div>}
+        </>
+      )}
+      {/* After the collapsible group so an expanded envelope reads in header
+          order — From, To, Cc, then Bcc — and before the body either way. */}
+      {alwaysOn.length > 0 && (
+        <div className={`space-y-0.5 ${collapsible.length > 0 ? 'mt-1' : ''}`}>
+          {alwaysOn.map(renderLine)}
+        </div>
+      )}
     </div>
   )
 }
@@ -767,7 +1021,7 @@ function ThreadMessage({ message, ticketId, onOpenAttachment, onForward, message
                 the To line reads: those addresses are a third party, not the
                 member. */}
             <ForwardedMarker label={forwarded} onAccent />
-            <RecipientLines message={message} onAccent />
+            <MessageEnvelope message={message} onAccent />
             {html ? (
               <EmailFrame
                 html={html}
@@ -803,7 +1057,7 @@ function ThreadMessage({ message, ticketId, onOpenAttachment, onForward, message
         {/* THE MEMBER'S OWN Cc. This is the point of capturing it inbound: a
             reply that reaches only the sender, when they copied two
             colleagues, drops those colleagues out of their own conversation. */}
-        <RecipientLines message={message} />
+        <MessageEnvelope message={message} />
         {html ? (
           <EmailFrame
             html={html}

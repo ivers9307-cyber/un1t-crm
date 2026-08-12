@@ -30,6 +30,35 @@
 // that lets someone drop a participant by clicking the wrong one, so neither
 // this component nor the route has a way to express it.
 //
+// REMOVING ONE, THOUGH, IS EXPLICIT (EMAIL-PARTICIPANTS.7). The audience is
+// derived from the WHOLE thread now, so it can include people an operator has
+// a real reason to take off — and a derived set nobody can edit is its own
+// trap. The × on each locked chip is that edit and the ONLY one: no free-form
+// box to type a new address (Richard). Subtracting from a derived set cannot
+// reach anyone the thread did not already include; adding to it can, and that
+// is what compose and forward are for. The removal is sticky, stored per
+// ticket by the participants route, and it is the SERVER's answer that
+// repaints the chips — this box never edits the list it renders.
+//
+// ONE LIST, NOT TWO. The × lives on the RecipientEditor chips that were
+// already showing the audience, rather than a second row of the same
+// addresses above the textarea. Two copies of "who this reaches", one of them
+// removable, is a question an operator should never have to answer.
+//
+// AN EMPTIED AUDIENCE IS A REAL STATE, and the composer says so in the reply
+// route's own words rather than falling back to the requester — see lockedTo.
+//
+// AND EVERY REMOVAL IS VISIBLE AND UNDOABLE. A removed address does not
+// disappear: it drops into its own group under the To box, struck through,
+// unfilled and labelled as not on the reply, with a restore beside it. Two
+// reasons, and the second is the one that matters more. An operator who
+// removed the wrong person from a five-person thread had no way to see they
+// had done it, because the only evidence was an address that was no longer
+// there. And an operator who removed EVERYBODY was told to "restore one to
+// reply" by a composer offering nothing to restore with — a one-way door out
+// of ever answering that ticket. Restore is not an exception to remove-only:
+// it can only ever put back an address the thread already carried.
+//
 // Cc and Bcc ADD people and live behind the editor's own toggle. An internal
 // note has no recipients at all — the editor is not rendered in note mode, and
 // the route refuses a note that carries any.
@@ -43,9 +72,13 @@
 // too, so the rule is stated in both places.
 
 import { useState } from 'react'
-import { Send, Lock, Users, AlertCircle } from 'lucide-react'
+import { Send, Lock, Users, AlertCircle, RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui'
 import { isArchivedStatus, statusMeta, replyActionLabel } from '@/lib/ticket-display'
+// The cap the reply route refuses on, imported rather than typed into the
+// sentence below: the route interpolates this same constant into its 400, and
+// two hand-written 25s are two places to forget when it moves.
+import { MAX_RECIPIENTS } from '@/lib/email-recipients'
 import SignatureHint from './SignatureHint'
 import RecipientEditor, { EMPTY_RECIPIENTS } from './RecipientEditor'
 import AttachmentPicker, { readyDrafts, hasPendingUploads } from './AttachmentPicker'
@@ -56,6 +89,11 @@ export default function TicketReplyBox({
   ticket,
   replyRecipients = null,
   onSend,
+  onRemoveRecipient,
+  onRestoreRecipient,
+  // A remove/restore is in flight. Separate from `sending` because it disables
+  // a different, much smaller thing: the chip buttons, and nothing else.
+  participantSaving = false,
   sending = false,
   signature,
 }) {
@@ -71,17 +109,66 @@ export default function TicketReplyBox({
   const archived = isArchivedStatus(ticket?.status)
 
   // Everybody the server will include whether or not this box asks it to.
-  // Falls back to the requester when the server could not derive the set.
-  const lockedTo = replyRecipients?.to?.length
-    ? replyRecipients.to
-    : [ticket?.requester_email].filter(Boolean)
+  //
+  // THE REQUESTER FALLBACK MUST NOT APPLY TO AN EMPTY SET. "We could not derive
+  // anybody" and "the operator took everybody off" are different answers, and
+  // only the first one is a gap the requester fills. Falling back on the second
+  // put the person they had just removed back on screen, and in the sentence
+  // naming who the reply reaches, while the route would refuse the send — the
+  // composer naming somebody who will not be mailed, which is the one thing
+  // this programme exists to end.
+  const audienceEmpty = !!replyRecipients?.empty
+  const lockedTo = audienceEmpty
+    ? []
+    : replyRecipients?.to?.length
+      ? replyRecipients.to
+      : [ticket?.requester_email].filter(Boolean)
   const sendLabel = replyActionLabel(replyRecipients, recipients.to.length)
+
+  // EMAIL-PARTICIPANTS.8 — THE PLACEHOLDER NAMES THE REAL AUDIENCE, not the
+  // requester. It read `Reply to ${ticket.requester_email}` — the address the
+  // FIRST message arrived from. On the 2026-08-12 ticket that meant the box an
+  // operator types into said "Reply to ratesoffice@dublincity.ie" while the
+  // reply was actually going to Eleanor: the same wrong-name-in-a-prominent-
+  // place defect as the header, one component along.
+  //
+  // It reads `lockedTo`, so it inherits the empty-audience rule above rather
+  // than re-deriving one, and can never name somebody the send would refuse.
+  // With several people on it, naming one is precisely the mistake — the first
+  // is the live counterparty and the rest are a count, which is the idiom the
+  // send button already uses.
+  //
+  // "THE FIRST" IS THE SERVER'S ANSWER, NOT AN ASSUMPTION ABOUT MAIL HEADERS.
+  // ticketParticipants() leads with the person the next reply answers, read
+  // off the newest real message in whichever direction it went: its From when
+  // they wrote to us, its first To when we wrote to them. It used to be the
+  // From either way, which on our own reply is one of OUR addresses and gets
+  // excluded — so this placeholder and the header's divergence check both
+  // silently re-pointed at whoever happened to appear first (see
+  // EMAIL-PARTICIPANTS.12 in src/lib/email-recipients.js).
+  const replyPlaceholder = lockedTo.length === 0
+    ? 'Reply…'
+    : lockedTo.length === 1
+      ? `Reply to ${lockedTo[0]}…`
+      : `Reply to ${lockedTo[0]} and ${lockedTo.length - 1} ${lockedTo.length === 2 ? 'other' : 'others'}…`
 
   // A note can never carry files, so files present + note mode is a state the
   // operator has to resolve rather than one we resolve for them by dropping
   // their uploads.
   const filesBlockNote = isNote && files.length > 0
   const uploading = hasPendingUploads(files)
+  // The two audiences the reply route refuses outright (EMAIL-PARTICIPANTS.5),
+  // both free to catch here because nothing has been sent. A note reaches
+  // nobody by design, so neither can ever apply to one.
+  const overCap = !isNote && !!replyRecipients?.over_cap
+  // Gated on canReply so a ticket with no requester address keeps its own,
+  // more accurate sentence rather than being told to restore somebody nobody
+  // ever removed.
+  const noAudience = !isNote && canReply && audienceEmpty
+  // The operator's own subtractions, straight off the ticket row. NOT derived
+  // and never guessed: these are exactly the addresses the participants route
+  // has stored, which is what makes the restore below able to lift them.
+  const removedParticipants = ticket?.excluded_participants || []
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -91,6 +178,10 @@ export default function TicketReplyBox({
     // Never send a partial set: a chip on screen that did not go with the email
     // is the same lie as a file the thread claims was sent.
     if (uploading || filesBlockNote) return
+    // Stated here as well as on the disabled button, the way filesBlockNote is:
+    // the button is the affordance, this is the rule, and a form submitted by
+    // any other route (Enter in a field, a stale render) meets it too.
+    if (overCap || noAudience) return
     // A note is sent to nobody, so it carries NEITHER recipients NOR files —
     // the route refuses one that does, and this is the client half of the same
     // rule for both. One `extras` object rather than two positional arguments,
@@ -148,14 +239,85 @@ export default function TicketReplyBox({
             lockedTo={lockedTo}
             lockedHint={
               lockedTo.length > 1
-                ? 'Everybody on this thread is included. To write to fewer people, start a new email instead.'
+                ? 'Everybody on this thread is included. Removing someone drops them from this reply and from later ones.'
                 : undefined
             }
+            // EMAIL-PARTICIPANTS.7 — the ONE list of who this reaches, so the ×
+            // sits on the chips that were already on screen rather than beside
+            // a second copy of them. Absent (compose, forward) there is no ×.
+            onRemoveLocked={onRemoveRecipient}
+            lockedBusy={participantSaving}
             disabled={sending}
           />
         </div>
       )}
 
+      {/* The people taken off this reply. Deliberately NOT inside the
+          RecipientEditor: everything in that box is somebody the email goes
+          to, and a chip sitting among them is read as a recipient however it
+          is styled. Four signals say otherwise here — its own labelled group,
+          no fill, a dashed edge, and the address struck through — because
+          "these two are not getting this" has to survive being glanced at. */}
+      {!isNote && canReply && removedParticipants.length > 0 && (
+        <div className="mb-2">
+          {/* The heading is TIED to the group, not merely above it. Sighted
+              readers get "not a recipient" from the strike-through and the
+              unfilled chip; a screen reader gets neither, so without the
+              association the only cue left is the word "Restore" on a button —
+              and an address announced with no cue at all reads as somebody on
+              the reply. */}
+          <p
+            id="reply-removed-participants"
+            className="mb-1 text-[11px] font-medium uppercase tracking-wider text-un1t-muted"
+          >
+            Not on this reply
+          </p>
+          <div
+            role="group"
+            aria-labelledby="reply-removed-participants"
+            className="flex flex-wrap items-center gap-1.5"
+          >
+            {removedParticipants.map(address => (
+              <span
+                key={`removed-${address}`}
+                className="inline-flex items-center gap-1 rounded-full border border-dashed border-un1t-border px-2 py-0.5 text-xs text-un1t-subtle"
+              >
+                <span className="line-through">{address}</span>
+                {/* Restore is not a second way to add somebody: the route only
+                    lifts an exclusion, so this can never reach an address the
+                    thread did not already carry. */}
+                {onRestoreRecipient && (
+                  <button
+                    type="button"
+                    onClick={() => onRestoreRecipient(address)}
+                    // Same reason the × is: the two writes are serialised
+                    // against each other, so both have to say when one is out.
+                    disabled={sending || participantSaving}
+                    aria-label={`Restore ${address}`}
+                    title="Put this person back on the reply"
+                    className="text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
+                  >
+                    <RotateCcw size={11} aria-hidden="true" />
+                  </button>
+                )}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Word for word what the reply route answers, so the composer and the
+          400 cannot describe the same ticket differently. */}
+      {noAudience && (
+        <p className="mb-2 text-[11px] text-amber-700" role="alert">
+          This ticket has no recipients left — restore one to reply.
+        </p>
+      )}
+      {overCap && (
+        <p className="mb-2 text-[11px] text-amber-700">
+          This thread has {lockedTo.length} recipients and the limit is {MAX_RECIPIENTS}. Remove some before replying.
+        </p>
+      )}
       <label className="sr-only" htmlFor="ticket-composer">
         {isNote ? 'Internal note (staff only)' : 'Reply to the member'}
       </label>
@@ -166,11 +328,7 @@ export default function TicketReplyBox({
         rows={3}
         maxLength={MAX_LENGTH}
         disabled={!isNote && !canReply}
-        placeholder={
-          isNote
-            ? 'Staff-only note. Nothing is sent.'
-            : `Reply to ${ticket?.requester_email || 'the member'}…`
-        }
+        placeholder={isNote ? 'Staff-only note. Nothing is sent.' : replyPlaceholder}
         className={`w-full resize-none rounded-lg border px-3 py-2 text-sm text-un1t-text focus:outline-none disabled:opacity-60 ${
           isNote
             ? 'border-amber-500/50 bg-un1t-bg focus:border-amber-600'
@@ -213,7 +371,13 @@ export default function TicketReplyBox({
               Staff only — this is written to the ticket and <strong>not sent</strong> to{' '}
               {ticket?.requester_email || 'the member'}.
             </>
-          ) : canReply ? (
+          ) : !canReply ? (
+            'This ticket has no requester address, so it cannot be replied to. You can still add an internal note.'
+          ) : noAudience ? (
+            // Without this branch the line below renders "Sends an email to"
+            // followed by nothing, which reads as a set still being worked out.
+            'Nobody is left on this reply.'
+          ) : (
             <>
               Sends an email to <strong>{lockedTo.join(', ')}</strong>
               {recipients.cc.length > 0 && <> · cc {recipients.cc.join(', ')}</>}
@@ -225,8 +389,6 @@ export default function TicketReplyBox({
               )}
               {ticket?.mailbox?.address && <> · replies come back to {ticket.mailbox.address}</>}
             </>
-          ) : (
-            'This ticket has no requester address, so it cannot be replied to. You can still add an internal note.'
           )}
         </p>
 
@@ -235,7 +397,10 @@ export default function TicketReplyBox({
           size="sm"
           variant={isNote ? 'secondary' : 'primary'}
           loading={sending}
-          disabled={!text.trim() || (!isNote && !canReply) || uploading || filesBlockNote}
+          // overCap/noAudience join filesBlockNote here as well as in
+          // handleSubmit: a button that looks live and silently does nothing is
+          // worse than a disabled one beside a sentence saying why.
+          disabled={!text.trim() || (!isNote && !canReply) || uploading || filesBlockNote || overCap || noAudience}
           icon={isNote ? Lock : (sendLabel === 'Reply' ? Send : Users)}
         >
           {/* The label IS the guard rail — see the header. It states the

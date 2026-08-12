@@ -28,16 +28,21 @@
 // unlike a wrong studio's queue. Operators who want everything
 // captured configure a catch-all mailbox.
 //
-// WHO it is from (helpers in src/lib/email-inbox.js):
-//   (a) In-Reply-To / References ids matched against
-//       email_sends.postmark_message_id → that send's contact (a reply
-//       to OUR campaign/sequence mail — the highest-signal path).
-//       Contact ONLY: the mailbox is authoritative about location and
-//       nothing else may override it.
-//   (b) else From address → contacts by email; the pick is
-//       deterministic (mailbox location preferred, then oldest
-//       created_at). An unknown sender still gets a ticket, with
-//       contact_id NULL.
+// WHO it is from (helpers in src/lib/email-inbox.js): the From address
+// → contacts by email, and nothing else. The pick is deterministic
+// (mailbox location preferred, then oldest created_at). An unknown
+// sender still gets a ticket, with contact_id NULL.
+//
+// In-Reply-To / References ids are still matched against
+// email_sends.postmark_message_id, but ONLY to report matched_via
+// 'in_reply_to'. They used to hand over that send's contact as well —
+// which meant a header the SENDER writes decided whose record an email
+// landed on, before we ever read the From address. Forward one of our
+// emails to a friend, have them reply, and their correspondence is
+// filed onto the member's timeline and into the member's DSAR export.
+// EMAIL-PARTICIPANTS.10 cut that link: threading and identity are
+// separate questions, and an unlinked message is honest where a
+// wrongly-linked one is a data-integrity breach.
 //
 // WHICH ticket it joins: threading ids are matched against this
 // location's own email_inbox_messages, most recent wins
@@ -579,10 +584,36 @@ async function processInboundEmail(db, body, messageId) {
   let contactId = null
   let matchedVia = 'unmatched'
 
-  // (a) Reply to one of OUR sends — In-Reply-To/References ↔ email_sends.
-  // Resolves CONTACT only. It used to resolve location too; since the
-  // mailbox cutover the delivered-to address is the only thing that says
-  // where mail landed, and a threading header is attacker-controlled.
+  // (a) matched_via only. EMAIL-PARTICIPANTS.10 removed the CONTACT link that
+  // used to be taken from here.
+  //
+  // The header is supplied by the sender. "From matches no contact, and a
+  // threading header names a send to contact X" describes BOTH a member writing
+  // in from a second address AND a stranger who was forwarded our mail — the
+  // code cannot tell them apart, and one of those outcomes writes a third
+  // party's correspondence onto a member's timeline and into their DSAR export.
+  // An unlinked message is honest; a wrongly-linked one is a data-integrity
+  // breach. Threading and identity are separate questions; conflating them was
+  // the error. Contact linkage is now the From address or nothing.
+  //
+  // The query itself STAYS: the row's existence is what still distinguishes
+  // "this replies to one of OUR sends" from "this carries some threading
+  // header", which is the whole content of the in_reply_to diagnostic. Nothing
+  // else reads it — contact_id is gone from the select, sent_at only orders and
+  // postmark_message_id only filters. Deriving it from `candidates.length`
+  // instead would BROADEN it: email_sends.contact_id is NOT NULL, so a staff
+  // reply to an UNLINKED requester writes no email_sends row at all, and that
+  // requester's later reply carries a real threading header with nothing of
+  // ours behind it. Pinned by a test ('reports from_address when a threading
+  // header names no send of ours').
+  //
+  // KNOW WHAT IT COSTS before you extend it. matchedVia is returned in the
+  // response body and persisted NOWHERE, so this query buys a string that only
+  // Postmark's activity log ever shows — while its failure branch below still
+  // 5xxes the whole inbound. That trade is fine as it stands (the read is
+  // indexed, and the 5xx gives the dedupe claim back so Postmark's retry really
+  // re-processes) but it is the wrong shape to hang anything heavier on: a
+  // diagnostic must never be the reason a member's email fails to file.
   //
   // sanitizeDbText on each candidate (EMAIL-INBOUND-POISON.1): a NUL inside
   // In-Reply-To would otherwise ride into the `.in()` filters and can fail
@@ -595,7 +626,7 @@ async function processInboundEmail(db, body, messageId) {
     .slice(0, MAX_THREAD_CANDIDATES)
   if (candidates.length) {
     const { data: sends, error: sendsErr } = await db.from('email_sends')
-      .select('contact_id, postmark_message_id, sent_at')
+      .select('postmark_message_id, sent_at')
       .in('postmark_message_id', candidates)
       .order('sent_at', { ascending: false })
       .limit(1)
@@ -603,11 +634,7 @@ async function processInboundEmail(db, body, messageId) {
       await recordInboundFailure('thread_lookup_failed', sendsErr)
       return unfiled(NextResponse.json({ success: false, error: 'thread_lookup_failed' }, { status: 500 }))
     }
-    const send = sends?.[0]
-    if (send) {
-      contactId = send.contact_id || null
-      matchedVia = 'in_reply_to'
-    }
+    if (sends?.[0]) matchedVia = 'in_reply_to'
   }
 
   // Recipient address → mailbox → location. AUTHORITATIVE, and the only
@@ -663,27 +690,29 @@ async function processInboundEmail(db, body, messageId) {
   ]
 
   // (b) From address → contacts (deterministic pick; prefer the mailbox's
-  // location). Runs even when (a) matched but the send had no contact — and
-  // fills contact linkage for recipient-only matches.
-  if (!contactId) {
-    // escapeLikePattern: fromEmail comes off an UNAUTHENTICATED webhook and
-    // normalizeEmail admits both LIKE wildcards, so a bare .ilike() matched a
-    // PATTERN — `%@example.com` picked up every contact at the domain and
-    // `a_b@` also matched `axb@`. pickContact then chose one deterministically,
-    // linking a stranger's mail to a real contact's identity, silently.
-    const { data: contacts, error: cErr } = await db.from('contacts')
-      .select('id, location_id, created_at')
-      .ilike('email', escapeLikePattern(fromEmail))
-      .limit(50)
-    if (cErr) {
-      await recordInboundFailure('contact_lookup_failed', cErr)
-      return unfiled(NextResponse.json({ success: false, error: 'contact_lookup_failed' }, { status: 500 }))
-    }
-    const picked = pickContact(contacts || [], locationId)
-    if (picked) {
-      contactId = picked.id
-      if (matchedVia === 'unmatched') matchedVia = 'from_address'
-    }
+  // location). THE ONLY source of contact linkage (EMAIL-PARTICIPANTS.10), so
+  // it is unconditional — it used to be skipped whenever (a) had already taken
+  // a contact off the sender-supplied header.
+  //
+  // escapeLikePattern: fromEmail comes off an UNAUTHENTICATED webhook and
+  // normalizeEmail admits both LIKE wildcards, so a bare .ilike() matched a
+  // PATTERN — `%@example.com` picked up every contact at the domain and
+  // `a_b@` also matched `axb@`. pickContact then chose one deterministically,
+  // linking a stranger's mail to a real contact's identity, silently.
+  const { data: contacts, error: cErr } = await db.from('contacts')
+    .select('id, location_id, created_at')
+    .ilike('email', escapeLikePattern(fromEmail))
+    .limit(50)
+  if (cErr) {
+    await recordInboundFailure('contact_lookup_failed', cErr)
+    return unfiled(NextResponse.json({ success: false, error: 'contact_lookup_failed' }, { status: 500 }))
+  }
+  const picked = pickContact(contacts || [], locationId)
+  if (picked) {
+    contactId = picked.id
+    // 'in_reply_to' still wins: it is the stronger statement about the THREAD,
+    // and matched_via has always reported the strongest signal available.
+    if (matchedVia === 'unmatched') matchedVia = 'from_address'
   }
 
   // Stamped last, so matched_via still reports the strongest signal we had:

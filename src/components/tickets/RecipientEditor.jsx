@@ -8,12 +8,20 @@
 // must read identically wherever recipients are edited:
 //
 //   • LOCKED PARTICIPANTS. On a reply, everybody already on the thread is
-//     shown as a chip that CANNOT be removed. Richard, 2026-08-07: it must be
-//     impossible to silently drop someone from a conversation. The server
-//     enforces it (the reply route always includes the derived participants
-//     and has no wire format for removing one); this is the affordance that
-//     stops an operator trying. The escape hatch is deliberate and explicit —
-//     start a new email to a narrower set — not a delete key here.
+//     shown as a chip the operator did not type and cannot edit. Richard,
+//     2026-08-07: it must be impossible to SILENTLY drop someone from a
+//     conversation. That word is the whole rule — dropping someone
+//     deliberately is a thing operators genuinely need.
+//
+//     So a locked chip carries a × only when the caller passes
+//     `onRemoveLocked` (EMAIL-PARTICIPANTS.7, the reply box). That × does not
+//     edit this component's list: it hands the address back, the caller writes
+//     a sticky exclusion server-side, and the re-derived audience comes back
+//     down as a new `lockedTo`. Nothing is removed here optimistically,
+//     because a chip that vanished without the write landing would be exactly
+//     the silent drop this rule forbids. Callers with no `onRemoveLocked` —
+//     compose and forward, which pass no `lockedTo` at all today — get the
+//     unremovable chip they always had.
 //   • CC/BCC ARE HIDDEN UNTIL WANTED, as every mail client does, and revealed
 //     for good the moment either holds an address. A permanently-open Bcc
 //     field on a support reply invites a Bcc nobody needed.
@@ -46,8 +54,14 @@ const BOX_CLASSES =
  * @param {object} props
  * @param {{to: string[], cc: string[], bcc: string[]}} props.value  editable additions
  * @param {(next: {to: string[], cc: string[], bcc: string[]}) => void} props.onChange
- * @param {string[]} [props.lockedTo]  thread participants — shown, never removable
- * @param {string} [props.lockedHint]  why they cannot be removed
+ * @param {string[]} [props.lockedTo]  thread participants — shown, not editable here
+ * @param {string} [props.lockedHint]  what including them means
+ * @param {(address: string) => void} [props.onRemoveLocked]  omit for no × on the
+ *   locked chips. Given one, it is handed the address and owns the write; this
+ *   component never drops the chip itself.
+ * @param {boolean} [props.lockedBusy]  a locked-chip write is in flight. Disables
+ *   those × only — NOT the Cc/Bcc fields, which have nothing to do with it and
+ *   may well have a half-typed address in them.
  * @param {boolean} [props.disabled]
  * @param {string} props.idPrefix  unique per mounted editor
  */
@@ -56,6 +70,8 @@ export default function RecipientEditor({
   onChange,
   lockedTo = [],
   lockedHint,
+  onRemoveLocked,
+  lockedBusy = false,
   disabled = false,
   idPrefix,
 }) {
@@ -183,6 +199,23 @@ export default function RecipientEditor({
                 className="inline-flex items-center gap-1 rounded-full bg-un1t-surface px-2 py-0.5 text-xs text-un1t-text"
               >
                 {address}
+                {/* Same chip, same ×, same place as an address the operator
+                    typed — because "take this person off" is one idea, and two
+                    shapes for it is how someone learns the wrong one. */}
+                {onRemoveLocked && (
+                  <button
+                    type="button"
+                    onClick={() => onRemoveLocked(address)}
+                    // The caller serialises these writes, so a second click
+                    // during one is dropped. Disabled says that, instead of
+                    // leaving a live-looking × that silently does nothing.
+                    disabled={disabled || lockedBusy}
+                    aria-label={`Remove ${address}`}
+                    className="text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
+                  >
+                    <X size={11} aria-hidden="true" />
+                  </button>
+                )}
               </span>
             ))}
             {value[field.key].map(address => (

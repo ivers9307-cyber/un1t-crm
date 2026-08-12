@@ -164,10 +164,16 @@ describe('GET /api/email/tickets/[id] — query failures are loud', () => {
     // Nothing in the response shape reads it, so naming it in the select only
     // buys a dependency on a column scheduled to disappear.
     await get(T_STUDIO.id)
+    // TWO reads since EMAIL-PARTICIPANTS.4: the thread to render, and the
+    // narrower participant scan the reply audience is derived from. The claim
+    // is about every one of them — a reintroduced conversation_id in either
+    // would be the same live dependency on a column being dropped.
     const thread = selectsFrom(db, 'email_inbox_messages')
-    expect(thread).toHaveLength(1)
-    expect(thread[0].columns).not.toContain('conversation_id')
-    // …while still asking for the columns the thread genuinely renders.
+    expect(thread).toHaveLength(2)
+    for (const read of thread) expect(read.columns).not.toContain('conversation_id')
+    // …while the RENDER read still asks for the columns the thread genuinely
+    // shows. (The participant scan deliberately asks for far less — and never
+    // for bcc_emails.)
     expect(thread[0].columns).toContain('text_body')
     expect(thread[0].columns).toContain('html_body')
   })
@@ -282,12 +288,18 @@ describe('GET …/[id] — recipients (EMAIL-CC.1)', () => {
     expect(reply.to).not.toContain('secret@example.com')
   })
 
-  it('derives reply_recipients from the latest message, minus our own addresses', async () => {
+  // Was 'derives reply_recipients from the latest message' until
+  // EMAIL-PARTICIPANTS.4 — the latest message IS the whole thread here (one
+  // message), so the addresses are unchanged; only the rule that produced them
+  // moved. `over_cap` and `empty` come with resolveReplyAudience.
+  it('derives reply_recipients from the thread, minus our own addresses', async () => {
     const res = await get(T_STUDIO.id)
     const { reply_recipients: reply } = (await res.json()).data
     expect(reply).toEqual({
       to: ['member@example.com', 'colleague@example.com'],
       mode: 'reply_all',
+      over_cap: false,
+      empty: false,
     })
   })
 
@@ -298,14 +310,104 @@ describe('GET …/[id] — recipients (EMAIL-CC.1)', () => {
     }))
     const res = await get(T_STUDIO.id)
     expect((await res.json()).data.reply_recipients)
-      .toEqual({ to: ['member@example.com'], mode: 'reply' })
+      .toEqual({ to: ['member@example.com'], mode: 'reply', over_cap: false, empty: false })
   })
 
   it('falls back to the requester on a ticket with no messages', async () => {
     setupDb(baseState({ grants: [GRANT_STUDIO], messages: [] }))
     const res = await get(T_STUDIO.id)
     expect((await res.json()).data.reply_recipients)
-      .toEqual({ to: [T_STUDIO.requester_email], mode: 'reply' })
+      .toEqual({ to: [T_STUDIO.requester_email], mode: 'reply', over_cap: false, empty: false })
+  })
+})
+
+// ── EMAIL-PARTICIPANTS.4 — the audience is the WHOLE thread ─────────────
+//
+// The live failure of 2026-08-12: a shared council mailbox opened a thread, a
+// named officer in that office answered from her own address, and the staff
+// reply reached her ALONE — the audience was derived from the newest message
+// only, so whoever wrote last silently redefined who the conversation was
+// with. Nobody saw a dropped recipient; the reply simply never arrived at the
+// mailbox that had asked the question.
+describe('GET …/[id] — reply_recipients unions the whole thread (EMAIL-PARTICIPANTS.4)', () => {
+  const OPENED_TO_SHARED_MAILBOX = {
+    id: 'm-rates', ticket_id: T_STUDIO.id, location_id: T_STUDIO.location_id,
+    direction: 'outbound', is_internal_note: false, text_body: 'Rates query',
+    from_email: MB_STUDIO.address,
+    to_email: 'rates@council.ie', to_emails: ['rates@council.ie'],
+    cc_emails: [], bcc_emails: [],
+    created_at: '2026-08-12T09:10:00Z',
+  }
+  const ANSWERED_BY_ONE_OFFICER = {
+    id: 'm-eleanor', ticket_id: T_STUDIO.id, location_id: T_STUDIO.location_id,
+    direction: 'inbound', is_internal_note: false, text_body: 'I have this now.',
+    from_email: 'eleanor@council.ie',
+    to_email: MB_STUDIO.address, to_emails: [MB_STUDIO.address],
+    cc_emails: [], bcc_emails: [],
+    created_at: '2026-08-12T10:06:00Z',
+  }
+
+  it('keeps a correspondent who is on an EARLIER message but not the newest', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      messages: [OPENED_TO_SHARED_MAILBOX, ANSWERED_BY_ONE_OFFICER],
+    }))
+    const res = await get(T_STUDIO.id)
+    expect(res.status).toBe(200)
+    const { reply_recipients: reply } = (await res.json()).data
+    // The officer who wrote last is on it…
+    expect(reply.to).toContain('eleanor@council.ie')
+    // …and so is the shared mailbox that opened the thread. Dropping it is the
+    // bug; a wider window is the fix.
+    expect(reply.to).toContain('rates@council.ie')
+    // Our own address is still never a recipient — a reply-all that mailed
+    // studio@ would re-enter our own inbound webhook and file onto this ticket.
+    expect(reply.to).not.toContain(MB_STUDIO.address)
+    expect(reply.over_cap).toBe(false)
+  })
+
+  // The audience read has its OWN failure path, and 'the messages query errors'
+  // above cannot reach it: `state.errors` fails every operation on the table, so
+  // the route refuses at the render read long before the audience is derived.
+  // An error branch nobody ever takes is the defect class this repo keeps
+  // getting bitten by, so this fails ONE of the two reads and not the other.
+  it('500s when only the participant lookup errors — never a quietly narrower audience', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      messages: [OPENED_TO_SHARED_MAILBOX, ANSWERED_BY_ONE_OFFICER],
+    }))
+    // The two reads of email_inbox_messages are told apart by what they ASK
+    // for: the render read pulls bodies, the audience read deliberately does
+    // not (and never asks for bcc_emails). Same db.from wrapping the reply
+    // route's own tests use to make a single access fail.
+    const realFrom = db.from
+    db.from = (table) => {
+      const b = realFrom(table)
+      if (table !== 'email_inbox_messages') return b
+      const realThen = b.then
+      b.then = (res, rej) => (
+        String(b._select).includes('html_body')
+          ? realThen(res, rej)
+          : Promise.resolve({
+            data: null,
+            error: { code: '57014', message: 'canceling statement due to statement timeout' },
+          }).then(res, rej)
+      )
+      return b
+    }
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const res = await get(T_STUDIO.id)
+
+    expect(res.status).toBe(500)
+    // The reason travels, and the RENDER read succeeded — so this is the
+    // participant branch refusing, not the messages branch tested twice.
+    expect((await res.json()).error).toContain('statement timeout')
+    expect(errors).toHaveBeenCalledWith(
+      '[tickets/:id] participant lookup failed:',
+      'canceling statement due to statement timeout',
+    )
+    errors.mockRestore()
   })
 })
 

@@ -156,8 +156,9 @@ export function forwardTimestamp(iso) {
  * WHY BCC IS ABSENT RATHER THAN REDACTED. A "Bcc: (hidden)" line would still
  * tell the forward's recipient that somebody was blind-copied, which is
  * exactly the fact a Bcc exists to keep. The header block must read as though
- * the Bcc was never typed — the same guarantee threadParticipants() gives on
- * the recipient side.
+ * the Bcc was never typed — the same guarantee ticketParticipants() gives on
+ * the recipient side (src/lib/email-recipients.js), by the same means: the
+ * column is not named.
  *
  * Empty values are omitted rather than rendered blank: "To:" with nothing
  * after it reads as a message sent to nobody.

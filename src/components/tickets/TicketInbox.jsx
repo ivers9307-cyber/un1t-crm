@@ -71,6 +71,10 @@ export default function TicketInbox({ locationId, locationName, userId }) {
   const [sending, setSending] = useState(false)
   const [statusSaving, setStatusSaving] = useState(false)
   const [assignSaving, setAssignSaving] = useState(false)
+  // EMAIL-PARTICIPANTS.7 — a remove/restore is in flight. Both the re-entrancy
+  // guard (see patchParticipants) and what disables the chip buttons: a guard
+  // nothing renders is a click that silently does nothing.
+  const [participantSaving, setParticipantSaving] = useState(false)
   // EMAIL-ASSIGN.1 — whether the viewer may reassign; the queue route says.
   const [viewerIsElevated, setViewerIsElevated] = useState(false)
 
@@ -404,6 +408,71 @@ export default function TicketInbox({ locationId, locationName, userId }) {
     }
   }
 
+  // EMAIL-PARTICIPANTS.7 — take ONE address off this ticket's reply audience,
+  // or put it back. One function for both directions, because they are the same
+  // write to the same column and any difference between them would be a way for
+  // the two to disagree about what just happened.
+  //
+  // Lives here, with the other mutations, because the write is only half the
+  // work: the audience itself is never stored — resolveReplyAudience() derives
+  // it from the thread on every read and subtracts the operator's exclusions —
+  // so the chips tell the truth only after the ticket is re-read. Editing a
+  // local copy of replyRecipients instead would be a second implementation of a
+  // derivation the whole programme exists to keep singular.
+  //
+  // ON FAILURE THE CHIP STAYS PUT. The write did not land, so the audience is
+  // still exactly what it was; a chip that moved between the two groups anyway
+  // would be a lie about who the next reply reaches, which is the failure this
+  // feature is meant to end. Nothing here is optimistic for that reason, and
+  // the banner says what happened in the same place a failed status change or
+  // assignment does.
+  async function patchParticipants(address, { body, failure }) {
+    if (!selectedId || !address || participantSaving) return
+    const id = selectedId // guard stale responses across a ticket switch
+    // Remove and restore are serialised against EACH OTHER, not just against
+    // themselves: the route read-modify-writes excluded_participants, so two
+    // writes in flight together would leave whichever landed second having
+    // overwritten the first — an address silently back on the audience, or
+    // silently off it. A dropped second click leaves its chip where it was,
+    // which is the honest half of that trade.
+    setParticipantSaving(true)
+    setThreadError(null)
+    try {
+      const res = await fetch(`/api/email/tickets/${id}/participants`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const answer = await res.json()
+      if (threadFor.current !== id) return // superseded — the operator switched tickets
+      if (!answer?.success) {
+        setThreadError(answer?.error || failure)
+        return
+      }
+      await loadThread(id)
+    } catch {
+      if (threadFor.current === id) {
+        setThreadError(`${failure} — check your connection and try again`)
+      }
+    } finally {
+      setParticipantSaving(false)
+    }
+  }
+
+  function handleRemoveRecipient(address) {
+    return patchParticipants(address, {
+      body: { remove: [address] },
+      failure: `Could not take ${address} off this reply`,
+    })
+  }
+
+  function handleRestoreRecipient(address) {
+    return patchParticipants(address, {
+      body: { restore: [address] },
+      failure: `Could not put ${address} back on this reply`,
+    })
+  }
+
   // A forward is an outbound message on THIS ticket, so the thread re-read is
   // all that is needed — and it is all that is done. The QUEUE is deliberately
   // not refetched, because the route deliberately does not touch the ticket:
@@ -594,6 +663,9 @@ export default function TicketInbox({ locationId, locationName, userId }) {
             viewerIsElevated={viewerIsElevated}
             onSend={handleSend}
             sending={sending}
+            onRemoveRecipient={handleRemoveRecipient}
+            onRestoreRecipient={handleRestoreRecipient}
+            participantSaving={participantSaving}
             onForward={setForwarding}
           />
         </div>
