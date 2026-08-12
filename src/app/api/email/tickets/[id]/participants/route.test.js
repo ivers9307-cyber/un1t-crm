@@ -109,6 +109,21 @@ describe('PATCH …/participants', () => {
     expect(written()).toEqual(['rates@council.ie'])
   })
 
+  // PRECEDENCE, PINNED. `remove` is applied after the `restore` filter, so a
+  // contradictory body lands on the NARROWER audience — the safe reading on a
+  // surface whose purpose is taking people off a thread. Documented in-source,
+  // but undocumented-by-test precedence is how a refactor flips it silently.
+  it('resolves an address named in BOTH lists as removed', async () => {
+    const res = await patch(T_STUDIO.id, {
+      remove: ['rates@council.ie'],
+      restore: ['Rates@Council.IE'],
+    })
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toEqual({ excluded_participants: ['rates@council.ie'] })
+    expect(stored()).toEqual(['rates@council.ie'])
+  })
+
   // A typo that reached the column would be a permanent exclusion matching
   // nobody — invisible, and undoable only by typing the same typo back.
   it('400s on an address it cannot use, writing nothing', async () => {

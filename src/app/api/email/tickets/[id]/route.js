@@ -191,9 +191,16 @@ export async function GET(request, props) {
       // EMAIL-ASSIGN.1 — the reassign control gates on this; claiming needs
       // no elevation, assigning somebody ELSE does.
       viewer_is_elevated: isElevatedAtLocation(user, ticket.location_id),
-      // { to: string[], mode: 'reply' | 'reply_all' }, or null — see above.
-      // `to` is derived from From/To/Cc only; bcc_emails is never a
-      // participant, so it can never appear here.
+      // { to: string[], mode: 'reply' | 'reply_all', over_cap, empty }, or
+      // null — see above. `to` is derived from From/To/Cc only; bcc_emails is
+      // never a participant, so it can never appear here.
+      //
+      // over_cap and empty (EMAIL-PARTICIPANTS.4) are the reply route's two
+      // refusals, answered HERE so the composer can say so before the operator
+      // types rather than after they hit send: over_cap means the derived
+      // audience exceeds MAX_RECIPIENTS and the reply will 400; empty means
+      // every participant has been excluded and there is nobody left to
+      // reply to.
       reply_recipients: replyRecipients,
       // True when the attachment query failed. The thread is complete; the
       // FILE list is not, and the UI must say so rather than imply there were
