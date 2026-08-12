@@ -95,7 +95,7 @@ describe('TicketReplyBox — the reply audience', () => {
   it('blocks the send and explains when the thread is over the recipient cap', () => {
     const to = Array.from({ length: 26 }, (_, i) => `p${i}@x.com`)
     const onSend = vi.fn()
-    renderBox({
+    const { container } = renderBox({
       ticket: { ...TICKET, requester_email: 'p0@x.com' },
       replyRecipients: audience(to),
       onSend,
@@ -104,11 +104,43 @@ describe('TicketReplyBox — the reply audience', () => {
     fireEvent.change(screen.getByLabelText('Reply to the member'), {
       target: { value: 'Sorry for the delay.' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Reply All (26 people)' }))
+
+    // Disabled, not merely inert: a live-looking button that silently does
+    // nothing is the worse half of this failure.
+    const send = screen.getByRole('button', { name: 'Reply All (26 people)' })
+    expect(send.disabled).toBe(true)
+    fireEvent.click(send)
+
+    // And the rule is stated at the send itself, so a submit that never went
+    // through the button cannot get past it either.
+    fireEvent.submit(container.querySelector('form'))
 
     // The route would 400 this. The composer must not spend a round trip
     // discovering that — and must never look as though the reply went.
     expect(onSend).not.toHaveBeenCalled()
     expect(screen.getByText(/26 recipients and the limit is 25/i)).toBeTruthy()
+  })
+
+  it('shows no chips and refuses to send once the audience has been emptied', () => {
+    const onSend = vi.fn()
+    // What the server answers after the last participant is removed: an empty
+    // set, deliberately, NOT "we could not work out who".
+    const { container } = renderBox({ replyRecipients: audience([]), onSend })
+
+    // The requester fallback must not run here. It did, and put the person the
+    // operator had just removed back on screen as a chip — and into the line
+    // naming who the reply reaches — while the route refused the send.
+    expect(screen.queryAllByRole('button', { name: /^Remove / })).toHaveLength(0)
+    expect(screen.queryByText(/a@x\.com/)).toBeNull()
+
+    // The reply route's own words, so the composer and its 400 agree.
+    expect(screen.getByText(/no recipients left/i)).toBeTruthy()
+
+    fireEvent.change(screen.getByLabelText('Reply to the member'), {
+      target: { value: 'Are you still there?' },
+    })
+    expect(screen.getByRole('button', { name: 'Reply' }).disabled).toBe(true)
+    fireEvent.submit(container.querySelector('form'))
+    expect(onSend).not.toHaveBeenCalled()
   })
 })
