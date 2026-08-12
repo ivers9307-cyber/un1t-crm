@@ -9,6 +9,7 @@ import {
   isArchivedStatus,
   ticketMessageKind,
   ticketMessageRecipients,
+  ticketReplyAudienceMeta,
   ticketDeliveryMeta,
   requesterLabel,
   mailboxLabel,
@@ -320,6 +321,82 @@ describe('ticketMessageRecipients', () => {
   it('omits empty lists rather than rendering a blank Cc', () => {
     expect(ticketMessageRecipients({ to_emails: ['a@x.com'], cc_emails: [], bcc_emails: [] })).toEqual([])
     expect(ticketMessageRecipients(null)).toEqual([])
+  })
+})
+
+// ── Reply audience (EMAIL-PARTICIPANTS.9) ─────────────────────────────
+//
+// GET .../[id] now derives the reply audience from the WHOLE thread
+// (reply_recipients = { to, mode, over_cap, empty } — the same shape
+// TicketReplyBox.jsx reads on web). Before this, mobile's composer footer
+// said "Sends an email to <requester>" unconditionally, even though a reply
+// from this screen has always reached everyone the server derives (the file
+// header's RECIPIENTS note — mobile posts { text, internal } only). That
+// understated the true audience on every multi-party thread, a known
+// standing defect as of the 2026-08-09 audit.
+describe('ticketReplyAudienceMeta (EMAIL-PARTICIPANTS.9)', () => {
+  const ticket = (extra) => ({ requester_email: 'ada@x.com', ...extra })
+  const audience = (to, extra) => ({ to, mode: to.length > 1 ? 'reply_all' : 'reply', over_cap: false, empty: false, ...extra })
+
+  it('names the one recipient on a one-person thread', () => {
+    const m = ticketReplyAudienceMeta(ticket(), audience(['ada@x.com']))
+    expect(m).toEqual({ disabled: false, text: 'Sends an email to ada@x.com' })
+  })
+
+  it('names the first and counts the rest on a wider thread — the first is the live counterparty, server-ordered', () => {
+    const m = ticketReplyAudienceMeta(ticket(), audience(['bob@x.com', 'ada@x.com', 'carol@x.com']))
+    expect(m).toEqual({ disabled: false, text: 'Sends an email to bob@x.com and 2 others' })
+  })
+
+  it('says "1 other" rather than "1 others" for exactly two people', () => {
+    const m = ticketReplyAudienceMeta(ticket(), audience(['bob@x.com', 'ada@x.com']))
+    expect(m.text).toBe('Sends an email to bob@x.com and 1 other')
+  })
+
+  it('names where replies land when the ticket has a mailbox', () => {
+    const m = ticketReplyAudienceMeta(
+      ticket({ mailbox: { address: 'accounts@x.com' } }),
+      audience(['ada@x.com']),
+    )
+    expect(m.text).toBe('Sends an email to ada@x.com · replies come back to accounts@x.com')
+  })
+
+  it('disables send and says there is nobody to reply to once every recipient has been removed', () => {
+    const m = ticketReplyAudienceMeta(ticket(), audience([], { empty: true }))
+    expect(m).toEqual({
+      disabled: true,
+      text: 'Every recipient has been removed from this thread, so there is nobody to reply to. '
+        + 'You can still add an internal note.',
+    })
+  })
+
+  it('disables send and explains the recipient cap — an enabled button here would be a dead click (the route 400s)', () => {
+    const wide = Array.from({ length: 30 }, (_, i) => `p${i}@x.com`)
+    const m = ticketReplyAudienceMeta(ticket(), audience(wide, { mode: 'reply_all', over_cap: true }))
+    expect(m).toEqual({
+      disabled: true,
+      text: 'This thread has 30 recipients — too many for one reply. Remove some on the web before replying.',
+    })
+  })
+
+  it('disables send when the ticket has no requester address, regardless of what reply_recipients says', () => {
+    const m = ticketReplyAudienceMeta(ticket({ requester_email: null }), audience(['ada@x.com']))
+    expect(m.disabled).toBe(true)
+    expect(m.text).toBe(
+      'This ticket has no requester address, so it cannot be replied to. You can still add an internal note.',
+    )
+  })
+
+  it('falls back to the requester address when the route could not derive one (null) — same as web', () => {
+    const m = ticketReplyAudienceMeta(ticket(), null)
+    expect(m).toEqual({ disabled: false, text: 'Sends an email to ada@x.com' })
+  })
+
+  it('never invents an over_cap/empty refusal off a null reply_recipients', () => {
+    // null means "we don't know", not "we checked and it's fine" — but it must
+    // ALSO not be misread as a refusal. The one-person fallback above is the
+    // only safe reading, same as TicketReplyBox.jsx's lockedTo on web.
+    expect(ticketReplyAudienceMeta(ticket(), null).disabled).toBe(false)
   })
 })
 

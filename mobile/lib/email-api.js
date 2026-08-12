@@ -90,6 +90,17 @@ export async function getTicket(ticketId, locationId) {
     // attachment chips and no warning, which reads as "the member sent no
     // files": the silent wrong answer the route exists to prevent.
     attachmentsUnavailable: !!res.data?.attachments_unavailable,
+    // EMAIL-PARTICIPANTS.9 — { to, mode, over_cap, empty } | null, derived from
+    // the WHOLE thread server-side. This used to be dropped here, so the
+    // composer footer fell back to a hard-coded "Sends an email to
+    // <requester>" even though a reply from this screen has always gone to
+    // everyone the server derives (replyToTicket below posts { text, internal }
+    // only — the route adds the rest). That understated the true audience on
+    // every multi-party thread (2026-08-09 audit). null means the route could
+    // not derive one (an own-address lookup blip); ticketReplyAudienceMeta()
+    // in email-tickets.js falls back to the requester address for that case,
+    // same as TicketReplyBox.jsx does on web.
+    reply_recipients: res.data?.reply_recipients || null,
   }
 }
 

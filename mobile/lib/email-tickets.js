@@ -174,6 +174,88 @@ export function ticketMessageRecipients(message) {
   return out
 }
 
+// ── Reply audience (EMAIL-PARTICIPANTS.9) ────────────────────────────
+//
+// GET .../[id] derives the reply audience from the WHOLE thread and answers
+// it as reply_recipients = { to, mode, over_cap, empty } — the same shape
+// TicketReplyBox.jsx reads on web. Before this, the composer footer below
+// said "Sends an email to <requester>" unconditionally, even though a reply
+// from this screen has ALWAYS gone to everyone the server derives (this
+// file's own header — mobile posts { text, internal } and the route adds the
+// rest). On any multi-party thread that told the operator the reply reached
+// one person when it reached several: a known standing defect (2026-08-09
+// audit).
+//
+// MOBILE IS READ-ONLY HERE, DELIBERATELY. There is no chip editor on this
+// screen (see the file header) — removing a participant is a web-only act —
+// so this function only ever DESCRIBES the audience the server already
+// settled on; it never changes it. What it adds beyond description is the two
+// refusals the reply route enforces server-side: over_cap and empty. Both are
+// answered by this same GET, so the operator can be told BEFORE typing rather
+// than after pressing a send button the route would 400.
+//
+// PRIORITY, most specific first:
+//   1. no requester_email at all — cannot be replied to, full stop.
+//   2. empty — every participant was excluded (a web-only act); nobody left.
+//   3. over_cap — more recipients than one email may carry.
+//   4. the normal case — name them.
+// (1) is checked first regardless of what reply_recipients says, matching
+// TicketReplyBox.jsx's `canReply` gate on web exactly.
+
+/**
+ * The composer footer's text and whether Send must be disabled, for a reply
+ * (never call this in note mode — a note has no audience).
+ *
+ * `replyRecipients` is null when the route could not derive one (an
+ * own-address lookup blip) — the fallback is the requester address alone,
+ * exactly like `lockedTo` on web, and null must never be misread as an
+ * over_cap/empty ANSWER.
+ *
+ * WITH SEVERAL RECIPIENTS THIS NAMES ONLY THE FIRST. Deliberately: the first
+ * entry is the live counterparty — ticketParticipants orders the latest
+ * correspondent first (src/lib/email-recipients.js), and this route derives
+ * `to` the same way the reply route does — and everyone else becomes a count.
+ * Naming all of them on a phone-width line is the mistake this exists to
+ * avoid, not a shortcut; it is the same idiom web's placeholder and
+ * send-button label already use.
+ *
+ * @param {{requester_email?: string, mailbox?: {address?: string}}|null} ticket
+ * @param {{to: string[], mode: string, over_cap: boolean, empty: boolean}|null} replyRecipients
+ * @returns {{ text: string, disabled: boolean }}
+ */
+export function ticketReplyAudienceMeta(ticket, replyRecipients) {
+  if (!ticket?.requester_email) {
+    return {
+      disabled: true,
+      text: 'This ticket has no requester address, so it cannot be replied to. You can still add an internal note.',
+    }
+  }
+
+  if (replyRecipients?.empty) {
+    return {
+      disabled: true,
+      text: 'Every recipient has been removed from this thread, so there is nobody to reply to. '
+        + 'You can still add an internal note.',
+    }
+  }
+
+  const to = replyRecipients?.to?.length ? replyRecipients.to : [ticket.requester_email]
+
+  if (replyRecipients?.over_cap) {
+    return {
+      disabled: true,
+      text: `This thread has ${to.length} recipients — too many for one reply. Remove some on the web before replying.`,
+    }
+  }
+
+  const mailboxNote = ticket?.mailbox?.address ? ` · replies come back to ${ticket.mailbox.address}` : ''
+  const text = to.length === 1
+    ? `Sends an email to ${to[0]}${mailboxNote}`
+    : `Sends an email to ${to[0]} and ${to.length - 1} ${to.length === 2 ? 'other' : 'others'}${mailboxNote}`
+
+  return { disabled: false, text }
+}
+
 // ── Delivery status (EMAIL-DELIVERY.1) ───────────────────────────────
 //
 // A re-statement of src/lib/ticket-display.js's deliveryMeta, for the reason

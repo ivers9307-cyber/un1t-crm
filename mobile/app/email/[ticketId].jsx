@@ -42,6 +42,13 @@
 // identically to web. What mobile does not get is the ADD side — a chip input
 // with a Cc/Bcc toggle is a confidentiality control that wants real device QA,
 // and this is the quick-answer surface. Scoped out deliberately, not missed.
+// Until EMAIL-PARTICIPANTS.9 the composer footer did not say any of this —
+// it named only the requester, unconditionally, so a multi-party thread had
+// the operator believing a reply-all was a reply to one person (2026-08-09
+// audit). The footer now reads reply_recipients (ticketReplyAudienceMeta in
+// lib/email-tickets.js) and REMOVAL STAYS WEB-ONLY: this screen only
+// describes the audience the server settled on, same as the recipient lines
+// above — it never offers a way to change it.
 
 import { useEffect, useState, useCallback, useRef } from 'react'
 import {
@@ -61,7 +68,7 @@ import {
   ticketMessageKind, ticketStatusMeta, mailboxLabel, ticketDeliveryMeta,
   ticketMessageRecipients, isArchivedStatus, TICKET_STATUS_ORDER,
   formatAttachmentSize, ticketAttachmentSkippedLabel, ticketAttachmentIcon,
-  threadRefreshMs,
+  threadRefreshMs, ticketReplyAudienceMeta,
 } from '../../lib/email-tickets'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
 
@@ -397,6 +404,12 @@ export default function EmailTicket() {
   // said, or a blipped lookup reads as "the member sent no files". Web renders
   // the same warning (AttachmentsUnavailableNotice).
   const [attachmentsUnavailable, setAttachmentsUnavailable] = useState(false)
+  // EMAIL-PARTICIPANTS.9 — { to, mode, over_cap, empty } | null, straight off
+  // getTicket(). Kept alongside `ticket` rather than folded into it: it comes
+  // back from the SAME response but is answered as its own top-level field
+  // (see getTicket's doc), and the assign-route merge below only ever spreads
+  // `ticket` fields back in, which must not clobber this.
+  const [replyRecipients, setReplyRecipients] = useState(null)
   // EMAIL-ATTACH-PREVIEW.1 — the one image being looked at, if any. Held here
   // rather than in a bubble so the viewer covers the screen, and so switching
   // tickets cannot leave a stale one open. The signed URL lives only as long as
@@ -419,6 +432,7 @@ export default function EmailTicket() {
     setTicket(res.ticket)
     setMessages(res.messages || [])
     setAttachmentsUnavailable(!!res.attachmentsUnavailable)
+    setReplyRecipients(res.reply_recipients || null)
 
     // Clearing the badge is its own call now. Fire-and-forget and once
     // per screen: it is idempotent, and a failure here must never look
@@ -462,11 +476,19 @@ export default function EmailTicket() {
   }, [messages.length])
 
   const canReply = !!ticket?.requester_email
+  // EMAIL-PARTICIPANTS.9 — the footer's real audience, and whether Send must
+  // be blocked. `audience.disabled` already covers "no requester address"
+  // (ticketReplyAudienceMeta checks that first), so it alone gates Send;
+  // `canReply` above stays scoped to the text input, which keeps taking a
+  // draft even on a thread nobody can currently be sent to — the route 400s,
+  // not the keyboard.
+  const audience = ticketReplyAudienceMeta(ticket, replyRecipients)
+  const sendBlocked = !isNote && audience.disabled
 
   async function send() {
     const body = text.trim()
     if (!body || sending) return
-    if (!isNote && !canReply) return
+    if (sendBlocked) return
     setSending(true)
     const res = await replyToTicket(ticketId, body, {
       internal: isNote,
@@ -717,9 +739,9 @@ export default function EmailTicket() {
               />
               <Pressable
                 onPress={send}
-                disabled={!text.trim() || sending || (!isNote && !canReply)}
+                disabled={!text.trim() || sending || sendBlocked}
                 className={`w-10 h-10 rounded-full ml-2 items-center justify-center ${
-                  text.trim() && !sending && (isNote || canReply)
+                  text.trim() && !sending && !sendBlocked
                     ? (isNote ? 'bg-amber-600' : 'bg-blue-500')
                     : 'bg-un1t-border'
                 }`}
@@ -733,15 +755,14 @@ export default function EmailTicket() {
             </View>
 
             {/* Said in words as well as in colour: whoever is about to press
-                send must be told, in the same glance, who receives this. */}
+                send must be told, in the same glance, who receives this.
+                EMAIL-PARTICIPANTS.9 — audience.text is the real, WHOLE-thread
+                audience (one name, or the first plus a count), not the
+                requester alone; see ticketReplyAudienceMeta. */}
             <Text className={`text-[11px] mt-1.5 ${isNote ? 'text-amber-700' : 'text-un1t-subtle'}`}>
               {isNote
                 ? `Staff only — written to the ticket and NOT sent to ${ticket?.requester_email || 'the member'}.`
-                : canReply
-                  ? `Sends an email to ${ticket.requester_email}${
-                      ticket?.mailbox?.address ? ` · replies come back to ${ticket.mailbox.address}` : ''
-                    }`
-                  : 'This ticket has no requester address, so it cannot be replied to. You can still add an internal note.'}
+                : audience.text}
             </Text>
             {!isNote && isArchivedStatus(ticket?.status) && (
               <Text className="text-[11px] text-un1t-subtle mt-1">
