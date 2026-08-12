@@ -23,7 +23,7 @@ vi.mock('@/lib/auth', async () => {
 import { POST, DELETE } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { makeDb, writesTo, updatesTo } from '../../_test-db'
+import { makeDb, writesTo, updatesTo, failWrites } from '../../_test-db'
 import {
   T_STUDIO, T_ACCOUNTS, COACH, OWNER, GRANT_STUDIO, baseState,
 } from '../../_test-fixtures'
@@ -59,8 +59,16 @@ const M_TARGET_NATIVE = {
 }
 
 let db
+/**
+ * The fake applies updates IN PLACE, so every message must be a fresh copy —
+ * baseState() already spreads its tickets for this reason and the messages come
+ * in unspread. Sharing them let one merge leave `merged_from_ticket_id` set on
+ * a module-level constant, which the next test then read as a ticket that had
+ * absorbed a previous merge. Found by the absorbed-merge check itself.
+ */
 function setupDb(extra = {}) {
-  db = makeDb(baseState({ messages: [M_TARGET_NATIVE, M_SOURCE], ...extra }))
+  const { messages = [M_TARGET_NATIVE, M_SOURCE], ...rest } = extra
+  db = makeDb(baseState({ messages: messages.map(m => ({ ...m })), ...rest }))
   createServerClient.mockImplementation(() => db)
   return db
 }
@@ -112,9 +120,12 @@ describe('POST …/merge', () => {
     // A tombstone is `closed` PLUS a pointer — never a fifth status value.
     expect(source.status).toBe('closed')
     expect(source.closed_at).toBeTruthy()
-    // Its unread badge belongs to the survivor now; leaving it would keep a
-    // hidden ticket contributing to a count nobody can clear.
-    expect(source.unread_count).toBe(0)
+    // Its unread_count is deliberately RETAINED: it is a counter, not a
+    // property of the messages, so it cannot be re-derived, and it is the only
+    // record of what the survivor absorbed. Zeroing it here would make the undo
+    // unable to give it back. Inert while merged — scopeToUnmerged hides
+    // tombstones from the list and the badge, and nothing sums this column.
+    expect(source.unread_count).toBe(1)
 
     // 1 (accounts) + 2 (studio) — the conversation's unread mail, in one place.
     expect(ticketRow(T_STUDIO.id).unread_count).toBe(3)
@@ -166,16 +177,85 @@ describe('POST …/merge', () => {
   // ORDER IS LOAD-BEARING: there is no transaction, so the tombstone is stamped
   // LAST. A failed reparent must leave the source LIVE — a hidden ticket whose
   // messages never moved is silent loss, and nothing would ever surface it.
+  //
+  // failWrites, not `errors`: the injected-error harness fails every operation
+  // on the table, which would refuse at the absorbed-merge READ above and never
+  // reach the reparent this test is about.
   it('500s without tombstoning the source when the reparent fails', async () => {
-    setupDb({
-      errors: { email_inbox_messages: { code: 'XX000', message: 'messages exploded' } },
-    })
+    failWrites(db, ['email_inbox_messages'])
     expect((await post(T_ACCOUNTS.id, { into: T_STUDIO.id })).status).toBe(500)
 
     expect(updatesTo(db, 'email_tickets')).toEqual([])
     const source = ticketRow(T_ACCOUNTS.id)
     expect(source.merged_into_id ?? null).toBeNull()
     expect(source.status).toBe('open')
+  })
+
+  // A SURVIVOR IS NOT A TOMBSTONE — the hole canMerge cannot see. A→B leaves B
+  // mergeable, and B→C would re-stamp A's rows as having come from B, after
+  // which unmerging A restores nothing. Both directions are refused: the check
+  // is about either ticket having absorbed, not about which side it is on.
+  it('404s when the SOURCE has already absorbed a merge', async () => {
+    setupDb({
+      messages: [
+        M_TARGET_NATIVE,
+        { ...M_SOURCE, merged_from_ticket_id: 'aaaaaaa9-0000-4000-8000-000000000009' },
+      ],
+    })
+    expect((await post(T_ACCOUNTS.id, { into: T_STUDIO.id })).status).toBe(404)
+    expect(writesTo(db)).toEqual([])
+  })
+
+  it('404s when the TARGET has already absorbed a merge', async () => {
+    setupDb({
+      messages: [
+        { ...M_TARGET_NATIVE, merged_from_ticket_id: 'aaaaaaa9-0000-4000-8000-000000000009' },
+        M_SOURCE,
+      ],
+    })
+    expect((await post(T_ACCOUNTS.id, { into: T_STUDIO.id })).status).toBe(404)
+    expect(writesTo(db)).toEqual([])
+  })
+
+  it('merges again once the earlier merge has been undone', async () => {
+    // The refusal is a state, not a life sentence: clearing the stamps makes
+    // the ticket mergeable again, which is what "unmerge first" has to mean.
+    expect((await post(T_ACCOUNTS.id, { into: T_STUDIO.id })).status).toBe(200)
+    expect((await del(T_ACCOUNTS.id)).status).toBe(200)
+    expect((await post(T_ACCOUNTS.id, { into: T_STUDIO.id })).status).toBe(200)
+  })
+
+  it('500s when the absorbed-merge check itself fails — a failed lookup is not "none"', async () => {
+    setupDb({
+      errors: { email_inbox_messages: { code: '42703', message: 'column merged_from_ticket_id does not exist' } },
+    })
+    expect((await post(T_ACCOUNTS.id, { into: T_STUDIO.id })).status).toBe(500)
+    expect(writesTo(db)).toEqual([])
+  })
+
+  // The same-source race: two operators merging one ticket into DIFFERENT
+  // targets. Without the conditional both stamps land, the pointer names one
+  // survivor while the messages sit split across two, and the undo restores
+  // half a conversation. Simulated by having the concurrent writer land while
+  // this request is between its reparent and its stamp.
+  it('409s instead of overwriting a pointer somebody else just set', async () => {
+    const otherTarget = 'aaaaaaa7-0000-4000-8000-000000000007'
+    const realFrom = db.from
+    db.from = (table) => {
+      const b = realFrom(table)
+      if (table !== 'email_inbox_messages') return b
+      const origUpdate = b.update
+      b.update = (payload) => {
+        // …the other operator's merge commits here, between our two writes.
+        ticketRow(T_ACCOUNTS.id).merged_into_id = otherTarget
+        return origUpdate(payload)
+      }
+      return b
+    }
+
+    expect((await post(T_ACCOUNTS.id, { into: T_STUDIO.id })).status).toBe(409)
+    // Their pointer stands — ours never overwrote it.
+    expect(ticketRow(T_ACCOUNTS.id).merged_into_id).toBe(otherTarget)
   })
 })
 
@@ -209,6 +289,36 @@ describe('DELETE …/merge — unmerge', () => {
     expect(source.merged_into_id).toBeNull()
     expect(source.merged_at).toBeNull()
     expect(source.merged_by).toBeNull()
+  })
+
+  // THE UNDO CLAIM, STATED AS A ROUND TRIP. Moving the rows back is not enough:
+  // left alone the survivor keeps the summed unread and advertises a last
+  // message that has left it — a preview and a sort key it does not own. The
+  // fixtures' stored trios are exactly what their messages imply, so anything
+  // the derivation gets wrong shows up here as drift rather than as a pass.
+  const DENORMALISED = ['unread_count', 'first_response_at', 'last_message_at', 'last_message_direction', 'last_message_preview']
+  const snapshot = (id) => Object.fromEntries(DENORMALISED.map(k => [k, ticketRow(id)[k]]))
+
+  it('leaves BOTH tickets as they were — a merge and its undo cancel out', async () => {
+    const before = { source: snapshot(T_ACCOUNTS.id), target: snapshot(T_STUDIO.id) }
+
+    expect((await post(T_ACCOUNTS.id, { into: T_STUDIO.id })).status).toBe(200)
+    // Mid-merge the survivor really did absorb the lot — otherwise this test
+    // would pass just as well against a merge that did nothing.
+    expect(ticketRow(T_STUDIO.id).unread_count).toBe(3)
+    expect(ticketRow(T_STUDIO.id).last_message_preview).toBe('My DD bounced')
+
+    expect((await del(T_ACCOUNTS.id)).status).toBe(200)
+
+    expect(snapshot(T_ACCOUNTS.id)).toEqual(before.source)
+    expect(snapshot(T_STUDIO.id)).toEqual(before.target)
+  })
+
+  it('does not drive the survivor’s unread negative when somebody read it meanwhile', async () => {
+    expect((await post(T_ACCOUNTS.id, { into: T_STUDIO.id })).status).toBe(200)
+    ticketRow(T_STUDIO.id).unread_count = 0   // an operator opened it
+    expect((await del(T_ACCOUNTS.id)).status).toBe(200)
+    expect(ticketRow(T_STUDIO.id).unread_count).toBe(0)
   })
 
   it('404s when the caller cannot open the tombstone', async () => {
