@@ -36,12 +36,19 @@
 // INBOUND-TO-US (our own rendering, and the far more likely mistake).
 // `email_inbox_messages.bcc_emails` is read by exactly two things: the staff
 // thread on a ticket, and nothing else. It is NEVER an input to a later send.
-// `threadParticipants()` below — the ONLY function that derives recipients
+// `ticketParticipants()` below — the ONLY function that derives recipients
 // from stored correspondence — reads `from_email`, `to_emails` and `cc_emails`
 // and does not so much as name `bcc_emails`. So a reply, a reply-all and a
 // forward on a ticket that once carried a Bcc all reach the same people they
 // would have reached had the Bcc never existed. That is the whole guarantee,
 // and `email-recipients.test.js` mutation-checks it.
+//
+// EMAIL-PARTICIPANTS.6 widened the window that guarantee has to hold over.
+// The derivation used to read ONE message; it now unions the whole thread, so
+// a Bcc typed months ago on a message nobody is answering is inside the set of
+// rows being walked. Nothing about the guarantee changed — the column is still
+// simply never named — but there is now no second, incidental reason it holds,
+// so do not add one and do not remove the one that is left.
 //
 // ── EXCLUSIONS: our own addresses ───────────────────────────────────────
 // Every send path passes the studio's own mailbox addresses (plus the Postmark
@@ -163,58 +170,35 @@ export function inboundAddresses(full, display) {
 }
 
 /**
- * Everybody on the thread, as of the message being replied to.
+ * Everyone on a ticket's conversation, across the WHOLE thread.
+ *
+ * THE ONE FUNCTION THAT DERIVES RECIPIENTS FROM STORED CORRESPONDENCE. There
+ * is deliberately no second way to compute an audience: the detail route and
+ * the reply route both come through here over an identical message window, so
+ * the recipients a ticket SHOWS and the recipients it SENDS to cannot disagree.
  *
  * THE DEFINITION, stated once so no caller re-derives it: the From, the To and
- * the Cc of the LATEST non-note message on the ticket, minus our own
- * addresses. Nothing else.
+ * the Cc of EVERY real message on the ticket, unioned, minus the exclusions
+ * below. Nothing else.
  *
- * WHY THE LATEST MESSAGE AND NOT THE UNION OF THE WHOLE THREAD. Mail clients
- * follow the latest message, and so do the people in the conversation. Someone
- * a member deliberately dropped from a later reply has been dropped; silently
- * resurrecting them because they appeared once in March would be its own bug,
- * and a worse one than the omission it "fixes" — it re-copies a person the
- * member chose to exclude, over the member's head.
+ * WHY THE UNION AND NOT THE LATEST MESSAGE. Until EMAIL-PARTICIPANTS.1 this
+ * was derived from the newest message alone, on the reasoning that mail clients
+ * follow the latest message and that resurrecting someone a member deliberately
+ * dropped would re-copy them over the member's head. That reasoning was wrong
+ * in the direction that loses people: it let whoever wrote LAST silently
+ * redefine the audience for everyone. On 2026-08-12 a named officer replied on
+ * a chain her own office had forwarded her, and the reply that followed reached
+ * her alone — silently dropping the shared mailbox that had opened the thread,
+ * i.e. the answer to a question never reached the people who asked it. A
+ * conversation accumulates people; the audience has to accumulate with it. The
+ * narrowing case the old rule was protecting is now an explicit operator act
+ * with an undo (`removed`, below) rather than a guess made from header shape.
  *
  * WHY From AND To AND Cc, rather than a direction-specific rule. On an INBOUND
  * message the From is the member and the To holds our mailbox (excluded here);
  * on an OUTBOUND one the From is ours (excluded) and the To/Cc are the people
  * we wrote to. One rule covers both, which is what stops "reply-all on a
  * ticket nobody has answered yet" from being a special case nobody tested.
- *
- * `bcc_emails` IS NOT READ. Not filtered, not read — the field is not named in
- * this function, which is the point. A ticket whose last outbound carried a
- * Bcc must reply-all to exactly the people it would have reached had that Bcc
- * never been typed. See the BCC section in this file's header.
- *
- * @param {object|null} message  an email_inbox_messages row
- * @param {{ exclude?: string[] }} [opts]
- * @returns {string[]}  normalised, deduped, order-stable (From first)
- */
-export function threadParticipants(message, { exclude = [] } = {}) {
-  if (!message) return []
-  const excluded = new Set(normalizeAddressList(exclude).valid)
-  const raw = [
-    message.from_email,
-    ...(Array.isArray(message.to_emails) ? message.to_emails : []),
-    // Pre-EMAIL-CC.1 rows have no to_emails array, only the scalar.
-    ...(Array.isArray(message.to_emails) && message.to_emails.length ? [] : [message.to_email]),
-    ...(Array.isArray(message.cc_emails) ? message.cc_emails : []),
-  ]
-  return normalizeAddressList(raw).valid.filter(a => !excluded.has(a))
-}
-
-/**
- * Everyone on a ticket's conversation, across the WHOLE thread.
- *
- * WHY THIS EXISTS SEPARATELY FROM threadParticipants()
- * threadParticipants() answers "who was on THIS message" and was, until
- * EMAIL-PARTICIPANTS.1, applied to the latest message alone to build a reply
- * audience. That made whoever wrote last redefine the entire audience: on
- * 2026-08-12 a named officer replied on a chain her office had forwarded her,
- * and the reply that followed reached her alone — silently dropping the shared
- * mailbox that had opened the thread. A conversation accumulates people; the
- * audience has to accumulate with it.
  *
  * WHAT IS DELIBERATELY EXCLUDED
  *   • internal notes — sent to nobody, so they name nobody
@@ -256,25 +240,6 @@ export function ticketParticipants(messages, { exclude = [], removed = [] } = {}
 
   const off = new Set(normalizeAddressList([...exclude, ...removed]).valid)
   return normalizeAddressList(raw).valid.filter(a => !off.has(a))
-}
-
-/**
- * The newest message a reply is actually answering.
- *
- * Internal notes are skipped: a note was sent to nobody, so it names no
- * participants and cannot be the thing being replied to.
- *
- * @param {object[]} messages  any order
- * @returns {object|null}
- */
-export function latestCorrespondence(messages) {
-  const real = (Array.isArray(messages) ? messages : []).filter(m => m && !m.is_internal_note)
-  if (real.length === 0) return null
-  return real.reduce((newest, m) => {
-    const a = Date.parse(m.created_at || m.sent_at || 0) || 0
-    const b = Date.parse(newest.created_at || newest.sent_at || 0) || 0
-    return a > b ? m : newest
-  })
 }
 
 /**

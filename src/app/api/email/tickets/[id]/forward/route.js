@@ -63,7 +63,8 @@ import { loadTicketForUser, loadOwnAddresses } from '../../_helpers'
 // ══ 3. RECIPIENTS ARE TYPED, NEVER DERIVED ═════════════════════════
 // The opposite of a reply. A reply's recipients come from the thread; a
 // forward's come from the operator, because choosing a new audience IS the
-// act. So there is no threadParticipants() call here at all — and, crucially,
+// act. So this route never derives an audience at all — no ticketParticipants()
+// call, nothing off the thread — and, crucially,
 // NOTHING ON THIS ROUTE READS `bcc_emails` OFF STORED CORRESPONDENCE. The
 // SELECT below does not name the column (email-forward.test.js scans this
 // file's source for it), and the quoted header block is a closed list of five

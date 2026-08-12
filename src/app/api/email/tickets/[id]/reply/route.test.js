@@ -1007,7 +1007,7 @@ describe('POST …/reply — bcc never leaks', () => {
 
   // BELT AND BRACES, and worth its own test: the route does not even ASK for
   // bcc_emails when it works out who to write to. A future edit to
-  // threadParticipants() that started reading the column would find it absent
+  // ticketParticipants() that started reading the column would find it absent
   // rather than populated — the leak is unreachable from two directions, not
   // one.
   it('never SELECTS bcc_emails on the recipient lookup', async () => {
@@ -1037,7 +1037,7 @@ describe('POST …/reply — added recipients', () => {
     expect(sent.cc).toBe('newperson@example.com')
   })
 
-  // THE SECOND ENFORCEMENT SITE. threadParticipants() already drops our own
+  // THE SECOND ENFORCEMENT SITE. ticketParticipants() already drops our own
   // addresses out of the DERIVED set, so the tests above pass with or without
   // the `exclude` on resolveRecipients — the one thing only resolveRecipients
   // can catch is an operator TYPING one of our mailboxes into Cc/Bcc. Same
