@@ -37,6 +37,19 @@ vi.mock('./ContactMultiSelect', () => ({
 
 import UnifiedSendComposer from './UnifiedSendComposer.jsx'
 
+// EVERY wait below crosses AudienceCount's 400ms DEBOUNCE (AudienceCount.jsx)
+// before the stubbed fetch is even called, so none of them may rely on
+// testing-library's 1000ms default. Measured idle cost is ~402ms — the default
+// was never wrong by much, just too tight to survive a busy machine, and a
+// loaded box eats the ~600ms of slack: the B6d test failed exactly that way in
+// a full run that took 120s against a normal 50s, while passing alone and in a
+// 50s run. Four of these ten tests were on the default when that happened.
+//
+// Keep this as the file's single knob. To check nothing has drifted back onto
+// the default, add `configure({ asyncUtilTimeout: 50 })` after the imports and
+// run the file: it must still pass.
+const COUNTED = { timeout: 3000 }
+
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
@@ -64,7 +77,7 @@ describe('UnifiedSendComposer — count errors surface and gate Send (B6)', () =
   it('renders the server error message from a 400 count, not the placeholder', async () => {
     stubCount(() => bad('OR logic is not supported together with tag or event filters. Use AND, or send these as separate audiences.'))
     render(<UnifiedSendComposer locationId="loc-1" channels={['sms']} initialAudienceFilter={FILTER} />)
-    await screen.findByText(/OR logic is not supported together with tag or event filters/)
+    await screen.findByText(/OR logic is not supported together with tag or event filters/, {}, COUNTED)
     expect(screen.queryByText(/Add a condition to see how many contacts match/)).toBeNull()
   })
 
@@ -72,7 +85,7 @@ describe('UnifiedSendComposer — count errors surface and gate Send (B6)', () =
     stubCount(() => bad('tag filter requires a non-empty string value'))
     const { container } = render(<UnifiedSendComposer locationId="loc-1" channels={['sms']} initialAudienceFilter={FILTER} />)
     fireEvent.change(container.querySelector('textarea'), { target: { value: 'Hello there' } })
-    await screen.findByText(/tag filter requires a non-empty string value/)
+    await screen.findByText(/tag filter requires a non-empty string value/, {}, COUNTED)
     expect(sendButton().disabled).toBe(true)
   })
 
@@ -87,7 +100,7 @@ describe('UnifiedSendComposer — count errors surface and gate Send (B6)', () =
     stubCount(() => ok({ count: 5, matched: 9, excluded: { no_phone: 2, not_opted_in: 1, opted_out: 1 } }))
     const { container } = render(<UnifiedSendComposer locationId="loc-1" channels={['sms']} initialAudienceFilter={FILTER} />)
     fireEvent.change(container.querySelector('textarea'), { target: { value: 'Hello there' } })
-    await waitFor(() => expect(sendButton().disabled).toBe(false), { timeout: 2000 })
+    await waitFor(() => expect(sendButton().disabled).toBe(false), COUNTED)
   })
 
   it('does not render the dangling AudienceBuilder "contacts match" footer', () => {
@@ -106,11 +119,11 @@ describe('UnifiedSendComposer — email will-receive breakdown (B6d)', () => {
       excluded: { not_opted_in: 1200, bounced_or_complained: 24, suppressed: 300 },
     }))
     render(<UnifiedSendComposer locationId="loc-1" channels={['email']} initialAudienceFilter={FILTER} />)
-    await screen.findByText(/will receive it/)
+    await screen.findByText(/will receive it/, {}, COUNTED)
     expect(screen.getByText('4,900')).toBeTruthy()
     expect(screen.getByText('2,300')).toBeTruthy()
     // Breakdown line carries the reasons from the B5 response.
-    await screen.findByText(/1,200 no marketing opt-in/)
+    await screen.findByText(/1,200 no marketing opt-in/, {}, COUNTED)
     screen.getByText(/24 bounced or complained/)
     screen.getByText(/300 suppressed for repeat bounces/)
   })
@@ -128,27 +141,27 @@ describe('UnifiedSendComposer — zero-count message tells the truth (P1.6c)', (
   it('says nobody MATCHED when the filter itself returns nothing', async () => {
     stubCount(() => ok({ count: 0, matched: 0, excluded: {} }))
     render(<UnifiedSendComposer locationId="loc-1" channels={['sms']} initialAudienceFilter={FILTER} />)
-    await screen.findByText(/No contacts match this filter/i)
+    await screen.findByText(/No contacts match this filter/i, {}, COUNTED)
   })
 
   it('does NOT say "no contacts match" when contacts matched but none are reachable', async () => {
     stubCount(() => ok({ count: 0, matched: 240, excluded: { no_phone: 240 } }))
     render(<UnifiedSendComposer locationId="loc-1" channels={['sms']} initialAudienceFilter={FILTER} />)
-    await waitFor(() => expect(screen.queryByText(/0 will receive it|will receive it/i)).not.toBeNull(), { timeout: 2000 })
+    await waitFor(() => expect(screen.queryByText(/0 will receive it|will receive it/i)).not.toBeNull(), COUNTED)
     expect(screen.queryByText(/^No contacts match this filter\.$/i)).toBeNull()
   })
 
   it('names the matched count and points at reachability instead', async () => {
     stubCount(() => ok({ count: 0, matched: 240, excluded: { no_phone: 240 } }))
     render(<UnifiedSendComposer locationId="loc-1" channels={['sms']} initialAudienceFilter={FILTER} />)
-    const msg = await screen.findByText(/none (of them )?can be reached|but none/i, {}, { timeout: 2000 })
+    const msg = await screen.findByText(/none (of them )?can be reached|but none/i, {}, COUNTED)
     expect(msg.textContent).toMatch(/240/)
   })
 
   it('keeps the WhatsApp warning keyed on REACHABLE, not raw matches', async () => {
     stubCount(() => ok({ count: 300, matched: 300, reachable: 0 }))
     render(<UnifiedSendComposer locationId="loc-1" channels={['whatsapp']} initialAudienceFilter={FILTER} />)
-    const msg = await screen.findByText(/but none/i, {}, { timeout: 2000 })
+    const msg = await screen.findByText(/but none/i, {}, COUNTED)
     expect(msg.textContent).toMatch(/300/)
   })
 })
