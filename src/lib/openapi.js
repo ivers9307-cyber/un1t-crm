@@ -2053,6 +2053,60 @@ registry.registerPath({
   },
 })
 
+// DELBLOCK.1 — DELETE /api/contacts/{id}. Cookie path only (destructive
+// deletes stay off the n8n API-key surface), Manager+ at the contact's
+// location. Registered here for the first time because of the 409 below.
+const ContactDeleteBlocker = z.object({
+  table: z.string(),
+  column: z.string(),
+  label: z.string(),
+  count: z.number().int(),
+}).openapi('ContactDeleteBlocker', {
+  description: 'A (table, column) that references contacts(id) with ON DELETE RESTRICT / NO ACTION and holds rows for this contact — the delete would raise a foreign-key violation.',
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/contacts/{id}',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Delete a contact (hard delete + GDPR scrub)',
+  description:
+    'DELBLOCK.1 — irreversible. Scrubs the WhatsApp PII (mig 094) and hard-deletes the InBody rows, then deletes the contact; CASCADE children go with it and SET NULL children survive unlinked. Because that scrub cannot be undone, the route asks public.contact_delete_impact (mig 538) what references the contact BEFORE touching anything: a RESTRICT / NO ACTION reference (person_groups.primary_contact_id, offer_purchases.contact_id) returns 409 with the blocking rows and performs no scrub and no delete. It also FAILS CLOSED — when that check could not run (partial), it returns 503 rather than guessing, since "we did not look" is not "nothing blocks it". The 500 remains as a backstop: the check and the delete are two statements, not one transaction, so a row inserted in between still reaches the database.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Contact deleted' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not Manager+, or the contact is at another location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: {
+      description: 'A foreign key blocks the delete — nothing was scrubbed or deleted. `data.block_delete` names the rows to reassign or remove first.',
+      content: {
+        'application/json': {
+          schema: z.object({
+            success: z.literal(false),
+            error: z.string(),
+            data: z.object({ block_delete: z.array(ContactDeleteBlocker) }),
+          }),
+        },
+      },
+    },
+    503: {
+      description: 'The blocker check could not run, so the delete was refused — nothing was scrubbed or deleted. Retryable.',
+      content: {
+        'application/json': {
+          schema: z.object({
+            success: z.literal(false),
+            error: z.string(),
+            data: z.object({ partial: z.literal(true) }),
+          }),
+        },
+      },
+    },
+    500: { description: 'The delete itself failed (backstop — e.g. a blocking row inserted after the check)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // PERSON-LINK.1 — identity-link routes
 registry.registerPath({
   method: 'post',

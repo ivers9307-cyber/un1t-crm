@@ -77,3 +77,40 @@ describe('ContactEditDeleteActions — the impact preview never contradicts itse
     await waitFor(() => expect(screen.getByText(/to confirm:/i)).toBeTruthy())
   })
 })
+
+// DELBLOCK.1 — the impact fetch that opened this dialog is a snapshot, and the
+// DELETE route re-checks at click time. So a 409 is reachable with an empty
+// `Blocking` section on screen: somebody added a person_group in between. It
+// must not read as a generic "Delete failed" — the operator needs to know both
+// what blocked it and, crucially, that nothing was scrubbed or deleted.
+describe('ContactEditDeleteActions — a 409 refusal from DELETE', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+  afterEach(() => { cleanup(); delete global.fetch })
+
+  it('names the blocking rows and says nothing was destroyed', async () => {
+    const blocker = { table: 'offer_purchases', column: 'contact_id', label: 'offer purchases', count: 2 }
+    global.fetch = vi.fn(async (_url, opts) => (
+      opts?.method === 'DELETE'
+        ? {
+            ok: false,
+            status: 409,
+            json: async () => ({
+              success: false,
+              error: 'Cannot delete this contact: 2 offer purchases. Reassign or remove those first.',
+              data: { block_delete: [blocker] },
+            }),
+          }
+        : { ok: true, json: async () => impactPayload({ total_rows: 0, partial: false }) }
+    ))
+    render(<ContactEditDeleteActions contact={contact} canEdit canDelete />)
+    fireEvent.click(screen.getByRole('button', { name: /delete/i }))
+    await waitFor(() => expect(screen.getByText(/to confirm:/i)).toBeTruthy())
+
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Ann' } })
+    fireEvent.click(screen.getByRole('button', { name: /permanently delete/i }))
+
+    await waitFor(() => expect(screen.getByText(/reassign or remove those first/i)).toBeTruthy())
+    expect(screen.getByRole('listitem').textContent).toMatch(/2 offer purchases/i)
+    expect(screen.getByText(/nothing was deleted or redacted/i)).toBeTruthy()
+  })
+})
