@@ -271,8 +271,8 @@ describe('joinPointsByMessage', () => {
 
   it('falls back to the legacy scalar to_email, exactly as its siblings do', () => {
     const points = joinPointsByMessage([
-      // A pre-EMAIL-CC.1 row: only the scalar. envelopeLines() and
-      // messageRecipients() both read it, and this must agree with them.
+      // A pre-EMAIL-CC.1 row: only the scalar. messageEnvelope() reads it too,
+      // and this must agree with it.
       { id: 'm1', from_email: 'studio@x.com', to_email: 'rates@council.ie' },
       { id: 'm2', from_email: 'rates@council.ie', to_emails: ['studio@x.com'] },
       { id: 'm3', from_email: 'eleanor@council.ie', to_emails: ['studio@x.com'] },

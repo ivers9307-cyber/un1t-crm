@@ -468,13 +468,13 @@ describe('ticketParticipants', () => {
   })
 
   // EMAIL-PARTICIPANTS.12 — a NON-EMPTY array of nothing is still nothing.
-  // The three places that render a message's To (TicketThread's envelopeLines,
-  // src/lib/email-tickets.js's messageRecipients, mobile's
-  // ticketMessageRecipients) all filter the array before asking whether it has
-  // anything in it, so `to_emails: [null]` takes the scalar fallback there.
-  // This one asked `.length` of the raw array, took the [null] branch, and
-  // dropped the address the other three show. No current writer produces the
-  // shape; four readers disagreeing about the same row is the defect.
+  // The other places that render a message's To (messageEnvelope in
+  // src/lib/ticket-display.js, mobile's ticketMessageRecipients) filter the
+  // array before asking whether it has anything in it, so `to_emails: [null]`
+  // takes the scalar fallback there. This one asked `.length` of the raw
+  // array, took the [null] branch, and dropped the address the others show.
+  // No current writer produces the shape; readers disagreeing about the same
+  // row is the defect.
   it('takes the scalar fallback for a to_emails array holding nothing usable', () => {
     const out = ticketParticipants([
       { from_email: 'a@x.com', to_email: 'b@x.com', to_emails: [null], cc_emails: null,

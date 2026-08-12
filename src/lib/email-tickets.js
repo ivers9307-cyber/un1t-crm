@@ -123,8 +123,8 @@ export function joinPointsByMessage(messages) {
   let opened = false
   for (const m of Array.isArray(messages) ? messages : []) {
     if (!m || m.is_internal_note || m.forwarded_message_id) continue
-    // The legacy scalar fallback, mirroring messageRecipients() and
-    // envelopeLines() (src/lib/ticket-display.js, TicketThread.jsx). Migrations
+    // The legacy scalar fallback, mirroring messageEnvelope()
+    // (src/lib/ticket-display.js). Migrations
     // backfilled `to_emails`, so a scalar-only row should not exist — but two
     // functions in the same feature disagreeing about whether to trust that is
     // the smell, and the failure is not inert: an unread recipient on the
