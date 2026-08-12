@@ -20,10 +20,18 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { Button, Card, Modal, Field, EmptyState } from '@/components/ui'
 import { ACTIONS, availableActions } from '@/lib/fleet-commands'
 
+// Every value fleet_device_health.state can hold (mig 472 + 531 + 537). An
+// unlisted state falls back to slate below, which reads as "we have no opinion"
+// — wrong for a fault, so this map has to grow with the CHECK constraint.
+// Red = go and find the box; amber = it is up and not doing its job.
 const STATE_CHIP = {
   ok: 'bg-green-500/10 text-green-700',
   unreachable: 'bg-red-500/10 text-red-700',
   service_down: 'bg-amber-500/10 text-amber-700',
+  // Losing data on a clock, so it reads as urgently as an unreachable box.
+  undelivered: 'bg-red-500/10 text-red-700',
+  adapter_down: 'bg-amber-500/10 text-amber-700',
+  blind: 'bg-amber-500/10 text-amber-700',
 }
 
 const STATUS_CHIP = {

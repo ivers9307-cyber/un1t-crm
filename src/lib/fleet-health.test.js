@@ -12,8 +12,12 @@ import {
   describeClass,
   strapsSeenWithin,
   locationsNeedingVisibilityProbe,
+  undeliveredDetail,
   CLASS_GRACE_MS,
   SAMPLE_SILENCE_MS,
+  PENDING_STUCK_AFTER_MS,
+  PENDING_BACKLOG_MIN,
+  BRIDGE_BUFFER_CAP,
 } from './fleet-health.js'
 
 // Tailscale's List Devices response shape. `lastSeen` is present ONLY when
@@ -751,5 +755,170 @@ describe('locationsNeedingVisibilityProbe', () => {
       [online('stillorgan-bridge'), online('stillorgan-bridge2'), {}], rows, NOW,
     )).toEqual([LOC])
     expect(locationsNeedingVisibilityProbe(null, rows, NOW)).toEqual([])
+  })
+})
+
+// ── BRIDGE-UNDELIVERED.1 ─────────────────────────────────────────
+
+describe('undelivered — reading fine, and the readings are not arriving', () => {
+  const bridge = online('stillorgan-bridge')
+
+  /**
+   * A bridge that is up, talking, radios fine, and holding `pending` samples
+   * that its buffer has not been empty of for `stuckMs`.
+   */
+  const stuck = (stuckMs, pending = 3_000, extra = {}) => ({
+    status: 'online',
+    last_seen_at: ago(10 * 1000),
+    last_ant_ok: true,
+    last_ble_ok: true,
+    last_telemetry_at: ago(10 * 1000),
+    last_pending_samples: pending,
+    pending_stuck_since: ago(stuckMs),
+    ...extra,
+  })
+
+  it('fires once the queue has been non-empty past the threshold', () => {
+    const g = gradeDevice(bridge, stuck(12 * 60 * 1000, 2_400), NOW)
+    expect(g.state).toBe('undelivered')
+    // Observation, then consequence. No guess at WHY — network, token and a
+    // 500 from us all look identical from here, and naming one sends the
+    // operator to the wrong place.
+    expect(g.detail).toMatch(/reading straps/)
+    expect(g.detail).toMatch(/2,400 samples/)
+    expect(g.detail).toMatch(/12 min/)
+    expect(g.detail).toMatch(/5,000 before it starts dropping/)
+    expect(g.detail).not.toMatch(/network|wifi|token|CRM is/i)
+    // On the tailnet and answering — not a box to go and find.
+    expect(g.connected).toBe(true)
+    expect(g.since).toBe(ago(12 * 60 * 1000))
+  })
+
+  it('says so plainly once the buffer is full and data is already being lost', () => {
+    const g = gradeDevice(bridge, stuck(40 * 60 * 1000, BRIDGE_BUFFER_CAP), NOW)
+    expect(g.detail).toMatch(/already dropping the oldest readings/)
+    expect(g.detail).not.toMatch(/will begin to be lost/)
+  })
+
+  it('does NOT fire before the threshold', () => {
+    expect(gradeDevice(bridge, stuck(PENDING_STUCK_AFTER_MS - 60_000), NOW).state).toBe('ok')
+    expect(gradeDevice(bridge, stuck(0), NOW).state).toBe('ok')
+  })
+
+  it('SHIPS DARK: a NULL marker is never a fault', () => {
+    // Every bridge has this NULL until it reports a non-empty queue — and a
+    // bridge on pre-mig-531 software never reports one at all.
+    expect(gradeDevice(bridge, stuck(60 * 60 * 1000, 3_000, { pending_stuck_since: null }), NOW).state).toBe('ok')
+    expect(gradeDevice(bridge, stuck(60 * 60 * 1000, 3_000, { pending_stuck_since: 'not a date' }), NOW).state).toBe('ok')
+  })
+
+  it('ignores an ordinary flush in progress, however long the marker has been open', () => {
+    // LOAD-BEARING. A healthy bridge flushing every 3s against a full room is
+    // nearly always mid-cycle, so its queue can read non-zero at every single
+    // heartbeat and hold the marker open for hours. Time alone would alert on
+    // a gym having a busy morning; the backlog floor is what refuses to.
+    const busy = gradeDevice(bridge, stuck(3 * 60 * 60 * 1000, 90), NOW)
+    expect(busy.state).toBe('ok')
+    expect(gradeDevice(bridge, stuck(3 * 60 * 60 * 1000, PENDING_BACKLOG_MIN - 1), NOW).state).toBe('ok')
+    expect(gradeDevice(bridge, stuck(3 * 60 * 60 * 1000, PENDING_BACKLOG_MIN), NOW).state).toBe('undelivered')
+  })
+
+  it('will not reason from a marker the bridge has stopped standing behind', () => {
+    // A frozen timestamp gets older by itself. Without this guard a bridge
+    // that stopped sending telemetry — downgraded software, say, while another
+    // endpoint keeps last_seen_at fresh — would look worse every 5 minutes
+    // forever, off one stale claim.
+    const stale = stuck(60 * 60 * 1000, 3_000, { last_telemetry_at: ago(2 * 60 * 60 * 1000) })
+    expect(gradeDevice(bridge, stale, NOW).state).toBe('ok')
+    expect(gradeDevice(bridge, stuck(60 * 60 * 1000, 3_000, { last_telemetry_at: null }), NOW).state).toBe('ok')
+  })
+
+  it('outranks adapter_down and blind, and never outranks being gone', () => {
+    // Both of those say "no data is being produced". This says "data exists
+    // and we are losing it on a clock" — and the two co-exist happily, so a
+    // standing radio fault must not be allowed to mask an active loss.
+    const alsoRadioDown = stuck(20 * 60 * 1000, 3_000, { last_ble_ok: false })
+    expect(gradeDevice(bridge, alsoRadioDown, NOW).state).toBe('undelivered')
+
+    const duringClass = {
+      classNow: { name: 'CONVOY', starts_at: ago(20 * 60 * 1000), ends_at: new Date(NOW + 1800_000).toISOString() },
+      sampleCount: 0,
+      priorCount: 8,
+    }
+    expect(gradeDevice(bridge, stuck(20 * 60 * 1000), NOW, null, duringClass).state).toBe('undelivered')
+
+    // But the marker is only ever written by a heartbeat, so "is it talking to
+    // us at all" has to be settled first.
+    const silent = stuck(20 * 60 * 1000, 3_000, { last_seen_at: ago(60 * 60 * 1000) })
+    expect(gradeDevice(bridge, silent, NOW).state).toBe('service_down')
+    expect(gradeDevice(offline('stillorgan-bridge', 60 * 60 * 1000), stuck(20 * 60 * 1000), NOW).state)
+      .toBe('unreachable')
+  })
+
+  it('alerts once, then stays quiet until something changes', () => {
+    const g = gradeDevice(bridge, stuck(20 * 60 * 1000), NOW)
+    const first = decideAlert(g, null, NOW)
+    expect(first.alert).toBe('down')
+    expect(decideAlert(g, first.row, NOW + 5 * 60 * 1000).alert).toBe(null)
+
+    // The queue drains: back to healthy, and the recovery is announced.
+    const drained = gradeDevice(bridge, stuck(20 * 60 * 1000, 3_000, { pending_stuck_since: null }), NOW)
+    expect(drained.state).toBe('ok')
+    expect(decideAlert(drained, first.row, NOW + 10 * 60 * 1000).alert).toBe('recovered')
+  })
+
+  it('is quiet overnight, and lands at opening time instead', () => {
+    // The studio is shut, so nothing new is being read and nothing new is being
+    // lost; and the 04:00 fleet reboot clears the buffer anyway.
+    const night = new Date('2026-08-02T02:00:00.000Z').getTime()
+    const row = {
+      status: 'online',
+      last_seen_at: new Date(night - 10_000).toISOString(),
+      last_ant_ok: true, last_ble_ok: true,
+      last_telemetry_at: new Date(night - 10_000).toISOString(),
+      last_pending_samples: 3_000,
+      pending_stuck_since: new Date(night - 20 * 60 * 1000).toISOString(),
+    }
+    const g = gradeDevice(bridge, row, night)
+    expect(g.state).toBe('undelivered')
+    expect(g.quiet).toBe(true)
+
+    const { alert, row: stateRow } = decideAlert(g, null, night)
+    expect(alert).toBe(null)
+    // Nothing was sent, so nothing claims it was.
+    expect(stateRow.alerted_at).toBe(null)
+    expect(decideAlert(gradeDevice(bridge, stuck(20 * 60 * 1000), NOW), stateRow, NOW).alert).toBe('down')
+  })
+
+  it('takes the visibility probe off a bridge it already explains', () => {
+    const LOC = 'a0000000-0000-0000-0000-000000000001'
+    const rows = indexBridgesByDevice([{ ...stuck(20 * 60 * 1000), tailscale_hostname: 'stillorgan-bridge', location_id: LOC }])
+    expect(locationsNeedingVisibilityProbe([bridge], rows, NOW)).toEqual([])
+  })
+})
+
+describe('undeliveredDetail', () => {
+  const base = {
+    last_telemetry_at: ago(10 * 1000),
+    last_pending_samples: 4_096,
+    pending_stuck_since: ago(30 * 60 * 1000),
+  }
+
+  it('tolerates a malformed or empty row', () => {
+    expect(undeliveredDetail(null, NOW)).toBe(null)
+    expect(undeliveredDetail({}, NOW)).toBe(null)
+    expect(undeliveredDetail({ ...base, last_pending_samples: null }, NOW)).toBe(null)
+    expect(undeliveredDetail({ ...base, last_pending_samples: 'lots' }, NOW)).toBe(null)
+  })
+
+  it('never fires on a marker stamped in the future', () => {
+    // Pi clock skew must read as "not yet", never as a negative duration
+    // rendered into an alert.
+    expect(undeliveredDetail({ ...base, pending_stuck_since: new Date(NOW + 3600_000).toISOString() }, NOW))
+      .toBe(null)
+  })
+
+  it('groups the count so a four-figure backlog is readable at a glance', () => {
+    expect(undeliveredDetail(base, NOW)).toMatch(/4,096 samples/)
   })
 })

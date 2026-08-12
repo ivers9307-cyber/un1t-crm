@@ -98,6 +98,90 @@ export const SAMPLE_SILENCE_MS = 10 * 60 * 1000
 // Ten minutes in, a class with zero samples is genuinely worth a look.
 export const CLASS_GRACE_MS = 10 * 60 * 1000
 
+// ── BRIDGE-UNDELIVERED.1 — "reading fine, cannot deliver" ────────
+//
+// The third failure, and the one every grade above certifies as HEALTHY. The
+// bridge keeps heartbeating, `status` stays 'online', `last_seen_at` stays
+// fresh, the radios report ready — and its local flush queue backs up because
+// the samples are not reaching us (network path down, token rejected, /samples
+// erroring). Reachability, service health, adapter health and blind all pass.
+//
+// It is also the only grade with a DEADLINE. champ-bridge buffers to
+// BRIDGE_BUFFER_CAP and then drops the oldest sample per new one, so this is
+// not "something is wrong somewhere" — it is "heart-rate data starts being
+// destroyed at a rate we can compute". Everything below is set against that.
+//
+// And unlike `blind`, nothing here is inferred. The bridge is TELLING us it is
+// holding data it could not send; we are only judging for how long.
+
+// champ-bridge's MAX_BUFFER (`src/buffer.js`), mirrored so the alert copy can
+// tell an operator how much runway is left.
+//
+// A MIRRORED CONSTANT, so say so: if champ-bridge changes MAX_BUFFER this
+// number is wrong and nothing here will notice. It is used ONLY for copy and
+// for the at-capacity wording — never as a gate — so drift makes a sentence
+// inaccurate, it does not make the alert fire or not fire.
+export const BRIDGE_BUFFER_CAP = 5000
+
+// The floor a reported queue must clear before it counts as a BACKLOG rather
+// than an ordinary flush in progress.
+//
+// LOAD-BEARING — this is what stops the grade firing on healthy busy classes.
+// `pending_samples` is sampled at a heartbeat instant, and a working bridge is
+// nearly always mid-cycle: it flushes every 3s (BATCH_INTERVAL_MS) while a
+// full room of 30 straps pushes ~30 samples/s, so a perfectly healthy queue
+// reads ~90 at any moment, and every reading in a busy hour can be non-zero
+// purely by sampling luck. A marker armed on `> 0` would then be hours old
+// during a normal class and time alone would alert on it.
+//
+// 1,000 is champ-bridge's SERVER_BATCH_CAP: exactly the number a single
+// successful flush POST clears. So a queue at or above it has failed at least
+// one whole round trip's worth of delivery — it cannot be reached by ordinary
+// accumulation, which would need >333 straps in the room against a hard
+// capacity of 30. It is also 20% of BRIDGE_BUFFER_CAP, so we are judging early
+// in the runway rather than at the cliff.
+//
+// Known cost, accepted: a bridge chronically hovering either side of 1,000
+// will flip ok <-> undelivered and re-alert on each crossing, because
+// gradeDevice is pure and has no prior state to apply hysteresis with. A
+// bridge permanently a thousand samples behind has earned the noise.
+export const PENDING_BACKLOG_MIN = 1000
+
+// How long the queue must have been continuously non-empty before we say so.
+//
+// LOAD-BEARING, same argument as OFFLINE_AFTER_MS — and unusually, the number
+// is squeezed from BOTH sides, so here is the arithmetic rather than a feel.
+//
+// FROM BELOW, what makes it credible: the flush loop runs every 3s, so ten
+// minutes of a continuously non-empty queue is ~200 consecutive failed flush
+// attempts. Unlike a reboot (~90s) there is no benign event of that shape — a
+// healthy bridge empties its buffer in a single POST. The fleet-health cron
+// ticks every 5 min, so anything under that is not observable anyway.
+//
+// FROM ABOVE, the deadline: a stalled queue grows at the room's sample rate
+// and the cap is BRIDGE_BUFFER_CAP, so time-to-first-dropped-sample is
+// 5,000 / (straps × 1Hz):
+//
+//     30 straps   2.8 min      5 straps  16.7 min
+//     10 straps   8.3 min      3 straps  27.8 min
+//                              1 strap   83   min
+//
+// With a 5-minute cron the worst-case detection latency is threshold + 5 min.
+// At 10 minutes that is 10-15 min, which lands BEFORE the first drop for the
+// occupancies this studio actually runs — the 14-day measurement behind
+// BRIDGE-BLIND.2 found only 17 of 84 classes had ANY strap at all, so the
+// live rates are the bottom of that table, not the top.
+//
+// State the part we cannot fix rather than pretending: a FULL 30-strap room
+// fills the buffer in 2.8 minutes, which no 5-minute cron can beat. Alerting
+// after the first drop still beats the alternative — the samples already lost
+// are gone either way, and every minute after that is more of them.
+//
+// 10 min also matches SAMPLE_SILENCE_MS / CLASS_GRACE_MS / RENDER_STALE_AFTER_MS:
+// this file's unit for "long enough to be real, short enough to catch inside a
+// single class".
+export const PENDING_STUCK_AFTER_MS = 10 * 60 * 1000
+
 // How far back the cron looks for heart-rate sessions to count samples
 // against. Sessions open at the top of a class and can run long; a few hours of
 // slack costs nothing (a location opens single-digit sessions per class) and
@@ -175,6 +259,77 @@ export function downAdapters(bridgeRow) {
   if (bridgeRow?.last_ant_ok === false) down.push('ANT+')
   if (bridgeRow?.last_ble_ok === false) down.push('Bluetooth')
   return down
+}
+
+/**
+ * Deterministic thousands separator — no Intl, so the alert copy is a stable
+ * string across Node ICU builds and the tests can assert it. Same reason
+ * report-generator.js carries its own private copy; not worth a shared module
+ * for one regex, and importing the report generator into fleet health would be
+ * a worse dependency than duplicating it.
+ */
+function withThousands(n) {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+}
+
+/**
+ * The "reading fine, cannot deliver" line, or null when we must not make the
+ * claim. (BRIDGE-UNDELIVERED.1)
+ *
+ * THREE conditions, all required, each closing a different way to be wrong:
+ *
+ *   marker is old enough      PENDING_STUCK_AFTER_MS — the queue has been
+ *                             continuously non-empty long enough that the 3s
+ *                             flush loop cannot explain it.
+ *   queue is a real backlog   PENDING_BACKLOG_MIN — otherwise a healthy busy
+ *                             class, whose queue is never observed empty, would
+ *                             hold the marker open indefinitely and age into an
+ *                             alert on nothing at all. See that constant.
+ *   the bridge is STILL       the marker is only ever written by a heartbeat.
+ *   saying it                 A bridge that stops reporting leaves it frozen,
+ *                             and a frozen timestamp gets older on its own —
+ *                             so age would keep "increasing" for a box that has
+ *                             said nothing for a week. Requiring a fresh
+ *                             `last_telemetry_at` means we alert on what the
+ *                             bridge is claiming NOW, never on a stale claim.
+ *                             (service_down outranks this anyway when the whole
+ *                             bridge goes quiet; this covers the narrower case
+ *                             of a bridge still touching last_seen_at while its
+ *                             TELEMETRY has gone away — e.g. downgraded to
+ *                             pre-mig-531 software.)
+ *
+ * NULL/unparseable anywhere returns null. As everywhere in this file, an
+ * unknown must never terminate in an alert.
+ *
+ * @param {{ pending_stuck_since?: string|null, last_pending_samples?: number|null,
+ *           last_telemetry_at?: string|null }|null} bridgeRow
+ * @param {number} nowMs
+ * @returns {string|null}
+ */
+export function undeliveredDetail(bridgeRow, nowMs = Date.now()) {
+  const since = Date.parse(bridgeRow?.pending_stuck_since ?? '')
+  if (!Number.isFinite(since)) return null
+
+  const pending = bridgeRow?.last_pending_samples
+  if (!Number.isFinite(pending) || pending < PENDING_BACKLOG_MIN) return null
+
+  const toldAt = Date.parse(bridgeRow?.last_telemetry_at ?? '')
+  if (!Number.isFinite(toldAt) || nowMs - toldAt > SERVICE_DOWN_AFTER_MS) return null
+
+  const stuckMs = nowMs - since
+  if (stuckMs < PENDING_STUCK_AFTER_MS) return null
+
+  // Observation, then consequence, and no guess at the cause. We know the
+  // bridge is holding samples and how long for; we do NOT know whether the
+  // network is down, the token is being rejected, or the CRM is erroring, and
+  // an alert that picks one sends someone to the wrong place.
+  const consequence = pending >= BRIDGE_BUFFER_CAP
+    ? `That is its whole ${withThousands(BRIDGE_BUFFER_CAP)}-sample buffer, so it is already dropping the oldest readings to make room.`
+    : `It can hold ${withThousands(BRIDGE_BUFFER_CAP)} before it starts dropping the oldest, so heart-rate data will begin to be lost.`
+
+  return `bridge online and reading straps, but it reports ${withThousands(pending)} sample${
+    pending === 1 ? '' : 's'} it has not been able to send for ${
+    Math.round(stuckMs / 60000)} min. ${consequence}`
 }
 
 /** 'CONVOY 09:30' — name plus Dublin wall-clock start, for an alert line. */
@@ -304,6 +459,7 @@ export function locationsNeedingVisibilityProbe(fleet, bridgeByName, nowMs = Dat
     const row = bridgeByName?.get(name)
     if (!row?.location_id) continue
     if (deriveBridgeStatus(row, nowMs, SERVICE_DOWN_AFTER_MS) !== 'online') continue
+    if (undeliveredDetail(row, nowMs)) continue
     if (downAdapters(row).length > 0) continue
     out.add(row.location_id)
   }
@@ -345,6 +501,11 @@ export function locationsNeedingVisibilityProbe(fleet, bridgeByName, nowMs = Dat
  * reports (adapter_down) and whether any samples landed while a class was
  * actually running (blind). See the constants above for the incident.
  *
+ * BRIDGE-UNDELIVERED.1 adds a SIXTH, also for bridges, and it is the one every
+ * signal above certifies as healthy: the bridge is reachable, heartbeating and
+ * reading straps, and the readings are piling up in its local buffer instead of
+ * reaching us (undelivered). Graded from `pending_stuck_since` (mig 538).
+ *
  * @param {object} device      Tailscale device row
  * @param {object|null} bridgeRow  matching ble_bridges row, or null for a kiosk
  * @param {number} nowMs
@@ -361,7 +522,8 @@ export function locationsNeedingVisibilityProbe(fleet, bridgeByName, nowMs = Dat
  * an alert at minute 16.
  *
  * @returns {{ name: string|null,
- *             state: 'ok'|'unreachable'|'service_down'|'adapter_down'|'blind',
+ *             state: 'ok'|'unreachable'|'service_down'|'undelivered'
+ *                    |'adapter_down'|'blind',
  *             detail: string, since: string|null, connected: boolean }}
  */
 export function gradeDevice(device, bridgeRow, nowMs = Date.now(), fleetRow = null, visibility = null) {
@@ -402,7 +564,52 @@ export function gradeDevice(device, bridgeRow, nowMs = Date.now(), fleetRow = nu
       }
     }
 
-    // BRIDGE-BLIND.1 — the bridge is up and talking. Is it READING anything?
+    // BRIDGE-UNDELIVERED.1 — the bridge is up and talking. Is what it reads
+    // actually REACHING us?
+    //
+    // Ranked first of the three "online but not working" grades, and the
+    // position is deliberate:
+    //
+    //   * It is the strongest claim available. adapter_down infers a fault
+    //     from a flag; blind infers one from an absence of rows. This one is
+    //     the bridge stating that it is holding data it could not deliver.
+    //     The other two say "no data is being produced"; this says "data
+    //     exists and we are losing it".
+    //   * It is the only grade on a CLOCK. Every minute past the cap is more
+    //     heart-rate data destroyed, so it must not sit behind a standing
+    //     configuration fault. Ranking adapter_down first would mean a bridge
+    //     with one dead radio reported ADAPTER for weeks while its other radio's
+    //     readings drained away unmentioned — the two co-exist happily, and
+    //     the wrong one would win every time.
+    //   * It cannot be ranked above service_down: the marker is only ever
+    //     written by a heartbeat, so a bridge that has gone quiet leaves a
+    //     frozen timestamp that merely gets older. "Not talking" has to be
+    //     settled first. (undeliveredDetail also demands a fresh
+    //     last_telemetry_at, so this holds twice.)
+    //
+    // No flip-flop risk against adapter_down, which is what the equivalent
+    // ordering note on that grade is about: these two do not alternate with
+    // the class schedule. undelivered tracks delivery health only, so the one
+    // bad->bad transition it can produce (delivery recovers, dead radio
+    // remains) is a state change worth hearing about.
+    const undelivered = undeliveredDetail(bridgeRow, nowMs)
+    if (undelivered) {
+      return {
+        name,
+        state: 'undelivered',
+        detail: undelivered,
+        since: bridgeRow.pending_stuck_since ?? null,
+        connected: true,
+        // Quiet overnight like the other two. The studio is shut, so nothing
+        // new is being read and nothing new is being lost; and the 04:00 fleet
+        // reboot restarts the process, which discards the in-memory buffer and
+        // clears the marker on the next heartbeat. If it is still stuck at
+        // opening, decideAlert has stamped nothing and the morning tick says so.
+        quiet: isOvernight(new Date(nowMs)),
+      }
+    }
+
+    // BRIDGE-BLIND.1 — is it READING anything?
     //
     // adapter_down is checked BEFORE blind, and the order is load-bearing.
     // When a radio is admittedly dead, "no samples during a class" is a
