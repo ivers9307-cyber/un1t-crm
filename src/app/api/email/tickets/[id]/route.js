@@ -2,13 +2,11 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { emailHtmlDocument } from '@/lib/email-html'
-import {
-  threadParticipants,
-  latestCorrespondence,
-  replyMode,
-} from '@/lib/email-recipients'
 import { attachmentPreviewKind } from '@/lib/email-attachment-preview'
-import { loadTicketForUser, loadOwnAddresses, isElevatedAtLocation } from '../_helpers'
+import {
+  loadTicketForUser, loadOwnAddresses, isElevatedAtLocation,
+  loadParticipantMessages, resolveReplyAudience,
+} from '../_helpers'
 
 // GET /api/email/tickets/[id] — one ticket and its thread (EMAIL-TICKET.4).
 //
@@ -143,15 +141,25 @@ export async function GET(request, props) {
   // extra recipient who will in fact be excluded is worse than no label — the
   // UI falls back to "reply to the requester" and the reply route recomputes
   // the truth at send time regardless.
+  // EMAIL-PARTICIPANTS.4 — derived through the SAME helper and the SAME window
+  // the reply route uses, so "Reply All (4 people)" and the send cannot
+  // disagree. Deliberately its own query rather than reusing `messagesDesc`:
+  // that list is capped for RENDERING (MESSAGE_LIMIT) and a ticket longer than
+  // the render cap would otherwise derive a narrower audience here than at send
+  // time — the disagreement this comment has always promised cannot happen.
   const own = await loadOwnAddresses(db)
   let replyRecipients = null
   if (!own.response) {
-    const participants = threadParticipants(
-      latestCorrespondence(messagesDesc || []),
-      { exclude: own.addresses },
-    )
-    const to = participants.length ? participants : [ticket.requester_email].filter(Boolean)
-    replyRecipients = { to, mode: replyMode(to) }
+    const { data: participantRows, error: participantErr } = await loadParticipantMessages(db, ticket.id)
+    if (participantErr) {
+      console.error('[tickets/:id] participant lookup failed:', participantErr.message)
+      return NextResponse.json({ success: false, error: participantErr.message }, { status: 500 })
+    }
+    replyRecipients = resolveReplyAudience({
+      messages: participantRows || [],
+      ticket,
+      ownAddresses: own.addresses,
+    })
   }
 
   // EMAIL-ASSIGN.1 — assignee display name, best-effort: `profiles` has no
