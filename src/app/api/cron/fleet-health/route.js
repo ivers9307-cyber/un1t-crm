@@ -328,9 +328,9 @@ async function visibilityForLocation(db, locationId, nowMs) {
   if (sessionError) throw new Error(`heart_rate_sessions: ${sessionError.message}`)
 
   const ids = (sessions || []).map((s) => s.id).filter(Boolean)
-  // No bridge session open at all during a running class IS zero samples, and
-  // is precisely the 2026-08-12 shape. Not an unknown.
-  if (ids.length === 0) return { classNow, sampleCount: 0 }
+  // No bridge session at all this class means no strap ever reported, which at
+  // this studio is the ORDINARY case (see priorCount below) — not a fault.
+  if (ids.length === 0) return { classNow, sampleCount: 0, priorCount: 0 }
 
   const { count, error: countError } = await db
     .from('hr_samples')
@@ -340,9 +340,27 @@ async function visibilityForLocation(db, locationId, nowMs) {
   if (countError) throw new Error(`hr_samples: ${countError.message}`)
   // A count-only select that comes back without a number is an unknown, not a
   // zero. Treating it as zero would invent an outage out of a PostgREST quirk.
-  if (!Number.isFinite(count)) return { classNow, sampleCount: null }
+  if (!Number.isFinite(count)) return { classNow, sampleCount: null, priorCount: null }
 
-  return { classNow, sampleCount: count }
+  // Samples EARLIER in this same class — from its start up to the silence
+  // window. This is what turns the blind grade from "nobody is wearing a
+  // strap" (ordinary here: 14-day measurement on 2026-08-12 found only 17 of
+  // 84 classes had ANY strap, so ~80% of classes legitimately report zero)
+  // into "straps were reporting in THIS class and then stopped", which is the
+  // actual signature of a wedged scanner and cannot happen in an empty room.
+  const { count: prior, error: priorError } = await db
+    .from('hr_samples')
+    .select('session_id', { count: 'exact', head: true })
+    .in('session_id', ids)
+    .gte('recorded_at', new Date(startMs).toISOString())
+    .lt('recorded_at', new Date(nowMs - SAMPLE_SILENCE_MS).toISOString())
+  if (priorError) throw new Error(`hr_samples prior: ${priorError.message}`)
+
+  return {
+    classNow,
+    sampleCount: count,
+    priorCount: Number.isFinite(prior) ? prior : null,
+  }
 }
 
 /**

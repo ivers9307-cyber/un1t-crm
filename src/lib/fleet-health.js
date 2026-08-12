@@ -241,6 +241,23 @@ export function blindDetail(bridgeRow, visibility, nowMs = Date.now()) {
   const count = visibility?.sampleCount
   if (!Number.isFinite(count) || count > 0) return null
 
+  // THE DROPOUT REQUIREMENT (BRIDGE-BLIND.2, 2026-08-12 evening).
+  //
+  // The first cut of this grade fired on "class running + zero samples", which
+  // measurement then showed to be the ORDINARY state of this studio: over the
+  // 14 days to 2026-08-12, only 17 of 84 classes had ANY strap at all. That
+  // predicate would have raised roughly five false alerts a day and trained
+  // the reader to ignore the very channel that caught TV2's outage that
+  // morning — a strictly worse outcome than no alert.
+  //
+  // So require evidence that straps WERE reporting in THIS class and then went
+  // quiet. An empty room cannot produce that; a wedged scanner is exactly it.
+  // The cost is honest and worth stating: a bridge that dies BETWEEN classes,
+  // or before the first strap of a class connects, is not caught by this grade
+  // — `adapter_down` and the unreachable/service_down grades carry that load.
+  const prior = visibility?.priorCount
+  if (!Number.isFinite(prior) || prior <= 0) return null
+
   const startMs = Date.parse(occ?.starts_at ?? '')
   if (!Number.isFinite(startMs)) return null
   const intoMs = nowMs - startMs
@@ -250,17 +267,18 @@ export function blindDetail(bridgeRow, visibility, nowMs = Date.now()) {
   const windowMin = Math.round(SAMPLE_SILENCE_MS / 60000)
   const seen = strapsSeenWithin(bridgeRow, SAMPLE_SILENCE_MS, nowMs)
 
-  // Stated as an observation, not a diagnosis. A class where genuinely nobody
-  // wears a strap produces exactly this reading, and an alert that asserts a
-  // hardware failure on that evidence would be wrong often enough to get muted.
+  // Still phrased as an observation. The dropout makes this a much stronger
+  // claim than the original predicate, but "the last member took their strap
+  // off early" remains a real, innocent explanation.
   const evidence = seen === null
     ? ''
     : seen > 0
-      ? ` The bridge can see ${seen} strap${seen === 1 ? '' : 's'}, so the readings are not reaching the CRM.`
-      : ' The bridge can see no straps either — dead radios and an empty room look the same from here.'
+      ? ` The bridge can still see ${seen} strap${seen === 1 ? '' : 's'}, so the readings are not reaching the CRM.`
+      : ' The bridge can no longer see any strap either.'
 
-  return `bridge online, 0 heart-rate samples in the last ${windowMin} min of ${
-    describeClass(occ)}, which has been running ${intoMin} min.${evidence}`
+  return `bridge online and was receiving heart-rate data earlier in ${
+    describeClass(occ)} (${prior} sample${prior === 1 ? '' : 's'}), but nothing for the last ${
+    windowMin} min while the class is still running (${intoMin} min in).${evidence}`
 }
 
 /**

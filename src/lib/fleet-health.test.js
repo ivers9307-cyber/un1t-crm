@@ -543,14 +543,18 @@ describe('blind — a class is running and nothing is landing', () => {
     starts_at: ago(startedMsAgo),
     ends_at: new Date(NOW + 30 * 60 * 1000).toISOString(),
   })
-  const during = (startedMsAgo, sampleCount) => ({ classNow: classAt(startedMsAgo), sampleCount })
+  // priorCount defaults to 8 — straps WERE reporting earlier in this class,
+  // which is what makes zero-now a dropout rather than an empty room.
+  const during = (startedMsAgo, sampleCount, priorCount = 8) =>
+    ({ classNow: classAt(startedMsAgo), sampleCount, priorCount })
 
   it('fires when a class is well underway and no sample has landed', () => {
     const g = gradeDevice(bridge, healthy(), NOW, null, during(12 * 60 * 1000, 0))
     expect(g.state).toBe('blind')
-    expect(g.detail).toMatch(/0 heart-rate samples in the last 10 min/)
+    expect(g.detail).toMatch(/nothing for the last 10 min/)
+    expect(g.detail).toMatch(/was receiving heart-rate data earlier/)
     expect(g.detail).toMatch(/CONVOY/)
-    expect(g.detail).toMatch(/running 12 min/)
+    expect(g.detail).toMatch(/12 min in/)
     expect(g.connected).toBe(true)
   })
 
@@ -561,7 +565,7 @@ describe('blind — a class is running and nothing is landing', () => {
     // No verb that asserts a defect...
     expect(g.detail).not.toMatch(/\b(has (failed|died|stopped)|is (broken|faulty|down|offline))\b/i)
     // ...and an explicit statement that the two explanations are indistinguishable.
-    expect(g.detail).toMatch(/no straps either .* look the same from here/)
+    expect(g.detail).toMatch(/can no longer see any strap either/)
   })
 
   it('says so when the bridge CAN see straps — then the data is not reaching us', () => {
@@ -572,21 +576,38 @@ describe('blind — a class is running and nothing is landing', () => {
       ],
     })
     const g = gradeDevice(bridge, seen, NOW, null, during(15 * 60 * 1000, 0))
-    expect(g.detail).toMatch(/can see 2 straps/)
+    expect(g.detail).toMatch(/can still see 2 straps/)
     expect(g.detail).toMatch(/not reaching the CRM/)
   })
 
   it('ignores a stale strap snapshot from before the window', () => {
     const stale = healthy({ last_seen_straps: [{ seen_at: ago(6 * 60 * 60 * 1000) }] })
     expect(gradeDevice(bridge, stale, NOW, null, during(15 * 60 * 1000, 0)).detail)
-      .toMatch(/no straps either/)
+      .toMatch(/can no longer see any strap either/)
   })
 
   it('does NOT fire when no class is running', () => {
     // The gym is quiet. Nobody expects samples, and this cron must not invent
     // an outage out of an empty room.
-    expect(gradeDevice(bridge, healthy(), NOW, null, { classNow: null, sampleCount: null }).state).toBe('ok')
-    expect(gradeDevice(bridge, healthy(), NOW, null, { classNow: null, sampleCount: 0 }).state).toBe('ok')
+    expect(gradeDevice(bridge, healthy(), NOW, null, { classNow: null, sampleCount: null, priorCount: null }).state).toBe('ok')
+    expect(gradeDevice(bridge, healthy(), NOW, null, { classNow: null, sampleCount: 0, priorCount: 0 }).state).toBe('ok')
+  })
+
+  // BRIDGE-BLIND.2 regression — the false positive this grade actually
+  // produced on its first evening (2026-08-12). Over the preceding 14 days
+  // only 17 of 84 classes had ANY strap, so "class running + zero samples" is
+  // the ORDINARY reading here, not a fault. Without the dropout requirement
+  // this fired ~5x a day and would have trained the reader to ignore the
+  // channel that had caught TV2's outage that same morning.
+  it('does NOT fire when nobody wore a strap all class (the ordinary case)', () => {
+    const g = gradeDevice(bridge, healthy(), NOW, null, during(45 * 60 * 1000, 0, 0))
+    expect(g.state).toBe('ok')
+  })
+
+  it('does NOT fire when the prior-sample count is unknown', () => {
+    // A failed/oddly-shaped count must never be read as "straps were flowing".
+    const g = gradeDevice(bridge, healthy(), NOW, null, during(45 * 60 * 1000, 0, null))
+    expect(g.state).toBe('ok')
   })
 
   it('does NOT fire inside the warm-up grace', () => {
@@ -613,7 +634,7 @@ describe('blind — a class is running and nothing is landing', () => {
 
   it('ignores an unparseable class start rather than guessing', () => {
     const g = gradeDevice(bridge, healthy(), NOW, null,
-      { classNow: { name: 'CONVOY', starts_at: 'nonsense' }, sampleCount: 0 })
+      { classNow: { name: 'CONVOY', starts_at: 'nonsense' }, sampleCount: 0, priorCount: 8 })
     expect(g.state).toBe('ok')
   })
 
@@ -646,6 +667,7 @@ describe('blind — a class is running and nothing is landing', () => {
     }, night, null, {
       classNow: { name: 'NIGHT', starts_at: new Date(night - 20 * 60 * 1000).toISOString() },
       sampleCount: 0,
+      priorCount: 8,
     })
     expect(g.state).toBe('blind')
     expect(g.quiet).toBe(true)
