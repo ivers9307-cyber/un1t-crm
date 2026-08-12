@@ -22,6 +22,7 @@ import {
   toPostmarkFields,
   newRecipients,
   recipientCount,
+  ticketParticipants,
 } from './email-recipients'
 
 const OURS = ['studio@un1tdublin.com', 'UN1T <hello@un1t.ie>']
@@ -370,5 +371,93 @@ describe('newRecipients', () => {
 
   it('is the whole set when nothing was known — a composed email', () => {
     expect(newRecipients({ to: ['ada@example.com'] }, [])).toEqual(['ada@example.com'])
+  })
+})
+
+describe('ticketParticipants', () => {
+  const msg = (over = {}) => ({
+    from_email: 'a@x.com', to_emails: [], cc_emails: [],
+    is_internal_note: false, forwarded_message_id: null,
+    created_at: '2026-08-01T00:00:00Z', ...over,
+  })
+
+  it('unions across the whole thread, not just the newest message', () => {
+    const out = ticketParticipants([
+      msg({ from_email: 'us@ours.com', to_emails: ['rates@council.ie'], created_at: '2026-08-01T00:00:00Z' }),
+      msg({ from_email: 'eleanor@council.ie', to_emails: ['us@ours.com'], created_at: '2026-08-02T00:00:00Z' }),
+    ], { exclude: ['us@ours.com'] })
+    expect(out).toEqual(['eleanor@council.ie', 'rates@council.ie'])
+  })
+
+  it('puts the latest correspondent first', () => {
+    const out = ticketParticipants([
+      msg({ from_email: 'old@x.com', created_at: '2026-08-01T00:00:00Z' }),
+      msg({ from_email: 'new@x.com', created_at: '2026-08-05T00:00:00Z' }),
+    ])
+    expect(out[0]).toBe('new@x.com')
+  })
+
+  it('skips internal notes', () => {
+    const out = ticketParticipants([
+      msg({ from_email: 'member@x.com' }),
+      msg({ from_email: 'staff@ours.com', to_emails: ['nobody@x.com'], is_internal_note: true }),
+    ])
+    expect(out).not.toContain('nobody@x.com')
+  })
+
+  it('skips forward rows — a forward shows the thread, it does not add someone', () => {
+    const out = ticketParticipants([
+      msg({ from_email: 'member@x.com' }),
+      msg({ from_email: 'staff@ours.com', to_emails: ['accountant@third.com'], forwarded_message_id: 'm1' }),
+    ])
+    expect(out).not.toContain('accountant@third.com')
+  })
+
+  it('never reads bcc_emails', () => {
+    const out = ticketParticipants([msg({ bcc_emails: ['secret@x.com'] })])
+    expect(out).not.toContain('secret@x.com')
+  })
+
+  it('applies sticky exclusions case-insensitively', () => {
+    const out = ticketParticipants(
+      [msg({ from_email: 'member@x.com', to_emails: ['Rates@Council.IE'] })],
+      { removed: ['rates@council.ie'] },
+    )
+    expect(out).toEqual(['member@x.com'])
+  })
+
+  it('reads the legacy scalar to_email on pre-EMAIL-CC.1 rows', () => {
+    const out = ticketParticipants([
+      { from_email: 'a@x.com', to_email: 'b@x.com', to_emails: null, cc_emails: null,
+        is_internal_note: false, forwarded_message_id: null, created_at: '2026-08-01T00:00:00Z' },
+    ])
+    expect(out).toEqual(['a@x.com', 'b@x.com'])
+  })
+
+  it('dedupes case variants across messages', () => {
+    const out = ticketParticipants([
+      msg({ from_email: 'Member@X.com', created_at: '2026-08-01T00:00:00Z' }),
+      msg({ from_email: 'member@x.com', created_at: '2026-08-02T00:00:00Z' }),
+    ])
+    expect(out).toEqual(['member@x.com'])
+  })
+
+  it('returns [] for no usable input', () => {
+    expect(ticketParticipants(null)).toEqual([])
+    expect(ticketParticipants([])).toEqual([])
+  })
+
+  // THE LIVE INCIDENT, 2026-08-12. Eleanor replied on a chain the rates office
+  // forwarded to her; the reply that followed reached her alone and dropped
+  // ratesoffice@ off their own thread.
+  it('regression: keeps ratesoffice@ on the audience after Eleanor joins', () => {
+    const out = ticketParticipants([
+      msg({ from_email: 'accounts@hatchstreetfitness.com', to_emails: ['ratesoffice@dublincity.ie'],
+            created_at: '2026-08-12T09:10:26Z' }),
+      msg({ from_email: 'eleanor.brennan@dublincity.ie', to_emails: ['accounts@hatchstreetfitness.com'],
+            created_at: '2026-08-12T10:06:43Z' }),
+    ], { exclude: ['accounts@hatchstreetfitness.com'] })
+    expect(out).toContain('ratesoffice@dublincity.ie')
+    expect(out).toContain('eleanor.brennan@dublincity.ie')
   })
 })

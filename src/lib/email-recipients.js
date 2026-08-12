@@ -205,6 +205,60 @@ export function threadParticipants(message, { exclude = [] } = {}) {
 }
 
 /**
+ * Everyone on a ticket's conversation, across the WHOLE thread.
+ *
+ * WHY THIS EXISTS SEPARATELY FROM threadParticipants()
+ * threadParticipants() answers "who was on THIS message" and was, until
+ * EMAIL-PARTICIPANTS.1, applied to the latest message alone to build a reply
+ * audience. That made whoever wrote last redefine the entire audience: on
+ * 2026-08-12 a named officer replied on a chain her office had forwarded her,
+ * and the reply that followed reached her alone — silently dropping the shared
+ * mailbox that had opened the thread. A conversation accumulates people; the
+ * audience has to accumulate with it.
+ *
+ * WHAT IS DELIBERATELY EXCLUDED
+ *   • internal notes — sent to nobody, so they name nobody
+ *   • FORWARD rows (forwarded_message_id set) — a forward SHOWS the thread to
+ *     someone rather than adding them to it. Without this, forwarding a ticket
+ *     to an accountant would copy them on every later reply to the member. It
+ *     also closes the inverse defect, where the next reply after a forward went
+ *     to the forwarded-to party INSTEAD of the member.
+ *   • bcc_emails — not named in this function, same guarantee as everywhere
+ *     else in this module. Do not add it.
+ *   • `exclude` — our own mailbox addresses, or a reply-all re-enters our own
+ *     inbound webhook and files onto this same ticket as INBOUND.
+ *   • `removed` — addresses an operator explicitly took off this ticket
+ *     (email_tickets.excluded_participants, mig 534).
+ *
+ * ORDER: the latest correspondent leads, then everyone else by first
+ * appearance. Deterministic, because the detail route and the reply route
+ * derive this independently and a difference between them is a wrong audience.
+ *
+ * @param {object[]} messages  email_inbox_messages rows, any order
+ * @param {{ exclude?: string[], removed?: string[] }} [opts]
+ * @returns {string[]}  normalised, deduped
+ */
+export function ticketParticipants(messages, { exclude = [], removed = [] } = {}) {
+  const at = (m) => Date.parse(m?.created_at || m?.sent_at || 0) || 0
+  const real = (Array.isArray(messages) ? messages : [])
+    .filter(m => m && !m.is_internal_note && !m.forwarded_message_id)
+    .sort((a, b) => at(a) - at(b)) // oldest first — first appearance decides order
+
+  const raw = []
+  const newest = real[real.length - 1]
+  if (newest) raw.push(newest.from_email) // who you are answering leads
+  for (const m of real) {
+    raw.push(m.from_email)
+    if (Array.isArray(m.to_emails) && m.to_emails.length) raw.push(...m.to_emails)
+    else if (m.to_email) raw.push(m.to_email) // pre-EMAIL-CC.1 rows
+    if (Array.isArray(m.cc_emails)) raw.push(...m.cc_emails)
+  }
+
+  const off = new Set(normalizeAddressList([...exclude, ...removed]).valid)
+  return normalizeAddressList(raw).valid.filter(a => !off.has(a))
+}
+
+/**
  * The newest message a reply is actually answering.
  *
  * Internal notes are skipped: a note was sent to nobody, so it names no
