@@ -128,6 +128,27 @@ describe('TicketThread — who the ticket is actually with', () => {
     // arrived from, and it appears BECAUSE the two have diverged.
     expect(screen.getByText('Opened by Rates Office <rates@council.ie>')).toBeTruthy()
   })
+
+  it('says nothing about who opened it while the requester is still the counterparty', () => {
+    renderThread({
+      // The ordinary ticket: nobody new has arrived, so the audience still
+      // leads with the address the first message came from.
+      replyRecipients: {
+        to: ['rates@council.ie', 'clerk@council.ie'],
+        mode: 'reply_all',
+        over_cap: false,
+        empty: false,
+      },
+    })
+
+    // "Opened by" earns its place by MEANING something. Printed on every
+    // ticket it is a line an operator learns to skip — and the one ticket
+    // where the thread had moved on is the one they would skip it on.
+    expect(screen.queryByText(/^Opened by/)).toBeNull()
+    expect(
+      screen.getByText('On this thread: Rates Office <rates@council.ie>, clerk@council.ie')
+    ).toBeTruthy()
+  })
 })
 
 describe('TicketThread — a message\'s own envelope', () => {
