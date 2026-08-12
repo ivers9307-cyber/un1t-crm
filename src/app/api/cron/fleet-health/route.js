@@ -20,6 +20,17 @@
 //                  answered SSH and reported cloud-init done — with no bridge
 //                  installed. Reachability alone calls that healthy.
 //
+//   BRIDGE-BLIND.1 adds the third: is the bridge READING anything? On
+//                  2026-08-12 the Stillorgan bridge heartbeated healthily for
+//                  2.5 hours across two full classes and ingested zero
+//                  samples — ANT+ scanner wedged, BLE radio never powered
+//                  (noble came up `unauthorized`). Both signals above said
+//                  healthy, and both were telling the truth. `adapter_down`
+//                  reads the telemetry the bridge was already sending (mig
+//                  531); `blind` notices a class running with no samples
+//                  landing. See src/lib/fleet-health.js for why they are two
+//                  grades of different strength rather than one.
+//
 // Reusing deriveBridgeStatus (shipped in #1193) means this alert, the admin
 // badge and the TV connection dot cannot disagree with each other.
 //
@@ -42,6 +53,10 @@ import {
   gradeDevice,
   decideAlert,
   indexBridgesByDevice,
+  locationsNeedingVisibilityProbe,
+  CLASS_GRACE_MS,
+  SAMPLE_SILENCE_MS,
+  SESSION_LOOKBACK_MS,
 } from '@/lib/fleet-health'
 
 export const runtime = 'nodejs'
@@ -92,9 +107,15 @@ export async function GET(request) {
   // indexBridgesByDevice for why that link is an explicit column (mig 473) and
   // not hardware_id. A device with no matching row is graded on reachability
   // alone, which is the correct behaviour for the two kiosk Pis.
+  //
+  // BRIDGE-BLIND.1 pulls four more columns: location_id (to look up what is
+  // scheduled in that room), the two adapter flags, and last_seen_straps —
+  // which costs nothing here (mig 111, already a single jsonb overwrite) and
+  // turns "0 samples" into an alert line that says whether the bridge could
+  // see any straps at all.
   const { data: bridgeRows } = await db
     .from('ble_bridges')
-    .select('id, name, hardware_id, tailscale_hostname, status, last_seen_at')
+    .select('id, name, hardware_id, tailscale_hostname, status, last_seen_at, location_id, last_ant_ok, last_ble_ok, last_telemetry_at, last_seen_straps')
   const bridgeByName = indexBridgesByDevice(bridgeRows)
 
   const names = fleet.map(deviceNameOf).filter(Boolean)
@@ -142,13 +163,31 @@ export async function GET(request) {
     .in('device_name', names)
   const fleetByName = new Map((fleetRows || []).map((r) => [r.device_name, r]))
 
+  // BRIDGE-BLIND.1 — what is happening in each bridge's room right now.
+  //
+  // Only for locations whose bridge could plausibly grade `blind` (see
+  // locationsNeedingVisibilityProbe): an unreachable, silent, or
+  // admittedly-radio-dead bridge already has a truthful, higher-ranking grade,
+  // so asking the database about it would be work for nothing. In practice
+  // that is at most one location today.
+  const visibilityByLocation = await readVisibility(
+    db, locationsNeedingVisibilityProbe(fleet, bridgeByName, now), now,
+  )
+
   const alerts = []
   const rows = []
 
   for (const device of fleet) {
     const name = deviceNameOf(device)
     if (!name) continue
-    const graded = gradeDevice(device, bridgeByName.get(name) ?? null, now, fleetByName.get(name) ?? null)
+    const bridgeRow = bridgeByName.get(name) ?? null
+    // A location absent from the map (probe skipped or failed) yields
+    // undefined -> null, and gradeDevice then never considers `blind`. Failing
+    // open is the rule here: an unknown must not end in an alert.
+    const visibility = bridgeRow?.location_id
+      ? (visibilityByLocation.get(bridgeRow.location_id) ?? null)
+      : null
+    const graded = gradeDevice(device, bridgeRow, now, fleetByName.get(name) ?? null, visibility)
     const { alert, row } = decideAlert(graded, priorByName.get(name) ?? null, now)
     rows.push(row)
     if (alert) alerts.push({ ...graded, alert, row })
@@ -234,6 +273,96 @@ export async function GET(request) {
   })
 }
 
+/**
+ * BRIDGE-BLIND.1 — is a class running at this location, and has any heart-rate
+ * data landed lately?
+ *
+ * Read as two cheap, independent facts and handed to the pure grader; no
+ * judgement is made here. A THROWN error means "we do not know", and the
+ * caller drops the location from the map so gradeDevice never considers the
+ * blind grade for it. Silence on unknown is the whole discipline: this cron
+ * exists because nobody noticed a failure, and it stays useful only for as
+ * long as its alerts are believed.
+ *
+ * @returns {Promise<{ classNow: object|null, sampleCount: number|null }>}
+ */
+async function visibilityForLocation(db, locationId, nowMs) {
+  const nowIso = new Date(nowMs).toISOString()
+
+  // The class in progress. `cancelled_at is null` matters — a cancelled class
+  // still sits in the mirror (mig 344) and an empty room is not a fault.
+  const { data: occurrences, error: occError } = await db
+    .from('class_occurrences')
+    .select('name, program, starts_at, ends_at')
+    .eq('location_id', locationId)
+    .is('cancelled_at', null)
+    .lte('starts_at', nowIso)
+    .gt('ends_at', nowIso)
+    .order('starts_at', { ascending: false })
+    .limit(1)
+  if (occError) throw new Error(`class_occurrences: ${occError.message}`)
+
+  const classNow = occurrences?.[0] ?? null
+  if (!classNow) return { classNow: null, sampleCount: null }
+
+  // Don't pay for the sample count until the class is far enough in for the
+  // answer to matter. blindDetail() re-checks the grace itself — this is the
+  // cheap short-circuit, not the rule.
+  const startMs = Date.parse(classNow.starts_at ?? '')
+  if (!Number.isFinite(startMs) || nowMs - startMs < CLASS_GRACE_MS) {
+    return { classNow, sampleCount: null }
+  }
+
+  // hr_samples carries no location — it hangs off heart_rate_sessions — so
+  // resolve the location's recent BRIDGE sessions first. Restricted to
+  // source='ble_bridge' on purpose: an Apple Health or Whoop sync landing
+  // samples for the same room would be perfectly real data that says nothing
+  // about whether the Pi is reading straps.
+  const { data: sessions, error: sessionError } = await db
+    .from('heart_rate_sessions')
+    .select('id')
+    .eq('location_id', locationId)
+    .eq('source', 'ble_bridge')
+    .gte('started_at', new Date(nowMs - SESSION_LOOKBACK_MS).toISOString())
+    .limit(500)
+  if (sessionError) throw new Error(`heart_rate_sessions: ${sessionError.message}`)
+
+  const ids = (sessions || []).map((s) => s.id).filter(Boolean)
+  // No bridge session open at all during a running class IS zero samples, and
+  // is precisely the 2026-08-12 shape. Not an unknown.
+  if (ids.length === 0) return { classNow, sampleCount: 0 }
+
+  const { count, error: countError } = await db
+    .from('hr_samples')
+    .select('session_id', { count: 'exact', head: true })
+    .in('session_id', ids)
+    .gte('recorded_at', new Date(nowMs - SAMPLE_SILENCE_MS).toISOString())
+  if (countError) throw new Error(`hr_samples: ${countError.message}`)
+  // A count-only select that comes back without a number is an unknown, not a
+  // zero. Treating it as zero would invent an outage out of a PostgREST quirk.
+  if (!Number.isFinite(count)) return { classNow, sampleCount: null }
+
+  return { classNow, sampleCount: count }
+}
+
+/**
+ * Probe every candidate location, tolerating failure per location.
+ * A location that throws is simply absent from the map — see above.
+ */
+async function readVisibility(db, locationIds, nowMs) {
+  const byLocation = new Map()
+  for (const locationId of locationIds) {
+    try {
+      byLocation.set(locationId, await visibilityForLocation(db, locationId, nowMs))
+    } catch (err) {
+      logWarn('fleet-health', 'visibility probe failed — not grading blind', {
+        err: String(err), locationId,
+      })
+    }
+  }
+  return byLocation
+}
+
 /** Screenshot retention, in hours. See mig 477 — this is health data. */
 const SCREENSHOT_TTL_HOURS = 24
 
@@ -306,6 +435,19 @@ async function expireStaleCommands(db) {
 }
 
 /**
+ * How each grade reads at the head of an alert line. The prefix is the first
+ * thing an operator sees on a phone, so it carries the severity: DOWN means go
+ * and look at the box, ADAPTER means it needs configuring, BLIND means check
+ * the room.
+ */
+const STATE_LABEL = {
+  unreachable: 'DOWN',
+  service_down: 'DOWN',
+  adapter_down: 'ADAPTER',
+  blind: 'BLIND',
+}
+
+/**
  * Tell the masters. Push plus email — a push is easy to miss, and this is
  * exactly the kind of thing to find in the morning.
  *
@@ -328,12 +470,19 @@ async function notify(db, alerts) {
   const down = alerts.filter((a) => a.alert === 'down')
   const back = alerts.filter((a) => a.alert === 'recovered')
 
+  // BRIDGE-BLIND.1 — say what was found, not "down".
+  //
+  // A bridge graded `blind` or `adapter_down` is on the tailnet, heartbeating,
+  // and answering everything asked of it. Calling that "down" in a subject
+  // line is simply false, and a subject that overstates is how an alert
+  // channel loses the benefit of the doubt it needs on the day it is right.
+  const hardDown = down.some((a) => a.state === 'unreachable' || a.state === 'service_down')
   const subject = down.length
-    ? `Fleet alert: ${down.map((a) => a.name).join(', ')} down`
+    ? `Fleet alert: ${down.map((a) => a.name).join(', ')} ${hardDown ? 'down' : 'needs a look'}`
     : `Fleet recovered: ${back.map((a) => a.name).join(', ')}`
 
   const lines = [
-    ...down.map((a) => `DOWN — ${a.name}: ${a.detail}`),
+    ...down.map((a) => `${STATE_LABEL[a.state] ?? 'DOWN'} — ${a.name}: ${a.detail}`),
     ...back.map((a) => `RECOVERED — ${a.name}`),
   ]
 

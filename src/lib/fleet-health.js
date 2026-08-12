@@ -12,6 +12,7 @@
 
 import { deriveBridgeStatus } from '@/lib/bridge-samples'
 import { isOvernight } from '@/lib/live-poll'
+import { dublinTimeLabel } from '@/lib/dublin-time'
 
 // Devices are identified as fleet members by this Tailscale ACL tag, set at
 // provisioning time by un1t-pi (`tailscale up --advertise-tags=tag:un1t-pi`).
@@ -55,6 +56,53 @@ export const SERVICE_DOWN_AFTER_MS = OFFLINE_AFTER_MS
 // nightly reboot (~90s) produces, while still catching a black screen inside a
 // single class.
 export const RENDER_STALE_AFTER_MS = 10 * 60 * 1000
+
+// ── BRIDGE-BLIND.1 — "online but blind" ─────────────────────────────
+//
+// 2026-08-12: the Stillorgan bridge heartbeated healthily for 2.5 hours and
+// ingested ZERO samples across two full classes. Reachability said fine.
+// deriveBridgeStatus said fine. Both were telling the truth — the process was
+// alive and talking — and the gym recorded nothing all morning. The three
+// signals above cover "is it there" and "is it running"; none of them covers
+// "is it actually reading anything".
+//
+// Two new grades, of deliberately different strength:
+//
+//   adapter_down — the bridge SAYS a radio is not ready
+//                  (adapters.ble.powered_on false, which is what a `noble
+//                  state unauthorized` Pi reports, or adapters.ant
+//                  .stick_present false). This is near-certain and would have
+//                  caught the 08-12 defect on day one. It is a standing
+//                  configuration fault, not an outage, so it is graded apart
+//                  from service_down: the box is up and doing all it can, and
+//                  it must alert ONCE, not once per class.
+//
+//   blind        — the weaker, inferential claim: a class is genuinely running
+//                  right now, the radios look fine, and no heart-rate sample
+//                  has landed. Consistent with a wedged scanner — and equally
+//                  consistent with a class where nobody put a strap on. The
+//                  copy therefore reports what was observed and asserts
+//                  nothing about hardware.
+
+// How far back "no samples have landed" looks. Long enough that a normal gap
+// between decimated sample flushes cannot read as silence, short enough to
+// catch a dead class inside its own hour.
+export const SAMPLE_SILENCE_MS = 10 * 60 * 1000
+
+// How far INTO a class we wait before the blind grade is allowed to fire.
+//
+// LOAD-BEARING, same argument as OFFLINE_AFTER_MS. Classes start with a
+// warm-up, coaches pair straps in the first minutes, and `class_occurrences`
+// carries the Glofox scheduled start, not the moment the room actually began.
+// Firing at minute zero would page on the beginning of every single class.
+// Ten minutes in, a class with zero samples is genuinely worth a look.
+export const CLASS_GRACE_MS = 10 * 60 * 1000
+
+// How far back the cron looks for heart-rate sessions to count samples
+// against. Sessions open at the top of a class and can run long; a few hours of
+// slack costs nothing (a location opens single-digit sessions per class) and
+// removes any chance of missing the session a sample belongs to.
+export const SESSION_LOOKBACK_MS = 6 * 60 * 60 * 1000
 
 /** Is this Tailscale device part of the Pi fleet? */
 export function isFleetDevice(device) {
@@ -111,6 +159,140 @@ export function indexBridgesByDevice(rows) {
 }
 
 /**
+ * Which radios the bridge itself is reporting as not ready. (BRIDGE-BLIND.1)
+ *
+ * NULL/undefined is NOT a fault — it means a bridge on software older than
+ * mig 531, or an adapter this box does not run. Reading absence as a fault
+ * would alert on every bridge the moment this merged, which is the cry-wolf
+ * behaviour the whole feature depends on avoiding. Only an explicit `false`
+ * counts, because only an explicit `false` is the bridge telling us.
+ *
+ * @param {{ last_ant_ok?: boolean|null, last_ble_ok?: boolean|null }|null} bridgeRow
+ * @returns {string[]} human-facing radio names, empty when nothing is wrong
+ */
+export function downAdapters(bridgeRow) {
+  const down = []
+  if (bridgeRow?.last_ant_ok === false) down.push('ANT+')
+  if (bridgeRow?.last_ble_ok === false) down.push('Bluetooth')
+  return down
+}
+
+/** 'CONVOY 09:30' — name plus Dublin wall-clock start, for an alert line. */
+export function describeClass(occ) {
+  const name = typeof occ?.name === 'string' && occ.name.trim()
+    ? occ.name.trim()
+    : (typeof occ?.program === 'string' && occ.program.trim() ? occ.program.trim() : 'a class')
+  const at = dublinTimeLabel(occ?.starts_at)
+  return at ? `${name} ${at}` : name
+}
+
+/**
+ * How many straps the bridge could see in the silence window.
+ *
+ * `ble_bridges.last_seen_straps` (mig 111) is a whole-column overwrite on every
+ * POST /api/bridge/scan, each entry stamped with the server time of that scan.
+ * It costs no extra query and it is the difference between two very different
+ * stories to tell an operator:
+ *
+ *   straps seen, no samples  — the radios are receiving and the data is not
+ *                              arriving. Something is genuinely wrong.
+ *   no straps seen           — either the radios are dead, or nobody in the
+ *                              room is wearing one. We cannot tell which, and
+ *                              the alert must not pretend otherwise.
+ *
+ * Reported, never used as a gate: gating on "straps seen" would have MISSED
+ * the 08-12 incident outright, because a wedged scanner sees nothing either.
+ *
+ * @returns {number|null} count, or null when the column says nothing usable
+ */
+export function strapsSeenWithin(bridgeRow, windowMs, nowMs = Date.now()) {
+  const straps = bridgeRow?.last_seen_straps
+  if (!Array.isArray(straps)) return null
+  let n = 0
+  for (const s of straps) {
+    const at = Date.parse(s?.seen_at ?? '')
+    if (Number.isFinite(at) && nowMs - at <= windowMs) n++
+  }
+  return n
+}
+
+/**
+ * The "online but blind" line, or null when we must not make the claim.
+ *
+ * Returns null — i.e. says nothing — whenever ANY of these is true, and each
+ * one is a deliberate refusal rather than an oversight:
+ *
+ *   no class running          nobody expects samples outside a class
+ *   class started < grace ago warm-up and strap pairing; see CLASS_GRACE_MS
+ *   sample count unknown      the probe failed, or was never run. FAILS OPEN:
+ *                             an unknown must never terminate in an alert
+ *                             (same rule the sequence auto-exit checks follow)
+ *   samples arrived           the bridge is demonstrably working
+ *
+ * @param {object|null} bridgeRow      ble_bridges row, for the strap evidence
+ * @param {{ classNow: object|null, sampleCount: number|null }|null} visibility
+ * @param {number} nowMs
+ * @returns {string|null}
+ */
+export function blindDetail(bridgeRow, visibility, nowMs = Date.now()) {
+  const occ = visibility?.classNow
+  if (!occ) return null
+
+  const count = visibility?.sampleCount
+  if (!Number.isFinite(count) || count > 0) return null
+
+  const startMs = Date.parse(occ?.starts_at ?? '')
+  if (!Number.isFinite(startMs)) return null
+  const intoMs = nowMs - startMs
+  if (intoMs < CLASS_GRACE_MS) return null
+
+  const intoMin = Math.floor(intoMs / 60000)
+  const windowMin = Math.round(SAMPLE_SILENCE_MS / 60000)
+  const seen = strapsSeenWithin(bridgeRow, SAMPLE_SILENCE_MS, nowMs)
+
+  // Stated as an observation, not a diagnosis. A class where genuinely nobody
+  // wears a strap produces exactly this reading, and an alert that asserts a
+  // hardware failure on that evidence would be wrong often enough to get muted.
+  const evidence = seen === null
+    ? ''
+    : seen > 0
+      ? ` The bridge can see ${seen} strap${seen === 1 ? '' : 's'}, so the readings are not reaching the CRM.`
+      : ' The bridge can see no straps either — dead radios and an empty room look the same from here.'
+
+  return `bridge online, 0 heart-rate samples in the last ${windowMin} min of ${
+    describeClass(occ)}, which has been running ${intoMin} min.${evidence}`
+}
+
+/**
+ * Which locations are worth running the (blind) visibility probe for.
+ *
+ * Purely to avoid pointless queries: a bridge that is unreachable, silent, or
+ * already admitting a dead radio has a truthful grade without asking the
+ * database anything, and those grades all outrank `blind`. Lives here rather
+ * than in the cron so the route holds no grading logic of its own — the two
+ * could otherwise disagree about who gets probed and who gets graded.
+ *
+ * @param {Array<object>} fleet tagged Tailscale devices
+ * @param {Map<string, object>} bridgeByName from indexBridgesByDevice
+ * @param {number} nowMs
+ * @returns {string[]} distinct location ids
+ */
+export function locationsNeedingVisibilityProbe(fleet, bridgeByName, nowMs = Date.now()) {
+  const out = new Set()
+  for (const device of fleet || []) {
+    const name = deviceNameOf(device)
+    if (!name) continue
+    if (device?.connectedToControl === false) continue
+    const row = bridgeByName?.get(name)
+    if (!row?.location_id) continue
+    if (deriveBridgeStatus(row, nowMs, SERVICE_DOWN_AFTER_MS) !== 'online') continue
+    if (downAdapters(row).length > 0) continue
+    out.add(row.location_id)
+  }
+  return [...out]
+}
+
+/**
  * Grade one device.
  *
  * Two independent signals, because either alone misses a real failure:
@@ -141,10 +323,17 @@ export function indexBridgesByDevice(rows) {
  * ship dark: a screen provisioned before the device-tagged URL existed has
  * simply never reported, which is not the same as having stopped.
  *
+ * BRIDGE-BLIND.1 adds a FOURTH and FIFTH, for bridges: the radios the bridge
+ * reports (adapter_down) and whether any samples landed while a class was
+ * actually running (blind). See the constants above for the incident.
+ *
  * @param {object} device      Tailscale device row
  * @param {object|null} bridgeRow  matching ble_bridges row, or null for a kiosk
  * @param {number} nowMs
  * @param {object|null} fleetRow   fleet_devices row (role + last_render_at)
+ * @param {{ classNow: object|null, sampleCount: number|null }|null} visibility
+ *   what the cron observed at this bridge's location. NULL (probe skipped or
+ *   failed) means the blind grade is simply not considered — never an alert.
  *
  * `connected` is deliberately separate from `state`. A device that dropped off
  * the tailnet 30 seconds ago grades 'ok' — that is the whole point of
@@ -153,10 +342,11 @@ export function indexBridgesByDevice(rows) {
  * would clear it during the first 15 minutes after the shutdown, guaranteeing
  * an alert at minute 16.
  *
- * @returns {{ name: string|null, state: 'ok'|'unreachable'|'service_down',
+ * @returns {{ name: string|null,
+ *             state: 'ok'|'unreachable'|'service_down'|'adapter_down'|'blind',
  *             detail: string, since: string|null, connected: boolean }}
  */
-export function gradeDevice(device, bridgeRow, nowMs = Date.now(), fleetRow = null) {
+export function gradeDevice(device, bridgeRow, nowMs = Date.now(), fleetRow = null, visibility = null) {
   const name = deviceNameOf(device)
 
   if (device?.connectedToControl === false) {
@@ -191,6 +381,44 @@ export function gradeDevice(device, bridgeRow, nowMs = Date.now(), fleetRow = nu
           : 'on the tailnet but the bridge service has stopped reporting',
         since: bridgeRow.last_seen_at ?? null,
         connected: true,
+      }
+    }
+
+    // BRIDGE-BLIND.1 — the bridge is up and talking. Is it READING anything?
+    //
+    // adapter_down is checked BEFORE blind, and the order is load-bearing.
+    // When a radio is admittedly dead, "no samples during a class" is a
+    // consequence of a fault we already know about, not news. Ranking blind
+    // first would flip the state every class — adapter_down between them,
+    // blind during them — and decideAlert re-alerts on every bad→bad
+    // transition, so one known, unfixed fault would page twice a class,
+    // forever. This way it pages once and then waits to be fixed.
+    const down = downAdapters(bridgeRow)
+    if (down.length > 0) {
+      return {
+        name,
+        state: 'adapter_down',
+        detail: `bridge online, but it reports its ${down.join(' and ')} radio${
+          down.length > 1 ? 's are' : ' is'} not ready — it cannot read straps over ${
+          down.join(' or ')}`,
+        since: bridgeRow.last_telemetry_at ?? null,
+        connected: true,
+        // A dead radio at 03:00 is a job for the morning, and the alert lands
+        // at opening because decideAlert deliberately does not stamp
+        // alerted_at while quiet.
+        quiet: isOvernight(new Date(nowMs)),
+      }
+    }
+
+    const blind = blindDetail(bridgeRow, visibility, nowMs)
+    if (blind) {
+      return {
+        name,
+        state: 'blind',
+        detail: blind,
+        since: visibility?.classNow?.starts_at ?? null,
+        connected: true,
+        quiet: isOvernight(new Date(nowMs)),
       }
     }
   }
