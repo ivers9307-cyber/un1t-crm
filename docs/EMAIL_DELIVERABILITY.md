@@ -218,7 +218,11 @@ doing it shifts placement for the rest.
 
 - [ ] From address is on the marketing subdomain (`mail.un1tdublin.com`)
 - [ ] SPF, DKIM, DMARC all pass on the From domain
-- [ ] List has been suppressed of 90-day non-openers and hard bounces
+- [ ] List has been suppressed of hard bounces and spam complaints
+      (**not** non-openers — NOENGSUP.1/mig 537 retired engagement-based
+      suppression deliberately: in a gym a member who goes quiet for a
+      season is exactly who a win-back email is for, so "hasn't opened"
+      is never a reason to stop mailing someone here)
 - [ ] Subject line is in sentence case, no SALE/FREE/!!! triggers
 - [ ] If high-intent send: text-first template, From name is a real
       coach, Reply-To is monitored

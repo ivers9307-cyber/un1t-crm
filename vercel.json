@@ -89,10 +89,6 @@
       "schedule": "0 4 * * *"
     },
     {
-      "path": "/api/cron/email-engagement-sweep",
-      "schedule": "15 5 * * *"
-    },
-    {
       "path": "/api/cron/sync-segment-memberships",
       "schedule": "*/5 * * * *"
     },

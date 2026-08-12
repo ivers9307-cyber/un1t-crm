@@ -699,11 +699,13 @@ export function buildAudienceQuery(db, filter, locationId, { columns = '*', sele
     .eq(consentColumnFor(assertConsentField(consentField)), true)
     .not('email_status', 'in', '("bounced","complained")')
 
-  // EMAIL-HYGIENE.1 — the MARKETING path additionally excludes contacts
-  // suppressed for inactivity (email_suppressed_at, mig 395: stamped by
-  // the email-engagement-sweep cron on 90-day non-openers, auto-cleared
-  // on any open/click or re-consent). The administrative path is never
-  // suppression-gated: transactional mail must always reach the contact.
+  // NOENGSUP.1 — the MARKETING path additionally excludes contacts carrying
+  // email_suppressed_at. That stamp used to mean either "90-day non-opener" or
+  // "repeat bounces"; the engagement rule is retired (mig 537) because not
+  // opening is a preference, not a dead address, so it now means repeat
+  // bounces ONLY, always with an email_bounce_escalations row (mig 515) behind
+  // it. The administrative path is never suppression-gated: transactional mail
+  // must always reach the contact.
   if (consentField === 'email_marketing') {
     query = query.is('email_suppressed_at', null)
   }

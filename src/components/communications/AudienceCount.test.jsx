@@ -102,7 +102,7 @@ describe('AudienceCount — send mode reports match vs will-receive', () => {
     expect(screen.getByText('2,300')).toBeTruthy()
     await screen.findByText(/1,200 no marketing opt-in/, undefined, WAIT)
     screen.getByText(/24 bounced or complained/)
-    screen.getByText(/300 inactive/)
+    screen.getByText(/300 suppressed for repeat bounces/)
   })
 
   it('sms: renders the excluded breakdown the composer never showed', async () => {

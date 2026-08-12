@@ -112,7 +112,7 @@ describe('UnifiedSendComposer — email will-receive breakdown (B6d)', () => {
     // Breakdown line carries the reasons from the B5 response.
     await screen.findByText(/1,200 no marketing opt-in/)
     screen.getByText(/24 bounced or complained/)
-    screen.getByText(/300 inactive/)
+    screen.getByText(/300 suppressed for repeat bounces/)
   })
 })
 

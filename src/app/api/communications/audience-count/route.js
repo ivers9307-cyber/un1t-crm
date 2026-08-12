@@ -88,10 +88,14 @@ export async function POST(request) {
       const matched = await viewCount(null)
       const not_opted_in = await viewCount((q) => q.eq('loc_email_marketing', false))
       const bounced_or_complained = await viewCount((q) => q.in('email_status', ['bounced', 'complained']))
-      // EMAIL-HYGIENE.1 — inactivity suppression (email_suppressed_at, mig
-      // 395), gated on the PER-LOCATION consent column (the old sub-count
-      // read the retired global contacts.email_marketing): consented AND
-      // stamped, matching buildAudienceQuery's marketing gate.
+      // Marketing suppression (email_suppressed_at), gated on the PER-LOCATION
+      // consent column (the old sub-count read the retired global
+      // contacts.email_marketing): consented AND stamped, matching
+      // buildAudienceQuery's marketing gate.
+      // NOENGSUP.1 — this used to be two populations sharing one column,
+      // engagement-inactivity and repeat bounces. The engagement rule is
+      // retired (mig 537), so it is now bounces only, which is what the UI
+      // label says.
       const suppressed = await viewCount((q) => q.eq('loc_email_marketing', true).not('email_suppressed_at', 'is', null))
       // The will-receive number comes from the EXACT send-path builder the
       // populate step uses (view + loc_email_marketing + email_status +
