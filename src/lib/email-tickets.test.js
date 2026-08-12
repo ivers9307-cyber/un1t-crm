@@ -269,6 +269,32 @@ describe('joinPointsByMessage', () => {
     expect(points.get('m3')).toEqual(['eleanor@council.ie'])
   })
 
+  it('falls back to the legacy scalar to_email, exactly as its siblings do', () => {
+    const points = joinPointsByMessage([
+      // A pre-EMAIL-CC.1 row: only the scalar. envelopeLines() and
+      // messageRecipients() both read it, and this must agree with them.
+      { id: 'm1', from_email: 'studio@x.com', to_email: 'rates@council.ie' },
+      { id: 'm2', from_email: 'rates@council.ie', to_emails: ['studio@x.com'] },
+      { id: 'm3', from_email: 'eleanor@council.ie', to_emails: ['studio@x.com'] },
+    ])
+    // Left unread, the opener's recipient would be UNCONSUMED, and the
+    // requester's own first reply would raise a false "joined this thread" —
+    // exactly the noise the opening-message rule exists to remove.
+    expect(points.has('m2')).toBe(false)
+    // And a genuinely new arrival after it is still reported.
+    expect(points.get('m3')).toEqual(['eleanor@council.ie'])
+  })
+
+  it('prefers to_emails over the scalar when both are present', () => {
+    const points = joinPointsByMessage([
+      { id: 'm1', from_email: 'a@x.com' },
+      { id: 'm2', from_email: 'b@x.com', to_emails: ['c@x.com'], to_email: 'stale@x.com' },
+    ])
+    // The array is the current column; the scalar is a legacy shadow of it and
+    // can be stale. Reading both would announce somebody who is not there.
+    expect(points.get('m2')).toEqual(['b@x.com', 'c@x.com'])
+  })
+
   it('returns an empty map for empty, null and malformed input', () => {
     expect(joinPointsByMessage([])).toEqual(new Map())
     expect(joinPointsByMessage(null)).toEqual(new Map())

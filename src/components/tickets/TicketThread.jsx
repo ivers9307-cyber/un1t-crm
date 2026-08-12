@@ -681,6 +681,7 @@ function ThreadParticipants({ ticket, name, replyRecipients }) {
       ? `${requesterName} <${address}>`
       : address
   )
+  const onThread = people.map(withName).join(', ')
 
   return (
     <>
@@ -688,8 +689,11 @@ function ThreadParticipants({ ticket, name, replyRecipients }) {
           renders this same joined list as its "sends to" summary, and a line
           that is only the addresses is indistinguishable from it — on screen
           and to a test. The words are what make this the header's answer. */}
-      <p className="mt-0.5 truncate text-xs text-un1t-subtle">
-        On this thread: {people.map(withName).join(', ')}
+      {/* `title` because this line truncates: a wide audience clips at the
+          pane edge, and a clipped participant is an invisible one — the whole
+          failure this header exists to prevent, reintroduced by CSS. */}
+      <p className="mt-0.5 truncate text-xs text-un1t-subtle" title={onThread}>
+        On this thread: {onThread}
       </p>
       {diverged && (
         <p className="truncate text-[11px] text-un1t-muted">Opened by {withName(requester)}</p>
@@ -814,10 +818,17 @@ function MessageEnvelope({ message, onAccent = false }) {
     <div className="mb-1">
       {collapsible.length > 0 && (
         <>
+          {/* NAMED BY ITS MESSAGE, not just "Details". A twenty-message thread
+              renders twenty of these, and a screen reader listing twenty
+              identically-named buttons gives no way to tell which message each
+              one opens — on the surface whose entire purpose is making it
+              obvious WHICH message came from whom. The visible label stays
+              short; the accessible name carries the sender. */}
           <button
             type="button"
             onClick={() => setOpen(v => !v)}
             aria-expanded={open}
+            aria-label={`${open ? 'Hide details for' : 'Details for'} the message from ${message?.from_email || 'an unknown sender'}`}
             className={`text-[11px] ${toggle}`}
           >
             {open ? 'Hide details' : 'Details'}

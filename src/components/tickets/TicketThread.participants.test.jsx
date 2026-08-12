@@ -169,7 +169,12 @@ describe('TicketThread — a message\'s own envelope', () => {
     // Collapsed at rest. An envelope permanently open on every bubble is three
     // lines of addresses above two lines of message, and an operator stops
     // reading both.
-    const details = screen.getByRole('button', { name: 'Details' })
+    // Named by its MESSAGE, not just "Details": a long thread renders one of
+    // these per message, and twenty identically-named buttons tell a screen
+    // reader user nothing about which message each one opens.
+    const details = screen.getByRole('button', {
+      name: 'Details for the message from eleanor@council.ie',
+    })
     expect(details.getAttribute('aria-expanded')).toBe('false')
     expect(screen.queryByText('clerk@council.ie')).toBeNull()
 
@@ -195,7 +200,9 @@ describe('TicketThread — a message\'s own envelope', () => {
     expect(screen.queryByText(/secret@x\.com joined this thread/i)).toBeNull()
 
     // Collapsing takes To and Cc away again, and leaves the Bcc where it was.
-    fireEvent.click(screen.getByRole('button', { name: 'Hide details' }))
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Hide details for the message from eleanor@council.ie',
+    }))
     expect(screen.queryByText('clerk@council.ie')).toBeNull()
     expect(screen.getByText('secret@x.com')).toBeTruthy()
   })

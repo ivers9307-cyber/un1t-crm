@@ -123,8 +123,17 @@ export function joinPointsByMessage(messages) {
   let opened = false
   for (const m of Array.isArray(messages) ? messages : []) {
     if (!m || m.is_internal_note || m.forwarded_message_id) continue
+    // The legacy scalar fallback, mirroring messageRecipients() and
+    // envelopeLines() (src/lib/ticket-display.js, TicketThread.jsx). Migrations
+    // backfilled `to_emails`, so a scalar-only row should not exist — but two
+    // functions in the same feature disagreeing about whether to trust that is
+    // the smell, and the failure is not inert: an unread recipient on the
+    // OPENING message stays unconsumed, and the requester's own first reply
+    // then raises a false "joined this thread".
+    const toList = Array.isArray(m.to_emails) ? m.to_emails.filter(Boolean) : []
+    const to = toList.length ? toList : (m.to_email ? [m.to_email] : [])
     const here = []
-    for (const raw of [m.from_email, ...(m.to_emails || []), ...(m.cc_emails || [])]) {
+    for (const raw of [m.from_email, ...to, ...(m.cc_emails || [])]) {
       const a = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
       if (!a || seen.has(a)) continue
       seen.add(a)

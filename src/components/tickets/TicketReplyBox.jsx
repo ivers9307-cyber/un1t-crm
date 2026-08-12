@@ -125,6 +125,25 @@ export default function TicketReplyBox({
       : [ticket?.requester_email].filter(Boolean)
   const sendLabel = replyActionLabel(replyRecipients, recipients.to.length)
 
+  // EMAIL-PARTICIPANTS.8 — THE PLACEHOLDER NAMES THE REAL AUDIENCE, not the
+  // requester. It read `Reply to ${ticket.requester_email}` — the address the
+  // FIRST message arrived from. On the 2026-08-12 ticket that meant the box an
+  // operator types into said "Reply to ratesoffice@dublincity.ie" while the
+  // reply was actually going to Eleanor: the same wrong-name-in-a-prominent-
+  // place defect as the header, one component along.
+  //
+  // It reads `lockedTo`, so it inherits the empty-audience rule above rather
+  // than re-deriving one, and can never name somebody the send would refuse.
+  // With several people on it, naming one is precisely the mistake — the first
+  // is the live counterparty (the server orders it that way, and the header's
+  // divergence check relies on the same thing) and the rest are a count, which
+  // is the idiom the send button already uses.
+  const replyPlaceholder = lockedTo.length === 0
+    ? 'Reply…'
+    : lockedTo.length === 1
+      ? `Reply to ${lockedTo[0]}…`
+      : `Reply to ${lockedTo[0]} and ${lockedTo.length - 1} ${lockedTo.length === 2 ? 'other' : 'others'}…`
+
   // A note can never carry files, so files present + note mode is a state the
   // operator has to resolve rather than one we resolve for them by dropping
   // their uploads.
@@ -301,11 +320,7 @@ export default function TicketReplyBox({
         rows={3}
         maxLength={MAX_LENGTH}
         disabled={!isNote && !canReply}
-        placeholder={
-          isNote
-            ? 'Staff-only note. Nothing is sent.'
-            : `Reply to ${ticket?.requester_email || 'the member'}…`
-        }
+        placeholder={isNote ? 'Staff-only note. Nothing is sent.' : replyPlaceholder}
         className={`w-full resize-none rounded-lg border px-3 py-2 text-sm text-un1t-text focus:outline-none disabled:opacity-60 ${
           isNote
             ? 'border-amber-500/50 bg-un1t-bg focus:border-amber-600'

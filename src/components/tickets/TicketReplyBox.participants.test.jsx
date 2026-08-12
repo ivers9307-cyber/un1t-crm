@@ -211,3 +211,46 @@ describe('TicketReplyBox — the people taken off it', () => {
     expect(onRestoreRecipient).toHaveBeenCalledWith('also@y.com')
   })
 })
+
+describe('TicketReplyBox — the box names who it will reach', () => {
+  it('placeholders the derived audience, not the requester', () => {
+    // The 2026-08-12 ticket: opened by the rates office, now with Eleanor. The
+    // placeholder read `Reply to ${ticket.requester_email}`, so the box an
+    // operator types into named the wrong person — the same defect as the
+    // header, one component along, and in the most prominent place of all.
+    renderBox({
+      ticket: { ...TICKET, requester_email: 'rates@council.ie' },
+      replyRecipients: audience(['eleanor@council.ie']),
+    })
+
+    const box = screen.getByLabelText('Reply to the member')
+    expect(box.placeholder).toBe('Reply to eleanor@council.ie…')
+    expect(box.placeholder).not.toContain('rates@council.ie')
+  })
+
+  it('counts the rest rather than naming one of several', () => {
+    renderBox({
+      ticket: { ...TICKET, requester_email: 'rates@council.ie' },
+      replyRecipients: audience(['eleanor@council.ie', 'rates@council.ie', 'clerk@council.ie']),
+    })
+
+    // Naming one person when three are on it is the mistake in miniature. The
+    // first is the live counterparty and the rest are a count — the idiom the
+    // send button ("Reply All (3 people)") already uses.
+    expect(screen.getByLabelText('Reply to the member').placeholder)
+      .toBe('Reply to eleanor@council.ie and 2 others…')
+  })
+
+  it('names nobody once the audience has been emptied', () => {
+    renderBox({
+      ticket: { ...TICKET, excluded_participants: ['a@x.com'] },
+      replyRecipients: audience([]),
+    })
+
+    // It reads the same `lockedTo` the send does, so it inherits the rule that
+    // an emptied audience does NOT fall back to the requester. Naming them
+    // here would put the person the operator just removed back in front of
+    // them, in the box, while the route refuses the send.
+    expect(screen.getByLabelText('Reply to the member').placeholder).toBe('Reply…')
+  })
+})
