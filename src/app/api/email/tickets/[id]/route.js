@@ -130,23 +130,29 @@ export async function GET(request, props) {
 
   const { messages, attachmentsUnavailable } = await shapeMessages(db, messagesDesc || [])
 
-  // ── Who a reply would reach (EMAIL-CC.1) ──────────────────────────
-  // Computed HERE, with the SAME functions the reply route uses, so the button
-  // that says "Reply All (4 people)" and the send that actually happens cannot
-  // disagree. The composer must never have to re-derive this from the message
-  // list: a second implementation is a second chance to include a bcc.
+  // ── Who a reply would reach (EMAIL-CC.1, EMAIL-PARTICIPANTS.4) ─────
+  // Computed HERE so the composer never re-derives it from the message list: a
+  // second implementation is a second chance to include a bcc.
+  //
+  // The audience is the WHOLE thread — every correspondent it accumulated, not
+  // just whoever happened to write last — via resolveReplyAudience() over its
+  // OWN query. Deliberately not a reuse of `messagesDesc`: that list is capped
+  // for RENDERING (MESSAGE_LIMIT), and an audience derived from a render cap is
+  // how a long ticket silently loses recipients.
+  //
+  // THE REPLY ROUTE HAS NOT MOVED YET, so do not read this as parity. It still
+  // derives from the latest message alone over a 10-row window, which means
+  // this label can currently name MORE people than the send reaches. That is
+  // the safe direction to be wrong in while the two halves land separately —
+  // an over-count an operator can SEE, rather than the silent under-send this
+  // programme exists to fix. EMAIL-PARTICIPANTS.5 wires the reply route through
+  // the same loadParticipantMessages() + resolveReplyAudience() pair; from
+  // there the button saying "Reply All (4 people)" and the send cannot disagree.
   //
   // NULL is a real answer, not a failure to handle. Without the own-address
   // list the set would wrongly contain our own mailbox, and a label naming an
   // extra recipient who will in fact be excluded is worse than no label — the
-  // UI falls back to "reply to the requester" and the reply route recomputes
-  // the truth at send time regardless.
-  // EMAIL-PARTICIPANTS.4 — derived through the SAME helper and the SAME window
-  // the reply route uses, so "Reply All (4 people)" and the send cannot
-  // disagree. Deliberately its own query rather than reusing `messagesDesc`:
-  // that list is capped for RENDERING (MESSAGE_LIMIT) and a ticket longer than
-  // the render cap would otherwise derive a narrower audience here than at send
-  // time — the disagreement this comment has always promised cannot happen.
+  // UI falls back to "reply to the requester".
   const own = await loadOwnAddresses(db)
   let replyRecipients = null
   if (!own.response) {

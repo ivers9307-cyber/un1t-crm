@@ -365,6 +365,50 @@ describe('GET …/[id] — reply_recipients unions the whole thread (EMAIL-PARTI
     expect(reply.to).not.toContain(MB_STUDIO.address)
     expect(reply.over_cap).toBe(false)
   })
+
+  // The audience read has its OWN failure path, and 'the messages query errors'
+  // above cannot reach it: `state.errors` fails every operation on the table, so
+  // the route refuses at the render read long before the audience is derived.
+  // An error branch nobody ever takes is the defect class this repo keeps
+  // getting bitten by, so this fails ONE of the two reads and not the other.
+  it('500s when only the participant lookup errors — never a quietly narrower audience', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      messages: [OPENED_TO_SHARED_MAILBOX, ANSWERED_BY_ONE_OFFICER],
+    }))
+    // The two reads of email_inbox_messages are told apart by what they ASK
+    // for: the render read pulls bodies, the audience read deliberately does
+    // not (and never asks for bcc_emails). Same db.from wrapping the reply
+    // route's own tests use to make a single access fail.
+    const realFrom = db.from
+    db.from = (table) => {
+      const b = realFrom(table)
+      if (table !== 'email_inbox_messages') return b
+      const realThen = b.then
+      b.then = (res, rej) => (
+        String(b._select).includes('html_body')
+          ? realThen(res, rej)
+          : Promise.resolve({
+            data: null,
+            error: { code: '57014', message: 'canceling statement due to statement timeout' },
+          }).then(res, rej)
+      )
+      return b
+    }
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const res = await get(T_STUDIO.id)
+
+    expect(res.status).toBe(500)
+    // The reason travels, and the RENDER read succeeded — so this is the
+    // participant branch refusing, not the messages branch tested twice.
+    expect((await res.json()).error).toContain('statement timeout')
+    expect(errors).toHaveBeenCalledWith(
+      '[tickets/:id] participant lookup failed:',
+      'canceling statement due to statement timeout',
+    )
+    errors.mockRestore()
+  })
 })
 
 // EMAIL-ASSIGN.1 — the thread header needs the assignee's name and whether
