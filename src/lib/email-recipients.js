@@ -257,10 +257,10 @@ export function ticketParticipants(messages, { exclude = [], removed = [] } = {}
 
   // The To of one message. Filtered BEFORE the emptiness test, so a row
   // carrying `to_emails: [null]` takes the scalar fallback rather than
-  // counting a hole as an address — which is what the three renderers of the
-  // same field (envelopeLines, messageRecipients, ticketMessageRecipients)
-  // already do, and four readers disagreeing about one row is a defect
-  // whatever writes it today.
+  // counting a hole as an address — which is what the other readers of the
+  // same field (messageEnvelope in src/lib/ticket-display.js, and mobile's
+  // ticketMessageRecipients) already do, and readers disagreeing about one
+  // row is a defect whatever writes it today.
   const toAddresses = (m) => {
     const listed = (Array.isArray(m?.to_emails) ? m.to_emails : []).filter(Boolean)
     if (listed.length) return listed

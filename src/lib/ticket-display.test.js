@@ -15,7 +15,7 @@ import {
   isArchivedStatus,
   priorityMeta,
   messageKind,
-  messageRecipients,
+  messageEnvelope,
   canForwardMessage,
   forwardedMarker,
   replyActionLabel,
@@ -287,41 +287,78 @@ describe('deliveryMeta (EMAIL-DELIVERY.1)', () => {
   })
 })
 
-// ── EMAIL-CC.1 — recipient lines and the button label ────────────────
-describe('messageRecipients', () => {
-  it('omits a single To — the bubble already says "Sent to …"', () => {
-    expect(messageRecipients({ to_emails: ['ada@example.com'] })).toEqual([])
+// ── The message envelope (EMAIL-CC.1 → ENVELOPE-ONE.1) ───────────────
+describe('messageEnvelope', () => {
+  it('leads with From — the line that says who actually sent it', () => {
+    const [line] = messageEnvelope({ from_email: 'ada@example.com' })
+    expect(line).toMatchObject({ key: 'from', label: 'From', staffOnly: false })
+    expect(line.addresses).toEqual(['ada@example.com'])
   })
 
-  it('shows a To line once there is more than one recipient', () => {
-    const [line] = messageRecipients({ to_emails: ['ada@example.com', 'bob@example.com'] })
+  // INVERTED BY ENVELOPE-ONE.1. This used to assert the opposite — a lone To
+  // was dropped because the bubble's own "Sent to …" line already said it.
+  // EMAIL-PARTICIPANTS.8 is why that was wrong: with no From and no
+  // single-recipient To to read, a reply from a different person at the same
+  // organisation looks identical to one from the requester.
+  it('renders a single To — an envelope that sometimes omits it is not one', () => {
+    const [line] = messageEnvelope({ to_emails: ['ada@example.com'] })
     expect(line).toMatchObject({ key: 'to', label: 'To', staffOnly: false })
+    expect(line.addresses).toEqual(['ada@example.com'])
+  })
+
+  it('renders every address on a multi-party To', () => {
+    const [line] = messageEnvelope({ to_emails: ['ada@example.com', 'bob@example.com'] })
     expect(line.addresses).toEqual(['ada@example.com', 'bob@example.com'])
   })
 
   it('shows Cc, which every recipient of the email could see', () => {
-    const lines = messageRecipients({ to_emails: ['ada@x.com'], cc_emails: ['bob@x.com'] })
-    expect(lines).toHaveLength(1)
-    expect(lines[0]).toMatchObject({ key: 'cc', staffOnly: false })
+    const lines = messageEnvelope({ to_emails: ['ada@x.com'], cc_emails: ['bob@x.com'] })
+    expect(lines.map(l => l.key)).toEqual(['to', 'cc'])
+    expect(lines[1]).toMatchObject({ key: 'cc', staffOnly: false })
   })
 
   // BCC MUST BE MARKED. Rendered beside To and Cc with no distinction it
   // implies the other recipients saw it. They did not, and never will.
   it('marks Bcc staffOnly and explains why', () => {
-    const [line] = messageRecipients({ to_emails: ['a@x.com'], bcc_emails: ['secret@x.com'] })
+    const lines = messageEnvelope({ to_emails: ['a@x.com'], bcc_emails: ['secret@x.com'] })
+    const line = lines.find(l => l.key === 'bcc')
     expect(line).toMatchObject({ key: 'bcc', staffOnly: true })
     expect(line.note).toMatch(/only staff/i)
   })
 
+  it('puts the lines in header order', () => {
+    const lines = messageEnvelope({
+      from_email: 'ada@x.com',
+      to_emails: ['bob@x.com'],
+      cc_emails: ['cara@x.com'],
+      bcc_emails: ['dan@x.com'],
+    })
+    expect(lines.map(l => l.key)).toEqual(['from', 'to', 'cc', 'bcc'])
+  })
+
+  // INVERTED BY ENVELOPE-ONE.1: this used to expect [] for a lone scalar To.
   it('reads the scalar to_email on a row written before mig 499', () => {
-    expect(messageRecipients({ to_email: 'ada@x.com' })).toEqual([])
-    const [line] = messageRecipients({ to_email: 'ada@x.com', cc_emails: ['bob@x.com'] })
-    expect(line.key).toBe('cc')
+    const [line] = messageEnvelope({ to_email: 'ada@x.com' })
+    expect(line).toMatchObject({ key: 'to' })
+    expect(line.addresses).toEqual(['ada@x.com'])
+  })
+
+  // EMAIL-PARTICIPANTS.12 — a NON-EMPTY array of nothing is still nothing.
+  // Four readers of to_emails must agree about this row, and this one could
+  // not be asserted while it lived in TicketThread.jsx.
+  it('takes the scalar fallback for a to_emails array holding nothing usable', () => {
+    const [line] = messageEnvelope({ to_emails: [null], to_email: 'ada@x.com' })
+    expect(line.addresses).toEqual(['ada@x.com'])
   })
 
   it('omits empty lists rather than rendering a blank Cc', () => {
-    expect(messageRecipients({ to_emails: ['a@x.com'], cc_emails: [], bcc_emails: [] })).toEqual([])
-    expect(messageRecipients(null)).toEqual([])
+    expect(messageEnvelope({ to_emails: ['a@x.com'], cc_emails: [], bcc_emails: [] }))
+      .toEqual([{ key: 'to', label: 'To', addresses: ['a@x.com'], staffOnly: false }])
+  })
+
+  it('is empty when there is no envelope to show', () => {
+    expect(messageEnvelope({})).toEqual([])
+    expect(messageEnvelope(null)).toEqual([])
   })
 })
 

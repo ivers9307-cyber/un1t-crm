@@ -136,7 +136,7 @@ export function ticketMessageKind(message) {
 
 // ── Recipients (EMAIL-CC.1) ──────────────────────────────────────────
 //
-// A re-statement of src/lib/ticket-display.js's messageRecipients, for the
+// A re-statement of src/lib/ticket-display.js's messageEnvelope, for the
 // reason in this file's header. MOBILE SHOWS RECIPIENTS BUT DOES NOT EDIT
 // THEM: the reply box here posts `{ text, internal }` and nothing else, so the
 // server derives everybody on the thread and includes them — a mobile reply is
