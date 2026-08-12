@@ -24,7 +24,7 @@ import {
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 import {
   loadTicketForUser, loadOwnAddresses, statusTimestamps,
-  loadParticipantMessages, resolveReplyAudience,
+  loadParticipantMessages, resolveReplyAudience, ticketMergedAway,
 } from '../../_helpers'
 
 // EMAIL-CC.1 — an ADDITIONAL address list, on top of the thread's own
@@ -179,6 +179,17 @@ export async function POST(request, props) {
   const loaded = await loadTicketForUser(db, user, params.id)
   if (loaded.response) return loaded.response
   const { ticket, mailbox } = loaded
+
+  // EMAIL-MERGE.6 — nothing leaves a tombstone. BEFORE the send, and before
+  // the note branch below it: this route sends first and writes second, so
+  // refusing here costs a retry and can never produce a half-done outcome.
+  //
+  // It covers the INTERNAL NOTE path too, deliberately. A note puts no mail on
+  // the wire, so it is not the dangerous case — but it would be written onto a
+  // ticket hidden from every queue and count, which is an operator typing up
+  // what they found and losing it silently. The composer is gone on the web
+  // either way; this is for the callers that never had one.
+  if (ticket.merged_into_id) return ticketMergedAway(ticket)
 
   const now = new Date().toISOString()
 
