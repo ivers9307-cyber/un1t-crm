@@ -38,7 +38,18 @@ vi.mock('@/lib/sequences', () => ({
   triggerSequencesForPipelineStageChange: vi.fn(async () => {}),
 }))
 vi.mock('@/lib/glofox-push', () => ({ findOrCreateGlofoxMember: vi.fn(async () => {}) }))
-vi.mock('@/lib/contact-merge', () => ({ redactWhatsAppForContact: vi.fn(async () => {}), redactInBodyForContact: vi.fn(async () => {}) }))
+// DELBLOCK.1 — DELETE /api/contacts/[id] now runs a blocker check before the
+// scrubs and FAILS CLOSED (503) when it cannot answer. This file is about the
+// TENANT boundary, not the FK boundary, so the impact is stubbed clean; the
+// blocker behaviour is pinned in src/app/api/contacts/[id]/route.test.js.
+vi.mock('@/lib/contact-merge', () => ({
+  redactWhatsAppForContact: vi.fn(async () => {}),
+  redactInBodyForContact: vi.fn(async () => {}),
+  getContactImpact: vi.fn(async () => ({
+    cascade_on_delete: [], keep_on_delete: [], redact_on_delete: [], block_delete: [],
+    total_rows: 0, partial: false,
+  })),
+}))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/audience-filter', () => ({
   applyAudienceFilterAsync: vi.fn(async ({ query }) => ({ query })),

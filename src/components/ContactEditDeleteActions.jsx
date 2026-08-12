@@ -25,6 +25,12 @@ export default function ContactEditDeleteActions({ contact, canEdit, canDelete }
   const [confirmName, setConfirmName] = useState('')
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState(null)
+  // DELBLOCK.1 — the DELETE route now refuses (409) when an FK would block
+  // it, and returns the blocking rows. The impact fetch that opened this
+  // dialog can be stale by the time the button is clicked (someone else adds
+  // a person_group), so this is a second, later answer, not a duplicate of
+  // the "Blocking" section above — render it where the operator is looking.
+  const [deleteBlockers, setDeleteBlockers] = useState([])
 
   const expected = (contact.first_name || contact.name?.split(' ')[0] || contact.email || '').trim()
 
@@ -34,6 +40,7 @@ export default function ContactEditDeleteActions({ contact, canEdit, canDelete }
     setImpactError(null)
     setConfirmName('')
     setDeleteError(null)
+    setDeleteBlockers([])
     try {
       const r = await fetch(`/api/contacts/${contact.id}/impact`, { cache: 'no-store' })
       const j = await r.json()
@@ -50,11 +57,16 @@ export default function ContactEditDeleteActions({ contact, canEdit, canDelete }
   async function doDelete() {
     setDeleting(true)
     setDeleteError(null)
+    setDeleteBlockers([])
     try {
       const r = await fetch(`/api/contacts/${contact.id}`, { method: 'DELETE' })
       const j = await r.json()
       if (!r.ok || j.success === false) {
         setDeleteError(j.error || `Delete failed (${r.status})`)
+        // DELBLOCK.1 — a 409 carries the rows that blocked it. Nothing was
+        // scrubbed or deleted, which is the part worth showing plainly:
+        // without this the refusal reads like a failed delete.
+        setDeleteBlockers(Array.isArray(j.data?.block_delete) ? j.data.block_delete : [])
         setDeleting(false)
         return
       }
@@ -217,8 +229,20 @@ export default function ContactEditDeleteActions({ contact, canEdit, canDelete }
                   />
                 </div>
                 {deleteError && (
-                  <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2">
-                    {deleteError}
+                  <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2 space-y-1">
+                    <p>{deleteError}</p>
+                    {deleteBlockers.length > 0 && (
+                      <>
+                        <ul className="space-y-0.5">
+                          {deleteBlockers.map(t => (
+                            <li key={`${t.table}.${t.column}`}>
+                              {t.count} {t.label}
+                            </li>
+                          ))}
+                        </ul>
+                        <p>Nothing was deleted or redacted.</p>
+                      </>
+                    )}
                   </div>
                 )}
                 <button

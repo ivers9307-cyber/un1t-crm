@@ -6,7 +6,7 @@ import { validateBody } from '@/lib/validate'
 import { email, phone, leadSourceSchema, MANAGER_ROLES } from '@/lib/schemas'
 import { triggerSequencesForTagsAdded } from '@/lib/sequences'
 import { getCurrentUser } from '@/lib/auth'
-import { redactWhatsAppForContact, redactInBodyForContact } from '@/lib/contact-merge'
+import { redactWhatsAppForContact, redactInBodyForContact, getContactImpact } from '@/lib/contact-merge'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 import { emailStatusResetForAddressChange } from '@/lib/email-reputation'
 import { logWarn } from '@/lib/log'
@@ -200,6 +200,25 @@ export async function GET(request, props) {
 // messages, CASCADE on broadcast_recipients) handle the link.
 // Cascades CASCADE_TABLES; SET-NULL tables keep the row with the
 // FK nulled (booking + revenue history preserved).
+//
+// DELBLOCK.1 — the scrubs above are IRREVERSIBLE and they used to run
+// before the one step that can fail. Two FKs reject the delete outright
+// (person_groups.primary_contact_id ON DELETE RESTRICT NOT NULL, and
+// offer_purchases.contact_id ON DELETE NO ACTION — a NO ACTION violation
+// is the same violation, it differs only in deferrability), so for every
+// contact holding either, the operator got: WhatsApp history scrubbed,
+// InBody scans hard-deleted, contact still there, raw Postgres error on
+// screen. Measured against prod on 2026-08-12: 892 of 8,578 contacts —
+// 887 via person_groups, 6 via offer_purchases. Same shape as the merge
+// bug fixed the same day (mig 533): a destructive act sequenced ahead of
+// an operation that can fail, with nothing to roll it back.
+//
+// So: ask what blocks the delete FIRST, and refuse before touching
+// anything. The blocker list comes from getContactImpact, which reads
+// pg_constraint via public.contact_delete_impact (mig 538) — deliberately
+// NOT a hand-listed pair of tables here, because a hand-maintained FK list
+// is the exact thing migs 533 and 538 removed and it would go stale the
+// day a third RESTRICT lands.
 export async function DELETE(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
@@ -221,6 +240,45 @@ export async function DELETE(_request, props) {
     }
   }
 
+  // DELBLOCK.1 — the blocker check. Runs AFTER the auth + location guards
+  // (an unauthorised caller learns nothing about the row) and BEFORE the
+  // first destructive statement.
+  //
+  // FAIL CLOSED. `partial: true` means the preview could not see the whole
+  // picture — either the catalog RPC was unavailable or a count errored —
+  // and on that path the legacy 21-pair fallback answers, which cannot
+  // populate block_delete at all. So partial does not mean "probably fine",
+  // it means "we did not look": treating it as a green light is exactly how
+  // a blocked contact gets scrubbed. We refuse instead, because a refused
+  // delete is recoverable by clicking again and a half-scrubbed contact is
+  // not — the WhatsApp bodies and InBody rows do not come back.
+  let impact
+  try {
+    impact = await getContactImpact(db, params.id)
+  } catch (e) {
+    // Same reasoning: an unexpected throw is "we did not look", not "clear".
+    logWarn('contacts.DELETE', `impact check threw for ${params.id}`, { err: e })
+    impact = null
+  }
+  if (!impact || impact.partial) {
+    return NextResponse.json({
+      success: false,
+      error: 'Could not check what depends on this contact, so the delete was refused. Nothing was changed — try again in a moment.',
+      data: { partial: true },
+    }, { status: 503 })
+  }
+  const blockers = impact.block_delete || []
+  if (blockers.length > 0) {
+    // 409, not 400/500: the request is well-formed and authorised: the
+    // contact's current state is what forbids it. Names the rows so the
+    // operator knows what to reassign rather than reading an FK message.
+    return NextResponse.json({
+      success: false,
+      error: `Cannot delete this contact: ${blockers.map(b => `${b.count} ${b.label}`).join(', ')}. Reassign or remove those first.`,
+      data: { block_delete: blockers },
+    }, { status: 409 })
+  }
+
   // GDPR scrub first — strip PII from the kept WhatsApp rows so
   // the audit thread is anonymised. Best-effort: even if this
   // partially fails the delete still proceeds (the FK rules will
@@ -236,6 +294,13 @@ export async function DELETE(_request, props) {
 
   const { error } = await db.from('contacts').delete().eq('id', params.id)
   if (error) {
+    // DELBLOCK.1 — KEPT as the backstop. The check above is a guard, not a
+    // transaction: it and this DELETE are two separate statements, so a
+    // person_groups or offer_purchases row inserted in between still lands
+    // here, and so does any FK added after mig 538 that nothing has counted
+    // yet. The guard narrows the window from "892 contacts, every time" to
+    // "a concurrent insert"; it does not close it. Closing it properly means
+    // one server-side function like merge_contacts() — see the PR body.
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   }
 

@@ -16,12 +16,21 @@ vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/sequences', () => ({ triggerSequencesForTagsAdded: vi.fn(async () => {}) }))
 vi.mock('@/lib/glofox-push', () => ({ findOrCreateGlofoxMember: vi.fn(async () => {}) }))
-vi.mock('@/lib/contact-merge', () => ({ redactWhatsAppForContact: vi.fn(async () => {}) }))
+vi.mock('@/lib/contact-merge', () => ({
+  redactWhatsAppForContact: vi.fn(async () => {}),
+  redactInBodyForContact: vi.fn(async () => {}),
+  getContactImpact: vi.fn(async () => ({
+    cascade_on_delete: [], keep_on_delete: [], redact_on_delete: [], block_delete: [],
+    total_rows: 0, partial: false,
+  })),
+}))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
 
-import { PUT } from './route.js'
+import { PUT, DELETE } from './route.js'
 import { requireApiKeyOrManager, assertRowInOrg } from '@/lib/api-auth'
 import { createServerClient } from '@/lib/supabase'
+import { getCurrentUser } from '@/lib/auth'
+import { redactWhatsAppForContact, redactInBodyForContact, getContactImpact } from '@/lib/contact-merge'
 
 function mockDb({ oldRow, updated } = {}) {
   const updateSingle = vi.fn(() =>
@@ -226,5 +235,166 @@ describe('PUT /api/contacts/[id] — email_status reset on address change (EMAIL
     for (const k of ['email_marketing', 'email_administrative', 'email_suppressed_at']) {
       expect(written).not.toHaveProperty(k)
     }
+  })
+})
+
+// DELBLOCK.1 — DELETE ran two irreversible scrubs (WhatsApp PII, InBody
+// hard-delete) BEFORE the one statement that can fail. Two FKs reject the
+// delete outright — person_groups.primary_contact_id (RESTRICT, NOT NULL) and
+// offer_purchases.contact_id (NO ACTION) — so 892 of prod's 8,578 contacts
+// could only ever end up scrubbed-but-not-deleted with a raw Postgres error on
+// screen. The route now asks getContactImpact what blocks the delete first.
+//
+// The load-bearing assertion in most of these is NOT the status code: it is
+// that redactWhatsAppForContact / redactInBodyForContact were never called.
+// A 409 that still scrubbed would be the same data loss with a nicer envelope.
+describe('DELETE /api/contacts/[id] — blocker check runs before any destructive work', () => {
+  const IMPACT_CLEAN = {
+    cascade_on_delete: [], keep_on_delete: [], redact_on_delete: [], block_delete: [],
+    total_rows: 0, partial: false,
+  }
+  const BLOCKER = { table: 'person_groups', column: 'primary_contact_id', label: 'person groups (primary)', count: 3 }
+
+  function deleteDb({ existing = { id: 'c1', location_id: 'loc-1' }, deleteError = null } = {}) {
+    const del = vi.fn(() => ({ eq: vi.fn(async () => ({ error: deleteError })) }))
+    return {
+      delete: del,
+      from: vi.fn(() => ({
+        select: vi.fn(() => ({
+          eq: vi.fn(() => ({ single: vi.fn(async () => ({ data: existing, error: existing ? null : { message: 'no rows' } })) })),
+        })),
+        delete: del,
+      })),
+    }
+  }
+
+  const delProps = { params: { id: 'c1' } }
+  const noDestruction = () => {
+    expect(redactWhatsAppForContact).not.toHaveBeenCalled()
+    expect(redactInBodyForContact).not.toHaveBeenCalled()
+  }
+
+  beforeEach(() => {
+    getContactImpact.mockResolvedValue(IMPACT_CLEAN)
+  })
+
+  it('401 with no session — impact never consulted, nothing scrubbed', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await DELETE(new Request('http://localhost/api/contacts/c1', { method: 'DELETE' }), delProps)
+    expect(res.status).toBe(401)
+    expect(getContactImpact).not.toHaveBeenCalled()
+    noDestruction()
+  })
+
+  it('403 for a non-manager role — impact never consulted, nothing scrubbed', async () => {
+    getCurrentUser.mockResolvedValue({ role: 'staff', locations: [{ id: 'loc-1' }] })
+    createServerClient.mockReturnValue(deleteDb())
+    const res = await DELETE(new Request('http://localhost/api/contacts/c1', { method: 'DELETE' }), delProps)
+    expect(res.status).toBe(403)
+    expect(getContactImpact).not.toHaveBeenCalled()
+    noDestruction()
+  })
+
+  it('404 when the contact does not exist — nothing scrubbed', async () => {
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+    createServerClient.mockReturnValue(deleteDb({ existing: null }))
+    const res = await DELETE(new Request('http://localhost/api/contacts/c1', { method: 'DELETE' }), delProps)
+    expect(res.status).toBe(404)
+    expect(getContactImpact).not.toHaveBeenCalled()
+    noDestruction()
+  })
+
+  it('403 across locations — the location guard still fires BEFORE the impact check', async () => {
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-OTHER' }] })
+    const db = deleteDb()
+    createServerClient.mockReturnValue(db)
+    const res = await DELETE(new Request('http://localhost/api/contacts/c1', { method: 'DELETE' }), delProps)
+    expect(res.status).toBe(403)
+    expect(getContactImpact).not.toHaveBeenCalled()
+    expect(db.delete).not.toHaveBeenCalled()
+    noDestruction()
+  })
+
+  it('409 when an FK blocks it — and NEITHER scrub ran', async () => {
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+    const db = deleteDb()
+    createServerClient.mockReturnValue(db)
+    getContactImpact.mockResolvedValue({ ...IMPACT_CLEAN, block_delete: [BLOCKER], total_rows: 3 })
+
+    const res = await DELETE(new Request('http://localhost/api/contacts/c1', { method: 'DELETE' }), delProps)
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    expect(body.error).toMatch(/person groups/)
+    expect(body.data.block_delete).toEqual([BLOCKER])
+
+    // The whole point of the change.
+    noDestruction()
+    expect(db.delete).not.toHaveBeenCalled()
+  })
+
+  it('refuses (503) when the check itself could not run — partial is not a green light', async () => {
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+    const db = deleteDb()
+    createServerClient.mockReturnValue(db)
+    // partial:true means the catalog RPC was unavailable and the legacy
+    // 21-pair fallback answered — which can never populate block_delete, so an
+    // empty block_delete here proves nothing.
+    getContactImpact.mockResolvedValue({ ...IMPACT_CLEAN, partial: true })
+
+    const res = await DELETE(new Request('http://localhost/api/contacts/c1', { method: 'DELETE' }), delProps)
+    expect(res.status).toBe(503)
+    expect((await res.json()).data).toEqual({ partial: true })
+    noDestruction()
+    expect(db.delete).not.toHaveBeenCalled()
+  })
+
+  it('refuses (503) when the impact check throws', async () => {
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+    const db = deleteDb()
+    createServerClient.mockReturnValue(db)
+    getContactImpact.mockRejectedValue(new Error('boom'))
+
+    const res = await DELETE(new Request('http://localhost/api/contacts/c1', { method: 'DELETE' }), delProps)
+    expect(res.status).toBe(503)
+    noDestruction()
+    expect(db.delete).not.toHaveBeenCalled()
+  })
+
+  it('unblocked contact still scrubs WhatsApp, then InBody, then deletes — in that order', async () => {
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+    const db = deleteDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await DELETE(new Request('http://localhost/api/contacts/c1', { method: 'DELETE' }), delProps)
+    expect(res.status).toBe(200)
+    expect(redactWhatsAppForContact).toHaveBeenCalledWith(db, 'c1')
+    expect(redactInBodyForContact).toHaveBeenCalledWith(db, 'c1')
+    expect(db.delete).toHaveBeenCalled()
+
+    const waOrder = redactWhatsAppForContact.mock.invocationCallOrder[0]
+    const inbodyOrder = redactInBodyForContact.mock.invocationCallOrder[0]
+    const delOrder = db.delete.mock.invocationCallOrder[0]
+    expect(waOrder).toBeLessThan(inbodyOrder)
+    expect(inbodyOrder).toBeLessThan(delOrder)
+  })
+
+  it('master may delete a contact at any location', async () => {
+    getCurrentUser.mockResolvedValue({ role: 'master', locations: [] })
+    const db = deleteDb()
+    createServerClient.mockReturnValue(db)
+    const res = await DELETE(new Request('http://localhost/api/contacts/c1', { method: 'DELETE' }), delProps)
+    expect(res.status).toBe(200)
+    expect(db.delete).toHaveBeenCalled()
+  })
+
+  it('still 500s when the delete itself fails — the guard is not a transaction', async () => {
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+    const db = deleteDb({ deleteError: { message: 'update or delete on table "contacts" violates foreign key constraint' } })
+    createServerClient.mockReturnValue(db)
+
+    const res = await DELETE(new Request('http://localhost/api/contacts/c1', { method: 'DELETE' }), delProps)
+    expect(res.status).toBe(500)
+    expect((await res.json()).error).toMatch(/foreign key constraint/)
   })
 })
