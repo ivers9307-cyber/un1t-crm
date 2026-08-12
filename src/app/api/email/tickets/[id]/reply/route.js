@@ -13,8 +13,6 @@ import {
   MAX_RECIPIENTS,
   resolveRecipients,
   toPostmarkFields,
-  threadParticipants,
-  latestCorrespondence,
   replyMode,
   newRecipients,
 } from '@/lib/email-recipients'
@@ -24,7 +22,10 @@ import {
   outboundAttachmentsField,
 } from '@/lib/email-outbound-attachments-server'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
-import { loadTicketForUser, loadOwnAddresses, statusTimestamps } from '../../_helpers'
+import {
+  loadTicketForUser, loadOwnAddresses, statusTimestamps,
+  loadParticipantMessages, resolveReplyAudience,
+} from '../../_helpers'
 
 // EMAIL-CC.1 — an ADDITIONAL address list, on top of the thread's own
 // participants. Bounded at parse time so a 10,000-element array is refused
@@ -34,15 +35,6 @@ const extraRecipients = z.array(z.string().trim().toLowerCase().pipe(emailAddres
   .max(MAX_RECIPIENTS)
   .optional()
   .default([])
-
-// How far back the recipient scan reads. Only the LATEST non-note message
-// decides who a reply reaches, so one row would nearly always do — but a
-// ticket can end in a run of internal notes, and a scan that stopped at the
-// first of them would find no correspondence and silently narrow the reply to
-// the requester. Ten covers any realistic run of notes and still costs one
-// small query. Every .select() caps at 1,000 rows regardless, so the bound is
-// stated rather than left implicit.
-const RECIPIENT_SCAN_LIMIT = 10
 
 const ReplySchema = z.object({
   text: z.string().trim().min(1).max(10000),
@@ -110,20 +102,31 @@ function textToHtml(text) {
 //   REPLY      — one recipient. A thread with one other participant.
 //   REPLY ALL  — everybody on the thread. Anything wider.
 //
-// They are the same code path. The set is `threadParticipants()` of the LATEST
-// NON-NOTE message — its From + To + Cc — minus our own addresses; whether
-// that comes back as one person or four is what makes it a reply or a
-// reply-all, and the UI's button says which ("Reply All (4 people)"). Only the
-// latest message counts: mail clients follow the latest message and so do the
-// people in the conversation, so someone a member deliberately dropped from a
-// later reply stays dropped. Resurrecting them would re-copy a person the
-// member chose to exclude, over their head.
+// They are the same code path. The set is `resolveReplyAudience()` over
+// `loadParticipantMessages()` — the From + To + Cc of every non-note, non-
+// forward message on the ticket, unioned, minus our own addresses and minus
+// anyone the operator removed; whether that comes back as one person or four
+// is what makes it a reply or a reply-all, and the UI's button says which
+// ("Reply All (4 people)").
+//
+// EMAIL-PARTICIPANTS.5 — IT IS THE WHOLE THREAD, NOT THE LATEST MESSAGE. This
+// route used to derive the set from the newest non-note message alone, which
+// let whoever wrote last silently redefine who the conversation was with. On
+// 2026-08-12 a shared council mailbox opened a thread, a named officer in that
+// office answered from her own address, and the reply that followed reached her
+// alone — the mailbox that had asked the question never got the answer, and
+// nothing on screen said a recipient had been dropped. A conversation
+// accumulates people, so the audience accumulates with it. Someone genuinely
+// finished with a thread is taken off it deliberately, through
+// excluded_participants (mig 534), which is a visible act with an undo — not by
+// a derivation rule nobody can see.
 //
 // bcc_emails IS NOT PART OF "EVERYBODY ON THE THREAD", under any reading.
-// threadParticipants() does not name the column. A ticket whose last outbound
-// carried a Bcc reply-alls to exactly the people it would have reached had
-// that Bcc never been typed. That is the confidentiality guarantee the whole
-// feature exists to keep, and email-recipients.test.js mutation-checks it.
+// ticketParticipants() does not name the column, and PARTICIPANT_COLUMNS does
+// not select it. A ticket whose last outbound carried a Bcc reply-alls to
+// exactly the people it would have reached had that Bcc never been typed. That
+// is the confidentiality guarantee the whole feature exists to keep, and
+// email-recipients.test.js mutation-checks it.
 //
 // THE PARTICIPANTS ARE ALWAYS INCLUDED. `to`/`cc`/`bcc` in the body ADD
 // people; there is no wire format for removing one. Dropping someone from a
@@ -240,9 +243,15 @@ export async function POST(request, props) {
   // Deliberately not merged into one query: threading must keep keying on the
   // last INBOUND message (changing that would change which mail-client thread
   // a reply lands in, and threading is explicitly out of scope), while
-  // "everybody on the thread" is a property of the latest message in EITHER
+  // "everybody on the thread" is a property of EVERY message in EITHER
   // direction — otherwise a ticket we composed and nobody has answered yet has
   // no participants at all and reply-all silently degrades to the requester.
+  //
+  // EMAIL-PARTICIPANTS.5 — the recipient half is now loadParticipantMessages(),
+  // the SAME window and the SAME columns the detail route derives its
+  // "Reply All (N)" label from. Two windows would be two answers to "who does
+  // this reach", and the one the operator can see would not be the one that
+  // sends. `bcc_emails` is still not among the columns it asks for.
   const [
     { data: lastInbound, error: lastInboundErr },
     { data: recentMessages, error: recentErr },
@@ -254,14 +263,7 @@ export async function POST(request, props) {
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle(),
-    // NOTE the columns: from_email, to_email(s) and cc_emails. `bcc_emails` is
-    // NOT SELECTED, so this route could not leak it into a recipient list even
-    // if threadParticipants() were changed to look for it.
-    db.from('email_inbox_messages')
-      .select('from_email, to_email, to_emails, cc_emails, is_internal_note, created_at, sent_at')
-      .eq('ticket_id', ticket.id)
-      .order('created_at', { ascending: false })
-      .limit(RECIPIENT_SCAN_LIMIT),
+    loadParticipantMessages(db, ticket.id),
   ])
   if (lastInboundErr) {
     console.error('[tickets/reply] threading lookup failed BEFORE sending:', lastInboundErr.message)
@@ -281,12 +283,32 @@ export async function POST(request, props) {
   const own = await loadOwnAddresses(db)
   if (own.response) return own.response
 
-  // ── Who this reaches ──────────────────────────────────────────────
-  const latest = latestCorrespondence(recentMessages || [])
-  const participants = threadParticipants(latest, { exclude: own.addresses })
-  // A ticket with no usable correspondence (every message an internal note, or
-  // a backfilled row with no addresses on it) still has a requester.
-  const derivedTo = participants.length ? participants : [ticket.requester_email]
+  // ── Who this reaches (EMAIL-PARTICIPANTS.5) ───────────────────────
+  // The union across the whole thread, minus our own addresses and minus
+  // anyone the operator removed. A ticket with no usable correspondence (every
+  // message an internal note, or a backfilled row with no addresses on it)
+  // still falls back to its requester — inside resolveReplyAudience, where the
+  // removals apply to the fallback too.
+  const audience = resolveReplyAudience({
+    messages: recentMessages || [],
+    ticket,
+    ownAddresses: own.addresses,
+  })
+  // NOTHING HAS BEEN SENT YET, so both refusals are free — and both exist
+  // because the alternative is a send that silently reaches the wrong set.
+  if (audience.empty) {
+    return NextResponse.json({
+      success: false,
+      error: 'This ticket has no recipients left — restore one to reply.',
+    }, { status: 400 })
+  }
+  if (audience.over_cap) {
+    return NextResponse.json({
+      success: false,
+      error: `This thread has ${audience.to.length} recipients and the limit is ${MAX_RECIPIENTS}. Remove some before replying.`,
+    }, { status: 400 })
+  }
+  const derivedTo = audience.to
 
   const recipients = resolveRecipients({
     to: [...derivedTo, ...extraTo],
@@ -561,10 +583,12 @@ export async function POST(request, props) {
   // they did it. Fire-and-forget by construction — logAuditEvent never throws
   // and never blocks; the mail has already gone either way.
   //
-  // `known` is the derived participant set plus the requester, so a person who
-  // appeared on an EARLIER message but not the latest is logged as added.
-  // That over-reports rather than under-reports, which is the right direction
-  // for an audit trail.
+  // `known` is the derived audience plus the requester. Since
+  // EMAIL-PARTICIPANTS.5 that audience is the WHOLE thread, so the
+  // earlier-participant over-report this used to carry is gone — those people
+  // are in `derivedTo` now, and `added` is only ever a genuinely hand-typed
+  // address. The requester stays in `known` unconditionally: they opened the
+  // ticket, so they were on the thread whatever the audience says today.
   const added = newRecipients(recipients, [...derivedTo, ticket.requester_email])
   if (added.length) {
     await logAuditEvent({

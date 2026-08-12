@@ -770,19 +770,40 @@ describe('POST …/reply — the derived recipient set', () => {
     expect(sent.cc || '').not.toContain(MB_OTHER_LOCATION.address)
   })
 
-  // Mail clients follow the latest message; someone a member deliberately
-  // dropped from a later reply stays dropped. Resurrecting them would re-copy
-  // a person the member chose to exclude, over their head.
-  it('follows the LATEST message — a participant dropped later is not resurrected', async () => {
+  // WAS 'follows the LATEST message — a participant dropped later is not
+  // resurrected', asserting `to` WITHOUT boss@ (EMAIL-PARTICIPANTS.5 inverted
+  // it). That expectation encoded the defect: it read a person's absence from
+  // the newest message as an intention to drop them, and the live 2026-08-12
+  // failure is what that inference costs — a shared council mailbox opened a
+  // thread, one officer answered from her own address, and the reply reached
+  // her alone. A mail client cannot distinguish "deliberately removed" from
+  // "did not happen to be on the last message", so it must not guess. Someone
+  // genuinely finished with a thread comes off it through excluded_participants
+  // — the test directly below.
+  const THREAD_LOSING_BOSS = [
+    { ...CC_INBOUND, id: 'm-old', created_at: '2026-08-06T09:00:00Z' },
+    {
+      ...CC_INBOUND, id: 'm-new', created_at: '2026-08-06T12:00:00Z',
+      cc_emails: ['colleague@example.com'],
+    },
+  ]
+
+  it('KEEPS a participant who is on an earlier message but not the newest', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: THREAD_LOSING_BOSS }))
+    await post(T_STUDIO.id, { text: 'hi' })
+    expect(sendEmail.mock.calls[0][0].to)
+      .toBe('member@example.com, colleague@example.com, boss@example.com')
+  })
+
+  // …and THIS is how someone actually comes off a thread now: an operator says
+  // so, on the ticket (mig 534). A visible act with an undo, rather than a
+  // derivation rule nobody can see. The guarantee the inverted test above used
+  // to carry — "a person can be dropped from the audience" — lives here.
+  it('drops exactly the participant an operator removed, and nobody else', async () => {
     setupDb(baseState({
       grants: [GRANT_STUDIO],
-      messages: [
-        { ...CC_INBOUND, id: 'm-old', created_at: '2026-08-06T09:00:00Z' },
-        {
-          ...CC_INBOUND, id: 'm-new', created_at: '2026-08-06T12:00:00Z',
-          cc_emails: ['colleague@example.com'],
-        },
-      ],
+      tickets: [{ ...T_STUDIO, excluded_participants: ['boss@example.com'] }, { ...T_ACCOUNTS }],
+      messages: THREAD_LOSING_BOSS,
     }))
     await post(T_STUDIO.id, { text: 'hi' })
     expect(sendEmail.mock.calls[0][0].to).toBe('member@example.com, colleague@example.com')
@@ -841,6 +862,111 @@ describe('POST …/reply — the derived recipient set', () => {
     }))
     expect((await post(T_STUDIO.id, { text: 'hi' })).status).toBe(500)
     expect(sendEmail).not.toHaveBeenCalled()
+  })
+})
+
+// ── EMAIL-PARTICIPANTS.5 — THE SEND REACHES THE WHOLE THREAD ─────────
+//
+// The live failure of 2026-08-12: a shared council mailbox opened a thread, a
+// named officer in that office answered from her own address, and the staff
+// reply reached her ALONE. Nobody saw a dropped recipient — the reply simply
+// never arrived at the mailbox that had asked the question, because the
+// audience was derived from the NEWEST message only, so whoever wrote last
+// silently redefined who the conversation was with.
+//
+// EMAIL-PARTICIPANTS.4 fixed the LABEL (the detail route's reply_recipients).
+// This block is the half that puts real mail on the wire, and it is the one
+// that actually decides who gets the email.
+describe('POST …/reply — the audience is the whole thread (EMAIL-PARTICIPANTS.5)', () => {
+  const OPENED_TO_SHARED_MAILBOX = {
+    id: 'm-rates', ticket_id: T_STUDIO.id, location_id: T_STUDIO.location_id,
+    direction: 'outbound', is_internal_note: false, forwarded_message_id: null,
+    from_email: MB_STUDIO.address,
+    to_email: 'rates@council.ie', to_emails: ['rates@council.ie'],
+    cc_emails: [], bcc_emails: [],
+    created_at: '2026-08-12T09:10:00Z',
+  }
+  const ANSWERED_BY_ONE_OFFICER = {
+    id: 'm-eleanor', ticket_id: T_STUDIO.id, location_id: T_STUDIO.location_id,
+    direction: 'inbound', is_internal_note: false, forwarded_message_id: null,
+    from_email: 'eleanor@council.ie',
+    to_email: MB_STUDIO.address, to_emails: [MB_STUDIO.address],
+    cc_emails: [], bcc_emails: [],
+    created_at: '2026-08-12T10:06:00Z',
+  }
+
+  it('sends to EVERYONE on the thread, not just the newest correspondent', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      messages: [OPENED_TO_SHARED_MAILBOX, ANSWERED_BY_ONE_OFFICER],
+    }))
+    const res = await post(T_STUDIO.id, { text: 'Thanks — noted.' })
+    expect(res.status).toBe(200)
+
+    const sent = sendEmail.mock.calls[0][0]
+    // The officer who wrote last…
+    expect(sent.to).toContain('eleanor@council.ie')
+    // …and the shared mailbox that opened it. THIS is the address the live bug
+    // dropped, silently, on a reply the operator watched succeed.
+    expect(sent.to).toContain('rates@council.ie')
+    // Our own address is still never written to — a reply-all that mailed
+    // studio@ re-enters our own inbound webhook and files onto this ticket.
+    expect(sent.to).not.toContain(MB_STUDIO.address)
+    // …and the row records the same set the wire carried.
+    const [msg] = insertsInto(db, 'email_inbox_messages')
+    expect(msg.payload.to_emails).toEqual(['eleanor@council.ie', 'rates@council.ie'])
+  })
+
+  // The other half of a wider audience: it can now be EMPTY, and it can now
+  // exceed the cap. Both are refused BEFORE the send, where a 400 costs a retry
+  // and nothing else — the alternative to each is a send that silently reaches
+  // the wrong set, which is the failure this whole programme exists to end.
+  it('400s rather than sending when every participant has been removed', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      // The operator took the only correspondent off this ticket (mig 534).
+      // Mailing them anyway is not an acceptable way to avoid an error message.
+      tickets: [{ ...T_STUDIO, excluded_participants: ['member@example.com'] }, { ...T_ACCOUNTS }],
+      messages: [{
+        id: 'm-only', ticket_id: T_STUDIO.id, location_id: T_STUDIO.location_id,
+        direction: 'inbound', is_internal_note: false, forwarded_message_id: null,
+        from_email: 'member@example.com',
+        to_email: MB_STUDIO.address, to_emails: [MB_STUDIO.address],
+        cc_emails: [], bcc_emails: [], created_at: '2026-08-12T09:00:00Z',
+      }],
+    }))
+    const res = await post(T_STUDIO.id, { text: 'hello' })
+
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatch(/no recipients/i)
+    // THE HALF THAT MATTERS: a 400 that had already mailed the person the
+    // operator removed would be worse than no check at all.
+    expect(sendEmail).not.toHaveBeenCalled()
+    expect(writesTo(db)).toEqual([])
+  })
+
+  it('400s rather than truncating when the audience exceeds the cap', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      messages: Array.from({ length: 30 }, (_, i) => ({
+        id: `m-${i}`, ticket_id: T_STUDIO.id, location_id: T_STUDIO.location_id,
+        direction: 'inbound', is_internal_note: false, forwarded_message_id: null,
+        from_email: `p${i}@example.com`,
+        to_email: MB_STUDIO.address, to_emails: [MB_STUDIO.address],
+        cc_emails: [], bcc_emails: [],
+        created_at: `2026-08-12T09:00:${String(i).padStart(2, '0')}Z`,
+      })),
+    }))
+    const res = await post(T_STUDIO.id, { text: 'hello' })
+
+    expect(res.status).toBe(400)
+    const { error } = await res.json()
+    expect(error).toMatch(/30 recipients/)
+    expect(error).toMatch(/limit is 25/)
+    // Silently sending to the first 25 is the outcome the refusal exists to
+    // prevent — five people dropped, and nothing on screen saying so.
+    expect(sendEmail).not.toHaveBeenCalled()
+    expect(writesTo(db)).toEqual([])
   })
 })
 
