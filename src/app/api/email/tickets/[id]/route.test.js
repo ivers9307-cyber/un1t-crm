@@ -440,3 +440,74 @@ describe('assignment enrichment', () => {
     expect((await (await get(T_STUDIO.id)).json()).data.viewer_is_elevated).toBe(false)
   })
 })
+
+// EMAIL-MERGE.5 — the survivor pointer reaches the client.
+//
+// A merged ticket is a TOMBSTONE (status `closed` plus merged_into_id), and
+// scopeToUnmerged hides it from the queue and the badge. This route is
+// deliberately NOT scoped that way: a bookmark or a push-notification link
+// pointing at a ticket that has since been folded into another must land
+// somewhere useful, not on "Not found". So the ticket stays READABLE and the
+// payload carries the pointer, which is the only thing the UI can redirect on.
+//
+// Both halves are pinned here because either alone is useless: a readable
+// tombstone with no pointer is a dead end (the operator reads a thread whose
+// messages have moved and has no way to reach the live one), and a pointer on
+// a 404 never arrives.
+describe('a merged ticket keeps pointing at its survivor', () => {
+  it('returns merged_into_id — the redirect target — rather than 404ing', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      tickets: [
+        { ...T_STUDIO },
+        // The tombstone: T_ACCOUNTS folded into T_STUDIO. Put on the mailbox
+        // the coach CAN see, so this test is about the merge and not about the
+        // per-account gate the tests above already own.
+        {
+          ...T_ACCOUNTS,
+          mailbox_id: MB_STUDIO.id,
+          status: 'closed',
+          merged_into_id: T_STUDIO.id,
+          merged_at: '2026-08-12T10:00:00Z',
+          merged_by: OWNER.id,
+        },
+      ],
+      messages: MESSAGES,
+    }))
+
+    const res = await get(T_ACCOUNTS.id)
+
+    // READABLE. A tombstone that 404s turns every link to it into a dead end.
+    expect(res.status).toBe(200)
+    const { data } = await res.json()
+
+    // …and it names where the conversation went. Without this the UI has
+    // nothing to redirect on and the operator is reading an emptied thread
+    // with no way to reach the live one.
+    expect(data.ticket.merged_into_id).toBe(T_STUDIO.id)
+    // The other two merge columns ride along, so the banner can say when and
+    // by whom without a second request.
+    expect(data.ticket.merged_at).toBe('2026-08-12T10:00:00Z')
+    expect(data.ticket.merged_by).toBe(OWNER.id)
+
+    // AND THE READ ACTUALLY ASKS FOR THEM. The three assertions above pass on
+    // this fake whatever the route selects — _test-db records the column list
+    // but does not PROJECT by it, so a select narrowed to a hand-written column
+    // set would still hand back a whole fixture row here while returning
+    // undefined against Postgres. Pinning the select is what makes this a test
+    // of the route rather than of the double: loadTicketForUser reads `*`, so
+    // every mig 536 column arrives, and narrowing it later fails HERE instead
+    // of silently emptying the banner in production.
+    const [ticketRead] = selectsFrom(db, 'email_tickets')
+    expect(
+      ticketRead.columns === '*' || ticketRead.columns.includes('merged_into_id')
+    ).toBe(true)
+  })
+
+  it('leaves merged_into_id null on an ordinary ticket', async () => {
+    // The negative half: a pointer that is always set is a banner that always
+    // shows, and the UI keys the merged banner on exactly this field.
+    const { data } = await (await get(T_STUDIO.id)).json()
+    expect(data.ticket.merged_into_id ?? null).toBeNull()
+  })
+})
