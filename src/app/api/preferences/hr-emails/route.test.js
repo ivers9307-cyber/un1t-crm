@@ -17,6 +17,13 @@
 //     nothing about their session ids.
 //
 // A bare `cid` with no `sid` is refused. That is the hole closing.
+//
+// GETMUT.1 — and the opt-out no longer happens on the GET. Following the URL
+// (a mail-provider link scanner, a security appliance, a browser prefetch) used
+// to unsubscribe the person without them ever clicking. GET now resolves and
+// budgets the credential exactly as before and renders a confirmation form;
+// POST is what writes. The confirm page is deliberately built from the
+// credential alone so it can never become an oracle over the flag.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -29,7 +36,7 @@ vi.mock('@/lib/rate-limit', () => ({
 
 import { createServerClient } from '@/lib/supabase'
 import { peekRateLimit, checkRateLimit } from '@/lib/rate-limit'
-import { GET } from './route.js'
+import { GET, POST } from './route.js'
 
 const TOKEN = '9f1c7c0e-0000-4000-8000-0000000000aa'
 const CONTACT = 'c0000000-0000-4000-8000-00000000000c'
@@ -37,7 +44,8 @@ const OTHER_CONTACT = 'd0000000-0000-4000-8000-00000000000d'
 const SESSION = '50000000-0000-4000-8000-000000000055'
 
 // Chainable recorder. Records every write so a test can assert that a REFUSED
-// request wrote nothing to contacts — the property that actually matters.
+// request — or any GET at all — wrote nothing to contacts, the property that
+// actually matters.
 function makeDb({ pref = null, session = null, contact = null } = {}) {
   const writes = { contacts: [], unsubscribe_refusals: [] }
 
@@ -85,7 +93,9 @@ function makeDb({ pref = null, session = null, contact = null } = {}) {
   return { db, writes }
 }
 
-const call = (qs) => GET(new Request(`https://crm.example/api/preferences/hr-emails?${qs}`))
+const url = (qs) => `https://crm.example/api/preferences/hr-emails?${qs}`
+const get = (qs) => GET(new Request(url(qs)))
+const post = (qs) => POST(new Request(url(qs), { method: 'POST' }))
 
 const optedIn = { id: CONTACT, email: 'sarah@test.com', hr_post_class_emails_enabled: true }
 const prefRow = { id: 'pref-1', contact_id: CONTACT, unsubscribe_token: TOKEN }
@@ -97,6 +107,85 @@ beforeEach(() => {
   checkRateLimit.mockResolvedValue({ allowed: true, remaining: 60, resetAt: new Date(), retryAfterSec: 60 })
 })
 
+// ── GETMUT.1: following the link must not change consent ─────────────
+
+describe('GETMUT.1 — GET confirms, POST acts', () => {
+  it('a valid GET writes nothing to contacts, however scannable the link is', async () => {
+    const { db, writes } = makeDb({ pref: prefRow, contact: optedIn })
+    createServerClient.mockReturnValue(db)
+
+    const res = await get(`scope=hr&token=${TOKEN}`)
+
+    expect(res.status).toBe(200)
+    expect(writes.contacts).toHaveLength(0)
+  })
+
+  it('renders a form that POSTs back with the same credential', async () => {
+    const { db } = makeDb({ pref: prefRow, contact: optedIn })
+    createServerClient.mockReturnValue(db)
+
+    const body = await (await get(`scope=hr&token=${TOKEN}`)).text()
+
+    expect(body).toContain('method="post"')
+    expect(body).toContain(`token=${TOKEN}`)
+    expect(body).toContain('scope=hr')
+    // Nothing has happened yet, and the page has to say so.
+    expect(body).not.toContain("You're unsubscribed")
+  })
+
+  it('carries the LEGACY pair through to the form action', async () => {
+    const { db } = makeDb({ session: sessionRow, contact: optedIn })
+    createServerClient.mockReturnValue(db)
+
+    const body = await (await get(`scope=hr&cid=${CONTACT}&sid=${SESSION}`)).text()
+
+    expect(body).toContain(`cid=${CONTACT}`)
+    expect(body).toContain(`sid=${SESSION}`)
+  })
+
+  it('the POST that follows the form does the opt-out', async () => {
+    const { db, writes } = makeDb({ pref: prefRow, contact: optedIn })
+    createServerClient.mockReturnValue(db)
+
+    const res = await post(`scope=hr&token=${TOKEN}`)
+
+    expect(res.status).toBe(200)
+    expect(writes.contacts).toHaveLength(1)
+    expect(writes.contacts[0].patch).toEqual({ hr_post_class_emails_enabled: false })
+  })
+})
+
+// ── the confirm page must not be an oracle ───────────────────────────
+
+describe('the confirm page leaks nothing about the contact', () => {
+  const bodyFor = async (fixture) => {
+    const { db } = makeDb(fixture)
+    createServerClient.mockReturnValue(db)
+    return (await get(`scope=hr&token=${TOKEN}`)).text()
+  }
+
+  it('is byte-identical for still-on, already-off, and a contact that is gone', async () => {
+    const stillOn = await bodyFor({ pref: prefRow, contact: optedIn })
+    const alreadyOff = await bodyFor({
+      pref: prefRow, contact: { ...optedIn, hr_post_class_emails_enabled: false },
+    })
+    const missing = await bodyFor({ pref: prefRow, contact: null })
+
+    expect(alreadyOff).toBe(stillOn)
+    expect(missing).toBe(stillOn)
+  })
+
+  it('does not read the contacts row at all, which is what guarantees that', async () => {
+    const tables = []
+    const { db } = makeDb({ pref: prefRow, contact: optedIn })
+    createServerClient.mockReturnValue({ from: (t) => { tables.push(t); return db.from(t) } })
+
+    await get(`scope=hr&token=${TOKEN}`)
+
+    expect(tables).not.toContain('contacts')
+  })
+})
+
 // ── the hole ────────────────────────────────────────────────────────
 
 describe('a bare contact id is no longer a credential', () => {
@@ -104,17 +193,30 @@ describe('a bare contact id is no longer a credential', () => {
     const { db, writes } = makeDb({ pref: prefRow, session: sessionRow, contact: optedIn })
     createServerClient.mockReturnValue(db)
 
-    const res = await call(`scope=hr&cid=${CONTACT}`)
+    const res = await post(`scope=hr&cid=${CONTACT}`)
 
     expect(res.status).toBe(404)
     expect(writes.contacts).toHaveLength(0)
+  })
+
+  it('refuses a bare ?cid= on GET too, and still records the refusal', async () => {
+    const { db, writes } = makeDb({ pref: prefRow, session: sessionRow, contact: optedIn })
+    createServerClient.mockReturnValue(db)
+
+    const res = await get(`scope=hr&cid=${CONTACT}`)
+
+    expect(res.status).toBe(404)
+    expect(writes.contacts).toHaveLength(0)
+    // Security accounting on a GET is fine and necessary — it is the
+    // enumeration that happens there. Consent is what may not move.
+    expect(writes.unsubscribe_refusals).toHaveLength(1)
   })
 
   it('records the refusal so a probe is visible, not silent', async () => {
     const { db, writes } = makeDb({ pref: prefRow, session: sessionRow, contact: optedIn })
     createServerClient.mockReturnValue(db)
 
-    await call(`scope=hr&cid=${CONTACT}`)
+    await post(`scope=hr&cid=${CONTACT}`)
 
     expect(writes.unsubscribe_refusals).toHaveLength(1)
     expect(writes.unsubscribe_refusals[0]).toMatchObject({
@@ -133,7 +235,7 @@ describe('a bare contact id is no longer a credential', () => {
     })
     createServerClient.mockReturnValue(db)
 
-    const res = await call(`scope=hr&cid=${CONTACT}&sid=${SESSION}`)
+    const res = await post(`scope=hr&cid=${CONTACT}&sid=${SESSION}`)
 
     expect(res.status).toBe(404)
     expect(writes.contacts).toHaveLength(0)
@@ -147,7 +249,7 @@ describe('token path', () => {
     const { db, writes } = makeDb({ pref: prefRow, contact: optedIn })
     createServerClient.mockReturnValue(db)
 
-    const res = await call(`scope=hr&token=${TOKEN}`)
+    const res = await post(`scope=hr&token=${TOKEN}`)
 
     expect(res.status).toBe(200)
     expect(writes.contacts).toHaveLength(1)
@@ -155,14 +257,24 @@ describe('token path', () => {
     expect(writes.contacts[0].filters.id).toBe(CONTACT)
   })
 
-  it('is a no-op success when already unsubscribed (providers re-fetch links)', async () => {
+  it('is a no-op success when already unsubscribed (two emails, one person)', async () => {
     const { db, writes } = makeDb({
       pref: prefRow,
       contact: { ...optedIn, hr_post_class_emails_enabled: false },
     })
     createServerClient.mockReturnValue(db)
 
-    const res = await call(`scope=hr&token=${TOKEN}`)
+    const res = await post(`scope=hr&token=${TOKEN}`)
+
+    expect(res.status).toBe(200)
+    expect(writes.contacts).toHaveLength(0)
+  })
+
+  it('is a success when the contact row is gone (merged or deleted)', async () => {
+    const { db, writes } = makeDb({ pref: prefRow, contact: null })
+    createServerClient.mockReturnValue(db)
+
+    const res = await post(`scope=hr&token=${TOKEN}`)
 
     expect(res.status).toBe(200)
     expect(writes.contacts).toHaveLength(0)
@@ -172,7 +284,7 @@ describe('token path', () => {
     const { db, writes } = makeDb({ pref: prefRow, contact: optedIn })
     createServerClient.mockReturnValue(db)
 
-    const res = await call('scope=hr&token=11111111-0000-4000-8000-000000000000')
+    const res = await post('scope=hr&token=11111111-0000-4000-8000-000000000000')
 
     expect(res.status).toBe(404)
     expect(writes.contacts).toHaveLength(0)
@@ -185,7 +297,7 @@ describe('token path', () => {
     const { db, writes } = makeDb({ pref: prefRow, contact: optedIn })
     createServerClient.mockReturnValue(db)
 
-    const res = await call('scope=hr&token=not-a-uuid')
+    const res = await post('scope=hr&token=not-a-uuid')
 
     expect(res.status).toBe(404)
     expect(writes.contacts).toHaveLength(0)
@@ -199,7 +311,7 @@ describe('legacy cid+sid pair', () => {
     const { db, writes } = makeDb({ session: sessionRow, contact: optedIn })
     createServerClient.mockReturnValue(db)
 
-    const res = await call(`scope=hr&cid=${CONTACT}&sid=${SESSION}`)
+    const res = await post(`scope=hr&cid=${CONTACT}&sid=${SESSION}`)
 
     expect(res.status).toBe(200)
     expect(writes.contacts).toHaveLength(1)
@@ -210,7 +322,7 @@ describe('legacy cid+sid pair', () => {
     const { db, writes } = makeDb({ contact: optedIn })
     createServerClient.mockReturnValue(db)
 
-    const res = await call(`scope=hr&cid=${CONTACT}&sid=${SESSION}`)
+    const res = await post(`scope=hr&cid=${CONTACT}&sid=${SESSION}`)
 
     expect(res.status).toBe(404)
     expect(writes.contacts).toHaveLength(0)
@@ -227,11 +339,25 @@ describe('rate limiting', () => {
       allowed: false, remaining: 0, resetAt: new Date(Date.now() + 60_000), retryAfterSec: 60,
     })
 
-    const res = await call(`scope=hr&token=${TOKEN}`)
+    const res = await post(`scope=hr&token=${TOKEN}`)
 
     expect(res.status).toBe(429)
     expect(res.headers.get('retry-after')).toBe('60')
     expect(writes.contacts).toHaveLength(0)
+    expect(writes.unsubscribe_refusals[0]).toMatchObject({ reason: 'ip_enumeration_budget' })
+  })
+
+  it('429s the GET on the same budget — both methods are accounted', async () => {
+    const { db, writes } = makeDb({ pref: prefRow, contact: optedIn })
+    createServerClient.mockReturnValue(db)
+    peekRateLimit.mockResolvedValue({
+      allowed: false, remaining: 0, resetAt: new Date(Date.now() + 60_000), retryAfterSec: 60,
+    })
+
+    const res = await get(`scope=hr&token=${TOKEN}`)
+
+    expect(res.status).toBe(429)
+    expect(res.headers.get('retry-after')).toBe('60')
     expect(writes.unsubscribe_refusals[0]).toMatchObject({ reason: 'ip_enumeration_budget' })
   })
 
@@ -242,7 +368,7 @@ describe('rate limiting', () => {
       allowed: false, remaining: 0, resetAt: new Date(Date.now() + 60_000), retryAfterSec: 60,
     })
 
-    const res = await call(`scope=hr&token=${TOKEN}`)
+    const res = await post(`scope=hr&token=${TOKEN}`)
 
     expect(res.status).toBe(429)
     expect(writes.contacts).toHaveLength(0)
@@ -261,14 +387,14 @@ describe('request shape', () => {
   it('400s an unknown scope', async () => {
     const { db } = makeDb({ pref: prefRow, contact: optedIn })
     createServerClient.mockReturnValue(db)
-    const res = await call(`scope=nonsense&token=${TOKEN}`)
-    expect(res.status).toBe(400)
+    expect((await get(`scope=nonsense&token=${TOKEN}`)).status).toBe(400)
+    expect((await post(`scope=nonsense&token=${TOKEN}`)).status).toBe(400)
   })
 
   it('400s a link carrying no credential at all', async () => {
     const { db, writes } = makeDb({ pref: prefRow, contact: optedIn })
     createServerClient.mockReturnValue(db)
-    const res = await call('scope=hr')
+    const res = await get('scope=hr')
     expect(res.status).toBe(400)
     expect(writes.contacts).toHaveLength(0)
   })
@@ -276,7 +402,7 @@ describe('request shape', () => {
   it('serves HTML, because a human clicked this from their inbox', async () => {
     const { db } = makeDb({ pref: prefRow, contact: optedIn })
     createServerClient.mockReturnValue(db)
-    const res = await call(`scope=hr&token=${TOKEN}`)
+    const res = await post(`scope=hr&token=${TOKEN}`)
     expect(res.headers.get('content-type')).toContain('text/html')
     expect(await res.text()).toContain('unsubscribed')
   })

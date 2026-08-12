@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validate'
 import { consentActionFor } from '@/lib/consent-actions'
+import { emailStatusNormaliseForOptIn } from '@/lib/email-reputation'
 import {
   REFUSAL_REASONS,
   guardBeforeTokenLookup,
@@ -72,9 +73,14 @@ async function resolveTokenOrRefuse(db, request, token) {
     return { refused: rateLimitResponse(ipBudget) }
   }
 
+  // EMAILREP.4 — `email_status` is selected for the PUT handler, not for the
+  // GET response: the opt-in path has to know the CURRENT reputation before it
+  // may write one, and emailStatusNormaliseForOptIn reads `undefined` as
+  // "unknown" and declines to stamp. Leaving it out of the embed would make
+  // the guard look correct while silently never normalising a legacy NULL row.
   const { data: pref, error } = await db
     .from('contact_preferences')
-    .select('*, contacts(id, name, email)')
+    .select('*, contacts(id, name, email, email_status)')
     .eq('unsubscribe_token', token)
     .single()
 
@@ -221,23 +227,44 @@ export async function PUT(request, props) {
     await db.from('consent_log').insert(logEntries)
   }
 
-  // Update contact email_status if email_marketing was changed
+  // The two contacts.* columns an email-marketing change touches. They sit
+  // next to each other and are NOT the same kind of thing — keeping that
+  // straight is the whole of EMAILREP.4:
+  //   • email_status        REPUTATION (active | bounced | complained).
+  //     Address-bound, and a hard send-time gate buildAudienceQuery applies
+  //     UNCONDITIONALLY — to administrative mail as well as marketing.
+  //   • email_suppressed_at ENGAGEMENT hygiene (mig 395), our own
+  //     90-day-non-opener call. Ours to revise.
   if (typeof updates.email_marketing === 'boolean') {
     // LOCCOMMS.5 — no longer stamps 'unsubscribed'. email_status carries
-    // reputation only (active | bounced | complained); the opt-out itself lives
-    // in contact_location_preferences.
-    const contactUpdate = updates.email_marketing ? { email_status: 'active' } : null
-    // EMAIL-HYGIENE.1 — explicit re-consent also clears the engagement-
-    // hygiene suppression stamp (contacts.email_suppressed_at, mig 395):
-    // a contact actively saying "send me marketing" outranks our
-    // 90-day-non-opener call. Opt-out leaves the stamp alone (the consent
-    // gate already excludes them; if they re-consent later this branch
-    // clears it then).
-    if (updates.email_marketing === true) contactUpdate.email_suppressed_at = null
-    // COMMSFIX.A.3 — on an opt-out contactUpdate is null (nothing to write
-    // since LOCCOMMS.5 retired the 'unsubscribed' stamp); running
-    // .update(null) anyway was a guaranteed-failing PATCH on every opt-out.
-    if (contactUpdate) {
+    // reputation only; the opt-out itself lives in contact_location_preferences.
+    const contactUpdate = {}
+    if (updates.email_marketing === true) {
+      // EMAILREP.4 — this was the last marketing-opt-in writer stamping
+      // 'active' with no bounce check, so one re-consent click through the
+      // customer preference centre put a hard-bounced or complaining mailbox
+      // back into every audience, administrative mail included. Consent is not
+      // evidence the mailbox works: the click may come from a copy delivered
+      // BEFORE the bounce, and Postmark keeps its own suppression list
+      // regardless of this column. emailStatusNormaliseForOptIn is the shared
+      // rule the three other opt-in writers already use (marketing-consent.js
+      // ×2, the admin PATCH, the bulk import) — 'active' only for NULL /
+      // retired-'unsubscribed' residue, null (leave it) for everything else.
+      const nextStatus = emailStatusNormaliseForOptIn(pref.contacts?.email_status)
+      if (nextStatus) contactUpdate.email_status = nextStatus
+      // EMAIL-HYGIENE.1 — the suppression stamp still clears UNCONDITIONALLY,
+      // and that is the point of the distinction above: it is not reputation,
+      // it is our own engagement heuristic, and a contact actively saying
+      // "send me marketing" outranks it. Opt-out leaves the stamp alone (the
+      // consent gate already excludes them; a later re-consent clears it).
+      contactUpdate.email_suppressed_at = null
+    }
+    // COMMSFIX.A.3 — on an opt-out there is nothing to write at all (LOCCOMMS.5
+    // retired the 'unsubscribed' stamp); running .update() anyway was a
+    // guaranteed-failing PATCH on every opt-out. On an opt-in the patch always
+    // carries email_suppressed_at, so it is never empty and this stays exactly
+    // one round trip.
+    if (Object.keys(contactUpdate).length > 0) {
       await db
         .from('contacts')
         .update(contactUpdate)
