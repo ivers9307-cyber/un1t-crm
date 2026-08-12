@@ -72,7 +72,7 @@ import {
   deliveryTimestamp,
   assigneeLabel,
   mailboxLabel,
-  messageRecipients,
+  messageEnvelope,
   threadSignature,
   canForwardMessage,
   forwardedMarker,
@@ -817,43 +817,13 @@ function JoinMarkers({ addresses }) {
 }
 
 /**
- * The envelope lines for one message, in header order: From, To, then whatever
- * messageRecipients() has to add.
- *
- * Cc and Bcc are taken from that helper rather than rebuilt, so the sentence
- * that says a Bcc was never on the delivered message keeps exactly one home.
- * Its own To line is dropped: it is conditional on there being more than one
- * address, and an envelope that sometimes omits the To is not an envelope.
- */
-function envelopeLines(message) {
-  const list = (v) => (Array.isArray(v) ? v.filter(Boolean) : [])
-  // Pre-EMAIL-CC.1 rows carry only the scalar to_email.
-  const to = list(message?.to_emails).length
-    ? list(message.to_emails)
-    : (message?.to_email ? [message.to_email] : [])
-
-  const out = []
-  if (message?.from_email) {
-    out.push({ key: 'from', label: 'From', addresses: [message.from_email], staffOnly: false })
-  }
-  if (to.length) out.push({ key: 'to', label: 'To', addresses: to, staffOnly: false })
-  for (const line of messageRecipients(message)) {
-    if (line.key !== 'to') out.push(line)
-  }
-  return out
-}
-
-/**
  * A message's real envelope, COLLAPSED BY DEFAULT (EMAIL-PARTICIPANTS.8,
  * replacing EMAIL-CC.1's always-open recipient lines).
  *
- * What was here before showed a Cc list, and a To only when it had more than
- * one address — on the reasoning that a single To was already stated by the
- * bubble's own "Sent to …" line. That reasoning held right up until the
- * address on the far end CHANGED: with no From and no single-recipient To to
- * read, a reply arriving from a different person at the same organisation
- * looked identical to one from the requester. That is how a thread moved to
- * somebody nobody noticed.
+ * The lines themselves come from messageEnvelope() (src/lib/ticket-display.js),
+ * which is where the rules about what an envelope contains live — including
+ * why the To is unconditional, and the sentence attached to a Bcc. This
+ * component decides only how they are shown.
  *
  * Collapsed, because an envelope permanently open on every bubble is what
  * every mail client learned not to do — three lines of addresses above two
@@ -867,7 +837,7 @@ function envelopeLines(message) {
  * and the sentence retained. It is also rare, so on an ordinary message this
  * costs nothing and keeps the thing that matters in front of the operator.
  *
- * The split is on `staffOnly`, which messageRecipients() already sets, rather
+ * The split is on `staffOnly`, which messageEnvelope() already sets, rather
  * than on the literal key 'bcc': the flag means "this line is not what the
  * recipients saw", and any future line carrying it wants the same treatment.
  *
@@ -877,7 +847,7 @@ function envelopeLines(message) {
  */
 function MessageEnvelope({ message, onAccent = false }) {
   const [open, setOpen] = useState(false)
-  const lines = envelopeLines(message)
+  const lines = messageEnvelope(message)
   if (lines.length === 0) return null
 
   const collapsible = lines.filter(l => !l.staffOnly)

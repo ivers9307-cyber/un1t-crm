@@ -218,7 +218,7 @@ export function forwardedMarker(message, byId) {
   return `Forwarded the message from ${who}${when ? ` · ${when}` : ''}`
 }
 
-// ── Recipients (EMAIL-CC.1) ──────────────────────────────────────────
+// ── Recipients and the envelope (EMAIL-CC.1, ENVELOPE-ONE.1) ─────────
 //
 // THE BUTTON LABEL IS THE SAFETY FEATURE. Reply and Reply All are not two
 // buttons here — the mode is derived from who is actually on the thread
@@ -244,33 +244,50 @@ export function replyActionLabel(replyRecipients, added = 0) {
 }
 
 /**
- * The recipient lines to render under a message, in header order.
+ * A message's envelope, in header order: From, To, Cc, Bcc.
+ *
+ * THE To IS UNCONDITIONAL, and that is a correction. EMAIL-CC.1 rendered it
+ * only when it had more than one address, on the reasoning that a single To
+ * was already stated by the bubble's own "Sent to …" line. That reasoning
+ * held right up until the address on the far end CHANGED: with no From and no
+ * single-recipient To to read, a reply arriving from a different person at the
+ * same organisation looked identical to one from the requester. That is how a
+ * thread moved to somebody nobody noticed (EMAIL-PARTICIPANTS.8). An envelope
+ * that sometimes omits the To is not an envelope.
  *
  * BCC IS MARKED `staffOnly` AND MUST BE RENDERED AS SUCH. The list is real —
  * the sender is staff on this ticket and seeing who they blind-copied is the
  * point of recording it — but it never went on the delivered message, so a
  * surface that shows it beside To and Cc with no distinction implies the other
- * recipients saw it. They did not, and never will.
+ * recipients saw it. They did not, and never will. The sentence saying so is
+ * attached here and nowhere else, so it cannot drift between renderers.
  *
  * Empty lists are omitted rather than rendered blank: "Cc:" with nothing after
- * it reads as a Cc that failed.
+ * it reads as a Cc that failed. A message with neither a From nor a To yields
+ * nothing at all, and the caller renders no envelope.
+ *
+ * `to_emails` IS FILTERED BEFORE IT IS MEASURED. A row carrying `to_emails:
+ * [null]` has no addresses, so it must fall back to the scalar rather than
+ * count a hole — the same rule ticketParticipants() and mobile's
+ * ticketMessageRecipients() follow. Readers of this field disagreeing about
+ * one row is the defect (EMAIL-PARTICIPANTS.12), whatever writes it today.
  *
  * @param {object|null} message
  * @returns {{ key: string, label: string, addresses: string[], staffOnly: boolean, note?: string }[]}
  */
-export function messageRecipients(message) {
+export function messageEnvelope(message) {
   if (!message) return []
   const list = (v) => (Array.isArray(v) ? v.filter(Boolean) : [])
   // Pre-EMAIL-CC.1 rows carry only the scalar to_email.
   const to = list(message.to_emails).length
     ? list(message.to_emails)
     : (message.to_email ? [message.to_email] : [])
+
   const out = []
-  if (to.length > 1) {
-    // A single To is already stated by the bubble's own "Sent to …" line;
-    // repeating it is noise. Two or more is information.
-    out.push({ key: 'to', label: 'To', addresses: to, staffOnly: false })
+  if (message.from_email) {
+    out.push({ key: 'from', label: 'From', addresses: [message.from_email], staffOnly: false })
   }
+  if (to.length) out.push({ key: 'to', label: 'To', addresses: to, staffOnly: false })
   const cc = list(message.cc_emails)
   if (cc.length) out.push({ key: 'cc', label: 'Cc', addresses: cc, staffOnly: false })
   const bcc = list(message.bcc_emails)
