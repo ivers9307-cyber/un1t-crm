@@ -134,7 +134,7 @@ export function AuthProvider({ children }) {
     return { success: true, data }
   }, [])
 
-  // MAGIC-LINK.1 — passwordless login on mobile via a 6-digit email code
+  // MAGIC-LINK.1 — passwordless login on mobile via an emailed login code
   // (the same code the shared Supabase Magic Link email carries; mirrors
   // champ-app/mobile). No deep-link / native release needed. Password sign-in
   // above stays as break-glass. shouldCreateUser:false + project signups OFF

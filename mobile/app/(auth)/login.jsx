@@ -1,7 +1,10 @@
 // Login screen. iOS-style large-title header, soft inputs, primary action.
-// MAGIC-LINK.1 — passwordless-first: request a 6-digit code by email, then
-// verify it (mirrors champ-app/mobile; no deep-link / native release). Password
+// MAGIC-LINK.1 — passwordless-first: request an emailed login code, then verify
+// it (mirrors champ-app/mobile; no deep-link / native release). Password
 // sign-in is retained as break-glass. Studio-device pairing is unchanged.
+//   - The code is EMAIL_OTP_LENGTH digits, from mobile/lib/otp.js — it mirrors
+//     the Supabase project's "Email OTP Length" setting, which is NOT the
+//     supabase default of 6. Never re-hard-code a digit count here.
 //   - On success, AuthProvider's onAuthStateChange picks up the session and the
 //     root index redirects to (tabs).
 //   - Errors are shown inline; never raw Supabase error codes.
@@ -16,6 +19,7 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth-context'
+import { EMAIL_OTP_LENGTH, OTP_PLACEHOLDER, normalizeOtpInput, isCompleteOtp } from '../../lib/otp'
 
 export default function Login() {
   const { signIn, requestCode, verifyCode } = useAuth()
@@ -141,27 +145,27 @@ export default function Login() {
 
           {mode === 'code' && codeStep === 'code' && (
             <>
-              <Text className="text-sm text-un1t-subtle mb-4">Enter the 6-digit code we emailed to {email}.</Text>
+              <Text className="text-sm text-un1t-subtle mb-4">Enter the {EMAIL_OTP_LENGTH}-digit code we emailed to {email}.</Text>
               <View className="bg-un1t-surface rounded-2xl border border-un1t-border overflow-hidden mb-4">
                 <View className="px-4 py-3">
                   <Text className="text-xs text-un1t-subtle mb-1">Login code</Text>
                   <TextInput
                     value={otp}
-                    onChangeText={setOtp}
-                    placeholder="123456"
+                    onChangeText={(v) => setOtp(normalizeOtpInput(v))}
+                    placeholder={OTP_PLACEHOLDER}
                     placeholderTextColor="#94A3B8"
                     keyboardType="number-pad"
                     autoComplete="one-time-code"
                     textContentType="oneTimeCode"
-                    maxLength={6}
+                    maxLength={EMAIL_OTP_LENGTH}
                     className="text-base text-un1t-text tracking-[8px]"
                   />
                 </View>
               </View>
               <Pressable
                 onPress={handleVerifyCode}
-                disabled={submitting || otp.length < 6}
-                className={`rounded-2xl py-4 items-center ${submitting || otp.length < 6 ? 'bg-un1t-border' : 'bg-un1t-text'}`}
+                disabled={submitting || !isCompleteOtp(otp)}
+                className={`rounded-2xl py-4 items-center ${submitting || !isCompleteOtp(otp) ? 'bg-un1t-border' : 'bg-un1t-text'}`}
               >
                 {submitting ? <ActivityIndicator color="#FFFFFF" /> : <Text className="text-un1t-bg font-semibold text-base">Verify &amp; sign in</Text>}
               </Pressable>
