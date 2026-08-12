@@ -90,6 +90,9 @@ export default function TicketThread({
   // server-side and re-read, so reflecting a removal is a thread refresh, and
   // this pane has no refresh of its own. Its failures land in `error` above.
   onRemoveRecipient,
+  // …and puts one back. Same path, same guards; the participants route is the
+  // only thing that writes the exclusion either way.
+  onRestoreRecipient,
   // EMAIL-FORWARD.1 — opens the forward composer for ONE message. Owned by the
   // inbox (like compose), because a forward is a modal over the whole surface
   // rather than something a bubble can render inside itself.
@@ -298,6 +301,7 @@ export default function TicketThread({
         replyRecipients={replyRecipients}
         onSend={onSend}
         onRemoveRecipient={onRemoveRecipient}
+        onRestoreRecipient={onRestoreRecipient}
         sending={sending}
       />
     </>

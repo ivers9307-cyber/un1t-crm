@@ -48,6 +48,17 @@
 // AN EMPTIED AUDIENCE IS A REAL STATE, and the composer says so in the reply
 // route's own words rather than falling back to the requester — see lockedTo.
 //
+// AND EVERY REMOVAL IS VISIBLE AND UNDOABLE. A removed address does not
+// disappear: it drops into its own group under the To box, struck through,
+// unfilled and labelled as not on the reply, with a restore beside it. Two
+// reasons, and the second is the one that matters more. An operator who
+// removed the wrong person from a five-person thread had no way to see they
+// had done it, because the only evidence was an address that was no longer
+// there. And an operator who removed EVERYBODY was told to "restore one to
+// reply" by a composer offering nothing to restore with — a one-way door out
+// of ever answering that ticket. Restore is not an exception to remove-only:
+// it can only ever put back an address the thread already carried.
+//
 // Cc and Bcc ADD people and live behind the editor's own toggle. An internal
 // note has no recipients at all — the editor is not rendered in note mode, and
 // the route refuses a note that carries any.
@@ -61,7 +72,7 @@
 // too, so the rule is stated in both places.
 
 import { useState } from 'react'
-import { Send, Lock, Users, AlertCircle } from 'lucide-react'
+import { Send, Lock, Users, AlertCircle, RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui'
 import { isArchivedStatus, statusMeta, replyActionLabel } from '@/lib/ticket-display'
 import SignatureHint from './SignatureHint'
@@ -75,6 +86,7 @@ export default function TicketReplyBox({
   replyRecipients = null,
   onSend,
   onRemoveRecipient,
+  onRestoreRecipient,
   sending = false,
   signature,
 }) {
@@ -115,7 +127,14 @@ export default function TicketReplyBox({
   // both free to catch here because nothing has been sent. A note reaches
   // nobody by design, so neither can ever apply to one.
   const overCap = !isNote && !!replyRecipients?.over_cap
-  const noAudience = !isNote && audienceEmpty
+  // Gated on canReply so a ticket with no requester address keeps its own,
+  // more accurate sentence rather than being told to restore somebody nobody
+  // ever removed.
+  const noAudience = !isNote && canReply && audienceEmpty
+  // The operator's own subtractions, straight off the ticket row. NOT derived
+  // and never guessed: these are exactly the addresses the participants route
+  // has stored, which is what makes the restore below able to lift them.
+  const removedParticipants = ticket?.excluded_participants || []
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -195,6 +214,45 @@ export default function TicketReplyBox({
             onRemoveLocked={onRemoveRecipient}
             disabled={sending}
           />
+        </div>
+      )}
+
+      {/* The people taken off this reply. Deliberately NOT inside the
+          RecipientEditor: everything in that box is somebody the email goes
+          to, and a chip sitting among them is read as a recipient however it
+          is styled. Four signals say otherwise here — its own labelled group,
+          no fill, a dashed edge, and the address struck through — because
+          "these two are not getting this" has to survive being glanced at. */}
+      {!isNote && canReply && removedParticipants.length > 0 && (
+        <div className="mb-2">
+          <p className="mb-1 text-[11px] font-medium uppercase tracking-wider text-un1t-muted">
+            Not on this reply
+          </p>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {removedParticipants.map(address => (
+              <span
+                key={`removed-${address}`}
+                className="inline-flex items-center gap-1 rounded-full border border-dashed border-un1t-border px-2 py-0.5 text-xs text-un1t-subtle"
+              >
+                <span className="line-through">{address}</span>
+                {/* Restore is not a second way to add somebody: the route only
+                    lifts an exclusion, so this can never reach an address the
+                    thread did not already carry. */}
+                {onRestoreRecipient && (
+                  <button
+                    type="button"
+                    onClick={() => onRestoreRecipient(address)}
+                    disabled={sending}
+                    aria-label={`Restore ${address}`}
+                    title="Put this person back on the reply"
+                    className="text-un1t-subtle hover:text-un1t-text"
+                  >
+                    <RotateCcw size={11} aria-hidden="true" />
+                  </button>
+                )}
+              </span>
+            ))}
+          </div>
         </div>
       )}
 

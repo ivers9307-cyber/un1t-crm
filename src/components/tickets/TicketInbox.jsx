@@ -407,50 +407,69 @@ export default function TicketInbox({ locationId, locationName, userId }) {
     }
   }
 
-  // EMAIL-PARTICIPANTS.7 — take ONE address off this ticket's reply audience.
+  // EMAIL-PARTICIPANTS.7 — take ONE address off this ticket's reply audience,
+  // or put it back. One function for both directions, because they are the same
+  // write to the same column and any difference between them would be a way for
+  // the two to disagree about what just happened.
   //
-  // Lives here, with the other mutations, because the removal is only half the
+  // Lives here, with the other mutations, because the write is only half the
   // work: the audience itself is never stored — resolveReplyAudience() derives
   // it from the thread on every read and subtracts the operator's exclusions —
   // so the chips tell the truth only after the ticket is re-read. Editing a
   // local copy of replyRecipients instead would be a second implementation of a
   // derivation the whole programme exists to keep singular.
   //
-  // ON FAILURE THE CHIP STAYS. The write did not land, so that address is still
-  // exactly who the next reply reaches; a chip that vanished anyway would be a
-  // lie about the audience, which is the failure this feature is meant to end.
-  // Nothing here is optimistic for that reason, and the banner says what
-  // happened in the same place a failed status change or assignment does.
-  async function handleRemoveRecipient(address) {
+  // ON FAILURE THE CHIP STAYS PUT. The write did not land, so the audience is
+  // still exactly what it was; a chip that moved between the two groups anyway
+  // would be a lie about who the next reply reaches, which is the failure this
+  // feature is meant to end. Nothing here is optimistic for that reason, and
+  // the banner says what happened in the same place a failed status change or
+  // assignment does.
+  async function patchParticipants(address, { body, failure }) {
     if (!selectedId || !address || participantSaving) return
     const id = selectedId // guard stale responses across a ticket switch
-    // Serialised deliberately: the route read-modify-writes
-    // excluded_participants, so two removals in flight together would leave
-    // whichever landed second having overwritten the first — one address
-    // silently back on the audience. A dropped second click leaves its chip on
-    // screen, which is the honest half of that trade.
+    // Remove and restore are serialised against EACH OTHER, not just against
+    // themselves: the route read-modify-writes excluded_participants, so two
+    // writes in flight together would leave whichever landed second having
+    // overwritten the first — an address silently back on the audience, or
+    // silently off it. A dropped second click leaves its chip where it was,
+    // which is the honest half of that trade.
     setParticipantSaving(true)
     setThreadError(null)
     try {
       const res = await fetch(`/api/email/tickets/${id}/participants`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ remove: [address] }),
+        body: JSON.stringify(body),
       })
-      const body = await res.json()
+      const answer = await res.json()
       if (threadFor.current !== id) return // superseded — the operator switched tickets
-      if (!body?.success) {
-        setThreadError(body?.error || `Could not take ${address} off this reply`)
+      if (!answer?.success) {
+        setThreadError(answer?.error || failure)
         return
       }
       await loadThread(id)
     } catch {
       if (threadFor.current === id) {
-        setThreadError(`Could not take ${address} off this reply — check your connection and try again`)
+        setThreadError(`${failure} — check your connection and try again`)
       }
     } finally {
       setParticipantSaving(false)
     }
+  }
+
+  function handleRemoveRecipient(address) {
+    return patchParticipants(address, {
+      body: { remove: [address] },
+      failure: `Could not take ${address} off this reply`,
+    })
+  }
+
+  function handleRestoreRecipient(address) {
+    return patchParticipants(address, {
+      body: { restore: [address] },
+      failure: `Could not put ${address} back on this reply`,
+    })
   }
 
   // A forward is an outbound message on THIS ticket, so the thread re-read is
@@ -644,6 +663,7 @@ export default function TicketInbox({ locationId, locationName, userId }) {
             onSend={handleSend}
             sending={sending}
             onRemoveRecipient={handleRemoveRecipient}
+            onRestoreRecipient={handleRestoreRecipient}
             onForward={setForwarding}
           />
         </div>

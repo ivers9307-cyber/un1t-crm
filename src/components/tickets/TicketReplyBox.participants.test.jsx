@@ -57,6 +57,7 @@ function renderBox(props = {}) {
       // of this is about.
       signature=""
       onRemoveRecipient={vi.fn()}
+      onRestoreRecipient={vi.fn()}
       {...props}
     />
   )
@@ -124,17 +125,29 @@ describe('TicketReplyBox — the reply audience', () => {
   it('shows no chips and refuses to send once the audience has been emptied', () => {
     const onSend = vi.fn()
     // What the server answers after the last participant is removed: an empty
-    // set, deliberately, NOT "we could not work out who".
-    const { container } = renderBox({ replyRecipients: audience([]), onSend })
+    // set, deliberately, NOT "we could not work out who" — and the requester
+    // sitting in excluded_participants is how it got that way.
+    const { container } = renderBox({
+      ticket: { ...TICKET, excluded_participants: ['a@x.com'] },
+      replyRecipients: audience([]),
+      onSend,
+    })
 
     // The requester fallback must not run here. It did, and put the person the
     // operator had just removed back on screen as a chip — and into the line
     // naming who the reply reaches — while the route refused the send.
     expect(screen.queryAllByRole('button', { name: /^Remove / })).toHaveLength(0)
-    expect(screen.queryByText(/a@x\.com/)).toBeNull()
+    // It may appear as a REMOVED chip below, but never as somebody this reply
+    // reaches, and the line that names them must not claim otherwise.
+    expect(screen.queryByText(/Sends an email to/i)).toBeNull()
 
     // The reply route's own words, so the composer and its 400 agree.
     expect(screen.getByText(/no recipients left/i)).toBeTruthy()
+
+    // And the thing that sentence tells them to do is on screen. Without it
+    // the empty state is a one-way door: the copy says "restore one" and there
+    // is nothing to restore with, so the ticket can never be replied to again.
+    expect(screen.getByRole('button', { name: 'Restore a@x.com' })).toBeTruthy()
 
     fireEvent.change(screen.getByLabelText('Reply to the member'), {
       target: { value: 'Are you still there?' },
@@ -142,5 +155,44 @@ describe('TicketReplyBox — the reply audience', () => {
     expect(screen.getByRole('button', { name: 'Reply' }).disabled).toBe(true)
     fireEvent.submit(container.querySelector('form'))
     expect(onSend).not.toHaveBeenCalled()
+  })
+})
+
+describe('TicketReplyBox — the people taken off it', () => {
+  it('shows removed participants as restorable, and not as recipients', () => {
+    renderBox({
+      ticket: { ...TICKET, excluded_participants: ['gone@x.com', 'also@y.com'] },
+      replyRecipients: audience(['a@x.com']),
+    })
+
+    // Every removed address is on screen with a way back. Vanishing silently
+    // is what made a removal impossible to see, let alone undo.
+    for (const address of ['gone@x.com', 'also@y.com']) {
+      expect(screen.getByRole('button', { name: `Restore ${address}` })).toBeTruthy()
+    }
+
+    // And they are NOT offered as recipients: a × beside a removed address
+    // would say they were still on the reply.
+    expect(screen.queryByRole('button', { name: 'Remove gone@x.com' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Remove a@x.com' })).toBeTruthy()
+
+    // Never in note mode: a note reaches nobody, so "not on this reply" is not
+    // a distinction it can draw.
+    fireEvent.click(screen.getByRole('button', { name: 'Internal note' }))
+    expect(screen.queryByRole('button', { name: /^Restore / })).toBeNull()
+  })
+
+  it("calls onRestoreRecipient with the chip's own address", () => {
+    const onRestoreRecipient = vi.fn()
+    renderBox({
+      ticket: { ...TICKET, excluded_participants: ['gone@x.com', 'also@y.com'] },
+      replyRecipients: audience(['a@x.com']),
+      onRestoreRecipient,
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /restore also@y\.com/i }))
+
+    expect(onRestoreRecipient).toHaveBeenCalledTimes(1)
+    expect(onRestoreRecipient).toHaveBeenCalledWith('also@y.com')
   })
 })
