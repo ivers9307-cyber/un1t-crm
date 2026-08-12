@@ -75,6 +75,10 @@ import { useState } from 'react'
 import { Send, Lock, Users, AlertCircle, RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui'
 import { isArchivedStatus, statusMeta, replyActionLabel } from '@/lib/ticket-display'
+// The cap the reply route refuses on, imported rather than typed into the
+// sentence below: the route interpolates this same constant into its 400, and
+// two hand-written 25s are two places to forget when it moves.
+import { MAX_RECIPIENTS } from '@/lib/email-recipients'
 import SignatureHint from './SignatureHint'
 import RecipientEditor, { EMPTY_RECIPIENTS } from './RecipientEditor'
 import AttachmentPicker, { readyDrafts, hasPendingUploads } from './AttachmentPicker'
@@ -225,10 +229,23 @@ export default function TicketReplyBox({
           "these two are not getting this" has to survive being glanced at. */}
       {!isNote && canReply && removedParticipants.length > 0 && (
         <div className="mb-2">
-          <p className="mb-1 text-[11px] font-medium uppercase tracking-wider text-un1t-muted">
+          {/* The heading is TIED to the group, not merely above it. Sighted
+              readers get "not a recipient" from the strike-through and the
+              unfilled chip; a screen reader gets neither, so without the
+              association the only cue left is the word "Restore" on a button —
+              and an address announced with no cue at all reads as somebody on
+              the reply. */}
+          <p
+            id="reply-removed-participants"
+            className="mb-1 text-[11px] font-medium uppercase tracking-wider text-un1t-muted"
+          >
             Not on this reply
           </p>
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div
+            role="group"
+            aria-labelledby="reply-removed-participants"
+            className="flex flex-wrap items-center gap-1.5"
+          >
             {removedParticipants.map(address => (
               <span
                 key={`removed-${address}`}
@@ -265,7 +282,7 @@ export default function TicketReplyBox({
       )}
       {overCap && (
         <p className="mb-2 text-[11px] text-amber-700">
-          This thread has {lockedTo.length} recipients and the limit is 25. Remove some before replying.
+          This thread has {lockedTo.length} recipients and the limit is {MAX_RECIPIENTS}. Remove some before replying.
         </p>
       )}
       <label className="sr-only" htmlFor="ticket-composer">
