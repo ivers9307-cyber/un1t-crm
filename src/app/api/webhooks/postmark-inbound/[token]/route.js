@@ -600,7 +600,20 @@ async function processInboundEmail(db, body, messageId) {
   // "this replies to one of OUR sends" from "this carries some threading
   // header", which is the whole content of the in_reply_to diagnostic. Nothing
   // else reads it — contact_id is gone from the select, sent_at only orders and
-  // postmark_message_id only filters.
+  // postmark_message_id only filters. Deriving it from `candidates.length`
+  // instead would BROADEN it: email_sends.contact_id is NOT NULL, so a staff
+  // reply to an UNLINKED requester writes no email_sends row at all, and that
+  // requester's later reply carries a real threading header with nothing of
+  // ours behind it. Pinned by a test ('reports from_address when a threading
+  // header names no send of ours').
+  //
+  // KNOW WHAT IT COSTS before you extend it. matchedVia is returned in the
+  // response body and persisted NOWHERE, so this query buys a string that only
+  // Postmark's activity log ever shows — while its failure branch below still
+  // 5xxes the whole inbound. That trade is fine as it stands (the read is
+  // indexed, and the 5xx gives the dedupe claim back so Postmark's retry really
+  // re-processes) but it is the wrong shape to hang anything heavier on: a
+  // diagnostic must never be the reason a member's email fails to file.
   //
   // sanitizeDbText on each candidate (EMAIL-INBOUND-POISON.1): a NUL inside
   // In-Reply-To would otherwise ride into the `.in()` filters and can fail

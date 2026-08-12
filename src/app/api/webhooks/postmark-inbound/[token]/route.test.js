@@ -505,6 +505,25 @@ describe('contact linkage ignores threading headers (EMAIL-PARTICIPANTS.10)', ()
     expect(insertsInto(db, 'email_inbox_messages')[0].payload.contact_id).toBe('c-1')
     expect((await res.json()).matched_via).toBe('in_reply_to')
   })
+
+  // WHY the email_sends query survived a change that took away its only
+  // consumer. Deriving the diagnostic from `candidates.length` — "this payload
+  // carries a threading header" — reads like the same statement and is not.
+  // email_sends.contact_id is NOT NULL, so a staff reply to an UNLINKED
+  // requester writes NO email_sends row at all (compose/reply both build
+  // sendLogRow as `contact ? {…} : null`). That requester's later reply then
+  // carries a perfectly real In-Reply-To with nothing of ours behind it, and
+  // the cheaper test would report it as 'in_reply_to' — quietly widening the
+  // diagnostic from "replies to one of OUR SENDS" to "has a header".
+  // The row's EXISTENCE is the signal; this test is what says so.
+  it('reports from_address when a threading header names no send of ours', async () => {
+    // Default fixture: sends is empty, so the In-Reply-To matches nothing.
+    const res = await post(reply())
+
+    expect((await res.json()).matched_via).toBe('from_address')
+    // …and the linkage still came off the From address, as it now always does.
+    expect(insertsInto(db, 'email_tickets')[0].payload.contact_id).toBe('c-1')
+  })
 })
 
 describe('ticket write (the dual-write is GONE — EMAIL-CONV-STOP.1)', () => {
