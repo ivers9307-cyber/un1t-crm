@@ -643,10 +643,29 @@ function DeliveryFailureNotice({ delivery, stamp }) {
  * With no derived audience (the server could not work one out — an own-address
  * lookup blip) this falls back to the requester line it replaced. That is the
  * honest answer at that point, and it is what the header always showed.
+ *
+ * THE FALLBACK STOPS AT `empty` (EMAIL-PARTICIPANTS.12). "We could not derive
+ * anybody" and "the operator took everybody off" are different answers and
+ * only the first one is a gap the requester fills. Falling back on the second
+ * printed the person who had just been removed at the top of the pane, named
+ * as who the ticket is with, directly above a composer saying nobody is left
+ * and a route that 400s the send. TicketReplyBox.jsx has forbidden exactly
+ * that since EMAIL-PARTICIPANTS.7 — never name somebody who will not be
+ * mailed — and this header was contradicting it one component up. It says the
+ * true thing instead, in the composer's own words, and the removed addresses
+ * stay visible where they are restorable: on the composer's own chips.
  */
 function ThreadParticipants({ ticket, name, replyRecipients }) {
   const people = (Array.isArray(replyRecipients?.to) ? replyRecipients.to : []).filter(Boolean)
   const requester = ticket?.requester_email || ''
+
+  if (replyRecipients?.empty) {
+    return (
+      <p className="mt-0.5 truncate text-xs text-un1t-subtle">
+        Nobody is left on this thread — every recipient was removed.
+      </p>
+    )
+  }
 
   if (people.length === 0) {
     return (
