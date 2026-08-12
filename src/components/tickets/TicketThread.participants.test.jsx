@@ -43,6 +43,7 @@ const TICKET = {
   status: 'open',
   subject: 'Commercial rates 2026',
   requester_email: 'rates@council.ie',
+  requester_name: 'Rates Office',
   mailbox: { id: 'mb-1', label: 'Studio', address: 'studio@x.com' },
 }
 const noop = () => {}
@@ -110,15 +111,22 @@ describe('TicketThread — who the ticket is actually with', () => {
     // people, same order, as the reply will actually reach. The header used to
     // show requester_email and nothing else, which is precisely the wrong name.
     //
+    // The requester's NAME rides on their own address rather than sitting
+    // above the list: a human name is what an operator scans for, but a name
+    // on its own line is the wrong name in the most prominent place the moment
+    // the thread has moved on.
+    //
     // Matched as the whole line rather than "somewhere on the page": the
     // composer below renders these addresses too, and it already did on the
     // day of the incident. Being in the composer is not being in the header.
-    expect(screen.getByText('On this thread: eleanor@council.ie, rates@council.ie')).toBeTruthy()
+    expect(
+      screen.getByText('On this thread: eleanor@council.ie, Rates Office <rates@council.ie>')
+    ).toBeTruthy()
 
     // And the requester is not erased — demoted. "Opened by" is how an
     // operator reconciles the ticket in front of them with the address it
     // arrived from, and it appears BECAUSE the two have diverged.
-    expect(screen.getByText(/opened by/i)).toBeTruthy()
+    expect(screen.getByText('Opened by Rates Office <rates@council.ie>')).toBeTruthy()
   })
 })
 
@@ -144,6 +152,13 @@ describe('TicketThread — a message\'s own envelope', () => {
     expect(details.getAttribute('aria-expanded')).toBe('false')
     expect(screen.queryByText('clerk@council.ie')).toBeNull()
 
+    // BCC IS THE EXCEPTION AND IS ALREADY VISIBLE, before any click. It is the
+    // highest-consequence line on a message here — a whole invariant exists
+    // about a Bcc address never re-entering a recipient list — so it must not
+    // be the thing an operator has to go looking for.
+    expect(screen.getByText('secret@x.com')).toBeTruthy()
+    expect(screen.getByText(/Only staff on this ticket can see this/)).toBeTruthy()
+
     fireEvent.click(details)
 
     // One click and it is the header a mail client would show. The From line
@@ -153,14 +168,14 @@ describe('TicketThread — a message\'s own envelope', () => {
     expect(screen.getByText('studio@x.com')).toBeTruthy()
     expect(screen.getByText('clerk@council.ie')).toBeTruthy()
 
-    // Bcc keeps the lock and the sentence it has always had. It is shown here
-    // and NOWHERE else — never in the header's participant list, and never as
-    // a join marker, where it would leak to everyone reading the ticket.
-    expect(screen.getByText('secret@x.com')).toBeTruthy()
-    expect(screen.getByText(/Only staff on this ticket can see this/)).toBeTruthy()
+    // Bcc is shown here and NOWHERE else — never in the header's participant
+    // list, and never as a join marker, where it would leak to everyone
+    // reading the ticket.
     expect(screen.queryByText(/secret@x\.com joined this thread/i)).toBeNull()
 
+    // Collapsing takes To and Cc away again, and leaves the Bcc where it was.
     fireEvent.click(screen.getByRole('button', { name: 'Hide details' }))
     expect(screen.queryByText('clerk@council.ie')).toBeNull()
+    expect(screen.getByText('secret@x.com')).toBeTruthy()
   })
 })

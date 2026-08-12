@@ -666,15 +666,33 @@ function ThreadParticipants({ ticket, name, replyRecipients }) {
   const norm = (a) => String(a || '').trim().toLowerCase()
   const diverged = !!requester && norm(people[0]) !== norm(requester)
 
+  // THE REQUESTER'S NAME GOES ON THEIR ADDRESS, not on a line of its own.
+  // A human name is what an operator actually scans this header for, so
+  // dropping it for raw addresses reads worse — but a name floating above the
+  // participants is the wrong name in the most prominent place the moment the
+  // thread moves to somebody else, which is the bug this task exists for.
+  // Mail-client form ("Ada Lovelace <ada@x.com>") attributes it to exactly one
+  // participant and leaves everyone else as the address they are. It is the
+  // only name we hold: requester_name is a column, the rest are bare addresses
+  // off message headers.
+  const requesterName = ticket?.requester_name || ''
+  const withName = (address) => (
+    requesterName && norm(address) === norm(requester)
+      ? `${requesterName} <${address}>`
+      : address
+  )
+
   return (
     <>
       {/* Label and addresses in ONE text run, deliberately: the composer below
           renders this same joined list as its "sends to" summary, and a line
           that is only the addresses is indistinguishable from it — on screen
           and to a test. The words are what make this the header's answer. */}
-      <p className="mt-0.5 truncate text-xs text-un1t-subtle">On this thread: {people.join(', ')}</p>
+      <p className="mt-0.5 truncate text-xs text-un1t-subtle">
+        On this thread: {people.map(withName).join(', ')}
+      </p>
       {diverged && (
-        <p className="truncate text-[11px] text-un1t-muted">Opened by {requester}</p>
+        <p className="truncate text-[11px] text-un1t-muted">Opened by {withName(requester)}</p>
       )}
     </>
   )
@@ -754,41 +772,64 @@ function envelopeLines(message) {
  * lines of message, and an operator stops reading either. One click and it is
  * the real header.
  *
- * BCC KEEPS ITS LOCK AND ITS SENTENCE, and lives here and nowhere else: never
- * on the header's participant list, never a join marker. On the accent bubble
- * the muted ramp is unreadable, hence the two colour sets.
+ * BCC IS THE EXCEPTION AND STAYS AT THE TOP LEVEL, never behind the toggle. It
+ * is the highest-consequence line on a message in this system — there is a
+ * whole invariant about a Bcc address never re-entering a recipient list — so
+ * putting it one click further away is the wrong direction even with the lock
+ * and the sentence retained. It is also rare, so on an ordinary message this
+ * costs nothing and keeps the thing that matters in front of the operator.
+ *
+ * The split is on `staffOnly`, which messageRecipients() already sets, rather
+ * than on the literal key 'bcc': the flag means "this line is not what the
+ * recipients saw", and any future line carrying it wants the same treatment.
+ *
+ * Bcc lives here and nowhere else: never on the header's participant list,
+ * never a join marker. On the accent bubble the muted ramp is unreadable,
+ * hence the two colour sets.
  */
 function MessageEnvelope({ message, onAccent = false }) {
   const [open, setOpen] = useState(false)
   const lines = envelopeLines(message)
   if (lines.length === 0) return null
 
+  const collapsible = lines.filter(l => !l.staffOnly)
+  const alwaysOn = lines.filter(l => l.staffOnly)
+
   const label = onAccent ? 'text-white/60' : 'text-un1t-muted'
   const body = onAccent ? 'text-white/85' : 'text-un1t-subtle'
   const toggle = onAccent ? 'text-white/80 hover:text-white' : 'text-un1t-subtle hover:text-un1t-text'
 
+  const renderLine = (line) => (
+    <p key={line.key} className={`flex flex-wrap items-baseline gap-x-1.5 text-[11px] ${body}`}>
+      <span className={`inline-flex items-center gap-1 font-medium uppercase tracking-wide ${label}`}>
+        {line.staffOnly && <Lock size={9} className="shrink-0" aria-hidden="true" />}
+        {line.label}
+      </span>
+      <span className="break-all">{line.addresses.join(', ')}</span>
+      {line.note && <span className={label}>· {line.note}</span>}
+    </p>
+  )
+
   return (
     <div className="mb-1">
-      <button
-        type="button"
-        onClick={() => setOpen(v => !v)}
-        aria-expanded={open}
-        className={`text-[11px] ${toggle}`}
-      >
-        {open ? 'Hide details' : 'Details'}
-      </button>
-      {open && (
-        <div className="mt-1 space-y-0.5">
-          {lines.map(line => (
-            <p key={line.key} className={`flex flex-wrap items-baseline gap-x-1.5 text-[11px] ${body}`}>
-              <span className={`inline-flex items-center gap-1 font-medium uppercase tracking-wide ${label}`}>
-                {line.staffOnly && <Lock size={9} className="shrink-0" aria-hidden="true" />}
-                {line.label}
-              </span>
-              <span className="break-all">{line.addresses.join(', ')}</span>
-              {line.note && <span className={label}>· {line.note}</span>}
-            </p>
-          ))}
+      {collapsible.length > 0 && (
+        <>
+          <button
+            type="button"
+            onClick={() => setOpen(v => !v)}
+            aria-expanded={open}
+            className={`text-[11px] ${toggle}`}
+          >
+            {open ? 'Hide details' : 'Details'}
+          </button>
+          {open && <div className="mt-1 space-y-0.5">{collapsible.map(renderLine)}</div>}
+        </>
+      )}
+      {/* After the collapsible group so an expanded envelope reads in header
+          order — From, To, Cc, then Bcc — and before the body either way. */}
+      {alwaysOn.length > 0 && (
+        <div className={`space-y-0.5 ${collapsible.length > 0 ? 'mt-1' : ''}`}>
+          {alwaysOn.map(renderLine)}
         </div>
       )}
     </div>
