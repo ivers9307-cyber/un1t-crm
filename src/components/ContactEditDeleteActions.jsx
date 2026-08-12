@@ -192,7 +192,11 @@ export default function ContactEditDeleteActions({ contact, canEdit, canDelete }
                   </div>
                 )}
 
-                {impact.total_rows === 0 && (
+                {/* IMPACTCAT.1 — "Safe to delete" is an assertion, so it needs
+                    a complete count behind it. Without the !partial guard a
+                    contact with nothing in the 21 legacy tables renders the
+                    caution above AND this line, which contradict each other. */}
+                {impact.total_rows === 0 && !impact.partial && (
                   <p className="text-xs">No dependent rows. Safe to delete.</p>
                 )}
               </div>
