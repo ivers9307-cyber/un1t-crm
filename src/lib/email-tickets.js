@@ -79,6 +79,48 @@ export function ticketSubject(existingSubject, inboundSubject) {
 }
 
 /**
+ * The message id at which each address first appears on the thread, so the UI
+ * can say WHERE someone joined. Derived, never stored — first appearance is a
+ * property of the messages that arrived.
+ *
+ * WHY THIS EXISTS (EMAIL-PARTICIPANTS.8)
+ * A ticket opened by ratesoffice@dublincity.ie was forwarded internally to a
+ * named officer, who replied. From that message on the conversation was with
+ * her — and nothing on screen said so, so an operator answered the wrong
+ * person twice. The recipient half of that is fixed upstream; this is the fact
+ * the thread needs to SHOW it, against the message she actually arrived on.
+ *
+ * Internal notes and forwards are skipped for the same reason they are skipped
+ * when building the audience: a note names nobody, and a forward shows the
+ * thread to someone rather than adding them to it. Skipped, note, means the
+ * addresses on them are not consumed either — someone first seen on a forward
+ * still joins properly on the message they themselves write.
+ *
+ * `bcc_emails` IS DELIBERATELY ABSENT from the field list. A Bcc'd person is
+ * not visibly on the thread, and announcing them would leak the Bcc to
+ * everyone reading the ticket. Do not add it.
+ *
+ * @param {object[]} messages  ascending by created_at
+ * @returns {Map<string, string[]>}  message id → addresses first seen there
+ */
+export function joinPointsByMessage(messages) {
+  const seen = new Set()
+  const out = new Map()
+  for (const m of Array.isArray(messages) ? messages : []) {
+    if (!m || m.is_internal_note || m.forwarded_message_id) continue
+    const here = []
+    for (const raw of [m.from_email, ...(m.to_emails || []), ...(m.cc_emails || [])]) {
+      const a = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
+      if (!a || seen.has(a)) continue
+      seen.add(a)
+      here.push(a)
+    }
+    if (here.length) out.set(m.id, here)
+  }
+  return out
+}
+
+/**
  * Which ticket a set of threading-matched message rows belongs to.
  *
  * A long reply chain touches many of our messages, so several rows can match

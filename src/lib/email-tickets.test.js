@@ -8,6 +8,7 @@ import {
   shouldStampFirstResponse,
   ticketSubject,
   pickThreadedTicket,
+  joinPointsByMessage,
 } from './email-tickets'
 
 describe('resolveTicketAction', () => {
@@ -131,5 +132,105 @@ describe('pickThreadedTicket', () => {
     expect(pickThreadedTicket([{ ticket_id: 'X', created_at: 'nonsense' }, b])).toBe('T2')
     expect(pickThreadedTicket([{ ticket_id: 'X', created_at: null }])).toBeNull()
     expect(pickThreadedTicket([{ ticket_id: 'X' }])).toBeNull()
+  })
+})
+
+// EMAIL-PARTICIPANTS.8 — WHERE each address first appears on the thread.
+//
+// The bug: a ticket opened by ratesoffice@dublincity.ie was forwarded
+// internally to eleanor.brennan@dublincity.ie, who replied. Every message from
+// then on was with Eleanor, and nothing on screen said so. This is the derived
+// fact the thread needs to render "eleanor… joined this thread" against the
+// message she actually arrived on.
+describe('joinPointsByMessage', () => {
+  it('attributes an address to the FIRST message it appears on, and only that one', () => {
+    const points = joinPointsByMessage([
+      { id: 'm1', from_email: 'rates@council.ie', to_emails: ['studio@x.com'] },
+      { id: 'm2', from_email: 'studio@x.com', to_emails: ['rates@council.ie'] },
+    ])
+    // Both arrived on m1. m2 introduces nobody, so it gets no entry at all —
+    // a marker on every message would say nothing and hide the one that does.
+    expect(points.get('m1')).toEqual(['rates@council.ie', 'studio@x.com'])
+    expect(points.has('m2')).toBe(false)
+  })
+
+  it('marks the message a NEW counterparty arrived on — the whole point', () => {
+    const points = joinPointsByMessage([
+      { id: 'm1', from_email: 'studio@x.com', to_emails: ['rates@council.ie'] },
+      { id: 'm2', from_email: 'eleanor@council.ie', to_emails: ['studio@x.com'] },
+    ])
+    expect(points.get('m2')).toEqual(['eleanor@council.ie'])
+  })
+
+  it('reads Cc as an arrival too — a copied colleague is on the thread', () => {
+    const points = joinPointsByMessage([
+      { id: 'm1', from_email: 'a@x.com', to_emails: ['b@x.com'], cc_emails: ['c@x.com'] },
+    ])
+    expect(points.get('m1')).toEqual(['a@x.com', 'b@x.com', 'c@x.com'])
+  })
+
+  it('skips an internal note, and does not let one consume an address', () => {
+    const points = joinPointsByMessage([
+      { id: 'm1', from_email: 'a@x.com', to_emails: ['b@x.com'] },
+      { id: 'm2', is_internal_note: true, from_email: 'staff@x.com', to_emails: ['boss@x.com'] },
+      { id: 'm3', from_email: 'staff@x.com', to_emails: ['b@x.com'] },
+    ])
+    // A note names nobody: it never left the building, so it cannot be where
+    // somebody joined the conversation.
+    expect(points.has('m2')).toBe(false)
+    // And because the note was skipped rather than counted, staff@x.com joins
+    // on m3 — the message they actually sent.
+    expect(points.get('m3')).toEqual(['staff@x.com'])
+  })
+
+  it('skips a forward, and does not let one consume an address', () => {
+    const points = joinPointsByMessage([
+      { id: 'm1', from_email: 'a@x.com', to_emails: ['b@x.com'] },
+      { id: 'm2', forwarded_message_id: 'm1', from_email: 'b@x.com', to_emails: ['acct@z.com'] },
+      { id: 'm3', from_email: 'acct@z.com', to_emails: ['b@x.com'] },
+    ])
+    // A forward SHOWS the thread to someone rather than adding them to it —
+    // the same rule the reply audience uses, for the same reason.
+    expect(points.has('m2')).toBe(false)
+    // So the accountant joins when they write in, not when they were shown it.
+    expect(points.get('m3')).toEqual(['acct@z.com'])
+  })
+
+  it('matches case-insensitively and reports the normalised address', () => {
+    const points = joinPointsByMessage([
+      { id: 'm1', from_email: '  Eleanor@Council.IE  ' },
+      { id: 'm2', from_email: 'eleanor@council.ie' },
+    ])
+    // Mail addresses arrive however the sender's client wrote them. "Eleanor
+    // joined twice" is the same defect as not noticing she joined at all.
+    expect(points.get('m1')).toEqual(['eleanor@council.ie'])
+    expect(points.has('m2')).toBe(false)
+  })
+
+  it('NEVER reads bcc_emails', () => {
+    const points = joinPointsByMessage([
+      { id: 'm1', from_email: 'a@x.com', to_emails: ['b@x.com'], bcc_emails: ['secret@x.com'] },
+    ])
+    // A Bcc'd person is not visibly on the thread, and announcing them leaks
+    // the Bcc to everyone reading the ticket.
+    expect(points.get('m1')).toEqual(['a@x.com', 'b@x.com'])
+  })
+
+  it('lets a previously-Bcc\'d address join when it appears openly', () => {
+    const points = joinPointsByMessage([
+      { id: 'm1', from_email: 'a@x.com', bcc_emails: ['secret@x.com'] },
+      { id: 'm2', from_email: 'secret@x.com', to_emails: ['a@x.com'] },
+    ])
+    // The Bcc was not merely unannounced, it was not consumed: when they write
+    // in openly, that IS where the thread learns about them.
+    expect(points.get('m2')).toEqual(['secret@x.com'])
+  })
+
+  it('returns an empty map for empty, null and malformed input', () => {
+    expect(joinPointsByMessage([])).toEqual(new Map())
+    expect(joinPointsByMessage(null)).toEqual(new Map())
+    expect(joinPointsByMessage(undefined)).toEqual(new Map())
+    expect(joinPointsByMessage('nope')).toEqual(new Map())
+    expect(joinPointsByMessage([null, { id: 'm1' }, { id: 'm2', from_email: '' }])).toEqual(new Map())
   })
 })
