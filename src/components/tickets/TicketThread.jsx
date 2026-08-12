@@ -85,6 +85,11 @@ export default function TicketThread({
   viewerIsElevated = false,
   onSend,
   sending = false,
+  // EMAIL-PARTICIPANTS.7 — takes ONE address off the reply audience, stickily.
+  // Owned by the inbox like every other mutation here: the audience is derived
+  // server-side and re-read, so reflecting a removal is a thread refresh, and
+  // this pane has no refresh of its own. Its failures land in `error` above.
+  onRemoveRecipient,
   // EMAIL-FORWARD.1 — opens the forward composer for ONE message. Owned by the
   // inbox (like compose), because a forward is a modal over the whole surface
   // rather than something a bubble can render inside itself.
@@ -292,6 +297,7 @@ export default function TicketThread({
         ticket={ticket}
         replyRecipients={replyRecipients}
         onSend={onSend}
+        onRemoveRecipient={onRemoveRecipient}
         sending={sending}
       />
     </>

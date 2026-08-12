@@ -30,6 +30,16 @@
 // that lets someone drop a participant by clicking the wrong one, so neither
 // this component nor the route has a way to express it.
 //
+// REMOVING ONE, THOUGH, IS EXPLICIT (EMAIL-PARTICIPANTS.7). The audience is
+// derived from the WHOLE thread now, so it can include people an operator has
+// a real reason to take off — and a derived set nobody can edit is its own
+// trap. The chips above the textarea are that edit and the ONLY one: a × per
+// address, no free-form box to type a new one (Richard). Subtracting from a
+// derived set cannot reach anyone the thread did not already include; adding
+// to it can, and that is what compose and forward are for. The removal is
+// sticky, stored per ticket by the participants route, and it is the SERVER's
+// answer that repaints these chips — this box never edits the list it renders.
+//
 // Cc and Bcc ADD people and live behind the editor's own toggle. An internal
 // note has no recipients at all — the editor is not rendered in note mode, and
 // the route refuses a note that carries any.
@@ -56,6 +66,7 @@ export default function TicketReplyBox({
   ticket,
   replyRecipients = null,
   onSend,
+  onRemoveRecipient,
   sending = false,
   signature,
 }) {
@@ -82,6 +93,9 @@ export default function TicketReplyBox({
   // their uploads.
   const filesBlockNote = isNote && files.length > 0
   const uploading = hasPendingUploads(files)
+  // The reply route refuses an audience over the cap (EMAIL-PARTICIPANTS.5).
+  // A note reaches nobody, so it can never be over one.
+  const overCap = !isNote && !!replyRecipients?.over_cap
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -91,6 +105,7 @@ export default function TicketReplyBox({
     // Never send a partial set: a chip on screen that did not go with the email
     // is the same lie as a file the thread claims was sent.
     if (uploading || filesBlockNote) return
+    if (overCap) return
     // A note is sent to nobody, so it carries NEITHER recipients NOR files —
     // the route refuses one that does, and this is the client half of the same
     // rule for both. One `extras` object rather than two positional arguments,
@@ -156,6 +171,40 @@ export default function TicketReplyBox({
         </div>
       )}
 
+      {!isNote && lockedTo.length > 0 && (
+        <div className="mb-2 flex flex-wrap items-center gap-1">
+          <span className="text-[11px] text-un1t-muted">To</span>
+          {lockedTo.map(address => (
+            <span
+              key={address}
+              className="inline-flex items-center gap-1 rounded-full bg-un1t-border/40 px-2 py-0.5 text-[11px] text-un1t-subtle"
+            >
+              {address}
+              {/* Removal is the ONLY edit offered. Adding an arbitrary address
+                  belongs to compose and forward — keeping the audience derived
+                  is what stops a reply quietly reaching someone the thread
+                  never included. A one-person thread keeps its × so the last
+                  recipient can still be removed deliberately; the reply route
+                  then refuses the send rather than mailing them anyway. */}
+              {onRemoveRecipient && (
+                <button
+                  type="button"
+                  aria-label={`Remove ${address}`}
+                  onClick={() => onRemoveRecipient(address)}
+                  className="text-un1t-muted hover:text-un1t-text"
+                >
+                  ×
+                </button>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
+      {overCap && (
+        <p className="mb-2 text-[11px] text-amber-700">
+          This thread has {lockedTo.length} recipients and the limit is 25. Remove some before replying.
+        </p>
+      )}
       <label className="sr-only" htmlFor="ticket-composer">
         {isNote ? 'Internal note (staff only)' : 'Reply to the member'}
       </label>
