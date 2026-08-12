@@ -402,9 +402,14 @@ export const PARTICIPANT_SCAN_LIMIT = 500
 
 // bcc_emails IS NOT SELECTED, so no caller can leak it into a recipient list
 // even if the derivation changed. forwarded_message_id IS, because a forward
-// row must be recognisable in order to be skipped.
+// row must be recognisable in order to be skipped. `direction` IS
+// (EMAIL-PARTICIPANTS.12) because ticketParticipants reads the newest message
+// two different ways — inbound leads with its From, outbound with its first To
+// — and without the column that decision falls back to the weaker signal
+// (is the From one of ours), which is right but only as far as `ownAddresses`
+// happens to be complete.
 const PARTICIPANT_COLUMNS =
-  'from_email, to_email, to_emails, cc_emails, is_internal_note, forwarded_message_id, created_at, sent_at'
+  'direction, from_email, to_email, to_emails, cc_emails, is_internal_note, forwarded_message_id, created_at, sent_at'
 
 /**
  * The one message window both the detail route and the reply route derive from.

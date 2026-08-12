@@ -24,6 +24,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent } from '@testing-library/react'
 import TicketThread from './TicketThread.jsx'
+// The REAL derivation, not a hand-written array (EMAIL-PARTICIPANTS.12). One
+// test below feeds this component exactly what the route would hand it for a
+// given thread, because the header's divergence marker is a fact about the
+// ORDER of that derivation and a fixture asserts nothing about the order.
+import { ticketParticipants } from '@/lib/email-recipients'
 
 beforeEach(() => {
   // jsdom has no scrollIntoView; the thread scroll-follows new messages.
@@ -148,6 +153,79 @@ describe('TicketThread — who the ticket is actually with', () => {
     expect(
       screen.getByText('On this thread: Rates Office <rates@council.ie>, clerk@council.ie')
     ).toBeTruthy()
+  })
+
+  // THE MARKER HAS TO SURVIVE THE REPLY IT PROMPTS (EMAIL-PARTICIPANTS.12).
+  // "Opened by" fires on `to[0]` differing from the requester, and `to[0]`
+  // came from the newest message's From — which on OUR OWN reply is one of our
+  // addresses, excluded a line later. So the order reverted to first
+  // appearance, `to[0]` became the requester again, and the one line telling
+  // an operator the thread had moved to somebody else disappeared the moment
+  // they answered. Derived here through the real function rather than a fixed
+  // array: an array can only assert what the header does with an order, and
+  // the defect was in the order.
+  it('keeps "Opened by" on screen after staff answer the diverged thread', () => {
+    const OURS = ['studio@x.com']
+    const thread = [
+      { from_email: 'studio@x.com', to_emails: ['rates@council.ie'], created_at: '2026-08-10T09:00:00Z' },
+      { from_email: 'eleanor@council.ie', to_emails: ['studio@x.com'], created_at: '2026-08-11T09:00:00Z' },
+    ]
+    const audience = ticketParticipants(thread, { exclude: OURS })
+    // Our reply-all to that thread, sent to exactly whom the composer showed.
+    const answered = ticketParticipants([
+      ...thread,
+      { direction: 'outbound', from_email: 'studio@x.com', to_emails: audience,
+        created_at: '2026-08-11T11:00:00Z' },
+    ], { exclude: OURS })
+
+    renderThread({
+      messages: [],
+      replyRecipients: { to: answered, mode: 'reply_all', over_cap: false, empty: false },
+    })
+
+    expect(screen.getByText('Opened by Rates Office <rates@council.ie>')).toBeTruthy()
+    expect(
+      screen.getByText('On this thread: eleanor@council.ie, Rates Office <rates@council.ie>')
+    ).toBeTruthy()
+  })
+})
+
+// EMAIL-PARTICIPANTS.12 — AN EMPTIED AUDIENCE IS NOT A MISSING ONE.
+//
+// The header fell back to naming the requester whenever `to` was empty, which
+// swallowed the case where the operator had just taken everybody off: it put
+// the person they removed back at the top of the pane, described as who the
+// ticket is with, directly above a composer saying nobody is left and a route
+// that 400s the send. TicketReplyBox.jsx has forbidden exactly this since
+// EMAIL-PARTICIPANTS.7 (see `lockedTo`) — never name somebody who will not be
+// mailed — and the header contradicted it one component up.
+//
+// `empty: true` and "no audience at all" are DIFFERENT ANSWERS and only the
+// second is a gap the requester fills, so both are pinned here.
+describe('TicketThread — an audience with nobody left on it', () => {
+  it('does not name the removed requester as the counterparty', () => {
+    renderThread({
+      replyRecipients: { to: [], mode: 'reply', over_cap: false, empty: true },
+    })
+
+    // Not as the person on the thread…
+    expect(screen.queryByText(/On this thread:/)).toBeNull()
+    // …and not through the requester fallback either, which is the line that
+    // used to render here and is the whole contradiction.
+    expect(screen.queryByText(/Rates Office/)).toBeNull()
+    expect(screen.queryByText(/rates@council\.ie/)).toBeNull()
+    // It says the true thing instead, in the composer's own terms.
+    expect(screen.getByText(/Nobody is left on this thread/i)).toBeTruthy()
+  })
+
+  it('still falls back to the requester when the server derived NO audience at all', () => {
+    // replyRecipients absent — an own-address lookup blip, not an operator
+    // act. The requester is the honest answer there, and it is what the
+    // header has always shown.
+    renderThread({ replyRecipients: null })
+
+    expect(screen.getByText(/Rates Office/)).toBeTruthy()
+    expect(screen.queryByText(/Nobody is left on this thread/i)).toBeNull()
   })
 })
 

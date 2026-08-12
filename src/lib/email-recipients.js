@@ -214,9 +214,36 @@ export function inboundAddresses(full, display) {
  *   • `removed` — addresses an operator explicitly took off this ticket
  *     (email_tickets.excluded_participants, mig 534).
  *
- * ORDER: the latest correspondent leads, then everyone else by first
- * appearance. Deterministic, because the detail route and the reply route
- * derive this independently and a difference between them is a wrong audience.
+ * ORDER: THE LIVE COUNTERPARTY LEADS — the person the next reply is answering
+ * — then everyone else by first appearance. Deterministic, because the detail
+ * route and the reply route derive this independently and a difference between
+ * them is a wrong audience.
+ *
+ * WHICH ADDRESS THAT IS depends on the direction of the newest real message,
+ * and reading it one way only is what EMAIL-PARTICIPANTS.12 fixed. The lead
+ * was `newest.from_email` unconditionally; on an OUTBOUND newest message that
+ * is one of OUR OWN addresses, which `exclude` then removes — so the lead
+ * silently evaporated and the order fell back to first appearance the moment
+ * staff answered. On the 2026-08-12 thread the set flipped from
+ * [eleanor, ratesoffice] to [ratesoffice, eleanor] on the reply, and `to[0]`
+ * is not decoration: web's composer placeholder, mobile's footer and the
+ * header's "Opened by" divergence marker all key on it, so the marker built to
+ * announce that the counterparty had changed vanished the instant anyone
+ * answered the ticket it existed for.
+ *
+ * So the newest message is read BOTH WAYS — same question, different field:
+ *   • INBOUND  → its `from_email`: the person who just wrote to us.
+ *   • OUTBOUND → its FIRST To address: the person we last wrote to. A Cc is
+ *     never the lead; "who we wrote to" is the addressee.
+ * Outbound is recognised from `direction`, or — because the participant query
+ * projects a narrow column list and old rows predate parts of it — from the
+ * From being one of `exclude`, which is the same fact stated another way.
+ * Either signal is enough; neither is required.
+ *
+ * Both branches are still subject to the exclusions below, so a lead that
+ * resolves to one of our own addresses (or to somebody removed) simply drops
+ * and the order falls back to first appearance, exactly as it does for a
+ * thread with no usable newest message at all.
  *
  * @param {object[]} messages  email_inbox_messages rows, any order
  * @param {{ exclude?: string[], removed?: string[] }} [opts]
@@ -228,13 +255,33 @@ export function ticketParticipants(messages, { exclude = [], removed = [] } = {}
     .filter(m => m && !m.is_internal_note && !m.forwarded_message_id)
     .sort((a, b) => at(a) - at(b)) // oldest first — first appearance decides order
 
+  // The To of one message. Filtered BEFORE the emptiness test, so a row
+  // carrying `to_emails: [null]` takes the scalar fallback rather than
+  // counting a hole as an address — which is what the three renderers of the
+  // same field (envelopeLines, messageRecipients, ticketMessageRecipients)
+  // already do, and four readers disagreeing about one row is a defect
+  // whatever writes it today.
+  const toAddresses = (m) => {
+    const listed = (Array.isArray(m?.to_emails) ? m.to_emails : []).filter(Boolean)
+    if (listed.length) return listed
+    return m?.to_email ? [m.to_email] : [] // pre-EMAIL-CC.1 rows
+  }
+
+  const ours = new Set(normalizeAddressList(exclude).valid)
+
   const raw = []
   const newest = real[real.length - 1]
-  if (newest) raw.push(newest.from_email) // who you are answering leads
+  if (newest) {
+    // Who you are answering leads — read off the newest message's direction,
+    // never off its From alone. See the ORDER note above.
+    const weSentIt = newest.direction === 'outbound'
+      || ours.has(normalizeAddress(newest.from_email))
+    const lead = weSentIt ? toAddresses(newest)[0] : newest.from_email
+    if (lead) raw.push(lead)
+  }
   for (const m of real) {
     raw.push(m.from_email)
-    if (Array.isArray(m.to_emails) && m.to_emails.length) raw.push(...m.to_emails)
-    else if (m.to_email) raw.push(m.to_email) // pre-EMAIL-CC.1 rows
+    raw.push(...toAddresses(m))
     if (Array.isArray(m.cc_emails)) raw.push(...m.cc_emails)
   }
 

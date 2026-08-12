@@ -135,9 +135,17 @@ export default function TicketReplyBox({
   // It reads `lockedTo`, so it inherits the empty-audience rule above rather
   // than re-deriving one, and can never name somebody the send would refuse.
   // With several people on it, naming one is precisely the mistake — the first
-  // is the live counterparty (the server orders it that way, and the header's
-  // divergence check relies on the same thing) and the rest are a count, which
-  // is the idiom the send button already uses.
+  // is the live counterparty and the rest are a count, which is the idiom the
+  // send button already uses.
+  //
+  // "THE FIRST" IS THE SERVER'S ANSWER, NOT AN ASSUMPTION ABOUT MAIL HEADERS.
+  // ticketParticipants() leads with the person the next reply answers, read
+  // off the newest real message in whichever direction it went: its From when
+  // they wrote to us, its first To when we wrote to them. It used to be the
+  // From either way, which on our own reply is one of OUR addresses and gets
+  // excluded — so this placeholder and the header's divergence check both
+  // silently re-pointed at whoever happened to appear first (see
+  // EMAIL-PARTICIPANTS.12 in src/lib/email-recipients.js).
   const replyPlaceholder = lockedTo.length === 0
     ? 'Reply…'
     : lockedTo.length === 1

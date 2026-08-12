@@ -358,6 +358,81 @@ describe('ticketParticipants', () => {
     expect(out[0]).toBe('new@x.com')
   })
 
+  // ── THE LEAD SURVIVES OUR OWN REPLY (EMAIL-PARTICIPANTS.12) ────────
+  //
+  // The lead used to be `newest.from_email` unconditionally. On an OUTBOUND
+  // newest message that is one of OUR addresses, which `exclude` then drops —
+  // so the lead silently evaporated and the order reverted to first
+  // appearance the instant staff answered. `to[0]` is not decoration: web's
+  // placeholder, mobile's footer and the header's "Opened by" divergence
+  // marker all key on it, so the marker built to say the counterparty had
+  // changed disappeared on the reply to the very ticket it existed for.
+  //
+  // The rule now reads the newest message BOTH WAYS: inbound → who wrote to
+  // us, outbound → who we wrote to. Same question ("who am I answering"),
+  // asked of a header whose direction decides which field holds the answer.
+  it('leads with the person WE last wrote to when the newest message is outbound', () => {
+    const out = ticketParticipants([
+      msg({ from_email: 'us@ours.com', to_emails: ['rates@council.ie'], created_at: '2026-08-01T00:00:00Z' }),
+      msg({ from_email: 'eleanor@council.ie', to_emails: ['us@ours.com'], created_at: '2026-08-02T00:00:00Z' }),
+      // Our reply-all: Eleanor first, because she is who we were answering.
+      msg({ from_email: 'us@ours.com', to_emails: ['eleanor@council.ie', 'rates@council.ie'],
+            direction: 'outbound', created_at: '2026-08-03T00:00:00Z' }),
+    ], { exclude: ['us@ours.com'] })
+    expect(out).toEqual(['eleanor@council.ie', 'rates@council.ie'])
+  })
+
+  it('holds the lead STABLE across an inbound followed by our outbound reply', () => {
+    const thread = [
+      msg({ from_email: 'us@ours.com', to_emails: ['rates@council.ie'], created_at: '2026-08-01T00:00:00Z' }),
+      msg({ from_email: 'eleanor@council.ie', to_emails: ['us@ours.com'], created_at: '2026-08-02T00:00:00Z' }),
+    ]
+    const beforeWeAnswer = ticketParticipants(thread, { exclude: ['us@ours.com'] })
+    const afterWeAnswer = ticketParticipants([
+      ...thread,
+      msg({ from_email: 'us@ours.com', to_emails: beforeWeAnswer,
+            direction: 'outbound', created_at: '2026-08-03T00:00:00Z' }),
+    ], { exclude: ['us@ours.com'] })
+
+    // Answering a ticket is not a change of counterparty, so it must not be a
+    // change of audience ORDER either. Same set, same order, same to[0].
+    expect(afterWeAnswer).toEqual(beforeWeAnswer)
+  })
+
+  // Direction is not always on the row: the participant query projects a
+  // narrow column list, and pre-EMAIL-CC.1 rows predate parts of it. Our own
+  // address in the From is the same fact stated another way, so the rule reads
+  // both signals and needs only one of them.
+  it('recognises an outbound newest message from the exclusions alone, with no direction column', () => {
+    const out = ticketParticipants([
+      msg({ from_email: 'member@x.com', to_emails: ['us@ours.com'], created_at: '2026-08-01T00:00:00Z' }),
+      msg({ from_email: 'us@ours.com', to_email: 'later@x.com', to_emails: null,
+            created_at: '2026-08-02T00:00:00Z' }),
+    ], { exclude: ['us@ours.com'] })
+    expect(out[0]).toBe('later@x.com')
+  })
+
+  it('falls back to first appearance when the newest outbound message named nobody usable', () => {
+    const out = ticketParticipants([
+      msg({ from_email: 'member@x.com', to_emails: ['us@ours.com'], created_at: '2026-08-01T00:00:00Z' }),
+      msg({ from_email: 'us@ours.com', to_emails: [], to_email: null,
+            direction: 'outbound', created_at: '2026-08-02T00:00:00Z' }),
+    ], { exclude: ['us@ours.com'] })
+    expect(out).toEqual(['member@x.com'])
+  })
+
+  // The lead is a To, never a Cc: "who we last wrote to" is the addressee.
+  // A Cc'd watcher leading the list would put the wrong name in the
+  // placeholder, the footer and the divergence check all at once.
+  it('leads with the outbound To, not a Cc on the same message', () => {
+    const out = ticketParticipants([
+      msg({ from_email: 'member@x.com', to_emails: ['us@ours.com'], created_at: '2026-08-01T00:00:00Z' }),
+      msg({ from_email: 'us@ours.com', to_emails: ['member@x.com'], cc_emails: ['watcher@x.com'],
+            direction: 'outbound', created_at: '2026-08-02T00:00:00Z' }),
+    ], { exclude: ['us@ours.com'] })
+    expect(out[0]).toBe('member@x.com')
+  })
+
   it('skips internal notes', () => {
     const out = ticketParticipants([
       msg({ from_email: 'member@x.com' }),
@@ -387,6 +462,22 @@ describe('ticketParticipants', () => {
   it('reads the legacy scalar to_email on pre-EMAIL-CC.1 rows', () => {
     const out = ticketParticipants([
       { from_email: 'a@x.com', to_email: 'b@x.com', to_emails: null, cc_emails: null,
+        is_internal_note: false, forwarded_message_id: null, created_at: '2026-08-01T00:00:00Z' },
+    ])
+    expect(out).toEqual(['a@x.com', 'b@x.com'])
+  })
+
+  // EMAIL-PARTICIPANTS.12 — a NON-EMPTY array of nothing is still nothing.
+  // The three places that render a message's To (TicketThread's envelopeLines,
+  // src/lib/email-tickets.js's messageRecipients, mobile's
+  // ticketMessageRecipients) all filter the array before asking whether it has
+  // anything in it, so `to_emails: [null]` takes the scalar fallback there.
+  // This one asked `.length` of the raw array, took the [null] branch, and
+  // dropped the address the other three show. No current writer produces the
+  // shape; four readers disagreeing about the same row is the defect.
+  it('takes the scalar fallback for a to_emails array holding nothing usable', () => {
+    const out = ticketParticipants([
+      { from_email: 'a@x.com', to_email: 'b@x.com', to_emails: [null], cc_emails: null,
         is_internal_note: false, forwarded_message_id: null, created_at: '2026-08-01T00:00:00Z' },
     ])
     expect(out).toEqual(['a@x.com', 'b@x.com'])
