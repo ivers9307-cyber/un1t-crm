@@ -15,6 +15,17 @@
 // read by the marketing audience gate (buildAudienceQuery) and sequences'
 // email step — administrative/transactional mail is never affected.
 //
+// HYGREL.1 — a contact carrying contacts.email_hygiene_released_at (mig 535)
+// is skipped PERMANENTLY. That column exists because this rule has no notion
+// of a cohort: it requires "first marketing send >90 days ago" to avoid
+// punishing new contacts, which yields a trickle on a list people join
+// continuously and a CLIFF on one that started sending on a single day. The
+// CRM's first send ever was 2026-05-13, so on 2026-08-12 the entire founding
+// cohort crossed that guard at once and this sweep suppressed 1,107 contacts
+// in a single run — about a third of everyone ever emailed, 190 of them
+// current members. Those 190 were released by mig 535 and are marked so this
+// sweep cannot silently re-take the decision.
+//
 // Batch-safe: contacts are keyset-paginated by id (order id, gt lastId) —
 // NOT offset pagination, because stamping rows mid-scan shrinks the
 // "email_suppressed_at IS NULL" population and offset pages would skip
@@ -67,6 +78,14 @@ export async function GET(request) {
         .select('id')
         .eq('email_marketing', true)
         .is('email_suppressed_at', null)
+        // HYGREL.1 — an operator release is PERMANENT (mig 535). Without this
+        // clause the release is undone by the very next run: a released
+        // contact still satisfies every criterion below, so clearing the stamp
+        // alone just puts them back in this page and re-stamps them the same
+        // night. Same reasoning as the bounce-release precedent in
+        // /api/communications/list-health/[id]/release — a rule that overrules
+        // a human every night is not a rule, it is a nag.
+        .is('email_hygiene_released_at', null)
         .order('id')
         .limit(CONTACT_PAGE)
       if (lastId) pageQuery = pageQuery.gt('id', lastId)
