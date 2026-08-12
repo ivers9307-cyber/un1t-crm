@@ -19,22 +19,28 @@ describe('canMerge', () => {
     expect(canMerge(T({ id: 'a' }), T({ id: 'b' }))).toEqual({ ok: true })
   })
   it('refuses merging a ticket into itself', () => {
-    expect(canMerge(T({ id: 'a' }), T({ id: 'a' })).ok).toBe(false)
+    // Pin the exact reason, not just ok:false — nothing consumes .reason yet
+    // (no merge route exists), so a transposed string here would ship silently
+    // and only surface once a later PR wires user-facing copy to it.
+    expect(canMerge(T({ id: 'a' }), T({ id: 'a' }))).toEqual({ ok: false, reason: 'same_ticket' })
   })
   it('refuses across locations', () => {
-    expect(canMerge(T({ id: 'a' }), T({ id: 'b', location_id: 'loc-2' })).ok).toBe(false)
+    expect(canMerge(T({ id: 'a' }), T({ id: 'b', location_id: 'loc-2' })))
+      .toEqual({ ok: false, reason: 'different_location' })
   })
   // Chains would make unmerge inexact: the second unmerge could not tell which
   // rows belonged to which source.
   it('refuses a source that is already merged', () => {
-    expect(canMerge(T({ id: 'a', merged_into_id: 'c' }), T({ id: 'b' })).ok).toBe(false)
+    expect(canMerge(T({ id: 'a', merged_into_id: 'c' }), T({ id: 'b' })))
+      .toEqual({ ok: false, reason: 'source_already_merged' })
   })
   it('refuses merging INTO a tombstone', () => {
-    expect(canMerge(T({ id: 'a' }), T({ id: 'b', merged_into_id: 'c' })).ok).toBe(false)
+    expect(canMerge(T({ id: 'a' }), T({ id: 'b', merged_into_id: 'c' })))
+      .toEqual({ ok: false, reason: 'target_is_merged' })
   })
   it('refuses a missing ticket', () => {
-    expect(canMerge(null, T()).ok).toBe(false)
-    expect(canMerge(T(), null).ok).toBe(false)
+    expect(canMerge(null, T())).toEqual({ ok: false, reason: 'missing_ticket' })
+    expect(canMerge(T(), null)).toEqual({ ok: false, reason: 'missing_ticket' })
   })
 })
 
