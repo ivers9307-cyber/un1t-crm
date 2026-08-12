@@ -39,7 +39,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
-import { loadVisibleMailboxes, scopeToVisibleMailboxes, scopeToNeedsReply } from '../_helpers'
+import { loadVisibleMailboxes, scopeToVisibleMailboxes, scopeToNeedsReply, scopeToUnmerged } from '../_helpers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -80,6 +80,13 @@ export async function GET() {
     .eq('location_id', locationId)
   query = scopeToVisibleMailboxes(query, { mailboxes, elevated })
   query = scopeToNeedsReply(query)
+  // EMAIL-MERGE.3 — and never a tombstone, by the SAME scope the list uses. A
+  // finished merge leaves it `closed`, which scopeToNeedsReply already drops,
+  // so this is the half-applied case (pointer stamped, status write lost) plus
+  // the standing guarantee that the badge and the tab it links to count the
+  // same rows: a badge counting a ticket the queue does not show is the red dot
+  // an operator clicks, finds nothing behind, and stops trusting.
+  query = scopeToUnmerged(query)
 
   const { count, error } = await query
   if (error) {

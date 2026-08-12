@@ -253,6 +253,29 @@ export function scopeToNeedsReply(query) {
   return query.eq('status', 'open').eq('last_message_direction', 'inbound')
 }
 
+/**
+ * Hide merged-away tickets (EMAIL-MERGE.3, mig 536).
+ *
+ * ONE definition, applied by every surface that lists or counts tickets. A
+ * tombstone missed by a filter shows up as an ordinary closed ticket — which is
+ * the duplicate this feature exists to remove, wearing a different hat.
+ *
+ * Status cannot do this job, and that is by design: a merged ticket is `closed`
+ * plus a pointer rather than a fifth enum value, so the `closed` view — which
+ * asks for exactly solved+closed — is precisely where a tombstone would surface
+ * looking like ordinary resolved history. The pointer is the only thing that
+ * distinguishes it, so the pointer is what the scope keys on. That also covers
+ * the half-applied merge (pointer stamped, status write lost), which no
+ * status-based filter could.
+ *
+ * `.is(col, null)` is the ONLY correct null filter here — `.eq(col, null)`
+ * matches nothing in PostgREST, and the failure would be an inbox that empties
+ * itself and a badge stuck at zero.
+ */
+export function scopeToUnmerged(query) {
+  return query.is('merged_into_id', null)
+}
+
 /** 404, never 403 — a detail route must not confirm that an id exists. */
 export function ticketNotFound() {
   return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
