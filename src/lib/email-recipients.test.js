@@ -389,6 +389,18 @@ describe('ticketParticipants', () => {
     expect(out).toEqual(['eleanor@council.ie', 'rates@council.ie'])
   })
 
+  it('unions cc_emails across the thread too, not just to_emails', () => {
+    // The cc'd address appears only on the FIRST (non-latest) message — this
+    // proves the cc_emails line inside the loop is actually reached, not just
+    // present in the source. Every fixture above this leaves cc_emails empty.
+    const out = ticketParticipants([
+      msg({ from_email: 'us@ours.com', to_emails: ['member@x.com'], cc_emails: ['watcher@council.ie'],
+            created_at: '2026-08-01T00:00:00Z' }),
+      msg({ from_email: 'member@x.com', to_emails: ['us@ours.com'], created_at: '2026-08-02T00:00:00Z' }),
+    ], { exclude: ['us@ours.com'] })
+    expect(out).toContain('watcher@council.ie')
+  })
+
   it('puts the latest correspondent first', () => {
     const out = ticketParticipants([
       msg({ from_email: 'old@x.com', created_at: '2026-08-01T00:00:00Z' }),
