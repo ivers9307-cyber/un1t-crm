@@ -409,6 +409,17 @@ const PARTICIPANT_COLUMNS =
 /**
  * The one message window both the detail route and the reply route derive from.
  * Two windows would be two answers to "who does this reach".
+ *
+ * Deliberately returns the raw supabase result rather than the
+ * `{ response } | { ... }` shape used by loadOwnAddresses/loadTicketForUser:
+ * those wrap access/visibility failures into one canonical refusal, but a
+ * content-query failure here logs a route-specific message at each call site
+ * (as the pre-existing message queries in both routes already did), so the
+ * error stays in the caller's hands.
+ *
+ * @param {object} db  service-role client
+ * @param {string} ticketId
+ * @returns {Promise<{ data: object[]|null, error: object|null }>}
  */
 export async function loadParticipantMessages(db, ticketId) {
   return db.from('email_inbox_messages')
@@ -435,7 +446,8 @@ export function resolveReplyAudience({ messages, ticket, ownAddresses }) {
     exclude: ownAddresses || [],
     removed,
   })
-  // Exclusions apply to the fallback too — see the test above.
+  // Exclusions apply to the fallback too — see _helpers.test.js: 'does not
+  // resurrect an excluded requester through the fallback'.
   const fallback = normalizeAddressList([ticket?.requester_email])
     .valid.filter(a => !off.has(a))
 
