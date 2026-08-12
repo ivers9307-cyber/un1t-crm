@@ -297,9 +297,15 @@ describe('GET /api/email/tickets — merged tickets are tombstones', () => {
   })
 
   it('leaves ordinary tickets alone — merged_into_id null is the normal row', async () => {
-    // The regression that would matter most if the filter were spelled with
-    // .eq('merged_into_id', null), which matches NOTHING in PostgREST: the
-    // queue would empty out completely.
+    // What this actually protects: the tombstone scope must not swallow the
+    // ordinary rows — a filter written inside out (or an .is() left non-null)
+    // would empty the queue completely, which is the more damaging direction.
+    //
+    // It does NOT protect the .eq('merged_into_id', null) misspelling, which
+    // matches nothing in real PostgREST: the shared fake's `.eq` is
+    // `value === a`, so it matches NULL exactly as `.is` does and this test
+    // passes either way. That gap is the mock's, not this test's — it is a
+    // tracked follow-up with wider blast radius than one route.
     getCurrentUser.mockResolvedValue(OWNER)
     setupDb(baseState({ grants: [] }))
     expect(ids((await list()).body.data.tickets).sort()).toEqual([T_STUDIO.id, T_ACCOUNTS.id].sort())

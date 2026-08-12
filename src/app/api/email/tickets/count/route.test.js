@@ -238,8 +238,14 @@ describe('GET /api/email/tickets/count — merged tickets are tombstones', () =>
   })
 
   it('still counts ordinary tickets — merged_into_id null is the normal row', async () => {
-    // The .eq(col, null) spelling matches nothing in PostgREST; it would badge
-    // a permanent 0 and the surface would look calm and be wrong.
+    // What this actually protects: the tombstone scope must not swallow the
+    // ordinary rows and badge a permanent 0 — calm and wrong.
+    //
+    // It does NOT protect the .eq(col, null) misspelling, which matches nothing
+    // in real PostgREST: the shared fake's `.eq` is `value === a`, so it matches
+    // NULL exactly as `.is` does and this test passes either way. That gap is
+    // the mock's, not this test's — a tracked follow-up, since changing `.eq`
+    // to reject NULL would ripple through every route test in this tree.
     expect((await count()).body.data.count).toBe(1)
   })
 })
