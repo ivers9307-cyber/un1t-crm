@@ -23,7 +23,7 @@ vi.mock('@/lib/auth', async () => {
 import { POST, DELETE } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { makeDb, writesTo, updatesTo, failWrites } from '../../_test-db'
+import { makeDb, writesTo, updatesTo, failWrites, insertsInto } from '../../_test-db'
 import {
   T_STUDIO, T_ACCOUNTS, COACH, OWNER, GRANT_STUDIO, baseState,
 } from '../../_test-fixtures'
@@ -321,6 +321,21 @@ describe('DELETE …/merge — unmerge', () => {
     expect(ticketRow(T_STUDIO.id).unread_count).toBe(0)
   })
 
+  // The mirror of the merge's own gate. This route takes messages OFF the
+  // survivor and rewrites its counters, so gating only the tombstone would let
+  // a caller reshape a ticket they cannot see.
+  it('404s when the caller cannot open the SURVIVOR, writing nothing', async () => {
+    // The coach holds studio@ only. Tombstone on studio@, survivor on accounts@.
+    getCurrentUser.mockResolvedValue(COACH)
+    setupDb({
+      grants: [GRANT_STUDIO],
+      tickets: [{ ...T_ACCOUNTS }, { ...T_STUDIO, merged_into_id: T_ACCOUNTS.id }],
+      messages: [{ ...M_TARGET_NATIVE, ticket_id: T_ACCOUNTS.id, merged_from_ticket_id: T_STUDIO.id }],
+    })
+    expect((await del(T_STUDIO.id)).status).toBe(404)
+    expect(writesTo(db)).toEqual([])
+  })
+
   it('404s when the caller cannot open the tombstone', async () => {
     getCurrentUser.mockResolvedValue(COACH)
     setupDb({
@@ -345,5 +360,41 @@ describe('DELETE …/merge — unmerge', () => {
 
     expect(updatesTo(db, 'email_tickets')).toEqual([])
     expect(ticketRow(T_ACCOUNTS.id).merged_into_id).toBe(T_STUDIO.id)
+  })
+})
+
+// Moving a member's correspondence between tickets is the most audit-worthy act
+// on this surface, and the ticket rows do NOT keep the story: the undo nulls
+// merged_by, so without these events a conversation that was moved twice leaves
+// no trace of either move.
+describe('…/merge — audit trail', () => {
+  it('records the merge with both tickets and how many messages moved', async () => {
+    await post(T_ACCOUNTS.id, { into: T_STUDIO.id })
+    const [audit] = insertsInto(db, 'audit_events')
+    expect(audit.payload.action).toBe('email_ticket.merged')
+    expect(audit.payload.actor_id).toBe(OWNER.id)
+    expect(audit.payload.target_resource).toBe(`email_ticket/${T_ACCOUNTS.id}`)
+    expect(audit.payload.details.merged_into_id).toBe(T_STUDIO.id)
+    expect(audit.payload.details.message_count).toBe(1)
+  })
+
+  it('records the undo, which is the only surviving record of it', async () => {
+    await post(T_ACCOUNTS.id, { into: T_STUDIO.id })
+    await del(T_ACCOUNTS.id)
+    const audit = insertsInto(db, 'audit_events').at(-1)
+    expect(audit.payload.action).toBe('email_ticket.unmerged')
+    expect(audit.payload.target_resource).toBe(`email_ticket/${T_ACCOUNTS.id}`)
+    expect(audit.payload.details.unmerged_from_id).toBe(T_STUDIO.id)
+    expect(audit.payload.details.message_count).toBe(1)
+    // The row itself now says nothing — merged_by is null again.
+    expect(ticketRow(T_ACCOUNTS.id).merged_by).toBeNull()
+  })
+
+  it('never fails the operation because the log failed', async () => {
+    setupDb({ errors: { audit_events: { code: 'XX000', message: 'audit exploded' } } })
+    expect((await post(T_ACCOUNTS.id, { into: T_STUDIO.id })).status).toBe(200)
+    expect(ticketRow(T_ACCOUNTS.id).merged_into_id).toBe(T_STUDIO.id)
+    expect((await del(T_ACCOUNTS.id)).status).toBe(200)
+    expect(ticketRow(T_ACCOUNTS.id).merged_into_id).toBeNull()
   })
 })
