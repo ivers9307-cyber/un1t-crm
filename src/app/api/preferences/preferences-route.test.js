@@ -10,9 +10,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // EMAILREP.4 — an opt-IN no longer stamps email_status: 'active' flat. It goes
 // through emailStatusNormaliseForOptIn, so NULL / legacy 'unsubscribed' residue
 // normalises but `bounced` / `complained` SURVIVE a re-consent (reputation is
-// address-bound and gates administrative mail too). `email_suppressed_at: null`
-// still clears unconditionally on opt-in — that column is engagement hygiene
-// (mig 395), not reputation, and consent outranks it (EMAIL-HYGIENE.1).
+// address-bound and gates administrative mail too).
+//
+// NOENGSUP.1 — an opt-in no longer touches `email_suppressed_at` either. It
+// used to clear unconditionally, which was right while that column was our own
+// 90-day-non-opener heuristic. mig 537 retired that rule, so the only stamps
+// left are REPEAT-BOUNCE suppressions, and clearing one on a customer click
+// would un-suppress a bouncing address AND auto-close its escalation row
+// (bounce-escalation-sweep reads a cleared stamp as 'stamp_cleared_externally').
+// So an opt-in now writes ONLY a normalised reputation, if there is one — which
+// means the patch can legitimately be empty and no PATCH is sent at all.
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 // UNSUB-RL.1 — the route now peeks a per-IP invalid-token budget before the
@@ -105,36 +112,43 @@ describe('EMAILREP.4 — re-consent may normalise reputation, never restore it',
     return writes
   }
 
-  it('normalises a legacy NULL status to active and clears the suppression', async () => {
+  it('normalises a legacy NULL status to active', async () => {
     const writes = await optInWith(null)
     expect(writes.contacts).toHaveLength(1)
-    expect(writes.contacts[0]).toEqual({ email_status: 'active', email_suppressed_at: null })
+    expect(writes.contacts[0]).toEqual({ email_status: 'active' })
   })
 
   it("normalises retired 'unsubscribed' residue to active", async () => {
     const writes = await optInWith('unsubscribed')
     expect(writes.contacts).toHaveLength(1)
-    expect(writes.contacts[0]).toEqual({ email_status: 'active', email_suppressed_at: null })
+    expect(writes.contacts[0]).toEqual({ email_status: 'active' })
   })
 
   it('leaves a bounced address bounced — consent is not evidence the mailbox works', async () => {
     const writes = await optInWith('bounced')
-    expect(writes.contacts).toHaveLength(1)
-    expect(writes.contacts[0]).toEqual({ email_suppressed_at: null })
-    expect(writes.contacts[0]).not.toHaveProperty('email_status')
+    expect(writes.contacts).toHaveLength(0)
   })
 
   it('leaves a complained address complained', async () => {
     const writes = await optInWith('complained')
-    expect(writes.contacts).toHaveLength(1)
-    expect(writes.contacts[0]).toEqual({ email_suppressed_at: null })
-    expect(writes.contacts[0]).not.toHaveProperty('email_status')
+    expect(writes.contacts).toHaveLength(0)
   })
 
-  it("spends no PATCH key on an already-'active' row", async () => {
+  it("writes nothing at all for an already-'active' row", async () => {
     const writes = await optInWith('active')
-    expect(writes.contacts).toHaveLength(1)
-    expect(writes.contacts[0]).toEqual({ email_suppressed_at: null })
+    expect(writes.contacts).toHaveLength(0)
+  })
+
+  it('NOENGSUP.1 — never clears a repeat-bounce suppression on a customer click', async () => {
+    // The load-bearing one. Whatever else an opt-in does, email_suppressed_at
+    // must not appear in the patch: a click would otherwise erase both the
+    // suppression and the escalation row that justifies it.
+    for (const status of [null, 'unsubscribed', 'active', 'bounced', 'complained']) {
+      const writes = await optInWith(status)
+      for (const patch of writes.contacts) {
+        expect(patch).not.toHaveProperty('email_suppressed_at')
+      }
+    }
   })
 
   it('opt-out still performs no contacts write at all', async () => {

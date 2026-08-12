@@ -888,7 +888,7 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     expect(pm.sendMarketingEmail).toHaveBeenCalledTimes(1)
   })
 
-  it('email_suppressed_at set (engagement hygiene, EMAIL-HYGIENE.1) → recorded skip, mirrors the campaign audience gate', async () => {
+  it('email_suppressed_at set (repeat-bounce suppression, NOENGSUP.1) → recorded skip, mirrors the campaign audience gate', async () => {
     const db = emailDb()
     const out = await steps.sendEmailStep(db, {
       enrollment: { id: 'e9' }, step, sequence,
@@ -897,7 +897,7 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     expect(out).toBeNull()
     expect(pm.sendMarketingEmail).not.toHaveBeenCalled()
     expect(db.activityInserts).toHaveLength(1)
-    expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/inactivity/i)
+    expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/repeat bounces/i)
     expect(db.rpcCalls).not.toContain('increment_step_sent')
   })
 

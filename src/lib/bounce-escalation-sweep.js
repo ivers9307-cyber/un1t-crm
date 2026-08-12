@@ -141,7 +141,11 @@ async function reconcileClearedSuppressions(db, nowIso, dry, errors) {
       .update({
         released_at: nowIso,
         release_reason: RELEASE_REASON_STAMP_CLEARED,
-        release_note: 'contacts.email_suppressed_at was cleared elsewhere (engagement, re-consent or a manual edit), so the suppression is no longer in force.',
+        // NOENGSUP.1 — "engagement" and "re-consent" were the other two ways
+        // this stamp came off. The engagement sweep is retired (mig 537) and
+        // the preference centre no longer touches the stamp, so a genuine
+        // open/click and a hand edit are what remain.
+        release_note: 'contacts.email_suppressed_at was cleared elsewhere (a genuine open/click, or a manual edit), so the suppression is no longer in force.',
       })
       .in('id', ids)
       .is('released_at', null)

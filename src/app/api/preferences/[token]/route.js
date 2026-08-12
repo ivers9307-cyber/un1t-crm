@@ -227,14 +227,17 @@ export async function PUT(request, props) {
     await db.from('consent_log').insert(logEntries)
   }
 
-  // The two contacts.* columns an email-marketing change touches. They sit
-  // next to each other and are NOT the same kind of thing — keeping that
-  // straight is the whole of EMAILREP.4:
+  // The contacts.* columns an email-marketing change may touch. Neither is
+  // consent, and neither is the other:
   //   • email_status        REPUTATION (active | bounced | complained).
   //     Address-bound, and a hard send-time gate buildAudienceQuery applies
   //     UNCONDITIONALLY — to administrative mail as well as marketing.
-  //   • email_suppressed_at ENGAGEMENT hygiene (mig 395), our own
-  //     90-day-non-opener call. Ours to revise.
+  //   • email_suppressed_at MARKETING SUPPRESSION. This used to be our own
+  //     90-day-non-opener call, which is why re-consent cleared it: it was our
+  //     heuristic, so a contact asking for marketing outranked it. NOENGSUP.1
+  //     (mig 537) retired that rule, and the column now means one thing only —
+  //     suppressed for REPEAT BOUNCES, with an email_bounce_escalations audit
+  //     row (mig 515) behind every stamp. So this route no longer touches it.
   if (typeof updates.email_marketing === 'boolean') {
     // LOCCOMMS.5 — no longer stamps 'unsubscribed'. email_status carries
     // reputation only; the opt-out itself lives in contact_location_preferences.
@@ -252,18 +255,25 @@ export async function PUT(request, props) {
       // retired-'unsubscribed' residue, null (leave it) for everything else.
       const nextStatus = emailStatusNormaliseForOptIn(pref.contacts?.email_status)
       if (nextStatus) contactUpdate.email_status = nextStatus
-      // EMAIL-HYGIENE.1 — the suppression stamp still clears UNCONDITIONALLY,
-      // and that is the point of the distinction above: it is not reputation,
-      // it is our own engagement heuristic, and a contact actively saying
-      // "send me marketing" outranks it. Opt-out leaves the stamp alone (the
-      // consent gate already excludes them; a later re-consent clears it).
-      contactUpdate.email_suppressed_at = null
+      // NOENGSUP.1 — this used to clear email_suppressed_at unconditionally.
+      // That was right while the stamp was our own engagement heuristic. It is
+      // wrong now: with the engagement rule retired (mig 537) the only stamps
+      // left are REPEAT-BOUNCE suppressions, so clearing one here would let a
+      // customer click un-suppress a bouncing address — and worse, silently,
+      // because bounce-escalation-sweep reconciles a cleared stamp by closing
+      // the escalation as 'stamp_cleared_externally'. One click would erase
+      // both the suppression and its audit row.
+      //
+      // Same rule as email_status directly above, for the same reason: consent
+      // is not evidence the mailbox works. A bounce suppression comes off via
+      // the list-health release (which records who and why), a genuine
+      // open/click, or Postmark lifting its own suppression.
     }
     // COMMSFIX.A.3 — on an opt-out there is nothing to write at all (LOCCOMMS.5
     // retired the 'unsubscribed' stamp); running .update() anyway was a
-    // guaranteed-failing PATCH on every opt-out. On an opt-in the patch always
-    // carries email_suppressed_at, so it is never empty and this stays exactly
-    // one round trip.
+    // guaranteed-failing PATCH on every opt-out. Since NOENGSUP.1 an opt-IN can
+    // also produce an empty patch (when reputation needs no normalising), so
+    // this guard now carries both cases rather than just the opt-out.
     if (Object.keys(contactUpdate).length > 0) {
       await db
         .from('contacts')

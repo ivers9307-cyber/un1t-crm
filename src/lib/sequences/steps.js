@@ -152,14 +152,14 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
     await recordStepSkip(db, { contact, sequence, step, channel: 'email', reason: `email_status is '${contact.email_status}'` })
     return null
   }
-  // EMAIL-HYGIENE.1 — engagement-suppressed contacts (90-day non-openers,
-  // stamped on contacts.email_suppressed_at by the email-engagement-sweep
-  // cron, mig 395) are a recorded SKIP, mirroring the campaign audience
-  // gate in buildAudienceQuery. Suppression is reversible: any open/click
-  // (or re-consent) clears the stamp, so a re-engaged contact resumes
-  // receiving sequence email from their next step.
+  // NOENGSUP.1 — marketing-suppressed contacts are a recorded SKIP, mirroring
+  // the campaign audience gate in buildAudienceQuery. This used to catch
+  // 90-day non-openers too; that rule is retired (mig 537), so the only stamps
+  // left are REPEAT-BOUNCE suppressions, each with an email_bounce_escalations
+  // row behind it. Still reversible: a genuine open/click clears the stamp, as
+  // does an operator release from the list-health page.
   if (contact.email_suppressed_at) {
-    await recordStepSkip(db, { contact, sequence, step, channel: 'email', reason: 'suppressed for email inactivity (no opens or clicks in 90 days)' })
+    await recordStepSkip(db, { contact, sequence, step, channel: 'email', reason: 'suppressed for repeat bounces' })
     return null
   }
   // FREQ-CAP.1 — after every consent/hygiene gate, before any send work.

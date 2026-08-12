@@ -40,7 +40,11 @@ const EXCLUDED_LABELS = {
   email: [
     ['not_opted_in', n => `${n} no marketing opt-in`],
     ['bounced_or_complained', n => `${n} bounced or complained`],
-    ['suppressed', n => `${n} inactive 90+ days`],
+    // NOENGSUP.1 — was "inactive 90+ days". The engagement rule that produced
+    // that population is retired (mig 537); the stamp now only ever means
+    // repeat bounces, so the label has to say so or it names a reason that no
+    // longer exists.
+    ['suppressed', n => `${n} suppressed for repeat bounces`],
   ],
   sms: [
     ['no_phone', n => `${n} no phone number`],
