@@ -191,13 +191,16 @@ export async function PATCH(request, props) {
   // consent_log above — and an opt-IN may only normalise legacy residue
   // (NULL / retired 'unsubscribed') to 'active'.
   //
-  // Opting someone in is not evidence the mailbox works, and this is a
-  // STAFF action on a contact record — nobody has confirmed anything about
-  // the address. That is what separates it from the customer preference
-  // centre, where the contact themselves re-consents. Reputation comes back
-  // via a corrected address (emailStatusResetForAddressChange), real
-  // engagement, or a Postmark un-suppression — never a toggle in the admin
-  // panel.
+  // EMAILREP.4 — consent from ANY source is subject to that rule, staff
+  // toggle and customer preference centre alike. There used to be a carve-out
+  // here claiming the customer centre was different because the contact
+  // themselves re-consents; it wasn't, and the preference centre is now the
+  // fourth caller of the shared helper. A click in an email that was
+  // delivered BEFORE the bounce is not evidence the mailbox works NOW, and
+  // Postmark keeps its own suppression list regardless of what this column
+  // says. Reputation comes back via a corrected address
+  // (emailStatusResetForAddressChange), real engagement, or a Postmark
+  // un-suppression — never a consent write.
   if (updates.email_marketing === true) {
     const nextStatus = emailStatusNormaliseForOptIn(contact.email_status)
     if (nextStatus) {
