@@ -1285,7 +1285,7 @@ registry.registerPath({
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'Ticket + its message thread',
-  description: 'Returns the ticket (with its mailbox and linked contact) and the thread oldest-first, text bodies only. EMAIL-CC.1: each message also carries to_emails, cc_emails and bcc_emails, and the payload carries reply_recipients = { to, mode: reply | reply_all } — who a reply would reach, derived by the same code the reply route sends with, or null when that could not be worked out. bcc_emails is STAFF-ONLY: this route is behind the ticket gate (location + email_inbox at that location + a grant on the ticket mailbox), it must never be rendered on a member-visible surface, and it is never an input to a later reply or forward. 404 — never 403 — when the ticket is missing, at a foreign location, or on a mailbox the caller cannot see. Does NOT mark it read; that is POST /read. EMAIL-DELIVERY.1: each OUTBOUND message also carries delivery_status (null | delivered | bounced | complained), delivery_status_at, delivery_detail and delivery_bounce_type (hard | soft | transient). NULL means sent with no provider event yet — it is NOT a failure and must never render as one.',
+  description: 'Returns the ticket (with its mailbox and linked contact) and the thread oldest-first, text bodies only. EMAIL-CC.1: each message also carries to_emails, cc_emails and bcc_emails, and the payload carries reply_recipients = { to, mode: reply | reply_all, over_cap, empty } — who a reply would reach, derived by the same code the reply route sends with, or null when that could not be worked out. EMAIL-PARTICIPANTS.4: `to` is the union of the WHOLE thread (minus the studio’s own addresses and anyone removed via PATCH /participants), not the latest message; over_cap:true means that set exceeds the 25-recipient cap and the reply route will refuse to send; empty:true means every participant has been excluded and there is nobody left to reply to. Both are refusals the composer should surface BEFORE the operator types, not send-time surprises. bcc_emails is STAFF-ONLY: this route is behind the ticket gate (location + email_inbox at that location + a grant on the ticket mailbox), it must never be rendered on a member-visible surface, and it is never an input to a later reply or forward. 404 — never 403 — when the ticket is missing, at a foreign location, or on a mailbox the caller cannot see. Does NOT mark it read; that is POST /read. EMAIL-DELIVERY.1: each OUTBOUND message also carries delivery_status (null | delivered | bounced | complained), delivery_status_at, delivery_detail and delivery_bounce_type (hard | soft | transient). NULL means sent with no provider event yet — it is NOT a failure and must never render as one.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: '{ ticket, messages }' },
@@ -1403,6 +1403,28 @@ registry.registerPath({
     200: { description: '{ assignees: [{ id, full_name }] }' },
     403: { description: 'Not elevated at the ticket’s location', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/email/tickets/{id}/participants',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Take an address off a ticket’s reply audience, or put it back',
+  description: 'EMAIL-PARTICIPANTS.6 — the only writer of email_tickets.excluded_participants (mig 534). The audience itself is NOT stored: it is derived from the thread on every read, so it cannot drift from the mail that actually arrived; only the operator’s subtractions are kept, and the reply route applies them on its next send with no other moving part. Addresses are stored NORMALISED (lowercased, angle-brackets stripped) so a case variant cannot dodge an exclusion later — and `restore` matches the same way, so an exclusion can always be lifted by whoever is looking at it. Set semantics: re-removing an already-excluded address is a no-op, not a duplicate. An address named in BOTH lists ends up removed. An address the server cannot parse is a 400 with NOTHING written — a typo in this column would be a permanent exclusion matching nobody. Gated through loadTicketForUser like every ticket write: 404, never 403, for a ticket that is missing, at a foreign location, or on a mailbox the caller cannot see.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      remove: z.array(z.string()).max(25).optional(),
+      restore: z.array(z.string()).max(25).optional(),
+    }).openapi('EmailTicketParticipants') } } },
+  },
+  responses: {
+    200: { description: '{ excluded_participants } — the full list after the change', content: { 'application/json': { schema: SuccessResponse(z.object({ excluded_participants: z.array(z.string()) })) } } },
+    400: { description: 'Neither list given, or an address the server cannot use', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The update failed — nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
