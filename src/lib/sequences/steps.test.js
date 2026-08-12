@@ -917,6 +917,35 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
       contact: { ...consentedContact, email: null },
     })).rejects.toThrow(/no email address/)
   })
+
+  // UNSUBTOKEN.2 — no contact_preferences row means no unsubscribe_token, and
+  // buildUnsubscribeUrl now returns null rather than the old contact.id
+  // fallback (which minted a link /api/unsubscribe/[token] could never
+  // resolve). A sequence email is MARKETING mail, so it must not go out
+  // without a working opt-out. This is a recorded SKIP, not a throw: the
+  // 2026-07-10 incident class is that per-contact faults which throw feed
+  // error_count and auto-pause the whole enrolment for everyone else on it.
+  it('no unsubscribe token → recorded skip, not a marketing email with a dead opt-out link', async () => {
+    pm.buildUnsubscribeUrl.mockReturnValueOnce(null)
+    const db = emailDb()
+    const out = await steps.sendEmailStep(db, { enrollment: { id: 'e9' }, step, sequence, contact: consentedContact })
+    expect(out).toBeNull()
+    expect(pm.sendMarketingEmail).not.toHaveBeenCalled()
+    expect(db.activityInserts).toHaveLength(1)
+    expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/unsubscribe/i)
+    expect(db.rpcCalls).not.toContain('increment_step_sent')
+  })
+
+  it('the skip does not crash on the preference URL derivation', async () => {
+    // The preference URL was built by string-splitting the unsubscribe URL
+    // (`url.split('/unsubscribe/')[1]`), so a null URL would TypeError before
+    // any gate could run — turning a recoverable skip into an enrolment-
+    // pausing error.
+    pm.buildUnsubscribeUrl.mockReturnValueOnce(null)
+    await expect(steps.sendEmailStep(emailDb(), {
+      enrollment: { id: 'e9' }, step, sequence, contact: consentedContact,
+    })).resolves.toBeNull()
+  })
 })
 
 // ── COMMSFIX.E.1 — SMS step: per-location marketing consent + graceful

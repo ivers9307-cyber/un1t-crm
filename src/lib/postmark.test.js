@@ -226,13 +226,31 @@ describe('buildUnsubscribeUrl', () => {
       .toBe('https://crm.un1t.ie/unsubscribe/tok-xyz789')
   })
 
-  it('falls back to contact.id when no preferences row exists', () => {
-    // The unsubscribe page accepts either token shape — see
-    // src/app/unsubscribe/[token]/page.js — so this fallback gives
-    // the recipient a working link even pre-CONSENT.1 contacts.
-    const contact = { id: 'contact-uuid' }
-    expect(buildUnsubscribeUrl(contact, 'https://crm.un1t.ie'))
-      .toBe('https://crm.un1t.ie/unsubscribe/contact-uuid')
+  // UNSUBTOKEN.2 — the old behaviour here was `|| contact.id`, justified by a
+  // comment claiming the unsubscribe page "accepts either token shape". It
+  // never did: /api/unsubscribe/[token] has resolved
+  // `.eq('unsubscribe_token', token)` and nothing else since the table was
+  // created (mig 005 / commit 98a0fabb), the page is a pass-through, and
+  // contacts.id / contact_preferences.unsubscribe_token are independently
+  // generated UUIDs. So the fallback minted a link that could only ever 404 —
+  // in the visible footer AND in the RFC 8058 List-Unsubscribe header built
+  // from the same URL. Returning null instead lets each caller refuse the
+  // send loudly; a dead opt-out link must never leave the building.
+  it('returns null when no preferences row exists — a contact id is NOT a token', () => {
+    expect(buildUnsubscribeUrl({ id: 'contact-uuid' }, 'https://crm.un1t.ie')).toBeNull()
+  })
+
+  it('returns null for a preferences row with no token at all', () => {
+    expect(buildUnsubscribeUrl({ id: 'c1', contact_preferences: [{}] }, 'https://crm.un1t.ie')).toBeNull()
+  })
+
+  it('returns null regardless of the location/campaign scope params', () => {
+    // The scope params decorate a URL; they can never manufacture one.
+    expect(buildUnsubscribeUrl({ id: 'c1' }, 'https://crm.example', 'loc-hatch', 'camp-1')).toBeNull()
+  })
+
+  it('returns null for a missing contact rather than throwing', () => {
+    expect(buildUnsubscribeUrl(null, 'https://crm.un1t.ie')).toBeNull()
   })
 })
 
@@ -608,9 +626,9 @@ describe('LOCCOMMS.4 — unsubscribe URL carries the sending location', () => {
       .toBe('https://crm.example/api/unsubscribe/tok?l=loc-hatch')
   })
 
-  it('still falls back to contact.id when there is no preferences token', () => {
-    expect(buildUnsubscribeUrl({ id: 'c1' }, 'https://crm.example', 'loc-hatch'))
-      .toBe('https://crm.example/unsubscribe/c1?l=loc-hatch')
+  it('returns null — not a location-scoped dead link — when there is no token', () => {
+    // UNSUBTOKEN.2: `?l=` scopes an opt-out, it does not make one resolvable.
+    expect(buildUnsubscribeUrl({ id: 'c1' }, 'https://crm.example', 'loc-hatch')).toBeNull()
   })
 })
 

@@ -539,7 +539,8 @@ export async function tickCampaignSend(db, campaign) {
   const consentOk = (c) =>
     eligibleIds.has(c.id) && !['bounced', 'complained'].includes(c.email_status)
   const suppressed = claimed.filter(r => !consentOk(r.contact))
-  const queuedRows = claimed.filter(r => consentOk(r.contact))
+  // `let` — the UNSUBTOKEN.2 gate below narrows this again.
+  let queuedRows = claimed.filter(r => consentOk(r.contact))
   if (suppressed.length > 0) {
     // Park them out of the queue without sending. Engagement counters are
     // sourced from email_sends (recalculate_campaign_stats), so a 'cancelled'
@@ -548,8 +549,47 @@ export async function tickCampaignSend(db, campaign) {
       .update({ status: 'cancelled' })
       .in('id', suppressed.map(r => r.id))
   }
+  // UNSUBTOKEN.2 — a MARKETING email with no working unsubscribe link never
+  // leaves the building. buildUnsubscribeUrl returns null when the contact has
+  // no contact_preferences.unsubscribe_token; it used to fall back to
+  // contact.id, which /api/unsubscribe/[token] cannot resolve (token column
+  // only), so both the footer link and the RFC 8058 List-Unsubscribe header
+  // 404'd — silently, on the one recipient least able to complain about it.
+  //
+  // Refusing beats the alternative of just omitting the URL. That path exists
+  // and is well-handled (the utility/outbound stream takes it: no footer,
+  // empty {{unsubscribe_url}}, no List-Unsubscribe header), but on a broadcast
+  // it would mean shipping marketing mail with NO opt-out mechanism at all —
+  // trading a dead link for a missing one, both non-compliant, both invisible.
+  //
+  // 'failed' + last_error, not the 'cancelled' used above: 'cancelled' is the
+  // ordinary consent-suppression outcome an operator is meant to ignore, while
+  // this is a data fault that needs fixing. 'failed' is terminal (the candidate
+  // query only picks up 'queued'), so this never retries in a loop, and
+  // campaigns.last_error surfaces it in the campaign UI rather than only in a
+  // log nobody reads. Per-recipient, so one bad row cannot fail the chunk.
+  //
+  // Mig 532 gave every contact a preferences row, so nothing hits this today.
+  let unsendable = []
+  if (stream === 'broadcast') {
+    const hasToken = (c) => {
+      const p = c?.contact_preferences?.[0] || c?.contact_preferences
+      return Boolean(p?.unsubscribe_token)
+    }
+    unsendable = queuedRows.filter(r => !hasToken(r.contact))
+    queuedRows = queuedRows.filter(r => hasToken(r.contact))
+    if (unsendable.length > 0) {
+      const msg = `${unsendable.length} recipient(s) have no contact_preferences.unsubscribe_token — refused rather than send marketing email with a dead unsubscribe link. Contacts: ${unsendable.map(r => r.contact_id).join(', ')}`
+      console.error('[campaign-sender]', msg)
+      await db.from('campaign_recipients')
+        .update({ status: 'failed', last_error: 'no unsubscribe token — refused (a marketing email needs a working opt-out link)' })
+        .in('id', unsendable.map(r => r.id))
+      await db.from('campaigns').update({ last_error: msg }).eq('id', campaignId)
+    }
+  }
+
   if (queuedRows.length === 0) {
-    return { phase: 'send', sent: 0, bounced: 0, suppressed: suppressed.length }
+    return { phase: 'send', sent: 0, bounced: 0, suppressed: suppressed.length, unsendable: unsendable.length }
   }
 
   // Build email batch for this chunk.
@@ -586,8 +626,17 @@ export async function tickCampaignSend(db, campaign) {
     // can attribute the opt-out to this campaign (footer link AND the
     // List-Unsubscribe header both resolve there).
     const unsubscribeUrl = stream === 'broadcast' ? buildUnsubscribeUrl(contact, baseUrl, campaign.location_id, campaignId) : null
+    // UNSUBTOKEN.2 — /api/preferences/[token] resolves the same
+    // contact_preferences.unsubscribe_token column the unsubscribe API does, so
+    // `|| contact.id` minted a second dead link here for exactly the same
+    // reason. No token → no preference URL, and {{preference_url}} merges to ''
+    // (applyMergeTags' own fallback). Broadcast recipients never reach this
+    // line without a token — the gate above refused them — so in practice this
+    // only ever goes empty on the utility stream, which carries no such chrome.
     const prefs = contact.contact_preferences?.[0] || contact.contact_preferences
-    const preferenceUrl = `${baseUrl}/preferences/${prefs?.unsubscribe_token || contact.id}`
+    const preferenceUrl = prefs?.unsubscribe_token
+      ? `${baseUrl}/preferences/${prefs.unsubscribe_token}`
+      : null
 
     const merged = applyMergeTags(campaign.html_content, contact, {
       location_name: campaign.locations?.name || '',

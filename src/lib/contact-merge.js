@@ -70,89 +70,19 @@ const REDACT_ON_DELETE_TABLES = Object.freeze([
   { table: 'whatsapp_messages',             column: 'contact_id', label: 'WhatsApp messages (body + media redacted, metadata preserved)' },
 ])
 
-// Pre-UPDATE dedupe: when both contacts have a row sharing a unique
-// constraint we have to delete the loser's row first or the UPDATE
-// fails with a 23505 conflict. These are the (table, column,
-// conflict-shape) triples we know about.
+// MERGE-TX.1 — dedupePreUpdate lived here. It deleted the loser's colliding
+// rows in contact_preferences, sequence_enrollments and contact_tags so the FK
+// re-points that followed could not hit a 23505. Those deletes were the first
+// destructive act of the merge and ran with nothing to roll them back, so an
+// abandoned merge left the loser permanently stripped of its preferences row —
+// the state migration 532 had to repair.
 //
-// contact_preferences has a UNIQUE(contact_id) — if survivor has
-// one, the loser's must go. We pick the survivor's because the
-// preferences map to the surviving identity (their unsubscribe
-// state, their administrative-opt-in posture, etc).
-//
-// sequence_enrollments has UNIQUE(sequence_id, contact_id). If both
-// contacts are in the same sequence, drop the loser's row (the
-// survivor's enrolment is what continues; the loser was a
-// duplicate that wouldn't have made sense to keep on a single
-// person's timeline).
-//
-// contact_tags has a partial UNIQUE(contact_id, tag) WHERE
-// removed_at IS NULL. For each loser-active tag that the survivor
-// also has active, drop the loser's row before the UPDATE.
-//
-// MERGE-LOSS.1 — every read AND write in here now throws on error,
-// matching the convention the rest of this file already follows. They
-// used to discard their errors, and a discarded one is not harmless:
-// a failed read yields "the survivor has none of these", the dedupe is
-// skipped, and the FK update that follows in mergeContacts hits the
-// very UNIQUE index this function exists to clear. The merge then dies
-// at a confusing 23505 on a table that looks unrelated, instead of at
-// the read that actually failed. Failing here also means we abort
-// BEFORE anything destructive has run.
-async function dedupePreUpdate(db, { survivorId, loserId }) {
-  // 1. contact_preferences — UNIQUE(contact_id)
-  // maybeSingle, not single: "the survivor has no preferences row" is a
-  // normal answer, and the unique constraint makes >1 impossible.
-  const { data: survivorPrefs, error: prefsErr } = await db
-    .from('contact_preferences').select('id').eq('contact_id', survivorId).maybeSingle()
-  if (prefsErr) {
-    throw new Error(`mergeContacts: dedupe read of contact_preferences failed: ${prefsErr.message}`)
-  }
-  if (survivorPrefs) {
-    const { error: prefsDelErr } = await db
-      .from('contact_preferences').delete().eq('contact_id', loserId)
-    if (prefsDelErr) {
-      throw new Error(`mergeContacts: dedupe delete of contact_preferences failed: ${prefsDelErr.message}`)
-    }
-  }
+// The rule now lives in public.merge_contacts() (migration 533), derived from
+// pg_index rather than hand-listed, and runs inside the same transaction as
+// everything else. The three cases above are exactly what that derivation
+// produces for today's catalog; the migration header shows the generated SQL
+// for each.
 
-  // 2. sequence_enrollments — UNIQUE(sequence_id, contact_id)
-  const { data: survivorEnrols, error: enrolErr } = await db
-    .from('sequence_enrollments').select('sequence_id').eq('contact_id', survivorId)
-  if (enrolErr) {
-    throw new Error(`mergeContacts: dedupe read of sequence_enrollments failed: ${enrolErr.message}`)
-  }
-  const survivorSeqIds = new Set((survivorEnrols || []).map(r => r.sequence_id))
-  if (survivorSeqIds.size > 0) {
-    const { error: enrolDelErr } = await db
-      .from('sequence_enrollments')
-      .delete()
-      .eq('contact_id', loserId)
-      .in('sequence_id', [...survivorSeqIds])
-    if (enrolDelErr) {
-      throw new Error(`mergeContacts: dedupe delete of sequence_enrollments failed: ${enrolDelErr.message}`)
-    }
-  }
-
-  // 3. contact_tags — partial UNIQUE(contact_id, tag) WHERE removed_at IS NULL
-  const { data: survivorTags, error: tagsErr } = await db
-    .from('contact_tags').select('tag').eq('contact_id', survivorId).is('removed_at', null)
-  if (tagsErr) {
-    throw new Error(`mergeContacts: dedupe read of contact_tags failed: ${tagsErr.message}`)
-  }
-  const survivorActiveTags = new Set((survivorTags || []).map(r => r.tag))
-  if (survivorActiveTags.size > 0) {
-    const { error: tagsDelErr } = await db
-      .from('contact_tags')
-      .delete()
-      .eq('contact_id', loserId)
-      .is('removed_at', null)
-      .in('tag', [...survivorActiveTags])
-    if (tagsDelErr) {
-      throw new Error(`mergeContacts: dedupe delete of contact_tags failed: ${tagsDelErr.message}`)
-    }
-  }
-}
 
 /**
  * Returns counts of every dependent row for a contact, split by
@@ -350,12 +280,28 @@ export async function redactInBodyForContact(db, contactId) {
  * "longest-known" date wins).
  */
 export function pickMergedFields(survivor, loser) {
+  // MERGE-TX.1 — every name here must be a REAL column on public.contacts, and
+  // the same list is whitelisted in public.merge_contacts (migration 533),
+  // which raises on an unknown key. That guard exists because this list carried
+  // 'last_active_at' from the day merge shipped (commit 36e49302) and
+  // public.contacts has never had that column — the string appears in no
+  // migration in the repo, and information_schema confirmed its absence on
+  // 2026-08-12. PostgREST rejects an UPDATE naming an unknown column
+  // (PGRST204), so the survivor stamp 400d on EVERY merge — landing after the
+  // dedupe deletes and FK re-points, i.e. in exactly the half-merged state
+  // migration 532 had to repair. Removing it merges nothing that was merging
+  // before, because it never merged anything.
+  //
+  // Deliberately NOT substituted with a neighbour: last_attended_at,
+  // last_booked_at and last_marketing_touch_at all exist and all mean something
+  // different, so picking one would be inventing behaviour rather than fixing a
+  // bug. If "last active" is wanted on a merge, that's an operator decision.
   const FIELDS = [
     'name', 'first_name', 'last_name',
     'email', 'phone', 'label',
     'glofox_member_id', 'trial_credits_remaining',
     'lead_source', 'lead_created_at',
-    'last_emailed_at', 'last_active_at',
+    'last_emailed_at',
   ]
   const isEmpty = (v) =>
     v === null || v === undefined || v === '' ||
@@ -399,18 +345,43 @@ export function mergeTagArrays(survivorTags, loserTags) {
 /**
  * Fold loser into survivor, then delete loser.
  *
- * Steps:
- *   1. Load both rows + validate same location_id.
- *   2. Pre-update dedupe (delete loser's would-be conflicts).
- *   3. UPDATE every dependent table's contact_id from loser → survivor.
- *   4. UPDATE survivor with merged fields + union tags.
- *   5. DELETE the loser row.
+ * MERGE-TX.1 — this is now a thin wrapper over the Postgres function
+ * public.merge_contacts() (migration 533). It:
+ *   1. loads both rows and re-checks the guards, so a bad request is
+ *      refused before the database is asked to do anything;
+ *   2. computes the merged scalars + union tags with pickMergedFields /
+ *      mergeTagArrays, which stay HERE — see below;
+ *   3. hands the whole destructive sequence to the RPC, which runs it in
+ *      one implicit transaction: dedupe, re-point every referencing FK,
+ *      stamp the survivor, delete the loser.
  *
- * Returns { survivor, folded: { tableA: count, ... } } so the API
- * can stamp an audit-friendly response.
+ * WHY A WRAPPER AND NOT A FALLBACK. The obvious alternative was to keep
+ * the old statement-by-statement path as a fallback if the RPC is
+ * missing. That fallback would BE the bug: it is the non-transactional
+ * merge, it would fire exactly when something is already wrong, and
+ * keeping it means keeping the hand-maintained FK table list this change
+ * exists to retire — two implementations of the same destructive
+ * operation, the stale one running unattended. If the function is not
+ * deployed the merge must fail loudly, which is what the RPC error does.
  *
- * Throws on validation failure or DB error. Caller should wrap in
- * try/catch and surface the message.
+ * WHY THE FIELD MERGE STAYS IN JS. pickMergedFields ("survivor wins
+ * unless empty", where empty excludes 0 and false) and mergeTagArrays
+ * (survivor-first, trimmed, case-sensitive union) are subtle and already
+ * carry 15 tests. Porting them to SQL would have made a THIRD copy of the
+ * rule — ContactMergeModal.jsx already keeps a preview copy — so the
+ * values are computed here and passed in. The function whitelists them
+ * and raises on an unknown key, so adding a field here without adding it
+ * there fails loudly instead of silently not merging.
+ *
+ * The read-then-stamp window this leaves (someone edits the survivor
+ * between step 1 and step 3) is exactly the window the old code had, and
+ * is unchanged.
+ *
+ * Returns { survivor, folded: { "<table>.<column>": count, ... } } — the
+ * same contract the route passes through and the UI reads.
+ *
+ * Throws on validation failure or DB error. Nothing is ever partially
+ * applied: the RPC either commits the whole merge or rolls all of it back.
  */
 export async function mergeContacts(db, { survivorId, loserId }) {
   if (!survivorId || !loserId) throw new Error('mergeContacts: survivorId and loserId required')
@@ -422,98 +393,44 @@ export async function mergeContacts(db, { survivorId, loserId }) {
   ])
   if (sErr || !survivor) throw new Error(`mergeContacts: survivor ${survivorId} not found`)
   if (lErr || !loser)    throw new Error(`mergeContacts: loser ${loserId} not found`)
+  // Re-checked inside the transaction too — this copy just gives the caller a
+  // clean refusal without opening one.
   if (survivor.location_id !== loser.location_id) {
     throw new Error('mergeContacts: contacts must be at the same location')
   }
 
-  await dedupePreUpdate(db, { survivorId, loserId })
-
-  // Re-point every dependent row's FK from loser to survivor. Done
-  // table-by-table because Supabase doesn't expose a multi-table
-  // transaction primitive — partial failure here would leave the
-  // contact half-merged, but every UPDATE is idempotent (UPDATE x
-  // SET fk=A WHERE fk=B is a no-op on retry once x=A) so a re-run
-  // is safe.
-  const folded = {}
-  // Merge re-points every dependent FK from loser → survivor.
-  // After mig 094 the WhatsApp tables are SET NULL / CASCADE on
-  // delete, but during MERGE we still want their rows to follow the
-  // survivor (the conversation thread should track the kept
-  // identity, not get nulled out). So include REDACT_ON_DELETE_TABLES
-  // here even though the delete-path handles them via the scrub.
-  const everyTable = [...CASCADE_TABLES, ...SET_NULL_TABLES, ...REDACT_ON_DELETE_TABLES]
-  for (const t of everyTable) {
-    const { error: upErr, count } = await db
-      .from(t.table)
-      .update({ [t.column]: survivorId }, { count: 'exact' })
-      .eq(t.column, loserId)
-    if (upErr) {
-      throw new Error(`mergeContacts: failed to fold ${t.table}.${t.column}: ${upErr.message}`)
-    }
-    if (count && count > 0) {
-      folded[`${t.table}.${t.column}`] = (folded[`${t.table}.${t.column}`] || 0) + count
-    }
-  }
-
-  // Stamp survivor with merged scalars + union tags. We do this
-  // AFTER the FK updates so a partial failure mid-update doesn't
-  // leave the survivor's fields modified while the loser still has
-  // its dependents.
-  //
-  // MERGE-LOSS.1 — this write used to be a bare `await` with no error
-  // binding, alone among the writes in this function. A failed stamp
-  // therefore fell straight through to the DELETE below: the loser was
-  // destroyed, everything folded into `mergedFields` went with it
-  // unrecoverably, and the caller got back a success object listing
-  // fields that were never written.
-  //
-  // What "stop" means here, given the FK updates above have ALREADY
-  // run. We cannot undo them — `UPDATE x SET fk=survivor WHERE
-  // fk=loser` is not reversible (the survivor's own rows are now
-  // indistinguishable from the ones that just arrived), and Supabase
-  // gives us no multi-table transaction to roll back into. So the
-  // honest failure mode is to throw BEFORE the delete and leave the
-  // merge half-done in its RECOVERABLE direction: the loser row still
-  // exists carrying every one of its own scalars and tags, its
-  // dependents have moved to the survivor, and nothing is destroyed.
-  // Re-running mergeContacts on the same pair completes it —
-  // pickMergedFields/mergeTagArrays re-read both rows fresh (the FK
-  // updates touched neither row's scalars), the FK updates are
-  // idempotent as noted above, and dedupePreUpdate is a no-op second
-  // time round. Deleting the loser anyway is the single outcome that
-  // is NOT recoverable, which is why it is the one we refuse.
-  //
-  // A zero-row stamp counts as a failure too: PostgREST reports no
-  // error when an UPDATE matches nothing, and "the survivor's fields
-  // were never written" is precisely the state being guarded, however
-  // it arose. `count` is only judged when the client actually returned
-  // one, so a client that omits it can't produce a false failure.
   const mergedFields = pickMergedFields(survivor, loser)
   const mergedTags = mergeTagArrays(survivor.tags, loser.tags)
-  const { error: stampErr, count: stampCount } = await db
-    .from('contacts')
-    .update({ ...mergedFields, tags: mergedTags }, { count: 'exact' })
-    .eq('id', survivorId)
-  if (stampErr || stampCount === 0) {
+
+  // supabase-js builders are thenables with no .catch — try/catch, never
+  // .catch() (CLAUDE.md). A throw here is a transport failure; an { error } is
+  // the database refusing. Both mean the merge did not happen.
+  let data, error
+  try {
+    ({ data, error } = await db.rpc('merge_contacts', {
+      p_survivor_id: survivorId,
+      p_loser_id: loserId,
+      p_merged_fields: mergedFields,
+      p_merged_tags: mergedTags,
+    }))
+  } catch (e) {
+    error = { message: e?.message || String(e) }
+  }
+  if (error) {
     throw new Error(
-      `mergeContacts: failed to stamp survivor ${survivorId} with the merged fields` +
-      `${stampErr ? `: ${stampErr.message}` : ' (the update matched no row)'}. ` +
-      `Loser ${loserId} has NOT been deleted and no data is lost — its dependent rows have ` +
-      'already moved to the survivor, so a re-run of this merge is safe and completes it.',
+      `mergeContacts: merge of ${loserId} into ${survivorId} failed: ${error.message}. ` +
+      'The whole merge was ROLLED BACK — both contacts still exist and nothing has changed, ' +
+      'so there is no half-merge to clean up and the merge can simply be retried.',
+    )
+  }
+  if (!data || !data.survivor) {
+    // A success with no payload is not a success. Treated the same way the old
+    // zero-row stamp check treated a silent no-op.
+    throw new Error(
+      `mergeContacts: merge of ${loserId} into ${survivorId} returned no survivor row. ` +
+      'Nothing has changed; the merge was rolled back or never ran.',
     )
   }
 
-  // Delete the loser. By this point nothing should still point at it
-  // — the FK updates moved everything to the survivor. CASCADE
-  // delete-rule rows that were missed (e.g. a table added since
-  // this code was written) get cleaned up here as a backstop.
-  const { error: delErr } = await db.from('contacts').delete().eq('id', loserId)
-  if (delErr) {
-    throw new Error(`mergeContacts: failed to delete loser: ${delErr.message}`)
-  }
-
-  return {
-    survivor: { ...survivor, ...mergedFields, tags: mergedTags },
-    folded,
-  }
+  return { survivor: data.survivor, folded: data.folded || {} }
 }

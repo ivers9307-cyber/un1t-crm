@@ -1622,6 +1622,92 @@ describe('tickCampaignSend — unsubscribe URL carries the campaign id (COMMSFIX
   })
 })
 
+// ── UNSUBTOKEN.2 — a marketing email with no working opt-out never ships
+//
+// buildUnsubscribeUrl used to fall back to contact.id when the contact had no
+// contact_preferences row. /api/unsubscribe/[token] resolves the token column
+// and nothing else, so that link 404s — and so does the List-Unsubscribe
+// header built from it. Mig 532 backfilled every contact, so nothing today is
+// in this state; this closes the door on the next one (a half-merge, a direct
+// INSERT into contacts, a restore).
+//
+// The recipient is FAILED, not cancelled: 'cancelled' is the consent-suppression
+// outcome and is a normal, expected result an operator should ignore. This is a
+// data fault that needs fixing, so it takes the visible path — a terminal row
+// with last_error, plus campaigns.last_error, which the campaign UI renders.
+describe('tickCampaignSend — refuses a broadcast with no unsubscribe token (UNSUBTOKEN.2)', () => {
+  const tokenless = (id) => {
+    const r = makeRecipient(id, 0)
+    r.contact.contact_preferences = []
+    return r
+  }
+
+  it('does not send, and marks the recipient failed with a last_error', async () => {
+    const { db, statements } = makeDb(routeFor({ candidates: [tokenless('r1')] }))
+    sendBatch.mockResolvedValue([])
+
+    const result = await tickCampaignSend(db, campaign)
+
+    expect(sendBatch).not.toHaveBeenCalled()
+    const updates = recipientUpdates(statements, 'r1')
+    expect(updates).toContainEqual(expect.objectContaining({
+      status: 'failed',
+      last_error: expect.stringMatching(/unsubscribe token/i),
+    }))
+    expect(result.sent).toBe(0)
+  })
+
+  it('stamps campaigns.last_error so the fault is visible in the UI, not just the log', async () => {
+    const { db, statements } = makeDb(routeFor({ candidates: [tokenless('r1')] }))
+    sendBatch.mockResolvedValue([])
+
+    await tickCampaignSend(db, campaign)
+
+    const campaignErrs = statements.filter(s =>
+      s.table === 'campaigns' && s.ops[0]?.method === 'update' && s.ops[0].args[0]?.last_error,
+    ).map(s => s.ops[0].args[0].last_error)
+    expect(campaignErrs.some(m => /unsubscribe[ _]token/i.test(m))).toBe(true)
+    // and it names the contact, so the operator can go and look at the row
+    expect(campaignErrs.some(m => m.includes('contact-r1'))).toBe(true)
+  })
+
+  it('still sends the recipients that DO have a token — one bad row is not a chunk failure', async () => {
+    const { db, statements } = makeDb(routeFor({ candidates: [tokenless('r1'), makeRecipient('r2', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-2' }])
+
+    await tickCampaignSend(db, campaign)
+
+    expect(sendBatch).toHaveBeenCalledTimes(1)
+    const batch = sendBatch.mock.calls[0][0]
+    expect(batch).toHaveLength(1)
+    expect(batch[0].to).toBe('r2@x.ie')
+    expect(recipientUpdates(statements, 'r1'))
+      .toContainEqual(expect.objectContaining({ status: 'failed' }))
+  })
+
+  it('does NOT refuse a utility/outbound send — that stream carries no unsubscribe chrome by design', async () => {
+    const { db } = makeDb(routeFor({ candidates: [tokenless('r1')] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, { ...campaign, postmark_stream: 'outbound' })
+
+    expect(sendBatch).toHaveBeenCalledTimes(1)
+    expect(sendBatch.mock.calls[0][0][0].unsubscribeUrl).toBeNull()
+  })
+
+  it('never mints a /preferences/<contact-id> URL either — that endpoint is token-only too', async () => {
+    // Same defect, same file: the preference-centre API resolves
+    // contact_preferences.unsubscribe_token and nothing else.
+    const { db } = makeDb(routeFor({ candidates: [tokenless('r1')] }))
+    sendBatch.mockResolvedValue([])
+
+    await tickCampaignSend(db, { ...campaign, postmark_stream: 'outbound' })
+
+    const body = sendBatch.mock.calls[0]?.[0]?.[0]?.htmlBody ?? ''
+    expect(body).not.toContain('/preferences/contact-r1')
+  })
+})
+
 // ── COMMSFIX.D.4b — subject-line merge tags get the same extras the body does
 //
 // The editor's merge-tag panel says "Use these in your subject line or email

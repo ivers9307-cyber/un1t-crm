@@ -205,10 +205,32 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
 
   const baseUrl = getAppUrl()
   const unsubscribeUrl = buildUnsubscribeUrl(contact, baseUrl, sequence?.location_id)
+  // UNSUBTOKEN.2 — null means the contact has no
+  // contact_preferences.unsubscribe_token, and a sequence step is MARKETING
+  // mail (it rides the broadcast stream via sendMarketingEmail, headers and
+  // all). Without a token there is no unsubscribe link and no List-Unsubscribe
+  // header that can resolve — buildUnsubscribeUrl used to hand back
+  // /unsubscribe/<contact.id>, which the token-only API always 404s.
+  //
+  // A recorded SKIP, not a throw: this is a per-CONTACT fault, and the
+  // 2026-07-10 incident (11 of 17 enrolments wedged on "no WhatsApp phone
+  // number") is what happens when a per-contact fault feeds error_count until
+  // MAX_ERRORS pauses the enrolment for everybody on it. The activity row names
+  // the reason on the contact's timeline; mig 532 means nobody is in this state
+  // today, so one appearing is a real signal worth reading.
+  if (!unsubscribeUrl) {
+    await recordStepSkip(db, {
+      contact, sequence, step, channel: 'email',
+      reason: 'no unsubscribe token — a marketing email needs a working opt-out link',
+    })
+    return null
+  }
   const mergedSubject = applyMergeTags(subject, contact, { location_name: locationName })
   const merged = applyMergeTags(html, contact, {
     location_name: locationName,
     unsubscribe_url: unsubscribeUrl,
+    // Derived from the unsubscribe URL because both endpoints resolve the same
+    // token column. Safe to split now that the null case returned above.
     preference_url: `${baseUrl}/preferences/${unsubscribeUrl.split('/unsubscribe/')[1]}`,
   })
   const mergedHtml = appendUnsubscribeFooter(merged, unsubscribeUrl)

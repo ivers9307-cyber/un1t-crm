@@ -512,16 +512,42 @@ export function applyMergeTags(html, contact, extras = {}) {
 // ============================================================
 
 /**
- * Build the canonical /unsubscribe/<token> URL for a contact.
- * Prefers the per-contact unsubscribe_token (from
- * contact_preferences) and falls back to contact.id, mirroring the
- * lookup logic the unsubscribe page already accepts. The caller
- * provides baseUrl from getAppUrl() so this is unit-testable
- * without env vars.
+ * Build the canonical /unsubscribe/<token> URL for a contact, or
+ * NULL if the contact has no unsubscribe token.
+ *
+ * The token is contact_preferences.unsubscribe_token and nothing
+ * else. There is no fallback, and there cannot be one:
+ * /api/unsubscribe/[token] resolves `.eq('unsubscribe_token', token)`
+ * — that has been the only lookup since the table was created (mig
+ * 005), the /unsubscribe/[token] page is a pass-through to it, and
+ * /api/preferences/[token] resolves the same column the same way.
+ *
+ * UNSUBTOKEN.2 — this used to fall back to `contact.id`, under a
+ * comment claiming it mirrored "the lookup logic the unsubscribe page
+ * already accepts". That comment was wrong on the day it was written
+ * (UNSUB.1, 2026-05-13): the two values are independently generated
+ * UUIDs, so the fallback produced a URL that could only ever 404 —
+ * both as the visible footer link and as the RFC 8058
+ * List-Unsubscribe / one-click header built from the same URL. A
+ * recipient who could be mailed but could not opt out is the exact
+ * failure GDPR and CAN-SPAM care about, and it was silent.
+ *
+ * Returning null pushes the decision to the caller, which is where it
+ * belongs — the two send paths refuse differently (see
+ * campaign-sender.js and sequences/steps.js) and neither may quietly
+ * ship the mail anyway. Mig 532 backfilled every contact that lacked a
+ * preferences row, so this returns null for nobody today; it is the
+ * closed door, not the fix for a live outage.
+ *
+ * The caller provides baseUrl from getAppUrl() so this is
+ * unit-testable without env vars.
+ *
+ * @returns {string|null} the URL, or null when there is no token
  */
 export function buildUnsubscribeUrl(contact, baseUrl, locationId, campaignId) {
   const prefs = contact?.contact_preferences?.[0] || contact?.contact_preferences
-  const token = prefs?.unsubscribe_token || contact?.id
+  const token = prefs?.unsubscribe_token
+  if (!token) return null
   // LOCCOMMS.4 — `?l=` scopes the opt-out to the SENDING location, so leaving a
   // Hatch Street list does not silently remove someone from Stillorgan's.
   //
