@@ -726,3 +726,47 @@ describe('POST …/forward — filing fails AFTER the send', () => {
     expect(updatesTo(db, 'email_tickets')).toHaveLength(0)
   })
 })
+
+// EMAIL-MERGE.6 — nothing leaves a tombstone.
+//
+// Same rule as the reply route, and it belongs here for a sharper reason: a
+// forward takes what the MEMBER sent us and hands it to a third party. Doing
+// that from a ticket scopeToUnmerged hides means the member's correspondence
+// goes to an outsider from a thread nobody is watching, with no row anywhere a
+// colleague would find. The messages themselves have already moved to the
+// survivor — forwarding one belongs there.
+//
+// The route is the gate: this runs on the service-role client, so the
+// composer being hidden on the web protects only the web. The mobile app has
+// no concept of merge at all.
+describe('a merged ticket cannot be forwarded from', () => {
+  it('refuses with 409 and names the survivor — and SENDS NOTHING', async () => {
+    setupDb(world({ tickets: [{ ...T_STUDIO, merged_into_id: T_ACCOUNTS.id, status: 'closed' }, { ...T_ACCOUNTS }] }))
+
+    const res = await post(T_STUDIO.id, GOOD)
+
+    // 409 rather than the 404 the other refusals here use: the caller got past
+    // loadTicketForUser, so the ticket is one they can see and the reason is
+    // one they are owed.
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    expect(body.error).toMatch(/merged into another one/i)
+    expect(body.data.merged_into_id).toBe(T_ACCOUNTS.id)
+
+    // THE HALF THAT MATTERS: the member's message never reached the third
+    // party. A refusal that still sent would be the whole harm, annotated.
+    expect(sendEmail).not.toHaveBeenCalled()
+    // The route sends before it writes, so a refusal at the gate leaves
+    // nothing behind — no message row, no attachment copy, no usage.
+    expect(writesTo(db)).toEqual([])
+  })
+
+  it('still forwards normally on an ordinary ticket', async () => {
+    // The negative half — a guard that refused everything would pass the test
+    // above while quietly breaking forwarding.
+    const res = await post(T_STUDIO.id, GOOD)
+    expect(res.status).toBe(200)
+    expect(sendEmail).toHaveBeenCalledTimes(1)
+  })
+})

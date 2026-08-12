@@ -215,6 +215,41 @@ describe('GET /api/email/tickets/count — WHAT the number counts', () => {
   })
 })
 
+describe('GET /api/email/tickets/count — merged tickets are tombstones', () => {
+  // A finished merge leaves the tombstone `closed`, which scopeToNeedsReply
+  // already excludes — so the badge is safe by accident there, not by design.
+  // This pins the case where the accident runs out: merge stamps the pointer
+  // and flips the status as two writes with no transaction, so "pointer set,
+  // still open with an inbound last message" can exist, and the badge would
+  // count one conversation twice and send the operator to a ticket the queue
+  // does not show. The list and the badge hide tombstones by the SAME scope.
+  it('does not count a tombstone whose status write did not land', async () => {
+    setupDb(baseState({
+      tickets: [
+        { ...T_STUDIO, status: 'open', last_message_direction: 'inbound' },
+        {
+          ...T_STUDIO, id: 'aaaaaaa8-0000-4000-8000-000000000008',
+          status: 'open', last_message_direction: 'inbound', merged_into_id: T_STUDIO.id,
+        },
+      ],
+      grants: [GRANT_STUDIO],
+    }))
+    expect((await count()).body.data.count).toBe(1)
+  })
+
+  it('still counts ordinary tickets — merged_into_id null is the normal row', async () => {
+    // What this actually protects: the tombstone scope must not swallow the
+    // ordinary rows and badge a permanent 0 — calm and wrong.
+    //
+    // It does NOT protect the .eq(col, null) misspelling, which matches nothing
+    // in real PostgREST: the shared fake's `.eq` is `value === a`, so it matches
+    // NULL exactly as `.is` does and this test passes either way. That gap is
+    // the mock's, not this test's — a tracked follow-up, since changing `.eq`
+    // to reject NULL would ripple through every route test in this tree.
+    expect((await count()).body.data.count).toBe(1)
+  })
+})
+
 describe('GET /api/email/tickets/count — cheapness and failure', () => {
   it('asks for a COUNT ONLY — never the rows', async () => {
     await count()

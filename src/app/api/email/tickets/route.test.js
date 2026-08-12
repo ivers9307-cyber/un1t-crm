@@ -258,6 +258,60 @@ describe('GET /api/email/tickets — views', () => {
   })
 })
 
+// EMAIL-MERGE.3 — a merged ticket is a TOMBSTONE and must not be listed.
+//
+// It is `closed` plus a pointer, deliberately — no fifth status value — which
+// means the status vocabulary cannot hide it: the `closed` view asks for
+// exactly solved+closed, so a tombstone lands there looking like an ordinary
+// resolved ticket. That is the duplicate this whole feature exists to remove,
+// wearing a different hat: the operator finds two records of one conversation
+// in their closed queue and is back where they started.
+describe('GET /api/email/tickets — merged tickets are tombstones', () => {
+  const merged = (over) => ({ ...T_ACCOUNTS, merged_into_id: T_STUDIO.id, ...over })
+
+  it('hides a merged ticket from the CLOSED view, where status cannot hide it', async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    setupDb(baseState({
+      tickets: [
+        { ...T_STUDIO, status: 'closed' },
+        merged({ status: 'closed' }),
+      ],
+      grants: [],
+    }))
+    const { body } = await list(`?location_id=${LOC_A}&view=closed`)
+    // The survivor is still there — hiding tombstones must not hide history.
+    expect(ids(body.data.tickets)).toEqual([T_STUDIO.id])
+  })
+
+  it('hides one whose status write did not land either', async () => {
+    // Merge stamps the pointer and flips the status as two writes with no
+    // transaction around them, so "pointer set, still open" is a state that can
+    // exist. The scope keys on the POINTER, not the status, so a half-applied
+    // merge still cannot show the conversation twice in the live queue.
+    getCurrentUser.mockResolvedValue(OWNER)
+    setupDb(baseState({
+      tickets: [{ ...T_STUDIO, status: 'open' }, merged({ status: 'open' })],
+      grants: [],
+    }))
+    expect(ids((await list()).body.data.tickets)).toEqual([T_STUDIO.id])
+  })
+
+  it('leaves ordinary tickets alone — merged_into_id null is the normal row', async () => {
+    // What this actually protects: the tombstone scope must not swallow the
+    // ordinary rows — a filter written inside out (or an .is() left non-null)
+    // would empty the queue completely, which is the more damaging direction.
+    //
+    // It does NOT protect the .eq('merged_into_id', null) misspelling, which
+    // matches nothing in real PostgREST: the shared fake's `.eq` is
+    // `value === a`, so it matches NULL exactly as `.is` does and this test
+    // passes either way. That gap is the mock's, not this test's — it is a
+    // tracked follow-up with wider blast radius than one route.
+    getCurrentUser.mockResolvedValue(OWNER)
+    setupDb(baseState({ grants: [] }))
+    expect(ids((await list()).body.data.tickets).sort()).toEqual([T_STUDIO.id, T_ACCOUNTS.id].sort())
+  })
+})
+
 // EMAIL-TICKET-CLEANUP.2 — a FAILED visibility lookup is not an empty one.
 //
 // `mailboxRes.data` is null on a PostgREST error, so `|| []` turned "we could

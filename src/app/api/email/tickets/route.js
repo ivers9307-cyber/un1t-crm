@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
-import { loadVisibleMailboxes, scopeToVisibleMailboxes, scopeToNeedsReply } from './_helpers'
+import { loadVisibleMailboxes, scopeToVisibleMailboxes, scopeToNeedsReply, scopeToUnmerged } from './_helpers'
 
 // GET /api/email/tickets — the studio's ticket queue (EMAIL-TICKET.4).
 // Spec: docs/superpowers/specs/2026-08-05-email-ticketing-design.md
@@ -111,6 +111,13 @@ export async function GET(request) {
     .eq('location_id', locationId)
     .order('last_message_at', { ascending: false, nullsFirst: false })
     .limit(TICKET_LIMIT)
+
+  // EMAIL-MERGE.3 — merged-away tickets are tombstones, hidden from EVERY view.
+  // Applied to the base query rather than inside applyView on purpose: a merged
+  // ticket is `closed` plus a pointer, so the `closed` view is exactly where one
+  // would resurface, and a per-view filter is a filter someone can forget to add
+  // to the next view. Its survivor keeps the whole conversation.
+  query = scopeToUnmerged(query)
 
   // One tab = that mailbox (already proved visible above). No tab = the whole
   // visible set, via the shared scope the count endpoint also uses, so the

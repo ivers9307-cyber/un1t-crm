@@ -1264,3 +1264,77 @@ describe('POST …/reply — filing fails AFTER the send (EMAIL-REPLY-UNFILED.1)
     expect(insertsInto(db, 'webhook_dead_letter')).toHaveLength(0)
   })
 })
+
+// EMAIL-MERGE.6 — nothing leaves a tombstone.
+//
+// THE ROUTE IS THE GATE. TicketThread hides the composer on a merged ticket,
+// but this route runs on the service-role client, so RLS does nothing and the
+// client-side guard protects only the client. The callers that matter are the
+// ones that never had it: a stale tab, a bookmarked deep link, a push
+// notification opened after somebody else merged — and THE MOBILE APP, which
+// has no concept of merge at all, polls, and ships a reply button.
+//
+// What it prevents is the failure this whole feature exists to remove: the
+// reply reaches the member, and is then filed on a ticket scopeToUnmerged hides
+// from every queue and count — so nobody sees it was answered and the next
+// person answers again. A duplicate reply, produced by the duplicate-reply fix.
+describe('a merged ticket cannot be replied from', () => {
+  const MERGED = { ...T_STUDIO, merged_into_id: T_ACCOUNTS.id, status: 'closed' }
+
+  function setupMerged() {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      tickets: [MERGED, { ...T_ACCOUNTS }],
+      messages: [LAST_INBOUND],
+    }))
+  }
+
+  it('refuses with 409 and names the survivor — and SENDS NOTHING', async () => {
+    setupMerged()
+
+    const res = await post(T_STUDIO.id, { text: 'Sorry for the delay.' })
+
+    // 409, not the 404 every other refusal here returns: the caller has
+    // already passed loadTicketForUser, so they can see this ticket and are
+    // owed a reason. The request conflicts with what the ticket has become.
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    expect(body.error).toMatch(/merged into another one/i)
+    // The survivor's id rides on the failure body so a client can route there
+    // rather than dead-ending on a ticket it cannot send from.
+    expect(body.data.merged_into_id).toBe(T_ACCOUNTS.id)
+
+    // THE HALF THAT MATTERS. A refusal that still put the mail on the wire
+    // would be the exact bug, with a red banner on top of it — the member gets
+    // the answer twice and the second copy is filed where nobody looks.
+    expect(sendEmail).not.toHaveBeenCalled()
+    // …and nothing was written either. This route sends before it writes, so
+    // refusing at the gate can leave no half-done state behind.
+    expect(writesTo(db)).toEqual([])
+  })
+
+  it('refuses an internal note on a tombstone too', async () => {
+    setupMerged()
+
+    const res = await post(T_STUDIO.id, { text: 'Rang the council back.', internal: true })
+
+    // A note puts no mail on the wire, so it is not the dangerous case — but it
+    // would be written onto a ticket hidden from every queue and count, which
+    // is an operator typing up what they found and losing it silently.
+    expect(res.status).toBe(409)
+    expect(insertsInto(db, 'email_inbox_messages')).toEqual([])
+    expect(sendEmail).not.toHaveBeenCalled()
+  })
+
+  it('still replies normally on an ordinary ticket', async () => {
+    // The negative half: a guard that refused everything would pass both tests
+    // above while breaking the queue.
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: [LAST_INBOUND] }))
+
+    const res = await post(T_STUDIO.id, { text: 'We open at 6.' })
+
+    expect(res.status).toBe(200)
+    expect(sendEmail).toHaveBeenCalledTimes(1)
+  })
+})

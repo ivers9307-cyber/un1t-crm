@@ -1430,6 +1430,41 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
+  path: '/api/email/tickets/{id}/merge',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Fold this ticket into another one',
+  description: 'EMAIL-MERGE.4 (mig 536) — two tickets that are really one conversation, joined so a correspondent cannot be answered twice. The ticket in the path is the SOURCE and becomes a tombstone: `closed` PLUS merged_into_id, deliberately not a fifth status value, hidden from every list and count by one shared scope. Its messages are REPARENTED onto the target — that is the mechanism, not the bookkeeping, because the inbound webhook threads replies on email_inbox_messages.ticket_id, so the survivor becomes the live thread and a later reply lands there. Every moved row is stamped merged_from_ticket_id so DELETE restores exactly those and nothing else. The target absorbs the summed unread_count, the EARLIER first_response_at and the newer message’s preview. BOTH tickets go through the same gate as every other ticket route, so a missing ticket, a foreign location, a missing email_inbox key at the ticket’s location and a mailbox the caller cannot see are all 404 — as are a self-merge, a cross-location merge, a ticket already merged, and a ticket on EITHER side that has itself ALREADY ABSORBED a merge (any message carrying merged_from_ticket_id) — chains are refused so the undo stays exact, since merging a survivor onward would re-stamp the rows it absorbed and strand the earlier merge; unmerge first, then merge onward. The tombstone RETAINS its unread_count: it is a counter rather than a property of the messages, so it cannot be re-derived, and it is the record of what the survivor absorbed — inert while merged, since tombstones are hidden from the list and the badge and nothing sums the column. There is no transaction: the messages move first, the target updates second, the tombstone is stamped LAST — conditionally, on the source not already being merged, so two operators merging one ticket into different targets cannot both stamp it (the loser gets 409). An interrupted merge leaves a visibly empty but LIVE source that re-running finishes, never a hidden ticket whose mail never moved; re-running does add the source’s unread to the survivor a second time, a badge that clears the moment the ticket is opened. Attachments key on message_id and ride along untouched; email_storage_usage is NOT adjusted, because merging moves no bytes. Writes an audit_events row (business / email_ticket.merged) naming both tickets and how many messages moved — the ticket rows alone cannot tell the story, since the undo nulls merged_by.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ into: uuidLike }).openapi('EmailTicketMerge') } } },
+  },
+  responses: {
+    200: { description: '{ ticket_id, merged_into_id }' },
+    400: { description: 'No target given, or one that is not UUID-shaped', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Either ticket missing or not accessible, or the pair cannot be merged', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Somebody else merged this ticket first — its pointer was not overwritten', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A step failed — the response says which, and re-running finishes the job', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/email/tickets/{id}/merge',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Undo a merge',
+  description: 'EMAIL-MERGE.4 — the exact reverse, on the TOMBSTONE’s id. Moves back only the messages stamped merged_from_ticket_id = this ticket, clearing the stamp, then clears merged_into_id / merged_at / merged_by; a ticket that was never merged is a 404. Keyed on the stamp rather than on the survivor’s ticket_id, so a survivor that had its own correspondence — or had absorbed an earlier merge — does not hand it to the wrong ticket. It is a real undo, not just a move: once the rows are back, BOTH tickets have their denormalised fields REBUILT from the messages that now sit on them (last-message trio and first_response_at, skipping internal notes and forwards, clocked on created_at because an inbound sent_at is the sender’s own Date header), and the survivor gives back exactly the unread_count the tombstone retained, clamped at zero. Left alone the survivor would keep advertising a last message that has left it — a preview and a queue sort key it does not own. Same ordering discipline as the merge: the messages move back first and the pointer clears LAST, so a failed undo leaves a tombstone that can simply be unmerged again (a retried undo subtracts the unread twice, a badge that clears when the ticket is opened). BOTH tickets go through the same gate as the merge did — this route takes messages OFF the survivor and rewrites its counters, so gating only the tombstone would let a caller reshape a ticket they cannot see. Writes an audit_events row (business / email_ticket.unmerged): once merged_into_id / merged_at / merged_by are cleared the rows carry no trace that the correspondence was ever moved, so that event is the only surviving record of it. The source stays `closed`; reopening it is the status route’s job, since merging is not a status decision.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ ticket_id }' },
+    404: { description: 'Not found / not accessible, or not a merged ticket', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A step failed — the response says which, and re-running finishes the job', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
   path: '/api/email/tickets/compose',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],

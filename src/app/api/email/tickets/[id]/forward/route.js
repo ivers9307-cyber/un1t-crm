@@ -25,7 +25,7 @@ import {
   fileForwardedAttachments,
 } from '@/lib/email-forward-server'
 import { MAX_OUTBOUND_ATTACHMENTS } from '@/lib/email-outbound-attachments'
-import { loadTicketForUser, loadOwnAddresses } from '../../_helpers'
+import { loadTicketForUser, loadOwnAddresses, ticketMergedAway } from '../../_helpers'
 
 // POST /api/email/tickets/[id]/forward — pass one message on the ticket to
 // somebody else (EMAIL-FORWARD.1, mig 501).
@@ -184,6 +184,12 @@ export async function POST(request, props) {
   const loaded = await loadTicketForUser(db, user, params.id)
   if (loaded.response) return loaded.response
   const { ticket, mailbox } = loaded
+
+  // EMAIL-MERGE.6 — nothing leaves a tombstone. Before the source lookup and
+  // well before the send, so a merged ticket cannot put a member's message in
+  // front of a third party from a thread nobody is watching. The messages
+  // themselves have moved to the survivor; forwarding one belongs there.
+  if (ticket.merged_into_id) return ticketMergedAway(ticket)
 
   // ── The message being forwarded ───────────────────────────────────
   // Scoped to THIS ticket, so a message id from anywhere else in the estate

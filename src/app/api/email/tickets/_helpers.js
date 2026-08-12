@@ -253,9 +253,69 @@ export function scopeToNeedsReply(query) {
   return query.eq('status', 'open').eq('last_message_direction', 'inbound')
 }
 
+/**
+ * Hide merged-away tickets (EMAIL-MERGE.3, mig 536).
+ *
+ * ONE definition, applied by every surface that lists or counts tickets. A
+ * tombstone missed by a filter shows up as an ordinary closed ticket — which is
+ * the duplicate this feature exists to remove, wearing a different hat.
+ *
+ * Status cannot do this job, and that is by design: a merged ticket is `closed`
+ * plus a pointer rather than a fifth enum value, so the `closed` view — which
+ * asks for exactly solved+closed — is precisely where a tombstone would surface
+ * looking like ordinary resolved history. The pointer is the only thing that
+ * distinguishes it, so the pointer is what the scope keys on. That also covers
+ * the half-applied merge (pointer stamped, status write lost), which no
+ * status-based filter could.
+ *
+ * `.is(col, null)` is the ONLY correct null filter here — `.eq(col, null)`
+ * matches nothing in PostgREST, and the failure would be an inbox that empties
+ * itself and a badge stuck at zero.
+ */
+export function scopeToUnmerged(query) {
+  return query.is('merged_into_id', null)
+}
+
 /** 404, never 403 — a detail route must not confirm that an id exists. */
 export function ticketNotFound() {
   return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+}
+
+/**
+ * EMAIL-MERGE.6 — refuse a SEND from a ticket that has been merged away.
+ *
+ * THE ROUTE IS THE GATE, THE UI IS AN AFFORDANCE. TicketThread hides the
+ * composer on a tombstone, and that guard is worth keeping — but these routes
+ * run on the service-role client, so RLS does nothing and a client-side check
+ * is not a check at all. Anything holding a ticket id can still POST: a stale
+ * tab, a bookmarked deep link, a push notification opened after somebody else
+ * merged, a direct API call — and THE MOBILE APP, which has no concept of
+ * merge whatsoever, polls, and ships a reply button. A ticket that becomes a
+ * tombstone while a phone has it open is the case that will actually happen.
+ *
+ * WHAT IT PREVENTS is precisely the failure this feature exists to remove: the
+ * reply reaches the member, and is then filed on a ticket scopeToUnmerged hides
+ * from every queue and count — so nobody sees it was answered, and the next
+ * person answers again. A duplicate reply, produced by the duplicate-reply fix.
+ *
+ * 409, NOT 404, and deliberately so. Every other refusal on this surface is a
+ * 404 because the caller must not learn whether an id exists — but they have
+ * already passed loadTicketForUser here, so they can see this ticket and are
+ * owed a reason. The ticket genuinely exists; the request conflicts with what
+ * it has become. It is the same code the merge route returns for the lost
+ * race, which is the same shape of answer: you are acting on a state that has
+ * moved out from under you.
+ *
+ * merged_into_id RIDES ON THE FAILURE BODY so a client can route to the
+ * survivor rather than dead-ending. `data` on a failure body is this surface's
+ * existing idiom (the reply route's own `data.sent` unfiled case).
+ */
+export function ticketMergedAway(ticket) {
+  return NextResponse.json({
+    success: false,
+    error: 'This ticket was merged into another one, so nothing can be sent from it. Open the ticket it was merged into and send from there.',
+    data: { merged_into_id: ticket?.merged_into_id || null },
+  }, { status: 409 })
 }
 
 /**
