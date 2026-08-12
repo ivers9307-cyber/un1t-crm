@@ -124,6 +124,29 @@ describe('PATCH …/participants', () => {
     expect(stored()).toEqual(['rates@council.ie'])
   })
 
+  // THE NO-OP BODY IS A REFUSAL, NOT A 200. `.refine` is the only branch of
+  // this schema a well-formed body can fail, and answering 200 with the list
+  // unchanged would render as "removed" on a surface whose entire job is
+  // removing people — the operator closes the drawer believing the address is
+  // off the thread and the next reply mails them anyway. That is the same
+  // silent-success shape the rest of this file exists to pin, so the branch
+  // gets a test rather than only a comment: a refactor that drops the
+  // `.refine` turns this red instead of shipping a button that lies.
+  //
+  // Refused BEFORE the ticket is loaded, which is safe here and only here: the
+  // answer does not depend on the ticket, so it is the same 400 for an id the
+  // caller may open and one they may not. (The address-validity 400 below
+  // cannot say that, which is exactly why it sits after the load.)
+  it('400s on a body naming NEITHER remove nor restore, writing nothing', async () => {
+    for (const body of [{}, { remove: [] }, { restore: [] }, { remove: [], restore: [] }]) {
+      const res = await patch(T_STUDIO.id, body)
+
+      expect(res.status).toBe(400)
+      expect((await res.json()).error).toBe('Invalid request body')
+      expect(writesTo(db)).toEqual([])
+    }
+  })
+
   // A typo that reached the column would be a permanent exclusion matching
   // nobody — invisible, and undoable only by typing the same typo back.
   it('400s on an address it cannot use, writing nothing', async () => {
