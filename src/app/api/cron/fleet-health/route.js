@@ -31,6 +31,16 @@
 //                  landing. See src/lib/fleet-health.js for why they are two
 //                  grades of different strength rather than one.
 //
+//   BRIDGE-UNDELIVERED.1 adds the fourth, and the only one every signal above
+//                  calls healthy: the bridge is reachable, heartbeating and
+//                  reading straps, but the readings are stacking up in its
+//                  local buffer instead of arriving. It self-reports that
+//                  queue on each heartbeat; mig 538's `pending_stuck_since`
+//                  marker is what turns a historyless number into "for how
+//                  long". Unlike the others it runs against a deadline — the
+//                  bridge drops the oldest sample once its 5,000-slot buffer
+//                  fills — so it outranks both grades above.
+//
 // Reusing deriveBridgeStatus (shipped in #1193) means this alert, the admin
 // badge and the TV connection dot cannot disagree with each other.
 //
@@ -113,9 +123,17 @@ export async function GET(request) {
   // which costs nothing here (mig 111, already a single jsonb overwrite) and
   // turns "0 samples" into an alert line that says whether the bridge could
   // see any straps at all.
+  //
+  // BRIDGE-UNDELIVERED.1 pulls two more: `pending_stuck_since` (mig 538) and
+  // `last_pending_samples`. Both are required — the marker says how long the
+  // bridge has been holding samples, the count says whether it is a genuine
+  // backlog or an ordinary flush in progress, and the grade needs both. Adding
+  // a column to a select that already reads the row is free; forgetting one
+  // would make undeliveredDetail silently unable to fire, which is precisely
+  // the dead-signal class this whole line of work exists to end.
   const { data: bridgeRows } = await db
     .from('ble_bridges')
-    .select('id, name, hardware_id, tailscale_hostname, status, last_seen_at, location_id, last_ant_ok, last_ble_ok, last_telemetry_at, last_seen_straps')
+    .select('id, name, hardware_id, tailscale_hostname, status, last_seen_at, location_id, last_ant_ok, last_ble_ok, last_telemetry_at, last_seen_straps, pending_stuck_since, last_pending_samples')
   const bridgeByName = indexBridgesByDevice(bridgeRows)
 
   const names = fleet.map(deviceNameOf).filter(Boolean)
@@ -456,13 +474,14 @@ async function expireStaleCommands(db) {
  * How each grade reads at the head of an alert line. The prefix is the first
  * thing an operator sees on a phone, so it carries the severity: DOWN means go
  * and look at the box, ADAPTER means it needs configuring, BLIND means check
- * the room.
+ * the room, UNDELIVERED means data is on a clock.
  */
 const STATE_LABEL = {
   unreachable: 'DOWN',
   service_down: 'DOWN',
   adapter_down: 'ADAPTER',
   blind: 'BLIND',
+  undelivered: 'UNDELIVERED',
 }
 
 /**
@@ -490,10 +509,12 @@ async function notify(db, alerts) {
 
   // BRIDGE-BLIND.1 — say what was found, not "down".
   //
-  // A bridge graded `blind` or `adapter_down` is on the tailnet, heartbeating,
-  // and answering everything asked of it. Calling that "down" in a subject
-  // line is simply false, and a subject that overstates is how an alert
-  // channel loses the benefit of the doubt it needs on the day it is right.
+  // A bridge graded `blind`, `adapter_down` or `undelivered` is on the
+  // tailnet, heartbeating, and answering everything asked of it. Calling that
+  // "down" in a subject line is simply false, and a subject that overstates is
+  // how an alert channel loses the benefit of the doubt it needs on the day it
+  // is right. The severity lives in the STATE_LABEL prefix on the line itself,
+  // which is where it can be specific.
   const hardDown = down.some((a) => a.state === 'unreachable' || a.state === 'service_down')
   const subject = down.length
     ? `Fleet alert: ${down.map((a) => a.name).join(', ')} ${hardDown ? 'down' : 'needs a look'}`
