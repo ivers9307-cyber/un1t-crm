@@ -1430,6 +1430,40 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
+  path: '/api/email/tickets/{id}/merge',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Fold this ticket into another one',
+  description: 'EMAIL-MERGE.4 (mig 536) — two tickets that are really one conversation, joined so a correspondent cannot be answered twice. The ticket in the path is the SOURCE and becomes a tombstone: `closed` PLUS merged_into_id, deliberately not a fifth status value, hidden from every list and count by one shared scope. Its messages are REPARENTED onto the target — that is the mechanism, not the bookkeeping, because the inbound webhook threads replies on email_inbox_messages.ticket_id, so the survivor becomes the live thread and a later reply lands there. Every moved row is stamped merged_from_ticket_id so DELETE restores exactly those and nothing else. The target absorbs the summed unread_count, the EARLIER first_response_at and the newer message’s preview. BOTH tickets go through the same gate as every other ticket route, so a missing ticket, a foreign location, a missing email_inbox key at the ticket’s location and a mailbox the caller cannot see are all 404 — as are a self-merge, a cross-location merge and a ticket already merged. There is no transaction: the messages move first, the target updates second, the tombstone is stamped LAST, so an interrupted merge leaves a visibly empty but LIVE source that re-running finishes, never a hidden ticket whose mail never moved. Attachments key on message_id and ride along untouched; email_storage_usage is NOT adjusted, because merging moves no bytes.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ into: uuidLike }).openapi('EmailTicketMerge') } } },
+  },
+  responses: {
+    200: { description: '{ ticket_id, merged_into_id }' },
+    400: { description: 'No target given, or one that is not UUID-shaped', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Either ticket missing or not accessible, or the pair cannot be merged', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A step failed — the response says which, and re-running finishes the job', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/email/tickets/{id}/merge',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Undo a merge',
+  description: 'EMAIL-MERGE.4 — the exact reverse, on the TOMBSTONE’s id. Moves back only the messages stamped merged_from_ticket_id = this ticket, clearing the stamp, then clears merged_into_id / merged_at / merged_by; a ticket that was never merged is a 404. Keyed on the stamp rather than on the survivor’s ticket_id, so a survivor that had its own correspondence — or had absorbed an earlier merge — does not hand it to the wrong ticket. Same ordering discipline as the merge: the messages move back first and the pointer clears LAST, so a failed undo leaves a tombstone that can simply be unmerged again. The survivor keeps the absorbed counters and the source stays `closed`; reopening it is the status route’s job.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ ticket_id }' },
+    404: { description: 'Not found / not accessible, or not a merged ticket', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A step failed — the response says which, and re-running finishes the job', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
   path: '/api/email/tickets/compose',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
