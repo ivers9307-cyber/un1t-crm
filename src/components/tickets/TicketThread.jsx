@@ -79,6 +79,7 @@ import {
 } from '@/lib/ticket-display'
 import { joinPointsByMessage } from '@/lib/email-tickets'
 import TicketReplyBox from './TicketReplyBox'
+import TicketMerge from './TicketMerge'
 
 export default function TicketThread({
   hasSelection,
@@ -117,6 +118,18 @@ export default function TicketThread({
   // inbox (like compose), because a forward is a modal over the whole surface
   // rather than something a bubble can render inside itself.
   onForward,
+  // EMAIL-MERGE.6 — folding this ticket into another, and undoing it. The
+  // WRITES are the inbox's, like every other mutation on this pane: a merge
+  // takes this ticket out of the queue and rewrites the survivor's row, and
+  // neither of those finishes inside a presentational component. onMerge
+  // resolves to { ok, error?, stale? } so the dialog can show a failure that
+  // leaves it useful — the same contract onSend already answers.
+  onMerge,
+  onUnmerge,
+  // (id) => void — select another ticket. Used by the merged banner's Open,
+  // whose target is deliberately NOT in the queue (tombstones' survivors may
+  // sit outside the current view).
+  onOpenTicket,
 }) {
   const endRef = useRef(null)
   // EMAIL-ATTACH-RACE.1 — scroll on a NEW message, not on every re-read.
@@ -156,6 +169,21 @@ export default function TicketThread({
   // EMAIL-PARTICIPANTS.8 — message id → the addresses first seen on it. Pure,
   // derived, and computed once per render for the same reason as the map above.
   const joinPoints = joinPointsByMessage(messages)
+
+  // EMAIL-MERGE.6 — held in one place because it is rendered in two: bare when
+  // this ticket is a tombstone (the banner is the whole row) and inside a
+  // labelled strip when it is not. Two copies of the prop list is two places to
+  // forget onUnmerge, and the one that forgot it would be the merged branch —
+  // the only branch where the undo exists.
+  const mergeControl = (
+    <TicketMerge
+      ticket={ticket}
+      messageCount={messages.length}
+      onMerge={onMerge}
+      onUnmerge={onUnmerge}
+      onOpenTicket={onOpenTicket}
+    />
+  )
 
   return (
     <>
@@ -263,6 +291,28 @@ export default function TicketThread({
             saving={assignSaving}
           />
         </div>
+
+        {/* Duplicates (EMAIL-MERGE.6). Two tickets that are one conversation
+            is the failure this row exists for — an operator answered both and
+            the correspondent got the same reply twice. TicketMerge renders the
+            ACTION normally and the merged BANNER once this ticket is a
+            tombstone, so the row changes shape rather than the header growing
+            a second one. The banner is full-width because it is the most
+            important thing on a merged ticket: it is the only route to the
+            live thread and the only route back. */}
+        {ticket?.id && (
+          <div className="mt-2">
+            {ticket.merged_into_id ? mergeControl : (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[11px] uppercase tracking-wide text-un1t-muted">Duplicate</span>
+                {mergeControl}
+                <span className="text-[11px] text-un1t-muted">
+                  Same conversation as another ticket? Fold this one into it.
+                </span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Thread */}
@@ -316,23 +366,38 @@ export default function TicketThread({
         </p>
       )}
 
-      {/* Keyed on the ticket so switching tickets REMOUNTS the composer.
-          Its draft text, reply/note mode, added Cc/Bcc and attached files are
-          all local state — carried across a switch, member A's half-written
-          reply (and Bcc chips) would send to member B's requester
-          (TICKET-COMPOSER-LEAK.1, pinned in TicketThread.composer-reset.test.jsx).
-          The inbox already clears the server-derived replyRecipients on
-          switch; this is the same rule for the operator-typed half. */}
-      <TicketReplyBox
-        key={ticketId}
-        ticket={ticket}
-        replyRecipients={replyRecipients}
-        onSend={onSend}
-        onRemoveRecipient={onRemoveRecipient}
-        onRestoreRecipient={onRestoreRecipient}
-        participantSaving={participantSaving}
-        sending={sending}
-      />
+      {/* NO COMPOSER ON A TOMBSTONE (EMAIL-MERGE.6).
+          The reply route gates on loadTicketForUser, which deliberately does
+          not care whether a ticket has been merged — so a reply sent from here
+          WOULD reach the member and would then be filed on a ticket
+          scopeToUnmerged hides from every queue and count. That is the
+          duplicate-reply failure this whole feature exists to end, wearing the
+          feature's own hat, and merging now LEAVES the operator on this ticket
+          (so the undo stays reachable), which puts them in front of that box.
+          The correspondence lives on the survivor; so does replying to it. */}
+      {ticket?.merged_into_id ? (
+        <p className="border-t border-un1t-border px-4 py-3 text-xs text-un1t-muted">
+          This ticket was merged, so it is read-only. Open the ticket it was merged into to reply.
+        </p>
+      ) : (
+        /* Keyed on the ticket so switching tickets REMOUNTS the composer.
+           Its draft text, reply/note mode, added Cc/Bcc and attached files are
+           all local state — carried across a switch, member A's half-written
+           reply (and Bcc chips) would send to member B's requester
+           (TICKET-COMPOSER-LEAK.1, pinned in TicketThread.composer-reset.test.jsx).
+           The inbox already clears the server-derived replyRecipients on
+           switch; this is the same rule for the operator-typed half. */
+        <TicketReplyBox
+          key={ticketId}
+          ticket={ticket}
+          replyRecipients={replyRecipients}
+          onSend={onSend}
+          onRemoveRecipient={onRemoveRecipient}
+          onRestoreRecipient={onRestoreRecipient}
+          participantSaving={participantSaving}
+          sending={sending}
+        />
+      )}
     </>
   )
 }

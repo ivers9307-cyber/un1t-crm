@@ -75,6 +75,10 @@ export default function TicketInbox({ locationId, locationName, userId }) {
   // guard (see patchParticipants) and what disables the chip buttons: a guard
   // nothing renders is a click that silently does nothing.
   const [participantSaving, setParticipantSaving] = useState(false)
+  // EMAIL-MERGE.6 — a merge or its undo is in flight. One flag for both
+  // directions, because they are the same pair of tickets and a second write
+  // landing on top of the first is how a merge and its reversal race.
+  const [mergeSaving, setMergeSaving] = useState(false)
   // EMAIL-ASSIGN.1 — whether the viewer may reassign; the queue route says.
   const [viewerIsElevated, setViewerIsElevated] = useState(false)
 
@@ -473,6 +477,122 @@ export default function TicketInbox({ locationId, locationName, userId }) {
     })
   }
 
+  // EMAIL-MERGE.6 — fold this ticket into another, and undo it.
+  //
+  // Both live here rather than in TicketMerge for the reason every other
+  // mutation on this pane does: the write is only half the work. A merge takes
+  // the source OUT of the queue (scopeToUnmerged hides tombstones) and rewrites
+  // the survivor's row, and an undo brings both back — none of which a
+  // presentational component can reflect.
+  //
+  // THE SELECTION DELIBERATELY DOES NOT MOVE ON SUCCESS. Landing the operator
+  // on the survivor is the friendlier-looking choice and would quietly make
+  // this feature one-way: the tombstone is hidden from every list the moment it
+  // is stamped, so navigating away puts the Undo out of reach. Staying put
+  // re-reads the same ticket, which now carries merged_into_id (EMAIL-MERGE.5)
+  // and renders the banner — survivor one click away, reversal one click away.
+  //
+  // Returns { ok, error?, stale? } so the dialog can distinguish a failure it
+  // should stay open for from one it should get out of the way of — the shape
+  // handleSend already answers the composer with.
+  async function handleMerge(targetId) {
+    if (!selectedId || !targetId || mergeSaving) return { ok: false }
+    const id = selectedId // guard stale responses across a ticket switch
+    setMergeSaving(true)
+    setThreadError(null)
+    try {
+      const res = await fetch(`/api/email/tickets/${id}/merge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ into: targetId }),
+      })
+      const body = await res.json()
+      if (threadFor.current !== id) return { ok: false } // superseded
+      if (!body?.success) {
+        // 409 — somebody merged this ticket while the dialog was open. The
+        // view on screen is now wrong about where this conversation lives, so
+        // it is refreshed rather than left to argue with the server: the
+        // re-read paints the banner naming the survivor somebody ELSE chose.
+        // Quietly, because loadThread's own error painting would replace the
+        // one sentence that explains what happened.
+        if (res.status === 409) {
+          setThreadError(body?.error || 'Somebody else merged this ticket while you were looking at it.')
+          await loadThread(id, { quiet: true })
+          await loadQueue(true)
+          return { ok: false, stale: true }
+        }
+        // Everything else stays IN the dialog. The route answers 404 for every
+        // refusal it will not explain (self-merge, cross-location, either side
+        // already merged or having absorbed a merge), so the operator gets a
+        // sentence naming the ones they can act on rather than "Not found".
+        return {
+          ok: false,
+          error: res.status === 404
+            ? 'These two tickets cannot be merged. They may be at different studios, or one of them has already been merged — reload and try again.'
+            : (body?.error || 'Could not merge these tickets'),
+        }
+      }
+      await loadThread(id)
+      await loadQueue(true)
+      return { ok: true }
+    } catch {
+      if (threadFor.current !== id) return { ok: false }
+      return { ok: false, error: 'Could not merge these tickets — check your connection and try again' }
+    } finally {
+      setMergeSaving(false)
+    }
+  }
+
+  // The exact undo. Its failures land in the thread's own error banner rather
+  // than a dialog return value, because Undo is a button ON that banner — the
+  // operator is already looking at the place the message appears, exactly as
+  // with a failed status change or assignment.
+  async function handleUnmerge() {
+    if (!selectedId || mergeSaving) return
+    const id = selectedId // guard stale responses across a ticket switch
+    setMergeSaving(true)
+    setThreadError(null)
+    try {
+      const res = await fetch(`/api/email/tickets/${id}/merge`, { method: 'DELETE' })
+      const body = await res.json()
+      if (threadFor.current !== id) return // superseded
+      if (!body?.success) {
+        // The route's refusal is a bare 404 — including for the case that
+        // actually happens, which is somebody else having already undone it.
+        // Refreshing is the useful half of saying so.
+        setThreadError(res.status === 404
+          ? 'This ticket is not merged any more — refreshed to show where things stand'
+          : (body?.error || 'Could not undo the merge'))
+        await loadThread(id, { quiet: true })
+        await loadQueue(true)
+        return
+      }
+      await loadThread(id)
+      await loadQueue(true)
+    } catch {
+      if (threadFor.current === id) {
+        setThreadError('Could not undo the merge — check your connection and try again')
+      }
+    } finally {
+      setMergeSaving(false)
+    }
+  }
+
+  // The merged banner's Open. The survivor is deliberately looked up in the
+  // queue but not required to be there: a mailbox tab or a view filter can
+  // exclude it, and refusing to open it then would leave the banner pointing
+  // at a ticket the operator cannot reach.
+  function handleOpenTicket(id) {
+    if (!id) return
+    const row = tickets.find(t => t.id === id)
+    selectTicket(row || { id })
+    // selectTicket marks read off the ROW's unread_count, which we do not have
+    // when the survivor is outside the current view. Opening a ticket is
+    // exactly when marking read is right, so do it explicitly in that case —
+    // and only that case, so a row we DO have is not asked twice.
+    if (!row) markRead(id)
+  }
+
   // A forward is an outbound message on THIS ticket, so the thread re-read is
   // all that is needed — and it is all that is done. The QUEUE is deliberately
   // not refetched, because the route deliberately does not touch the ticket:
@@ -667,6 +787,9 @@ export default function TicketInbox({ locationId, locationName, userId }) {
             onRestoreRecipient={handleRestoreRecipient}
             participantSaving={participantSaving}
             onForward={setForwarding}
+            onMerge={handleMerge}
+            onUnmerge={handleUnmerge}
+            onOpenTicket={handleOpenTicket}
           />
         </div>
       </div>
