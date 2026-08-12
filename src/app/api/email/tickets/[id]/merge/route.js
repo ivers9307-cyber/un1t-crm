@@ -39,6 +39,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
+import { logAuditEvent } from '@/lib/audit'
 import { canMerge, mergedTicketFields, ticketFieldsFromMessages } from '@/lib/email-ticket-merge'
 import { loadTicketForUser, ticketNotFound, PARTICIPANT_SCAN_LIMIT } from '../../_helpers'
 
@@ -121,6 +122,15 @@ export async function POST(request, props) {
   // past the loads, but the reason a merge is ineligible is still not something
   // this surface owes them, and a distinct code would be a new oracle to keep
   // in step with the four the loads already return.
+  // CROSS-MAILBOX MERGE IS CURRENTLY PERMITTED, AND IT CHANGES WHO CAN READ THE
+  // SOURCE'S MESSAGES. canMerge scopes to location_id, not to mailbox_id, so
+  // folding accounts@ into studio@ is legal — and because mig 502 keys message
+  // RLS on the TICKET'S mailbox, the billing correspondence becomes readable by
+  // everyone holding a grant on the target's mailbox. Mig 502 exists precisely
+  // because mailbox scoping was missing, so this re-widens a slice of what it
+  // closed. Whether to refuse such merges or permit them with a warning is the
+  // product owner's call and is OPEN — deliberately not decided here, and the
+  // UI task will carry whichever answer comes back. Behaviour unchanged for now.
   const eligible = canMerge(source, target)
   if (!eligible.ok) {
     // The caller gets nothing but 404; the REASON goes to the log, because on a
@@ -145,9 +155,12 @@ export async function POST(request, props) {
 
   // 1. THE MESSAGES. Idempotent by construction: the filter is the source's own
   // ticket_id, which no longer matches once the rows have moved.
-  const { error: moveError } = await db.from('email_inbox_messages')
+  // `.select('id')` so the audit event below can say HOW MANY moved — the one
+  // number that makes a merge reconstructable after the fact.
+  const { data: moved, error: moveError } = await db.from('email_inbox_messages')
     .update({ ticket_id: target.id, merged_from_ticket_id: source.id })
     .eq('ticket_id', source.id)
+    .select('id')
   if (moveError) {
     console.error('[tickets/:id/merge] reparent failed:', moveError.message)
     return failed('Could not move the messages. Nothing was merged — try again.')
@@ -227,6 +240,27 @@ export async function POST(request, props) {
     return failed('The messages moved but the old ticket is still open. Re-run the merge to finish it.')
   }
 
+  // Moving a member's correspondence from one ticket to another is the most
+  // audit-worthy act on this surface — more so than the sends, which at least
+  // leave a message row behind. BOTH ids and the count go in the details,
+  // because after an unmerge the ticket rows themselves say nothing: DELETE
+  // nulls merged_by, so without this the fact a conversation was moved at all
+  // would survive nowhere. logAuditEvent never throws and the merge has already
+  // happened either way, exactly as the compose/reply/forward calls are built.
+  await logAuditEvent({
+    category: 'business',
+    action: 'email_ticket.merged',
+    actor: { id: user.id, full_name: user.full_name, email: user.email },
+    target: { resource: `email_ticket/${source.id}`, label: source.subject || null },
+    locationId: source.location_id,
+    details: {
+      merged_into_id: target.id,
+      merged_into_subject: target.subject || null,
+      message_count: (moved || []).length,
+    },
+    request,
+  })
+
   return NextResponse.json({
     success: true,
     data: { ticket_id: source.id, merged_into_id: target.id },
@@ -262,21 +296,29 @@ export async function DELETE(request, props) {
   if (!ticket.merged_into_id) return ticketNotFound()
   const targetId = ticket.merged_into_id
 
+  // THE SURVIVOR GOES THROUGH THE SAME GATE AS THE MERGE PUT IT THROUGH. This
+  // route takes messages OFF that ticket and rewrites its counters, so gating
+  // only the tombstone would leave the pair asymmetric — and asymmetric gating
+  // on two operations that mirror each other is how the next reader concludes
+  // the looser one is the intended pattern.
+  const loadedTarget = await loadTicketForUser(db, user, targetId)
+  if (loadedTarget.response) return loadedTarget.response
+  const target = loadedTarget.ticket
+
   // EXACTLY the rows this merge moved, found by the stamp rather than by "every
   // message on the survivor". The survivor has its own correspondence, and
   // keyed on ticket_id an undo would hand that to the wrong ticket.
-  const { error: moveError } = await db.from('email_inbox_messages')
+  // `.select('id')` for the audit count, as on the way in.
+  const { data: movedBack, error: moveError } = await db.from('email_inbox_messages')
     .update({ ticket_id: ticket.id, merged_from_ticket_id: null })
     .eq('merged_from_ticket_id', ticket.id)
+    .select('id')
   if (moveError) {
     console.error('[tickets/:id/merge] unmerge move-back failed:', moveError.message)
     return failed('Could not move the messages back. Nothing was unmerged — try again.')
   }
 
-  const [targetRow, targetMessages, sourceMessages] = await Promise.all([
-    // The survivor's CURRENT unread, read after the move so the subtraction
-    // below is against what it holds now, not what it held at merge time.
-    db.from('email_tickets').select('unread_count').eq('id', targetId).maybeSingle(),
+  const [targetMessages, sourceMessages] = await Promise.all([
     messagesOn(db, targetId),
     messagesOn(db, ticket.id),
   ])
@@ -284,10 +326,10 @@ export async function DELETE(request, props) {
   // tickets' previews and null their sort keys — the same silent-wrong-answer
   // shape EMAIL-TICKET.6 fixed for the thread view. The rows are already back
   // where they belong, so refusing costs a retry and nothing else.
-  if (targetRow.error || targetMessages.error || sourceMessages.error) {
+  if (targetMessages.error || sourceMessages.error) {
     console.error(
       '[tickets/:id/merge] unmerge rebuild read failed:',
-      targetRow.error?.message || targetMessages.error?.message || sourceMessages.error?.message
+      targetMessages.error?.message || sourceMessages.error?.message
     )
     return failed('The messages moved back but the ticket totals could not be rebuilt. Try again.')
   }
@@ -299,7 +341,7 @@ export async function DELETE(request, props) {
   const { error: targetError } = await db.from('email_tickets')
     .update({
       ...ticketFieldsFromMessages(targetMessages.data),
-      unread_count: Math.max(0, (targetRow.data?.unread_count || 0) - (ticket.unread_count || 0)),
+      unread_count: Math.max(0, (target.unread_count || 0) - (ticket.unread_count || 0)),
       updated_at: new Date().toISOString(),
     })
     .eq('id', targetId)
@@ -324,6 +366,24 @@ export async function DELETE(request, props) {
     console.error('[tickets/:id/merge] unmerge clear failed:', clearError.message)
     return failed('The messages moved back but the ticket is still marked merged. Try again.')
   }
+
+  // The undo is logged for the same reason the merge is, and MORE urgently:
+  // this write nulls merged_into_id / merged_at / merged_by, so the moment it
+  // lands the ticket rows carry no trace that the correspondence was ever moved.
+  // This event is the only surviving record of the second move.
+  await logAuditEvent({
+    category: 'business',
+    action: 'email_ticket.unmerged',
+    actor: { id: user.id, full_name: user.full_name, email: user.email },
+    target: { resource: `email_ticket/${ticket.id}`, label: ticket.subject || null },
+    locationId: ticket.location_id,
+    details: {
+      unmerged_from_id: targetId,
+      unmerged_from_subject: target.subject || null,
+      message_count: (movedBack || []).length,
+    },
+    request,
+  })
 
   return NextResponse.json({ success: true, data: { ticket_id: ticket.id, unmerged_from: targetId } })
 }
