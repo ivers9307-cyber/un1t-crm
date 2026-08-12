@@ -125,6 +125,15 @@ export default function ContactEditDeleteActions({ contact, canEdit, canDelete }
 
             {impact && (
               <div className="text-sm text-un1t-subtle space-y-3 mb-4">
+                {/* IMPACTCAT.1 — a preview that failed to look must not read as
+                    a confident zero. Set when the catalog function is
+                    unavailable or a count errored. */}
+                {impact.partial && (
+                  <div className="bg-amber-500/10 text-amber-700 text-xs rounded-md p-2">
+                    Some dependent records could not be counted, so this list may be incomplete.
+                  </div>
+                )}
+
                 {impact.redact_on_delete?.length > 0 && (
                   <div>
                     <div className="text-xs uppercase tracking-wider text-amber-700 mb-1">Will be redacted</div>
@@ -183,7 +192,11 @@ export default function ContactEditDeleteActions({ contact, canEdit, canDelete }
                   </div>
                 )}
 
-                {impact.total_rows === 0 && (
+                {/* IMPACTCAT.1 — "Safe to delete" is an assertion, so it needs
+                    a complete count behind it. Without the !partial guard a
+                    contact with nothing in the 21 legacy tables renders the
+                    caution above AND this line, which contradict each other. */}
+                {impact.total_rows === 0 && !impact.partial && (
                   <p className="text-xs">No dependent rows. Safe to delete.</p>
                 )}
               </div>

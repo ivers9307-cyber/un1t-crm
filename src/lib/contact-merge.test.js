@@ -1,11 +1,11 @@
-// Tests for the pure helpers in contact-merge.js. The DB-touching
-// functions (getContactImpact, mergeContacts) are tested at the
-// route level + manual smoke; the field-resolution + tag-union
-// logic is the riskiest piece operators will be relying on so it
-// gets dedicated unit coverage here.
+// Tests for contact-merge.js. The field-resolution + tag-union logic is the
+// riskiest piece operators rely on, so it gets dedicated unit coverage; the
+// DB-touching functions are covered with fake supabase clients (getContactImpact
+// against both the catalog RPC and the fallback path, mergeContacts against the
+// merge_contacts RPC contract) plus route-level smoke.
 
-import { describe, it, expect } from 'vitest'
-import { pickMergedFields, mergeTagArrays, redactInBodyForContact, mergeContacts } from './contact-merge.js'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { pickMergedFields, mergeTagArrays, redactInBodyForContact, mergeContacts, getContactImpact, redactWhatsAppForContact } from './contact-merge.js'
 
 // Minimal fake supabase builder that records .from(table).delete().eq(col, val)
 // chains so we can assert the InBody erasure hits the right tables/columns.
@@ -350,5 +350,261 @@ describe('mergeContacts — delegates the whole merge to one transaction', () =>
     const db = makeRpcDb()
     await mergeContacts(db, { survivorId: 'survivor-1', loserId: 'loser-1' })
     expect(db.rpcCalls[0].params.p_merged_fields).not.toHaveProperty('last_active_at')
+  })
+})
+
+// ── IMPACTCAT.1 — delete-impact preview, derived from the FK catalog ──────
+
+// Fake client for getContactImpact. `rows` is what public.contact_delete_impact
+// returns; `rpcError` / `rpcThrows` simulate the function being absent (mig 538
+// unapplied) or the transport dying. `counts` / `countErrors` drive the
+// per-table fallback path.
+function makeImpactDb({ rows = [], rpcError = null, rpcThrows = false, counts = {}, countErrors = [] } = {}) {
+  const rpcCalls = []
+  const countCalls = []
+  return {
+    rpcCalls,
+    countCalls,
+    rpc(name, params) {
+      rpcCalls.push({ name, params })
+      if (rpcThrows) return Promise.reject(new Error('fetch failed'))
+      if (rpcError) return Promise.resolve({ data: null, error: rpcError })
+      return Promise.resolve({ data: rows, error: null })
+    },
+    from(table) {
+      const builder = {
+        select() { return builder },
+        eq(column, value) {
+          const key = `${table}.${column}`
+          countCalls.push({ table, column, value })
+          if (countErrors.includes(key)) {
+            return Promise.resolve({ count: null, error: { message: 'permission denied' } })
+          }
+          return Promise.resolve({ count: counts[key] ?? 0, error: null })
+        },
+      }
+      return builder
+    },
+  }
+}
+
+const row = (table_name, column_name, delete_action, row_count) => ({
+  table_name, column_name, delete_action, row_count,
+})
+
+describe('getContactImpact — buckets by the catalog delete rule', () => {
+  beforeEach(() => { vi.spyOn(console, 'warn').mockImplementation(() => {}) })
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('maps all five confdeltype values to the right bucket', async () => {
+    const db = makeImpactDb({
+      rows: [
+        row('deals', 'contact_id', 'c', 2),                        // cascade
+        row('bookings', 'contact_id', 'n', 3),                     // set null
+        row('offer_purchases', 'contact_id', 'a', 1),              // no action
+        row('person_groups', 'primary_contact_id', 'r', 1),        // restrict
+        row('member_monthly_targets', 'contact_id', 'd', 4),       // set default
+      ],
+    })
+    const out = await getContactImpact(db, 'c-1')
+
+    expect(db.rpcCalls[0]).toEqual({ name: 'contact_delete_impact', params: { p_contact_id: 'c-1' } })
+    expect(out.cascade_on_delete.map(t => t.table)).toEqual(['deals'])
+    // SET NULL and SET DEFAULT both leave the row alive, just re-pointed.
+    expect(out.keep_on_delete.map(t => t.table)).toEqual(['bookings', 'member_monthly_targets'])
+    expect(out.redact_on_delete).toEqual([])
+    expect(out.partial).toBe(false)
+  })
+
+  it('puts BOTH real blockers in block_delete — RESTRICT and NO ACTION alike', async () => {
+    // They differ only in deferrability; both raise an FK violation on delete.
+    // Neither was reported before IMPACTCAT.1, and block_delete being non-empty
+    // is what hides the type-to-confirm input in ContactEditDeleteActions.
+    const db = makeImpactDb({
+      rows: [
+        row('person_groups', 'primary_contact_id', 'r', 1),
+        row('offer_purchases', 'contact_id', 'a', 2),
+      ],
+    })
+    const out = await getContactImpact(db, 'c-1')
+
+    expect(out.block_delete.map(t => `${t.table}.${t.column}`)).toEqual([
+      'person_groups.primary_contact_id',
+      'offer_purchases.contact_id',
+    ])
+    expect(out.cascade_on_delete).toEqual([])
+    expect(out.keep_on_delete).toEqual([])
+  })
+
+  it('the WhatsApp redaction override beats the catalog bucket', async () => {
+    // These are CASCADE / SET NULL in pg_constraint, but mig 094's PII scrub is
+    // what makes the kept rows GDPR-safe, so the dialog must keep saying
+    // "redacted" rather than "deleted" / "unlinked".
+    const db = makeImpactDb({
+      rows: [
+        row('whatsapp_broadcast_recipients', 'contact_id', 'c', 5),
+        row('whatsapp_conversations', 'contact_id', 'n', 1),
+        row('whatsapp_messages', 'contact_id', 'n', 42),
+      ],
+    })
+    const out = await getContactImpact(db, 'c-1')
+
+    expect(out.redact_on_delete.map(t => t.table)).toEqual([
+      'whatsapp_broadcast_recipients', 'whatsapp_conversations', 'whatsapp_messages',
+    ])
+    expect(out.cascade_on_delete).toEqual([])
+    expect(out.keep_on_delete).toEqual([])
+  })
+
+  it('uses the hand-written label where one exists, and a humanised table name otherwise', async () => {
+    const db = makeImpactDb({
+      rows: [
+        row('activities', 'contact_id', 'c', 1),                  // has an override
+        row('member_health_metrics', 'contact_id', 'c', 1),       // no override
+        row('inbody_webhook_events', 'matched_contact_id', 'n', 1), // no override, odd column
+      ],
+    })
+    const out = await getContactImpact(db, 'c-1')
+    const labels = Object.fromEntries(
+      [...out.cascade_on_delete, ...out.keep_on_delete].map(t => [`${t.table}.${t.column}`, t.label]),
+    )
+
+    expect(labels['activities.contact_id']).toBe('activities & tasks')
+    expect(labels['member_health_metrics.contact_id']).toBe('member health metrics')
+    // A second reference from the same table must not render as a duplicate line.
+    expect(labels['inbody_webhook_events.matched_contact_id']).toBe('inbody webhook events (matched contact)')
+  })
+
+  it('total_rows sums every bucket, blockers included', async () => {
+    const db = makeImpactDb({
+      rows: [
+        row('deals', 'contact_id', 'c', 2),
+        row('bookings', 'contact_id', 'n', 3),
+        row('whatsapp_messages', 'contact_id', 'n', 10),
+        row('person_groups', 'primary_contact_id', 'r', 1),
+      ],
+    })
+    const out = await getContactImpact(db, 'c-1')
+    expect(out.total_rows).toBe(16)
+  })
+
+  it('omits zero-count and malformed rows', async () => {
+    const db = makeImpactDb({
+      rows: [
+        row('deals', 'contact_id', 'c', 0),
+        row(null, 'contact_id', 'c', 5),
+        row('notes', null, 'c', 5),
+        row('notes', 'contact_id', 'c', 1),
+      ],
+    })
+    const out = await getContactImpact(db, 'c-1')
+    expect(out.cascade_on_delete.map(t => t.table)).toEqual(['notes'])
+    expect(out.total_rows).toBe(1)
+  })
+
+  it('keys every entry as { table, column, label, count } — both consumers depend on those names', async () => {
+    const db = makeImpactDb({ rows: [row('deals', 'contact_id', 'c', 2)] })
+    const out = await getContactImpact(db, 'c-1')
+    expect(out.cascade_on_delete[0]).toEqual({ table: 'deals', column: 'contact_id', label: 'deals', count: 2 })
+  })
+
+  it('rejects a missing contactId before touching the database', async () => {
+    const db = makeImpactDb()
+    await expect(getContactImpact(db, '')).rejects.toThrow(/contactId required/)
+    expect(db.rpcCalls).toEqual([])
+  })
+})
+
+describe('getContactImpact — falls back when migration 538 is not applied', () => {
+  beforeEach(() => { vi.spyOn(console, 'warn').mockImplementation(() => {}) })
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it.each([
+    ['the function does not exist', { rpcError: { message: 'function public.contact_delete_impact(uuid) does not exist', code: 'PGRST202' } }],
+    ['the call throws', { rpcThrows: true }],
+  ])('counts the hand-maintained lists and flags itself partial when %s', async (_why, opts) => {
+    const db = makeImpactDb({
+      ...opts,
+      counts: { 'deals.contact_id': 2, 'bookings.contact_id': 3, 'whatsapp_messages.contact_id': 7 },
+    })
+    const out = await getContactImpact(db, 'c-1')
+
+    // Today's shape, unchanged — the fallback must be deployable on its own.
+    expect(out.cascade_on_delete).toEqual([
+      { table: 'deals', column: 'contact_id', label: 'deals', count: 2 },
+    ])
+    expect(out.keep_on_delete).toEqual([
+      { table: 'bookings', column: 'contact_id', label: 'Calendly bookings', count: 3 },
+    ])
+    expect(out.redact_on_delete[0]).toMatchObject({ table: 'whatsapp_messages', count: 7 })
+    expect(out.block_delete).toEqual([])
+    expect(out.total_rows).toBe(12)
+    // The 21 hand-listed pairs cover a quarter of the 80 real ones, so the
+    // answer IS incomplete and has to say so.
+    expect(out.partial).toBe(true)
+  })
+
+  it('counts every hand-maintained pair with one request each', async () => {
+    const db = makeImpactDb({ rpcThrows: true })
+    await getContactImpact(db, 'c-1')
+    expect(db.countCalls).toHaveLength(21)
+    expect(db.countCalls.every(c => c.value === 'c-1')).toBe(true)
+  })
+
+  it('a failed count reports partial, never a confident 0', async () => {
+    const db = makeImpactDb({
+      rpcThrows: true,
+      counts: { 'deals.contact_id': 2 },
+      countErrors: ['notes.contact_id'],
+    })
+    const out = await getContactImpact(db, 'c-1')
+    expect(out.partial).toBe(true)
+    // The table we could not count is absent rather than listed as "0 notes".
+    expect(out.cascade_on_delete.map(t => t.table)).not.toContain('notes')
+  })
+})
+
+describe('redactWhatsAppForContact — still driven by REDACT_ON_DELETE_TABLES', () => {
+  function makeUpdateDb({ failOn = null } = {}) {
+    const calls = []
+    return {
+      calls,
+      from(table) {
+        const ctx = { table, patch: null, eqs: {} }
+        const builder = {
+          update(patch) { ctx.patch = patch; return builder },
+          eq(column, value) {
+            ctx.eqs[column] = value
+            calls.push(ctx)
+            if (failOn === table) return Promise.reject(new Error(`boom:${table}`))
+            return Promise.resolve({ error: null })
+          },
+        }
+        return builder
+      },
+    }
+  }
+
+  it('scrubs the conversation and message PII the impact preview promises', async () => {
+    const db = makeUpdateDb()
+    await redactWhatsAppForContact(db, 'c-1')
+
+    const byTable = Object.fromEntries(db.calls.map(c => [c.table, c]))
+    expect(byTable.whatsapp_conversations.patch).toEqual({
+      wa_phone: null, wa_profile_name: null, last_message_preview: '[redacted]',
+    })
+    expect(byTable.whatsapp_conversations.eqs.contact_id).toBe('c-1')
+    expect(byTable.whatsapp_messages.patch).toMatchObject({ media_url: null, template_variables: null })
+    expect(byTable.whatsapp_messages.patch.body).toMatch(/redacted/)
+  })
+
+  it('keeps going when one table fails — a partial scrub beats no scrub', async () => {
+    const db = makeUpdateDb({ failOn: 'whatsapp_conversations' })
+    await expect(redactWhatsAppForContact(db, 'c-1')).resolves.toBeUndefined()
+    expect(db.calls.map(c => c.table)).toContain('whatsapp_messages')
+  })
+
+  it('refuses a missing contactId', async () => {
+    await expect(redactWhatsAppForContact(makeUpdateDb(), '')).rejects.toThrow(/contactId required/)
   })
 })
