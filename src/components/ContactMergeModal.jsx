@@ -198,6 +198,13 @@ export default function ContactMergeModal({ contactIds, contacts, onClose }) {
                 {impactErr}
               </div>
             )}
+            {/* IMPACTCAT.1 — the fold-across list is derived from the FK
+                catalog; say so when that derivation could not run. */}
+            {impact?.partial && (
+              <div className="bg-amber-500/10 text-amber-700 text-xs rounded-md p-2 mb-3">
+                Some dependent records could not be counted, so this list may be incomplete.
+              </div>
+            )}
             {impact && (impact.cascade_on_delete?.length > 0 || impact.keep_on_delete?.length > 0 || impact.block_delete?.length > 0 || impact.redact_on_delete?.length > 0) && (
               <div className="bg-un1t-bg border border-un1t-border rounded-md p-3 mb-3">
                 <div className="text-xs uppercase tracking-wider text-un1t-subtle mb-2">Folding across from <strong className="text-un1t-text">{loser.name || loser.email}</strong></div>

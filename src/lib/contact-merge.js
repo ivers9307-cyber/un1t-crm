@@ -20,6 +20,24 @@
 // apply; the route layer is responsible for verifying the caller is
 // allowed to touch both contacts.
 
+// IMPACTCAT.1 — the three lists below are NO LONGER the source of truth for
+// the impact preview. getContactImpact now derives every referencing (table,
+// column) from pg_constraint via public.contact_delete_impact (migration 538),
+// because these 21 pairs covered barely a quarter of the 80 columns that
+// actually reference contacts(id), and neither of the two FKs that would BLOCK
+// a delete was among them.
+//
+// They are kept for two live reasons, not for sentiment:
+//   1. FALLBACK. Migration 538 is applied by hand and Vercel auto-deploys
+//      main, so this code must work before the function exists. When the RPC
+//      is unavailable the preview falls back to exactly the behaviour below
+//      and flags itself `partial`.
+//   2. LABELS + the redaction override. The catalog knows a column name; it
+//      does not know that whatsapp_messages is "WhatsApp messages (body +
+//      media redacted, metadata preserved)". See LABEL_OVERRIDES.
+// REDACT_ON_DELETE_TABLES additionally remains the work list for
+// redactWhatsAppForContact().
+
 // Tables that point at contacts.id with ON DELETE CASCADE — these
 // rows GO AWAY when the contact is deleted. The merge path UPDATEs
 // these to the survivor instead so history is preserved.
@@ -84,60 +102,178 @@ const REDACT_ON_DELETE_TABLES = Object.freeze([
 // for each.
 
 
-/**
- * Returns counts of every dependent row for a contact, split by
- * delete-rule. The shape is friendly to UI rendering — caller can
- * map each entry to a "X rows of <label>" line.
- *
- * Mig 094 introduced a new `redact_on_delete` category for the
- * WhatsApp tables (was `block_delete` before — they used to refuse
- * the delete entirely). `block_delete` is retained as an empty
- * array for back-compat with the existing UI (renders nothing when
- * empty); future add-only protected FKs can land in there without
- * a UI change.
- */
-export async function getContactImpact(db, contactId) {
-  if (!contactId) throw new Error('getContactImpact: contactId required')
-  const out = {
+// IMPACTCAT.1 — human labels for the (table, column) pairs someone has
+// actually written prose for. Derived from the three lists above so there is
+// one place to edit, and applied as an OVERRIDE on top of the catalog: where
+// an override exists it wins, everything else gets humaniseRef().
+const LABEL_OVERRIDES = Object.freeze(Object.fromEntries(
+  [...CASCADE_TABLES, ...SET_NULL_TABLES, ...REDACT_ON_DELETE_TABLES]
+    .map(t => [`${t.table}.${t.column}`, t.label]),
+))
+
+// The WhatsApp tables are CASCADE / SET NULL in the catalog, but the delete
+// path scrubs their PII (mig 094) and that scrub — not the FK rule — is what
+// makes the kept rows GDPR-safe. So they are bucketed as `redact_on_delete`
+// regardless of what pg_constraint says, applied AFTER catalog bucketing.
+const REDACT_KEYS = Object.freeze(
+  REDACT_ON_DELETE_TABLES.map(t => `${t.table}.${t.column}`),
+)
+
+// confdeltype → bucket. 'r' (restrict) and 'a' (no action) both raise a
+// foreign-key violation on delete — they differ only in deferrability — so
+// both BLOCK. 'd' (set default) keeps the row, just pointed elsewhere.
+const BUCKET_BY_ACTION = Object.freeze({
+  c: 'cascade_on_delete',
+  n: 'keep_on_delete',
+  d: 'keep_on_delete',
+  r: 'block_delete',
+  a: 'block_delete',
+})
+
+// "member_health_metrics" → "member health metrics". Deliberately mechanical:
+// there are ~60 columns with no hand-written label and inventing prose for
+// each would recreate the hand-maintained list this change exists to retire.
+// A column other than the plain contact_id is suffixed so two references from
+// the same table don't render as two identical lines.
+function humaniseRef(table, column) {
+  const base = String(table).replace(/_/g, ' ')
+  if (column === 'contact_id') return base
+  return `${base} (${String(column).replace(/_id$/, '').replace(/_/g, ' ')})`
+}
+
+function emptyImpact() {
+  return {
     cascade_on_delete: [],
     keep_on_delete: [],
     redact_on_delete: [],
     block_delete: [],
     total_rows: 0,
+    partial: false,
   }
+}
 
-  // Helper — single COUNT, ignore errors (best-effort reporting).
+/**
+ * Returns counts of every dependent row for a contact, split by
+ * delete-rule. The shape is friendly to UI rendering — caller can
+ * map each entry to a "X rows of <label>" line.
+ *
+ * IMPACTCAT.1 — the referencing columns come from pg_constraint via
+ * public.contact_delete_impact (migration 538), not from a hand-maintained
+ * list. Buckets:
+ *   cascade_on_delete  the rows are destroyed with the contact
+ *   keep_on_delete     the rows survive, unlinked (SET NULL / SET DEFAULT)
+ *   redact_on_delete   kept but PII-scrubbed (mig 094 WhatsApp override)
+ *   block_delete       RESTRICT / NO ACTION — the DELETE itself will fail
+ *
+ * `block_delete` was an always-empty back-compat array until now; two real
+ * blockers live in the schema (person_groups.primary_contact_id RESTRICT,
+ * offer_purchases.contact_id NO ACTION) and ContactEditDeleteActions hides
+ * the type-to-confirm input while it is non-empty.
+ *
+ * `partial: true` means the list may be INCOMPLETE — either the catalog RPC
+ * was unavailable (migration 538 not applied yet, so the old 21-pair lists
+ * answered) or an individual count failed. A preview whose whole job is to
+ * say how much gets destroyed must not report a confident 0 when it did not
+ * actually manage to look.
+ */
+export async function getContactImpact(db, contactId) {
+  if (!contactId) throw new Error('getContactImpact: contactId required')
+
+  const rows = await fetchCatalogImpact(db, contactId)
+  if (rows) return bucketCatalogRows(rows)
+  return legacyImpact(db, contactId)
+}
+
+/**
+ * One round trip for all ~80 referencing columns. Returns the rows, or null
+ * when the function is unavailable / errored — which is the signal to fall
+ * back. supabase-js builders are thenables with no .catch (CLAUDE.md), so the
+ * transport failure is caught and the database's refusal is read off `error`.
+ */
+async function fetchCatalogImpact(db, contactId) {
+  let data, error
+  try {
+    ({ data, error } = await db.rpc('contact_delete_impact', { p_contact_id: contactId }))
+  } catch (e) {
+    error = { message: e?.message || String(e) }
+  }
+  if (error || !Array.isArray(data)) {
+    // Expected — and silent-by-design — until migration 538 is applied.
+    logWarn('contact-merge', 'contact_delete_impact unavailable, falling back to the hand-maintained lists', {
+      contactId,
+      err: error?.message || 'no rows returned',
+    })
+    return null
+  }
+  return data
+}
+
+function bucketCatalogRows(rows) {
+  const out = emptyImpact()
+  for (const row of rows) {
+    const table = row?.table_name
+    const column = row?.column_name
+    if (!table || !column) continue
+    const count = Number(row.row_count) || 0
+    if (count <= 0) continue
+
+    const key = `${table}.${column}`
+    const bucket = REDACT_KEYS.includes(key)
+      ? 'redact_on_delete'
+      : BUCKET_BY_ACTION[row.delete_action] || 'keep_on_delete'
+
+    out[bucket].push({
+      table,
+      column,
+      label: LABEL_OVERRIDES[key] || humaniseRef(table, column),
+      count,
+    })
+    out.total_rows += count
+  }
+  return out
+}
+
+/**
+ * Pre-538 behaviour, kept verbatim apart from the `partial` flag: count the 21
+ * hand-listed pairs one request at a time. It under-reports by ~60 columns and
+ * never populates block_delete, which is why `partial` is set unconditionally
+ * here — the operator is told the list may be incomplete, because it is.
+ */
+async function legacyImpact(db, contactId) {
+  const out = emptyImpact()
+  out.partial = true
+
+  // Single COUNT per table. Errors are swallowed (best-effort preview) but
+  // recorded, so a failed count reads as "we could not look" rather than "0".
   async function countAt({ table, column }) {
     try {
-      const { count } = await db
+      const { count, error } = await db
         .from(table)
         .select('*', { count: 'exact', head: true })
         .eq(column, contactId)
-      return count || 0
+      if (error) return { count: 0, failed: true }
+      return { count: count || 0, failed: false }
     } catch {
-      return 0
+      return { count: 0, failed: true }
     }
   }
 
-  for (const t of CASCADE_TABLES) {
-    const n = await countAt(t)
-    if (n > 0) {
-      out.cascade_on_delete.push({ ...t, count: n })
-      out.total_rows += n
-    }
-  }
-  for (const t of SET_NULL_TABLES) {
-    const n = await countAt(t)
-    if (n > 0) {
-      out.keep_on_delete.push({ ...t, count: n })
-      out.total_rows += n
-    }
-  }
-  for (const t of REDACT_ON_DELETE_TABLES) {
-    const n = await countAt(t)
-    if (n > 0) {
-      out.redact_on_delete.push({ ...t, count: n })
-      out.total_rows += n
+  const passes = [
+    [CASCADE_TABLES, 'cascade_on_delete'],
+    [SET_NULL_TABLES, 'keep_on_delete'],
+    [REDACT_ON_DELETE_TABLES, 'redact_on_delete'],
+  ]
+  for (const [list, bucket] of passes) {
+    for (const t of list) {
+      const { count, failed } = await countAt(t)
+      // Redundant on this path (partial is already true) and deliberately
+      // kept: it is the line that must survive if the fallback ever stops
+      // being partial by construction.
+      if (failed) out.partial = true
+      if (count > 0) {
+        out[bucket].push({ ...t, count })
+        out.total_rows += count
+      }
     }
   }
 
