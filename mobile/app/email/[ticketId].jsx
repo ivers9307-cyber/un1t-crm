@@ -49,6 +49,17 @@
 // lib/email-tickets.js) and REMOVAL STAYS WEB-ONLY: this screen only
 // describes the audience the server settled on, same as the recipient lines
 // above — it never offers a way to change it.
+//
+// THE OTHER TWO PLACES A NAME APPEARS (EMAIL-PARTICIPANTS.12) went the same
+// way, because .9 fixed the footer and left them reading requester_email raw:
+// the header line under the subject, and the composer's own placeholder. On
+// the 2026-08-12 ticket that had the box an operator types into saying "Reply
+// to ratesoffice@dublincity.ie" one line above a footer saying the mail goes
+// to Eleanor and one other — the composer contradicting itself. All three now
+// come from ONE derivation (ticketReplyAudience in lib/email-tickets.js), so
+// this screen cannot say three things about who a reply reaches, and an
+// emptied audience names nobody rather than resurrecting the person a web
+// operator removed.
 
 import { useEffect, useState, useCallback, useRef } from 'react'
 import {
@@ -68,7 +79,8 @@ import {
   ticketMessageKind, ticketStatusMeta, mailboxLabel, ticketDeliveryMeta,
   ticketMessageRecipients, isArchivedStatus, TICKET_STATUS_ORDER,
   formatAttachmentSize, ticketAttachmentSkippedLabel, ticketAttachmentIcon,
-  threadRefreshMs, ticketReplyAudienceMeta,
+  threadRefreshMs, ticketReplyAudienceMeta, ticketReplyPlaceholder,
+  ticketThreadAudienceLines,
 } from '../../lib/email-tickets'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
 
@@ -484,6 +496,14 @@ export default function EmailTicket() {
   // not the keyboard.
   const audience = ticketReplyAudienceMeta(ticket, replyRecipients)
   const sendBlocked = !isNote && audience.disabled
+  // EMAIL-PARTICIPANTS.12 — the OTHER two strings that named the requester
+  // raw: the header line under the subject, and the composer's placeholder.
+  // Both derive from the same audience the footer does (one derivation, in
+  // lib/email-tickets.js), so this screen cannot say three different things
+  // about who a reply reaches. STILL READ-ONLY — describing the set, never
+  // editing it.
+  const threadLines = ticketThreadAudienceLines(ticket, replyRecipients)
+  const replyPlaceholder = ticketReplyPlaceholder(ticket, replyRecipients)
 
   async function send() {
     const body = text.trim()
@@ -576,17 +596,31 @@ export default function EmailTicket() {
       ) : (
         <>
           {/* Header strip — the native header holds the requester's name;
-              this carries the address, the subject, which account it came
-              in to, and the lifecycle control. */}
+              this carries WHO THE TICKET IS WITH, the subject, which account
+              it came in to, and the lifecycle control.
+
+              EMAIL-PARTICIPANTS.12 — that first line was requester_email
+              raw, i.e. the address the FIRST message arrived from. Once a
+              shared mailbox hands a thread to a named person it is the wrong
+              name in the most prominent place on the screen, which is the
+              2026-08-12 incident exactly. It is the LIVE audience now,
+              straight off the server's own derivation, with the requester
+              demoted to an "Opened by" line that appears only when the two
+              have actually diverged. */}
           <View className="border-b border-un1t-border bg-un1t-surface px-4 py-2">
             <View className="flex-row items-center">
               <Text className="text-xs text-un1t-subtle flex-1" numberOfLines={1}>
-                {ticket?.requester_email || 'No requester address'}
+                {threadLines.primary}
               </Text>
               <View className={`ml-2 px-1.5 py-0.5 rounded ${status.cls}`}>
                 <Text className={`text-[10px] font-semibold ${status.text}`}>{status.label}</Text>
               </View>
             </View>
+            {threadLines.opener ? (
+              <Text className="text-[11px] text-un1t-muted mt-0.5" numberOfLines={1}>
+                {threadLines.opener}
+              </Text>
+            ) : null}
             {ticket?.subject ? (
               <Text className="text-sm font-medium text-un1t-text mt-0.5" numberOfLines={2}>
                 {ticket.subject}
@@ -723,13 +757,12 @@ export default function EmailTicket() {
                 onChangeText={setText}
                 multiline
                 editable={isNote || canReply}
-                placeholder={
-                  isNote
-                    ? 'Staff-only note. Nothing is sent.'
-                    : canReply
-                      ? `Reply to ${ticket?.requester_email}…`
-                      : 'No requester address — add an internal note instead'
-                }
+                // EMAIL-PARTICIPANTS.12 — the real audience, not the
+                // requester. It said "Reply to <requester>" while the footer
+                // one line below named somebody else entirely; see
+                // ticketReplyPlaceholder, which also carries the no-requester
+                // wording this used to spell out inline.
+                placeholder={isNote ? 'Staff-only note. Nothing is sent.' : replyPlaceholder}
                 placeholderTextColor="#94A3B8"
                 maxLength={10000}
                 className={`flex-1 border rounded-2xl px-4 py-2.5 text-base text-un1t-text max-h-32 ${

@@ -10,6 +10,8 @@ import {
   ticketMessageKind,
   ticketMessageRecipients,
   ticketReplyAudienceMeta,
+  ticketReplyPlaceholder,
+  ticketThreadAudienceLines,
   ticketDeliveryMeta,
   requesterLabel,
   mailboxLabel,
@@ -397,6 +399,106 @@ describe('ticketReplyAudienceMeta (EMAIL-PARTICIPANTS.9)', () => {
     // ALSO not be misread as a refusal. The one-person fallback above is the
     // only safe reading, same as TicketReplyBox.jsx's lockedTo on web.
     expect(ticketReplyAudienceMeta(ticket(), null).disabled).toBe(false)
+  })
+})
+
+// ── The screen's OTHER two requester_email sites (EMAIL-PARTICIPANTS.12) ──
+//
+// EMAIL-PARTICIPANTS.9 moved mobile's composer FOOTER onto the real audience
+// and left the two most prominent strings on the screen still reading
+// `ticket.requester_email` raw: the header line under the ticket subject, and
+// the composer's own placeholder. Web changed both in .8, citing this exact
+// defect. On the 2026-08-12 ticket that left the phone saying "Reply to
+// ratesoffice@dublincity.ie" in the box an operator types into, directly above
+// a footer saying the mail goes to Eleanor and one other — the composer
+// contradicting itself in two adjacent lines.
+//
+// MOBILE STAYS READ-ONLY. These describe the audience the server settled on;
+// there is no remove/restore on this screen and these add none.
+describe('ticketReplyPlaceholder (EMAIL-PARTICIPANTS.12)', () => {
+  const ticket = (extra) => ({ requester_email: 'rates@council.ie', ...extra })
+  const audience = (to, extra) => ({ to, mode: to.length > 1 ? 'reply_all' : 'reply', over_cap: false, empty: false, ...extra })
+
+  it('names the live counterparty, not the address the ticket arrived from', () => {
+    const p = ticketReplyPlaceholder(ticket(), audience(['eleanor@council.ie', 'rates@council.ie']))
+    expect(p).toBe('Reply to eleanor@council.ie and 1 other…')
+  })
+
+  it('names the only recipient on a one-person thread', () => {
+    expect(ticketReplyPlaceholder(ticket(), audience(['rates@council.ie'])))
+      .toBe('Reply to rates@council.ie…')
+  })
+
+  it('says "others" once there are more than two', () => {
+    expect(ticketReplyPlaceholder(ticket(), audience(['a@x.com', 'b@x.com', 'c@x.com'])))
+      .toBe('Reply to a@x.com and 2 others…')
+  })
+
+  // The same rule TicketReplyBox.jsx's lockedTo enforces on web: an emptied
+  // audience must never put the removed person back into a prompt, because the
+  // route would refuse the send to them.
+  it('names NOBODY once every recipient has been removed', () => {
+    const p = ticketReplyPlaceholder(ticket(), audience([], { empty: true }))
+    expect(p).toBe('Reply…')
+    expect(p).not.toContain('rates@council.ie')
+  })
+
+  it('falls back to the requester when the route derived no audience (null)', () => {
+    expect(ticketReplyPlaceholder(ticket(), null)).toBe('Reply to rates@council.ie…')
+  })
+
+  it('says a ticket with no requester address cannot be replied to at all', () => {
+    expect(ticketReplyPlaceholder(ticket({ requester_email: null }), audience(['a@x.com'])))
+      .toBe('No requester address — add an internal note instead')
+  })
+})
+
+describe('ticketThreadAudienceLines (EMAIL-PARTICIPANTS.12)', () => {
+  const ticket = (extra) => ({
+    requester_email: 'rates@council.ie', requester_name: 'Rates Office', ...extra,
+  })
+  const audience = (to, extra) => ({ to, mode: to.length > 1 ? 'reply_all' : 'reply', over_cap: false, empty: false, ...extra })
+
+  it('names the live audience in the header, with the requester demoted to "Opened by"', () => {
+    const lines = ticketThreadAudienceLines(
+      ticket(), audience(['eleanor@council.ie', 'rates@council.ie']),
+    )
+    expect(lines).toEqual({
+      primary: 'On this thread: eleanor@council.ie, Rates Office <rates@council.ie>',
+      opener: 'Opened by Rates Office <rates@council.ie>',
+    })
+  })
+
+  it('says nothing about who opened it while the requester is still the counterparty', () => {
+    const lines = ticketThreadAudienceLines(ticket(), audience(['rates@council.ie', 'clerk@council.ie']))
+    expect(lines.primary).toBe('On this thread: Rates Office <rates@council.ie>, clerk@council.ie')
+    expect(lines.opener).toBeNull()
+  })
+
+  // Two different places wrote these addresses — a stored column and headers a
+  // stranger's mail client produced — so a case difference is not a change of
+  // counterparty and must not be announced as one.
+  it('does not call a case difference a change of counterparty', () => {
+    expect(ticketThreadAudienceLines(ticket(), audience(['Rates@Council.IE'])).opener).toBeNull()
+  })
+
+  it('never names the removed requester once the audience is empty', () => {
+    const lines = ticketThreadAudienceLines(ticket(), audience([], { empty: true }))
+    expect(lines.primary).toBe('Nobody is left on this thread — every recipient was removed.')
+    expect(lines.primary).not.toContain('rates@council.ie')
+    expect(lines.opener).toBeNull()
+  })
+
+  it('keeps the plain requester line when the route derived no audience (null)', () => {
+    // Not an operator act — an own-address lookup blip. The requester address
+    // is the honest answer, and it is what this line has always shown.
+    expect(ticketThreadAudienceLines(ticket(), null))
+      .toEqual({ primary: 'rates@council.ie', opener: null })
+  })
+
+  it('still says so when the ticket has no requester address', () => {
+    expect(ticketThreadAudienceLines(ticket({ requester_email: null }), null))
+      .toEqual({ primary: 'No requester address', opener: null })
   })
 })
 
