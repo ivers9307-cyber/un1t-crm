@@ -34,17 +34,22 @@ import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
-import { normalizeAddressList } from '@/lib/email-recipients'
+import { normalizeAddressList, MAX_RECIPIENTS } from '@/lib/email-recipients'
 import { loadTicketForUser } from '../../_helpers'
 
 // Both lists are optional, but a body naming neither is a no-op the caller
 // almost certainly did not mean — refused rather than answered 200 with the
 // list unchanged, which reads as "removed" on a surface whose whole job is
-// removing people. The cap matches MAX_RECIPIENTS: nothing here sends mail, but
-// an unbounded array on a text[] column is a free write amplifier.
+// removing people. The cap IS MAX_RECIPIENTS, imported rather than typed:
+// nothing here sends mail, but an unbounded array on a text[] column is a free
+// write amplifier, and the ceiling on how many people can be taken off a reply
+// is the ceiling on how many could be on one. It was two hard-coded 25s under
+// a comment claiming this exact link (EMAIL-PARTICIPANTS.12) — true by
+// coincidence, and two places to forget the day the constant moves.
+// TicketReplyBox.jsx imports it for its own sentence citing the same rule.
 const ParticipantsSchema = z.object({
-  remove: z.array(z.string()).max(25).optional(),
-  restore: z.array(z.string()).max(25).optional(),
+  remove: z.array(z.string()).max(MAX_RECIPIENTS).optional(),
+  restore: z.array(z.string()).max(MAX_RECIPIENTS).optional(),
 }).refine(
   v => Boolean(v.remove?.length || v.restore?.length),
   { message: 'Name at least one address to remove or restore' }

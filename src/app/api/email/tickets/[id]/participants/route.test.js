@@ -32,6 +32,7 @@ import { PATCH } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { makeDb, failWrites, updatesTo, writesTo } from '../../_test-db'
+import { MAX_RECIPIENTS } from '@/lib/email-recipients'
 import {
   T_STUDIO, T_OTHER_LOCATION, COACH, GRANT_STUDIO, baseState,
 } from '../../_test-fixtures'
@@ -154,6 +155,25 @@ describe('PATCH …/participants', () => {
 
     expect(res.status).toBe(400)
     expect((await res.json()).error).toContain('not an address')
+    expect(writesTo(db)).toEqual([])
+  })
+
+  // EMAIL-PARTICIPANTS.12 — THE CAP IS THE CONSTANT, not a 25 that happens to
+  // agree with it. The schema hard-coded `.max(25)` twice while its comment
+  // said it matched MAX_RECIPIENTS, so the claim was true by coincidence and
+  // the next move of the constant would have silently broken it in two places
+  // at once. Written in terms of the import for that reason: this test says
+  // nothing about the number 25 and everything about the two staying tied.
+  it('accepts a list right up to MAX_RECIPIENTS and refuses the one past it', async () => {
+    const addresses = (n) => Array.from({ length: n }, (_, i) => `p${i}@council.ie`)
+
+    const atCap = await patch(T_STUDIO.id, { remove: addresses(MAX_RECIPIENTS) })
+    expect(atCap.status).toBe(200)
+    expect(stored()).toHaveLength(MAX_RECIPIENTS)
+
+    setupDb()
+    const overCap = await patch(T_STUDIO.id, { remove: addresses(MAX_RECIPIENTS + 1) })
+    expect(overCap.status).toBe(400)
     expect(writesTo(db)).toEqual([])
   })
 
