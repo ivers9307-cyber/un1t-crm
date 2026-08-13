@@ -18,6 +18,7 @@ import Link from 'next/link'
 import { createBrowserClient } from '@/lib/supabase'
 import { mergeTimeline } from '@shared/approval-cards'
 import { CHANNELS } from '@shared/channels'
+import LinkInstagramContactModal from '@/components/communications/LinkInstagramContactModal'
 import ApprovalActionCard from '@/components/ApprovalActionCard'
 import { ChannelAvatar } from '@/components/inbox/ChannelBits'
 import HandledByControl from '@/components/inbox/HandledByControl'
@@ -67,6 +68,7 @@ export default function IGInbox({ locationId, initialConversationId, embedded = 
   // INBOX-APPROVALS.8 — pending/decided agent approval requests for the
   // open conversation, merged into the message timeline below.
   const [approvals, setApprovals] = useState([])
+  const [linkOpen, setLinkOpen] = useState(false)
   // AGENT-QA.1 — see WAInbox twin.
   const [agentFeedback, setAgentFeedback] = useState({})
   async function rateAgentMessage(msg, rating) {
@@ -151,6 +153,23 @@ export default function IGInbox({ locationId, initialConversationId, embedded = 
       /* ignore */
     }
   }, [])
+
+  // IG-LINK.1 — after linking/unlinking, the CONVERSATION changed but the
+  // message list didn't, so the signature guard in loadThread would skip the
+  // refresh and the header would keep showing the old state. Clear it first.
+  const refreshThreadHard = useCallback(async (id) => {
+    threadSigRef.current = ''
+    await loadThread(id)
+    await loadConversations()
+  }, [loadThread, loadConversations])
+
+  const unlinkContact = useCallback(async () => {
+    if (!selectedId) return
+    try {
+      await fetch(`/api/instagram/conversations/${selectedId}/link`, { method: 'DELETE' })
+      await refreshThreadHard(selectedId)
+    } catch { /* header stays as-is; staff can retry */ }
+  }, [selectedId, refreshThreadHard])
 
   // INBOX-APPROVALS.8 — approval requests tied to this conversation, for
   // the inline cards in the timeline. Never errors for a valid session
@@ -373,12 +392,29 @@ export default function IGInbox({ locationId, initialConversationId, embedded = 
                     <p className="font-medium text-sm truncate">{displayName(conversation)}</p>
                     <span className="text-[10px] font-semibold text-channel-ig">{CHANNELS.ig.name}</span>
                   </div>
+                  {/* IG-LINK.1 — Instagram has no phone/email to match on, so
+                      an unlinked thread needs a human to say who this is (once). */}
                   {conversation?.contacts?.id ? (
-                    <Link href={`/contacts/${conversation.contacts.id}`} className="text-xs text-un1t-accent hover:underline">
-                      View contact
-                    </Link>
+                    <span className="flex items-center gap-2">
+                      <Link href={`/contacts/${conversation.contacts.id}`} className="text-xs text-un1t-accent hover:underline">
+                        View contact
+                      </Link>
+                      <button
+                        type="button"
+                        onClick={unlinkContact}
+                        className="text-xs text-un1t-muted hover:text-un1t-text underline"
+                      >
+                        Unlink
+                      </button>
+                    </span>
                   ) : (
-                    <span className="text-xs text-un1t-muted">Not linked to a contact</span>
+                    <button
+                      type="button"
+                      onClick={() => setLinkOpen(true)}
+                      className="text-xs text-un1t-accent hover:underline"
+                    >
+                      Link to a contact
+                    </button>
                   )}
                 </div>
               </div>
@@ -480,6 +516,13 @@ export default function IGInbox({ locationId, initialConversationId, embedded = 
           </>
         )}
       </div>
+
+      <LinkInstagramContactModal
+        open={linkOpen}
+        onClose={() => setLinkOpen(false)}
+        conversation={conversation}
+        onLinked={() => refreshThreadHard(selectedId)}
+      />
     </div>
   )
 }

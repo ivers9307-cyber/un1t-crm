@@ -17,6 +17,7 @@ import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { stampConnectionOk, stampConnectionError, isMetaAuthError } from '@/lib/connection-health'
 import { ensureInstagramMediaRehosted } from '@/lib/instagram-media-server'
+import { resolveContactForInstagramThread } from '@/lib/instagram-contact-link-server'
 import { mediaRenderKind } from '@shared/whatsapp-media'
 
 // IG-MEDIA.1 — map an inbound IG attachment type to the message_type we
@@ -200,18 +201,24 @@ export async function handleInstagramInbound(db, event) {
 
   // Find-or-create the conversation (one per location + customer IGSID).
   const { data: existingConv } = await db.from('instagram_conversations')
-    .select('id, contact_id, agent_handed_off_at')
+    .select('id, contact_id, agent_handed_off_at, customer_name, ig_username')
     .eq('location_id', locationId)
     .eq('ig_user_id', event.customerId)
     .maybeSingle()
 
   let conversationId = existingConv?.id
-  const contactId = existingConv?.contact_id || null
+  let contactId = existingConv?.contact_id || null
   const existingHandoffAt = existingConv?.agent_handed_off_at || null
+  // Identity shown by Instagram, for contact matching below. Comes off the
+  // stored row for a known thread, or the freshly-fetched profile for a new one.
+  let igDisplayName = existingConv?.customer_name || null
+  let igHandle = existingConv?.ig_username || null
   if (!conversationId) {
     // Capture the customer's IG display name once, so the agent can use
     // the surname as a verification factor without making them retype it.
     const profile = await fetchInstagramProfile(event.customerId, connection)
+    igDisplayName = profile?.name || igDisplayName
+    igHandle = profile?.username || igHandle
     const { data: created, error: createError } = await db.from('instagram_conversations').insert({
       location_id: locationId,
       channel_connection_id: connection?.id || null,
@@ -240,6 +247,23 @@ export async function handleInstagramInbound(db, event) {
     }
   }
   if (!conversationId) return { handled: false, reason: 'no_conversation' }
+
+  // IG-LINK.1 — attach the thread to a CRM contact when we safely can, so the
+  // message rows below carry contact_id and the inbox shows the member's
+  // profile/history instead of a stranger. Instagram exposes no phone or
+  // email, so this is (1) the IGSID remembered on a contact from a previous
+  // link, else (2) a strictly-guarded exact unique full-name match. Ambiguous
+  // cases stay unlinked for staff to resolve. Best-effort: never blocks the
+  // message.
+  if (!contactId) {
+    contactId = await resolveContactForInstagramThread(db, {
+      conversationId,
+      locationId,
+      igsid: event.customerId,
+      displayName: igDisplayName,
+      handle: igHandle,
+    })
+  }
 
   const ts = event.timestamp ? new Date(event.timestamp).toISOString() : new Date().toISOString()
   const messageType = event.type || 'text'
