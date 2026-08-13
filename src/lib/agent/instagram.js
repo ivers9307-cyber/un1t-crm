@@ -23,15 +23,18 @@ import { mediaRenderKind } from '@shared/whatsapp-media'
 // IG-MEDIA.1 — map an inbound IG attachment type to the message_type we
 // store. Chosen so the shared mediaRenderKind() (also used by WhatsApp)
 // resolves the right inline renderer. IG "file" → "document" because
-// mediaRenderKind classifies documents by MIME (image/pdf/etc). Anything
-// not here (share, story_mention, reel…) has no inline renderer and keeps
-// its raw type, rendering as a text placeholder.
+// mediaRenderKind classifies documents by MIME (image/pdf/etc).
+// story_mention deliberately keeps its raw type: mediaRenderKind resolves it
+// by MIME (a story frame is a photo or a clip) and never returns null for it,
+// so it still passes every media gate (IG-MEDIA.2). Types genuinely without a
+// renderer (share, reel…) keep their raw type and show a text placeholder.
 const IG_ATTACHMENT_TYPE_TO_MESSAGE_TYPE = {
   image: 'image',
   video: 'video',
   audio: 'audio',
   file: 'document',
 }
+
 
 /**
  * Normalise a Meta Instagram webhook body into a flat list of message
@@ -126,6 +129,48 @@ export async function sendInstagramMessage(recipientIgsid, text, opts = {}) {
   // INTEG-A3 — a delivered send proves the connection works right now.
   if (conn?.id) await stampConnectionOk(null, conn.id)
   return { messageId: result.message_id || null }
+}
+
+/**
+ * Tell Instagram the customer's messages have been read (IG-SEEN.1).
+ *
+ * Answering in the CRM did not clear the thread's unread state in the
+ * Instagram app, because a reply through the API is not itself a read
+ * receipt — Meta needs an explicit `mark_seen` sender action. Without it
+ * staff see a thread they have already handled still sitting bold on the
+ * phone.
+ *
+ * Best-effort by design: this is a courtesy signal, so a failure is logged
+ * and swallowed. It must never fail a reply that actually went out.
+ *
+ * @param {string} recipientIgsid  the customer's IGSID
+ * @param {object} opts { connection }  channel_connections row
+ * @returns {Promise<boolean>} whether Meta accepted it
+ */
+export async function markInstagramSeen(recipientIgsid, opts = {}) {
+  const conn = opts.connection
+  const token = conn?.access_token
+  if (!token || !recipientIgsid) return false
+  try {
+    const igId = conn?.external_account_id || 'me'
+    const res = await fetch(`${IG_GRAPH_URL}/${encodeURIComponent(igId)}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        recipient: { id: recipientIgsid },
+        sender_action: 'mark_seen',
+      }),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      console.error('[instagram mark_seen] rejected', body?.error?.message || `HTTP ${res.status}`)
+      return false
+    }
+    return true
+  } catch (e) {
+    console.error('[instagram mark_seen] failed', e?.message)
+    return false
+  }
 }
 
 /**
@@ -272,12 +317,13 @@ export async function handleInstagramInbound(db, event) {
   const ts = event.timestamp ? new Date(event.timestamp).toISOString() : new Date().toISOString()
   const messageType = event.type || 'text'
   const mediaUrl = event.mediaUrl || null
-  // Stored body is: the caption for renderable media (image/video/audio —
-  // the media itself renders from its own columns, so no placeholder), a
-  // "[type]" label for attachment kinds we can't render inline (shares,
-  // story-mentions) so the bubble isn't blank, and the text otherwise.
-  // previewText always yields a "[type]" fallback for the conversation list
-  // + push when there's no caption. (IG-MEDIA.1)
+  // Stored body is: the caption for renderable media (image/video/audio, and
+  // since IG-MEDIA.2 story mentions too — the media renders from its own
+  // columns, so a placeholder would sit under the picture), a "[type]" label
+  // for kinds with no renderer at all (shares, reels) so the bubble isn't
+  // blank, and the text otherwise. previewText always yields a "[type]"
+  // fallback for the conversation list + push when there's no caption.
+  // (IG-MEDIA.1/.2)
   const body = event.text || (messageType !== 'text' && !mediaRenderKind(messageType) ? `[${messageType}]` : '')
   const previewText = (body || `[${messageType}]`).slice(0, 100)
 
@@ -294,7 +340,13 @@ export async function handleInstagramInbound(db, event) {
         .select('id').eq('ig_message_id', event.messageId).limit(1).maybeSingle()
       if (already) return { handled: false, reason: 'echo_own_send', conversationId }
     }
-    const { error: echoErr } = await db.from('instagram_messages').insert({
+    // IG-MEDIA.2 — media_url was missing here: the echo path predates
+    // IG-MEDIA.1, which only wired the inbound insert below. Anything sent
+    // from the native IG app (a photo, or a story mention echoed back when
+    // the business tags someone) recorded as a bare placeholder with the
+    // image silently dropped, and the IG CDN URL expires within about a day,
+    // so it was unrecoverable after the fact.
+    const { data: insertedEcho, error: echoErr } = await db.from('instagram_messages').insert({
       conversation_id: conversationId,
       contact_id: contactId,
       location_id: locationId,
@@ -302,10 +354,11 @@ export async function handleInstagramInbound(db, event) {
       direction: 'outbound',
       message_type: messageType,
       body,
+      media_url: mediaUrl,
       status: 'sent',
       source: 'instagram_app',
       sent_at: ts,
-    })
+    }).select('id').single()
     if (echoErr) {
       // 23505 on the unique idx_ig_msg_mid = our own CRM/agent send landed
       // between the dedup lookup above and this insert (webhook/send race).
@@ -315,6 +368,21 @@ export async function handleInstagramInbound(db, event) {
       console.error('[instagram echo] insert failed', echoErr.message)
       return { handled: false, reason: 'echo_insert_failed', conversationId }
     }
+    // Re-host while the CDN URL is fresh, same as the inbound path.
+    if (mediaUrl && insertedEcho?.id && mediaRenderKind(messageType)) {
+      try {
+        await ensureInstagramMediaRehosted(db, {
+          id: insertedEcho.id,
+          location_id: locationId,
+          message_type: messageType,
+          media_url: mediaUrl,
+          media_storage_path: null,
+        }, { token: connection?.access_token })
+      } catch (e) {
+        console.error('[instagram echo] media rehost failed (will lazy-load):', e?.message)
+      }
+    }
+
     // A human replied from outside the CRM → mirror the operator send
     // route exactly: take over (stop Mia) and flip the thread to
     // answered, so app-replies and CRM-replies behave identically in the
@@ -356,8 +424,10 @@ export async function handleInstagramInbound(db, event) {
   // bucket now, while the IG CDN URL is still fresh (it expires fast), so
   // the inbox shows it without a first-view round-trip. Best-effort and
   // bounded: never block or fail the webhook — /api/instagram/media
-  // re-hosts lazily if this misses. Gated to renderable kinds — shares and
-  // story-mentions carry a url but have no inline renderer.
+  // re-hosts lazily if this misses. Gated to renderable kinds — which now
+  // includes story mentions, since mediaRenderKind never returns null for
+  // them (IG-MEDIA.2). Kinds with no renderer at all (shares, reels) still
+  // carry a url but are deliberately left alone.
   if (mediaUrl && insertedInbound?.id && mediaRenderKind(messageType)) {
     try {
       await ensureInstagramMediaRehosted(db, {

@@ -103,13 +103,29 @@ describe('parseInstagramEvents', () => {
     expect(parseInstagramEvents(body)[0].mediaUrl).toBe('first')
   })
 
-  it('non-media attachment (story_mention/share) keeps its raw type and does not render as media', () => {
+  // IG-MEDIA.2 — a story mention keeps its raw type (so the thread can say
+  // what it was) but it IS media: the payload is the story frame itself, and
+  // every gate on the media path asks mediaRenderKind, so it must not answer
+  // null or the file never reaches our bucket and the IG CDN drops it within
+  // about a day. This test previously asserted the opposite.
+  it('story_mention keeps its raw type and stays on the media path', () => {
     const body = baseEntry([{
       sender: { id: 'C' }, recipient: { id: 'IGBIZ1' },
       message: { mid: 'm6', attachments: [{ type: 'story_mention', payload: { url: 'sm' } }] },
     }])
     const out = parseInstagramEvents(body)
-    expect(out[0].type).toBe('story_mention')
+    expect(out[0]).toMatchObject({ type: 'story_mention', mediaUrl: 'sm' })
+    expect(mediaRenderKind(out[0].type)).toBe('file')            // before the mime is known
+    expect(mediaRenderKind(out[0].type, 'image/jpeg')).toBe('image')  // after re-hosting
+  })
+
+  it('a share genuinely has no renderer and stays a placeholder', () => {
+    const body = baseEntry([{
+      sender: { id: 'C' }, recipient: { id: 'IGBIZ1' },
+      message: { mid: 'm6b', attachments: [{ type: 'share', payload: { url: 'sh' } }] },
+    }])
+    const out = parseInstagramEvents(body)
+    expect(out[0].type).toBe('share')
     expect(mediaRenderKind(out[0].type)).toBeNull()
   })
 
