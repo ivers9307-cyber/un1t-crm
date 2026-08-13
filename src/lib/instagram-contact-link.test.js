@@ -17,6 +17,23 @@ describe('normalizeName', () => {
     expect(normalizeName('  Séan   O\'Brien-Murphy ')).toBe('sean o brien murphy')
     expect(normalizeName('SARAH BYRNE')).toBe('sarah byrne')
   })
+  // PARITY (IG-LINK.3): these must fold identically to the generated
+  // contacts.name_normalized column (mig 541), because the auto-link
+  // ambiguity guard counts what SQL returns and validates it in JS — if the
+  // two normalizers drift, a duplicate can hide again. Each case below is a
+  // real class found in prod data.
+  it('folds NFD-form names (combining marks as separate codepoints)', () => {
+    // "Eilís" stored decomposed — visually identical to the NFC spelling.
+    expect(normalizeName('Eilís McCarthy')).toBe('eilis mccarthy')
+    expect(normalizeName('Eilís McCarthy')).toBe('eilis mccarthy')
+  })
+  it('folds NFKD compatibility characters (Instagram "fancy font" names)', () => {
+    expect(normalizeName('𝓤𝓙 Enkhbaatar')).toBe('uj enkhbaatar')
+  })
+  it('folds letters beyond the common accents', () => {
+    expect(normalizeName('Ema Tușineanu')).toBe('ema tusineanu')
+    expect(normalizeName('İlke Akdağ')).toBe('ilke akdag')
+  })
   it('is empty for nullish/blank', () => {
     expect(normalizeName(null)).toBe('')
     expect(normalizeName(undefined)).toBe('')

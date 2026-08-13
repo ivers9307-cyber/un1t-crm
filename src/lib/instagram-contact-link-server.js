@@ -29,6 +29,11 @@ export async function linkThreadToContact(db, {
   // Backfill the thread's existing messages, or the contact's timeline would
   // start blank at the moment of linking (mirrors the WhatsApp add-contact
   // route). Only fills rows that have no contact yet.
+  // NOTE: unlinking does NOT clear these back to null, so a mis-linked thread
+  // leaves its message rows stamped with the old contact. Nothing reads
+  // instagram_messages.contact_id today (the GDPR export in contact-export.js
+  // walks instagram_conversations), so this is inert — but anything that
+  // starts querying messages by contact must clear them on unlink first.
   const { error: msgErr } = await db.from('instagram_messages')
     .update({ contact_id: contactId })
     .eq('conversation_id', conversationId)
@@ -108,18 +113,20 @@ export async function resolveContactForInstagramThread(db, {
     if (!ok) return null
 
     // Visible + undoable: staff should never wonder why a thread attached
-    // itself to a member.
-    try {
-      await db.from('activities').insert({
-        contact_id: match.id,
-        location_id: locationId,
-        kind: 'event',
-        type: 'instagram',
-        subject: `Instagram ${handle ? `@${handle}` : 'account'} linked automatically`,
-        note: `Matched the Instagram display name "${name}" to this contact. Unlink from the Instagram thread if this is the wrong person.`,
-        done: true,
-      })
-    } catch { /* activity is a nicety, never block the link */ }
+    // itself to a member. The link itself is already done and stays undoable
+    // via the inbox regardless, so a failed breadcrumb is logged, not fatal.
+    // (supabase-js RETURNS errors rather than throwing, so this needs the
+    // destructure — a try/catch alone would never fire.)
+    const { error: actErr } = await db.from('activities').insert({
+      contact_id: match.id,
+      location_id: locationId,
+      kind: 'event',
+      type: 'instagram',
+      subject: `Instagram ${handle ? `@${handle}` : 'account'} linked automatically`,
+      note: `Matched the Instagram display name "${name}" to this contact. Unlink from the Instagram thread if this is the wrong person.`,
+      done: true,
+    })
+    if (actErr) logWarn('ig-contact-link', 'auto-link activity insert failed', { contactId: match.id, err: actErr.message })
 
     return match.id
   } catch (e) {
