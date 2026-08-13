@@ -9,10 +9,23 @@ export const GEOFENCE_MIN_RADIUS_M = 50
 export const GEOFENCE_MAX_RADIUS_M = 1000
 const DEFAULT_RADIUS_M = 150
 
+// GEO-ATT.19 — this string IS the Google Play "prominent disclosure" for
+// background location: LocationGate renders it verbatim on a full-screen gate
+// BEFORE any runtime permission prompt, and the Play declaration's review video
+// shows it. Play grades three things, so the test file pins all three: the
+// feature the data serves, that collection continues with the app closed, and
+// an honest statement of what is NOT collected. The old wording carried the
+// background clause only in the small print UNDER the button, which is the
+// single most common rejection reason for this declaration.
+//
+// It is served from the API, not baked into the binary — so correcting it is a
+// web deploy that lands on the next foreground, with no store release. Per-
+// location `gate_copy` overrides it; an operator override is NOT checked
+// against any of this, so review a custom one against the same three points.
 export const DEFAULT_GATE_COPY =
-  'This app records when you arrive at the gym so your shift attendance is logged automatically. ' +
-  'Only your arrival at the gym is detected — the app never tracks where you are anywhere else. ' +
-  'To use the app, allow location access set to "Always".'
+  'Repset logs your shift attendance automatically when you arrive at the gym. ' +
+  'To do that it collects your location in the background, even when the app is closed or not in use. ' +
+  'Only arrival at your gym is detected. Your location is never tracked anywhere else.'
 
 function finiteOrNull(v) {
   const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v

@@ -8,6 +8,25 @@ import {
   GEOFENCE_MAX_RADIUS_M,
 } from './geofence-attendance.js'
 
+// GEO-ATT.19 — Google Play's background-location declaration is graded on the
+// PROMINENT DISCLOSURE the app shows before the runtime prompt, and this string
+// is that disclosure's body (LocationGate renders it verbatim). Play rejects a
+// disclosure that doesn't say the collection continues with the app closed, so
+// these phrases are a compliance contract, not prose preference. Change the
+// wording freely — but keep it saying all three of these things, or the next
+// store submission bounces.
+describe('DEFAULT_GATE_COPY (Play prominent-disclosure contract)', () => {
+  it('states that location is collected when the app is closed or not in use', () => {
+    expect(DEFAULT_GATE_COPY.toLowerCase()).toContain('closed or not in use')
+  })
+  it('names the feature the data is collected for', () => {
+    expect(DEFAULT_GATE_COPY.toLowerCase()).toContain('attendance')
+  })
+  it('says what is NOT collected, so the scope is honest', () => {
+    expect(DEFAULT_GATE_COPY.toLowerCase()).toContain('never')
+  })
+})
+
 describe('geofenceFromLocationSettings', () => {
   it('returns disabled defaults for null/missing settings', () => {
     for (const s of [null, undefined, {}, { geofence: null }]) {

@@ -163,8 +163,14 @@ export default function LocationGate() {
       style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999 }}
       className="items-center justify-center bg-un1t-bg px-8"
     >
+      {/* GEO-ATT.19 — headline names the FEATURE, not the requirement. Google
+          Play grades this screen as the prominent disclosure for background
+          location; "Location required to utilise app features" told a reviewer
+          (and a staffer) nothing about what the data is for. The body below is
+          server-supplied (DEFAULT_GATE_COPY) and carries the "even when the app
+          is closed or not in use" clause Play looks for. */}
       <Text className="text-2xl font-bold text-un1t-text text-center mb-4">
-        Location required to utilise app features
+        Automatic shift attendance needs your location
       </Text>
       <Text className="text-base text-un1t-subtle text-center mb-8">{config.gate_copy}</Text>
       <Pressable
