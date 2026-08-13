@@ -15,9 +15,26 @@
 // for it on initial render. Optimistic UI: the toggle flips
 // immediately, then either stays put on success or rolls back if
 // the API rejects.
+//
+// HYGREL.1 — THIS CARD USED TO LIE, and quietly. Consent is one gate;
+// contacts.email_status (reputation) and contacts.email_suppressed_at
+// (our 90-day hygiene call, mig 395) are two more, applied
+// independently in buildAudienceQuery. The card showed only the first,
+// so a contact who had been unmailable since the 12 Aug sweep — 1,128
+// of them on that date — read "Email marketing: ON" to any operator
+// who opened their record, including one about to ask why the member
+// never gets the newsletter. The banner below names whichever gate is
+// actually closed.
+//
+// NO RELEASE CONTROL HERE, deliberately. Undoing a suppression writes
+// an audit row and is permanent with respect to the nightly sweep; it
+// belongs on the list-health page where the whole cohort and both
+// mechanisms are visible, not on a per-contact card where it would be
+// one click away from a toggle that means something else entirely.
 
 import { useState, useEffect } from 'react'
-import { Mail, MessageSquare, MessageCircle, Loader2, Lock, AlertCircle, CheckCircle2 } from 'lucide-react'
+import { Mail, MessageSquare, MessageCircle, Loader2, Lock, AlertCircle, CheckCircle2, MailWarning } from 'lucide-react'
+import { describeEmailBlock } from '@/lib/email-hygiene'
 
 const MARKETING_CHANNELS = [
   {
@@ -40,6 +57,15 @@ const MARKETING_CHANNELS = [
   },
 ]
 
+// Client-only: this card fetches after mount, so nothing here is ever
+// server-rendered and there is no SSR/hydration clock mismatch to avoid.
+function blockDate(iso) {
+  if (!iso) return 'an unknown date'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return 'an unknown date'
+  return d.toLocaleDateString('en-IE', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Europe/Dublin' })
+}
+
 const TRANSACTIONAL_CHANNELS = [
   { key: 'email_administrative',    label: 'Email',    Icon: Mail },
   { key: 'sms_administrative',      label: 'SMS',      Icon: MessageSquare },
@@ -56,6 +82,7 @@ export default function ContactMarketingPreferencesCard({ contactId, canEdit, gl
   // not on every contact write).
   const isClasspass = glofoxMembershipStatus === 'classpass_payg'
   const [prefs, setPrefs] = useState(null)
+  const [deliverability, setDeliverability] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [savingKey, setSavingKey] = useState(null)
@@ -68,8 +95,13 @@ export default function ContactMarketingPreferencesCard({ contactId, canEdit, gl
         const r = await fetch(`/api/contacts/${contactId}/marketing-preferences`)
         const j = await r.json()
         if (cancelled) return
-        if (j.success) setPrefs(j.preferences)
-        else setError(j.error || 'Failed to load preferences')
+        if (j.success) {
+          setPrefs(j.preferences)
+          // Absent on an older deploy of the API — treat that as "nothing
+          // known", not as "nothing wrong", so the banner stays silent rather
+          // than asserting a clean bill of health it cannot see.
+          setDeliverability(j.deliverability || null)
+        } else setError(j.error || 'Failed to load preferences')
       } catch (e) {
         if (!cancelled) setError(e?.message || 'Network error')
       } finally {
@@ -79,6 +111,17 @@ export default function ContactMarketingPreferencesCard({ contactId, canEdit, gl
     load()
     return () => { cancelled = true }
   }, [contactId])
+
+  // Recomputed from the CURRENT prefs, so flipping email marketing off makes
+  // the hygiene banner disappear (the suppression is moot while consent is off)
+  // and flipping it back on brings it straight back — which is exactly the
+  // thing an operator needs to know before they promise a member they will
+  // start getting the newsletter again.
+  const block = describeEmailBlock({
+    emailMarketing: prefs?.email_marketing,
+    emailStatus: deliverability?.email_status,
+    emailSuppressedAt: deliverability?.email_suppressed_at,
+  })
 
   async function toggle(key) {
     if (!canEdit || !prefs) return
@@ -148,6 +191,30 @@ export default function ContactMarketingPreferencesCard({ contactId, canEdit, gl
               channels below if you genuinely need to message this person; the trigger
               won&apos;t override your choice on subsequent contact updates.
             </div>
+          </div>
+        </div>
+      )}
+
+      {!loading && prefs && block && (
+        <div
+          className={`flex items-start gap-2 text-[11px] rounded p-2 mb-3 border ${
+            block.kind === 'hygiene_suppressed'
+              ? 'text-amber-700 bg-amber-500/10 border-amber-500/30'
+              : 'text-red-700 bg-red-500/10 border-red-500/30'
+          }`}
+        >
+          <MailWarning size={12} className="mt-0.5 shrink-0" />
+          <div>
+            <div className="font-medium">{block.headline}</div>
+            <div className="mt-0.5">{block.detail}</div>
+            {block.kind === 'hygiene_suppressed' && deliverability?.email_suppressed_at && (
+              <div className="mt-0.5">Held back since {blockDate(deliverability.email_suppressed_at)}.</div>
+            )}
+            {deliverability?.email_hygiene_released_at && (
+              <div className="mt-0.5">
+                Previously released on {blockDate(deliverability.email_hygiene_released_at)}.
+              </div>
+            )}
           </div>
         </div>
       )}

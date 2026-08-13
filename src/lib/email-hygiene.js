@@ -12,7 +12,21 @@
 // reversible three ways:
 //   • any Open/Click webhook clears it (postmark-webhook-processor)
 //   • re-consenting via the preference centre clears it
-//   • an operator can clear it in the DB
+//   • an operator releases it from the list-health hygiene surface
+//     (HYGREL.1) — which, unlike the first two, is PERMANENT
+//
+// HYGREL.1 — that third route used to read "an operator can clear it in
+// the DB", and that was the honest description: the only release path
+// keyed on an escalation row id (mig 515), so the 1,107 contacts this
+// sweep stamped with no escalation behind them could only be freed by
+// hand-written SQL, leaving no audit row. There is now an operator
+// surface, an audit table (email_hygiene_releases) and a gate column
+// (contacts.email_hygiene_released_at, both mig 535). The gate is NOT
+// part of the pure predicate below — it filters the CANDIDATE
+// POPULATION, in the cron's own contacts query, because a contact who
+// has been released should never be fetched, scored or counted. Keep
+// the two in step: this module owns "does the evidence say suppress",
+// the route owns "is this contact eligible to be asked".
 //
 // Gates that read the stamp:
 //   • buildAudienceQuery/buildAudienceQueryAsync (marketing consent
@@ -23,6 +37,9 @@
 // ── Thresholds (conservative by design) ─────────────────────────
 //
 // A contact is suppressed only when ALL hold:
+//   0. no operator release on record (email_hygiene_released_at IS
+//      NULL, mig 535) — applied by the cron's candidate query, not by
+//      the predicate below, and permanent by design
 //   1. email_marketing = true (still consented — unsubscribed contacts
 //      are already excluded by the consent gate; suppression is for
 //      consented-but-dead addresses)
@@ -36,6 +53,70 @@
 //      whose entire history is recent hasn't had 90 days to engage yet
 export const HYGIENE_WINDOW_DAYS = 90
 export const HYGIENE_MIN_MARKETING_SENDS = 3
+
+// ── HYGREL.1 — the operator release surface ─────────────────────
+export const HYGIENE_RELEASES_TABLE = 'email_hygiene_releases'
+
+// Page size for the hygiene-suppression list. Every .select() is capped
+// at 1,000 rows regardless of .limit() (CLAUDE.md invariant) and this
+// list is ~1,100 rows on day one, so the endpoint is paginated rather
+// than bounded — a bounded list would quietly hide the tail, which is
+// the exact failure this whole surface exists to fix.
+export const HYGIENE_LIST_PAGE_DEFAULT = 100
+export const HYGIENE_LIST_PAGE_MAX = 200
+
+/**
+ * Why a contact with marketing consent switched on is still unmailable.
+ *
+ * The contact card used to render "Email marketing: ON" beside a contact
+ * that no send would ever reach, because consent and deliverability are
+ * different columns and only consent was on screen. This turns the other
+ * two columns into one operator-facing sentence.
+ *
+ * Ordering is by WHICH GATE FIRES FIRST in buildAudienceQuery: reputation
+ * (email_status) is applied to administrative mail as well as marketing,
+ * so a bounced address is more broken than a suppressed one and is what
+ * an operator should be told about first.
+ *
+ * @returns {null|{kind: string, headline: string, detail: string}} null
+ *   when nothing is blocking, so the caller can render nothing at all
+ *   rather than a reassuring green box that would be noise.
+ */
+export function describeEmailBlock({ emailMarketing, emailStatus, emailSuppressedAt } = {}) {
+  const status = typeof emailStatus === 'string' ? emailStatus.toLowerCase() : null
+
+  if (status === 'bounced') {
+    return {
+      kind: 'bounced',
+      headline: 'This address is not receiving email',
+      detail: 'The last send to it bounced, so every send is skipped, marketing and transactional alike. '
+        + 'Correcting the email address here clears the flag.',
+    }
+  }
+  if (status === 'complained') {
+    return {
+      kind: 'complained',
+      headline: 'This address reported a send as spam',
+      detail: 'Every send is skipped, marketing and transactional alike. Sending again after a spam report '
+        + 'damages the sending domain for everyone, so the flag is not cleared by re-consenting.',
+    }
+  }
+  // Consent off is not a fault to explain — the toggle beside it already
+  // says so, and the suppression underneath is moot while it is off.
+  if (emailMarketing === false) return null
+
+  if (emailSuppressedAt) {
+    return {
+      kind: 'hygiene_suppressed',
+      headline: 'Marketing email is on, but nothing is being sent',
+      detail: 'This contact is held back for list hygiene: no opens and no clicks across at least '
+        + `${HYGIENE_MIN_MARKETING_SENDS} marketing emails in ${HYGIENE_WINDOW_DAYS} days, or repeated bounces. `
+        + 'Transactional email such as booking confirmations still goes out. Release them from Communications, '
+        + 'List health.',
+    }
+  }
+  return null
+}
 
 export function hygieneCutoffIso(now = new Date()) {
   return new Date(now.getTime() - HYGIENE_WINDOW_DAYS * 86_400_000).toISOString()

@@ -4,8 +4,9 @@
 // in 90 days — the biggest available deliverability lever. This cron
 // stamps contacts.email_suppressed_at (mig 395) on contacts where ALL
 // hold (thresholds + predicate in src/lib/email-hygiene.js):
-//   • email_marketing = true          (still consented)
-//   • email_suppressed_at IS NULL     (not already suppressed)
+//   • email_marketing = true               (still consented)
+//   • email_suppressed_at IS NULL          (not already suppressed)
+//   • email_hygiene_released_at IS NULL    (no operator release — HYGREL.1)
 //   • ≥3 marketing (broadcast) sends in the last 90 days
 //   • zero opens AND zero clicks in the last 90 days (any stream)
 //   • first marketing send >90 days ago (never punish new contacts)
@@ -14,6 +15,19 @@
 // processor), as does re-consent via the preference centre. The stamp is
 // read by the marketing audience gate (buildAudienceQuery) and sequences'
 // email step — administrative/transactional mail is never affected.
+//
+// HYGREL.1 — AND AN OPERATOR RELEASE IS PERMANENT. The three reversals above
+// are all evidence-driven: the contact did something, or changed their mind.
+// A release from the list-health hygiene surface is neither, and it must
+// outlast this cron, because the contact still satisfies every criterion above
+// the moment it is granted — a release with no gate would be undone by the
+// very next 05:15 run, seven hours later. contacts.email_hygiene_released_at
+// (mig 535) is that gate, and it is deliberately never cleared here: the same
+// rule the repeat-bounce release route states, "a rule that overrules a human
+// every night is not a rule, it is a nag". The audit row naming the operator
+// and the reason lives in email_hygiene_releases; this column is only the
+// filter, because an embedded-resource filter would break the count path
+// (CLASSIFY.1) and an .in() of every release ever made is unbounded.
 //
 // Batch-safe: contacts are keyset-paginated by id (order id, gt lastId) —
 // NOT offset pagination, because stamping rows mid-scan shrinks the
@@ -62,11 +76,19 @@ export async function GET(request) {
     for (;;) {
       // Keyset page of the candidate population. Suppression is a global
       // hygiene concern, so the sweep runs across all locations.
+      //
+      // HYGREL.1 — email_hygiene_released_at excludes contacts an operator has
+      // already released. It is a plain column rather than a join for the
+      // reason mig 535 gives: an embedded-resource filter silently returns 0
+      // under a count-only select. mig 535 widened idx_contacts_hygiene_scan to
+      // carry this third condition, so released contacts are never visited
+      // rather than filtered out after the scan.
       let pageQuery = db
         .from('contacts')
         .select('id')
         .eq('email_marketing', true)
         .is('email_suppressed_at', null)
+        .is('email_hygiene_released_at', null)
         .order('id')
         .limit(CONTACT_PAGE)
       if (lastId) pageQuery = pageQuery.gt('id', lastId)
@@ -101,7 +123,9 @@ export async function GET(request) {
       })
 
       // Stamp in bounded chunks, re-asserting the guards so a concurrent
-      // open-webhook clear or unsubscribe between scan and stamp wins.
+      // open-webhook clear, unsubscribe, or operator release between scan and
+      // stamp wins. The sweep can take minutes; a release granted inside that
+      // window must not be undone by the pass that was already running.
       for (let i = 0; i < toSuppress.length; i += STAMP_CHUNK) {
         const chunk = toSuppress.slice(i, i + STAMP_CHUNK)
         const { error: updErr } = await db
@@ -110,6 +134,7 @@ export async function GET(request) {
           .in('id', chunk)
           .eq('email_marketing', true)
           .is('email_suppressed_at', null)
+          .is('email_hygiene_released_at', null)
         if (updErr) throw new Error(`suppression stamp failed: ${updErr.message}`)
         suppressed += chunk.length
       }

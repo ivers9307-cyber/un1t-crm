@@ -33,7 +33,9 @@ import { createServerClient } from '@/lib/supabase'
 import { buildAudienceQueryAsync } from '@/lib/postmark'
 import { ESCALATION_TABLE } from '@/lib/bounce-escalation-sweep'
 import { BOUNCE_ESCALATION_MIN_CAMPAIGNS } from '@/lib/bounce-escalation'
+import { HYGIENE_WINDOW_DAYS } from '@/lib/email-hygiene'
 import ListHealthEscalations from '@/components/communications/ListHealthEscalations'
+import ListHealthHygiene from '@/components/communications/ListHealthHygiene'
 import ListHealthTrend from '@/components/communications/ListHealthTrend'
 import OtherEmailDeliverability from '@/components/communications/OtherEmailDeliverability'
 import { buildListHealthTrend } from '@/lib/list-health-trend'
@@ -202,7 +204,7 @@ export default async function ListHealthPage() {
         <Stat label="Can be emailed now" value={mailable.toLocaleString()} hint="What a marketing send would reach" />
         <Stat label="Not opted in" value={notOptedIn.toLocaleString()} hint="No marketing consent here" />
         <Stat label="Bounced or complained" value={bouncedOrComplained.toLocaleString()} hint="Hard bounce or spam report" />
-        <Stat label="Suppressed" value={suppressed.toLocaleString()} hint="Opted in, but held back for list hygiene" />
+        <Stat label="Suppressed" value={suppressed.toLocaleString()} hint="Opted in, but held back — listed by name below" />
       </div>
 
       <ListHealthTrend trend={trend} />
@@ -265,6 +267,25 @@ export default async function ListHealthPage() {
             nightly check from suppressing them for bounces again.
           </p>
         </div>
+      </div>
+
+      {/* HYGREL.1 — the roster behind the Suppressed stat at the top of this
+          page. It sits ABOVE the two bounce tables deliberately: it is the
+          larger cohort by roughly fifty to one, and it is the one that had no
+          surface at all until now. Client-fetched and paged (see the
+          component) because the list outgrew the 1,000-row select cap on the
+          night the founding cohort crossed the 90-day guard together. */}
+      <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-5 mb-6">
+        <h3 className="text-sm font-semibold text-un1t-text mb-1">Held back for list hygiene</h3>
+        <p className="text-xs text-un1t-subtle mb-3">
+          Everyone counted in Suppressed above, by name. These contacts are opted in to marketing email but
+          nothing is being sent to them, either because nothing has been opened or clicked in{' '}
+          {HYGIENE_WINDOW_DAYS} days or because the address keeps bouncing. Booking confirmations and other
+          transactional mail still go out as normal. Releasing a contact puts them back in the marketing
+          audience and, unlike the nightly check, that decision sticks: the check will not suppress them for
+          inactivity again.
+        </p>
+        <ListHealthHygiene />
       </div>
 
       <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-5 mb-6">

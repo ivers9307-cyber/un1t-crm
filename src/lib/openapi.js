@@ -3926,6 +3926,95 @@ registry.registerPath({
   },
 })
 
+// HYGREL.1 (mig 535) — the OTHER suppression mechanism's operator surface.
+// contacts.email_suppressed_at is written both by the repeat-bounce sweep
+// (audited, releasable through the two routes above) and by the nightly
+// engagement sweep, which writes no audit row at all. On 2026-08-12, 1,107 of
+// the 1,128 suppressed contacts had no id to hand the routes above and so no
+// release path anywhere in the product. These two are that path.
+registry.registerPath({
+  method: 'get',
+  path: '/api/communications/hygiene-suppressions',
+  tags: ['Marketing'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List the contacts currently held back by an email-hygiene suppression',
+  description:
+    'Names the population behind the list-health page\'s "Suppressed" count, which until now was a number with no '
+    + 'roster. Rows come from contact_location_audience (mig 491) under the same filters that count uses '
+    + '(loc_email_marketing = true AND email_suppressed_at IS NOT NULL), so the list can never disagree with the '
+    + 'headline above it. has_bounce_escalation distinguishes the two mechanisms that write the shared stamp: true '
+    + 'means the repeat-bounce sweep owns it (mig 515) and it must be undone through the escalation release route, '
+    + 'false means the engagement sweep stamped it and the release endpoint below applies. PAGINATED, not bounded: '
+    + 'every PostgREST select is capped at 1,000 rows whatever limit says and this population is already larger, so '
+    + 'the caller pages with offset/limit and reads total for the real size. Location-scoped to the caller\'s active '
+    + 'location unless location_id is given; answers 404 (never 403) so location ids cannot be enumerated.',
+  request: {
+    query: z.object({
+      location_id: uuidLike.optional().describe('Defaults to the caller\'s active location'),
+      limit: z.coerce.number().int().min(1).max(200).optional().describe('Default 100, clamped to 200'),
+      offset: z.coerce.number().int().min(0).optional(),
+    }),
+  },
+  responses: {
+    200: { description: 'A page of suppressed contacts', content: { 'application/json': { schema: SuccessResponse(z.object({
+      rows: z.array(z.object({
+        contact_id: uuidLike,
+        name: z.string().nullable(),
+        email: z.string().nullable(),
+        email_status: z.string().nullable(),
+        pipeline_stage_slug: z.string().nullable(),
+        suppressed_at: z.string().nullable(),
+        previously_released_at: z.string().nullable().describe('Set if this contact was released before and has since been suppressed again'),
+        has_bounce_escalation: z.boolean().describe('True = the repeat-bounce sweep owns this stamp; release it through the escalation route'),
+      })),
+      total: z.number().int().describe('The full count, not the page length'),
+      offset: z.number().int(),
+      limit: z.number().int(),
+      location_id: uuidLike,
+    }).openapi('HygieneSuppressionList')) } } },
+    400: { description: 'No active location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No email permission', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location outside the caller\'s access (404 not 403 — ids are not enumerable)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The query failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/communications/hygiene-suppressions/{contactId}/release',
+  tags: ['Marketing'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Release a contact from an engagement-hygiene suppression',
+  description:
+    'Keyed on the CONTACT id, not an escalation row id, which is the whole reason it exists. Clears '
+    + 'contacts.email_suppressed_at AND stamps contacts.email_hygiene_released_at (mig 535), then writes an '
+    + 'email_hygiene_releases audit row naming the operator. BOTH writes are required: a released contact still '
+    + 'satisfies every criterion the nightly engagement sweep tests, so clearing the stamp alone would be undone at '
+    + '05:15 the same night. The release is therefore PERMANENT with respect to that sweep, deliberately. Refused '
+    + 'with 400 when an active repeat-bounce escalation owns the stamp — that mechanism has its own release route '
+    + 'and its audit row must close with the release. Idempotent: releasing an already-released contact is a 200 '
+    + 'reporting alreadyReleased, and writes nothing. Requires access to the contact\'s location; answers 404 '
+    + '(never 403) so contact ids cannot be enumerated.',
+  request: {
+    params: z.object({ contactId: uuidLike }),
+    query: z.object({ location_id: uuidLike.optional().describe('Defaults to the caller\'s active location') }),
+  },
+  responses: {
+    200: { description: 'Released (or already released)', content: { 'application/json': { schema: SuccessResponse(z.object({
+      contact_id: uuidLike,
+      release_id: uuidLike.nullable().optional(),
+      released_at: z.string().nullable().optional(),
+      alreadyReleased: z.boolean(),
+    }).openapi('HygieneSuppressionRelease')) } } },
+    400: { description: 'No active location, or the stamp belongs to a repeat-bounce escalation', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No email permission', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such contact at that location, or outside the caller\'s locations', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Release failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Schedule reports
 registry.registerPath({
   method: 'post',

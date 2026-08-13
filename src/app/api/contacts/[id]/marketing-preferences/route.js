@@ -49,9 +49,18 @@ export async function GET(_request, props) {
   // IDOR gate (2026-06 audit). Service-role client bypasses RLS, so
   // resolve the contact's studio and confirm it's one of the caller's
   // before returning consent state — same pattern as consent-log.
+  //
+  // HYGREL.1 — the deliverability columns ride along on the gate's existing
+  // round trip. This endpoint returned consent and nothing else, so the card
+  // above it could render "Email marketing: ON" for a contact that no send
+  // would ever reach: email_suppressed_at (mig 395) and email_status are
+  // separate gates in buildAudienceQuery, and neither was on screen anywhere on
+  // the contact record. 1,128 contacts were in exactly that state on
+  // 2026-08-12. Reading them here costs nothing and is what lets the card stop
+  // lying.
   const { data: contact, error: contactErr } = await db
     .from('contacts')
-    .select('location_id')
+    .select('location_id, email_status, email_suppressed_at, email_hygiene_released_at')
     .eq('id', params.id)
     .maybeSingle()
   if (contactErr) {
@@ -86,6 +95,19 @@ export async function GET(_request, props) {
       sms_administrative: true,
       whatsapp_administrative: true,
       updated_at: null,
+    },
+    // HYGREL.1 — a SIBLING key, not folded into `preferences`. These are not
+    // preferences and must not read as any: email_status is reputation and
+    // email_suppressed_at is our hygiene call, neither of them the contact's
+    // choice, and the one place this repo has already been bitten is code that
+    // treated the two families as interchangeable (EMAILREP.2 put dead
+    // mailboxes back in the audience by stamping reputation on a consent edit).
+    // Read-only here on purpose: releasing a suppression is an operator action
+    // with an audit trail, and it lives on the list-health page.
+    deliverability: {
+      email_status: contact.email_status || null,
+      email_suppressed_at: contact.email_suppressed_at || null,
+      email_hygiene_released_at: contact.email_hygiene_released_at || null,
     },
   })
 }
