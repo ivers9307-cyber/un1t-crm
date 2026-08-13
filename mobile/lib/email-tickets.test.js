@@ -9,6 +9,7 @@ import {
   isArchivedStatus,
   ticketMessageKind,
   ticketMessageRecipients,
+  sentToLabel,
   ticketReplyAudienceMeta,
   ticketReplyPlaceholder,
   ticketThreadAudienceLines,
@@ -295,34 +296,91 @@ describe('ticketDeliveryMeta (EMAIL-DELIVERY.1)', () => {
 // screen must get right is the RENDERING, and specifically that a Bcc line is
 // never mistaken for something the other recipients could see.
 describe('ticketMessageRecipients', () => {
-  it('omits a single To — the bubble already says "Sent to …"', () => {
-    expect(ticketMessageRecipients({ to_emails: ['ada@example.com'] })).toEqual([])
+  // MOBILE-ENV.1 — the two bubbles carry DIFFERENT headers, and the old rule
+  // was written as though they carried the same one.
+  it('shows a single To on the INBOUND bubble — its header names the sender, not us', () => {
+    const [line] = ticketMessageRecipients({ to_emails: ['ada@example.com'] })
+    expect(line).toMatchObject({ key: 'to', label: 'To', staffOnly: false })
+    expect(line.addresses).toEqual(['ada@example.com'])
   })
 
-  it('shows a To line once there is more than one recipient', () => {
-    const [line] = ticketMessageRecipients({ to_emails: ['ada@x.com', 'bob@x.com'] })
+  it('omits a single To on the OUTBOUND bubble — "Sent to …" already names it in full', () => {
+    expect(ticketMessageRecipients({ to_emails: ['ada@example.com'] }, { toShownInHeader: true }))
+      .toEqual([])
+  })
+
+  it('shows the To on the OUTBOUND bubble once the header can only name the first', () => {
+    const [line] = ticketMessageRecipients(
+      { to_emails: ['ada@x.com', 'bob@x.com'] },
+      { toShownInHeader: true },
+    )
     expect(line).toMatchObject({ key: 'to', label: 'To', staffOnly: false })
+    expect(line.addresses).toEqual(['ada@x.com', 'bob@x.com'])
   })
 
   it('shows the member’s Cc — the reason inbound capture exists', () => {
-    const [line] = ticketMessageRecipients({ to_emails: ['a@x.com'], cc_emails: ['bob@x.com'] })
+    const lines = ticketMessageRecipients({ to_emails: ['a@x.com'], cc_emails: ['bob@x.com'] })
+    const line = lines.find(l => l.key === 'cc')
     expect(line).toMatchObject({ key: 'cc', staffOnly: false })
     expect(line.addresses).toEqual(['bob@x.com'])
   })
 
   it('marks Bcc staffOnly so the screen can say no recipient could see it', () => {
-    const [line] = ticketMessageRecipients({ to_emails: ['a@x.com'], bcc_emails: ['secret@x.com'] })
-    expect(line).toMatchObject({ key: 'bcc', staffOnly: true })
+    const lines = ticketMessageRecipients({ to_emails: ['a@x.com'], bcc_emails: ['secret@x.com'] })
+    expect(lines.find(l => l.key === 'bcc')).toMatchObject({ key: 'bcc', staffOnly: true })
   })
 
   it('reads the scalar to_email on a row written before mig 499', () => {
     const [line] = ticketMessageRecipients({ to_email: 'a@x.com', cc_emails: ['b@x.com'] })
-    expect(line.key).toBe('cc')
+    expect(line).toMatchObject({ key: 'to' })
+    expect(line.addresses).toEqual(['a@x.com'])
+  })
+
+  // EMAIL-PARTICIPANTS.12 — a NON-EMPTY array of nothing is still nothing.
+  // Every reader of this field filters before measuring; this one always did,
+  // and now says so out loud.
+  it('takes the scalar fallback for a to_emails array holding nothing usable', () => {
+    const [line] = ticketMessageRecipients({ to_emails: [null], to_email: 'a@x.com' })
+    expect(line.addresses).toEqual(['a@x.com'])
   })
 
   it('omits empty lists rather than rendering a blank Cc', () => {
-    expect(ticketMessageRecipients({ to_emails: ['a@x.com'], cc_emails: [], bcc_emails: [] })).toEqual([])
+    expect(ticketMessageRecipients({ to_emails: ['a@x.com'], cc_emails: [], bcc_emails: [] }))
+      .toEqual([{ key: 'to', label: 'To', addresses: ['a@x.com'], staffOnly: false }])
+    expect(ticketMessageRecipients({ to_emails: [], cc_emails: [], bcc_emails: [] })).toEqual([])
     expect(ticketMessageRecipients(null)).toEqual([])
+  })
+})
+
+// ── MOBILE-ENV.1 — the outbound bubble's "Sent to …" header ───────────
+//
+// The reply route writes `to_email: recipients.to[0]` and `to_emails:
+// recipients.to`, so the scalar is the FIRST recipient, not the audience. The
+// bubble rendered the scalar, which on a four-person reply read "Sent to
+// alice@x.com" — one name for a reply that reached four. Nothing was hidden
+// (the To line below listed them all) but the header contradicted it.
+describe('sentToLabel', () => {
+  it('names the one recipient when there is only one', () => {
+    expect(sentToLabel({ to_emails: ['ada@x.com'] })).toBe('ada@x.com')
+  })
+
+  it('says how many more there are rather than naming only the first', () => {
+    expect(sentToLabel({ to_emails: ['ada@x.com', 'bob@x.com', 'cara@x.com', 'dan@x.com'] }))
+      .toBe('ada@x.com +3 more')
+  })
+
+  it('reads the scalar to_email on a pre-mig-499 row', () => {
+    expect(sentToLabel({ to_email: 'ada@x.com' })).toBe('ada@x.com')
+  })
+
+  it('takes the scalar fallback for a to_emails array holding nothing usable', () => {
+    expect(sentToLabel({ to_emails: [null], to_email: 'ada@x.com' })).toBe('ada@x.com')
+  })
+
+  it('falls back to the generic phrase rather than rendering "Sent to "', () => {
+    expect(sentToLabel({})).toBe('the member')
+    expect(sentToLabel(null)).toBe('the member')
+    expect(sentToLabel({ to_emails: [null] })).toBe('the member')
   })
 })
 

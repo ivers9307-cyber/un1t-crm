@@ -152,21 +152,79 @@ export function ticketMessageKind(message) {
 // their own blind-copy list is correct. `staffOnly` exists so the screen can
 // say, in words, that no recipient of the email could see it.
 /**
+ * Every address a message's To resolves to.
+ *
+ * FILTERED BEFORE IT IS MEASURED, so a row carrying `to_emails: [null]` falls
+ * back to the scalar rather than counting a hole as an address — the rule
+ * every other reader of this field follows (EMAIL-PARTICIPANTS.12), and the
+ * reason this is one function rather than the same three lines twice.
+ *
+ * @param {object|null} message
+ * @returns {string[]}
+ */
+function toAddresses(message) {
+  const listed = (Array.isArray(message?.to_emails) ? message.to_emails : []).filter(Boolean)
+  if (listed.length) return listed
+  return message?.to_email ? [message.to_email] : [] // rows written before mig 499
+}
+
+/**
+ * The outbound bubble's "Sent to …" header.
+ *
+ * IT MUST NOT RENDER THE SCALAR. The reply route writes
+ * `to_email: recipients.to[0]` and `to_emails: recipients.to` (mig 499), so
+ * the scalar is the FIRST recipient, not the audience — and the bubble read
+ * the scalar, so a reply that reached four people said "Sent to alice@x.com".
+ * Nothing was hidden (the To line below listed all four) but the header
+ * contradicted the line under it, which is the same shape as the composer
+ * footer EMAIL-PARTICIPANTS.9 already had to fix on this screen.
+ *
+ * The count rather than the full list, because this line is `numberOfLines={1}`
+ * on a phone: four addresses truncate to one and a half, which trades a header
+ * that under-states for one that is merely unreadable. The full list is the To
+ * line directly below.
+ *
+ * @param {object|null} message
+ * @param {string} [fallback]  when we have no address at all
+ * @returns {string}
+ */
+export function sentToLabel(message, fallback = 'the member') {
+  const to = toAddresses(message)
+  if (!to.length) return fallback
+  return to.length === 1 ? to[0] : `${to[0]} +${to.length - 1} more`
+}
+
+/**
  * The To / Cc / Bcc lines under a message, in header order. Empty lists are
  * omitted — "Cc:" with nothing after it reads as a Cc that failed.
  *
+ * THE TWO BUBBLES CARRY DIFFERENT HEADERS, and the old rule here was written
+ * as though they carried the same one. It dropped a single To unconditionally,
+ * "because the bubble's own 'Sent to …' line already says it" — but only the
+ * OUTBOUND bubble has that line. The INBOUND bubble's header is "From …",
+ * which names the sender and nobody on our side, so there a single To was
+ * suppressed with nothing standing in for it and the screen stopped saying
+ * which studio mailbox the member had written to.
+ *
+ * So the caller states it. `toShownInHeader` defaults to false — the reading
+ * that shows MORE — because a wrong default here is invisible: it does not
+ * break, it just quietly stops rendering a line.
+ *
+ * @param {object|null} message
+ * @param {{ toShownInHeader?: boolean }} [opts]  true only for the outbound
+ *   bubble, whose sentToLabel() header names the To in full when there is
+ *   exactly one and only the first of several otherwise
  * @returns {{ key: string, label: string, addresses: string[], staffOnly: boolean }[]}
  */
-export function ticketMessageRecipients(message) {
+export function ticketMessageRecipients(message, { toShownInHeader = false } = {}) {
   if (!message) return []
   const list = (v) => (Array.isArray(v) ? v.filter(Boolean) : [])
-  // Rows written before mig 499 carry only the scalar to_email.
-  const to = list(message.to_emails).length
-    ? list(message.to_emails)
-    : (message.to_email ? [message.to_email] : [])
+  const to = toAddresses(message)
   const out = []
-  // A single To is already stated by the bubble's own "Sent to …" line.
-  if (to.length > 1) out.push({ key: 'to', label: 'To', addresses: to, staffOnly: false })
+  // Outbound needs the line only once the header can no longer name everyone.
+  if (to.length >= (toShownInHeader ? 2 : 1)) {
+    out.push({ key: 'to', label: 'To', addresses: to, staffOnly: false })
+  }
   const cc = list(message.cc_emails)
   if (cc.length) out.push({ key: 'cc', label: 'Cc', addresses: cc, staffOnly: false })
   const bcc = list(message.bcc_emails)
