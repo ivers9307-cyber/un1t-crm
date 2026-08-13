@@ -32,6 +32,10 @@ const PERMISSION = {
   when_in_use: ['amber', 'While using'],
   denied: ['red', 'Denied'],
   undetermined: ['neutral', 'Not asked'],
+  // GEO-ATT.21 — the device asked the OS and the call FAILED, so geofencing is
+  // not running on it. Red, not neutral: this is a fault to chase, and it is
+  // exactly the state that used to render as a stale green 'Always'.
+  unknown: ['red', 'Unavailable'],
 }
 
 function fmtWhen(iso) {

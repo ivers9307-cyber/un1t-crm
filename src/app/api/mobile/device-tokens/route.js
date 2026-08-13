@@ -44,7 +44,10 @@ const RegisterSchema = z.object({
   // device. Optional: clients below 2.2.0 never send it, and their
   // silence must not be read as a denial (see the upsert note below).
   // Values mirror the mig 466 CHECK constraint.
-  geofence_permission: z.enum(['always', 'when_in_use', 'denied', 'undetermined']).optional(),
+  // 'unknown' (GEO-ATT.21, mig 542) = the device asked the OS and the call
+  // threw, so geofencing is NOT running on it. Distinct from omitting the field
+  // (nothing to say) and from NULL in the column (never reported at all).
+  geofence_permission: z.enum(['always', 'when_in_use', 'denied', 'undetermined', 'unknown']).optional(),
 })
 
 export async function POST(request) {

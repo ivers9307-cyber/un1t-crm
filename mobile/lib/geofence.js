@@ -17,6 +17,7 @@ import * as TaskManager from 'expo-task-manager'
 import * as SecureStore from 'expo-secure-store'
 import { api } from './api'
 import { readImpersonate } from './impersonate'
+import { resolveGeofencePermission } from './geofence-permission'
 
 export const GEOFENCE_TASK = 'geo-att-region-enter'
 const QUEUE_KEY = 'geo_att_queue_v1'
@@ -133,11 +134,18 @@ export async function syncGeofences() {
   if (!res.success || !res.data) return null
   const { required, regions } = res.data
 
+  // GEO-ATT.21 — same resolver LocationGate uses. It used to be a local
+  // `catch { granted = false }` here while the gate did `setGranted(true)`, so
+  // one throw tore the registration down AND hid the screen that would have
+  // told the staffer. mayRegister is false for every non-granted state,
+  // including the error: we never claim a permission we could not read.
   let granted = false
   try {
     const bg = await Location.getBackgroundPermissionsAsync()
-    granted = bg.status === 'granted'
-  } catch { granted = false }
+    granted = resolveGeofencePermission({ bg }).mayRegister
+  } catch (e) {
+    granted = resolveGeofencePermission({ error: e }).mayRegister
+  }
 
   const fingerprint = JSON.stringify(
     (regions || []).map(r => [r.location_id, r.latitude, r.longitude, r.radius_m]).sort()
