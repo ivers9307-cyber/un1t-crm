@@ -27,6 +27,13 @@ export default function MessageBubble({ msg, myRating, onRate, onReact, reacting
     ? isServableInstagramMedia(msg)
     : channel === 'whatsapp' && isServableMedia(msg)
   const media = !showMedia && mediaLabel(msg.message_type)
+  // IG-MEDIA.4 — the stored body for an attachment with no caption is the
+  // literal "[type]" placeholder, which the chip above already says in plain
+  // words. Rendering both gave "📎 Story mention" with "[story_mention]" under
+  // it. Show the placeholder only when nothing else stands in for the
+  // attachment, so the bubble is never empty either.
+  const isTypePlaceholder = msg.body === `[${msg.message_type}]`
+  const bodyText = isTypePlaceholder && (media || showMedia) ? '' : msg.body
   // 'played' (voice note listened to) is the strongest read signal there
   // is — the webhook stamps read_at for it, but honour the status too so
   // the ticks read correctly even before/without that stamp.
@@ -58,21 +65,21 @@ export default function MessageBubble({ msg, myRating, onRate, onReact, reacting
             </Text>
           )}
           {showMedia && (
-            <View className={msg.body ? 'mb-1' : ''}>
+            <View className={bodyText ? 'mb-1' : ''}>
               <WAMediaThumb msg={msg} channel={channel} />
             </View>
           )}
           {media && (
-            <View className={`flex-row items-center ${msg.body ? 'mb-0.5' : ''}`}>
+            <View className={`flex-row items-center ${bodyText ? 'mb-0.5' : ''}`}>
               <Ionicons name={media.icon} size={14} color={out ? 'rgba(255,255,255,0.85)' : '#64748B'} />
               <Text className={`text-sm italic ml-1.5 ${out ? 'text-white/85' : 'text-un1t-light'}`}>
                 {media.label}
               </Text>
             </View>
           )}
-          {msg.body ? (
+          {bodyText ? (
             <Text className={`text-base ${out ? 'text-white' : 'text-un1t-text'}`}>
-              {msg.body}
+              {bodyText}
             </Text>
           ) : (!media && !showMedia) ? (
             <Text className={`text-base ${out ? 'text-white' : 'text-un1t-text'}`}>—</Text>
