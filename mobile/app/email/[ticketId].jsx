@@ -77,7 +77,7 @@ import {
 } from '../../lib/email-api'
 import {
   ticketMessageKind, ticketStatusMeta, mailboxLabel, ticketDeliveryMeta,
-  ticketMessageRecipients, isArchivedStatus, TICKET_STATUS_ORDER,
+  ticketMessageRecipients, sentToLabel, isArchivedStatus, TICKET_STATUS_ORDER,
   formatAttachmentSize, ticketAttachmentSkippedLabel, ticketAttachmentIcon,
   threadRefreshMs, ticketReplyAudienceMeta, ticketReplyPlaceholder,
   ticketThreadAudienceLines,
@@ -104,9 +104,16 @@ function formatTime(iso) {
  * showing it is somebody reading the line as though the other recipients could
  * see it too; they could not, and never will. `onAccent` because the muted
  * ramp is unreadable on the blue outbound bubble.
+ *
+ * `toShownInHeader` is DELIBERATELY NOT DERIVED FROM `onAccent`, even though
+ * today only the accent bubble sets both. Reusing "is this the blue bubble?"
+ * to mean "does the header name the recipients?" is how the single-To rule got
+ * this wrong in the first place — it was written for the outbound bubble's
+ * "Sent to …" line and then applied to the inbound one, whose header is
+ * "From …" and names nobody on our side. Two questions, two props.
  */
-function RecipientLines({ msg, onAccent = false }) {
-  const lines = ticketMessageRecipients(msg)
+function RecipientLines({ msg, onAccent = false, toShownInHeader = false }) {
+  const lines = ticketMessageRecipients(msg, { toShownInHeader })
   if (lines.length === 0) return null
   const label = onAccent ? 'text-white/60' : 'text-un1t-subtle'
   const body = onAccent ? 'text-white/85' : 'text-un1t-text'
@@ -323,10 +330,13 @@ function MessageBubble({ msg, ticketId, locationId, onViewImage }) {
             <View className="flex-row items-center mb-1">
               <Ionicons name="mail-open-outline" size={11} color="rgba(255,255,255,0.75)" style={{ marginRight: 4 }} />
               <Text className="text-[11px] text-white/75 flex-1" numberOfLines={1}>
-                Sent to {msg.to_email || 'the member'}
+                Sent to {sentToLabel(msg)}
               </Text>
             </View>
-            <RecipientLines msg={msg} onAccent />
+            {/* toShownInHeader: the line directly above names the recipient in
+                full when there is one, and the first of several otherwise —
+                so a lone To here would just repeat it. */}
+            <RecipientLines msg={msg} onAccent toShownInHeader />
             <Text className="text-base text-white">{body}</Text>
             <Attachments
               ticketId={ticketId}
@@ -379,10 +389,12 @@ function MessageBubble({ msg, ticketId, locationId, onViewImage }) {
         <Text className="text-[11px] text-un1t-subtle mb-1" numberOfLines={1}>
           From {msg.from_email || 'the member'}
         </Text>
-        {/* THE MEMBER'S OWN Cc. Captured inbound since EMAIL-CC.1 — without
-            it a staffer cannot tell that two colleagues are on the thread,
-            and a reply from this screen reaches them without anyone knowing
-            why. */}
+        {/* THE MEMBER'S OWN To and Cc. Captured inbound since EMAIL-CC.1 —
+            without the Cc a staffer cannot tell that two colleagues are on the
+            thread, and a reply from this screen reaches them without anyone
+            knowing why. No toShownInHeader here on purpose: the header above
+            is "From …", so it names the sender and nobody we were written to,
+            and the To has to carry itself however short it is. */}
         <RecipientLines msg={msg} />
         <Text className="text-base text-un1t-text">{body}</Text>
         <Attachments
