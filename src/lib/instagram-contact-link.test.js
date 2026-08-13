@@ -49,9 +49,16 @@ describe('isAutoLinkableName', () => {
 })
 
 describe('pickAutoLinkContact', () => {
-  it('links when exactly one contact matches the full name', () => {
-    const out = pickAutoLinkContact([c(), c({ id: 'c2', name: 'Mark Kelly', first_name: 'Mark', last_name: 'Kelly' })], 'Sarah Byrne')
-    expect(out?.id).toBe('c1')
+  // CONTRACT: candidates are the COMPLETE set of contacts carrying this
+  // normalised name (the caller queries name_normalized, mig 540). The count
+  // below is the ambiguity test, so a partial set would manufacture a false
+  // unique — that was the original bug.
+  it('links when the authoritative candidate set holds exactly one contact', () => {
+    expect(pickAutoLinkContact([c()], 'Sarah Byrne')?.id).toBe('c1')
+  })
+  it('validates the candidate really carries the name (can only refuse)', () => {
+    const wrong = [c({ id: 'other', name: 'Mark Kelly', first_name: 'Mark', last_name: 'Kelly' })]
+    expect(pickAutoLinkContact(wrong, 'Sarah Byrne')).toBe(null)
   })
   it('matches on the first+last spelling too', () => {
     const out = pickAutoLinkContact([c({ name: 'Sarah Byrne (Member)' })], 'Sarah Byrne')

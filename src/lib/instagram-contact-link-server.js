@@ -11,7 +11,7 @@
 //      staff can see it was automatic and undo it.
 // Anything ambiguous stays unlinked for a human to resolve in the inbox.
 
-import { pickAutoLinkContact } from '@/lib/instagram-contact-link'
+import { pickAutoLinkContact, normalizeName, isAutoLinkableName } from '@/lib/instagram-contact-link'
 import { logWarn } from '@/lib/log'
 
 /** Persist the link on both sides: thread → contact, contact → IGSID/handle. */
@@ -71,18 +71,33 @@ export async function resolveContactForInstagramThread(db, {
       return known.id
     }
 
-    // 2. Exact unique full-name auto-link. Candidates are narrowed in SQL
-    //    (case-insensitive equality, capped) so this never walks the contact
-    //    book; pickAutoLinkContact then enforces "exactly one" plus the
-    //    don't-steal-a-bound-identity rule. Accented/punctuated spellings that
-    //    SQL misses simply fall through to manual linking — fails closed.
+    // 2. Exact unique full-name auto-link.
+    //    The lookup is equality on the GENERATED name_normalized column (mig
+    //    540), which folds accents/case/punctuation the same way
+    //    normalizeName() does. That matters for safety, not just tidiness:
+    //    pickAutoLinkContact decides "is this ambiguous?" by counting what we
+    //    hand it, so the query must return EVERY contact sharing the name.
+    //    The previous `ilike(name)` compared raw strings while matching was
+    //    normalised, so same-name twins spelled differently ("Sean"/"Seán")
+    //    came back as one row and auto-linked. Equality also means no LIKE
+    //    wildcards from an attacker-controlled display name, and it uses
+    //    idx_contacts_location_name_normalized instead of scanning contacts.
     const name = (displayName || '').trim()
-    if (!name) return null
-    const { data: candidates } = await db.from('contacts')
+    const normalized = normalizeName(name)
+    // Bail before the query, not after: a mononym or handle-ish name can never
+    // auto-link, so looking it up is a wasted round-trip on the webhook path.
+    if (!normalized || !isAutoLinkableName(name)) return null
+    const { data: candidates, error: candErr } = await db.from('contacts')
       .select('id, name, first_name, last_name, instagram_igsid')
       .eq('location_id', locationId)
-      .ilike('name', name)
-      .limit(20)
+      .eq('name_normalized', normalized)
+      .limit(10)
+    // A failed lookup must not read as "no duplicates" — that is the unsafe
+    // direction. Bail and leave the thread for a human.
+    if (candErr) {
+      logWarn('ig-contact-link', 'candidate lookup failed', { conversationId, err: candErr.message })
+      return null
+    }
 
     const match = pickAutoLinkContact(candidates || [], name, igsid)
     if (!match) return null

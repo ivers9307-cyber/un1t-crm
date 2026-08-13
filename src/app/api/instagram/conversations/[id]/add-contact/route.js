@@ -73,14 +73,23 @@ export async function POST(request, props) {
   }
 
   // Links the thread, stamps the identity, and backfills the thread's
-  // existing messages onto the new contact's timeline.
-  await linkThreadToContact(db, {
+  // existing messages onto the new contact's timeline. Reported honestly: if
+  // the link fails the contact still exists, but the thread is NOT attached —
+  // saying "success" there would close the modal on a half-done job.
+  const linked = await linkThreadToContact(db, {
     conversationId: conversation.id,
     contactId: contact.id,
     locationId: conversation.location_id,
     igsid: conversation.ig_user_id,
     handle: conversation.ig_username,
   })
+  if (!linked) {
+    return NextResponse.json({
+      success: false,
+      error: 'Contact created, but linking the conversation failed — try linking it to that contact.',
+      contact_id: contact.id,
+    }, { status: 500 })
+  }
 
   try {
     await db.from('activities').insert({

@@ -49,21 +49,30 @@ export function isAutoLinkableName(displayName) {
 }
 
 /**
- * Pick the single contact an IG display name unambiguously identifies, or
- * null. Caller supplies candidates ALREADY scoped to the conversation's
- * location (multi-tenancy is not this function's job).
+ * Pick the single contact an IG display name unambiguously identifies, or null.
+ *
+ * CONTRACT (IG-LINK.2): `candidates` MUST already be the complete set of
+ * contacts carrying this normalised name at this location — i.e. the caller
+ * queried `name_normalized` (mig 540), not a raw `ilike`. The ambiguity test
+ * below counts that set, so a caller that hands over a partial set turns a
+ * genuine duplicate into a false unique. That was the original bug: candidates
+ * came from raw string equality while matching was normalised, so "Sean Byrne"
+ * and "Seán Byrne" looked like one person and auto-linked to whichever row SQL
+ * happened to return.
  *
  * Guards, all required:
  *  - the display name must look like a real full name
- *  - exactly ONE candidate may match (any ambiguity → null, suggest instead)
+ *  - exactly ONE candidate (any ambiguity → null, let a human choose)
+ *  - that candidate must genuinely carry the name (validates, never narrows —
+ *    it can only ever refuse, so it cannot manufacture a unique)
  *  - never steal a contact already bound to a DIFFERENT Instagram account
  */
 export function pickAutoLinkContact(candidates, displayName, igsid = null) {
   if (!isAutoLinkableName(displayName)) return null
-  const target = normalizeName(displayName)
-  const matches = (candidates || []).filter(c => contactNameVariants(c).includes(target))
-  if (matches.length !== 1) return null
-  const match = matches[0]
+  const list = candidates || []
+  if (list.length !== 1) return null
+  const match = list[0]
+  if (!contactNameVariants(match).includes(normalizeName(displayName))) return null
   if (match.instagram_igsid && match.instagram_igsid !== igsid) return null
   return match
 }

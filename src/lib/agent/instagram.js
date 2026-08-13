@@ -255,7 +255,11 @@ export async function handleInstagramInbound(db, event) {
   // link, else (2) a strictly-guarded exact unique full-name match. Ambiguous
   // cases stay unlinked for staff to resolve. Best-effort: never blocks the
   // message.
-  if (!contactId) {
+  // Skipped for echoes: an echo is our OWN outbound reflected back, and the
+  // echo branch below either dedups it away or records it — either way it
+  // learns nothing new about who the customer is, so paying for the lookup
+  // on every CRM/Mia send would be pure waste on the webhook's critical path.
+  if (!contactId && !event.isEcho) {
     contactId = await resolveContactForInstagramThread(db, {
       conversationId,
       locationId,

@@ -5,6 +5,7 @@ import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } fro
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { rankContactSuggestions } from '@/lib/instagram-contact-link'
+import { escapeLikePattern } from '@/lib/like-escape'
 import { linkThreadToContact } from '@/lib/instagram-contact-link-server'
 
 // IG-LINK.1 — attach an Instagram thread to a CRM contact.
@@ -46,7 +47,9 @@ export async function GET(request, props) {
 
   if (q) {
     // Explicit staff search — name/email/phone, same shape the contacts UI uses.
-    const like = `%${q}%`
+    // Escaped: a stray % or _ would silently widen the search, and a comma or
+    // paren would break the PostgREST filter group into a 400.
+    const like = `%${escapeLikePattern(q).replace(/[(),]/g, ' ')}%`
     const { data } = await db.from('contacts')
       .select(select)
       .eq('location_id', conversation.location_id)
@@ -63,8 +66,15 @@ export async function GET(request, props) {
   // No query → suggest from what Instagram tells us. Candidates are narrowed
   // in SQL by the display-name tokens so this never walks the contact book;
   // ranking is advisory only and a human always confirms.
+  // Tokens come from an Instagram display name the sender controls, so they
+  // are escaped (LIKE wildcards) and stripped of the characters that would
+  // break the PostgREST filter group.
   const name = (conversation.customer_name || '').trim()
-  const tokens = name.split(/\s+/).filter(t => t.length > 1).slice(0, 3)
+  const tokens = name
+    .split(/\s+/)
+    .map(t => escapeLikePattern(t).replace(/[(),.]/g, ''))
+    .filter(t => t.length > 1)
+    .slice(0, 3)
   if (tokens.length) {
     const { data } = await db.from('contacts')
       .select(select)
