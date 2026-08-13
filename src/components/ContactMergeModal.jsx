@@ -17,20 +17,41 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { GitMerge, X, Loader2, AlertTriangle, ArrowRight } from 'lucide-react'
 
-const isEmpty = (v) =>
-  v === null || v === undefined || v === '' ||
-  (typeof v === 'string' && v.trim() === '')
+// MERGEPREV.1 — the preview now calls the SAME function the merge does.
+//
+// It used to keep a local copy that claimed to mirror pickMergedFields and had
+// drifted in both directions:
+//   • it previewed `pipeline_stage_slug`, which the merge does not and cannot
+//     merge — see the Stage note in the confirm step below; and
+//   • it omitted first_name, last_name, trial_credits_remaining,
+//     lead_created_at and last_emailed_at, five fields the merge DOES write,
+//     so the operator confirmed a change they were never shown.
+//
+// A second copy of a rule is a copy that drifts, and this one drifted silently
+// because nothing compared them. Importing is safe from a client component:
+// contact-merge.js pulls in nothing but ./log, which is console-only, and
+// pickMergedFields is pure (it takes the two rows, touches no database).
+import { pickMergedFields } from '@/lib/contact-merge'
 
-// Mirrors src/lib/contact-merge.js#pickMergedFields. Duplicated for
-// the preview UI so the modal doesn't need to round-trip the API
-// before showing what the merge will look like.
-function previewMergedFields(survivor, loser) {
-  const out = {}
-  for (const f of ['name', 'email', 'phone', 'pipeline_stage_slug', 'lead_source', 'label', 'glofox_member_id']) {
-    out[f] = isEmpty(survivor[f]) && !isEmpty(loser[f]) ? loser[f] : survivor[f]
-  }
-  return out
-}
+// Field → operator-facing label for the "After merge" list. NOT a whitelist:
+// the rows are generated from whatever pickMergedFields actually returns, so a
+// field added to the merge shows up here on its own, humanised, rather than
+// silently going unmentioned the way five of them already had.
+const MERGED_FIELD_LABELS = Object.freeze({
+  name: 'Name',
+  first_name: 'First name',
+  last_name: 'Last name',
+  email: 'Email',
+  phone: 'Phone',
+  label: 'Label',
+  glofox_member_id: 'Glofox member ID',
+  trial_credits_remaining: 'Trial credits',
+  lead_source: 'Source',
+  lead_created_at: 'Lead created',
+  last_emailed_at: 'Last emailed',
+})
+
+const humaniseField = (f) => f.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase())
 
 export default function ContactMergeModal({ contactIds, contacts, onClose }) {
   const router = useRouter()
@@ -48,7 +69,7 @@ export default function ContactMergeModal({ contactIds, contacts, onClose }) {
 
   const survivor = contacts.find(c => c.id === survivorId)
   const loser = contacts.find(c => c.id !== survivorId)
-  const merged = survivor && loser ? previewMergedFields(survivor, loser) : null
+  const merged = survivor && loser ? pickMergedFields(survivor, loser) : null
   const expected = (loser?.first_name || loser?.name?.split(' ')[0] || loser?.email || '').trim()
 
   useEffect(() => {
@@ -176,15 +197,47 @@ export default function ContactMergeModal({ contactIds, contacts, onClose }) {
           <>
             <div className="bg-un1t-bg border border-un1t-border rounded-md p-3 mb-3">
               <div className="text-xs uppercase tracking-wider text-un1t-subtle mb-2">After merge</div>
+              {/* MERGEPREV.1 — rows come from pickMergedFields' own output, so
+                  every field the merge writes is shown and none that it does
+                  not write can appear. Fields empty on both sides are skipped:
+                  there is nothing to say about them. */}
               <ul className="text-xs text-un1t-text space-y-1">
-                <li><span className="text-un1t-subtle">Name:</span> {merged.name || '—'}</li>
-                <li><span className="text-un1t-subtle">Email:</span> {merged.email || '—'}</li>
-                <li><span className="text-un1t-subtle">Phone:</span> {merged.phone || '—'}</li>
-                <li><span className="text-un1t-subtle">Stage:</span> {merged.pipeline_stage_slug || '—'}</li>
-                <li><span className="text-un1t-subtle">Source:</span> {merged.lead_source || '—'}</li>
+                {Object.entries(merged)
+                  .filter(([, v]) => v !== null && v !== undefined && v !== '')
+                  .map(([field, value]) => (
+                    <li key={field}>
+                      <span className="text-un1t-subtle">{MERGED_FIELD_LABELS[field] || humaniseField(field)}:</span>{' '}
+                      {String(value)}
+                    </li>
+                  ))}
               </ul>
+              {/* MERGEPREV.1 — Stage used to be listed above as a merged value.
+                  It is not one. contacts.pipeline_stage_slug is denormalised and
+                  owned entirely by sync_contacts_pipeline_stage_slug_trigger
+                  (mig 155), which recomputes it as the stage of the contact's
+                  MOST RECENTLY CREATED OPEN DEAL. The merge re-points the
+                  loser's deals onto the survivor, so the trigger then re-runs
+                  across the combined set — and the newest open deal is often the
+                  loser's, which is the OPPOSITE of the "survivor wins unless
+                  empty" rule the list above states. Predicting it here would
+                  mean re-implementing the trigger in the browser, so the honest
+                  thing is to say what decides it. (Checked 2026-08-12: 0 of
+                  8,580 contacts have a slug that disagrees with the trigger, so
+                  the column really is fully derived, never operator-set.) */}
+              {/* MERGEPREV.1 — the rows above are computed from the columns the
+                  contacts LIST loaded (CONTACT_LIST_FIELDS, narrowed by PERF.2),
+                  which is fewer than the eleven pickMergedFields writes. That is
+                  a display gap, not a correctness one: the client posts two ids
+                  and mergeContacts re-reads both rows with select('*') on the
+                  server, so the merge itself always sees every column. The note
+                  below states the rule that covers the fields not listed. */}
               <p className="text-[11px] text-un1t-muted mt-2">
-                Tags from both contacts will union. Any field that&apos;s empty on the survivor is filled from the loser.
+                Tags from both contacts will union. Any field that&apos;s empty on the survivor is filled from the
+                loser — including fields not listed above.
+              </p>
+              <p className="text-[11px] text-un1t-muted mt-1">
+                <span className="text-un1t-subtle">Stage</span> is not merged — it is recalculated after the merge from
+                the combined deals (the most recent open deal wins), so it may end up as either contact&apos;s current stage.
               </p>
             </div>
 
