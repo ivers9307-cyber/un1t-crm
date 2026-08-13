@@ -317,12 +317,13 @@ export async function handleInstagramInbound(db, event) {
   const ts = event.timestamp ? new Date(event.timestamp).toISOString() : new Date().toISOString()
   const messageType = event.type || 'text'
   const mediaUrl = event.mediaUrl || null
-  // Stored body is: the caption for renderable media (image/video/audio —
-  // the media itself renders from its own columns, so no placeholder), a
-  // "[type]" label for attachment kinds we can't render inline (shares,
-  // story-mentions) so the bubble isn't blank, and the text otherwise.
-  // previewText always yields a "[type]" fallback for the conversation list
-  // + push when there's no caption. (IG-MEDIA.1)
+  // Stored body is: the caption for renderable media (image/video/audio, and
+  // since IG-MEDIA.2 story mentions too — the media renders from its own
+  // columns, so a placeholder would sit under the picture), a "[type]" label
+  // for kinds with no renderer at all (shares, reels) so the bubble isn't
+  // blank, and the text otherwise. previewText always yields a "[type]"
+  // fallback for the conversation list + push when there's no caption.
+  // (IG-MEDIA.1/.2)
   const body = event.text || (messageType !== 'text' && !mediaRenderKind(messageType) ? `[${messageType}]` : '')
   const previewText = (body || `[${messageType}]`).slice(0, 100)
 
