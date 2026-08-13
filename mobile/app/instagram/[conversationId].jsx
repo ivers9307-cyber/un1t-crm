@@ -242,7 +242,7 @@ export default function InstagramConversation() {
                   onPrefillComposer={t => setText(t)}
                 />
               ) : (
-                <MessageBubble key={item.key} msg={item.message} myRating={feedback[item.message.id] || null} onRate={rate} />
+                <MessageBubble key={item.key} msg={item.message} channel="instagram" myRating={feedback[item.message.id] || null} onRate={rate} />
               )
             ))}
           </ScrollView>

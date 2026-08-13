@@ -5,6 +5,7 @@ import {
   mediaRenderKind,
   resolveMediaExternalId,
   isServableMedia,
+  isServableInstagramMedia,
   buildMediaObjectPath,
   mediaProxyPath,
   WHATSAPP_MEDIA_BUCKET,
@@ -133,5 +134,32 @@ describe('mediaProxyPath', () => {
 describe('constants', () => {
   it('exposes the bucket name', () => {
     expect(WHATSAPP_MEDIA_BUCKET).toBe('whatsapp-media')
+  })
+})
+
+// IG-MEDIA.3 — Instagram needs its own servable test. WhatsApp media is fetched
+// from Meta by an opaque media id; Instagram gives a direct CDN url, so the
+// WhatsApp rule rejects every IG row. Mobile had no rule at all, which is why
+// IG media never rendered there — these lock the asymmetry in.
+describe('isServableInstagramMedia', () => {
+  it('serves a row that still has only the IG CDN url', () => {
+    expect(isServableInstagramMedia({ message_type: 'image', media_url: 'https://cdn.ig/p.jpg' })).toBe(true)
+  })
+  it('serves a row already re-hosted into the bucket', () => {
+    expect(isServableInstagramMedia({ message_type: 'image', media_storage_path: 'loc/msg.jpg' })).toBe(true)
+  })
+  it('serves a story mention before its mime is known', () => {
+    expect(isServableInstagramMedia({ message_type: 'story_mention', media_url: 'https://cdn.ig/s.jpg' })).toBe(true)
+  })
+  it('refuses rows with nothing to serve, or no renderer', () => {
+    expect(isServableInstagramMedia({ message_type: 'image' })).toBe(false)
+    expect(isServableInstagramMedia({ message_type: 'share', media_url: 'https://cdn.ig/x' })).toBe(false)
+    expect(isServableInstagramMedia({ message_type: 'text', media_url: 'https://cdn.ig/x' })).toBe(false)
+    expect(isServableInstagramMedia(null)).toBe(false)
+  })
+  it('the WhatsApp rule would have rejected the same IG row (why this exists)', () => {
+    const igRow = { message_type: 'image', media_url: 'https://cdn.ig/p.jpg' }
+    expect(isServableMedia(igRow)).toBe(false)
+    expect(isServableInstagramMedia(igRow)).toBe(true)
   })
 })

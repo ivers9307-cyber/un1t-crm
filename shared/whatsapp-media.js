@@ -116,6 +116,23 @@ export function isServableMedia(message) {
   return !!message.media_storage_path || resolveMediaExternalId(message) != null
 }
 
+/**
+ * The Instagram equivalent (IG-MEDIA.3).
+ *
+ * Deliberately a separate test, not a flag on the one above: WhatsApp media is
+ * fetched from Meta by an opaque media ID, while Instagram gives a direct CDN
+ * URL, so `resolveMediaExternalId` (which insists on a Meta-shaped id) is
+ * always null for an IG row and the WhatsApp test rejects media we can serve
+ * perfectly well. Lives in shared/ so the web inbox and the mobile app cannot
+ * drift on what "has media" means — they had two copies of this rule and only
+ * one of them existed.
+ */
+export function isServableInstagramMedia(message) {
+  if (!message) return false
+  if (mediaRenderKind(message.message_type, message.media_mime_type) == null) return false
+  return !!message.media_storage_path || !!message.media_url
+}
+
 // Object path inside the whatsapp-media bucket. Namespaced by location
 // so a single bucket holds every studio's media without collision, and
 // keyed by the message id (one media per message) so re-hosting is

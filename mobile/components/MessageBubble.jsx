@@ -8,7 +8,7 @@
 import { View, Text, Pressable } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { mediaLabel } from '../lib/inbox'
-import { isServableMedia } from 'shared/whatsapp-media'
+import { isServableMedia, isServableInstagramMedia } from 'shared/whatsapp-media'
 import WAMediaThumb from './WAMediaThumb'
 
 // C6 — same three emoji the web inbox offers.
@@ -17,9 +17,15 @@ const REACTION_EMOJI = ['👍', '❤️', '🔥']
 export default function MessageBubble({ msg, myRating, onRate, onReact, reactingId, channel }) {
   const out = msg.direction === 'outbound'
   const isAgent = msg.source === 'agent'
-  // WhatsApp inbound media re-hosts through /api/whatsapp/media and renders
-  // inline; Instagram (separate table/route) stays a chip for now.
-  const showMedia = channel === 'whatsapp' && isServableMedia(msg)
+  // IG-MEDIA.3 — both channels re-host through their own media route and render
+  // inline. The servable test differs per channel and is NOT interchangeable:
+  // WhatsApp fetches from Meta by media id, Instagram by a CDN url, so the
+  // WhatsApp test rejects every IG row. Instagram used to fall through to the
+  // chip, which showed nothing at all once story mentions stopped carrying a
+  // text placeholder.
+  const showMedia = channel === 'instagram'
+    ? isServableInstagramMedia(msg)
+    : channel === 'whatsapp' && isServableMedia(msg)
   const media = !showMedia && mediaLabel(msg.message_type)
   // 'played' (voice note listened to) is the strongest read signal there
   // is — the webhook stamps read_at for it, but honour the status too so
@@ -53,7 +59,7 @@ export default function MessageBubble({ msg, myRating, onRate, onReact, reacting
           )}
           {showMedia && (
             <View className={msg.body ? 'mb-1' : ''}>
-              <WAMediaThumb msg={msg} />
+              <WAMediaThumb msg={msg} channel={channel} />
             </View>
           )}
           {media && (

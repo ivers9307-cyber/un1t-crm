@@ -6,12 +6,9 @@
 // read threads the agent is handling, send a manual reply (which takes the
 // thread OVER from the agent), and hand it back.
 
-// IG-MEDIA.1 — an inbound message carries renderable media when it has a
-// media render kind AND a source to serve from (a re-hosted bucket object,
-// or the original IG CDN url the media route can still lazily re-host).
-function igHasMedia(m) {
-  return !!mediaRenderKind(m.message_type, m.media_mime_type) && (!!m.media_storage_path || !!m.media_url)
-}
+// IG-MEDIA.3 — the "does this row carry servable media" rule now lives in
+// shared/ (isServableInstagramMedia) so this inbox and the mobile app agree.
+// Mobile had no such rule at all, which is why IG media never rendered there.
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Link from 'next/link'
@@ -24,7 +21,7 @@ import { ChannelAvatar } from '@/components/inbox/ChannelBits'
 import HandledByControl from '@/components/inbox/HandledByControl'
 import MiaDecisionTrace from '@/components/inbox/MiaDecisionTrace'
 import WAMediaContent from '@/components/WAMediaContent'
-import { mediaRenderKind } from '@shared/whatsapp-media'
+import { isServableInstagramMedia as igHasMedia } from '@shared/whatsapp-media'
 import {
   ArrowLeft, Send, MessageCircle, Clock, Check, AlertCircle,
   RefreshCw, Bot, UserCheck,

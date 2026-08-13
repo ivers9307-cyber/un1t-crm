@@ -1,31 +1,47 @@
-// WA-MEDIA.1 — render inbound WhatsApp media inline in the mobile inbox.
+// WA-MEDIA.1 / IG-MEDIA.3 — render inbound message media inline in the mobile
+// inbox, for WhatsApp AND Instagram.
 //
-// Fetches a short-lived signed URL from /api/whatsapp/media/[id] (which
-// re-hosts the bytes from Meta into the private whatsapp-media bucket on
-// first view) and shows it: images inline, everything else as a tap-to-
-// open link. Falls back to a small "unavailable" note if Meta expired the
-// media or the fetch failed. WhatsApp only — Instagram media is a separate
-// table/route (follow-up), so MessageBubble gates this on channel.
+// Fetches a short-lived signed URL from the channel's media route (which
+// re-hosts the bytes into the private whatsapp-media bucket on first view) and
+// shows it: images inline, everything else as a tap-to-open link. Falls back to
+// a small "unavailable" note if the source expired or the fetch failed.
+//
+// Instagram was previously excluded, so no IG photo or story mention ever
+// rendered on mobile — and once story mentions stopped carrying a text
+// placeholder, that showed as an empty bubble.
 
 import { useEffect, useState } from 'react'
 import { View, Text, Image, Pressable, Linking, ActivityIndicator } from 'react-native'
 import { api } from '../lib/api'
 import { mediaRenderKind } from 'shared/whatsapp-media'
 
-export default function WAMediaThumb({ msg }) {
-  const kind = mediaRenderKind(msg.message_type, msg.media_mime_type)
+const MEDIA_ENDPOINT = {
+  whatsapp: '/api/whatsapp/media',
+  instagram: '/api/instagram/media',
+}
+
+export default function WAMediaThumb({ msg, channel = 'whatsapp' }) {
   const [status, setStatus] = useState('loading') // loading | ready | error
   const [url, setUrl] = useState(null)
+  // The route resolves the kind server-side from the re-hosted MIME, which is
+  // authoritative: an Instagram story mention is 'file' until re-hosting has
+  // fetched it, then 'image'/'video'. Preferring the response avoids rendering
+  // a download link for a picture we've just stored.
+  const [servedKind, setServedKind] = useState(null)
+  const kind = servedKind || mediaRenderKind(msg.message_type, msg.media_mime_type)
 
   useEffect(() => {
     let cancelled = false
     setStatus('loading')
     setUrl(null)
-    api(`/api/whatsapp/media/${msg.id}`)
+    setServedKind(null)
+    const base = MEDIA_ENDPOINT[channel] || MEDIA_ENDPOINT.whatsapp
+    api(`${base}/${msg.id}`)
       .then(res => {
         if (cancelled) return
         if (res?.success && res.url) {
           setUrl(res.url)
+          if (res.kind) setServedKind(res.kind)
           setStatus('ready')
         } else {
           setStatus('error')
@@ -33,7 +49,7 @@ export default function WAMediaThumb({ msg }) {
       })
       .catch(() => { if (!cancelled) setStatus('error') })
     return () => { cancelled = true }
-  }, [msg.id])
+  }, [msg.id, channel])
 
   if (!kind) return null
   if (status === 'loading') {
