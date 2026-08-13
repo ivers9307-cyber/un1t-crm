@@ -22,6 +22,7 @@ vi.mock('@/lib/instagram-media-server', () => ({ ensureInstagramMediaRehosted: v
 import { handleInstagramInbound } from './instagram'
 import { resolveLocationByExternalAccount } from './channels'
 import { runChannelAgent } from './auto-reply'
+import { ensureInstagramMediaRehosted } from '@/lib/instagram-media-server'
 
 // Chainable stub. `conv` decides what the find-or-create lookups return (an
 // array consumed in order, so a test can say "miss, then the winner's row"),
@@ -29,6 +30,7 @@ import { runChannelAgent } from './auto-reply'
 function igDb({ convLookups = [null], convInsert = { data: { id: 'conv-new' }, error: null }, msgInsert = { data: { id: 'msg-1' }, error: null } }) {
   const lookups = [...convLookups]
   const inserts = []
+  const updates = []
   const mk = (table) => {
     const state = { op: 'select' }
     const finish = () => {
@@ -45,14 +47,14 @@ function igDb({ convLookups = [null], convInsert = { data: { id: 'conv-new' }, e
     const b = {
       select: () => b,
       insert: (row) => { state.op = 'insert'; state.row = row; return b },
-      update: () => { state.op = 'update'; return b },
+      update: (row) => { state.op = 'update'; state.row = row; updates.push({ table, row }); return b },
       eq: () => b, limit: () => b, order: () => b,
       single: () => b, maybeSingle: () => b,
       then: (resolve, reject) => Promise.resolve(finish()).then(resolve, reject),
     }
     return b
   }
-  return { from: mk, rpc: vi.fn(async () => ({ data: null, error: null })), inserts }
+  return { from: mk, rpc: vi.fn(async () => ({ data: null, error: null })), inserts, updates }
 }
 
 const EVENT = { accountId: 'IGBIZ1', customerId: 'CUST1', messageId: 'mid-1', text: 'how much is membership?', type: 'text', isEcho: false }
@@ -113,5 +115,59 @@ describe('handleInstagramInbound — unchecked inbound insert', () => {
       expect.stringContaining('message insert failed'),
       'violates check constraint',
     )
+  })
+})
+
+// IG-MEDIA.2 / IG-ECHO — the echo branch records a reply a staff member typed
+// in the native Instagram app. It had no coverage at all, despite carrying a
+// load-bearing guard: an echo of Mia's OWN send must not be mistaken for a
+// human taking over, or she goes silent on a thread she was handling.
+describe('handleInstagramInbound — echo (staff replied from the Instagram app)', () => {
+  const ECHO = {
+    accountId: 'IGBIZ1', customerId: 'CUST1', messageId: 'mid-echo',
+    text: '', type: 'story_mention', mediaUrl: 'https://cdn.ig/story.jpg', isEcho: true,
+  }
+
+  it('persists the media instead of dropping it, and re-hosts before the CDN url expires', async () => {
+    const db = igDb({ convLookups: [{ id: 'conv-1' }] })
+
+    const result = await handleInstagramInbound(db, ECHO)
+
+    expect(result).toMatchObject({ handled: true, echo: true })
+    const row = db.inserts.find((i) => i.table === 'instagram_messages').row
+    expect(row).toMatchObject({
+      direction: 'outbound',
+      source: 'instagram_app',
+      message_type: 'story_mention',
+      media_url: 'https://cdn.ig/story.jpg',
+    })
+    expect(ensureInstagramMediaRehosted).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ id: 'msg-1', message_type: 'story_mention', media_url: 'https://cdn.ig/story.jpg' }),
+      expect.anything(),
+    )
+  })
+
+  it('hands the thread to the human: answered, and Mia stands down', async () => {
+    const db = igDb({ convLookups: [{ id: 'conv-1' }] })
+
+    await handleInstagramInbound(db, ECHO)
+
+    const convUpdate = db.updates.find((u) => u.table === 'instagram_conversations')
+    expect(convUpdate.row).toMatchObject({ last_message_direction: 'outbound', agent_active: false })
+    expect(runChannelAgent).not.toHaveBeenCalled()
+  })
+
+  it('an echo of our OWN send is skipped and never stands Mia down (23505 race)', async () => {
+    // The send route inserted its row between the dedup lookup and this insert.
+    const db = igDb({
+      convLookups: [{ id: 'conv-1' }],
+      msgInsert: { data: null, error: { code: '23505', message: 'duplicate key' } },
+    })
+
+    const result = await handleInstagramInbound(db, ECHO)
+
+    expect(result).toMatchObject({ handled: false, reason: 'echo_own_send' })
+    expect(db.updates.find((u) => u.table === 'instagram_conversations')).toBeUndefined()
   })
 })

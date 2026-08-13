@@ -74,8 +74,13 @@ export async function POST(request, props) {
   // unambiguous proof a human dealt with it, whereas opening a thread in the
   // inbox is not. Fire-and-forget: the message is already delivered, and a
   // courtesy signal must never turn a successful send into an error.
-  markInstagramSeen(conversation.ig_user_id, { connection: conn })
-    .catch(() => { /* helper already logs; never surfaces to the operator */ })
+  // Awaited deliberately: an un-awaited promise in a serverless handler is not
+  // guaranteed to run once the response is sent, so fire-and-forget would fix
+  // this only sometimes — and invisibly, since the helper's own logging would
+  // never execute either. markInstagramSeen can't throw (every path is caught
+  // and it returns a boolean), so awaiting still cannot fail a send that has
+  // already been delivered.
+  await markInstagramSeen(conversation.ig_user_id, { connection: conn })
 
   const now = new Date().toISOString()
   await db.from('instagram_messages').insert({

@@ -81,7 +81,15 @@ export function mediaRenderKind(messageType, mime) {
     case 'story_mention':
       if (m.startsWith('image/')) return 'image'
       if (m.startsWith('video/')) return 'video'
-      return null
+      // A story frame is always a picture or a clip, but the webhook doesn't
+      // say which and the MIME only exists once re-hosting has fetched it.
+      // Never return null: every gate on the media path — the eager re-host,
+      // the lazy /api/instagram/media fallback, and the client's render test —
+      // asks this function, so a null here would keep the bytes out of our
+      // bucket entirely and the IG CDN drops them within about a day. 'file'
+      // keeps it fetchable and renderable now, and it upgrades to image/video
+      // the moment the MIME lands.
+      return 'file'
     default:
       return null
   }

@@ -23,9 +23,11 @@ import { mediaRenderKind } from '@shared/whatsapp-media'
 // IG-MEDIA.1 — map an inbound IG attachment type to the message_type we
 // store. Chosen so the shared mediaRenderKind() (also used by WhatsApp)
 // resolves the right inline renderer. IG "file" → "document" because
-// mediaRenderKind classifies documents by MIME (image/pdf/etc). Anything
-// not here (share, story_mention, reel…) has no inline renderer and keeps
-// its raw type, rendering as a text placeholder.
+// mediaRenderKind classifies documents by MIME (image/pdf/etc).
+// story_mention deliberately keeps its raw type: mediaRenderKind resolves it
+// by MIME (a story frame is a photo or a clip) and never returns null for it,
+// so it still passes every media gate (IG-MEDIA.2). Types genuinely without a
+// renderer (share, reel…) keep their raw type and show a text placeholder.
 const IG_ATTACHMENT_TYPE_TO_MESSAGE_TYPE = {
   image: 'image',
   video: 'video',
@@ -33,16 +35,6 @@ const IG_ATTACHMENT_TYPE_TO_MESSAGE_TYPE = {
   file: 'document',
 }
 
-/**
- * Which attachment kinds are worth pulling into our own storage.
- * mediaRenderKind() can't answer this alone for a story mention: it resolves
- * that type by MIME, and the MIME only exists once re-hosting has fetched the
- * file — so gating the re-host on it would never let a story through. Allow it
- * explicitly and let mediaRenderKind classify it afterwards. (IG-MEDIA.2)
- */
-function isRehostableIgMedia(messageType) {
-  return !!mediaRenderKind(messageType) || messageType === 'story_mention'
-}
 
 /**
  * Normalise a Meta Instagram webhook body into a flat list of message
@@ -376,7 +368,7 @@ export async function handleInstagramInbound(db, event) {
       return { handled: false, reason: 'echo_insert_failed', conversationId }
     }
     // Re-host while the CDN URL is fresh, same as the inbound path.
-    if (mediaUrl && insertedEcho?.id && isRehostableIgMedia(messageType)) {
+    if (mediaUrl && insertedEcho?.id && mediaRenderKind(messageType)) {
       try {
         await ensureInstagramMediaRehosted(db, {
           id: insertedEcho.id,
@@ -431,9 +423,11 @@ export async function handleInstagramInbound(db, event) {
   // bucket now, while the IG CDN URL is still fresh (it expires fast), so
   // the inbox shows it without a first-view round-trip. Best-effort and
   // bounded: never block or fail the webhook — /api/instagram/media
-  // re-hosts lazily if this misses. Gated to renderable kinds — shares and
-  // story-mentions carry a url but have no inline renderer.
-  if (mediaUrl && insertedInbound?.id && isRehostableIgMedia(messageType)) {
+  // re-hosts lazily if this misses. Gated to renderable kinds — which now
+  // includes story mentions, since mediaRenderKind never returns null for
+  // them (IG-MEDIA.2). Kinds with no renderer at all (shares, reels) still
+  // carry a url but are deliberately left alone.
+  if (mediaUrl && insertedInbound?.id && mediaRenderKind(messageType)) {
     try {
       await ensureInstagramMediaRehosted(db, {
         id: insertedInbound.id,
