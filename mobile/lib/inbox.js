@@ -92,6 +92,12 @@ const MEDIA_LABELS = {
   sticker: { icon: 'happy-outline', label: 'Sticker' },
   location: { icon: 'location-outline', label: 'Location' },
   contacts: { icon: 'person-outline', label: 'Contact card' },
+  // Instagram kinds. Without these the chip fell back to the raw webhook
+  // string and a bubble read "story_mention" — internal vocabulary in front
+  // of an operator (IG-MEDIA.4).
+  story_mention: { icon: 'aperture-outline', label: 'Story mention' },
+  share: { icon: 'link-outline', label: 'Shared post' },
+  reel: { icon: 'film-outline', label: 'Reel' },
 }
 
 export function mediaLabel(messageType) {
