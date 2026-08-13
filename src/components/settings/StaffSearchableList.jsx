@@ -207,6 +207,9 @@ const PERMISSION_CHIPS = {
   when_in_use: ['bg-amber-500/10 text-amber-700', 'While using'],
   denied: ['bg-red-500/10 text-red-700', 'Denied'],
   undetermined: ['bg-gray-500/10 text-gray-700', 'Not asked'],
+  // GEO-ATT.21 — permission read failed on the device; geofencing is not
+  // running. A fault, not an absence, so it gets the -700 ramp like denied.
+  unknown: ['bg-red-500/10 text-red-700', 'Unavailable'],
 }
 
 function PermissionChip({ value }) {

@@ -342,6 +342,8 @@ function PermissionChip({ value }) {
     when_in_use:  ['amber', 'While using'],
     denied:       ['red', 'Denied'],
     undetermined: ['neutral', 'Not asked'],
+    // GEO-ATT.21 — permission read failed on the device; geofencing is off.
+    unknown:      ['red', 'Unavailable'],
   }
   const entry = map[value]
   if (!entry) return <span className="text-un1t-muted">—</span>

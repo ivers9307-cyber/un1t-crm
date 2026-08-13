@@ -22,22 +22,13 @@ import * as Location from 'expo-location'
 import { useAuth } from '../lib/auth-context'
 import { api } from '../lib/api'
 import { syncGeofences } from '../lib/geofence'
+import { resolveGeofencePermission } from '../lib/geofence-permission'
 import { reportDeviceState } from '../lib/push-register'
 
-// STAFF-DEV.7 — collapse the two OS permission reads into the single
-// value the CRM stores (mig 466's CHECK values).
-//
-// Background-first by design: this column answers "can geofence
-// attendance actually fire on this phone?", so an iOS user on "While
-// Using" (whose BACKGROUND status expo reports as denied) is a denial
-// for that purpose. `when_in_use` is therefore mainly an Android shape —
-// background still undetermined while foreground is granted.
-function mapPermission(bg, fg) {
-  if (bg?.status === 'granted') return 'always'
-  if (bg?.status === 'denied') return 'denied'
-  if (fg?.status === 'granted') return 'when_in_use'
-  return 'undetermined'
-}
+// STAFF-DEV.7's mapPermission moved to mobile/lib/geofence-permission.js
+// (GEO-ATT.21) so this component and syncGeofences resolve the permission the
+// same way — including the error case, where they used to disagree — and so the
+// mapping is unit-tested rather than living inline in an RN component.
 
 export default function LocationGate() {
   const { session, impersonatingFrom } = useAuth()
@@ -68,12 +59,24 @@ export default function LocationGate() {
   }, [session, impersonatingFrom])
 
   const check = useCallback(async () => {
+    // GEO-ATT.21 — read BOTH, then let the shared resolver decide. It used to
+    // be `catch { setGranted(true) }` here and `catch { granted = false }` in
+    // syncGeofences: on a throw the gate hid itself while the registration was
+    // torn down, so attendance stopped and every surface said it was fine.
+    // Both fail directions now live in one tested place.
     let bg = null
+    let fg = null
+    let permErr = null
     try {
       bg = await Location.getBackgroundPermissionsAsync()
-      setGranted(bg.status === 'granted')
-      setDenied(bg.status === 'denied' && !bg.canAskAgain)
-    } catch { setGranted(true) } // never brick the app on a permission API error
+      try { fg = await Location.getForegroundPermissionsAsync() } catch { /* bg alone is enough */ }
+    } catch (e) { permErr = e || new Error('permission read failed') }
+
+    const resolved = resolveGeofencePermission({ bg, fg, error: permErr })
+    // `granted` drives the block, so an unreadable permission must set it TRUE:
+    // never lock staff out of the whole app over a permission API fault.
+    setGranted(!resolved.blocks)
+    setDenied(resolved.sendToSettings)
 
     // Fire-and-forget device-state report. Mirrors the gate's own
     // early-outs — but these are a CHEAP EARLY-OUT ONLY: the
@@ -84,11 +87,12 @@ export default function LocationGate() {
     // already attaching x-impersonate-target. Wrapped in its own
     // try/catch so a reporting failure can never block or break the gate.
     try {
-      if (!bg) return
+      // GEO-ATT.21 — this used to be `if (!bg) return`, so the ONE state worth
+      // alerting on was the one state never reported: the row kept its last
+      // good value (usually 'always') while geofencing was dead on the handset.
+      // 'unknown' is now a real value the CRM stores and the chips render.
       if (!sessionRef.current || impersonatingRef.current) return
-      let fg = null
-      try { fg = await Location.getForegroundPermissionsAsync() } catch { /* background alone is enough */ }
-      const value = mapPermission(bg, fg)
+      const value = resolved.value
       if (value === reportedRef.current) return
       // Only remember it once the SERVER confirmed it. api() never
       // throws and never sets `skipped` — a network failure comes back
