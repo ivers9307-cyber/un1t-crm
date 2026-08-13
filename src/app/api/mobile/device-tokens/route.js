@@ -17,6 +17,7 @@
 // device used by two different staff (shared kiosk) is supported.
 
 import { z } from 'zod'
+import { GEOFENCE_PERMISSION_VALUES } from '@/lib/geofence-permission-chips'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
@@ -44,10 +45,12 @@ const RegisterSchema = z.object({
   // device. Optional: clients below 2.2.0 never send it, and their
   // silence must not be read as a denial (see the upsert note below).
   // Values mirror the mig 466 CHECK constraint.
-  // 'unknown' (GEO-ATT.21, mig 542) = the device asked the OS and the call
-  // threw, so geofencing is NOT running on it. Distinct from omitting the field
-  // (nothing to say) and from NULL in the column (never reported at all).
-  geofence_permission: z.enum(['always', 'when_in_use', 'denied', 'undetermined', 'unknown']).optional(),
+  // GEO-ATT.22 — read from the shared registry, so this route cannot accept a
+  // value the operator surfaces have no chip for. 'unknown' (GEO-ATT.21, mig
+  // 542) = the device asked the OS and the call threw, so geofencing is NOT
+  // running on it. Distinct from omitting the field (nothing to say) and from
+  // NULL in the column (never reported at all).
+  geofence_permission: z.enum(GEOFENCE_PERMISSION_VALUES).optional(),
 })
 
 export async function POST(request) {

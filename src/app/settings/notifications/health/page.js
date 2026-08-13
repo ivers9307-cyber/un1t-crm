@@ -39,6 +39,7 @@ import { ArrowLeft, ShieldCheck, Smartphone, Mail } from 'lucide-react'
 import TestPushButton from '@/components/settings/TestPushButton'
 import NudgeUpdateButton from '@/components/settings/NudgeUpdateButton'
 import { deriveTargetVersion, deviceVerdict, currentDevice } from '@/lib/staff-devices'
+import { geofencePermissionChip } from '@/lib/geofence-permission-chips'
 
 export const dynamic = 'force-dynamic'
 
@@ -337,16 +338,8 @@ function VersionCell({ verdict }) {
 // JS) and MUST render as "—" — absence of data is not a denial, and
 // that distinction is the whole diagnostic point.
 function PermissionChip({ value }) {
-  const map = {
-    always:       ['green', 'Always'],
-    when_in_use:  ['amber', 'While using'],
-    denied:       ['red', 'Denied'],
-    undetermined: ['neutral', 'Not asked'],
-    // GEO-ATT.21 — permission read failed on the device; geofencing is off.
-    unknown:      ['red', 'Unavailable'],
-  }
-  const entry = map[value]
-  if (!entry) return <span className="text-un1t-muted">—</span>
-  const [tone, label] = entry
-  return <span className={`${CHIP} ${CHIP_TONE[tone]}`}>{label}</span>
+  // GEO-ATT.22 — labels/tones from the shared registry; null still renders "—".
+  const chip = geofencePermissionChip(value)
+  if (!chip) return <span className="text-un1t-muted">—</span>
+  return <span className={`${CHIP} ${chip.className}`}>{chip.label}</span>
 }

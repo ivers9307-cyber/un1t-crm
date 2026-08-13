@@ -15,28 +15,10 @@
 
 import { useEffect, useState } from 'react'
 import { Smartphone } from 'lucide-react'
+import { geofencePermissionChip, CHIP_TONE_CLASSES as TONE } from '@/lib/geofence-permission-chips'
 
 const CHIP = 'text-[10px] uppercase font-semibold px-2 py-0.5 rounded-full'
-const TONE = {
-  green: 'bg-emerald-500/10 text-emerald-700',
-  amber: 'bg-amber-500/10 text-amber-700',
-  red: 'bg-red-500/10 text-red-700',
-  neutral: 'bg-gray-500/10 text-gray-700',
-}
 
-// null = the device has never reported (client below 2.2.0, or
-// pre-STAFF-DEV JS). It renders as "—", NEVER as denied — absence of
-// data is not a denial, and that distinction is the diagnostic value.
-const PERMISSION = {
-  always: ['green', 'Always'],
-  when_in_use: ['amber', 'While using'],
-  denied: ['red', 'Denied'],
-  undetermined: ['neutral', 'Not asked'],
-  // GEO-ATT.21 — the device asked the OS and the call FAILED, so geofencing is
-  // not running on it. Red, not neutral: this is a fault to chase, and it is
-  // exactly the state that used to render as a stale green 'Always'.
-  unknown: ['red', 'Unavailable'],
-}
 
 function fmtWhen(iso) {
   if (!iso) return 'never'
@@ -49,10 +31,15 @@ function fmtWhen(iso) {
   return `${Math.floor(d / 30)}mo ago`
 }
 
+// null = the device has never reported (client below 2.2.0, or pre-STAFF-DEV
+// JS). It renders as "—", NEVER as denied — absence of data is not a denial,
+// and that distinction is the diagnostic value. Labels/tones come from
+// @/lib/geofence-permission-chips (GEO-ATT.22) so this surface cannot drift
+// from the other two or from the DB's CHECK constraint.
 function PermissionChip({ value }) {
-  const entry = PERMISSION[value]
-  if (!entry) return <span className="text-xs text-un1t-muted">—</span>
-  return <span className={`${CHIP} ${TONE[entry[0]]}`}>{entry[1]}</span>
+  const chip = geofencePermissionChip(value)
+  if (!chip) return <span className="text-xs text-un1t-muted">—</span>
+  return <span className={`${CHIP} ${chip.className}`}>{chip.label}</span>
 }
 
 export default function StaffDevicesCard({ profileId }) {

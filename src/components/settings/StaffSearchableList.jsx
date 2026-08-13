@@ -9,6 +9,7 @@
 import { useMemo, useState } from 'react'
 import Link from 'next/link'
 import { Search, X } from 'lucide-react'
+import { geofencePermissionChip } from '@/lib/geofence-permission-chips'
 
 const ROLE_COLORS = {
   master: 'bg-amber-500/20 text-amber-700',
@@ -202,21 +203,12 @@ export default function StaffSearchableList({ staff, user: _user, canEditFns, ve
 // is null until a device reports (any client below 2.2.0 never does),
 // and absence of data is not a denial — conflating the two is what makes
 // the whole diagnostic useless.
-const PERMISSION_CHIPS = {
-  always: ['bg-emerald-500/10 text-emerald-700', 'Always'],
-  when_in_use: ['bg-amber-500/10 text-amber-700', 'While using'],
-  denied: ['bg-red-500/10 text-red-700', 'Denied'],
-  undetermined: ['bg-gray-500/10 text-gray-700', 'Not asked'],
-  // GEO-ATT.21 — permission read failed on the device; geofencing is not
-  // running. A fault, not an absence, so it gets the -700 ramp like denied.
-  unknown: ['bg-red-500/10 text-red-700', 'Unavailable'],
-}
 
+// GEO-ATT.22 — labels/tones from the shared registry; null still renders "—".
 function PermissionChip({ value }) {
-  const entry = PERMISSION_CHIPS[value]
-  if (!entry) return <span className="text-un1t-muted">—</span>
-  const [tone, label] = entry
-  return <span className={`px-2 py-0.5 rounded-full ${tone}`}>{label}</span>
+  const chip = geofencePermissionChip(value)
+  if (!chip) return <span className="text-un1t-muted">—</span>
+  return <span className={`px-2 py-0.5 rounded-full ${chip.className}`}>{chip.label}</span>
 }
 
 function DeviceCell({ verdict, permission }) {
