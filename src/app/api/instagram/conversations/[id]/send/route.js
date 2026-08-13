@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { sendInstagramMessage } from '@/lib/agent/instagram'
+import { sendInstagramMessage, markInstagramSeen } from '@/lib/agent/instagram'
 import { resolveChannelConnection } from '@/lib/agent/channels'
 
 const SendSchema = z.object({
@@ -67,6 +67,15 @@ export async function POST(request, props) {
   } catch (err) {
     return NextResponse.json({ success: false, error: err.message }, { status: 400 })
   }
+
+  // IG-SEEN.1 — a reply through the API is not a read receipt, so without
+  // this the thread stays bold in the Instagram app after staff have already
+  // answered it here. Richard's call: mark on REPLY, not on open — a reply is
+  // unambiguous proof a human dealt with it, whereas opening a thread in the
+  // inbox is not. Fire-and-forget: the message is already delivered, and a
+  // courtesy signal must never turn a successful send into an error.
+  markInstagramSeen(conversation.ig_user_id, { connection: conn })
+    .catch(() => { /* helper already logs; never surfaces to the operator */ })
 
   const now = new Date().toISOString()
   await db.from('instagram_messages').insert({

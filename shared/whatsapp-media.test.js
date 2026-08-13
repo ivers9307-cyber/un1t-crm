@@ -57,6 +57,16 @@ describe('mediaRenderKind', () => {
     expect(mediaRenderKind('document', 'application/pdf')).toBe('file')
     expect(mediaRenderKind('document', null)).toBe('file')
   })
+  // IG-MEDIA.2 — an Instagram story mention carries the story frame, which can
+  // be a photo or a video and the webhook doesn't say which, so it resolves by
+  // MIME once re-hosting has recorded one. Null beforehand is deliberate: the
+  // re-host is allowed through by type, not by this function.
+  it('classifies an instagram story mention by mime', () => {
+    expect(mediaRenderKind('story_mention', 'image/jpeg')).toBe('image')
+    expect(mediaRenderKind('story_mention', 'video/mp4')).toBe('video')
+    expect(mediaRenderKind('story_mention')).toBe(null)
+    expect(mediaRenderKind('story_mention', 'application/octet-stream')).toBe(null)
+  })
   it('returns null for non-media types', () => {
     expect(mediaRenderKind('text')).toBeNull()
     expect(mediaRenderKind('location')).toBeNull()

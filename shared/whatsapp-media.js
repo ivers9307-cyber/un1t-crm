@@ -71,6 +71,17 @@ export function mediaRenderKind(messageType, mime) {
       if (m.startsWith('video/')) return 'video'
       if (m.startsWith('audio/')) return 'audio'
       return 'file'
+    // IG-MEDIA.2 — an Instagram story mention carries the story frame itself,
+    // which can be a photo OR a video, and the webhook doesn't say which. So
+    // it resolves by MIME like 'document' does, once re-hosting has recorded
+    // one. Before that it returns null and the bubble shows its placeholder —
+    // which is why the re-host is allowed through explicitly for this type
+    // rather than gated on this function. Unreachable for WhatsApp (no such
+    // message_type there).
+    case 'story_mention':
+      if (m.startsWith('image/')) return 'image'
+      if (m.startsWith('video/')) return 'video'
+      return null
     default:
       return null
   }
