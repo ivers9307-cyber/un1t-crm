@@ -23,9 +23,9 @@ const DEFAULT_RADIUS_M = 150
 // location `gate_copy` overrides it; an operator override is NOT checked
 // against any of this, so review a custom one against the same three points.
 export const DEFAULT_GATE_COPY =
-  'Repset logs your shift attendance automatically when you arrive at the gym. ' +
+  'Repset logs your shift attendance when you arrive at the gym. ' +
   'To do that it collects your location in the background, even when the app is closed or not in use. ' +
-  'Only arrival at your gym is detected. Your location is never tracked anywhere else.'
+  'It only detects arrival at your own gym and never tracks you anywhere else.'
 
 function finiteOrNull(v) {
   const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v
