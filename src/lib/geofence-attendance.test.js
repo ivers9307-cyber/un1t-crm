@@ -19,8 +19,12 @@ describe('DEFAULT_GATE_COPY (Play prominent-disclosure contract)', () => {
   it('states that location is collected when the app is closed or not in use', () => {
     expect(DEFAULT_GATE_COPY.toLowerCase()).toContain('closed or not in use')
   })
+  // Anchored on "shift", not "attendance": the feature can be described as
+  // logging attendance or clocking in, and both are honest. What Play needs is
+  // that the copy says WHICH feature the location is for, and every phrasing of
+  // this one is about the staffer's shift.
   it('names the feature the data is collected for', () => {
-    expect(DEFAULT_GATE_COPY.toLowerCase()).toContain('attendance')
+    expect(DEFAULT_GATE_COPY.toLowerCase()).toContain('shift')
   })
   it('says what is NOT collected, so the scope is honest', () => {
     expect(DEFAULT_GATE_COPY.toLowerCase()).toContain('never')
