@@ -75,6 +75,14 @@ export async function POST(request, props) {
   }
   logInfo('live-class', 'override pair', {
     locationId, contactId, deviceKey, bridgeId, sessionId: out.sessionId, actor: user.id,
+    persistWarning: out.warning ?? null,
   })
-  return NextResponse.json({ ok: true, session_id: out.sessionId })
+  // `warning` = the pairing worked for this class but the permanent
+  // registration was skipped (strap owned by another member, or the ownership
+  // check failed). The coach should see it, not just the journal.
+  return NextResponse.json(
+    out.warning
+      ? { ok: true, session_id: out.sessionId, warning: out.warning }
+      : { ok: true, session_id: out.sessionId },
+  )
 }

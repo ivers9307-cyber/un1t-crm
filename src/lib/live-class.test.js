@@ -52,7 +52,13 @@ describe('getLiveSessions', () => {
             })),
           }
         }
-        if (table === 'contact_devices') return { upsert: vi.fn(() => Promise.resolve({ error: null })) }
+        if (table === 'contact_devices') {
+          return {
+            // Steal guard reads active registrations before the persist upsert.
+            select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ data: [], error: null })) })) })),
+            upsert: vi.fn(() => Promise.resolve({ error: null })),
+          }
+        }
         throw new Error(`unexpected ${table}`)
       }),
     }
@@ -152,7 +158,13 @@ describe('getAvailableStraps', () => {
             })),
           }
         }
-        if (table === 'contact_devices') return { upsert: vi.fn(() => Promise.resolve({ error: null })) }
+        if (table === 'contact_devices') {
+          return {
+            // Steal guard reads active registrations before the persist upsert.
+            select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ data: [], error: null })) })) })),
+            upsert: vi.fn(() => Promise.resolve({ error: null })),
+          }
+        }
         throw new Error(`unexpected ${table}`)
       }),
     }
@@ -283,7 +295,13 @@ describe('pairOverride', () => {
             }),
           }
         }
-        if (table === 'contact_devices') return { upsert: vi.fn(() => Promise.resolve({ error: null })) }
+        if (table === 'contact_devices') {
+          return {
+            // Steal guard reads active registrations before the persist upsert.
+            select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ data: [], error: null })) })) })),
+            upsert: vi.fn(() => Promise.resolve({ error: null })),
+          }
+        }
         throw new Error(`unexpected ${table}`)
       }),
     }
@@ -324,7 +342,10 @@ describe('pairOverride', () => {
           return { insert: vi.fn(() => Promise.resolve({ error: null })) }
         }
         if (table === 'contact_devices') {
-          return { upsert: vi.fn((row, opts) => { cd.upserted = row; cd.opts = opts; return Promise.resolve({ error: null }) }) }
+          return {
+            select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ data: [], error: null })) })) })),
+            upsert: vi.fn((row, opts) => { cd.upserted = row; cd.opts = opts; return Promise.resolve({ error: null }) }),
+          }
         }
         throw new Error(`unexpected ${table}`)
       }),
@@ -384,7 +405,13 @@ describe('pairOverride', () => {
         if (table === 'strap_assignments') {
           return { insert: vi.fn(() => Promise.resolve({ error: null })) }
         }
-        if (table === 'contact_devices') return { upsert: vi.fn(() => Promise.resolve({ error: null })) }
+        if (table === 'contact_devices') {
+          return {
+            // Steal guard reads active registrations before the persist upsert.
+            select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ data: [], error: null })) })) })),
+            upsert: vi.fn(() => Promise.resolve({ error: null })),
+          }
+        }
         throw new Error(`unexpected ${table}`)
       }),
     }
@@ -441,7 +468,13 @@ describe('pairOverride', () => {
         if (table === 'strap_assignments') {
           return { insert: vi.fn(() => Promise.resolve({ error: null })) }
         }
-        if (table === 'contact_devices') return { upsert: vi.fn(() => Promise.resolve({ error: null })) }
+        if (table === 'contact_devices') {
+          return {
+            // Steal guard reads active registrations before the persist upsert.
+            select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ data: [], error: null })) })) })),
+            upsert: vi.fn(() => Promise.resolve({ error: null })),
+          }
+        }
         throw new Error(`unexpected ${table}`)
       }),
     }
@@ -453,6 +486,82 @@ describe('pairOverride', () => {
     expect(inserted).toBeNull()                  // NO new session inserted
     expect(adoptPatch).toMatchObject({ contact_id: 'c-1' }) // anon → named
     expect(typeof adoptPatch.max_hr_used).toBe('number')    // max HR re-stamped
+  })
+
+  // Steal guard on the persist path — mirrors the register-device route's
+  // findRegistrationConflict tests. The one-off strap_assignments pairing must
+  // ALWAYS stand (pairing a lent strap for today is legitimate); only the
+  // durable contact_devices registration is refused.
+  describe('persist steal guard', () => {
+    // regRows: what the guard's contact_devices select returns.
+    const mk = (regRows, cd, regErr = null) => ({
+      from: vi.fn((table) => {
+        if (table === 'contacts') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({
+            maybeSingle: vi.fn(() => Promise.resolve({ data: { id: 'c-1', max_hr_override: null, dob: '1990-05-08', location_id: 'loc-1' }, error: null })),
+          })) })) })) }
+        }
+        if (table === 'heart_rate_sessions') {
+          return {
+            select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({ is: vi.fn(() => ({ order: vi.fn(() => ({ limit: vi.fn(() => ({
+              maybeSingle: vi.fn(() => Promise.resolve({ data: { id: 'sess-1', device_identifier: 'ant:12345' }, error: null })),
+            })) })) })) })) })) })),
+            update: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ error: null })) })),
+          }
+        }
+        if (table === 'class_occurrences') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ gte: vi.fn(() => ({ lte: vi.fn(() => ({ is: vi.fn(() => ({ order: vi.fn(() => Promise.resolve({ data: [], error: null })) })) })) })) })) })) }
+        }
+        if (table === 'strap_assignments') {
+          return { insert: vi.fn((row) => { cd.saInsert = row; return Promise.resolve({ error: null }) }) }
+        }
+        if (table === 'contact_devices') {
+          return {
+            select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ data: regRows, error: regErr })) })) })),
+            upsert: vi.fn((row) => { cd.upserted = row; return Promise.resolve({ error: null }) }),
+          }
+        }
+        throw new Error(`unexpected ${table}`)
+      }),
+    })
+
+    it('skips the persist and names the holder when they are at the SAME location', async () => {
+      const cd = { upserted: null, saInsert: null }
+      const rows = [{ contact_id: 'c-other', is_active: true, contacts: { name: 'Aoife Byrne', location_id: 'loc-1' } }]
+      const out = await pairOverride(mk(rows, cd), { locationId: 'loc-1', bridgeId: 'b-1', contactId: 'c-1', deviceKey: 'ant:12345' })
+      expect(out.ok).toBe(true)                       // today's pairing stands
+      expect(cd.saInsert).toMatchObject({ contact_id: 'c-1', strap_identifier: 'ant:12345' })
+      expect(cd.upserted).toBeNull()                  // durable registration refused
+      expect(out.warning).toMatch(/Aoife Byrne/)
+      expect(out.warning).toMatch(/this class only/)
+    })
+
+    it('skips the persist WITHOUT naming a cross-location holder (no cross-tenant leak)', async () => {
+      const cd = { upserted: null, saInsert: null }
+      const rows = [{ contact_id: 'c-other', is_active: true, contacts: { name: 'Hatch Member', location_id: 'loc-2' } }]
+      const out = await pairOverride(mk(rows, cd), { locationId: 'loc-1', bridgeId: 'b-1', contactId: 'c-1', deviceKey: 'ant:12345' })
+      expect(out.ok).toBe(true)
+      expect(cd.upserted).toBeNull()
+      expect(out.warning).toMatch(/another member/)
+      expect(out.warning).not.toMatch(/Hatch Member/)
+    })
+
+    it('a self re-pair is NOT a conflict — the upsert proceeds warning-free', async () => {
+      const cd = { upserted: null, saInsert: null }
+      const rows = [{ contact_id: 'c-1', is_active: true, contacts: { name: 'Self', location_id: 'loc-1' } }]
+      const out = await pairOverride(mk(rows, cd), { locationId: 'loc-1', bridgeId: 'b-1', contactId: 'c-1', deviceKey: 'ant:12345' })
+      expect(out.ok).toBe(true)
+      expect(out.warning).toBeUndefined()
+      expect(cd.upserted).toMatchObject({ contact_id: 'c-1', identifier: 'ant:12345' })
+    })
+
+    it('skips the persist when the guard read fails — never write unverified', async () => {
+      const cd = { upserted: null, saInsert: null }
+      const out = await pairOverride(mk(null, cd, { message: 'boom' }), { locationId: 'loc-1', bridgeId: 'b-1', contactId: 'c-1', deviceKey: 'ant:12345' })
+      expect(out.ok).toBe(true)                       // pairing still succeeds
+      expect(cd.upserted).toBeNull()
+      expect(out.warning).toMatch(/could not verify/i)
+    })
   })
 })
 
@@ -478,7 +587,13 @@ describe('endSession', () => {
         if (table === 'strap_assignments') {
           return { update: vi.fn(() => ({ eq: vi.fn(() => ({ is: vi.fn(() => Promise.resolve({ error: null })) })) })) }
         }
-        if (table === 'contact_devices') return { upsert: vi.fn(() => Promise.resolve({ error: null })) }
+        if (table === 'contact_devices') {
+          return {
+            // Steal guard reads active registrations before the persist upsert.
+            select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ data: [], error: null })) })) })),
+            upsert: vi.fn(() => Promise.resolve({ error: null })),
+          }
+        }
         throw new Error(`unexpected ${table}`)
       }),
     }
@@ -559,7 +674,13 @@ describe('endSession', () => {
             }),
           }
         }
-        if (table === 'contact_devices') return { upsert: vi.fn(() => Promise.resolve({ error: null })) }
+        if (table === 'contact_devices') {
+          return {
+            // Steal guard reads active registrations before the persist upsert.
+            select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ data: [], error: null })) })) })),
+            upsert: vi.fn(() => Promise.resolve({ error: null })),
+          }
+        }
         throw new Error(`unexpected ${table}`)
       }),
     }
@@ -813,7 +934,13 @@ describe('finalizeSessionRewards', () => {
         if (table === 'locations') {
           return { select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: { id: 'loc-1', settings: {} }, error: null })) })) })) }
         }
-        if (table === 'contact_devices') return { upsert: vi.fn(() => Promise.resolve({ error: null })) }
+        if (table === 'contact_devices') {
+          return {
+            // Steal guard reads active registrations before the persist upsert.
+            select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ data: [], error: null })) })) })),
+            upsert: vi.fn(() => Promise.resolve({ error: null })),
+          }
+        }
         throw new Error(`unexpected ${table}`)
       }),
     }
