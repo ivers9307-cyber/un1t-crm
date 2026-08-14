@@ -102,8 +102,6 @@ Worktrees: `~/code/un1t-crm` is the primary checkout, but no checkout reliably h
 
 ## Architecture (overview)
 
-React 19 + Next.js 16 (App Router) · Tailwind 3.4 · Supabase (Postgres + Auth SSR cookies + Storage) · Postmark (email) · WhatsApp Cloud API (Meta v21) · Twilio (SMS) · Revolut Merchant (deposits) · Zod · Vitest.
-
 **Companion deployments sharing the same Supabase project** (`iyvtbjjxdggiadzwwvdj`):
 - **un1t-crm** (this repo) — staff/admin/operator surface.
 - **champ-app** (`~/code/champ-app`) — customer-facing portal (`app.champfitness.ie`); members see their own HR sessions/reports. No staff features.
@@ -118,7 +116,7 @@ React 19 + Next.js 16 (App Router) · Tailwind 3.4 · Supabase (Postgres + Auth 
 - **Input validation** via `validateBody(request, schema)` against Zod schemas in `src/lib/schemas.js`.
 - **Audience whitelist** — all sends go through `applyAudienceFilter()` (`AUDIENCE_FIELDS` registry); the canonical funnel field is `contacts.pipeline_stage_slug` (denormalised, trigger-maintained — operators never write it).
 
-**Key tables:** `locations`, `organizations`, `profiles`, `profile_locations`, `contacts`, `deals`/`pipeline_stages`, `bookings`/`event_types`, `campaigns`/`email_sequences`/`contact_preferences`, `whatsapp_conversations`/`_messages`/`_templates`, the roster v2 chain (`shift_templates`→`shift_blocks`→`shift_assignments`), `cars`, `cron_heartbeats`. 310 migrations (numbered to 313) in `supabase/migrations/`. **RLS model + full table map: [`docs/architecture/REFERENCE.md`](docs/architecture/REFERENCE.md).**
+**RLS model + full table map: [`docs/architecture/REFERENCE.md`](docs/architecture/REFERENCE.md).** Migrations live in `supabase/migrations/`.
 
 ---
 
