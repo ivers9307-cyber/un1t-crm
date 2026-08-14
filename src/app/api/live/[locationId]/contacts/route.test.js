@@ -6,10 +6,12 @@ vi.mock('@/lib/auth', () => ({
   getUserLocationIds: vi.fn(() => ['loc1']),
 }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
+vi.mock('@/lib/class-bookings', () => ({ getClassRoster: vi.fn() }))
 
 import { GET } from './route'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { getClassRoster } from '@/lib/class-bookings'
 
 function makeReq(q = '') {
   const url = q
@@ -19,19 +21,11 @@ function makeReq(q = '') {
 }
 const props = { params: Promise.resolve({ locationId: 'loc1' }) }
 
-function makeDb(contacts = []) {
-  const terminal = Promise.resolve({ data: contacts, error: null })
-  const limit = vi.fn(() => terminal)
-  const order = vi.fn(() => ({ limit }))
-  const orFn = vi.fn(() => ({ order }))
-  const eq = vi.fn(() => ({ or: orFn, order }))
-  const select = vi.fn(() => ({ eq }))
-  // expose orFn so tests can assert on it
-  const from = vi.fn(() => ({ select }))
-  return { client: { from }, eq, orFn, order, limit }
-}
-
-beforeEach(() => { vi.clearAllMocks(); getUserLocationIds.mockReturnValue(['loc1']) })
+beforeEach(() => {
+  vi.clearAllMocks()
+  getUserLocationIds.mockReturnValue(['loc1'])
+  getClassRoster.mockResolvedValue({ occurrence: null, roster: [] })
+})
 
 describe('GET /api/live/[locationId]/contacts', () => {
   it('401 without a user', async () => {
@@ -66,7 +60,7 @@ describe('GET /api/live/[locationId]/contacts', () => {
     expect(res.status).toBe(200)
     expect(json.ok).toBe(true)
     expect(json.contacts).toHaveLength(2)
-    expect(json.contacts[0].name).toBe('Alice')
+    expect(json.contacts[0]).toEqual({ id: 'c1', name: 'Alice', on_roster: false })
   })
 
   it('200 returns contacts for a search term', async () => {
@@ -90,5 +84,37 @@ describe('GET /api/live/[locationId]/contacts', () => {
     expect(json.ok).toBe(true)
     // or filter should have been called with the search term
     expect(orFn).toHaveBeenCalledWith(expect.stringContaining('alice'))
+  })
+
+  it('ranks the live class roster first, deduped, with the class name (HR-CLAIM.1)', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'staff', isMaster: false })
+    getClassRoster.mockResolvedValue({
+      occurrence: { glofox_event_id: 'ev1', class_name: 'UN1T Strength' },
+      roster: [
+        { contact_id: 'c5', member_name: 'Cara Doyle', status: 'BOOKED' },
+        { contact_id: 'c1', member_name: 'Alice', status: 'BOOKED' },
+      ],
+    })
+    const contacts = [{ id: 'c1', name: 'Alice' }, { id: 'c2', name: 'Bob' }]
+    const terminal = Promise.resolve({ data: contacts, error: null })
+    createServerClient.mockReturnValue({
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            or: () => ({ order: () => ({ limit: () => terminal }) }),
+            order: () => ({ limit: () => terminal }),
+          }),
+        }),
+      }),
+    })
+    const res = await GET(makeReq(), props)
+    const json = await res.json()
+    expect(res.status).toBe(200)
+    expect(json.class_name).toBe('UN1T Strength')
+    expect(json.contacts).toEqual([
+      { id: 'c5', name: 'Cara Doyle', on_roster: true },
+      { id: 'c1', name: 'Alice', on_roster: true },
+      { id: 'c2', name: 'Bob', on_roster: false },
+    ])
   })
 })

@@ -4,6 +4,12 @@
 // HR-DETECT.1 — durable "Detected" tab: every strap the bridge has recorded at
 // this location (linked or not), with appearance history + linking. Polls
 // /api/live/[id]/detections slower than the 2s live board.
+//
+// HR-CLAIM.1 — the "Claim" flow: tapping a candidate registers the strap to
+// that member in one go (contact_devices via register-device, which also
+// adopts today's open contact-less session). Candidates are ranked by the
+// server: the live class roster first, then the name search. One-off "pair
+// for today" lives on the Live tab's straps panel.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Plug, ChevronDown, ChevronRight, Link2, Check } from 'lucide-react'
@@ -97,7 +103,7 @@ export default function DetectedTab({ locationId }) {
       )}
 
       {linking && (
-        <LinkModal
+        <ClaimModal
           row={linking}
           locationId={locationId}
           onClose={() => setLinking(null)}
@@ -145,7 +151,7 @@ function DetectionRow({ row, locationId, onLink }) {
             <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700"><Check size={12} /> {row.linked_contact.name}</span>
           ) : (
             <button type="button" onClick={onLink} className="inline-flex items-center gap-1 rounded-md bg-indigo-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-indigo-500">
-              <Link2 size={12} /> Link
+              <Link2 size={12} /> Claim
             </button>
           )}
           <p className="mt-0.5 text-[11px] text-un1t-subtle">
@@ -176,12 +182,16 @@ function DetectionRow({ row, locationId, onLink }) {
   )
 }
 
-function LinkModal({ row, locationId, onClose, onDone }) {
+// HR-CLAIM.1 — one-tap claim. Candidates arrive ranked from the server (live
+// class roster first, tagged on_roster), and tapping one registers the strap
+// permanently — register-device also adopts today's open contact-less session
+// so the member gets the class being recorded right now.
+function ClaimModal({ row, locationId, onClose, onDone }) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState([])
-  const [contactId, setContactId] = useState(null)
+  const [className, setClassName] = useState(null)
   const [deviceType, setDeviceType] = useState('chest_strap')
-  const [busy, setBusy] = useState(false)
+  const [busyId, setBusyId] = useState(null)
   const [error, setError] = useState(null)
 
   useEffect(() => {
@@ -190,44 +200,51 @@ function LinkModal({ row, locationId, onClose, onDone }) {
       try {
         const res = await fetch(`/api/live/${locationId}/contacts?q=${encodeURIComponent(query.trim())}`)
         const json = await res.json()
-        if (!cancelled) setResults(json.ok ? (json.contacts || []) : [])
+        if (!cancelled) {
+          setResults(json.ok ? (json.contacts || []) : [])
+          setClassName(json.ok ? (json.class_name || null) : null)
+        }
       } catch { if (!cancelled) setResults([]) }
     }, 250)
     return () => { cancelled = true; clearTimeout(t) }
   }, [query, locationId])
 
-  async function pairForToday() {
-    if (!contactId) return
-    setBusy(true); setError(null)
-    try {
-      const res = await fetch(`/api/live/${locationId}/pair`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ device_key: row.device_key, contact_id: contactId, bridge_id: row.last_bridge_id }),
-      })
-      const json = await res.json()
-      if (!res.ok || !json.ok) throw new Error(json.error || 'Pair failed')
-      onDone()
-    } catch (e) { setError(e.message); setBusy(false) }
-  }
-
-  async function rememberDevice() {
-    if (!contactId) return
-    setBusy(true); setError(null)
+  async function claim(contactId) {
+    if (busyId) return
+    setBusyId(contactId); setError(null)
     try {
       const res = await fetch(`/api/live/${locationId}/register-device`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ device_key: row.device_key, contact_id: contactId, device_type: deviceType }),
       })
       const json = await res.json()
-      if (!res.ok || !json.ok) throw new Error(json.error || 'Register failed')
+      if (!res.ok || !json.ok) throw new Error(json.error || 'Claim failed')
       onDone()
-    } catch (e) { setError(e.message); setBusy(false) }
+    } catch (e) { setError(e.message); setBusyId(null) }
+  }
+
+  const rosterResults = results.filter((c) => c.on_roster)
+  const otherResults = results.filter((c) => !c.on_roster)
+
+  function candidateButton(c) {
+    return (
+      <li key={c.id}>
+        <button
+          type="button"
+          disabled={!!busyId}
+          onClick={() => claim(c.id)}
+          className={`block w-full px-3 py-2 text-left text-sm hover:bg-un1t-surface disabled:opacity-50 ${busyId === c.id ? 'bg-indigo-50 font-medium' : ''}`}
+        >
+          {busyId === c.id ? `Claiming for ${c.name}…` : c.name}
+        </button>
+      </li>
+    )
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
       <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-lg font-semibold">Link strap to member</h2>
+        <h2 className="text-lg font-semibold">Claim strap for member</h2>
         <p className="mt-1 font-mono text-sm text-un1t-subtle">{row.device_key}</p>
 
         <input
@@ -238,21 +255,24 @@ function LinkModal({ row, locationId, onClose, onDone }) {
           onChange={(e) => setQuery(e.target.value)}
           className="mt-3 w-full rounded-md border border-un1t-border bg-white px-3 py-2 text-sm"
         />
-        <ul className="mt-2 max-h-48 overflow-auto rounded-md border border-un1t-border">
+        <ul className="mt-2 max-h-56 overflow-auto rounded-md border border-un1t-border">
           {results.length === 0 ? (
             <li className="p-3 text-center text-xs text-un1t-subtle">No matches</li>
           ) : (
-            results.map((c) => (
-              <li key={c.id}>
-                <button
-                  type="button"
-                  onClick={() => setContactId(c.id)}
-                  className={`block w-full px-3 py-2 text-left text-sm hover:bg-un1t-surface ${contactId === c.id ? 'bg-indigo-50 font-medium' : ''}`}
-                >
-                  {c.name}
-                </button>
-              </li>
-            ))
+            <>
+              {rosterResults.length > 0 && (
+                <li className="bg-un1t-surface px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-un1t-subtle">
+                  In this class{className ? ` · ${className}` : ''}
+                </li>
+              )}
+              {rosterResults.map(candidateButton)}
+              {rosterResults.length > 0 && otherResults.length > 0 && (
+                <li className="bg-un1t-surface px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-un1t-subtle">
+                  All members
+                </li>
+              )}
+              {otherResults.map(candidateButton)}
+            </>
           )}
         </ul>
 
@@ -272,27 +292,11 @@ function LinkModal({ row, locationId, onClose, onDone }) {
 
         {error && <p className="mt-3 text-sm text-red-700">{error}</p>}
 
-        <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+        <div className="mt-4 flex items-center justify-end">
           <button type="button" onClick={onClose} className="text-sm font-medium text-un1t-subtle hover:text-un1t-text">Cancel</button>
-          <button
-            type="button"
-            disabled={!contactId || busy}
-            onClick={pairForToday}
-            className="rounded-md border border-indigo-600 px-3 py-1.5 text-sm font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
-          >
-            Pair for today
-          </button>
-          <button
-            type="button"
-            disabled={!contactId || busy}
-            onClick={rememberDevice}
-            className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
-          >
-            Remember this device
-          </button>
         </div>
         <p className="mt-2 text-[11px] text-un1t-subtle">
-          &quot;Pair for today&quot; shows them on the board for this class only. &quot;Remember this device&quot; saves it to their profile so it auto-routes every future class.
+          Tapping a member registers this strap to their profile: today&apos;s class is credited to them and every future class auto-routes. For a one-off lent strap, use &quot;Pair&quot; on the Live tab instead.
         </p>
       </div>
     </div>

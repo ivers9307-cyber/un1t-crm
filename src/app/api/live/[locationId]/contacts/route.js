@@ -4,11 +4,18 @@
 // location matching the term (name or email), for the strap-link member picker.
 // Server-side so it reaches ALL members, not just a preloaded slice.
 //
+// HR-CLAIM.1 — candidates are ranked: members booked into the class running
+// NOW come first (getClassRoster, the same plumbing as the live roster panel),
+// tagged `on_roster: true`; the name search fills in behind. Additive — the
+// existing consumers (PairModal) only read id + name.
+//
 // Auth: any staff at the location (mirrors GET /api/live/[locationId]/detections).
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { getClassRoster } from '@/lib/class-bookings'
+import { rankClaimCandidates } from '@/lib/hr-claim'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -33,11 +40,17 @@ export async function GET(request, props) {
     query = query.or(`name.ilike.%${q}%,email.ilike.%${q}%`)
   }
 
-  const { data: contacts, error } = await query
-    .order('name', { ascending: true })
-    .limit(30)
+  const [rosterData, { data: contacts, error }] = await Promise.all([
+    getClassRoster(db, { locationId }),
+    query.order('name', { ascending: true }).limit(30),
+  ])
 
   if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
 
-  return NextResponse.json({ ok: true, contacts: contacts || [] })
+  const ranked = rankClaimCandidates({ roster: rosterData.roster, contacts: contacts || [], query: q })
+  return NextResponse.json({
+    ok: true,
+    contacts: ranked,
+    class_name: rosterData.occurrence?.class_name ?? null,
+  })
 }
