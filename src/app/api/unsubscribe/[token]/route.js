@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { getRequestOrigin } from '@/lib/app-url'
 import { CONSENT_ACTIONS } from '@/lib/consent-actions'
+import { propagateOptOut } from '@/lib/consent-propagation'
 import {
   REFUSAL_REASONS,
   guardBeforeTokenLookup,
@@ -148,7 +149,7 @@ export async function POST(request, props) {
   // Find the contact preference by token
   const { data: pref, error } = await db
     .from('contact_preferences')
-    .select('*, contacts(id, name, email, location_id)')
+    .select('*, contacts(id, name, email, location_id, wa_phone)')
     .eq('unsubscribe_token', token)
     .single()
 
@@ -250,6 +251,15 @@ export async function POST(request, props) {
         logEntries.map((e) => ({ ...e, location_id: scopeLocationId })),
       )
     }
+
+    // DUPEUNSUB.1 — best-effort, after the person's own opt-out is durable.
+    await propagateOptOut(db, {
+      contactId: pref.contact_id,
+      email: pref.contacts?.email,
+      waPhone: pref.contacts?.wa_phone,
+      channels: Object.keys(channelPatch),
+      locationId: scopeLocationId,
+    })
 
     // COMMSFIX.C.4 — attribute the unsubscribe to the campaign that carried
     // the link. Gated on email_marketing having ACTUALLY flipped in this

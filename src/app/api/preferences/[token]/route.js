@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validate'
 import { consentActionFor } from '@/lib/consent-actions'
+import { propagateOptOut } from '@/lib/consent-propagation'
 import { emailStatusNormaliseForOptIn } from '@/lib/email-reputation'
 import {
   REFUSAL_REASONS,
@@ -80,7 +81,7 @@ async function resolveTokenOrRefuse(db, request, token) {
   // the guard look correct while silently never normalising a legacy NULL row.
   const { data: pref, error } = await db
     .from('contact_preferences')
-    .select('*, contacts(id, name, email, email_status)')
+    .select('*, contacts(id, name, email, email_status, wa_phone)')
     .eq('unsubscribe_token', token)
     .single()
 
@@ -225,6 +226,20 @@ export async function PUT(request, props) {
   // Log all changes to consent audit trail
   if (logEntries.length > 0) {
     await db.from('consent_log').insert(logEntries)
+  }
+
+  // DUPEUNSUB.1 — best-effort, after the person's own change is durable.
+  // Only the channels that went FALSE: an opt-IN must never propagate — it
+  // is evidence for this contact record, not for a sibling's.
+  const optedOut = Object.keys(updates).filter(k => k !== 'updated_at' && updates[k] === false)
+  if (optedOut.length > 0) {
+    await propagateOptOut(db, {
+      contactId: pref.contact_id,
+      email: pref.contacts?.email,
+      waPhone: pref.contacts?.wa_phone,
+      channels: optedOut,
+      locationId: body.locationId || null,
+    })
   }
 
   // The contacts.* columns an email-marketing change may touch. Neither is
