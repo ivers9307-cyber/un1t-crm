@@ -6,6 +6,7 @@ import { validateBody } from '@/lib/validate'
 import { consentActionFor } from '@/lib/consent-actions'
 import { propagateOptOut } from '@/lib/consent-propagation'
 import { emailStatusNormaliseForOptIn } from '@/lib/email-reputation'
+import { suppressAtPostmark, unsuppressAtPostmark } from '@/lib/postmark-suppressions'
 import {
   REFUSAL_REASONS,
   guardBeforeTokenLookup,
@@ -331,6 +332,76 @@ export async function PUT(request, props) {
         .from('contacts')
         .update(contactUpdate)
         .eq('id', pref.contact_id)
+    }
+
+    // PMSUPP.1 — mirror the change at POSTMARK, so our database and Postmark
+    // refuse independently instead of our database being the single gate.
+    //
+    // Best-effort by contract, like propagateOptOut above and for the same
+    // reason: by this line the person's change is already durable, and a
+    // Postmark hiccup must never fail their opt-out. The daily reconciliation
+    // in /api/cron/consent-drift-check repairs anything dropped here.
+    //
+    // THE TWO DIRECTIONS ARE NOT SYMMETRIC, deliberately:
+    //
+    //   OPT-OUT → suppress, but only on a GLOBAL change. A Postmark
+    //   suppression is per (server, stream), NOT per location, so pushing one
+    //   for somebody leaving ONE location's list would silently stop the mail
+    //   they still want from the others — the LOCCOMMS.4 harm, landing outside
+    //   our database where no CRM screen would ever show it.
+    //
+    //   OPT-IN → lift, scoped or not. Here a leftover server-wide suppression
+    //   is the thing that blocks mail the person just explicitly asked for, so
+    //   the same server-wide reach that makes suppression dangerous above
+    //   makes lifting necessary here. Consent is still gated by our database
+    //   per location; this only removes Postmark's refusal.
+    //
+    // The lift is safe because unsuppressAtPostmark reads the suppression
+    // first and deletes ONLY a ManualSuppression — never a HardBounce (whose
+    // deletion Postmark describes as "reactivating the associated bounce") and
+    // never a SpamComplaint. That is the same rule as
+    // emailStatusNormaliseForOptIn directly above: consent is not evidence the
+    // mailbox works.
+    //
+    // A location-scoped OPT-OUT is the one combination with nothing to do at
+    // Postmark; the other three all act.
+    const scopedOptOut = updates.email_marketing === false && Boolean(body.locationId)
+    if (pref.contacts?.email && !scopedOptOut) {
+      try {
+        if (updates.email_marketing === false) {
+          const result = await suppressAtPostmark(pref.contacts.email)
+          if (result?.failed?.length) {
+            console.error('[preferences] Postmark suppression failed (the opt-out itself IS recorded; consent-drift-check will retry):', {
+              contactId: pref.contact_id,
+              message: result.failed[0]?.message,
+            })
+          }
+        } else {
+          const result = await unsuppressAtPostmark(pref.contacts.email)
+          if (result?.failed?.length) {
+            console.error('[preferences] Postmark un-suppression failed (the opt-in itself IS recorded):', {
+              contactId: pref.contact_id,
+              message: result.failed[0]?.message,
+            })
+          }
+          // Left suppressed ON PURPOSE — a hard bounce or a spam complaint.
+          // Worth a line so a "why am I still not getting email?" question has
+          // an answer, but never an error for the customer. 'NotSuppressed' is
+          // the ordinary case (nothing was there to lift) and says nothing.
+          const heldBack = (result?.skipped || []).filter(s => s.reason !== 'NotSuppressed')
+          if (heldBack.length) {
+            console.warn('[preferences] Postmark suppression left in place on opt-in:', {
+              contactId: pref.contact_id,
+              reason: heldBack[0].reason,
+            })
+          }
+        }
+      } catch (err) {
+        // The helper is best-effort by contract and should never throw — but a
+        // Postmark problem must not reach the customer's own change even if it
+        // one day does.
+        console.error('[preferences] Postmark suppression sync threw (the change itself IS recorded):', err?.message || err)
+      }
     }
   }
 
