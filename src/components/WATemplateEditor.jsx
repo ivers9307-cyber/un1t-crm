@@ -344,7 +344,7 @@ export default function WATemplateEditor({ template, locationId, userId, events 
 
       if (!result.success) throw new Error(errorMessageFrom(result, 'Save failed'))
 
-      router.push('/whatsapp/templates')
+      router.push('/communications/templates?channel=whatsapp')
       router.refresh()
     } catch (err) {
       setError(err.message)

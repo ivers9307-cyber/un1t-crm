@@ -741,7 +741,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
       <div className={`${embedded ? 'hidden' : 'flex'} w-80 border-r border-un1t-border flex-col shrink-0 bg-un1t-surface`}>
         <div className="p-4 border-b border-un1t-border flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <Link href="/whatsapp" className="text-un1t-subtle hover:text-un1t-text transition-colors">
+            <Link href="/communications" className="text-un1t-subtle hover:text-un1t-text transition-colors">
               <ArrowLeft size={18} />
             </Link>
             <h3 className="font-semibold">Inbox</h3>

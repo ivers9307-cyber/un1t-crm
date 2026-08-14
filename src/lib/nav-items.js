@@ -243,7 +243,7 @@ export const ALL_NAV = [
   // Car Processing — different business entirely. For CCF Autos
   // users the location feature gate already hides everything else,
   // so this reads as their primary entry either way.
-  { href: '/cars',       label: 'Car Processing', icon: Car,           permission: 'car_processing', section: 'other' },
+  { href: '/cars/active', label: 'Car Processing', icon: Car,          permission: 'car_processing', section: 'other' },
   // Orders (mig 085) spans all revenue streams (race signups + cars).
   // Got its own permission key in the mig-092 audit. Demoted from the
   // Gym section 2026-06-12 — Richard confirmed it's not a daily

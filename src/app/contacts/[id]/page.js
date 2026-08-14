@@ -448,7 +448,7 @@ export default async function ContactDetailPage(props) {
               {waConversations.map(conv => (
                 <Link
                   key={conv.id}
-                  href="/whatsapp/inbox"
+                  href="/communications/inbox"
                   className="block py-2 border-b border-un1t-border last:border-0 hover:bg-un1t-border/20 -mx-1 px-1 rounded transition-colors"
                 >
                   <div className="flex items-center justify-between">

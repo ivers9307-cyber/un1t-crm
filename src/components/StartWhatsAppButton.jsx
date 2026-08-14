@@ -22,7 +22,7 @@ export default function StartWhatsAppButton({ contactId, contactPhone, waPhone }
       const data = await res.json()
 
       if (data.success && data.conversation_id) {
-        router.push(`/whatsapp/inbox?c=${data.conversation_id}`)
+        router.push(`/communications/inbox?c=${data.conversation_id}`)
       } else {
         alert(data.error || 'Failed to start conversation')
       }
