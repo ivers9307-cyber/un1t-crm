@@ -2,8 +2,10 @@
 //
 // Single page with a channel filter at the top. Email and WhatsApp
 // templates have very different shapes (HTML/JSON vs Meta-approved
-// template+variables) so the editor links go to their respective
-// existing /email/templates/new and /whatsapp/templates/new paths.
+// template+variables) so each channel keeps its own editor, at
+// /communications/templates/email/* and /communications/templates/
+// whatsapp/* — full-screen surfaces in the (editors) route group,
+// outside this (hub) chrome.
 
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
@@ -55,7 +57,7 @@ export default async function TemplatesListPage(props) {
         <div className="flex gap-2">
           {canEmail && (
             <Link
-              href="/email/templates/new"
+              href="/communications/templates/email/new"
               className="flex items-center gap-2 bg-un1t-text text-un1t-bg text-sm font-medium px-3 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
             >
               <Plus size={14} /> Email
@@ -63,7 +65,7 @@ export default async function TemplatesListPage(props) {
           )}
           {canWhatsapp && (
             <Link
-              href="/whatsapp/templates/new"
+              href="/communications/templates/whatsapp/new"
               className="flex items-center gap-2 bg-un1t-text text-un1t-bg text-sm font-medium px-3 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
             >
               <Plus size={14} /> WhatsApp
@@ -101,7 +103,7 @@ export default async function TemplatesListPage(props) {
             {emailRes.data.map(t => (
               <Link
                 key={`e-${t.id}`}
-                href={`/email/templates/${t.id}`}
+                href={`/communications/templates/email/${t.id}`}
                 className="flex items-center justify-between px-5 py-3 hover:bg-un1t-border/20"
               >
                 <div className="flex items-center gap-4 min-w-0">

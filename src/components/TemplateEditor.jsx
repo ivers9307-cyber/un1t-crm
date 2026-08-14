@@ -125,7 +125,7 @@ export default function TemplateEditor({ template, locationId, userId }) {
 
       if (!templateId && result.template?.id) {
         setTemplateId(result.template.id)
-        window.history.replaceState(null, '', `/email/templates/${result.template.id}`)
+        window.history.replaceState(null, '', `/communications/templates/email/${result.template.id}`)
       }
     } catch (err) {
       setError(err.message)
