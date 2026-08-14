@@ -4,6 +4,7 @@ import { getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { getRequestOrigin } from '@/lib/app-url'
 import { CONSENT_ACTIONS } from '@/lib/consent-actions'
 import { propagateOptOut } from '@/lib/consent-propagation'
+import { suppressAtPostmark } from '@/lib/postmark-suppressions'
 import {
   REFUSAL_REASONS,
   guardBeforeTokenLookup,
@@ -302,6 +303,47 @@ export async function POST(request, props) {
       channels: Object.keys(channelPatch),
       locationId: scopeLocationId,
     })
+
+    // PMSUPP.1 — suppress the address at POSTMARK too, so the two systems
+    // refuse independently. Same best-effort contract as propagateOptOut
+    // directly above, and it sits here for the same reason: the opt-out is
+    // already durable in our database by this line.
+    //
+    // WHY IT EXISTS. Postmark's own mail-client Unsubscribe button suppresses
+    // at Postmark and webhooks us (SubscriptionChange) — 74 opt-outs. An
+    // opt-out taken HERE told Postmark nothing, so for those our database was
+    // the SINGLE gate. mig 544 is what a single gate failing looks like:
+    // eleven contacts logged as opted out while the column the sender reads
+    // said mailable, straight through the audience filter. Postmark would have
+    // been the backstop; we had never built it.
+    //
+    // GLOBAL OPT-OUTS ONLY — `scopeLocationId` must be null. A Postmark
+    // suppression is per (server, stream), NOT per location, so pushing one on
+    // a scoped opt-out would silently stop mail from every OTHER location the
+    // person is still opted in to. That is precisely the LOCCOMMS.4 harm the
+    // write above bends over backwards to avoid, and it would be worse here:
+    // invisible, because it lands outside our database entirely. The daily
+    // reconciliation (consent-drift-check) reads the same rule.
+    //
+    // Gated on email_marketing having ACTUALLY flipped — channelPatch is built
+    // only from channels that were true — so a repeat click or an SMS-only
+    // opt-out sends nothing.
+    if (!scopeLocationId && channelPatch.email_marketing === false && pref.contacts?.email) {
+      try {
+        const result = await suppressAtPostmark(pref.contacts.email)
+        if (result?.failed?.length) {
+          console.error('[unsubscribe] Postmark suppression failed (the opt-out itself IS recorded; consent-drift-check will retry):', {
+            contactId: pref.contact_id,
+            message: result.failed[0]?.message,
+          })
+        }
+      } catch (err) {
+        // The helper is best-effort by contract and should never throw — but a
+        // Postmark problem must not reach the customer's opt-out even if it
+        // one day does.
+        console.error('[unsubscribe] Postmark suppression threw (the opt-out itself IS recorded):', err?.message || err)
+      }
+    }
 
     // COMMSFIX.C.4 — attribute the unsubscribe to the campaign that carried
     // the link. Gated on email_marketing having ACTUALLY flipped in this
