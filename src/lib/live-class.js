@@ -12,6 +12,7 @@
 // the coach needs to handle in real time.
 
 import { logWarn } from '@/lib/log'
+import { findRegistrationConflict } from '@/lib/hr-claim'
 import { selectAll } from '@/lib/select-all'
 import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
 import { BOOKED_PRE_MS, BOOKED_POST_MS } from '@/lib/bridge-samples'
@@ -320,24 +321,54 @@ export async function pairOverride(db, { locationId, bridgeId, contactId, device
   // Turning the coach's per-class pairing into a durable registration fixes
   // attribution going forward with no new UI. Best-effort (never fail the pair);
   // pass persist:false for a genuine one-off lent strap.
+  //
+  // Steal guard, mirroring register-device: a strap actively registered to a
+  // DIFFERENT member must not gain a second registration — routing is by
+  // identifier alone, so a duplicate makes every future sample's owner
+  // nondeterministic. The upsert's ignoreDuplicates only covers the
+  // per-contact conflict target, so without this check the write dies on the
+  // mig 546 global unique as a swallowed logWarn — technically safe, silently
+  // confusing. Instead: keep TODAY's pairing (the strap_assignments row above
+  // stands — pairing a lent strap for one class is legitimate), skip the
+  // permanent registration, and tell the coach why.
+  let warning = null
   if (persist) {
-    const { error: cdErr } = await db
+    const { data: existingRegs, error: regErr } = await db
       .from('contact_devices')
-      .upsert(
-        {
-          contact_id: contactId,
-          device_type: 'chest_strap',
-          identifier: deviceKey,
-          is_active: true,
-          added_by_contact: false,
-          added_by_user_id: actorUserId,
-        },
-        { onConflict: 'contact_id,device_type,identifier', ignoreDuplicates: true },
-      )
-    if (cdErr) logWarn('live-class', 'pairOverride contact_devices persist failed', { err: cdErr })
+      .select('contact_id, is_active, contacts(name, location_id)')
+      .eq('identifier', deviceKey)
+      .eq('is_active', true)
+    const conflict = regErr
+      ? null
+      : findRegistrationConflict({ deviceRows: existingRegs || [], contactId, locationId })
+    if (regErr) {
+      // Can't prove the strap is free — never write a registration we couldn't
+      // check. The one-off pairing above already succeeded.
+      logWarn('live-class', 'pairOverride steal-guard read failed — persist skipped', { err: regErr })
+      warning = 'Paired for this class, but the permanent registration was skipped (could not verify the strap is unowned). Try again from the Detected tab.'
+    } else if (conflict) {
+      warning = conflict.name
+        ? `Paired for this class only — this strap is permanently registered to ${conflict.name}. Unregister it from their profile to transfer it.`
+        : 'Paired for this class only — this strap is permanently registered to another member.'
+    } else {
+      const { error: cdErr } = await db
+        .from('contact_devices')
+        .upsert(
+          {
+            contact_id: contactId,
+            device_type: 'chest_strap',
+            identifier: deviceKey,
+            is_active: true,
+            added_by_contact: false,
+            added_by_user_id: actorUserId,
+          },
+          { onConflict: 'contact_id,device_type,identifier', ignoreDuplicates: true },
+        )
+      if (cdErr) logWarn('live-class', 'pairOverride contact_devices persist failed', { err: cdErr })
+    }
   }
 
-  return { ok: true, sessionId }
+  return warning ? { ok: true, sessionId, warning } : { ok: true, sessionId }
 }
 
 /**
