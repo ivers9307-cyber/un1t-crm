@@ -41,7 +41,7 @@ const CHANNEL_OPTIONS = [
   },
 ]
 
-export default function UnsubscribePage({ token, locationId = null }) {
+export default function UnsubscribePage({ token, locationId = null, campaignId = null }) {
   // UNSUBAUTO.1 — the opt-out fires on ARRIVAL, not on a button press.
   //
   // The previous flow was a GET landing on a confirm button. Measured live on
@@ -100,11 +100,31 @@ export default function UnsubscribePage({ token, locationId = null }) {
       // GLOBAL contact_preferences row and the mig 489 trigger fans the
       // opt-out to every location. No locationId → unchanged global
       // behaviour for old location-less links.
-      const scope = locationId ? `?l=${encodeURIComponent(locationId)}` : ''
-      const res = await fetch(`/api/unsubscribe/${token}${scope}`, {
+      //
+      // UNSUBAUTO.4 — `?c=` goes with it. The route reads it to attribute the
+      // opt-out to the campaign that carried the link (increment_campaign_metric
+      // → campaigns.total_unsubscribed); the page dropped it silently, so every
+      // page-path opt-out was invisible to that counter. UNSUBAUTO.1 multiplies
+      // page-path opt-outs, so the undercount grows with it.
+      //
+      // Built with URLSearchParams, not string concatenation: with two optional
+      // params, hand-rolling the `?`/`&` is how the l-absent/c-present case ends
+      // up as a malformed `&c=…`.
+      const query = new URLSearchParams()
+      if (locationId) query.set('l', locationId)
+      if (campaignId) query.set('c', campaignId)
+      const qs = query.toString()
+      const res = await fetch(`/api/unsubscribe/${token}${qs ? `?${qs}` : ''}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ channels }),
+        // UNSUBAUTO.3 — "Processing…" has no controls and no escape, so an
+        // unbounded fetch can hold a flaky mobile connection there for minutes;
+        // a visitor who gives up and closes the tab is unrecorded, which is a
+        // narrow re-entry of the very harm the auto-submit removes. On timeout
+        // the existing catch routes to 'idle', which drops them onto the manual
+        // button — a screen they can act on. No new branch needed.
+        signal: AbortSignal.timeout(15000),
       })
       const data = await res.json()
       if (data.success) {
@@ -137,7 +157,14 @@ export default function UnsubscribePage({ token, locationId = null }) {
       const res = await fetch(`/api/preferences/${token}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ locationId, email_marketing: true }),
+        // UNSUBAUTO.3 — OMIT the key when there is no location; never send
+        // `null`. PreferencesUpdateSchema has `locationId: z.string().optional()`,
+        // and zod 4 accepts `undefined` but REJECTS `null`, so the unconditional
+        // form 400'd on every location-less link — Resubscribe could not work on
+        // any pre-LOCCOMMS.4 email or any campaign without a location. The
+        // server schema is right; this is the same omit idiom PreferenceCentre
+        // already uses.
+        body: JSON.stringify({ ...(locationId ? { locationId } : {}), email_marketing: true }),
       })
       const data = await res.json()
       setResubStatus(data.success ? 'done' : 'error')
@@ -249,7 +276,11 @@ export default function UnsubscribePage({ token, locationId = null }) {
               Utility communications (booking confirmations, reminders, schedule changes) will continue.
             </p>
             {resubStatus === 'done' ? (
-              <p className="text-sm text-un1t-text mb-3">You're back on the list.</p>
+              // UNSUBAUTO.3 — name the channel. Resubscribe restores
+              // email_marketing ONLY, but after the failure → manual → retry
+              // path the visitor may have opted out of all three, so a bare
+              // "back on the list" overclaims what was restored.
+              <p className="text-sm text-un1t-text mb-3">You're back on the marketing email list.</p>
             ) : (
               <button
                 type="button"
