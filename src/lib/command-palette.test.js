@@ -245,9 +245,10 @@ describe('K5 — palette targets are real final destinations', () => {
   })
 
   it('recognises a known retired stub, so the check above is not vacuous', () => {
-    // If this ever stops being a redirect the guard has gone blind.
-    expect(isRedirectStub(pageFileFor('/whatsapp/broadcasts/new'))).toBe(true)
-    expect(isRedirectStub(pageFileFor('/cars'))).toBe(true)
+    // Every real stub was deleted in PRUNE.1; the fixture is the old /cars
+    // stub moved verbatim. If this ever stops matching, the guard has gone blind.
+    const fixture = path.join(process.cwd(), 'src/lib/__fixtures__/redirect-stub-page.js')
+    expect(isRedirectStub(fixture)).toBe(true)
     // …and does not misread the session-resolving dashboard index as retired.
     expect(isRedirectStub(pageFileFor('/dashboard'))).toBe(false)
   })
