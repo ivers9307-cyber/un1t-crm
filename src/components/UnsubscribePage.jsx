@@ -16,7 +16,7 @@
 // The route preserves back-compat with the empty-body List-Unsubscribe
 // header path (defaults to email_marketing only when no body is sent).
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { Mail, MessageCircle, MessageSquare, Check } from 'lucide-react'
 
@@ -42,14 +42,40 @@ const CHANNEL_OPTIONS = [
 ]
 
 export default function UnsubscribePage({ token, locationId = null }) {
-  // All three pre-selected because the user clicked an "unsubscribe"
-  // link — assume they want out of everything unless they say otherwise.
+  // UNSUBAUTO.1 — the opt-out fires on ARRIVAL, not on a button press.
+  //
+  // The previous flow was a GET landing on a confirm button. Measured live on
+  // 2026-08-14: 161 contacts had clicked an unsubscribe link and were still
+  // mailable, 96 of them more than once, one six times across four days. They
+  // clicked "Unsubscribe", saw a page, and closed the tab — which is what
+  // "unsubscribe" means to everyone who is not an email engineer.
+  //
+  // Auto-submitting on GET server-side was rejected: Outlook Safe Links and
+  // antivirus scanners issue GETs and would opt people out who never clicked.
+  // Firing from a useEffect means it only runs in a real browser that executes
+  // JS, which no link scanner does.
+  //
+  // email_marketing ONLY. They clicked a link in an EMAIL; silently ending
+  // their WhatsApp class reminders is not what they asked for. The other two
+  // channels stay available on the manual controls.
   const [selected, setSelected] = useState(
     () => new Set(CHANNEL_OPTIONS.map(c => c.key))
   )
-  const [status, setStatus] = useState('idle')  // idle, loading, done, error
+  const [status, setStatus] = useState('working')
   const [errorMsg, setErrorMsg] = useState(null)
   const [unsubChannels, setUnsubChannels] = useState([])
+  const [resubStatus, setResubStatus] = useState('idle')
+  const autoSubmitted = useRef(false)
+
+  useEffect(() => {
+    // React 18/19 StrictMode double-invokes effects in dev. The route is
+    // idempotent (a repeat opt-out is a 200 no-op) so a second POST is
+    // harmless, but the ref keeps the network log honest.
+    if (autoSubmitted.current) return
+    autoSubmitted.current = true
+    submitOptOut(['email_marketing'], { auto: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   function toggle(key) {
     setSelected(prev => {
@@ -60,12 +86,12 @@ export default function UnsubscribePage({ token, locationId = null }) {
     })
   }
 
-  async function handleUnsubscribe() {
-    if (selected.size === 0) {
+  async function submitOptOut(channels, { auto = false } = {}) {
+    if (channels.length === 0) {
       setErrorMsg('Pick at least one channel to unsubscribe from.')
       return
     }
-    setStatus('loading')
+    setStatus('working')
     setErrorMsg(null)
     try {
       // COMMSFIX.A.2 (LOCCOMMS.4) — forward the location scope the email
@@ -78,19 +104,45 @@ export default function UnsubscribePage({ token, locationId = null }) {
       const res = await fetch(`/api/unsubscribe/${token}${scope}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channels: [...selected] }),
+        body: JSON.stringify({ channels }),
       })
       const data = await res.json()
       if (data.success) {
-        setUnsubChannels(data.unsubscribed_channels || [...selected])
+        setUnsubChannels(prev => [...new Set([...prev, ...(data.unsubscribed_channels || channels)])])
         setStatus('done')
       } else {
+        // UNSUBAUTO.1 — a failed AUTO submit must drop the person into the
+        // manual flow, never into a success screen. Claiming "you've been
+        // unsubscribed" when the write failed is the exact harm this fixes.
         setErrorMsg(data.error || 'Could not process your request.')
-        setStatus('error')
+        setStatus(auto ? 'idle' : 'error')
       }
     } catch {
       setErrorMsg('Network error — please try again.')
-      setStatus('error')
+      setStatus(auto ? 'idle' : 'error')
+    }
+  }
+
+  function handleUnsubscribe() {
+    return submitOptOut([...selected])
+  }
+
+  // UNSUBAUTO.2 — because the opt-out now happens without a confirmation,
+  // undo has to be one press away on the same screen. PUT /api/preferences
+  // is the existing opt-in writer; it runs emailStatusNormaliseForOptIn so a
+  // bounced address cannot be resurrected by this click.
+  async function handleResubscribe() {
+    setResubStatus('working')
+    try {
+      const res = await fetch(`/api/preferences/${token}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ locationId, email_marketing: true }),
+      })
+      const data = await res.json()
+      setResubStatus(data.success ? 'done' : 'error')
+    } catch {
+      setResubStatus('error')
     }
   }
 
@@ -171,7 +223,7 @@ export default function UnsubscribePage({ token, locationId = null }) {
           </div>
         )}
 
-        {status === 'loading' && (
+        {status === 'working' && (
           <div className="bg-un1t-surface border border-un1t-border rounded-lg p-8">
             <p className="text-un1t-subtle">Processing…</p>
           </div>
@@ -196,6 +248,21 @@ export default function UnsubscribePage({ token, locationId = null }) {
             <p className="text-xs text-un1t-muted mb-4">
               Utility communications (booking confirmations, reminders, schedule changes) will continue.
             </p>
+            {resubStatus === 'done' ? (
+              <p className="text-sm text-un1t-text mb-3">You're back on the list.</p>
+            ) : (
+              <button
+                type="button"
+                onClick={handleResubscribe}
+                disabled={resubStatus === 'working'}
+                className="text-xs text-un1t-subtle underline hover:text-un1t-text transition-colors mb-3 disabled:opacity-50"
+              >
+                {resubStatus === 'working' ? 'Working…' : 'Unsubscribed by mistake? Resubscribe'}
+              </button>
+            )}
+            {resubStatus === 'error' && (
+              <p className="text-xs text-red-400 mb-3">Could not resubscribe — use the preference centre below.</p>
+            )}
             <Link
               href={`/preferences/${token}`}
               className="text-sm text-un1t-subtle hover:text-un1t-text transition-colors"
