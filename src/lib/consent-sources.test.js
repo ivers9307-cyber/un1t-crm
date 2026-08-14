@@ -26,6 +26,7 @@ import {
 const LIVE_VOCABULARY = [
   ['bulk_import', 3963, 'bulk'],
   ['auto_classpass_backfill', 1533, 'bulk'],
+  ['unsub_click_recovery', 160, 'bulk'],
   ['auto_classpass', 82, 'policy'],
   ['duplicate_propagation', 0, 'policy'],
   ['postmark_one_click_unsubscribe', 56, 'voluntary'],
@@ -51,24 +52,27 @@ describe('the live vocabulary is completely mapped', () => {
     expect(unmapped).toEqual([])
   })
 
-  it('excludes the 5,521 bulk rows from the headline', () => {
-    // 3,963 + 1,533 + 23 on 2026-05-13, plus 2 corrections on 2026-08-06.
+  it('excludes the 5,681 bulk rows from the headline', () => {
+    // 3,963 + 1,533 + 23 on 2026-05-13, 2 corrections on 2026-08-06, and the
+    // 160 opt-outs mig 545 reconstructed from click evidence on 2026-08-14.
+    // That last set records departures that already happened months earlier,
+    // so counting them as fresh churn would misreport the month they land in.
     const bulkRows = LIVE_VOCABULARY
       .filter(([, , c]) => c === 'bulk')
       .reduce((t, [, rows]) => t + rows, 0)
-    expect(bulkRows).toBe(5521)
+    expect(bulkRows).toBe(5681)
     for (const [source] of LIVE_VOCABULARY.filter(([, , c]) => c === 'bulk')) {
       expect(countsTowardNetListChange(source)).toBe(false)
     }
   })
 
-  it('counts 146 real departures across the window, not 5,749', () => {
+  it('counts 146 real departures across the window, not 5,909', () => {
     const counted = LIVE_VOCABULARY
       .filter(([source]) => countsTowardNetListChange(source))
       .reduce((t, [, rows]) => t + rows, 0)
     expect(counted).toBe(146)
     const all = LIVE_VOCABULARY.reduce((t, [, rows]) => t + rows, 0)
-    expect(all).toBe(5749)
+    expect(all).toBe(5909)
   })
 })
 

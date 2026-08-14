@@ -113,6 +113,12 @@ export const CONSENT_SOURCE_CATEGORY = Object.freeze({
   import:                         BULK,
   auto_classpass_backfill:        BULK,
   postmark_suppression_backfill:  BULK,
+  // UNSUBRECOVER.3 (mig 545) — reconstructed from campaign_link_clicks
+  // evidence that the person clicked an unsubscribe link during the window
+  // when the per-IP limiters were dropping opt-outs with nothing written.
+  // BULK: a correction, so it must not move the NET LIST CHANGE headline —
+  // the departure it records already happened, months earlier.
+  unsub_click_recovery:           BULK,
   // Already hand-excluded from a genuine-opt-out query by mig 488.
   leadcap1_scope_correction:      BULK,
 })
