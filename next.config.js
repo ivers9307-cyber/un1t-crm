@@ -1,3 +1,5 @@
+const legacyRedirects = require('./legacy-redirects')
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // heic-convert (libheif-js WASM) decodes iPhone HEIC receipts — sharp's
@@ -123,6 +125,9 @@ const nextConfig = {
       // needed immediately. The durable version is a re-pointable alias on
       // the event row so an operator can do this without a deploy.
       { source: '/event/pride-training-club-aug2', destination: '/event/pride-training-club-sep20', permanent: false },
+      // PRUNE.1 — aliases for the deleted legacy stub pages (1:1 map,
+      // see legacy-redirects.js + its test).
+      ...legacyRedirects,
     ]
   },
 
