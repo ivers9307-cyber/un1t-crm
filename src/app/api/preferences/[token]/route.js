@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validate'
 import { consentActionFor } from '@/lib/consent-actions'
+import { propagateOptOut } from '@/lib/consent-propagation'
 import { emailStatusNormaliseForOptIn } from '@/lib/email-reputation'
 import {
   REFUSAL_REASONS,
@@ -80,7 +81,7 @@ async function resolveTokenOrRefuse(db, request, token) {
   // the guard look correct while silently never normalising a legacy NULL row.
   const { data: pref, error } = await db
     .from('contact_preferences')
-    .select('*, contacts(id, name, email, email_status)')
+    .select('*, contacts(id, name, email, email_status, wa_phone)')
     .eq('unsubscribe_token', token)
     .single()
 
@@ -209,22 +210,73 @@ export async function PUT(request, props) {
   // contact_preferences would trip the mig 489 trigger, which fans any channel
   // going FALSE out to every location — turning "leave the Hatch list" into
   // "leave every UN1T list", which is the harm this PR exists to prevent.
+  //
+  // UNSUBAUTO.3 — THE ASYMMETRY BETWEEN THIS WRITE AND THE consent_log INSERT
+  // BELOW IS DELIBERATE. Do not tidy it into consistency.
+  //
+  // THIS write *is* the preference change. It used to be awaited with the
+  // error discarded while the handler returned `{ success: true }`
+  // regardless (CLAUDE.md's discarded-error defect class). Both callers —
+  // PreferenceCentre's toggles and UnsubscribePage's Resubscribe button —
+  // render their confirmation off that flag, so a failed write told the
+  // person the opposite of what the database holds.
+  let writeError = null
   if (body.locationId) {
-    await db
+    const { error: locWriteErr } = await db
       .from('contact_location_preferences')
       .update(updates)
       .eq('contact_id', pref.contact_id)
       .eq('location_id', body.locationId)
+    writeError = locWriteErr
   } else {
-    await db
+    const { error: globalWriteErr } = await db
       .from('contact_preferences')
       .update(updates)
       .eq('id', pref.id)
+    writeError = globalWriteErr
+  }
+  if (writeError) {
+    console.error('[preferences] preference write failed — change NOT recorded:', {
+      contactId: pref.contact_id,
+      locationId: body.locationId || null,
+      channels: Object.keys(updates).filter((k) => k !== 'updated_at'),
+      message: writeError.message,
+    })
+    return NextResponse.json(
+      { success: false, error: 'Could not record your preference' },
+      { status: 500 },
+    )
   }
 
-  // Log all changes to consent audit trail
+  // Log all changes to consent audit trail.
+  //
+  // The OTHER half of the asymmetry: by this line the change has landed, so
+  // the audit row is secondary. Failing the request would tell somebody their
+  // opt-out did not take when it did — and on the opt-out direction that is
+  // the harm this branch exists to remove. Log it and carry on.
   if (logEntries.length > 0) {
-    await db.from('consent_log').insert(logEntries)
+    const { error: logErr } = await db.from('consent_log').insert(logEntries)
+    if (logErr) {
+      console.error('[preferences] consent_log insert failed (the change itself IS recorded):', {
+        contactId: pref.contact_id,
+        locationId: body.locationId || null,
+        message: logErr.message,
+      })
+    }
+  }
+
+  // DUPEUNSUB.1 — best-effort, after the person's own change is durable.
+  // Only the channels that went FALSE: an opt-IN must never propagate — it
+  // is evidence for this contact record, not for a sibling's.
+  const optedOut = Object.keys(updates).filter(k => k !== 'updated_at' && updates[k] === false)
+  if (optedOut.length > 0) {
+    await propagateOptOut(db, {
+      contactId: pref.contact_id,
+      email: pref.contacts?.email,
+      waPhone: pref.contacts?.wa_phone,
+      channels: optedOut,
+      locationId: body.locationId || null,
+    })
   }
 
   // The contacts.* columns an email-marketing change may touch. Neither is

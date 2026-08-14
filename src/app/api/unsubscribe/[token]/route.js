@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { getRequestOrigin } from '@/lib/app-url'
 import { CONSENT_ACTIONS } from '@/lib/consent-actions'
+import { propagateOptOut } from '@/lib/consent-propagation'
 import {
   REFUSAL_REASONS,
   guardBeforeTokenLookup,
@@ -148,7 +149,7 @@ export async function POST(request, props) {
   // Find the contact preference by token
   const { data: pref, error } = await db
     .from('contact_preferences')
-    .select('*, contacts(id, name, email, location_id)')
+    .select('*, contacts(id, name, email, location_id, wa_phone)')
     .eq('unsubscribe_token', token)
     .single()
 
@@ -237,19 +238,70 @@ export async function POST(request, props) {
   const hasChanges = Object.keys(channelPatch).length > 0
 
   if (hasChanges) {
+    // UNSUBAUTO.3 — THE ASYMMETRY BETWEEN THESE TWO WRITES IS DELIBERATE.
+    // Do not tidy it into consistency; they carry different weight.
+    //
+    // THE PREFERENCE WRITE *IS* THE OPT-OUT. Both branches used to be awaited
+    // with the error discarded, and the handler returned `{ success: true }`
+    // unconditionally below — the repo's documented discarded-error defect
+    // class (CLAUDE.md, `no-discarded-single-error`). That was survivable
+    // while the page sat behind a confirm button. UNSUBAUTO.1 made the page
+    // auto-submit and key its "You've been unsubscribed" screen off
+    // `data.success`, so a failed write now renders that screen to somebody
+    // who is still fully subscribed — the exact harm this branch exists to
+    // remove. If this write fails, say so.
+    let writeError = null
     if (scopeLocationId) {
-      await db.from('contact_location_preferences')
+      const { error: locWriteErr } = await db.from('contact_location_preferences')
         .update({ ...channelPatch, updated_at: updates.updated_at })
         .eq('contact_id', pref.contact_id)
         .eq('location_id', scopeLocationId)
+      writeError = locWriteErr
     } else {
-      await db.from('contact_preferences').update(updates).eq('id', pref.id)
+      const { error: globalWriteErr } = await db.from('contact_preferences').update(updates).eq('id', pref.id)
+      writeError = globalWriteErr
     }
-    if (logEntries.length) {
-      await db.from('consent_log').insert(
-        logEntries.map((e) => ({ ...e, location_id: scopeLocationId })),
+    if (writeError) {
+      console.error('[unsubscribe] preference write failed — opt-out NOT recorded:', {
+        contactId: pref.contact_id,
+        locationId: scopeLocationId,
+        channels: Object.keys(channelPatch),
+        message: writeError.message,
+      })
+      return NextResponse.json(
+        { success: false, error: 'Could not record your preference' },
+        { status: 500 },
       )
     }
+
+    // THE CONSENT_LOG INSERT IS THE AUDIT ROW, and by this line the person
+    // genuinely IS unsubscribed — the write above landed. Failing the request
+    // here would make a mail provider retry an opt-out that has ALREADY taken
+    // effect, and an unbounded retry loop against a working opt-out is a worse
+    // outcome than a missing audit row. So this one logs and continues, and
+    // the request still returns success. That is why it does not mirror the
+    // 500 above.
+    if (logEntries.length) {
+      const { error: logErr } = await db.from('consent_log').insert(
+        logEntries.map((e) => ({ ...e, location_id: scopeLocationId })),
+      )
+      if (logErr) {
+        console.error('[unsubscribe] consent_log insert failed (the opt-out itself IS recorded):', {
+          contactId: pref.contact_id,
+          locationId: scopeLocationId,
+          message: logErr.message,
+        })
+      }
+    }
+
+    // DUPEUNSUB.1 — best-effort, after the person's own opt-out is durable.
+    await propagateOptOut(db, {
+      contactId: pref.contact_id,
+      email: pref.contacts?.email,
+      waPhone: pref.contacts?.wa_phone,
+      channels: Object.keys(channelPatch),
+      locationId: scopeLocationId,
+    })
 
     // COMMSFIX.C.4 — attribute the unsubscribe to the campaign that carried
     // the link. Gated on email_marketing having ACTUALLY flipped in this

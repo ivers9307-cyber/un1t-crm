@@ -28,7 +28,13 @@ const HATCH = '22222222-3333-4444-8555-666666666666'
 // Records every write so the test can assert WHICH table was touched — the
 // distinction that matters, because writing contact_preferences would let the
 // mig 489 trigger fan the opt-out out to every location.
-function makeDb({ pref, locRow }) {
+//
+// UNSUBAUTO.3 — the fake can now FAIL a write. `updateErrors` / `insertErrors`
+// are keyed by table; a match makes that call resolve `{ error }` instead of
+// `{ error: null }`. The update chain is a thenable that resolves to the
+// result object (which is what a supabase-js builder is), so the route reads
+// the error off `await …update().eq().eq()` exactly as it does in prod.
+function makeDb({ pref, locRow, updateErrors = {}, insertErrors = {} }) {
   const writes = { contact_preferences: [], contact_location_preferences: [], contacts: [], consent_log: [] }
   // COMMSFIX.C.4 — the route now attributes an actual opt-out flip to the
   // campaign that carried the link, so the fake has to record rpc calls.
@@ -42,8 +48,20 @@ function makeDb({ pref, locRow }) {
         maybeSingle: async () => ({
           data: table === 'contact_location_preferences' ? locRow : null, error: null,
         }),
-        update(row) { writes[table]?.push(row); return api },
-        insert(rows) { writes[table]?.push(...[].concat(rows)); return Promise.resolve({ error: null }) },
+        update(row) {
+          writes[table]?.push(row)
+          const result = { error: updateErrors[table] || null }
+          const chain = {
+            eq() { return chain },
+            in() { return chain },
+            then(resolve, reject) { return Promise.resolve(result).then(resolve, reject) },
+          }
+          return chain
+        },
+        insert(rows) {
+          writes[table]?.push(...[].concat(rows))
+          return Promise.resolve({ error: insertErrors[table] || null })
+        },
       }
       return api
     },
@@ -223,5 +241,104 @@ describe('COMMSFIX.C.4 — campaign attribution on unsubscribe', () => {
 
     expect(rpcCalls).toEqual([])
     expect(writes.contact_location_preferences).toHaveLength(1)
+  })
+})
+
+// UNSUBAUTO.3 — the route must not report a success it did not achieve.
+//
+// Both consent writes were `await`ed with the error DISCARDED, and the handler
+// returned `{ success: true }` unconditionally. That was survivable while the
+// page sat behind a confirm button; UNSUBAUTO.1 made the page auto-submit and
+// key its "You've been unsubscribed" screen off `data.success`, so a failed
+// write now renders that screen to somebody who is still fully subscribed —
+// the exact harm this branch exists to remove.
+//
+// The asymmetry below is deliberate and is asserted, not assumed: the
+// PREFERENCE write failing means the opt-out did not happen (500), while the
+// consent_log insert failing means only the audit row is missing (200).
+describe('UNSUBAUTO.3 — a failed consent write is never reported as success', () => {
+  const errorSpy = () => vi.spyOn(console, 'error').mockImplementation(() => {})
+
+  it('returns 500 + success:false when the SCOPED preference write errors', async () => {
+    const spy = errorSpy()
+    const { db, writes } = makeDb({
+      pref: { id: 'p1', contact_id: 'c1', email_marketing: true, contacts: { id: 'c1' } },
+      locRow: { email_marketing: true, sms_marketing: true, whatsapp_marketing: true },
+      updateErrors: { contact_location_preferences: { message: 'permission denied' } },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(req(`https://crm.example/api/unsubscribe/${TOK}?l=${HATCH}`), props)
+    const json = await res.json()
+
+    expect(res.status).toBe(500)
+    expect(json.success).toBe(false)
+    // And nothing may claim the opt-out happened: no audit row for a write
+    // that did not land.
+    expect(writes.consent_log).toHaveLength(0)
+    expect(spy).toHaveBeenCalled()
+    spy.mockRestore()
+  })
+
+  it('returns 500 + success:false when the GLOBAL preference write errors', async () => {
+    const spy = errorSpy()
+    const { db, writes } = makeDb({
+      pref: { id: 'p1', contact_id: 'c1', email_marketing: true, contacts: { id: 'c1' } },
+      locRow: null,
+      updateErrors: { contact_preferences: { message: 'permission denied' } },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(req(`https://crm.example/api/unsubscribe/${TOK}`), props)
+    const json = await res.json()
+
+    expect(res.status).toBe(500)
+    expect(json.success).toBe(false)
+    expect(writes.consent_log).toHaveLength(0)
+    spy.mockRestore()
+  })
+
+  it('a failed preference write does NOT count a campaign unsubscribe', async () => {
+    const spy = errorSpy()
+    const { db, rpcCalls } = makeDb({
+      pref: { id: 'p1', contact_id: 'c1', email_marketing: true, contacts: { id: 'c1' } },
+      locRow: { email_marketing: true, sms_marketing: true, whatsapp_marketing: true },
+      updateErrors: { contact_location_preferences: { message: 'permission denied' } },
+    })
+    createServerClient.mockReturnValue(db)
+
+    await POST(req(`https://crm.example/api/unsubscribe/${TOK}?l=${HATCH}&c=${CAMP}`), props)
+
+    expect(rpcCalls).toEqual([])
+    spy.mockRestore()
+  })
+
+  it('still returns 200 + success:true when ONLY the consent_log insert errors', async () => {
+    // The person genuinely IS unsubscribed here — the preference write landed.
+    // Failing the request would make a mail provider retry an opt-out that has
+    // already taken effect. The audit row is secondary; losing it is worth a
+    // console.error, not a 500.
+    const spy = errorSpy()
+    const { db, writes, rpcCalls } = makeDb({
+      pref: { id: 'p1', contact_id: 'c1', email_marketing: true, contacts: { id: 'c1' } },
+      locRow: { email_marketing: true, sms_marketing: true, whatsapp_marketing: true },
+      insertErrors: { consent_log: { message: 'consent_log unavailable' } },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(req(`https://crm.example/api/unsubscribe/${TOK}?l=${HATCH}&c=${CAMP}`), props)
+    const json = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(json.success).toBe(true)
+    expect(writes.contact_location_preferences).toHaveLength(1)
+    // …and the rest of the request still runs: the campaign attribution is not
+    // skipped just because the audit row failed.
+    expect(rpcCalls).toContainEqual([
+      'increment_campaign_metric',
+      { p_campaign_id: CAMP, p_field: 'total_unsubscribed' },
+    ])
+    expect(spy).toHaveBeenCalled()
+    spy.mockRestore()
   })
 })

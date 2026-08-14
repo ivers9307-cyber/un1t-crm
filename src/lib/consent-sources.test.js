@@ -27,6 +27,7 @@ const LIVE_VOCABULARY = [
   ['bulk_import', 3963, 'bulk'],
   ['auto_classpass_backfill', 1533, 'bulk'],
   ['auto_classpass', 82, 'policy'],
+  ['duplicate_propagation', 0, 'policy'],
   ['postmark_one_click_unsubscribe', 56, 'voluntary'],
   ['event_form', 38, 'voluntary'],
   ['one_click_unsubscribe', 27, 'voluntary'],

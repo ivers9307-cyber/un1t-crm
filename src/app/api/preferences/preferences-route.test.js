@@ -36,7 +36,13 @@ import { PUT } from './[token]/route'
 
 // Same chainable recorder as unsubscribe-scope.test.js — records every
 // write so the test can assert which table was touched and with what.
-function makeDb({ pref, locRow = null }) {
+//
+// UNSUBAUTO.3 — and, like that one, it can now FAIL a write: `updateErrors` /
+// `insertErrors` are keyed by table and make that call resolve `{ error }`.
+// The update chain is a thenable resolving to the result object, the shape a
+// supabase-js builder has, so the route reads the error the same way it does
+// against a real client.
+function makeDb({ pref, locRow = null, updateErrors = {}, insertErrors = {} }) {
   const writes = { contact_preferences: [], contact_location_preferences: [], contacts: [], consent_log: [] }
   const db = {
     from(table) {
@@ -47,8 +53,20 @@ function makeDb({ pref, locRow = null }) {
         maybeSingle: async () => ({
           data: table === 'contact_location_preferences' ? locRow : null, error: null,
         }),
-        update(row) { writes[table]?.push(row); return api },
-        insert(rows) { writes[table]?.push(...[].concat(rows)); return Promise.resolve({ error: null }) },
+        update(row) {
+          writes[table]?.push(row)
+          const result = { error: updateErrors[table] || null }
+          const chain = {
+            eq() { return chain },
+            in() { return chain },
+            then(resolve, reject) { return Promise.resolve(result).then(resolve, reject) },
+          }
+          return chain
+        },
+        insert(rows) {
+          writes[table]?.push(...[].concat(rows))
+          return Promise.resolve({ error: insertErrors[table] || null })
+        },
       }
       return api
     },
@@ -163,5 +181,76 @@ describe('EMAILREP.4 — re-consent may normalise reputation, never restore it',
     await PUT(req({ email_marketing: false }), props)
 
     expect(writes.contacts).toHaveLength(0)
+  })
+})
+
+// UNSUBAUTO.3 — same defect, same fix, as /api/unsubscribe/[token]: the
+// preference write was `await`ed with its error discarded and the handler
+// returned `{ success: true }` regardless. UnsubscribePage's Resubscribe
+// button and PreferenceCentre both key their confirmation off that flag, so a
+// failed write told the person the opposite of what the database holds.
+//
+// The asymmetry is deliberate: the PREFERENCE write failing means the change
+// did not happen (500); the consent_log insert failing loses only the audit
+// row (200, logged).
+const LOC = '22222222-3333-4444-8555-666666666666'
+
+describe('UNSUBAUTO.3 — a failed consent write is never reported as success', () => {
+  const errorSpy = () => vi.spyOn(console, 'error').mockImplementation(() => {})
+
+  it('returns 500 + success:false when the GLOBAL preference write errors', async () => {
+    const spy = errorSpy()
+    const { db, writes } = makeDb({
+      pref: { id: 'p1', contact_id: 'c1', email_marketing: true, contacts: { id: 'c1' } },
+      updateErrors: { contact_preferences: { message: 'permission denied' } },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await PUT(req({ email_marketing: false }), props)
+    const json = await res.json()
+
+    expect(res.status).toBe(500)
+    expect(json.success).toBe(false)
+    expect(writes.consent_log).toHaveLength(0)
+    expect(spy).toHaveBeenCalled()
+    spy.mockRestore()
+  })
+
+  it('returns 500 + success:false when the SCOPED location write errors', async () => {
+    const spy = errorSpy()
+    const { db, writes } = makeDb({
+      pref: { id: 'p1', contact_id: 'c1', email_marketing: true, contacts: { id: 'c1' } },
+      locRow: { email_marketing: true, sms_marketing: true, whatsapp_marketing: true },
+      updateErrors: { contact_location_preferences: { message: 'permission denied' } },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await PUT(req({ locationId: LOC, email_marketing: false }), props)
+    const json = await res.json()
+
+    expect(res.status).toBe(500)
+    expect(json.success).toBe(false)
+    expect(writes.consent_log).toHaveLength(0)
+    spy.mockRestore()
+  })
+
+  it('still returns 200 + success:true when ONLY the consent_log insert errors', async () => {
+    // The change landed. Failing the request here would tell somebody their
+    // opt-out did not take when it did.
+    const spy = errorSpy()
+    const { db, writes } = makeDb({
+      pref: { id: 'p1', contact_id: 'c1', email_marketing: true, contacts: { id: 'c1' } },
+      insertErrors: { consent_log: { message: 'consent_log unavailable' } },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await PUT(req({ email_marketing: false }), props)
+    const json = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(json.success).toBe(true)
+    expect(writes.contact_preferences).toHaveLength(1)
+    expect(spy).toHaveBeenCalled()
+    spy.mockRestore()
   })
 })

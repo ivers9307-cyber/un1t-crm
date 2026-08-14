@@ -102,6 +102,11 @@ export const CONSENT_SOURCE_CATEGORY = Object.freeze({
   // classpass_payg. See NET_LIST_CHANGE_CATEGORIES for why it is excluded
   // from the headline.
   auto_classpass:                 POLICY,
+  // DUPEUNSUB.1 — mirrored from a sibling contact record that shares this
+  // person's email or phone. POLICY, not VOLUNTARY: the person made one
+  // decision, and counting it once per duplicate record would inflate the
+  // NET LIST CHANGE headline by however many duplicates we happen to hold.
+  duplicate_propagation:          POLICY,
 
   // ── bulk: one-off migrations and corrections ──────────────────────
   bulk_import:                    BULK,
