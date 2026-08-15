@@ -26,7 +26,11 @@ import HubTabs from '@/components/HubTabs'
 export const dynamic = 'force-dynamic'
 
 const TABS = [
-  { id: 'automations', label: 'Automations',  href: '/automations', perms: ['automations', 'email', 'whatsapp'] },
+  // device_control is in this union for the same reason it's in the
+  // sidebar entry's anyPermission (review fix, HUBS.2f) — the
+  // Automations page's Tapo devices section (canDevices) gates on it
+  // alone, so a device_control-only holder needs the tab to show too.
+  { id: 'automations', label: 'Automations',  href: '/automations', perms: ['automations', 'email', 'whatsapp', 'device_control'] },
   { id: 'landing',     label: 'Landing page', href: '/welcome',     perms: ['landing_page'], newTab: true },
 ]
 

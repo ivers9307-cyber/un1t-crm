@@ -6,14 +6,18 @@
 // activeAssignment.permissions overrides, the same fixture shape used
 // by src/lib/dashboard-redirect.test.js's `user()` factory (role +
 // activeLocation + activeAssignment.permissions). Every fixture below
-// sets all four gate keys EXPLICITLY — role defaults for staff grant
+// sets all five gate keys EXPLICITLY — role defaults for staff grant
 // many of them, so an omitted key would pass for the wrong reason.
 //
-// Chain order (automations/email/whatsapp first — the /automations
-// page itself gates on that same OR, VERIFIED by reading the page —
-// then landing_page) and the final fallback ('/', unlike /team's
-// universal-access /policies — Marketing has no open-to-all tab) both
-// come straight from the page brief.
+// Chain order (automations/email/whatsapp/device_control first — the
+// /automations page itself gates on that same OR, VERIFIED by reading
+// the page: canCurated || canFlows || canDevices, where canDevices is
+// device_control alone — a device_control-only holder sees the Tapo
+// section rendered by /automations/devices and would otherwise
+// dead-end at this index's fallback; then landing_page) and the final
+// fallback ('/', unlike /team's universal-access /policies —
+// Marketing has no open-to-all tab) both come straight from the page
+// brief.
 //
 // landing_page routes to /settings/landing-page — the in-app editor —
 // NEVER to /welcome, which is the PUBLIC landing page itself and is
@@ -38,13 +42,14 @@ import { getCurrentUser } from '@/lib/auth'
 
 // Stable user fixture — explicit per-user permission overrides
 // (tier 2 of the resolver) so each test controls exactly which of the
-// four gate keys the fixture holds, regardless of role defaults.
-// ALL four keys are always passed explicitly.
+// five gate keys the fixture holds, regardless of role defaults.
+// ALL five keys are always passed explicitly.
 function user({ role = 'staff', perms = {}, features = {} } = {}) {
   const allDenied = {
     automations: false,
     email: false,
     whatsapp: false,
+    device_control: false,
     landing_page: false,
   }
   return {
@@ -77,6 +82,13 @@ describe('/marketing index page', () => {
     await expect(MarketingIndexPage()).rejects.toThrow('NEXT_REDIRECT:/automations')
   })
 
+  it('redirects to /automations when only device_control is held', async () => {
+    getCurrentUser.mockResolvedValue(
+      user({ perms: { device_control: true } })
+    )
+    await expect(MarketingIndexPage()).rejects.toThrow('NEXT_REDIRECT:/automations')
+  })
+
   it('redirects to /settings/landing-page when only landing_page is held', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { landing_page: true } })
@@ -84,12 +96,16 @@ describe('/marketing index page', () => {
     await expect(MarketingIndexPage()).rejects.toThrow('NEXT_REDIRECT:/settings/landing-page')
   })
 
-  it('redirects to / when none of the four keys are held', async () => {
+  it('redirects to / when none of the five keys are held', async () => {
     getCurrentUser.mockResolvedValue(user())
     await expect(MarketingIndexPage()).rejects.toThrow('NEXT_REDIRECT:/')
   })
 
-  it('redirects to /settings/landing-page when the location gate denies automations + email + whatsapp for everyone, even with all four permissions held', async () => {
+  // device_control deliberately left denied here (the fixture default) —
+  // the location gate below only denies automations/email/whatsapp, so
+  // granting device_control too would light the /automations branch for
+  // a reason this test isn't trying to exercise.
+  it('redirects to /settings/landing-page when the location gate denies automations + email + whatsapp for everyone, even with those permissions plus landing_page held', async () => {
     const u = user({
       perms: {
         automations: true,

@@ -272,6 +272,14 @@ export const ALL_NAV = [
   // (same rationale as every prior hub — /marketing redirects into a
   // default tab rather than rendering content itself).
   //
+  // Review fix — `device_control` joined the union: the Automations
+  // page also gates its Tapo devices section on device_control alone
+  // (canDevices in src/app/(marketing)/automations/page.js), a
+  // population the original union missed entirely. Without it a
+  // device_control-only holder saw no Marketing sidebar entry at all,
+  // even though /automations/devices was reachable and useful to
+  // them.
+  //
   // `/welcome` is deliberately ABSENT from extraActivePaths: it's the
   // PUBLIC marketing site (outside auth entirely, per the public-path
   // allowlist), never an in-app pathname the sidebar could be sitting
@@ -286,17 +294,17 @@ export const ALL_NAV = [
   // Folded-forward context from the old standalone entries:
   //  - Automations (curated toggles + custom email/WhatsApp flows +
   //    Tapo device control) — visible to anyone holding `automations`
-  //    (the curated cards) or `email`/`whatsapp` (custom flows); the
-  //    page itself (src/app/(marketing)/automations/page.js) gates
-  //    which sections render for which permission, matching this
-  //    union exactly.
+  //    (the curated cards), `email`/`whatsapp` (custom flows), or
+  //    `device_control` (the Tapo devices section); the page itself
+  //    (src/app/(marketing)/automations/page.js) gates which sections
+  //    render for which permission, matching this union exactly.
   //  - Landing page (HUBS.2a — promoted from a Studio Management child
   //    to Marketing; it's the public-facing landing page, not a
   //    building-admin surface). The edit form lives at Settings →
   //    Landing page (SIDEBAR-IA.1); this was always just the public
   //    preview link.
   { href: '/marketing', label: 'Marketing', icon: Megaphone,
-    anyPermission: ['automations', 'email', 'whatsapp', 'landing_page'],
+    anyPermission: ['automations', 'email', 'whatsapp', 'device_control', 'landing_page'],
     extraActivePaths: ['/automations'],
     section: 'marketing' },
 

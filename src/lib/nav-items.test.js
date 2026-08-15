@@ -166,7 +166,7 @@ describe('Marketing hub', () => {
 
   it('the Marketing hub entry ORs its member permissions and lights on the automations path', () => {
     const marketing = ALL_NAV.find(i => i.href === '/marketing')
-    expect(marketing.anyPermission).toEqual(['automations', 'email', 'whatsapp', 'landing_page'])
+    expect(marketing.anyPermission).toEqual(['automations', 'email', 'whatsapp', 'device_control', 'landing_page'])
     expect(marketing.extraActivePaths).toEqual(['/automations'])
   })
 })
