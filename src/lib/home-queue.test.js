@@ -1,0 +1,393 @@
+// HOME.3 — the needs-attention queue assembler. Merges three sources
+// (approvals, tickets, unified inbox) into one sorted, capped list plus
+// TRUE (uncapped) per-source counts.
+//
+// Dependencies are mocked at the module boundary rather than re-modelled
+// here: the approvals registry (src/lib/approvals/registry.js), the ticket
+// visibility helpers (src/app/api/email/tickets/_helpers.js) and the
+// permission gates each have their own test coverage already. These tests
+// are about assembleHomeQueue's OWN job — gating, row shaping, merge/sort,
+// per-source and global caps, TRUE counts, and the degraded-source path —
+// not re-proving mailbox visibility or approvals scoping.
+
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+vi.mock('@/lib/approvals/registry', () => ({
+  getPendingApprovals: vi.fn(),
+  getPendingApprovalsCount: vi.fn(),
+}))
+vi.mock('@/lib/permissions', () => ({
+  hasPermission: vi.fn(),
+  hasPermissionForLocation: vi.fn(),
+}))
+vi.mock('@/app/api/email/tickets/_helpers', () => ({
+  loadVisibleMailboxes: vi.fn(),
+  scopeToVisibleMailboxes: vi.fn((q) => q),
+  scopeToNeedsReply: vi.fn((q) => q),
+  scopeToUnmerged: vi.fn((q) => q),
+}))
+
+import { assembleHomeQueue, getHomeQueueCount, SOURCE_PRE_CAP, GLOBAL_CAP } from './home-queue'
+import { getPendingApprovals, getPendingApprovalsCount } from '@/lib/approvals/registry'
+import { hasPermission, hasPermissionForLocation } from '@/lib/permissions'
+import { loadVisibleMailboxes } from '@/app/api/email/tickets/_helpers'
+
+const LOC = 'loc-1'
+const userAt = (over = {}) => ({ id: 'u1', role: 'staff', activeLocation: { id: LOC }, ...over })
+
+function approvalsResult(providers) {
+  return { providers, total: providers.reduce((s, p) => s + p.count, 0) }
+}
+
+// A minimal chainable query double. `wantsCount` flips when .select() is
+// called with { count }, matching supabase-js's head-count shape; otherwise
+// the terminal `then` resolves with the row list. Good enough for
+// home-queue's own fixed, known query shapes — the filters themselves
+// (mailbox scoping, needs_reply, unmerged) are proven elsewhere and are
+// identity-mocked here.
+function makeDb(tables = {}) {
+  return {
+    from(table) {
+      const t = tables[table] || { rows: [], count: 0 }
+      let wantsCount = false
+      const b = {
+        select(_cols, opts) { if (opts?.count) wantsCount = true; return b },
+        eq() { return b },
+        is() { return b },
+        order() { return b },
+        limit() { return b },
+        then(resolve, reject) {
+          const out = wantsCount
+            ? { data: null, count: t.count ?? 0, error: t.error || null }
+            : { data: t.rows ?? [], error: t.error || null }
+          return Promise.resolve(out).then(resolve, reject)
+        },
+      }
+      return b
+    },
+  }
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  getPendingApprovals.mockResolvedValue(approvalsResult([]))
+  getPendingApprovalsCount.mockResolvedValue(0)
+  hasPermission.mockReturnValue(false)
+  hasPermissionForLocation.mockReturnValue(false)
+  loadVisibleMailboxes.mockResolvedValue({ elevated: false, mailboxes: [] })
+})
+
+describe('assembleHomeQueue — no active location', () => {
+  it('returns an all-empty result without touching any source', async () => {
+    const result = await assembleHomeQueue(makeDb(), { id: 'u1', activeLocation: null })
+    expect(result).toEqual({ rows: [], counts: { approvals: 0, tickets: 0, inbox: 0 }, total: 0 })
+    expect(getPendingApprovals).not.toHaveBeenCalled()
+  })
+})
+
+describe('assembleHomeQueue — approvals source', () => {
+  it('maps provider items into QueueRow shape', async () => {
+    getPendingApprovals.mockResolvedValue(approvalsResult([
+      {
+        key: 'issues', label: 'Issues', reviewBase: '/issues', count: 1,
+        items: [{
+          id: 'i1', title: 'Ada', subtitle: 'desc',
+          submittedAt: '2026-08-10T10:00:00Z', reviewUrl: '/issues?focus=i1',
+        }],
+      },
+    ]))
+    getPendingApprovalsCount.mockResolvedValue(1)
+
+    const result = await assembleHomeQueue(makeDb(), userAt())
+
+    expect(result.rows).toContainEqual({
+      source: 'issues', sourceLabel: 'Issues', id: 'i1', title: 'Ada', subtitle: 'desc',
+      occurredAt: '2026-08-10T10:00:00Z', href: '/issues?focus=i1',
+    })
+    expect(result.counts.approvals).toBe(1)
+  })
+
+  it('flags host_events rows as orgWide (the one org-scoped approval provider)', async () => {
+    getPendingApprovals.mockResolvedValue(approvalsResult([
+      {
+        key: 'host_events', label: 'Host events', reviewBase: '/settings/hosts', count: 1,
+        items: [{
+          id: 'e1', title: 'Pride', subtitle: null,
+          submittedAt: '2026-08-10T10:00:00Z', reviewUrl: '/settings/hosts',
+        }],
+      },
+    ]))
+    const result = await assembleHomeQueue(makeDb(), userAt())
+    expect(result.rows.find((r) => r.id === 'e1').orgWide).toBe(true)
+  })
+
+  it('does not flag ordinary (location-scoped) providers as orgWide', async () => {
+    getPendingApprovals.mockResolvedValue(approvalsResult([
+      {
+        key: 'issues', label: 'Issues', reviewBase: '/issues', count: 1,
+        items: [{ id: 'i1', title: 'Ada', subtitle: null, submittedAt: '2026-08-10T10:00:00Z', reviewUrl: '/issues?focus=i1' }],
+      },
+    ]))
+    const result = await assembleHomeQueue(makeDb(), userAt())
+    expect(result.rows.find((r) => r.id === 'i1').orgWide).toBeUndefined()
+  })
+
+  it('true count comes from getPendingApprovalsCount, not summed item lists', async () => {
+    // A provider's fetchPending items can be internally capped (e.g. issues'
+    // own .limit(50)); the assembler's approvals count must be the TRUE
+    // uncapped number, which is what getPendingApprovalsCount answers.
+    getPendingApprovals.mockResolvedValue(approvalsResult([
+      { key: 'issues', label: 'Issues', reviewBase: '/issues', count: 2, items: [] },
+    ]))
+    getPendingApprovalsCount.mockResolvedValue(57)
+    const result = await assembleHomeQueue(makeDb(), userAt())
+    expect(result.counts.approvals).toBe(57)
+  })
+})
+
+describe('assembleHomeQueue — tickets source', () => {
+  it('gates on email_inbox at the active location before touching the db', async () => {
+    hasPermissionForLocation.mockReturnValue(false)
+    const result = await assembleHomeQueue(makeDb(), userAt())
+    expect(result.rows.filter((r) => r.source === 'tickets')).toEqual([])
+    expect(result.counts.tickets).toBe(0)
+    expect(loadVisibleMailboxes).not.toHaveBeenCalled()
+  })
+
+  it('is empty when the caller has no visible mailboxes', async () => {
+    hasPermissionForLocation.mockReturnValue(true)
+    loadVisibleMailboxes.mockResolvedValue({ elevated: false, mailboxes: [] })
+    const db = makeDb({ email_tickets: { rows: [{ id: 't1' }], count: 1 } })
+    const result = await assembleHomeQueue(db, userAt())
+    expect(result.counts.tickets).toBe(0)
+  })
+
+  it('builds rows from needs-reply unmerged tickets', async () => {
+    hasPermissionForLocation.mockReturnValue(true)
+    loadVisibleMailboxes.mockResolvedValue({ elevated: true, mailboxes: [{ id: 'mb1' }] })
+    const db = makeDb({
+      email_tickets: {
+        rows: [{
+          id: 't1', subject: 'Billing', requester_name: 'Bob',
+          requester_email: 'bob@x.com', last_message_at: '2026-08-10T09:00:00Z',
+        }],
+        count: 1,
+      },
+    })
+    const result = await assembleHomeQueue(db, userAt())
+    expect(result.rows).toContainEqual({
+      source: 'tickets', sourceLabel: 'Tickets', id: 't1', title: 'Billing', subtitle: 'Bob',
+      occurredAt: '2026-08-10T09:00:00Z', href: '/communications/tickets',
+    })
+    expect(result.counts.tickets).toBe(1)
+  })
+
+  it('falls back to requester email when the ticket has no subject or name', async () => {
+    hasPermissionForLocation.mockReturnValue(true)
+    loadVisibleMailboxes.mockResolvedValue({ elevated: true, mailboxes: [{ id: 'mb1' }] })
+    const db = makeDb({
+      email_tickets: {
+        rows: [{
+          id: 't2', subject: null, requester_name: null,
+          requester_email: 'payer@example.com', last_message_at: '2026-08-10T09:00:00Z',
+        }],
+        count: 1,
+      },
+    })
+    const result = await assembleHomeQueue(db, userAt())
+    const row = result.rows.find((r) => r.id === 't2')
+    expect(row.title).toBe('payer@example.com')
+  })
+})
+
+describe('assembleHomeQueue — inbox source', () => {
+  it('gates on the whatsapp permission for both WhatsApp and Instagram', async () => {
+    hasPermission.mockReturnValue(false)
+    const db = makeDb({
+      whatsapp_conversations: { rows: [{ id: 'w1', resolved_at: null, last_message_at: '2026-08-10T08:00:00Z', last_message_direction: 'inbound' }] },
+    })
+    const result = await assembleHomeQueue(db, userAt())
+    expect(result.rows.filter((r) => r.source === 'inbox')).toEqual([])
+    expect(result.counts.inbox).toBe(0)
+  })
+
+  it('filters by needsAction and builds rows for wa + ig with the right deep links', async () => {
+    hasPermission.mockReturnValue(true)
+    const db = makeDb({
+      whatsapp_conversations: {
+        rows: [
+          // needs action: unresolved, inbound last message
+          {
+            id: 'w1', wa_phone: '+353871234567', resolved_at: null,
+            last_message_at: '2026-08-10T08:00:00Z', last_message_direction: 'inbound',
+            agent_handed_off_at: null, contacts: { name: 'Alice' },
+          },
+          // does NOT need action: resolved
+          {
+            id: 'w2', wa_phone: '+353870000000', resolved_at: '2026-08-09T00:00:00Z',
+            last_message_at: '2026-08-09T08:00:00Z', last_message_direction: 'inbound',
+            agent_handed_off_at: null, contacts: null,
+          },
+        ],
+      },
+      instagram_conversations: {
+        rows: [
+          {
+            id: 'g1', ig_username: 'ig_user', resolved_at: null,
+            last_message_at: '2026-08-10T07:00:00Z', last_message_direction: 'outbound',
+            agent_handed_off_at: '2026-08-10T07:00:00Z', contacts: null,
+          },
+        ],
+      },
+    })
+    const result = await assembleHomeQueue(db, userAt())
+    const inboxRows = result.rows.filter((r) => r.source === 'inbox')
+    expect(inboxRows).toHaveLength(2)
+    expect(inboxRows.find((r) => r.id === 'w1')).toMatchObject({
+      title: 'Alice', href: '/communications/inbox?c=w1',
+    })
+    expect(inboxRows.find((r) => r.id === 'g1')).toMatchObject({
+      title: 'ig_user', href: '/communications/inbox?c=g1&ch=ig',
+    })
+    expect(result.counts.inbox).toBe(2)
+  })
+
+  it('falls back to phone/username when there is no linked contact', async () => {
+    hasPermission.mockReturnValue(true)
+    const db = makeDb({
+      whatsapp_conversations: {
+        rows: [{
+          id: 'w3', wa_phone: '+353871111111', resolved_at: null,
+          last_message_at: '2026-08-10T08:00:00Z', last_message_direction: 'inbound',
+          agent_handed_off_at: null, contacts: null,
+        }],
+      },
+    })
+    const result = await assembleHomeQueue(db, userAt())
+    expect(result.rows.find((r) => r.id === 'w3').title).toBe('+353871111111')
+  })
+})
+
+describe('assembleHomeQueue — merge, sort and caps', () => {
+  beforeEach(() => {
+    hasPermissionForLocation.mockReturnValue(true)
+    hasPermission.mockReturnValue(true)
+    loadVisibleMailboxes.mockResolvedValue({ elevated: true, mailboxes: [{ id: 'mb1' }] })
+  })
+
+  it('merge-sorts rows across sources by occurredAt descending', async () => {
+    getPendingApprovals.mockResolvedValue(approvalsResult([
+      {
+        key: 'issues', label: 'Issues', reviewBase: '/issues', count: 1,
+        items: [{ id: 'a1', title: 'A', subtitle: null, submittedAt: '2026-08-10T06:00:00Z', reviewUrl: '/issues?focus=a1' }],
+      },
+    ]))
+    const db = makeDb({
+      email_tickets: {
+        rows: [{ id: 't1', subject: 'T', requester_name: null, requester_email: 'x@x.com', last_message_at: '2026-08-10T12:00:00Z' }],
+        count: 1,
+      },
+      whatsapp_conversations: {
+        rows: [{
+          id: 'w1', wa_phone: '+353', resolved_at: null, last_message_at: '2026-08-10T09:00:00Z',
+          last_message_direction: 'inbound', agent_handed_off_at: null, contacts: null,
+        }],
+      },
+    })
+    const result = await assembleHomeQueue(db, userAt())
+    expect(result.rows.map((r) => r.id)).toEqual(['t1', 'w1', 'a1'])
+  })
+
+  it('pre-caps a single source to SOURCE_PRE_CAP rows before the global cap', async () => {
+    const rows = Array.from({ length: 25 }, (_, i) => ({
+      id: `t${i}`, subject: `S${i}`, requester_name: 'Bob', requester_email: 'bob@x.com',
+      last_message_at: new Date(Date.UTC(2026, 7, 1 + i)).toISOString(),
+    }))
+    const db = makeDb({ email_tickets: { rows, count: 25 } })
+    const result = await assembleHomeQueue(db, userAt())
+    expect(result.rows.filter((r) => r.source === 'tickets')).toHaveLength(SOURCE_PRE_CAP)
+    // TRUE count is uncapped even though the row list was pre-capped.
+    expect(result.counts.tickets).toBe(25)
+  })
+
+  it('caps the merged total at GLOBAL_CAP, keeping the most recent rows', async () => {
+    const ticketRows = Array.from({ length: 20 }, (_, i) => ({
+      id: `t${i}`, subject: `T${i}`, requester_name: null, requester_email: 'x@x.com',
+      // Older half of the timeline.
+      last_message_at: new Date(Date.UTC(2026, 7, 1 + i)).toISOString(),
+    }))
+    const waRows = Array.from({ length: 20 }, (_, i) => ({
+      id: `w${i}`, wa_phone: '+353', resolved_at: null,
+      // Newer half of the timeline — these must win the cap.
+      last_message_at: new Date(Date.UTC(2026, 7, 21 + i)).toISOString(),
+      last_message_direction: 'inbound', agent_handed_off_at: null, contacts: null,
+    }))
+    const db = makeDb({
+      email_tickets: { rows: ticketRows, count: 20 },
+      whatsapp_conversations: { rows: waRows },
+    })
+    const result = await assembleHomeQueue(db, userAt())
+    expect(result.rows).toHaveLength(GLOBAL_CAP)
+    // All 20 WA rows are newer than every ticket row, so the 30-cap should
+    // keep all 20 WA rows plus the 10 most recent tickets.
+    expect(result.rows.filter((r) => r.source === 'inbox')).toHaveLength(20)
+    expect(result.rows.filter((r) => r.source === 'tickets')).toHaveLength(10)
+    // TRUE counts are unaffected by the global cap.
+    expect(result.counts.tickets).toBe(20)
+  })
+})
+
+describe('assembleHomeQueue — degraded source path', () => {
+  beforeEach(() => {
+    hasPermission.mockReturnValue(true)
+  })
+
+  it('degrades a failed source to an empty bucket without failing the others', async () => {
+    getPendingApprovals.mockRejectedValue(new Error('registry boom'))
+    const db = makeDb({
+      whatsapp_conversations: {
+        rows: [{
+          id: 'w1', wa_phone: '+353', resolved_at: null, last_message_at: '2026-08-10T08:00:00Z',
+          last_message_direction: 'inbound', agent_handed_off_at: null, contacts: null,
+        }],
+      },
+    })
+    const result = await assembleHomeQueue(db, userAt())
+    expect(result.counts.approvals).toBe(0)
+    expect(result.degraded).toEqual(['approvals'])
+    expect(result.counts.inbox).toBe(1)
+    expect(result.rows.some((r) => r.source === 'inbox')).toBe(true)
+  })
+
+  it('omits the degraded field entirely when nothing failed', async () => {
+    const result = await assembleHomeQueue(makeDb(), userAt())
+    expect(result.degraded).toBeUndefined()
+  })
+})
+
+describe('getHomeQueueCount', () => {
+  it('is 0 with no active location', async () => {
+    const count = await getHomeQueueCount(makeDb(), { id: 'u1', activeLocation: null })
+    expect(count).toBe(0)
+  })
+
+  it('sums true counts across all three sources without assembling rows', async () => {
+    getPendingApprovalsCount.mockResolvedValue(3)
+    hasPermissionForLocation.mockReturnValue(true)
+    hasPermission.mockReturnValue(true)
+    loadVisibleMailboxes.mockResolvedValue({ elevated: true, mailboxes: [{ id: 'mb1' }] })
+    const db = makeDb({
+      email_tickets: { rows: [], count: 5 },
+      whatsapp_conversations: {
+        rows: [{
+          id: 'w1', resolved_at: null, last_message_at: '2026-08-10T08:00:00Z',
+          last_message_direction: 'inbound', agent_handed_off_at: null,
+        }],
+      },
+    })
+    const count = await getHomeQueueCount(db, userAt())
+    expect(count).toBe(3 + 5 + 1)
+    // Cheap: getPendingApprovals (the item-materialising call) is never made.
+    expect(getPendingApprovals).not.toHaveBeenCalled()
+  })
+})

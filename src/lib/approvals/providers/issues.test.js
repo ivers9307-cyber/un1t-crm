@@ -1,6 +1,10 @@
-// APPROVALS-STUDIO.2 — only UNCLAIMED issues count as approvals. A claimed
-// (in_progress) issue is decided and just pending actioning; counting it
-// left the approvals badge stuck while work was underway.
+// HOME.3 — unified with /api/issues/count (open + in_progress). The provider
+// used to count 'open' only on the theory that a claimed issue is "decided,
+// just pending actioning" (APPROVALS-STUDIO.2) — but that made the approvals
+// tab and the sidebar issues badge disagree about the same population, which
+// is exactly the kind of drift the home queue exists to remove. Unified on
+// open+in_progress, the /api/issues/count definition, so a number an operator
+// sees in one surface means the same thing in the other.
 import { describe, it, expect, vi } from 'vitest'
 
 vi.mock('../registry', () => ({
@@ -23,9 +27,9 @@ function dbCapturingStatuses(rows = []) {
 }
 
 describe('issuesProvider', () => {
-  it("queries status 'open' only — in_progress is decided, not pending approval", async () => {
+  it("queries status 'open' AND 'in_progress' — unified with /api/issues/count", async () => {
     const { db, captured } = dbCapturingStatuses([])
     await issuesProvider.fetchPending(db, { id: 'u1' })
-    expect(captured.statuses).toEqual(['open'])
+    expect(captured.statuses).toEqual(['open', 'in_progress'])
   })
 })

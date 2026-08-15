@@ -15,6 +15,7 @@ import { hasPermission } from '@/lib/permissions'
 import { getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { countInboxIssues } from '@/lib/issues'
 import { loadRadar } from '@/lib/churn-radar-data'
+import { needsAction } from '@/lib/inbox-queues'
 import {
   glofoxCredentialsForLocation,
   missingGlofoxCredentialsForLocation,
@@ -54,14 +55,29 @@ async function safe(allowed, fn) {
   }
 }
 
-async function fetchWhatsappUnread(db, locationId) {
+// HOME.3 — unified with the shared needsAction predicate
+// (src/lib/inbox-queues.js), the same one the Communications badge
+// (/api/whatsapp/unread-count) and the home queue (src/lib/home-queue.js)
+// count by. This used to sum raw unread_count, which is exactly the bug
+// SIDEBAR-BADGES.2 fixed for the nav badge: it reads 0 the instant someone
+// opens a thread without replying or resolving it, and it never saw an
+// agent handoff whose last line was Mia's own holding message. Without this
+// fix the Today feed's WhatsApp row and the badge right next to it on the
+// same page could show two different numbers for the same inbox.
+//
+// NOTE for the morning-briefing digest (BRIEFING.1 / fetchLocationTodayFeed
+// below): this row's WA number changed semantics from "unread messages" to
+// "threads needing a reply or handoff" — a smaller, more meaningful number,
+// not a regression if today's email reads lower than yesterday's.
+async function fetchWhatsappNeedsAction(db, locationId) {
+  const cols = 'resolved_at, last_message_at, last_message_direction, agent_handed_off_at'
   const { data, error } = await db
     .from('whatsapp_conversations')
-    .select('unread_count')
+    .select(cols)
     .eq('location_id', locationId)
-    .gt('unread_count', 0)
+    .is('resolved_at', null)
   if (error) return null
-  return (data || []).reduce((s, c) => s + (c.unread_count || 0), 0)
+  return (data || []).filter(needsAction).length
 }
 
 async function fetchInvoicesPending(db, locationId) {
@@ -168,7 +184,7 @@ export async function fetchLocationTodayFeed(db, locationId, nowMs = Date.now())
     await Promise.all([
       safe(true, () => countInboxIssues(db, locationId)),
       safe(true, () => fetchInvoicesPending(db, locationId)),
-      safe(true, () => fetchWhatsappUnread(db, locationId)),
+      safe(true, () => fetchWhatsappNeedsAction(db, locationId)),
       safe(true, () => fetchBookingsToday(db, locationId, todayIso)),
       safe(true, () => fetchChurn(db, locationId)),
       safe(true, () => fetchTasksDue(db, locationId, todayIso)),
@@ -197,7 +213,7 @@ export async function fetchTodayFeed(db, user, locationId, nowMs = Date.now()) {
     safe(hasPermission(user, 'approvals_inbox'), () => getPendingApprovalsCount(db, user)),
     safe(hasPermission(user, 'issues_inbox'), () => countInboxIssues(db, locationId)),
     safe(hasPermission(user, 'invoices_inbox'), () => fetchInvoicesPending(db, locationId)),
-    safe(hasPermission(user, 'whatsapp'), () => fetchWhatsappUnread(db, locationId)),
+    safe(hasPermission(user, 'whatsapp'), () => fetchWhatsappNeedsAction(db, locationId)),
     safe(canBookings, () => fetchBookingsToday(db, locationId, todayIso)),
     safe(hasPermission(user, 'churn_radar'), () => fetchChurn(db, locationId)),
     safe(hasPermission(user, 'activities'), () => fetchTasksDue(db, locationId, todayIso)),

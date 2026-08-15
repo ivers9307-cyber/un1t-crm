@@ -1,16 +1,20 @@
 // REPORT-ISSUE.2 — approvals provider for staff-reported issues.
 //
-// Surfaces UNCLAIMED (status 'open') issues at the user's active
-// location as another category inside /approvals so handlers don't
-// need to flip between two inboxes. The dedicated /issues page is
-// still the richer surface (claim + resolve + close); the /approvals
-// tab is the aggregator view.
+// Surfaces open + in_progress issues at the user's active location as
+// another category inside /approvals so handlers don't need to flip
+// between two inboxes. The dedicated /issues page is still the richer
+// surface (claim + resolve + close); the /approvals tab is the
+// aggregator view.
 //
-// APPROVALS-STUDIO.2 — in_progress issues are deliberately NOT
-// counted: an approval is a decision that hasn't been made yet, and
-// a claimed issue has been decided (someone owns it) and is just
-// pending actioning. Counting them left the approvals badge stuck at
-// N forever while work was underway (operator-reported 2026-07-28).
+// HOME.3 — unified with /api/issues/count's open+in_progress definition
+// (src/app/api/issues/count/route.js → countInboxIssues). Previously this
+// provider counted 'open' only, on the APPROVALS-STUDIO.2 theory that a
+// claimed (in_progress) issue is "decided, just pending actioning" — but
+// that left this tab and the sidebar issues badge counting two different
+// populations of the same table, which is precisely the drift the home
+// queue exists to remove: an operator working off one badge and a handler
+// working off the other would disagree about how many issues are open.
+// One definition, shared.
 //
 // Scope: owner + master at the location (per the "All owners at the
 // studio" routing decision). Non-handlers see a 0-count empty tab
@@ -22,7 +26,7 @@ import {
 } from '../registry'
 
 const HANDLER_ROLES = ['owner']
-const OPEN_STATUSES = ['open']
+const OPEN_STATUSES = ['open', 'in_progress']
 
 export const issuesProvider = {
   key: 'issues',
