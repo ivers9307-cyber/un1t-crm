@@ -85,21 +85,21 @@ describe('ALL_NAV structure', () => {
 })
 
 describe('Messages hub', () => {
-  it('contains the Communications hub and the email ticket queue', () => {
-    expect(hrefsIn('messages')).toEqual([
-      '/communications',
-      // EMAIL-TICKET.4 — the studio email queue is an action queue too, and
-      // sits next to the hub it lives inside.
-      '/communications/tickets',
-    ])
+  // HUBS.2f Task 1 — collapsed the two Messages entries (the Communications
+  // hub + the standalone Email inbox ticket queue) into ONE sidebar entry.
+  // The email ticket surface didn't move — it's still a tab inside
+  // CommunicationsTabs (canEmailInbox) — only its OWN top-level sidebar row
+  // is gone. See the entry comment below for why `email_inbox` moved into
+  // the union instead of just disappearing.
+  it('is a single collapsed hub entry', () => {
+    expect(hrefsIn('messages')).toEqual(['/communications'])
   })
 
-  it('gates the email ticket queue on email_inbox, NOT the marketing `email` key', () => {
-    // Two different populations: `email` is campaign/broadcast mail,
-    // `email_inbox` is the ticketed studio accounts (accounts@, sales@).
-    const tickets = ALL_NAV.find((i) => i.href === '/communications/tickets')
-    expect(tickets.permission).toBe('email_inbox')
-    expect(tickets.anyPermission).toBeUndefined()
+  it('the Messages entry ORs all four channel permissions', () => {
+    const messages = ALL_NAV.find(i => i.href === '/communications')
+    expect(messages.label).toBe('Messages')
+    expect(messages.anyPermission).toEqual(['email', 'whatsapp', 'sms', 'email_inbox'])
+    expect(messages.extraActivePaths).toBeUndefined()
   })
 })
 
@@ -198,10 +198,10 @@ describe('Account', () => {
 // SYNTHETIC hand-built fixture below, so that behaviour stays pinned
 // even though no grouped entry remains in production nav data.
 describe('activeHrefFor — longest-match single winner', () => {
-  it('kills double-light #1: /communications/tickets lights ONLY the Email inbox entry, not the Communications hub too', () => {
+  it('HUBS.2f: /communications/tickets now lights the single Messages entry (the standalone Email inbox sidebar row is gone — it is a CommunicationsTabs tab now)', () => {
     expect(activeHrefFor('/communications/tickets', ALL_NAV)).toEqual({
-      itemHref: '/communications/tickets',
-      matchedPath: '/communications/tickets',
+      itemHref: '/communications',
+      matchedPath: '/communications',
     })
   })
 

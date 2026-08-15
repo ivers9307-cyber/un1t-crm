@@ -7,7 +7,12 @@
 // HUBS.2a regroups the flat SIDEBAR-IA.1 sections into the phase-2 hub
 // programme — each section below is (or is becoming) a hub with its own
 // route and tab strip, rather than a department label:
-//   messages    — Communications hub + the email ticket queue
+//   messages    — the Messages hub. HUBS.2f Task 1 collapses it the same
+//                 way: the Communications hub entry and the standalone
+//                 Email inbox ticket-queue entry fold into one, with
+//                 `email_inbox` OR'd into the entry's own anyPermission
+//                 (there's no second route to add to extraActivePaths —
+//                 the ticket queue already lives under /communications).
 //   queues      — Approvals + Issues. INTERIM: header-less, until the
 //                 phase-3 Home queue absorbs both into one inbox.
 //   sales       — the Sales hub. HUBS.2a Task 2 collapsed it to a single
@@ -46,7 +51,7 @@ import {
   Settings, Car,
   Globe, ClipboardCheck, AlertCircle,
   Workflow, Building2,
-  Wrench, Mail, Handshake, HeartPulse, Wallet, UsersRound,
+  Wrench, Handshake, HeartPulse, Wallet, UsersRound,
 } from 'lucide-react'
 
 // The sidebar Dashboard link is visible if ANY of these are true. The
@@ -82,30 +87,26 @@ export const ALL_NAV = [
   { href: '/portfolio',  label: 'Account home', icon: Building2,       masterOrOwnerOnly: true },
   { href: '/dashboard',  label: 'Dashboard',   icon: LayoutDashboard, dashboardGroup: true },
 
-  // ── Messages — the Communications hub + the email ticket queue ──
-  //
-  // Single Communications entry replacing the old Email + WhatsApp.
-  // Visible if the user has ANY channel permission (sms included —
-  // an SMS-only user still needs the hub link; PERM-AUDIT.1) —
-  // sub-tabs inside the hub gate themselves further.
-  { href: '/communications', label: 'Communications', icon: MessagesSquare,
-    anyPermission: ['email', 'whatsapp', 'sms'], section: 'messages' },
-  // EMAIL-TICKET.4 — the studio email queue, an action queue in its own
-  // right (it accrues unanswered tickets the way Approvals accrues
-  // pending items). It lives at a /communications/* URL and shows in that
-  // hub's tab strip too, but it gets its own sidebar entry because its
-  // permission population is different: `email_inbox` gates the ticket
-  // surface, while the neighbouring Communications entry ORs the marketing
-  // `email` / `whatsapp` / `sms` keys. Someone who answers accounts@ all day
-  // need not hold any of those.
-  // INBOX-SPLIT.1 labelled it "Email" (the only place email is worked now, the
-  // unified Inbox being WhatsApp + Instagram only). COMMS-IA.3 REVERSES that
-  // label to "Email inbox": in a Work section of action queues, "Email" named
-  // the channel rather than the queue, and it sits directly under a
-  // "Communications" entry that also does email. "Ticket" remains the data
-  // model's name — href, API and table are unchanged on purpose.
-  { href: '/communications/tickets', label: 'Email inbox', icon: Mail,
-    permission: 'email_inbox', section: 'messages' },
+  // ── Messages hub ──────────────────────────────────────────────
+  // HUBS.2f Task 1 — sixth application of the hub-collapse pattern
+  // (after Sales HUBS.2a, Members HUBS.2b, Money HUBS.2c, Team HUBS.2d,
+  // Operations HUBS.2e): what was two standalone sidebar entries
+  // (Communications, the Email inbox ticket queue) becomes one hub
+  // entry. `email_inbox` folds into the anyPermission union — this is
+  // what the old separate EMAIL-TICKET.4 entry existed to express in
+  // the first place (a different population: someone who only answers
+  // accounts@/sales@ and holds none of the marketing `email`/
+  // `whatsapp`/`sms` keys still needs a way into the hub). Folding the
+  // key into the union rather than dropping the entry is what keeps
+  // that population seeing Messages at all. The ticket queue itself
+  // didn't move — it's still reachable as the "Email inbox" tab inside
+  // CommunicationsTabs (COMMS-IA.3), gated the same way, badge intact —
+  // only its OWN top-level sidebar row is gone. No extraActivePaths:
+  // every one of its routes (/communications/send, /communications/
+  // tickets, /communications/inbox, …) is already a literal child of
+  // /communications, so the bare href prefix-matches all of them.
+  { href: '/communications', label: 'Messages', icon: MessagesSquare,
+    anyPermission: ['email', 'whatsapp', 'sms', 'email_inbox'], section: 'messages' },
 
   // ── queues — the interim action-queue zone (header-less). HUBS.2a
   // leaves Approvals + Issues here rather than folding them into a
