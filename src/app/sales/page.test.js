@@ -78,4 +78,11 @@ describe('/sales index page', () => {
     )
     await expect(SalesIndexPage()).rejects.toThrow('NEXT_REDIRECT:/')
   })
+
+  it('redirects to /contacts when the location gate denies pipeline for everyone, even with pipeline permission held', async () => {
+    const u = user({ perms: { pipeline: true, contacts: true, activities: true } })
+    u.activeLocation = { id: 'loc1', features: { pipeline: false } }
+    getCurrentUser.mockResolvedValue(u)
+    await expect(SalesIndexPage()).rejects.toThrow('NEXT_REDIRECT:/contacts')
+  })
 })
