@@ -95,7 +95,12 @@ export function assembleTodayFeed(bundle = {}) {
   queue('approvals', approvals, 'Approvals waiting', '/approvals')
   queue('issues', issues, 'Open issues', '/issues')
   queue('invoices', invoices, 'Invoices to process', '/invoices')
-  queue('whatsapp', whatsappUnread, 'Unread WhatsApp messages', '/communications/inbox')
+  // HOME.3 — the underlying number is needsAction (unresolved + awaiting a
+  // reply or handed off), not raw unread_count (src/lib/today-feed-data.js
+  // fetchWhatsappNeedsAction) — "Unread WhatsApp messages" was wrong the
+  // moment a thread was opened but still unanswered. The email digest and
+  // mobile both render this label verbatim, so it lives here once.
+  queue('whatsapp', whatsappUnread, 'WhatsApp needing a reply', '/communications/inbox')
 
   if (bookingsToday && (bookingsToday.count || 0) > 0) {
     rows.push({

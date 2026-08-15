@@ -2,17 +2,26 @@
 // PersonalDashboard. Same data fetched from shared/dashboard-data.js.
 //
 // TODAY-FEED.1 made this the gym's front door: a permission-filtered
-// "Needs attention" triage feed (approvals / issues / invoices /
-// unread WhatsApp / today's bookings / churn risks / tasks due /
-// low-fill classes) renders above the personal roster, each row
-// deep-linking into its full surface. A coach with none of the queue
-// permissions sees exactly what they saw before.
+// "Needs attention" triage feed rendering above the personal roster,
+// each row deep-linking into its full surface.
+//
+// HOME.3 replaced the count-level rows for approvals / email tickets /
+// unified inbox with assembleHomeQueue's item-level merged queue (src/
+// lib/home-queue.js) — one row per approval / ticket / conversation,
+// not one row per source count. The today-feed rows that are NOT queue
+// sources (today's bookings, churn watch, tasks due, low-fill classes)
+// still render, in their own block below the queue (QUEUE_MIGRATED_IDS
+// names the ids the queue owns; everything else renders).
 //
 // Permission: dashboard_personal (cross-platform).
 
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Calendar, AlertCircle, AlertTriangle, ClipboardCheck, Inbox, MessagesSquare, Radar, CheckSquare, Flag } from 'lucide-react'
+import {
+  Calendar, AlertCircle, AlertTriangle, ClipboardCheck, Inbox, MessagesSquare,
+  Radar, CheckSquare, Flag, Ticket, Receipt, FileText, Wallet, Zap,
+  ArrowLeftRight, Users, Handshake, ShoppingBag,
+} from 'lucide-react'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
@@ -25,6 +34,8 @@ import {
 import { buildMonthMatrix } from '@shared/roster-month'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { fetchTodayFeed } from '@/lib/today-feed-data'
+import { assembleHomeQueue, queueCountLabel, groupQueueRows } from '@/lib/home-queue'
+import { relativeTime } from '@/lib/ticket-display'
 import {
   KpiCard, KpiRow, SectionHeader, ListCard, PendingRow,
 } from '@/components/dashboard/Cards'
@@ -32,8 +43,12 @@ import MonthRoster from '@/components/dashboard/MonthRoster'
 import MyRequests from '@/components/dashboard/MyRequests'
 import SwapActions from '@/components/dashboard/SwapActions'
 
-// Icon per triage row id (assembleTodayFeed in shared/today-feed.js
-// owns the ids). Kept here — icons are a web rendering concern.
+// Icon per triage row id (assembleTodayFeed in shared/today-feed.js owns
+// the ids). Kept here — icons are a web rendering concern. HOME.3 —
+// 'approvals', 'issues', 'invoices' and 'whatsapp' no longer render from
+// this map (those sources moved to the item-level queue below); the
+// entries stay so a future today-feed row of the same id doesn't need a
+// new icon decision.
 const FEED_ICONS = {
   approvals: <ClipboardCheck size={16} />,
   issues: <AlertCircle size={16} />,
@@ -45,12 +60,82 @@ const FEED_ICONS = {
   lowfill: <Flag size={16} />,
 }
 
+// HOME.3's assembleHomeQueue (src/lib/home-queue.js) covers approvals
+// (which already folds in the issues + invoices-queue approval
+// providers) and the unified inbox (which already covers whatsapp) at
+// item level, so the matching today-feed rows would just duplicate the
+// queue above — these four ids are the ones the queue now owns.
+//
+// R2 (HOME.3 review rider) — this used to be SECONDARY_FEED_IDS, an
+// ALLOWLIST of the four ids that still render below the queue
+// ('bookings', 'churn', 'tasks', 'lowfill'). That silently drops any
+// today-feed source added later: shared/today-feed.js's assembler
+// gains a 9th row id, nobody remembers to add it here, and it renders
+// nowhere — present in feedRows, invisible on the page. Inverted to a
+// DENYLIST of what the queue owns: a future non-migrated source is
+// VISIBLE by default because it simply isn't in this list, no edit
+// needed. Same constant also passed as fetchTodayFeed's `skip` option
+// below (R1) — the two are intentionally the same list, since "what the
+// queue already computed" is one fact, not two.
+const QUEUE_MIGRATED_IDS = ['approvals', 'issues', 'invoices', 'whatsapp']
+
 // One line of context under a feed row: the detail string (e.g. the
 // churn delta) followed by up to three item labels.
 function feedSubtitle(row) {
   const items = (row.items || []).map((it) =>
     it.sublabel ? `${it.label} (${it.sublabel})` : it.label)
   return [row.detail, ...items].filter(Boolean).join(' · ') || undefined
+}
+
+// Icon per home-queue row source. Tickets and inbox map directly; every
+// approvals provider key (src/lib/approvals/providers/*.js) gets its own
+// icon so the flat/grouped queue list doesn't render one generic glyph
+// for eleven very different kinds of approval. Falls back to the generic
+// approvals icon for any provider key added later without an update here.
+const QUEUE_SOURCE_ICONS = {
+  issues: <AlertCircle size={16} />,
+  invoices_queue: <Receipt size={16} />,
+  contractor_invoices: <FileText size={16} />,
+  fte_expenses: <Wallet size={16} />,
+  agent_requests: <Zap size={16} />,
+  time_off: <Calendar size={16} />,
+  shift_swaps: <ArrowLeftRight size={16} />,
+  rosters: <ClipboardCheck size={16} />,
+  hyrox_sessions: <Users size={16} />,
+  host_events: <Handshake size={16} />,
+  offer_purchases: <ShoppingBag size={16} />,
+  tickets: <Ticket size={16} />,
+  inbox: <MessagesSquare size={16} />,
+}
+const DEFAULT_QUEUE_ICON = <ClipboardCheck size={16} />
+
+function queueRowIcon(row) {
+  return QUEUE_SOURCE_ICONS[row.source] || DEFAULT_QUEUE_ICON
+}
+
+// host_events is the one org-wide approval provider (see home-queue.js) —
+// flag it in the subtitle so it doesn't read as local to the active
+// studio.
+function queueRowSubtitle(row) {
+  if (!row.orgWide) return row.subtitle || undefined
+  return row.subtitle ? `${row.subtitle} · org-wide` : 'org-wide'
+}
+
+// Renders one ListCard's worth of queue rows (either the flat list or a
+// single group's slice) — isLast is always relative to the array passed
+// in, so a grouped section's border logic is self-contained.
+function QueueRows({ rows }) {
+  return rows.map((row, i) => (
+    <PendingRow
+      key={`${row.source}-${row.id}`}
+      icon={queueRowIcon(row)}
+      title={row.title}
+      subtitle={queueRowSubtitle(row)}
+      time={relativeTime(row.occurredAt)}
+      href={row.href}
+      isLast={i === rows.length - 1}
+    />
+  ))
 }
 
 export const dynamic = 'force-dynamic'
@@ -70,17 +155,31 @@ export default async function PersonalDashboardPage() {
   if (!hasPermission(user, 'dashboard_personal')) redirect('/dashboard')
 
   const db = createServerClient()
-  // TODAY-FEED.1 — the triage feed fetches in parallel with the
-  // personal data; it gates per-source internally and never throws.
-  const [res, feedRows] = await Promise.all([
+  // TODAY-FEED.1 / HOME.3 — the triage feed and the item-level queue
+  // fetch in parallel with the personal data; both gate per-source
+  // internally and never throw. fetchTodayFeed is still needed for the
+  // rows that are NOT home-queue sources (bookings/churn/tasks/lowfill);
+  // its approvals/issues/invoices/whatsapp rows are no longer rendered,
+  // since assembleHomeQueue now covers those same sources at item level
+  // — R1 (HOME.3 review rider) passes `skip: QUEUE_MIGRATED_IDS` so
+  // fetchTodayFeed doesn't bother COMPUTING them either (previously
+  // getPendingApprovalsCount fired once here and once more inside
+  // assembleHomeQueue, every page load).
+  const [res, feedRows, queue] = await Promise.all([
     fetchPersonalDashboardData(db, user.id, user.activeLocation?.id),
-    fetchTodayFeed(db, user, user.activeLocation?.id),
+    fetchTodayFeed(db, user, user.activeLocation?.id, { skip: QUEUE_MIGRATED_IDS }),
+    assembleHomeQueue(db, user),
   ])
   if (!res.success) {
     return (
       <p className="text-sm text-red-500">Failed to load dashboard: {res.error}</p>
     )
   }
+
+  const secondaryFeedRows = feedRows.filter((row) => !QUEUE_MIGRATED_IDS.includes(row.id))
+  const queueGroups = groupQueueRows(queue.rows, queue.counts)
+  const queueDegraded = Boolean(queue.degraded && queue.degraded.length)
+  const queueEmpty = queue.total === 0 && !queueDegraded
 
   const {
     weekShifts, weekStartIso, weekEndIso,
@@ -128,16 +227,64 @@ export default async function PersonalDashboardPage() {
 
   return (
     <>
-      {/* TODAY-FEED.1 — the triage feed. First thing on the page:
-          everything across the gym that needs the viewer, one row per
-          queue, deep-linking into the full surface. Renders nothing
-          when the viewer has no queue permissions or nothing is
-          pending — staff see their roster exactly as before. */}
-      {feedRows.length > 0 && (
-        <div className="mb-4 max-w-5xl">
-          <SectionHeader title="Needs attention" count={feedRows.length} />
+      {/* HOME.3 — the needs-attention queue. First thing on the page:
+          the merged, item-level list from assembleHomeQueue (approvals,
+          email tickets, unified WhatsApp/Instagram inbox), one row per
+          item rather than one row per source-count — each deep-links
+          straight into its own surface. Always rendered (unlike the old
+          count-level feed, which hid itself entirely when empty) so an
+          empty queue reads as a confirmed "all clear", not an absent
+          section a viewer can't tell from a loading gap. */}
+      <div className="mb-4 max-w-5xl">
+        <SectionHeader title="Needs attention" count={queueCountLabel(queue.total, queue.rows.length)} />
+        {queue.counts.tickets === null && (
+          // EMAIL-TICKET-CLEANUP.2 — a failed mailbox-visibility lookup
+          // is "we don't know", never a confident zero; say so instead
+          // of silently omitting the tickets source.
+          <p className="px-1 mb-2 text-xs text-un1t-subtle">Email tickets unavailable right now</p>
+        )}
+        {queueEmpty ? (
+          <ListCard empty emptyText="Nothing needs your attention" />
+        ) : queueGroups ? (
+          // 3+ distinct sources present — subheader each with its own
+          // TRUE count and a "View all" link into the full surface,
+          // rather than one undifferentiated 30-row wall.
+          queueGroups.map((group) => (
+            <div key={group.key}>
+              <SectionHeader
+                title={group.label}
+                count={group.count}
+                action={(
+                  <Link href={group.href} className="text-xs text-un1t-subtle hover:text-un1t-text">
+                    View all
+                  </Link>
+                )}
+              />
+              <ListCard>
+                <QueueRows rows={group.rows} />
+              </ListCard>
+            </div>
+          ))
+        ) : queue.rows.length > 0 ? (
           <ListCard>
-            {feedRows.map((row, i) => (
+            <QueueRows rows={queue.rows} />
+          </ListCard>
+        ) : null}
+      </div>
+
+      {/* TODAY-FEED.1 — the remaining today-feed rows that are NOT
+          home-queue sources (anything not in QUEUE_MIGRATED_IDS): today's
+          bookings, churn watch, tasks due, low-fill classes today, plus
+          any future today-feed source by default. The queue-owned rows
+          are filtered out here — those sources render item-level in the
+          queue above instead (and fetchTodayFeed above didn't even
+          compute them — see the `skip` call). Renders nothing when none
+          apply, same as before. */}
+      {secondaryFeedRows.length > 0 && (
+        <div className="mb-4 max-w-5xl">
+          <SectionHeader title="Also today" count={secondaryFeedRows.length} />
+          <ListCard>
+            {secondaryFeedRows.map((row, i) => (
               <PendingRow
                 key={row.id}
                 icon={FEED_ICONS[row.id]}
@@ -145,7 +292,7 @@ export default async function PersonalDashboardPage() {
                 subtitle={feedSubtitle(row)}
                 time={String(row.count)}
                 href={row.href}
-                isLast={i === feedRows.length - 1}
+                isLast={i === secondaryFeedRows.length - 1}
               />
             ))}
           </ListCard>

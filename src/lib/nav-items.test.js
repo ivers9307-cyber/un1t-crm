@@ -4,8 +4,6 @@
 // tests pin the HUBS.2a hub regroup:
 //
 //   Messages    — Communications hub + the email ticket queue
-//   queues      — Approvals + Issues (interim, header-less — the phase-3
-//                 Home queue eventually absorbs these)
 //   Sales       — the collapsed Sales hub (single entry, tabs at the page)
 //   Members     — what's on for members: bookings, events, challenges,
 //                 pulse, live floor, Hyrox
@@ -33,7 +31,6 @@ describe('NAV_SECTIONS', () => {
   it('renders the hub sections in order', () => {
     expect(NAV_SECTIONS).toEqual([
       { id: 'messages',   label: 'Messages' },
-      { id: 'queues',     label: null },
       { id: 'sales',      label: 'Sales' },
       { id: 'members',    label: 'Members' },
       { id: 'money',      label: 'Money' },
@@ -101,12 +98,6 @@ describe('Messages hub', () => {
     expect(messages.label).toBe('Messages')
     expect(messages.anyPermission).toEqual(['email', 'whatsapp', 'sms', 'email_inbox'])
     expect(messages.extraActivePaths).toBeUndefined()
-  })
-})
-
-describe('queues — interim action-queue zone', () => {
-  it('holds Approvals and Issues until the phase-3 Home queue absorbs them', () => {
-    expect(hrefsIn('queues')).toEqual(['/approvals', '/issues'])
   })
 })
 
@@ -273,6 +264,18 @@ describe('activeHrefFor — longest-match single winner', () => {
       itemHref: '/parent',
       matchedPath: '/parent/child-b',
     })
+  })
+})
+
+describe('HOME.3 — queues section retired', () => {
+  it('removes the queues section id entirely (no header-less holding pen left)', () => {
+    expect(sectionIds).not.toContain('queues')
+  })
+
+  it('removes the standalone Approvals and Issues sidebar entries — the needs-attention queue is the entry point now', () => {
+    const hrefs = ALL_NAV.flatMap((i) => [i.href, ...(i.children || []).map((c) => c.href)])
+    expect(hrefs).not.toContain('/approvals')
+    expect(hrefs).not.toContain('/issues')
   })
 })
 

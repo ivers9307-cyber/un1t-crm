@@ -25,10 +25,13 @@ const roleLabels = {
 // policy contract. This component only filters it per-user and
 // renders it.
 
-// Sidebar badge polling lives in use-polled-count.js (extracted so the
+// The polled-count hook lives in use-polled-count.js (extracted so the
 // Communications tab strip shares the exact same poller for its Inbox
-// badge). Drives the red circles next to nav items that surface
-// pending counts; polls every 60s and refreshes on tab refocus.
+// badge). Polls every 60s and refreshes on tab refocus. HOME.3 retired
+// the sidebar's own per-item red-circle badges (8 pollers, one per
+// nav item) — the needs-attention queue on /dashboard/today is the
+// per-source breakdown now. The one usePolledCount call left in this
+// component drives only the browser tab title prefix.
 
 export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false, onMobileClose }) {
   const pathname = usePathname()
@@ -68,108 +71,42 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
   // hides everything except Car Processing for non-master users).
   const hasPerm = (key) => hasPermission(user, key)
 
-  // INVOICES.2 + APPROVALS.1 — poll only for users who can see each
-  // surface. The API short-circuits to 0 for others, but skipping
-  // the fetch entirely saves 60 RPM × every-staff-session.
-  const invoicesPendingCount = usePolledCount({
-    enabled: hasPerm('invoices_inbox'),
-    url: '/api/invoices-inbox/unread-count',
+  // HOME.3 — the per-item nav badge apparatus (8 separate usePolledCount
+  // pollers — invoices, approvals, churn/lead radar, issues, WhatsApp,
+  // email tickets, host events — each duplicating a count the
+  // needs-attention queue on /dashboard/today now computes anyway) is
+  // retired. One poller against the queue's own count endpoint replaces
+  // all eight: it's viewer-scoped (mirrors each source's own gate
+  // server-side, so it's quietly small — 0 or close to it — for a
+  // low-permission user, same as the retired per-source endpoints were)
+  // and it's the single number the title prefix below now surfaces.
+  // EMAIL-TICKET-CLEANUP.2 — the ONE exception to "always 200 with a
+  // number": a failed tickets mailbox-visibility lookup makes this
+  // endpoint 500 rather than silently answering a confidently-wrong
+  // lower count; usePolledCount ignores a non-ok response and keeps its
+  // last good number, so a blip here reads as a stale count, not a
+  // false "all clear".
+  const homeQueueCount = usePolledCount({
+    enabled: true,
+    url: '/api/home-queue/count',
   })
-  const approvalsPendingCount = usePolledCount({
-    enabled: hasPerm('approvals_inbox'),
-    url: '/api/approvals/count',
-  })
-  // CHURN-RADAR.1 / LEAD-RADAR.1 — high-risk + high-tier funnel
-  // counts. The radars are dashboard tabs since SIDEBAR-IA.1, so the
-  // two counts combine into one badge on the Dashboard entry — the
-  // glance signal survives the relocation; the per-radar split lives
-  // one click away on the tab strip.
-  const churnRadarCount = usePolledCount({
-    enabled: hasPerm('churn_radar'),
-    url: '/api/churn-radar/count',
-  })
-  const leadRadarCount = usePolledCount({
-    enabled: hasPerm('lead_radar'),
-    url: '/api/lead-radar/count',
-  })
-  // SIDEBAR-BADGES.1 — Issues badge: open + in_progress staff-reported
-  // issues awaiting a handler at the active location.
-  const issuesPendingCount = usePolledCount({
-    enabled: hasPerm('issues_inbox'),
-    url: '/api/issues/count',
-  })
-  // SIDEBAR-BADGES.2 — Communications badge: conversations NEEDING ACTION
-  // (unresolved WhatsApp + Instagram threads awaiting a reply or handed off
-  // by the agent) at the active location. Not raw unread — an opened-but-
-  // unanswered or handed-off thread must still badge. See the count endpoint.
-  const communicationsActionCount = usePolledCount({
-    enabled: hasPerm('whatsapp'),
-    url: '/api/whatsapp/unread-count',
-  })
-  // EMAIL-TICKET-CLEANUP.3 — Email badge: tickets somebody sent us that nobody
-  // has answered yet, at the active location and only on mailboxes this person
-  // can actually open. NOT the whole live queue — nothing in that feature
-  // auto-closes, so counting tickets already waiting on the member would give a
-  // number that never comes down. Full reasoning in the count endpoint.
-  const emailNeedsReplyCount = usePolledCount({
-    enabled: hasPerm('email_inbox'),
-    url: '/api/email/tickets/count',
-  })
-  // HOST-PORTAL.6 — host events awaiting review (pending_review). Admin-only
-  // (the API short-circuits to 0 for everyone else); surfaces on Settings,
-  // where the hosts review queue lives (/settings/hosts).
-  const hostEventsPendingCount = usePolledCount({
-    enabled: ['master', 'owner', 'manager'].includes(user?.role),
-    url: '/api/hosts/pending-events/count',
-  })
-  // Badge map by href. Add more entries here when another nav item
-  // needs a notification dot.
-  const badges = {
-    '/dashboard': churnRadarCount + leadRadarCount,
-    // HUBS.2c — the Money hub entry carries the invoices count (same
-    // endpoint + poller as the Invoices tab inside the hub, so the two
-    // can never disagree). Sidebar badges retire entirely with the
-    // phase-3 Home queue.
-    '/money': invoicesPendingCount,
-    '/approvals': approvalsPendingCount,
-    '/issues': issuesPendingCount,
-    // HUBS.2f — the Messages hub entry carries the COMBINED queue count
-    // (unresolved WhatsApp/Instagram threads + unanswered email tickets),
-    // same summing treatment as the Dashboard churn+lead badge above. Both
-    // usePolledCount calls already existed with their own enabled gates
-    // (communicationsActionCount on `whatsapp`, emailNeedsReplyCount on
-    // `email_inbox`) — reused as-is, just summed into one badge, now that
-    // the standalone /communications/tickets sidebar entry (and its own
-    // badge key) is gone. Per-channel splits still live one click away on
-    // CommunicationsTabs' own Inbox / Email inbox tab badges; sidebar
-    // badges retire entirely with the phase-3 Home queue.
-    '/communications': communicationsActionCount + emailNeedsReplyCount,
-    '/settings': hostEventsPendingCount,
-  }
 
-  // Browser tab title prefix — surfaces the combined pending count
-  // even when the operator is on a different tab. Format:
-  // "(3) Repset · …". Combines the operator-action queues
-  // (INVOICES.2 + APPROVALS.1 + Issues) so the operator sees one
-  // total rather than the prefix flickering between values; the
-  // per-tab breakdown lives in the sidebar. WhatsApp unread is
-  // deliberately excluded — it's a message inbox, not an action
-  // queue, and would keep the title perpetually badged. Restores the
-  // original title on cleanup so a stale "(3)" doesn't survive a
+  // Browser tab title prefix — surfaces the pending count even when the
+  // operator is on a different tab. Format: "(3) Repset · …". Restores
+  // the original title on cleanup so a stale "(3)" doesn't survive a
   // navigation that triggers a Sidebar unmount.
-  const titleBadgeCount = invoicesPendingCount + approvalsPendingCount + issuesPendingCount
   useEffect(() => {
     if (typeof document === 'undefined') return
     const original = document.title.replace(/^\(\d+\+?\)\s+/, '')
-    document.title = titleBadgeCount > 0
-      ? `(${titleBadgeCount > 99 ? '99+' : titleBadgeCount}) ${original}`
+    document.title = homeQueueCount > 0
+      ? `(${homeQueueCount > 99 ? '99+' : homeQueueCount}) ${original}`
       : original
     return () => {
       if (typeof document !== 'undefined') {
         document.title = document.title.replace(/^\(\d+\+?\)\s+/, '')
       }
     }
-  }, [titleBadgeCount])
+  }, [homeQueueCount])
 
   // Match-permission predicate. Used both for top-level items and
   // for children of expandable sections.
@@ -270,7 +207,6 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
         key={item.href}
         item={item}
         active={active}
-        badge={badges[item.href] || 0}
       />
     )
 
@@ -478,7 +414,7 @@ function leafClassName(active, isChild = false) {
   )
 }
 
-function SidebarItem({ item, active, isChild = false, badge = 0 }) {
+function SidebarItem({ item, active, isChild = false }) {
   const { href, label, icon: Icon, openInNewTab } = item
   // HUBS.2e Task 4 — ONE winner, longest match. A top-level item tints
   // when it IS the winning entry (active.itemHref); a child row tints
@@ -500,23 +436,16 @@ function SidebarItem({ item, active, isChild = false, badge = 0 }) {
   // its tint. The `!item.children` guard documents that invariant rather
   // than changing behaviour.
   const isAriaCurrent = isChild ? isActive : (isActive && !item.children)
-  // INVOICES.2 — notification badge. Renders to the right of the
-  // label with `ml-auto`. Capped at 99+ to stop the pill stretching
-  // the sidebar layout. Hidden when the count is zero.
-  const badgeNode = badge > 0 ? (
-    <span
-      aria-label={`${badge} pending`}
-      className="ml-auto inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-semibold rounded-full bg-red-500 text-white"
-    >
-      {badge > 99 ? '99+' : badge}
-    </span>
-  ) : null
+  // HOME.3 — the per-item notification-pill badge (INVOICES.2) is
+  // retired along with the badges map that fed it; the needs-attention
+  // queue on /dashboard/today is where per-source counts live now, and
+  // the sidebar's own homeQueueCount (Sidebar()) only ever drives the
+  // browser tab title, not a per-row pill. Nothing below renders a badge.
   if (openInNewTab) {
     return (
       <a href={href} target="_blank" rel="noopener noreferrer" className={className}>
         <Icon size={isChild ? 14 : 18} />
         {label}
-        {badgeNode}
         <ExternalLink size={11} className="opacity-60 ml-1" />
       </a>
     )
@@ -525,7 +454,6 @@ function SidebarItem({ item, active, isChild = false, badge = 0 }) {
     <Link href={href} className={className} aria-current={isAriaCurrent ? 'page' : undefined}>
       <Icon size={isChild ? 14 : 18} />
       {label}
-      {badgeNode}
     </Link>
   )
 }

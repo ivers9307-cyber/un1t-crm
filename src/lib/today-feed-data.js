@@ -15,6 +15,7 @@ import { hasPermission } from '@/lib/permissions'
 import { getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { countInboxIssues } from '@/lib/issues'
 import { loadRadar } from '@/lib/churn-radar-data'
+import { needsAction } from '@/lib/inbox-queues'
 import {
   glofoxCredentialsForLocation,
   missingGlofoxCredentialsForLocation,
@@ -54,14 +55,29 @@ async function safe(allowed, fn) {
   }
 }
 
-async function fetchWhatsappUnread(db, locationId) {
+// HOME.3 — unified with the shared needsAction predicate
+// (src/lib/inbox-queues.js), the same one the Communications badge
+// (/api/whatsapp/unread-count) and the home queue (src/lib/home-queue.js)
+// count by. This used to sum raw unread_count, which is exactly the bug
+// SIDEBAR-BADGES.2 fixed for the nav badge: it reads 0 the instant someone
+// opens a thread without replying or resolving it, and it never saw an
+// agent handoff whose last line was Mia's own holding message. Without this
+// fix the Today feed's WhatsApp row and the badge right next to it on the
+// same page could show two different numbers for the same inbox.
+//
+// NOTE for the morning-briefing digest (BRIEFING.1 / fetchLocationTodayFeed
+// below): this row's WA number changed semantics from "unread messages" to
+// "threads needing a reply or handoff" — a smaller, more meaningful number,
+// not a regression if today's email reads lower than yesterday's.
+async function fetchWhatsappNeedsAction(db, locationId) {
+  const cols = 'resolved_at, last_message_at, last_message_direction, agent_handed_off_at'
   const { data, error } = await db
     .from('whatsapp_conversations')
-    .select('unread_count')
+    .select(cols)
     .eq('location_id', locationId)
-    .gt('unread_count', 0)
+    .is('resolved_at', null)
   if (error) return null
-  return (data || []).reduce((s, c) => s + (c.unread_count || 0), 0)
+  return (data || []).filter(needsAction).length
 }
 
 async function fetchInvoicesPending(db, locationId) {
@@ -168,7 +184,7 @@ export async function fetchLocationTodayFeed(db, locationId, nowMs = Date.now())
     await Promise.all([
       safe(true, () => countInboxIssues(db, locationId)),
       safe(true, () => fetchInvoicesPending(db, locationId)),
-      safe(true, () => fetchWhatsappUnread(db, locationId)),
+      safe(true, () => fetchWhatsappNeedsAction(db, locationId)),
       safe(true, () => fetchBookingsToday(db, locationId, todayIso)),
       safe(true, () => fetchChurn(db, locationId)),
       safe(true, () => fetchTasksDue(db, locationId, todayIso)),
@@ -184,24 +200,43 @@ export async function fetchLocationTodayFeed(db, locationId, nowMs = Date.now())
  * Fetch + assemble the viewer's triage rows for the active location.
  * Returns [] when nothing needs attention (the page renders "all
  * clear"); individual sources degrade to omitted rows, never throw.
+ *
+ * HOME.3 rider (review of the original queue PR) — assembleHomeQueue
+ * (src/lib/home-queue.js) now covers approvals/issues/invoices/whatsapp
+ * at item level, and the web /dashboard/today page stopped RENDERING
+ * this function's rows for those four ids. Left as-is, this function
+ * kept COMPUTING them anyway — getPendingApprovalsCount fired once here
+ * and once more inside assembleHomeQueue, every page load. `skip` lets a
+ * caller who doesn't need certain rows say so up front, same fail-soft
+ * contract otherwise. Deliberately a DENYLIST (ids to omit), not an
+ * allowlist of ids to compute: a future source added to the Promise.all
+ * below is computed by default for every caller unless a caller
+ * explicitly names it in `skip` — mirrors the QUEUE_MIGRATED_IDS denylist
+ * in dashboard/today/page.js (R2 of the same review), so "what the queue
+ * already owns" is the one thing both layers name, rather than either
+ * layer having to enumerate "everything else". The mobile
+ * /api/mobile/today-feed route calls this with no `skip` (mobile has no
+ * item-level queue yet — parity program, still catching up) and gets
+ * every source computed, exactly as before this rider.
  */
-export async function fetchTodayFeed(db, user, locationId, nowMs = Date.now()) {
+export async function fetchTodayFeed(db, user, locationId, { nowMs = Date.now(), skip = [] } = {}) {
   if (!user || !locationId) return []
   const todayIso = isoToday(new Date(nowMs))
   const canBookings = hasPermission(user, 'events') || hasPermission(user, 'bookings')
+  const want = (id) => !skip.includes(id)
 
   const [
     approvals, issues, invoices, whatsappUnread,
     bookingsToday, churn, tasksDue, lowFill,
   ] = await Promise.all([
-    safe(hasPermission(user, 'approvals_inbox'), () => getPendingApprovalsCount(db, user)),
-    safe(hasPermission(user, 'issues_inbox'), () => countInboxIssues(db, locationId)),
-    safe(hasPermission(user, 'invoices_inbox'), () => fetchInvoicesPending(db, locationId)),
-    safe(hasPermission(user, 'whatsapp'), () => fetchWhatsappUnread(db, locationId)),
-    safe(canBookings, () => fetchBookingsToday(db, locationId, todayIso)),
-    safe(hasPermission(user, 'churn_radar'), () => fetchChurn(db, locationId)),
-    safe(hasPermission(user, 'activities'), () => fetchTasksDue(db, locationId, todayIso)),
-    safe(canBookings, () => fetchLowFillClasses(db, locationId, nowMs)),
+    safe(want('approvals') && hasPermission(user, 'approvals_inbox'), () => getPendingApprovalsCount(db, user)),
+    safe(want('issues') && hasPermission(user, 'issues_inbox'), () => countInboxIssues(db, locationId)),
+    safe(want('invoices') && hasPermission(user, 'invoices_inbox'), () => fetchInvoicesPending(db, locationId)),
+    safe(want('whatsapp') && hasPermission(user, 'whatsapp'), () => fetchWhatsappNeedsAction(db, locationId)),
+    safe(want('bookings') && canBookings, () => fetchBookingsToday(db, locationId, todayIso)),
+    safe(want('churn') && hasPermission(user, 'churn_radar'), () => fetchChurn(db, locationId)),
+    safe(want('tasks') && hasPermission(user, 'activities'), () => fetchTasksDue(db, locationId, todayIso)),
+    safe(want('lowfill') && canBookings, () => fetchLowFillClasses(db, locationId, nowMs)),
   ])
 
   return assembleTodayFeed({

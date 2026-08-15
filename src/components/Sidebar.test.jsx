@@ -36,6 +36,7 @@ vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn(() => true) }))
 vi.mock('./use-polled-count', () => ({ usePolledCount: vi.fn(() => 0) }))
 
 import Sidebar from './Sidebar.jsx'
+import { usePolledCount } from './use-polled-count'
 
 // owner (not master) — real enough to pass the masterOrOwnerOnly gate on
 // /portfolio without also rendering the master-only Platform link / the
@@ -44,7 +45,25 @@ import Sidebar from './Sidebar.jsx'
 // no fetch mock is needed either.
 const USER = { role: 'owner', full_name: 'Test Owner' }
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  usePolledCount.mockReturnValue(0)
+})
+
+describe('Sidebar — HOME.3 badge retirement', () => {
+  it('renders no per-item badge pill, even when the poller reports a positive count', () => {
+    // Mocked to a positive number on purpose — before HOME.3 this fed the
+    // '/dashboard' badge (churnRadarCount + leadRadarCount) via the badges
+    // map, and would have rendered a red pill. The badges map (and the 8
+    // pollers that fed it) are gone; the one usePolledCount call left in
+    // Sidebar.jsx drives only the tab-title prefix, never a per-row pill.
+    usePolledCount.mockReturnValue(7)
+    mockPathname.mockReturnValue('/dashboard')
+    render(<Sidebar user={USER} />)
+    expect(screen.queryAllByLabelText(/pending$/)).toHaveLength(0)
+    expect(document.querySelector('.bg-red-500')).toBeNull()
+  })
+})
 
 describe('Sidebar — active state', () => {
   it('lights exactly one aria-current, on the Operations entry, for a former group-child page', () => {

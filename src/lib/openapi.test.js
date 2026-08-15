@@ -141,6 +141,28 @@ describe('getOpenApiSpec', () => {
     expect(op.security).toContainEqual({ CookieAuth: [] })
   })
 
+  // HOME.3 — the needs-attention triage queue (approvals + tickets + inbox).
+  it('documents the home-queue routes, including the tickets-visibility 500', () => {
+    expect(spec.paths).toHaveProperty('/api/home-queue')
+    expect(spec.paths).toHaveProperty('/api/home-queue/count')
+
+    const queue = spec.paths['/api/home-queue'].get
+    expect(queue.tags).toContain('Dashboard')
+    expect(queue.security).toContainEqual({ CookieAuth: [] })
+    expect(queue.responses).toHaveProperty('200')
+    expect(queue.responses).toHaveProperty('401')
+
+    const count = spec.paths['/api/home-queue/count'].get
+    expect(count.tags).toContain('Dashboard')
+    expect(count.security).toContainEqual({ CookieAuth: [] })
+    expect(count.responses).toHaveProperty('200')
+    // EMAIL-TICKET-CLEANUP.2 — the count endpoint 500s rather than
+    // answering a confident 0 when the tickets mailbox-visibility lookup
+    // itself fails; that has to be a documented response, not just an
+    // implementation detail (mirrors /api/email/tickets/count's own spec).
+    expect(count.responses).toHaveProperty('500')
+  })
+
   it('includes an outbound webhooks stub', () => {
     expect(spec).toHaveProperty('webhooks')
     expect(spec.webhooks).toHaveProperty('lead.created')
