@@ -91,6 +91,41 @@ describe('visibleCommands', () => {
   })
 })
 
+// SEC-PALETTE-OPS.1 — the Operations hub (nav-items.js ALL_NAV) collapsed
+// Studio Management, TV Displays, Presentations and Checklists into one
+// sidebar entry, but the palette (a hand-maintained flat subset of the
+// sidebar, per the module comment) never got individual jump targets for
+// any of the four — they were only reachable by clicking through the hub.
+// Gates mirror each destination page's own permission check exactly
+// (src/app/(operations)/{studio-management,tv-displays,presentations,
+// checklists}/page.js), not the hub's looser anyPermission union.
+describe('Operations family palette commands', () => {
+  it('adds studio-management, tv-displays, presentations and checklists as jump targets', () => {
+    const byId = Object.fromEntries(NAV_COMMANDS.map((c) => [c.id, c]))
+    expect(byId['studio-management']).toMatchObject({ label: 'Studio Management', href: '/studio-management', permission: 'studio_management' })
+    expect(byId['tv-displays']).toMatchObject({ label: 'TV Displays', href: '/tv-displays', permission: 'tv_displays' })
+    expect(byId['presentations']).toMatchObject({ label: 'Presentations', href: '/presentations', permission: 'presentations' })
+    // Checklists has no permission of its own — it shares studio_management
+    // with the Studio tab (documented on the Operations hub's ALL_NAV entry).
+    expect(byId['checklists']).toMatchObject({ label: 'Checklists', href: '/checklists', permission: 'studio_management' })
+  })
+  it('gates each new command on its own permission, independently of the others', () => {
+    const out = visibleCommands(NAV_COMMANDS, '', granted('tv_displays'))
+    const ids = out.map((c) => c.id)
+    expect(ids).toContain('tv-displays')
+    expect(ids).not.toContain('studio-management')
+    expect(ids).not.toContain('presentations')
+    expect(ids).not.toContain('checklists')
+  })
+  it('shows studio-management and checklists together under studio_management', () => {
+    const ids = visibleCommands(NAV_COMMANDS, '', granted('studio_management')).map((c) => c.id)
+    expect(ids).toContain('studio-management')
+    expect(ids).toContain('checklists')
+    expect(ids).not.toContain('tv-displays')
+    expect(ids).not.toContain('presentations')
+  })
+})
+
 describe('sanitizeSearchTerm', () => {
   it('strips PostgREST .or()-breaking characters', () => {
     expect(sanitizeSearchTerm('a,b(c)%_*')).toBe('a b c')

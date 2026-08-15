@@ -38,6 +38,17 @@ export const NAV_COMMANDS = [
   { id: 'events', label: 'Events', href: '/events', permission: 'races' },
   // EQUIP-MAINT.1 — mirrors the nav-items.js Sidebar entry's gate.
   { id: 'maintenance', label: 'Maintenance', href: '/maintenance', anyPermission: ['equipment_admin', 'equipment_inspect'] },
+  // SEC-PALETTE-OPS.1 — the Operations hub (nav-items.js) collapsed these
+  // four into one sidebar entry with a looser anyPermission union; the
+  // palette wants individual jump targets, so each is gated on the SAME
+  // permission its own destination page checks, not the hub's union.
+  { id: 'studio-management', label: 'Studio Management', href: '/studio-management', permission: 'studio_management' },
+  { id: 'tv-displays', label: 'TV Displays', href: '/tv-displays', permission: 'tv_displays' },
+  { id: 'presentations', label: 'Presentations', href: '/presentations', permission: 'presentations' },
+  // Checklists has no permission of its own — src/app/(operations)/checklists/page.js
+  // gates on studio_management (shared with the Studio tab; see the
+  // Operations hub's ALL_NAV entry comment in nav-items.js).
+  { id: 'checklists', label: 'Checklists', href: '/checklists', permission: 'studio_management' },
   // K5 — /cars is a redirect-only stub to /cars/active. Same wasted hop as
   // the broadcast entry below; the palette is the fast path, so it lands on
   // the page that actually renders.
