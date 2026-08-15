@@ -230,6 +230,15 @@ export const ALL_NAV = [
     permission: 'landing_page', openInNewTab: true, section: 'marketing' },
 
   // ── Team ───────────────────────────────────────────────────────
+  // Schedule hub — single sidebar entry. Internal tab strip
+  // (ScheduleTabs.jsx) holds Schedule / Approvals / Reporting /
+  // Invoices / Attendance. The Attendance tab (mig 120 — auto-
+  // stamped from UniFi Access door unlocks) used to be a top-level
+  // sidebar entry; folded into the schedule tab strip in May 2026
+  // because operationally it sits next to Invoices (both are
+  // about staff time + pay). Same attendance_reports permission
+  // gate; the standalone /schedule/attendance URL still works as
+  // a deep link for cron-driven emails / scheduled reminders.
   { href: '/schedule',   label: 'Schedule',     icon: CalendarClock,   permission: 'schedule', section: 'team' },
   // HUBS.2a — promoted from a Studio Management child to Team (staff
   // contracts belong beside the schedule they're tied to, not under
