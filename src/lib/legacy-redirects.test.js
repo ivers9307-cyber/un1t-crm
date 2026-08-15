@@ -45,6 +45,11 @@ const DELETED_STUB_SOURCES = [
   '/communications/sms/broadcasts',
   '/communications/sms/broadcasts/new',
   '/communications/sms/broadcasts/:id',
+  // HUBS.2b — moved, not deleted (/admin/hyrox -> /hyrox), but listed
+  // here anyway so the "never regains a page" guard below covers it
+  // too, per this file's own header contract (every redirect source
+  // gets a reverse-check, not just the PRUNE.1b deletions).
+  '/admin/hyrox',
 ]
 
 describe('legacy-redirects', () => {
