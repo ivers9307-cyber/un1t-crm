@@ -459,8 +459,8 @@ export default function StaffForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
-      <Link href="/settings" className="inline-flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text">
-        <ArrowLeft size={16} /> Back to Settings
+      <Link href="/settings/staff" className="inline-flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text">
+        <ArrowLeft size={16} /> Staff
       </Link>
 
       {error && (
