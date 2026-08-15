@@ -27,7 +27,10 @@ vi.mock('@/app/api/email/tickets/_helpers', () => ({
   scopeToUnmerged: vi.fn((q) => q),
 }))
 
-import { assembleHomeQueue, getHomeQueueCount, SOURCE_PRE_CAP, GLOBAL_CAP } from './home-queue'
+import {
+  assembleHomeQueue, getHomeQueueCount, SOURCE_PRE_CAP, GLOBAL_CAP,
+  queueCountLabel, queueRowGroup, groupQueueRows,
+} from './home-queue'
 import { getPendingApprovals, getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { hasPermission, hasPermissionForLocation } from '@/lib/permissions'
 import { loadVisibleMailboxes } from '@/app/api/email/tickets/_helpers'
@@ -445,6 +448,74 @@ describe('assembleHomeQueue — tickets visibility-lookup failure (EMAIL-TICKET-
     const result = await assembleHomeQueue(db, userAt())
     expect(result.counts.tickets).toBe(0)
     expect(result.degraded).toEqual(['tickets'])
+  })
+})
+
+describe('queueCountLabel', () => {
+  it('returns null when there is nothing to count', () => {
+    expect(queueCountLabel(0, 0)).toBeNull()
+  })
+
+  it('returns the plain total as a string when nothing was capped', () => {
+    expect(queueCountLabel(5, 5)).toBe('5')
+    expect(queueCountLabel(5, 30)).toBe('5') // rows can exceed total in no real case, but never crash
+  })
+
+  it('appends a "+" when GLOBAL_CAP trimmed the row list below the true total', () => {
+    expect(queueCountLabel(42, 30)).toBe('42+')
+  })
+})
+
+describe('queueRowGroup', () => {
+  it('groups tickets and inbox rows by their literal source', () => {
+    expect(queueRowGroup({ source: 'tickets' })).toBe('tickets')
+    expect(queueRowGroup({ source: 'inbox' })).toBe('inbox')
+  })
+
+  it('folds every approvals provider key into "approvals"', () => {
+    expect(queueRowGroup({ source: 'issues' })).toBe('approvals')
+    expect(queueRowGroup({ source: 'invoices_queue' })).toBe('approvals')
+    expect(queueRowGroup({ source: 'host_events' })).toBe('approvals')
+  })
+})
+
+describe('groupQueueRows', () => {
+  const row = (source, id) => ({ source, id, occurredAt: '2026-08-10T10:00:00Z' })
+
+  it('returns null (flat list) when only 1 group is present', () => {
+    const rows = [row('issues', 'a1'), row('invoices_queue', 'a2')]
+    expect(groupQueueRows(rows, { approvals: 2 })).toBeNull()
+  })
+
+  it('returns null (flat list) when only 2 groups are present', () => {
+    const rows = [row('issues', 'a1'), row('tickets', 't1')]
+    expect(groupQueueRows(rows, { approvals: 1, tickets: 1 })).toBeNull()
+  })
+
+  it('splits into 3 sections, ordered by first appearance, when all 3 groups are present', () => {
+    const rows = [row('tickets', 't1'), row('issues', 'a1'), row('inbox', 'i1'), row('tickets', 't2')]
+    const groups = groupQueueRows(rows, { approvals: 1, tickets: 2, inbox: 1 })
+    expect(groups.map((g) => g.key)).toEqual(['tickets', 'approvals', 'inbox'])
+    expect(groups.find((g) => g.key === 'tickets').rows).toHaveLength(2)
+    expect(groups.find((g) => g.key === 'tickets').href).toBe('/communications/tickets')
+    expect(groups.find((g) => g.key === 'approvals').href).toBe('/approvals')
+    expect(groups.find((g) => g.key === 'inbox').href).toBe('/communications/inbox')
+  })
+
+  it('uses the TRUE count from `counts`, not the visible row count, for each section badge', () => {
+    const rows = [row('tickets', 't1'), row('issues', 'a1'), row('inbox', 'i1')]
+    const groups = groupQueueRows(rows, { approvals: 57, tickets: 1, inbox: 1 })
+    expect(groups.find((g) => g.key === 'approvals').count).toBe(57)
+  })
+
+  it('falls back to the visible row count when `counts` is missing a key', () => {
+    const rows = [row('tickets', 't1'), row('issues', 'a1'), row('inbox', 'i1')]
+    const groups = groupQueueRows(rows, {})
+    expect(groups.find((g) => g.key === 'approvals').count).toBe(1)
+  })
+
+  it('handles an empty row list', () => {
+    expect(groupQueueRows([], {})).toBeNull()
   })
 })
 

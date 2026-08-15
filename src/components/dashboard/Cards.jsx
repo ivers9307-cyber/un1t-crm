@@ -36,11 +36,19 @@ export function KpiRow({ children }) {
 }
 
 export function SectionHeader({ title, count, action }) {
+  // HOME.3 — `count` is a number everywhere except the home-queue badge,
+  // which can pass a capped-total string like "30+" (queueCountLabel in
+  // src/lib/home-queue.js). `count > 0` string-coerces "30+" to NaN and
+  // silently drops the badge, so the guard checks non-zero instead of
+  // positive — every existing numeric caller only ever passes null or a
+  // positive length (never an explicit 0), so this is behaviour-preserving
+  // for them.
+  const showBadge = count != null && count !== 0 && count !== '0'
   return (
     <div className="flex items-center justify-between mt-6 mb-2 px-1">
       <div className="flex items-center">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">{title}</h3>
-        {count != null && count > 0 ? (
+        {showBadge ? (
           <span className="ml-2 min-w-[20px] h-5 px-1.5 rounded-full bg-un1t-text text-un1t-bg text-[11px] font-semibold flex items-center justify-center">
             {count}
           </span>

@@ -344,6 +344,71 @@ export async function assembleHomeQueue(db, user) {
  * @param {object} user
  * @returns {Promise<number>}
  */
+// ── Rendering-adjacent helpers (pure) ───────────────────────────────────
+// The Today page (src/app/dashboard/today/page.js) is a server component
+// with no page-level test idiom in this repo, so the logic-worthy pieces
+// of rendering the queue — the capped-count badge label and the
+// group-or-flat decision — live here as pure functions with their own
+// tests, and the page stays thin: call these, map the result to JSX.
+
+/**
+ * Badge text for the queue's SectionHeader: the true total, with a "+"
+ * suffix appended when GLOBAL_CAP trimmed the row list below it — 42 real
+ * items behind a 30-row list must read as "30+", never a confident "30".
+ * Returns null (no badge) when there is nothing to count.
+ */
+export function queueCountLabel(total, rowsCount) {
+  if (!total) return null
+  return total > rowsCount ? `${total}+` : String(total)
+}
+
+// Which of the three top-level buckets (matching `counts` above) a row
+// belongs to. Every approvals provider key (issues, invoices_queue,
+// time_off, …) folds into 'approvals' — the queue's grouping and "View
+// all" links are three-wide, matching `counts`, not one section per
+// approval provider.
+export function queueRowGroup(row) {
+  if (row?.source === 'tickets') return 'tickets'
+  if (row?.source === 'inbox') return 'inbox'
+  return 'approvals'
+}
+
+const GROUP_META = {
+  approvals: { label: 'Approvals', href: '/approvals' },
+  tickets: { label: 'Tickets', href: '/communications/tickets' },
+  inbox: { label: 'Inbox', href: '/communications/inbox' },
+}
+
+/**
+ * Split the merged row list into per-group sections when 3+ distinct
+ * groups are present in it (order = first appearance in the
+ * already-sorted rows, so the most recently active group leads); returns
+ * null when 1-2 groups are present, telling the caller to render one flat
+ * list instead — a single- or two-source queue doesn't need subheaders.
+ * `counts` supplies each section's TRUE (uncapped) badge number; falls
+ * back to the visible row count if a key is missing.
+ */
+export function groupQueueRows(rows, counts = {}) {
+  const order = []
+  const buckets = new Map()
+  for (const row of rows || []) {
+    const key = queueRowGroup(row)
+    if (!buckets.has(key)) {
+      buckets.set(key, [])
+      order.push(key)
+    }
+    buckets.get(key).push(row)
+  }
+  if (order.length < 3) return null
+  return order.map((key) => ({
+    key,
+    label: GROUP_META[key].label,
+    href: GROUP_META[key].href,
+    count: typeof counts[key] === 'number' ? counts[key] : buckets.get(key).length,
+    rows: buckets.get(key),
+  }))
+}
+
 export async function getHomeQueueCount(db, user) {
   const locationId = user?.activeLocation?.id || null
   if (!locationId) return 0
