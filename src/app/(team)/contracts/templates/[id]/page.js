@@ -1,4 +1,5 @@
-// /admin/contracts/templates/[id] — edit an existing template.
+// /contracts/templates/[id] — edit an existing template (moved from
+// /admin/contracts/templates/[id], HUBS.2d).
 // Same form as /new with an extra "Active" toggle (soft-delete), plus
 // a read-only History section (CONTRACTS-TPLVER.1, mig 446) showing
 // every body_markdown snapshot archived by a previous PATCH.
@@ -65,7 +66,7 @@ export default async function EditTemplatePage(props) {
 
   return (
     <div className="p-6 md:p-8 max-w-5xl">
-      <Link href="/admin/contracts/templates" className="text-xs text-un1t-subtle hover:text-un1t-text">
+      <Link href="/contracts/templates" className="text-xs text-un1t-subtle hover:text-un1t-text">
         ← Templates
       </Link>
       <h2 className="text-2xl font-bold mt-1 mb-1">{template.name}</h2>

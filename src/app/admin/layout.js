@@ -2,14 +2,17 @@
 //
 // Distinct from /settings/* which is for per-location operator
 // admin (locations, staff, integrations, etc.). The hard-master-only
-// gate was relaxed by STUDIO-GROUP.1 (May 2026) so that the four
-// Studio Management children that live under /admin/* (contracts,
+// gate was relaxed by STUDIO-GROUP.1 (May 2026) so that the Studio
+// Management children living under /admin/* (originally contracts,
 // tv-displays, glofox-import, marketing-import) can be opened up to
-// non-master users via their own per-user permissions.
+// non-master users via their own per-user permissions. HUBS.2d moved
+// contracts out to /contracts (see the ADMIN_CHILD_PERMS note below) —
+// tv-displays, glofox-import and marketing-import are the ones still
+// actually under this tree.
 //
 // New rule:
 //   - master: always allowed (unchanged).
-//   - non-master: allowed if they hold ANY of the four Studio
+//   - non-master: allowed if they hold ANY of the Studio
 //     Management child permissions. Per-page guards then enforce
 //     the specific permission for the page they're on.
 //   - other /admin/* pages (achievements, audit-log, integrations,
@@ -34,6 +37,10 @@ export const dynamic = 'force-dynamic'
 // the Hyrox page itself to /hyrox (out from under this layout), but the
 // key stays here so a hyrox-only user can still reach the /admin index,
 // where the repointed admin nav card to /hyrox lives.
+// HUBS.2d — contracts got the same treatment: the page itself moved to
+// /contracts (out from under this layout), but the key stays here so a
+// contracts-only user can still reach the /admin index, where the
+// repointed admin nav card to /contracts lives.
 const ADMIN_CHILD_PERMS = ['contracts', 'tv_displays', 'glofox_import', 'preferences_import', 'approvals_hyrox_sessions']
 
 export default async function AdminLayout({ children }) {

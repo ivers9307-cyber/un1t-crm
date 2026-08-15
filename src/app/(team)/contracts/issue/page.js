@@ -1,4 +1,5 @@
-// /admin/contracts/issue — issue-a-contract wizard host page.
+// /contracts/issue — issue-a-contract wizard host page (moved from
+// /admin/contracts/issue, HUBS.2d).
 //
 // CONTRACTS-DRAFT.1 — accepts ?from=<contractId> (re-issue prefill,
 // linked from a revoked/declined contract's detail page, or from
@@ -29,7 +30,7 @@ export default async function IssueContractPage(props) {
 
   return (
     <div className="p-6 md:p-8 max-w-3xl">
-      <Link href="/admin/contracts" className="text-xs text-un1t-subtle hover:text-un1t-text">
+      <Link href="/contracts" className="text-xs text-un1t-subtle hover:text-un1t-text">
         ← Contracts
       </Link>
       <h2 className="text-2xl font-bold mt-1 mb-1">Issue a contract</h2>

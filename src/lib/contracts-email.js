@@ -173,7 +173,7 @@ export async function sendContractReminderEmail({ contract, recipient, templateN
  * Two emails after the recipient signs: the recipient gets a
  * "thanks, here's your copy" confirmation, and the issuer gets a
  * "Sarah signed her contract" notification. Both link to the
- * dual-signed document at /admin/contracts/[id] (issuer) or
+ * dual-signed document at /contracts/[id] (issuer) or
  * /account/contracts/[id] (recipient).
  *
  * CONTRACTS-PDF.1 — when the caller passes `pdfBuffer` (the dual-signed
@@ -186,7 +186,7 @@ export async function sendContractReminderEmail({ contract, recipient, templateN
 export async function sendContractSignedEmails({ contract, recipient, issuer, templateName, pdfBuffer = null }) {
   const branding = await getBranding(contract.location_id)
   const recipientUrl = `${appUrl()}/account/contracts/${contract.id}`
-  const issuerUrl = `${appUrl()}/admin/contracts/${contract.id}`
+  const issuerUrl = `${appUrl()}/contracts/${contract.id}`
   const results = { recipient: null, issuer: null }
 
   // Postmark's hard limit is 10MB for the WHOLE message including the
@@ -275,7 +275,7 @@ export async function sendContractSignedEmails({ contract, recipient, issuer, te
 export async function sendContractDeclinedEmail({ contract, recipient, issuer, templateName }) {
   if (!issuer?.email) return { ok: false, error: 'No issuer email' }
   const branding = await getBranding(contract.location_id)
-  const issuerUrl = `${appUrl()}/admin/contracts/${contract.id}`
+  const issuerUrl = `${appUrl()}/contracts/${contract.id}`
   const subject = `Declined: ${recipient?.full_name || 'recipient'} — ${templateName || 'contract'}`
   const innerHtml = `
     <h2 style="font-size:20px;margin:0 0 16px 0;">Contract declined</h2>

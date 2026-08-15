@@ -152,8 +152,15 @@ describe('Marketing hub', () => {
 })
 
 describe('Team hub', () => {
-  it('contains schedule, contracts, and policies', () => {
-    expect(hrefsIn('team')).toEqual(['/schedule', '/admin/contracts', '/policies'])
+  it('is a single collapsed hub entry', () => {
+    expect(hrefsIn('team')).toEqual(['/team'])
+  })
+
+  it('the Team hub entry is open to all and lights on member paths', () => {
+    const team = ALL_NAV.find(i => i.href === '/team')
+    expect(team.openToAll).toBe(true)
+    expect(team.anyPermission).toBeUndefined()
+    expect(team.extraActivePaths).toEqual(['/schedule', '/contracts', '/policies'])
   })
 })
 

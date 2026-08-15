@@ -42,7 +42,7 @@ export default async function MoneyHubLayout({ children }) {
   return (
     <>
       {tabs.length > 1 && (
-        <div className="px-8 pt-6">
+        <div className="px-8 pt-6 print:hidden">
           <HubTabs tabs={tabs} />
         </div>
       )}

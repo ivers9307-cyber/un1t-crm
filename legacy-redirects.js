@@ -55,6 +55,13 @@ module.exports = [
   { source: '/contacts/duplicates', destination: '/contacts?tab=duplicates', permanent: false },
   // HUBS.2b — Hyrox planner moved out of /admin into the Members hub.
   { source: '/admin/hyrox', destination: '/hyrox', permanent: false },
+  // HUBS.2d — Contracts moved out of /admin into the Team hub. Exact
+  // rule first, then the wildcard covering every child route ([id],
+  // issue, templates, templates/[id], templates/new) — required order
+  // per the shadow-order test below (specific before its prefix
+  // wildcard).
+  { source: '/admin/contracts', destination: '/contracts', permanent: false },
+  { source: '/admin/contracts/:path*', destination: '/contracts/:path*', permanent: false },
   // /communications legacy stub set
   { source: '/communications/broadcasts', destination: '/communications/sent', permanent: false },
   { source: '/communications/campaigns', destination: '/communications/sent', permanent: false },

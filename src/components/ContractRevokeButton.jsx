@@ -48,7 +48,7 @@ export default function ContractRevokeButton({ contractId, reissueAfter, label =
       const json = await res.json()
       if (!res.ok || !json.success) throw new Error(json.error || `HTTP ${res.status}`)
       if (reissueAfter) {
-        router.push(`/admin/contracts/issue?from=${reissueAfter}`)
+        router.push(`/contracts/issue?from=${reissueAfter}`)
       } else {
         router.refresh()
       }

@@ -43,10 +43,10 @@
 
 import {
   LayoutDashboard, MessagesSquare,
-  CalendarClock, Settings, Car, DoorOpen, FileSignature,
-  Globe, Tv, BookOpen, ClipboardCheck, AlertCircle,
+  Settings, Car, DoorOpen,
+  Globe, Tv, ClipboardCheck, AlertCircle,
   Workflow, Projector, Building2,
-  Wrench, Mail, Handshake, HeartPulse, Wallet,
+  Wrench, Mail, Handshake, HeartPulse, Wallet, UsersRound,
 } from 'lucide-react'
 
 // The sidebar Dashboard link is visible if ANY of these are true. The
@@ -257,28 +257,49 @@ export const ALL_NAV = [
   { href: '/welcome', label: 'Landing page', icon: Globe,
     permission: 'landing_page', openInNewTab: true, section: 'marketing' },
 
-  // ── Team ───────────────────────────────────────────────────────
-  // Schedule hub — single sidebar entry. Internal tab strip
-  // (ScheduleTabs.jsx) holds Schedule / Approvals / Reporting /
-  // Invoices / Attendance. The Attendance tab (mig 120 — auto-
-  // stamped from UniFi Access door unlocks) used to be a top-level
-  // sidebar entry; folded into the schedule tab strip in May 2026
-  // because operationally it sits next to Invoices (both are
-  // about staff time + pay). Same attendance_reports permission
-  // gate; the standalone /schedule/attendance URL still works as
-  // a deep link for cron-driven emails / scheduled reminders.
-  { href: '/schedule',   label: 'Schedule',     icon: CalendarClock,   permission: 'schedule', section: 'team' },
-  // HUBS.2a — promoted from a Studio Management child to Team (staff
-  // contracts belong beside the schedule they're tied to, not under
-  // building admin). Contracts (mig 106) — digital staff/contractor
-  // contracts.
-  { href: '/admin/contracts', label: 'Contracts', icon: FileSignature,
-    permission: 'contracts', section: 'team' },
-  // Policies (POLICIES.1) — versioned HR policies, open to every
-  // authenticated employee. No permission gate; sidebar always shows
-  // the entry to anyone signed in so they can find the documents
-  // they're being asked to acknowledge.
-  { href: '/policies',   label: 'Policies',     icon: BookOpen,        openToAll: true, section: 'team' },
+  // ── Team hub ───────────────────────────────────────────────────
+  // HUBS.2d — fourth application of the hub-collapse pattern (after
+  // Sales in HUBS.2a, Members in HUBS.2b, Money in HUBS.2c): what was
+  // three standalone sidebar entries (Schedule, Contracts, Policies)
+  // becomes one hub entry. Team's specialty among the four: Policies
+  // was already `openToAll` (POLICIES.1 — versioned HR policies open
+  // to every signed-in employee, no permission gate), which had
+  // already made the whole section universally visible in practice —
+  // any signed-in user could see the Team header via that entry alone.
+  // So the collapsed /team entry carrying `openToAll: true` is PARITY,
+  // not an access add: nobody gains or loses visibility, the hub just
+  // presents what was already true as one line instead of three.
+  // extraActivePaths keeps the entry lit while the user is actually
+  // sitting on one of the underlying routes (same rationale as Sales/
+  // Members/Money — /team redirects into a default tab rather than
+  // rendering content itself). The `/contracts` path in that list is
+  // the NEW contracts home (moved this branch, HUBS.2d — the old
+  // `/admin/contracts` URL now redirects there).
+  //
+  // Folded-forward context from the old standalone entries:
+  //  - Schedule — internal tab strip (ScheduleTabs.jsx) holds
+  //    Schedule / Approvals / Reporting / Invoices / Attendance. The
+  //    Attendance tab (mig 120 — auto-stamped from UniFi Access door
+  //    unlocks) used to be a top-level sidebar entry; folded into the
+  //    schedule tab strip in May 2026 because operationally it sits
+  //    next to Invoices (both are about staff time + pay). Same
+  //    attendance_reports permission gate; the standalone
+  //    /schedule/attendance URL still works as a deep link for
+  //    cron-driven emails / scheduled reminders.
+  //  - Contracts (mig 106) — digital staff/contractor contracts.
+  //    HUBS.2a had promoted it from a Studio Management child to Team
+  //    (staff contracts belong beside the schedule they're tied to,
+  //    not under building admin); HUBS.2d moved its URL from
+  //    /admin/contracts to /contracts as part of this collapse.
+  //  - Policies (POLICIES.1) — versioned HR policies, open to every
+  //    authenticated employee. No permission gate; the section always
+  //    showed to anyone signed in so they could find the documents
+  //    they're being asked to acknowledge — that's the universal
+  //    visibility the collapsed entry now carries directly.
+  { href: '/team', label: 'Team', icon: UsersRound,
+    openToAll: true,
+    extraActivePaths: ['/schedule', '/contracts', '/policies'],
+    section: 'team' },
 
   // ── Operations ─────────────────────────────────────────────────
   // EQUIP-MAINT.1 — equipment register + inspection checklists. Visible

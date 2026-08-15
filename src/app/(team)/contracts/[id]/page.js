@@ -1,4 +1,5 @@
-// /admin/contracts/[id] — issuer's view of one contract.
+// /contracts/[id] — issuer's view of one contract (moved from
+// /admin/contracts/[id], HUBS.2d).
 // Shows status, both signatures (when present), the rendered body,
 // and offers Revoke (only for issued/viewed) and a Print/Save-PDF
 // affordance.
@@ -84,7 +85,7 @@ export default async function ContractDetailAdmin(props) {
     <div className="p-6 md:p-8 max-w-3xl print:p-0 print:max-w-none">
       <ContractIssueWarningBanner contractId={c.id} />
       <div className="print:hidden">
-        <Link href="/admin/contracts" className="text-xs text-un1t-subtle hover:text-un1t-text">
+        <Link href="/contracts" className="text-xs text-un1t-subtle hover:text-un1t-text">
           ← Contracts
         </Link>
         <div className="flex items-start justify-between gap-3 mt-1 mb-4">
@@ -178,7 +179,7 @@ export default async function ContractDetailAdmin(props) {
         {canManageDraft && <ContractDraftActions contractId={c.id} />}
         {canReissue && (
           <Link
-            href={`/admin/contracts/issue?from=${c.id}`}
+            href={`/contracts/issue?from=${c.id}`}
             className="text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text"
           >Re-issue</Link>
         )}
