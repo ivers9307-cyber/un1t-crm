@@ -13,8 +13,6 @@
 //                 `email_inbox` OR'd into the entry's own anyPermission
 //                 (there's no second route to add to extraActivePaths —
 //                 the ticket queue already lives under /communications).
-//   queues      — Approvals + Issues. INTERIM: header-less, until the
-//                 phase-3 Home queue absorbs both into one inbox.
 //   sales       — the Sales hub. HUBS.2a Task 2 collapsed it to a single
 //                 sidebar entry backed by /sales's tab strip; the old
 //                 standalone Pipeline/Contacts/Tasks entries are gone
@@ -58,7 +56,6 @@
 import {
   LayoutDashboard, MessagesSquare,
   Settings, Car,
-  ClipboardCheck, AlertCircle,
   Megaphone, Building2,
   Wrench, Handshake, HeartPulse, Wallet, UsersRound,
 } from 'lucide-react'
@@ -117,24 +114,17 @@ export const ALL_NAV = [
   { href: '/communications', label: 'Messages', icon: MessagesSquare,
     anyPermission: ['email', 'whatsapp', 'sms', 'email_inbox'], section: 'messages' },
 
-  // ── queues — the interim action-queue zone (header-less). HUBS.2a
-  // leaves Approvals + Issues here rather than folding them into a
-  // hub; the phase-3 Home queue is what eventually absorbs both into
-  // one inbox, so this section is deliberately a holding pen, not a
-  // hub in its own right.
-  //
-  // APPROVALS.1 — central approvals dashboard. Aggregates contractor
-  // invoices, FTE expense claims, time-off, swap requests, and any
-  // future approval surfaces (extensible via src/lib/approvals
-  // registry). Sidebar badge shows total pending count for items
-  // the user can approve. Default-on for master + owner + manager —
-  // head_coach + staff see nothing approvable so it's off for them.
-  { href: '/approvals',  label: 'Approvals',    icon: ClipboardCheck,  permission: 'approvals_inbox', section: 'queues' },
-  // REPORT-ISSUE.2 — handler inbox for staff-reported issues at the
-  // active location. Owner + master by default; the submit + own-
-  // history surface (REPORT-ISSUE.1) is open to all staff via the
-  // mobile More tab and doesn't appear on the web sidebar.
-  { href: '/issues',     label: 'Issues',       icon: AlertCircle,     permission: 'issues_inbox', section: 'queues' },
+  // HOME.3 — the standalone Approvals + Issues sidebar entries (the old
+  // "queues" holding pen) retired here. The needs-attention queue on
+  // /dashboard/today (assembleHomeQueue, src/lib/home-queue.js) is now
+  // the entry point for both: it merges approvals + issues + email
+  // tickets + the unified inbox into one item-level list, so a
+  // dedicated Approvals/Issues sidebar row would just be a second way
+  // to reach a subset of what the queue already shows. Both pages
+  // still exist and both routes still work — /approvals and /issues
+  // remain reachable as deep-link destinations (⌘K palette commands
+  // below in command-palette.js, and every queue row's href) — only
+  // their OWN top-level sidebar rows are gone.
 
   // ── Sales hub ─────────────────────────────────────────────────
   // HUBS.2a — Sales collapses from three standalone sidebar entries
@@ -432,11 +422,12 @@ export const ALL_NAV = [
 // UI-FOUND.4 / HUBS.2a — section render order + headers. A `label` of
 // null renders the section's items with no header. HUBS.2a regroups
 // SIDEBAR-IA.1's flat sections into the phase-2 hub programme:
-//   - `queues` is INTERIM and deliberately header-less — Approvals +
-//     Issues live here only until the phase-3 Home queue absorbs both
-//     into one inbox, so it isn't styled as a hub of its own.
-//   - `modules` is also header-less: vertical modules bolted onto the
+//   - `modules` is header-less: vertical modules bolted onto the
 //     core product (Cars today), kept out of the daily scan path.
+// HOME.3 retired the `queues` section (the interim Approvals + Issues
+// holding pen) — the needs-attention queue on /dashboard/today now
+// absorbs both, exactly as this comment used to say it eventually
+// would.
 // A section with no visible items for the current user renders nothing
 // — no empty header. Dashboard is pinned above all sections (it has no
 // `section`).
@@ -471,7 +462,6 @@ export function activeHrefFor(pathname, items) {
 
 export const NAV_SECTIONS = [
   { id: 'messages',   label: 'Messages' },
-  { id: 'queues',     label: null },
   { id: 'sales',      label: 'Sales' },
   { id: 'members',    label: 'Members' },
   { id: 'money',      label: 'Money' },

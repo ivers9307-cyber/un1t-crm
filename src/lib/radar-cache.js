@@ -2,14 +2,16 @@
 //
 // THE PROBLEM (see docs/PERF_2_readout_2026-05-23.md)
 // ───────────────────────────────────────────────────
-// Sidebar.jsx (POLL_INTERVAL_MS = 60_000) polls /api/lead-radar/count
-// and /api/churn-radar/count every 60s per open operator session.
-// Each poll runs the *full* radar load (loadFunnel / loadRadar), which
-// paginates a sequential scan of the ~13 MB contacts table — purely to
-// produce one integer badge. Separately, each radar tab (funnel /
-// cleanup / classpass, radar / quarantine / overdue / winback)
-// re-fetches the same contact base. The PERF.2 readout measured this
-// family at roughly half of all database exec time.
+// /api/lead-radar/count and /api/churn-radar/count used to be polled
+// every 60s per open operator session by Sidebar.jsx (HOME.3 retired
+// both routes along with the sidebar's per-item badges — the radar tab
+// pages below are what still exercises this cache). Each poll ran the
+// *full* radar load (loadFunnel / loadRadar), which paginates a
+// sequential scan of the ~13 MB contacts table — purely to produce one
+// integer badge. Separately, each radar tab (funnel / cleanup /
+// classpass, radar / quarantine / overdue / winback) re-fetches the
+// same contact base. The PERF.2 readout measured this family at
+// roughly half of all database exec time.
 //
 // THE FIX
 // ───────

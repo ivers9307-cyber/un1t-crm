@@ -6,8 +6,13 @@
 // no approval items, ticket subjects or conversation contacts are ever
 // fetched. Every per-source gate mirrors the equivalent count route exactly
 // (see src/lib/home-queue.js's header); a session ineligible for a source
-// answers 0 for it, same as /api/approvals/count, /api/issues/count and
-// /api/whatsapp/unread-count all do, so a 60s poll is harmless for any user.
+// answers 0 for it, same posture as /api/whatsapp/unread-count, so a 60s
+// poll is harmless for any user. HOME.3's sidebar retirement task made
+// this the ONE poller Sidebar.jsx calls now — the per-source badge routes
+// it used to poll separately (/api/approvals/count, /api/issues/count,
+// /api/churn-radar/count, /api/lead-radar/count, /api/hosts/pending-
+// events/count) are deleted; this endpoint's count is what the sidebar
+// and the /dashboard/today queue header agree on.
 //
 // EMAIL-TICKET-CLEANUP.2 — the ONE exception to "always 200 with a number":
 // getHomeQueueCount REJECTS rather than resolving when the tickets

@@ -5,14 +5,13 @@
 // merge/sort and cap rules; this route is just auth + envelope.
 //
 // No single `permission` gates this surface — each of the three sources
-// self-gates exactly as its own count route does (approvals via the
+// self-gates exactly as its own count query does (approvals via the
 // registry's per-provider isVisible/permissionKey, tickets via
 // hasPermissionForLocation('email_inbox') + mailbox visibility, inbox via
 // hasPermission('whatsapp')) — so withAuth is used auth-only here, the same
-// shape /api/approvals/pending and /api/approvals/count use with a direct
-// getCurrentUser() call. `location: false` because "no active location"
-// is a valid, well-defined state (assembleHomeQueue answers all-empty for
-// it), not a 400.
+// shape /api/approvals/pending uses with a direct getCurrentUser() call.
+// `location: false` because "no active location" is a valid, well-defined
+// state (assembleHomeQueue answers all-empty for it), not a 400.
 //
 // assembleHomeQueue never throws — a failed source degrades to an empty
 // bucket via Promise.allSettled (see its header) — so the only 500 this

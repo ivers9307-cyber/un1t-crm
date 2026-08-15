@@ -6,11 +6,12 @@
 // surface (claim + resolve + close); the /approvals tab is the
 // aggregator view.
 //
-// HOME.3 — unified with /api/issues/count's open+in_progress definition
-// (src/app/api/issues/count/route.js → countInboxIssues). Previously this
-// provider counted 'open' only, on the APPROVALS-STUDIO.2 theory that a
-// claimed (in_progress) issue is "decided, just pending actioning" — but
-// that left this tab and the sidebar issues badge counting two different
+// HOME.3 — unified with countInboxIssues's open+in_progress definition
+// (src/lib/issues.js — the same query the retired /api/issues/count
+// sidebar-badge route used to run). Previously this provider counted
+// 'open' only, on the APPROVALS-STUDIO.2 theory that a claimed
+// (in_progress) issue is "decided, just pending actioning" — but that
+// left this tab and the sidebar issues badge counting two different
 // populations of the same table, which is precisely the drift the home
 // queue exists to remove: an operator working off one badge and a handler
 // working off the other would disagree about how many issues are open.
