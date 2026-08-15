@@ -7,12 +7,18 @@
 
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 
 export const dynamic = 'force-dynamic'
 
 export default async function LiveRedirectPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
+  // SEC-LIVE-GATE.1 — the sidebar nav and /members hub index both gate
+  // this on `studio_management` ("Same permission gate as Studio
+  // Management"), but nothing enforced it server-side. Same gate as
+  // src/app/(operations)/studio-management/page.js.
+  if (!hasPermission(user, 'studio_management')) redirect('/')
   const activeLocationId = user.activeLocation?.id
   if (!activeLocationId) {
     // Master with no active location selected; bounce to home where

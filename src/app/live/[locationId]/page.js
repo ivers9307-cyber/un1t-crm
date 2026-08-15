@@ -6,6 +6,7 @@
 
 import { redirect, notFound } from 'next/navigation'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import LiveClassClient from './LiveClassClient'
 
@@ -15,6 +16,11 @@ export default async function LiveClassPage(props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
+  // SEC-LIVE-GATE.1 — this page rendered the coach heart-rate board (live
+  // HR sessions, member names) behind only login + location membership.
+  // Same gate as src/app/(operations)/studio-management/page.js — the nav
+  // and /members hub index both already assume it.
+  if (!hasPermission(user, 'studio_management')) redirect('/')
 
   const locationId = params.locationId
   if (!user.isMaster && !getUserLocationIds(user).includes(locationId)) {
