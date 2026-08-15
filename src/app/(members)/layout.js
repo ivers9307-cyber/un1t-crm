@@ -1,10 +1,13 @@
 // (members) — Members hub chrome. Same pattern as (sales)/layout.js: the
 // group shares one tab strip WITHOUT changing member URLs. Live HR and the
 // class timer are tabs but their routes stay OUTSIDE the group — they are
-// full-screen surfaces and must not inherit the strip. Tab visibility
-// mirrors each PAGE's own gate (not the old nav entries' looser gates);
-// /live has no page gate today (tracked separately) — its tab uses the
-// nav-documented studio_management key.
+// full-screen surfaces and must not inherit the strip. The event check-in
+// subtree (/events/[id]/checkin + /checkin/scan) and the race-day control
+// console (/events/[id]/control) live outside the group for the same
+// reason — a phone scan surface and a tablet race console, chrome-free by
+// design. Tab visibility mirrors each PAGE's own gate (not the old nav
+// entries' looser gates); /live has no page gate today (tracked
+// separately) — its tab uses the nav-documented studio_management key.
 
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
