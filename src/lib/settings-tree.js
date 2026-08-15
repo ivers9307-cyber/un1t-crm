@@ -108,11 +108,22 @@ export const SETTINGS_TREE = [
         // it also admits non-master holders of certain Studio-Management
         // child permissions (STUDIO-GROUP.1). The row gate here is
         // intentionally narrower (masterOnly), matching the old page.js
-        // grid's "Master tools" section, which only ever rendered for
-        // `user.role === 'master' || user.impersonatingFrom`. A
-        // permission-holding non-master who needs /admin's child surfaces
-        // reaches them via their OWN dedicated nav entries elsewhere, not
-        // through this shortcut.
+        // grid's "Master tools" section, which rendered for
+        // `user.role === 'master' || user.impersonatingFrom`. That old
+        // formula OVERSTATES its equivalence to real reachability, though:
+        // during impersonation `profile = target` (src/lib/auth.js), so a
+        // master impersonating a non-master gets that target's role/
+        // profileRole, not 'master' — and /admin/achievements and
+        // /admin/integrations below both hard-gate on `profileRole ===
+        // 'master'` (redirect otherwise). The old grid showed this section
+        // throughout such a session regardless, i.e. as dead links for two
+        // of its three destinations. masterOnly carries no impersonatingFrom
+        // carve-out, so it has no such gap — it matches those two
+        // destinations' real reachability exactly, and is the deliberately
+        // narrower (correct) choice for /admin too. A permission-holding
+        // non-master who needs /admin's child surfaces reaches them via
+        // their OWN dedicated nav entries elsewhere, not through this
+        // shortcut.
         gate: { masterOnly: true },
       },
       {
@@ -121,6 +132,11 @@ export const SETTINGS_TREE = [
         href: '/admin/achievements',
         description: 'Manage the achievements catalogue members unlock.',
         icon: Trophy,
+        // Same masterOnly reasoning as admin-hub above: this destination
+        // hard-gates on `profileRole === 'master'` (no impersonatingFrom
+        // carve-out), so masterOnly matches its real reachability exactly
+        // — the old grid's wider formula showed this row as a dead link
+        // whenever a master impersonated a non-master.
         gate: { masterOnly: true },
       },
       {
@@ -129,6 +145,11 @@ export const SETTINGS_TREE = [
         href: '/admin/integrations',
         description: 'Master-only credentials store for platform-level service integrations.',
         icon: Cable,
+        // Same masterOnly reasoning as admin-hub above: this destination
+        // hard-gates on `profileRole === 'master'` (no impersonatingFrom
+        // carve-out), so masterOnly matches its real reachability exactly
+        // — the old grid's wider formula showed this row as a dead link
+        // whenever a master impersonated a non-master.
         gate: { masterOnly: true },
       },
     ],
