@@ -1,4 +1,5 @@
-// /admin/contracts — issuer-side hub. Lists issued contracts for the
+// /contracts — issuer-side hub (moved from /admin/contracts, HUBS.2d).
+// Lists issued contracts for the
 // viewer's ORGANIZATION plus a button to issue a new one and a link to
 // the templates manager.
 //

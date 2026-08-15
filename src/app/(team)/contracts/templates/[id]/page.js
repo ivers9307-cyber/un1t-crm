@@ -1,4 +1,5 @@
-// /admin/contracts/templates/[id] — edit an existing template.
+// /contracts/templates/[id] — edit an existing template (moved from
+// /admin/contracts/templates/[id], HUBS.2d).
 // Same form as /new with an extra "Active" toggle (soft-delete), plus
 // a read-only History section (CONTRACTS-TPLVER.1, mig 446) showing
 // every body_markdown snapshot archived by a previous PATCH.

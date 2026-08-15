@@ -1,4 +1,5 @@
-// /admin/contracts/templates/new — create a new contract template.
+// /contracts/templates/new — create a new contract template (moved
+// from /admin/contracts/templates/new, HUBS.2d).
 
 import { redirect } from 'next/navigation'
 import Link from 'next/link'

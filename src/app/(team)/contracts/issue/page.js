@@ -1,4 +1,5 @@
-// /admin/contracts/issue — issue-a-contract wizard host page.
+// /contracts/issue — issue-a-contract wizard host page (moved from
+// /admin/contracts/issue, HUBS.2d).
 //
 // CONTRACTS-DRAFT.1 — accepts ?from=<contractId> (re-issue prefill,
 // linked from a revoked/declined contract's detail page, or from

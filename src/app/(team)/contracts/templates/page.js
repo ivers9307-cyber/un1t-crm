@@ -1,5 +1,6 @@
-// /admin/contracts/templates — list of contract templates the
-// caller can administer. Master/owner only.
+// /contracts/templates — list of contract templates the
+// caller can administer. Master/owner only. (Moved from
+// /admin/contracts/templates, HUBS.2d.)
 
 import Link from 'next/link'
 import { redirect } from 'next/navigation'

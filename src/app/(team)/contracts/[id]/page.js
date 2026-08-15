@@ -1,4 +1,5 @@
-// /admin/contracts/[id] — issuer's view of one contract.
+// /contracts/[id] — issuer's view of one contract (moved from
+// /admin/contracts/[id], HUBS.2d).
 // Shows status, both signatures (when present), the rendered body,
 // and offers Revoke (only for issued/viewed) and a Print/Save-PDF
 // affordance.
