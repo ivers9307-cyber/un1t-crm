@@ -27,7 +27,10 @@ function canEnter(user) {
 export default async function ChecklistsAdminPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!canEnter(user)) redirect('/admin')
+  // HUBS.2e — was redirect('/admin'); this page moved out of /admin
+  // into the Operations hub (/checklists), so bouncing a denied user
+  // back to the grid it just left makes no sense post-move.
+  if (!canEnter(user)) redirect('/')
 
   return (
     <div className="p-6 md:p-8 max-w-6xl">
