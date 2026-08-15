@@ -10,14 +10,16 @@
 //   messages    — Communications hub + the email ticket queue
 //   queues      — Approvals + Issues. INTERIM: header-less, until the
 //                 phase-3 Home queue absorbs both into one inbox.
-//   sales       — the Sales hub. THIS PR collapses it to a single sidebar
-//                 entry backed by /sales's tab strip (HUBS.2a Task 2);
-//                 the old standalone Pipeline/Contacts/Tasks entries are
-//                 gone from here (they remain deep-linkable via the ⌘K
+//   sales       — the Sales hub. HUBS.2a Task 2 collapsed it to a single
+//                 sidebar entry backed by /sales's tab strip; the old
+//                 standalone Pipeline/Contacts/Tasks entries are gone
+//                 from here (they remain deep-linkable via the ⌘K
 //                 palette and extraActivePaths keeps the hub entry lit
 //                 while a user is on one of those routes).
-//   members     — what's on for members: bookings, events, challenges,
-//                 pulse, live floor HR, Hyrox Training Club.
+//   members     — the Members hub. HUBS.2b Task 4 collapses it the same
+//                 way: bookings, events, challenges, pulse, live floor
+//                 HR (+ nested Class timer) and Hyrox Training Club all
+//                 fold into a single /members entry.
 //   money       — bookkeeping (RCOV.P2) + the orders ledger.
 //   marketing   — automations + the public landing page.
 //   team        — schedule, staff contracts, HR policies.
@@ -26,9 +28,9 @@
 //   modules     — vertical modules bolted onto the core product (Cars).
 //                 Header-less, out of the daily scan path.
 //   account     — config.
-// Later PRs in the HUBS.2a programme collapse the remaining multi-entry
-// sections (members, money, etc.) into single hub entries the same way
-// Sales was collapsed here; until then each keeps its individual items.
+// Later PRs in the HUBS.2b programme collapse the remaining multi-entry
+// sections (money, etc.) into single hub entries the same way Sales and
+// Members were collapsed here; until then each keeps its individual items.
 //
 // The radars (churn/lead) are deliberately NOT here — SIDEBAR-IA.1
 // relocated them under the Dashboard tab strip (/dashboard/churn-radar,
@@ -37,11 +39,11 @@
 // an entry point (dashboard-redirect.js lands them on their radar).
 
 import {
-  LayoutDashboard, Calendar, MessagesSquare,
-  CalendarClock, Settings, Car, Flag, Receipt, DoorOpen, FileSignature,
-  Heart, Globe, Tv, BookOpen, Inbox, ClipboardCheck, AlertCircle, CreditCard,
-  Workflow, Timer, Projector, Trophy, Activity, Landmark, Building2, Dumbbell,
-  Wrench, Mail, Handshake,
+  LayoutDashboard, MessagesSquare,
+  CalendarClock, Settings, Car, Receipt, DoorOpen, FileSignature,
+  Globe, Tv, BookOpen, Inbox, ClipboardCheck, AlertCircle, CreditCard,
+  Workflow, Projector, Landmark, Building2,
+  Wrench, Mail, Handshake, HeartPulse,
 } from 'lucide-react'
 
 // The sidebar Dashboard link is visible if ANY of these are true. The
@@ -145,71 +147,49 @@ export const ALL_NAV = [
   // PERSON-LINK.2 — duplicate review is a tab on /contacts?tab=duplicates,
   // not a standalone sidebar entry. No sidebar item needed.
 
-  // ── Members — what's on for members ─────────────────────────────
+  // ── Members hub ───────────────────────────────────────────────
+  // HUBS.2b Task 4 — mirrors the HUBS.2a Sales collapse: what was six
+  // standalone sidebar entries (Bookings, Events, Challenges, Pulse,
+  // the Live HR group + its Class timer child, Hyrox Training Club)
+  // becomes one hub entry. anyPermission ORs every underlying
+  // permission so the entry is visible to anyone who could reach any
+  // tab; extraActivePaths keeps it lit while the user is actually
+  // sitting on one of those routes (same rationale as Sales —
+  // /members redirects into a default tab rather than rendering
+  // content itself). `'events'` stays in the union even though no
+  // current members tab reads it: it's a visibility superset carried
+  // over from the old /bookings entry (anyPermission: ['events',
+  // 'bookings']) so an events-holder who never held `bookings` still
+  // sees the section — nobody loses access in the collapse.
   //
-  // Schedule hub — single sidebar entry. Internal tab strip
-  // (ScheduleTabs.jsx) holds Schedule / Approvals / Reporting /
-  // Invoices / Attendance. The Attendance tab (mig 120 — auto-
-  // stamped from UniFi Access door unlocks) used to be a top-level
-  // sidebar entry; folded into the schedule tab strip in May 2026
-  // because operationally it sits next to Invoices (both are
-  // about staff time + pay). Same attendance_reports permission
-  // gate; the standalone /schedule/attendance URL still works as
-  // a deep link for cron-driven emails / scheduled reminders.
+  // TRAP: `/studio-management/timer` also appears in the Operations
+  // section's `/studio-management` entry's prefix match (the bare
+  // pathname-startsWith matcher used for active-state highlighting) —
+  // both this hub AND Studio Management light up on the timer page.
+  // Accepted for this PR; the matcher fix belongs to whichever PR
+  // gives Operations its own hub treatment.
   //
-  // Single entry replacing the old Events + Bookings ("Calendly").
-  // The hub lands on /bookings (the high-frequency operational view —
-  // "what's booked today / coming up") with a tab strip at the top of
-  // /bookings/* that switches between booking types and reservations.
-  { href: '/bookings',   label: 'Bookings',     icon: Calendar,
-    anyPermission: ['events', 'bookings'], section: 'members' },
-  // Events (mig 082 origin, multi-kind from mig 122 onwards). Was
-  // labelled "Races" before the events expansion — same data table
-  // (race_events), now spans race + workshop + seminar + open_day +
-  // masterclass via the kind discriminator. URL relocated /races →
-  // /events; permission key 'races' stays internal (gates UI, not
-  // user-visible). extraActivePaths keeps the entry highlighted on
-  // old /events/* URLs that hit the back-compat rewrite.
-  { href: '/events',     label: 'Events',       icon: Flag,            permission: 'races',
-    extraActivePaths: ['/events'], section: 'members' },
-  // ENGAGEMENT-CHALLENGES — operator CRUD for member challenges.
-  // Manager+ by default (same as events). Backed by the challenges table.
-  { href: '/challenges', label: 'Challenges',   icon: Trophy,          permission: 'challenges', section: 'members' },
-  // PULSE-90.4 — the /pulse operator hub. Management home for the Pulse
-  // customer app: the first-90-days journey lane (9-classes-in-6-weeks
-  // pace), plus future Pulse features (leaderboards, seasonal challenge).
-  // Cross-links to /dashboard/engagement + /challenges rather than
-  // duplicating them. Owner + manager + head_coach by default (retention
-  // oversight — same shape as engagement_analytics).
-  { href: '/pulse',      label: 'Pulse',        icon: Activity,        permission: 'pulse_admin', section: 'members' },
-  // Live class — coach view of in-studio HR (mig 110-113). Renders
-  // attendees with current zone color, available straps panel, and
-  // override-pairing flow. /live redirects to /live/<activeLocation>.
-  // Same permission gate as Studio Management — anyone running class
-  // can use it. A top-level members entry (not nested under Studio
-  // Management) because operationally it's its own surface — but it IS
-  // a parent: the Class timer (CLASS-TIMER) nests under it, since the
-  // timer runs on the studio TV alongside this HR board (same floor
-  // surface, not an admin task). Both share the `studio_management`
-  // gate. Lived under the Communications header before SIDEBAR-IA.1.
-  {
-    href: '/live',
-    label: 'Live HR',
-    icon: Heart,
-    permission: 'studio_management',
-    section: 'members',
-    groupId: 'live',  // localStorage key for expand state
-    children: [
-      { href: '/studio-management/timer', label: 'Class timer', icon: Timer, permission: 'class_timer' },
-    ],
-  },
-  // HUBS.2a — promoted from a Studio Management child to a standalone
-  // Members entry (it's a member-facing training programme, not a
-  // building-admin surface). HYROX-TC.2 — coach planner: generate a
-  // 12-week Hyrox Training Club block and review/approve/regenerate
-  // each AI-generated session before it can publish to the studio TV.
-  { href: '/admin/hyrox', label: 'Hyrox Training Club', icon: Dumbbell,
-    permission: 'approvals_hyrox_sessions', section: 'members' },
+  // Folded-forward context from the old standalone entries:
+  //  - Bookings landed on /bookings (high-frequency "what's booked
+  //    today" view) with a tab strip switching booking types/reservations.
+  //  - Events (mig 082 origin, multi-kind from mig 122) was labelled
+  //    "Races" before the expansion — same race_events table, now spans
+  //    race/workshop/seminar/open_day/masterclass via `kind`. URL
+  //    relocated /races → /events; permission key `races` stays internal.
+  //  - Challenges (ENGAGEMENT-CHALLENGES) — operator CRUD over the
+  //    challenges table.
+  //  - Pulse (PULSE-90.4) — the /pulse operator hub for the customer
+  //    app's first-90-days journey lane + future engagement features.
+  //  - Live HR (mig 110-113) — coach view of in-studio HR, redirects to
+  //    /live/<activeLocation>; shares `studio_management` with Studio
+  //    Management. Class timer nested under it (runs on the studio TV
+  //    alongside the HR board — same floor surface, not an admin task).
+  //  - Hyrox Training Club (HYROX-TC.2) — coach planner: generate/review/
+  //    approve a 12-week Hyrox block before it publishes to the studio TV.
+  { href: '/members', label: 'Members', icon: HeartPulse,
+    anyPermission: ['bookings', 'events', 'races', 'challenges', 'pulse_admin', 'studio_management', 'class_timer', 'approvals_hyrox_sessions'],
+    extraActivePaths: ['/bookings', '/events', '/challenges', '/pulse', '/live', '/studio-management/timer', '/hyrox'],
+    section: 'members' },
 
   // ── Money — bookkeeping (RCOV.P2) + the orders ledger ────────────
   // RCOV.P2, Richard's "prevent sprawl" call — the accounting hub
