@@ -1,11 +1,14 @@
 // PRUNE.1 — the config-level redirects that replaced the deleted legacy
-// stub pages. Invariants: the map mirrors the deleted stubs 1:1 (every
-// source a stub used to serve still redirects, to the same target the
-// stub had), every destination is canonical (never lands on another
-// retired tree, or the chain the stubs were deleted to kill comes back),
-// and specific rules precede their prefix wildcard (next.config
-// redirects are first-match-wins).
+// stub pages. Invariants: every source a deleted stub used to serve still
+// redirects, to the same target the stub had (DELETED_STUB_SOURCES below
+// is hand-maintained bookkeeping, not derived from git — it is only as
+// complete as whoever last updated it), every destination is canonical
+// (never lands on another retired tree, or the chain the stubs were
+// deleted to kill comes back), and specific rules precede their prefix
+// wildcard (next.config redirects are first-match-wins).
 import { describe, it, expect } from 'vitest'
+import fs from 'node:fs'
+import path from 'node:path'
 import legacyRedirects from '../../legacy-redirects.js'
 
 const RETIRED_PREFIXES = ['/email', '/whatsapp', '/segments']
@@ -54,10 +57,28 @@ describe('legacy-redirects', () => {
     }
   })
 
-  it('mirrors the PRUNE.1b deletion list 1:1 — every deleted stub route has a rule', () => {
+  it('every route in the recorded deletion list has a redirect rule', () => {
     const sources = new Set(legacyRedirects.map(r => r.source))
     for (const stub of DELETED_STUB_SOURCES) {
       expect(sources.has(stub), `deleted stub ${stub} has no redirect rule`).toBe(true)
+    }
+  })
+
+  it('no recorded deleted stub still resolves to a real page under src/app', () => {
+    // Guards the bookkeeping from the other direction: if a route in
+    // DELETED_STUB_SOURCES ever gains (or regains) a page.js, either the
+    // deletion never happened or the list is stale — both are bugs.
+    // NOTE: this cannot catch a deleted page that was never added to the
+    // list; a green run here is not proof of completeness.
+    for (const stub of DELETED_STUB_SOURCES) {
+      const rel = stub.replace(/:id$/, '[id]')
+      const candidates = [
+        path.join(process.cwd(), 'src/app', rel, 'page.js'),
+        path.join(process.cwd(), 'src/app', rel, 'page.jsx'),
+      ]
+      for (const f of candidates) {
+        expect(fs.existsSync(f), `${stub} still has a page at ${f}`).toBe(false)
+      }
     }
   })
 
