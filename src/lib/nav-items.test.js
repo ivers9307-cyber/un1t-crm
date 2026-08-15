@@ -22,7 +22,7 @@
 // DASHBOARD_LINK_PERM_KEYS.
 
 import { describe, it, expect } from 'vitest'
-import { ALL_NAV, NAV_SECTIONS, DASHBOARD_LINK_PERM_KEYS } from './nav-items'
+import { ALL_NAV, NAV_SECTIONS, DASHBOARD_LINK_PERM_KEYS, activeHrefFor } from './nav-items'
 
 const sectionIds = NAV_SECTIONS.map((s) => s.id)
 const itemsIn = (id) => ALL_NAV.filter((i) => i.section === id)
@@ -165,25 +165,14 @@ describe('Team hub', () => {
 })
 
 describe('Operations hub', () => {
-  it('contains maintenance and studio management', () => {
-    expect(hrefsIn('operations')).toEqual(['/maintenance', '/studio-management'])
+  it('is a single collapsed hub entry', () => {
+    expect(hrefsIn('operations')).toEqual(['/operations'])
   })
 
-  it('gates Maintenance on equipment_admin OR equipment_inspect (EQUIP-MAINT.1)', () => {
-    const maintenance = ALL_NAV.find((i) => i.href === '/maintenance')
-    expect(maintenance.anyPermission).toEqual(['equipment_admin', 'equipment_inspect'])
-  })
-})
-
-describe('Studio Management group', () => {
-  it('is the only operations-section group entry with children', () => {
-    const group = ALL_NAV.find((i) => i.href === '/studio-management')
-    expect(group.section).toBe('operations')
-  })
-
-  it('Studio Management group keeps only its display children after promotions', () => {
-    const sm = ALL_NAV.find(i => i.href === '/studio-management')
-    expect(sm.children.map(c => c.href)).toEqual(['/admin/tv-displays', '/presentations'])
+  it('the Operations hub entry ORs its member permissions and lights on member paths', () => {
+    const ops = ALL_NAV.find(i => i.href === '/operations')
+    expect(ops.anyPermission).toEqual(['equipment_admin', 'equipment_inspect', 'studio_management', 'tv_displays', 'presentations'])
+    expect(ops.extraActivePaths).toEqual(['/maintenance', '/studio-management', '/tv-displays', '/presentations', '/checklists'])
   })
 })
 
@@ -196,6 +185,70 @@ describe('modules — vertical modules zone', () => {
 describe('Account', () => {
   it('contains settings', () => {
     expect(hrefsIn('account')).toEqual(['/settings'])
+  })
+})
+
+// HUBS.2e Task 4/5 — activeHrefFor is the ONE-winner, longest-match
+// replacement for Sidebar's old per-item bare startsWith (which let
+// every prefix-matching item light simultaneously). Cases below assert
+// against the REAL ALL_NAV at this commit. Task 5 folded Studio
+// Management + Maintenance into a single Operations hub entry, which
+// removed the last children-bearing entry from ALL_NAV — the one case
+// that depended on a real group (child-match semantics) is now a
+// SYNTHETIC hand-built fixture below, so that behaviour stays pinned
+// even though no grouped entry remains in production nav data.
+describe('activeHrefFor — longest-match single winner', () => {
+  it('kills double-light #1: /communications/tickets lights ONLY the Email inbox entry, not the Communications hub too', () => {
+    expect(activeHrefFor('/communications/tickets', ALL_NAV)).toEqual({
+      itemHref: '/communications/tickets',
+      matchedPath: '/communications/tickets',
+    })
+  })
+
+  it('a route under the Communications hub (not the ticket queue) lights the hub via its own href', () => {
+    expect(activeHrefFor('/communications/send', ALL_NAV)).toEqual({
+      itemHref: '/communications',
+      matchedPath: '/communications',
+    })
+  })
+
+  it('a Sales extraActivePaths route lights the Sales hub entry', () => {
+    expect(activeHrefFor('/contacts/abc123', ALL_NAV)).toEqual({
+      itemHref: '/sales',
+      matchedPath: '/contacts',
+    })
+  })
+
+  it('kills double-light #2: /studio-management/timer lights ONLY Members (its extraActivePath beats the shorter Operations href, now that Task 5 folded the old Studio Management group under Operations)', () => {
+    expect(activeHrefFor('/studio-management/timer', ALL_NAV)).toEqual({
+      itemHref: '/members',
+      matchedPath: '/studio-management/timer',
+    })
+  })
+
+  it('the class timer still resolves to Members, not Operations (longest match)', () => {
+    expect(activeHrefFor('/studio-management/timer', ALL_NAV)).toEqual({ itemHref: '/members', matchedPath: '/studio-management/timer' })
+  })
+
+  it('a Members extraActivePaths route (Hyrox) lights the Members hub entry', () => {
+    expect(activeHrefFor('/hyrox', ALL_NAV)).toEqual({
+      itemHref: '/members',
+      matchedPath: '/hyrox',
+    })
+  })
+
+  it('returns null when nothing matches', () => {
+    expect(activeHrefFor('/nonexistent', ALL_NAV)).toBeNull()
+  })
+
+  it('a child match reports the PARENT item as itemHref, and the matched child href as matchedPath, so the group opens and the child row lights (SYNTHETIC fixture — HUBS.2e Task 5 removed the last children-bearing entry, Studio Management, from ALL_NAV; this hand-built items array keeps child-match semantics tested forever, independent of what nav data looks like)', () => {
+    const items = [
+      { href: '/parent', children: [{ href: '/parent/child-a' }, { href: '/parent/child-b' }] },
+    ]
+    expect(activeHrefFor('/parent/child-b/deep', items)).toEqual({
+      itemHref: '/parent',
+      matchedPath: '/parent/child-b',
+    })
   })
 })
 

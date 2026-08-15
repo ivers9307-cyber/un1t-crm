@@ -57,7 +57,7 @@ export default async function AdminHubPage() {
   // Studio Management family — visible per per-user permission.
   const studioTools = [
     { perm: 'contracts',          href: '/contracts',               icon: FileSignature, title: 'Contracts',           desc: 'Issue, track, and revoke digital contracts.' },
-    { perm: 'tv_displays',        href: '/admin/tv-displays',       icon: Tv,            title: 'TV Displays',         desc: 'Register studio TVs and push content via UC Cast Pro.' },
+    { perm: 'tv_displays',        href: '/tv-displays',             icon: Tv,            title: 'TV Displays',         desc: 'Register studio TVs and push content via UC Cast Pro.' },
     { perm: 'glofox_import',      href: '/admin/glofox-import',     icon: Download,      title: 'Glofox import',       desc: 'Interactive Glofox member import and sync history.' },
     { perm: 'preferences_import', href: '/admin/marketing-import',  icon: Download,      title: 'Preferences import',  desc: 'Bulk import marketing preferences from external platforms.' },
     // HYROX-TC.2 — coach planner: generate the block, then review/approve/
@@ -71,7 +71,7 @@ export default async function AdminHubPage() {
     // CHECKLIST.1 — per-(role, day) closer / opener checklists for
     // coaches on shift. Master + owner write; anyone with admin
     // access can browse to see the current layout.
-    { ownerOrMasterOnly: true,    href: '/admin/checklists',        icon: CheckSquare,   title: 'Checklists',          desc: 'Role + day-of-week checklists for coaches. Items shown on the mobile app during their shift.' },
+    { ownerOrMasterOnly: true,    href: '/checklists',              icon: CheckSquare,   title: 'Checklists',          desc: 'Role + day-of-week checklists for coaches. Items shown on the mobile app during their shift.' },
     // FLEET-CMD.1 — keyed on fleet_restart, the SAFE tier, so a coach who
     // can restart a frozen board can find the page. Destructive actions are
     // gated per-action behind fleet_admin inside it.

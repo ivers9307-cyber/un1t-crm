@@ -62,6 +62,11 @@ module.exports = [
   // wildcard).
   { source: '/admin/contracts', destination: '/contracts', permanent: false },
   { source: '/admin/contracts/:path*', destination: '/contracts/:path*', permanent: false },
+  // HUBS.2e — TV Displays + Checklists moved out of /admin into the
+  // Operations hub. Neither has child routes, so no wildcard needed
+  // (unlike /admin/contracts above).
+  { source: '/admin/tv-displays', destination: '/tv-displays', permanent: false },
+  { source: '/admin/checklists', destination: '/checklists', permanent: false },
   // /communications legacy stub set
   { source: '/communications/broadcasts', destination: '/communications/sent', permanent: false },
   { source: '/communications/campaigns', destination: '/communications/sent', permanent: false },

@@ -53,6 +53,11 @@ const DELETED_STUB_SOURCES = [
   // HUBS.2d — moved, not deleted (/admin/contracts -> /contracts, hub
   // member of the Team hub); listed for the same reverse-check reason.
   '/admin/contracts',
+  // HUBS.2e — moved, not deleted (/admin/tv-displays -> /tv-displays,
+  // /admin/checklists -> /checklists, hub members of the Operations
+  // hub); listed for the same reverse-check reason.
+  '/admin/tv-displays',
+  '/admin/checklists',
 ]
 
 describe('legacy-redirects', () => {

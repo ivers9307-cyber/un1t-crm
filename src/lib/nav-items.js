@@ -43,9 +43,9 @@
 
 import {
   LayoutDashboard, MessagesSquare,
-  Settings, Car, DoorOpen,
-  Globe, Tv, ClipboardCheck, AlertCircle,
-  Workflow, Projector, Building2,
+  Settings, Car,
+  Globe, ClipboardCheck, AlertCircle,
+  Workflow, Building2,
   Wrench, Mail, Handshake, HeartPulse, Wallet, UsersRound,
 } from 'lucide-react'
 
@@ -301,42 +301,60 @@ export const ALL_NAV = [
     extraActivePaths: ['/schedule', '/contracts', '/policies'],
     section: 'team' },
 
-  // ── Operations ─────────────────────────────────────────────────
-  // EQUIP-MAINT.1 — equipment register + inspection checklists. Visible
-  // to anyone holding either equipment_admin (the setup surfaces —
-  // register, types, intervals, inspection weekday) or equipment_inspect
-  // (the walk-round; equipment_inspect is the universal default granted
-  // to every staff role). The page itself (src/app/maintenance/page.js)
-  // gates which tabs render for which permission — this entry only
-  // decides sidebar visibility.
-  { href: '/maintenance', label: 'Maintenance', icon: Wrench,
-    anyPermission: ['equipment_admin', 'equipment_inspect'], section: 'operations' },
-  // ── Studio Management — expandable group ───────────────────────
-  // Parent route /studio-management renders the door-unlock panel
-  // (mig 093 cross-platform key). Children each carry their own
-  // per-user permission (STUDIO-GROUP.1) so operators can grant
-  // access individually. SIDEBAR-IA.1 moved the rare set-and-forget
-  // surfaces (Glofox import, Preferences import, Landing page
-  // settings) onto the Settings index page; HUBS.2a promoted the
-  // remaining member/marketing/team-shaped children (Hyrox, Landing
-  // page, Contracts) out to their own hub sections, shrinking this
-  // group to the genuinely building-admin surfaces: TV displays and
-  // presentations.
-  {
-    href: '/studio-management',
-    label: 'Studio Management',
-    icon: DoorOpen,
-    permission: 'studio_management',
-    section: 'operations',
-    groupId: 'studio',  // localStorage key for expand state
-    children: [
-      // TV.1 — TV display management. UC Cast Pro renders /tv/<token>.
-      { href: '/admin/tv-displays',       label: 'TV Displays',           icon: Tv,            permission: 'tv_displays' },
-      // PRESENT — run a slide deck across multiple screens from a laptop
-      // (workshops / events). Its own `presentations` permission.
-      { href: '/presentations',           label: 'Presentations',         icon: Projector,     permission: 'presentations' },
-    ],
-  },
+  // ── Operations hub ─────────────────────────────────────────────
+  // HUBS.2e Task 5 — fifth application of the hub-collapse pattern
+  // (after Sales HUBS.2a, Members HUBS.2b, Money HUBS.2c, Team
+  // HUBS.2d): what was two standalone sidebar entries (Maintenance,
+  // the Studio Management expandable group with its TV Displays +
+  // Presentations children) becomes one hub entry. anyPermission ORs
+  // every underlying permission so the entry is visible to anyone who
+  // could reach any tab; extraActivePaths keeps it lit while the user
+  // is actually sitting on one of those routes (same rationale as
+  // Sales/Members/Money/Team — /operations redirects into a default
+  // tab rather than rendering content itself). The `/checklists` path
+  // is in the union even though checklists shares the `studio_management`
+  // permission key with the Studio tab rather than getting its own —
+  // its gate note lives on the (operations) route group's HubTabs
+  // definition (src/app/(operations)/layout.js).
+  //
+  // The `/studio-management/timer` path is DELIBERATELY ABSENT from
+  // this list. That route belongs to the Members hub's
+  // extraActivePaths, not here — it's a coach-facing floor tool shown
+  // alongside the live HR board, not an Operations admin surface. The
+  // old double-light this used to cause (both Members AND the Studio
+  // Management group lit on the timer page) is now structurally
+  // impossible: activeHrefFor is a longest-match single winner, and
+  // since Operations doesn't claim the timer path at all, Members's
+  // longer, more specific extraActivePaths entry
+  // (`/studio-management/timer`) is simply the only candidate that
+  // matches — there's no second claimant left to race against it.
+  //
+  // fleet (device/AC control) and studio-devices surfaces are
+  // deliberately deferred to a future dissolution of this hub — noted
+  // here as a spec deviation, not an oversight.
+  //
+  // Folded-forward context from the old standalone entries:
+  //  - Maintenance (EQUIP-MAINT.1) — equipment register + inspection
+  //    checklists. Visible to anyone holding either equipment_admin
+  //    (the setup surfaces — register, types, intervals, inspection
+  //    weekday) or equipment_inspect (the walk-round; equipment_inspect
+  //    is the universal default granted to every staff role). The page
+  //    itself (src/app/(operations)/maintenance/page.js) gates which
+  //    tabs render for which permission.
+  //  - Studio Management (mig 093) — the door-unlock panel + its
+  //    expandable children. SIDEBAR-IA.1 moved the rare set-and-forget
+  //    surfaces (Glofox import, Preferences import, Landing page
+  //    settings) onto the Settings index page; HUBS.2a promoted the
+  //    remaining member/marketing/team-shaped children (Hyrox, Landing
+  //    page, Contracts) out to their own hub sections, shrinking the
+  //    group to TV displays (TV.1 — UC Cast Pro renders /tv/<token>)
+  //    and Presentations (PRESENT — run a slide deck across multiple
+  //    screens from a laptop for workshops/events) before this PR
+  //    folded those two, plus Studio itself, into this single entry.
+  { href: '/operations', label: 'Operations', icon: Wrench,
+    anyPermission: ['equipment_admin', 'equipment_inspect', 'studio_management', 'tv_displays', 'presentations'],
+    extraActivePaths: ['/maintenance', '/studio-management', '/tv-displays', '/presentations', '/checklists'],
+    section: 'operations' },
 
   // ── modules — vertical modules zone (header-less) ────────────────
   // Header-less bottom zone for things that are real but not daily,
@@ -362,6 +380,35 @@ export const ALL_NAV = [
 // A section with no visible items for the current user renders nothing
 // — no empty header. Dashboard is pinned above all sections (it has no
 // `section`).
+// activeHrefFor(pathname, items) — which ONE nav entry should light, and
+// via which of its paths. Longest-match across every item's href,
+// extraActivePaths, and children hrefs (CalendlyTabs semantics, already
+// used by HubTabs). The old per-item bare startsWith let every prefix
+// light simultaneously — /communications + /communications/tickets both
+// lit on the tickets page, and Members + Operations both lit on the
+// class timer. One winner only.
+// Returns { itemHref, matchedPath } or null. A child match returns the
+// PARENT item's href as itemHref and the child's href as matchedPath, so
+// the group can open and the child row can light (current behaviour kept).
+export function activeHrefFor(pathname, items) {
+  let best = null
+  for (const item of items) {
+    const candidates = [
+      { owner: item.href, path: item.href },
+      ...(item.extraActivePaths || []).map(p => ({ owner: item.href, path: p })),
+      ...(item.children || []).map(c => ({ owner: item.href, path: c.href })),
+    ]
+    for (const { owner, path } of candidates) {
+      if (pathname === path || (path !== '/' && pathname.startsWith(`${path}/`))) {
+        if (!best || path.length > best.matchedPath.length) {
+          best = { itemHref: owner, matchedPath: path }
+        }
+      }
+    }
+  }
+  return best
+}
+
 export const NAV_SECTIONS = [
   { id: 'messages',   label: 'Messages' },
   { id: 'queues',     label: null },
