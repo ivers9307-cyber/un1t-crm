@@ -1,5 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { redirect, notFound } from 'next/navigation'
 import { resolveSequenceGraph } from '@/lib/sequences/graph/persist'
 import SequenceFlowBuilder from '@/components/sequences/SequenceFlowBuilder'
@@ -16,6 +17,14 @@ export default async function SequenceBuilderPage(props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) redirect('/login')
+  // SEC-AUTOMATION-BUILDER-GATE.1 — this page had auth + tenant checks but
+  // no permission gate at all. The /automations index only ever links here
+  // from AutomationsFlowList, which it renders behind `canFlows =
+  // hasPermission('email') || hasPermission('whatsapp')` — the curated
+  // toggle cards (`automations`) and the Devices link (`device_control`)
+  // are unrelated surfaces that never route to a sequence id, so they're
+  // deliberately excluded from this gate.
+  if (!hasPermission(user, 'email') && !hasPermission(user, 'whatsapp')) redirect('/')
 
   const db = createServerClient()
   const { data: sequence } = await db.from('email_sequences')

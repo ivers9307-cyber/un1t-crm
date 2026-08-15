@@ -75,7 +75,12 @@ export default async function AutomationRecipesGallery() {
   if (!user) redirect('/login')
   // Same permission gate as the sequences list page — operators
   // who can manage email sequences can install recipes.
-  if (!hasPermission(user, 'email')) redirect('/communications')
+  // SEC-AUTOMATION-BUILDER-GATE.1 — this used to redirect to
+  // /communications, but that route's own layout gates on
+  // email/whatsapp/sms/email_inbox and bounces to '/' when none are
+  // held, so a non-email holder here would double-bounce through a
+  // page they can't use anyway. Flattened to redirect straight home.
+  if (!hasPermission(user, 'email')) redirect('/')
 
   // Group recipes by category, preserving the order declared in
   // TEMPLATE_CATEGORIES. Anything with a category not in the list
