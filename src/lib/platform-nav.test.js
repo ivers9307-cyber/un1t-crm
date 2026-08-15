@@ -73,7 +73,8 @@ describe('resolvePlatformNav', () => {
 
     // Both routes exist in-repo, so both are live.
     expect(byKey.provision.href).toBe('/admin/tenants/new')
-    expect(byKey.audit.href).toBe('/admin/audit-log')
+    // ADMIN.2h Task 1 — audit log left /admin for /settings/audit-log.
+    expect(byKey.audit.href).toBe('/settings/audit-log')
   })
 
   it('flags Provision tenant as inside the console shell (nested under /admin/tenants)', () => {

@@ -129,16 +129,9 @@ describe('K3 — every settings-tree href resolves to a real page', () => {
 })
 
 describe('the /admin hrefs pin (2H handoff)', () => {
-  it('is exactly the six master-tools + data-import + audit-log admin routes', () => {
-    const adminHrefs = ALL_ROWS.map((r) => r.href).filter((h) => h && h.startsWith('/admin')).sort()
-    expect(adminHrefs).toEqual([
-      '/admin',
-      '/admin/achievements',
-      '/admin/audit-log',
-      '/admin/glofox-import',
-      '/admin/integrations',
-      '/admin/marketing-import',
-    ].sort())
+  it('ADMIN.2h Task 1 — the tree contains ZERO /admin hrefs: all six former /admin rows (the index card + achievements/audit-log/glofox-import/integrations/marketing-import) have left /admin for good', () => {
+    const adminHrefs = ALL_ROWS.map((r) => r.href).filter((h) => h && h.startsWith('/admin'))
+    expect(adminHrefs).toEqual([])
   })
 })
 

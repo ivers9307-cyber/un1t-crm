@@ -1,7 +1,9 @@
-// /admin/glofox-import — interactive Glofox member import.
+// /settings/glofox-import — interactive Glofox member import.
+// ADMIN.2h Task 1 — moved out of /admin (was /admin/glofox-import);
+// same page, gated standalone below (glofox_import permission), no
+// dependency on the old /admin/layout.js relaxation.
 //
-// GLOFOX2.3 — operator-driven import page. Master-only (handled by
-// /admin/layout.js). Used for:
+// GLOFOX2.3 — operator-driven import page. Used for:
 //   - Initial full pull (one-time backfill of every member).
 //   - Filtered re-syncs ("re-pull every TRIAL member from yesterday").
 //   - Diagnostic dry-runs (see what WOULD happen without committing).

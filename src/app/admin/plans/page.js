@@ -9,7 +9,7 @@
 // existing pins keep their grandfathered numbers.
 //
 // Permissions: master-only page gate (profileRole), exactly like
-// /admin/integrations — no WEB_PERMISSIONS key, so no mobile-parity
+// /settings/service-credentials — no WEB_PERMISSIONS key, so no mobile-parity
 // entry is needed (the parity linter only walks WEB_PERMISSIONS).
 
 import { redirect } from 'next/navigation'

@@ -1,9 +1,10 @@
-// /admin/marketing-import — bulk import of marketing preferences
+// /settings/marketing-import — bulk import of marketing preferences
 // from external platforms (Mailchimp / Klaviyo / ActiveCampaign /
 // any CSV export with email + per-channel boolean columns).
 //
-// Master-only. Belt-and-braces gate even though /admin/layout.js
-// already enforces master at the route level.
+// ADMIN.2h Task 1 — moved out of /admin (was /admin/marketing-import).
+// Gate is standalone below (preferences_import permission) — no
+// dependency on the old /admin/layout.js relaxation.
 
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'

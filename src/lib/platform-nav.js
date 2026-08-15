@@ -71,14 +71,14 @@ export const PLATFORM_PRIMARY_ITEMS = Object.freeze([
 // "Soon" placeholders).
 //   - Provision tenant → /admin/tenants/new (SAAS4-P2 wizard). It is
 //     NESTED under /admin/tenants, so it stays inside the console shell.
-//   - Audit log → /admin/audit-log (AUDIT-EXPAND.1, master-only). It is
-//     NOT one of the four console roots, so it keeps its current
-//     (studio) shell — this is an intentional cross-link OUT of the
-//     console to the platform-wide audit trail, per the Phase-2 rule
-//     that nothing else in /admin moves.
+//   - Audit log → /settings/audit-log (AUDIT-EXPAND.1, master-only;
+//     ADMIN.2h Task 1 moved it out of /admin). It is NOT one of the
+//     four console roots, so it keeps its current (studio) shell —
+//     this is an intentional cross-link OUT of the console to the
+//     platform-wide audit trail.
 const PLATFORM_ACTION_CANDIDATES = Object.freeze([
   Object.freeze({ key: 'provision', href: '/admin/tenants/new', label: 'Provision tenant', icon: UserPlus, live: true, insideShell: true }),
-  Object.freeze({ key: 'audit', href: '/admin/audit-log', label: 'Audit log', icon: ScrollText, live: true, insideShell: false }),
+  Object.freeze({ key: 'audit', href: '/settings/audit-log', label: 'Audit log', icon: ScrollText, live: true, insideShell: false }),
 ])
 
 // Where "Exit to app →" lands: the normal studio/account experience.

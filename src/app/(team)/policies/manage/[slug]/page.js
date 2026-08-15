@@ -1,4 +1,5 @@
-// /admin/policies/[slug] — admin detail page for a single policy.
+// /policies/manage/[slug] — admin detail page for a single policy.
+// ADMIN.2h Task 1 — moved out of /admin (was /admin/policies/[slug]).
 // Shows version history (newest first), ack count per version, and a
 // "Publish new version" form. Click into a version to see who's
 // acknowledged it.
@@ -44,7 +45,7 @@ export default async function AdminPolicyDetailPage({ params }) {
 
   return (
     <div className="p-6 md:p-8 max-w-4xl">
-      <Link href="/admin/policies" className="inline-flex items-center gap-1 text-xs text-un1t-subtle hover:text-un1t-text mb-4">
+      <Link href="/policies/manage" className="inline-flex items-center gap-1 text-xs text-un1t-subtle hover:text-un1t-text mb-4">
         <ChevronLeft size={12} /> All policies
       </Link>
 
@@ -62,7 +63,7 @@ export default async function AdminPolicyDetailPage({ params }) {
           {versions.map((v, i) => (
             <Link
               key={v.id}
-              href={`/admin/policies/${policy.slug}/versions/${v.version_number}`}
+              href={`/policies/manage/${policy.slug}/versions/${v.version_number}`}
               className={`flex items-center gap-4 px-4 py-3 hover:bg-un1t-border/30 transition-colors ${
                 i < versions.length - 1 ? 'border-b border-un1t-border' : ''
               }`}

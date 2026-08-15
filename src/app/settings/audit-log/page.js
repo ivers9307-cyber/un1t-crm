@@ -1,4 +1,9 @@
-// /admin/audit-log — Master-only browser for the unified audit log.
+// /settings/audit-log — Master-only browser for the unified audit log.
+//
+// ADMIN.2h Task 1 — moved out of /admin (was /admin/audit-log). Gate
+// (below) was already standalone page-level master-only, unaffected
+// by the move; the write/read API stays at /api/admin/audit-log
+// (not moved — API routes aren't part of this dissolution).
 //
 // AUDIT-EXPAND.1: previously a viewer for assignment_change_log
 // only; now backed by the audit_events table which spans auth,

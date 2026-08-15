@@ -1,8 +1,11 @@
-// /admin/policies/[slug]/versions/[versionNumber] — admin per-version
+// /policies/manage/[slug]/versions/[versionNumber] — admin per-version
 // view showing the body, the list of staff who've opened (and how
 // many sessions / how long), the staff who haven't, and the "hot
 // sections" aggregate (which sections people spent the longest on
 // collectively).
+//
+// ADMIN.2h Task 1 — moved out of /admin (was
+// /admin/policies/[slug]/versions/[versionNumber]).
 //
 // POLICIES-VIEWS.1 — replaces the previous acknowledgement-based
 // report.
@@ -69,7 +72,7 @@ export default async function AdminPolicyVersionPage({ params }) {
 
   return (
     <div className="p-6 md:p-8 max-w-5xl">
-      <Link href={`/admin/policies/${slug}`} className="inline-flex items-center gap-1 text-xs text-un1t-subtle hover:text-un1t-text mb-4">
+      <Link href={`/policies/manage/${slug}`} className="inline-flex items-center gap-1 text-xs text-un1t-subtle hover:text-un1t-text mb-4">
         <ChevronLeft size={12} /> {policy.title} — version history
       </Link>
 

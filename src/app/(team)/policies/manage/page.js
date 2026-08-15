@@ -1,4 +1,9 @@
-// /admin/policies — master/owner-only admin for the policies hub.
+// /policies/manage — master/owner-only admin for the policies hub.
+// ADMIN.2h Task 1 — moved out of /admin (was /admin/policies) to sit
+// alongside the staff-facing read surface at /policies (that page and
+// its [slug] detail predate this move and are untouched — this CRUD
+// tree lives at /policies/manage so the two don't collide). Gate is
+// standalone below (owner|master), unaffected by the move.
 // Lists policies with current version + view counts (POLICIES-VIEWS.1
 // replaced the previous acknowledgement model). Click a row to drill
 // into version history, viewer report, and the publish-new-version form.
@@ -79,7 +84,7 @@ export default async function AdminPoliciesPage() {
           return (
             <Link
               key={p.id}
-              href={`/admin/policies/${p.slug}`}
+              href={`/policies/manage/${p.slug}`}
               className={`flex items-center gap-4 px-4 py-3 hover:bg-un1t-border/30 transition-colors ${
                 i < policies.length - 1 ? 'border-b border-un1t-border' : ''
               }`}

@@ -11,7 +11,7 @@
 //     is hard-scoped so no cross-tenant data can render.
 //
 // No WEB_PERMISSIONS key: like the other role-gated admin surfaces
-// (/settings/impersonate, /admin/integrations) this is gated by role at
+// (/settings/impersonate, /settings/service-credentials) this is gated by role at
 // the page, not permission-gated — so there is no parity decision to
 // make (check:mobile-parity only tracks WEB_PERMISSIONS keys).
 //

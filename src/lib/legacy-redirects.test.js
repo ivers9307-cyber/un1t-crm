@@ -58,6 +58,14 @@ const DELETED_STUB_SOURCES = [
   // hub); listed for the same reverse-check reason.
   '/admin/tv-displays',
   '/admin/checklists',
+  // ADMIN.2h Task 1 — moved, not deleted: five studio/settings-tier
+  // page sets plus the policies CRUD tree left /admin.
+  '/admin/glofox-import',
+  '/admin/marketing-import',
+  '/admin/audit-log',
+  '/admin/achievements',
+  '/admin/integrations',
+  '/admin/policies',
 ]
 
 describe('legacy-redirects', () => {

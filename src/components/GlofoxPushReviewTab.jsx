@@ -1,12 +1,13 @@
 'use client'
 
-// GLOFOX3.6 — Review tab on /admin/glofox-import. Shows
+// GLOFOX3.6 — Review tab on /settings/glofox-import (ADMIN.2h Task 1
+// moved it out of /admin). Shows
 // glofox_push_events rows where status ∈ {failed, needs_review}
 // AND reviewed_at IS NULL. Per-row actions: retry, dismiss,
 // jump-to-contact.
 //
 // Lazy-loads on mount so the parent page render isn't blocked.
-// Master only at the page level (/admin/layout.js + the API).
+// Master only at the page level (the page's own gate + the API).
 
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'

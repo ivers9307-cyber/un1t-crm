@@ -1,6 +1,7 @@
 'use client'
 
-// /admin/integrations editor. Inline expand-to-edit per provider.
+// /settings/service-credentials editor (ADMIN.2h Task 1 moved it out
+// of /admin, was /admin/integrations). Inline expand-to-edit per provider.
 // Secrets are write-only after first save: we display a "set"
 // indicator but never echo the stored value back to the form.
 

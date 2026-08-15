@@ -1,7 +1,8 @@
 'use client'
 
 // AuditLogTable — interactive client component for the unified
-// audit log viewer at /admin/audit-log.
+// audit log viewer at /settings/audit-log (ADMIN.2h Task 1 moved it
+// out of /admin).
 //
 // AUDIT-EXPAND.1: previously a viewer for assignment_change_log
 // only; now reads from audit_events which covers auth, business,

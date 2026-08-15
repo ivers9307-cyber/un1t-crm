@@ -16,7 +16,8 @@ export const AUTOMATIONS = Object.freeze([
     label: 'Auto-create leads in Glofox',
     description: 'When a new lead is created, create their Glofox account and attach the studio trial membership.',
     supportsBackfill: true,
-    reviewBase: '/admin/glofox-import',
+    // ADMIN.2h Task 1 — moved out of /admin.
+    reviewBase: '/settings/glofox-import',
   },
   {
     key: 'class_climate',

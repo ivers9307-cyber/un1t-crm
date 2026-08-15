@@ -1,10 +1,11 @@
 'use client'
 
-// Operator UI for /admin/achievements. Lists rules with inline
+// Operator UI for /achievements (ADMIN.2h Task 1 moved it out of
+// /admin). Lists rules with inline
 // edit, add-new, backfill, and a read-only "test against contact"
 // preview panel.
 //
-// Conventions match /admin/audit-log: client component owns all
+// Conventions match /settings/audit-log: client component owns all
 // mutation traffic via /api/admin/*; the server page just hydrates
 // the initial list.
 

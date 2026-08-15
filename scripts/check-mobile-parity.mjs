@@ -143,8 +143,8 @@ const WEB_ONLY_OK = {
   // Studio hub's TV tile (view TVs + current content + cast URL + clear).
   // Content authoring (templates / uploads) stays desktop-only but rides
   // the same web key, so no exemption is needed now the key has a surface.
-  glofox_import:      'Interactive Glofox member import + sync history at /admin/glofox-import. Bulk-data CSV / preview operation that needs desktop screen real estate; the daily cron handles the ongoing sync without operator input.',
-  preferences_import: 'Bulk marketing-preferences CSV import at /admin/marketing-import. Same shape as glofox_import — a preview-and-commit flow that wants a wide screen.',
+  glofox_import:      'Interactive Glofox member import + sync history at /settings/glofox-import. Bulk-data CSV / preview operation that needs desktop screen real estate; the daily cron handles the ongoing sync without operator input.',
+  preferences_import: 'Bulk marketing-preferences CSV import at /settings/marketing-import. Same shape as glofox_import — a preview-and-commit flow that wants a wide screen.',
   // W2 (parity inversion): the invoice approver inbox (review + approve /
   // decline, PDF opens in the browser) now ships on mobile via the
   // `invoices_inbox` MOBILE_PERMISSIONS entry (webEquivalent: 'invoices_inbox'),
