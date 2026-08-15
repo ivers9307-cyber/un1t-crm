@@ -79,7 +79,7 @@ export default function CarDetail({
     const j = await res.json()
     setBusy(false)
     if (!j.success) { setError(j.error || 'Failed to delete'); return }
-    router.push('/cars')
+    router.push('/cars/active')
   }
 
   // BCA gate (Phase 3) flows through opts so legacy locations stay

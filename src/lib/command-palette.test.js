@@ -188,7 +188,7 @@ describe('entityResult', () => {
 // so this walks src/app and fails on ANY palette href that is missing or is a
 // redirect-only stub — the check the original entry needed and did not have.
 
-import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import path from 'node:path'
 
 const APP = path.resolve(process.cwd(), 'src/app')
@@ -207,22 +207,58 @@ function isRedirectStub(file) {
   )
 }
 
-// Resolve a URL path to its page file, honouring [dynamic] segments.
+// Resolve a URL path to its page file, honouring [dynamic] segments AND
+// (route-group) directories — a group folder doesn't consume a URL segment,
+// so it must be tried both before and interleaved with literal/dynamic
+// matches at every level (e.g. src/app/communications/(hub)/inbox is
+// /communications/inbox; src/app/communications/(hub)/page.js is
+// /communications itself, i.e. a group can hold the terminal page.js too).
+function findPage(dir, segments) {
+  if (segments.length === 0) {
+    for (const name of ['page.js', 'page.jsx']) {
+      const file = path.join(dir, name)
+      if (existsSync(file)) return file
+    }
+  }
+
+  let entries
+  try {
+    entries = readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory())
+  } catch {
+    return null
+  }
+
+  if (segments.length > 0) {
+    const [segment, ...rest] = segments
+    const directEntry = entries.find((e) => e.name === segment)
+    if (directEntry) {
+      const result = findPage(path.join(dir, directEntry.name), rest)
+      if (result) return result
+    }
+  }
+
+  for (const entry of entries) {
+    if (/^\(.+\)$/.test(entry.name)) {
+      const result = findPage(path.join(dir, entry.name), segments)
+      if (result) return result
+    }
+  }
+
+  if (segments.length > 0) {
+    const [segment, ...rest] = segments
+    const dynamicEntry = entries.find((e) => /^\[.+\]$/.test(e.name))
+    if (dynamicEntry) {
+      const result = findPage(path.join(dir, dynamicEntry.name), rest)
+      if (result) return result
+    }
+  }
+
+  return null
+}
+
 function pageFileFor(urlPath) {
   const segments = urlPath.split('?')[0].split('/').filter(Boolean)
-  let dir = APP
-  for (const segment of segments) {
-    const direct = path.join(dir, segment)
-    if (existsSync(direct) && statSync(direct).isDirectory()) { dir = direct; continue }
-    const dynamic = readdirSync(dir).find((e) => /^\[.+\]$/.test(e))
-    if (!dynamic) return null
-    dir = path.join(dir, dynamic)
-  }
-  for (const name of ['page.js', 'page.jsx']) {
-    const file = path.join(dir, name)
-    if (existsSync(file)) return file
-  }
-  return null
+  return findPage(APP, segments)
 }
 
 // Every href the palette can navigate to, including the search results'.
@@ -245,9 +281,10 @@ describe('K5 — palette targets are real final destinations', () => {
   })
 
   it('recognises a known retired stub, so the check above is not vacuous', () => {
-    // If this ever stops being a redirect the guard has gone blind.
-    expect(isRedirectStub(pageFileFor('/whatsapp/broadcasts/new'))).toBe(true)
-    expect(isRedirectStub(pageFileFor('/cars'))).toBe(true)
+    // Every real stub was deleted in PRUNE.1; the fixture is the old /cars
+    // stub moved verbatim. If this ever stops matching, the guard has gone blind.
+    const fixture = path.join(process.cwd(), 'src/lib/__fixtures__/redirect-stub-page.js')
+    expect(isRedirectStub(fixture)).toBe(true)
     // …and does not misread the session-resolving dashboard index as retired.
     expect(isRedirectStub(pageFileFor('/dashboard'))).toBe(false)
   })

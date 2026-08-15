@@ -113,7 +113,7 @@ export default function WhatsappTemplatesList({ locationId }) {
               <div key={t.id} className="flex items-center justify-between gap-3 py-3 px-1">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <Link href={`/whatsapp/templates/${t.id}`} className="text-sm font-medium text-un1t-text hover:underline truncate">{t.name}</Link>
+                    <Link href={`/communications/templates/whatsapp/${t.id}`} className="text-sm font-medium text-un1t-text hover:underline truncate">{t.name}</Link>
                     {t.quality_rating && QUALITY_CHIP[t.quality_rating] && (
                       <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${QUALITY_CHIP[t.quality_rating]}`}>{t.quality_rating}</span>
                     )}
@@ -137,7 +137,7 @@ export default function WhatsappTemplatesList({ locationId }) {
                   />
                   {['REJECTED', 'PAUSED'].includes(t.status) && (
                     <>
-                      <Link href={`/whatsapp/templates/${t.id}`} className="text-xs text-blue-600 hover:underline">Edit &amp; resubmit</Link>
+                      <Link href={`/communications/templates/whatsapp/${t.id}`} className="text-xs text-blue-600 hover:underline">Edit &amp; resubmit</Link>
                       <a href={MANAGER_URL} target="_blank" rel="noopener noreferrer" className="text-xs text-un1t-subtle hover:underline">Appeal ↗</a>
                     </>
                   )}

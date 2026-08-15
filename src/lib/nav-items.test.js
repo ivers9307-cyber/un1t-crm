@@ -151,7 +151,7 @@ describe('Other — occasional surfaces zone', () => {
   it('holds Car Processing and the demoted Orders ledger, out of daily gym ops', () => {
     // Orders demoted from Gym 2026-06-12 — Richard confirmed it is not
     // a daily surface. Jump access survives via the ⌘K palette.
-    expect(hrefsIn('other')).toEqual(['/cars', '/orders'])
+    expect(hrefsIn('other')).toEqual(['/cars/active', '/orders'])
     expect(hrefsIn('gym')).not.toContain('/cars')
     expect(hrefsIn('gym')).not.toContain('/orders')
   })

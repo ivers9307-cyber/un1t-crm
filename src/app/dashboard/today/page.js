@@ -175,7 +175,7 @@ export default async function PersonalDashboardPage() {
           value={unreadInbox}
           sublabel={unreadInbox === 1 ? 'unread message' : 'unread messages'}
           accent={unreadInbox > 0 ? 'text-un1t-text' : 'text-un1t-muted'}
-          href={unreadInbox > 0 ? '/whatsapp' : undefined}
+          href={unreadInbox > 0 ? '/communications' : undefined}
         />
       </KpiRow>
 

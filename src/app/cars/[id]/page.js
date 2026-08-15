@@ -20,7 +20,7 @@ export default async function CarDetailPage(props) {
   ])
   if (!car) notFound()
   const guard = assertLocationAccess(user, car.location_id)
-  if (guard) redirect('/cars')
+  if (guard) redirect('/cars/active')
 
   // Look up the BCA feature flag for the car's location + whether
   // there's an active non-error submission for this car. CarDetail

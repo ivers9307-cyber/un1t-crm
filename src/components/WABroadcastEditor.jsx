@@ -626,7 +626,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
               {templates.length === 0 ? (
                 <div className="text-center py-4">
                   <p className="text-sm text-un1t-subtle mb-2">No approved templates available</p>
-                  <Link href="/whatsapp/templates/new" className="text-sm text-blue-700 hover:underline">
+                  <Link href="/communications/templates/whatsapp/new" className="text-sm text-blue-700 hover:underline">
                     Create a template first
                   </Link>
                 </div>
