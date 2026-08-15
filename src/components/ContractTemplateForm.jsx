@@ -127,7 +127,7 @@ export default function ContractTemplateForm({ initial, isEdit = false }) {
       })
       const json = await res.json()
       if (!res.ok || !json.success) throw new Error(json.error || `HTTP ${res.status}`)
-      router.push('/admin/contracts/templates')
+      router.push('/contracts/templates')
       router.refresh()
     } catch (err) {
       setError(err.message)
@@ -354,7 +354,7 @@ export default function ContractTemplateForm({ initial, isEdit = false }) {
       <div className="flex items-center justify-end gap-2">
         <button
           type="button"
-          onClick={() => router.push('/admin/contracts/templates')}
+          onClick={() => router.push('/contracts/templates')}
           className="text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text"
         >Cancel</button>
         <button

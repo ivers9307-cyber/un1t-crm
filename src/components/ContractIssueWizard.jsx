@@ -406,7 +406,7 @@ export default function ContractIssueWizard({ issuerName, fromContractId }) {
           // through fine.
         }
       }
-      router.push(`/admin/contracts/${json.data.id}`)
+      router.push(`/contracts/${json.data.id}`)
       router.refresh()
     } catch (e) {
       setError(e.message)
@@ -912,7 +912,7 @@ export default function ContractIssueWizard({ issuerName, fromContractId }) {
                     <span>{r.name}</span>
                     {r.status === 'pending' && <span className="text-xs text-un1t-muted">Waiting…</span>}
                     {r.status === 'success' && (
-                      <Link href={`/admin/contracts/${r.contractId}`} className="text-xs text-emerald-700 underline">
+                      <Link href={`/contracts/${r.contractId}`} className="text-xs text-emerald-700 underline">
                         Open
                       </Link>
                     )}

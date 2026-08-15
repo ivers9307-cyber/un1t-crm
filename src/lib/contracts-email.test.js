@@ -13,7 +13,7 @@ vi.mock('./supabase.js', () => ({ createServerClient: vi.fn() }))
 
 import { createServerClient } from './supabase.js'
 import { sendEmail } from './postmark.js'
-import { sendContractIssuedEmail, sendContractSignedEmails } from './contracts-email.js'
+import { sendContractIssuedEmail, sendContractSignedEmails, sendContractDeclinedEmail } from './contracts-email.js'
 
 // Table-aware supabase-builder mock. getLocationBranding does
 // from('company_settings').select(...).eq(...).limit(1); the legacy
@@ -152,5 +152,27 @@ describe('sendContractSignedEmails — signed PDF attachment', () => {
     for (const call of sendEmail.mock.calls) {
       expect(call[0].attachments).toBeUndefined()
     }
+  })
+})
+
+// HUBS.2d — /admin/contracts moved to /contracts. These two senders build
+// an issuer-facing link that stays actionable for months (a notification
+// email sitting unread in an inbox), so the producer must point at the
+// new home, never the old one.
+describe('issuer notification links point at /contracts (HUBS.2d)', () => {
+  it('sendContractSignedEmails — issuer notification links to /contracts/<id>, not /admin/contracts', async () => {
+    createServerClient.mockReturnValue(makeDb({}))
+    await sendContractSignedEmails(baseArgs)
+    const issuerCall = sendEmail.mock.calls.find(c => c[0].tag === 'contract-signed-issuer')
+    expect(issuerCall[0].htmlBody).toContain(`/contracts/${baseArgs.contract.id}`)
+    expect(issuerCall[0].htmlBody).not.toContain('/admin/contracts')
+  })
+
+  it('sendContractDeclinedEmail — issuer notification links to /contracts/<id>, not /admin/contracts', async () => {
+    createServerClient.mockReturnValue(makeDb({}))
+    await sendContractDeclinedEmail(baseArgs)
+    const { htmlBody } = sendEmail.mock.calls[0][0]
+    expect(htmlBody).toContain(`/contracts/${baseArgs.contract.id}`)
+    expect(htmlBody).not.toContain('/admin/contracts')
   })
 })

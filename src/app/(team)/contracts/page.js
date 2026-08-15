@@ -107,13 +107,13 @@ export default async function ContractsAdminPage() {
         {canWrite && (
           <div className="flex items-center gap-2">
             <Link
-              href="/admin/contracts/templates"
+              href="/contracts/templates"
               className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text"
             >
               <SettingsIcon size={12} /> Templates
             </Link>
             <Link
-              href="/admin/contracts/issue"
+              href="/contracts/issue"
               className="inline-flex items-center gap-1.5 text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
             >
               <Plus size={12} /> Issue contract
@@ -132,7 +132,7 @@ export default async function ContractsAdminPage() {
           <p className="text-sm text-un1t-subtle mb-4">No contracts issued yet.</p>
           {canWrite && (
             <Link
-              href="/admin/contracts/issue"
+              href="/contracts/issue"
               className="inline-flex items-center gap-1.5 text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
             >
               <Plus size={12} /> Issue your first contract
@@ -174,7 +174,7 @@ export default async function ContractsAdminPage() {
                       </td>
                       <td className="p-3 text-right">
                         <Link
-                          href={`/admin/contracts/${r.id}`}
+                          href={`/contracts/${r.id}`}
                           className="text-xs text-un1t-subtle hover:text-un1t-text inline-flex items-center"
                         >
                           Open <ChevronRight size={12} className="ml-0.5" />
@@ -194,7 +194,7 @@ export default async function ContractsAdminPage() {
               return (
                 <Link
                   key={r.id}
-                  href={`/admin/contracts/${r.id}`}
+                  href={`/contracts/${r.id}`}
                   className="block bg-un1t-surface border border-un1t-border rounded-lg p-3 active:bg-un1t-border/30"
                 >
                   <div className="flex items-start justify-between gap-2">

@@ -45,13 +45,13 @@ export default async function TemplatesPage() {
     <div className="p-6 md:p-8 max-w-5xl">
       <div className="flex items-start justify-between gap-3 mb-2">
         <div>
-          <Link href="/admin/contracts" className="text-xs text-un1t-subtle hover:text-un1t-text">
+          <Link href="/contracts" className="text-xs text-un1t-subtle hover:text-un1t-text">
             ← Contracts
           </Link>
           <h2 className="text-2xl font-bold mt-1">Templates</h2>
         </div>
         <Link
-          href="/admin/contracts/templates/new"
+          href="/contracts/templates/new"
           className="inline-flex items-center gap-1.5 text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
         >
           <Plus size={12} /> New template
@@ -68,7 +68,7 @@ export default async function TemplatesPage() {
           <FileText size={28} className="mx-auto text-un1t-subtle mb-3" />
           <p className="text-sm text-un1t-subtle mb-4">No templates yet.</p>
           <Link
-            href="/admin/contracts/templates/new"
+            href="/contracts/templates/new"
             className="inline-flex items-center gap-1.5 text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
           >
             <Plus size={12} /> Create your first template
@@ -79,7 +79,7 @@ export default async function TemplatesPage() {
           {rows.map(t => (
             <Link
               key={t.id}
-              href={`/admin/contracts/templates/${t.id}`}
+              href={`/contracts/templates/${t.id}`}
               className="block bg-un1t-surface border border-un1t-border rounded-lg p-4 hover:border-un1t-muted/60"
             >
               <div className="flex items-start justify-between gap-3">

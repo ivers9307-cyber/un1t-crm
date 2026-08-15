@@ -56,7 +56,7 @@ export default async function AdminHubPage() {
 
   // Studio Management family — visible per per-user permission.
   const studioTools = [
-    { perm: 'contracts',          href: '/admin/contracts',         icon: FileSignature, title: 'Contracts',           desc: 'Issue, track, and revoke digital contracts.' },
+    { perm: 'contracts',          href: '/contracts',               icon: FileSignature, title: 'Contracts',           desc: 'Issue, track, and revoke digital contracts.' },
     { perm: 'tv_displays',        href: '/admin/tv-displays',       icon: Tv,            title: 'TV Displays',         desc: 'Register studio TVs and push content via UC Cast Pro.' },
     { perm: 'glofox_import',      href: '/admin/glofox-import',     icon: Download,      title: 'Glofox import',       desc: 'Interactive Glofox member import and sync history.' },
     { perm: 'preferences_import', href: '/admin/marketing-import',  icon: Download,      title: 'Preferences import',  desc: 'Bulk import marketing preferences from external platforms.' },

@@ -50,6 +50,9 @@ const DELETED_STUB_SOURCES = [
   // too, per this file's own header contract (every redirect source
   // gets a reverse-check, not just the PRUNE.1b deletions).
   '/admin/hyrox',
+  // HUBS.2d — moved, not deleted (/admin/contracts -> /contracts, hub
+  // member of the Team hub); listed for the same reverse-check reason.
+  '/admin/contracts',
 ]
 
 describe('legacy-redirects', () => {

@@ -65,7 +65,7 @@ export default async function EditTemplatePage(props) {
 
   return (
     <div className="p-6 md:p-8 max-w-5xl">
-      <Link href="/admin/contracts/templates" className="text-xs text-un1t-subtle hover:text-un1t-text">
+      <Link href="/contracts/templates" className="text-xs text-un1t-subtle hover:text-un1t-text">
         ← Templates
       </Link>
       <h2 className="text-2xl font-bold mt-1 mb-1">{template.name}</h2>
