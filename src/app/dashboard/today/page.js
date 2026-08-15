@@ -10,7 +10,8 @@
 // lib/home-queue.js) — one row per approval / ticket / conversation,
 // not one row per source count. The today-feed rows that are NOT queue
 // sources (today's bookings, churn watch, tasks due, low-fill classes)
-// still render, in their own block below the queue (SECONDARY_FEED_IDS).
+// still render, in their own block below the queue (QUEUE_MIGRATED_IDS
+// names the ids the queue owns; everything else renders).
 //
 // Permission: dashboard_personal (cross-platform).
 
@@ -59,13 +60,24 @@ const FEED_ICONS = {
   lowfill: <Flag size={16} />,
 }
 
-// Sources that still render via the plain today-feed count block below
-// the queue. HOME.3's assembleHomeQueue (src/lib/home-queue.js) covers
-// approvals (which already folds in the issues + invoices-queue approval
+// HOME.3's assembleHomeQueue (src/lib/home-queue.js) covers approvals
+// (which already folds in the issues + invoices-queue approval
 // providers) and the unified inbox (which already covers whatsapp) at
 // item level, so the matching today-feed rows would just duplicate the
-// queue; these four are NOT queue sources and would otherwise regress.
-const SECONDARY_FEED_IDS = ['bookings', 'churn', 'tasks', 'lowfill']
+// queue above — these four ids are the ones the queue now owns.
+//
+// R2 (HOME.3 review rider) — this used to be SECONDARY_FEED_IDS, an
+// ALLOWLIST of the four ids that still render below the queue
+// ('bookings', 'churn', 'tasks', 'lowfill'). That silently drops any
+// today-feed source added later: shared/today-feed.js's assembler
+// gains a 9th row id, nobody remembers to add it here, and it renders
+// nowhere — present in feedRows, invisible on the page. Inverted to a
+// DENYLIST of what the queue owns: a future non-migrated source is
+// VISIBLE by default because it simply isn't in this list, no edit
+// needed. Same constant also passed as fetchTodayFeed's `skip` option
+// below (R1) — the two are intentionally the same list, since "what the
+// queue already computed" is one fact, not two.
+const QUEUE_MIGRATED_IDS = ['approvals', 'issues', 'invoices', 'whatsapp']
 
 // One line of context under a feed row: the detail string (e.g. the
 // churn delta) followed by up to three item labels.
@@ -146,13 +158,16 @@ export default async function PersonalDashboardPage() {
   // TODAY-FEED.1 / HOME.3 — the triage feed and the item-level queue
   // fetch in parallel with the personal data; both gate per-source
   // internally and never throw. fetchTodayFeed is still needed for the
-  // four rows that are NOT home-queue sources (bookings/churn/tasks/
-  // lowfill, see SECONDARY_FEED_IDS above); its approvals/issues/
-  // invoices/whatsapp rows are computed but no longer rendered, since
-  // assembleHomeQueue now covers those same sources at item level.
+  // rows that are NOT home-queue sources (bookings/churn/tasks/lowfill);
+  // its approvals/issues/invoices/whatsapp rows are no longer rendered,
+  // since assembleHomeQueue now covers those same sources at item level
+  // — R1 (HOME.3 review rider) passes `skip: QUEUE_MIGRATED_IDS` so
+  // fetchTodayFeed doesn't bother COMPUTING them either (previously
+  // getPendingApprovalsCount fired once here and once more inside
+  // assembleHomeQueue, every page load).
   const [res, feedRows, queue] = await Promise.all([
     fetchPersonalDashboardData(db, user.id, user.activeLocation?.id),
-    fetchTodayFeed(db, user, user.activeLocation?.id),
+    fetchTodayFeed(db, user, user.activeLocation?.id, { skip: QUEUE_MIGRATED_IDS }),
     assembleHomeQueue(db, user),
   ])
   if (!res.success) {
@@ -161,7 +176,7 @@ export default async function PersonalDashboardPage() {
     )
   }
 
-  const secondaryFeedRows = feedRows.filter((row) => SECONDARY_FEED_IDS.includes(row.id))
+  const secondaryFeedRows = feedRows.filter((row) => !QUEUE_MIGRATED_IDS.includes(row.id))
   const queueGroups = groupQueueRows(queue.rows, queue.counts)
   const queueDegraded = Boolean(queue.degraded && queue.degraded.length)
   const queueEmpty = queue.total === 0 && !queueDegraded
@@ -258,11 +273,13 @@ export default async function PersonalDashboardPage() {
       </div>
 
       {/* TODAY-FEED.1 — the remaining today-feed rows that are NOT
-          home-queue sources (see SECONDARY_FEED_IDS): today's bookings,
-          churn watch, tasks due, low-fill classes. The feed's approvals/
-          issues/invoices/whatsapp rows are dropped here — those sources
-          now render item-level in the queue above. Renders nothing when
-          none of the four apply, same as before. */}
+          home-queue sources (anything not in QUEUE_MIGRATED_IDS): today's
+          bookings, churn watch, tasks due, low-fill classes today, plus
+          any future today-feed source by default. The queue-owned rows
+          are filtered out here — those sources render item-level in the
+          queue above instead (and fetchTodayFeed above didn't even
+          compute them — see the `skip` call). Renders nothing when none
+          apply, same as before. */}
       {secondaryFeedRows.length > 0 && (
         <div className="mb-4 max-w-5xl">
           <SectionHeader title="Also today" count={secondaryFeedRows.length} />

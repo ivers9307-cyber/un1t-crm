@@ -27,6 +27,7 @@ vi.mock('@/lib/glofox', () => ({
 
 import { fetchTodayFeed, fetchLocationTodayFeed } from './today-feed-data'
 import { hasPermission } from '@/lib/permissions'
+import { getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { countInboxIssues } from '@/lib/issues'
 import { loadRadar } from '@/lib/churn-radar-data'
 import { glofoxCredentialsForLocation } from '@/lib/glofox'
@@ -125,6 +126,46 @@ describe('fetchTodayFeed — WhatsApp row uses needsAction, not raw unread_count
     const db = makeDb({ whatsapp_conversations: tableStub([AGENT_HANDOFF]) })
     const rows = await fetchTodayFeed(db, { id: 'u1' }, LOC)
     expect(rows.find((r) => r.id === 'whatsapp')?.count).toBe(1)
+  })
+})
+
+// HOME.3 review rider R1 — kill the double-computation. Before this, the
+// web /dashboard/today page called fetchTodayFeed and got EVERY source
+// computed (including approvals/issues/invoices/whatsapp), even though it
+// only rendered the four that are not home-queue sources — the queue
+// (assembleHomeQueue) computes approvals/issues/invoices/whatsapp itself,
+// so getPendingApprovalsCount literally fired twice per page load. `skip`
+// lets a caller opt specific sources out of computation entirely.
+describe('fetchTodayFeed — `skip` opts sources out of computation entirely', () => {
+  beforeEach(() => {
+    // Every permission granted — proves a skipped source is never even
+    // attempted, not merely permission-gated off.
+    hasPermission.mockImplementation(() => true)
+    getPendingApprovalsCount.mockResolvedValue(5)
+  })
+
+  it('does not call the approvals/issues/churn/glofox fetchers when they are in `skip`', async () => {
+    const db = makeDb()
+    await fetchTodayFeed(db, { id: 'u1' }, LOC, { skip: ['approvals', 'issues', 'churn', 'lowfill'] })
+    expect(getPendingApprovalsCount).not.toHaveBeenCalled()
+    expect(countInboxIssues).not.toHaveBeenCalled()
+    expect(loadRadar).not.toHaveBeenCalled()
+    expect(glofoxCredentialsForLocation).not.toHaveBeenCalled()
+  })
+
+  it('still computes and returns a row for a source NOT in `skip`', async () => {
+    const db = makeDb()
+    const rows = await fetchTodayFeed(db, { id: 'u1' }, LOC, { skip: ['issues', 'churn', 'lowfill'] })
+    expect(getPendingApprovalsCount).toHaveBeenCalledTimes(1)
+    expect(rows.find((r) => r.id === 'approvals')?.count).toBe(5)
+  })
+
+  it('with no `skip` (the mobile /api/mobile/today-feed call shape), every source still computes', async () => {
+    const db = makeDb()
+    await fetchTodayFeed(db, { id: 'u1' }, LOC)
+    expect(getPendingApprovalsCount).toHaveBeenCalledTimes(1)
+    expect(countInboxIssues).toHaveBeenCalledTimes(1)
+    expect(loadRadar).toHaveBeenCalledTimes(1)
   })
 })
 
