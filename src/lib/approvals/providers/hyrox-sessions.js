@@ -8,7 +8,7 @@ export const hyroxSessionsProvider = {
   key: 'hyrox_sessions',
   permissionKey: 'approvals_hyrox_sessions',
   label: 'Hyrox sessions',
-  reviewBase: '/admin/hyrox',
+  reviewBase: '/hyrox',
 
   async fetchPending(db, user) {
     const activeId = viewerActiveLocationId(user)
@@ -29,7 +29,7 @@ export const hyroxSessionsProvider = {
       submittedAt: r.created_at,
       amount: null,
       currency: null,
-      reviewUrl: `/admin/hyrox?focus=${r.id}`,
+      reviewUrl: `/hyrox?focus=${r.id}`,
     }))
     return { count: items.length, items }
   },

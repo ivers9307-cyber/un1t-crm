@@ -62,7 +62,7 @@ export default async function AdminHubPage() {
     { perm: 'preferences_import', href: '/admin/marketing-import',  icon: Download,      title: 'Preferences import',  desc: 'Bulk import marketing preferences from external platforms.' },
     // HYROX-TC.2 — coach planner: generate the block, then review/approve/
     // regenerate each AI-generated session before it publishes to a TV.
-    { perm: 'approvals_hyrox_sessions', href: '/admin/hyrox',       icon: Dumbbell,      title: 'Hyrox Training Club', desc: 'Generate and review the 12-week Hyrox block.' },
+    { perm: 'approvals_hyrox_sessions', href: '/hyrox',             icon: Dumbbell,      title: 'Hyrox Training Club', desc: 'Generate and review the 12-week Hyrox block.' },
     // Policies admin is owner/master-only at the page level. Expose the
     // card to them; non-owner/non-master with a Studio Management perm
     // won't see this card (and the page itself would redirect them

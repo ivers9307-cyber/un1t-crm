@@ -122,14 +122,14 @@ describe('Sales hub', () => {
 })
 
 describe('Members hub', () => {
-  it('contains bookings, events, challenges, pulse, live HR, and Hyrox', () => {
-    expect(hrefsIn('members')).toEqual(['/bookings', '/events', '/challenges', '/pulse', '/live', '/admin/hyrox'])
+  it('is a single collapsed hub entry', () => {
+    expect(hrefsIn('members')).toEqual(['/members'])
   })
 
-  it('keeps Live HR a top-level members entry with Class timer nested under it', () => {
-    const live = ALL_NAV.find((i) => i.href === '/live')
-    expect(live.section).toBe('members')
-    expect(live.children.map((c) => c.href)).toEqual(['/studio-management/timer'])
+  it('the Members hub entry ORs its member permissions and lights on member paths', () => {
+    const members = ALL_NAV.find(i => i.href === '/members')
+    expect(members.anyPermission).toEqual(['bookings', 'events', 'races', 'challenges', 'pulse_admin', 'studio_management', 'class_timer', 'approvals_hyrox_sessions'])
+    expect(members.extraActivePaths).toEqual(['/bookings', '/events', '/challenges', '/pulse', '/live', '/studio-management/timer', '/hyrox'])
   })
 })
 
