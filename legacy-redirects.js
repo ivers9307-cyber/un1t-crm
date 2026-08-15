@@ -67,6 +67,24 @@ module.exports = [
   // (unlike /admin/contracts above).
   { source: '/admin/tv-displays', destination: '/tv-displays', permanent: false },
   { source: '/admin/checklists', destination: '/checklists', permanent: false },
+  // ADMIN.2h Task 1 — five studio/settings-tier page sets moved out of
+  // /admin (imports, audit-log, achievements, service-credentials) plus
+  // the policies CRUD tree. Singles are exact-only (no child routes);
+  // policies gets the same exact-then-wildcard pair as contracts above.
+  { source: '/admin/glofox-import', destination: '/settings/glofox-import', permanent: false },
+  { source: '/admin/marketing-import', destination: '/settings/marketing-import', permanent: false },
+  { source: '/admin/audit-log', destination: '/settings/audit-log', permanent: false },
+  { source: '/admin/achievements', destination: '/achievements', permanent: false },
+  { source: '/admin/integrations', destination: '/settings/service-credentials', permanent: false },
+  { source: '/admin/policies', destination: '/policies/manage', permanent: false },
+  { source: '/admin/policies/:path*', destination: '/policies/manage/:path*', permanent: false },
+  // ADMIN.2h Task 3 — the /admin index itself is gone. Exact-match only
+  // (no :path* — that would shadow every still-live resident under
+  // /admin: tenants, plans, tenant-domains, health, matrix, bridges,
+  // studio-devices, webhook-dead-letter, fleet). /settings is the
+  // nearest still-standing hub a bookmark of the old index should land
+  // on.
+  { source: '/admin', destination: '/settings', permanent: false },
   // /communications legacy stub set
   { source: '/communications/broadcasts', destination: '/communications/sent', permanent: false },
   { source: '/communications/campaigns', destination: '/communications/sent', permanent: false },

@@ -1,5 +1,11 @@
-// /admin/integrations — master-only credentials store for
-// third-party services (Strava etc).
+// /settings/service-credentials — master-only credentials store for
+// third-party services (Strava, Garmin, Apple Health).
+//
+// ADMIN.2h Task 1 — moved out of /admin (was /admin/integrations),
+// relabelled "Service credentials" to disambiguate from
+// /settings/integrations-hub (the per-location Glofox/Xero/WhatsApp/
+// Instagram/Meta Ads connections). Gate is standalone below
+// (page-level master-only), unaffected by the move.
 
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'

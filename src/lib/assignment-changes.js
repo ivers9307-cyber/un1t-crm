@@ -132,7 +132,7 @@ export async function logAssignmentChange(db, {
     primaryResult = { logged: false, error: e?.message || 'unknown' }
   }
   // AUDIT-EXPAND.1 — mirror the same row into the new unified
-  // audit_events table so it shows up in the expanded /admin/audit-log
+  // audit_events table so it shows up in the expanded /settings/audit-log
   // alongside auth/business/mutation events. Best-effort; never
   // surfaces an error if it fails (the legacy insert is still the
   // authoritative record during the transition cycle).

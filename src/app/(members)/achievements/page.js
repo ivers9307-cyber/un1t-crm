@@ -1,5 +1,16 @@
-// /admin/achievements — Master-only editor for the data-driven
-// achievements rule set.
+// /achievements — Master-only editor for the data-driven achievements
+// rule set.
+//
+// ADMIN.2h Task 1 — moved out of /admin (was /admin/achievements) into
+// the (members) route group so the URL is the clean /achievements —
+// this is the master's CATALOGUE editor, distinct from any
+// member-facing achievements view. Deliberately NOT added to the
+// (members) layout's HubTabs strip (src/app/(members)/layout.js) —
+// this is a master-only admin surface, not a member-hub tab a
+// non-master member should ever see offered. The strip still renders
+// above this page for whichever OTHER tabs the visiting master has
+// perms for (Bookings, Events, etc.) — harmless, just contextual
+// chrome; it carries no link to this page itself.
 //
 // Server component loads:
 //   - the seed list of rules + earned-counts (so the UI can warn
@@ -8,7 +19,7 @@
 //     when adding class_type or first_event:location_visit rules)
 //
 // All edits go through /api/admin/achievements/* — same shape as
-// /admin/audit-log, /admin/matrix.
+// /settings/audit-log, /admin/matrix (API routes were not moved).
 
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'

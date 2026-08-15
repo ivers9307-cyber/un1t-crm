@@ -16,6 +16,22 @@
 //     full-screen slide deck rendered across other screens; it needs
 //     the entire viewport for deck controls, not a hub tab strip.
 //
+// ADMIN.2h Task 2 — the `fleet` tab's href (/admin/fleet) is OUTSIDE this
+// route group, same technique as (members)'s `live` tab (Live HR, at
+// /live rather than a (members) path — see that layout's header
+// comment). A route group's layout only wraps routes literally inside
+// it, so arriving at /admin/fleet renders NO Operations strip — the tab
+// exists purely to give fleet a discoverable, persistent nav entry (it
+// had none: /admin's index page was its only bridge, and that index
+// dies in ADMIN.2h Task 3). The page itself is untouched — still at
+// /admin/fleet, still rendering inside the normal studio AppShell
+// (it is deliberately NOT a platform-tier path — see platform-nav.js's
+// header comment on why fleet stays out of that contract). Masters
+// reach it too: resolvePermission's master bypass (shared/permissions.js)
+// returns true for any key once the location feature-gate passes, so
+// `fleet_restart`/`fleet_admin` both resolve true for a master and the
+// tab shows for them exactly as it does for permission holders.
+//
 // The checklists tab shares the `studio_management` perms key with
 // the Studio tab rather than getting its own. Its page (`page.js`)
 // also admits owner/master directly ahead of the permission check —
@@ -44,6 +60,9 @@ const TABS = [
   { id: 'tv',            label: 'TV displays',   href: '/tv-displays',       perms: ['tv_displays'] },
   { id: 'presentations', label: 'Presentations', href: '/presentations',     perms: ['presentations'] },
   { id: 'checklists',    label: 'Checklists',    href: '/checklists',        perms: ['studio_management'] },
+  // ADMIN.2h Task 2 — href is OUTSIDE the (operations) group (see header
+  // comment): arriving here renders no strip, same as (members)'s `live`.
+  { id: 'fleet',         label: 'Fleet',         href: '/admin/fleet',       perms: ['fleet_restart', 'fleet_admin'] },
 ]
 
 export default async function OperationsHubLayout({ children }) {

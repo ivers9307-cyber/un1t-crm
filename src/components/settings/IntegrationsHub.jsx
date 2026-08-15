@@ -771,7 +771,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
       <SectionHead
         title="Master view · hidden from tenants"
         hidden
-        sub="Org-gated, excluded, or UN1T studio customisation. Tenants never see these cards; platform OAuth apps (Garmin, Apple Health) stay in /admin/integrations."
+        sub="Org-gated, excluded, or UN1T studio customisation. Tenants never see these cards; platform OAuth apps (Garmin, Apple Health) stay in /settings/service-credentials."
       />
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
 

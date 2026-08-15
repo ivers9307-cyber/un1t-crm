@@ -44,7 +44,7 @@
 
 import { MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
 import {
-  CalendarDays, Tag, Store, LayoutGrid, Trophy, Cable,
+  CalendarDays, Tag, Store, Trophy, Cable,
   Users, UserPlus, UserCog,
   AtSign, Bell, Bot,
   Plug, Activity, Globe, Phone,
@@ -90,66 +90,59 @@ export const SETTINGS_TREE = [
         gate: { roles: ADMIN_ROLES },
       },
       // Master tools. PLACEMENT DECISION: Workspace, not Security. These
-      // three are general platform administration (feature matrix,
-      // achievements catalogue, service credentials) rather than
-      // account-security surfaces — the Security group here is scoped to
-      // audit/access/auth (audit log, access history, 2FA, SSO), so
-      // bundling /admin/integrations' credentials store in there would
-      // blur that group's theme. The old page.js grid put "Master tools"
-      // as the very first section on the page; Workspace being the first
-      // group in this tree is the closest match to that precedent.
-      {
-        id: 'admin-hub',
-        label: 'Admin',
-        href: '/admin',
-        description: 'Feature matrix, audit log, achievements, and integrations in one hub.',
-        icon: LayoutGrid,
-        // NOTE: /admin's own page gate is slightly WIDER than masterOnly —
-        // it also admits non-master holders of certain Studio-Management
-        // child permissions (STUDIO-GROUP.1). The row gate here is
-        // intentionally narrower (masterOnly), matching the old page.js
-        // grid's "Master tools" section, which rendered for
-        // `user.role === 'master' || user.impersonatingFrom`. That old
-        // formula OVERSTATES its equivalence to real reachability, though:
-        // during impersonation `profile = target` (src/lib/auth.js), so a
-        // master impersonating a non-master gets that target's role/
-        // profileRole, not 'master' — and /admin/achievements and
-        // /admin/integrations below both hard-gate on `profileRole ===
-        // 'master'` (redirect otherwise). The old grid showed this section
-        // throughout such a session regardless, i.e. as dead links for two
-        // of its three destinations. masterOnly carries no impersonatingFrom
-        // carve-out, so it has no such gap — it matches those two
-        // destinations' real reachability exactly, and is the deliberately
-        // narrower (correct) choice for /admin too. A permission-holding
-        // non-master who needs /admin's child surfaces reaches them via
-        // their OWN dedicated nav entries elsewhere, not through this
-        // shortcut.
-        gate: { masterOnly: true },
-      },
+      // two are general platform administration (achievements catalogue,
+      // service credentials) rather than account-security surfaces — the
+      // Security group here is scoped to audit/access/auth (audit log,
+      // access history, 2FA, SSO), so bundling the credentials store in
+      // there would blur that group's theme.
+      //
+      // ADMIN.2h Task 1 — the 'admin-hub' row (→ /admin) that used to sit
+      // here is DELETED outright, not repointed: it was this tree's only
+      // link to the /admin index, and that index itself dies in Task 3 of
+      // the /admin dissolution. No replacement row is needed — every
+      // remaining /admin resident now has its own persistent home
+      // elsewhere: `tenants`/`plans`/`tenant-domains`/`health`/`matrix`/
+      // `bridges`/`studio-devices`/`webhook-dead-letter` reach masters
+      // via the 8-item platform console (src/lib/platform-nav.js,
+      // ADMIN.2h Task 2); `webhook-dead-letter` separately reaches
+      // owners via the integration-health remediation link (unchanged,
+      // see integration-health.js); and `fleet` — deliberately NOT a
+      // console page, since fleet_restart holders aren't master/owner —
+      // reaches everyone via the Operations hub's `fleet` tab
+      // ((operations)/layout.js, ADMIN.2h Task 2). "Everyone" here means
+      // every fleet_restart/fleet_admin holder specifically — that
+      // needed src/lib/nav-items.js's `/operations` sidebar entry to
+      // also OR in `fleet_restart`/`fleet_admin` (review fix, same
+      // task): without it, a fleet-only persona with every other
+      // Operations permission revoked would never see the Operations
+      // sidebar entry at all and the tab would be undiscoverable. This
+      // is also why this pin now reads "the tree contains ZERO /admin
+      // hrefs" in settings-tree.test.js.
       {
         id: 'admin-achievements',
         label: 'Achievements',
-        href: '/admin/achievements',
+        href: '/achievements',
         description: 'Manage the achievements catalogue members unlock.',
         icon: Trophy,
-        // Same masterOnly reasoning as admin-hub above: this destination
+        // ADMIN.2h Task 1 — moved out of /admin to /achievements
+        // ((members) route group, no Members-hub tab). Destination still
         // hard-gates on `profileRole === 'master'` (no impersonatingFrom
-        // carve-out), so masterOnly matches its real reachability exactly
-        // — the old grid's wider formula showed this row as a dead link
-        // whenever a master impersonated a non-master.
+        // carve-out), so masterOnly matches its real reachability exactly.
         gate: { masterOnly: true },
       },
       {
         id: 'admin-integrations',
-        label: 'Platform integrations',
-        href: '/admin/integrations',
-        description: 'Master-only credentials store for platform-level service integrations.',
+        label: 'Service credentials',
+        href: '/settings/service-credentials',
+        description: 'Master-only credentials store for platform-level service integrations — Strava, Garmin, Apple Health.',
         icon: Cable,
-        // Same masterOnly reasoning as admin-hub above: this destination
-        // hard-gates on `profileRole === 'master'` (no impersonatingFrom
-        // carve-out), so masterOnly matches its real reachability exactly
-        // — the old grid's wider formula showed this row as a dead link
-        // whenever a master impersonated a non-master.
+        // ADMIN.2h Task 1 — moved out of /admin to
+        // /settings/service-credentials (relabelled from "Platform
+        // integrations" to disambiguate from the integrations-hub row
+        // below, which is per-location Glofox/Xero/WhatsApp/etc.).
+        // Destination still hard-gates on `profileRole === 'master'` (no
+        // impersonatingFrom carve-out), so masterOnly matches its real
+        // reachability exactly.
         gate: { masterOnly: true },
       },
     ],
@@ -326,19 +319,21 @@ export const SETTINGS_TREE = [
       {
         id: 'glofox-import',
         label: 'Glofox import',
-        href: '/admin/glofox-import',
+        href: '/settings/glofox-import',
         description: 'Interactive Glofox member import + sync history.',
         icon: Download,
-        // Mirrors the page's own gate exactly.
+        // ADMIN.2h Task 1 — moved out of /admin. Mirrors the page's own
+        // gate exactly.
         gate: { permission: 'glofox_import' },
       },
       {
         id: 'marketing-import',
         label: 'Preferences import',
-        href: '/admin/marketing-import',
+        href: '/settings/marketing-import',
         description: 'Bulk import of marketing preferences (consent flags).',
         icon: Download,
-        // Mirrors the page's own gate exactly.
+        // ADMIN.2h Task 1 — moved out of /admin. Mirrors the page's own
+        // gate exactly.
         gate: { permission: 'preferences_import' },
       },
       {
@@ -368,12 +363,11 @@ export const SETTINGS_TREE = [
       {
         id: 'audit-log',
         label: 'Audit log',
-        href: '/admin/audit-log',
+        href: '/settings/audit-log',
         description: 'Unified record of authentication events, high-value business actions, and assignment / role changes across the platform.',
         icon: ShieldCheck,
-        // Mirrors the page's own gate exactly (page-level master-only,
-        // even though the /admin layout itself is relaxed for Studio
-        // Management child permissions — STUDIO-GROUP.1).
+        // ADMIN.2h Task 1 — moved out of /admin. Mirrors the page's own
+        // gate exactly (page-level master-only).
         gate: { masterOnly: true },
       },
       {

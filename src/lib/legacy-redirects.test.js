@@ -58,6 +58,19 @@ const DELETED_STUB_SOURCES = [
   // hub); listed for the same reverse-check reason.
   '/admin/tv-displays',
   '/admin/checklists',
+  // ADMIN.2h Task 1 — moved, not deleted: five studio/settings-tier
+  // page sets plus the policies CRUD tree left /admin.
+  '/admin/glofox-import',
+  '/admin/marketing-import',
+  '/admin/audit-log',
+  '/admin/achievements',
+  '/admin/integrations',
+  '/admin/policies',
+  // ADMIN.2h Task 3 — the /admin index page itself is deleted (its nine
+  // residents — tenants/plans/tenant-domains/health/matrix/bridges/
+  // studio-devices/webhook-dead-letter/fleet — each now have their own
+  // persistent nav home per Task 2, so the hub page is dead weight).
+  '/admin',
 ]
 
 describe('legacy-redirects', () => {

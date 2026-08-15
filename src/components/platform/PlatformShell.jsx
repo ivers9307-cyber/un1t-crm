@@ -5,7 +5,7 @@
 // At the platform tier both the studio operational sidebar
 // (Communications, Bookings, Approvals, Accounting, …) and the account
 // org menu are the wrong altitude — this is the platform operator's
-// cross-tenant cockpit. AppShell renders THIS in their place on the four
+// cross-tenant cockpit. AppShell renders THIS in their place on the eight
 // console paths (isPlatformTierPath) FOR A MASTER only; every other path
 // (and every non-master) is left completely untouched. Visually it
 // mirrors Sidebar.jsx / AccountShell.jsx (same <aside>, tokens, user/
@@ -112,7 +112,7 @@ export default function PlatformShell({ user, mobileOpen = false, onMobileClose 
       </div>
 
       <nav className="flex-1 min-h-0 overflow-y-auto py-4">
-        {/* Console — the four platform pages. Tenants is the home. */}
+        {/* Console — the eight platform pages. Tenants is the home. */}
         <SectionHeader label="Console" />
         {nav.primary.map((item) => {
           const Icon = item.icon
