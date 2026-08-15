@@ -9,6 +9,14 @@
 // the winning matchedPath. This file pins "exactly one aria-current,
 // always" so it can't silently regress again.
 //
+// HUBS.2e Task 5 update — the /presentations/xyz case below used to
+// exercise the Studio Management GROUP (parent tint + child
+// aria-current). Task 5 collapsed Studio Management into the single
+// /operations leaf entry, so that same URL now resolves to one plain
+// leaf item lighting both tint AND aria-current together (no group,
+// no separate child row to split the two) — still exactly one
+// aria-current, by construction rather than by the parent/child split.
+//
 // Mirrors HubTabs.test.jsx conventions (mockPathname + a mocked
 // use-polled-count) plus the '@/lib/permissions' mock other component
 // tests use to sidestep the real 3-tier resolver — this file is testing
@@ -39,19 +47,14 @@ const USER = { role: 'owner', full_name: 'Test Owner' }
 afterEach(cleanup)
 
 describe('Sidebar — active state', () => {
-  it('lights exactly one aria-current, on the Presentations child row, when a group child page is current', () => {
+  it('lights exactly one aria-current, on the Operations entry, for a former group-child page', () => {
     mockPathname.mockReturnValue('/presentations/xyz')
     render(<Sidebar user={USER} />)
 
     const current = screen.getAllByRole('link').filter(l => l.getAttribute('aria-current') === 'page')
     expect(current).toHaveLength(1)
-    expect(current[0].textContent).toContain('Presentations')
-
-    // The Studio Management parent still visually tints (section
-    // context), but does NOT also claim aria-current.
-    const parent = screen.getByRole('link', { name: /Studio Management/ })
-    expect(parent.getAttribute('aria-current')).toBeNull()
-    expect(parent.className).toContain('bg-un1t-border/50')
+    expect(current[0].textContent).toContain('Operations')
+    expect(current[0].className).toContain('bg-un1t-border/50')
   })
 
   it('lights exactly one aria-current, on the Sales entry, for a route reached via extraActivePaths', () => {

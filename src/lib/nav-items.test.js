@@ -165,25 +165,14 @@ describe('Team hub', () => {
 })
 
 describe('Operations hub', () => {
-  it('contains maintenance and studio management', () => {
-    expect(hrefsIn('operations')).toEqual(['/maintenance', '/studio-management'])
+  it('is a single collapsed hub entry', () => {
+    expect(hrefsIn('operations')).toEqual(['/operations'])
   })
 
-  it('gates Maintenance on equipment_admin OR equipment_inspect (EQUIP-MAINT.1)', () => {
-    const maintenance = ALL_NAV.find((i) => i.href === '/maintenance')
-    expect(maintenance.anyPermission).toEqual(['equipment_admin', 'equipment_inspect'])
-  })
-})
-
-describe('Studio Management group', () => {
-  it('is the only operations-section group entry with children', () => {
-    const group = ALL_NAV.find((i) => i.href === '/studio-management')
-    expect(group.section).toBe('operations')
-  })
-
-  it('Studio Management group keeps only its display children after promotions', () => {
-    const sm = ALL_NAV.find(i => i.href === '/studio-management')
-    expect(sm.children.map(c => c.href)).toEqual(['/admin/tv-displays', '/presentations'])
+  it('the Operations hub entry ORs its member permissions and lights on member paths', () => {
+    const ops = ALL_NAV.find(i => i.href === '/operations')
+    expect(ops.anyPermission).toEqual(['equipment_admin', 'equipment_inspect', 'studio_management', 'tv_displays', 'presentations'])
+    expect(ops.extraActivePaths).toEqual(['/maintenance', '/studio-management', '/tv-displays', '/presentations', '/checklists'])
   })
 })
 
@@ -199,13 +188,15 @@ describe('Account', () => {
   })
 })
 
-// HUBS.2e Task 4 — activeHrefFor is the ONE-winner, longest-match
+// HUBS.2e Task 4/5 — activeHrefFor is the ONE-winner, longest-match
 // replacement for Sidebar's old per-item bare startsWith (which let
 // every prefix-matching item light simultaneously). Cases below assert
-// against the REAL ALL_NAV at this commit (Operations not yet
-// collapsed — Task 5 will fold Studio Management + Maintenance into a
-// single Operations hub entry; where that collapse changes an
-// expectation here, it's called out per-case).
+// against the REAL ALL_NAV at this commit. Task 5 folded Studio
+// Management + Maintenance into a single Operations hub entry, which
+// removed the last children-bearing entry from ALL_NAV — the one case
+// that depended on a real group (child-match semantics) is now a
+// SYNTHETIC hand-built fixture below, so that behaviour stays pinned
+// even though no grouped entry remains in production nav data.
 describe('activeHrefFor — longest-match single winner', () => {
   it('kills double-light #1: /communications/tickets lights ONLY the Email inbox entry, not the Communications hub too', () => {
     expect(activeHrefFor('/communications/tickets', ALL_NAV)).toEqual({
@@ -228,11 +219,15 @@ describe('activeHrefFor — longest-match single winner', () => {
     })
   })
 
-  it('kills double-light #2: /studio-management/timer lights ONLY Members (its extraActivePath beats the shorter Studio Management group href) — NOTE: once Task 5 collapses Operations, the /studio-management group href moves under a single Operations entry; this expectation (Members wins via the longer extraActivePath) is unaffected by that collapse and should remain true', () => {
+  it('kills double-light #2: /studio-management/timer lights ONLY Members (its extraActivePath beats the shorter Operations href, now that Task 5 folded the old Studio Management group under Operations)', () => {
     expect(activeHrefFor('/studio-management/timer', ALL_NAV)).toEqual({
       itemHref: '/members',
       matchedPath: '/studio-management/timer',
     })
+  })
+
+  it('the class timer still resolves to Members, not Operations (longest match)', () => {
+    expect(activeHrefFor('/studio-management/timer', ALL_NAV)).toEqual({ itemHref: '/members', matchedPath: '/studio-management/timer' })
   })
 
   it('a Members extraActivePaths route (Hyrox) lights the Members hub entry', () => {
@@ -246,13 +241,13 @@ describe('activeHrefFor — longest-match single winner', () => {
     expect(activeHrefFor('/nonexistent', ALL_NAV)).toBeNull()
   })
 
-  it('a child match reports the PARENT item as itemHref, and the matched child href as matchedPath, so the group opens and the child row lights', () => {
-    // Current Studio Management children: /admin/tv-displays, /presentations
-    // (verified against nav-items.js at this commit). /presentations/xyz
-    // matches the Presentations child only.
-    expect(activeHrefFor('/presentations/xyz', ALL_NAV)).toEqual({
-      itemHref: '/studio-management',
-      matchedPath: '/presentations',
+  it('a child match reports the PARENT item as itemHref, and the matched child href as matchedPath, so the group opens and the child row lights (SYNTHETIC fixture — HUBS.2e Task 5 removed the last children-bearing entry, Studio Management, from ALL_NAV; this hand-built items array keeps child-match semantics tested forever, independent of what nav data looks like)', () => {
+    const items = [
+      { href: '/parent', children: [{ href: '/parent/child-a' }, { href: '/parent/child-b' }] },
+    ]
+    expect(activeHrefFor('/parent/child-b/deep', items)).toEqual({
+      itemHref: '/parent',
+      matchedPath: '/parent/child-b',
     })
   })
 })
