@@ -126,7 +126,11 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
   // needs a notification dot.
   const badges = {
     '/dashboard': churnRadarCount + leadRadarCount,
-    '/invoices': invoicesPendingCount,
+    // HUBS.2c — the Money hub entry carries the invoices count (same
+    // endpoint + poller as the Invoices tab inside the hub, so the two
+    // can never disagree). Sidebar badges retire entirely with the
+    // phase-3 Home queue.
+    '/money': invoicesPendingCount,
     '/approvals': approvalsPendingCount,
     '/issues': issuesPendingCount,
     '/communications': communicationsActionCount,

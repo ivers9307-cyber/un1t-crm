@@ -20,7 +20,10 @@
 //                 way: bookings, events, challenges, pulse, live floor
 //                 HR (+ nested Class timer) and Hyrox Training Club all
 //                 fold into a single /members entry.
-//   money       — bookkeeping (RCOV.P2) + the orders ledger.
+//   money       — the Money hub. HUBS.2c Task 3 collapses it the same way:
+//                 bookkeeping (RCOV.P2), the invoices queue, company-card
+//                 receipts, the orders ledger, and (newly surfaced) offer
+//                 sales all fold into a single /money entry.
 //   marketing   — automations + the public landing page.
 //   team        — schedule, staff contracts, HR policies.
 //   operations  — studio management (door/TV/presentations) + equipment
@@ -28,9 +31,9 @@
 //   modules     — vertical modules bolted onto the core product (Cars).
 //                 Header-less, out of the daily scan path.
 //   account     — config.
-// Later PRs in the HUBS.2b programme collapse the remaining multi-entry
-// sections (money, etc.) into single hub entries the same way Sales and
-// Members were collapsed here; until then each keeps its individual items.
+// Sales, Members and Money are now collapsed; the remaining multi-entry
+// sections (Team, Operations) are candidates for the same treatment in a
+// later PR.
 //
 // The radars (churn/lead) are deliberately NOT here — SIDEBAR-IA.1
 // relocated them under the Dashboard tab strip (/dashboard/churn-radar,
@@ -40,10 +43,10 @@
 
 import {
   LayoutDashboard, MessagesSquare,
-  CalendarClock, Settings, Car, Receipt, DoorOpen, FileSignature,
-  Globe, Tv, BookOpen, Inbox, ClipboardCheck, AlertCircle, CreditCard,
-  Workflow, Projector, Landmark, Building2,
-  Wrench, Mail, Handshake, HeartPulse,
+  CalendarClock, Settings, Car, DoorOpen, FileSignature,
+  Globe, Tv, BookOpen, ClipboardCheck, AlertCircle,
+  Workflow, Projector, Building2,
+  Wrench, Mail, Handshake, HeartPulse, Wallet,
 } from 'lucide-react'
 
 // The sidebar Dashboard link is visible if ANY of these are true. The
@@ -191,34 +194,59 @@ export const ALL_NAV = [
     extraActivePaths: ['/bookings', '/events', '/challenges', '/pulse', '/live', '/studio-management/timer', '/hyrox'],
     section: 'members' },
 
-  // ── Money — bookkeeping (RCOV.P2) + the orders ledger ────────────
-  // RCOV.P2, Richard's "prevent sprawl" call — the accounting hub
-  // leads; the invoices queue and card receipts it feeds sit beside
-  // it.
+  // ── Money hub ──────────────────────────────────────────────────
+  // HUBS.2c Task 3 — third application of the hub-collapse pattern
+  // (after Sales in HUBS.2a and Members in HUBS.2b): what was four
+  // standalone sidebar entries (Accounting, Invoices, Company-card
+  // receipts, Orders) becomes one hub entry. anyPermission ORs every
+  // underlying permission so the entry is visible to anyone who could
+  // reach any tab; extraActivePaths keeps it lit while the user is
+  // actually sitting on one of those routes (same rationale as Sales/
+  // Members — /money redirects into a default tab rather than
+  // rendering content itself).
   //
-  // RCOV.P0/P2 — receipt-coverage hub: coverage board, exceptions
-  // (audit F2–F5), runs & health. Master + owner only by default.
-  { href: '/accounting', label: 'Accounting',   icon: Landmark,        permission: 'accounting_hub', section: 'money' },
-  // INVOICES.1 — Dext-style email-in inbox. Master + owner only by
-  // default. Per-location forwarding addresses are shown at the top
-  // of the page; quality + data approvals run before forward-to-Xero.
-  { href: '/invoices',   label: 'Invoices',     icon: Inbox,           permission: 'invoices_inbox', section: 'money' },
-  // SPEND.P3 — company-card receipts. A card holder photographs/uploads
-  // a receipt; owner/master approves it, then it rides the bookkeeper →
-  // Xero queue (the /approvals dashboard also surfaces the pending ones).
-  // Gated by the `card_receipts` permission — default master + owner +
-  // manager; card-holding staff get it granted per-user. No sidebar
-  // badge: approvable receipts already count on the Approvals entry.
-  { href: '/card-receipts', label: 'Company-card receipts', icon: CreditCard, permission: 'card_receipts', section: 'money' },
-  // Orders (mig 085) spans all revenue streams (race signups + cars).
-  // Got its own permission key in the mig-092 audit. Demoted from the
-  // Gym section 2026-06-12 — Richard confirmed it's not a daily
-  // surface; the ⌘K palette keeps it one keystroke away. (Segments
-  // was demoted the same way earlier — moved under /communications/
-  // segments; the /segments URL still works via legacy redirect.)
-  // HUBS.2a — regrouped under Money: it's a revenue ledger, so it
-  // reads better beside Accounting/Invoices than out on its own.
-  { href: '/orders',     label: 'Orders',       icon: Receipt,         permission: 'orders', section: 'money' },
+  // `approvals_offer_purchases` in the union is a deliberate
+  // visibility ADD, not just a fold-forward: /offer-sales had no
+  // sidebar entry of its own before this PR — it was reachable only
+  // by drilling into Approvals. The (money) route group's tab strip
+  // (src/app/(money)/layout.js) already surfaces it as the "Offer
+  // sales" tab, so the Money hub entry now has to light up for an
+  // offer-purchases-only approver too, or the hub itself would stay
+  // invisible to them while the tab inside it works fine.
+  //
+  // `/orders` overshow (pre-existing, carried forward): the old
+  // standalone Orders entry showed on the `orders` permission alone,
+  // but the page itself additionally gates on
+  // MANAGER_ROLES.includes(user.role) — a non-manager holding the
+  // permission sees the sidebar/tab entry and then bounces off the
+  // page. Not fixed here; same overshow the (money) layout's own
+  // /orders tab comment documents.
+  //
+  // Folded-forward context from the old standalone entries:
+  //  - Accounting (RCOV.P0/P2) — receipt-coverage hub: coverage
+  //    board, exceptions (audit F2–F5), runs & health. Master + owner
+  //    only by default. RCOV.P2, Richard's "prevent sprawl" call, is
+  //    why it leads the hub rather than Invoices.
+  //  - Invoices (INVOICES.1) — Dext-style email-in inbox. Master +
+  //    owner only by default. Per-location forwarding addresses show
+  //    at the top of the page; quality + data approvals run before
+  //    forward-to-Xero.
+  //  - Company-card receipts (SPEND.P3) — a card holder photographs/
+  //    uploads a receipt; owner/master approves it, then it rides the
+  //    bookkeeper → Xero queue (the /approvals dashboard also
+  //    surfaces the pending ones). Gated by `card_receipts` — default
+  //    master + owner + manager; card-holding staff get it granted
+  //    per-user.
+  //  - Orders (mig 085) spans all revenue streams (race signups +
+  //    cars). Got its own permission key in the mig-092 audit.
+  //    Demoted from the Gym section 2026-06-12 — Richard confirmed
+  //    it's not a daily surface; the ⌘K palette keeps it one
+  //    keystroke away. HUBS.2a regrouped it under Money as a revenue
+  //    ledger beside Accounting/Invoices.
+  { href: '/money', label: 'Money', icon: Wallet,
+    anyPermission: ['accounting_hub', 'invoices_inbox', 'card_receipts', 'orders', 'approvals_offer_purchases'],
+    extraActivePaths: ['/accounting', '/invoices', '/card-receipts', '/orders', '/offer-sales'],
+    section: 'money' },
 
   // ── Marketing ──────────────────────────────────────────────────
   { href: '/automations', label: 'Automations', icon: Workflow, anyPermission: ['automations', 'email', 'whatsapp'], section: 'marketing' },
