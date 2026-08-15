@@ -113,11 +113,25 @@ async function fetchApprovalsSource(db, user) {
 
 // ── Tickets ──────────────────────────────────────────────────────────────
 
+// EMAIL-TICKET-CLEANUP.2 — a FAILED mailbox-visibility lookup is NOT "no
+// mailboxes" (mailboxesUnavailable() in _helpers.js exists precisely
+// because the two used to collapse into the same empty answer). A generic
+// tickets failure — the row/count query itself erroring — is allowed to
+// fold into the ordinary degraded-source path (counts.tickets = 0, same as
+// any other source); THIS failure is not, because "0" here reads as "no
+// tickets need a reply" when the true answer is "we don't know". A
+// dedicated error type lets assembleHomeQueue and getHomeQueueCount each
+// catch this ONE case and answer honestly instead of a confident zero —
+// see both call sites below.
+class TicketsVisibilityUnavailableError extends Error {}
+
 async function ticketsVisibility(db, user, locationId) {
   if (!hasPermissionForLocation(user, locationId, 'email_inbox')) return null
   const visibility = await loadVisibleMailboxes(db, user, locationId)
   if (visibility.response) {
-    throw new Error('tickets: mailbox visibility lookup failed')
+    throw new TicketsVisibilityUnavailableError(
+      'tickets: mailbox visibility lookup failed — EMAIL-TICKET-CLEANUP.2'
+    )
   }
   const { elevated, mailboxes } = visibility
   if (mailboxes.length === 0) return null
@@ -257,7 +271,7 @@ async function countInboxNeedsAction(db, user, locationId) {
  * @param {object} user  getCurrentUser() result
  * @returns {Promise<{
  *   rows: object[],
- *   counts: { approvals: number, tickets: number, inbox: number },
+ *   counts: { approvals: number, tickets: number|null, inbox: number },
  *   total: number,
  *   degraded?: string[],
  * }>}
@@ -282,6 +296,13 @@ export async function assembleHomeQueue(db, user) {
     if (s.status === 'fulfilled') {
       counts[name] = s.value.count
       rows = rows.concat(s.value.rows)
+    } else if (name === 'tickets' && s.reason instanceof TicketsVisibilityUnavailableError) {
+      // EMAIL-TICKET-CLEANUP.2 — see the error class above: null, not 0.
+      // "No tickets need a reply" and "we could not find out" must stay
+      // distinguishable all the way to the response.
+      console.warn(`[home-queue] source 'tickets' degraded: mailbox visibility lookup failed`)
+      counts.tickets = null
+      degraded.push('tickets')
     } else {
       console.warn(`[home-queue] source '${name}' failed: ${s.reason?.message || s.reason}`)
       counts[name] = 0
@@ -292,7 +313,14 @@ export async function assembleHomeQueue(db, user) {
   rows.sort(byOccurredAtDesc)
   rows = rows.slice(0, GLOBAL_CAP)
 
-  const total = counts.approvals + counts.tickets + counts.inbox
+  // `null` (visibility-unavailable tickets) is excluded from the sum rather
+  // than treated as 0 — the same reasoning as above applies to `total`: an
+  // unknown contributor must not silently read as a known zero. The
+  // `degraded` array is what tells a caller the total is a floor, not the
+  // whole picture.
+  const total = [counts.approvals, counts.tickets, counts.inbox]
+    .filter((n) => typeof n === 'number')
+    .reduce((sum, n) => sum + n, 0)
   const result = { rows, counts, total }
   if (degraded.length) result.degraded = degraded
   return result
@@ -302,6 +330,15 @@ export async function assembleHomeQueue(db, user) {
  * Cheap count-only variant for the sidebar/nav badge — sums each source's
  * TRUE count without materialising any rows (no approval item lists, no
  * ticket subjects, no conversation contact embeds).
+ *
+ * EMAIL-TICKET-CLEANUP.2 — this endpoint answers ONE number, with no room
+ * for a per-source `degraded` flag the way assembleHomeQueue has, so a
+ * failed mailbox-visibility lookup can't be folded into the sum as a
+ * confident 0 the way a generic source failure is: it REJECTS instead,
+ * mirroring /api/email/tickets/count's own 500 on the identical failure.
+ * The route this feeds is expected to answer 500 on that rejection so its
+ * poller keeps its last good number rather than overwriting it with a
+ * wrong "nothing to do" (see src/app/api/home-queue/count/route.js).
  *
  * @param {object} db
  * @param {object} user
@@ -316,5 +353,11 @@ export async function getHomeQueueCount(db, user) {
     countTicketsNeedsReply(db, user, locationId),
     countInboxNeedsAction(db, user, locationId),
   ])
+
+  const [, ticketsSettled] = settled
+  if (ticketsSettled.status === 'rejected' && ticketsSettled.reason instanceof TicketsVisibilityUnavailableError) {
+    throw ticketsSettled.reason
+  }
+
   return settled.reduce((sum, s) => sum + (s.status === 'fulfilled' ? (s.value || 0) : 0), 0)
 }

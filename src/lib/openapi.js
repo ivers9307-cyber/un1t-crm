@@ -4838,6 +4838,39 @@ registry.registerPath({
   },
 })
 
+// HOME.3 — the needs-attention triage queue: one merged list over the three
+// surfaces an operator already checks separately (approvals, email tickets,
+// the unified WhatsApp/Instagram inbox). No single `permission` gates these
+// two routes — each source self-gates exactly as its own count route does
+// (see src/lib/home-queue.js's header).
+registry.registerPath({
+  method: 'get',
+  path: '/api/home-queue',
+  tags: ['Dashboard'],
+  security: [{ CookieAuth: [] }],
+  summary: 'The needs-attention triage queue',
+  description: 'Merges approvals, needs-reply email tickets and the unified WhatsApp/Instagram inbox into one sorted list. Each source is gated exactly as its own count route (approvals via the registry\'s per-provider gates, tickets via email_inbox + per-account mailbox visibility, inbox via the whatsapp permission); an ineligible source, or no active location, contributes nothing rather than erroring. Rows are pre-capped to 20 per source, merge-sorted by occurredAt descending and capped at 30 overall; counts are always the TRUE uncapped number per source, reusing each surface\'s own count query. EMAIL-TICKET-CLEANUP.2: a FAILED tickets mailbox-visibility lookup is not the same as "no tickets need a reply" — it reports counts.tickets = null (never 0) and lists `tickets` in `degraded`. A 500 here means every source degraded, not just one.',
+  responses: {
+    200: { description: '{ rows, counts: { approvals, tickets, inbox|null }, total, degraded? }' },
+    401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Every source degraded', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/home-queue/count',
+  tags: ['Dashboard'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Count of needs-attention items across approvals + tickets + inbox (nav badge)',
+  description: 'Cheap sum of the same three TRUE counts GET /api/home-queue reports — no approval items, ticket subjects or conversation contacts are ever fetched. Every per-source gate mirrors the equivalent count route exactly; a session ineligible for a source contributes 0 for it, the same posture as /api/approvals/count, /api/issues/count and /api/whatsapp/unread-count. EMAIL-TICKET-CLEANUP.2 is the one exception: a FAILED tickets mailbox-visibility lookup 500s rather than silently answering a lower, confidently-wrong number — the same posture /api/email/tickets/count takes on the identical failure, so the badge poller keeps its last good number instead of overwriting it with a wrong "nothing to do".',
+  responses: {
+    200: { description: '{ count }', content: { 'application/json': { schema: SuccessResponse(z.object({ count: z.number() })) } } },
+    401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Tickets mailbox-visibility lookup failed — NOT a zero', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // ============================================================================
 // Customer (champ-app member) self-service
 // ============================================================================

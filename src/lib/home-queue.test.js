@@ -391,3 +391,77 @@ describe('getHomeQueueCount', () => {
     expect(getPendingApprovals).not.toHaveBeenCalled()
   })
 })
+
+// EMAIL-TICKET-CLEANUP.2 — a FAILED mailbox-visibility lookup is not "no
+// mailboxes": collapsing the two into the same 0 is exactly the silent
+// wrong-answer shape that invariant exists to prevent (src/app/api/email/
+// tickets/_helpers.js's loadVisibleMailboxes / mailboxesUnavailable). The
+// generic degraded-source path (any other tickets failure — a query error,
+// say) still folds to counts.tickets = 0, proven below alongside it so the
+// distinction is pinned, not assumed.
+describe('assembleHomeQueue — tickets visibility-lookup failure (EMAIL-TICKET-CLEANUP.2)', () => {
+  beforeEach(() => {
+    hasPermissionForLocation.mockReturnValue(true)
+  })
+
+  it('sets counts.tickets to null, not 0, and keeps tickets in degraded', async () => {
+    // The real shape from loadVisibleMailboxes on a FAILED lookup —
+    // { response: <NextResponse> } — as opposed to a successful empty set
+    // ({ elevated, mailboxes: [] }).
+    loadVisibleMailboxes.mockResolvedValue({ response: 'mailboxes-unavailable' })
+    const result = await assembleHomeQueue(makeDb(), userAt())
+    expect(result.counts.tickets).toBeNull()
+    expect(result.degraded).toEqual(['tickets'])
+  })
+
+  it('does not poison the other two sources or turn total into NaN', async () => {
+    loadVisibleMailboxes.mockResolvedValue({ response: 'mailboxes-unavailable' })
+    getPendingApprovalsCount.mockResolvedValue(2)
+    hasPermission.mockReturnValue(true)
+    const db = makeDb({
+      whatsapp_conversations: {
+        rows: [{
+          id: 'w1', wa_phone: '+353', resolved_at: null, last_message_at: '2026-08-10T08:00:00Z',
+          last_message_direction: 'inbound', agent_handed_off_at: null, contacts: null,
+        }],
+      },
+    })
+    const result = await assembleHomeQueue(db, userAt())
+    expect(result.counts).toEqual({ approvals: 2, tickets: null, inbox: 1 })
+    expect(Number.isNaN(result.total)).toBe(false)
+    expect(result.total).toBe(3) // 2 + 1, the unknown tickets count excluded rather than treated as 0
+  })
+
+  it('a genuinely empty visible-mailbox set (not a failure) still reads as a confident 0', async () => {
+    loadVisibleMailboxes.mockResolvedValue({ elevated: false, mailboxes: [] })
+    const result = await assembleHomeQueue(makeDb(), userAt())
+    expect(result.counts.tickets).toBe(0)
+    expect(result.degraded).toBeUndefined()
+  })
+
+  it('a non-visibility tickets failure (e.g. the row/count query erroring) still folds to counts.tickets = 0', async () => {
+    loadVisibleMailboxes.mockResolvedValue({ elevated: true, mailboxes: [{ id: 'mb1' }] })
+    const db = makeDb({ email_tickets: { rows: [], count: 0, error: { message: 'boom' } } })
+    const result = await assembleHomeQueue(db, userAt())
+    expect(result.counts.tickets).toBe(0)
+    expect(result.degraded).toEqual(['tickets'])
+  })
+})
+
+describe('getHomeQueueCount — tickets visibility-lookup failure (EMAIL-TICKET-CLEANUP.2)', () => {
+  it('rejects (mirrors /api/email/tickets/count returning 500) rather than answering a confident number', async () => {
+    hasPermissionForLocation.mockReturnValue(true)
+    loadVisibleMailboxes.mockResolvedValue({ response: 'mailboxes-unavailable' })
+    getPendingApprovalsCount.mockResolvedValue(2)
+    hasPermission.mockReturnValue(true)
+    await expect(getHomeQueueCount(makeDb(), userAt())).rejects.toThrow()
+  })
+
+  it('still answers a plain number when tickets is genuinely empty (not a failure)', async () => {
+    hasPermissionForLocation.mockReturnValue(true)
+    loadVisibleMailboxes.mockResolvedValue({ elevated: false, mailboxes: [] })
+    getPendingApprovalsCount.mockResolvedValue(2)
+    hasPermission.mockReturnValue(false)
+    await expect(getHomeQueueCount(makeDb(), userAt())).resolves.toBe(2)
+  })
+})

@@ -129,6 +129,19 @@ describe('assembleTodayFeed', () => {
     expect(hrefs.tasks).toBe('/activities')
   })
 
+  // HOME.3 review fix — the `whatsapp` row's underlying number switched from
+  // raw unread_count to the needsAction predicate (src/lib/today-feed-data.js
+  // fetchWhatsappNeedsAction), so a label reading "Unread WhatsApp messages"
+  // is now wrong: a thread that's been opened but still needs a reply counts
+  // here with 0 unread. The email + mobile render this label verbatim, so it
+  // is pinned here rather than left to drift.
+  it("labels the whatsapp row for needs-a-reply, not raw unread", () => {
+    const rows = assembleTodayFeed(full)
+    const wa = rows.find((r) => r.id === 'whatsapp')
+    expect(wa.label).toBe('WhatsApp needing a reply')
+    expect(wa.label).not.toMatch(/unread/i)
+  })
+
   it('omits sources that are null (no permission / fetch failed)', () => {
     const rows = assembleTodayFeed({ ...full, approvals: null, lowFill: null })
     const ids = rows.map((r) => r.id)

@@ -49,4 +49,18 @@ describe('GET /api/home-queue/count', () => {
     expect(res.status).toBe(200)
     expect(body.data.count).toBe(0)
   })
+
+  // EMAIL-TICKET-CLEANUP.2 — a failed mailbox-visibility lookup must not
+  // read as a confident 0. getHomeQueueCount rejects for exactly this case
+  // (src/lib/home-queue.js); the route mirrors /api/email/tickets/count's
+  // own 500 posture so the title-bar poller keeps its last good number
+  // rather than overwriting it with a wrong "nothing to do".
+  it('500s (not a confident 0) when getHomeQueueCount rejects on a tickets visibility failure', async () => {
+    getCurrentUser.mockResolvedValue(staff)
+    getHomeQueueCount.mockRejectedValue(new Error('tickets: mailbox visibility lookup failed'))
+    const res = await GET(req())
+    const body = await res.json()
+    expect(res.status).toBe(500)
+    expect(body.success).toBe(false)
+  })
 })
