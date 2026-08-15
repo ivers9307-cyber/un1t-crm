@@ -9,9 +9,12 @@
  *      (or explicit "web-only" exception).
  *   2. A mobile permission added without a web counterpart (or
  *      explicit "mobile-only" exception).
- *   3. A web sidebar nav entry in Sidebar.jsx that doesn't exist in
- *      the mobile (tabs)/_layout.jsx tab list.
- *   4. A mobile tab that has no corresponding sidebar nav entry.
+ *   3. A mobile nav feature (MOBILE_NAV_FEATURES in shared/mobile-nav.js
+ *      — the bar/More registry the app actually renders) whose
+ *      permission key has no representation anywhere in the web
+ *      sidebar nav (ALL_NAV in src/lib/nav-items.js). See the "Sidebar
+ *      nav vs mobile nav parity" section below for the parsing +
+ *      comparison semantics and why this check is one-directional.
  *
  * The mapping between web and mobile permission keys lives in
  * shared/permissions.js (the `webEquivalent` and `mobileOnly` fields
@@ -261,43 +264,148 @@ for (const m of MOBILE_PERMISSIONS) {
 }
 
 // --------------------------------------------------------------------
-// Sidebar nav vs mobile tab parity
+// Sidebar nav vs mobile nav parity
 //
-// We grep Sidebar.jsx for the inline nav array. This is best-effort —
-// if the file structure changes the linter will skip nav-parity checks
-// rather than fail loudly, since permissions parity above is the
-// stronger guarantee.
+// TOOLING-PARITY-CHECK.1 — this used to grep Sidebar.jsx for `key: '…'`
+// nav entries and mobile/app/(tabs)/_layout.jsx for `<Tabs.Screen
+// name="…">`. Both sources went stale without anyone noticing:
+//   - Sidebar.jsx's nav array moved to src/lib/nav-items.js's ALL_NAV
+//     (SIDEBAR-IA.1 / HUBS.2a) and stopped using a `key:` field at all
+//     (`grep -c "key:\s*['\"]" src/components/Sidebar.jsx` → 0) — so
+//     `webNav` was always the empty set.
+//   - _layout.jsx's real tab list is data-driven (`name={key}`, a JS
+//     expression, not a quoted literal) — only the two hardcoded
+//     screens ("index", "more") ever matched the quoted-literal regex,
+//     and neither is a permission-bearing tab.
+// Both sides therefore silently produced zero candidates forever, so
+// the `for` loop below never ran and this check never found anything —
+// it just always reported clean. The bug that killed it (a dead check
+// reporting success) is exactly the class of bug this check exists to
+// catch, which is why the zero-entries guard below is CRITICAL: from
+// now on, parsing either side down to nothing is a hard failure, not a
+// quiet no-op.
+//
+// Correct sources today:
+//   - Web: ALL_NAV in src/lib/nav-items.js. Each entry carries a single
+//     `permission: '<key>'` OR an `anyPermission: [...]` OR-list (the
+//     hub collapse — HUBS.2a onward — turned most entries into unions
+//     of several permissions rather than one-key-per-entry), plus a
+//     few `openToAll: true` entries with no permission field at all.
+//     Also parsed: the DASHBOARD_LINK_PERM_KEYS export, which the
+//     file's own header comment documents as OR'd into the pinned
+//     Dashboard link's visibility (churn_radar/lead_radar/
+//     engagement_analytics/dashboard_ads never get their own ALL_NAV
+//     entry — they're reachable only through that union).
+//   - Mobile: MOBILE_NAV_FEATURES in shared/mobile-nav.js. Each entry
+//     carries a `permKeys: [...]` OR-list — the real bar/More registry
+//     that resolveMobileLayout() renders from (unlike the old
+//     _layout.jsx grep, this is genuinely where "is this feature
+//     mobile-navigable" is decided).
+//
+// Comparison semantics — ONE direction only: does every mobile nav
+// feature's permission resolve to something present in the web nav's
+// permission union?
+//
+//   for each permKey in MOBILE_NAV_FEATURES:
+//     resolve permKey -> its web-equivalent key (CROSS_PLATFORM_KEYS
+//       for a shared-name key like studio_management; otherwise the
+//       matching MOBILE_PERMISSIONS entry's `webEquivalent`; skip
+//       outright if that entry is `mobileOnly: true` — those are
+//       declared to have no web side at all, same "don't flag it"
+//       contract the permission-parity check above already honours)
+//     the resolved key MUST appear in webNavKeys (or the small,
+//       documented WEB_NAV_OPEN_TO_ALL_KEYS exemption below)
+//
+// The reverse direction (a web nav permission key with no mobile nav
+// feature) is deliberately NOT checked here. The permission-parity
+// check above (webDrift, using the full WEB_PERMISSIONS list and the
+// curated WEB_ONLY_OK exemptions) already owns that question at the
+// permission-registry level, with reasons on file for every exemption.
+// Re-deriving it here from the narrower nav-only data would either
+// duplicate that check with weaker data, or need to re-invent
+// WEB_ONLY_OK's exemption list a second time for hub-union keys that
+// were never meant to be mobile-navigable (e.g. `automations`,
+// `device_control` inside the Marketing hub's union) — the hub
+// collapse is exactly why "one web nav entry ↔ one mobile tab" no
+// longer holds, so this check only makes the claim that survives it:
+// mobile's own chosen nav surface should point at something real.
 // --------------------------------------------------------------------
 
-let navDrift = []
-try {
-  const sidebar = readFileSync(resolve(repoRoot, 'src/components/Sidebar.jsx'), 'utf8')
-  const tabs = readFileSync(resolve(repoRoot, 'mobile/app/(tabs)/_layout.jsx'), 'utf8')
+const navItemsSrc = readFileSync(resolve(repoRoot, 'src/lib/nav-items.js'), 'utf8')
+const mobileNavSrc = readFileSync(resolve(repoRoot, 'shared/mobile-nav.js'), 'utf8')
 
-  // Sidebar nav entries look like { key: 'pipeline', label: 'Pipeline', ... }
-  const webNav = new Set(
-    [...sidebar.matchAll(/\bkey:\s*['"]([a-z_]+)['"]/g)]
-      .map(m => m[1])
-      .filter(k => WEB_PERMISSION_KEYS.includes(k))
+// `permission: '<key>'` — deliberately excludes `anyPermission:` (capital
+// P, a different token) via the negative lookbehind.
+const webSingle = [...navItemsSrc.matchAll(/(?<!any)\bpermission:\s*'([a-zA-Z_]+)'/g)].map(m => m[1])
+// `anyPermission: ['a', 'b', ...]`
+const webAny = [...navItemsSrc.matchAll(/anyPermission:\s*\[([^\]]+)\]/g)]
+  .flatMap(block => [...block[1].matchAll(/'([a-zA-Z_]+)'/g)].map(m => m[1]))
+// DASHBOARD_LINK_PERM_KEYS = [ 'dashboard_personal', ... ] — OR'd into
+// the pinned Dashboard link per the file's own header comment; the
+// radar/engagement/ads keys have no other ALL_NAV representation.
+const dashboardLinkBlock = navItemsSrc.match(/DASHBOARD_LINK_PERM_KEYS\s*=\s*\[([^\]]+)\]/)
+const webDashboardLink = dashboardLinkBlock
+  ? [...dashboardLinkBlock[1].matchAll(/'([a-zA-Z_]+)'/g)].map(m => m[1])
+  : []
+
+// Team hub (`/team`) is `openToAll: true` — no permission/anyPermission
+// field, so the regexes above find nothing for it, yet /schedule is
+// genuinely reachable there for every signed-in user (POLICIES.1 /
+// HUBS.2d). Mobile's `schedule` nav feature (webEquivalent 'schedule')
+// would otherwise false-positive every run; this is the one documented
+// exemption the openToAll shape needs.
+const WEB_NAV_OPEN_TO_ALL_KEYS = new Set(['schedule'])
+
+const webNavKeys = new Set([...webSingle, ...webAny, ...webDashboardLink])
+
+const mobilePermKeysBlocks = [...mobileNavSrc.matchAll(/permKeys:\s*\[([^\]]+)\]/g)]
+const mobileNavKeys = new Set(
+  mobilePermKeysBlocks.flatMap(block => [...block[1].matchAll(/'([a-zA-Z_]+)'/g)].map(m => m[1]))
+)
+
+// CRITICAL guard — the exact failure mode that killed the old check:
+// both sides silently parsing to zero entries and the loop below
+// simply never running. Fail loudly instead of reporting a false
+// "clean".
+if (webNavKeys.size === 0) {
+  throw new Error(
+    'check-mobile-parity: parsed ZERO permission keys out of ALL_NAV in src/lib/nav-items.js. ' +
+    'The regex (permission:/anyPermission:/DASHBOARD_LINK_PERM_KEYS) no longer matches this file\'s shape — fix the parser, don\'t silence this.'
   )
-
-  // Mobile tabs are expo-router file-based; we look for <Tabs.Screen name=…>
-  const mobileNav = new Set(
-    [...tabs.matchAll(/<Tabs\.Screen[\s\S]*?name=["']([a-z_-]+)["']/g)].map(m => m[1])
+}
+if (mobileNavKeys.size === 0) {
+  throw new Error(
+    'check-mobile-parity: parsed ZERO permKeys out of MOBILE_NAV_FEATURES in shared/mobile-nav.js. ' +
+    'The regex (permKeys: [...]) no longer matches this file\'s shape — fix the parser, don\'t silence this.'
   )
+}
 
-  for (const w of webNav) {
-    const mobileEquivalent = (mobileByWebKey[w] || [])[0]
-    if (mobileEquivalent && !mobileNav.has(mobileEquivalent)) {
-      navDrift.push({
-        web_nav: w,
-        issue: `Sidebar shows '${w}' but mobile has no '${mobileEquivalent}' tab.`,
-        fix: `Add a Tabs.Screen entry for '${mobileEquivalent}' in mobile/app/(tabs)/_layout.jsx.`,
-      })
-    }
+const mobileKeyToWebEquivalent = Object.fromEntries(MOBILE_PERMISSIONS.map(m => [m.key, m.webEquivalent]))
+const mobileOnlySet = new Set(MOBILE_PERMISSIONS.filter(m => m.mobileOnly).map(m => m.key))
+
+const navDrift = []
+for (const permKey of mobileNavKeys) {
+  if (mobileOnlySet.has(permKey)) continue // declared mobile-only — no web side to check against
+
+  const resolved = CROSS_PLATFORM_SET.has(permKey) ? permKey : mobileKeyToWebEquivalent[permKey]
+
+  if (!resolved) {
+    navDrift.push({
+      mobile_nav_key: permKey,
+      issue: `MOBILE_NAV_FEATURES references permKey '${permKey}', which is neither a CROSS_PLATFORM_KEYS entry nor a known MOBILE_PERMISSIONS key with a webEquivalent.`,
+      fix: `Check the permKey for a typo, or add a MOBILE_PERMISSIONS entry (or CROSS_PLATFORM_KEYS entry) for '${permKey}' in shared/permissions.js.`,
+    })
+    continue
   }
-} catch (err) {
-  navDrift = [{ note: 'Skipped nav check (could not read Sidebar.jsx or _layout.jsx)', err: err.message }]
+
+  if (!webNavKeys.has(resolved) && !WEB_NAV_OPEN_TO_ALL_KEYS.has(resolved)) {
+    navDrift.push({
+      mobile_nav_key: permKey,
+      web_equivalent: resolved,
+      issue: `Mobile nav resolves '${permKey}' to web key '${resolved}', which has no permission/anyPermission entry anywhere in ALL_NAV (src/lib/nav-items.js).`,
+      fix: `Either add '${resolved}' to a permission/anyPermission field in ALL_NAV, or add it to WEB_NAV_OPEN_TO_ALL_KEYS in this script with a reason (openToAll nav entries only).`,
+    })
+  }
 }
 
 // --------------------------------------------------------------------
@@ -305,13 +413,14 @@ try {
 // --------------------------------------------------------------------
 
 const json = process.argv.includes('--json')
-const totalIssues = webDrift.length + mobileDrift.length + navDrift.filter(n => !n.note).length
+const totalIssues = webDrift.length + mobileDrift.length + navDrift.length
 
 if (json) {
   console.log(JSON.stringify({
     web_drift: webDrift,
     mobile_drift: mobileDrift,
     nav_drift: navDrift,
+    nav_counts: { web_nav_keys: webNavKeys.size, mobile_nav_keys: mobileNavKeys.size },
     total_issues: totalIssues,
   }, null, 2))
   process.exit(totalIssues > 0 ? 1 : 0)
@@ -322,6 +431,7 @@ const banner = (s) => `\n\x1b[1m${s}\x1b[0m`
 if (totalIssues === 0) {
   console.log(banner('Mobile parity: clean'))
   console.log(`  ${WEB_PERMISSIONS.length} web permissions, ${MOBILE_PERMISSIONS.length} mobile permissions.`)
+  console.log(`  ${webNavKeys.size} web nav permission keys, ${mobileNavKeys.size} mobile nav permKeys checked.`)
   console.log(`  ${Object.keys(WEB_ONLY_OK).length} web-only features explicitly excluded:`)
   for (const [k, why] of Object.entries(WEB_ONLY_OK)) {
     console.log(`    - ${k}  (${why})`)
@@ -348,14 +458,10 @@ if (mobileDrift.length) {
   }
 }
 if (navDrift.length) {
-  console.log(banner('Sidebar / tab nav drift:'))
+  console.log(banner('Sidebar / mobile nav drift:'))
   for (const d of navDrift) {
-    if (d.note) {
-      console.log(`  • ${d.note} (${d.err})`)
-    } else {
-      console.log(`  • ${d.web_nav}: ${d.issue}`)
-      console.log(`      Fix: ${d.fix}`)
-    }
+    console.log(`  • ${d.mobile_nav_key}: ${d.issue}`)
+    console.log(`      Fix: ${d.fix}`)
   }
 }
 
