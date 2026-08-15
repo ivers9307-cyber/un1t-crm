@@ -134,8 +134,14 @@ describe('Members hub', () => {
 })
 
 describe('Money hub', () => {
-  it('leads with the accounting hub, then the invoices queue, card receipts, and orders', () => {
-    expect(hrefsIn('money')).toEqual(['/accounting', '/invoices', '/card-receipts', '/orders'])
+  it('is a single collapsed hub entry', () => {
+    expect(hrefsIn('money')).toEqual(['/money'])
+  })
+
+  it('the Money hub entry ORs its member permissions and lights on member paths', () => {
+    const money = ALL_NAV.find(i => i.href === '/money')
+    expect(money.anyPermission).toEqual(['accounting_hub', 'invoices_inbox', 'card_receipts', 'orders', 'approvals_offer_purchases'])
+    expect(money.extraActivePaths).toEqual(['/accounting', '/invoices', '/card-receipts', '/orders', '/offer-sales'])
   })
 })
 
