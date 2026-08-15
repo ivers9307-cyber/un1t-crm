@@ -29,16 +29,25 @@
 //                 bookkeeping (RCOV.P2), the invoices queue, company-card
 //                 receipts, the orders ledger, and (newly surfaced) offer
 //                 sales all fold into a single /money entry.
-//   marketing   — automations + the public landing page.
-//   team        — schedule, staff contracts, HR policies.
-//   operations  — studio management (door/TV/presentations) + equipment
-//                 maintenance.
+//   marketing   — the Marketing hub. HUBS.2f Task 2 collapses it the same
+//                 way: Automations and the public Landing page link fold
+//                 into a single /marketing entry, with `landing_page`
+//                 OR'd in (same reasoning as Messages' email_inbox fold)
+//                 and the Landing page tab reached inside the hub via
+//                 HubTabs' new `newTab` capability rather than its own
+//                 top-level sidebar row.
+//   team        — the Team hub. HUBS.2d collapsed it the same way:
+//                 schedule, staff contracts, HR policies fold into a
+//                 single /team entry.
+//   operations  — the Operations hub. HUBS.2e collapsed it the same way:
+//                 studio management (door/TV/presentations) + equipment
+//                 maintenance fold into a single /operations entry.
 //   modules     — vertical modules bolted onto the core product (Cars).
 //                 Header-less, out of the daily scan path.
 //   account     — config.
-// Sales, Members and Money are now collapsed; the remaining multi-entry
-// sections (Team, Operations) are candidates for the same treatment in a
-// later PR.
+// Messages, Sales, Members, Money, Marketing, Team and Operations are now
+// all collapsed to single hub entries — every multi-entry section from
+// the original HUBS.2a regroup has gone through the pattern.
 //
 // The radars (churn/lead) are deliberately NOT here — SIDEBAR-IA.1
 // relocated them under the Dashboard tab strip (/dashboard/churn-radar,
@@ -49,8 +58,8 @@
 import {
   LayoutDashboard, MessagesSquare,
   Settings, Car,
-  Globe, ClipboardCheck, AlertCircle,
-  Workflow, Building2,
+  ClipboardCheck, AlertCircle,
+  Megaphone, Building2,
   Wrench, Handshake, HeartPulse, Wallet, UsersRound,
 } from 'lucide-react'
 
@@ -249,14 +258,47 @@ export const ALL_NAV = [
     extraActivePaths: ['/accounting', '/invoices', '/card-receipts', '/orders', '/offer-sales'],
     section: 'money' },
 
-  // ── Marketing ──────────────────────────────────────────────────
-  { href: '/automations', label: 'Automations', icon: Workflow, anyPermission: ['automations', 'email', 'whatsapp'], section: 'marketing' },
-  // HUBS.2a — promoted from a Studio Management child to Marketing
-  // (it's the public-facing landing page, not a building-admin
-  // surface). Public landing page — preview link, opens in new tab.
-  // (The edit form moved to Settings → Landing page in SIDEBAR-IA.1.)
-  { href: '/welcome', label: 'Landing page', icon: Globe,
-    permission: 'landing_page', openInNewTab: true, section: 'marketing' },
+  // ── Marketing hub ─────────────────────────────────────────────
+  // HUBS.2f Task 2 — seventh application of the hub-collapse pattern
+  // (after Sales HUBS.2a, Members HUBS.2b, Money HUBS.2c, Team
+  // HUBS.2d, Operations HUBS.2e, Messages HUBS.2f Task 1): what was
+  // two standalone sidebar entries (Automations, the public Landing
+  // page link) becomes one hub entry. anyPermission ORs both
+  // underlying permissions plus `landing_page` — folding landing_page
+  // into the union (rather than dropping it) is what keeps a
+  // landing-page-only editor seeing Marketing at all, the same
+  // reasoning Messages' `email_inbox` fold used. extraActivePaths
+  // keeps the entry lit while the user is actually on /automations
+  // (same rationale as every prior hub — /marketing redirects into a
+  // default tab rather than rendering content itself).
+  //
+  // `/welcome` is deliberately ABSENT from extraActivePaths: it's the
+  // PUBLIC marketing site (outside auth entirely, per the public-path
+  // allowlist), never an in-app pathname the sidebar could be sitting
+  // on, so there's nothing there for the hub entry to light against.
+  // Its reachability didn't disappear — it moved from its own
+  // top-level sidebar row to the (marketing) hub's Landing page tab
+  // (src/app/(marketing)/layout.js), which renders it via HubTabs'
+  // new `newTab: true` capability (HUBS.2f Task 2): a plain
+  // target="_blank" anchor with an ExternalLink glyph, same idiom the
+  // old standalone sidebar entry used via openInNewTab.
+  //
+  // Folded-forward context from the old standalone entries:
+  //  - Automations (curated toggles + custom email/WhatsApp flows +
+  //    Tapo device control) — visible to anyone holding `automations`
+  //    (the curated cards) or `email`/`whatsapp` (custom flows); the
+  //    page itself (src/app/(marketing)/automations/page.js) gates
+  //    which sections render for which permission, matching this
+  //    union exactly.
+  //  - Landing page (HUBS.2a — promoted from a Studio Management child
+  //    to Marketing; it's the public-facing landing page, not a
+  //    building-admin surface). The edit form lives at Settings →
+  //    Landing page (SIDEBAR-IA.1); this was always just the public
+  //    preview link.
+  { href: '/marketing', label: 'Marketing', icon: Megaphone,
+    anyPermission: ['automations', 'email', 'whatsapp', 'landing_page'],
+    extraActivePaths: ['/automations'],
+    section: 'marketing' },
 
   // ── Team hub ───────────────────────────────────────────────────
   // HUBS.2d — fourth application of the hub-collapse pattern (after

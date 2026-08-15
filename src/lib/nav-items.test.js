@@ -10,7 +10,8 @@
 //   Members     — what's on for members: bookings, events, challenges,
 //                 pulse, live floor, Hyrox
 //   Money       — bookkeeping + orders
-//   Marketing   — automations + the public landing page
+//   Marketing   — the collapsed Marketing hub (automations + the public
+//                 landing page, HUBS.2f Task 2)
 //   Team        — schedule, contracts, policies
 //   Operations  — studio management + maintenance
 //   modules     — vertical modules (Cars), header-less
@@ -146,8 +147,27 @@ describe('Money hub', () => {
 })
 
 describe('Marketing hub', () => {
-  it('contains automations and the public landing page', () => {
-    expect(hrefsIn('marketing')).toEqual(['/automations', '/welcome'])
+  // HUBS.2f Task 2 — seventh application of the hub-collapse pattern
+  // (after Sales HUBS.2a, Members HUBS.2b, Money HUBS.2c, Team HUBS.2d,
+  // Operations HUBS.2e, Messages HUBS.2f Task 1): what was two
+  // standalone sidebar entries (Automations, the public Landing page
+  // link) becomes one hub entry. `landing_page` folds into the union
+  // so a landing-page-only editor still sees the hub — the same
+  // fold-into-the-OR reasoning as Messages' email_inbox. No
+  // '/welcome' in extraActivePaths: it's the PUBLIC site, never an
+  // in-app pathname the sidebar could be sitting on, so there's
+  // nothing for the hub entry to light against there — its
+  // reachability moves entirely to the (marketing) hub's own Landing
+  // page tab (newTab: true, HubTabs capability), not to sidebar
+  // active-state.
+  it('is a single collapsed hub entry', () => {
+    expect(hrefsIn('marketing')).toEqual(['/marketing'])
+  })
+
+  it('the Marketing hub entry ORs its member permissions and lights on the automations path', () => {
+    const marketing = ALL_NAV.find(i => i.href === '/marketing')
+    expect(marketing.anyPermission).toEqual(['automations', 'email', 'whatsapp', 'landing_page'])
+    expect(marketing.extraActivePaths).toEqual(['/automations'])
   })
 })
 
