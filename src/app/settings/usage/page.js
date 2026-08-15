@@ -19,8 +19,7 @@ import { hasPermission } from '@/lib/permissions'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { getOrgUsageSummary } from '@/lib/usage-summary'
 import { redirect } from 'next/navigation'
-import Link from 'next/link'
-import { ArrowLeft, Gauge } from 'lucide-react'
+import { Gauge } from 'lucide-react'
 import UsageCapsForm from '@/components/settings/UsageCapsForm'
 
 export const runtime = 'nodejs'
@@ -55,10 +54,6 @@ export default async function UsageSettingsPage() {
 
   return (
     <div className="p-6 max-w-4xl">
-      <Link href="/settings" className="inline-flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text mb-4">
-        <ArrowLeft size={14} /> Settings
-      </Link>
-
       <div className="flex items-center gap-2 mb-1">
         <Gauge size={20} className="text-un1t-subtle" />
         <h1 className="text-2xl font-semibold">Usage &amp; caps</h1>

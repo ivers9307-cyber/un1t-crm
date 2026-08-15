@@ -12,6 +12,16 @@
 // routes also expose have no role check, but this page's whole purpose is
 // the editor, so gating on the write requirement is the correct mirror
 // (never looser than the strictest endpoint it drives).
+//
+// Task 1 review disclosure: this IS a deliberate tightening, not a pure
+// mirror. Before this gate existed, a non-manager holder of the `settings`
+// permission (e.g. a permission-granted staff member) could open this page
+// and see a working, ungated GET — a de facto read-only view. The
+// MANAGER_ROLES gate above removes that read-only path entirely; those
+// callers now bounce to /settings. Accepted tradeoff: this page is an
+// editor, not a viewer, and the write APIs already gate MANAGER_ROLES, so a
+// read-only front door onto an editor-only surface was itself the
+// inconsistency being fixed.
 
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
