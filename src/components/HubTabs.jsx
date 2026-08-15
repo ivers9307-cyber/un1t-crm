@@ -19,6 +19,9 @@ import clsx from 'clsx'
 import { usePolledCount } from './use-polled-count'
 
 // Hooks can't sit in the tabs.map loop, so each badge is its own component.
+// Soft convention: each badgeUrl is its own independent poller (own interval,
+// own focus listener) — keep badge tabs per hub to the few queues that
+// actually need a live count, not every tab that could theoretically have one.
 function TabBadge({ url }) {
   const count = usePolledCount({ enabled: true, url })
   if (!(count > 0)) return null
@@ -108,10 +111,18 @@ export default function HubTabs({ tabs }) {
         </div>
       </div>
       {edges.start && (
-        <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 w-10 rounded-l-xl bg-gradient-to-r from-un1t-surface from-15% via-un1t-surface/80 to-transparent" />
+        <div
+          data-testid="tabs-fade-start"
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-0 left-0 w-10 rounded-l-xl bg-gradient-to-r from-un1t-surface from-15% via-un1t-surface/80 to-transparent"
+        />
       )}
       {edges.end && (
-        <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0 w-10 rounded-r-xl bg-gradient-to-l from-un1t-surface from-15% via-un1t-surface/80 to-transparent" />
+        <div
+          data-testid="tabs-fade-end"
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-0 right-0 w-10 rounded-r-xl bg-gradient-to-l from-un1t-surface from-15% via-un1t-surface/80 to-transparent"
+        />
       )}
     </div>
   )
