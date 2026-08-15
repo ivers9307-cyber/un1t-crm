@@ -33,7 +33,7 @@ export default async function CommunicationsHubLayout({ children }) {
 
   return (
     <CommsShell>
-      <h1 className="text-2xl font-bold text-un1t-text mb-1">Communications</h1>
+      <h1 className="text-2xl font-bold text-un1t-text mb-1">Messages</h1>
       <p className="text-sm text-un1t-subtle mb-5">
         {[
           (canEmail || canEmailInbox) && 'email',
