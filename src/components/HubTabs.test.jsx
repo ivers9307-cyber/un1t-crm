@@ -128,3 +128,44 @@ describe('HubTabs — overflow affordance (COMMS-DETAIL-FIX.2)', () => {
     expect(within(container).getByTestId('tabs-scroller').className).toMatch(/scroll-p[xl]?-/)
   })
 })
+
+// HUBS.2f Task 2 — a hub tab that points at an external/public page
+// (the Marketing hub's Landing page tab → /welcome, the public site)
+// renders as a plain new-tab anchor instead of an in-app <Link>, the
+// same idiom the sidebar already uses for openInNewTab entries
+// (Sidebar.jsx SidebarItem). External pages have no in-app pathname,
+// so they can never be usePathname's match — active-state computation
+// excludes them outright rather than relying on them simply never
+// matching.
+describe('HubTabs — newTab capability (HUBS.2f)', () => {
+  const NEWTAB_TABS = [
+    { id: 'automations', label: 'Automations', href: '/automations' },
+    { id: 'landing',     label: 'Landing page', href: '/welcome', newTab: true },
+  ]
+
+  it('renders a newTab tab as target="_blank" with rel="noopener noreferrer", not a Link', () => {
+    mockPathname.mockReturnValue('/automations')
+    render(<HubTabs tabs={NEWTAB_TABS} />)
+    const links = screen.getAllByRole('link')
+    const landing = links.find(l => l.textContent.includes('Landing page'))
+    expect(landing.getAttribute('href')).toBe('/welcome')
+    expect(landing.getAttribute('target')).toBe('_blank')
+    expect(landing.getAttribute('rel')).toBe('noopener noreferrer')
+  })
+
+  it('never marks a newTab tab active, even when the pathname matches its href', () => {
+    // /welcome is never a real in-app pathname, but even a contrived
+    // match must not light the external tab.
+    mockPathname.mockReturnValue('/welcome')
+    render(<HubTabs tabs={NEWTAB_TABS} />)
+    const active = screen.getAllByRole('link').filter(l => l.className.includes('font-semibold'))
+    expect(active).toHaveLength(0)
+  })
+
+  it('counts a newTab tab toward the >=2 visibility threshold', () => {
+    mockPathname.mockReturnValue('/automations')
+    const { container } = render(<HubTabs tabs={NEWTAB_TABS} />)
+    expect(container.innerHTML).not.toBe('')
+    expect(screen.getAllByRole('link')).toHaveLength(2)
+  })
+})

@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { ExternalLink } from 'lucide-react'
 import clsx from 'clsx'
 import { usePolledCount } from './use-polled-count'
 
@@ -76,7 +77,13 @@ export default function HubTabs({ tabs }) {
 
   if (!tabs || tabs.length < 2) return null
 
+  // HUBS.2f — a newTab tab (e.g. Marketing's Landing page → /welcome,
+  // the public site) is excluded outright, not just left to never
+  // match: it has no in-app pathname, so usePathname can never
+  // legitimately equal its href, but excluding it here means active
+  // state can't be fooled by a contrived match either.
   const bestMatch = tabs
+    .filter(t => !t.newTab)
     .filter(t => pathname === t.href || (t.href !== '/' && pathname.startsWith(`${t.href}/`)))
     .sort((a, b) => b.href.length - a.href.length)[0]
 
@@ -92,18 +99,41 @@ export default function HubTabs({ tabs }) {
       >
         <div className="flex w-max min-w-full p-1 bg-un1t-surface border border-un1t-border rounded-xl">
           {tabs.map(t => {
-            const active = bestMatch?.href === t.href
+            // newTab tabs are never the active one (see the bestMatch
+            // filter above) — this `&& !t.newTab` is belt-and-braces,
+            // not load-bearing, since bestMatch can never equal them.
+            const active = bestMatch?.href === t.href && !t.newTab
+            const className = clsx(
+              'flex-1 whitespace-nowrap text-center px-3 py-2 rounded-lg text-sm transition-colors',
+              active
+                ? 'bg-un1t-text text-un1t-bg font-semibold'
+                : 'text-un1t-subtle hover:text-un1t-text'
+            )
+            if (t.newTab) {
+              // Same idiom as Sidebar.jsx's openInNewTab rendering: a
+              // plain anchor (no client-side <Link> prefetch/navigation
+              // for a page outside this app) with an ExternalLink glyph
+              // after the label.
+              return (
+                <a
+                  key={t.id}
+                  href={t.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={className}
+                >
+                  {t.label}
+                  {t.badgeUrl ? <TabBadge url={t.badgeUrl} /> : null}
+                  <ExternalLink size={12} className="inline-block opacity-60 ml-1" />
+                </a>
+              )
+            }
             return (
               <Link
                 key={t.id}
                 href={t.href}
                 ref={active ? activeRef : undefined}
-                className={clsx(
-                  'flex-1 whitespace-nowrap text-center px-3 py-2 rounded-lg text-sm transition-colors',
-                  active
-                    ? 'bg-un1t-text text-un1t-bg font-semibold'
-                    : 'text-un1t-subtle hover:text-un1t-text'
-                )}
+                className={className}
               >
                 {t.label}
                 {t.badgeUrl ? <TabBadge url={t.badgeUrl} /> : null}
