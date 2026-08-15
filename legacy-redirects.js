@@ -78,6 +78,13 @@ module.exports = [
   { source: '/admin/integrations', destination: '/settings/service-credentials', permanent: false },
   { source: '/admin/policies', destination: '/policies/manage', permanent: false },
   { source: '/admin/policies/:path*', destination: '/policies/manage/:path*', permanent: false },
+  // ADMIN.2h Task 3 — the /admin index itself is gone. Exact-match only
+  // (no :path* — that would shadow every still-live resident under
+  // /admin: tenants, plans, tenant-domains, health, matrix, bridges,
+  // studio-devices, webhook-dead-letter, fleet). /settings is the
+  // nearest still-standing hub a bookmark of the old index should land
+  // on.
+  { source: '/admin', destination: '/settings', permanent: false },
   // /communications legacy stub set
   { source: '/communications/broadcasts', destination: '/communications/sent', permanent: false },
   { source: '/communications/campaigns', destination: '/communications/sent', permanent: false },

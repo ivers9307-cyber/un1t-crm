@@ -1,47 +1,48 @@
-// /admin/* — historically master-only home for platform-level tools.
+// /admin/* — master console + a couple of narrower-audience platform
+// tools. Distinct from /settings/* (per-location operator admin).
 //
-// Distinct from /settings/* which is for per-location operator
-// admin (locations, staff, integrations, etc.). The hard-master-only
-// gate was relaxed by STUDIO-GROUP.1 (May 2026) so that the Studio
-// Management children living under /admin/* (originally contracts,
-// tv-displays, glofox-import, marketing-import) can be opened up to
-// non-master users via their own per-user permissions. HUBS.2d moved
-// contracts out to /contracts (see the ADMIN_CHILD_PERMS note below) —
-// tv-displays, glofox-import and marketing-import are the ones still
-// actually under this tree.
+// ADMIN.2h dissolved the old /admin index hub (Task 3) and, across both
+// tasks, relocated every child that had its own operator-facing
+// permission out from under this tree entirely: contracts → /contracts
+// (HUBS.2d), tv-displays/checklists → the Operations hub (HUBS.2e),
+// glofox-import/marketing-import/audit-log/achievements/service-
+// credentials/policies → /settings or /achievements (ADMIN.2h Task 1).
+// The old STUDIO-GROUP.1 relax (ADMIN_CHILD_PERMS — "let a Studio
+// Management permission holder past this gate") is GONE because there
+// is no longer a Studio Management child living under /admin/* for it
+// to admit someone to.
 //
-// New rule:
-//   - master: always allowed (unchanged).
-//   - non-master: allowed if they hold ANY of the Studio
-//     Management child permissions. Per-page guards then enforce
-//     the specific permission for the page they're on.
-//   - other /admin/* pages (achievements, audit-log, integrations,
-//     matrix) keep their own page-level master gates so the relax
-//     here doesn't accidentally open them.
+// What's actually left here (verified against src/app/admin/*):
+//   tenants, plans, tenant-domains, health, matrix, bridges,
+//   studio-devices — all master-only at the page level.
+//   webhook-dead-letter — master-OR-owner at the page level.
+//   fleet — master (isMaster bypass) or per-location fleet_restart/
+//     fleet_admin holder; the page itself does the per-device filtering
+//     once past this gate.
 //
-// RLS at the data layer is the second line of defence — even if a
-// non-master somehow reached an /admin/* page they don't have
-// permission for, they'd see no data because RLS enforces tenancy
-// + role at the row level.
+// New rule, sized to that actual resident set:
+//   - master: always allowed (covers every resident).
+//   - owner: allowed (needed for webhook-dead-letter; every OTHER
+//     resident still redirects a non-master owner right back out via
+//     its own page-level master-only gate, so this doesn't widen
+//     access to them — see each page's header comment).
+//   - hasPermission('fleet_restart' | 'fleet_admin'): allowed (needed
+//     for a non-owner coach/manager/head_coach with fleet rights;
+//     fleet's page then does the per-device visibility check RLS can't
+//     express, since fleet_devices has no location_id filter that maps
+//     1:1 to "assigned to me").
+//   - everyone else: redirect('/').
+//
+// RLS at the data layer is the second line of defence — even if
+// someone somehow reached an /admin/* page they don't have permission
+// for, they'd see no data because RLS enforces tenancy + role at the
+// row level.
 
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 
 export const dynamic = 'force-dynamic'
-
-// Permissions that grant access to the /admin/* tree. Each target
-// page enforces its own specific permission; we only need ONE of
-// these here to let the user past the parent layout.
-// HYROX-TC.2 — approvals_hyrox_sessions joined the list. HUBS.2b moved
-// the Hyrox page itself to /hyrox (out from under this layout), but the
-// key stays here so a hyrox-only user can still reach the /admin index,
-// where the repointed admin nav card to /hyrox lives.
-// HUBS.2d — contracts got the same treatment: the page itself moved to
-// /contracts (out from under this layout), but the key stays here so a
-// contracts-only user can still reach the /admin index, where the
-// repointed admin nav card to /contracts lives.
-const ADMIN_CHILD_PERMS = ['contracts', 'tv_displays', 'glofox_import', 'preferences_import', 'approvals_hyrox_sessions']
 
 export default async function AdminLayout({ children }) {
   const user = await getCurrentUser()
@@ -50,9 +51,13 @@ export default async function AdminLayout({ children }) {
   // global value. Master is platform-wide so we read from profileRole
   // (which is 'master') rather than the per-location role.
   if (user.profileRole === 'master') return children
-  // Non-master: at least one Studio Management child permission must
-  // be held. Per-page guards inside each /admin/* page enforce the
-  // specific permission for that page.
-  if (ADMIN_CHILD_PERMS.some((k) => hasPermission(user, k))) return children
+  // Owner — needed for webhook-dead-letter (master-or-owner at the page
+  // level); every other resident's own master-only gate still turns a
+  // non-master owner away.
+  if (user.role === 'owner') return children
+  // fleet_restart / fleet_admin holder — needed for a non-owner coach,
+  // manager or head_coach who can operate the studio Pis. fleet's page
+  // does its own per-device location check once past this gate.
+  if (hasPermission(user, 'fleet_restart') || hasPermission(user, 'fleet_admin')) return children
   redirect('/')
 }

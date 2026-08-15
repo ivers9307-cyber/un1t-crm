@@ -66,6 +66,11 @@ const DELETED_STUB_SOURCES = [
   '/admin/achievements',
   '/admin/integrations',
   '/admin/policies',
+  // ADMIN.2h Task 3 — the /admin index page itself is deleted (its nine
+  // residents — tenants/plans/tenant-domains/health/matrix/bridges/
+  // studio-devices/webhook-dead-letter/fleet — each now have their own
+  // persistent nav home per Task 2, so the hub page is dead weight).
+  '/admin',
 ]
 
 describe('legacy-redirects', () => {
