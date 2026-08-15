@@ -81,7 +81,9 @@ export default function HubTabs({ tabs }) {
     .sort((a, b) => b.href.length - a.href.length)[0]
 
   return (
-    <div className="relative mb-6 max-w-3xl">
+    // print:hidden — nav chrome never prints (found via the (team) group
+    // wrapping the contract print surface, HUBS.2d review).
+    <div className="relative mb-6 max-w-3xl print:hidden">
       <div
         ref={scrollerRef}
         data-testid="tabs-scroller"

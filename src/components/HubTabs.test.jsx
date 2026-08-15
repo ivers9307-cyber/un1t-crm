@@ -53,6 +53,15 @@ describe('HubTabs', () => {
     render(<HubTabs tabs={TABS} />)
     expect(usePolledCount).not.toHaveBeenCalled()
   })
+
+  // HUBS.2d review — the (team) group wraps the /contracts/[id] print/
+  // "Save as PDF" surface, and nav chrome printed onto the legal
+  // document. print:hidden on the root element is the load-bearing fix.
+  it('never prints — root element carries print:hidden', () => {
+    mockPathname.mockReturnValue('/pipeline')
+    const { container } = render(<HubTabs tabs={TABS} />)
+    expect(container.firstChild.className).toContain('print:hidden')
+  })
 })
 
 // COMMS-DETAIL-FIX.2 — ported from CommunicationsTabs.test.jsx (the origin
