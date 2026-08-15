@@ -474,13 +474,26 @@ function leafClassName(active, isChild = false) {
 
 function SidebarItem({ item, active, isChild = false, badge = 0 }) {
   const { href, label, icon: Icon, openInNewTab } = item
-  // HUBS.2e Task 4 — ONE winner, longest match. A top-level item lights
-  // when it IS the winning entry (active.itemHref); a child row lights
+  // HUBS.2e Task 4 — ONE winner, longest match. A top-level item tints
+  // when it IS the winning entry (active.itemHref); a child row tints
   // when it's specifically the matched path (active.matchedPath) — a
   // child match reports the PARENT's href as itemHref, so checking
-  // itemHref alone would light every child of an active group.
+  // itemHref alone would tint every child of an active group.
   const isActive = isChild ? active?.matchedPath === href : active?.itemHref === href
   const className = leafClassName(isActive, isChild)
+  // Review fix (2026-08-15) — aria-current is stricter than the tint:
+  // WAI-ARIA means exactly ONE element may claim aria-current="page", but
+  // a group's parent row and its lit child both used to satisfy the same
+  // itemHref check, so a child page (e.g. /presentations/xyz) announced
+  // TWO "current pages". A child row's own isActive check already IS the
+  // matchedPath===href test, so it's already exactly-one-correct — kept
+  // as-is here. A genuine top-level leaf (no children — an item with
+  // children always renders via SidebarGroup, never reaches this
+  // component as a non-child) has no sibling child row to collide with,
+  // so it claims aria-current whenever it's the winning entry, same as
+  // its tint. The `!item.children` guard documents that invariant rather
+  // than changing behaviour.
+  const isAriaCurrent = isChild ? isActive : (isActive && !item.children)
   // INVOICES.2 — notification badge. Renders to the right of the
   // label with `ml-auto`. Capped at 99+ to stop the pill stretching
   // the sidebar layout. Hidden when the count is zero.
@@ -503,7 +516,7 @@ function SidebarItem({ item, active, isChild = false, badge = 0 }) {
     )
   }
   return (
-    <Link href={href} className={className} aria-current={isActive ? 'page' : undefined}>
+    <Link href={href} className={className} aria-current={isAriaCurrent ? 'page' : undefined}>
       <Icon size={isChild ? 14 : 18} />
       {label}
       {badgeNode}
@@ -513,11 +526,22 @@ function SidebarItem({ item, active, isChild = false, badge = 0 }) {
 
 function SidebarGroup({ item, active, open, onToggle }) {
   const { href, label, icon: Icon, _children: children, _parentHasPerm: parentHasPerm } = item
-  // HUBS.2e Task 4 — the group's own row lights when the group IS the
-  // winning entry, same rule as a top-level SidebarItem (a child match
-  // also reports the parent's href as itemHref, so this stays lit while
-  // a child row is the actual match).
+  // HUBS.2e Task 4 — the group's own row TINTS (visual active class)
+  // when the group IS the winning entry, same rule as a top-level
+  // SidebarItem — deliberately including a child match (a child match
+  // reports the parent's href as itemHref), so the section still reads
+  // as "you're in here" while a child row is the literal match.
   const parentActive = active?.itemHref === href
+  // Review fix (2026-08-15) — aria-current is stricter than the tint:
+  // exactly one element may claim aria-current="page" (WAI-ARIA — two
+  // "current pages" is a screen-reader contradiction). Confirmed live on
+  // /presentations/xyz: both this parent row (itemHref match) and the
+  // Presentations child row (matchedPath match) carried aria-current
+  // together. The parent now only claims it when its OWN href is the
+  // matched path — i.e. no child is the more specific match — leaving
+  // the lit child (SidebarItem's isAriaCurrent) as the sole claimant
+  // whenever a child is what actually matched.
+  const parentIsAriaCurrent = active?.matchedPath === href
   const Chevron = open ? ChevronDown : ChevronRightIcon
   // SIDEBAR-CHEVRON — only render the expand toggle when the user
   // actually has visible children. The filter step above (line 190)
@@ -535,7 +559,7 @@ function SidebarGroup({ item, active, open, onToggle }) {
     <div>
       <div className="flex items-stretch">
         {parentHasPerm ? (
-          <Link href={href} className={clsx(leafClassName(parentActive), 'flex-1')} aria-current={parentActive ? 'page' : undefined}>
+          <Link href={href} className={clsx(leafClassName(parentActive), 'flex-1')} aria-current={parentIsAriaCurrent ? 'page' : undefined}>
             <Icon size={18} />
             {label}
           </Link>
