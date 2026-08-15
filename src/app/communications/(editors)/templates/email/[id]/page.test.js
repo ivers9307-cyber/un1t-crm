@@ -82,7 +82,7 @@ function props(id = 'tpl-1') {
 
 beforeEach(() => vi.clearAllMocks())
 
-describe('/email/templates/[id] page', () => {
+describe('/communications/templates/email/[id] page', () => {
   it('redirects to /login without a session', async () => {
     getCurrentUser.mockResolvedValue(null)
     await expect(EditTemplatePage(props())).rejects.toThrow('NEXT_REDIRECT:/login')

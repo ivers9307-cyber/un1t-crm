@@ -22,8 +22,11 @@
 // - /email/campaigns/:id preserved '?edit=1' via query passthrough
 //   (next.config redirects forward unmatched query params by default).
 // - /communications/instagram used to append ch=ig when forwarding a
-//   ?c= param; a static rule can't do that conditionally, so the ?c=
-//   passes through and only the channel pre-filter is lost.
+//   ?c= param; a `has` rule now covers that case (matched requests keep
+//   both ?c= and ch=ig — Next passes the unmatched query through and
+//   merges it with the destination's own query), so the channel
+//   pre-filter is preserved whenever ?c= is present. The plain fallback
+//   rule below still covers the no-?c= case.
 // - /whatsapp/broadcasts used to double-hop via /communications/
 //   broadcasts; flattened straight to /communications/sent.
 module.exports = [
@@ -53,6 +56,7 @@ module.exports = [
   // /communications legacy stub set
   { source: '/communications/broadcasts', destination: '/communications/sent', permanent: false },
   { source: '/communications/campaigns', destination: '/communications/sent', permanent: false },
+  { source: '/communications/instagram', has: [{ type: 'query', key: 'c' }], destination: '/communications/inbox?ch=ig', permanent: false },
   { source: '/communications/instagram', destination: '/communications/inbox', permanent: false },
   { source: '/communications/sequences/templates', destination: '/automations/templates', permanent: false },
   { source: '/communications/sequences/:id', destination: '/automations/:id', permanent: false },

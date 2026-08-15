@@ -4,6 +4,7 @@
 // here because the chrome needs them for tab visibility — deliberate
 // duplication, the gate and the chrome are separate jobs.
 
+import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { MANAGER_ROLES } from '@/lib/schemas'
@@ -14,6 +15,7 @@ export const dynamic = 'force-dynamic'
 
 export default async function CommunicationsHubLayout({ children }) {
   const user = await getCurrentUser()
+  if (!user) redirect('/login') // parent layout already gates; defensive for render-order edge cases
 
   const canEmail = hasPermission(user, 'email')
   const canWhatsapp = hasPermission(user, 'whatsapp')

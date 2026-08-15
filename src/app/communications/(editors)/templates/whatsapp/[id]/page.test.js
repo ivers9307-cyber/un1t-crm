@@ -92,7 +92,7 @@ function props(id = 'wa-tpl-1') {
 
 beforeEach(() => vi.clearAllMocks())
 
-describe('/whatsapp/templates/[id] page', () => {
+describe('/communications/templates/whatsapp/[id] page', () => {
   it('redirects to /login without a session', async () => {
     getCurrentUser.mockResolvedValue(null)
     await expect(EditWATemplatePage(props())).rejects.toThrow('NEXT_REDIRECT:/login')

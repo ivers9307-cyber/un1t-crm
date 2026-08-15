@@ -20,8 +20,9 @@
 // FILE-LEVEL evidence (`assertLocationAccess(` anywhere in the page), so
 // splitting them would move the guards out of the scanner's view.
 //
-// Old paths keep redirect stubs (see the tests in
-// ../../legacy-detail-redirects.test.js) — those URLs are bookmarked and one of
+// Old paths keep back-compat at the config level (legacy-redirects.js at
+// the repo root, 307s), invariants tested in
+// src/lib/legacy-redirects.test.js — those URLs are bookmarked and one of
 // them is linked from notification email, so a 404 was never an option.
 
 import { notFound, redirect } from 'next/navigation'
