@@ -380,8 +380,17 @@ export const ALL_NAV = [
   // (`/studio-management/timer`) is simply the only candidate that
   // matches — there's no second claimant left to race against it.
   //
-  // fleet (device/AC control) and studio-devices surfaces are
-  // deliberately deferred to a future dissolution of this hub — noted
+  // ADMIN.2h Task 2 review fix — fleet_restart/fleet_admin joined the
+  // union below. The (operations) route group grew a `fleet` tab
+  // (href /admin/fleet, outside the group — see its layout's header
+  // comment) so fleet is now reachable through this hub, but without
+  // these two keys in anyPermission an edge persona holding ONLY
+  // fleet_restart/fleet_admin (every other Operations permission
+  // revoked) would never see the Operations sidebar entry at all —
+  // exactly the "no persistent nav home" problem ADMIN.2h set out to
+  // fix, just one permission-shape narrower. studio-devices remains
+  // deliberately deferred to a future dissolution of this hub (it has
+  // no Operations tab and isn't reachable from here at all) — noted
   // here as a spec deviation, not an oversight.
   //
   // Folded-forward context from the old standalone entries:
@@ -403,7 +412,7 @@ export const ALL_NAV = [
   //    screens from a laptop for workshops/events) before this PR
   //    folded those two, plus Studio itself, into this single entry.
   { href: '/operations', label: 'Operations', icon: Wrench,
-    anyPermission: ['equipment_admin', 'equipment_inspect', 'studio_management', 'tv_displays', 'presentations'],
+    anyPermission: ['equipment_admin', 'equipment_inspect', 'studio_management', 'tv_displays', 'presentations', 'fleet_restart', 'fleet_admin'],
     extraActivePaths: ['/maintenance', '/studio-management', '/tv-displays', '/presentations', '/checklists'],
     section: 'operations' },
 

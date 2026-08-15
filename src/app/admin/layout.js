@@ -20,17 +20,34 @@
 //     fleet_admin holder; the page itself does the per-device filtering
 //     once past this gate.
 //
+// SEC fix (ADMIN.2h review): `health` was the ONE resident that did NOT
+// actually carry its own page-level gate when this layout comment was
+// first written — its page.js merely claimed to "inherit the
+// master-only gate from /admin/layout.js" (a layout that, by this
+// point, was never hard master-only). That made the "every OTHER
+// resident redirects a non-master owner/fleet-holder right back out"
+// claim below FALSE for health specifically: once this layout admitted
+// owner and fleet_restart/fleet_admin, they could load cross-tenant
+// platform health (org-wide integration errors, AI spend, heartbeats)
+// with no further check. health now enforces its own page-level
+// master-only gate directly (see its header comment), closing that
+// historical exception — the claim below is accurate for every
+// resident as of this fix, not just the other eight.
+//
 // New rule, sized to that actual resident set:
 //   - master: always allowed (covers every resident).
 //   - owner: allowed (needed for webhook-dead-letter; every OTHER
-//     resident still redirects a non-master owner right back out via
-//     its own page-level master-only gate, so this doesn't widen
-//     access to them — see each page's header comment).
+//     resident — health included, as of the fix above — still
+//     redirects a non-master owner right back out via its own
+//     page-level master-only gate, so this doesn't widen access to
+//     them — see each page's header comment).
 //   - hasPermission('fleet_restart' | 'fleet_admin'): allowed (needed
 //     for a non-owner coach/manager/head_coach with fleet rights;
 //     fleet's page then does the per-device visibility check RLS can't
 //     express, since fleet_devices has no location_id filter that maps
-//     1:1 to "assigned to me").
+//     1:1 to "assigned to me". Every other resident's page-level
+//     master-only or master-or-owner gate turns a fleet-only holder
+//     away just as it does a plain owner.)
 //   - everyone else: redirect('/').
 //
 // RLS at the data layer is the second line of defence — even if

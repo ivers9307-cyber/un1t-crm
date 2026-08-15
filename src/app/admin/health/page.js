@@ -5,8 +5,20 @@
 // connection-health cron), month-to-date AI cost, and the live
 // campaign backlog. Composes existing signals — builds none.
 //
-// Auth: inherits the master-only gate from /admin/layout.js.
+// Auth: SEC fix (ADMIN.2h review) — this page had NO page-level gate.
+// The old comment here claimed it "inherits the master-only gate from
+// /admin/layout.js", which was already false at STUDIO-GROUP.1 (that
+// layout let any Studio Management perm holder through) and became a
+// live cross-tenant data leak once ADMIN.2h Task 3 widened the layout
+// further to owner + fleet_restart/fleet_admin — nearly any staff role
+// could reach this page and see every tenant's integration errors, AI
+// spend and heartbeats. Page-level master gate now enforced directly,
+// matching the sibling idiom (/admin/plans, /admin/matrix, etc.):
+// profileRole is read (not the per-location `role`) because master is
+// platform-wide, not location-scoped.
 
+import { redirect } from 'next/navigation'
+import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { getTenantHealth } from '@/lib/tenant-health'
 import Link from 'next/link'
@@ -45,6 +57,10 @@ function ConnectionChip({ c }) {
 }
 
 export default async function TenantHealthPage() {
+  const user = await getCurrentUser()
+  if (!user) redirect('/login')
+  if (user.profileRole !== 'master') redirect('/')
+
   const db = createServerClient()
   const orgs = await getTenantHealth(db)
 

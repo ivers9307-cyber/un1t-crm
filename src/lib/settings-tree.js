@@ -109,9 +109,15 @@ export const SETTINGS_TREE = [
       // see integration-health.js); and `fleet` — deliberately NOT a
       // console page, since fleet_restart holders aren't master/owner —
       // reaches everyone via the Operations hub's `fleet` tab
-      // ((operations)/layout.js, ADMIN.2h Task 2). This is also why this
-      // pin now reads "the tree contains ZERO /admin hrefs" in
-      // settings-tree.test.js.
+      // ((operations)/layout.js, ADMIN.2h Task 2). "Everyone" here means
+      // every fleet_restart/fleet_admin holder specifically — that
+      // needed src/lib/nav-items.js's `/operations` sidebar entry to
+      // also OR in `fleet_restart`/`fleet_admin` (review fix, same
+      // task): without it, a fleet-only persona with every other
+      // Operations permission revoked would never see the Operations
+      // sidebar entry at all and the tab would be undiscoverable. This
+      // is also why this pin now reads "the tree contains ZERO /admin
+      // hrefs" in settings-tree.test.js.
       {
         id: 'admin-achievements',
         label: 'Achievements',

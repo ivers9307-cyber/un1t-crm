@@ -191,7 +191,11 @@ describe('Operations hub', () => {
 
   it('the Operations hub entry ORs its member permissions and lights on member paths', () => {
     const ops = ALL_NAV.find(i => i.href === '/operations')
-    expect(ops.anyPermission).toEqual(['equipment_admin', 'equipment_inspect', 'studio_management', 'tv_displays', 'presentations'])
+    // ADMIN.2h Task 2 review fix — fleet_restart/fleet_admin joined the
+    // union so a fleet-only edge persona (every other Operations
+    // permission revoked) still sees the Operations sidebar entry and
+    // can discover the fleet tab from it.
+    expect(ops.anyPermission).toEqual(['equipment_admin', 'equipment_inspect', 'studio_management', 'tv_displays', 'presentations', 'fleet_restart', 'fleet_admin'])
     expect(ops.extraActivePaths).toEqual(['/maintenance', '/studio-management', '/tv-displays', '/presentations', '/checklists'])
   })
 })
