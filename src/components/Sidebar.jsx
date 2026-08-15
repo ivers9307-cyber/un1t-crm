@@ -10,7 +10,7 @@ import ImpersonatePicker from './ImpersonatePicker'
 import clsx from 'clsx'
 import { hasPermission } from '@/lib/permissions'
 import { usePolledCount } from './use-polled-count'
-import { ALL_NAV, NAV_SECTIONS, DASHBOARD_LINK_PERM_KEYS } from '@/lib/nav-items'
+import { ALL_NAV, NAV_SECTIONS, DASHBOARD_LINK_PERM_KEYS, activeHrefFor } from '@/lib/nav-items'
 
 const roleLabels = {
   master: 'Master',
@@ -205,6 +205,16 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
       return matches(item)
     })
 
+  // HUBS.2e Task 4 — ONE winner, longest match (activeHrefFor in
+  // nav-items.js), computed once per render against the FILTERED nav
+  // (a hidden item/child shouldn't claim the light — swap in the
+  // permission-filtered `_children` for `children` before matching).
+  // Replaces the old per-item bare startsWith (isPathActive) that let
+  // every prefix-matching item light simultaneously.
+  const active = activeHrefFor(pathname, nav.map((item) =>
+    item.children ? { ...item, children: item._children } : item
+  ))
+
   // STUDIO-GROUP.1 — expand/collapse state for the Studio Management
   // group, persisted to localStorage so it survives navigation. Auto-
   // opens the section if the current pathname matches the parent
@@ -229,9 +239,12 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
   }
   function isGroupOpen(item) {
     if (!item.groupId) return false
-    // Auto-open if URL is the parent or any of its children.
-    const autoOpen = pathname === item.href
-      || (item._children || []).some((c) => pathname === c.href || (c.href !== '/' && pathname.startsWith(c.href)))
+    // HUBS.2e Task 4 — auto-open exactly when this group is the ONE
+    // winning entry (its own href, OR a child match — a child match
+    // reports the parent's href as itemHref, so this still fires for a
+    // deep link into a child). Same source of truth as the highlight,
+    // rather than a second, separately-maintained match.
+    const autoOpen = active?.itemHref === item.href
     return openGroups[item.groupId] ?? autoOpen
   }
 
@@ -242,7 +255,7 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
       <SidebarGroup
         key={item.href}
         item={item}
-        pathname={pathname}
+        active={active}
         open={isGroupOpen(item)}
         onToggle={() => toggleGroup(item.groupId)}
       />
@@ -250,7 +263,7 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
       <SidebarItem
         key={item.href}
         item={item}
-        pathname={pathname}
+        active={active}
         badge={badges[item.href] || 0}
       />
     )
@@ -370,7 +383,7 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
       {isLinkedHost && (
         <Link
           href="/host"
-          className={clsx(leafClassName(isPathActive(pathname, '/host')), 'border-t border-un1t-border')}
+          className={clsx(leafClassName(pathname === '/host' || pathname.startsWith('/host/')), 'border-t border-un1t-border')}
           title="Open the event host portal for a host linked to your login"
         >
           <Store size={18} />
@@ -459,16 +472,15 @@ function leafClassName(active, isChild = false) {
   )
 }
 
-function isPathActive(pathname, href, extraActivePaths) {
-  return pathname === href
-    || (href !== '/' && pathname.startsWith(href))
-    || (extraActivePaths || []).some((p) => pathname.startsWith(p))
-}
-
-function SidebarItem({ item, pathname, isChild = false, badge = 0 }) {
-  const { href, label, icon: Icon, extraActivePaths, openInNewTab } = item
-  const active = isPathActive(pathname, href, extraActivePaths)
-  const className = leafClassName(active, isChild)
+function SidebarItem({ item, active, isChild = false, badge = 0 }) {
+  const { href, label, icon: Icon, openInNewTab } = item
+  // HUBS.2e Task 4 — ONE winner, longest match. A top-level item lights
+  // when it IS the winning entry (active.itemHref); a child row lights
+  // when it's specifically the matched path (active.matchedPath) — a
+  // child match reports the PARENT's href as itemHref, so checking
+  // itemHref alone would light every child of an active group.
+  const isActive = isChild ? active?.matchedPath === href : active?.itemHref === href
+  const className = leafClassName(isActive, isChild)
   // INVOICES.2 — notification badge. Renders to the right of the
   // label with `ml-auto`. Capped at 99+ to stop the pill stretching
   // the sidebar layout. Hidden when the count is zero.
@@ -491,7 +503,7 @@ function SidebarItem({ item, pathname, isChild = false, badge = 0 }) {
     )
   }
   return (
-    <Link href={href} className={className} aria-current={active ? 'page' : undefined}>
+    <Link href={href} className={className} aria-current={isActive ? 'page' : undefined}>
       <Icon size={isChild ? 14 : 18} />
       {label}
       {badgeNode}
@@ -499,9 +511,13 @@ function SidebarItem({ item, pathname, isChild = false, badge = 0 }) {
   )
 }
 
-function SidebarGroup({ item, pathname, open, onToggle }) {
-  const { href, label, icon: Icon, extraActivePaths, _children: children, _parentHasPerm: parentHasPerm } = item
-  const parentActive = isPathActive(pathname, href, extraActivePaths)
+function SidebarGroup({ item, active, open, onToggle }) {
+  const { href, label, icon: Icon, _children: children, _parentHasPerm: parentHasPerm } = item
+  // HUBS.2e Task 4 — the group's own row lights when the group IS the
+  // winning entry, same rule as a top-level SidebarItem (a child match
+  // also reports the parent's href as itemHref, so this stays lit while
+  // a child row is the actual match).
+  const parentActive = active?.itemHref === href
   const Chevron = open ? ChevronDown : ChevronRightIcon
   // SIDEBAR-CHEVRON — only render the expand toggle when the user
   // actually has visible children. The filter step above (line 190)
@@ -548,7 +564,7 @@ function SidebarGroup({ item, pathname, open, onToggle }) {
       {hasChildren && open && (
         <div>
           {children.map((child) => (
-            <SidebarItem key={child.href} item={child} pathname={pathname} isChild />
+            <SidebarItem key={child.href} item={child} active={active} isChild />
           ))}
         </div>
       )}

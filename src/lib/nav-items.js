@@ -362,6 +362,35 @@ export const ALL_NAV = [
 // A section with no visible items for the current user renders nothing
 // — no empty header. Dashboard is pinned above all sections (it has no
 // `section`).
+// activeHrefFor(pathname, items) — which ONE nav entry should light, and
+// via which of its paths. Longest-match across every item's href,
+// extraActivePaths, and children hrefs (CalendlyTabs semantics, already
+// used by HubTabs). The old per-item bare startsWith let every prefix
+// light simultaneously — /communications + /communications/tickets both
+// lit on the tickets page, and Members + Operations both lit on the
+// class timer. One winner only.
+// Returns { itemHref, matchedPath } or null. A child match returns the
+// PARENT item's href as itemHref and the child's href as matchedPath, so
+// the group can open and the child row can light (current behaviour kept).
+export function activeHrefFor(pathname, items) {
+  let best = null
+  for (const item of items) {
+    const candidates = [
+      { owner: item.href, path: item.href },
+      ...(item.extraActivePaths || []).map(p => ({ owner: item.href, path: p })),
+      ...(item.children || []).map(c => ({ owner: item.href, path: c.href })),
+    ]
+    for (const { owner, path } of candidates) {
+      if (pathname === path || (path !== '/' && pathname.startsWith(`${path}/`))) {
+        if (!best || path.length > best.matchedPath.length) {
+          best = { itemHref: owner, matchedPath: path }
+        }
+      }
+    }
+  }
+  return best
+}
+
 export const NAV_SECTIONS = [
   { id: 'messages',   label: 'Messages' },
   { id: 'queues',     label: null },

@@ -22,7 +22,7 @@
 // DASHBOARD_LINK_PERM_KEYS.
 
 import { describe, it, expect } from 'vitest'
-import { ALL_NAV, NAV_SECTIONS, DASHBOARD_LINK_PERM_KEYS } from './nav-items'
+import { ALL_NAV, NAV_SECTIONS, DASHBOARD_LINK_PERM_KEYS, activeHrefFor } from './nav-items'
 
 const sectionIds = NAV_SECTIONS.map((s) => s.id)
 const itemsIn = (id) => ALL_NAV.filter((i) => i.section === id)
@@ -196,6 +196,64 @@ describe('modules — vertical modules zone', () => {
 describe('Account', () => {
   it('contains settings', () => {
     expect(hrefsIn('account')).toEqual(['/settings'])
+  })
+})
+
+// HUBS.2e Task 4 — activeHrefFor is the ONE-winner, longest-match
+// replacement for Sidebar's old per-item bare startsWith (which let
+// every prefix-matching item light simultaneously). Cases below assert
+// against the REAL ALL_NAV at this commit (Operations not yet
+// collapsed — Task 5 will fold Studio Management + Maintenance into a
+// single Operations hub entry; where that collapse changes an
+// expectation here, it's called out per-case).
+describe('activeHrefFor — longest-match single winner', () => {
+  it('kills double-light #1: /communications/tickets lights ONLY the Email inbox entry, not the Communications hub too', () => {
+    expect(activeHrefFor('/communications/tickets', ALL_NAV)).toEqual({
+      itemHref: '/communications/tickets',
+      matchedPath: '/communications/tickets',
+    })
+  })
+
+  it('a route under the Communications hub (not the ticket queue) lights the hub via its own href', () => {
+    expect(activeHrefFor('/communications/send', ALL_NAV)).toEqual({
+      itemHref: '/communications',
+      matchedPath: '/communications',
+    })
+  })
+
+  it('a Sales extraActivePaths route lights the Sales hub entry', () => {
+    expect(activeHrefFor('/contacts/abc123', ALL_NAV)).toEqual({
+      itemHref: '/sales',
+      matchedPath: '/contacts',
+    })
+  })
+
+  it('kills double-light #2: /studio-management/timer lights ONLY Members (its extraActivePath beats the shorter Studio Management group href) — NOTE: once Task 5 collapses Operations, the /studio-management group href moves under a single Operations entry; this expectation (Members wins via the longer extraActivePath) is unaffected by that collapse and should remain true', () => {
+    expect(activeHrefFor('/studio-management/timer', ALL_NAV)).toEqual({
+      itemHref: '/members',
+      matchedPath: '/studio-management/timer',
+    })
+  })
+
+  it('a Members extraActivePaths route (Hyrox) lights the Members hub entry', () => {
+    expect(activeHrefFor('/hyrox', ALL_NAV)).toEqual({
+      itemHref: '/members',
+      matchedPath: '/hyrox',
+    })
+  })
+
+  it('returns null when nothing matches', () => {
+    expect(activeHrefFor('/nonexistent', ALL_NAV)).toBeNull()
+  })
+
+  it('a child match reports the PARENT item as itemHref, and the matched child href as matchedPath, so the group opens and the child row lights', () => {
+    // Current Studio Management children: /admin/tv-displays, /presentations
+    // (verified against nav-items.js at this commit). /presentations/xyz
+    // matches the Presentations child only.
+    expect(activeHrefFor('/presentations/xyz', ALL_NAV)).toEqual({
+      itemHref: '/studio-management',
+      matchedPath: '/presentations',
+    })
   })
 })
 
