@@ -1,15 +1,20 @@
-// SIDEBAR-IA.1 — policy contract for the sidebar information
+// SIDEBAR-IA.1 / HUBS.2a — policy contract for the sidebar information
 // architecture. The nav data lives in src/lib/nav-items.js (extracted
 // from Sidebar.jsx so the structure is testable without a DOM). These
-// tests pin the regrouped IA:
+// tests pin the HUBS.2a hub regroup:
 //
-//   Work    — the five badge/action queues, top of the sidebar
-//   Sales   — pipeline, contacts, tasks
-//   Gym     — what's on at the gym (schedule, events, live floor)
-//   studio  — the self-labelled Studio Management group (header-less)
-//   other   — occasional surfaces: the car-import business + the
-//             orders ledger, separated from daily gym ops (header-less)
-//   Account — policies + settings
+//   Messages    — Communications hub + the email ticket queue
+//   queues      — Approvals + Issues (interim, header-less — the phase-3
+//                 Home queue eventually absorbs these)
+//   Sales       — the collapsed Sales hub (single entry, tabs at the page)
+//   Members     — what's on for members: bookings, events, challenges,
+//                 pulse, live floor, Hyrox
+//   Money       — bookkeeping + orders
+//   Marketing   — automations + the public landing page
+//   Team        — schedule, contracts, policies
+//   Operations  — studio management + maintenance
+//   modules     — vertical modules (Cars), header-less
+//   Account     — settings
 //
 // Radars are deliberately ABSENT here — they relocated to dashboard
 // tabs (/dashboard/churn-radar, /dashboard/lead-radar) and the
@@ -24,16 +29,18 @@ const itemsIn = (id) => ALL_NAV.filter((i) => i.section === id)
 const hrefsIn = (id) => itemsIn(id).map((i) => i.href)
 
 describe('NAV_SECTIONS', () => {
-  it('renders the regrouped sections in order', () => {
+  it('renders the hub sections in order', () => {
     expect(NAV_SECTIONS).toEqual([
-      { id: 'work',         label: 'Work' },
-      { id: 'accounting',   label: 'Accounting' }, // RCOV.P2 — bookkeeping consolidated
-      { id: 'sales',        label: 'Sales' },
-      { id: 'gym',          label: 'Gym' },
-      { id: 'automations',  label: 'Automations' },
-      { id: 'studio',       label: null },
-      { id: 'other',        label: null },
-      { id: 'account',      label: 'Account' },
+      { id: 'messages',   label: 'Messages' },
+      { id: 'queues',     label: null },
+      { id: 'sales',      label: 'Sales' },
+      { id: 'members',    label: 'Members' },
+      { id: 'money',      label: 'Money' },
+      { id: 'marketing',  label: 'Marketing' },
+      { id: 'team',       label: 'Team' },
+      { id: 'operations', label: 'Operations' },
+      { id: 'modules',    label: null },
+      { id: 'account',    label: 'Account' },
     ])
   })
 })
@@ -77,16 +84,13 @@ describe('ALL_NAV structure', () => {
   })
 })
 
-describe('Work — the action queues, grouped and ordered', () => {
-  it('contains exactly the queue surfaces (finance moved to Accounting in RCOV.P2)', () => {
-    expect(hrefsIn('work')).toEqual([
+describe('Messages hub', () => {
+  it('contains the Communications hub and the email ticket queue', () => {
+    expect(hrefsIn('messages')).toEqual([
       '/communications',
       // EMAIL-TICKET.4 — the studio email queue is an action queue too, and
       // sits next to the hub it lives inside.
       '/communications/tickets',
-      '/bookings',
-      '/approvals',
-      '/issues',
     ])
   })
 
@@ -99,67 +103,86 @@ describe('Work — the action queues, grouped and ordered', () => {
   })
 })
 
-describe('Accounting — bookkeeping consolidated (RCOV.P2)', () => {
-  it('leads with the hub, then the invoices queue and card receipts it feeds', () => {
-    expect(hrefsIn('accounting')).toEqual([
-      '/accounting',
-      '/invoices',
-      '/card-receipts',
-    ])
+describe('queues — interim action-queue zone', () => {
+  it('holds Approvals and Issues until the phase-3 Home queue absorbs them', () => {
+    expect(hrefsIn('queues')).toEqual(['/approvals', '/issues'])
   })
 })
 
-describe('Sales', () => {
-  it('contains pipeline, contacts and tasks (ads moved to the dashboard tab strip; other duplicates moved to a tab on /contacts)', () => {
-    expect(hrefsIn('sales')).toEqual(['/pipeline', '/contacts', '/activities'])
+describe('Sales hub', () => {
+  it('is a single collapsed hub entry', () => {
+    expect(hrefsIn('sales')).toEqual(['/sales'])
+  })
+
+  it('the Sales hub entry ORs its member permissions and lights on member paths', () => {
+    const sales = ALL_NAV.find(i => i.href === '/sales')
+    expect(sales.anyPermission).toEqual(['pipeline', 'contacts', 'activities'])
+    expect(sales.extraActivePaths).toEqual(['/pipeline', '/contacts', '/activities'])
   })
 })
 
-describe('Gym', () => {
-  it('contains the daily surfaces only: schedule, events, challenges, pulse, live HR, maintenance', () => {
-    expect(hrefsIn('gym')).toEqual(['/schedule', '/events', '/challenges', '/pulse', '/live', '/maintenance'])
+describe('Members hub', () => {
+  it('contains bookings, events, challenges, pulse, live HR, and Hyrox', () => {
+    expect(hrefsIn('members')).toEqual(['/bookings', '/events', '/challenges', '/pulse', '/live', '/admin/hyrox'])
+  })
+
+  it('keeps Live HR a top-level members entry with Class timer nested under it', () => {
+    const live = ALL_NAV.find((i) => i.href === '/live')
+    expect(live.section).toBe('members')
+    expect(live.children.map((c) => c.href)).toEqual(['/studio-management/timer'])
+  })
+})
+
+describe('Money hub', () => {
+  it('leads with the accounting hub, then the invoices queue, card receipts, and orders', () => {
+    expect(hrefsIn('money')).toEqual(['/accounting', '/invoices', '/card-receipts', '/orders'])
+  })
+})
+
+describe('Marketing hub', () => {
+  it('contains automations and the public landing page', () => {
+    expect(hrefsIn('marketing')).toEqual(['/automations', '/welcome'])
+  })
+})
+
+describe('Team hub', () => {
+  it('contains schedule, contracts, and policies', () => {
+    expect(hrefsIn('team')).toEqual(['/schedule', '/admin/contracts', '/policies'])
+  })
+})
+
+describe('Operations hub', () => {
+  it('contains maintenance and studio management', () => {
+    expect(hrefsIn('operations')).toEqual(['/maintenance', '/studio-management'])
   })
 
   it('gates Maintenance on equipment_admin OR equipment_inspect (EQUIP-MAINT.1)', () => {
     const maintenance = ALL_NAV.find((i) => i.href === '/maintenance')
     expect(maintenance.anyPermission).toEqual(['equipment_admin', 'equipment_inspect'])
   })
-
-  it('keeps Live HR a top-level gym entry with Class timer nested under it', () => {
-    const live = ALL_NAV.find((i) => i.href === '/live')
-    expect(live.section).toBe('gym')
-    expect(live.children.map((c) => c.href)).toEqual(['/studio-management/timer'])
-  })
 })
 
 describe('Studio Management group', () => {
-  it('is the only studio-section entry', () => {
-    expect(hrefsIn('studio')).toEqual(['/studio-management'])
+  it('is the only operations-section group entry with children', () => {
+    const group = ALL_NAV.find((i) => i.href === '/studio-management')
+    expect(group.section).toBe('operations')
   })
 
-  it('keeps only studio surfaces as children — imports + landing-page settings moved to Settings', () => {
-    const group = itemsIn('studio')[0]
-    const childHrefs = group.children.map((c) => c.href)
-    expect(childHrefs).toEqual(['/admin/contracts', '/admin/tv-displays', '/presentations', '/welcome', '/admin/hyrox'])
-    expect(childHrefs).not.toContain('/admin/glofox-import')
-    expect(childHrefs).not.toContain('/admin/marketing-import')
-    expect(childHrefs).not.toContain('/settings/landing-page')
+  it('Studio Management group keeps only its display children after promotions', () => {
+    const sm = ALL_NAV.find(i => i.href === '/studio-management')
+    expect(sm.children.map(c => c.href)).toEqual(['/admin/tv-displays', '/presentations'])
   })
 })
 
-describe('Other — occasional surfaces zone', () => {
-  it('holds Car Processing and the demoted Orders ledger, out of daily gym ops', () => {
-    // Orders demoted from Gym 2026-06-12 — Richard confirmed it is not
-    // a daily surface. Jump access survives via the ⌘K palette.
-    expect(hrefsIn('other')).toEqual(['/cars/active', '/orders'])
-    expect(hrefsIn('gym')).not.toContain('/cars')
-    expect(hrefsIn('gym')).not.toContain('/orders')
+describe('modules — vertical modules zone', () => {
+  it('holds Car Processing, out of daily gym ops', () => {
+    expect(hrefsIn('modules')).toEqual(['/cars/active'])
   })
 })
 
 describe('Account', () => {
-  it('contains policies and settings', () => {
-    expect(hrefsIn('account')).toEqual(['/policies', '/settings'])
+  it('contains settings', () => {
+    expect(hrefsIn('account')).toEqual(['/settings'])
   })
 })
 

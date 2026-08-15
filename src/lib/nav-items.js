@@ -1,17 +1,34 @@
-// SIDEBAR-IA.1 — the sidebar's information architecture, extracted
-// from Sidebar.jsx so the structure is a testable policy contract
-// (nav-items.test.js) instead of data trapped inside a client
+// SIDEBAR-IA.1 / HUBS.2a — the sidebar's information architecture,
+// extracted from Sidebar.jsx so the structure is a testable policy
+// contract (nav-items.test.js) instead of data trapped inside a client
 // component. Sidebar.jsx owns rendering/filtering/badges; this module
 // owns WHAT is in the nav and WHERE it sits.
 //
-// Sections are grouped by job, not department:
-//   Work    — the action queues (everything with a badge): what needs me?
-//   Sales   — who are we selling to?
-//   Gym     — what's on at the gym?
-//   studio  — the building (self-labelled collapsible group, no header)
-//   other   — occasional surfaces: car-import business + orders ledger
-//             (header-less bottom zone, out of the daily scan path)
-//   Account — config + policies
+// HUBS.2a regroups the flat SIDEBAR-IA.1 sections into the phase-2 hub
+// programme — each section below is (or is becoming) a hub with its own
+// route and tab strip, rather than a department label:
+//   messages    — Communications hub + the email ticket queue
+//   queues      — Approvals + Issues. INTERIM: header-less, until the
+//                 phase-3 Home queue absorbs both into one inbox.
+//   sales       — the Sales hub. THIS PR collapses it to a single sidebar
+//                 entry backed by /sales's tab strip (HUBS.2a Task 2);
+//                 the old standalone Pipeline/Contacts/Tasks entries are
+//                 gone from here (they remain deep-linkable via the ⌘K
+//                 palette and extraActivePaths keeps the hub entry lit
+//                 while a user is on one of those routes).
+//   members     — what's on for members: bookings, events, challenges,
+//                 pulse, live floor HR, Hyrox Training Club.
+//   money       — bookkeeping (RCOV.P2) + the orders ledger.
+//   marketing   — automations + the public landing page.
+//   team        — schedule, staff contracts, HR policies.
+//   operations  — studio management (door/TV/presentations) + equipment
+//                 maintenance.
+//   modules     — vertical modules bolted onto the core product (Cars).
+//                 Header-less, out of the daily scan path.
+//   account     — config.
+// Later PRs in the HUBS.2a programme collapse the remaining multi-entry
+// sections (members, money, etc.) into single hub entries the same way
+// Sales was collapsed here; until then each keeps its individual items.
 //
 // The radars (churn/lead) are deliberately NOT here — SIDEBAR-IA.1
 // relocated them under the Dashboard tab strip (/dashboard/churn-radar,
@@ -20,11 +37,11 @@
 // an entry point (dashboard-redirect.js lands them on their radar).
 
 import {
-  LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare,
+  LayoutDashboard, Calendar, MessagesSquare,
   CalendarClock, Settings, Car, Flag, Receipt, DoorOpen, FileSignature,
   Heart, Globe, Tv, BookOpen, Inbox, ClipboardCheck, AlertCircle, CreditCard,
   Workflow, Timer, Projector, Trophy, Activity, Landmark, Building2, Dumbbell,
-  Wrench, Mail,
+  Wrench, Mail, Handshake,
 } from 'lucide-react'
 
 // The sidebar Dashboard link is visible if ANY of these are true. The
@@ -60,20 +77,16 @@ export const ALL_NAV = [
   { href: '/portfolio',  label: 'Account home', icon: Building2,       masterOrOwnerOnly: true },
   { href: '/dashboard',  label: 'Dashboard',   icon: LayoutDashboard, dashboardGroup: true },
 
-  // ── Work — the action queues. One section for everything that
-  // accrues pending counts, so the morning loop is "walk the Work
-  // section top to bottom" instead of polling entries scattered
-  // across Sales/Operations/Communications (the pre-SIDEBAR-IA.1
-  // layout). Badge wiring stays in Sidebar.jsx.
+  // ── Messages — the Communications hub + the email ticket queue ──
   //
   // Single Communications entry replacing the old Email + WhatsApp.
   // Visible if the user has ANY channel permission (sms included —
   // an SMS-only user still needs the hub link; PERM-AUDIT.1) —
   // sub-tabs inside the hub gate themselves further.
   { href: '/communications', label: 'Communications', icon: MessagesSquare,
-    anyPermission: ['email', 'whatsapp', 'sms'], section: 'work' },
-  // EMAIL-TICKET.4 — the studio email queue, a Work-section action queue in
-  // its own right (it accrues unanswered tickets the way Approvals accrues
+    anyPermission: ['email', 'whatsapp', 'sms'], section: 'messages' },
+  // EMAIL-TICKET.4 — the studio email queue, an action queue in its own
+  // right (it accrues unanswered tickets the way Approvals accrues
   // pending items). It lives at a /communications/* URL and shows in that
   // hub's tab strip too, but it gets its own sidebar entry because its
   // permission population is different: `email_inbox` gates the ticket
@@ -87,56 +100,52 @@ export const ALL_NAV = [
   // "Communications" entry that also does email. "Ticket" remains the data
   // model's name — href, API and table are unchanged on purpose.
   { href: '/communications/tickets', label: 'Email inbox', icon: Mail,
-    permission: 'email_inbox', section: 'work' },
-  // Single entry replacing the old Events + Bookings ("Calendly").
-  // The hub lands on /bookings (the high-frequency operational view —
-  // "what's booked today / coming up") with a tab strip at the top of
-  // /bookings/* that switches between booking types and reservations.
-  { href: '/bookings',   label: 'Bookings',     icon: Calendar,
-    anyPermission: ['events', 'bookings'], section: 'work' },
+    permission: 'email_inbox', section: 'messages' },
+
+  // ── queues — the interim action-queue zone (header-less). HUBS.2a
+  // leaves Approvals + Issues here rather than folding them into a
+  // hub; the phase-3 Home queue is what eventually absorbs both into
+  // one inbox, so this section is deliberately a holding pen, not a
+  // hub in its own right.
+  //
   // APPROVALS.1 — central approvals dashboard. Aggregates contractor
   // invoices, FTE expense claims, time-off, swap requests, and any
   // future approval surfaces (extensible via src/lib/approvals
   // registry). Sidebar badge shows total pending count for items
   // the user can approve. Default-on for master + owner + manager —
   // head_coach + staff see nothing approvable so it's off for them.
-  { href: '/approvals',  label: 'Approvals',    icon: ClipboardCheck,  permission: 'approvals_inbox', section: 'work' },
+  { href: '/approvals',  label: 'Approvals',    icon: ClipboardCheck,  permission: 'approvals_inbox', section: 'queues' },
   // REPORT-ISSUE.2 — handler inbox for staff-reported issues at the
   // active location. Owner + master by default; the submit + own-
   // history surface (REPORT-ISSUE.1) is open to all staff via the
   // mobile More tab and doesn't appear on the web sidebar.
-  { href: '/issues',     label: 'Issues',       icon: AlertCircle,     permission: 'issues_inbox', section: 'work' },
-  // ── Accounting — the bookkeeping surfaces, consolidated (RCOV.P2,
-  // Richard's "prevent sprawl" call). The hub leads; the invoices
-  // queue and card receipts it feeds sit beside it.
-  //
-  // RCOV.P0/P2 — receipt-coverage hub: coverage board, exceptions
-  // (audit F2–F5), runs & health. Master + owner only by default.
-  { href: '/accounting', label: 'Accounting',   icon: Landmark,        permission: 'accounting_hub', section: 'accounting' },
-  // INVOICES.1 — Dext-style email-in inbox. Master + owner only by
-  // default. Per-location forwarding addresses are shown at the top
-  // of the page; quality + data approvals run before forward-to-Xero.
-  { href: '/invoices',   label: 'Invoices',     icon: Inbox,           permission: 'invoices_inbox', section: 'accounting' },
-  // SPEND.P3 — company-card receipts. A card holder photographs/uploads
-  // a receipt; owner/master approves it, then it rides the bookkeeper →
-  // Xero queue (the /approvals dashboard also surfaces the pending ones).
-  // Gated by the `card_receipts` permission — default master + owner +
-  // manager; card-holding staff get it granted per-user. No sidebar
-  // badge: approvable receipts already count on the Approvals entry.
-  { href: '/card-receipts', label: 'Company-card receipts', icon: CreditCard, permission: 'card_receipts', section: 'accounting' },
+  { href: '/issues',     label: 'Issues',       icon: AlertCircle,     permission: 'issues_inbox', section: 'queues' },
 
-  // ── Sales ──────────────────────────────────────────────────────
-  { href: '/pipeline',            label: 'Pipeline',  icon: Columns3,   permission: 'pipeline',        section: 'sales' },
-  { href: '/contacts',            label: 'Contacts',  icon: Users,      permission: 'contacts',        section: 'sales' },
-  // PERSON-LINK.2 — duplicate review is now a tab on /contacts?tab=duplicates,
-  // not a standalone sidebar entry. No sidebar item needed.
-  { href: '/activities',          label: 'Tasks',     icon: CheckSquare, permission: 'activities',     section: 'sales' },
+  // ── Sales hub ─────────────────────────────────────────────────
+  // HUBS.2a — Sales collapses from three standalone sidebar entries
+  // (Pipeline, Contacts, Tasks) to a single hub entry. The route
+  // /sales exists since HUBS.2a Task 2 and renders a shared tab strip
+  // (HubTabs) over the unchanged /pipeline, /contacts and /activities
+  // URLs — the pages, permissions and data didn't move, only the
+  // sidebar's presentation of them did. anyPermission ORs the three
+  // underlying permissions so the hub entry is visible to anyone who
+  // could reach any tab; extraActivePaths lights the entry while the
+  // user is actually sitting on one of those routes (the hub's own
+  // /sales URL redirects into a default tab rather than rendering
+  // content itself, so without this the sidebar would go dark the
+  // moment you land on a tab).
+  { href: '/sales', label: 'Sales', icon: Handshake,
+    anyPermission: ['pipeline', 'contacts', 'activities'],
+    extraActivePaths: ['/pipeline', '/contacts', '/activities'],
+    section: 'sales' },
   // ADS-REPORT — /dashboard/ads lives in the dashboard tab strip
   // (app/dashboard/layout.js SEGMENTS), not the sidebar. dashboard_ads
   // stays in DASHBOARD_LINK_PERM_KEYS so the pinned Dashboard link
   // remains visible for a user holding only that permission.
+  // PERSON-LINK.2 — duplicate review is a tab on /contacts?tab=duplicates,
+  // not a standalone sidebar entry. No sidebar item needed.
 
-  // ── Gym — what's on at the gym ─────────────────────────────────
+  // ── Members — what's on for members ─────────────────────────────
   //
   // Schedule hub — single sidebar entry. Internal tab strip
   // (ScheduleTabs.jsx) holds Schedule / Approvals / Reporting /
@@ -147,7 +156,13 @@ export const ALL_NAV = [
   // about staff time + pay). Same attendance_reports permission
   // gate; the standalone /schedule/attendance URL still works as
   // a deep link for cron-driven emails / scheduled reminders.
-  { href: '/schedule',   label: 'Schedule',     icon: CalendarClock,   permission: 'schedule', section: 'gym' },
+  //
+  // Single entry replacing the old Events + Bookings ("Calendly").
+  // The hub lands on /bookings (the high-frequency operational view —
+  // "what's booked today / coming up") with a tab strip at the top of
+  // /bookings/* that switches between booking types and reservations.
+  { href: '/bookings',   label: 'Bookings',     icon: Calendar,
+    anyPermission: ['events', 'bookings'], section: 'members' },
   // Events (mig 082 origin, multi-kind from mig 122 onwards). Was
   // labelled "Races" before the events expansion — same data table
   // (race_events), now spans race + workshop + seminar + open_day +
@@ -156,22 +171,22 @@ export const ALL_NAV = [
   // user-visible). extraActivePaths keeps the entry highlighted on
   // old /events/* URLs that hit the back-compat rewrite.
   { href: '/events',     label: 'Events',       icon: Flag,            permission: 'races',
-    extraActivePaths: ['/events'], section: 'gym' },
+    extraActivePaths: ['/events'], section: 'members' },
   // ENGAGEMENT-CHALLENGES — operator CRUD for member challenges.
   // Manager+ by default (same as events). Backed by the challenges table.
-  { href: '/challenges', label: 'Challenges',   icon: Trophy,          permission: 'challenges', section: 'gym' },
+  { href: '/challenges', label: 'Challenges',   icon: Trophy,          permission: 'challenges', section: 'members' },
   // PULSE-90.4 — the /pulse operator hub. Management home for the Pulse
   // customer app: the first-90-days journey lane (9-classes-in-6-weeks
   // pace), plus future Pulse features (leaderboards, seasonal challenge).
   // Cross-links to /dashboard/engagement + /challenges rather than
   // duplicating them. Owner + manager + head_coach by default (retention
   // oversight — same shape as engagement_analytics).
-  { href: '/pulse',      label: 'Pulse',        icon: Activity,        permission: 'pulse_admin', section: 'gym' },
+  { href: '/pulse',      label: 'Pulse',        icon: Activity,        permission: 'pulse_admin', section: 'members' },
   // Live class — coach view of in-studio HR (mig 110-113). Renders
   // attendees with current zone color, available straps panel, and
   // override-pairing flow. /live redirects to /live/<activeLocation>.
   // Same permission gate as Studio Management — anyone running class
-  // can use it. A top-level gym entry (not nested under Studio
+  // can use it. A top-level members entry (not nested under Studio
   // Management) because operationally it's its own surface — but it IS
   // a parent: the Class timer (CLASS-TIMER) nests under it, since the
   // timer runs on the studio TV alongside this HR board (same floor
@@ -182,12 +197,73 @@ export const ALL_NAV = [
     label: 'Live HR',
     icon: Heart,
     permission: 'studio_management',
-    section: 'gym',
+    section: 'members',
     groupId: 'live',  // localStorage key for expand state
     children: [
       { href: '/studio-management/timer', label: 'Class timer', icon: Timer, permission: 'class_timer' },
     ],
   },
+  // HUBS.2a — promoted from a Studio Management child to a standalone
+  // Members entry (it's a member-facing training programme, not a
+  // building-admin surface). HYROX-TC.2 — coach planner: generate a
+  // 12-week Hyrox Training Club block and review/approve/regenerate
+  // each AI-generated session before it can publish to the studio TV.
+  { href: '/admin/hyrox', label: 'Hyrox Training Club', icon: Dumbbell,
+    permission: 'approvals_hyrox_sessions', section: 'members' },
+
+  // ── Money — bookkeeping (RCOV.P2) + the orders ledger ────────────
+  // RCOV.P2, Richard's "prevent sprawl" call — the accounting hub
+  // leads; the invoices queue and card receipts it feeds sit beside
+  // it.
+  //
+  // RCOV.P0/P2 — receipt-coverage hub: coverage board, exceptions
+  // (audit F2–F5), runs & health. Master + owner only by default.
+  { href: '/accounting', label: 'Accounting',   icon: Landmark,        permission: 'accounting_hub', section: 'money' },
+  // INVOICES.1 — Dext-style email-in inbox. Master + owner only by
+  // default. Per-location forwarding addresses are shown at the top
+  // of the page; quality + data approvals run before forward-to-Xero.
+  { href: '/invoices',   label: 'Invoices',     icon: Inbox,           permission: 'invoices_inbox', section: 'money' },
+  // SPEND.P3 — company-card receipts. A card holder photographs/uploads
+  // a receipt; owner/master approves it, then it rides the bookkeeper →
+  // Xero queue (the /approvals dashboard also surfaces the pending ones).
+  // Gated by the `card_receipts` permission — default master + owner +
+  // manager; card-holding staff get it granted per-user. No sidebar
+  // badge: approvable receipts already count on the Approvals entry.
+  { href: '/card-receipts', label: 'Company-card receipts', icon: CreditCard, permission: 'card_receipts', section: 'money' },
+  // Orders (mig 085) spans all revenue streams (race signups + cars).
+  // Got its own permission key in the mig-092 audit. Demoted from the
+  // Gym section 2026-06-12 — Richard confirmed it's not a daily
+  // surface; the ⌘K palette keeps it one keystroke away. (Segments
+  // was demoted the same way earlier — moved under /communications/
+  // segments; the /segments URL still works via legacy redirect.)
+  // HUBS.2a — regrouped under Money: it's a revenue ledger, so it
+  // reads better beside Accounting/Invoices than out on its own.
+  { href: '/orders',     label: 'Orders',       icon: Receipt,         permission: 'orders', section: 'money' },
+
+  // ── Marketing ──────────────────────────────────────────────────
+  { href: '/automations', label: 'Automations', icon: Workflow, anyPermission: ['automations', 'email', 'whatsapp'], section: 'marketing' },
+  // HUBS.2a — promoted from a Studio Management child to Marketing
+  // (it's the public-facing landing page, not a building-admin
+  // surface). Public landing page — preview link, opens in new tab.
+  // (The edit form moved to Settings → Landing page in SIDEBAR-IA.1.)
+  { href: '/welcome', label: 'Landing page', icon: Globe,
+    permission: 'landing_page', openInNewTab: true, section: 'marketing' },
+
+  // ── Team ───────────────────────────────────────────────────────
+  { href: '/schedule',   label: 'Schedule',     icon: CalendarClock,   permission: 'schedule', section: 'team' },
+  // HUBS.2a — promoted from a Studio Management child to Team (staff
+  // contracts belong beside the schedule they're tied to, not under
+  // building admin). Contracts (mig 106) — digital staff/contractor
+  // contracts.
+  { href: '/admin/contracts', label: 'Contracts', icon: FileSignature,
+    permission: 'contracts', section: 'team' },
+  // Policies (POLICIES.1) — versioned HR policies, open to every
+  // authenticated employee. No permission gate; sidebar always shows
+  // the entry to anyone signed in so they can find the documents
+  // they're being asked to acknowledge.
+  { href: '/policies',   label: 'Policies',     icon: BookOpen,        openToAll: true, section: 'team' },
+
+  // ── Operations ─────────────────────────────────────────────────
   // EQUIP-MAINT.1 — equipment register + inspection checklists. Visible
   // to anyone holding either equipment_admin (the setup surfaces —
   // register, types, intervals, inspection weekday) or equipment_inspect
@@ -196,83 +272,67 @@ export const ALL_NAV = [
   // gates which tabs render for which permission — this entry only
   // decides sidebar visibility.
   { href: '/maintenance', label: 'Maintenance', icon: Wrench,
-    anyPermission: ['equipment_admin', 'equipment_inspect'], section: 'gym' },
-
-  // ── Automations ────────────────────────────────────────────────
-  { href: '/automations', label: 'Automations', icon: Workflow, anyPermission: ['automations', 'email', 'whatsapp'], section: 'automations' },
-
+    anyPermission: ['equipment_admin', 'equipment_inspect'], section: 'operations' },
   // ── Studio Management — expandable group ───────────────────────
   // Parent route /studio-management renders the door-unlock panel
   // (mig 093 cross-platform key). Children each carry their own
   // per-user permission (STUDIO-GROUP.1) so operators can grant
-  // access individually. Lives in its own (header-less) `studio`
-  // section — it's already self-labelled and collapsible, so an
-  // extra section header would be redundant. SIDEBAR-IA.1 moved the
-  // rare set-and-forget surfaces (Glofox import, Preferences import,
-  // Landing page settings) onto the Settings index page, shrinking
-  // this group to the genuinely studio-shaped surfaces.
+  // access individually. SIDEBAR-IA.1 moved the rare set-and-forget
+  // surfaces (Glofox import, Preferences import, Landing page
+  // settings) onto the Settings index page; HUBS.2a promoted the
+  // remaining member/marketing/team-shaped children (Hyrox, Landing
+  // page, Contracts) out to their own hub sections, shrinking this
+  // group to the genuinely building-admin surfaces: TV displays and
+  // presentations.
   {
     href: '/studio-management',
     label: 'Studio Management',
     icon: DoorOpen,
     permission: 'studio_management',
-    section: 'studio',
+    section: 'operations',
     groupId: 'studio',  // localStorage key for expand state
     children: [
-      // Contracts (mig 106) — digital staff/contractor contracts.
-      { href: '/admin/contracts',         label: 'Contracts',             icon: FileSignature, permission: 'contracts' },
       // TV.1 — TV display management. UC Cast Pro renders /tv/<token>.
       { href: '/admin/tv-displays',       label: 'TV Displays',           icon: Tv,            permission: 'tv_displays' },
       // PRESENT — run a slide deck across multiple screens from a laptop
       // (workshops / events). Its own `presentations` permission.
       { href: '/presentations',           label: 'Presentations',         icon: Projector,     permission: 'presentations' },
-      // Public landing page — preview link, opens in new tab. (The
-      // edit form moved to Settings → Landing page in SIDEBAR-IA.1.)
-      { href: '/welcome',                 label: 'Landing page',          icon: Globe,         permission: 'landing_page', openInNewTab: true },
-      // HYROX-TC.2 — coach planner: generate a 12-week Hyrox Training Club
-      // block and review/approve/regenerate each AI-generated session
-      // before it can publish to the studio TV.
-      { href: '/admin/hyrox',             label: 'Hyrox Training Club',   icon: Dumbbell,      permission: 'approvals_hyrox_sessions' },
     ],
   },
 
-  // ── Other — occasional surfaces zone ───────────────────────────
+  // ── modules — vertical modules zone (header-less) ────────────────
   // Header-less bottom zone for things that are real but not daily,
   // so they stop costing attention in the daily scan path.
   //
   // Car Processing — different business entirely. For CCF Autos
   // users the location feature gate already hides everything else,
   // so this reads as their primary entry either way.
-  { href: '/cars/active', label: 'Car Processing', icon: Car,          permission: 'car_processing', section: 'other' },
-  // Orders (mig 085) spans all revenue streams (race signups + cars).
-  // Got its own permission key in the mig-092 audit. Demoted from the
-  // Gym section 2026-06-12 — Richard confirmed it's not a daily
-  // surface; the ⌘K palette keeps it one keystroke away. (Segments
-  // was demoted the same way earlier — moved under /communications/
-  // segments; the /segments URL still works via legacy redirect.)
-  { href: '/orders',     label: 'Orders',       icon: Receipt,         permission: 'orders', section: 'other' },
+  { href: '/cars/active', label: 'Car Processing', icon: Car,          permission: 'car_processing', section: 'modules' },
 
   // ── Account ────────────────────────────────────────────────────
-  // Policies (POLICIES.1) — versioned HR policies, open to every
-  // authenticated employee. No permission gate; sidebar always shows
-  // the entry to anyone signed in so they can find the documents
-  // they're being asked to acknowledge.
-  { href: '/policies',   label: 'Policies',     icon: BookOpen,        openToAll: true, section: 'account' },
   { href: '/settings',   label: 'Settings',     icon: Settings,        permission: 'settings', section: 'account' },
 ]
 
-// UI-FOUND.4 — section render order + headers. A `label` of null renders
-// the section's items with no header (used for the self-labelled Studio
-// Management group and the occasional-surfaces zone). A section with no
-// visible items for the current user renders nothing — no empty header.
-// Dashboard is pinned above all sections (it has no `section`).
+// UI-FOUND.4 / HUBS.2a — section render order + headers. A `label` of
+// null renders the section's items with no header. HUBS.2a regroups
+// SIDEBAR-IA.1's flat sections into the phase-2 hub programme:
+//   - `queues` is INTERIM and deliberately header-less — Approvals +
+//     Issues live here only until the phase-3 Home queue absorbs both
+//     into one inbox, so it isn't styled as a hub of its own.
+//   - `modules` is also header-less: vertical modules bolted onto the
+//     core product (Cars today), kept out of the daily scan path.
+// A section with no visible items for the current user renders nothing
+// — no empty header. Dashboard is pinned above all sections (it has no
+// `section`).
 export const NAV_SECTIONS = [
-  { id: 'work',       label: 'Work' },
-  { id: 'accounting', label: 'Accounting' },
-  { id: 'sales',   label: 'Sales' },
-  { id: 'gym',          label: 'Gym' },
-  { id: 'automations',  label: 'Automations' },
-  { id: 'studio',       label: null },
-  { id: 'other',   label: null },
-  { id: 'account', label: 'Account' },
+  { id: 'messages',   label: 'Messages' },
+  { id: 'queues',     label: null },
+  { id: 'sales',      label: 'Sales' },
+  { id: 'members',    label: 'Members' },
+  { id: 'money',      label: 'Money' },
+  { id: 'marketing',  label: 'Marketing' },
+  { id: 'team',       label: 'Team' },
+  { id: 'operations', label: 'Operations' },
+  { id: 'modules',    label: null },
+  { id: 'account',    label: 'Account' },
 ]
