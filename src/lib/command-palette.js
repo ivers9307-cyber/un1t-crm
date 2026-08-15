@@ -22,7 +22,12 @@ export const NAV_COMMANDS = [
   { id: 'churn-radar', label: 'Churn Radar', href: '/dashboard/churn-radar', permission: 'churn_radar' },
   { id: 'lead-radar', label: 'Lead Radar', href: '/dashboard/lead-radar', permission: 'lead_radar' },
   { id: 'bookings', label: 'Bookings', href: '/bookings', anyPermission: ['events', 'bookings'] },
-  { id: 'communications', label: 'Communications', href: '/communications', anyPermission: ['email', 'whatsapp', 'sms'] },
+  // HUBS.2f — relabelled "Messages" to match the sidebar's collapsed entry
+  // (nav-items.js), and email_inbox folded into the OR for the same reason
+  // as the sidebar's: an accounts@/sales@-only user (email_inbox only)
+  // still needs to find this command. The email-tickets entry below stays
+  // separate — its own deep link into the ticket queue tab.
+  { id: 'communications', label: 'Messages', href: '/communications', anyPermission: ['email', 'whatsapp', 'sms', 'email_inbox'] },
   // EMAIL-TICKET.4 — the studio email queue. `email_inbox`, not the
   // marketing `email` key (different population of people). INBOX-SPLIT.1
   // relabelled it "Email"; COMMS-IA.3 relabels it again to "Email inbox" so a

@@ -133,11 +133,17 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
     '/money': invoicesPendingCount,
     '/approvals': approvalsPendingCount,
     '/issues': issuesPendingCount,
-    '/communications': communicationsActionCount,
-    // Top-level 'work' item, NOT a child of /communications — SidebarGroup
-    // renders children without a badge prop, so a badge on a child would
-    // silently do nothing.
-    '/communications/tickets': emailNeedsReplyCount,
+    // HUBS.2f — the Messages hub entry carries the COMBINED queue count
+    // (unresolved WhatsApp/Instagram threads + unanswered email tickets),
+    // same summing treatment as the Dashboard churn+lead badge above. Both
+    // usePolledCount calls already existed with their own enabled gates
+    // (communicationsActionCount on `whatsapp`, emailNeedsReplyCount on
+    // `email_inbox`) — reused as-is, just summed into one badge, now that
+    // the standalone /communications/tickets sidebar entry (and its own
+    // badge key) is gone. Per-channel splits still live one click away on
+    // CommunicationsTabs' own Inbox / Email inbox tab badges; sidebar
+    // badges retire entirely with the phase-3 Home queue.
+    '/communications': communicationsActionCount + emailNeedsReplyCount,
     '/settings': hostEventsPendingCount,
   }
 

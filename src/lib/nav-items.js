@@ -7,7 +7,12 @@
 // HUBS.2a regroups the flat SIDEBAR-IA.1 sections into the phase-2 hub
 // programme — each section below is (or is becoming) a hub with its own
 // route and tab strip, rather than a department label:
-//   messages    — Communications hub + the email ticket queue
+//   messages    — the Messages hub. HUBS.2f Task 1 collapses it the same
+//                 way: the Communications hub entry and the standalone
+//                 Email inbox ticket-queue entry fold into one, with
+//                 `email_inbox` OR'd into the entry's own anyPermission
+//                 (there's no second route to add to extraActivePaths —
+//                 the ticket queue already lives under /communications).
 //   queues      — Approvals + Issues. INTERIM: header-less, until the
 //                 phase-3 Home queue absorbs both into one inbox.
 //   sales       — the Sales hub. HUBS.2a Task 2 collapsed it to a single
@@ -24,16 +29,25 @@
 //                 bookkeeping (RCOV.P2), the invoices queue, company-card
 //                 receipts, the orders ledger, and (newly surfaced) offer
 //                 sales all fold into a single /money entry.
-//   marketing   — automations + the public landing page.
-//   team        — schedule, staff contracts, HR policies.
-//   operations  — studio management (door/TV/presentations) + equipment
-//                 maintenance.
+//   marketing   — the Marketing hub. HUBS.2f Task 2 collapses it the same
+//                 way: Automations and the public Landing page link fold
+//                 into a single /marketing entry, with `landing_page`
+//                 OR'd in (same reasoning as Messages' email_inbox fold)
+//                 and the Landing page tab reached inside the hub via
+//                 HubTabs' new `newTab` capability rather than its own
+//                 top-level sidebar row.
+//   team        — the Team hub. HUBS.2d collapsed it the same way:
+//                 schedule, staff contracts, HR policies fold into a
+//                 single /team entry.
+//   operations  — the Operations hub. HUBS.2e collapsed it the same way:
+//                 studio management (door/TV/presentations) + equipment
+//                 maintenance fold into a single /operations entry.
 //   modules     — vertical modules bolted onto the core product (Cars).
 //                 Header-less, out of the daily scan path.
 //   account     — config.
-// Sales, Members and Money are now collapsed; the remaining multi-entry
-// sections (Team, Operations) are candidates for the same treatment in a
-// later PR.
+// Messages, Sales, Members, Money, Marketing, Team and Operations are now
+// all collapsed to single hub entries — every multi-entry section from
+// the original HUBS.2a regroup has gone through the pattern.
 //
 // The radars (churn/lead) are deliberately NOT here — SIDEBAR-IA.1
 // relocated them under the Dashboard tab strip (/dashboard/churn-radar,
@@ -44,9 +58,9 @@
 import {
   LayoutDashboard, MessagesSquare,
   Settings, Car,
-  Globe, ClipboardCheck, AlertCircle,
-  Workflow, Building2,
-  Wrench, Mail, Handshake, HeartPulse, Wallet, UsersRound,
+  ClipboardCheck, AlertCircle,
+  Megaphone, Building2,
+  Wrench, Handshake, HeartPulse, Wallet, UsersRound,
 } from 'lucide-react'
 
 // The sidebar Dashboard link is visible if ANY of these are true. The
@@ -82,30 +96,26 @@ export const ALL_NAV = [
   { href: '/portfolio',  label: 'Account home', icon: Building2,       masterOrOwnerOnly: true },
   { href: '/dashboard',  label: 'Dashboard',   icon: LayoutDashboard, dashboardGroup: true },
 
-  // ── Messages — the Communications hub + the email ticket queue ──
-  //
-  // Single Communications entry replacing the old Email + WhatsApp.
-  // Visible if the user has ANY channel permission (sms included —
-  // an SMS-only user still needs the hub link; PERM-AUDIT.1) —
-  // sub-tabs inside the hub gate themselves further.
-  { href: '/communications', label: 'Communications', icon: MessagesSquare,
-    anyPermission: ['email', 'whatsapp', 'sms'], section: 'messages' },
-  // EMAIL-TICKET.4 — the studio email queue, an action queue in its own
-  // right (it accrues unanswered tickets the way Approvals accrues
-  // pending items). It lives at a /communications/* URL and shows in that
-  // hub's tab strip too, but it gets its own sidebar entry because its
-  // permission population is different: `email_inbox` gates the ticket
-  // surface, while the neighbouring Communications entry ORs the marketing
-  // `email` / `whatsapp` / `sms` keys. Someone who answers accounts@ all day
-  // need not hold any of those.
-  // INBOX-SPLIT.1 labelled it "Email" (the only place email is worked now, the
-  // unified Inbox being WhatsApp + Instagram only). COMMS-IA.3 REVERSES that
-  // label to "Email inbox": in a Work section of action queues, "Email" named
-  // the channel rather than the queue, and it sits directly under a
-  // "Communications" entry that also does email. "Ticket" remains the data
-  // model's name — href, API and table are unchanged on purpose.
-  { href: '/communications/tickets', label: 'Email inbox', icon: Mail,
-    permission: 'email_inbox', section: 'messages' },
+  // ── Messages hub ──────────────────────────────────────────────
+  // HUBS.2f Task 1 — sixth application of the hub-collapse pattern
+  // (after Sales HUBS.2a, Members HUBS.2b, Money HUBS.2c, Team HUBS.2d,
+  // Operations HUBS.2e): what was two standalone sidebar entries
+  // (Communications, the Email inbox ticket queue) becomes one hub
+  // entry. `email_inbox` folds into the anyPermission union — this is
+  // what the old separate EMAIL-TICKET.4 entry existed to express in
+  // the first place (a different population: someone who only answers
+  // accounts@/sales@ and holds none of the marketing `email`/
+  // `whatsapp`/`sms` keys still needs a way into the hub). Folding the
+  // key into the union rather than dropping the entry is what keeps
+  // that population seeing Messages at all. The ticket queue itself
+  // didn't move — it's still reachable as the "Email inbox" tab inside
+  // CommunicationsTabs (COMMS-IA.3), gated the same way, badge intact —
+  // only its OWN top-level sidebar row is gone. No extraActivePaths:
+  // every one of its routes (/communications/send, /communications/
+  // tickets, /communications/inbox, …) is already a literal child of
+  // /communications, so the bare href prefix-matches all of them.
+  { href: '/communications', label: 'Messages', icon: MessagesSquare,
+    anyPermission: ['email', 'whatsapp', 'sms', 'email_inbox'], section: 'messages' },
 
   // ── queues — the interim action-queue zone (header-less). HUBS.2a
   // leaves Approvals + Issues here rather than folding them into a
@@ -248,14 +258,55 @@ export const ALL_NAV = [
     extraActivePaths: ['/accounting', '/invoices', '/card-receipts', '/orders', '/offer-sales'],
     section: 'money' },
 
-  // ── Marketing ──────────────────────────────────────────────────
-  { href: '/automations', label: 'Automations', icon: Workflow, anyPermission: ['automations', 'email', 'whatsapp'], section: 'marketing' },
-  // HUBS.2a — promoted from a Studio Management child to Marketing
-  // (it's the public-facing landing page, not a building-admin
-  // surface). Public landing page — preview link, opens in new tab.
-  // (The edit form moved to Settings → Landing page in SIDEBAR-IA.1.)
-  { href: '/welcome', label: 'Landing page', icon: Globe,
-    permission: 'landing_page', openInNewTab: true, section: 'marketing' },
+  // ── Marketing hub ─────────────────────────────────────────────
+  // HUBS.2f Task 2 — seventh application of the hub-collapse pattern
+  // (after Sales HUBS.2a, Members HUBS.2b, Money HUBS.2c, Team
+  // HUBS.2d, Operations HUBS.2e, Messages HUBS.2f Task 1): what was
+  // two standalone sidebar entries (Automations, the public Landing
+  // page link) becomes one hub entry. anyPermission ORs both
+  // underlying permissions plus `landing_page` — folding landing_page
+  // into the union (rather than dropping it) is what keeps a
+  // landing-page-only editor seeing Marketing at all, the same
+  // reasoning Messages' `email_inbox` fold used. extraActivePaths
+  // keeps the entry lit while the user is actually on /automations
+  // (same rationale as every prior hub — /marketing redirects into a
+  // default tab rather than rendering content itself).
+  //
+  // Review fix — `device_control` joined the union: the Automations
+  // page also gates its Tapo devices section on device_control alone
+  // (canDevices in src/app/(marketing)/automations/page.js), a
+  // population the original union missed entirely. Without it a
+  // device_control-only holder saw no Marketing sidebar entry at all,
+  // even though /automations/devices was reachable and useful to
+  // them.
+  //
+  // `/welcome` is deliberately ABSENT from extraActivePaths: it's the
+  // PUBLIC marketing site (outside auth entirely, per the public-path
+  // allowlist), never an in-app pathname the sidebar could be sitting
+  // on, so there's nothing there for the hub entry to light against.
+  // Its reachability didn't disappear — it moved from its own
+  // top-level sidebar row to the (marketing) hub's Landing page tab
+  // (src/app/(marketing)/layout.js), which renders it via HubTabs'
+  // new `newTab: true` capability (HUBS.2f Task 2): a plain
+  // target="_blank" anchor with an ExternalLink glyph, same idiom the
+  // old standalone sidebar entry used via openInNewTab.
+  //
+  // Folded-forward context from the old standalone entries:
+  //  - Automations (curated toggles + custom email/WhatsApp flows +
+  //    Tapo device control) — visible to anyone holding `automations`
+  //    (the curated cards), `email`/`whatsapp` (custom flows), or
+  //    `device_control` (the Tapo devices section); the page itself
+  //    (src/app/(marketing)/automations/page.js) gates which sections
+  //    render for which permission, matching this union exactly.
+  //  - Landing page (HUBS.2a — promoted from a Studio Management child
+  //    to Marketing; it's the public-facing landing page, not a
+  //    building-admin surface). The edit form lives at Settings →
+  //    Landing page (SIDEBAR-IA.1); this was always just the public
+  //    preview link.
+  { href: '/marketing', label: 'Marketing', icon: Megaphone,
+    anyPermission: ['automations', 'email', 'whatsapp', 'device_control', 'landing_page'],
+    extraActivePaths: ['/automations'],
+    section: 'marketing' },
 
   // ── Team hub ───────────────────────────────────────────────────
   // HUBS.2d — fourth application of the hub-collapse pattern (after
