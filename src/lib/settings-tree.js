@@ -99,11 +99,19 @@ export const SETTINGS_TREE = [
       // ADMIN.2h Task 1 — the 'admin-hub' row (→ /admin) that used to sit
       // here is DELETED outright, not repointed: it was this tree's only
       // link to the /admin index, and that index itself dies in Task 3 of
-      // the /admin dissolution — masters reach every remaining /admin
-      // surface (tenants/plans/health/matrix/etc.) via the platform
-      // console (src/lib/platform-nav.js) or this tree's own rows, so no
-      // replacement row is needed. This is also why this pin now reads
-      // "the tree contains ZERO /admin hrefs" in settings-tree.test.js.
+      // the /admin dissolution. No replacement row is needed — every
+      // remaining /admin resident now has its own persistent home
+      // elsewhere: `tenants`/`plans`/`tenant-domains`/`health`/`matrix`/
+      // `bridges`/`studio-devices`/`webhook-dead-letter` reach masters
+      // via the 8-item platform console (src/lib/platform-nav.js,
+      // ADMIN.2h Task 2); `webhook-dead-letter` separately reaches
+      // owners via the integration-health remediation link (unchanged,
+      // see integration-health.js); and `fleet` — deliberately NOT a
+      // console page, since fleet_restart holders aren't master/owner —
+      // reaches everyone via the Operations hub's `fleet` tab
+      // ((operations)/layout.js, ADMIN.2h Task 2). This is also why this
+      // pin now reads "the tree contains ZERO /admin hrefs" in
+      // settings-tree.test.js.
       {
         id: 'admin-achievements',
         label: 'Achievements',

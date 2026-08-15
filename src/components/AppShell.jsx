@@ -98,8 +98,8 @@ export default function AppShell({ user, children, isLinkedHost = false }) {
   // path both flags are false and the chrome renders byte-for-byte as
   // before, so the studio CRM is completely untouched.
   //
-  // REPSET-PLATFORM.1 — platform-tier (the four /admin console pages)
-  // gets the master console shell. Gated on BOTH the path AND
+  // REPSET-PLATFORM.1 — platform-tier (the eight /admin console pages,
+  // ADMIN.2h Task 2) gets the master console shell. Gated on BOTH the path AND
   // `user.isMaster`: a non-master who somehow hits a console path falls
   // through to the normal shell (and the page's own master guard then
   // redirects them), so this branch only ever engages for masters.
