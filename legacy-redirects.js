@@ -53,6 +53,8 @@ module.exports = [
   { source: '/cars/new', destination: '/cars/active', permanent: false },
   { source: '/cars/pending', destination: '/cars/active', permanent: false },
   { source: '/contacts/duplicates', destination: '/contacts?tab=duplicates', permanent: false },
+  // HUBS.2b — Hyrox planner moved out of /admin into the Members hub.
+  { source: '/admin/hyrox', destination: '/hyrox', permanent: false },
   // /communications legacy stub set
   { source: '/communications/broadcasts', destination: '/communications/sent', permanent: false },
   { source: '/communications/campaigns', destination: '/communications/sent', permanent: false },
