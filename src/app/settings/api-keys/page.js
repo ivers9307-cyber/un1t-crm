@@ -4,8 +4,6 @@
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
-import Link from 'next/link'
-import { ChevronLeft } from 'lucide-react'
 import ApiKeysSettings from '@/components/settings/ApiKeysSettings'
 
 export const dynamic = 'force-dynamic'
@@ -31,9 +29,6 @@ export default async function ApiKeysPage() {
 
   return (
     <div className="p-8 max-w-3xl">
-      <Link href="/settings" className="inline-flex items-center gap-1 text-sm text-un1t-subtle hover:text-un1t-text mb-4">
-        <ChevronLeft size={16} /> Settings
-      </Link>
       <h2 className="text-2xl font-bold mb-1">API keys</h2>
       <p className="text-sm text-un1t-subtle mb-6">
         Programmatic access for n8n and other integrations, scoped to{' '}

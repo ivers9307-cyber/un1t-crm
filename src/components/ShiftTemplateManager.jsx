@@ -1,8 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import Link from 'next/link'
-import { ArrowLeft, Plus, Clock, Pencil, Trash2, X, AlertCircle, Users } from 'lucide-react'
+import { Plus, Clock, Pencil, Trash2, X, AlertCircle, Users } from 'lucide-react'
 
 const PRESET_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#F97316']
 const DAY_OPTIONS = [
@@ -95,10 +94,6 @@ export default function ShiftTemplateManager({ user }) {
 
   return (
     <div>
-      <Link href="/settings" className="inline-flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text mb-6">
-        <ArrowLeft size={16} /> Back to Settings
-      </Link>
-
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold">Shift Templates</h2>

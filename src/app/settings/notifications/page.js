@@ -21,7 +21,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Bell, Clock, Users, User, Mail, Cog, Webhook, ArrowLeft, ChevronRight, ShieldCheck } from 'lucide-react'
+import { Bell, Clock, Users, User, Mail, Cog, Webhook, ChevronRight, ShieldCheck } from 'lucide-react'
 import { NOTIFICATION_REGISTRY } from '@/lib/notifications-registry'
 import { getEffectiveConfig, formatLeadTimes } from '@/lib/notification-config'
 
@@ -71,12 +71,6 @@ export default async function NotificationRegistryPage() {
 
   return (
     <div className="p-8 max-w-5xl">
-      <Link
-        href="/settings"
-        className="inline-flex items-center gap-1.5 text-xs text-un1t-subtle hover:text-un1t-text mb-4"
-      >
-        <ArrowLeft size={12} /> Settings
-      </Link>
       <div className="flex items-center gap-2 mb-1">
         <Bell size={20} className="text-un1t-subtle" />
         <h2 className="text-2xl font-bold">Notification registry</h2>

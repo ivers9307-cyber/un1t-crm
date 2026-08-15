@@ -14,8 +14,7 @@
 import { getCurrentUser } from '@/lib/auth'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { redirect } from 'next/navigation'
-import Link from 'next/link'
-import { ChevronLeft, Store } from 'lucide-react'
+import { Store } from 'lucide-react'
 import HostsManager from '@/components/settings/HostsManager'
 import HostEventReviewQueue from '@/components/settings/HostEventReviewQueue'
 
@@ -31,12 +30,6 @@ export default async function HostsSettingsPage() {
 
   return (
     <div className="p-8 max-w-4xl">
-      <Link
-        href="/settings"
-        className="inline-flex items-center gap-1 text-xs text-un1t-subtle hover:text-un1t-text mb-3"
-      >
-        <ChevronLeft size={14} /> Settings
-      </Link>
       <div className="mb-6">
         <h2 className="text-2xl font-bold inline-flex items-center gap-2">
           <Store size={20} className="text-un1t-subtle" /> Event hosts

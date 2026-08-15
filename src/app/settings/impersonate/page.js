@@ -6,8 +6,7 @@
 // picture.
 
 import { redirect } from 'next/navigation'
-import Link from 'next/link'
-import { ChevronLeft, UserCog, History } from 'lucide-react'
+import { UserCog, History } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import ImpersonatePickerFull from '@/components/ImpersonatePickerFull'
@@ -60,9 +59,6 @@ export default async function ImpersonatePage() {
 
   return (
     <div className="p-8 max-w-4xl">
-      <Link href="/settings" className="inline-flex items-center gap-1 text-xs text-un1t-subtle hover:text-un1t-text mb-3">
-        <ChevronLeft size={14} /> Settings
-      </Link>
       <h2 className="text-2xl font-bold mb-1">View as user</h2>
       <p className="text-sm text-un1t-subtle mb-6">
         Master-only. Sign in as another user to debug their experience. Every session is logged below — both you and the impersonated user can review their own row in the audit trail.

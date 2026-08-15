@@ -33,8 +33,7 @@ import { hasPermission } from '@/lib/permissions'
 import { getBillingPageData } from '@/lib/billing-page'
 import { METERS } from '@shared/plans'
 import { redirect } from 'next/navigation'
-import Link from 'next/link'
-import { ArrowLeft, CreditCard, ReceiptText, Wallet } from 'lucide-react'
+import { CreditCard, ReceiptText, Wallet } from 'lucide-react'
 import AutoTopupForm from '@/components/settings/AutoTopupForm'
 import WalletTopupButtons from '@/components/settings/WalletTopupButtons'
 
@@ -117,10 +116,6 @@ export default async function BillingSettingsPage({ searchParams }) {
 
   return (
     <div className="p-6 max-w-4xl">
-      <Link href="/settings" className="inline-flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text mb-4">
-        <ArrowLeft size={14} /> Settings
-      </Link>
-
       <div className="flex items-center gap-2 mb-1">
         <CreditCard size={20} className="text-un1t-subtle" />
         <h1 className="text-2xl font-semibold">Billing &amp; usage</h1>

@@ -12,7 +12,7 @@ import { hasPermission } from '@/lib/permissions'
 import { canEditStaffMember } from '@/lib/staff-access'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { ChevronLeft, Users } from 'lucide-react'
+import { Users } from 'lucide-react'
 import StaffSearchableList from '@/components/settings/StaffSearchableList'
 import { deriveTargetVersion, deviceVerdict, currentDevice } from '@/lib/staff-devices'
 
@@ -70,12 +70,6 @@ export default async function StaffIndexPage() {
 
   return (
     <div className="p-8 max-w-5xl">
-      <Link
-        href="/settings"
-        className="inline-flex items-center gap-1 text-xs text-un1t-subtle hover:text-un1t-text mb-3"
-      >
-        <ChevronLeft size={14} /> Settings
-      </Link>
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold inline-flex items-center gap-2">
