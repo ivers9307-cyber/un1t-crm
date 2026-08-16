@@ -83,6 +83,7 @@ import { loadNonOpenerContactIds } from './campaign-resend.js'
 import { getAppUrl } from './app-url.js'
 import { logInfo } from './log.js'
 import { buildCampaignViewUrl, prependViewInBrowserLink, fetchLocationEmailCopy } from './campaign-web-view.js'
+import { isFeatureEnabledAtLocation } from '@shared/permissions'
 
 const CHUNK_SIZE = 500             // recipients per cron tick per campaign
 const AUDIENCE_PAGE_SIZE = 1000    // audience load page (CAMPAIGN.11)
@@ -145,6 +146,34 @@ export async function tickCampaignSend(db, campaign) {
       .update({ status: 'cancelled', sent_at: new Date().toISOString() })
       .eq('id', campaignId)
     return { phase: 'cancelled' }
+  }
+
+  // TENANT.8 (item 3b) — location bundle/feature gate. Closes TENANT.6's
+  // accepted gap #2 for campaigns: a campaign configured before the
+  // location's email/bundle_messaging/bundle_marketing was turned off
+  // used to keep sending regardless — no gate anywhere in this file
+  // consulted isFeatureEnabledAtLocation. campaign.locations.features
+  // rides the same run-campaigns join FREQ-CAP.1's settings read already
+  // depends on; a missing join defaults OPEN (isFeatureEnabledAtLocation's
+  // own contract), matching every other call site's "don't block on
+  // missing data" posture.
+  //
+  // Deliberately NOT an error result: this is a valid, intentional
+  // location state, not a send failure, so it must never feed
+  // campaignFailurePatch's repeated-error escalation (run-campaigns
+  // route.js) into status='failed'. Mirrors the CAMPAIGN-AB 'ab_waiting'
+  // phase below — touch updated_at so the campaign rotates to the BACK
+  // of the cron's fair-pick order instead of pinning a per-tick slot,
+  // and record the reason on last_error (operator-visible, but not an
+  // error-count field) so the pause is visible without being a failure.
+  if (!isFeatureEnabledAtLocation(campaign.locations, 'email')) {
+    await db.from('campaigns')
+      .update({
+        updated_at: new Date().toISOString(),
+        last_error: 'Skipped — email is disabled at this location (feature toggle or bundle off).',
+      })
+      .eq('id', campaignId)
+    return { phase: 'bundle_disabled', sent: 0 }
   }
 
   // Phase 1 — if the campaign has not finished populating, populate it.

@@ -8,6 +8,7 @@ import { toE164Ireland } from '@/lib/twilio'
 import { sendTemplateMessage, getOrCreateConversation } from '@/lib/whatsapp'
 import { logTransactionalWalletState } from '@/lib/wallet-enforcement'
 import { logWarn } from '@/lib/log'
+import { isFeatureEnabledAtLocation } from '@shared/permissions'
 
 // Live APPROVED template names (single source of truth — keep in sync with the
 // templates in WhatsApp Manager). NOTE: the class template was created with a
@@ -19,6 +20,21 @@ export const CLASS_CONFIRM_TEMPLATE = 'booking_class_confirmed_'
 
 export async function maybeSendBookingWhatsappConfirm({ db, locationId, contact, templateName, bodyParams = [] }) {
   try {
+    // TENANT.8 (item 3b) — location bundle/feature gate, before any send
+    // work. Genuinely new query here (this helper never fetched a
+    // `locations` row before) — accepted, this fires once per booking
+    // confirmation, not a fan-out. Fail-open on a DB error, same posture
+    // as this whole function's outer try/catch (never blocks a booking
+    // confirmation on an unrelated read failing).
+    let location = null
+    try {
+      const { data } = await db.from('locations').select('id, features').eq('id', locationId).maybeSingle()
+      location = data
+    } catch (e) { logWarn('booking-wa-confirm', 'location features read failed; defaulting open', { err: e }) }
+    if (!isFeatureEnabledAtLocation(location, 'whatsapp')) {
+      return { sent: false, reason: 'bundle_disabled' }
+    }
+
     if (!templateName) return { sent: false, reason: 'no_template_configured' }
     if (!contact?.phone) return { sent: false, reason: 'no_phone' }
 

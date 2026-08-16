@@ -174,7 +174,10 @@ export async function GET(request) {
     // campaign replies route into the unified inbox (EMAIL-INBOX.1).
     // settings — feeds the FREQ-CAP.1 marketing frequency-cap gate
     // (locations.settings.comms_frequency_cap) inside tickCampaignSend.
-    .select('*, locations(name, slug, email_inbox_reply_to, settings)')
+    // features (TENANT.8 item 3b) — feeds the location bundle/feature
+    // gate (isFeatureEnabledAtLocation(campaign.locations, 'email'))
+    // inside tickCampaignSend.
+    .select('*, locations(name, slug, email_inbox_reply_to, settings, features)')
     .in('status', ['queued', 'sending'])
     .order('updated_at', { ascending: true })
     .limit(FAIR_PICK_WINDOW)

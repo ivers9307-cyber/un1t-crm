@@ -24,6 +24,7 @@ import {
   getOrCreateConversation,
 } from '@/lib/whatsapp'
 import { logWarn } from '@/lib/log'
+import { isFeatureEnabledAtLocation } from '@shared/permissions'
 
 // The template's only body variable {{1}} is the lead's first name.
 const VARIABLE_MAPPING = { '1': 'first_name' }
@@ -40,15 +41,26 @@ export async function maybeSendCampaignWhatsappWelcome({ db, locationId, contact
     // If this location has the booking Flow enabled, prefer its FLOW-button
     // template over the classic quick-reply welcome, and mint a per-lead
     // flow_token so the endpoint can resolve contact + location on tap.
+    // `features` rides the same row (TENANT.8 item 3b) — one query serves
+    // both the flow-config read AND the bundle/feature gate below.
     let flowToken = null
+    let location = null
     try {
-      const { data: loc } = await db.from('locations').select('settings').eq('id', locationId).maybeSingle()
+      const { data: loc } = await db.from('locations').select('settings, features').eq('id', locationId).maybeSingle()
+      location = loc
       const flowCfg = loc?.settings?.whatsapp_flow
       if (flowCfg?.enabled && flowCfg.template_name) {
         templateName = flowCfg.template_name
         flowToken = `${contact?.id}.${locationId}`
       }
     } catch (e) { logWarn('meta-ad-wa-welcome', 'flow config read failed', { err: e }) }
+
+    // TENANT.8 (item 3b) — location bundle/feature gate. A missing/failed
+    // location read defaults OPEN (isFeatureEnabledAtLocation's own
+    // contract), matching this function's fail-open posture everywhere else.
+    if (!isFeatureEnabledAtLocation(location, 'whatsapp')) {
+      return { sent: false, reason: 'bundle_disabled' }
+    }
 
     if (!templateName) return { sent: false, reason: 'no_template_configured' }
     if (!contact?.phone) return { sent: false, reason: 'no_phone' }

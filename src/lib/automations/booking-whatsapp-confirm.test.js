@@ -8,7 +8,7 @@ vi.mock('@/lib/whatsapp', () => ({
 import { maybeSendBookingWhatsappConfirm } from './booking-whatsapp-confirm'
 import { sendTemplateMessage } from '@/lib/whatsapp'
 
-function makeDb(template) {
+function makeDb(template, { features } = {}) {
   return {
     from(tbl) {
       if (tbl === 'whatsapp_templates') {
@@ -16,6 +16,8 @@ function makeDb(template) {
       }
       if (tbl === 'contacts') return { update: () => ({ eq: () => ({ is: async () => ({}) }) }) }
       if (tbl === 'whatsapp_messages') return { insert: async () => ({}) }
+      // TENANT.8 (item 3b) — bundle/feature gate reads `locations`.
+      if (tbl === 'locations') return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { id: 'L', features: features ?? {} } }) }) }) }
       return {}
     },
   }
@@ -51,5 +53,50 @@ describe('maybeSendBookingWhatsappConfirm', () => {
       [{ type: 'body', parameters: [{ type: 'text', text: 'Sarah' }, { type: 'text', text: 'Tue 8 Jul, 6:30pm' }] }],
       { locationId: 'a0000000-0000-0000-0000-000000000001' },
     )
+  })
+
+  // TENANT.8 (item 3b) — location bundle/feature gate.
+  describe('location bundle/feature gate', () => {
+    it('SKIPS when features.whatsapp is explicitly false', async () => {
+      const r = await maybeSendBookingWhatsappConfirm({
+        db: makeDb(APPROVED, { features: { whatsapp: false } }), locationId: 'L',
+        contact: { phone: '0871234567' }, templateName: 'booking_consult_confirmed', bodyParams: ['Sarah'],
+      })
+      expect(r).toEqual({ sent: false, reason: 'bundle_disabled' })
+      expect(sendTemplateMessage).not.toHaveBeenCalled()
+    })
+
+    it('SKIPS when every bundle owning `whatsapp` is explicitly off', async () => {
+      const r = await maybeSendBookingWhatsappConfirm({
+        db: makeDb(APPROVED, { features: { bundle_messaging: false, bundle_marketing: false } }), locationId: 'L',
+        contact: { phone: '0871234567' }, templateName: 'booking_consult_confirmed', bodyParams: ['Sarah'],
+      })
+      expect(r).toEqual({ sent: false, reason: 'bundle_disabled' })
+      expect(sendTemplateMessage).not.toHaveBeenCalled()
+    })
+
+    it('SENDS when only one owning bundle is off — OR semantics', async () => {
+      const r = await maybeSendBookingWhatsappConfirm({
+        db: makeDb(APPROVED, { features: { bundle_messaging: true, bundle_marketing: false } }), locationId: 'L',
+        contact: { phone: '0871234567' }, templateName: 'booking_consult_confirmed', bodyParams: ['Sarah'],
+      })
+      expect(r.sent).toBe(true)
+      expect(sendTemplateMessage).toHaveBeenCalled()
+    })
+
+    it('SENDS (fails open) when the locations read throws', async () => {
+      const db = makeDb(APPROVED)
+      db.from = new Proxy(db.from, {
+        apply(target, thisArg, args) {
+          if (args[0] === 'locations') return { select: () => ({ eq: () => ({ maybeSingle: async () => { throw new Error('down') } }) }) }
+          return target.apply(thisArg, args)
+        },
+      })
+      const r = await maybeSendBookingWhatsappConfirm({
+        db, locationId: 'L', contact: { phone: '0871234567' }, templateName: 'booking_consult_confirmed', bodyParams: ['Sarah'],
+      })
+      expect(r.sent).toBe(true)
+      expect(sendTemplateMessage).toHaveBeenCalled()
+    })
   })
 })

@@ -115,3 +115,45 @@ describe('maybeSendCampaignWhatsappWelcome — Flow toggle', () => {
     expect(components.find((c) => c.sub_type === 'flow')).toBeUndefined()
   })
 })
+
+// TENANT.8 (item 3b) — location bundle/feature gate.
+describe('maybeSendCampaignWhatsappWelcome — location bundle/feature gate', () => {
+  function makeLocDb(template, features) {
+    return {
+      from(tbl) {
+        if (tbl === 'locations') return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { settings: {}, features } }) }) }) }
+        if (tbl === 'whatsapp_templates') return { select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: template }) }) }) }) }
+        if (tbl === 'contacts') return { update: () => ({ eq: () => ({ is: async () => ({}) }) }) }
+        if (tbl === 'whatsapp_messages') return { insert: async () => ({}) }
+        return {}
+      },
+    }
+  }
+
+  it('SKIPS when features.whatsapp is explicitly false', async () => {
+    const r = await maybeSendCampaignWhatsappWelcome({
+      db: makeLocDb(APPROVED, { whatsapp: false }), locationId: 'loc1',
+      contact: { phone: '0871234567' }, templateName: 'meta_ad_whatsapp_lead',
+    })
+    expect(r).toEqual({ sent: false, reason: 'bundle_disabled' })
+    expect(sendTemplateMessage).not.toHaveBeenCalled()
+  })
+
+  it('SKIPS when every bundle owning `whatsapp` is explicitly off', async () => {
+    const r = await maybeSendCampaignWhatsappWelcome({
+      db: makeLocDb(APPROVED, { bundle_messaging: false, bundle_marketing: false }), locationId: 'loc1',
+      contact: { phone: '0871234567' }, templateName: 'meta_ad_whatsapp_lead',
+    })
+    expect(r).toEqual({ sent: false, reason: 'bundle_disabled' })
+    expect(sendTemplateMessage).not.toHaveBeenCalled()
+  })
+
+  it('SENDS when only one owning bundle is off — OR semantics', async () => {
+    const r = await maybeSendCampaignWhatsappWelcome({
+      db: makeLocDb(APPROVED, { bundle_messaging: false, bundle_marketing: true }), locationId: 'loc1',
+      contact: { id: 'c1', phone: '0871234567' }, templateName: 'meta_ad_whatsapp_lead',
+    })
+    expect(r.sent).toBe(true)
+    expect(sendTemplateMessage).toHaveBeenCalled()
+  })
+})

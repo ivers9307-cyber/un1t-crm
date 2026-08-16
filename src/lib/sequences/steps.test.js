@@ -652,6 +652,9 @@ describe('sendWhatsappStep — send-time consent gate + graceful skips (COMMS-AU
         }
         if (table === 'whatsapp_templates') return { select: () => ({ eq: () => ({ single: async () => ({ data: WA_TEMPLATE }) }) }) }
         if (table === 'whatsapp_messages') return { insert: () => ({ select: () => ({ single: async () => ({ data: { id: 'aaaaaaaa-0000-0000-0000-000000000001' } }) }) }) }
+        // TENANT.8 (item 3b) — sendWhatsappStep now fetches the sequence's
+        // location for the bundle gate. `features: {}` = every bundle/key on.
+        if (table === 'locations') return { select: () => ({ eq: () => ({ single: async () => ({ data: { id: 'loc-1', features: {} } }) }) }) }
         throw new Error(`unexpected table ${table}`)
       },
       rpc(name) { rpcCalls.push(name); return Promise.resolve({ data: null, error: null }) },
@@ -748,6 +751,7 @@ describe('sendWhatsappStep — send-time consent gate + graceful skips (COMMS-AU
     const db = {
       from: (table) => {
         if (table === 'whatsapp_templates') return { select: () => ({ eq: () => ({ single: async () => ({ data: null }) }) }) }
+        if (table === 'locations') return { select: () => ({ eq: () => ({ single: async () => ({ data: { id: 'loc-1', features: {} } }) }) }) }
         throw new Error(`unexpected table ${table}`)
       },
       rpc: async () => ({}),
