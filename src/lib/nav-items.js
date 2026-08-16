@@ -344,6 +344,22 @@ export const ALL_NAV = [
   // otherwise be the only candidate) once the user is actually on one
   // of those pages. Longest-match: Marketing's longer, more specific
   // path always wins over Messages' bare prefix.
+  //
+  // FU-COSMETICS awareness note — `/communications/templates` as a
+  // prefix also matches the FULL-SCREEN template editors under
+  // src/app/communications/(editors)/templates/email|whatsapp (route
+  // groups don't affect the URL, so those pages' real paths are
+  // /communications/templates/email/... and .../whatsapp/...). Those
+  // editors deliberately opt OUT of the (marketing-era) hub's own tab
+  // strip (see src/app/communications/layout.js's header comment), but
+  // AppShell still renders the persistent Sidebar around them, so
+  // Marketing lights up there too — a user deep in one campaign's WYSIWYG
+  // editor sees "Marketing" tinted in the sidebar despite not being on
+  // any hub tab. Accepted-by-design: it's still the correct SECTION
+  // (you did get there via Marketing → Templates), the editor itself
+  // has no tab strip to conflict with, and narrowing extraActivePaths to
+  // exclude the editor sub-paths would just make the *list* page light
+  // up while its own editor doesn't — worse, not better.
   { href: '/marketing', label: 'Marketing', icon: Megaphone,
     anyPermission: ['automations', 'email', 'whatsapp', 'device_control', 'landing_page', 'sms'],
     extraActivePaths: ['/automations', '/communications/send', '/communications/sent', '/communications/templates', '/communications/segments', '/communications/list-health'],

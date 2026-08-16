@@ -180,6 +180,17 @@ export default async function PersonalDashboardPage() {
   const queueGroups = groupQueueRows(queue.rows, queue.counts)
   const queueDegraded = Boolean(queue.degraded && queue.degraded.length)
   const queueEmpty = queue.total === 0 && !queueDegraded
+  // FU-COSMETICS (c) — registry-internal degradation: queue.total came
+  // from getPendingApprovalsCount's own query path (a provider's
+  // .countPending()), independent of the .fetchPending() path that
+  // materialises queue.rows (src/lib/approvals/registry.js) — so the two
+  // can disagree when only one of a provider's two query paths fails.
+  // total > 0 with rows.length === 0 means the header would otherwise
+  // show a confident "N+" over what renders as nothing at all (queueGroups
+  // is null below 3 sources, and the flat-list branch has zero rows to
+  // show) — indistinguishable from a broken page. queueCountLabel already
+  // drops the "+" for this exact case; this adds the explanation.
+  const queueRowsDelayed = queue.rows.length === 0 && queue.total > 0
 
   const {
     weekShifts, weekStartIso, weekEndIso,
@@ -242,6 +253,9 @@ export default async function PersonalDashboardPage() {
           // is "we don't know", never a confident zero; say so instead
           // of silently omitting the tickets source.
           <p className="px-1 mb-2 text-xs text-un1t-subtle">Email tickets unavailable right now</p>
+        )}
+        {queueRowsDelayed && (
+          <p className="px-1 mb-2 text-xs text-un1t-subtle">Some sources may be delayed</p>
         )}
         {queueEmpty ? (
           <ListCard empty emptyText="Nothing needs your attention" />
