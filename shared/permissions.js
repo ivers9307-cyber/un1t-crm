@@ -9,6 +9,14 @@
 // Plain JS, no Next.js / React imports — Metro (mobile bundler) can
 // resolve it via the `watchFolders` setting in mobile/metro.config.js,
 // and Next.js resolves it via the `@/shared/*` alias in jsconfig.json.
+//
+// BUNDLES.5 — one-directional import from permission-bundles.js (the
+// bundle layer sitting above these keys). permission-bundles.js does
+// NOT import back from here (its EXEMPT_KEYS is a deliberately literal
+// list, not `[...NOTIFY_KEYS, ...APPROVAL_SUBPERMISSION_KEYS]`) — see
+// the EXEMPT_KEYS comment there for why a reverse import would be
+// circular against this file's top-to-bottom eval order.
+import { bundlesDenyKey } from './permission-bundles.js'
 
 // ============================================================
 // Web sidebar permissions
@@ -1110,6 +1118,13 @@ export function isFeatureGatedByLocation(key) {
  * (or the location object is null/undefined — defensive default
  * matches "no location info → don't block").
  *
+ * BUNDLES.5 — ANDs in the bundle layer (shared/permission-bundles.js)
+ * on top of the existing individual-key check: a key is enabled only
+ * if it isn't individually denied AND isn't denied by every bundle
+ * that owns it. A key owned by zero bundles (core/exempt) is never
+ * bundle-denied, so this is purely additive — see the polarity +
+ * completeness tests in permission-bundles.test.js.
+ *
  * @param {{features?: object} | null | undefined} location
  * @param {string} key
  */
@@ -1118,7 +1133,7 @@ export function isFeatureEnabledAtLocation(location, key) {
   const features = location?.features || {}
   // Missing key OR explicit true → enabled.
   // Only an explicit `false` denies.
-  return features[key] !== false
+  return features[key] !== false && !bundlesDenyKey(features, key)
 }
 
 // ============================================================

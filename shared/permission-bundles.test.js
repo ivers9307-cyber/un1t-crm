@@ -1,0 +1,180 @@
+// BUNDLES.5 Task 1 — the bundle layer's own contract tests.
+//
+// Completeness is checked against the LIVE WEB_PERMISSIONS /
+// MOBILE_PERMISSIONS exports (never hard-coded counts) so a future
+// key addition that forgets to classify it here fails loudly instead
+// of silently falling through bundlesDenyKey's "not owned by any
+// bundle → never denied" default.
+
+import { describe, it, expect } from 'vitest'
+import {
+  BUNDLE_KEYS,
+  KEY_BUNDLES,
+  CORE_KEYS,
+  EXEMPT_KEYS,
+  bundlesDenyKey,
+} from './permission-bundles.js'
+import {
+  WEB_PERMISSION_KEYS,
+  MOBILE_PERMISSION_KEYS,
+  NOTIFY_KEYS,
+  APPROVAL_SUBPERMISSION_KEYS,
+} from './permissions.js'
+
+const ALL_KEYS = Array.from(new Set([...WEB_PERMISSION_KEYS, ...MOBILE_PERMISSION_KEYS]))
+
+describe('BUNDLE_KEYS', () => {
+  it('has exactly 7 hub bundles + module_cars (8 total)', () => {
+    expect(BUNDLE_KEYS.length).toBe(8)
+    expect(BUNDLE_KEYS).toContain('module_cars')
+    const hubBundles = BUNDLE_KEYS.filter(k => k !== 'module_cars')
+    expect(hubBundles.length).toBe(7)
+    hubBundles.forEach(k => expect(k.startsWith('bundle_')).toBe(true))
+  })
+
+  it('has no duplicate entries', () => {
+    expect(new Set(BUNDLE_KEYS).size).toBe(BUNDLE_KEYS.length)
+  })
+
+  it('collides with no WEB or MOBILE permission key', () => {
+    BUNDLE_KEYS.forEach(b => {
+      expect(WEB_PERMISSION_KEYS.includes(b)).toBe(false)
+      expect(MOBILE_PERMISSION_KEYS.includes(b)).toBe(false)
+    })
+  })
+})
+
+describe('completeness — every WEB + MOBILE key is classified exactly once', () => {
+  it('every key appears in exactly one of KEY_BUNDLES / CORE_KEYS / EXEMPT_KEYS', () => {
+    const missing = []
+    const duplicated = []
+    for (const key of ALL_KEYS) {
+      const inBundles = Object.prototype.hasOwnProperty.call(KEY_BUNDLES, key)
+      const inCore = CORE_KEYS.includes(key)
+      const inExempt = EXEMPT_KEYS.includes(key)
+      const count = [inBundles, inCore, inExempt].filter(Boolean).length
+      if (count === 0) missing.push(key)
+      if (count > 1) duplicated.push(key)
+    }
+    expect(missing).toEqual([])
+    expect(duplicated).toEqual([])
+  })
+
+  it('KEY_BUNDLES contains no keys outside the WEB/MOBILE key set', () => {
+    const stray = Object.keys(KEY_BUNDLES).filter(k => !ALL_KEYS.includes(k))
+    expect(stray).toEqual([])
+  })
+
+  it('CORE_KEYS contains no keys outside the WEB/MOBILE key set', () => {
+    const stray = CORE_KEYS.filter(k => !ALL_KEYS.includes(k))
+    expect(stray).toEqual([])
+  })
+
+  it('EXEMPT_KEYS contains no keys outside the WEB/MOBILE key set', () => {
+    const stray = EXEMPT_KEYS.filter(k => !ALL_KEYS.includes(k))
+    expect(stray).toEqual([])
+  })
+
+  it('every KEY_BUNDLES value is a non-empty array of valid BUNDLE_KEYS', () => {
+    for (const [key, bundles] of Object.entries(KEY_BUNDLES)) {
+      expect(Array.isArray(bundles), `${key} must map to an array`).toBe(true)
+      expect(bundles.length, `${key} must own at least one bundle`).toBeGreaterThan(0)
+      bundles.forEach(b => {
+        expect(BUNDLE_KEYS.includes(b), `${key} owns unknown bundle '${b}'`).toBe(true)
+      })
+    }
+  })
+})
+
+describe('EXEMPT_KEYS mirrors the existing location-gate exemptions', () => {
+  it('exactly matches NOTIFY_KEYS ∪ APPROVAL_SUBPERMISSION_KEYS (drift guard)', () => {
+    const expected = new Set([...NOTIFY_KEYS, ...APPROVAL_SUBPERMISSION_KEYS])
+    expect(new Set(EXEMPT_KEYS)).toEqual(expected)
+  })
+})
+
+describe('bundlesDenyKey — polarity (back-compat is sacred)', () => {
+  it('an empty features object ({}) denies nothing, for any bundled key', () => {
+    Object.keys(KEY_BUNDLES).forEach(key => {
+      expect(bundlesDenyKey({}, key)).toBe(false)
+    })
+  })
+
+  it('a null/undefined features object denies nothing', () => {
+    expect(bundlesDenyKey(null, 'pipeline')).toBe(false)
+    expect(bundlesDenyKey(undefined, 'pipeline')).toBe(false)
+  })
+
+  it('a key owned by zero bundles (core/exempt) is never denied, even if every bundle is off', () => {
+    const everyBundleOff = Object.fromEntries(BUNDLE_KEYS.map(b => [b, false]))
+    CORE_KEYS.forEach(key => {
+      expect(bundlesDenyKey(everyBundleOff, key)).toBe(false)
+    })
+    EXEMPT_KEYS.forEach(key => {
+      expect(bundlesDenyKey(everyBundleOff, key)).toBe(false)
+    })
+  })
+})
+
+describe('bundlesDenyKey — single-bundle keys', () => {
+  it('denies when its one owning bundle is explicitly false', () => {
+    expect(bundlesDenyKey({ bundle_sales: false }, 'pipeline')).toBe(true)
+  })
+
+  it('does not deny when the bundle is true or missing', () => {
+    expect(bundlesDenyKey({ bundle_sales: true }, 'pipeline')).toBe(false)
+    expect(bundlesDenyKey({}, 'pipeline')).toBe(false)
+  })
+
+  it('car_processing maps 1:1 to module_cars only', () => {
+    expect(KEY_BUNDLES.car_processing).toEqual(['module_cars'])
+    expect(bundlesDenyKey({ module_cars: false }, 'car_processing')).toBe(true)
+    // module_cars is opt-in (off by default in spirit), but an EXPLICIT
+    // true still enables it — polarity is uniform across all bundles.
+    expect(bundlesDenyKey({ module_cars: true }, 'car_processing')).toBe(false)
+  })
+})
+
+describe('bundlesDenyKey — OR semantics across multiple owning bundles', () => {
+  it('email is owned by both bundle_messaging and bundle_marketing', () => {
+    expect(KEY_BUNDLES.email.sort()).toEqual(['bundle_marketing', 'bundle_messaging'])
+  })
+
+  it('denies only when EVERY owning bundle is explicitly false', () => {
+    expect(bundlesDenyKey({ bundle_messaging: false, bundle_marketing: false }, 'email')).toBe(true)
+  })
+
+  it('does not deny when only one owning bundle is false', () => {
+    expect(bundlesDenyKey({ bundle_messaging: false, bundle_marketing: true }, 'email')).toBe(false)
+    expect(bundlesDenyKey({ bundle_messaging: true, bundle_marketing: false }, 'email')).toBe(false)
+  })
+
+  it('does not deny when neither owning bundle is set', () => {
+    expect(bundlesDenyKey({}, 'email')).toBe(false)
+  })
+
+  it('studio_management is owned by both bundle_members and bundle_operations', () => {
+    expect(KEY_BUNDLES.studio_management.sort()).toEqual(['bundle_members', 'bundle_operations'])
+    expect(bundlesDenyKey({ bundle_members: false, bundle_operations: true }, 'studio_management')).toBe(false)
+    expect(bundlesDenyKey({ bundle_members: false, bundle_operations: false }, 'studio_management')).toBe(true)
+  })
+})
+
+describe('spot-check assignments the reviewer will verify against the pages they gate', () => {
+  it('the 8 approvals_* sub-permission keys are EXEMPT, not bundled (Task 2 handles categories)', () => {
+    APPROVAL_SUBPERMISSION_KEYS.forEach(key => {
+      expect(EXEMPT_KEYS.includes(key)).toBe(true)
+      expect(KEY_BUNDLES[key]).toBeUndefined()
+    })
+  })
+
+  it('settings, dashboards, issues_inbox and approvals_inbox are core (never bundled)', () => {
+    ;['settings', 'dashboard_personal', 'dashboard_studio', 'dashboard_business', 'dashboard_ads', 'issues_inbox', 'approvals_inbox']
+      .forEach(key => expect(CORE_KEYS.includes(key)).toBe(true))
+  })
+
+  it('contracts and attendance_reports land in bundle_team', () => {
+    expect(KEY_BUNDLES.contracts).toEqual(['bundle_team'])
+    expect(KEY_BUNDLES.attendance_reports).toEqual(['bundle_team'])
+  })
+})

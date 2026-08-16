@@ -22,11 +22,13 @@ import {
   isFeatureEnabledAtLocation,
   isFeatureGatedByLocation,
   NOTIFY_KEYS,
+  APPROVAL_SUBPERMISSION_KEYS,
   LANDING_PREFERENCE_VALUES,
   LANDING_PREFERENCE_TARGETS,
   resolveLandingPreference,
 } from '@shared/permissions'
 import { hasPermission, hasMobilePermission } from './permissions.js'
+import { CORE_KEYS } from '@shared/permission-bundles'
 
 // Derived from the defaults map, NEVER hardcoded. A hardcoded list
 // (['owner','manager','head_coach','staff']) silently left `master` and
@@ -156,6 +158,52 @@ describe('per-location feature gate (isFeatureEnabledAtLocation)', () => {
       // Even an explicit false in the location map is ignored for notify_*
       expect(isFeatureEnabledAtLocation({ features: { [k]: false } }, k)).toBe(true)
     }
+  })
+})
+
+// BUNDLES.5 Task 1 — isFeatureEnabledAtLocation now ORs in
+// bundlesDenyKey(features, key) on top of the existing individual-key
+// check: `features[key] !== false && !bundlesDenyKey(features, key)`.
+describe('per-location feature gate — bundle layer (BUNDLES.5)', () => {
+  it('denies a bundled key when its owning bundle is explicitly false, even with no individual-key false', () => {
+    expect(isFeatureEnabledAtLocation({ features: { bundle_sales: false } }, 'pipeline')).toBe(false)
+  })
+
+  it('does not deny a bundled key when its owning bundle is true or unset', () => {
+    expect(isFeatureEnabledAtLocation({ features: { bundle_sales: true } }, 'pipeline')).toBe(true)
+    expect(isFeatureEnabledAtLocation({ features: {} }, 'pipeline')).toBe(true)
+  })
+
+  it('OR semantics: a key owned by two bundles survives if only one is off', () => {
+    // `email` is owned by both bundle_messaging and bundle_marketing.
+    expect(isFeatureEnabledAtLocation({ features: { bundle_messaging: false, bundle_marketing: true } }, 'email')).toBe(true)
+    expect(isFeatureEnabledAtLocation({ features: { bundle_messaging: false, bundle_marketing: false } }, 'email')).toBe(false)
+  })
+
+  it('an individual-key false still denies even when every owning bundle is true (existing exception mechanism, unaffected)', () => {
+    expect(isFeatureEnabledAtLocation({ features: { pipeline: false, bundle_sales: true } }, 'pipeline')).toBe(false)
+  })
+
+  it('CORE keys (settings, dashboards, issues_inbox, approvals_inbox, …) are never denied by any bundle', () => {
+    for (const key of CORE_KEYS) {
+      expect(isFeatureEnabledAtLocation({
+        features: { bundle_sales: false, bundle_members: false, bundle_money: false, bundle_messaging: false, bundle_marketing: false, bundle_team: false, bundle_operations: false, module_cars: false },
+      }, key)).toBe(true)
+    }
+  })
+
+  it('the 8 approvals_* per-category grants stay exempt from the bundle layer too (Task 2 handles categories separately)', () => {
+    for (const key of APPROVAL_SUBPERMISSION_KEYS) {
+      expect(isFeatureEnabledAtLocation({
+        features: { bundle_sales: false, bundle_members: false, bundle_money: false, bundle_messaging: false, bundle_marketing: false, bundle_team: false, bundle_operations: false, module_cars: false },
+      }, key)).toBe(true)
+    }
+  })
+
+  it('{} (every existing location today) still means everything on — back-compat is sacred', () => {
+    expect(isFeatureEnabledAtLocation({ features: {} }, 'pipeline')).toBe(true)
+    expect(isFeatureEnabledAtLocation({ features: {} }, 'car_processing')).toBe(true)
+    expect(isFeatureEnabledAtLocation({ features: {} }, 'settings')).toBe(true)
   })
 })
 
