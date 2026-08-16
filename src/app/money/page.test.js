@@ -26,12 +26,16 @@
 // directly rather than assumed.
 //
 // DEEP.4 Task 1 (4A) — approvals_contractor_invoices and
-// approvals_fte_expenses join the chain AFTER orders, BEFORE
-// approvals_offer_purchases, mirroring (money)/layout.js's tab order.
-// Both are also APPROVAL_SUBPERMISSION_KEYS (same family as
-// approvals_offer_purchases) so they're exempt from the location gate
-// too — an approver reaches the review queue regardless of the
-// location's feature flags.
+// approvals_fte_expenses join the chain AFTER approvals_offer_purchases,
+// LAST, mirroring (money)/layout.js's tab order (contractor invoices and
+// expenses are the final two tabs). Both are also
+// APPROVAL_SUBPERMISSION_KEYS (same family as approvals_offer_purchases)
+// so they're exempt from the location gate too — an approver reaches the
+// review queue regardless of the location's feature flags.
+//
+// DEEP.4 final review — originally placed BEFORE approvals_offer_purchases;
+// moved after it so an offers+contractor approver lands in-hub at
+// /offer-sales rather than bouncing to /schedule/invoices (Team chrome).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -124,9 +128,9 @@ describe('/money index page', () => {
     await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/orders')
   })
 
-  // DEEP.4 Task 1 (4A) — the two approver keys sit between orders and
-  // approvals_offer_purchases in the chain, mirroring the tab order in
-  // (money)/layout.js.
+  // DEEP.4 final review — the two approver keys sit AFTER
+  // approvals_offer_purchases, last in the chain, mirroring the tab order
+  // in (money)/layout.js.
   it('redirects to /schedule/invoices when only approvals_contractor_invoices is held', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { approvals_contractor_invoices: true } })
@@ -141,13 +145,12 @@ describe('/money index page', () => {
     await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/schedule/expenses')
   })
 
-  it('redirects to /schedule/invoices ahead of /schedule/expenses and /offer-sales when all three approver keys are held (chain order)', async () => {
+  it('redirects to /schedule/invoices ahead of /schedule/expenses when both approver keys are held but not approvals_offer_purchases (chain order)', async () => {
     getCurrentUser.mockResolvedValue(
       user({
         perms: {
           approvals_contractor_invoices: true,
           approvals_fte_expenses: true,
-          approvals_offer_purchases: true,
         },
       })
     )
@@ -157,6 +160,22 @@ describe('/money index page', () => {
   it('redirects to /offer-sales when only approvals_offer_purchases is held', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { approvals_offer_purchases: true } })
+    )
+    await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/offer-sales')
+  })
+
+  // DEEP.4 final review — offers now precedes both approver keys in the
+  // chain, so an offers+contractor+expenses approver lands IN-hub at
+  // /offer-sales rather than bouncing to Team chrome at /schedule/invoices.
+  it('redirects to /offer-sales ahead of /schedule/invoices and /schedule/expenses when all three approver keys are held (chain order)', async () => {
+    getCurrentUser.mockResolvedValue(
+      user({
+        perms: {
+          approvals_contractor_invoices: true,
+          approvals_fte_expenses: true,
+          approvals_offer_purchases: true,
+        },
+      })
     )
     await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/offer-sales')
   })
