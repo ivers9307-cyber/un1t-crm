@@ -416,13 +416,17 @@ export const CATEGORY_BUNDLES = Object.freeze({
   shift_swaps: ['bundle_team'],
   rosters: ['bundle_team'],
   // JUDGEMENT CALL, confirmed by reading providers/agent-requests.js:
-  // pause / cancellation / class-booking-draft requests are member/
-  // contact lifecycle actions reviewed off the contact record — grouped
-  // with the other CRM-data categories in bundle_sales (mirrors
-  // `contact_linking`/`consultations` above) rather than
-  // bundle_messaging (Mia is the messenger, not the domain the request
-  // is ABOUT) or bundle_members (no anyPermission union references it).
-  agent_requests: ['bundle_sales'],
+  // genuinely mixed-domain, unlike the categories above. `pause` /
+  // `cancellation` are membership-lifecycle actions reviewed off the
+  // contact record (the same CRM territory as `contact_linking` /
+  // `consultations` in bundle_sales); `class_booking` /
+  // `consultation` kinds are Members-hub bookings (the same domain as
+  // `bookings`/`events`). Real OR-semantics case (like `email` and
+  // `studio_management` in KEY_BUNDLES above), not an artificial one:
+  // a location that dropped Sales but kept Members (or vice versa)
+  // should still see agent requests, since either hub alone accounts
+  // for a real slice of what this category contains.
+  agent_requests: ['bundle_sales', 'bundle_members'],
 })
 
 /**

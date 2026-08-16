@@ -13,6 +13,8 @@ import {
   CORE_KEYS,
   EXEMPT_KEYS,
   bundlesDenyKey,
+  CATEGORY_BUNDLES,
+  bundlesDenyCategory,
 } from './permission-bundles.js'
 import {
   WEB_PERMISSION_KEYS,
@@ -176,5 +178,52 @@ describe('spot-check assignments the reviewer will verify against the pages they
   it('contracts and attendance_reports land in bundle_team', () => {
     expect(KEY_BUNDLES.contracts).toEqual(['bundle_team'])
     expect(KEY_BUNDLES.attendance_reports).toEqual(['bundle_team'])
+  })
+})
+
+// BUNDLES.5 Task 2 — category→bundle map for the approvals registry
+// (src/lib/approvals/registry.js). See registry.test.js for the
+// integration-level tests exercising getPendingApprovals /
+// getPendingApprovalsCount end to end; these are the pure unit tests
+// for the map + resolver primitive themselves.
+describe('CATEGORY_BUNDLES + bundlesDenyCategory', () => {
+  it('every CATEGORY_BUNDLES value is a non-empty array of valid BUNDLE_KEYS', () => {
+    for (const [category, bundles] of Object.entries(CATEGORY_BUNDLES)) {
+      expect(Array.isArray(bundles), `${category} must map to an array`).toBe(true)
+      expect(bundles.length, `${category} must own at least one bundle`).toBeGreaterThan(0)
+      bundles.forEach(b => {
+        expect(BUNDLE_KEYS.includes(b), `${category} owns unknown bundle '${b}'`).toBe(true)
+      })
+    }
+  })
+
+  it('polarity: {} denies no category (back-compat)', () => {
+    Object.keys(CATEGORY_BUNDLES).forEach(category => {
+      expect(bundlesDenyCategory({}, category)).toBe(false)
+    })
+    expect(bundlesDenyCategory(null, 'contractor_invoices')).toBe(false)
+  })
+
+  it('a category owning zero bundles (e.g. the unmapped "issues" core category) is never denied', () => {
+    const everyBundleOff = Object.fromEntries(BUNDLE_KEYS.map(b => [b, false]))
+    expect(bundlesDenyCategory(everyBundleOff, 'issues')).toBe(false)
+  })
+
+  it('denies a single-bundle category when its bundle is explicitly false', () => {
+    expect(bundlesDenyCategory({ bundle_money: false }, 'contractor_invoices')).toBe(true)
+    expect(bundlesDenyCategory({ bundle_money: true }, 'contractor_invoices')).toBe(false)
+  })
+
+  it('agent_requests — OR semantics across bundle_sales + bundle_members', () => {
+    expect(CATEGORY_BUNDLES.agent_requests.slice().sort()).toEqual(['bundle_members', 'bundle_sales'])
+    expect(bundlesDenyCategory({ bundle_sales: false, bundle_members: true }, 'agent_requests')).toBe(false)
+    expect(bundlesDenyCategory({ bundle_sales: true, bundle_members: false }, 'agent_requests')).toBe(false)
+    expect(bundlesDenyCategory({ bundle_sales: false, bundle_members: false }, 'agent_requests')).toBe(true)
+  })
+
+  it('contractor_invoices / fte_expenses / offer_purchases follow bundle_money (approval = review, per the plan)', () => {
+    expect(CATEGORY_BUNDLES.contractor_invoices).toEqual(['bundle_money'])
+    expect(CATEGORY_BUNDLES.fte_expenses).toEqual(['bundle_money'])
+    expect(CATEGORY_BUNDLES.offer_purchases).toEqual(['bundle_money'])
   })
 })

@@ -57,6 +57,7 @@ import { hyroxSessionsProvider } from './providers/hyrox-sessions'
 import { hostEventsProvider } from './providers/host-events'
 import { offerPurchasesProvider } from './providers/offer-purchases'
 import { hasPermission } from '@/lib/permissions'
+import { bundlesDenyCategory } from '@shared/permission-bundles'
 
 export const APPROVALS_PROVIDERS = Object.freeze([
   // BOOKKEEPER-APPROVALS.1 — invoices_queue tab first so bookkeepers
@@ -85,6 +86,34 @@ export const APPROVALS_PROVIDERS = Object.freeze([
   offerPurchasesProvider,
 ])
 
+// BUNDLES.5 Task 2 — is this provider visible to `user`, combining the
+// existing per-user grant check with the bundle-layer check?
+//
+// The permissionKey / isVisible() check above is a pure per-user GRANT
+// (hasPermission on an EXEMPT_KEYS permission — see
+// shared/permission-bundles.js — never itself location-gated). That's
+// exactly why a bundle-off location used to have no effect here: the
+// grant alone decided visibility, bypassing location-level gating
+// entirely (the parked HOME.3 decision). bundlesDenyCategory() is a
+// SEPARATE, independent check against shared/permission-bundles.js's
+// CATEGORY_BUNDLES map, applied on top — a category is hidden if
+// EITHER the per-user grant is missing OR its owning bundle(s) are
+// all explicitly off. A category with no bundle mapping (`issues` —
+// mirrors the core `issues_inbox` key) is never denied by this check.
+//
+// Single implementation shared by getPendingApprovals AND
+// getPendingApprovalsCount so the two can't drift the way the
+// pre-BUNDLES.5 duplicated filter blocks could have.
+function isProviderVisible(p, user) {
+  // APPROVALS-PERCAT.1 — category providers gate on their permissionKey;
+  // providers without one keep their isVisible() gate (invoices_queue, issues).
+  const granted = p.permissionKey
+    ? hasPermission(user, p.permissionKey)
+    : (typeof p.isVisible !== 'function' || p.isVisible(user))
+  if (!granted) return false
+  return !bundlesDenyCategory(user?.activeLocation?.features, p.key)
+}
+
 /**
  * Fetch pending approvals across every registered provider in
  * parallel. Returns an object keyed by provider.key plus a `total`
@@ -95,14 +124,9 @@ export const APPROVALS_PROVIDERS = Object.freeze([
  * @returns {Promise<{ providers: Array<{key, label, count, items, reviewBase}>, total: number }>}
  */
 export async function getPendingApprovals(db, user) {
-  // BOOKKEEPER-APPROVALS.1 — apply isVisible() filter first so
+  // BOOKKEEPER-APPROVALS.1 — apply the visibility filter first so
   // hidden providers don't even fire their query.
-  const visible = APPROVALS_PROVIDERS.filter((p) => {
-    // APPROVALS-PERCAT.1 — category providers gate on their permissionKey;
-    // providers without one keep their isVisible() gate (invoices_queue, issues).
-    if (p.permissionKey) return hasPermission(user, p.permissionKey)
-    return typeof p.isVisible !== 'function' || p.isVisible(user)
-  })
+  const visible = APPROVALS_PROVIDERS.filter((p) => isProviderVisible(p, user))
 
   const settled = await Promise.allSettled(
     visible.map(async (p) => {
@@ -137,14 +161,9 @@ export async function getPendingApprovals(db, user) {
  * fetchPending + read .count off the result.
  */
 export async function getPendingApprovalsCount(db, user) {
-  // Mirror the isVisible() filter from getPendingApprovals so the
+  // Mirror the visibility filter from getPendingApprovals so the
   // sidebar badge matches what the inbox renders.
-  const visible = APPROVALS_PROVIDERS.filter((p) => {
-    // APPROVALS-PERCAT.1 — category providers gate on their permissionKey;
-    // providers without one keep their isVisible() gate (invoices_queue, issues).
-    if (p.permissionKey) return hasPermission(user, p.permissionKey)
-    return typeof p.isVisible !== 'function' || p.isVisible(user)
-  })
+  const visible = APPROVALS_PROVIDERS.filter((p) => isProviderVisible(p, user))
   const settled = await Promise.allSettled(
     visible.map(async (p) => {
       if (typeof p.countPending === 'function') {
