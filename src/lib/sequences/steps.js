@@ -41,6 +41,7 @@ import { logWarn } from '@/lib/log'
 import { getLocationBranding } from '@/lib/location-branding'
 import { isFrequencyCapped, frequencyCapDeferUntil, FrequencyCapDeferral, stampMarketingTouch } from '@/lib/frequency-cap'
 import { overlayConnections } from '@/lib/connection-registry'
+import { isFeatureEnabledAtLocation } from '@shared/permissions'
 
 // ── FREQ-CAP.1 — cross-channel marketing frequency cap ──────────
 //
@@ -119,12 +120,62 @@ async function recordStepSkip(db, { contact, sequence, step, channel, reason }) 
   } catch { /* best-effort logging only — never wedge the runner */ }
 }
 
+// ── TENANT.8 (item 3b) — location bundle/feature gate ───────────
+//
+// TENANT.6's accepted gap #2: background senders never consulted
+// isFeatureEnabledAtLocation/bundlesDenyKey at all, so a sequence
+// configured before a location's bundle_marketing/bundle_messaging
+// (or the plain per-key email/whatsapp/sms toggle) was turned off
+// kept firing regardless. Closed here: every send handler fetches its
+// sequence's location (features column) and gates through the SAME
+// resolver web/mobile already use — isFeatureEnabledAtLocation ANDs
+// the per-key toggle with the bundle layer's OR-across-owning-bundles
+// check (shared/permission-bundles.js) automatically, so no new bundle
+// logic lives in this file at all.
+//
+// Each handler fetches its own `locations` row (columns vary — email/sms
+// already fetched one for name/sender-id before this change, this just
+// adds `features` to that same select; WhatsApp did not previously fetch
+// `locations` at all, so its gate call below is a genuinely NEW query —
+// accepted, a sequence tick fires a handful of steps, not a fan-out) and
+// passes it to channelEnabledOrSkip below.
+//
+// Missing/undeleted location info defaults OPEN (isFeatureEnabledAtLocation's
+// own contract — `location == null` → features = {} → nothing denied),
+// matching the "don't block on missing data" posture every other
+// call site of this resolver takes.
+async function channelEnabledOrSkip(db, { location, sequence, step, contact, channel, featureKey }) {
+  if (isFeatureEnabledAtLocation(location, featureKey)) return true
+  await recordStepSkip(db, {
+    contact, sequence, step, channel,
+    reason: `${featureKey} is disabled at this location (feature toggle or bundle off)`,
+  })
+  return false
+}
+
 // ── email ───────────────────────────────────────────────────────
 
 export async function sendEmailStep(db, { enrollment: _enrollment, step, sequence, contact, frequencyCap }) {
   if (!contact?.email) {
     throw new Error('Contact has no email address — cannot send email step.')
   }
+
+  // TENANT.8 (item 3b) — location bundle/feature gate, before any other
+  // per-contact work. One query serves both this gate AND the
+  // {{location_name}} merge-tag lookup further down (COMMSFIX.E.4) —
+  // no extra round trip versus before this change.
+  const { data: seqLocation } = await db
+    .from('locations')
+    .select('id, name, features')
+    .eq('id', sequence.location_id)
+    .single()
+  if (!(await channelEnabledOrSkip(db, {
+    location: seqLocation, sequence, step, contact, channel: 'email', featureKey: 'email',
+  }))) {
+    return null
+  }
+  const locationName = seqLocation?.name || ''
+
   // Send-time consent gate — the same population campaign broadcasts
   // enforce (campaign-sender consentOk: email_marketing === true AND
   // email_status not bounced/complained; we also refuse a manually
@@ -191,18 +242,11 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
   // append is idempotent — if the merged body already contains the
   // unsubscribe link, appendUnsubscribeFooter skips it so recipients
   // don't see two "Unsubscribe" links.
-  // COMMSFIX.E.4 — resolve the location name so {{location_name}}
-  // renders in sequence EMAIL steps as it already does in SMS steps
-  // (six shipped templates sign off 'UN1T {{location_name}}'; without
-  // the extra it rendered 'UN1T ' with a trailing space). Best-effort:
-  // a branding miss must never block a send, so a missing row merges ''.
-  const { data: seqLocation } = await db
-    .from('locations')
-    .select('id, name')
-    .eq('id', sequence.location_id)
-    .single()
-  const locationName = seqLocation?.name || ''
-
+  // COMMSFIX.E.4 — {{location_name}} renders in sequence EMAIL steps as
+  // it already does in SMS steps (six shipped templates sign off 'UN1T
+  // {{location_name}}'; without it rendered 'UN1T ' with a trailing
+  // space). locationName is resolved above from the same location row
+  // the bundle gate fetched.
   const baseUrl = getAppUrl()
   const unsubscribeUrl = buildUnsubscribeUrl(contact, baseUrl, sequence?.location_id)
   // UNSUBTOKEN.2 — null means the contact has no
@@ -276,6 +320,25 @@ export async function sendWhatsappStep(db, { step, sequence, contact, frequencyC
   if (!step.whatsapp_template_id) {
     throw new Error('WhatsApp step has no template_id.')
   }
+
+  // TENANT.8 (item 3b) — location bundle/feature gate, before any other
+  // per-contact work. Unlike email/SMS, no `locations` row was
+  // previously fetched here (getLocationBranding reads company_settings,
+  // a different table) — this is a genuinely new query per step
+  // execution. Accepted: a sequence tick fires a handful of steps, not
+  // a fan-out, so the extra round trip is worth closing the RLS-bypass
+  // gap on a service-role sender.
+  const { data: waLocation } = await db
+    .from('locations')
+    .select('id, features')
+    .eq('id', sequence.location_id)
+    .single()
+  if (!(await channelEnabledOrSkip(db, {
+    location: waLocation, sequence, step, contact, channel: 'WhatsApp', featureKey: 'whatsapp',
+  }))) {
+    return null
+  }
+
   // Per-contact gates — recorded SKIPS, never errors (see recordStepSkip;
   // the throw here is what auto-paused 11 of 17 live "First Class Booking
   // Nudge" enrollments on contacts with no wa_phone).
@@ -410,6 +473,27 @@ export async function sendSmsStep(db, { step, sequence, contact }) {
   if (!step.sms_body) {
     throw new Error('SMS step has no sms_body.')
   }
+
+  // Resolve the sequence's location up front — needed both for the
+  // TENANT.8 (item 3b) bundle/feature gate below AND (already, before
+  // this change) the alpha sender ID (mig 059). Sequences are pinned
+  // to one location, so every enrolment in this sequence sends from
+  // the same sender. Config fault (no location row at all) still
+  // throws — that needs an operator fix, unlike a per-contact skip.
+  let { data: smsLocation } = await db
+    .from('locations')
+    .select('id, name, twilio_alpha_sender_id, features')
+    .eq('id', sequence.location_id)
+    .single()
+  if (!smsLocation) {
+    throw new Error('Sequence location not found — cannot resolve SMS sender.')
+  }
+  if (!(await channelEnabledOrSkip(db, {
+    location: smsLocation, sequence, step, contact, channel: 'SMS', featureKey: 'sms',
+  }))) {
+    return null
+  }
+
   // Per-contact gates — recorded SKIPS, never errors (COMMSFIX.E.1).
   // These used to THROW, feeding error_count until MAX_ERRORS auto-
   // paused the whole enrolment — the identical wedge class fixed for
@@ -443,19 +527,9 @@ export async function sendSmsStep(db, { step, sequence, contact }) {
     return null
   }
 
-  // Resolve the sequence's location so we get the right alpha
-  // sender ID (mig 059). Sequences are pinned to one location, so
-  // every enrolment in this sequence sends from the same sender.
-  let { data: location } = await db
-    .from('locations')
-    .select('id, name, twilio_alpha_sender_id')
-    .eq('id', sequence.location_id)
-    .single()
-  if (!location) {
-    throw new Error('Sequence location not found — cannot resolve SMS sender.')
-  }
-  // INTEG-A2 dual-read: registry twilio_sender row first.
-  location = await overlayConnections(db, location, ['twilio_sender'])
+  // INTEG-A2 dual-read: registry twilio_sender row first. Reuses the
+  // location row fetched above for the bundle gate.
+  const location = await overlayConnections(db, smsLocation, ['twilio_sender'])
 
   // Apply merge tags. Same set as email + ad-hoc SMS (first_name,
   // name, location_name, etc.).

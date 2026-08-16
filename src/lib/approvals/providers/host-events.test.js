@@ -3,13 +3,17 @@ import { describe, it, expect, vi } from 'vitest'
 
 vi.mock('../registry', () => ({
   viewerActiveLocationId: vi.fn(() => 'loc1'),
+  // TENANT.8 (item 4) — identity pass-through here; the real filter's
+  // behaviour is exercised end-to-end (unmocked) in
+  // host-events-bundle-gate.test.js.
+  filterRowsByLocationBundle: vi.fn(async (_db, rows) => rows),
 }))
 
 import { hostEventsProvider } from './host-events'
 
 const ROWS = [
-  { id: 'e1', name: 'Pride Training Club', kind: 'masterclass', race_date: '2026-09-20', status: 'pending_review', submitted_at: '2026-07-27T07:20:00Z', created_at: '2026-07-27T07:20:00Z', host: { id: 'h1', name: 'Pride Training Club', organization_id: 'org-un1t' } },
-  { id: 'e2', name: 'Other Org Event', kind: 'race', race_date: '2026-10-01', status: 'pending_review', submitted_at: null, created_at: '2026-07-28T09:00:00Z', host: { id: 'h2', name: 'Elsewhere', organization_id: 'org-other' } },
+  { id: 'e1', name: 'Pride Training Club', kind: 'masterclass', race_date: '2026-09-20', status: 'pending_review', submitted_at: '2026-07-27T07:20:00Z', created_at: '2026-07-27T07:20:00Z', location_id: 'loc-a', host: { id: 'h1', name: 'Pride Training Club', organization_id: 'org-un1t' } },
+  { id: 'e2', name: 'Other Org Event', kind: 'race', race_date: '2026-10-01', status: 'pending_review', submitted_at: null, created_at: '2026-07-28T09:00:00Z', location_id: 'loc-b', host: { id: 'h2', name: 'Elsewhere', organization_id: 'org-other' } },
 ]
 
 function makeDb(rows = ROWS) {

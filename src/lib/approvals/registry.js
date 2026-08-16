@@ -128,6 +128,40 @@ function isProviderVisible(p, user) {
   return !bundlesDenyCategory(user?.activeLocation?.features, p.key)
 }
 
+// ===========================================================
+// TENANT.8 (item 4) — per-row bundle filter for providers whose rows can
+// come from a location OTHER than the viewer's active one.
+//
+// isProviderVisible above only checks bundlesDenyCategory against the
+// VIEWER'S active location — correct for every provider whose rows are
+// themselves `eq('location_id', activeId)`-filtered (every provider in
+// APPROVALS_PROVIDERS except host_events — see each provider file's own
+// APPROVALS-LOCATION-SCOPE comment), because in that case "the viewer's
+// active location" and "the row's location" are provably the same thing.
+// host_events is org-scoped (hosts span every location in the org), so a
+// row can legitimately belong to a DIFFERENT location than the one whose
+// bundle state isProviderVisible just checked — an approver browsing from
+// a bundle-ON location could see (and act on) a pending event that lives
+// at a bundle-OFF location, which isProviderVisible's coarse check can
+// never catch because it never looks at the row.
+//
+// Fix: fetch the involved locations' features in ONE query (the provider
+// already knows every location_id its rows touch) and filter row-by-row
+// against EACH row's own location. Cheap by construction — a Map lookup
+// per row, not a query per row.
+export async function filterRowsByLocationBundle(db, rows, category) {
+  const list = rows || []
+  const ids = [...new Set(list.map((r) => r.location_id).filter(Boolean))]
+  if (ids.length === 0) return list
+  const { data, error } = await db.from('locations').select('id, features').in('id', ids)
+  // Fail OPEN on a lookup error — a locations read failing must never
+  // hide a legitimate pending row from an approver (same posture as
+  // isFeatureEnabledAtLocation's own "missing data never blocks" contract).
+  if (error) return list
+  const featuresById = new Map((data || []).map((l) => [l.id, l.features]))
+  return list.filter((r) => !bundlesDenyCategory(featuresById.get(r.location_id), category))
+}
+
 /**
  * Fetch pending approvals across every registered provider in
  * parallel. Returns an object keyed by provider.key plus a `total`

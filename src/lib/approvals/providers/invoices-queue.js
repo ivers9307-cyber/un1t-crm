@@ -84,7 +84,9 @@ export const invoicesQueueProvider = {
     if (!userIsBookkeeper(user)) return { count: 0, items: [] }
     // APPROVALS-LOCATION-SCOPE — bookkeepers only see invoices for
     // the studio they're currently in. Switch active location to
-    // see another studio's queue.
+    // see another studio's queue. TENANT.8 (item 4) — this also means
+    // the registry's bundlesDenyCategory(user.activeLocation.features,
+    // key) check already covers every row here; no per-row check needed.
     const activeId = viewerActiveLocationId(user)
     if (!activeId) return { count: 0, items: [] }
 

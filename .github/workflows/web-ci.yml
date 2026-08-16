@@ -150,6 +150,14 @@ jobs:
       - name: Supabase guardrails
         run: npm run check:guardrails
 
+      # TENANT.8 — catches shared/permission-bundles.js's KEY_BUNDLES
+      # drifting from the seed data pasted into the latest migration
+      # that reseeds private.permission_key_bundles (the SQL mirror
+      # private.auth_mobile_can reads for mobile RLS). See mig 550 and
+      # scripts/check-bundle-sql.mjs.
+      - name: Bundle SQL drift
+        run: npm run check:bundle-sql
+
   # SAAS4-W0.3 (INFRA_BACKLOG #7) — `next build` as a first-class CI gate.
   # Vitest runs on mocked imports, so a missing/renamed export or an
   # unresolvable import sails through tests + eslint and only fails in

@@ -20,6 +20,13 @@
 // Scope: owner + master at the location (per the "All owners at the
 // studio" routing decision). Non-handlers see a 0-count empty tab
 // (the inbox UI hides 0-count tabs by default).
+//
+// TENANT.8 (item 4) — APPROVALS-LOCATION-SCOPE: every row is
+// eq('location_id', activeId)-filtered to the viewer's own active
+// location (defence in depth even though `issues` has no
+// CATEGORY_BUNDLES mapping at all — it mirrors the core `issues_inbox`
+// key, see shared/permission-bundles.js, so bundlesDenyCategory never
+// denies it here regardless).
 
 import {
   canApproveAtActiveLocation,

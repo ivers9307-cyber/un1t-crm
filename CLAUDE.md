@@ -73,9 +73,9 @@ npm test             # vitest run (~2950 pure-lib tests, no DB)
 npm run lint         # eslint .
 ```
 
-**CI mirror — run all nine before pushing:**
+**CI mirror — run all ten before pushing:**
 ```bash
-npm test && npm run lint && npm run check:mobile-parity && npm run check:mobile-imports && npm run check:mobile-lint && npm run check:route-guards && npm run check:location-scoping && npm run check:rls-restrictive && npm run check:guardrails
+npm test && npm run lint && npm run check:mobile-parity && npm run check:mobile-imports && npm run check:mobile-lint && npm run check:route-guards && npm run check:location-scoping && npm run check:rls-restrictive && npm run check:guardrails && npm run check:bundle-sql
 ```
 
 - **`next build` is NOT in the local CI mirror** (it's slow), but since SAAS4-W0.3 GitHub Actions runs it as a parallel "Next build" job on every PR. Green vitest + eslint alone still does **not** mean the build passes — tests run on mocked imports, so a missing/renamed export or unresolvable import sails through them. For any change adding an import or a new route/page, run `npm run build` locally before pushing rather than discovering it in CI; the Actions build job and the Vercel check on the PR are the enforcing gates.
