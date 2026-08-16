@@ -9,6 +9,7 @@ import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { hasPermission } from '@/lib/permissions'
+import ScheduleTabs from '@/components/ScheduleTabs'
 import ExpensesManager from '@/components/ExpensesManager'
 
 export const dynamic = 'force-dynamic'
@@ -48,6 +49,8 @@ export default async function ExpensesPage() {
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
+      {/* SCHED.9 — Schedule tab strip follows onto every sibling page. */}
+      <ScheduleTabs user={user} />
       <header className="mb-6">
         <h1 className="text-2xl font-semibold text-un1t-text">Expenses</h1>
         <p className="text-sm text-un1t-subtle mt-1">

@@ -10,6 +10,7 @@
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
+import ScheduleTabs from '@/components/ScheduleTabs'
 import AttendanceReportClient from '@/components/AttendanceReportClient'
 
 export const dynamic = 'force-dynamic'
@@ -21,6 +22,10 @@ export default async function AttendanceReportPage() {
 
   return (
     <div className="p-8 max-w-7xl">
+      {/* SCHED.9 — Schedule tab strip follows onto every sibling page.
+          This URL itself is unchanged (live cron-email consumers with no
+          in-repo link — see the header comment above). */}
+      <ScheduleTabs user={user} />
       <h2 className="text-2xl font-bold mb-1">Attendance</h2>
       <p className="text-sm text-un1t-subtle mb-8 max-w-3xl">
         Auto-stamped from UniFi Access door unlocks. On-time means the

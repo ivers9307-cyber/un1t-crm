@@ -36,6 +36,9 @@ vi.mock('next/navigation', () => ({
     err.digest = `NEXT_REDIRECT;${url}`
     throw err
   }),
+  // SCHED.9 — the page now mounts ScheduleTabs, which reads these.
+  usePathname: () => '/schedule/expenses',
+  useSearchParams: () => new URLSearchParams(),
 }))
 
 vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ success: true, data: [] }) })))
