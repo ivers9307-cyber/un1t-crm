@@ -179,6 +179,23 @@ describe('spot-check assignments the reviewer will verify against the pages they
     expect(KEY_BUNDLES.contracts).toEqual(['bundle_team'])
     expect(KEY_BUNDLES.attendance_reports).toEqual(['bundle_team'])
   })
+
+  // R1 (final-review rider) — mobile `issues` ("Report a Problem") and
+  // mobile `policies` (HR policy reading) were reclassified OUT of
+  // KEY_BUNDLES (bundle_operations / bundle_team respectively) INTO
+  // CORE_KEYS: both mirror web surfaces that are deliberately ungated
+  // (POST /api/issues has no permission gate by design; /policies is
+  // login-only), so a bundle hiding them would be an unintended side
+  // effect rather than a real product decision.
+  it('R1: issues and policies are CORE, not bundled — baseline/compliance surfaces', () => {
+    expect(CORE_KEYS.includes('issues')).toBe(true)
+    expect(CORE_KEYS.includes('policies')).toBe(true)
+    expect(KEY_BUNDLES.issues).toBeUndefined()
+    expect(KEY_BUNDLES.policies).toBeUndefined()
+    const everyBundleOff = Object.fromEntries(BUNDLE_KEYS.map(b => [b, false]))
+    expect(bundlesDenyKey(everyBundleOff, 'issues')).toBe(false)
+    expect(bundlesDenyKey(everyBundleOff, 'policies')).toBe(false)
+  })
 })
 
 // BUNDLES.5 Task 2 — category→bundle map for the approvals registry

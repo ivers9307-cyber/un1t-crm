@@ -48,6 +48,23 @@ export const BUNDLE_KEYS = Object.freeze([
 ])
 
 // ============================================================
+// BUNDLE_LABELS — human-readable label per BUNDLE_KEYS entry, for the
+// Task 3 UI (LocationFeatures.jsx / AdminFeatureMatrix.jsx bundles
+// section). Mirrors the hub labels in src/lib/nav-items.js ALL_NAV.
+// ============================================================
+
+export const BUNDLE_LABELS = Object.freeze({
+  bundle_messaging: 'Messages',
+  bundle_sales: 'Sales',
+  bundle_members: 'Members',
+  bundle_money: 'Money',
+  bundle_marketing: 'Marketing',
+  bundle_team: 'Team',
+  bundle_operations: 'Operations',
+  module_cars: 'Cars (module)',
+})
+
+// ============================================================
 // KEY_BUNDLES — key → array of bundles that OWN it.
 //
 // This is a SET, not a partition: several keys legitimately belong to
@@ -196,11 +213,6 @@ export const KEY_BUNDLES = Object.freeze({
   // JUDGEMENT CALL — mobile FTE self-submit, same reasoning as
   // `invoices` above (src/components/ScheduleTabs.jsx `showExpenses`).
   expenses: ['bundle_team'],
-  // JUDGEMENT CALL — mobile-only toggle for HR policies. The web
-  // Policies surface is openToAll with no permission key of its own
-  // (POLICIES.1); this is the per-user mobile visibility toggle for
-  // the same HR-policy content, so it follows Team.
-  policies: ['bundle_team'],
 
   // ---- bundle_operations — src/lib/nav-items.js '/operations' anyPermission ----
   equipment_admin: ['bundle_operations'],
@@ -209,14 +221,6 @@ export const KEY_BUNDLES = Object.freeze({
   presentations: ['bundle_operations'],
   fleet_restart: ['bundle_operations'],
   fleet_admin: ['bundle_operations'],
-  // JUDGEMENT CALL — mobile-only universal "Report a Problem" submit
-  // screen. No web permission key (open to all staff by policy, see
-  // src/app/issues/page.js's handler-only gate, which is role-based not
-  // permission-based); grouped with the other on-site studio-operations
-  // surfaces (equipment_inspect is the closest analogue: also universal,
-  // also "walk the floor and flag something").
-  issues: ['bundle_operations'],
-
   // ---- module_cars ----
   // Per plan: "module_cars replaces nothing: car_processing maps to it
   // 1:1." src/lib/nav-items.js '/cars/active' permission: 'car_processing'.
@@ -272,6 +276,21 @@ export const CORE_KEYS = Object.freeze([
   // it always was — this classification only stops a BUNDLE from also
   // being able to deny it.
   'push_notifications',
+  // ---- R1 (final-review rider) — moved OUT of KEY_BUNDLES into CORE ----
+  // `issues` (mobile "Report a Problem") and `policies` (mobile HR-policy
+  // reading) were originally bundled (issues → bundle_operations, policies
+  // → bundle_team). Review finding: both are baseline/compliance surfaces
+  // whose WEB analogues are deliberately ungated already — POST
+  // /api/issues has "no permission gate" by design (any authenticated
+  // profile may flag a problem) and the web Policies page is login-only
+  // (POLICIES.1, no permission key at all). Letting a bundle hide the
+  // MOBILE mirror of an intentionally-always-on web surface would be an
+  // unintended side effect of the bundle layer, not a real product
+  // decision — exactly the class of thing CORE_KEYS exists to prevent.
+  // Promoted here instead; see permission-bundles.test.js for the pinned
+  // assertions.
+  'issues',
+  'policies',
 ])
 
 // ============================================================
