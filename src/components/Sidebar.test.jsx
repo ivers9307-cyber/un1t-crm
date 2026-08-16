@@ -85,3 +85,42 @@ describe('Sidebar — active state', () => {
     expect(current[0].textContent).toContain('Sales')
   })
 })
+
+// FU-PLATFORM-LINK — the master-only "Platform" link used to point ONLY
+// at the external https://platform.un1tdublin.com (the old, separately-
+// deployed un1t-platform app — see docs/INFRA_BACKLOG.md #5, tagged for
+// retirement). The in-app Platform console (8 pages, src/lib/platform-
+// nav.js) has since shipped at /admin/tenants with no sidebar entry of
+// its own, so masters had no persistent link to their own console. Fix:
+// repoint the primary link internally, keep the old one as a smaller
+// secondary "Legacy platform" link so nothing already relying on it
+// (whatever docs/INFRA_BACKLOG.md #5's "confirm/port the surfaces" step
+// hasn't resolved yet) gets stranded.
+describe('Sidebar — Platform links (FU-PLATFORM-LINK)', () => {
+  const MASTER = { role: 'master', full_name: 'Test Master' }
+
+  it('shows an internal "Platform console" link to /admin/tenants for a master', () => {
+    mockPathname.mockReturnValue('/dashboard')
+    render(<Sidebar user={MASTER} />)
+    const link = screen.getByRole('link', { name: /Platform console/ })
+    expect(link.getAttribute('href')).toBe('/admin/tenants')
+    // Internal Link, not an external tab-opener.
+    expect(link.getAttribute('target')).toBeNull()
+  })
+
+  it('keeps a secondary external "Legacy platform" link to the old un1t-platform app', () => {
+    mockPathname.mockReturnValue('/dashboard')
+    render(<Sidebar user={MASTER} />)
+    const link = screen.getByRole('link', { name: /Legacy platform/ })
+    expect(link.getAttribute('href')).toBe('https://platform.un1tdublin.com')
+    expect(link.getAttribute('target')).toBe('_blank')
+    expect(link.getAttribute('rel')).toContain('noreferrer')
+  })
+
+  it('renders neither Platform link for a non-master (owner)', () => {
+    mockPathname.mockReturnValue('/dashboard')
+    render(<Sidebar user={USER} />)
+    expect(screen.queryByRole('link', { name: /Platform console/ })).toBeNull()
+    expect(screen.queryByRole('link', { name: /Legacy platform/ })).toBeNull()
+  })
+})
