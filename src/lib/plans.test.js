@@ -235,6 +235,35 @@ describe('applyPlanBundlesToLocation', () => {
     }
   })
 
+  // TENANT.6 review rider — this is the "PARTIAL bundle version" scenario
+  // the pin route's own guard (src/app/api/admin/tenants/[orgId]/plans/
+  // route.js) deliberately lets through untouched: a version with SOME
+  // but not all 8 bundle keys isn't the guard's ALL-8-absent target
+  // (route.test.js's matching "PARTIAL version pins with no force" test
+  // proves the guard side of this exact scenario, same 3-key combination
+  // — that fake db doesn't model getLocationPlan's embedded select, so
+  // the write-side assertion lives here instead). 5 of 8 keys were never
+  // mentioned by the plan version at all (not even explicit false) — they
+  // still come out denied, proving "absent" and "explicitly false" are
+  // the exact same outcome once a plan IS pinned.
+  it('a pinned tier with a PARTIAL bundle set (3 of 8 keys) denies the 5 it never mentions, same as if they were explicit false', async () => {
+    const { db, updates } = stubDb({
+      locationPlanRows: [tierRow({ bundle_money: true, bundle_team: true, module_cars: true })],
+      location: { features: {} },
+    })
+    const result = await applyPlanBundlesToLocation(db, 'loc-1')
+    expect(updates).toHaveLength(1)
+    const grantedByOmission = ['bundle_money', 'bundle_team', 'module_cars']
+    for (const key of grantedByOmission) {
+      expect(key in result, key).toBe(false)
+    }
+    const neverMentioned = BUNDLE_KEYS.filter((k) => !grantedByOmission.includes(k))
+    expect(neverMentioned).toEqual(['bundle_messaging', 'bundle_sales', 'bundle_members', 'bundle_marketing', 'bundle_operations'])
+    for (const key of neverMentioned) {
+      expect(result[key], key).toBe(false)
+    }
+  })
+
   // BUNDLES.5 final-review fix 3 — fail-closed: unassigning a plan (or
   // being unpinned already) does NOT reopen whatever bundle state the
   // location is currently in. Replaces the old "removes every bundle

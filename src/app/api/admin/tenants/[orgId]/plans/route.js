@@ -207,6 +207,21 @@ export async function POST(request, props) {
   //     for an operator who has already reviewed the version and wants it
   //     pinned as-is (e.g. testing, or a version that's genuinely meant to
   //     withhold every bundle).
+  //
+  //     This guard only catches the ALL-8-absent case. A PARTIAL version
+  //     (some bundle keys set, others not) sails through untouched — and
+  //     that's correct, not a gap: mirrorBundleFeatures's polarity is
+  //     "true grants, anything else (absent OR explicitly false) denies",
+  //     so an omitted key on a partial version is DELIBERATELY withholding
+  //     that bundle, the exact same semantics as an operator typing
+  //     `false` by hand. The invariant this relies on is that the ONLY
+  //     legitimate way to submit a partial features blob is via the plan
+  //     version editor UI, which always submits the full 8-key set (see
+  //     the matching comment on VersionBody in
+  //     src/app/api/admin/plans/[id]/versions/route.js) — a caller
+  //     hitting this API directly with a hand-built partial body is
+  //     withholding those keys by design, not making a mistake the guard
+  //     should catch.
   const hasAnyBundleKey = BUNDLE_KEYS.some((key) =>
     Object.prototype.hasOwnProperty.call(version.features || {}, key))
   if (!hasAnyBundleKey && !body.force) {
