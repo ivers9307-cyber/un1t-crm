@@ -13,6 +13,7 @@
 // route handlers stay the only place that constructs one.
 
 import { METER_KEYS } from '@shared/plans'
+import { BUNDLE_KEYS } from '@shared/permission-bundles'
 import { dublinTodayStr } from '@/lib/dublin-time'
 
 /**
@@ -147,4 +148,115 @@ export async function getLocationPlan(db, locationId) {
     })),
     resolved: resolveAllowances(tierVersion, addonVersions),
   }
+}
+
+// ============================================================
+// BUNDLES.5 Task 3 — plan → locations.features bundle mirror.
+//
+// shared/plans.js FEATURE_KEYS now includes the 7 hub bundles +
+// module_cars (BUNDLE_KEYS, shared/permission-bundles.js) alongside
+// ai_agent/custom_email_domain, so a plan version can grant/withhold
+// whole bundles. This is the write-side mirror: whenever a location's
+// plan pin CHANGES (assign or unassign — see
+// src/app/api/admin/tenants/[orgId]/plans/route.js), the plan's
+// resolved bundle grants get copied onto locations.features using the
+// SAME deny-by-explicit-false polarity the bundle layer already uses
+// everywhere else (shared/permission-bundles.js bundlesDenyKey).
+//
+// getLocationPlan() is READ-ONLY and NOT itself in any permission
+// path (see its own header comment) — the resolver
+// (isFeatureEnabledAtLocation) only ever reads locations.features
+// directly. This mirror is what makes a plan's bundle grants actually
+// take effect: it is the ONE write path that turns "the location is
+// pinned to a plan that includes bundle_sales" into
+// "locations.features.bundle_sales is not explicitly false".
+// ============================================================
+
+/**
+ * Pure polarity adapter: given a location's CURRENT features blob and
+ * the bundle-relevant features a plan resolves to, return the next
+ * features blob to write.
+ *
+ * - `planFeatures === null` means "no active plan pin" (getLocationPlan
+ *   returned null — the documented "no plan constraints, behave
+ *   exactly as before plans existed" contract, which is still exactly
+ *   right for a location that was NEVER pinned). BUNDLES.5
+ *   final-review fix 3: this does NOT mean "reopen every bundle".
+ *   Unassigning a plan (or simply being unpinned) STOPS the plan
+ *   mechanism from applying — it does not undo whatever bundle state
+ *   the location is currently in. Every existing BUNDLE_KEYS entry is
+ *   left exactly as it is (fail-closed: a denial a prior pin left
+ *   behind survives the unpin); an operator who wants a bundle back on
+ *   flips it by hand on Location Features. A never-pinned location's
+ *   `{}` is likewise untouched, so back-compat is unaffected.
+ * - Otherwise (a plan IS pinned), per BUNDLE_KEYS: `planFeatures[key]
+ *   === true` (the plan GRANTS the bundle) → the key is REMOVED from
+ *   locations.features (back to default-on, same as any other unset
+ *   feature); anything else (absent, or explicitly false) → the plan
+ *   does NOT grant it, so locations.features[key] is set to explicit
+ *   `false` (denied).
+ *
+ * Every non-bundle key already on the location (fine-grained
+ * WEB/MOBILE_PERMISSIONS overrides an operator set by hand) passes
+ * through untouched either way — this function only ever touches
+ * BUNDLE_KEYS, and only when a plan is actually pinned.
+ *
+ * @param {object|null|undefined} currentFeatures  location.features
+ * @param {object|null} planFeatures  plan.resolved.features, or null for "unpinned"
+ * @returns {object} the next locations.features blob
+ */
+export function mirrorBundleFeatures(currentFeatures, planFeatures) {
+  const next = { ...(currentFeatures || {}) }
+  if (planFeatures === null) {
+    // Fail-closed: no plan pinned right now → don't touch bundle
+    // overrides at all, in either direction. See the header comment.
+    return next
+  }
+  for (const bundleKey of BUNDLE_KEYS) {
+    if (planFeatures?.[bundleKey] === true) {
+      delete next[bundleKey]
+    } else {
+      next[bundleKey] = false
+    }
+  }
+  return next
+}
+
+/**
+ * Orchestration: re-derive a location's bundle mirror from its CURRENT
+ * plan pin state and write it. Call this after every write to
+ * location_plans (assign or unassign) for the affected location — see
+ * src/app/api/admin/tenants/[orgId]/plans/route.js.
+ *
+ * On ASSIGN, this applies the newly-pinned plan's bundle grants.
+ * On UNASSIGN (no active tier left → getLocationPlan returns null),
+ * this is a fail-closed no-op on the bundle keys themselves — see
+ * mirrorBundleFeatures's header comment. The write still happens (it
+ * writes the SAME features blob back), which is harmless; what matters
+ * is that no bundle_x entry changes value.
+ *
+ * @param {object} db - service-role client
+ * @param {string} locationId
+ * @returns {Promise<object>} the features blob that was written
+ */
+export async function applyPlanBundlesToLocation(db, locationId) {
+  const plan = await getLocationPlan(db, locationId)
+  const planFeatures = plan ? plan.resolved.features : null
+
+  const { data: loc, error: locErr } = await db
+    .from('locations')
+    .select('features')
+    .eq('id', locationId)
+    .maybeSingle()
+  if (locErr) throw new Error(`applyPlanBundlesToLocation: ${locErr.message}`)
+
+  const nextFeatures = mirrorBundleFeatures(loc?.features, planFeatures)
+
+  const { error: updErr } = await db
+    .from('locations')
+    .update({ features: nextFeatures, updated_at: new Date().toISOString() })
+    .eq('id', locationId)
+  if (updErr) throw new Error(`applyPlanBundlesToLocation: ${updErr.message}`)
+
+  return nextFeatures
 }

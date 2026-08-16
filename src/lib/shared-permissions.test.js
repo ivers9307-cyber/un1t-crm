@@ -22,11 +22,13 @@ import {
   isFeatureEnabledAtLocation,
   isFeatureGatedByLocation,
   NOTIFY_KEYS,
+  APPROVAL_SUBPERMISSION_KEYS,
   LANDING_PREFERENCE_VALUES,
   LANDING_PREFERENCE_TARGETS,
   resolveLandingPreference,
 } from '@shared/permissions'
 import { hasPermission, hasMobilePermission } from './permissions.js'
+import { CORE_KEYS } from '@shared/permission-bundles'
 
 // Derived from the defaults map, NEVER hardcoded. A hardcoded list
 // (['owner','manager','head_coach','staff']) silently left `master` and
@@ -156,6 +158,89 @@ describe('per-location feature gate (isFeatureEnabledAtLocation)', () => {
       // Even an explicit false in the location map is ignored for notify_*
       expect(isFeatureEnabledAtLocation({ features: { [k]: false } }, k)).toBe(true)
     }
+  })
+})
+
+// BUNDLES.5 Task 1 — isFeatureEnabledAtLocation now ORs in
+// bundlesDenyKey(features, key) on top of the existing individual-key
+// check: `features[key] !== false && !bundlesDenyKey(features, key)`.
+describe('per-location feature gate — bundle layer (BUNDLES.5)', () => {
+  it('denies a bundled key when its owning bundle is explicitly false, even with no individual-key false', () => {
+    expect(isFeatureEnabledAtLocation({ features: { bundle_sales: false } }, 'pipeline')).toBe(false)
+  })
+
+  it('does not deny a bundled key when its owning bundle is true or unset', () => {
+    expect(isFeatureEnabledAtLocation({ features: { bundle_sales: true } }, 'pipeline')).toBe(true)
+    expect(isFeatureEnabledAtLocation({ features: {} }, 'pipeline')).toBe(true)
+  })
+
+  it('OR semantics: a key owned by two bundles survives if only one is off', () => {
+    // `email` is owned by both bundle_messaging and bundle_marketing.
+    expect(isFeatureEnabledAtLocation({ features: { bundle_messaging: false, bundle_marketing: true } }, 'email')).toBe(true)
+    expect(isFeatureEnabledAtLocation({ features: { bundle_messaging: false, bundle_marketing: false } }, 'email')).toBe(false)
+  })
+
+  it('an individual-key false still denies even when every owning bundle is true (existing exception mechanism, unaffected)', () => {
+    expect(isFeatureEnabledAtLocation({ features: { pipeline: false, bundle_sales: true } }, 'pipeline')).toBe(false)
+  })
+
+  it('CORE keys (settings, dashboards, issues_inbox, approvals_inbox, …) are never denied by any bundle', () => {
+    for (const key of CORE_KEYS) {
+      expect(isFeatureEnabledAtLocation({
+        features: { bundle_sales: false, bundle_members: false, bundle_money: false, bundle_messaging: false, bundle_marketing: false, bundle_team: false, bundle_operations: false, module_cars: false },
+      }, key)).toBe(true)
+    }
+  })
+
+  // BUNDLES.5 final-review fix 1 (the "Money chrome leak"): approvals_*
+  // keys are exempt from THEIR OWN per-key toggle, but now follow their
+  // owning CATEGORY's bundle (shared/permissions.js
+  // APPROVAL_CATEGORY_PERMISSION → shared/permission-bundles.js
+  // CATEGORY_BUNDLES), via the same mechanism Task 2 wired into the
+  // approvals registry. Replaces the old "stay exempt from the bundle
+  // layer too" test, which was the bug: it asserted the leak as
+  // correct behaviour.
+  describe('approvals_* keys: per-key exempt, category-bundle-followed', () => {
+    it('an individual approvals_* key toggle (features["approvals_x"] = false) does NOTHING — still per-key exempt', () => {
+      for (const key of APPROVAL_SUBPERMISSION_KEYS) {
+        expect(isFeatureEnabledAtLocation({ features: { [key]: false } }, key), key).toBe(true)
+      }
+    })
+
+    it('every bundle owning the key\'s category off DOES deny it now', () => {
+      // contractor_invoices / fte_expenses / offer_purchases → bundle_money
+      expect(isFeatureEnabledAtLocation({ features: { bundle_money: false } }, 'approvals_contractor_invoices')).toBe(false)
+      expect(isFeatureEnabledAtLocation({ features: { bundle_money: false } }, 'approvals_fte_expenses')).toBe(false)
+      expect(isFeatureEnabledAtLocation({ features: { bundle_money: false } }, 'approvals_offer_purchases')).toBe(false)
+      // time_off / shift_swaps / rosters → bundle_team
+      expect(isFeatureEnabledAtLocation({ features: { bundle_team: false } }, 'approvals_time_off')).toBe(false)
+      expect(isFeatureEnabledAtLocation({ features: { bundle_team: false } }, 'approvals_shift_swaps')).toBe(false)
+      expect(isFeatureEnabledAtLocation({ features: { bundle_team: false } }, 'approvals_rosters')).toBe(false)
+      // hyrox_sessions → bundle_members
+      expect(isFeatureEnabledAtLocation({ features: { bundle_members: false } }, 'approvals_hyrox_sessions')).toBe(false)
+      // agent_requests → bundle_sales OR bundle_members (OR semantics)
+      expect(isFeatureEnabledAtLocation({ features: { bundle_sales: false, bundle_members: true } }, 'approvals_agent_requests')).toBe(true)
+      expect(isFeatureEnabledAtLocation({ features: { bundle_sales: false, bundle_members: false } }, 'approvals_agent_requests')).toBe(false)
+    })
+
+    it('the individual-key exemption and the category-bundle check are independent — {} (bundle on) always enables regardless of the (never-consulted) individual key', () => {
+      for (const key of APPROVAL_SUBPERMISSION_KEYS) {
+        expect(isFeatureEnabledAtLocation({ features: {} }, key), key).toBe(true)
+      }
+    })
+
+    it('every bundle off (every category loses its owner) denies all 8 approvals_* keys', () => {
+      const features = { bundle_sales: false, bundle_members: false, bundle_money: false, bundle_messaging: false, bundle_marketing: false, bundle_team: false, bundle_operations: false, module_cars: false }
+      for (const key of APPROVAL_SUBPERMISSION_KEYS) {
+        expect(isFeatureEnabledAtLocation({ features }, key), key).toBe(false)
+      }
+    })
+  })
+
+  it('{} (every existing location today) still means everything on — back-compat is sacred', () => {
+    expect(isFeatureEnabledAtLocation({ features: {} }, 'pipeline')).toBe(true)
+    expect(isFeatureEnabledAtLocation({ features: {} }, 'car_processing')).toBe(true)
+    expect(isFeatureEnabledAtLocation({ features: {} }, 'settings')).toBe(true)
   })
 })
 

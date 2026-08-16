@@ -32,7 +32,7 @@ import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody, uuidLike } from '@/lib/validate'
-import { getActivePlanVersion } from '@/lib/plans'
+import { getActivePlanVersion, applyPlanBundlesToLocation } from '@/lib/plans'
 import { PLAN_KINDS } from '@shared/plans'
 
 export const runtime = 'nodejs'
@@ -200,6 +200,9 @@ export async function POST(request, props) {
       versionId: version.id,
       userId: user.id,
     })
+    // BUNDLES.5 Task 3 — re-derive + write the location's bundle
+    // mirror from its now-current plan pin state (src/lib/plans.js).
+    await applyPlanBundlesToLocation(db, body.location_id)
     return NextResponse.json({
       success: true,
       data: {
@@ -249,6 +252,21 @@ export async function DELETE(request, props) {
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   if (!rows || rows.length === 0) {
     return NextResponse.json({ success: false, error: 'No such pin for this location.' }, { status: 404 })
+  }
+
+  // BUNDLES.5 Task 3 — re-derive + write the location's bundle mirror.
+  // Unassigning the active tier leaves the location with no active tier
+  // row, so getLocationPlan() returns null. Final-review fix 3: this is
+  // fail-closed, NOT "no plan constraints" — applyPlanBundlesToLocation
+  // leaves every existing bundle_x override exactly as it is (a denial
+  // a prior pin left behind survives the unpin). Unassigning a plan
+  // stops the plan mechanism; it does not reopen features an operator
+  // (or the plan) had explicitly turned off — see that function's
+  // header comment.
+  try {
+    await applyPlanBundlesToLocation(db, location_id)
+  } catch (e) {
+    return NextResponse.json({ success: false, error: e.message }, { status: 400 })
   }
 
   return NextResponse.json({

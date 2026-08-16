@@ -213,4 +213,30 @@ describe('/money index page', () => {
     getCurrentUser.mockResolvedValue(u)
     await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/schedule/invoices')
   })
+
+  // BUNDLES.5 final-review fix 1 — the "Money chrome leak". Before this
+  // fix, approvals_contractor_invoices/approvals_fte_expenses/
+  // approvals_offer_purchases were fully exempt from the bundle layer
+  // (not just from their own per-key toggle), so this exact fixture —
+  // every one of the seven gate keys granted — still landed in-hub at
+  // /accounting even at bundle_money: false. Now bundle_money: false
+  // denies all seven (the three approvals_* keys via their category,
+  // shared/permissions.js APPROVAL_CATEGORY_PERMISSION → bundle_money),
+  // so Money has nowhere left to redirect to.
+  it('redirects to / when bundle_money is explicitly false, even with all seven Money gate keys granted', async () => {
+    const u = user({
+      perms: {
+        accounting_hub: true,
+        invoices_inbox: true,
+        card_receipts: true,
+        orders: true,
+        approvals_contractor_invoices: true,
+        approvals_fte_expenses: true,
+        approvals_offer_purchases: true,
+      },
+    })
+    u.activeLocation = { id: 'loc1', features: { bundle_money: false } }
+    getCurrentUser.mockResolvedValue(u)
+    await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/')
+  })
 })

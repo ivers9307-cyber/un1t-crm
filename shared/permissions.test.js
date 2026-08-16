@@ -77,6 +77,40 @@ describe('resolvePermission — tier 1 (location gate)', () => {
   })
 })
 
+describe('resolvePermission — tier 1 (bundle layer, BUNDLES.5)', () => {
+  it('returns false when the owning bundle is explicitly disabled, even for master', () => {
+    // Tier 1 applies to every role including master — same as the
+    // existing individual-key location gate above.
+    expect(resolvePermission({
+      role: 'master',
+      location: { features: { bundle_sales: false } },
+      permissions: null,
+      defaults: DEFAULT_WEB_PERMISSIONS_BY_ROLE,
+      key: 'pipeline',
+    })).toBe(false)
+  })
+
+  it('a bundle-off location still lets master through for a CORE key (settings)', () => {
+    expect(resolvePermission({
+      role: 'master',
+      location: { features: { bundle_sales: false, bundle_team: false, bundle_money: false } },
+      permissions: null,
+      defaults: DEFAULT_WEB_PERMISSIONS_BY_ROLE,
+      key: 'settings',
+    })).toBe(true)
+  })
+
+  it('does NOT bundle-gate notification keys (notify_*) — exempt at tier 1 same as the individual-key gate', () => {
+    expect(resolvePermission({
+      role: 'staff',
+      location: { features: { bundle_team: false } },
+      permissions: { notify_swap: true },
+      defaults: DEFAULT_MOBILE_PERMISSIONS_BY_ROLE,
+      key: 'notify_swap',
+    })).toBe(true)
+  })
+})
+
 describe('resolvePermission — tier 2 (per-user override)', () => {
   it('explicit true in the bag wins over the role default', () => {
     expect(resolvePermission({

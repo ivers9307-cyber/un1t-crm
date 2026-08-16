@@ -57,6 +57,7 @@ import { hyroxSessionsProvider } from './providers/hyrox-sessions'
 import { hostEventsProvider } from './providers/host-events'
 import { offerPurchasesProvider } from './providers/offer-purchases'
 import { hasPermission } from '@/lib/permissions'
+import { bundlesDenyCategory } from '@shared/permission-bundles'
 
 export const APPROVALS_PROVIDERS = Object.freeze([
   // BOOKKEEPER-APPROVALS.1 — invoices_queue tab first so bookkeepers
@@ -85,6 +86,48 @@ export const APPROVALS_PROVIDERS = Object.freeze([
   offerPurchasesProvider,
 ])
 
+// BUNDLES.5 Task 2 — is this provider visible to `user`, combining the
+// existing per-user grant check with the bundle-layer check?
+//
+// The permissionKey / isVisible() check above is a pure per-user GRANT
+// (hasPermission on an EXEMPT_KEYS permission — see
+// shared/permission-bundles.js — never PER-KEY location-gated). That
+// used to mean a bundle-off location had no effect here at all: the
+// grant alone decided visibility (the parked HOME.3 decision).
+// bundlesDenyCategory() is a SEPARATE, independent check against
+// shared/permission-bundles.js's CATEGORY_BUNDLES map, applied on top
+// — a category is hidden if EITHER the per-user grant is missing OR
+// its owning bundle(s) are all explicitly off. A category with no
+// bundle mapping (`issues` — mirrors the core `issues_inbox` key) is
+// never denied by this check.
+//
+// BUNDLES.5 final-review fix 1 — for the 7 providers whose
+// `permissionKey` is one of the 8 `approvals_*` keys, `hasPermission()`
+// above now ALSO runs this exact same category-bundle check internally
+// (shared/permissions.js isFeatureEnabledAtLocation, fixed to close a
+// Money-hub chrome leak: nav/tabs/redirect-chain call sites weren't
+// running through this registry and so weren't getting
+// bundlesDenyCategory's protection at all). So for those providers the
+// `bundlesDenyCategory()` line below is now a HARMLESS DOUBLE-APPLICATION
+// of the same rule `granted` already encodes — kept rather than removed
+// because (a) `invoicesQueueProvider`/`issuesProvider` have no
+// permissionKey and rely on this line as their ONLY bundle check, and
+// (b) a single shared gate here is simpler to reason about than
+// special-casing which providers still need it.
+//
+// Single implementation shared by getPendingApprovals AND
+// getPendingApprovalsCount so the two can't drift the way the
+// pre-BUNDLES.5 duplicated filter blocks could have.
+function isProviderVisible(p, user) {
+  // APPROVALS-PERCAT.1 — category providers gate on their permissionKey;
+  // providers without one keep their isVisible() gate (invoices_queue, issues).
+  const granted = p.permissionKey
+    ? hasPermission(user, p.permissionKey)
+    : (typeof p.isVisible !== 'function' || p.isVisible(user))
+  if (!granted) return false
+  return !bundlesDenyCategory(user?.activeLocation?.features, p.key)
+}
+
 /**
  * Fetch pending approvals across every registered provider in
  * parallel. Returns an object keyed by provider.key plus a `total`
@@ -95,14 +138,9 @@ export const APPROVALS_PROVIDERS = Object.freeze([
  * @returns {Promise<{ providers: Array<{key, label, count, items, reviewBase}>, total: number }>}
  */
 export async function getPendingApprovals(db, user) {
-  // BOOKKEEPER-APPROVALS.1 — apply isVisible() filter first so
+  // BOOKKEEPER-APPROVALS.1 — apply the visibility filter first so
   // hidden providers don't even fire their query.
-  const visible = APPROVALS_PROVIDERS.filter((p) => {
-    // APPROVALS-PERCAT.1 — category providers gate on their permissionKey;
-    // providers without one keep their isVisible() gate (invoices_queue, issues).
-    if (p.permissionKey) return hasPermission(user, p.permissionKey)
-    return typeof p.isVisible !== 'function' || p.isVisible(user)
-  })
+  const visible = APPROVALS_PROVIDERS.filter((p) => isProviderVisible(p, user))
 
   const settled = await Promise.allSettled(
     visible.map(async (p) => {
@@ -137,14 +175,9 @@ export async function getPendingApprovals(db, user) {
  * fetchPending + read .count off the result.
  */
 export async function getPendingApprovalsCount(db, user) {
-  // Mirror the isVisible() filter from getPendingApprovals so the
+  // Mirror the visibility filter from getPendingApprovals so the
   // sidebar badge matches what the inbox renders.
-  const visible = APPROVALS_PROVIDERS.filter((p) => {
-    // APPROVALS-PERCAT.1 — category providers gate on their permissionKey;
-    // providers without one keep their isVisible() gate (invoices_queue, issues).
-    if (p.permissionKey) return hasPermission(user, p.permissionKey)
-    return typeof p.isVisible !== 'function' || p.isVisible(user)
-  })
+  const visible = APPROVALS_PROVIDERS.filter((p) => isProviderVisible(p, user))
   const settled = await Promise.allSettled(
     visible.map(async (p) => {
       if (typeof p.countPending === 'function') {

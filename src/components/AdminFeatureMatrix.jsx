@@ -13,25 +13,40 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Building2, Check, AlertCircle } from 'lucide-react'
-import { WEB_PERMISSIONS, MOBILE_PERMISSIONS, isFeatureGatedByLocation } from '@shared/permissions'
+import { Building2, Check, AlertCircle, LayoutGrid } from 'lucide-react'
+import { WEB_PERMISSIONS, MOBILE_PERMISSIONS, isFeatureGatedByLocation, isFeatureEnabledAtLocation } from '@shared/permissions'
+import { BUNDLE_KEYS, BUNDLE_LABELS } from '@shared/permission-bundles'
+import { nextRawFeatureValue, isBundleDenied, bundleDenialNote } from '@/lib/feature-toggle-ui'
 
-// Mirror of isFeatureEnabledAtLocation in shared/permissions.js —
-// keep inline for self-containment so the table doesn't crash if
-// the helper signature shifts.
+// BUNDLES.5 — was a hand-rolled mirror of isFeatureEnabledAtLocation's
+// polarity; now calls the real helper (same reasoning as
+// LocationFeatures.jsx) so the matrix can't drift from the resolver,
+// and correctly reflects bundle denial for bundle-owned keys too. This
+// is the DISPLAY value only — what a click WRITES is a separate
+// question, see nextRawFeatureValue below (final-review fix 2).
 function isOn(features, key) {
-  return features?.[key] !== false
+  return isFeatureEnabledAtLocation({ features }, key)
 }
 
-function ToggleCell({ on, busy, onClick }) {
+// The 8 bundle "features" as {key, label} entries — shaped like a
+// WEB_PERMISSIONS/MOBILE_PERMISSIONS entry so FeatureSection can
+// render them with no special-casing.
+const BUNDLE_FEATURES = BUNDLE_KEYS.map((key) => ({ key, label: BUNDLE_LABELS[key] }))
+
+function ToggleCell({ on, busy, onClick, disabled, deniedNote, locationName, label }) {
+  const isDisabled = busy || disabled
+  const title = deniedNote
+    ? `${deniedNote} — flip the bundle to change this`
+    : (on ? 'Enabled — click to disable' : 'Disabled — click to enable')
   return (
     <button
       type="button"
       onClick={onClick}
-      disabled={busy}
+      disabled={isDisabled}
       className={`shrink-0 w-8 h-4 rounded-full transition-colors disabled:opacity-40 ${on ? 'bg-green-500' : 'bg-un1t-border'}`}
       aria-pressed={on}
-      title={on ? 'Enabled — click to disable' : 'Disabled — click to enable'}
+      aria-label={`${locationName} — ${label} toggle`}
+      title={title}
     >
       <div className={`w-3 h-3 rounded-full bg-white transition-transform ${on ? 'translate-x-4' : 'translate-x-0.5'}`} />
     </button>
@@ -53,6 +68,11 @@ export default function AdminFeatureMatrix({ organizations, locationsByOrg }) {
   const [busyCell, setBusyCell] = useState(null)        // `${locationId}::${featureKey}`
   const [error, setError] = useState(null)
   const [savedAt, setSavedAt] = useState(null)
+  // BUNDLES.5 Task 3 — the matrix defaults to a bundles-only view (8
+  // columns, one per hub/module) rather than the full ~35-key
+  // fine-grained grid; a master flips this to audit/adjust individual
+  // keys when the 8 bundle toggles aren't enough.
+  const [showAdvanced, setShowAdvanced] = useState(false)
 
   // Filter to location-gated features only — notification preferences
   // are personal and don't belong on a location-scoped matrix.
@@ -65,7 +85,12 @@ export default function AdminFeatureMatrix({ organizations, locationsByOrg }) {
     setError(null)
 
     const current = featuresByLoc[locationId] || {}
-    const next = { ...current, [featureKey]: !isOn(current, featureKey) }
+    // BUNDLES.5 final-review fix 2 — write the RAW flip, never the
+    // bundle-aware composite (`isOn`) — see LocationFeatures.jsx's
+    // toggle() for the full reasoning (same bug, same fix, shared
+    // helper). Bundle-denied cells are also rendered disabled below, so
+    // this path isn't normally reachable for them — belt and braces.
+    const next = { ...current, [featureKey]: nextRawFeatureValue(current, featureKey) }
 
     // Optimistic update — revert on failure. Save goes through the
     // master-only endpoint so the policy is enforced server-side
@@ -95,6 +120,22 @@ export default function AdminFeatureMatrix({ organizations, locationsByOrg }) {
 
   return (
     <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
+      <div className="flex items-center justify-between mb-3 gap-3">
+        <p className="text-xs text-un1t-subtle">
+          {showAdvanced
+            ? 'Showing bundles + every fine-grained key.'
+            : 'Showing bundles only — the 8 flags that gate a whole hub (or module) at once.'}
+        </p>
+        <button
+          type="button"
+          onClick={() => setShowAdvanced(v => !v)}
+          className="shrink-0 inline-flex items-center gap-1.5 text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border rounded-md px-2.5 py-1"
+        >
+          <LayoutGrid size={12} />
+          {showAdvanced ? 'Show bundles only' : 'Show all feature keys'}
+        </button>
+      </div>
+
       {error && (
         <div className="mb-3 bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2 flex items-start gap-2">
           <AlertCircle size={12} className="mt-0.5" /> {error}
@@ -107,8 +148,8 @@ export default function AdminFeatureMatrix({ organizations, locationsByOrg }) {
       )}
 
       <FeatureSection
-        title="Web features"
-        features={webFeatures}
+        title="Bundles"
+        features={BUNDLE_FEATURES}
         organizations={organizations}
         locationsByOrg={locationsByOrg}
         featuresByLoc={featuresByLoc}
@@ -116,17 +157,33 @@ export default function AdminFeatureMatrix({ organizations, locationsByOrg }) {
         onToggle={toggle}
       />
 
-      <div className="h-6" />
+      {showAdvanced && (
+        <>
+          <div className="h-6" />
 
-      <FeatureSection
-        title="Mobile features"
-        features={mobileFeatures}
-        organizations={organizations}
-        locationsByOrg={locationsByOrg}
-        featuresByLoc={featuresByLoc}
-        busyCell={busyCell}
-        onToggle={toggle}
-      />
+          <FeatureSection
+            title="Web features"
+            features={webFeatures}
+            organizations={organizations}
+            locationsByOrg={locationsByOrg}
+            featuresByLoc={featuresByLoc}
+            busyCell={busyCell}
+            onToggle={toggle}
+          />
+
+          <div className="h-6" />
+
+          <FeatureSection
+            title="Mobile features"
+            features={mobileFeatures}
+            organizations={organizations}
+            locationsByOrg={locationsByOrg}
+            featuresByLoc={featuresByLoc}
+            busyCell={busyCell}
+            onToggle={toggle}
+          />
+        </>
+      )}
     </div>
   )
 }
@@ -208,13 +265,19 @@ function FeatureOrgRows({ org, locations, features, featuresByLoc, busyCell, onT
           </td>
           {features.map(f => {
             const cellKey = `${loc.id}::${f.key}`
-            const on = (featuresByLoc[loc.id]?.[f.key]) !== false
+            const locFeatures = featuresByLoc[loc.id]
+            const on = isOn(locFeatures, f.key)
+            const denied = isBundleDenied(locFeatures, f.key)
             return (
               <td key={f.key} className="px-2 py-1.5">
                 <ToggleCell
                   on={on}
                   busy={busyCell === cellKey}
                   onClick={() => onToggle(loc.id, f.key)}
+                  disabled={denied}
+                  deniedNote={denied ? bundleDenialNote(f.key) : null}
+                  locationName={loc.name}
+                  label={f.label}
                 />
               </td>
             )

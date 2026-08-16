@@ -14,6 +14,7 @@ import {
   getPendingApprovalsCount,
   getPendingApprovals,
 } from './registry'
+import { CATEGORY_BUNDLES } from '@shared/permission-bundles'
 
 describe('APPROVALS_PROVIDERS', () => {
   it('every provider declares the required surface', () => {
@@ -161,6 +162,137 @@ describe('registry per-category gating', () => {
     const keys = providers.map((p) => p.key)
     for (const k of ['contractor_invoices', 'fte_expenses', 'agent_requests', 'time_off', 'shift_swaps', 'rosters']) {
       expect(keys).toContain(k)
+    }
+  })
+})
+
+// BUNDLES.5 Task 2 — approval categories follow their owning bundle.
+//
+// CLOSES the parked HOME.3 decision: the per-category permissionKey
+// check above (hasPermission) is a pure per-user GRANT — the 8
+// approvals_* keys are explicitly EXEMPT from shared/permissions.js's
+// own location gate (isFeatureGatedByLocation), so an owner who holds
+// the grant used to see the tab regardless of what the location's
+// bundles said. These tests prove the registry now applies its OWN,
+// independent bundle check on top of the grant, and that the Home
+// queue (src/lib/home-queue.js) inherits it for free — it calls these
+// exact same getPendingApprovals/getPendingApprovalsCount functions,
+// so there is no second gate to patch.
+describe('registry per-category gating — bundle layer (BUNDLES.5 Task 2)', () => {
+  const db = {
+    from() { return this },
+    select() { return this },
+    eq() { return this },
+    in() { return this },
+    order() { return this },
+    is() { return this },
+    then(res) { return Promise.resolve({ data: [], count: 0, error: null }).then(res) },
+  }
+
+  function user(role, { perms = {}, features = {} } = {}) {
+    return {
+      role,
+      activeLocation: { id: 'loc1', features },
+      activeAssignment: { permissions: perms },
+      activeRoleTemplate: null,
+      rolesByLocation: { loc1: role },
+    }
+  }
+
+  it('CATEGORY_BUNDLES covers every provider except the core-exempt "issues" category', () => {
+    const categoryKeys = APPROVALS_PROVIDERS.map((p) => p.key)
+    const mapped = Object.keys(CATEGORY_BUNDLES)
+    expect(mapped.sort()).toEqual(categoryKeys.filter((k) => k !== 'issues').sort())
+  })
+
+  it('an owner stops seeing contractor_invoices / fte_expenses / offer_purchases when bundle_money is explicitly off', async () => {
+    const { providers } = await getPendingApprovals(db, user('owner', { features: { bundle_money: false } }))
+    const keys = providers.map((p) => p.key)
+    expect(keys).not.toContain('contractor_invoices')
+    expect(keys).not.toContain('fte_expenses')
+    expect(keys).not.toContain('offer_purchases')
+  })
+
+  it('the same owner sees them again once bundle_money is unset ({}) — back-compat', async () => {
+    const { providers } = await getPendingApprovals(db, user('owner', { features: {} }))
+    const keys = providers.map((p) => p.key)
+    expect(keys).toContain('contractor_invoices')
+    expect(keys).toContain('fte_expenses')
+  })
+
+  it('a master bookkeeper stops seeing the invoices_queue tab when bundle_money is explicitly off (grant alone used to be enough)', async () => {
+    // invoices_queue is isVisible()-gated on the bookkeeper key, not a
+    // permissionKey — master qualifies via userIsMaster() with no
+    // per-user override needed, isolating this to the bundle check.
+    const off = await getPendingApprovals(db, user('master', { features: { bundle_money: false } }))
+    expect(off.providers.map((p) => p.key)).not.toContain('invoices_queue')
+
+    const on = await getPendingApprovals(db, user('master', { features: {} }))
+    expect(on.providers.map((p) => p.key)).toContain('invoices_queue')
+  })
+
+  it('time_off / shift_swaps / rosters follow bundle_team', async () => {
+    const off = await getPendingApprovals(db, user('owner', { features: { bundle_team: false } }))
+    const offKeys = off.providers.map((p) => p.key)
+    expect(offKeys).not.toContain('time_off')
+    expect(offKeys).not.toContain('shift_swaps')
+    expect(offKeys).not.toContain('rosters')
+
+    const on = await getPendingApprovals(db, user('owner', { features: { bundle_team: true } }))
+    const onKeys = on.providers.map((p) => p.key)
+    expect(onKeys).toContain('time_off')
+    expect(onKeys).toContain('shift_swaps')
+    expect(onKeys).toContain('rosters')
+  })
+
+  it('hyrox_sessions follows bundle_members', async () => {
+    const off = await getPendingApprovals(db, user('owner', { features: { bundle_members: false } }))
+    expect(off.providers.map((p) => p.key)).not.toContain('hyrox_sessions')
+  })
+
+  it('host_events follows bundle_members', async () => {
+    const off = await getPendingApprovals(db, user('owner', { features: { bundle_members: false } }))
+    expect(off.providers.map((p) => p.key)).not.toContain('host_events')
+  })
+
+  it('agent_requests — OR semantics across its two owning bundles (bundle_sales + bundle_members)', async () => {
+    // Only one owning bundle off → still visible.
+    const salesOff = await getPendingApprovals(db, user('owner', { features: { bundle_sales: false, bundle_members: true } }))
+    expect(salesOff.providers.map((p) => p.key)).toContain('agent_requests')
+
+    const membersOff = await getPendingApprovals(db, user('owner', { features: { bundle_sales: true, bundle_members: false } }))
+    expect(membersOff.providers.map((p) => p.key)).toContain('agent_requests')
+
+    // BOTH owning bundles off → denied.
+    const bothOff = await getPendingApprovals(db, user('owner', { features: { bundle_sales: false, bundle_members: false } }))
+    expect(bothOff.providers.map((p) => p.key)).not.toContain('agent_requests')
+  })
+
+  it('the "issues" category is exempt from the bundle layer (core, mirrors issues_inbox) — visible even with every bundle off', async () => {
+    const everyBundleOff = {
+      bundle_sales: false, bundle_members: false, bundle_money: false,
+      bundle_messaging: false, bundle_marketing: false, bundle_team: false,
+      bundle_operations: false, module_cars: false,
+    }
+    const { providers } = await getPendingApprovals(db, user('owner', { features: everyBundleOff }))
+    expect(providers.map((p) => p.key)).toContain('issues')
+  })
+
+  it('getPendingApprovalsCount applies the same bundle gate as getPendingApprovals (no second, un-patched filter)', async () => {
+    // Shim contractor_invoices' countPending so the total is
+    // observable — the stub db always resolves count:0, so without
+    // this the assertion would be vacuously true regardless of
+    // whether the fix actually applies to the count path too.
+    const provider = APPROVALS_PROVIDERS.find((p) => p.key === 'contractor_invoices')
+    const original = provider.countPending
+    provider.countPending = async () => 5
+    try {
+      const withMoney = await getPendingApprovalsCount(db, user('owner', { features: {} }))
+      const withoutMoney = await getPendingApprovalsCount(db, user('owner', { features: { bundle_money: false } }))
+      expect(withMoney).toBeGreaterThanOrEqual(5)
+      expect(withoutMoney).toBe(withMoney - 5)
+    } finally {
+      provider.countPending = original
     }
   })
 })

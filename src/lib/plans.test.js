@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest'
-import { pickActiveVersion, resolveAllowances } from './plans.js'
+import { describe, it, expect, vi } from 'vitest'
+import { pickActiveVersion, resolveAllowances, mirrorBundleFeatures, applyPlanBundlesToLocation } from './plans.js'
+import { BUNDLE_KEYS } from '@shared/permission-bundles'
 
 const v = (effective_from, extra = {}) => ({ effective_from, ...extra })
 
@@ -93,5 +94,203 @@ describe('resolveAllowances', () => {
     )
     expect(r.allowances.mystery_meter).toBeUndefined()
     expect(r.allowances.email_send).toBe(10)
+  })
+})
+
+// BUNDLES.5 Task 3 — the plan → locations.features bundle mirror.
+describe('mirrorBundleFeatures', () => {
+  it('a bundle the plan grants (=== true) is REMOVED from features — back to default-on', () => {
+    const next = mirrorBundleFeatures({ bundle_sales: false }, { bundle_sales: true })
+    expect('bundle_sales' in next).toBe(false)
+  })
+
+  it('a bundle absent from the plan features is set explicitly false', () => {
+    const next = mirrorBundleFeatures({}, { bundle_sales: true })
+    expect(next.bundle_money).toBe(false)
+  })
+
+  it('a bundle explicitly false in the plan features is set explicitly false (same as absent)', () => {
+    const next = mirrorBundleFeatures({}, { bundle_money: false })
+    expect(next.bundle_money).toBe(false)
+  })
+
+  it('covers every BUNDLE_KEYS entry, granting exactly the ones the plan lists true', () => {
+    const planFeatures = { bundle_messaging: true, bundle_sales: true, bundle_members: true, ai_agent: true }
+    const next = mirrorBundleFeatures({}, planFeatures)
+    for (const key of BUNDLE_KEYS) {
+      if (['bundle_messaging', 'bundle_sales', 'bundle_members'].includes(key)) {
+        expect(key in next, key).toBe(false)
+      } else {
+        expect(next[key], key).toBe(false)
+      }
+    }
+    // Non-bundle plan feature keys (ai_agent) are none of this
+    // function's business — never copied onto locations.features.
+    expect('ai_agent' in next).toBe(false)
+  })
+
+  // BUNDLES.5 final-review fix 3 — unpinning STOPS the plan, it does not
+  // reopen features. Replaces the old "removes EVERY bundle override"
+  // test, which was fail-OPEN: it silently re-granted every bundle a
+  // prior plan pin (or an operator) had explicitly denied, the moment
+  // the location's tier was unassigned. Fail-closed instead: every
+  // existing bundle_x entry (denied or granted-by-absence) survives an
+  // unpin completely unchanged; an operator who wants bundles back on
+  // flips them by hand on Location Features.
+  it('planFeatures === null (unpinned) leaves EVERY existing bundle override UNCHANGED — fail-closed, no reopening', () => {
+    const allOff = Object.fromEntries(BUNDLE_KEYS.map((k) => [k, false]))
+    const next = mirrorBundleFeatures(allOff, null)
+    expect(next).toEqual(allOff)
+    for (const key of BUNDLE_KEYS) expect(next[key], key).toBe(false)
+  })
+
+  it('planFeatures === null (unpinned) on a location with NO prior overrides ({}) stays {} — nothing is denied either', () => {
+    const next = mirrorBundleFeatures({}, null)
+    expect(next).toEqual({})
+  })
+
+  it('planFeatures === null (unpinned) preserves a MIX of already-granted and already-denied bundles exactly as-is', () => {
+    const mixed = { bundle_money: false, bundle_sales: true, pipeline: false }
+    const next = mirrorBundleFeatures(mixed, null)
+    expect(next).toEqual(mixed)
+  })
+
+  it('preserves non-bundle keys already on the location untouched', () => {
+    const next = mirrorBundleFeatures({ pipeline: false, notify_lead: true }, { bundle_sales: true })
+    expect(next.pipeline).toBe(false)
+    expect(next.notify_lead).toBe(true)
+  })
+
+  it('null/undefined currentFeatures is treated as {}', () => {
+    expect(() => mirrorBundleFeatures(null, {})).not.toThrow()
+    expect(() => mirrorBundleFeatures(undefined, {})).not.toThrow()
+  })
+})
+
+describe('applyPlanBundlesToLocation', () => {
+  // Minimal stub covering exactly the two tables/chains this function
+  // (via getLocationPlan) touches — not the full makeFakeDb double,
+  // since getLocationPlan's embedded select
+  // (version:plan_versions!plan_version_id(*, plan:plans!plan_id(*)))
+  // needs pre-shaped fixture rows rather than real join logic.
+  function stubDb({ locationPlanRows = [], location = { features: {} } } = {}) {
+    const updates = []
+    return {
+      updates,
+      db: {
+        from(table) {
+          if (table === 'location_plans') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  eq: async () => ({ data: locationPlanRows, error: null }),
+                }),
+              }),
+            }
+          }
+          if (table === 'locations') {
+            return {
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: async () => ({ data: location, error: null }),
+                }),
+              }),
+              update: (patch) => ({
+                eq: async () => { updates.push(patch); return { error: null } },
+              }),
+            }
+          }
+          throw new Error(`stubDb: unexpected table ${table}`)
+        },
+      },
+    }
+  }
+
+  const tierRow = (features) => ({
+    plan_version_id: 'v-tier',
+    active: true,
+    version: {
+      id: 'v-tier',
+      plan_id: 'p-tier',
+      allowances: {},
+      unit_rates_cents: {},
+      features,
+      plan: { id: 'p-tier', kind: 'tier', slug: 'growth' },
+    },
+  })
+
+  it('a pinned tier granting bundle_messaging/sales/members removes those keys and denies the rest', async () => {
+    const { db, updates } = stubDb({
+      locationPlanRows: [tierRow({ bundle_messaging: true, bundle_sales: true, bundle_members: true })],
+      location: { features: {} },
+    })
+    const result = await applyPlanBundlesToLocation(db, 'loc-1')
+    expect(updates).toHaveLength(1)
+    expect(updates[0].features).toEqual(result)
+    for (const key of ['bundle_messaging', 'bundle_sales', 'bundle_members']) {
+      expect(key in result, key).toBe(false)
+    }
+    for (const key of BUNDLE_KEYS.filter((k) => !['bundle_messaging', 'bundle_sales', 'bundle_members'].includes(k))) {
+      expect(result[key], key).toBe(false)
+    }
+  })
+
+  // BUNDLES.5 final-review fix 3 — fail-closed: unassigning a plan (or
+  // being unpinned already) does NOT reopen whatever bundle state the
+  // location is currently in. Replaces the old "removes every bundle
+  // override" test — that was the bug, silently re-granting bundles a
+  // prior pin had explicitly denied the moment the tier was unassigned.
+  it('an unpinned location (no active tier row) leaves its EXISTING bundle overrides untouched — fail-closed, no reopening', async () => {
+    const priorlyDenied = Object.fromEntries(BUNDLE_KEYS.map((k) => [k, false]))
+    const { db, updates } = stubDb({ locationPlanRows: [], location: { features: priorlyDenied } })
+    const result = await applyPlanBundlesToLocation(db, 'loc-1')
+    expect(updates).toHaveLength(1)
+    expect(result).toEqual(priorlyDenied)
+    for (const key of BUNDLE_KEYS) expect(result[key], key).toBe(false)
+  })
+
+  it('an unpinned, never-touched location ({}) stays {} — still means "everything on" (back-compat, unaffected by this fix)', async () => {
+    const { db } = stubDb({ locationPlanRows: [], location: { features: {} } })
+    const result = await applyPlanBundlesToLocation(db, 'loc-1')
+    expect(result).toEqual({})
+  })
+
+  it('preserves the location row id targeting and stamps updated_at', async () => {
+    const { db } = stubDb({ locationPlanRows: [], location: { features: {} } })
+    const eqSpy = vi.fn(async () => ({ error: null }))
+    db.from = (table) => {
+      if (table === 'location_plans') {
+        return { select: () => ({ eq: () => ({ eq: async () => ({ data: [], error: null }) }) }) }
+      }
+      return {
+        select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { features: {} }, error: null }) }) }),
+        update: (patch) => { expect(patch.updated_at).toBeTruthy(); return { eq: eqSpy } },
+      }
+    }
+    await applyPlanBundlesToLocation(db, 'loc-42')
+    expect(eqSpy).toHaveBeenCalledWith('id', 'loc-42')
+  })
+
+  it('throws (does not swallow) a locations select error', async () => {
+    const db = {
+      from(table) {
+        if (table === 'location_plans') return { select: () => ({ eq: () => ({ eq: async () => ({ data: [], error: null }) }) }) }
+        return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: 'boom' } }) }) }) }
+      },
+    }
+    await expect(applyPlanBundlesToLocation(db, 'loc-1')).rejects.toThrow(/boom/)
+  })
+
+  it('throws (does not swallow) a locations update error', async () => {
+    const db = {
+      from(table) {
+        if (table === 'location_plans') return { select: () => ({ eq: () => ({ eq: async () => ({ data: [], error: null }) }) }) }
+        return {
+          select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { features: {} }, error: null }) }) }),
+          update: () => ({ eq: async () => ({ error: { message: 'update boom' } }) }),
+        }
+      },
+    }
+    await expect(applyPlanBundlesToLocation(db, 'loc-1')).rejects.toThrow(/update boom/)
   })
 })
