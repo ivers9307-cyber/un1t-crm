@@ -129,9 +129,23 @@ describe('K3 — every settings-tree href resolves to a real page', () => {
 })
 
 describe('the /admin hrefs pin (2H handoff)', () => {
-  it('ADMIN.2h Task 1 — the tree contains ZERO /admin hrefs: all six former /admin rows (the index card + achievements/audit-log/glofox-import/integrations/marketing-import) have left /admin for good', () => {
+  it('ADMIN.2h Task 1 pin, AMENDED by FU-DEADLETTER-OWNER-PATH — the tree contains ZERO /admin hrefs EXCEPT the explicit allowlist below. All six former /admin rows (the index card + achievements/audit-log/glofox-import/integrations/marketing-import) left /admin for good, per the original pin. /admin/webhook-dead-letter is a DELIBERATE, later exception: the page legitimately lives at an /admin URL in the platform tier (see src/lib/platform-nav.js) but owners — who pass the page\'s own master-or-owner gate — get no console shell there (AppShell\'s platform branch is master-only) and previously had no persistent nav path at all, only the conditional integration-health remediation link (warn/down status only). This row gives owners a stable door without moving the page.', () => {
+    const ADMIN_HREF_ALLOWLIST = ['/admin/webhook-dead-letter']
     const adminHrefs = ALL_ROWS.map((r) => r.href).filter((h) => h && h.startsWith('/admin'))
-    expect(adminHrefs).toEqual([])
+    expect(adminHrefs).toEqual(ADMIN_HREF_ALLOWLIST)
+  })
+})
+
+describe('FU-DEADLETTER-OWNER-PATH — webhook dead-letters row', () => {
+  const row = ALL_ROWS.find((r) => r.href === '/admin/webhook-dead-letter')
+
+  it('exists, lives in the Integrations group, and points at the real page', () => {
+    expect(row).toBeTruthy()
+    expect(row.groupId).toBe('integrations')
+  })
+
+  it('gates on owner or master — mirrors the page\'s own master-or-owner check exactly', () => {
+    expect(row.gate).toEqual({ roles: ['owner', 'master'] })
   })
 })
 
