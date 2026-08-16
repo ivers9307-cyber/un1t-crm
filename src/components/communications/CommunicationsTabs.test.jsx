@@ -39,18 +39,18 @@ describe('CommunicationsTabs — 375px survivability (COMMSLAYOUT.2)', () => {
   it('renders both tabs when both permissions are held', () => {
     const { container } = render(<CommunicationsTabs {...ALL} />)
     const labels = within(container).getAllByRole('link').map((a) => a.textContent)
-    expect(labels).toEqual(['Inbox', 'Email inbox'])
+    expect(labels).toEqual(['WhatsApp & Instagram inbox', 'Email inbox'])
   })
 
   it('renders only Inbox when canEmailInbox is false', () => {
     render(<CommunicationsTabs canWhatsapp canEmailInbox={false} />)
-    expect(screen.getByRole('link', { name: /^Inbox$/ })).toBeTruthy()
+    expect(screen.getByRole('link', { name: /^WhatsApp & Instagram inbox$/ })).toBeTruthy()
     expect(screen.queryByRole('link', { name: /^Email inbox$/ })).toBeNull()
   })
 
   it('renders only Email inbox when canWhatsapp is false', () => {
     render(<CommunicationsTabs canWhatsapp={false} canEmailInbox />)
-    expect(screen.queryByRole('link', { name: /^Inbox$/ })).toBeNull()
+    expect(screen.queryByRole('link', { name: /^WhatsApp & Instagram inbox$/ })).toBeNull()
     expect(screen.getByRole('link', { name: /^Email inbox$/ })).toBeTruthy()
   })
 
@@ -89,7 +89,7 @@ describe('CommunicationsTabs — 375px survivability (COMMSLAYOUT.2)', () => {
     const active = within(container).getByRole('link', { name: /^Email inbox$/ })
     expect(active.className).toContain('bg-un1t-text')
     expect(active.className).toContain('text-un1t-bg')
-    const inactive = within(container).getByRole('link', { name: /^Inbox$/ })
+    const inactive = within(container).getByRole('link', { name: /^WhatsApp & Instagram inbox$/ })
     expect(inactive.className).toContain('text-un1t-subtle')
   })
 
@@ -107,7 +107,7 @@ describe('CommunicationsTabs — badges survive the layout change', () => {
   it('still renders a badge on a tab that has a count', () => {
     polled.mockImplementation(({ url }) => (url.includes('whatsapp') ? 7 : 0))
     const { container } = render(<CommunicationsTabs {...ALL} />)
-    expect(within(container).getByRole('link', { name: /Inbox/ }).textContent).toContain('7')
+    expect(within(container).getByRole('link', { name: /WhatsApp & Instagram inbox/ }).textContent).toContain('7')
   })
 
   it('still renders a badge on the Email inbox tab', () => {
