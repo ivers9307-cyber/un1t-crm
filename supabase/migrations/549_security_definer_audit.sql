@@ -1,0 +1,188 @@
+-- 549_security_definer_audit.sql
+--
+-- AUDIT.7 closure — advisor WARNs for the three public-schema
+-- SECURITY DEFINER functions flagged by the security advisor
+-- (public.is_owner, public.list_enabled_integrations,
+-- public.scan_straps_for_contact). This is the complete audit
+-- record: caller evidence for each function, live in un1t-crm and
+-- champ-app source as of 2026-08-16, and the resulting decision.
+--
+-- Method: grepped supabase/migrations/ in this repo for each
+-- function's creation + any RLS-policy/other-function reference;
+-- grepped both un1t-crm and champ-app source for `.rpc('<fn>')`
+-- and raw string mentions; cross-checked live grants and RLS-policy
+-- text against prod (project iyvtbjjxdggiadzwwvdj) via read-only
+-- queries, since none of these three appear with their current
+-- shape/grants anywhere in this repo's migration history — all
+-- three carry out-of-band drift relative to what's committed here
+-- (documented per-function below; not remediated by this migration,
+-- which only touches EXECUTE/schema exposure).
+--
+-- ============================================================
+-- 1. public.is_owner() — MOVE to private schema (not a plain
+--    keep/revoke/drop — see rationale)
+-- ============================================================
+--
+-- Caller evidence: NOT called by any client anywhere. `grep -rnE
+-- "\bis_owner\b"` (word-bounded, excluding auth_is_owner /
+-- auth_is_owner_at / auth_is_owner_or_manager) across un1t-crm and
+-- champ-app source and un1t-crm's supabase/migrations/ returns
+-- zero hits. There is no migration in this repo that creates
+-- public.is_owner() at all — it does not exist in this codebase's
+-- migration history under that name.
+--
+-- It IS live in prod today, SECURITY DEFINER, EXECUTE granted to
+-- authenticated, and it IS used — but only inside three
+-- storage.objects RLS policies ("Owners can upload/update/delete
+-- branding", bucket 'branding'). Those policy NAMES were created by
+-- migration 013_company_branding.sql, but that migration's policy
+-- bodies use an inline `EXISTS (SELECT 1 FROM profiles WHERE
+-- profiles.id = auth.uid() AND profiles.role = 'owner')` check, NOT
+-- is_owner(). Live prod has since had those same three policies
+-- redefined out-of-band to call is_owner() instead (confirmed via
+-- pg_policies.qual/with_check on prod) — a change with no
+-- corresponding migration file. is_owner() itself also checks
+-- role IN ('owner','master'), not just 'owner', so it is not a
+-- byte-for-byte duplicate of private.auth_is_owner() (which checks
+-- role = 'owner' only) — swapping callers over to the private
+-- helper would silently drop 'master' access, so that consolidation
+-- is NOT done here; flagged as a follow-up, not fixed.
+--
+-- Per the audit's decision framework, "used only inside RLS
+-- policies, never client-called" would normally mean
+-- `REVOKE EXECUTE ... FROM authenticated, anon`. That is NOT what
+-- this migration does for is_owner(), because it was verified
+-- empirically (transaction-scoped test against prod, rolled back)
+-- that revoking EXECUTE from `authenticated` breaks those three
+-- branding policies outright:
+--
+--   BEGIN;
+--   REVOKE EXECUTE ON FUNCTION public.is_owner() FROM authenticated;
+--   SET LOCAL ROLE authenticated;
+--   SELECT public.is_owner();
+--   -- ERROR:  42501: permission denied for function is_owner
+--   ROLLBACK;
+--
+-- RLS predicates are evaluated under the querying role's own
+-- privileges (SECURITY DEFINER only changes the privileges the
+-- function's BODY runs with, not who may call it) — there is no
+-- "runs as table owner" exemption for the EXECUTE check on a
+-- function referenced by a policy. Revoking authenticated's EXECUTE
+-- would 403 every owner trying to upload/update/delete branding
+-- assets. This is the same reason private.auth_is_owner(),
+-- private.auth_is_owner_at() and private.auth_is_owner_or_manager()
+-- — all RLS-only helpers — still carry `authenticated: EXECUTE`
+-- in prod today: RLS-only functions MUST stay executable by the
+-- roles the policies apply to.
+--
+-- The actual attack surface the advisor is warning about isn't RLS
+-- breakage risk, it's that a `public`-schema function with EXECUTE
+-- granted to authenticated is auto-exposed by PostgREST as a
+-- directly callable RPC endpoint (POST /rest/v1/rpc/is_owner) even
+-- though it was never meant to be client-invoked. This repo already
+-- has an established, prod-tested fix for exactly this shape of
+-- problem: migration 022_final_advisor_cleanup.sql moved
+-- auth_is_owner() / auth_is_owner_or_manager() out of `public` and
+-- into the `private` schema, which PostgREST does not expose,
+-- while leaving their `authenticated` EXECUTE grants untouched so
+-- RLS kept working. We apply the identical pattern to is_owner()
+-- here: move schema, keep the grant, keep the name (no rename —
+-- renaming isn't required for the fix and would only add a second,
+-- unnecessary change to audit).
+--
+-- Net effect: is_owner() disappears from the PostgREST RPC surface
+-- (closing the advisor WARN's actual concern) and the three
+-- branding storage policies keep working unchanged, because Postgres
+-- resolves a policy's function reference by OID, not by schema-
+-- qualified name — this is the same reason migration 014's policies
+-- kept working across migration 022's schema move.
+
+ALTER FUNCTION public.is_owner() SET SCHEMA private;
+
+-- Defensive/idempotent — matches the REVOKE-from-PUBLIC-and-anon
+-- pattern applied to the other private auth_is_owner* helpers.
+-- anon already has no EXECUTE on this function in prod; this is a
+-- no-op there and just makes the posture explicit in the migration
+-- record.
+REVOKE ALL ON FUNCTION private.is_owner() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION private.is_owner() FROM anon;
+GRANT EXECUTE ON FUNCTION private.is_owner() TO authenticated;
+
+COMMENT ON FUNCTION private.is_owner() IS
+  'AUDIT.7 (mig 549): moved from public to private — RLS-only helper '
+  '(storage.objects branding-bucket policies), never client-called. '
+  'Moving schema (not revoking authenticated EXECUTE) removes it from '
+  'the PostgREST RPC surface without breaking the policies that call '
+  'it — see migration comments for the empirical proof that a bare '
+  'REVOKE would 403 those policies. role IN (owner, master) — not a '
+  'duplicate of private.auth_is_owner() (owner only); do not merge '
+  'without confirming master-role branding access is still wanted.';
+
+-- ============================================================
+-- 2. public.list_enabled_integrations() — KEEP (no DDL change)
+-- ============================================================
+--
+-- Caller evidence: actively called by authenticated champ-app
+-- clients —
+--   champ-app/mobile/app/account/integrations.jsx:85
+--     supabase.rpc('list_enabled_integrations')
+--   champ-app/src/app/account/integrations/page.jsx:24
+--     supabase.rpc('list_enabled_integrations')
+-- (both native Expo/RN and legacy web surfaces). No callers found
+-- in un1t-crm.
+--
+-- Internally well-scoped: SECURITY DEFINER lets it read
+-- service_integrations (which authenticated customers have no
+-- direct SELECT on) but the body only ever returns
+-- `provider, display_name` for rows that are enabled AND have both
+-- client_id and client_secret set — no secret/credential value is
+-- ever in the projection, so there is nothing to leak regardless of
+-- caller. anon has no EXECUTE (verified: has_function_privilege
+-- against prod returns false); authenticated does.
+--
+-- This exact acceptance was already reached and documented across
+-- migrations 166_sec_advisor_warn_fixes.sql,
+-- 168_advisor_info_cleanup.sql, 216_sec_p0_2_revoke_fte_recompute_
+-- exec.sql and 221_advisor_safe_cleanup.sql. This migration doesn't
+-- touch it; recorded here only so this file is a complete,
+-- self-contained audit record per AUDIT.7. See also
+-- docs/architecture/REFERENCE.md (RLS posture section, 2026-08-16).
+
+-- ============================================================
+-- 3. public.scan_straps_for_contact() — KEEP (no DDL change)
+-- ============================================================
+--
+-- Caller evidence: actively called by authenticated champ-app
+-- clients, polled every 2s during the device-pairing flow —
+--   champ-app/mobile/app/account/devices.jsx:205
+--     supabase.rpc('scan_straps_for_contact')
+--   champ-app/src/app/account/devices/ScanForStraps.jsx:47
+--     supabase.rpc('scan_straps_for_contact')
+-- No callers found in un1t-crm.
+--
+-- Internally well-scoped: resolves the caller to a contact via
+-- private.auth_contact_id() and RAISEs 'not authenticated' if that
+-- resolves to NULL — self-scoping, same helper contact_devices RLS
+-- itself relies on. anon has no EXECUTE (verified against prod);
+-- authenticated does.
+--
+-- Note (drift, not remediated here — out of scope for a grants-only
+-- audit): live prod's body additionally scopes the live-strap scan
+-- to the caller's own contact's location (looks up
+-- contacts.location_id, returns early if NULL, filters
+-- ble_bridges.location_id = that location) — this repo's most
+-- recent migration touching the function (193_protocol_aware_
+-- strap_identifiers.sql) still shows the pre-location-scoping,
+-- cross-location "all bridges, all locations" body. Prod has moved
+-- ahead of this repo's migration history for this function's BODY,
+-- same as is_owner() above. Flagged for a follow-up migration to
+-- reconcile the tracked history with prod; not a grants/exposure
+-- issue so out of scope for AUDIT.7.
+--
+-- This EXECUTE-grant acceptance was already reached and documented
+-- across migrations 166_sec_advisor_warn_fixes.sql,
+-- 168_advisor_info_cleanup.sql, 216_sec_p0_2_revoke_fte_recompute_
+-- exec.sql and 221_advisor_safe_cleanup.sql. This migration doesn't
+-- touch it; recorded here only so this file is a complete,
+-- self-contained audit record per AUDIT.7. See also
+-- docs/architecture/REFERENCE.md (RLS posture section, 2026-08-16).
