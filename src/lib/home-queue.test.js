@@ -464,6 +464,21 @@ describe('queueCountLabel', () => {
   it('appends a "+" when GLOBAL_CAP trimmed the row list below the true total', () => {
     expect(queueCountLabel(42, 30)).toBe('42+')
   })
+
+  // FU-COSMETICS (c) — registry-internal degradation: a source's count
+  // came from a query path independent of the one that materialised rows
+  // (e.g. getPendingApprovalsCount succeeding via a provider's own
+  // .countPending() while that SAME provider's .fetchPending() — the rows
+  // path — threw and degraded to an empty bucket, src/lib/approvals/
+  // registry.js). total > 0 with rows.length === 0 is not "more items
+  // exist below a page cap" (what "+" means everywhere else this label is
+  // used) — it is possibly-stale count with literally nothing to show for
+  // it, and appending "+" over an empty list read as a broken header
+  // rather than a degraded one.
+  it('drops the "+" when rowsCount is 0 but total is not — a capped list has SOME rows to show for it, this has none', () => {
+    expect(queueCountLabel(5, 0)).toBe('5')
+    expect(queueCountLabel(1, 0)).toBe('1')
+  })
 })
 
 describe('queueRowGroup', () => {

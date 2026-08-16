@@ -7,10 +7,22 @@
 // member-facing achievements view. Deliberately NOT added to the
 // (members) layout's HubTabs strip (src/app/(members)/layout.js) —
 // this is a master-only admin surface, not a member-hub tab a
-// non-master member should ever see offered. The strip still renders
-// above this page for whichever OTHER tabs the visiting master has
-// perms for (Bookings, Events, etc.) — harmless, just contextual
-// chrome; it carries no link to this page itself.
+// non-master member should ever see offered.
+//
+// FU-COSMETICS amendment — "harmless, just contextual chrome" turned out
+// not to be harmless: the strip DID still render above this page for
+// whichever other tabs the visiting master holds perms for (Bookings,
+// Events, …), so a master editing the achievements catalogue saw an
+// unrelated Members hub tab bar with no tab of its own lit and no link
+// back to this page — pure noise around an admin table. Escaped to a
+// literal tree (src/app/achievements, out of the (members) group) so it
+// renders chrome-free, same fix/same reasoning as the event check-in
+// subtree and the race-day control console documented in
+// src/app/(members)/layout.js's header comment (a phone scan surface and
+// a tablet race console — this is a master admin table, same principle:
+// a surface the hub's own chrome does nothing for). URL is unchanged —
+// route groups are invisible to the router, so /achievements still
+// resolves exactly the same.
 //
 // Server component loads:
 //   - the seed list of rules + earned-counts (so the UI can warn

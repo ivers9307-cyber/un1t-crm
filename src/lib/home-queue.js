@@ -356,9 +356,22 @@ export async function assembleHomeQueue(db, user) {
  * suffix appended when GLOBAL_CAP trimmed the row list below it — 42 real
  * items behind a 30-row list must read as "30+", never a confident "30".
  * Returns null (no badge) when there is nothing to count.
+ *
+ * FU-COSMETICS (c) — the "+" means "more rows exist below the ones shown"
+ * everywhere else this label is used, which presumes at least SOME rows
+ * are shown. When rowsCount is 0 but total isn't, that's not a capped
+ * list — it's registry-internal degradation (a source's count came from a
+ * query path independent of the one that materialised rows; see
+ * src/lib/approvals/registry.js's countPending()-vs-fetchPending() split)
+ * — nothing renders below the header at all. Dropping the "+" there stops
+ * the header claiming a fuller list is one click away when the honest
+ * story is "we have a count, but couldn't fetch what it counts"; the
+ * caller pairs this with a subdued explanatory line (see
+ * src/app/dashboard/today/page.js).
  */
 export function queueCountLabel(total, rowsCount) {
   if (!total) return null
+  if (rowsCount === 0) return String(total)
   return total > rowsCount ? `${total}+` : String(total)
 }
 

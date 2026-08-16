@@ -8,6 +8,14 @@
 // design. Tab visibility mirrors each PAGE's own gate (not the old nav
 // entries' looser gates); /live has no page gate today (tracked
 // separately) — its tab uses the nav-documented studio_management key.
+//
+// FU-COSMETICS — /achievements (the master-only achievements-catalogue
+// editor) is ANOTHER chrome-free exception, moved out to
+// src/app/achievements (2026-08-16). It used to sit inside this group with
+// no tab of its own; a master editing the catalogue still saw this strip
+// lit for whichever OTHER tabs they held perms for, with nothing to click
+// back to this page. Same principle as the check-in/control surfaces above
+// — an admin table the hub chrome does nothing for.
 
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
