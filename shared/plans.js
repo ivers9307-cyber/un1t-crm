@@ -50,11 +50,27 @@ export const UNIT_RATE_KEYS = Object.freeze({
   ai_message:   { label: 'AI message',         per: 'message' },
 })
 
+import { BUNDLE_KEYS, BUNDLE_LABELS } from './permission-bundles.js'
+
 // Boolean feature flags on plan_versions.features. Structure here,
 // inclusion per tier/add-on in the DB.
+//
+// BUNDLES.5 Task 3 — the 7 hub bundles + module_cars (BUNDLE_KEYS,
+// shared/permission-bundles.js) are spread in here too, so a plan
+// version can grant/withhold whole feature bundles the same way it
+// already grants ai_agent/custom_email_domain. Both
+// src/app/api/admin/plans/[id]/versions/route.js's validation
+// (`jsonbShape(Object.keys(FEATURE_KEYS), z.boolean())`) and
+// PlansAdmin.jsx's editor (`Object.entries(FEATURE_KEYS)`) iterate
+// this object, so the 8 bundle toggles appear in both automatically —
+// no separate wiring needed. The WRITE side (mirroring a plan's
+// bundle grants onto a pinned location's locations.features) is
+// src/lib/plans.js applyPlanBundlesToLocation, invoked from the
+// plan-pinning route whenever a pin is assigned or unassigned.
 export const FEATURE_KEYS = Object.freeze({
   ai_agent:            { label: 'AI agent (Mia)' },
   custom_email_domain: { label: 'Custom email domain' },
+  ...Object.fromEntries(BUNDLE_KEYS.map((key) => [key, { label: BUNDLE_LABELS[key] }])),
 })
 
 // Add-on plan slugs the platform knows how to provision. An addon-kind

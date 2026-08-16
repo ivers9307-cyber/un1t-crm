@@ -13,14 +13,18 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Check, AlertCircle, ChevronRight } from 'lucide-react'
-import { WEB_PERMISSIONS, MOBILE_PERMISSIONS, isFeatureGatedByLocation } from '@shared/permissions'
+import { WEB_PERMISSIONS, MOBILE_PERMISSIONS, isFeatureGatedByLocation, isFeatureEnabledAtLocation } from '@shared/permissions'
+import { BUNDLE_KEYS, BUNDLE_LABELS } from '@shared/permission-bundles'
 
-// Resolve current state of a key — explicit false → off, anything
-// else (true OR missing) → on. Mirrors isFeatureEnabledAtLocation
-// in shared/permissions.js (kept inline so the toggle UI is fully
-// self-contained).
+// BUNDLES.5 — was a hand-rolled `isOn(features, key)` mirror of
+// isFeatureEnabledAtLocation's polarity; now calls the REAL helper so
+// this UI can never drift from the resolver it's previewing (it also
+// now needs to account for the bundle layer, not just the individual
+// key, and re-deriving that here would be exactly the kind of second
+// implementation the bundle layer's own polarity tests exist to catch
+// drift in).
 function isOn(features, key) {
-  return features?.[key] !== false
+  return isFeatureEnabledAtLocation({ features }, key)
 }
 
 function FeatureToggle({ on, onToggle, busy, label, hint }) {
@@ -100,7 +104,7 @@ export default function LocationFeatures({ location }) {
         <div className="flex-1 min-w-0">
           <div className="text-sm font-semibold text-un1t-text">Per-location feature toggles</div>
           <div className="text-xs text-un1t-subtle mt-0.5">
-            {webFeatures.length + mobileFeatures.length} features — click to expand.
+            {BUNDLE_KEYS.length} bundles + {webFeatures.length + mobileFeatures.length} fine-grained features — click to expand.
             Toggling off hides a feature for every user at this location.
           </div>
         </div>
@@ -125,40 +129,72 @@ export default function LocationFeatures({ location }) {
           )}
         </div>
 
+        {/* BUNDLES.5 Task 3 — bundles render FIRST, above the
+            fine-grained keys: this is the ≤8-flag SaaS provisioning
+            surface most masters actually want, with the ~35
+            fine-grained keys demoted to an "Advanced" details below. */}
         <section>
-          <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">Web features</h4>
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">Bundles</h4>
+          <p className="text-[11px] text-un1t-subtle mb-2">
+            Each bundle gates a whole hub (or the Cars module) at once. Turning a bundle off hides
+            every feature it owns, everywhere — including fine-grained keys below that also happen
+            to belong to it.
+          </p>
           <div className="divide-y divide-un1t-border/40 border border-un1t-border rounded-md px-3">
-            {webFeatures.map(f => (
+            {BUNDLE_KEYS.map(key => (
               <FeatureToggle
-                key={`web-${f.key}`}
-                on={isOn(features, f.key)}
-                onToggle={() => toggle(f.key)}
-                busy={busyKey === f.key}
-                label={f.label}
-                hint={f.hint}
+                key={`bundle-${key}`}
+                on={isOn(features, key)}
+                onToggle={() => toggle(key)}
+                busy={busyKey === key}
+                label={BUNDLE_LABELS[key]}
               />
             ))}
           </div>
         </section>
 
-        <section>
-          <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">Mobile features</h4>
-          <p className="text-[11px] text-un1t-subtle mb-2">
-            Notification preferences (per-user) are intentionally not listed here.
-          </p>
-          <div className="divide-y divide-un1t-border/40 border border-un1t-border rounded-md px-3">
-            {mobileFeatures.map(f => (
-              <FeatureToggle
-                key={`mobile-${f.key}`}
-                on={isOn(features, f.key)}
-                onToggle={() => toggle(f.key)}
-                busy={busyKey === f.key}
-                label={f.label}
-                hint={f.hint}
-              />
-            ))}
+        <details>
+          <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">
+            Advanced — fine-grained feature keys
+          </summary>
+
+          <div className="space-y-5 mt-3">
+            <section>
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">Web features</h4>
+              <div className="divide-y divide-un1t-border/40 border border-un1t-border rounded-md px-3">
+                {webFeatures.map(f => (
+                  <FeatureToggle
+                    key={`web-${f.key}`}
+                    on={isOn(features, f.key)}
+                    onToggle={() => toggle(f.key)}
+                    busy={busyKey === f.key}
+                    label={f.label}
+                    hint={f.hint}
+                  />
+                ))}
+              </div>
+            </section>
+
+            <section>
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">Mobile features</h4>
+              <p className="text-[11px] text-un1t-subtle mb-2">
+                Notification preferences (per-user) are intentionally not listed here.
+              </p>
+              <div className="divide-y divide-un1t-border/40 border border-un1t-border rounded-md px-3">
+                {mobileFeatures.map(f => (
+                  <FeatureToggle
+                    key={`mobile-${f.key}`}
+                    on={isOn(features, f.key)}
+                    onToggle={() => toggle(f.key)}
+                    busy={busyKey === f.key}
+                    label={f.label}
+                    hint={f.hint}
+                  />
+                ))}
+              </div>
+            </section>
           </div>
-        </section>
+        </details>
       </div>
     </details>
   )

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { FUNNEL_STAGE_SLUGS, OFF_FUNNEL_STAGE_SLUGS } from '../../shared/pipeline-classifier.js'
-import { defaultPipelineStages, seedLocationDefaults } from './location-seed.js'
+import { BUNDLE_KEYS } from '../../shared/permission-bundles.js'
+import { defaultPipelineStages, seedLocationDefaults, seedBundleFeatures, STARTER_BUNDLES } from './location-seed.js'
 
 describe('defaultPipelineStages', () => {
   it('matches the classifier taxonomy exactly — funnel then off-funnel, in order', () => {
@@ -52,21 +53,37 @@ describe('defaultPipelineStages', () => {
 })
 
 describe('seedLocationDefaults', () => {
+  // Routes by table name so both the pipeline_stages upsert and the
+  // BUNDLES.5 locations.features bundle-seed write can be exercised
+  // (and asserted on) independently.
   function stubDb() {
-    const calls = []
+    const upsertCalls = []
+    const updateCalls = []
     const upsert = vi.fn(async (rows, opts) => {
-      calls.push({ rows, opts })
+      upsertCalls.push({ rows, opts })
       return { error: null }
     })
-    return { db: { from: vi.fn(() => ({ upsert })) }, calls, upsert }
+    const from = vi.fn((table) => {
+      if (table === 'pipeline_stages') return { upsert }
+      if (table === 'locations') {
+        return {
+          update: vi.fn((patch) => {
+            updateCalls.push(patch)
+            return { eq: vi.fn(async () => ({ error: null })) }
+          }),
+        }
+      }
+      throw new Error(`stubDb: unexpected table ${table}`)
+    })
+    return { db: { from }, upsertCalls, updateCalls, upsert }
   }
 
   it('upserts every default stage stamped with the location id', async () => {
-    const { db, calls } = stubDb()
+    const { db, upsertCalls } = stubDb()
     await seedLocationDefaults(db, { id: 'loc-1' })
     expect(db.from).toHaveBeenCalledWith('pipeline_stages')
-    expect(calls).toHaveLength(1)
-    const { rows } = calls[0]
+    expect(upsertCalls).toHaveLength(1)
+    const { rows } = upsertCalls[0]
     expect(rows).toHaveLength(FUNNEL_STAGE_SLUGS.length + OFF_FUNNEL_STAGE_SLUGS.length)
     for (const row of rows) expect(row.location_id).toBe('loc-1')
   })
@@ -74,9 +91,9 @@ describe('seedLocationDefaults', () => {
   it('is idempotent — ignores duplicates on the (location_id, slug) unique key', async () => {
     // Re-running the seed (wizard retry, resumed provisioning) must not
     // error against uq (location_id, slug) from mig 150.
-    const { db, calls } = stubDb()
+    const { db, upsertCalls } = stubDb()
     await seedLocationDefaults(db, { id: 'loc-1' })
-    expect(calls[0].opts).toMatchObject({
+    expect(upsertCalls[0].opts).toMatchObject({
       onConflict: 'location_id,slug',
       ignoreDuplicates: true,
     })
@@ -84,7 +101,9 @@ describe('seedLocationDefaults', () => {
 
   it('throws when the upsert reports an error (supabase-js resolves, never rejects)', async () => {
     const db = {
-      from: () => ({ upsert: async () => ({ error: { message: 'permission denied' } }) }),
+      from: (table) => (table === 'pipeline_stages'
+        ? { upsert: async () => ({ error: { message: 'permission denied' } }) }
+        : { update: () => ({ eq: async () => ({ error: null }) }) }),
     }
     await expect(seedLocationDefaults(db, { id: 'loc-1' })).rejects.toThrow(/permission denied/)
   })
@@ -92,5 +111,60 @@ describe('seedLocationDefaults', () => {
   it('rejects a location without an id rather than seeding orphan rows', async () => {
     const { db } = stubDb()
     await expect(seedLocationDefaults(db, {})).rejects.toThrow(/location/i)
+  })
+
+  it('also writes the starter bundle defaults onto locations.features', async () => {
+    const { db, updateCalls } = stubDb()
+    await seedLocationDefaults(db, { id: 'loc-1', features: {} })
+    expect(db.from).toHaveBeenCalledWith('locations')
+    expect(updateCalls).toHaveLength(1)
+    const written = updateCalls[0].features
+    for (const key of STARTER_BUNDLES) expect(key in written, key).toBe(false)
+    for (const key of BUNDLE_KEYS.filter((k) => !STARTER_BUNDLES.includes(k))) {
+      expect(written[key], key).toBe(false)
+    }
+  })
+
+  it('throws when the locations.features write reports an error', async () => {
+    const db = {
+      from: (table) => (table === 'pipeline_stages'
+        ? { upsert: async () => ({ error: null }) }
+        : { update: () => ({ eq: async () => ({ error: { message: 'features write denied' } }) }) }),
+    }
+    await expect(seedLocationDefaults(db, { id: 'loc-1' })).rejects.toThrow(/features write denied/)
+  })
+})
+
+// BUNDLES.5 Task 3 — new-location bundle defaults (pure adapter).
+describe('seedBundleFeatures', () => {
+  it('leaves STARTER_BUNDLES (messaging, sales, members) unset — default-on', () => {
+    expect(STARTER_BUNDLES).toEqual(['bundle_messaging', 'bundle_sales', 'bundle_members'])
+    const result = seedBundleFeatures({})
+    for (const key of STARTER_BUNDLES) expect(key in result, key).toBe(false)
+  })
+
+  it('sets every other bundle (money, marketing, team, operations, module_cars) explicitly false', () => {
+    const result = seedBundleFeatures({})
+    for (const key of BUNDLE_KEYS.filter((k) => !STARTER_BUNDLES.includes(k))) {
+      expect(result[key], key).toBe(false)
+    }
+  })
+
+  it('is a MERGE, not a replace — an already-set key is never overwritten', () => {
+    // Re-running against a partially-provisioned location (wizard retry)
+    // must not stomp a bundle an operator already toggled by hand.
+    const result = seedBundleFeatures({ bundle_money: true, bundle_sales: false })
+    expect(result.bundle_money).toBe(true)
+    expect(result.bundle_sales).toBe(false)
+  })
+
+  it('preserves unrelated fine-grained feature keys untouched', () => {
+    const result = seedBundleFeatures({ pipeline: false })
+    expect(result.pipeline).toBe(false)
+  })
+
+  it('null/undefined existingFeatures is treated as {}', () => {
+    expect(() => seedBundleFeatures(null)).not.toThrow()
+    expect(() => seedBundleFeatures(undefined)).not.toThrow()
   })
 })
