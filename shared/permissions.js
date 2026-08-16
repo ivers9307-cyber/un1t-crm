@@ -16,7 +16,7 @@
 // list, not `[...NOTIFY_KEYS, ...APPROVAL_SUBPERMISSION_KEYS]`) — see
 // the EXEMPT_KEYS comment there for why a reverse import would be
 // circular against this file's top-to-bottom eval order.
-import { bundlesDenyKey } from './permission-bundles.js'
+import { bundlesDenyKey, bundlesDenyCategory } from './permission-bundles.js'
 
 // ============================================================
 // Web sidebar permissions
@@ -286,6 +286,16 @@ export const APPROVAL_CATEGORY_PERMISSION = Object.freeze({
 // visibility (holds ≥1) and to exempt them from the location gate.
 export const APPROVAL_SUBPERMISSION_KEYS = Object.freeze(
   Object.values(APPROVAL_CATEGORY_PERMISSION)
+)
+
+// BUNDLES.5 final-review fix 1 — the reverse of APPROVAL_CATEGORY_PERMISSION
+// (permission key → category), derived from that SAME single definition
+// rather than re-deriving it (e.g. stripping an 'approvals_' prefix) so
+// the two can never drift. Used by isFeatureEnabledAtLocation below to
+// look up which shared/permission-bundles.js CATEGORY_BUNDLES entry an
+// approvals_* key's bundle-denial should follow.
+const APPROVAL_PERMISSION_CATEGORY = Object.freeze(
+  Object.fromEntries(Object.entries(APPROVAL_CATEGORY_PERMISSION).map(([category, key]) => [key, category]))
 )
 
 export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
@@ -1109,6 +1119,11 @@ export function isFeatureGatedByLocation(key) {
   if (NOTIFY_KEYS.includes(key)) return false
   // APPROVALS-PERCAT.1 — per-category approval grants are pure grants,
   // not location features; the approvals_inbox card is the only gate.
+  // "Not location-gated" means exempt from THIS PER-KEY toggle only —
+  // BUNDLES.5 final-review fix 1 makes isFeatureEnabledAtLocation below
+  // apply a SEPARATE, category-level bundle check to these same keys,
+  // so they're exempt from `features['approvals_x']` but NOT exempt
+  // from the bundle layer as a whole. See that function's comment.
   if (APPROVAL_SUBPERMISSION_KEYS.includes(key)) return false
   return true
 }
@@ -1125,12 +1140,43 @@ export function isFeatureGatedByLocation(key) {
  * bundle-denied, so this is purely additive — see the polarity +
  * completeness tests in permission-bundles.test.js.
  *
+ * BUNDLES.5 final-review fix 1 (the "Money chrome leak") — the 8
+ * approvals_* per-category grants are exempt from isFeatureGatedByLocation
+ * (a location can't deny "approvals_contractor_invoices" as an
+ * individual key — see that function's comment) but that used to mean
+ * they were ALSO fully exempt from the bundle layer, since this
+ * function short-circuited to `true` before bundlesDenyKey was ever
+ * consulted. Money's nav-items.js `anyPermission` union, the /money
+ * redirect chain, (money)/layout.js's review tabs and /offer-sales all
+ * gate on one of these three keys — so a senior role (owner default:
+ * every one of those keys true) kept ALL of Money's chrome lit even at
+ * `bundle_money: false`, because none of the checks ever reached
+ * bundlesDenyKey. Fixed HERE, at the resolver's tier-1 root, rather than
+ * at each call site: an approvals_* key stays exempt from its OWN
+ * per-key toggle (features['approvals_contractor_invoices'] === false
+ * still does nothing — the exemption above is unchanged) but now
+ * follows its owning CATEGORY's bundle, via the exact same
+ * CATEGORY_BUNDLES map + bundlesDenyCategory() the approvals registry
+ * (src/lib/approvals/registry.js) already uses for Task 2 — so every
+ * caller that routes through hasPermission/resolvePermission (nav
+ * unions, the money chain, the tabs, the offer-sales page, AND the
+ * registry) now agrees automatically. The registry's own
+ * bundlesDenyCategory check becomes a harmless double-application of
+ * this same rule for the providers that have a permissionKey — see the
+ * comment on isProviderVisible() there.
+ *
  * @param {{features?: object} | null | undefined} location
  * @param {string} key
  */
 export function isFeatureEnabledAtLocation(location, key) {
-  if (!isFeatureGatedByLocation(key)) return true
   const features = location?.features || {}
+  if (!isFeatureGatedByLocation(key)) {
+    const category = APPROVAL_PERMISSION_CATEGORY[key]
+    // Only approvals_* keys have a category to follow; NOTIFY_KEYS stay
+    // fully exempt (category is undefined for them, bundlesDenyCategory
+    // never denies an unmapped category).
+    return !bundlesDenyCategory(features, category)
+  }
   // Missing key OR explicit true → enabled.
   // Only an explicit `false` denies.
   return features[key] !== false && !bundlesDenyKey(features, key)

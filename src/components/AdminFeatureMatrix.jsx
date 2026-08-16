@@ -16,11 +16,14 @@ import { useRouter } from 'next/navigation'
 import { Building2, Check, AlertCircle, LayoutGrid } from 'lucide-react'
 import { WEB_PERMISSIONS, MOBILE_PERMISSIONS, isFeatureGatedByLocation, isFeatureEnabledAtLocation } from '@shared/permissions'
 import { BUNDLE_KEYS, BUNDLE_LABELS } from '@shared/permission-bundles'
+import { nextRawFeatureValue, isBundleDenied, bundleDenialNote } from '@/lib/feature-toggle-ui'
 
 // BUNDLES.5 — was a hand-rolled mirror of isFeatureEnabledAtLocation's
 // polarity; now calls the real helper (same reasoning as
 // LocationFeatures.jsx) so the matrix can't drift from the resolver,
-// and correctly reflects bundle denial for bundle-owned keys too.
+// and correctly reflects bundle denial for bundle-owned keys too. This
+// is the DISPLAY value only — what a click WRITES is a separate
+// question, see nextRawFeatureValue below (final-review fix 2).
 function isOn(features, key) {
   return isFeatureEnabledAtLocation({ features }, key)
 }
@@ -30,15 +33,20 @@ function isOn(features, key) {
 // render them with no special-casing.
 const BUNDLE_FEATURES = BUNDLE_KEYS.map((key) => ({ key, label: BUNDLE_LABELS[key] }))
 
-function ToggleCell({ on, busy, onClick }) {
+function ToggleCell({ on, busy, onClick, disabled, deniedNote, locationName, label }) {
+  const isDisabled = busy || disabled
+  const title = deniedNote
+    ? `${deniedNote} — flip the bundle to change this`
+    : (on ? 'Enabled — click to disable' : 'Disabled — click to enable')
   return (
     <button
       type="button"
       onClick={onClick}
-      disabled={busy}
+      disabled={isDisabled}
       className={`shrink-0 w-8 h-4 rounded-full transition-colors disabled:opacity-40 ${on ? 'bg-green-500' : 'bg-un1t-border'}`}
       aria-pressed={on}
-      title={on ? 'Enabled — click to disable' : 'Disabled — click to enable'}
+      aria-label={`${locationName} — ${label} toggle`}
+      title={title}
     >
       <div className={`w-3 h-3 rounded-full bg-white transition-transform ${on ? 'translate-x-4' : 'translate-x-0.5'}`} />
     </button>
@@ -77,7 +85,12 @@ export default function AdminFeatureMatrix({ organizations, locationsByOrg }) {
     setError(null)
 
     const current = featuresByLoc[locationId] || {}
-    const next = { ...current, [featureKey]: !isOn(current, featureKey) }
+    // BUNDLES.5 final-review fix 2 — write the RAW flip, never the
+    // bundle-aware composite (`isOn`) — see LocationFeatures.jsx's
+    // toggle() for the full reasoning (same bug, same fix, shared
+    // helper). Bundle-denied cells are also rendered disabled below, so
+    // this path isn't normally reachable for them — belt and braces.
+    const next = { ...current, [featureKey]: nextRawFeatureValue(current, featureKey) }
 
     // Optimistic update — revert on failure. Save goes through the
     // master-only endpoint so the policy is enforced server-side
@@ -252,13 +265,19 @@ function FeatureOrgRows({ org, locations, features, featuresByLoc, busyCell, onT
           </td>
           {features.map(f => {
             const cellKey = `${loc.id}::${f.key}`
-            const on = isOn(featuresByLoc[loc.id], f.key)
+            const locFeatures = featuresByLoc[loc.id]
+            const on = isOn(locFeatures, f.key)
+            const denied = isBundleDenied(locFeatures, f.key)
             return (
               <td key={f.key} className="px-2 py-1.5">
                 <ToggleCell
                   on={on}
                   busy={busyCell === cellKey}
                   onClick={() => onToggle(loc.id, f.key)}
+                  disabled={denied}
+                  deniedNote={denied ? bundleDenialNote(f.key) : null}
+                  locationName={loc.name}
+                  label={f.label}
                 />
               </td>
             )

@@ -256,9 +256,13 @@ export async function DELETE(request, props) {
 
   // BUNDLES.5 Task 3 — re-derive + write the location's bundle mirror.
   // Unassigning the active tier leaves the location with no active tier
-  // row, so getLocationPlan() returns null and applyPlanBundlesToLocation
-  // removes every bundle_x override — "no plan constraints", same as a
-  // location that was never pinned (see that function's header comment).
+  // row, so getLocationPlan() returns null. Final-review fix 3: this is
+  // fail-closed, NOT "no plan constraints" — applyPlanBundlesToLocation
+  // leaves every existing bundle_x override exactly as it is (a denial
+  // a prior pin left behind survives the unpin). Unassigning a plan
+  // stops the plan mechanism; it does not reopen features an operator
+  // (or the plan) had explicitly turned off — see that function's
+  // header comment.
   try {
     await applyPlanBundlesToLocation(db, location_id)
   } catch (e) {

@@ -129,10 +129,30 @@ describe('mirrorBundleFeatures', () => {
     expect('ai_agent' in next).toBe(false)
   })
 
-  it('planFeatures === null (unpinned) removes EVERY bundle override — restores plain back-compat', () => {
+  // BUNDLES.5 final-review fix 3 — unpinning STOPS the plan, it does not
+  // reopen features. Replaces the old "removes EVERY bundle override"
+  // test, which was fail-OPEN: it silently re-granted every bundle a
+  // prior plan pin (or an operator) had explicitly denied, the moment
+  // the location's tier was unassigned. Fail-closed instead: every
+  // existing bundle_x entry (denied or granted-by-absence) survives an
+  // unpin completely unchanged; an operator who wants bundles back on
+  // flips them by hand on Location Features.
+  it('planFeatures === null (unpinned) leaves EVERY existing bundle override UNCHANGED — fail-closed, no reopening', () => {
     const allOff = Object.fromEntries(BUNDLE_KEYS.map((k) => [k, false]))
     const next = mirrorBundleFeatures(allOff, null)
-    for (const key of BUNDLE_KEYS) expect(key in next, key).toBe(false)
+    expect(next).toEqual(allOff)
+    for (const key of BUNDLE_KEYS) expect(next[key], key).toBe(false)
+  })
+
+  it('planFeatures === null (unpinned) on a location with NO prior overrides ({}) stays {} — nothing is denied either', () => {
+    const next = mirrorBundleFeatures({}, null)
+    expect(next).toEqual({})
+  })
+
+  it('planFeatures === null (unpinned) preserves a MIX of already-granted and already-denied bundles exactly as-is', () => {
+    const mixed = { bundle_money: false, bundle_sales: true, pipeline: false }
+    const next = mirrorBundleFeatures(mixed, null)
+    expect(next).toEqual(mixed)
   })
 
   it('preserves non-bundle keys already on the location untouched', () => {
@@ -215,12 +235,24 @@ describe('applyPlanBundlesToLocation', () => {
     }
   })
 
-  it('an unpinned location (no active tier row) removes every bundle override — same as never pinned', async () => {
+  // BUNDLES.5 final-review fix 3 — fail-closed: unassigning a plan (or
+  // being unpinned already) does NOT reopen whatever bundle state the
+  // location is currently in. Replaces the old "removes every bundle
+  // override" test — that was the bug, silently re-granting bundles a
+  // prior pin had explicitly denied the moment the tier was unassigned.
+  it('an unpinned location (no active tier row) leaves its EXISTING bundle overrides untouched — fail-closed, no reopening', async () => {
     const priorlyDenied = Object.fromEntries(BUNDLE_KEYS.map((k) => [k, false]))
     const { db, updates } = stubDb({ locationPlanRows: [], location: { features: priorlyDenied } })
     const result = await applyPlanBundlesToLocation(db, 'loc-1')
     expect(updates).toHaveLength(1)
-    for (const key of BUNDLE_KEYS) expect(key in result, key).toBe(false)
+    expect(result).toEqual(priorlyDenied)
+    for (const key of BUNDLE_KEYS) expect(result[key], key).toBe(false)
+  })
+
+  it('an unpinned, never-touched location ({}) stays {} — still means "everything on" (back-compat, unaffected by this fix)', async () => {
+    const { db } = stubDb({ locationPlanRows: [], location: { features: {} } })
+    const result = await applyPlanBundlesToLocation(db, 'loc-1')
+    expect(result).toEqual({})
   })
 
   it('preserves the location row id targeting and stamps updated_at', async () => {

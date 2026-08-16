@@ -21,6 +21,8 @@ import {
   MOBILE_PERMISSION_KEYS,
   NOTIFY_KEYS,
   APPROVAL_SUBPERMISSION_KEYS,
+  APPROVAL_CATEGORY_PERMISSION,
+  isFeatureEnabledAtLocation,
 } from './permissions.js'
 
 const ALL_KEYS = Array.from(new Set([...WEB_PERMISSION_KEYS, ...MOBILE_PERMISSION_KEYS]))
@@ -88,10 +90,46 @@ describe('completeness — every WEB + MOBILE key is classified exactly once', (
   })
 })
 
+// BUNDLES.5 final-review fix 1 — restructured: EXEMPT_KEYS is still one
+// literal list (the drift guard below is unchanged), but the TWO
+// halves that make it up are no longer symmetric in how the bundle
+// layer treats them, so the guard now says so explicitly rather than
+// implying "exempt" means the same thing for both.
 describe('EXEMPT_KEYS mirrors the existing location-gate exemptions', () => {
   it('exactly matches NOTIFY_KEYS ∪ APPROVAL_SUBPERMISSION_KEYS (drift guard)', () => {
     const expected = new Set([...NOTIFY_KEYS, ...APPROVAL_SUBPERMISSION_KEYS])
     expect(new Set(EXEMPT_KEYS)).toEqual(expected)
+  })
+
+  it('bundlesDenyKey (the KEY_BUNDLES-based per-key check) never denies EITHER half — that part IS still symmetric', () => {
+    const everyBundleOff = Object.fromEntries(BUNDLE_KEYS.map(b => [b, false]))
+    for (const key of EXEMPT_KEYS) {
+      expect(bundlesDenyKey(everyBundleOff, key), key).toBe(false)
+      expect(KEY_BUNDLES[key], key).toBeUndefined()
+    }
+  })
+
+  it('notify_* keys: FULLY exempt — isFeatureEnabledAtLocation never denies them, no matter how every bundle is set', () => {
+    const everyBundleOff = { bundle_sales: false, bundle_members: false, bundle_money: false, bundle_messaging: false, bundle_marketing: false, bundle_team: false, bundle_operations: false, module_cars: false }
+    for (const key of NOTIFY_KEYS) {
+      expect(isFeatureEnabledAtLocation({ features: everyBundleOff }, key), key).toBe(true)
+    }
+  })
+
+  it('approvals_* keys: per-key exempt (their own features[key]=false is ignored) but CATEGORY-bundle-followed — every APPROVAL_SUBPERMISSION_KEYS entry maps to a real CATEGORY_BUNDLES category', () => {
+    for (const key of APPROVAL_SUBPERMISSION_KEYS) {
+      // Per-key exempt: an individual override does nothing on its own.
+      expect(isFeatureEnabledAtLocation({ features: { [key]: false } }, key), key).toBe(true)
+      // Category-bundle-followed: every approvals_* key's category (the
+      // reverse of shared/permissions.js APPROVAL_CATEGORY_PERMISSION)
+      // is a real, non-empty CATEGORY_BUNDLES entry — so
+      // isFeatureEnabledAtLocation has a real bundle check to run, not
+      // a silent no-op.
+      const category = Object.entries(APPROVAL_CATEGORY_PERMISSION).find(([, k]) => k === key)?.[0]
+      expect(category, key).toBeTruthy()
+      expect(CATEGORY_BUNDLES[category], category).toBeDefined()
+      expect(CATEGORY_BUNDLES[category].length, category).toBeGreaterThan(0)
+    }
   })
 })
 

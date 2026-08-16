@@ -15,6 +15,7 @@ import { useRouter } from 'next/navigation'
 import { Check, AlertCircle, ChevronRight } from 'lucide-react'
 import { WEB_PERMISSIONS, MOBILE_PERMISSIONS, isFeatureGatedByLocation, isFeatureEnabledAtLocation } from '@shared/permissions'
 import { BUNDLE_KEYS, BUNDLE_LABELS } from '@shared/permission-bundles'
+import { nextRawFeatureValue, isBundleDenied, bundleDenialNote } from '@/lib/feature-toggle-ui'
 
 // BUNDLES.5 — was a hand-rolled `isOn(features, key)` mirror of
 // isFeatureEnabledAtLocation's polarity; now calls the REAL helper so
@@ -22,22 +23,27 @@ import { BUNDLE_KEYS, BUNDLE_LABELS } from '@shared/permission-bundles'
 // now needs to account for the bundle layer, not just the individual
 // key, and re-deriving that here would be exactly the kind of second
 // implementation the bundle layer's own polarity tests exist to catch
-// drift in).
+// drift in). This is the DISPLAY value only — what a click WRITES is a
+// separate question, see nextRawFeatureValue below (final-review fix 2).
 function isOn(features, key) {
   return isFeatureEnabledAtLocation({ features }, key)
 }
 
-function FeatureToggle({ on, onToggle, busy, label, hint }) {
+function FeatureToggle({ on, onToggle, busy, label, hint, disabled, deniedNote }) {
+  const isDisabled = busy || disabled
   return (
     <div className="flex items-start justify-between gap-3 py-2">
       <div className="flex-1 min-w-0">
         <div className="text-sm text-un1t-text">{label}</div>
         {hint && <div className="text-[11px] text-un1t-subtle mt-0.5">{hint}</div>}
+        {deniedNote && <div className="text-[11px] text-amber-600 mt-0.5">{deniedNote} — flip the bundle to change this</div>}
       </div>
       <button
         type="button"
         onClick={onToggle}
-        disabled={busy}
+        disabled={isDisabled}
+        title={deniedNote || undefined}
+        aria-label={`${label} toggle`}
         className={`shrink-0 w-10 h-5 rounded-full transition-colors disabled:opacity-40 ${on ? 'bg-green-500' : 'bg-un1t-border'}`}
         aria-pressed={on}
       >
@@ -61,7 +67,16 @@ export default function LocationFeatures({ location }) {
 
   async function toggle(key) {
     setBusyKey(key); setError(null)
-    const next = { ...features, [key]: !isOn(features, key) }
+    // BUNDLES.5 final-review fix 2 — write the RAW flip, never the
+    // bundle-aware composite (`isOn`/isFeatureEnabledAtLocation). Using
+    // the composite here used to silently promote a bundle-denied key's
+    // unset/true raw value to an explicit `true` with zero visible
+    // effect (the bundle still denies it) — a stray override nobody
+    // remembers setting, waiting to surprise the next person who
+    // re-enables the bundle. Bundle-denied rows are also rendered
+    // disabled below (isBundleDenied), so in practice this path isn't
+    // reachable for them anyway — this is the belt to that braces.
+    const next = { ...features, [key]: nextRawFeatureValue(features, key) }
     // Optimistic update — revert on failure.
     setFeatures(next)
     try {
@@ -170,6 +185,8 @@ export default function LocationFeatures({ location }) {
                     busy={busyKey === f.key}
                     label={f.label}
                     hint={f.hint}
+                    disabled={isBundleDenied(features, f.key)}
+                    deniedNote={isBundleDenied(features, f.key) ? bundleDenialNote(f.key) : null}
                   />
                 ))}
               </div>
@@ -189,6 +206,8 @@ export default function LocationFeatures({ location }) {
                     busy={busyKey === f.key}
                     label={f.label}
                     hint={f.hint}
+                    disabled={isBundleDenied(features, f.key)}
+                    deniedNote={isBundleDenied(features, f.key) ? bundleDenialNote(f.key) : null}
                   />
                 ))}
               </div>

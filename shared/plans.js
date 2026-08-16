@@ -9,6 +9,8 @@
 // Plain JS, no Next.js / React imports (the shared/ seam — mobile can
 // consume this via Metro if it ever needs to render plan features).
 
+import { BUNDLE_KEYS, BUNDLE_LABELS } from './permission-bundles.js'
+
 // Billing meters — the quantities plan allowances are keyed by.
 // Naming aligns with the mig 411 usage ledger (usage_events /
 // usage_rollups_daily): wa_template_send and email_send are rollup
@@ -49,8 +51,6 @@ export const UNIT_RATE_KEYS = Object.freeze({
   email_per_1k: { label: 'Email',              per: '1,000 emails' },
   ai_message:   { label: 'AI message',         per: 'message' },
 })
-
-import { BUNDLE_KEYS, BUNDLE_LABELS } from './permission-bundles.js'
 
 // Boolean feature flags on plan_versions.features. Structure here,
 // inclusion per tier/add-on in the DB.

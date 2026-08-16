@@ -192,12 +192,49 @@ describe('per-location feature gate — bundle layer (BUNDLES.5)', () => {
     }
   })
 
-  it('the 8 approvals_* per-category grants stay exempt from the bundle layer too (Task 2 handles categories separately)', () => {
-    for (const key of APPROVAL_SUBPERMISSION_KEYS) {
-      expect(isFeatureEnabledAtLocation({
-        features: { bundle_sales: false, bundle_members: false, bundle_money: false, bundle_messaging: false, bundle_marketing: false, bundle_team: false, bundle_operations: false, module_cars: false },
-      }, key)).toBe(true)
-    }
+  // BUNDLES.5 final-review fix 1 (the "Money chrome leak"): approvals_*
+  // keys are exempt from THEIR OWN per-key toggle, but now follow their
+  // owning CATEGORY's bundle (shared/permissions.js
+  // APPROVAL_CATEGORY_PERMISSION → shared/permission-bundles.js
+  // CATEGORY_BUNDLES), via the same mechanism Task 2 wired into the
+  // approvals registry. Replaces the old "stay exempt from the bundle
+  // layer too" test, which was the bug: it asserted the leak as
+  // correct behaviour.
+  describe('approvals_* keys: per-key exempt, category-bundle-followed', () => {
+    it('an individual approvals_* key toggle (features["approvals_x"] = false) does NOTHING — still per-key exempt', () => {
+      for (const key of APPROVAL_SUBPERMISSION_KEYS) {
+        expect(isFeatureEnabledAtLocation({ features: { [key]: false } }, key), key).toBe(true)
+      }
+    })
+
+    it('every bundle owning the key\'s category off DOES deny it now', () => {
+      // contractor_invoices / fte_expenses / offer_purchases → bundle_money
+      expect(isFeatureEnabledAtLocation({ features: { bundle_money: false } }, 'approvals_contractor_invoices')).toBe(false)
+      expect(isFeatureEnabledAtLocation({ features: { bundle_money: false } }, 'approvals_fte_expenses')).toBe(false)
+      expect(isFeatureEnabledAtLocation({ features: { bundle_money: false } }, 'approvals_offer_purchases')).toBe(false)
+      // time_off / shift_swaps / rosters → bundle_team
+      expect(isFeatureEnabledAtLocation({ features: { bundle_team: false } }, 'approvals_time_off')).toBe(false)
+      expect(isFeatureEnabledAtLocation({ features: { bundle_team: false } }, 'approvals_shift_swaps')).toBe(false)
+      expect(isFeatureEnabledAtLocation({ features: { bundle_team: false } }, 'approvals_rosters')).toBe(false)
+      // hyrox_sessions → bundle_members
+      expect(isFeatureEnabledAtLocation({ features: { bundle_members: false } }, 'approvals_hyrox_sessions')).toBe(false)
+      // agent_requests → bundle_sales OR bundle_members (OR semantics)
+      expect(isFeatureEnabledAtLocation({ features: { bundle_sales: false, bundle_members: true } }, 'approvals_agent_requests')).toBe(true)
+      expect(isFeatureEnabledAtLocation({ features: { bundle_sales: false, bundle_members: false } }, 'approvals_agent_requests')).toBe(false)
+    })
+
+    it('the individual-key exemption and the category-bundle check are independent — {} (bundle on) always enables regardless of the (never-consulted) individual key', () => {
+      for (const key of APPROVAL_SUBPERMISSION_KEYS) {
+        expect(isFeatureEnabledAtLocation({ features: {} }, key), key).toBe(true)
+      }
+    })
+
+    it('every bundle off (every category loses its owner) denies all 8 approvals_* keys', () => {
+      const features = { bundle_sales: false, bundle_members: false, bundle_money: false, bundle_messaging: false, bundle_marketing: false, bundle_team: false, bundle_operations: false, module_cars: false }
+      for (const key of APPROVAL_SUBPERMISSION_KEYS) {
+        expect(isFeatureEnabledAtLocation({ features }, key), key).toBe(false)
+      }
+    })
   })
 
   it('{} (every existing location today) still means everything on — back-compat is sacred', () => {

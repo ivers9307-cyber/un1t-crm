@@ -15,7 +15,7 @@
 // the two owning bundles must NOT deny it; turning off both must.
 
 import { describe, it, expect } from 'vitest'
-import { resolvePermission } from '@shared/permissions'
+import { resolvePermission, DEFAULT_WEB_PERMISSIONS_BY_ROLE } from '@shared/permissions'
 import { KEY_BUNDLES } from '@shared/permission-bundles'
 import { ALL_NAV } from './nav-items'
 
@@ -68,5 +68,58 @@ describe('R2 — real resolver × real nav unions: the studio_management dual-ow
 
   it('location {bundle_members: false, bundle_operations: false} — studio_management now resolves false (both owners off)', () => {
     expect(resolvesAtLocation({ bundle_members: false, bundle_operations: false }, 'studio_management')).toBe(false)
+  })
+})
+
+// Final-review fix 1 persona test — the "Money chrome leak" this fix
+// closes. Drives the REAL resolver (via a realistic 'owner' role, not
+// master — so tier 3 role defaults are actually exercised) against the
+// REAL Money hub anyPermission union. Before the fix, 3 of these 7 keys
+// (the approvals_* trio) were fully exempt from the bundle layer, so
+// the union stayed non-empty — Money's sidebar entry, redirect chain,
+// (money) review tabs and /offer-sales all stayed reachable — even at
+// bundle_money: false, for any role (owner by role default) holding
+// those three grants.
+const moneyEntry = ALL_NAV.find((i) => i.href === '/money')
+
+function resolvesForOwner(features, key) {
+  return resolvePermission({
+    role: 'owner',
+    location: { features },
+    permissions: null,
+    roleTemplate: null,
+    defaults: DEFAULT_WEB_PERMISSIONS_BY_ROLE,
+    key,
+  })
+}
+
+describe('final-review fix 1 — bundle_money:false closes Money chrome entirely for an owner', () => {
+  it('sanity: the real Money anyPermission union is the expected 7 keys, incl. the 3 approvals_* keys', () => {
+    expect(moneyEntry).toBeTruthy()
+    expect(moneyEntry.anyPermission).toEqual([
+      'accounting_hub', 'invoices_inbox', 'card_receipts', 'orders',
+      'approvals_offer_purchases', 'approvals_contractor_invoices', 'approvals_fte_expenses',
+    ])
+  })
+
+  it('sanity: an owner holds every one of those 7 keys by role default at an unconstrained ({}) location', () => {
+    for (const key of moneyEntry.anyPermission) {
+      expect(resolvesForOwner({}, key), key).toBe(true)
+    }
+  })
+
+  it('bundle_money: false denies EVERY key in the real Money union for an owner — the union goes fully empty, the hub entry disappears', () => {
+    for (const key of moneyEntry.anyPermission) {
+      expect(resolvesForOwner({ bundle_money: false }, key), key).toBe(false)
+    }
+    // What nav-items.js's own anyPermission check actually ORs —
+    // proves the WHOLE hub entry, not just individual keys, goes dark.
+    const hubVisible = moneyEntry.anyPermission.some((key) => resolvesForOwner({ bundle_money: false }, key))
+    expect(hubVisible).toBe(false)
+  })
+
+  it('bundle_money: true (or any other bundle off) leaves the union intact', () => {
+    const hubVisible = moneyEntry.anyPermission.some((key) => resolvesForOwner({ bundle_money: true, bundle_sales: false }, key))
+    expect(hubVisible).toBe(true)
   })
 })

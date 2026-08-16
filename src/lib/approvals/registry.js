@@ -91,15 +91,29 @@ export const APPROVALS_PROVIDERS = Object.freeze([
 //
 // The permissionKey / isVisible() check above is a pure per-user GRANT
 // (hasPermission on an EXEMPT_KEYS permission — see
-// shared/permission-bundles.js — never itself location-gated). That's
-// exactly why a bundle-off location used to have no effect here: the
-// grant alone decided visibility, bypassing location-level gating
-// entirely (the parked HOME.3 decision). bundlesDenyCategory() is a
-// SEPARATE, independent check against shared/permission-bundles.js's
-// CATEGORY_BUNDLES map, applied on top — a category is hidden if
-// EITHER the per-user grant is missing OR its owning bundle(s) are
-// all explicitly off. A category with no bundle mapping (`issues` —
-// mirrors the core `issues_inbox` key) is never denied by this check.
+// shared/permission-bundles.js — never PER-KEY location-gated). That
+// used to mean a bundle-off location had no effect here at all: the
+// grant alone decided visibility (the parked HOME.3 decision).
+// bundlesDenyCategory() is a SEPARATE, independent check against
+// shared/permission-bundles.js's CATEGORY_BUNDLES map, applied on top
+// — a category is hidden if EITHER the per-user grant is missing OR
+// its owning bundle(s) are all explicitly off. A category with no
+// bundle mapping (`issues` — mirrors the core `issues_inbox` key) is
+// never denied by this check.
+//
+// BUNDLES.5 final-review fix 1 — for the 7 providers whose
+// `permissionKey` is one of the 8 `approvals_*` keys, `hasPermission()`
+// above now ALSO runs this exact same category-bundle check internally
+// (shared/permissions.js isFeatureEnabledAtLocation, fixed to close a
+// Money-hub chrome leak: nav/tabs/redirect-chain call sites weren't
+// running through this registry and so weren't getting
+// bundlesDenyCategory's protection at all). So for those providers the
+// `bundlesDenyCategory()` line below is now a HARMLESS DOUBLE-APPLICATION
+// of the same rule `granted` already encodes — kept rather than removed
+// because (a) `invoicesQueueProvider`/`issuesProvider` have no
+// permissionKey and rely on this line as their ONLY bundle check, and
+// (b) a single shared gate here is simpler to reason about than
+// special-casing which providers still need it.
 //
 // Single implementation shared by getPendingApprovals AND
 // getPendingApprovalsCount so the two can't drift the way the

@@ -294,14 +294,30 @@ export const CORE_KEYS = Object.freeze([
 ])
 
 // ============================================================
-// EXEMPT_KEYS — keys that were NEVER location-gated in the first
-// place (shared/permissions.js `isFeatureGatedByLocation`): the 25
-// personal `notify_*` toggles and the 8 `approvals_*` per-category
-// grants. bundlesDenyKey() never denies them (and in production
-// isFeatureEnabledAtLocation short-circuits to `true` before
-// bundlesDenyKey is even consulted, per the existing
-// isFeatureGatedByLocation() check — this classification exists only
-// so the completeness test can account for all ~110 keys).
+// EXEMPT_KEYS — keys that were NEVER location-gated PER-KEY in the
+// first place (shared/permissions.js `isFeatureGatedByLocation`): the
+// 25 personal `notify_*` toggles and the 8 `approvals_*` per-category
+// grants. bundlesDenyKey() (the KEY_BUNDLES-based single-key check)
+// never denies them — that part is still exactly as documented before.
+//
+// BUNDLES.5 final-review fix 1 — the two halves of EXEMPT_KEYS are NO
+// LONGER symmetric w.r.t. the bundle layer AS A WHOLE, only w.r.t.
+// bundlesDenyKey specifically:
+//   - `notify_*` (NOTIFY_KEYS) stay FULLY exempt — isFeatureEnabledAtLocation
+//     short-circuits them to `true` unconditionally, same as always.
+//   - `approvals_*` (APPROVAL_SUBPERMISSION_KEYS) are exempt from their
+//     OWN per-key toggle only. isFeatureEnabledAtLocation now runs a
+//     SEPARATE check for them — bundlesDenyCategory() against
+//     CATEGORY_BUNDLES below, via each key's owning category
+//     (shared/permissions.js APPROVAL_CATEGORY_PERMISSION) — so an
+//     approvals_* key DOES get denied when every bundle owning its
+//     category is off, even though `features['approvals_x'] = false`
+//     alone still does nothing. See isFeatureEnabledAtLocation's own
+//     comment for why (the Money-hub chrome-leak this closes).
+// This classification (KEY_BUNDLES/CORE_KEYS/EXEMPT_KEYS) itself is
+// UNCHANGED by that fix — approvals_* keys still don't belong in
+// KEY_BUNDLES, because their bundle-following runs through the
+// separate CATEGORY_BUNDLES mechanism, not this file's per-key one.
 //
 // Deliberately a LITERAL list, not `[...NOTIFY_KEYS,
 // ...APPROVAL_SUBPERMISSION_KEYS]` imported from shared/permissions.js
