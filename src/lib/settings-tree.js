@@ -51,6 +51,7 @@ import {
   CreditCard, Gauge,
   Download, KeyRound,
   ShieldCheck, Eye, Fingerprint, Lock,
+  AlertTriangle,
 } from 'lucide-react'
 
 export const SETTINGS_TREE = [
@@ -104,9 +105,7 @@ export const SETTINGS_TREE = [
       // elsewhere: `tenants`/`plans`/`tenant-domains`/`health`/`matrix`/
       // `bridges`/`studio-devices`/`webhook-dead-letter` reach masters
       // via the 8-item platform console (src/lib/platform-nav.js,
-      // ADMIN.2h Task 2); `webhook-dead-letter` separately reaches
-      // owners via the integration-health remediation link (unchanged,
-      // see integration-health.js); and `fleet` — deliberately NOT a
+      // ADMIN.2h Task 2); and `fleet` — deliberately NOT a
       // console page, since fleet_restart holders aren't master/owner —
       // reaches everyone via the Operations hub's `fleet` tab
       // ((operations)/layout.js, ADMIN.2h Task 2). "Everyone" here means
@@ -116,8 +115,23 @@ export const SETTINGS_TREE = [
       // task): without it, a fleet-only persona with every other
       // Operations permission revoked would never see the Operations
       // sidebar entry at all and the tab would be undiscoverable. This
-      // is also why this pin now reads "the tree contains ZERO /admin
-      // hrefs" in settings-tree.test.js.
+      // is also why this pin originally read "the tree contains ZERO
+      // /admin hrefs" in settings-tree.test.js.
+      //
+      // FU-DEADLETTER-OWNER-PATH amendment — that ZERO-/admin-hrefs pin
+      // turned out to hide a real gap: `webhook-dead-letter`'s page gate
+      // is master-OR-owner, but the platform console (the only nav path
+      // above) is master-only chrome (AppShell engages it only for
+      // `user.isMaster` — see platform-nav.js's header comment), and the
+      // ONLY other pointer at the page was integration-health's
+      // remediation link, which renders solely when that integration's
+      // status is warn/down — not a persistent path. An owner with
+      // nothing currently broken had literally no way to discover the
+      // page. The `webhook-dead-letter` row in the Integrations group
+      // below is the fix: a persistent, owner-reachable door, gated
+      // identically to the page (`{ roles: ['owner', 'master'] }`). The
+      // /admin-hrefs pin test now allowlists this one href explicitly
+      // rather than asserting zero.
       {
         id: 'admin-achievements',
         label: 'Achievements',
@@ -282,6 +296,24 @@ export const SETTINGS_TREE = [
         // This row is gated narrower — owner/master, matching every other
         // row in this group — per the Task 3 spec's explicit instruction
         // ("leave visible to owner/master").
+        gate: { roles: ['owner', 'master'] },
+      },
+      {
+        id: 'webhook-dead-letter',
+        label: 'Webhook dead letters',
+        href: '/admin/webhook-dead-letter',
+        description: 'Failed webhook deliveries from Postmark and other providers — bounces, unroutable inbound email, and unfiled ticket replies that ran out of retries. Replay the ones that are safely replayable; mark the rest resolved by hand.',
+        icon: AlertTriangle,
+        // FU-DEADLETTER-OWNER-PATH — the ONE deliberate exception to this
+        // tree's "zero /admin hrefs" rule (see the Workspace group's
+        // ADMIN.2h Task 1 comment above for the full history). The page
+        // stays at its /admin URL — it's a platform-tier page
+        // (src/lib/platform-nav.js) that masters reach via the console —
+        // but the console shell is master-only, and owners pass the
+        // page's own master-or-owner gate with no persistent nav path to
+        // it otherwise. Gate mirrors the page's own check EXACTLY
+        // (`user.profileRole === 'master' || user.role === 'owner'` in
+        // src/app/admin/webhook-dead-letter/page.js).
         gate: { roles: ['owner', 'master'] },
       },
     ],
