@@ -7,6 +7,7 @@
 
 import { getCurrentUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
+import ScheduleTabs from '@/components/ScheduleTabs'
 import InvoicesManager from '@/components/InvoicesManager'
 
 export const dynamic = 'force-dynamic'
@@ -16,6 +17,9 @@ export default async function InvoicesPage() {
   if (!user) redirect('/login')
   return (
     <div className="p-8">
+      {/* SCHED.9 — the Schedule tab strip now follows onto every sibling
+          page, not just the root. */}
+      <ScheduleTabs user={user} />
       <InvoicesManager user={user} />
     </div>
   )

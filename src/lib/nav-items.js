@@ -385,15 +385,20 @@ export const ALL_NAV = [
   // `/admin/contracts` URL now redirects there).
   //
   // Folded-forward context from the old standalone entries:
-  //  - Schedule — internal tab strip (ScheduleTabs.jsx) holds
-  //    Schedule / Approvals / Reporting / Invoices / Attendance. The
-  //    Attendance tab (mig 120 — auto-stamped from UniFi Access door
-  //    unlocks) used to be a top-level sidebar entry; folded into the
-  //    schedule tab strip in May 2026 because operationally it sits
-  //    next to Invoices (both are about staff time + pay). Same
+  //  - Schedule — second-level tab strip (ScheduleTabs.jsx) holds
+  //    Schedule / Reporting / Time Off / Swaps / Invoices / Expenses /
+  //    Attendance. The Attendance tab (mig 120 — auto-stamped from UniFi
+  //    Access door unlocks) used to be a top-level sidebar entry; folded
+  //    into the schedule tab strip in May 2026 because operationally it
+  //    sits next to Invoices (both are about staff time + pay). Same
   //    attendance_reports permission gate; the standalone
   //    /schedule/attendance URL still works as a deep link for
-  //    cron-driven emails / scheduled reminders.
+  //    cron-driven emails / scheduled reminders. SCHED.9 (2026-08) made
+  //    every tab a real Link to its own /schedule/* page instead of a
+  //    useState swap — Reporting is the one exception (no standalone page
+  //    exists, so it's distinguished by a /schedule?view=reporting search
+  //    param instead); ScheduleTabs.jsx's own header comment has the
+  //    full duplication-vs-convergence writeup.
   //  - Contracts (mig 106) — digital staff/contractor contracts.
   //    HUBS.2a had promoted it from a Studio Management child to Team
   //    (staff contracts belong beside the schedule they're tied to,
