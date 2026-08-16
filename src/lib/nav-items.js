@@ -243,8 +243,24 @@ export const ALL_NAV = [
   //    it's not a daily surface; the ⌘K palette keeps it one
   //    keystroke away. HUBS.2a regrouped it under Money as a revenue
   //    ledger beside Accounting/Invoices.
+  //
+  // DEEP.4 Task 1 (4A) — approvals_contractor_invoices and
+  // approvals_fte_expenses join the union so a reviewer who holds ONLY
+  // one of these two keys still sees the Money hub entry at all: the
+  // (money) route group's tab strip (src/app/(money)/layout.js) grew
+  // two cross-hub review tabs pointing at /schedule/invoices and
+  // /schedule/expenses (submitters keep using Team → Schedule; this is
+  // the reviewer-side door). Deliberately NOT added to
+  // extraActivePaths — those two routes are (team)-group pages and
+  // Team's own extraActivePaths already claims the /schedule prefix,
+  // so landing on either page lights Team's sidebar entry, not
+  // Money's (activeHrefFor is a longest-match ONE winner; see
+  // nav-items.test.js's "cross-hub tab active-state" cases). Same
+  // pattern as (operations)'s `fleet` tab (/admin/fleet) and
+  // (members)'s `live` tab (/live) — a hub tab whose href lives
+  // outside that hub's own route group and sidebar territory.
   { href: '/money', label: 'Money', icon: Wallet,
-    anyPermission: ['accounting_hub', 'invoices_inbox', 'card_receipts', 'orders', 'approvals_offer_purchases'],
+    anyPermission: ['accounting_hub', 'invoices_inbox', 'card_receipts', 'orders', 'approvals_offer_purchases', 'approvals_contractor_invoices', 'approvals_fte_expenses'],
     extraActivePaths: ['/accounting', '/invoices', '/card-receipts', '/orders', '/offer-sales'],
     section: 'money' },
 

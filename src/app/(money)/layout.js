@@ -18,6 +18,33 @@
 // the permission but not the role — same pre-existing overshow the /money
 // index comment already documents, carried into the tab gate for
 // consistency rather than fixed here.
+//
+// DEEP.4 Task 1 (4A) — Contractor invoices + Staff expenses are
+// CROSS-HUB tabs: their hrefs (/schedule/invoices, /schedule/expenses)
+// point OUTSIDE this route group, into (team). Same technique as
+// (operations)'s `fleet` tab (/admin/fleet) and (members)'s `live` tab
+// (/live) — a hub tab is just a discoverable, permission-gated link;
+// it doesn't require its target to live inside the hub's own group.
+// Spec amendment (recon 2026-08-16, documented for review): moving
+// those two pages under Money URLs would cost a NEW permission key
+// (submitters hold no Money-union key — their only nav path today is
+// Team → Schedule) purchased only for URL aesthetics, since the
+// approvals rows/emails/`?focus` params work identically either way.
+// So the URLs stay put and Money grows a reviewer-only door to them
+// instead: gated on the APPROVER keys (approvals_contractor_invoices /
+// approvals_fte_expenses), not the submitter-facing page gate (which
+// is role/employment_type driven, not a permission check at all).
+// Submitters keep reaching these pages via Team → Schedule; nothing
+// about that path changes.
+//
+// Active-state note: arriving at either page renders NO Money strip
+// (they're outside this group) — Team's own strip + sidebar entry
+// light instead, because Team's extraActivePaths already claims the
+// /schedule prefix and activeHrefFor is a longest-match ONE winner
+// (src/lib/nav-items.js, src/lib/nav-items.test.js). This is the
+// accepted cross-hub-tab UX, same as fleet/live above: the tab exists
+// to give reviewers a discoverable path from Money, not to make the
+// destination page part of Money's chrome.
 
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
@@ -31,6 +58,8 @@ const TABS = [
   { id: 'receipts', label: 'Card receipts', href: '/card-receipts', perms: ['card_receipts'] },
   { id: 'orders',   label: 'Orders',        href: '/orders',        perms: ['orders'] },
   { id: 'offers',   label: 'Offer sales',   href: '/offer-sales',   perms: ['approvals_offer_purchases'] },
+  { id: 'contractor-invoices', label: 'Contractor invoices', href: '/schedule/invoices', perms: ['approvals_contractor_invoices'] },
+  { id: 'expenses',            label: 'Staff expenses',      href: '/schedule/expenses', perms: ['approvals_fte_expenses'] },
 ]
 
 export default async function MoneyHubLayout({ children }) {

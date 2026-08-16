@@ -132,8 +132,23 @@ describe('Money hub', () => {
 
   it('the Money hub entry ORs its member permissions and lights on member paths', () => {
     const money = ALL_NAV.find(i => i.href === '/money')
-    expect(money.anyPermission).toEqual(['accounting_hub', 'invoices_inbox', 'card_receipts', 'orders', 'approvals_offer_purchases'])
+    expect(money.anyPermission).toEqual(['accounting_hub', 'invoices_inbox', 'card_receipts', 'orders', 'approvals_offer_purchases', 'approvals_contractor_invoices', 'approvals_fte_expenses'])
     expect(money.extraActivePaths).toEqual(['/accounting', '/invoices', '/card-receipts', '/orders', '/offer-sales'])
+  })
+
+  // DEEP.4 Task 1 (4A) — the two review tabs added to (money)/layout.js
+  // point at /schedule/invoices and /schedule/expenses, which are Team
+  // URLs, not Money ones. Deliberately NOT added to extraActivePaths
+  // above: those paths are already claimed by Team's own `/schedule`
+  // extraActivePath, and activeHrefFor is a longest-match ONE winner —
+  // see the "cross-hub tab active-state" case below for the proof that
+  // Team wins, not Money.
+  it('the two approver keys join the union without joining extraActivePaths (Team already claims /schedule/*)', () => {
+    const money = ALL_NAV.find(i => i.href === '/money')
+    expect(money.anyPermission).toContain('approvals_contractor_invoices')
+    expect(money.anyPermission).toContain('approvals_fte_expenses')
+    expect(money.extraActivePaths).not.toContain('/schedule/invoices')
+    expect(money.extraActivePaths).not.toContain('/schedule/expenses')
   })
 })
 
@@ -254,6 +269,31 @@ describe('activeHrefFor — longest-match single winner', () => {
 
   it('returns null when nothing matches', () => {
     expect(activeHrefFor('/nonexistent', ALL_NAV)).toBeNull()
+  })
+
+  // DEEP.4 Task 1 (4A) — the Money hub's two new cross-hub review tabs
+  // (Contractor invoices, Staff expenses; see (money)/layout.js) point
+  // at /schedule/invoices and /schedule/expenses. Those routes live in
+  // the (team) route group and Team's own extraActivePaths already
+  // claims the /schedule prefix — Money's extraActivePaths does NOT
+  // list them (see nav-items.test.js's Money hub describe block above),
+  // so Team is the only candidate and wins outright. This is the
+  // accepted cross-hub-tab UX (same shape as (operations)'s `fleet`
+  // tab at /admin/fleet, and (members)'s `live` tab at /live): landing
+  // on the tab's page shows the OTHER hub's sidebar highlight and
+  // strip, not Money's — there is no Money chrome on a (team) page.
+  it('a Money cross-hub review tab (contractor invoices) lights Team, not Money', () => {
+    expect(activeHrefFor('/schedule/invoices', ALL_NAV)).toEqual({
+      itemHref: '/team',
+      matchedPath: '/schedule',
+    })
+  })
+
+  it('a Money cross-hub review tab (staff expenses) lights Team, not Money', () => {
+    expect(activeHrefFor('/schedule/expenses', ALL_NAV)).toEqual({
+      itemHref: '/team',
+      matchedPath: '/schedule',
+    })
   })
 
   it('a child match reports the PARENT item as itemHref, and the matched child href as matchedPath, so the group opens and the child row lights (SYNTHETIC fixture — HUBS.2e Task 5 removed the last children-bearing entry, Studio Management, from ALL_NAV; this hand-built items array keeps child-match semantics tested forever, independent of what nav data looks like)', () => {
