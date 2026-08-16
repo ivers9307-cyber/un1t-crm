@@ -1,31 +1,26 @@
 // @vitest-environment jsdom
 //
-// COMMSLAYOUT.2 / .3 — two defects in one strip:
+// COMMSLAYOUT.2 — six `flex-1` tabs in a no-wrap, no-scroll row squash to
+// unreadable at 375px. The row scrolls horizontally on narrow screens and
+// keeps the even-width desktop layout via `min-w-full` + `flex-1`.
 //
-//  .2  Six `flex-1` tabs in a no-wrap, no-scroll row squash to unreadable at
-//      375px. The row now scrolls horizontally on narrow screens and keeps the
-//      even-width desktop layout via `min-w-full` + `flex-1`.
-//  COMMS-IA.3 renamed two of the six labels: "Sends" → "Sent" (the route was
-//      always /communications/sent) and "Email" → "Email inbox". The label
-//      list below is the guard that both landed.
-//  .3  The Segments tab used to render on `canEmail || canWhatsapp` while
-//      /communications/segments itself is manager-gated, so a `staff` user with
-//      the email permission was ejected to `/`. The tab now takes its own
-//      `canSegments` prop and simply is not rendered for them.
+// DEEP.4 Task 2 (4B) — this component slimmed from six tabs to two: Send /
+// Sent / Templates / Segments moved to communications/(marketing-era) (see
+// that layout's header comment). What's left is Inbox + Email inbox, so
+// this file's fixtures and assertions shrink to match — the scroller/fade/
+// badge behaviour underneath is unchanged and still worth pinning at two
+// tabs (a narrow viewport can still overflow with badges attached).
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, within, fireEvent, act } from '@testing-library/react'
 
 const { polled } = vi.hoisted(() => ({ polled: vi.fn(() => 0) }))
-vi.mock('next/navigation', () => ({ usePathname: () => '/communications/sent' }))
+vi.mock('next/navigation', () => ({ usePathname: () => '/communications/tickets' }))
 vi.mock('../use-polled-count', () => ({ usePolledCount: (...args) => polled(...args) }))
 
 import CommunicationsTabs from './CommunicationsTabs.jsx'
 
-const ALL = {
-  canSms: true, canEmail: true, canWhatsapp: true,
-  canEmailInbox: true, canSegments: true,
-}
+const ALL = { canWhatsapp: true, canEmailInbox: true }
 
 beforeEach(() => {
   cleanup()
@@ -41,10 +36,27 @@ function strip(container) {
 }
 
 describe('CommunicationsTabs — 375px survivability (COMMSLAYOUT.2)', () => {
-  it('renders all six tabs when every permission is held', () => {
+  it('renders both tabs when both permissions are held', () => {
     const { container } = render(<CommunicationsTabs {...ALL} />)
     const labels = within(container).getAllByRole('link').map((a) => a.textContent)
-    expect(labels).toEqual(['Send', 'Sent', 'Inbox', 'Email inbox', 'Templates', 'Segments'])
+    expect(labels).toEqual(['Inbox', 'Email inbox'])
+  })
+
+  it('renders only Inbox when canEmailInbox is false', () => {
+    render(<CommunicationsTabs canWhatsapp canEmailInbox={false} />)
+    expect(screen.getByRole('link', { name: /^Inbox$/ })).toBeTruthy()
+    expect(screen.queryByRole('link', { name: /^Email inbox$/ })).toBeNull()
+  })
+
+  it('renders only Email inbox when canWhatsapp is false', () => {
+    render(<CommunicationsTabs canWhatsapp={false} canEmailInbox />)
+    expect(screen.queryByRole('link', { name: /^Inbox$/ })).toBeNull()
+    expect(screen.getByRole('link', { name: /^Email inbox$/ })).toBeTruthy()
+  })
+
+  it('renders nothing when neither permission is held', () => {
+    const { container } = render(<CommunicationsTabs canWhatsapp={false} canEmailInbox={false} />)
+    expect(within(container).queryAllByRole('link')).toHaveLength(0)
   })
 
   it('puts the row in a horizontal scroll container', () => {
@@ -74,10 +86,10 @@ describe('CommunicationsTabs — 375px survivability (COMMSLAYOUT.2)', () => {
 
   it('keeps the active-state styling', () => {
     const { container } = render(<CommunicationsTabs {...ALL} />)
-    const active = within(container).getByRole('link', { name: /^Sent$/ })
+    const active = within(container).getByRole('link', { name: /^Email inbox$/ })
     expect(active.className).toContain('bg-un1t-text')
     expect(active.className).toContain('text-un1t-bg')
-    const inactive = within(container).getByRole('link', { name: /^Templates$/ })
+    const inactive = within(container).getByRole('link', { name: /^Inbox$/ })
     expect(inactive.className).toContain('text-un1t-subtle')
   })
 
@@ -97,34 +109,25 @@ describe('CommunicationsTabs — badges survive the layout change', () => {
     const { container } = render(<CommunicationsTabs {...ALL} />)
     expect(within(container).getByRole('link', { name: /Inbox/ }).textContent).toContain('7')
   })
-})
 
-describe('CommunicationsTabs — Segments gate (COMMSLAYOUT.3)', () => {
-  it('hides Segments when the viewer cannot open the segments page', () => {
-    render(<CommunicationsTabs {...ALL} canSegments={false} />)
-    expect(screen.queryByRole('link', { name: /^Segments$/ })).toBeNull()
-  })
-
-  it('shows Segments when the viewer passes the page gate', () => {
-    render(<CommunicationsTabs {...ALL} canSegments />)
-    expect(screen.getByRole('link', { name: /^Segments$/ })).toBeTruthy()
-  })
-
-  it('does not show Segments on channel permission alone', () => {
-    render(<CommunicationsTabs canEmail canWhatsapp canSegments={false} />)
-    expect(screen.queryByRole('link', { name: /^Segments$/ })).toBeNull()
+  it('still renders a badge on the Email inbox tab', () => {
+    polled.mockImplementation(({ url }) => (url.includes('tickets') ? 3 : 0))
+    const { container } = render(<CommunicationsTabs {...ALL} />)
+    expect(within(container).getByRole('link', { name: /Email inbox/ }).textContent).toContain('3')
   })
 })
 
-// COMMS-DETAIL-FIX.2 — at 375px the strip is 507px of content in a 327px
-// viewport, the scrollbar is hidden ([scrollbar-width:none]) and there was no
-// fade, shadow or arrow. So there was ZERO signal that more tabs existed —
-// and with the last tab active, scrollIntoView parked the row so the left edge
-// cut straight through the Inbox badge, leaving a red half-circle with a hard
+// COMMS-DETAIL-FIX.2 — at 375px the strip could be wider than the viewport,
+// the scrollbar is hidden ([scrollbar-width:none]) and there was no fade,
+// shadow or arrow. So there was ZERO signal that more tabs existed — and
+// with the last tab active, scrollIntoView parked the row so the left edge
+// cut straight through a badge, leaving a red half-circle with a hard
 // vertical edge and no label. That reads as a rendering bug, not "scroll for
 // more". Both halves are fixed here: a gradient fade on whichever edge has
 // content beyond it, and scroll-padding so the resting position leaves a
-// readable sliver instead of slicing an element down the middle.
+// readable sliver instead of slicing an element down the middle. Still
+// worth pinning at two tabs — a narrow viewport + a wide badge can overflow
+// even a short row.
 function measurable(el, { scrollWidth, clientWidth, scrollLeft }) {
   Object.defineProperty(el, 'scrollWidth', { value: scrollWidth, configurable: true })
   Object.defineProperty(el, 'clientWidth', { value: clientWidth, configurable: true })
@@ -144,7 +147,7 @@ describe('CommunicationsTabs — overflow affordance (COMMS-DETAIL-FIX.2)', () =
   it('fades only the trailing edge at the start of an overflowing strip', () => {
     const { container } = render(<CommunicationsTabs {...ALL} />)
     const scroller = within(container).getByTestId('tabs-scroller')
-    measurable(scroller, { scrollWidth: 507, clientWidth: 327, scrollLeft: 0 })
+    measurable(scroller, { scrollWidth: 400, clientWidth: 250, scrollLeft: 0 })
     act(() => { fireEvent.scroll(scroller) })
     expect(within(container).queryByTestId('tabs-fade-start')).toBeNull()
     expect(within(container).getByTestId('tabs-fade-end')).toBeTruthy()
@@ -153,8 +156,7 @@ describe('CommunicationsTabs — overflow affordance (COMMS-DETAIL-FIX.2)', () =
   it('fades the leading edge once the row is scrolled — the severed-badge case', () => {
     const { container } = render(<CommunicationsTabs {...ALL} />)
     const scroller = within(container).getByTestId('tabs-scroller')
-    // Exactly the measured 375px "Segments active" state: scrolled fully right.
-    measurable(scroller, { scrollWidth: 507, clientWidth: 327, scrollLeft: 180 })
+    measurable(scroller, { scrollWidth: 400, clientWidth: 250, scrollLeft: 150 })
     act(() => { fireEvent.scroll(scroller) })
     expect(within(container).getByTestId('tabs-fade-start')).toBeTruthy()
     expect(within(container).queryByTestId('tabs-fade-end')).toBeNull()
@@ -163,7 +165,7 @@ describe('CommunicationsTabs — overflow affordance (COMMS-DETAIL-FIX.2)', () =
   it('keeps the fades out of the accessibility tree and out of the way of taps', () => {
     const { container } = render(<CommunicationsTabs {...ALL} />)
     const scroller = within(container).getByTestId('tabs-scroller')
-    measurable(scroller, { scrollWidth: 507, clientWidth: 327, scrollLeft: 90 })
+    measurable(scroller, { scrollWidth: 400, clientWidth: 250, scrollLeft: 60 })
     act(() => { fireEvent.scroll(scroller) })
     for (const id of ['tabs-fade-start', 'tabs-fade-end']) {
       const fade = within(container).getByTestId(id)

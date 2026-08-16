@@ -1,10 +1,18 @@
 'use client'
 
-// Sub-tab navigation for /communications. Each tab gates itself by
-// the underlying email / whatsapp permission. Pure UI — the parent
-// layout already redirected away if neither perm is held, and it
-// computes the props (including `canSegments`, which mirrors the
-// segments page's own manager gate — see COMMSLAYOUT.3 below).
+// Sub-tab navigation for /communications — the Messages landing's own
+// strip. Pure UI — the parent layout already redirected away if neither
+// underlying permission is held, and computes the two props below.
+//
+// DEEP.4 Task 2 (4B) — slimmed from six tabs to two. Send / Sent /
+// Templates / Segments moved to communications/(marketing-era) (their
+// own route group + their own HubTabs-based strip — see that layout's
+// header comment), because they're campaign-lifecycle content with zero
+// inbox coupling. What's left here is genuinely Messages territory: the
+// unified WhatsApp/Instagram inbox and the email support-ticket queue.
+// The scroller/fade/badge machinery below is kept as-is (harmless at two
+// tabs, and this component still needs to survive the same 375px
+// viewport COMMSLAYOUT.2 fixed for six).
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import Link from 'next/link'
@@ -12,7 +20,7 @@ import { usePathname } from 'next/navigation'
 import clsx from 'clsx'
 import { usePolledCount } from '../use-polled-count'
 
-export default function CommunicationsTabs({ canSms, canEmail, canWhatsapp, canEmailInbox, canSegments }) {
+export default function CommunicationsTabs({ canWhatsapp, canEmailInbox }) {
   const pathname = usePathname()
   const activeRef = useRef(null)
   const scrollerRef = useRef(null)
@@ -35,12 +43,7 @@ export default function CommunicationsTabs({ canSms, canEmail, canWhatsapp, canE
     url: '/api/email/tickets/count',
   })
 
-  const canSend = canSms || canEmail || canWhatsapp
   const tabs = [
-    // PILLAR2: the unified audience-first send + its history replace the old
-    // per-channel Campaigns / Broadcasts tabs.
-    canSend     && { id: 'send',       label: 'Send',       href: '/communications/send' },
-    canSend     && { id: 'sent',       label: 'Sent',       href: '/communications/sent' },
     // UIX-P1b: one unified WhatsApp + Instagram queue — the separate
     // Instagram tab retired (/communications/instagram redirects here).
     canWhatsapp && { id: 'inbox',      label: 'Inbox',      href: '/communications/inbox', badge: inboxActionCount },
@@ -49,25 +52,12 @@ export default function CommunicationsTabs({ canSms, canEmail, canWhatsapp, canE
     // actually answer accounts@/sales@ and for nobody else.
     //
     // INBOX-SPLIT.1 chose "Email" over "Tickets" on the grounds that operators
-    // think in channels. COMMS-IA.3 REVERSES the label (not the reasoning): the
-    // hub now has "Send", "Sent" and "Templates" all sitting next to it, and a
-    // bare "Email" beside them reads as "email sending" rather than "the studio
-    // mailbox" — it was the one tab whose name did not say what you do there.
+    // think in channels. COMMS-IA.3 REVERSES the label (not the reasoning):
     // "Email inbox" keeps the channel word operators look for and adds the
     // thing that distinguishes it. "Tickets" is still rejected for the original
     // reason, and "Ticket" still stays the name of the DATA MODEL — the route,
     // the API and the `email_tickets` table are deliberately unchanged.
     canEmailInbox && { id: 'tickets',  label: 'Email inbox', href: '/communications/tickets', badge: emailNeedsReplyCount },
-    (canEmail || canWhatsapp) && { id: 'templates', label: 'Templates', href: '/communications/templates' },
-    // Segments tab (mig 085, moved from top-level /segments).
-    //
-    // COMMSLAYOUT.3 — gated on `canSegments`, which the layout computes as the
-    // SAME manager-role check /communications/segments applies to itself (and
-    // that GET /api/segments applies to its data). It used to render on
-    // `canEmail || canWhatsapp`, so a `staff` user with the email permission
-    // saw the tab, clicked it, and was redirected to `/` — off Communications
-    // entirely. Hiding a tab you cannot use beats ejecting you from one.
-    canSegments && { id: 'segments',  label: 'Segments',  href: '/communications/segments' },
   ].filter(Boolean)
 
   // COMMS-DETAIL-FIX.2 — measured rather than assumed, because "does this

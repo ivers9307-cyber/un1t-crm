@@ -24,6 +24,18 @@
 // exempt (not notify keys, not approval sub-permissions) so they ARE
 // location-gated — confirmed by reading isFeatureGatedByLocation()
 // directly rather than assumed.
+//
+// DEEP.4 Task 1 (4A) — approvals_contractor_invoices and
+// approvals_fte_expenses join the chain AFTER approvals_offer_purchases,
+// LAST, mirroring (money)/layout.js's tab order (contractor invoices and
+// expenses are the final two tabs). Both are also
+// APPROVAL_SUBPERMISSION_KEYS (same family as approvals_offer_purchases)
+// so they're exempt from the location gate too — an approver reaches the
+// review queue regardless of the location's feature flags.
+//
+// DEEP.4 final review — originally placed BEFORE approvals_offer_purchases;
+// moved after it so an offers+contractor approver lands in-hub at
+// /offer-sales rather than bouncing to /schedule/invoices (Team chrome).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -52,6 +64,8 @@ function user({ role = 'staff', perms = {} } = {}) {
     invoices_inbox: false,
     card_receipts: false,
     orders: false,
+    approvals_contractor_invoices: false,
+    approvals_fte_expenses: false,
     approvals_offer_purchases: false,
   }
   return {
@@ -70,7 +84,7 @@ describe('/money index page', () => {
     await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/login')
   })
 
-  it('redirects to /accounting when all five keys are granted', async () => {
+  it('redirects to /accounting when all seven keys are granted', async () => {
     getCurrentUser.mockResolvedValue(
       user({
         perms: {
@@ -78,6 +92,8 @@ describe('/money index page', () => {
           invoices_inbox: true,
           card_receipts: true,
           orders: true,
+          approvals_contractor_invoices: true,
+          approvals_fte_expenses: true,
           approvals_offer_purchases: true,
         },
       })
@@ -93,6 +109,8 @@ describe('/money index page', () => {
           invoices_inbox: true,
           card_receipts: true,
           orders: true,
+          approvals_contractor_invoices: true,
+          approvals_fte_expenses: true,
           approvals_offer_purchases: true,
         },
       })
@@ -110,6 +128,35 @@ describe('/money index page', () => {
     await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/orders')
   })
 
+  // DEEP.4 final review — the two approver keys sit AFTER
+  // approvals_offer_purchases, last in the chain, mirroring the tab order
+  // in (money)/layout.js.
+  it('redirects to /schedule/invoices when only approvals_contractor_invoices is held', async () => {
+    getCurrentUser.mockResolvedValue(
+      user({ perms: { approvals_contractor_invoices: true } })
+    )
+    await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/schedule/invoices')
+  })
+
+  it('redirects to /schedule/expenses when only approvals_fte_expenses is held', async () => {
+    getCurrentUser.mockResolvedValue(
+      user({ perms: { approvals_fte_expenses: true } })
+    )
+    await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/schedule/expenses')
+  })
+
+  it('redirects to /schedule/invoices ahead of /schedule/expenses when both approver keys are held but not approvals_offer_purchases (chain order)', async () => {
+    getCurrentUser.mockResolvedValue(
+      user({
+        perms: {
+          approvals_contractor_invoices: true,
+          approvals_fte_expenses: true,
+        },
+      })
+    )
+    await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/schedule/invoices')
+  })
+
   it('redirects to /offer-sales when only approvals_offer_purchases is held', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { approvals_offer_purchases: true } })
@@ -117,7 +164,23 @@ describe('/money index page', () => {
     await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/offer-sales')
   })
 
-  it('redirects to / when none of the five are held', async () => {
+  // DEEP.4 final review — offers now precedes both approver keys in the
+  // chain, so an offers+contractor+expenses approver lands IN-hub at
+  // /offer-sales rather than bouncing to Team chrome at /schedule/invoices.
+  it('redirects to /offer-sales ahead of /schedule/invoices and /schedule/expenses when all three approver keys are held (chain order)', async () => {
+    getCurrentUser.mockResolvedValue(
+      user({
+        perms: {
+          approvals_contractor_invoices: true,
+          approvals_fte_expenses: true,
+          approvals_offer_purchases: true,
+        },
+      })
+    )
+    await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/offer-sales')
+  })
+
+  it('redirects to / when none of the seven are held', async () => {
     getCurrentUser.mockResolvedValue(user())
     await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/')
   })
@@ -129,11 +192,25 @@ describe('/money index page', () => {
         invoices_inbox: true,
         card_receipts: true,
         orders: true,
+        approvals_contractor_invoices: true,
+        approvals_fte_expenses: true,
         approvals_offer_purchases: true,
       },
     })
     u.activeLocation = { id: 'loc1', features: { accounting_hub: false } }
     getCurrentUser.mockResolvedValue(u)
     await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/invoices')
+  })
+
+  it('redirects to /schedule/invoices when the location gate denies orders for everyone, even with orders permission held (approvals_contractor_invoices is exempt from location gating)', async () => {
+    const u = user({
+      perms: {
+        orders: true,
+        approvals_contractor_invoices: true,
+      },
+    })
+    u.activeLocation = { id: 'loc1', features: { orders: false } }
+    getCurrentUser.mockResolvedValue(u)
+    await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/schedule/invoices')
   })
 })

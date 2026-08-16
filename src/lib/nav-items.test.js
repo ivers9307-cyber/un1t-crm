@@ -132,8 +132,23 @@ describe('Money hub', () => {
 
   it('the Money hub entry ORs its member permissions and lights on member paths', () => {
     const money = ALL_NAV.find(i => i.href === '/money')
-    expect(money.anyPermission).toEqual(['accounting_hub', 'invoices_inbox', 'card_receipts', 'orders', 'approvals_offer_purchases'])
+    expect(money.anyPermission).toEqual(['accounting_hub', 'invoices_inbox', 'card_receipts', 'orders', 'approvals_offer_purchases', 'approvals_contractor_invoices', 'approvals_fte_expenses'])
     expect(money.extraActivePaths).toEqual(['/accounting', '/invoices', '/card-receipts', '/orders', '/offer-sales'])
+  })
+
+  // DEEP.4 Task 1 (4A) — the two review tabs added to (money)/layout.js
+  // point at /schedule/invoices and /schedule/expenses, which are Team
+  // URLs, not Money ones. Deliberately NOT added to extraActivePaths
+  // above: those paths are already claimed by Team's own `/schedule`
+  // extraActivePath, and activeHrefFor is a longest-match ONE winner —
+  // see the "cross-hub tab active-state" case below for the proof that
+  // Team wins, not Money.
+  it('the two approver keys join the union without joining extraActivePaths (Team already claims /schedule/*)', () => {
+    const money = ALL_NAV.find(i => i.href === '/money')
+    expect(money.anyPermission).toContain('approvals_contractor_invoices')
+    expect(money.anyPermission).toContain('approvals_fte_expenses')
+    expect(money.extraActivePaths).not.toContain('/schedule/invoices')
+    expect(money.extraActivePaths).not.toContain('/schedule/expenses')
   })
 })
 
@@ -157,8 +172,48 @@ describe('Marketing hub', () => {
 
   it('the Marketing hub entry ORs its member permissions and lights on the automations path', () => {
     const marketing = ALL_NAV.find(i => i.href === '/marketing')
-    expect(marketing.anyPermission).toEqual(['automations', 'email', 'whatsapp', 'device_control', 'landing_page'])
-    expect(marketing.extraActivePaths).toEqual(['/automations'])
+    expect(marketing.anyPermission).toEqual(['automations', 'email', 'whatsapp', 'device_control', 'landing_page', 'sms'])
+    expect(marketing.extraActivePaths).toEqual(['/automations', '/communications/send', '/communications/sent', '/communications/templates', '/communications/segments', '/communications/list-health'])
+  })
+
+  // DEEP.4 Task 2 (4B) — the campaign-lifecycle pages moved OWNERSHIP to
+  // Marketing (their own (marketing-era) chrome), even though their URLs
+  // stayed literal children of /communications. Marketing's
+  // extraActivePaths now claims them, so activeHrefFor's longest-match
+  // picks Marketing over Messages' bare `/communications` prefix. Unlike
+  // DEEP.4 Task 1's Money case (where Team's PRE-EXISTING extraActivePath
+  // won and Money deliberately did NOT compete), this is a genuine
+  // ownership transfer, so Marketing DOES compete and DOES win.
+  it('a Marketing cross-hub campaign page (send) lights Marketing, not Messages', () => {
+    expect(activeHrefFor('/communications/send', ALL_NAV)).toEqual({
+      itemHref: '/marketing',
+      matchedPath: '/communications/send',
+    })
+  })
+
+  it('a Marketing cross-hub campaign page (segments) lights Marketing, not Messages', () => {
+    expect(activeHrefFor('/communications/segments', ALL_NAV)).toEqual({
+      itemHref: '/marketing',
+      matchedPath: '/communications/segments',
+    })
+  })
+
+  it('the templates list page lights Marketing, not Messages (moved with the rest of the campaign-content lifecycle)', () => {
+    expect(activeHrefFor('/communications/templates', ALL_NAV)).toEqual({
+      itemHref: '/marketing',
+      matchedPath: '/communications/templates',
+    })
+  })
+
+  it('Messages still wins on its own genuinely-owned pages (inbox, tickets, the bare index)', () => {
+    expect(activeHrefFor('/communications', ALL_NAV)).toEqual({
+      itemHref: '/communications',
+      matchedPath: '/communications',
+    })
+    expect(activeHrefFor('/communications/inbox', ALL_NAV)).toEqual({
+      itemHref: '/communications',
+      matchedPath: '/communications',
+    })
   })
 })
 
@@ -220,10 +275,18 @@ describe('activeHrefFor — longest-match single winner', () => {
     })
   })
 
-  it('a route under the Communications hub (not the ticket queue) lights the hub via its own href', () => {
+  // DEEP.4 Task 2 (4B) UPDATED EXPECTATION — this used to assert
+  // /communications/send lights Messages via its own bare href (the only
+  // candidate at the time). Marketing's extraActivePaths now also claims
+  // this path (the campaign-lifecycle ownership move), and it's the
+  // LONGER match, so Marketing wins. See "Marketing hub"'s own
+  // cross-hub-tab active-state cases above for the full set (send,
+  // segments, templates) plus the companion proof that Messages still
+  // wins on the pages it actually owns (inbox, tickets, the bare index).
+  it('a route under the Communications hub that moved to Marketing (send) lights Marketing, not the Messages hub', () => {
     expect(activeHrefFor('/communications/send', ALL_NAV)).toEqual({
-      itemHref: '/communications',
-      matchedPath: '/communications',
+      itemHref: '/marketing',
+      matchedPath: '/communications/send',
     })
   })
 
@@ -254,6 +317,31 @@ describe('activeHrefFor — longest-match single winner', () => {
 
   it('returns null when nothing matches', () => {
     expect(activeHrefFor('/nonexistent', ALL_NAV)).toBeNull()
+  })
+
+  // DEEP.4 Task 1 (4A) — the Money hub's two new cross-hub review tabs
+  // (Contractor invoices, Staff expenses; see (money)/layout.js) point
+  // at /schedule/invoices and /schedule/expenses. Those routes live in
+  // the (team) route group and Team's own extraActivePaths already
+  // claims the /schedule prefix — Money's extraActivePaths does NOT
+  // list them (see nav-items.test.js's Money hub describe block above),
+  // so Team is the only candidate and wins outright. This is the
+  // accepted cross-hub-tab UX (same shape as (operations)'s `fleet`
+  // tab at /admin/fleet, and (members)'s `live` tab at /live): landing
+  // on the tab's page shows the OTHER hub's sidebar highlight and
+  // strip, not Money's — there is no Money chrome on a (team) page.
+  it('a Money cross-hub review tab (contractor invoices) lights Team, not Money', () => {
+    expect(activeHrefFor('/schedule/invoices', ALL_NAV)).toEqual({
+      itemHref: '/team',
+      matchedPath: '/schedule',
+    })
+  })
+
+  it('a Money cross-hub review tab (staff expenses) lights Team, not Money', () => {
+    expect(activeHrefFor('/schedule/expenses', ALL_NAV)).toEqual({
+      itemHref: '/team',
+      matchedPath: '/schedule',
+    })
   })
 
   it('a child match reports the PARENT item as itemHref, and the matched child href as matchedPath, so the group opens and the child row lights (SYNTHETIC fixture — HUBS.2e Task 5 removed the last children-bearing entry, Studio Management, from ALL_NAV; this hand-built items array keeps child-match semantics tested forever, independent of what nav data looks like)', () => {

@@ -111,6 +111,21 @@ export const ALL_NAV = [
   // every one of its routes (/communications/send, /communications/
   // tickets, /communications/inbox, …) is already a literal child of
   // /communications, so the bare href prefix-matches all of them.
+  //
+  // DEEP.4 Task 2 (4B) — the union below is UNCHANGED even though the
+  // campaign-lifecycle pages (Send/Sent/Templates/Segments/List health)
+  // moved ownership to Marketing: /communications/send etc. still live
+  // literally under /communications, so someone holding only `email` or
+  // `sms` (a one-off-sends-only permission shape, no `whatsapp`, no
+  // `email_inbox`) still needs a sidebar door into that URL space, and
+  // this entry is still it. What changed is which entry WINS the
+  // active-state fight once they're actually on one of those pages —
+  // see the Marketing hub entry below, whose extraActivePaths now
+  // claims those specific paths and out-matches this bare
+  // `/communications` prefix (activeHrefFor is longest-match). A user
+  // can legitimately see BOTH Messages and Marketing lit in the
+  // sidebar's visible-sections sense (holding `email` alone satisfies
+  // both unions) while only ONE is highlighted active at a time.
   { href: '/communications', label: 'Messages', icon: MessagesSquare,
     anyPermission: ['email', 'whatsapp', 'sms', 'email_inbox'], section: 'messages' },
 
@@ -243,8 +258,24 @@ export const ALL_NAV = [
   //    it's not a daily surface; the ⌘K palette keeps it one
   //    keystroke away. HUBS.2a regrouped it under Money as a revenue
   //    ledger beside Accounting/Invoices.
+  //
+  // DEEP.4 Task 1 (4A) — approvals_contractor_invoices and
+  // approvals_fte_expenses join the union so a reviewer who holds ONLY
+  // one of these two keys still sees the Money hub entry at all: the
+  // (money) route group's tab strip (src/app/(money)/layout.js) grew
+  // two cross-hub review tabs pointing at /schedule/invoices and
+  // /schedule/expenses (submitters keep using Team → Schedule; this is
+  // the reviewer-side door). Deliberately NOT added to
+  // extraActivePaths — those two routes are (team)-group pages and
+  // Team's own extraActivePaths already claims the /schedule prefix,
+  // so landing on either page lights Team's sidebar entry, not
+  // Money's (activeHrefFor is a longest-match ONE winner; see
+  // nav-items.test.js's "cross-hub tab active-state" cases). Same
+  // pattern as (operations)'s `fleet` tab (/admin/fleet) and
+  // (members)'s `live` tab (/live) — a hub tab whose href lives
+  // outside that hub's own route group and sidebar territory.
   { href: '/money', label: 'Money', icon: Wallet,
-    anyPermission: ['accounting_hub', 'invoices_inbox', 'card_receipts', 'orders', 'approvals_offer_purchases'],
+    anyPermission: ['accounting_hub', 'invoices_inbox', 'card_receipts', 'orders', 'approvals_offer_purchases', 'approvals_contractor_invoices', 'approvals_fte_expenses'],
     extraActivePaths: ['/accounting', '/invoices', '/card-receipts', '/orders', '/offer-sales'],
     section: 'money' },
 
@@ -293,9 +324,29 @@ export const ALL_NAV = [
   //    building-admin surface). The edit form lives at Settings →
   //    Landing page (SIDEBAR-IA.1); this was always just the public
   //    preview link.
+  //
+  // DEEP.4 Task 2 (4B) — `sms` joins the union: it had NO conversational
+  // surface of its own (no SMS inbox — the channel is broadcast-only),
+  // so unlike `email`/`whatsapp` it was never in this union via the
+  // Automations page's own gate. It's here now because /communications/
+  // send and /communications/sent (both in extraActivePaths below) are
+  // reachable on `sms` alone, and an sms-only holder needs a Marketing
+  // door to them. `email`/`whatsapp`/`device_control` were already
+  // present (the Automations page's own gate) and stay for the same
+  // reason they always did — the campaign-lifecycle move didn't change
+  // what /automations itself requires.
+  //
+  // extraActivePaths grew five entries: /communications/send, /sent,
+  // /templates, /segments, /list-health. These are the SAME five
+  // (marketing-era) cross-hub tabs added to (marketing)/layout.js
+  // above — claiming them here is what makes activeHrefFor highlight
+  // Marketing (not Messages, whose bare `/communications` href would
+  // otherwise be the only candidate) once the user is actually on one
+  // of those pages. Longest-match: Marketing's longer, more specific
+  // path always wins over Messages' bare prefix.
   { href: '/marketing', label: 'Marketing', icon: Megaphone,
-    anyPermission: ['automations', 'email', 'whatsapp', 'device_control', 'landing_page'],
-    extraActivePaths: ['/automations'],
+    anyPermission: ['automations', 'email', 'whatsapp', 'device_control', 'landing_page', 'sms'],
+    extraActivePaths: ['/automations', '/communications/send', '/communications/sent', '/communications/templates', '/communications/segments', '/communications/list-health'],
     section: 'marketing' },
 
   // ── Team hub ───────────────────────────────────────────────────
