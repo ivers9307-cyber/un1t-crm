@@ -19,6 +19,12 @@
 // so the review queue remains a manager surface. Non-manager staff
 // decide from the inline card in /communications/inbox instead
 // (GET ?conversation_id= form).
+//
+// TENANT.8 (item 4) — APPROVALS-LOCATION-SCOPE: every row is
+// eq('location_id', activeId)-filtered to the viewer's own active
+// location, so the registry's bundlesDenyCategory(user.activeLocation.features,
+// key) check already covers every row here. No per-row location-features
+// query needed — unlike host_events (org-scoped).
 
 import { viewerActiveLocationId } from '../registry'
 import { formatMoneyMinor } from '@/lib/money-format'

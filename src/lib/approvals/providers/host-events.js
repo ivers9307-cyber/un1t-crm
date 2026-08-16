@@ -9,8 +9,17 @@
 //
 // Approve/decline executes via POST /api/events/[id]/review (CAS on
 // pending_review; decline requires a reason), which also emails the host.
+//
+// TENANT.8 (item 4) — host_events is the ONE provider in APPROVALS_PROVIDERS
+// whose rows can span MULTIPLE locations within the org (every other
+// provider is already eq('location_id', activeId)-scoped — see each
+// provider file's own APPROVALS-LOCATION-SCOPE comment), so the registry's
+// isProviderVisible only checking the VIEWER'S active location's bundle
+// state is NOT enough here: a row can legitimately belong to a different,
+// bundle-OFF location. filterRowsByLocationBundle fetches every involved
+// location's features in one query and filters row-by-row.
 
-import { viewerActiveLocationId } from '../registry'
+import { viewerActiveLocationId, filterRowsByLocationBundle } from '../registry'
 
 const REVIEWER_ROLES = ['master', 'owner', 'manager']
 
@@ -37,7 +46,7 @@ export const hostEventsProvider = {
     const { data, error } = await db
       .from('race_events')
       .select(`
-        id, name, kind, race_date, status, submitted_at, created_at,
+        id, name, kind, race_date, status, submitted_at, created_at, location_id,
         host:event_hosts!host_id ( id, name, organization_id )
       `)
       .eq('status', 'pending_review')
@@ -47,7 +56,9 @@ export const hostEventsProvider = {
 
     if (error) throw new Error(`host_events: ${error.message}`)
 
-    const rows = (data || []).filter((r) => r.host?.organization_id === orgId)
+    const orgRows = (data || []).filter((r) => r.host?.organization_id === orgId)
+    // TENANT.8 (item 4) — per-row bundle filter (see header comment).
+    const rows = await filterRowsByLocationBundle(db, orgRows, 'host_events')
     const items = rows.map((r) => ({
       id: r.id,
       title: `${r.name} — ${r.host?.name || 'Host'}`,
@@ -66,11 +77,14 @@ export const hostEventsProvider = {
     if (!orgId) return 0
     const { data, error } = await db
       .from('race_events')
-      .select('id, host:event_hosts!host_id ( organization_id )')
+      .select('id, location_id, host:event_hosts!host_id ( organization_id )')
       .eq('status', 'pending_review')
       .not('host_id', 'is', null)
       .limit(50)
     if (error) throw new Error(`host_events count: ${error.message}`)
-    return (data || []).filter((r) => r.host?.organization_id === orgId).length
+    const orgRows = (data || []).filter((r) => r.host?.organization_id === orgId)
+    // TENANT.8 (item 4) — count must match fetchPending's filtered set.
+    const rows = await filterRowsByLocationBundle(db, orgRows, 'host_events')
+    return rows.length
   },
 }

@@ -1,6 +1,12 @@
 // HYROX-TC.2 — approvals provider for AI-generated Hyrox Training Club
 // sessions. Surfaces `draft` hyrox_sessions rows so a coach reviews/edits
 // and approves each session before it can publish to the studio TV.
+//
+// TENANT.8 (item 4) — APPROVALS-LOCATION-SCOPE: every row is
+// eq('location_id', activeId)-filtered to the viewer's own active
+// location, so the registry's bundlesDenyCategory(user.activeLocation.features,
+// key) check already covers every row here. No per-row location-features
+// query needed — unlike host_events (org-scoped).
 
 import { viewerActiveLocationId } from '../registry'
 

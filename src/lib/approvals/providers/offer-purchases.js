@@ -6,6 +6,11 @@
 // /offer-sales after setting the member up in Glofox.
 //
 // APPROVALS-LOCATION-SCOPE — scoped to user.activeLocation only.
+// TENANT.8 (item 4) — every row this provider returns is eq('location_id',
+// activeId)-filtered to the VIEWER'S OWN active location, so the registry's
+// bundlesDenyCategory(user.activeLocation.features, key) check already
+// covers every row here. No per-row location-features query needed —
+// unlike host_events (org-scoped, can return rows from OTHER locations).
 
 import { viewerActiveLocationId } from '../registry'
 import { formatEuro } from '@/lib/sale-offers'

@@ -13,6 +13,7 @@ import {
   scheduleApproverLocationIds,
   getPendingApprovalsCount,
   getPendingApprovals,
+  filterRowsByLocationBundle,
 } from './registry'
 import { CATEGORY_BUNDLES } from '@shared/permission-bundles'
 
@@ -83,6 +84,79 @@ describe('scheduleApproverLocationIds', () => {
   it('excludes staff', () => {
     const user = { rolesByLocation: { 'loc-only-staff': 'staff' } }
     expect(scheduleApproverLocationIds(user)).toEqual([])
+  })
+})
+
+// TENANT.8 (item 4) — per-row bundle filter, unit-level. host-events-
+// bundle-gate.test.js proves the same behaviour end-to-end through the
+// hostEventsProvider; these tests pin the helper's own contract directly
+// (batching, fail-open, unmapped category).
+describe('filterRowsByLocationBundle', () => {
+  function makeLocationsDb(locations) {
+    return {
+      from(table) {
+        expect(table).toBe('locations')
+        return {
+          select: () => ({
+            in: async (_col, ids) => ({ data: locations.filter((l) => ids.includes(l.id)), error: null }),
+          }),
+        }
+      },
+    }
+  }
+
+  it('keeps a row whose location has the category\'s bundle ON, drops one whose bundle is OFF', async () => {
+    const rows = [{ id: 'r1', location_id: 'loc-on' }, { id: 'r2', location_id: 'loc-off' }]
+    const db = makeLocationsDb([
+      { id: 'loc-on', features: {} },
+      { id: 'loc-off', features: { bundle_members: false } },
+    ])
+    const out = await filterRowsByLocationBundle(db, rows, 'host_events')
+    expect(out.map((r) => r.id)).toEqual(['r1'])
+  })
+
+  it('makes exactly ONE locations query regardless of row count (batched, not per-row)', async () => {
+    const rows = [
+      { id: 'r1', location_id: 'loc-a' },
+      { id: 'r2', location_id: 'loc-a' },
+      { id: 'r3', location_id: 'loc-b' },
+    ]
+    let calls = 0
+    const db = {
+      from(table) {
+        calls += 1
+        expect(table).toBe('locations')
+        return { select: () => ({ in: async (_col, ids) => ({ data: ids.map((id) => ({ id, features: {} })), error: null }) }) }
+      },
+    }
+    await filterRowsByLocationBundle(db, rows, 'host_events')
+    expect(calls).toBe(1)
+  })
+
+  it('fails OPEN (returns all rows unfiltered) when the locations lookup errors', async () => {
+    const rows = [{ id: 'r1', location_id: 'loc-a' }]
+    const db = { from: () => ({ select: () => ({ in: async () => ({ data: null, error: { message: 'db down' } }) }) }) }
+    const out = await filterRowsByLocationBundle(db, rows, 'host_events')
+    expect(out).toEqual(rows)
+  })
+
+  it('never denies a category with no CATEGORY_BUNDLES mapping (e.g. issues)', async () => {
+    const rows = [{ id: 'r1', location_id: 'loc-a' }]
+    const db = makeLocationsDb([{ id: 'loc-a', features: { bundle_operations: false, bundle_team: false } }])
+    const out = await filterRowsByLocationBundle(db, rows, 'issues')
+    expect(out).toEqual(rows)
+  })
+
+  it('short-circuits (no query at all) when every row lacks a location_id', async () => {
+    const rows = [{ id: 'r1' }, { id: 'r2', location_id: null }]
+    const db = { from: () => { throw new Error('should not query') } }
+    const out = await filterRowsByLocationBundle(db, rows, 'host_events')
+    expect(out).toEqual(rows)
+  })
+
+  it('returns an empty array unchanged', async () => {
+    const db = { from: () => { throw new Error('should not query') } }
+    expect(await filterRowsByLocationBundle(db, [], 'host_events')).toEqual([])
   })
 })
 
