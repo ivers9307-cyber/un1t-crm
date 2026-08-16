@@ -69,10 +69,20 @@ export default function CommunicationsTabs({ canWhatsapp, canEmailInbox }) {
     const max = el.scrollWidth - el.clientWidth
     // 1px slack: sub-pixel layout leaves a permanent 0.4px of "overflow" on
     // a row that visibly fits, which would park a fade on the desktop strip.
-    setEdges({
+    const next = {
       start: max > 1 && el.scrollLeft > 1,
       end: max > 1 && el.scrollLeft < max - 1,
-    })
+    }
+    // FU-COMMSTABS-BAILOUT — backported from HubTabs.jsx's identical
+    // measure(). Bail out on a no-op update (same reference back) rather
+    // than always handing setEdges a fresh object literal. jsdom reports
+    // scrollWidth === clientWidth === 0, so the mount-time layout effect
+    // and the pathname effect both compute the same {false,false} — a
+    // fresh object each time still re-renders (React only skips identical
+    // *references*), which forced every per-tab badge poller to re-run on
+    // mount and re-resolve its count, discarding whatever the first
+    // render saw.
+    setEdges(prev => (prev.start === next.start && prev.end === next.end) ? prev : next)
   }, [])
 
   useLayoutEffect(() => {

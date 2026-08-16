@@ -179,3 +179,27 @@ describe('CommunicationsTabs — overflow affordance (COMMS-DETAIL-FIX.2)', () =
     expect(within(container).getByTestId('tabs-scroller').className).toMatch(/scroll-p[xl]?-/)
   })
 })
+
+// FU-COMMSTABS-BAILOUT — backports HubTabs.jsx's measure() functional-
+// setState bail-out (`setEdges(prev => same values ? prev : next)`) to
+// this component's identical pattern. jsdom always reports
+// scrollWidth === clientWidth === 0, so on mount BOTH the mount
+// useLayoutEffect's measure() call and the [pathname, measure] mount
+// useEffect's measure() call compute the same {start:false,end:false} —
+// matching the initial state's values too. Before the bail-out, each
+// call handed setEdges a FRESH object literal, and React only skips a
+// re-render on reference equality, not value equality, so both calls
+// forced a spurious extra render — which re-invoked every poller hook
+// in the component body (usePolledCount for inbox + email counts here),
+// discarding whatever the first render's poll saw. `polled` (the mocked
+// usePolledCount) is called exactly twice per render (once per badge),
+// so counting its total calls after mount pins the render count.
+describe('CommunicationsTabs — measure() re-render bail-out (FU-COMMSTABS-BAILOUT)', () => {
+  it('does not spuriously re-render on mount when the measured edges already match initial state', () => {
+    render(<CommunicationsTabs {...ALL} />)
+    // One render's worth of poller calls (inbox + email) — not 4 or 6,
+    // which is what stacking the layout-effect and mount-effect measure()
+    // calls on top of the initial render would produce without the bail-out.
+    expect(polled.mock.calls.length).toBe(2)
+  })
+})
