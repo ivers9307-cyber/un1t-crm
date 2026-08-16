@@ -8,6 +8,7 @@
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { hasPermission } from '@/lib/permissions'
 import ExpensesManager from '@/components/ExpensesManager'
 
 export const dynamic = 'force-dynamic'
@@ -18,8 +19,18 @@ export default async function ExpensesPage() {
 
   // FTE submitters always have access; owners + masters always have
   // access (review queue). Contractors don't — they use /schedule/invoices.
+  //
+  // FU-INVOICES-APPROVER — isApprover used to be role-only (master, or
+  // owner at ANY location), ignoring the grantable approvals_fte_expenses
+  // key that src/lib/approvals/providers/fte-expenses.js and the Money
+  // hub's Staff-expenses tab (src/app/(money)/layout.js) both gate on —
+  // same bug class as InvoicesManager. hasPermission is OR'd in (not a
+  // replace) so master/owner keep access even if their permissions blob
+  // is missing/stale; hasPermission reads the ACTIVE location's grant,
+  // which is what the Money tab and provider check too.
   const isFte = user.employment_type === 'fte'
-  const isApprover = user.profileRole === 'master' || user.role === 'master'
+  const isApprover = hasPermission(user, 'approvals_fte_expenses')
+    || user.profileRole === 'master' || user.role === 'master'
     || Object.values(user.rolesByLocation || {}).some((r) => r === 'owner')
   if (!isFte && !isApprover) redirect('/schedule')
 

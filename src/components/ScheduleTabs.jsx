@@ -43,18 +43,30 @@ export default function ScheduleTabs({ user }) {
   // Invoices is shown to:
   //   - contractors (employment_type = 'contractor') — to submit
   //   - master + owner — to approve/decline + audit
-  // Hidden for FTE managers / head_coaches / staff who are neither.
+  //   - anyone else explicitly granted approvals_contractor_invoices
+  //     (FU-INVOICES-APPROVER — this used to be role-only, so a manager
+  //     granted the key via the money hub still had the Team → Schedule
+  //     Invoices tab hidden here, and InvoicesManager itself hard-coded
+  //     the same role check — same fix mirrored from
+  //     src/lib/approvals/providers/contractor-invoices.js's
+  //     permissionKey). Hidden for FTE managers / head_coaches / staff
+  //     who are neither.
   const isContractor = user.employment_type === 'contractor'
-  const isApprover = user.role === 'master' || user.role === 'owner'
-  const showInvoices = isContractor || isApprover
+  const isInvoiceApprover = hasPermission(user, 'approvals_contractor_invoices')
+    || user.role === 'master' || user.role === 'owner'
+  const showInvoices = isContractor || isInvoiceApprover
 
   // FTE-EXPENSES.1 — Expenses tab. Same gate pattern as Invoices but
   // flipped on the employment_type side: FTE staff submit; master +
-  // owner review. Contractors use the Invoices tab instead (and pay
-  // themselves via their own service invoice rather than receipt-
-  // based reimbursement).
+  // owner review, or anyone granted approvals_fte_expenses (same
+  // FU-INVOICES-APPROVER fix, mirroring
+  // src/lib/approvals/providers/fte-expenses.js). Contractors use the
+  // Invoices tab instead (and pay themselves via their own service
+  // invoice rather than receipt-based reimbursement).
   const isFte = user.employment_type === 'fte'
-  const showExpenses = isFte || isApprover
+  const isExpenseApprover = hasPermission(user, 'approvals_fte_expenses')
+    || user.role === 'master' || user.role === 'owner'
+  const showExpenses = isFte || isExpenseApprover
 
   // Attendance: same gate as the standalone /schedule/attendance page
   // (still reachable directly — this is just an additional surface).
@@ -119,7 +131,7 @@ export default function ScheduleTabs({ user }) {
         <ExpensesManager
           userId={user.id}
           isFte={isFte}
-          isApprover={isApprover}
+          isApprover={isExpenseApprover}
           locations={user.locations || []}
         />
       )}
