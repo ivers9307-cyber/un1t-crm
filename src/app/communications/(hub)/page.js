@@ -1,8 +1,20 @@
 // /communications — landing/hub.
 //
 // Combined snapshot of email, WhatsApp, and SMS activity for the
-// current location. Cards link into the sub-tabs. Stats only
-// show for channels the user has permission for.
+// current location. Stats only show for channels the user has
+// permission for.
+//
+// DEEP.4 Task 2 (4B) — this stays the Messages landing (inbox/tickets are
+// genuinely this hub's content), but 4 of its original 6 action cards
+// (Send, Sent, Templates, List health) are now cross-links into
+// communications/(marketing-era) — same URLs, different chrome on
+// arrival (that group's own HubTabs strip, not this page). Their
+// descriptions say so. WhatsApp inbox stays outright (Messages
+// territory); Sequences stays outright too (an /automations cross-link
+// that predates this PR and isn't part of the campaign-lifecycle move).
+// The Email inbox card is NEW — the ticket queue had a CommunicationsTabs
+// tab but no card here, so "inbox/tickets cards" (the landing's stated
+// job) was actually only half true before this.
 
 import Link from 'next/link'
 import { getCurrentUser } from '@/lib/auth'
@@ -50,6 +62,9 @@ export default async function CommunicationsHub() {
   const canEmail = hasPermission(user, 'email')
   const canWhatsapp = hasPermission(user, 'whatsapp')
   const canSms = hasPermission(user, 'sms')
+  // EMAIL-TICKET.4 key — the studio email queue, not the marketing `email`
+  // one. Powers the new Email inbox card below.
+  const canEmailInbox = hasPermission(user, 'email_inbox')
 
   const db = createServerClient()
   const locationId = user.activeLocation?.id
@@ -191,15 +206,6 @@ export default async function CommunicationsHub() {
       {/* Quick actions */}
       <h3 className="text-sm font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Jump in</h3>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-        {(canSms || canWhatsapp || canEmail) && (
-          <ActionCard
-            href="/communications/send"
-            icon={Send}
-            color="bg-un1t-text/10 text-un1t-text"
-            title="Send a message"
-            desc="Pick an audience, write once, send via SMS, WhatsApp or email"
-          />
-        )}
         {canWhatsapp && (
           <ActionCard
             href="/communications/inbox"
@@ -207,6 +213,17 @@ export default async function CommunicationsHub() {
             color="bg-green-500/20 text-green-700"
             title="WhatsApp inbox"
             desc={unreadConvos > 0 ? `${unreadConvos} unread conversation${unreadConvos === 1 ? '' : 's'}` : 'View and reply to conversations'}
+          />
+        )}
+        {/* NEW (DEEP.4 Task 2) — the ticket queue had a CommunicationsTabs
+            tab but no landing card until now. */}
+        {canEmailInbox && (
+          <ActionCard
+            href="/communications/tickets"
+            icon={Mail}
+            color="bg-blue-500/20 text-blue-700"
+            title="Email inbox"
+            desc="Answer studio email tickets (accounts@, sales@…)"
           />
         )}
         {canEmail && (
@@ -218,6 +235,18 @@ export default async function CommunicationsHub() {
             desc={`${activeSequences} active drip flow${activeSequences === 1 ? '' : 's'}`}
           />
         )}
+        {/* DEEP.4 Task 2 — the four cards below are cross-links: same URLs
+            as always, but they now land in communications/(marketing-era),
+            a Marketing-owned chrome (its own HubTabs strip), not this page's. */}
+        {(canSms || canWhatsapp || canEmail) && (
+          <ActionCard
+            href="/communications/send"
+            icon={Send}
+            color="bg-un1t-text/10 text-un1t-text"
+            title="Send a message"
+            desc="Pick an audience, write once, send via SMS, WhatsApp or email — now in Marketing"
+          />
+        )}
         {(canSms || canWhatsapp || canEmail) && (
           <ActionCard
             href="/communications/sent"
@@ -226,8 +255,8 @@ export default async function CommunicationsHub() {
             title="Sent"
             desc={
               smsScheduled > 0
-                ? `${smsScheduled} scheduled · history of one-off sends`
-                : 'History of one-off SMS, WhatsApp & email sends'
+                ? `${smsScheduled} scheduled · history of one-off sends — now in Marketing`
+                : 'History of one-off SMS, WhatsApp & email sends — now in Marketing'
             }
           />
         )}
@@ -236,18 +265,18 @@ export default async function CommunicationsHub() {
           icon={FileText}
           color="bg-un1t-border/40 text-un1t-subtle"
           title="Templates"
-          desc="Reusable email + WhatsApp content"
+          desc="Reusable email + WhatsApp content — now in Marketing"
         />
-        {/* GAPS-P5 — the only entry point to the list-health surface. A
-            sixth sub-tab would push the tab bar past its width; this is a
-            page operators visit occasionally, not one they work in. */}
+        {/* GAPS-P5 — list-health also has a (marketing-era) tab now; this
+            card stays as the landing's own pointer to it, same reasoning as
+            every other cross-link card above. */}
         {canEmail && (
           <ActionCard
             href="/communications/list-health"
             icon={ShieldCheck}
             color="bg-amber-500/20 text-amber-700"
             title="List health"
-            desc="Who can be emailed, bounces, and suppressed contacts"
+            desc="Who can be emailed, bounces, and suppressed contacts — now in Marketing"
           />
         )}
       </div>

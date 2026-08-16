@@ -172,8 +172,48 @@ describe('Marketing hub', () => {
 
   it('the Marketing hub entry ORs its member permissions and lights on the automations path', () => {
     const marketing = ALL_NAV.find(i => i.href === '/marketing')
-    expect(marketing.anyPermission).toEqual(['automations', 'email', 'whatsapp', 'device_control', 'landing_page'])
-    expect(marketing.extraActivePaths).toEqual(['/automations'])
+    expect(marketing.anyPermission).toEqual(['automations', 'email', 'whatsapp', 'device_control', 'landing_page', 'sms'])
+    expect(marketing.extraActivePaths).toEqual(['/automations', '/communications/send', '/communications/sent', '/communications/templates', '/communications/segments', '/communications/list-health'])
+  })
+
+  // DEEP.4 Task 2 (4B) — the campaign-lifecycle pages moved OWNERSHIP to
+  // Marketing (their own (marketing-era) chrome), even though their URLs
+  // stayed literal children of /communications. Marketing's
+  // extraActivePaths now claims them, so activeHrefFor's longest-match
+  // picks Marketing over Messages' bare `/communications` prefix. Unlike
+  // DEEP.4 Task 1's Money case (where Team's PRE-EXISTING extraActivePath
+  // won and Money deliberately did NOT compete), this is a genuine
+  // ownership transfer, so Marketing DOES compete and DOES win.
+  it('a Marketing cross-hub campaign page (send) lights Marketing, not Messages', () => {
+    expect(activeHrefFor('/communications/send', ALL_NAV)).toEqual({
+      itemHref: '/marketing',
+      matchedPath: '/communications/send',
+    })
+  })
+
+  it('a Marketing cross-hub campaign page (segments) lights Marketing, not Messages', () => {
+    expect(activeHrefFor('/communications/segments', ALL_NAV)).toEqual({
+      itemHref: '/marketing',
+      matchedPath: '/communications/segments',
+    })
+  })
+
+  it('the templates list page lights Marketing, not Messages (moved with the rest of the campaign-content lifecycle)', () => {
+    expect(activeHrefFor('/communications/templates', ALL_NAV)).toEqual({
+      itemHref: '/marketing',
+      matchedPath: '/communications/templates',
+    })
+  })
+
+  it('Messages still wins on its own genuinely-owned pages (inbox, tickets, the bare index)', () => {
+    expect(activeHrefFor('/communications', ALL_NAV)).toEqual({
+      itemHref: '/communications',
+      matchedPath: '/communications',
+    })
+    expect(activeHrefFor('/communications/inbox', ALL_NAV)).toEqual({
+      itemHref: '/communications',
+      matchedPath: '/communications',
+    })
   })
 })
 
@@ -235,10 +275,18 @@ describe('activeHrefFor — longest-match single winner', () => {
     })
   })
 
-  it('a route under the Communications hub (not the ticket queue) lights the hub via its own href', () => {
+  // DEEP.4 Task 2 (4B) UPDATED EXPECTATION — this used to assert
+  // /communications/send lights Messages via its own bare href (the only
+  // candidate at the time). Marketing's extraActivePaths now also claims
+  // this path (the campaign-lifecycle ownership move), and it's the
+  // LONGER match, so Marketing wins. See "Marketing hub"'s own
+  // cross-hub-tab active-state cases above for the full set (send,
+  // segments, templates) plus the companion proof that Messages still
+  // wins on the pages it actually owns (inbox, tickets, the bare index).
+  it('a route under the Communications hub that moved to Marketing (send) lights Marketing, not the Messages hub', () => {
     expect(activeHrefFor('/communications/send', ALL_NAV)).toEqual({
-      itemHref: '/communications',
-      matchedPath: '/communications',
+      itemHref: '/marketing',
+      matchedPath: '/communications/send',
     })
   })
 
