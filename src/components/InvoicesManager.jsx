@@ -20,18 +20,29 @@ import {
   RefreshCw, Loader2, Eye, ExternalLink, Undo2, History,
 } from 'lucide-react'
 import { recentMonthOptions, defaultMonthKey, periodLabel } from '@/lib/contractor-invoices'
+import { hasPermission } from '@/lib/permissions'
 
-// Approver = the only roles allowed to review + approve/decline.
-// Tighter than MANAGER_ROLES (which includes manager + head_coach):
-// we want the financial-sign-off to live with master + owner only.
-const isApprover = (role) => role === 'master' || role === 'owner'
+// Approver = master/owner by default, OR anyone explicitly granted the
+// approvals_contractor_invoices key. Mirrors the authoritative predicate
+// in src/lib/approvals/providers/contractor-invoices.js (permissionKey:
+// 'approvals_contractor_invoices'), which is what the Money hub's
+// Contractor-invoices tab (src/app/(money)/layout.js) and the /approvals
+// dashboard both gate visibility on — this component used to only check
+// role, so a manager granted the key could see + click the tab but land
+// on the "not set up as a contractor" fallback below. The role check
+// stays as an OR (not a replace) so master/owner keep working even if
+// their per-user permissions blob is missing/stale.
+const isApprover = (user) => (
+  hasPermission(user, 'approvals_contractor_invoices')
+  || user?.role === 'master' || user?.role === 'owner'
+)
 
 // Contractor = the only employment_type allowed to submit invoices.
 // Hide the upload form from FTEs and any other employment shape.
 const isContractor = (user) => user?.employment_type === 'contractor'
 
 export default function InvoicesManager({ user }) {
-  const reviewerMode = isApprover(user.role)
+  const reviewerMode = isApprover(user)
   const canSubmit = isContractor(user)
   const [invoices, setInvoices] = useState([])
   const [loading, setLoading] = useState(true)
