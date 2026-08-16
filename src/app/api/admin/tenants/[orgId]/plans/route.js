@@ -34,6 +34,7 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { getActivePlanVersion, applyPlanBundlesToLocation } from '@/lib/plans'
 import { PLAN_KINDS } from '@shared/plans'
+import { BUNDLE_KEYS } from '@shared/permission-bundles'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -48,6 +49,10 @@ const AssignBody = z.object({
   plan_slug: z.string().trim().min(1).max(100).optional(),
   plan_version_id: uuidLike.optional(),
   kind: z.enum(PLAN_KINDS),
+  // TENANT.6 — explicit escape hatch for the pre-bundle-version guard
+  // below. Defaults false so the guard is armed unless a caller
+  // deliberately opts in.
+  force: z.boolean().optional().default(false),
 }).refine((b) => b.plan_id || b.plan_slug, {
   message: 'Provide plan_id or plan_slug',
   path: ['plan_id'],
@@ -174,7 +179,7 @@ export async function POST(request, props) {
   if (body.plan_version_id) {
     const { data: v, error: vErr } = await db
       .from('plan_versions')
-      .select('id, plan_id, price_cents, effective_from')
+      .select('id, plan_id, price_cents, effective_from, features')
       .eq('id', body.plan_version_id)
       .maybeSingle()
     if (vErr) return NextResponse.json({ success: false, error: vErr.message }, { status: 500 })
@@ -187,6 +192,43 @@ export async function POST(request, props) {
     if (!version) {
       return NextResponse.json({ success: false, error: `Plan "${plan.slug}" has no active version to assign.` }, { status: 400 })
     }
+  }
+
+  // 3b) TENANT.6 — pre-bundle version guard. A plan_versions row that
+  //     predates BUNDLES.5 has NONE of the 8 bundle_*/module_cars keys in
+  //     its features blob. applyPlanBundlesToLocation() (src/lib/plans.js)
+  //     treats an absent bundle key as WITHHELD, not "not this plan's
+  //     business" — so pinning an unbackfilled version would silently deny
+  //     EVERY bundle at the location, even though every such plan was sold
+  //     as everything-on before bundles existed (BUNDLES.5 final-review
+  //     latent note). Mig 548 backfills existing rows, but this refuses
+  //     the pin outright rather than depending on that migration having
+  //     run — belt AND braces. `force: true` is the deliberate override
+  //     for an operator who has already reviewed the version and wants it
+  //     pinned as-is (e.g. testing, or a version that's genuinely meant to
+  //     withhold every bundle).
+  //
+  //     This guard only catches the ALL-8-absent case. A PARTIAL version
+  //     (some bundle keys set, others not) sails through untouched — and
+  //     that's correct, not a gap: mirrorBundleFeatures's polarity is
+  //     "true grants, anything else (absent OR explicitly false) denies",
+  //     so an omitted key on a partial version is DELIBERATELY withholding
+  //     that bundle, the exact same semantics as an operator typing
+  //     `false` by hand. The invariant this relies on is that the ONLY
+  //     legitimate way to submit a partial features blob is via the plan
+  //     version editor UI, which always submits the full 8-key set (see
+  //     the matching comment on VersionBody in
+  //     src/app/api/admin/plans/[id]/versions/route.js) — a caller
+  //     hitting this API directly with a hand-built partial body is
+  //     withholding those keys by design, not making a mistake the guard
+  //     should catch.
+  const hasAnyBundleKey = BUNDLE_KEYS.some((key) =>
+    Object.prototype.hasOwnProperty.call(version.features || {}, key))
+  if (!hasAnyBundleKey && !body.force) {
+    return NextResponse.json({
+      success: false,
+      error: `Plan version "${version.id}" predates bundle enforcement (its features blob has none of the 8 bundle_*/module_cars keys) — pinning it as-is would silently deny every bundle at this location. Run supabase/migrations/548_plan_versions_bundle_backfill.sql (or backfill this version's features by hand) and try again, or pass force: true to pin it as-is anyway.`,
+    }, { status: 400 })
   }
 
   // 4) Write. TIER: deactivate-first (the one-active-tier invariant),

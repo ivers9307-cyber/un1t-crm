@@ -1,4 +1,5 @@
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { redirect } from 'next/navigation'
 import ScheduleTabs from '@/components/ScheduleTabs'
 import SwapRequestsManager from '@/components/SwapRequestsManager'
@@ -8,6 +9,10 @@ export const dynamic = 'force-dynamic'
 export default async function SwapRequestsPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
+
+  // SWAPS.1 — mirrors the sibling pages' gate (see ../time-off/page.js);
+  // this page previously only checked login.
+  if (!hasPermission(user, 'schedule')) redirect('/')
 
   return (
     <div className="p-8">

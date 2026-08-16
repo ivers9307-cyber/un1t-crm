@@ -32,6 +32,22 @@ const VersionBody = z.object({
   currency: z.literal('EUR').optional(),
   allowances: jsonbShape(Object.keys(METERS), z.number().int().min(0).max(100_000_000)).optional(),
   unit_rates_cents: jsonbShape(Object.keys(UNIT_RATE_KEYS), z.number().int().min(0).max(1_000_000)).optional(),
+  // TENANT.6 — every key in FEATURE_KEYS (including the 8 bundle_*/
+  // module_cars keys, shared/permission-bundles.js BUNDLE_KEYS) is
+  // individually `.optional()`, so this schema does NOT enforce
+  // submitting the full set. That's deliberate for the non-bundle
+  // FEATURE_KEYS entries, but it means a caller CAN submit a partial
+  // bundle set here too — and if they do, the omitted bundle keys read
+  // as a deliberate WITHHOLD once this version is pinned, not "unset /
+  // not this plan's business": mirrorBundleFeatures (src/lib/plans.js)
+  // grants a bundle only on an explicit `true`, so absent behaves
+  // exactly like explicit `false`. The pin route's own bundle guard
+  // (src/app/api/admin/tenants/[orgId]/plans/route.js) only refuses an
+  // ALL-8-absent version (the pre-BUNDLES.5 shape); a partial version
+  // passes that guard by design. The plan-version editor UI is the
+  // ONLY intended caller and it always submits the full 8-key set — a
+  // direct API caller who omits some of the 8 is withholding those
+  // bundles on purpose, not making a mistake this schema should catch.
   features: jsonbShape(Object.keys(FEATURE_KEYS), z.boolean()).optional(),
   notes: z.string().max(2000).optional().nullable(),
 })

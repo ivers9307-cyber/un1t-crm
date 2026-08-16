@@ -33,6 +33,8 @@ const GROWTH = 'c0000000-0000-0000-0000-0000000000c2'
 const SCALE = 'c0000000-0000-0000-0000-0000000000c3'
 const RETIRED = 'c0000000-0000-0000-0000-0000000000c4'
 const ADDON = 'c0000000-0000-0000-0000-0000000000ca'
+const LEGACY = 'c0000000-0000-0000-0000-0000000000c5'
+const PARTIAL = 'c0000000-0000-0000-0000-0000000000c6'
 const BOGUS_PLAN = 'c0000000-0000-0000-0000-0000000000cf'
 
 const CORE_V = 'd0000000-0000-0000-0000-0000000000d1'
@@ -40,11 +42,46 @@ const GROWTH_V = 'd0000000-0000-0000-0000-0000000000d2'
 const SCALE_V = 'd0000000-0000-0000-0000-0000000000d3'
 const RETIRED_V = 'd0000000-0000-0000-0000-0000000000d4'
 const ADDON_V = 'd0000000-0000-0000-0000-0000000000da'
+const LEGACY_V = 'd0000000-0000-0000-0000-0000000000d5'
+const PARTIAL_V = 'd0000000-0000-0000-0000-0000000000d6'
 
-const TIER_VERSIONS = new Set([CORE_V, GROWTH_V, SCALE_V, RETIRED_V])
+const TIER_VERSIONS = new Set([CORE_V, GROWTH_V, SCALE_V, RETIRED_V, LEGACY_V, PARTIAL_V])
+
+// TENANT.6 review rider — 3 of the 8 bundle keys present, 5 absent. Guard
+// passes (some bundle keys present, not the all-8-absent LEGACY shape);
+// the 3 present ones are the ONLY ones the pinned plan grants. This exact
+// 3-key combination is mirrored in src/lib/plans.test.js's
+// applyPlanBundlesToLocation suite (the "PARTIAL bundle set" test) so the
+// guard-passes half (here) and the mirror-writes-false-for-the-rest half
+// (there — this fake db doesn't model getLocationPlan's embedded select)
+// are provably about the same scenario.
+const PARTIAL_FEATURES = Object.freeze({
+  bundle_money: true,
+  bundle_team: true,
+  module_cars: true,
+  // bundle_messaging / bundle_sales / bundle_members / bundle_marketing /
+  // bundle_operations deliberately absent — withheld, same as explicit
+  // false.
+})
 
 const MASTER = { id: 'u-master', profileRole: 'master' }
 const OWNER = { id: 'u-owner', profileRole: 'owner' }
+
+// TENANT.6 — every regular fixture version below is "backfilled" (mig
+// 548: all 8 bundle_*/module_cars keys present) so the pre-existing
+// tests in this file stay unaffected by the pin-route bundle guard.
+// LEGACY_V deliberately has NO bundle keys — it's the pre-BUNDLES.5
+// shape the guard exists to catch.
+const BACKFILLED_FEATURES = Object.freeze({
+  bundle_messaging: true,
+  bundle_sales: true,
+  bundle_members: true,
+  bundle_money: true,
+  bundle_marketing: true,
+  bundle_team: true,
+  bundle_operations: true,
+  module_cars: true,
+})
 
 function fixture() {
   return {
@@ -58,13 +95,17 @@ function fixture() {
       { id: SCALE, slug: 'scale', name: 'Scale', kind: 'tier', active: true },
       { id: RETIRED, slug: 'retired', name: 'Retired', kind: 'tier', active: false },
       { id: ADDON, slug: 'custom_email_domain', name: 'Custom email domain', kind: 'addon', active: true },
+      { id: LEGACY, slug: 'legacy', name: 'Legacy (pre-bundle)', kind: 'tier', active: true },
+      { id: PARTIAL, slug: 'partial', name: 'Partial (3-of-8 bundles)', kind: 'tier', active: true },
     ],
     plan_versions: [
-      { id: CORE_V, plan_id: CORE, effective_from: '2026-07-01', price_cents: 9900 },
-      { id: GROWTH_V, plan_id: GROWTH, effective_from: '2026-07-01', price_cents: 17900 },
-      { id: SCALE_V, plan_id: SCALE, effective_from: '2026-07-01', price_cents: 29900 },
-      { id: RETIRED_V, plan_id: RETIRED, effective_from: '2026-07-01', price_cents: 4900 },
-      { id: ADDON_V, plan_id: ADDON, effective_from: '2026-07-01', price_cents: 1500 },
+      { id: CORE_V, plan_id: CORE, effective_from: '2026-07-01', price_cents: 9900, features: { ...BACKFILLED_FEATURES } },
+      { id: GROWTH_V, plan_id: GROWTH, effective_from: '2026-07-01', price_cents: 17900, features: { ...BACKFILLED_FEATURES } },
+      { id: SCALE_V, plan_id: SCALE, effective_from: '2026-07-01', price_cents: 29900, features: { ...BACKFILLED_FEATURES } },
+      { id: RETIRED_V, plan_id: RETIRED, effective_from: '2026-07-01', price_cents: 4900, features: { ...BACKFILLED_FEATURES } },
+      { id: ADDON_V, plan_id: ADDON, effective_from: '2026-07-01', price_cents: 1500, features: { ...BACKFILLED_FEATURES } },
+      { id: LEGACY_V, plan_id: LEGACY, effective_from: '2026-01-01', price_cents: 5900, features: {} },
+      { id: PARTIAL_V, plan_id: PARTIAL, effective_from: '2026-07-15', price_cents: 12900, features: { ...PARTIAL_FEATURES } },
     ],
     location_plans: [],
   }
@@ -244,5 +285,55 @@ describe('unassign → dormant', () => {
   it('404s unassigning against a cross-org location', async () => {
     const res = await unassign(ORG_ID, { location_id: OTHER_LOC, plan_version_id: CORE_V })
     expect(res.status).toBe(404)
+  })
+})
+
+// TENANT.6 — a plan version with ZERO of the 8 bundle_*/module_cars keys
+// predates BUNDLES.5. Pinning it would silently deny every bundle at the
+// location (applyPlanBundlesToLocation treats "absent" as "withheld") even
+// though the plan was sold as everything-on — mig 548 backfills the keys,
+// but this guard makes the footgun unreachable even if that migration
+// hasn't run yet.
+describe('pre-bundle plan version guard', () => {
+  it('refuses to pin a version with none of the 8 bundle keys', async () => {
+    const res = await assign(ORG_ID, { location_id: LOC_ID, plan_id: LEGACY, kind: 'tier' })
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    expect(body.error).toMatch(/predates bundle/i)
+    expect(body.error).toMatch(/548_plan_versions_bundle_backfill/)
+    // Refused — nothing written.
+    expect(activeTierPins(LOC_ID)).toHaveLength(0)
+  })
+
+  it('force: true overrides the refusal and pins anyway', async () => {
+    const res = await assign(ORG_ID, { location_id: LOC_ID, plan_id: LEGACY, kind: 'tier', force: true })
+    expect(res.status).toBe(200)
+    const active = activeTierPins(LOC_ID)
+    expect(active).toHaveLength(1)
+    expect(active[0].plan_version_id).toBe(LEGACY_V)
+  })
+
+  it('a backfilled version (has all 8 bundle keys) pins normally, no force needed', async () => {
+    const res = await assign(ORG_ID, { location_id: LOC_ID, plan_id: CORE, kind: 'tier' })
+    expect(res.status).toBe(200)
+    expect(activeTierPins(LOC_ID).map((r) => r.plan_version_id)).toEqual([CORE_V])
+  })
+
+  // Review rider: the guard only catches ALL-8-absent (LEGACY). A PARTIAL
+  // version (some bundle keys present, others not) has "any" bundle key
+  // and so sails through the guard untouched, no force needed — that's
+  // correct polarity, not a hole: mirrorBundleFeatures grants a bundle
+  // only on an explicit `true`, so the 5 omitted keys mean "deliberately
+  // withheld", identical to the plan author typing `false` by hand. The
+  // mirror's OWN write behaviour for this exact "3 of 8" shape (which 5
+  // keys land `false`) is proven against a real applyPlanBundlesToLocation
+  // call in plans.test.js — this makeFakeDb double doesn't model
+  // getLocationPlan's embedded select (see plans.test.js's stubDb header
+  // comment), so it can only prove the guard/pin half here.
+  it('a PARTIAL version (3 of 8 bundle keys) pins with no force needed (guard only fires on ALL 8 absent)', async () => {
+    const res = await assign(ORG_ID, { location_id: LOC_ID, plan_id: PARTIAL, kind: 'tier' })
+    expect(res.status).toBe(200)
+    expect(activeTierPins(LOC_ID).map((r) => r.plan_version_id)).toEqual([PARTIAL_V])
   })
 })

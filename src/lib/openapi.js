@@ -5291,7 +5291,10 @@ registry.registerPath({
     'existing active tier pin for the location BEFORE activating the new one (deactivate-first), ' +
     'so a location can never hold two active tiers. Add-ons are additive (multiple allowed) and ' +
     'idempotent. Cross-org / unknown location → 404 (not 403). Validates the plan is active and ' +
-    'its kind matches, and that an explicit version belongs to the plan.',
+    'its kind matches, and that an explicit version belongs to the plan. TENANT.6: refuses to pin ' +
+    'a version whose features carry NONE of the 8 bundle_*/module_cars keys (a pre-BUNDLES.5 ' +
+    'version — pinning it as-is would silently deny every bundle at the location) unless force ' +
+    'is true; see mig 548_plan_versions_bundle_backfill.sql.',
   request: {
     params: z.object({ orgId: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({
@@ -5300,6 +5303,7 @@ registry.registerPath({
       plan_slug: z.string().optional().openapi({ description: 'Plan slug — alternative to plan_id.' }),
       plan_version_id: uuidLike.optional().openapi({ description: 'Specific version to pin (grandfathering). Defaults to the plan\'s current active version.' }),
       kind: z.enum(['tier', 'addon']),
+      force: z.boolean().optional().openapi({ description: 'Override the pre-bundle version guard and pin anyway. Defaults to false.' }),
     }).openapi('AdminTenantPlanAssignBody') } } },
   },
   responses: {
@@ -5307,7 +5311,7 @@ registry.registerPath({
       description: 'Pin created/activated — returns the resulting pin, plan and version',
       content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('AdminTenantPlanAssignResponse') } },
     },
-    400: { description: 'Validation failed — inactive plan, kind mismatch, version not on plan, or no active version', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Validation failed — inactive plan, kind mismatch, version not on plan, no active version, or a pre-bundle version pinned without force', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — master role required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Org, location (incl. cross-org), or plan not found', content: { 'application/json': { schema: ErrorResponse } } },
