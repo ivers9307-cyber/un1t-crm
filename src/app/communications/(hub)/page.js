@@ -260,13 +260,18 @@ export default async function CommunicationsHub() {
             }
           />
         )}
-        <ActionCard
-          href="/communications/templates"
-          icon={FileText}
-          color="bg-un1t-border/40 text-un1t-subtle"
-          title="Templates"
-          desc="Reusable email + WhatsApp content — now in Marketing"
-        />
+        {/* Rider (DEEP.4 Task 3) — templates/page.js redirects to /communications
+            when !canEmail && !canWhatsapp (sms-only has neither), so an
+            sms-only user must not see a card that bounces. */}
+        {(canEmail || canWhatsapp) && (
+          <ActionCard
+            href="/communications/templates"
+            icon={FileText}
+            color="bg-un1t-border/40 text-un1t-subtle"
+            title="Templates"
+            desc="Reusable email + WhatsApp content — now in Marketing"
+          />
+        )}
         {/* GAPS-P5 — list-health also has a (marketing-era) tab now; this
             card stays as the landing's own pointer to it, same reasoning as
             every other cross-link card above. */}
