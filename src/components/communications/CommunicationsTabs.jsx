@@ -46,7 +46,7 @@ export default function CommunicationsTabs({ canWhatsapp, canEmailInbox }) {
   const tabs = [
     // UIX-P1b: one unified WhatsApp + Instagram queue — the separate
     // Instagram tab retired (/communications/instagram redirects here).
-    canWhatsapp && { id: 'inbox',      label: 'Inbox',      href: '/communications/inbox', badge: inboxActionCount },
+    canWhatsapp && { id: 'inbox',      label: 'WhatsApp & Instagram inbox', href: '/communications/inbox', badge: inboxActionCount },
     // EMAIL-TICKET.4 — the studio email queue. Its own key (`email_inbox`),
     // not the marketing `email` one, so it appears for the people who
     // actually answer accounts@/sales@ and for nobody else.
