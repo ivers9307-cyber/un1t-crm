@@ -7,6 +7,13 @@
 
 export const runtime = 'nodejs'
 
+// Phase 6 (Repset domain separation): the champ backend is gaining
+// api.repset.ie. Stage 1 keeps the default on app.champfitness.ie (which
+// keeps serving forever); Stage 2 flips this via CHAMP_OPENAPI_URL env
+// once certs on the new host are live — no code change needed then.
+const CHAMP_OPENAPI_URL =
+  process.env.CHAMP_OPENAPI_URL || 'https://app.champfitness.ie/api/openapi.json'
+
 const HTML = `<!DOCTYPE html>
 <html lang="en">
   <head>
@@ -27,7 +34,7 @@ const HTML = `<!DOCTYPE html>
         window.ui = SwaggerUIBundle({
           urls: [
             { url: '/api/openapi.json', name: 'UN1T CRM' },
-            { url: 'https://app.champfitness.ie/api/openapi.json', name: 'Champ App' },
+            { url: '${CHAMP_OPENAPI_URL}', name: 'Champ App' },
           ],
           'urls.primaryName': 'UN1T CRM',
           dom_id: '#swagger-ui',
