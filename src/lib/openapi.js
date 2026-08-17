@@ -2152,6 +2152,92 @@ registry.registerPath({
   },
 })
 
+// REPSET-P5 — admin app-account linking (contacts.user_id ↔ auth user).
+// Master/owner only; staff never self-link their member contact.
+registry.registerPath({
+  method: 'get',
+  path: '/api/contacts/{id}/link-account',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'App-account link state, with optional exact-email auth-user search (master/owner)',
+  request: {
+    params: z.object({ id: uuidLike }),
+    query: z.object({ email: z.string().email().optional() }),
+  },
+  responses: {
+    200: {
+      description: 'Link state (masked email only) + optional search result',
+      content: {
+        'application/json': {
+          schema: z.object({
+            success: z.literal(true),
+            data: z.object({
+              linked: z.boolean(),
+              account: z.object({ userId: uuidLike, maskedEmail: z.string().nullable(), staff: z.object({ fullName: z.string().nullable(), role: z.string() }).nullable() }).nullable(),
+              search: z.object({ found: z.boolean() }).passthrough().optional(),
+            }),
+          }),
+        },
+      },
+    },
+    400: { description: 'Malformed email search term', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — master/owner only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/contacts/{id}/link-account',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Link contacts.user_id to an EXISTING auth user (master/owner; never creates auth users)',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({ userId: uuidLike, confirm: z.literal(true) }).openapi('ContactLinkAccountBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Linked', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({}).passthrough() }) } } },
+    400: { description: 'Validation error (confirm is required)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — master/owner only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact or target auth user not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Contact already linked (unlink first) or auth user linked to another contact', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/contacts/{id}/link-account',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Unlink a contact from its app account (master/owner)',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({ confirm: z.literal(true) }).openapi('ContactUnlinkAccountBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Unlinked', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({}).passthrough() }) } } },
+    400: { description: 'Not linked / confirm missing', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — master/owner only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // PERSON-LINK.2 — detection runner
 registry.registerPath({
   method: 'post',

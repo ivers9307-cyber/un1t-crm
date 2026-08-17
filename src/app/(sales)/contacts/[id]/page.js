@@ -489,6 +489,10 @@ export default async function ContactDetailPage(props) {
               canInvite: (user?.isMaster || ['owner', 'manager'].includes(user?.role)) && Boolean(contact.email),
               hasUserAccount: Boolean(contact.user_id),
               canEditDevices: user?.isMaster || ['owner', 'manager', 'head_coach'].includes(user?.role),
+              // REPSET-P5 — admin contact-linking tool: master/owner ONLY
+              // (staff never self-link their member contact; the route
+              // re-enforces this server-side).
+              canLinkAccount: user?.isMaster || ['master', 'owner'].includes(user?.role),
             }}
           />
 
