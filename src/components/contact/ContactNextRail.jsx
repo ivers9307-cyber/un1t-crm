@@ -8,6 +8,7 @@ import { CheckSquare, Clock } from 'lucide-react'
 import ContactRaceHistory from '@/components/ContactRaceHistory'
 import ContactEditDeleteActions from '@/components/ContactEditDeleteActions'
 import InviteToAppButton from '@/components/InviteToAppButton'
+import ContactAppAccountCard from '@/components/ContactAppAccountCard'
 import MemberPasswordOverrideButton from '@/components/MemberPasswordOverrideButton'
 import ContactDevicesCard from '@/components/ContactDevicesCard'
 import { UpcomingEventsCard } from './EventRegistrationsCards'
@@ -25,7 +26,7 @@ export default function ContactNextRail({
   sequences = [],
   upcomingBookings = [],
   deals = [],
-  admin, // { canEditDelete, canPasswordOverride, canInvite, hasUserAccount, canEditDevices }
+  admin, // { canEditDelete, canPasswordOverride, canInvite, hasUserAccount, canEditDevices, canLinkAccount }
 }) {
   return (
     <>
@@ -114,6 +115,14 @@ export default function ContactNextRail({
 
       {/* HR devices: chest strap MAC registry. */}
       <ContactDevicesCard contactId={contact.id} canEdit={admin.canEditDevices} />
+
+      {/* REPSET-P5 — App account link state + admin link/unlink tool.
+          Master/owner only (staff never self-link their member contact —
+          the Repset app hard-disables self-linking for anyone with
+          has_ever_been_staff; an admin links from here instead). */}
+      {admin.canLinkAccount && (
+        <ContactAppAccountCard contactId={contact.id} contactName={contact.name} />
+      )}
 
       {/* Admin actions — edit / delete, app invite, password override.
           Each keeps its existing permission gate. */}
