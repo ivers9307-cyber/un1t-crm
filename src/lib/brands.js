@@ -216,14 +216,44 @@ export function isFrameworkAsset(path) {
 // ─────────────────────────────────────────────────────────────────
 // Legacy (in-code) hostnames — read-only display descriptors
 //
-// The CRM's OWN hostname is deliberately NOT a BRANDS entry
-// (resolveBrand returns null for it → the CRM auth gate). It's named
-// here only so the /admin/tenant-domains "managed in code" view can
-// show the FULL domain picture. Sourced from NEXT_PUBLIC_APP_URL when
-// set, else this constant.
+// The CRM's OWN hostnames are deliberately NOT BRANDS entries
+// (resolveBrand returns null for them → the CRM auth gate). They're
+// named here only so the /admin/tenant-domains "managed in code" view
+// can show the FULL domain picture. See getCrmHostnames() below for
+// the full set; this constant is the canonical (first) host.
 // ─────────────────────────────────────────────────────────────────
 
 export const CRM_DEFAULT_HOSTNAME = 'crm.un1tdublin.com'
+
+// ─────────────────────────────────────────────────────────────────
+// REPSET-P6 — the CRM hostname concept is SET-valued.
+//
+// The platform gains crm.repset.ie; the un1tdublin hostnames keep
+// serving forever (dual-domain). Everything that used to compare
+// against ONE host derived from NEXT_PUBLIC_APP_URL must consult
+// this set instead: the edge tenant-domains skip, the admin
+// tenant-domains write guard, and the "managed in code" rows below.
+//
+// Env-overridable comma-list (same pattern as MARKETING_HOSTNAMES);
+// ordering is canonical-first — index 0 is the canonical CRM host.
+// A function, not a module const, so the env is read at call time
+// (tests/previews can stub it without a module reload). The
+// NEXT_PUBLIC_APP_URL hostname is always part of the set (appended
+// when not already listed): preview deployments point it at their
+// own URL and that host must keep behaving as the CRM host.
+// ─────────────────────────────────────────────────────────────────
+
+export function getCrmHostnames() {
+  const hosts = (process.env.CRM_HOSTNAMES || `${CRM_DEFAULT_HOSTNAME},crm.repset.ie`)
+    .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
+  try {
+    const appHost = new URL(process.env.NEXT_PUBLIC_APP_URL).hostname.toLowerCase()
+    if (!hosts.includes(appHost)) hosts.push(appHost)
+  } catch {
+    // Env unset/malformed (dev/tests) — the static list stands.
+  }
+  return hosts
+}
 
 /**
  * Read-only descriptors of the in-code hostnames (the CRM default +
@@ -237,19 +267,18 @@ export const CRM_DEFAULT_HOSTNAME = 'crm.un1tdublin.com'
  * @returns {{ key:string, hostname:string, extraHostnames:string[], label:string, description:string }[]}
  */
 export function getLegacyBrandRows() {
-  let crmHost = CRM_DEFAULT_HOSTNAME
-  try {
-    crmHost = new URL(process.env.NEXT_PUBLIC_APP_URL).hostname.toLowerCase()
-  } catch {
-    // Env unset/malformed (dev/tests) — fall back to the constant.
-  }
+  // REPSET-P6: the CRM row carries the WHOLE host set — canonical
+  // first, the rest (crm.repset.ie, any preview APP_URL host) as
+  // extras — so an admin never mistakes a CRM host for an unclaimed
+  // hostname and tries to add it as a tenant row.
+  const [crmPrimary, ...crmExtras] = getCrmHostnames()
 
   const rows = [{
     key: 'crm-default',
-    hostname: crmHost,
-    extraHostnames: [],
+    hostname: crmPrimary || CRM_DEFAULT_HOSTNAME,
+    extraHostnames: crmExtras,
     label: 'CRM (default)',
-    description: 'Staff CRM — the default hostname (auth-gated)',
+    description: 'Staff CRM — the default hostnames (auth-gated)',
   }]
 
   for (const brand of BRANDS) {

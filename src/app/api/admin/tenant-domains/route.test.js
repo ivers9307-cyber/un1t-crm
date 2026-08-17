@@ -148,6 +148,30 @@ describe('POST — create', () => {
     expect(body.error).toContain("CRM's own hostname")
   })
 
+  // REPSET-P6 — dual-domain: EITHER CRM host as a tenant row would
+  // brand-gate the staff CRM on that domain. Both must be refused,
+  // even when NEXT_PUBLIC_APP_URL names only one of them (prod
+  // config) or is unset entirely (dev/tests).
+  it('EVERY CRM host in the set is refused, whatever NEXT_PUBLIC_APP_URL says', async () => {
+    for (const appUrl of ['https://crm.un1tdublin.com', undefined]) {
+      if (appUrl) vi.stubEnv('NEXT_PUBLIC_APP_URL', appUrl)
+      else vi.unstubAllEnvs()
+      for (const hostname of ['crm.un1tdublin.com', 'crm.repset.ie']) {
+        const res = await POST(postReq({ hostname, organization_id: ORG_ID }))
+        expect(res.status).toBe(400)
+        const body = await res.json()
+        expect(body.error).toContain("CRM's own hostname")
+      }
+    }
+  })
+
+  it('CRM hosts are refused case-insensitively (schema lowercases before the guard)', async () => {
+    const res = await POST(postReq({ hostname: 'CRM.Repset.IE', organization_id: ORG_ID }))
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error).toContain("CRM's own hostname")
+  })
+
   it('unknown organization → 400', async () => {
     const res = await POST(postReq({ hostname: 'pay.acmegym.ie', organization_id: MISSING_ID }))
     expect(res.status).toBe(400)
