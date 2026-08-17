@@ -150,6 +150,16 @@ jobs:
       - name: Supabase guardrails
         run: npm run check:guardrails
 
+      # Phase 0b of the Repset merge — the staff + member mobile apps are
+      # merging into ONE binary, after which staff-app JS ships to every
+      # member phone. Nothing secret-shaped may live in mobile/** or
+      # shared/**: PEM blocks, key files, Stripe/AWS/GitHub keys, Supabase
+      # SERVICE-ROLE JWTs (the anon key is intentionally committed and is
+      # not flagged), and hardcoded gate codes (the burned review-login
+      # precedent). See scripts/check-secrets.mjs.
+      - name: Secret scan (mobile/shared)
+        run: npm run check:secrets
+
       # TENANT.8 — catches shared/permission-bundles.js's KEY_BUNDLES
       # drifting from the seed data pasted into the latest migration
       # that reseeds private.permission_key_bundles (the SQL mirror
