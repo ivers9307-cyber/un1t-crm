@@ -5,11 +5,10 @@
 // merged app has exactly ONE client (mobile/lib/supabase.js) and this module
 // is a re-export shim keeping every ported member import path working.
 //
-// Champ-only behaviour NOT carried over here (deliberately):
-//   - the AppState-driven startAutoRefresh/stopAutoRefresh + proactive
-//     foreground refreshSession() wiring lived in champ's client module.
-//     TODO(stage C): decide whether the shared client adopts it when the
-//     member tree goes live — wiring it now would change today's staff
-//     token-refresh behaviour.
+// STAGE C: champ's AppState-driven startAutoRefresh/stopAutoRefresh +
+// proactive foreground refreshSession() wiring now lives ON THE SHARED
+// CLIENT (mobile/lib/supabase.js, guarded against double-wiring) — both
+// shells' direct supabase.from() reads get a fresh token after a long
+// background, exactly as champ's members did.
 
 export { supabase } from '../supabase'

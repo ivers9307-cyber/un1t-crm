@@ -1,25 +1,27 @@
-// PHASE2 (one-app merge, stage B) — the member (Graft) tree's layout.
-// Deliberately NOT champ's root _layout ported as-is: providers and every
-// auth-consuming gate are stage-C work. This layout only pins the member
-// look — iron canvas (Afterglow tokens), portrait, light status bar — and
-// registers the screens that need non-default presentation, verbatim from
-// champ's root Stack (minus champ's (auth) group, which is not ported:
-// stage C merges the auth flows and the resolver is the only way in).
+// PHASE2 (one-app merge) — the member (Graft) tree's layout. Pins the
+// member look — iron canvas (Afterglow tokens), portrait, light status
+// bar — and registers the screens that need non-default presentation,
+// verbatim from champ's root Stack (minus champ's (auth) group: the
+// resolver is the only way in; the staff login is the merged app's single
+// auth entry).
 //
-// TODO(stage C) — wire here (or in the root layout) when the identity spine
-// lands; all of it read champ's auth context so none of it can mount yet:
-//   - the member AuthProvider (lib/member/contact-context.jsx)
-//   - NotificationRouter for member push types — the pure route mapping is
-//     already ported at lib/member/notification-nav.js
-//   - Notifications.setNotificationHandler foreground-banner handler (champ
-//     registered it at module scope; doing so here would globally change
-//     how STAFF foreground pushes present today)
-//   - AppleHealthBackgroundSync (iOS), ProfileSetupGate, MonthWrappedGate
-// Fonts (Archivo Expanded / Figtree / IBM Plex Mono) load in the merged
-// ROOT app/_layout.jsx — nothing to load here.
+// Stage C wiring (design point 8): the member AuthProvider
+// (lib/member/contact-context — contact loading + the policy-gated
+// link-contact fallback) mounts HERE, so it only ever runs while a member
+// route is active; the gates (ProfileSetupGate, MonthWrappedGate) and the
+// Apple-Health background sync mount inside it. AppleHealthBackgroundSync
+// is additionally gated on !paired — a shared studio kiosk must never
+// sync anyone's HealthKit data. Member push presentation/tap-routing is
+// NOT here: the merged root handler owns both (app/_layout.jsx).
 
 import { Stack } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
+import { Platform } from 'react-native'
+import { AuthProvider as MemberContactProvider } from '../../lib/member/contact-context'
+import { AppleHealthBackgroundSync } from '../../lib/member/apple-health-background'
+import { useIdentity } from '../../lib/identity-context'
+import ProfileSetupGate from '../../components/member/ProfileSetupGate'
+import MonthWrappedGate from '../../components/member/MonthWrappedGate'
 
 // Iron canvas — mobile/tailwind.config.js 'iron-bg'. Pinned as the stack's
 // contentStyle so every member screen sits on the Graft graphite ground
@@ -27,11 +29,15 @@ import { StatusBar } from 'expo-status-bar'
 const IRON_BG = '#0F1216'
 
 export default function MemberLayout() {
+  const { paired } = useIdentity()
   return (
-    <>
+    <MemberContactProvider>
       {/* Member chrome is light-on-dark; mounts only while a member route is
           active, so the staff tree keeps its dark-on-light status bar. */}
       <StatusBar style="light" />
+      <ProfileSetupGate />
+      <MonthWrappedGate />
+      {Platform.OS === 'ios' && !paired && <AppleHealthBackgroundSync />}
       <Stack
         screenOptions={{
           headerShown: false,
@@ -64,6 +70,6 @@ export default function MemberLayout() {
           options={{ presentation: 'fullScreenModal', headerShown: false, gestureEnabled: false }}
         />
       </Stack>
-    </>
+    </MemberContactProvider>
   )
 }

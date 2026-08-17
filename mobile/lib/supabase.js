@@ -22,7 +22,7 @@ import 'react-native-url-polyfill/auto'
 import { createClient } from '@supabase/supabase-js'
 import * as SecureStore from 'expo-secure-store'
 import Constants from 'expo-constants'
-import { Platform } from 'react-native'
+import { AppState, Platform } from 'react-native'
 
 const SUPABASE_URL = Constants.expoConfig?.extra?.supabaseUrl
 const SUPABASE_ANON_KEY = Constants.expoConfig?.extra?.supabaseAnonKey
@@ -108,3 +108,52 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     flowType: 'pkce',
   },
 })
+
+// ── AppState-wired token refresh (PHASE2 stage C — champ's pattern, moved
+// onto the ONE shared client) ──
+//
+// Supabase's auto-refresh timer only ticks while the JS runtime is running.
+// When the app is backgrounded the OS suspends the timer, so a user
+// returning after >1h holds a stale access token. The api() helpers recover
+// on a 401, but DIRECT `supabase.from(...)` reads (member dashboard,
+// sessions; staff schedule reads) have no 401-retry path — they just
+// surface "Failed to load" until a manual refetch.
+//
+// The standard Supabase RN fix: drive the auto-refresh loop off AppState,
+// and proactively refresh the moment we come back to the foreground so the
+// very next direct read carries a fresh token. Wired once here at import
+// (the client is a module singleton) with an explicit guard so no future
+// re-export/refactor can double-register the listener.
+let autoRefreshWired = false
+if (Platform.OS !== 'web' && !autoRefreshWired) {
+  autoRefreshWired = true
+  let refreshingOnForeground = false
+
+  const handleAppStateChange = (state) => {
+    if (state === 'active') {
+      // Resume the periodic auto-refresh loop.
+      supabase.auth.startAutoRefresh()
+      // Proactively refresh NOW so a direct supabase.from() read that fires
+      // on this same foreground doesn't race a still-expired token. Guarded
+      // so overlapping 'active' events don't stack refresh calls.
+      // Best-effort: a truly-dead refresh token is handled by the normal
+      // onAuthStateChange sign-out path, not here.
+      if (!refreshingOnForeground) {
+        refreshingOnForeground = true
+        supabase.auth
+          .refreshSession()
+          .catch(() => { /* best-effort; auth listener handles a dead session */ })
+          .finally(() => { refreshingOnForeground = false })
+      }
+    } else {
+      // Backgrounded/inactive — stop the loop so we don't burn cycles or
+      // hit the network from a suspended state.
+      supabase.auth.stopAutoRefresh()
+    }
+  }
+
+  AppState.addEventListener('change', handleAppStateChange)
+  // Kick the loop for the initial foreground launch (AppState starts
+  // 'active' but the 'change' event won't have fired yet).
+  if (AppState.currentState === 'active') supabase.auth.startAutoRefresh()
+}

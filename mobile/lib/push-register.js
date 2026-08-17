@@ -20,16 +20,12 @@ import { api } from './api'
 import { readImpersonate } from './impersonate'
 import { ANDROID_CHANNELS } from 'shared/push-channels'
 
-// Show notifications even when the app is in the foreground (default
-// is to silence them). Iconic "banner from the top" iOS behaviour.
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-  }),
-})
+// PHASE2 stage C — the foreground-presentation handler that used to live
+// here (module scope) moved to the ROOT layout (app/_layout.jsx): the
+// merged app registers ONE Notifications.setNotificationHandler that
+// branches per payload type — staff types keep the sound+badge banner this
+// module registered, member types keep champ's silent banner. See
+// lib/notification-side.js presentationForNotification.
 
 /**
  * Register this device's Expo push token with the CRM.

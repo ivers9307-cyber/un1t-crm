@@ -22,6 +22,7 @@ import { getNeedsActionCount } from '../../../lib/whatsapp-api'
 import { getTicketCount } from '../../../lib/email-api'
 import ImpersonateBanner from '../../../components/ImpersonateBanner'
 import PendingContractsBanner from '../../../components/PendingContractsBanner'
+import IdentitySwitcher from '../../../components/IdentitySwitcher'
 
 export default function TabsLayout() {
   const { session, profile, activeLocation, loading } = useAuth()
@@ -148,6 +149,11 @@ export default function TabsLayout() {
           tabBarActiveTintColor: '#111827',
           tabBarInactiveTintColor: '#94A3B8',
           tabBarStyle: { borderTopColor: '#E2E5E9', backgroundColor: '#FFFFFF' },
+          // Stage C — the staff-side identity switcher (volt-dot avatar) on
+          // every staff tab header. Renders ONLY for dual (staff+member)
+          // users; kiosk-paired and impersonating sessions render nothing
+          // (guards inside the component), so pre-merge staff see no change.
+          headerRight: () => <IdentitySwitcher side="staff" />,
         }}
       >
         <Tabs.Screen

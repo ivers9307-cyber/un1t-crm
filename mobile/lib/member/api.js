@@ -15,14 +15,57 @@
 // Both ride the SHARED Supabase client (lib/supabase via the member shim),
 // so the Authorization header carries the one session the merged app holds.
 //
-// TODO(stage C): the 401 paths below sign out via the shared client
-// (scope: 'local'), which in the merged app ends the STAFF session too.
-// Unreachable until the resolver lands (nothing routes into the member
-// tree); stage C revisits sign-out semantics for the one-session model.
+// STAGE C sign-out policy (one-session model — locked decision): the app
+// holds ONE session for both shells, so this helper self-signs-out ONLY on
+// an explicit invalid-refresh-token error from the shared client's refresh
+// attempt (the session is provably dead everywhere). A HOST-level failure —
+// 401 with a freshly-refreshed token, 5xx, network error, timeout — must
+// degrade the member surface only: we return the usual { success:false }
+// error envelope the ported member screens already render as error states,
+// and NEVER end the staff session. When it does sign out, it routes through
+// performFullSignOut() (lib/sign-out.js) — the same teardown the kiosk
+// idle-lock path calls, so on a paired studio device the session drop lands
+// in StudioPinProvider's lock/pad flow rather than a bare auth flip.
 
 import Constants from 'expo-constants'
 import { supabase } from './supabase'
 import { isAcceptableSuccessBody } from './response-envelope'
+
+// Typed error for callers that prefer throwing semantics over the
+// { success:false } envelope (none of the ported champ screens do — they
+// all branch on the envelope — but the identity spine and future member
+// modules can wrap results in this).
+export class MemberApiError extends Error {
+  constructor(message, { status, hostLevel = false } = {}) {
+    super(message)
+    this.name = 'MemberApiError'
+    this.status = status
+    this.hostLevel = hostLevel
+  }
+}
+
+// Only supabase-auth "this refresh token is dead" failures qualify —
+// transport/host failures (Failed to fetch, retryable 5xx) never do.
+export function isInvalidRefreshTokenError(error) {
+  if (!error) return false
+  const code = typeof error.code === 'string' ? error.code : ''
+  if (code === 'refresh_token_not_found' || code === 'refresh_token_already_used') return true
+  const msg = String(error.message || '').toLowerCase()
+  return msg.includes('invalid refresh token')
+}
+
+// Dynamic import so the static graph stays acyclic (sign-out.js imports the
+// member push-register, which imports this module).
+async function selfSignOut() {
+  try {
+    const { performFullSignOut } = await import('../sign-out')
+    await performFullSignOut()
+  } catch {
+    // Teardown must never leave a dead session half-alive — fall back to
+    // the bare local sign-out champ used.
+    try { await supabase.auth.signOut({ scope: 'local' }) } catch { /* best-effort */ }
+  }
+}
 
 const API_BASE = Constants.expoConfig?.extra?.champApiBaseUrl
 const CRM_BASE = Constants.expoConfig?.extra?.apiBaseUrl
@@ -65,22 +108,28 @@ async function request(base, path, options = {}, _isRetry = false) {
   const { response, fetchError } = await fetchWithTimeout(`${base}${path}`, fetchOptions)
   if (fetchError) return { success: false, error: fetchError }
 
-  // 401 handling: refresh once, retry once, then sign out.
+  // 401 handling: refresh once, retry once. Sign-out ONLY on a provably
+  // dead refresh token — see the module header for the one-session policy.
   if (response.status === 401 && !_isRetry) {
     const { error: refreshError } = await supabase.auth.refreshSession()
     if (!refreshError) {
       // Retry once with fresh headers (pass _isRetry=true to prevent recursion).
       return request(base, path, options, true)
     }
-    // Refresh itself failed — sign the user out and surface a friendly message.
-    // scope: 'local' — the default ('global') revokes every refresh token the user holds (all devices).
-    await supabase.auth.signOut({ scope: 'local' })
-    return { success: false, error: 'Your session expired. Please sign in again.' }
+    if (isInvalidRefreshTokenError(refreshError)) {
+      // The session is dead everywhere — full teardown (staff + member).
+      await selfSignOut()
+      return { success: false, error: 'Your session expired. Please sign in again.' }
+    }
+    // Refresh failed for a transient reason (auth outage, offline) —
+    // degrade this surface only; the staff session stays untouched.
+    return { success: false, error: 'Could not verify your session. Please try again.' }
   }
   if (response.status === 401 && _isRetry) {
-    // scope: 'local' — the default ('global') revokes every refresh token the user holds (all devices).
-    await supabase.auth.signOut({ scope: 'local' })
-    return { success: false, error: 'Your session expired. Please sign in again.' }
+    // Host-level 401 on a FRESHLY-refreshed token: the champ host is
+    // rejecting a token Supabase just minted (outage / authz gap). NEVER
+    // a sign-out — the shared session is demonstrably alive.
+    return { success: false, error: 'Could not load this right now. Please try again.' }
   }
 
   let json

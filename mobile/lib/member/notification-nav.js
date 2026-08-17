@@ -12,6 +12,15 @@
 // Group folders add no URL segment, so these paths hit the (member) tree by
 // implicit path mapping once it is reachable.
 
+// Membership predicate for the merged root handler (stage C): true iff the
+// type belongs to the member map above — i.e. routeForMemberNotification
+// would NOT report it unknown. Used to pick the foreground presentation and
+// to keep known-member no-nav types from being logged as gaps.
+export function isMemberNotificationType(type) {
+  if (typeof type !== 'string') return false
+  return routeForMemberNotification({ type }) !== undefined
+}
+
 export function routeForMemberNotification(data) {
   if (!data || typeof data.type !== 'string') return undefined
   switch (data.type) {

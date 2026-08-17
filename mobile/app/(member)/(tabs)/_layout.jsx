@@ -7,6 +7,7 @@ import { api } from '../../../lib/member/api'
 import { registerForPushNotifications, getPushPermission } from '../../../lib/member/push-register'
 import { isPushOptedOut } from '../../../lib/member/push-opt-out'
 import { shouldRegisterPush, isGenuinePushSuccess } from 'shared/push-registration'
+import IdentitySwitcher from '../../../components/IdentitySwitcher'
 
 // How often to refresh the Social pending-request badge while the app is
 // foregrounded. Cheap aggregate call; 60 s keeps it roughly live without
@@ -68,10 +69,11 @@ export default function TabsLayout() {
   }, [session, contact])
 
   if (loading) return null
-  // TODO(stage C): champ's (auth) group is not ported — this resolves to the
-  // STAFF login for now. Unreachable until the resolver routes members here;
-  // stage C replaces it with the merged-auth entry.
-  if (!session) return <Redirect href="/(auth)/login" />
+  // Stage C: the resolver (app/index.jsx) owns entry, so this gate only
+  // fires when the session dies WHILE a member route is active (idle
+  // sign-out, dead refresh token). The staff login is the merged app's
+  // single auth entry — champ's (auth) group is deliberately not ported.
+  if (!session) return <Redirect href="/(staff)/(auth)/login" />
   return (
     <Tabs
       screenOptions={{
@@ -91,8 +93,18 @@ export default function TabsLayout() {
     >
       {/* ── The 5 tabs ── */}
       {/* PHASE2: champ's (tabs)/index.jsx is (member)/(tabs)/home.jsx in the
-          merged app — the staff (tabs)/index keeps '/'; member home is '/home'. */}
-      <Tabs.Screen name="home" options={{ title: 'Home', tabBarIcon: ({ color, size }) => <Ionicons name="home-outline" size={size} color={color} /> }} />
+          merged app — the staff (tabs)/index keeps '/'; member home is '/home'.
+          Stage C: the member-side identity switcher lives in the home header —
+          renders ONLY for dual (staff+member) users, never on kiosk /
+          impersonating sessions (guards inside the component). */}
+      <Tabs.Screen
+        name="home"
+        options={{
+          title: 'Home',
+          tabBarIcon: ({ color, size }) => <Ionicons name="home-outline" size={size} color={color} />,
+          headerRight: () => <IdentitySwitcher side="member" />,
+        }}
+      />
       <Tabs.Screen name="activity" options={{ title: 'Activity', tabBarIcon: ({ color, size }) => <Ionicons name="pulse-outline" size={size} color={color} /> }} />
       <Tabs.Screen name="compete" options={{ title: 'Compete', tabBarIcon: ({ color, size }) => <Ionicons name="trophy-outline" size={size} color={color} /> }} />
       <Tabs.Screen

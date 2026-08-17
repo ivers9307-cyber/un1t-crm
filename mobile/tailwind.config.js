@@ -31,6 +31,10 @@ module.exports = {
         'chalk-2': '#A9B0BA',
         'chalk-3': '#66707E',
         pearl: '#D9D5CC',           // resting accent (unlit state)
+        // ── Repset brand signal (stage C) — the volt-green of the app
+        // mark (public/repset-mark.svg). Dual-identity affordances only
+        // (switcher badge); NOT a content accent in either shell. ──
+        volt: '#D6FF3D',
       },
       fontFamily: {
         sans: ['System'],

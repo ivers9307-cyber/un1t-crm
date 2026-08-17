@@ -9,3 +9,7 @@ export const IRON_HAIRLINE = '#2A323D'
 export const CHALK = '#F4F1EA'
 export const CHALK_2 = '#A9B0BA'
 export const CHALK_3 = '#66707E'
+
+// ── Repset brand signal (stage C) — dual-identity affordances only
+// (identity switcher badge), matching the volt in the app mark. ──
+export const VOLT = '#D6FF3D'

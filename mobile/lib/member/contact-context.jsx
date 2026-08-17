@@ -1,48 +1,69 @@
-// PHASE2 (one-app merge, stage B) — champ's lib/auth-context.jsx ported as
-// the member CONTACT context. It consumes the SHARED Supabase client
-// (lib/supabase via the member shim) and keeps the contact-loading logic
-// compiling; it is NOT mounted anywhere yet — the member tree is unreachable
-// until the stage-C resolver lands, and stage C wires the providers.
+// PHASE2 (one-app merge) — champ's lib/auth-context.jsx as the member
+// CONTACT context, now fully wired to the identity spine (stage C). It
+// consumes the SHARED Supabase client and is mounted as the (member)
+// tree's provider by app/(member)/_layout.jsx.
 //
 // The exported names stay `AuthProvider`/`useAuth` so every ported member
 // screen (which imported champ's auth-context) compiles unchanged.
 //
-// TODO(stage C) — side-effect wiring REMOVED from champ's original, to be
-// re-decided when the identity spine lands (none of it may fire from a
-// shared-session app as-is):
-//   - link-contact fallback: on a missing contacts row champ POSTed
-//     /api/mobile/link-contact (member-app deployment) then re-read; in the
-//     merged app self-linking against a STAFF session would be wrong.
-//   - review-login: requestCode/verifyCode carried the App-Store demo
-//     account gate (DEMO_REVIEW_EMAIL → POST /api/mobile/review-login).
-//     Champ's (auth) group is not ported; stage C merges auth flows.
-//   - signOut: champ unregistered device push, cleared the outgoing
-//     contact's per-contact HealthKit SecureStore keys (hkConnectedKey /
-//     hkCursorKey), then supabase.auth.signOut({ scope: 'local' }). On the
-//     SHARED client that would end the staff session too — so here it is a
-//     deliberate no-op stub that only keeps consumers compiling.
+// Stage-C wiring decisions (locked):
+//   - link-contact fallback: champ POSTed /api/mobile/link-contact when a
+//     signed-in user had no contacts row, then re-read. In the merged app
+//     that self-link is policy-gated (lib/identity.js
+//     shouldAttemptLinkContact): it fires ONLY when the staff probe
+//     CONFIRMED not_staff, the device has never held a staff session
+//     (has_ever_been_staff unset — staff linking is admin-only), and the
+//     member probe CONFIRMED empty. Any 'unknown' leg ⇒ no self-link.
+//   - review-login / requestCode / verifyCode: NOT here — the staff login
+//     is the merged app's only auth entry (champ's (auth) group is not
+//     ported; the resolver owns entry).
+//   - signOut: the ONE teardown union (lib/sign-out.js) — both shells'
+//     sign-outs are identical in the one-session model.
 
 import { createContext, useContext, useEffect, useState, useCallback } from 'react'
 import { supabase } from './supabase'
+import { api } from './api'
+import { performFullSignOut } from '../sign-out'
+import { useIdentity } from '../identity-context'
+import { NO_MEMBER, shouldAttemptLinkContact, getHasEverBeenStaff, writeCachedMemberContactId } from '../identity'
+
+const CONTACT_COLUMNS = 'id, name, email, dob, gender, weight_kg, profile_setup_completed_at'
 
 const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
+  const identity = useIdentity()
   const [session, setSession] = useState(null)
-  const [contact, setContact] = useState(null)
+  // Seed from the identity spine's boot probe so the member tree paints
+  // without a second contacts read on entry.
+  const [contact, setContact] = useState(identity.contact || null)
   const [loading, setLoading] = useState(true)
+  const { staffState } = identity
 
   const loadContact = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { setContact(null); return }
-    const { data } = await supabase
+    let { data } = await supabase
       .from('contacts')
-      .select('id, name, email, dob, gender, weight_kg, profile_setup_completed_at')
+      .select(CONTACT_COLUMNS)
       .eq('user_id', user.id)
       .maybeSingle()
-    // TODO(stage C): champ's link-contact fallback lived here (see header).
+    if (!data) {
+      // App-first member who never clicked the web invite link — self-link
+      // by email, ONLY when the identity policy allows (see header).
+      // SecureStore is re-read here (not the context snapshot) so a staff
+      // probe that landed after this provider mounted still hard-disables
+      // the fallback.
+      const hasEverBeenStaff = await getHasEverBeenStaff()
+      if (shouldAttemptLinkContact({ staffState, hasEverBeenStaff, memberState: NO_MEMBER })) {
+        try { await api('/api/mobile/link-contact', { method: 'POST' }) } catch { /* best-effort */ }
+        const reread = await supabase.from('contacts').select(CONTACT_COLUMNS).eq('user_id', user.id).maybeSingle()
+        data = reread.data
+      }
+    }
+    if (data?.id) writeCachedMemberContactId(data.id).catch(() => {})
     setContact(data || null)
-  }, [])
+  }, [staffState])
 
   useEffect(() => {
     let mounted = true
@@ -64,17 +85,19 @@ export function AuthProvider({ children }) {
         return
       }
       // TOKEN_REFRESHED (and USER_UPDATED) fires hourly and carries the same
-      // identity — skip the contact reload on those. Only load on meaningful
-      // auth transitions.
+      // identity — skip the contact load/link on those so link-contact can
+      // never re-POST on every refresh. Only load on meaningful transitions.
       if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') return
       loadContact().catch(() => {})
     })
     return () => { mounted = false; sub?.subscription?.unsubscribe?.() }
   }, [loadContact])
 
-  // TODO(stage C): deliberate no-op — see the header for what champ's
-  // signOut did and why it must not run against the shared session.
-  const signOut = useCallback(async () => {}, [])
+  // The one-session teardown union — identical to the staff shell's
+  // sign-out (kiosk idle-lock included). See lib/sign-out.js.
+  const signOut = useCallback(async () => {
+    await performFullSignOut()
+  }, [])
 
   return (
     <AuthContext.Provider value={{ session, contact, loading, signOut, refresh: loadContact }}>
