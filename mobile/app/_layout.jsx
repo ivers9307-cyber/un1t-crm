@@ -31,6 +31,9 @@ import {
   Poppins_700Bold,
   Poppins_800ExtraBold,
 } from '@expo-google-fonts/poppins'
+// PHASE2 — Graft (member-tree) faces; see the useFonts call below.
+import { Figtree_400Regular, Figtree_500Medium, Figtree_600SemiBold } from '@expo-google-fonts/figtree'
+import { IBMPlexMono_500Medium } from '@expo-google-fonts/ibm-plex-mono'
 import { AuthProvider, useAuth } from '../lib/auth-context'
 // GEO-ATT — importing from lib/geofence also runs its module top-level
 // TaskManager.defineTask, so the background geofence task is registered
@@ -118,12 +121,32 @@ export default function RootLayout() {
   // system font until the family is ready (expo-font resolves the
   // fontFamily on later renders). expo-font's native module is
   // already in the build (Ionicons dep), so this is OTA-safe.
-  useFonts({
+  //
+  // PHASE2 (one-app merge, stage B) — the Graft brand faces (Afterglow
+  // system) load here too: Archivo Expanded for EARNED numbers +
+  // headings, Figtree for body, IBM Plex Mono for body-sourced
+  // telemetry. Champ's settle-on-error pattern is kept below
+  // (`fontsLoaded || !!fontError`): EITHER state counts as settled so a
+  // font-load failure can never wedge rendering — screens fall back to
+  // the system font. Staff splash still gates on auth only (SplashGate),
+  // exactly as before this merge.
+  const [fontsLoaded, fontError] = useFonts({
     Poppins_400Regular,
     Poppins_600SemiBold,
     Poppins_700Bold,
     Poppins_800ExtraBold,
+    'ArchivoExpanded-SemiBold': require('../assets/fonts/ArchivoExpanded-600.ttf'),
+    'ArchivoExpanded-Bold': require('../assets/fonts/ArchivoExpanded-700.ttf'),
+    'ArchivoExpanded-Black': require('../assets/fonts/ArchivoExpanded-800.ttf'),
+    Figtree_400Regular,
+    Figtree_500Medium,
+    Figtree_600SemiBold,
+    IBMPlexMono_500Medium,
   })
+  // Settled = loaded OR errored. Not consumed by any gate yet — TODO(stage C):
+  // the member-tree splash/entry gating consumes this when the resolver lands.
+  const fontsReady = fontsLoaded || !!fontError
+  void fontsReady
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
@@ -137,27 +160,16 @@ export default function RootLayout() {
             <NotificationRouter />
             <GeofenceSync />
             <ForegroundOtaUpdater />
+            {/* PHASE2 (one-app merge, stage B) — the route tree now has two
+                groups: (staff) carries the ENTIRE pre-merge staff app (its
+                Stack — moved verbatim — lives in app/(staff)/_layout.jsx;
+                group folders add no URL segment so every staff path and push
+                deep link is byte-identical), and (member) carries the ported
+                Graft member tree (unreachable until the stage-C resolver —
+                see app/index.jsx). */}
             <Stack screenOptions={{ headerShown: false }}>
-              <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-              <Stack.Screen name="tasks" options={{ headerShown: false }} />
-              <Stack.Screen name="bookings" options={{ headerShown: false }} />
-              <Stack.Screen name="radar" options={{ headerShown: false }} />
-              <Stack.Screen name="assistant" options={{ headerShown: false }} />
-              <Stack.Screen name="staff" options={{ headerShown: false }} />
-              <Stack.Screen name="cars" options={{ headerShown: false }} />
-              <Stack.Screen name="races" options={{ headerShown: false }} />
-              {/* Single-file routes have no folder _layout to host a header,
-                  so enable the native header here (each screen still supplies
-                  its own title + BackHeaderLeft). Without this they inherit
-                  the headerless root stack and render under the status bar —
-                  the same bug the folder sections fix via their _layout.jsx. */}
-              <Stack.Screen name="approvals" options={{ headerShown: true, headerStyle: { backgroundColor: '#FFFFFF' }, headerTitleStyle: { fontWeight: '600' }, headerTintColor: '#111827' }} />
-              <Stack.Screen name="customise-bar" options={{ headerShown: true, headerStyle: { backgroundColor: '#FFFFFF' }, headerTitleStyle: { fontWeight: '600' }, headerTintColor: '#111827' }} />
-              <Stack.Screen name="location-features" options={{ headerShown: true, headerStyle: { backgroundColor: '#FFFFFF' }, headerTitleStyle: { fontWeight: '600' }, headerTintColor: '#111827' }} />
-              <Stack.Screen name="orders" options={{ headerShown: true, headerStyle: { backgroundColor: '#FFFFFF' }, headerTitleStyle: { fontWeight: '600' }, headerTintColor: '#111827' }} />
-              <Stack.Screen name="accounting" options={{ headerShown: true, headerStyle: { backgroundColor: '#FFFFFF' }, headerTitleStyle: { fontWeight: '600' }, headerTintColor: '#111827' }} />
-              <Stack.Screen name="events" options={{ headerShown: false }} />
+              <Stack.Screen name="(staff)" options={{ headerShown: false }} />
+              <Stack.Screen name="(member)" options={{ headerShown: false }} />
             </Stack>
             {/* GEO-ATT.12 — full-screen permission-gate OVERLAY. Sibling
                 of <Stack> (SplashGate pattern: reads useAuth in its own
