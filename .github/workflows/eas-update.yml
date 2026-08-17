@@ -33,14 +33,26 @@ name: EAS Update
 # back then ANY OTA boot-crashed, so more triggers = more risk. That root
 # cause is fixed.)
 #
-# RESIDUAL RISK + recovery: this publishes STRAIGHT TO PRODUCTION — no
-# preview-channel boot-gate and no staged rollout, so a bad JS bundle reaches
-# all devices on next launch. The pipeline mitigates the boot-crash class
-# (pinned `npm ci` + eas-cli so OTA Hermes bytecode matches the binary;
-# an explicit runtimeVersion string so only same-lane binaries get it). If a bad bundle
-# ever ships: `eas update:roll-back-to-embedded --channel production`
-# (instant), then publish a fix. Future hardening: publish to a `preview`
-# channel first + add `--rollout`. See mobile/docs/OTA_BOOT_CRASH_FINDINGS.md.
+# STAGED ROLLOUT (P5 exit gate, Repset merge — decided 2026-08-17): the
+# publish below carries `--rollout-percentage 10`, so a push to main reaches
+# ~10% of same-runtime devices, not the whole install base. This was the
+# Phase-5 precondition for the public App Store release: an unstaged instant
+# publish was acceptable for 16 staff, not for ~1,100 members on the same
+# `main` branch / `production` channel. Ramping to 100% (and halting a bad
+# rollout) is a MANUAL step — the full runbook is mobile/docs/ota-rollout.md.
+# Rule: every rollout is ramped to 100 or rolled back within 48h; no zombie
+# partials. The pinned eas-cli 18.9.1 supports --rollout-percentage natively
+# (verified against its own --help), so the Hermes-bytecode version pin is
+# untouched.
+#
+# RESIDUAL RISK + recovery: still no preview-channel boot-gate — a bad JS
+# bundle reaches the 10% cohort on next launch. The pipeline mitigates the
+# boot-crash class (pinned `npm ci` + eas-cli so OTA Hermes bytecode matches
+# the binary; an explicit runtimeVersion string so only same-lane binaries
+# get it). If a bad bundle ships: halt per mobile/docs/ota-rollout.md
+# (`eas update:republish` the last good group, or
+# `eas update:roll-back-to-embedded --channel production` as the hammer),
+# then publish a fix. See mobile/docs/OTA_BOOT_CRASH_FINDINGS.md.
 on:
   # Auto-publish a JS OTA when mobile/ or shared/ code lands on main.
   # Path-filtered so web-only pushes (src/, supabase/, docs, CLAUDE.md)
@@ -193,10 +205,55 @@ jobs:
       # Use the commit message as the EAS update note so you can see
       # at a glance which commit a given update came from in the EAS
       # dashboard. Squash newlines to keep the eas-update CLI happy.
+      #
+      # --rollout-percentage 10: STAGED rollout (P5 exit gate — see the
+      # header comment). Devices outside the 10% keep serving the previous
+      # latest update on the branch. Ramp/halt is manual:
+      # mobile/docs/ota-rollout.md. Supported by the pinned eas-cli 18.9.1;
+      # do NOT bump the pin to change rollout behaviour — the pin exists
+      # for Hermes bytecode compatibility with the binary.
+      #
+      # --json so the next step can put the published group id +
+      # runtimeVersion in the job summary (non-JSON chatter goes to
+      # stderr, so stdout is clean JSON; it also implies
+      # --non-interactive, which we keep explicit for clarity).
       - name: Publish update
         run: |
           MSG=$(git log -1 --pretty=%s)
           eas update \
             --branch main \
             --message "$MSG" \
-            --non-interactive
+            --rollout-percentage 10 \
+            --non-interactive \
+            --json > eas-update-result.json
+          cat eas-update-result.json
+
+      # Surface what actually shipped: runtime lane (which binaries will
+      # take this update) + rollout % + the group id you need for the
+      # manual ramp (`eas update:edit <group> --rollout-percentage N`).
+      # The estate keeps re-learning these by clicking through the EAS
+      # dashboard — put them where the eyes already are. Defensive: a
+      # summary hiccup must never fail a job whose publish succeeded.
+      - name: Job summary — published update
+        if: success()
+        run: |
+          node -e '
+            let updates = []
+            try { updates = JSON.parse(require("fs").readFileSync("eas-update-result.json", "utf8")) } catch {}
+            if (!Array.isArray(updates)) updates = [updates].filter(Boolean)
+            const uniq = (k) => [...new Set(updates.map((u) => u && u[k]).filter(Boolean))]
+            const groups = uniq("group")
+            const runtimes = uniq("runtimeVersion")
+            const rollout = uniq("rolloutPercentage")
+            const lines = [
+              "## EAS OTA published (staged rollout)",
+              "",
+              `- **Runtime version (lane):** ${runtimes.join(", ") || "unknown — check the EAS dashboard"}`,
+              `- **Rollout:** ${rollout.length ? rollout.join(", ") + "%" : "10% (as requested; CLI output omitted the field)"}`,
+              `- **Update group:** ${groups.join(", ") || "unknown — `eas update:list --branch main`"}`,
+              `- **Platforms:** ${uniq("platform").join(", ") || "unknown"}`,
+              "",
+              "Ramp to 100% or roll back within 48h — runbook: `mobile/docs/ota-rollout.md`.",
+            ]
+            require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n")
+          ' || echo "Job summary generation failed (non-fatal)"

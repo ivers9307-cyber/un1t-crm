@@ -1,0 +1,88 @@
+# OTA staged rollout — ramp / halt runbook
+
+**Since P5-OTA (2026-08-17), every auto-published OTA starts at 10%.**
+`.github/workflows/eas-update.yml` publishes with `--rollout-percentage 10`
+on each push to `main` touching `mobile/**` or `shared/**`. Devices outside
+the 10% cohort keep serving the *previous latest* update on branch `main`.
+Ramping to 100% is a manual step — this file is the runbook.
+
+Why: P5 exit gate of the Repset one-app merge. Instant full-fleet publish
+was fine for 16 staff phones; it is not acceptable with ~1,100 members on
+the same `main` branch / `production` channel. The pinned eas-cli **18.9.1**
+supports `--rollout-percentage` on `update`, `update:edit` and
+`update:republish` (verified against its `--help` output), so the
+Hermes-bytecode CLI pin (`eas.json` `cli.version` = workflow pin = 18.9.1)
+is unchanged. Do **not** bump the pin to change rollout behaviour.
+
+## THE RULE — no zombie partials
+
+**Every rollout is ramped to 100 or rolled back within 48 hours.**
+A partial rollout left sitting means two cohorts run different code
+indefinitely, bug reports stop reproducing, and the next auto-publish
+stacks a second partial on top (users outside the new 10% get the previous
+latest update *even if that one is itself mid-rollout*). Ramp it or kill it.
+
+## Ramp 10 → 100
+
+The group id is printed in the GitHub Actions **job summary** of the
+publish run (or `npx eas-cli@18.9.1 update:list --branch main`).
+
+    cd mobile
+    # sanity: watch crash-free behaviour in the 10% cohort first
+    npx eas-cli@18.9.1 update:edit <GROUP_ID> --rollout-percentage 50
+    # then, when still clean:
+    npx eas-cli@18.9.1 update:edit <GROUP_ID> --rollout-percentage 100
+
+10 → 100 directly is fine for low-risk changes; the 50% step is for
+anything touching boot/auth/navigation. Percentages only go **up** —
+to pull an update back, use a halt (below), not a lower percentage
+(the flag accepts 1–100; there is no 0).
+
+## Halt a bad rollout
+
+Two levers, in order of preference:
+
+1. **Republish the last known-good group** (converges everyone, including
+   the 10% who got the bad update, onto the good bundle):
+
+       cd mobile
+       npx eas-cli@18.9.1 update:republish --group <LAST_GOOD_GROUP_ID> \
+         --message "halt: republish last good over <bad-sha>" --non-interactive
+
+   (Interactive `update:republish --branch main` also works and lets you
+   pick the group from a list.)
+
+2. **Nuclear — back to the embedded bundle** (every device falls back to
+   the JS baked into its binary; loses ALL OTAs since the store build):
+
+       npx eas-cli@18.9.1 update:roll-back-to-embedded --channel production
+
+Then fix forward: land the fix on `main`; the workflow publishes it at 10%
+and the cycle restarts.
+
+## Interaction with the 2.2.0 / 2.3.0 runtime lanes
+
+**runtimeVersion isolation is unchanged.** A rollout percentage is scoped to
+its update group, and an update group only ever serves binaries whose
+runtimeVersion matches the checkout it was published from. Post-P2, `main`
+is runtime **2.3.0**, so the auto-published 10% cohort is 10% of 2.3.0
+installs; staff binaries still on the **2.2.0** lane see nothing from it.
+An emergency hotfix to the 2.2.0 lane (see `rollback-2.2.0-lane.md`) is a
+manual publish — add `--rollout-percentage 10` there too if the blast
+radius warrants it, and apply the same 48h rule.
+
+## Gotchas
+
+- **A new push mid-rollout stacks.** The workflow publishes every qualifying
+  `main` push at 10%. If update B lands while update A is at 10%, devices
+  outside B's cohort serve A (the previous latest) — including A's bad code
+  if A was the problem. Halting means republishing the last *good* group,
+  not just waiting for the next merge. And when ramping after stacked
+  publishes, ramp the **newest** group; older partials become moot once a
+  newer update is fully rolled out.
+- The job summary of each publish run shows runtimeVersion, rollout % and
+  group id — check there before reaching for the EAS dashboard.
+- `eas update:edit` needs `EXPO_TOKEN`/login locally: run it from `mobile/`
+  with `npx eas-cli@18.9.1` (matches the pin; a newer global CLI also works
+  for `update:edit` since it publishes no bytecode, but staying on the pin
+  removes the thought entirely).
