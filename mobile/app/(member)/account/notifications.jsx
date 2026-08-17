@@ -24,7 +24,7 @@ import { api } from '../../../lib/member/api'
 import { getPushPermission, registerForPushNotifications, unregisterCurrentDevicePush } from '../../../lib/member/push-register'
 import { isPushOptedOut, setPushOptOut } from '../../../lib/member/push-opt-out'
 import Card from '../../../components/member/ui/Card'
-import { PEARL } from 'shared/accent'
+import { PEARL } from '../../../lib/member/brand'
 
 // Per-category copy + the example banner each card renders. Categories are
 // product labels tied to the shared channel ids — fixed by design, like the
@@ -66,9 +66,9 @@ const CATEGORIES = [
 ]
 
 const SWITCH_COLORS = {
-  trackColor: { false: '#202730', true: '#F4F1EA' },
+  trackColor: { false: '#24242A', true: '#F1EEE7' },
 }
-const thumb = (on) => (on ? '#0F1216' : '#66707E')
+const thumb = (on) => (on ? '#131316' : '#727170')
 
 // Lock-screen-style example banner with the CHAMP app icon.
 function PushPreview({ title, time, body }) {
@@ -79,7 +79,7 @@ function PushPreview({ title, time, body }) {
       </Text>
       <View
         className="mx-5 mb-4 flex-row items-start gap-2.5 rounded-[14px] bg-iron-raised px-3 py-2.5"
-        style={{ borderWidth: 1, borderColor: '#2A323D' }}
+        style={{ borderWidth: 1, borderColor: '#2A2A31' }}
       >
         <View className="h-[30px] w-[30px] items-center justify-center rounded-[7px] border border-iron-hairline bg-black">
           <Text className="text-[11px] font-display-black text-chalk">
@@ -159,7 +159,7 @@ export default function Notifications() {
           onPress={() => router.back()}
           className="flex-row items-center gap-1 mb-4 self-start active:opacity-60"
         >
-          <Ionicons name="chevron-back-outline" size={18} color="#A9B0BA" />
+          <Ionicons name="chevron-back-outline" size={18} color="#B3B2AC" />
           <Text className="text-sm font-body text-chalk-2">Account</Text>
         </Pressable>
 
@@ -195,7 +195,7 @@ export default function Notifications() {
         {CATEGORIES.map(({ key, label, icon, desc, example }) => (
           <Card key={key} className="mt-3.5 p-0 overflow-hidden">
             <View className="flex-row items-center gap-3 px-5 pt-[18px] pb-1.5">
-              <Ionicons name={icon} size={18} color="#A9B0BA" />
+              <Ionicons name={icon} size={18} color="#B3B2AC" />
               <Text className="flex-1 text-sm font-body-semibold text-chalk">{label}</Text>
               <Switch
                 value={prefs[key]}

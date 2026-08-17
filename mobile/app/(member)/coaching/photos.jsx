@@ -50,7 +50,7 @@ export default function ProgressPhotos() {
   if (loading) {
     return (
       <SafeAreaView className="flex-1 bg-iron-bg items-center justify-center" edges={['left', 'right']}>
-        <ActivityIndicator color="#F4F1EA" size="large" />
+        <ActivityIndicator color="#F1EEE7" size="large" />
       </SafeAreaView>
     )
   }
@@ -64,7 +64,7 @@ export default function ProgressPhotos() {
           <View className="mt-6"><ErrorRetry onPress={load} /></View>
         ) : photos.length === 0 ? (
           <Card className="mt-6 items-center py-8">
-            <Ionicons name="images-outline" size={32} color="#66707E" />
+            <Ionicons name="images-outline" size={32} color="#727170" />
             <Text className="mt-3 text-base font-display text-chalk">No photos yet</Text>
             <Text className="mt-1 text-sm text-chalk-2 text-center">
               Your progress photos show here. Your coach can add them during a consultation.
@@ -79,7 +79,7 @@ export default function ProgressPhotos() {
                     <Image source={{ uri: p.url }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
                   ) : (
                     <View className="flex-1 items-center justify-center">
-                      <Ionicons name="image-outline" size={20} color="#66707E" />
+                      <Ionicons name="image-outline" size={20} color="#727170" />
                     </View>
                   )}
                 </View>
@@ -98,7 +98,7 @@ function Header({ onBack }) {
   return (
     <View>
       <Pressable onPress={onBack} className="flex-row items-center gap-1 mb-4 self-start active:opacity-60">
-        <Ionicons name="chevron-back-outline" size={18} color="#A9B0BA" />
+        <Ionicons name="chevron-back-outline" size={18} color="#B3B2AC" />
         <Text className="text-sm text-chalk-2">Back</Text>
       </Pressable>
       <Text className="text-2xl font-display-bold text-chalk">Progress photos</Text>
@@ -115,7 +115,7 @@ function PhotoViewer({ photo, onClose }) {
         <SafeAreaView className="flex-1" edges={['top', 'left', 'right', 'bottom']}>
           <View className="flex-row justify-end p-4">
             <Pressable onPress={onClose} hitSlop={12} className="active:opacity-60">
-              <Ionicons name="close" size={28} color="#F4F1EA" />
+              <Ionicons name="close" size={28} color="#F1EEE7" />
             </Pressable>
           </View>
           <View className="flex-1 items-center justify-center px-4">

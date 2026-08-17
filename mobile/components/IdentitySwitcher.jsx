@@ -78,7 +78,7 @@ export default function IdentitySwitcher({ side }) {
         onPress={() => switchTo(target)}
         style={{
           ...cardBase,
-          backgroundColor: dark ? (current ? '#202730' : IRON_SURFACE) : (current ? '#F1F5F9' : '#FFFFFF'),
+          backgroundColor: dark ? (current ? '#24242A' : IRON_SURFACE) : (current ? '#F1F5F9' : '#FFFFFF'),
           borderColor: current ? VOLT : (dark ? IRON_HAIRLINE : '#E2E5E9'),
         }}
       >
@@ -130,7 +130,7 @@ export default function IdentitySwitcher({ side }) {
               borderRadius: (VOLT_DOT + 4) / 2,
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: dark ? '#0F1216' : '#FFFFFF',
+              backgroundColor: dark ? '#131316' : '#FFFFFF',
             }}
           >
             <View style={{ width: VOLT_DOT, height: VOLT_DOT, borderRadius: VOLT_DOT / 2, backgroundColor: VOLT }} />
@@ -144,7 +144,7 @@ export default function IdentitySwitcher({ side }) {
           <Pressable
             onPress={() => {}}
             style={{
-              backgroundColor: dark ? '#0F1216' : '#FFFFFF',
+              backgroundColor: dark ? '#131316' : '#FFFFFF',
               borderTopLeftRadius: 20,
               borderTopRightRadius: 20,
               paddingHorizontal: 20,

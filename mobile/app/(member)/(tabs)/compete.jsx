@@ -15,7 +15,7 @@ import { View, Text, Pressable, ScrollView } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { ChallengesScreen } from '../challenges'
 import BoardsPanel from '../../../components/member/BoardsPanel'
-import { PEARL } from 'shared/accent'
+import { PEARL } from '../../../lib/member/brand'
 
 const SEGMENTS = ['Challenges', 'Boards']
 
@@ -26,7 +26,7 @@ export default function Compete() {
     <View className="px-5 pt-4 pb-1">
       <View
         className="flex-row rounded-xl bg-iron-surface p-1 gap-1"
-        style={{ borderWidth: 1, borderColor: '#2A323D' }}
+        style={{ borderWidth: 1, borderColor: '#2A2A31' }}
       >
         {SEGMENTS.map((s) => {
           const active = seg === s
@@ -44,7 +44,7 @@ export default function Compete() {
                 backgroundColor: active ? PEARL : 'transparent',
               }}
             >
-              <Text className="font-body-semibold" style={{ fontSize: 14, color: active ? '#0F1216' : '#A9B0BA' }}>
+              <Text className="font-body-semibold" style={{ fontSize: 14, color: active ? '#131316' : '#B3B2AC' }}>
                 {s}
               </Text>
             </Pressable>

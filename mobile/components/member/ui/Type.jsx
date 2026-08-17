@@ -6,7 +6,7 @@ import { Text, View } from 'react-native'
 // mono with an uppercase unit tag in the active accent colour. If a number
 // came from your body, it looks like it came off a monitor.
 
-export function EarnedNumber({ children, size = 34, color = '#F4F1EA', className = '' }) {
+export function EarnedNumber({ children, size = 34, color = '#F1EEE7', className = '' }) {
   return (
     <Text className={`font-display-bold ${className}`} style={{ fontSize: size, lineHeight: size * 1.02, color }}>
       {children}
@@ -15,7 +15,7 @@ export function EarnedNumber({ children, size = 34, color = '#F4F1EA', className
 }
 
 // <Telemetry value="152" unit="AVG BPM" accent="#FFA928" />
-export function Telemetry({ value, unit, accent = '#66707E', size = 12, className = '' }) {
+export function Telemetry({ value, unit, accent = '#727170', size = 12, className = '' }) {
   return (
     <View className={`flex-row items-baseline gap-1 ${className}`}>
       <Text className="font-mono text-chalk" style={{ fontSize: size }}>{value}</Text>

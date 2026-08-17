@@ -47,12 +47,12 @@ export default function AppleHealthResyncCard() {
 
   return (
     <Pressable onPress={resync} disabled={busy} className="flex-row items-center gap-3 rounded-2xl border border-iron-hairline bg-iron-surface px-4 py-3 active:opacity-70">
-      <Ionicons name="heart-circle-outline" size={22} color="#F4F1EA" />
+      <Ionicons name="heart-circle-outline" size={22} color="#F1EEE7" />
       <View className="flex-1">
         <Text className="text-sm font-body-medium text-chalk">Update Apple Health</Text>
         <Text className="text-xs font-body text-chalk-2">Allow weight syncing so we can track your calories.</Text>
       </View>
-      {busy ? <ActivityIndicator color="#A9B0BA" /> : <Ionicons name="chevron-forward" size={14} color="#66707E" />}
+      {busy ? <ActivityIndicator color="#B3B2AC" /> : <Ionicons name="chevron-forward" size={14} color="#727170" />}
     </Pressable>
   )
 }

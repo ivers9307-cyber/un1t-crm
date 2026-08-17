@@ -15,10 +15,10 @@ export default function ErrorRetry({
   return (
     <Card>
       <View className="items-center py-4 gap-3">
-        <Ionicons name="cloud-offline-outline" size={28} color="#66707E" />
+        <Ionicons name="cloud-offline-outline" size={28} color="#727170" />
         <Text
           className="font-body"
-          style={{ fontSize: 13, color: '#A9B0BA', textAlign: 'center', maxWidth: 260 }}
+          style={{ fontSize: 13, color: '#B3B2AC', textAlign: 'center', maxWidth: 260 }}
         >
           {message}
         </Text>

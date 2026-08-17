@@ -22,7 +22,7 @@ import { useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { validateAboutYou, normalizeWeightKg } from 'shared/profile-setup'
 import { crmApi } from '../../lib/member/api'
-import { PEARL } from 'shared/accent' // Afterglow resting accent (chrome, not zone data)
+import { PEARL } from '../../lib/member/brand' // Afterglow resting accent (chrome, not zone data)
 
 const GENDERS = [
   { key: 'female', label: 'Female' },
@@ -109,7 +109,7 @@ export default function ProfileSetupWizard({ contact, onDone, onDismiss }) {
           <View className="grow justify-between">
             <View className="mt-10">
               <View className="h-14 w-14 rounded-2xl items-center justify-center" style={{ backgroundColor: PEARL }}>
-                <Ionicons name="flame" size={28} color="#0F1216" />
+                <Ionicons name="flame" size={28} color="#131316" />
               </View>
               <Text className="mt-8 text-3xl font-display-bold leading-9 text-chalk">
                 Let's set up{'\n'}your profile
@@ -129,7 +129,7 @@ export default function ProfileSetupWizard({ contact, onDone, onDismiss }) {
                 className="flex-row items-center justify-center gap-2 rounded-xl bg-chalk px-4 py-4 active:opacity-80"
               >
                 <Text className="text-base font-body-semibold text-iron-bg">Get started</Text>
-                <Ionicons name="arrow-forward" size={16} color="#0F1216" />
+                <Ionicons name="arrow-forward" size={16} color="#131316" />
               </Pressable>
               <Pressable onPress={onDismiss} className="mt-3 items-center py-2 active:opacity-60">
                 <Text className="text-sm font-body-medium text-chalk-3">Skip for now</Text>
@@ -160,7 +160,7 @@ export default function ProfileSetupWizard({ contact, onDone, onDismiss }) {
                   value={dd}
                   onChangeText={(t) => setDd(t.replace(/\D/g, '').slice(0, 2))}
                   placeholder="DD"
-                  placeholderTextColor="#66707E"
+                  placeholderTextColor="#727170"
                   keyboardType="number-pad"
                   maxLength={2}
                   className="rounded-xl border border-iron-hairline bg-iron-surface px-3 py-3 text-center text-base font-mono text-chalk"
@@ -171,7 +171,7 @@ export default function ProfileSetupWizard({ contact, onDone, onDismiss }) {
                   value={mm}
                   onChangeText={(t) => setMm(t.replace(/\D/g, '').slice(0, 2))}
                   placeholder="MM"
-                  placeholderTextColor="#66707E"
+                  placeholderTextColor="#727170"
                   keyboardType="number-pad"
                   maxLength={2}
                   className="rounded-xl border border-iron-hairline bg-iron-surface px-3 py-3 text-center text-base font-mono text-chalk"
@@ -182,7 +182,7 @@ export default function ProfileSetupWizard({ contact, onDone, onDismiss }) {
                   value={yyyy}
                   onChangeText={(t) => setYyyy(t.replace(/\D/g, '').slice(0, 4))}
                   placeholder="YYYY"
-                  placeholderTextColor="#66707E"
+                  placeholderTextColor="#727170"
                   keyboardType="number-pad"
                   maxLength={4}
                   className="rounded-xl border border-iron-hairline bg-iron-surface px-3 py-3 text-center text-base font-mono text-chalk"
@@ -222,7 +222,7 @@ export default function ProfileSetupWizard({ contact, onDone, onDismiss }) {
                 value={weightInput}
                 onChangeText={(t) => setWeightInput(t.replace(/[^0-9.]/g, ''))}
                 placeholder="70"
-                placeholderTextColor="#66707E"
+                placeholderTextColor="#727170"
                 keyboardType="decimal-pad"
                 className="flex-1 py-3 text-base font-mono text-chalk"
               />
@@ -244,11 +244,11 @@ export default function ProfileSetupWizard({ contact, onDone, onDismiss }) {
                 disabled={busy}
                 className="flex-row items-center justify-center gap-2 rounded-xl bg-chalk px-4 py-4 active:opacity-80 disabled:opacity-50"
               >
-                {busy ? <ActivityIndicator size="small" color="#0F1216" /> : null}
+                {busy ? <ActivityIndicator size="small" color="#131316" /> : null}
                 <Text className="text-base font-body-semibold text-iron-bg">
                   {busy ? 'Saving…' : 'Continue'}
                 </Text>
-                {!busy ? <Ionicons name="arrow-forward" size={16} color="#0F1216" /> : null}
+                {!busy ? <Ionicons name="arrow-forward" size={16} color="#131316" /> : null}
               </Pressable>
               <Pressable
                 onPress={onDismiss}
@@ -300,7 +300,7 @@ export default function ProfileSetupWizard({ contact, onDone, onDismiss }) {
               />
               <ConnectCard
                 icon="fitness-outline"
-                iconColor="#A9B0BA"
+                iconColor="#B3B2AC"
                 title="Whoop"
                 subtitle="Coming soon"
                 disabled
@@ -313,7 +313,7 @@ export default function ProfileSetupWizard({ contact, onDone, onDismiss }) {
                 className="flex-row items-center justify-center gap-2 rounded-xl bg-chalk px-4 py-4 active:opacity-80"
               >
                 <Text className="text-base font-body-semibold text-iron-bg">Continue</Text>
-                <Ionicons name="arrow-forward" size={16} color="#0F1216" />
+                <Ionicons name="arrow-forward" size={16} color="#131316" />
               </Pressable>
               <Pressable onPress={onDone} className="mt-3 items-center py-2 active:opacity-60">
                 <Text className="text-sm font-body-medium text-chalk-3">Skip for now</Text>
@@ -327,7 +327,7 @@ export default function ProfileSetupWizard({ contact, onDone, onDismiss }) {
           <View className="grow justify-between">
             <View className="mt-16 items-center">
               <View className="h-16 w-16 rounded-full items-center justify-center" style={{ backgroundColor: PEARL }}>
-                <Ionicons name="checkmark" size={34} color="#0F1216" />
+                <Ionicons name="checkmark" size={34} color="#131316" />
               </View>
               <Text className="mt-6 text-2xl font-display-bold text-center text-chalk">You're all set</Text>
               <Text className="mt-3 text-base font-body leading-6 text-center text-chalk-2 px-2">
@@ -364,7 +364,7 @@ function ConnectCard({ icon, iconColor, title, subtitle, onPress, disabled }) {
         <Text className="text-base font-body-semibold text-chalk">{title}</Text>
         <Text className="mt-0.5 text-xs font-body text-chalk-2" numberOfLines={1}>{subtitle}</Text>
       </View>
-      {!disabled ? <Ionicons name="chevron-forward" size={18} color="#66707E" /> : null}
+      {!disabled ? <Ionicons name="chevron-forward" size={18} color="#727170" /> : null}
     </View>
   )
   if (disabled) return body

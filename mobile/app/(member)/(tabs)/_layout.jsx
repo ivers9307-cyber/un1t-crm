@@ -81,14 +81,14 @@ export default function TabsLayout() {
         // labels. The accent tick above the active tab needs a custom
         // tabBarButton — deliberately deferred to P3; colour retune only here.
         // Badge = attention (Redline), not the dead ember accent.
-        headerStyle: { backgroundColor: '#0F1216' },
-        headerTitleStyle: { color: '#F4F1EA', fontFamily: 'ArchivoExpanded-Bold' },
+        headerStyle: { backgroundColor: '#131316' },
+        headerTitleStyle: { color: '#F1EEE7', fontFamily: 'ArchivoExpanded-Bold' },
         headerShadowVisible: false,
-        tabBarActiveTintColor: '#F4F1EA',
-        tabBarInactiveTintColor: '#66707E',
-        tabBarStyle: { backgroundColor: '#0F1216', borderTopColor: '#2A323D' },
+        tabBarActiveTintColor: '#F1EEE7',
+        tabBarInactiveTintColor: '#727170',
+        tabBarStyle: { backgroundColor: '#131316', borderTopColor: '#2A2A31' },
         tabBarLabelStyle: { fontFamily: 'IBMPlexMono_500Medium', fontSize: 9, letterSpacing: 1, textTransform: 'uppercase' },
-        tabBarBadgeStyle: { backgroundColor: '#FF4E42', color: '#F4F1EA' },
+        tabBarBadgeStyle: { backgroundColor: '#FF4E42', color: '#F1EEE7' },
       }}
     >
       {/* ── The 5 tabs ── */}

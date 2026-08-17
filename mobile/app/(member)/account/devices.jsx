@@ -246,14 +246,14 @@ function ScanModal({ onClose, onPick }) {
           {/* Header */}
           <View className="flex-row items-center justify-between mb-3">
             <View className="flex-row items-center gap-2">
-              <Ionicons name="bluetooth-outline" size={18} color="#A9B0BA" />
+              <Ionicons name="bluetooth-outline" size={18} color="#B3B2AC" />
               <Text className="text-base font-display text-chalk">Scan for your strap</Text>
             </View>
             <Pressable
               onPress={onClose}
               className="rounded p-1.5 active:bg-iron-raised"
             >
-              <Ionicons name="close-outline" size={18} color="#A9B0BA" />
+              <Ionicons name="close-outline" size={18} color="#B3B2AC" />
             </Pressable>
           </View>
 
@@ -275,7 +275,7 @@ function ScanModal({ onClose, onPick }) {
           {/* Strap list */}
           {straps.length === 0 && !error ? (
             <View className="items-center py-8 rounded-xl border border-dashed border-iron-hairline">
-              <ActivityIndicator color="#F4F1EA" />
+              <ActivityIndicator color="#F1EEE7" />
               <Text className="mt-3 text-sm text-chalk-2">Looking for nearby straps…</Text>
               <Text className="mt-1 text-xs text-chalk-3">Make sure your strap is on and you're inside the studio.</Text>
             </View>
@@ -441,7 +441,7 @@ function AddDeviceForm({ onSubmit, onCancel, prefill }) {
           onChangeText={setIdentifier}
           editable={!fromScan}
           placeholder={isAnt ? '12345' : 'AA:BB:CC:DD:EE:FF'}
-          placeholderTextColor="#66707E"
+          placeholderTextColor="#727170"
           autoCapitalize="none"
           autoCorrect={false}
           className="w-full rounded-xl border border-iron-hairline bg-iron-raised px-3 py-2 font-mono text-sm text-chalk"
@@ -456,7 +456,7 @@ function AddDeviceForm({ onSubmit, onCancel, prefill }) {
             value={label}
             onChangeText={setLabel}
             placeholder="My Polar H10"
-            placeholderTextColor="#66707E"
+            placeholderTextColor="#727170"
             className="w-full rounded-xl border border-iron-hairline bg-iron-raised px-3 py-2 text-sm text-chalk"
           />
         </View>
@@ -476,9 +476,9 @@ function AddDeviceForm({ onSubmit, onCancel, prefill }) {
           className="flex-row items-center gap-1 rounded-xl bg-chalk px-4 py-2.5 active:opacity-80 disabled:opacity-40"
         >
           {busy ? (
-            <ActivityIndicator size="small" color="#0F1216" />
+            <ActivityIndicator size="small" color="#131316" />
           ) : (
-            <Ionicons name="add-outline" size={14} color="#0F1216" />
+            <Ionicons name="add-outline" size={14} color="#131316" />
           )}
           <Text className="text-sm font-body-semibold text-iron-bg">{busy ? 'Saving…' : 'Add device'}</Text>
         </Pressable>
@@ -505,7 +505,7 @@ function ManufacturerPicker({ value, onChange }) {
       className="w-full flex-row items-center justify-between rounded-xl border border-iron-hairline bg-iron-raised px-3 py-2"
     >
       <Text className="text-sm text-chalk">{MFR_LABELS[value] || 'Select…'}</Text>
-      <Ionicons name="chevron-down-outline" size={14} color="#A9B0BA" />
+      <Ionicons name="chevron-down-outline" size={14} color="#B3B2AC" />
     </Pressable>
   )
 }
@@ -607,7 +607,7 @@ export default function Devices() {
           onPress={() => router.back()}
           className="flex-row items-center gap-1 mb-4 self-start active:opacity-60"
         >
-          <Ionicons name="chevron-back-outline" size={18} color="#A9B0BA" />
+          <Ionicons name="chevron-back-outline" size={18} color="#B3B2AC" />
           <Text className="text-sm text-chalk-2">Back</Text>
         </Pressable>
 
@@ -628,7 +628,7 @@ export default function Devices() {
         {!loading && !contact ? (
           <Card className="mt-6">
             <View className="flex-row items-center gap-2 mb-2">
-              <ActivityIndicator size="small" color="#A9B0BA" />
+              <ActivityIndicator size="small" color="#B3B2AC" />
               <Text className="text-sm font-body-semibold text-chalk">Finishing setting up your account…</Text>
             </View>
             <Text className="text-sm text-chalk-2">
@@ -649,14 +649,14 @@ export default function Devices() {
                   onPress={() => setScanning(true)}
                   className="flex-row items-center gap-1 rounded-xl border border-iron-hairline px-2.5 py-1.5 active:bg-iron-raised"
                 >
-                  <Ionicons name="bluetooth-outline" size={13} color="#A9B0BA" />
+                  <Ionicons name="bluetooth-outline" size={13} color="#B3B2AC" />
                   <Text className="text-xs font-body-medium text-chalk-2">Scan</Text>
                 </Pressable>
                 <Pressable
                   onPress={() => { setPrefill(null); setAdding(true) }}
                   className="flex-row items-center gap-1 rounded-xl bg-chalk px-2.5 py-1.5 active:opacity-80"
                 >
-                  <Ionicons name="add-outline" size={13} color="#0F1216" />
+                  <Ionicons name="add-outline" size={13} color="#131316" />
                   <Text className="text-xs font-body-semibold text-iron-bg">Add manually</Text>
                 </Pressable>
               </View>
@@ -665,7 +665,7 @@ export default function Devices() {
 
           {loading ? (
             <View className="mt-6 items-center">
-              <ActivityIndicator color="#F4F1EA" />
+              <ActivityIndicator color="#F1EEE7" />
             </View>
           ) : devices.length === 0 && !adding ? (
             <Text className="mt-4 text-sm text-chalk-2">

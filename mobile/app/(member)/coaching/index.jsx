@@ -27,7 +27,7 @@ import { supabase } from '../../../lib/member/supabase'
 import { crmApi } from '../../../lib/member/api'
 import Card from '../../../components/member/ui/Card'
 import ErrorRetry from '../../../components/member/ErrorRetry'
-import { PEARL } from 'shared/accent'
+import { PEARL } from '../../../lib/member/brand'
 
 // ── Number / date formatting ─────────────────────────────────────────────────
 
@@ -117,7 +117,7 @@ export default function Coaching() {
   if (loading) {
     return (
       <SafeAreaView className="flex-1 bg-iron-bg items-center justify-center" edges={['left', 'right']}>
-        <ActivityIndicator color="#F4F1EA" size="large" />
+        <ActivityIndicator color="#F1EEE7" size="large" />
       </SafeAreaView>
     )
   }
@@ -180,7 +180,7 @@ function Header({ onBack }) {
         onPress={onBack}
         className="flex-row items-center gap-1 mb-4 self-start active:opacity-60"
       >
-        <Ionicons name="chevron-back-outline" size={18} color="#A9B0BA" />
+        <Ionicons name="chevron-back-outline" size={18} color="#B3B2AC" />
         <Text className="text-sm text-chalk-2">Back</Text>
       </Pressable>
       <Text className="text-2xl font-display-bold text-chalk">Coaching</Text>
@@ -201,7 +201,7 @@ function CoachFeedbackCard({ feedback, onOpenAll }) {
       <View className="flex-row items-center" style={{ gap: 12 }}>
         <View
           className="h-9 w-9 items-center justify-center rounded-full"
-          style={{ backgroundColor: 'rgba(217,213,204,0.16)' }}
+          style={{ backgroundColor: 'rgba(214,210,201,0.16)' }}
         >
           {glyph ? (
             <Text className="text-sm font-display-bold" style={{ color: PEARL }}>{glyph}</Text>
@@ -266,14 +266,14 @@ function GoalsCard({ goals, onOpenTargets }) {
         onPress={onOpenTargets}
         className="mt-2 flex-row items-center gap-3 rounded-xl border border-iron-hairline bg-iron-raised px-4 py-3.5 active:opacity-70"
       >
-        <Ionicons name="flag-outline" size={18} color="#A9B0BA" />
+        <Ionicons name="flag-outline" size={18} color="#B3B2AC" />
         <View className="flex-1">
           <Text className="text-sm font-body-medium text-chalk">Weekly targets</Text>
           <Text className="mt-0.5 text-xs text-chalk-2">
             Set your own goals and watch them tick up every class.
           </Text>
         </View>
-        <Ionicons name="chevron-forward-outline" size={18} color="#66707E" />
+        <Ionicons name="chevron-forward-outline" size={18} color="#727170" />
       </Pressable>
     </Card>
   )
@@ -301,7 +301,7 @@ function StatusChip({ chip }) {
   if (chip.muted) {
     return (
       <View className="flex-row items-center rounded-full border border-iron-hairline bg-iron-raised px-2.5 py-0.5" style={{ gap: 4 }}>
-        {chip.icon ? <Ionicons name={chip.icon} size={12} color="#A9B0BA" /> : null}
+        {chip.icon ? <Ionicons name={chip.icon} size={12} color="#B3B2AC" /> : null}
         <Text className="font-mono text-[10px] uppercase text-chalk-2" style={{ letterSpacing: 1.2 }}>{chip.label}</Text>
       </View>
     )
@@ -309,7 +309,7 @@ function StatusChip({ chip }) {
   return (
     <View
       className="flex-row items-center rounded-full px-2.5 py-0.5"
-      style={{ gap: 4, borderWidth: 1, borderColor: 'rgba(217,213,204,0.45)' }}
+      style={{ gap: 4, borderWidth: 1, borderColor: 'rgba(214,210,201,0.45)' }}
     >
       <Text className="font-mono text-[10px] uppercase" style={{ color: PEARL, letterSpacing: 1.2 }}>{chip.label}</Text>
     </View>
@@ -354,7 +354,7 @@ function MiniStat({ label, value, unit, accent }) {
       <View className="mt-1 flex-row items-baseline">
         <Text
           className="text-xl font-mono"
-          style={accent ? { color: PEARL } : { color: '#F4F1EA' }}
+          style={accent ? { color: PEARL } : { color: '#F1EEE7' }}
         >
           {value}
         </Text>
@@ -365,7 +365,7 @@ function MiniStat({ label, value, unit, accent }) {
 }
 
 function Divider() {
-  return <View style={{ width: 1, backgroundColor: '#202730', marginHorizontal: 4 }} />
+  return <View style={{ width: 1, backgroundColor: '#24242A', marginHorizontal: 4 }} />
 }
 
 // ── Progress photos card ─────────────────────────────────────────────────────
@@ -393,7 +393,7 @@ function ProgressPhotosCard({ photos, onOpenAll }) {
                 <Image source={{ uri: p.url }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
               ) : (
                 <View className="flex-1 items-center justify-center">
-                  <Ionicons name="image-outline" size={18} color="#66707E" />
+                  <Ionicons name="image-outline" size={18} color="#727170" />
                 </View>
               )}
               {i === shown.length - 1 && extra > 0 ? (

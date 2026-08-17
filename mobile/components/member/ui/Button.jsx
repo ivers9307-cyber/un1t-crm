@@ -6,21 +6,21 @@ function variantStyles(variant, off) {
       return {
         container: off ? 'bg-iron-raised' : 'bg-chalk',
         text: 'text-iron-bg',
-        indicatorColor: '#0F1216',
+        indicatorColor: '#131316',
       }
     case 'secondary':
     case 'outline':
       return {
         container: 'border border-iron-hairline bg-transparent',
         text: 'text-chalk',
-        indicatorColor: '#F4F1EA',
+        indicatorColor: '#F1EEE7',
       }
     case 'ghost':
     default:
       return {
         container: 'bg-transparent',
         text: 'text-chalk-2',
-        indicatorColor: '#A9B0BA',
+        indicatorColor: '#B3B2AC',
       }
   }
 }

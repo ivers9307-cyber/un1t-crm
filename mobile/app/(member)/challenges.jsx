@@ -14,7 +14,7 @@ import { supabase } from '../../lib/member/supabase'
 import Card from '../../components/member/ui/Card'
 import ErrorRetry from '../../components/member/ErrorRetry'
 import ChallengeTransformationCard from '../../components/member/ChallengeTransformationCard'
-import { PEARL } from 'shared/accent'
+import { PEARL, VOLT } from '../../lib/member/brand'
 import { endedRecentlyFlagship, ownWindowStats, challengeWindowMs } from 'shared/challenge-wrapped'
 
 // ── Everyone / Friends toggle for individual challenges ───────────────
@@ -71,7 +71,7 @@ function IndividualChallengesSection({ everyoneData, viewerIsNewMember = false }
   return (
     <View>
       {/* Toggle */}
-      <View className="flex-row rounded-lg bg-iron-surface mb-4 p-0.5 gap-0.5 self-start" style={{ borderWidth: 1, borderColor: '#2A323D' }}>
+      <View className="flex-row rounded-lg bg-iron-surface mb-4 p-0.5 gap-0.5 self-start" style={{ borderWidth: 1, borderColor: '#2A2A31' }}>
         {options.map((opt) => {
           const key = opt.toLowerCase()
           const isActive = view === key
@@ -88,7 +88,7 @@ function IndividualChallengesSection({ everyoneData, viewerIsNewMember = false }
                 opacity: loading ? 0.5 : 1,
               }}
             >
-              <Text className="font-body-semibold" style={{ fontSize: 12, color: isActive ? '#0F1216' : '#A9B0BA' }}>
+              <Text className="font-body-semibold" style={{ fontSize: 12, color: isActive ? '#131316' : '#B3B2AC' }}>
                 {loadingKey === key ? '...' : opt}
               </Text>
             </Pressable>
@@ -258,7 +258,7 @@ export function ChallengesScreen({ showBack = true }) {
   if (loading) {
     return (
       <SafeAreaView className="flex-1 bg-iron-bg items-center justify-center" edges={['left', 'right']}>
-        <ActivityIndicator color="#F4F1EA" size="large" />
+        <ActivityIndicator color="#F1EEE7" size="large" />
       </SafeAreaView>
     )
   }
@@ -317,7 +317,7 @@ export function ChallengesScreen({ showBack = true }) {
           <View className="mt-8">
             <Card>
               <View className="items-center py-8 gap-2">
-                <Ionicons name="trophy-outline" size={28} color="#66707E" />
+                <Ionicons name="trophy-outline" size={28} color="#727170" />
                 <Text className="text-sm font-body-semibold text-chalk">No active challenges</Text>
                 <Text className="text-xs text-chalk-2 text-center max-w-xs">
                   Check back soon — your studio will post challenges here.
@@ -434,7 +434,8 @@ function CollectiveCard({ challenge }) {
           </Text>
         )}
         {pct >= 1 && (
-          <Text className="text-xs font-body-medium mt-2" style={{ color: PEARL }}>
+          // P4b: goal reached is EARNED — lights volt.
+          <Text className="text-xs font-body-medium mt-2" style={{ color: VOLT }}>
             Goal achieved!
           </Text>
         )}
@@ -471,7 +472,7 @@ function LeaderboardCard({ title, subtitle, iconName, top, me, count, metric, ph
       {/* Header */}
       <View className="flex-row items-center justify-between gap-3">
         <View className="flex-row items-center gap-2 flex-1">
-          <Ionicons name={iconName} size={20} color="#A9B0BA" />
+          <Ionicons name={iconName} size={20} color="#B3B2AC" />
           <View className="flex-1">
             <View className="flex-row items-center" style={{ gap: 8 }}>
               <Text className="text-base font-display text-chalk shrink" numberOfLines={1}>
@@ -492,7 +493,7 @@ function LeaderboardCard({ title, subtitle, iconName, top, me, count, metric, ph
       {/* Entries */}
       {top.length === 0 ? (
         <View className="items-center py-6 gap-2 mt-2">
-          <Ionicons name="people-outline" size={24} color="#66707E" />
+          <Ionicons name="people-outline" size={24} color="#727170" />
           <Text className="text-sm font-body-medium text-chalk">No entries yet</Text>
           <Text className="text-xs text-chalk-2 text-center">
             {phase === 'upcoming' ? "Challenge hasn't started yet." : 'Be the first on the board.'}
@@ -521,7 +522,7 @@ function LeaderboardCard({ title, subtitle, iconName, top, me, count, metric, ph
 function LeaderboardRow({ row, metricLabel }) {
   const podiumColor = row.rank <= 3 ? METAL[row.rank - 1] : null
   const isMe = row.isMe
-  const rankColor = podiumColor || (isMe ? PEARL : '#66707E')
+  const rankColor = podiumColor || (isMe ? PEARL : '#727170')
 
   return (
     <View
@@ -539,7 +540,7 @@ function LeaderboardRow({ row, metricLabel }) {
       {/* Name */}
       <Text
         className="flex-1 text-sm font-body-medium"
-        style={{ color: isMe ? PEARL : '#F4F1EA' }}
+        style={{ color: isMe ? PEARL : '#F1EEE7' }}
         numberOfLines={1}
       >
         {row.name}
@@ -551,7 +552,7 @@ function LeaderboardRow({ row, metricLabel }) {
       {/* Value */}
       <Text
         className={metricLabel === 'UN1T Points' ? 'shrink-0 font-display-bold text-sm' : 'shrink-0 font-mono text-sm'}
-        style={{ color: isMe ? PEARL : '#A9B0BA' }}
+        style={{ color: isMe ? PEARL : '#B3B2AC' }}
       >
         {formatValue(row.value, metricLabel)}
       </Text>

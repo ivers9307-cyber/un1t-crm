@@ -9,7 +9,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { api } from '../../lib/member/api'
 import Card from './ui/Card'
 import ErrorRetry from './ErrorRetry'
-import { PEARL } from 'shared/accent'
+import { PEARL } from '../../lib/member/brand'
 
 const METAL = ['#e8b931', '#c2c8ce', '#c77b3a']
 
@@ -30,14 +30,14 @@ function Avatar({ name, size = 32 }) {
       style={{
         width: size, height: size,
         borderRadius: size / 2,
-        backgroundColor: '#202730',
+        backgroundColor: '#24242A',
         borderWidth: 1,
-        borderColor: '#2A323D',
+        borderColor: '#2A2A31',
         alignItems: 'center',
         justifyContent: 'center',
       }}
     >
-      <Text style={{ color: '#F4F1EA', fontSize: 11, fontFamily: 'Figtree_600SemiBold' }}>{initials}</Text>
+      <Text style={{ color: '#F1EEE7', fontSize: 11, fontFamily: 'Figtree_600SemiBold' }}>{initials}</Text>
     </View>
   )
 }
@@ -45,14 +45,14 @@ function Avatar({ name, size = 32 }) {
 function BoardRow({ row }) {
   const podiumColor = row.rank <= 3 ? METAL[row.rank - 1] : null
   const isMe = row.isMe
-  const rankColor = podiumColor || (isMe ? PEARL : '#66707E')
+  const rankColor = podiumColor || (isMe ? PEARL : '#727170')
 
   return (
     <View
       className={`flex-row items-center gap-3 rounded-lg px-3 py-2 ${
         isMe ? 'border border-pearl/30' : 'border border-transparent'
       }`}
-      style={isMe ? { backgroundColor: 'rgba(217,213,204,0.08)' } : undefined}
+      style={isMe ? { backgroundColor: 'rgba(214,210,201,0.08)' } : undefined}
     >
       <Text
         className="w-5 text-center text-sm font-mono"
@@ -63,18 +63,18 @@ function BoardRow({ row }) {
       <Avatar name={row.name} />
       <Text
         className="flex-1 text-sm font-body-medium"
-        style={{ color: isMe ? PEARL : '#F4F1EA' }}
+        style={{ color: isMe ? PEARL : '#F1EEE7' }}
         numberOfLines={1}
       >
         {row.name}
         {isMe && (
-          <Text className="text-xs font-body" style={{ color: 'rgba(217,213,204,0.7)' }}> (you)</Text>
+          <Text className="text-xs font-body" style={{ color: 'rgba(214,210,201,0.7)' }}> (you)</Text>
         )}
       </Text>
       <View className="shrink-0 flex-row items-baseline">
         <Text
           className="text-sm font-display-bold"
-          style={{ color: isMe ? PEARL : '#A9B0BA' }}
+          style={{ color: isMe ? PEARL : '#B3B2AC' }}
         >
           {Math.round(row.value).toLocaleString()}
         </Text>
@@ -90,7 +90,7 @@ function WindowToggle({ value, onChange }) {
   return (
     <View
       className="flex-row rounded-lg bg-iron-surface p-0.5 gap-0.5"
-      style={{ borderWidth: 1, borderColor: '#2A323D' }}
+      style={{ borderWidth: 1, borderColor: '#2A2A31' }}
     >
       {WINDOWS.map((w) => {
         const active = value === w.key
@@ -108,7 +108,7 @@ function WindowToggle({ value, onChange }) {
               backgroundColor: active ? PEARL : 'transparent',
             }}
           >
-            <Text style={{ fontSize: 12, fontFamily: 'Figtree_600SemiBold', color: active ? '#0F1216' : '#A9B0BA' }}>
+            <Text style={{ fontSize: 12, fontFamily: 'Figtree_600SemiBold', color: active ? '#131316' : '#B3B2AC' }}>
               {w.label}
             </Text>
           </Pressable>
@@ -166,7 +166,7 @@ export default function BoardsPanel() {
       {toggle}
       {loading ? (
         <View className="items-center justify-center py-16">
-          <ActivityIndicator color="#F4F1EA" />
+          <ActivityIndicator color="#F1EEE7" />
         </View>
       ) : error && rows.length === 0 ? (
         <ErrorRetry onPress={() => load(window)} />
@@ -175,7 +175,7 @@ export default function BoardsPanel() {
           {/* Header */}
           <View className="flex-row items-center justify-between gap-3 mb-1">
             <View className="flex-row items-center gap-2 flex-1">
-              <Ionicons name="trophy-outline" size={20} color="#A9B0BA" />
+              <Ionicons name="trophy-outline" size={20} color="#B3B2AC" />
               <View className="flex-1">
                 <Text className="text-base font-display text-chalk" numberOfLines={1}>
                   {meta.header}
@@ -196,7 +196,7 @@ export default function BoardsPanel() {
           {/* Rows */}
           {rows.length === 0 ? (
             <View className="items-center py-8 gap-2">
-              <Ionicons name="people-outline" size={24} color="#66707E" />
+              <Ionicons name="people-outline" size={24} color="#727170" />
               <Text className="text-sm font-body-semibold text-chalk">No entries yet</Text>
               <Text className="text-xs font-body text-chalk-2 text-center max-w-xs">
                 {window === 'week'

@@ -26,7 +26,7 @@ import MonthWrappedGate from '../../components/member/MonthWrappedGate'
 // Iron canvas — mobile/tailwind.config.js 'iron-bg'. Pinned as the stack's
 // contentStyle so every member screen sits on the Graft graphite ground
 // (never the staff white) even before its own styled view renders.
-const IRON_BG = '#0F1216'
+const IRON_BG = '#131316'
 
 export default function MemberLayout() {
   const { paired } = useIdentity()

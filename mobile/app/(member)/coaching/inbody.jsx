@@ -24,11 +24,11 @@ import Svg, { Circle, Polyline, Line } from 'react-native-svg'
 import { supabase } from '../../../lib/member/supabase'
 import Card from '../../../components/member/ui/Card'
 import ErrorRetry from '../../../components/member/ErrorRetry'
-import { PEARL } from 'shared/accent'
+import { PEARL, VOLT } from '../../../lib/member/brand'
 import { METRICS } from 'shared/inbody'
 
-const TRACK = '#202730'       // ring/axis track (iron-raised)
-const TEXT_2 = '#A9B0BA'      // muted
+const TRACK = '#24242A'       // ring/axis track (iron-raised)
+const TEXT_2 = '#B3B2AC'      // muted
 
 // ── Formatting ───────────────────────────────────────────────────────────────
 
@@ -91,7 +91,7 @@ export default function InBodyDetail() {
   if (loading) {
     return (
       <SafeAreaView className="flex-1 bg-iron-bg items-center justify-center" edges={['left', 'right']}>
-        <ActivityIndicator color="#F4F1EA" size="large" />
+        <ActivityIndicator color="#F1EEE7" size="large" />
       </SafeAreaView>
     )
   }
@@ -115,7 +115,7 @@ export default function InBodyDetail() {
         <ScrollView contentContainerClassName="p-5 pb-24">
           <Header onBack={() => router.back()} />
           <Card className="mt-6 items-center py-8">
-            <Ionicons name="body-outline" size={32} color="#66707E" />
+            <Ionicons name="body-outline" size={32} color="#727170" />
             <Text className="mt-3 text-base font-display text-chalk">No scans yet</Text>
             <Text className="mt-1 text-sm text-chalk-2 text-center">
               Ask a coach to scan you on the InBody — your trends and metrics
@@ -161,7 +161,7 @@ function Header({ onBack }) {
         onPress={onBack}
         className="flex-row items-center gap-1 mb-4 self-start active:opacity-60"
       >
-        <Ionicons name="chevron-back-outline" size={18} color="#A9B0BA" />
+        <Ionicons name="chevron-back-outline" size={18} color="#B3B2AC" />
         <Text className="text-sm text-chalk-2">Back</Text>
       </Pressable>
       <View className="flex-row items-center" style={{ gap: 10 }}>
@@ -222,11 +222,12 @@ function ScoreHero({ latest, previous }) {
       {delta !== null && delta !== 0 ? (
         <View
           className="mt-2 rounded-full px-3 py-1"
-          style={{ backgroundColor: delta > 0 ? 'rgba(217,213,204,0.12)' : '#202730' }}
+          // P4b: a higher InBody score is EARNED — the chip lights volt.
+          style={{ backgroundColor: delta > 0 ? VOLT + '1F' : '#24242A' }}
         >
           <Text
             className="font-mono text-xs"
-            style={{ color: delta > 0 ? PEARL : TEXT_2 }}
+            style={{ color: delta > 0 ? VOLT : TEXT_2 }}
           >
             {delta > 0 ? `+${Math.round(delta)} since last` : `${Math.round(delta)} since last`}
           </Text>
@@ -279,7 +280,8 @@ function MetricTile({ def, current, prev, width }) {
   if (hasDelta && def.betterWhenLower === true) improving = delta < 0
   else if (hasDelta && def.betterWhenLower === false) improving = delta > 0
 
-  const deltaColor = improving === true ? PEARL : TEXT_2
+  // P4b: an improvement is EARNED — lights volt; muted otherwise.
+  const deltaColor = improving === true ? VOLT : TEXT_2
   const arrow = !hasDelta ? '' : delta > 0 ? '▲' : '▼'
   const deltaText = hasDelta
     ? `${arrow} ${Math.abs(delta).toFixed(def.dp)}${def.unit ? ` ${def.unit}` : ''}`

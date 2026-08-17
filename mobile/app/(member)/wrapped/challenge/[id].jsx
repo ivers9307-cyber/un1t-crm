@@ -29,13 +29,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { supabase } from '../../../../lib/member/supabase'
-import { PEARL } from 'shared/accent'
-import { zoneColorDark } from 'shared/zone-colors'
+import { PEARL, VOLT } from '../../../../lib/member/brand'
 import { challengeWrappedModel, challengeWindowMs } from 'shared/challenge-wrapped'
 import { inbodyBookend } from 'shared/inbody'
 
 // Keep the pearl flood dark enough that chalk type always passes contrast.
-const SCRIM = 'rgba(15,18,22,0.62)'
+const SCRIM = 'rgba(19,19,22,0.62)'
 
 // ── animated count-up hero ────────────────────────────────────────
 function CountUp({ target, reduceMotion, label }) {
@@ -116,11 +115,11 @@ function ConfettiPiece({ x, color, delay, size, drift }) {
 // ── stat tile ─────────────────────────────────────────────────────
 function Stat({ label, value, unit }) {
   return (
-    <View className="flex-1 rounded-[20px] p-4" style={{ backgroundColor: 'rgba(244,241,234,0.06)', borderWidth: 1, borderColor: 'rgba(244,241,234,0.12)' }}>
-      <Text className="font-mono text-[10px] uppercase" style={{ color: 'rgba(244,241,234,0.6)', letterSpacing: 2 }}>{label}</Text>
+    <View className="flex-1 rounded-[20px] p-4" style={{ backgroundColor: 'rgba(241,238,231,0.06)', borderWidth: 1, borderColor: 'rgba(241,238,231,0.12)' }}>
+      <Text className="font-mono text-[10px] uppercase" style={{ color: 'rgba(241,238,231,0.6)', letterSpacing: 2 }}>{label}</Text>
       <View className="mt-1 flex-row items-baseline flex-wrap">
         <Text className="font-mono text-xl text-chalk">{value}</Text>
-        {unit ? <Text className="ml-1 font-mono text-[10px] uppercase" style={{ color: 'rgba(244,241,234,0.7)', letterSpacing: 1 }}>{unit}</Text> : null}
+        {unit ? <Text className="ml-1 font-mono text-[10px] uppercase" style={{ color: 'rgba(241,238,231,0.7)', letterSpacing: 1 }}>{unit}</Text> : null}
       </View>
     </View>
   )
@@ -260,7 +259,7 @@ export default function ChallengeWrapped() {
   if (loading || !motionReady) {
     return (
       <SafeAreaView className="flex-1 bg-iron-bg items-center justify-center">
-        <ActivityIndicator color="#F4F1EA" size="large" />
+        <ActivityIndicator color="#F1EEE7" size="large" />
       </SafeAreaView>
     )
   }
@@ -289,7 +288,8 @@ export default function ChallengeWrapped() {
     )
   }
 
-  const confettiColors = [PEARL, '#F4F1EA', zoneColorDark(4)]
+  // P4b: the Z4 hue here was zone-as-accent sparkle, not zone data → volt.
+  const confettiColors = [PEARL, '#F1EEE7', VOLT]
 
   // Hero = classes attended (the flagship's consistency metric). Points read on
   // a supporting tile so the count-up stays a single clean figure.
@@ -318,18 +318,18 @@ export default function ChallengeWrapped() {
           <Pressable onPress={dismiss} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close recap">
             <Text className="text-2xl text-chalk" style={{ lineHeight: 26 }}>×</Text>
           </Pressable>
-          <Text className="font-mono text-[10px] uppercase" style={{ color: 'rgba(244,241,234,0.7)', letterSpacing: 2 }}>Challenge wrapped</Text>
+          <Text className="font-mono text-[10px] uppercase" style={{ color: 'rgba(241,238,231,0.7)', letterSpacing: 2 }}>Challenge wrapped</Text>
           <View style={{ width: 20 }} />
         </View>
 
         <ScrollView contentContainerClassName="px-5 pb-10" showsVerticalScrollIndicator={false}>
           {/* Hero: challenge name + classes count-up */}
           <View className="items-center mt-8">
-            <Text className="text-base font-display mb-2 text-center" style={{ color: 'rgba(244,241,234,0.9)' }} numberOfLines={2}>
+            <Text className="text-base font-display mb-2 text-center" style={{ color: 'rgba(241,238,231,0.9)' }} numberOfLines={2}>
               {model.name}
             </Text>
             <CountUp target={heroValue} reduceMotion={reduceMotion} label={heroUnit} />
-            <Text className="text-base font-body-medium mt-1" style={{ color: 'rgba(244,241,234,0.85)' }}>{heroUnit}</Text>
+            <Text className="text-base font-body-medium mt-1" style={{ color: 'rgba(241,238,231,0.85)' }}>{heroUnit}</Text>
           </View>
 
           <Animated.View style={revealStyle}>
@@ -337,11 +337,12 @@ export default function ChallengeWrapped() {
             {model.finisher ? (
               <View
                 className="mt-7 rounded-[20px] px-4 py-4"
-                style={{ backgroundColor: PEARL, borderWidth: 1, borderColor: PEARL }}
+                // P4b: finishing the challenge is EARNED — lights volt.
+                style={{ backgroundColor: VOLT, borderWidth: 1, borderColor: VOLT }}
               >
                 <View className="flex-row items-center justify-center" style={{ gap: 8 }}>
-                  <Ionicons name="medal" size={16} color="#0F1216" />
-                  <Text className="text-base font-display-bold text-center" style={{ color: '#0F1216' }}>
+                  <Ionicons name="medal" size={16} color="#131316" />
+                  <Text className="text-base font-display-bold text-center" style={{ color: '#131316' }}>
                     Challenge finisher
                   </Text>
                 </View>
@@ -352,9 +353,9 @@ export default function ChallengeWrapped() {
             {inbodyText ? (
               <View
                 className="mt-4 rounded-[20px] px-4 py-4 flex-row items-center justify-center"
-                style={{ gap: 8, backgroundColor: 'rgba(244,241,234,0.1)', borderWidth: 1, borderColor: 'rgba(244,241,234,0.18)' }}
+                style={{ gap: 8, backgroundColor: 'rgba(241,238,231,0.1)', borderWidth: 1, borderColor: 'rgba(241,238,231,0.18)' }}
               >
-                <Text className="text-sm font-body-semibold" style={{ color: '#F4F1EA' }}>
+                <Text className="text-sm font-body-semibold" style={{ color: '#F1EEE7' }}>
                   ★  {inbodyText}
                 </Text>
               </View>
@@ -371,7 +372,7 @@ export default function ChallengeWrapped() {
               />
             </View>
 
-            <Text className="mt-6 text-center text-sm" style={{ color: 'rgba(244,241,234,0.8)' }}>
+            <Text className="mt-6 text-center text-sm" style={{ color: 'rgba(241,238,231,0.8)' }}>
               That&apos;s a wrap on {model.name}. Onto the next one.
             </Text>
           </Animated.View>
@@ -387,7 +388,7 @@ export default function ChallengeWrapped() {
             <Text className="font-display text-iron-bg">Share my challenge</Text>
           </Pressable>
           <Pressable onPress={dismiss} hitSlop={8} className="items-center py-2">
-            <Text className="text-sm font-body-medium" style={{ color: 'rgba(244,241,234,0.85)' }}>Done</Text>
+            <Text className="text-sm font-body-medium" style={{ color: 'rgba(241,238,231,0.85)' }}>Done</Text>
           </Pressable>
         </View>
       </SafeAreaView>

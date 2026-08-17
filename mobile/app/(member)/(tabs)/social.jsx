@@ -18,7 +18,7 @@ import Card from '../../../components/member/ui/Card'
 import ErrorRetry from '../../../components/member/ErrorRetry'
 import SocialFeedPanel from '../../../components/member/SocialFeedPanel'
 import BoardsPanel from '../../../components/member/BoardsPanel'
-import { PEARL } from 'shared/accent'
+import { PEARL } from '../../../lib/member/brand'
 
 const TABS = ['Feed', 'Friends', 'Boards']
 
@@ -46,14 +46,14 @@ function Avatar({ name, size = 36 }) {
       style={{
         width: size, height: size,
         borderRadius: size / 2,
-        backgroundColor: '#202730',
+        backgroundColor: '#24242A',
         borderWidth: 1,
-        borderColor: '#2A323D',
+        borderColor: '#2A2A31',
         alignItems: 'center',
         justifyContent: 'center',
       }}
     >
-      <Text style={{ color: '#F4F1EA', fontSize: 12, fontFamily: 'Figtree_600SemiBold' }}>{initials}</Text>
+      <Text style={{ color: '#F1EEE7', fontSize: 12, fontFamily: 'Figtree_600SemiBold' }}>{initials}</Text>
     </View>
   )
 }
@@ -96,9 +96,9 @@ function PrivateModeRow() {
           value={privateMode}
           onValueChange={toggle}
           disabled={busy || !loaded}
-          trackColor={{ false: '#202730', true: PEARL }}
-          thumbColor="#F4F1EA"
-          ios_backgroundColor="#202730"
+          trackColor={{ false: '#24242A', true: PEARL }}
+          thumbColor="#F1EEE7"
+          ios_backgroundColor="#24242A"
         />
       </View>
     </Card>
@@ -152,14 +152,14 @@ function RequestsSection({ incoming, outgoing, onMutation }) {
                 disabled={busy[req.friendshipId]}
                 style={{ backgroundColor: PEARL, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, opacity: busy[req.friendshipId] ? 0.5 : 1 }}
               >
-                <Text style={{ color: '#0F1216', fontSize: 12, fontFamily: 'Figtree_600SemiBold' }}>Accept</Text>
+                <Text style={{ color: '#131316', fontSize: 12, fontFamily: 'Figtree_600SemiBold' }}>Accept</Text>
               </Pressable>
               <Pressable
                 onPress={() => decline(req.friendshipId)}
                 disabled={busy[req.friendshipId]}
-                style={{ borderWidth: 1, borderColor: '#2A323D', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, opacity: busy[req.friendshipId] ? 0.5 : 1 }}
+                style={{ borderWidth: 1, borderColor: '#2A2A31', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, opacity: busy[req.friendshipId] ? 0.5 : 1 }}
               >
-                <Text style={{ color: '#A9B0BA', fontSize: 12, fontFamily: 'Figtree_600SemiBold' }}>Decline</Text>
+                <Text style={{ color: '#B3B2AC', fontSize: 12, fontFamily: 'Figtree_600SemiBold' }}>Decline</Text>
               </Pressable>
             </View>
           ))}
@@ -169,7 +169,7 @@ function RequestsSection({ incoming, outgoing, onMutation }) {
               <Text className="flex-1 text-sm font-body-medium text-chalk" numberOfLines={1}>
                 {req.name}
               </Text>
-              <Text style={{ fontSize: 12, color: '#66707E', fontFamily: 'Figtree_500Medium' }}>Pending</Text>
+              <Text style={{ fontSize: 12, color: '#727170', fontFamily: 'Figtree_500Medium' }}>Pending</Text>
             </View>
           ))}
         </View>
@@ -225,7 +225,7 @@ function FriendsList({ friends, onMutation }) {
       <Card>
         {friends.length === 0 ? (
           <View className="items-center py-6 gap-2">
-            <Ionicons name="people-outline" size={24} color="#66707E" />
+            <Ionicons name="people-outline" size={24} color="#727170" />
             <Text className="text-sm font-body text-chalk-2 text-center">
               No friends yet — search below to add some.
             </Text>
@@ -244,7 +244,7 @@ function FriendsList({ friends, onMutation }) {
                   hitSlop={8}
                   style={{ opacity: busy[f.contactId] ? 0.4 : 1 }}
                 >
-                  <Ionicons name="close-outline" size={20} color="#66707E" />
+                  <Ionicons name="close-outline" size={20} color="#727170" />
                 </Pressable>
               </View>
             ))}
@@ -313,19 +313,19 @@ function SearchSection({ onMutation }) {
       </Text>
       <Card>
         {/* Search input */}
-        <View className="flex-row items-center bg-iron-raised rounded-xl px-3 mb-3" style={{ borderWidth: 1, borderColor: '#2A323D' }}>
-          <Ionicons name="search-outline" size={16} color="#66707E" />
+        <View className="flex-row items-center bg-iron-raised rounded-xl px-3 mb-3" style={{ borderWidth: 1, borderColor: '#2A2A31' }}>
+          <Ionicons name="search-outline" size={16} color="#727170" />
           <TextInput
             value={query}
             onChangeText={onChangeText}
             placeholder="Search by name..."
-            placeholderTextColor="#66707E"
-            style={{ flex: 1, color: '#F4F1EA', fontSize: 14, fontFamily: 'Figtree_400Regular', paddingVertical: 10, paddingHorizontal: 8 }}
+            placeholderTextColor="#727170"
+            style={{ flex: 1, color: '#F1EEE7', fontSize: 14, fontFamily: 'Figtree_400Regular', paddingVertical: 10, paddingHorizontal: 8 }}
             autoCapitalize="words"
             autoCorrect={false}
             returnKeyType="search"
           />
-          {searching && <ActivityIndicator size="small" color="#66707E" />}
+          {searching && <ActivityIndicator size="small" color="#727170" />}
         </View>
 
         {results.length > 0 && (
@@ -346,12 +346,12 @@ function SearchSection({ onMutation }) {
                       disabled={busy[res.contactId]}
                       style={{ backgroundColor: PEARL, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, opacity: busy[res.contactId] ? 0.5 : 1 }}
                     >
-                      <Text style={{ color: '#0F1216', fontSize: 12, fontFamily: 'Figtree_600SemiBold' }}>
+                      <Text style={{ color: '#131316', fontSize: 12, fontFamily: 'Figtree_600SemiBold' }}>
                         {busy[res.contactId] ? '...' : 'Add'}
                       </Text>
                     </Pressable>
                   ) : (
-                    <Text style={{ fontSize: 12, color: '#66707E', fontFamily: 'Figtree_500Medium' }}>
+                    <Text style={{ fontSize: 12, color: '#727170', fontFamily: 'Figtree_500Medium' }}>
                       {wasSent ? 'Pending' : label}
                     </Text>
                   )}
@@ -418,16 +418,16 @@ function SuggestionsSection({ suggestions, friendContactIds, onMutation }) {
                   </Text>
                 </View>
                 {isFriend ? (
-                  <Text style={{ fontSize: 12, color: '#66707E', fontFamily: 'Figtree_500Medium' }}>Friends</Text>
+                  <Text style={{ fontSize: 12, color: '#727170', fontFamily: 'Figtree_500Medium' }}>Friends</Text>
                 ) : wasSent ? (
-                  <Text style={{ fontSize: 12, color: '#66707E', fontFamily: 'Figtree_500Medium' }}>Pending</Text>
+                  <Text style={{ fontSize: 12, color: '#727170', fontFamily: 'Figtree_500Medium' }}>Pending</Text>
                 ) : (
                   <Pressable
                     onPress={() => sendRequest(s.contactId)}
                     disabled={busy[s.contactId]}
                     style={{ backgroundColor: PEARL, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, opacity: busy[s.contactId] ? 0.5 : 1 }}
                   >
-                    <Text style={{ color: '#0F1216', fontSize: 12, fontFamily: 'Figtree_600SemiBold' }}>
+                    <Text style={{ color: '#131316', fontSize: 12, fontFamily: 'Figtree_600SemiBold' }}>
                       {busy[s.contactId] ? '...' : 'Add'}
                     </Text>
                   </Pressable>
@@ -485,7 +485,7 @@ function FriendsPanel() {
   if (loading) {
     return (
       <View className="items-center justify-center py-16">
-        <ActivityIndicator color="#F4F1EA" />
+        <ActivityIndicator color="#F1EEE7" />
       </View>
     )
   }
@@ -526,7 +526,7 @@ export default function SocialScreen() {
         if (disabled) {
           return (
             <View className="flex-1 items-center justify-center px-8">
-              <Text style={{ color: '#A9B0BA', fontSize: 15, fontFamily: 'Figtree_400Regular', textAlign: 'center' }}>
+              <Text style={{ color: '#B3B2AC', fontSize: 15, fontFamily: 'Figtree_400Regular', textAlign: 'center' }}>
                 Social isn&apos;t switched on at your gym yet.
               </Text>
             </View>
@@ -538,7 +538,7 @@ export default function SocialScreen() {
         // own the scroll + keep virtualization) while Friends/Boards keep it as the
         // top of the parent ScrollView.
         const segmentedControl = (
-          <View className="flex-row rounded-xl bg-iron-surface mb-6 p-1 gap-1" style={{ borderWidth: 1, borderColor: '#2A323D' }}>
+          <View className="flex-row rounded-xl bg-iron-surface mb-6 p-1 gap-1" style={{ borderWidth: 1, borderColor: '#2A2A31' }}>
             {TABS.map((t) => (
               <Pressable
                 key={t}
@@ -551,7 +551,7 @@ export default function SocialScreen() {
                   backgroundColor: tab === t ? PEARL : 'transparent',
                 }}
               >
-                <Text style={{ fontSize: 14, fontFamily: 'Figtree_600SemiBold', color: tab === t ? '#0F1216' : '#A9B0BA' }}>
+                <Text style={{ fontSize: 14, fontFamily: 'Figtree_600SemiBold', color: tab === t ? '#131316' : '#B3B2AC' }}>
                   {t}
                 </Text>
               </Pressable>

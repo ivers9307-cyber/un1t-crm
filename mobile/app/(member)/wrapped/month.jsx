@@ -30,11 +30,10 @@ import { supabase } from '../../../lib/member/supabase'
 import { markMonthRecapSeen } from '../../../lib/member/recap-seen'
 import { monthlyRecap, personalRecords } from 'shared/progress-analytics'
 import { monthWrappedModel } from 'shared/month-wrapped'
-import { PEARL } from 'shared/accent'
-import { zoneColorDark } from 'shared/zone-colors'
+import { PEARL, VOLT } from '../../../lib/member/brand'
 
 // Keep the pearl flood dark enough that chalk type always passes contrast.
-const SCRIM = 'rgba(15,18,22,0.62)'
+const SCRIM = 'rgba(19,19,22,0.62)'
 
 // ── animated points count-up ──────────────────────────────────────
 function PointsCountUp({ target, reduceMotion }) {
@@ -115,11 +114,11 @@ function ConfettiPiece({ x, color, delay, size, drift }) {
 // ── stat tile ─────────────────────────────────────────────────────
 function Stat({ label, value, unit }) {
   return (
-    <View className="flex-1 rounded-[20px] p-4" style={{ backgroundColor: 'rgba(244,241,234,0.06)', borderWidth: 1, borderColor: 'rgba(244,241,234,0.12)' }}>
-      <Text className="font-mono text-[10px] uppercase" style={{ color: 'rgba(244,241,234,0.6)', letterSpacing: 2 }}>{label}</Text>
+    <View className="flex-1 rounded-[20px] p-4" style={{ backgroundColor: 'rgba(241,238,231,0.06)', borderWidth: 1, borderColor: 'rgba(241,238,231,0.12)' }}>
+      <Text className="font-mono text-[10px] uppercase" style={{ color: 'rgba(241,238,231,0.6)', letterSpacing: 2 }}>{label}</Text>
       <View className="mt-1 flex-row items-baseline flex-wrap">
         <Text className="font-mono text-xl text-chalk">{value}</Text>
-        {unit ? <Text className="ml-1 font-mono text-[10px] uppercase" style={{ color: 'rgba(244,241,234,0.7)', letterSpacing: 1 }}>{unit}</Text> : null}
+        {unit ? <Text className="ml-1 font-mono text-[10px] uppercase" style={{ color: 'rgba(241,238,231,0.7)', letterSpacing: 1 }}>{unit}</Text> : null}
       </View>
     </View>
   )
@@ -229,11 +228,11 @@ export default function MonthWrapped() {
           <Pressable onPress={dismiss} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close recap">
             <Text className="text-2xl text-chalk" style={{ lineHeight: 26 }}>×</Text>
           </Pressable>
-          <Text className="font-mono text-[10px] uppercase" style={{ color: 'rgba(244,241,234,0.7)', letterSpacing: 2 }}>Monthly wrapped</Text>
+          <Text className="font-mono text-[10px] uppercase" style={{ color: 'rgba(241,238,231,0.7)', letterSpacing: 2 }}>Monthly wrapped</Text>
           <View style={{ width: 20 }} />
         </View>
         <View className="flex-1 items-center justify-center">
-          <ActivityIndicator color="#F4F1EA" size="large" />
+          <ActivityIndicator color="#F1EEE7" size="large" />
         </View>
       </SafeAreaView>
     )
@@ -263,7 +262,8 @@ export default function MonthWrapped() {
     )
   }
 
-  const confettiColors = [PEARL, '#F4F1EA', zoneColorDark(4)]
+  // P4b: the Z4 hue here was zone-as-accent sparkle, not zone data → volt.
+  const confettiColors = [PEARL, '#F1EEE7', VOLT]
 
   const revealStyle = reduceMotion
     ? {}
@@ -283,16 +283,16 @@ export default function MonthWrapped() {
           <Pressable onPress={dismiss} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close recap">
             <Text className="text-2xl text-chalk" style={{ lineHeight: 26 }}>×</Text>
           </Pressable>
-          <Text className="font-mono text-[10px] uppercase" style={{ color: 'rgba(244,241,234,0.7)', letterSpacing: 2 }}>Monthly wrapped</Text>
+          <Text className="font-mono text-[10px] uppercase" style={{ color: 'rgba(241,238,231,0.7)', letterSpacing: 2 }}>Monthly wrapped</Text>
           <View style={{ width: 20 }} />
         </View>
 
         <ScrollView contentContainerClassName="px-5 pb-10" showsVerticalScrollIndicator={false}>
           {/* Hero: month label + points count-up */}
           <View className="items-center mt-8">
-            <Text className="text-base font-display mb-2" style={{ color: 'rgba(244,241,234,0.9)' }}>{model.label}</Text>
+            <Text className="text-base font-display mb-2" style={{ color: 'rgba(241,238,231,0.9)' }}>{model.label}</Text>
             <PointsCountUp target={model.points} reduceMotion={reduceMotion} />
-            <Text className="text-base font-body-medium mt-1" style={{ color: 'rgba(244,241,234,0.85)' }}>UN1T Points</Text>
+            <Text className="text-base font-body-medium mt-1" style={{ color: 'rgba(241,238,231,0.85)' }}>UN1T Points</Text>
           </View>
 
           <Animated.View style={revealStyle}>
@@ -300,11 +300,12 @@ export default function MonthWrapped() {
             {model.isFittest ? (
               <View
                 className="mt-7 rounded-[20px] px-4 py-4"
-                style={{ backgroundColor: PEARL, borderWidth: 1, borderColor: PEARL }}
+                // P4b: fittest month is EARNED — the celebratory fill lights volt.
+                style={{ backgroundColor: VOLT, borderWidth: 1, borderColor: VOLT }}
               >
                 <View className="flex-row items-center justify-center" style={{ gap: 8 }}>
-                  <Ionicons name="trophy" size={16} color="#0F1216" />
-                  <Text className="text-base font-display-bold text-center" style={{ color: '#0F1216' }}>
+                  <Ionicons name="trophy" size={16} color="#131316" />
+                  <Text className="text-base font-display-bold text-center" style={{ color: '#131316' }}>
                     Fittest month yet
                   </Text>
                 </View>
@@ -315,9 +316,9 @@ export default function MonthWrapped() {
             {model.pr ? (
               <View
                 className="mt-4 rounded-[20px] px-4 py-4 flex-row items-center justify-center"
-                style={{ gap: 8, backgroundColor: 'rgba(244,241,234,0.1)', borderWidth: 1, borderColor: 'rgba(244,241,234,0.18)' }}
+                style={{ gap: 8, backgroundColor: 'rgba(241,238,231,0.1)', borderWidth: 1, borderColor: 'rgba(241,238,231,0.18)' }}
               >
-                <Text className="text-sm font-body-semibold" style={{ color: '#F4F1EA' }}>
+                <Text className="text-sm font-body-semibold" style={{ color: '#F1EEE7' }}>
                   ★  {model.pr.label} — {model.pr.value.toLocaleString()} {model.pr.unit}
                 </Text>
               </View>
@@ -330,7 +331,7 @@ export default function MonthWrapped() {
               <Stat label="Avg peak" value={model.avgPeakHr != null ? `${model.avgPeakHr}` : '—'} unit={model.avgPeakHr != null ? 'bpm' : undefined} />
             </View>
 
-            <Text className="mt-6 text-center text-sm" style={{ color: 'rgba(244,241,234,0.8)' }}>
+            <Text className="mt-6 text-center text-sm" style={{ color: 'rgba(241,238,231,0.8)' }}>
               That's a wrap on {model.monthName}. Here's to the next one.
             </Text>
           </Animated.View>
@@ -346,7 +347,7 @@ export default function MonthWrapped() {
             <Text className="font-display text-iron-bg">Share my month</Text>
           </Pressable>
           <Pressable onPress={dismiss} hitSlop={8} className="items-center py-2">
-            <Text className="text-sm font-body-medium" style={{ color: 'rgba(244,241,234,0.85)' }}>Done</Text>
+            <Text className="text-sm font-body-medium" style={{ color: 'rgba(241,238,231,0.85)' }}>Done</Text>
           </Pressable>
         </View>
       </SafeAreaView>

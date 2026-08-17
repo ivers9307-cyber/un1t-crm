@@ -27,7 +27,7 @@ import { api } from '../../../../lib/member/api'
 import { markRecapSeen } from '../../../../lib/member/recap-seen'
 import { recapModel } from 'shared/wrapped'
 import { tracePolyline } from 'shared/share-card'
-import { PEARL } from 'shared/accent'
+import { PEARL, VOLT } from '../../../../lib/member/brand'
 import { zoneColorDark } from 'shared/zone-colors'
 
 // The Burn accent = the Zone 4 colour (Furnace on the dark canvas), tying
@@ -47,7 +47,7 @@ function downsample(samples, max) {
 
 // Readable text/veil over a flooded zone colour. We keep the flood dark by
 // overlaying a translucent iron scrim so chalk type always passes contrast.
-const SCRIM = 'rgba(15,18,22,0.62)'
+const SCRIM = 'rgba(19,19,22,0.62)'
 
 // ── animated points count-up ──────────────────────────────────────
 function PointsCountUp({ target, reduceMotion }) {
@@ -130,11 +130,11 @@ function ConfettiPiece({ x, color, delay, size, drift }) {
 // ── stat tile ─────────────────────────────────────────────────────
 function Stat({ label, value, unit }) {
   return (
-    <View className="flex-1 rounded-[20px] p-4" style={{ backgroundColor: 'rgba(244,241,234,0.06)', borderWidth: 1, borderColor: 'rgba(244,241,234,0.12)' }}>
-      <Text className="font-mono text-[10px] uppercase" style={{ color: 'rgba(244,241,234,0.6)', letterSpacing: 2 }}>{label}</Text>
+    <View className="flex-1 rounded-[20px] p-4" style={{ backgroundColor: 'rgba(241,238,231,0.06)', borderWidth: 1, borderColor: 'rgba(241,238,231,0.12)' }}>
+      <Text className="font-mono text-[10px] uppercase" style={{ color: 'rgba(241,238,231,0.6)', letterSpacing: 2 }}>{label}</Text>
       <View className="mt-1 flex-row items-baseline flex-wrap">
         <Text className="font-mono text-xl text-chalk">{value}</Text>
-        {unit ? <Text className="ml-1 font-mono text-[10px] uppercase" style={{ color: 'rgba(244,241,234,0.7)', letterSpacing: 1 }}>{unit}</Text> : null}
+        {unit ? <Text className="ml-1 font-mono text-[10px] uppercase" style={{ color: 'rgba(241,238,231,0.7)', letterSpacing: 1 }}>{unit}</Text> : null}
       </View>
     </View>
   )
@@ -250,7 +250,7 @@ export default function SessionWrapped() {
   if (loading || !motionReady) {
     return (
       <SafeAreaView className="flex-1 bg-iron-bg items-center justify-center">
-        <ActivityIndicator color="#F4F1EA" size="large" />
+        <ActivityIndicator color="#F1EEE7" size="large" />
       </SafeAreaView>
     )
   }
@@ -280,7 +280,7 @@ export default function SessionWrapped() {
   const floodColor = zoneColorDark(model.dominant?.id) || PEARL
   const zoneLabel = model.dominant?.id ? `Zone ${model.dominant.id}` : null
   const tracePoints = model.hasTrace ? tracePolyline(model.traceSamples, { width: 600, height: 140, points: 80 }) : null
-  const confettiColors = [floodColor, PEARL, '#F4F1EA']
+  const confettiColors = [floodColor, PEARL, '#F1EEE7']
 
   // Wash-in: fade the flood colour in from transparent so the screen "takes"
   // the zone's colour. Under reduce-motion this is set to 1 immediately.
@@ -302,7 +302,7 @@ export default function SessionWrapped() {
           <Pressable onPress={dismiss} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close recap">
             <Text className="text-2xl text-chalk" style={{ lineHeight: 26 }}>×</Text>
           </Pressable>
-          <Text className="font-mono text-[10px] uppercase" style={{ color: 'rgba(244,241,234,0.7)', letterSpacing: 2 }}>Session wrapped</Text>
+          <Text className="font-mono text-[10px] uppercase" style={{ color: 'rgba(241,238,231,0.7)', letterSpacing: 2 }}>Session wrapped</Text>
           <View style={{ width: 20 }} />
         </View>
 
@@ -310,12 +310,12 @@ export default function SessionWrapped() {
           {/* Hero: points count-up */}
           <View className="items-center mt-6">
             {model.className ? (
-              <Text className="text-sm font-body-medium mb-2" style={{ color: 'rgba(244,241,234,0.85)' }}>{model.className}</Text>
+              <Text className="text-sm font-body-medium mb-2" style={{ color: 'rgba(241,238,231,0.85)' }}>{model.className}</Text>
             ) : null}
             <PointsCountUp target={model.points} reduceMotion={reduceMotion} />
-            <Text className="text-base font-body-medium mt-1" style={{ color: 'rgba(244,241,234,0.8)' }}>UN1T Points</Text>
+            <Text className="text-base font-body-medium mt-1" style={{ color: 'rgba(241,238,231,0.8)' }}>UN1T Points</Text>
             {zoneLabel ? (
-              <View className="mt-3 flex-row items-center rounded-full px-3 py-1" style={{ backgroundColor: 'rgba(244,241,234,0.14)' }}>
+              <View className="mt-3 flex-row items-center rounded-full px-3 py-1" style={{ backgroundColor: 'rgba(241,238,231,0.14)' }}>
                 <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: floodColor, marginRight: 6 }} />
                 <Text className="font-mono text-[10px] uppercase text-chalk" style={{ letterSpacing: 1.2 }}>{zoneLabel} session</Text>
               </View>
@@ -328,14 +328,15 @@ export default function SessionWrapped() {
               <View
                 className="mt-7 rounded-[20px] px-4 py-4"
                 style={{
-                  backgroundColor: model.highlight.kind === 'pb' ? PEARL : 'rgba(244,241,234,0.1)',
+                  // P4b: a PB is EARNED — the celebratory fill lights volt.
+                  backgroundColor: model.highlight.kind === 'pb' ? VOLT : 'rgba(241,238,231,0.1)',
                   borderWidth: 1,
-                  borderColor: model.highlight.kind === 'pb' ? PEARL : 'rgba(244,241,234,0.18)',
+                  borderColor: model.highlight.kind === 'pb' ? VOLT : 'rgba(241,238,231,0.18)',
                 }}
               >
                 <Text
                   className="text-base font-display-bold text-center"
-                  style={{ color: model.highlight.kind === 'pb' ? '#0F1216' : '#F4F1EA' }}
+                  style={{ color: model.highlight.kind === 'pb' ? '#131316' : '#F1EEE7' }}
                 >
                   {model.highlight.kind === 'pb' ? '★  ' : ''}{model.highlight.message}
                 </Text>
@@ -350,7 +351,7 @@ export default function SessionWrapped() {
               >
                 <Text className="font-mono text-[13px]" style={{ color: BURN_COLOR, letterSpacing: 1.4 }}>BURN</Text>
                 {model.z4plusMinutes ? (
-                  <Text className="text-sm font-body-medium" style={{ color: 'rgba(244,241,234,0.85)' }}>
+                  <Text className="text-sm font-body-medium" style={{ color: 'rgba(241,238,231,0.85)' }}>
                     {model.z4plusMinutes} min in Zone 4+
                   </Text>
                 ) : null}
@@ -366,10 +367,10 @@ export default function SessionWrapped() {
 
             {/* HR trace */}
             {tracePoints ? (
-              <View className="mt-6 rounded-[20px] px-4 py-4" style={{ backgroundColor: 'rgba(244,241,234,0.06)', borderWidth: 1, borderColor: 'rgba(244,241,234,0.12)' }}>
-                <Text className="font-mono text-[10px] uppercase mb-3" style={{ color: 'rgba(244,241,234,0.6)', letterSpacing: 2 }}>Your heart rate</Text>
+              <View className="mt-6 rounded-[20px] px-4 py-4" style={{ backgroundColor: 'rgba(241,238,231,0.06)', borderWidth: 1, borderColor: 'rgba(241,238,231,0.12)' }}>
+                <Text className="font-mono text-[10px] uppercase mb-3" style={{ color: 'rgba(241,238,231,0.6)', letterSpacing: 2 }}>Your heart rate</Text>
                 <Svg viewBox="0 0 600 140" width="100%" height={90} preserveAspectRatio="none">
-                  <Polyline points={tracePoints} fill="none" stroke="#F4F1EA" strokeWidth={4} strokeLinejoin="round" strokeLinecap="round" />
+                  <Polyline points={tracePoints} fill="none" stroke="#F1EEE7" strokeWidth={4} strokeLinejoin="round" strokeLinecap="round" />
                 </Svg>
               </View>
             ) : null}
@@ -385,11 +386,11 @@ export default function SessionWrapped() {
             className="rounded-xl py-3.5 px-5 items-center bg-chalk"
           >
             {sharing
-              ? <ActivityIndicator color="#0F1216" />
+              ? <ActivityIndicator color="#131316" />
               : <Text className="font-display text-iron-bg">Share my session</Text>}
           </Pressable>
           <Pressable onPress={seeFullSession} hitSlop={8} className="items-center py-2">
-            <Text className="text-sm font-body-medium" style={{ color: 'rgba(244,241,234,0.85)' }}>See full session</Text>
+            <Text className="text-sm font-body-medium" style={{ color: 'rgba(241,238,231,0.85)' }}>See full session</Text>
           </Pressable>
         </View>
       </SafeAreaView>

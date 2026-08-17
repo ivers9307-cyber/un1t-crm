@@ -18,7 +18,7 @@ import { View, Text, Pressable } from 'react-native'
 import { useFocusEffect, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/member/contact-context'
-import { PEARL } from 'shared/accent'
+import { PEARL } from '../../lib/member/brand'
 import {
   shouldShowCompletionPrompt,
   missingCalorieFields,
@@ -64,12 +64,12 @@ export default function ProfileCompletionPrompt({ className = '' }) {
   return (
     <View
       className={`rounded-2xl border border-iron-hairline bg-iron-surface p-4 ${className}`}
-      style={{ borderColor: 'rgba(217,213,204,0.35)' }}
+      style={{ borderColor: 'rgba(214,210,201,0.35)' }}
     >
       <View className="flex-row items-start gap-3">
         <View
           className="h-9 w-9 rounded-full items-center justify-center shrink-0"
-          style={{ backgroundColor: 'rgba(217,213,204,0.14)' }}
+          style={{ backgroundColor: 'rgba(214,210,201,0.14)' }}
         >
           <Ionicons name="flame" size={18} color={PEARL} />
         </View>
@@ -96,7 +96,7 @@ export default function ProfileCompletionPrompt({ className = '' }) {
               className="flex-row items-center gap-2 rounded-xl bg-chalk px-4 py-2.5 active:opacity-80"
             >
               <Text className="text-sm font-body-semibold text-iron-bg">Add my details</Text>
-              <Ionicons name="arrow-forward" size={14} color="#0F1216" />
+              <Ionicons name="arrow-forward" size={14} color="#131316" />
             </Pressable>
             <Pressable onPress={snooze} hitSlop={8} className="px-2 py-2 active:opacity-60">
               <Text className="text-sm font-body-medium text-chalk-3">Not now</Text>

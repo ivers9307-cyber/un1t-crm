@@ -33,15 +33,16 @@ import {
 import { currentStreak, trendDelta } from 'shared/hr-analytics'
 import { workoutLabel, sessionDetailChips, formatDistance, formatDuration } from 'shared/workout-detail'
 import { buildTrendViews, TREND_METRICS } from 'shared/wearable-trends-view'
-import { accentFromSessions, PEARL } from 'shared/accent'
+import { accentFromSessions, PEARL } from '../../../lib/member/brand'
 
 // No fixed accent: the chart, heatmap and chips take the EARNED Afterglow
-// accent (shared/accent.js, spec §2.2) threaded down from ProgressScreen, so
+// accent (shared rule via lib/member/brand, spec §2.2; P4b lit = volt)
+// threaded down from ProgressScreen, so
 // the whole surface reads in the member's own hardest-zone colour — Pearl
 // when the trailing week is quiet. HR-zone colours stay reserved for zone
 // bars (they're data, never chrome).
-const SURFACE_2 = '#202730' // iron-raised equivalent for SVG fills
-const TEXT_2 = '#A9B0BA'    // chalk-2 for muted trend arrows
+const SURFACE_2 = '#24242A' // iron-raised equivalent for SVG fills
+const TEXT_2 = '#B3B2AC'    // chalk-2 for muted trend arrows
 
 const TREND_SERIES = [
   { key: 'points', label: 'Points', pick: (b) => b.points },
@@ -161,7 +162,7 @@ export function ProgressScreen({ focus = 'trends', showHeader = true } = {}) {
   if (loading) {
     return (
       <SafeAreaView className="flex-1 bg-iron-bg items-center justify-center" edges={['left', 'right']}>
-        <ActivityIndicator color="#F4F1EA" size="large" />
+        <ActivityIndicator color="#F1EEE7" size="large" />
       </SafeAreaView>
     )
   }
@@ -186,7 +187,7 @@ export function ProgressScreen({ focus = 'trends', showHeader = true } = {}) {
         <ScrollView contentContainerClassName="p-5 pb-24">
           {showHeader && <Header />}
           <Card className={`${showHeader ? 'mt-8' : ''} items-center py-8`}>
-            <Ionicons name="trending-up-outline" size={32} color="#66707E" />
+            <Ionicons name="trending-up-outline" size={32} color="#727170" />
             <Text className="mt-3 text-base font-body-semibold text-chalk">No progress yet</Text>
             <Text className="mt-1 text-sm text-chalk-2 text-center">
               Train your first class to start tracking your progress — your
@@ -648,7 +649,7 @@ function RecoveryFitnessCard({ trendViews, accent = PEARL }) {
             const arrow = view.direction === 'up' ? '▲' : view.direction === 'down' ? '▼' : '→'
             const arrowColor =
               view.improving === true ? accent
-              : view.improving === false ? '#66707E'
+              : view.improving === false ? '#727170'
               : TEXT_2
 
             return (
@@ -694,7 +695,7 @@ function NativeTrendSparkline({ points, improving, accent = PEARL }) {
     return `${x.toFixed(1)},${y.toFixed(1)}`
   }).join(' ')
   const stroke =
-    improving === true ? accent : improving === false ? '#66707E' : TEXT_2
+    improving === true ? accent : improving === false ? '#727170' : TEXT_2
   return (
     <Svg width={W} height={H}>
       <Polyline

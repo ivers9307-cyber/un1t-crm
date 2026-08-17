@@ -15,7 +15,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { crmApi } from '../../../lib/member/api'
 import Card from '../../../components/member/ui/Card'
 import ErrorRetry from '../../../components/member/ErrorRetry'
-import { PEARL } from 'shared/accent'
+import { PEARL } from '../../../lib/member/brand'
 
 // ── Formatting ───────────────────────────────────────────────────────────────
 
@@ -61,7 +61,7 @@ export default function CoachFeedback() {
   if (loading) {
     return (
       <SafeAreaView className="flex-1 bg-iron-bg items-center justify-center" edges={['left', 'right']}>
-        <ActivityIndicator color="#F4F1EA" size="large" />
+        <ActivityIndicator color="#F1EEE7" size="large" />
       </SafeAreaView>
     )
   }
@@ -87,7 +87,7 @@ export default function CoachFeedback() {
         <ScrollView contentContainerClassName="p-5 pb-24">
           <Header onBack={() => router.back()} />
           <Card className="mt-6 items-center py-8">
-            <Ionicons name="chatbubble-ellipses-outline" size={32} color="#66707E" />
+            <Ionicons name="chatbubble-ellipses-outline" size={32} color="#727170" />
             <Text className="mt-3 text-base font-display text-chalk">No feedback yet</Text>
             <Text className="mt-1 text-sm text-chalk-2 text-center">
               When a coach shares feedback after a session, it'll show up here.
@@ -122,7 +122,7 @@ function Header({ onBack }) {
         onPress={onBack}
         className="flex-row items-center gap-1 mb-4 self-start active:opacity-60"
       >
-        <Ionicons name="chevron-back-outline" size={18} color="#A9B0BA" />
+        <Ionicons name="chevron-back-outline" size={18} color="#B3B2AC" />
         <Text className="text-sm text-chalk-2">Back</Text>
       </Pressable>
       <View className="flex-row items-center" style={{ gap: 10 }}>
@@ -144,7 +144,7 @@ function FeedbackCard({ item }) {
       <View className="flex-row items-center" style={{ gap: 12 }}>
         <View
           className="h-9 w-9 items-center justify-center rounded-full"
-          style={{ backgroundColor: 'rgba(217,213,204,0.16)' }}
+          style={{ backgroundColor: 'rgba(214,210,201,0.16)' }}
         >
           {glyph ? (
             <Text className="text-sm font-display-bold" style={{ color: PEARL }}>{glyph}</Text>

@@ -31,7 +31,7 @@ import {
 } from 'shared/live-view'
 import { zoneBreakdown } from 'shared/heart-rate'
 import { zoneColorDark } from 'shared/zone-colors'
-import { hardestZone, PEARL } from 'shared/accent'
+import { hardestZone, PEARL, VOLT } from '../../lib/member/brand'
 
 const POLL_MS = 2000
 
@@ -118,7 +118,7 @@ export default function LiveScreen() {
   if (loading) {
     return (
       <SafeAreaView className="flex-1 bg-iron-bg items-center justify-center">
-        <ActivityIndicator color="#F4F1EA" size="large" />
+        <ActivityIndicator color="#F1EEE7" size="large" />
       </SafeAreaView>
     )
   }
@@ -136,7 +136,7 @@ export default function LiveScreen() {
 function LiveActive({ model, reduceMotion, onClose }) {
   // Zone DATA colour on the dark canvas — this zone colour IS the screen's
   // accent while live (Afterglow: the accent is earned, never fixed chrome).
-  const zoneColor = zoneColorDark(model.zone?.id) || '#66707E'
+  const zoneColor = zoneColorDark(model.zone?.id) || '#727170'
   const zoneLabel = model.zone?.label || null // "Zone 4"
   const points = useCountUp(model.effortPoints, { reduceMotion, duration: 600 })
 
@@ -150,7 +150,7 @@ function LiveActive({ model, reduceMotion, onClose }) {
             <Text className="font-mono text-[10px] uppercase text-chalk-2" style={{ letterSpacing: 2 }}>Training live</Text>
           </View>
           <Pressable onPress={onClose} hitSlop={10} className="active:opacity-60">
-            <Ionicons name="close" size={24} color="#A9B0BA" />
+            <Ionicons name="close" size={24} color="#B3B2AC" />
           </Pressable>
         </View>
 
@@ -177,7 +177,7 @@ function LiveActive({ model, reduceMotion, onClose }) {
           )}
           {model.stale && (
             <View className="mt-3 flex-row items-center gap-1.5">
-              <Ionicons name="bluetooth-outline" size={13} color="#A9B0BA" />
+              <Ionicons name="bluetooth-outline" size={13} color="#B3B2AC" />
               <Text className="text-xs font-body text-chalk-2">Strap reconnecting…</Text>
             </View>
           )}
@@ -248,11 +248,11 @@ function BpmPulse({ bpm, color, reduceMotion, stale }) {
     <Animated.View style={{ transform: [{ scale }], opacity: stale ? 0.45 : 1 }} className="items-center">
       <View className="flex-row items-start">
         {/* Body-sourced TELEMETRY (two-tier numeral rule): mono, zone-coloured */}
-        <Text className="font-mono text-[96px] leading-none" style={{ color: bpm != null ? color : '#66707E' }}>
+        <Text className="font-mono text-[96px] leading-none" style={{ color: bpm != null ? color : '#727170' }}>
           {bpm != null ? bpm : '––'}
         </Text>
       </View>
-      <Text className="mt-1 font-mono text-[10px] uppercase" style={{ letterSpacing: 1.6, color: bpm != null ? color : '#66707E' }}>bpm</Text>
+      <Text className="mt-1 font-mono text-[10px] uppercase" style={{ letterSpacing: 1.6, color: bpm != null ? color : '#727170' }}>bpm</Text>
     </Animated.View>
   )
 }
@@ -340,14 +340,16 @@ function ZoneLegend({ zonesSeconds }) {
 function CompleteState({ model, sessionId, onClose }) {
   const router = useRouter()
   const finished = model.active && model.ended
-  // Afterglow: the accent is EARNED — the hardest zone of the session already
-  // in scope (no new fetch); Pearl resting identity when nothing qualifies.
-  const accent = zoneColorDark(hardestZone(model.zonesSeconds)) || PEARL
+  // The accent is EARNED — a zone sustained >=3 min in the session already
+  // in scope (no new fetch) lights it volt (P4b: zone-hued accents collapse
+  // to volt; the ZoneLegend keeps its zone DATA colours); Pearl resting
+  // identity when nothing qualifies.
+  const accent = hardestZone(model.zonesSeconds) != null ? VOLT : PEARL
   return (
     <SafeAreaView className="flex-1 bg-iron-bg">
       <View className="px-5 pt-2 flex-row justify-end">
         <Pressable onPress={onClose} hitSlop={10} className="active:opacity-60">
-          <Ionicons name="close" size={24} color="#A9B0BA" />
+          <Ionicons name="close" size={24} color="#B3B2AC" />
         </Pressable>
       </View>
       <View className="flex-1 items-center justify-center px-8">

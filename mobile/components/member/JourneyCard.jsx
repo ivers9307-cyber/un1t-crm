@@ -22,12 +22,12 @@
 import { View, Text, Animated } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import Svg, { Path } from 'react-native-svg'
-import { PEARL } from 'shared/accent'
+import { PEARL, VOLT } from '../../lib/member/brand'
 import { useProgressSweep } from '../../lib/member/motion'
 
 const AnimatedPath = Animated.createAnimatedComponent(Path)
 
-const TRACK = '#2A323D' // iron-hairline — visible on the surface, clearly "empty"
+const TRACK = '#2A2A31' // iron-hairline — visible on the surface, clearly "empty"
 
 export default function JourneyCard({ card, reduceMotion }) {
   if (!card) return null
@@ -38,9 +38,10 @@ export default function JourneyCard({ card, reduceMotion }) {
       className="rounded-[24px] p-5 overflow-hidden"
       style={
         completed
-          ? // Celebration: pearl glow band (same treatment as the tier hero).
-            { backgroundColor: pearlAlpha(0.1), borderWidth: 1, borderColor: pearlAlpha(0.35) }
-          : { backgroundColor: '#181D24', borderWidth: 1, borderColor: TRACK }
+          ? // Celebration: volt glow band (P4b — completion is EARNED; same
+            // treatment as the tier hero's lit accent).
+            { backgroundColor: voltAlpha(0.1), borderWidth: 1, borderColor: voltAlpha(0.35) }
+          : { backgroundColor: '#1C1C21', borderWidth: 1, borderColor: TRACK }
       }
     >
       <View className="flex-row items-center" style={{ gap: 18 }}>
@@ -51,7 +52,7 @@ export default function JourneyCard({ card, reduceMotion }) {
         <View className="flex-1 min-w-0">
           <Text
             className="font-mono text-[10px] uppercase"
-            style={{ color: PEARL, letterSpacing: 2 }}
+            style={{ color: completed ? VOLT : PEARL, letterSpacing: 2 }}
           >
             {completed ? 'Complete' : card.weekLabel}
           </Text>
@@ -70,8 +71,8 @@ export default function JourneyCard({ card, reduceMotion }) {
 
 // ── Segmented progress ring ──────────────────────────────────────
 //
-// One arc segment per target class (9 by default). Filled segments are pearl;
-// unfilled stay on the neutral track. On mount the earned segments light up
+// One arc segment per target class (9 by default). Filled segments are pearl
+// (volt once the journey completes — P4b); unfilled stay on the neutral track. On mount the earned segments light up
 // one after another (a single sweep value drives staggered opacities — snaps
 // straight to done under Reduce Motion, matching lib/motion.js semantics).
 function SegmentedRing({ ticks, completed, reduceMotion }) {
@@ -113,13 +114,14 @@ function SegmentedRing({ ticks, completed, reduceMotion }) {
             fill="none"
           />
         ))}
-        {/* Earned segments in pearl, staggered in on mount */}
+        {/* Earned segments — pearl while accruing, volt once complete (P4b) */}
         {paths.map((p, i) =>
           p.filled ? (
             <AnimatedPath
               key={`f${i}`}
               d={p.d}
-              stroke={PEARL}
+              // P4b: volt once the journey is complete; pearl while accruing.
+              stroke={completed ? VOLT : PEARL}
               strokeWidth={STROKE}
               strokeLinecap="round"
               fill="none"
@@ -130,7 +132,7 @@ function SegmentedRing({ ticks, completed, reduceMotion }) {
       </Svg>
       <View style={{ position: 'absolute', alignItems: 'center', justifyContent: 'center' }}>
         {completed ? (
-          <Ionicons name="trophy" size={24} color={PEARL} />
+          <Ionicons name="trophy" size={24} color={VOLT} />
         ) : (
           <Text className="text-base font-display-black text-chalk">
             {filled}/{segments}
@@ -145,7 +147,7 @@ function SegmentedRing({ ticks, completed, reduceMotion }) {
 //
 // One slim segment per week of the window (6 by default). Weeks already
 // reached are lit (neutral chalk — time elapsed, distinct from the pearl
-// "classes earned" ring); the whole bar goes pearl on completion.
+// "classes earned" ring); the whole bar goes volt on completion (P4b).
 function WeekTickBar({ week, totalWeeks, completed }) {
   const weeks = Number.isFinite(totalWeeks) && totalWeeks > 0 ? Math.floor(totalWeeks) : 6
   const current = Number.isFinite(week) ? week : 0
@@ -159,10 +161,10 @@ function WeekTickBar({ week, totalWeeks, completed }) {
             className="h-1.5 flex-1 rounded-full"
             style={{
               backgroundColor: completed
-                ? PEARL
+                ? VOLT
                 : reached
-                  ? 'rgba(244,241,234,0.75)'
-                  : '#202730', // iron-raised
+                  ? 'rgba(241,238,231,0.75)'
+                  : '#24242A', // iron-raised
             }}
           />
         )
@@ -184,8 +186,9 @@ function polar(cx, cy, r, deg) {
   return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) }
 }
 
-// '#rrggbb'-safe pearl alpha for the celebration tint (RN colour parser).
-function pearlAlpha(alpha) {
+// '#rrggbb'-safe volt alpha for the completion celebration tint (RN colour
+// parser). P4b: completion is EARNED, so the tint is volt.
+function voltAlpha(alpha) {
   const a = Math.round(Math.max(0, Math.min(1, alpha)) * 255)
-  return `${PEARL}${a.toString(16).padStart(2, '0')}`
+  return `${VOLT}${a.toString(16).padStart(2, '0')}`
 }

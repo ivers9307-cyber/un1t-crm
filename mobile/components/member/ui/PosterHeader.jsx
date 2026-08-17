@@ -13,7 +13,7 @@ export default function PosterHeader({ eyebrow, title, accent, tracePoints = nul
       {tracePoints ? (
         <View pointerEvents="none" style={{ position: 'absolute', top: 8, left: 0, right: 0, opacity: 0.08 }}>
           <Svg viewBox="0 0 320 110" width="100%" height={96}>
-            <Polyline points={tracePoints} fill="none" stroke="#F4F1EA" strokeWidth={2} />
+            <Polyline points={tracePoints} fill="none" stroke="#F1EEE7" strokeWidth={2} />
           </Svg>
         </View>
       ) : null}

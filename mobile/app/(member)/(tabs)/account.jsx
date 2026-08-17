@@ -14,7 +14,7 @@ import { useAuth } from '../../../lib/member/contact-context'
 import Card from '../../../components/member/ui/Card'
 import Button from '../../../components/member/ui/Button'
 import ProfileCompletionPrompt from '../../../components/member/ProfileCompletionPrompt'
-import { PEARL } from 'shared/accent'
+import { PEARL } from '../../../lib/member/brand'
 
 const LINKS = [
   { href: '/account/devices',       label: 'Devices',       icon: 'pulse-outline' },
@@ -75,9 +75,9 @@ export default function Account() {
                 i < LINKS.length - 1 ? ' border-b border-iron-hairline' : ''
               }`}
             >
-              <Ionicons name={icon} size={18} color="#A9B0BA" />
+              <Ionicons name={icon} size={18} color="#B3B2AC" />
               <Text className="flex-1 text-sm font-body-medium text-chalk">{label}</Text>
-              <Ionicons name="chevron-forward-outline" size={18} color="#66707E" />
+              <Ionicons name="chevron-forward-outline" size={18} color="#727170" />
             </Pressable>
           ))}
         </Card>

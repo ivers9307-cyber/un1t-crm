@@ -16,7 +16,7 @@ import { supabase } from '../../../lib/member/supabase'
 import { useAuth } from '../../../lib/member/contact-context'
 import Card from '../../../components/member/ui/Card'
 import { memberAchievementStats, ruleProgress } from 'shared/achievement-progress'
-import { PEARL } from 'shared/accent'
+import { PEARL } from '../../../lib/member/brand'
 
 // ── Category metadata (mirrors web's CATEGORY_ORDER / CATEGORY_LABELS) ──────
 
@@ -219,7 +219,7 @@ export default function Achievements() {
       <ScrollView
         contentContainerClassName="p-5 pb-24"
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#F4F1EA" />
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#F1EEE7" />
         }
       >
 
@@ -228,7 +228,7 @@ export default function Achievements() {
           onPress={() => router.back()}
           className="flex-row items-center gap-1 mb-4 self-start active:opacity-60"
         >
-          <Ionicons name="chevron-back-outline" size={18} color="#A9B0BA" />
+          <Ionicons name="chevron-back-outline" size={18} color="#B3B2AC" />
           <Text className="text-sm font-body text-chalk-2">Back</Text>
         </Pressable>
 
@@ -250,14 +250,14 @@ export default function Achievements() {
 
         {authLoading || loading ? (
           <View className="mt-12 items-center">
-            <ActivityIndicator color="#F4F1EA" size="large" />
+            <ActivityIndicator color="#F1EEE7" size="large" />
           </View>
         ) : !contact?.id ? (
           /* Unlinked-account state — contact hasn't been linked yet (mirrors
              account/devices.jsx). Never an endless spinner. */
           <Card className="mt-6">
             <View className="flex-row items-center gap-2 mb-2">
-              <ActivityIndicator size="small" color="#A9B0BA" />
+              <ActivityIndicator size="small" color="#B3B2AC" />
               <Text className="text-sm font-body-semibold text-chalk">Finishing setting up your account…</Text>
             </View>
             <Text className="text-sm text-chalk-2">
@@ -300,7 +300,7 @@ export default function Achievements() {
             {/* Empty state */}
             {list.length === 0 && (
               <Card className="mt-4 items-center py-8">
-                <Ionicons name="trophy-outline" size={32} color="#66707E" />
+                <Ionicons name="trophy-outline" size={32} color="#727170" />
                 <Text className="mt-3 text-sm font-body text-chalk-2 text-center">
                   {tab === 'unlocked'
                     ? 'No achievements yet — get to your first class!'
@@ -359,7 +359,7 @@ function AchievementCard({ rule, stats }) {
           <Ionicons
             name={iconName}
             size={16}
-            color={isUnlocked ? '#F4F1EA' : '#66707E'}
+            color={isUnlocked ? '#F1EEE7' : '#727170'}
           />
         </View>
         <View className="flex-1 min-w-0">

@@ -16,7 +16,7 @@ export default function WeekRing({ slots, filled = [], size = 108, stroke = 9, c
           <Path
             key={i}
             d={arcPath(c, c, r, s.startDeg, s.endDeg)}
-            stroke={filled[i] || '#2A323D'}
+            stroke={filled[i] || '#2A2A31'}
             strokeWidth={stroke}
             // butt caps, not round: round caps extend strokeWidth/2 past each
             // endpoint, which swallows the 5° gaps and merges the segments

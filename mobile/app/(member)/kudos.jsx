@@ -20,7 +20,7 @@ import { supabase } from '../../lib/member/supabase'
 import { api } from '../../lib/member/api'
 import Card from '../../components/member/ui/Card'
 import ErrorRetry from '../../components/member/ErrorRetry'
-import { PEARL } from 'shared/accent'
+import { PEARL } from '../../lib/member/brand'
 import { toKudosView, kudosRelativeTime, isUnseen } from 'shared/coach-kudos'
 
 const SELECT =
@@ -90,7 +90,7 @@ export default function Kudos() {
   if (loading) {
     return (
       <SafeAreaView className="flex-1 bg-iron-bg items-center justify-center">
-        <ActivityIndicator color="#F4F1EA" size="large" />
+        <ActivityIndicator color="#F1EEE7" size="large" />
       </SafeAreaView>
     )
   }
@@ -117,7 +117,7 @@ export default function Kudos() {
         data={rows}
         keyExtractor={(item) => item.id}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#F4F1EA" />
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#F1EEE7" />
         }
         ListHeaderComponent={
           <Text className="mt-1 mb-5 text-sm font-body text-chalk-2">
@@ -126,7 +126,7 @@ export default function Kudos() {
         }
         ListEmptyComponent={
           <Card className="items-center py-8">
-            <Ionicons name="chatbubble-ellipses-outline" size={32} color="#66707E" />
+            <Ionicons name="chatbubble-ellipses-outline" size={32} color="#727170" />
             <Text className="mt-3 text-base font-body-semibold text-chalk">No kudos yet</Text>
             <Text className="mt-1 text-sm font-body text-chalk-2 text-center">
               Your coaches' shout-outs will show up here.
@@ -150,7 +150,7 @@ function Header({ onBack }) {
         accessibilityRole="button"
         accessibilityLabel="Back"
       >
-        <Ionicons name="chevron-back" size={24} color="#F4F1EA" />
+        <Ionicons name="chevron-back" size={24} color="#F1EEE7" />
       </Pressable>
       <Text className="text-2xl font-display-bold text-chalk">Coach kudos</Text>
     </View>

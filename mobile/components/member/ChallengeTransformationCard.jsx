@@ -20,11 +20,11 @@ import { useFocusEffect, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../lib/member/supabase'
 import Card from './ui/Card'
-import { PEARL } from 'shared/accent'
+import { PEARL, VOLT } from '../../lib/member/brand'
 import { inbodyBookend } from 'shared/inbody'
 import { windowIso } from 'shared/challenges'
 
-const TEXT_2 = '#A9B0BA' // muted (chalk-2)
+const TEXT_2 = '#B3B2AC' // muted (chalk-2)
 
 // Challenge-window ms bounds from the 'YYYY-MM-DD' starts_on/ends_on, via the
 // shared Dublin-day windowIso (same boundaries as the standings RPC). toMs is
@@ -159,7 +159,7 @@ function MetricRow({ metric }) {
       <Text className="text-sm text-chalk-2">{label}</Text>
       <Text
         className="font-mono text-sm"
-        style={{ color: hasDelta && improved === true ? PEARL : TEXT_2 }}
+        style={{ color: hasDelta && improved === true ? VOLT : TEXT_2 }}
       >
         {deltaText}
       </Text>
@@ -171,11 +171,12 @@ function DeltaBadge({ text, improved }) {
   return (
     <View
       className="rounded-full px-2 py-0.5"
-      style={{ backgroundColor: improved === true ? PEARL + '1F' : '#202730' }}
+      // P4b: an improved bookend is EARNED — the badge lights volt.
+      style={{ backgroundColor: improved === true ? VOLT + '1F' : '#24242A' }}
     >
       <Text
         className="font-mono text-xs"
-        style={{ color: improved === true ? PEARL : TEXT_2 }}
+        style={{ color: improved === true ? VOLT : TEXT_2 }}
       >
         {text}
       </Text>

@@ -150,7 +150,7 @@ export default function Goals() {
       <ScrollView
         contentContainerClassName="p-5 pb-24"
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#F4F1EA" />
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#F1EEE7" />
         }
       >
 
@@ -159,7 +159,7 @@ export default function Goals() {
           onPress={() => router.back()}
           className="flex-row items-center gap-1 mb-4 self-start active:opacity-60"
         >
-          <Ionicons name="chevron-back-outline" size={18} color="#A9B0BA" />
+          <Ionicons name="chevron-back-outline" size={18} color="#B3B2AC" />
           <Text className="text-sm font-body text-chalk-2">Back</Text>
         </Pressable>
 
@@ -178,7 +178,7 @@ export default function Goals() {
 
         {loading ? (
           <View className="mt-12 items-center">
-            <ActivityIndicator color="#F4F1EA" size="large" />
+            <ActivityIndicator color="#F1EEE7" size="large" />
           </View>
         ) : error ? (
           <Card className="mt-6">
@@ -191,7 +191,7 @@ export default function Goals() {
             {/* Empty state with CTA */}
             {goals.length === 0 && !adding && (
               <View className="rounded-[20px] border border-dashed border-iron-hairline p-6 items-center">
-                <Ionicons name="flag-outline" size={20} color="#66707E" />
+                <Ionicons name="flag-outline" size={20} color="#727170" />
                 <Text className="mt-2 text-sm font-body text-chalk-2 text-center">
                   No goals yet. Set one to track week-over-week progress.
                 </Text>
@@ -199,7 +199,7 @@ export default function Goals() {
                   onPress={() => setAdding(true)}
                   className="mt-4 flex-row items-center gap-1 rounded-xl bg-chalk px-4 py-2.5 active:opacity-80"
                 >
-                  <Ionicons name="add-outline" size={14} color="#0F1216" />
+                  <Ionicons name="add-outline" size={14} color="#131316" />
                   <Text className="text-sm font-body-semibold text-iron-bg">Set a goal</Text>
                 </Pressable>
               </View>
@@ -222,7 +222,7 @@ export default function Goals() {
                 onPress={() => setAdding(true)}
                 className="flex-row items-center gap-1 self-start rounded-xl border border-iron-hairline px-3 py-2 active:bg-iron-raised"
               >
-                <Ionicons name="add-outline" size={14} color="#F4F1EA" />
+                <Ionicons name="add-outline" size={14} color="#F1EEE7" />
                 <Text className="text-sm font-body-semibold text-chalk">Add another</Text>
               </Pressable>
             )}
@@ -317,7 +317,7 @@ function GoalCard({ goal, sessions, onUpdate, onArchive }) {
             onChangeText={setTarget}
             keyboardType="number-pad"
             className="w-24 rounded-xl border border-iron-hairline bg-iron-raised px-2 py-1.5 text-sm font-body text-chalk"
-            placeholderTextColor="#66707E"
+            placeholderTextColor="#727170"
           />
           {def?.unit ? (
             <Text className="font-mono text-[10px] uppercase text-chalk-3" style={{ letterSpacing: 1 }}>{def.unit}</Text>
@@ -332,11 +332,11 @@ function GoalCard({ goal, sessions, onUpdate, onArchive }) {
               }}
               className="flex-row items-center gap-1 rounded-xl bg-chalk px-3 py-1.5 active:opacity-80"
             >
-              <Ionicons name="checkmark-outline" size={12} color="#0F1216" />
+              <Ionicons name="checkmark-outline" size={12} color="#131316" />
               <Text className="text-xs font-body-semibold text-iron-bg">Save</Text>
             </Pressable>
             <Pressable onPress={() => setEditing(false)}>
-              <Ionicons name="close-outline" size={16} color="#A9B0BA" />
+              <Ionicons name="close-outline" size={16} color="#B3B2AC" />
             </Pressable>
           </View>
         </View>
@@ -403,7 +403,7 @@ function AddGoalForm({ availableKinds, onCancel, onSubmit }) {
             onChangeText={setTarget}
             keyboardType="number-pad"
             className="w-24 rounded-xl border border-iron-hairline bg-iron-surface px-3 py-2 text-sm font-body text-chalk"
-            placeholderTextColor="#66707E"
+            placeholderTextColor="#727170"
           />
           {def?.unit ? (
             <Text className="font-mono text-[10px] uppercase text-chalk-3" style={{ letterSpacing: 1 }}>{def.unit}</Text>
@@ -443,7 +443,7 @@ function AddGoalForm({ availableKinds, onCancel, onSubmit }) {
           onPress={handleSubmit}
           className="flex-row items-center gap-1 rounded-xl bg-chalk px-4 py-2.5 active:opacity-80"
         >
-          <Ionicons name="checkmark-outline" size={14} color="#0F1216" />
+          <Ionicons name="checkmark-outline" size={14} color="#131316" />
           <Text className="text-sm font-body-semibold text-iron-bg">Set goal</Text>
         </Pressable>
         <Pressable onPress={onCancel}>

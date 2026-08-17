@@ -170,7 +170,7 @@ export default function Integrations() {
           onPress={() => router.back()}
           className="flex-row items-center gap-1 mb-4 self-start active:opacity-60"
         >
-          <Ionicons name="chevron-back-outline" size={18} color="#A9B0BA" />
+          <Ionicons name="chevron-back-outline" size={18} color="#B3B2AC" />
           <Text className="text-sm text-chalk-2">Back</Text>
         </Pressable>
 
@@ -200,12 +200,12 @@ export default function Integrations() {
             <Text className="text-base font-display text-chalk">Apple Health</Text>
             <Text className="mt-0.5 text-xs text-chalk-2">Sync your Apple Watch workouts</Text>
           </View>
-          <Ionicons name="chevron-forward-outline" size={18} color="#A9B0BA" />
+          <Ionicons name="chevron-forward-outline" size={18} color="#B3B2AC" />
         </Pressable>
 
         {loading ? (
           <View className="mt-12 items-center">
-            <ActivityIndicator color="#F4F1EA" size="large" />
+            <ActivityIndicator color="#F1EEE7" size="large" />
           </View>
         ) : (
           <View className="mt-6 gap-3">
@@ -236,7 +236,7 @@ export default function Integrations() {
                 >
                   <View className="flex-row items-start gap-3">
                     <View className="h-9 w-9 rounded-full bg-iron-raised items-center justify-center shrink-0">
-                      <Ionicons name={meta.icon} size={18} color="#A9B0BA" />
+                      <Ionicons name={meta.icon} size={18} color="#B3B2AC" />
                     </View>
                     <View className="flex-1 min-w-0">
                       <Text className="text-base font-display text-chalk">
@@ -269,7 +269,7 @@ export default function Integrations() {
                         onPress={() => connectProvider(p.provider)}
                         className="flex-row items-center gap-1 rounded-xl bg-chalk px-3 py-2 shrink-0 active:opacity-80"
                       >
-                        <Ionicons name="open-outline" size={14} color="#0F1216" />
+                        <Ionicons name="open-outline" size={14} color="#131316" />
                         <Text className="text-sm font-body-semibold text-iron-bg">Connect</Text>
                       </Pressable>
                     )}
@@ -288,8 +288,8 @@ export default function Integrations() {
                           value={row.auto_export_enabled}
                           disabled={isBusy}
                           onValueChange={(v) => setAutoExport(row, v)}
-                          trackColor={{ false: '#2A323D', true: '#F4F1EA' }}
-                          thumbColor={row.auto_export_enabled ? '#0F1216' : '#A9B0BA'}
+                          trackColor={{ false: '#2A2A31', true: '#F1EEE7' }}
+                          thumbColor={row.auto_export_enabled ? '#131316' : '#B3B2AC'}
                         />
                         <Text className="text-sm text-chalk">Auto-export each session</Text>
                       </View>

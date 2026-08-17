@@ -22,7 +22,7 @@ import HrChart from '../../../components/member/HrChart'
 import TickRule from '../../../components/member/ui/TickRule'
 import { Telemetry } from '../../../components/member/ui/Type'
 import Glow from '../../../components/member/ui/Glow'
-import { hardestZone } from 'shared/accent'
+import { hardestZone, PEARL, VOLT } from '../../../lib/member/brand'
 import { zoneColorDark } from 'shared/zone-colors'
 import { sourceLabel, durationMinutes, sessionDate, workoutTypeLabel, formatPace, formatDistanceKm } from 'shared/format'
 
@@ -81,7 +81,7 @@ function VsRecent({ t }) {
 }
 
 // ── Stat card ─────────────────────────────────────────────────────
-function Stat({ label, value, unit, accent = '#66707E' }) {
+function Stat({ label, value, unit, accent = '#727170' }) {
   // Two-tier numeral rule (spec §2.3): these are TELEMETRY numbers (bpm,
   // minutes, kcal — body-sourced), so they render in mono with the
   // accent-coloured unit tag, never the earned display face.
@@ -251,7 +251,7 @@ export default function SessionDetail() {
   if (loading) {
     return (
       <SafeAreaView className="flex-1 bg-iron-bg items-center justify-center" edges={['top', 'left', 'right']}>
-        <ActivityIndicator color="#F4F1EA" size="large" />
+        <ActivityIndicator color="#F1EEE7" size="large" />
       </SafeAreaView>
     )
   }
@@ -302,13 +302,15 @@ export default function SessionDetail() {
   const breakdown = summary.zones || []   // pre-built [{ id, name, color, seconds, percent }]
   const comparisons = report.comparisons || {}
   const burn = summary.burn === true
-  // Afterglow: this screen's accent is SESSION-scoped (the share-card rule) —
-  // the hardest zone sustained >=3 min in THIS session. summary.zones is the
-  // pre-built breakdown [{ id, seconds, ... }]; rebuild the {id: seconds}
-  // shape the shared rule expects. Pearl when nothing qualifies.
-  const sessionAccent = zoneColorDark(hardestZone(
+  // This screen's accent is SESSION-scoped (the share-card rule) — earned
+  // by the hardest zone sustained >=3 min in THIS session, lit volt (P4b:
+  // zone-hued accents collapse to volt; the zone breakdown bars below keep
+  // their zone DATA colours). summary.zones is the pre-built breakdown
+  // [{ id, seconds, ... }]; rebuild the {id: seconds} shape the shared rule
+  // expects. Pearl when nothing qualifies.
+  const sessionAccent = hardestZone(
     Object.fromEntries((summary.zones || []).map((z) => [z.id, z.seconds])),
-  )) || '#D9D5CC'
+  ) != null ? VOLT : PEARL
   const z4plusMinutes = Number.isFinite(summary.z4plus_minutes) ? summary.z4plus_minutes : null
 
   // Show share + the recap affordance only if the session has ended (ended_at set)
@@ -354,7 +356,7 @@ export default function SessionDetail() {
               className="mt-4 self-start flex-row items-center rounded-full border border-iron-hairline bg-iron-surface px-3 py-1.5"
               style={{ gap: 6 }}
             >
-              <Ionicons name="sparkles" size={14} color="#F4F1EA" />
+              <Ionicons name="sparkles" size={14} color="#F1EEE7" />
               <Text className="text-sm font-body-semibold text-chalk">View recap</Text>
             </Pressable>
           )}
@@ -366,7 +368,7 @@ export default function SessionDetail() {
         {report.highlight && (
           <Card className="mt-4">
             <View className="flex-row items-center" style={{ gap: 8 }}>
-              <Ionicons name="star" size={16} color="#F4F1EA" />
+              <Ionicons name="star" size={16} color="#F1EEE7" />
               <Text className="flex-1 text-sm font-body-medium text-chalk">{report.highlight.message}</Text>
             </View>
           </Card>
@@ -402,7 +404,7 @@ export default function SessionDetail() {
         {achievements.length > 0 && (
           <Card className="mt-6">
             <View className="flex-row items-center mb-2.5" style={{ gap: 6 }}>
-              <Ionicons name="sparkles" size={14} color="#F4F1EA" />
+              <Ionicons name="sparkles" size={14} color="#F1EEE7" />
               <Text className="text-sm font-body-semibold text-chalk">Unlocked in this session</Text>
             </View>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -4 }}>
@@ -414,7 +416,7 @@ export default function SessionDetail() {
                     style={{ gap: 8 }}
                   >
                     <View className="w-7 h-7 items-center justify-center rounded-full bg-iron-surface">
-                      <Ionicons name="trophy-outline" size={14} color="#F4F1EA" />
+                      <Ionicons name="trophy-outline" size={14} color="#F1EEE7" />
                     </View>
                     <Text className="text-sm font-body-semibold text-chalk">{u.rule.name}</Text>
                   </View>
@@ -470,7 +472,7 @@ export default function SessionDetail() {
             style={{ backgroundColor: sessionAccent, opacity: sharing ? 0.6 : 1 }}
           >
             {sharing
-              ? <ActivityIndicator color="#0F1216" />
+              ? <ActivityIndicator color="#131316" />
               : <Text className="font-display text-[15px] text-iron-bg">Share this session</Text>}
           </Pressable>
         )}

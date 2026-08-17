@@ -82,7 +82,7 @@ export function SessionsScreen() {
   if (loading) {
     return (
       <SafeAreaView className="flex-1 bg-iron-bg items-center justify-center" edges={['left', 'right']}>
-        <ActivityIndicator color="#F4F1EA" size="large" />
+        <ActivityIndicator color="#F1EEE7" size="large" />
       </SafeAreaView>
     )
   }
@@ -116,7 +116,7 @@ export function SessionsScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            tintColor="#F4F1EA"
+            tintColor="#F1EEE7"
           />
         }
         ListHeaderComponent={
@@ -129,7 +129,7 @@ export function SessionsScreen() {
         }
         ListEmptyComponent={
           <Card className="items-center py-8">
-            <Ionicons name="heart-outline" size={32} color="#66707E" />
+            <Ionicons name="heart-outline" size={32} color="#727170" />
             <Text className="mt-3 text-base font-body-semibold text-chalk">No sessions yet</Text>
             <Text className="mt-1 text-sm text-chalk-2 text-center">
               Connect a device, or pair a chest strap at the studio. Every

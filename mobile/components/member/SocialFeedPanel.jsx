@@ -8,7 +8,7 @@ import { api } from '../../lib/member/api'
 import Card from './ui/Card'
 import ErrorRetry from './ErrorRetry'
 import { REACTIONS } from 'shared/social'
-import { PEARL } from 'shared/accent'
+import { PEARL } from '../../lib/member/brand'
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
@@ -36,14 +36,14 @@ function Avatar({ name, size = 36 }) {
       style={{
         width: size, height: size,
         borderRadius: size / 2,
-        backgroundColor: '#202730',
+        backgroundColor: '#24242A',
         borderWidth: 1,
-        borderColor: '#2A323D',
+        borderColor: '#2A2A31',
         alignItems: 'center',
         justifyContent: 'center',
       }}
     >
-      <Text style={{ color: '#F4F1EA', fontSize: 12, fontFamily: 'Figtree_600SemiBold' }}>{initials}</Text>
+      <Text style={{ color: '#F1EEE7', fontSize: 12, fontFamily: 'Figtree_600SemiBold' }}>{initials}</Text>
     </View>
   )
 }
@@ -96,14 +96,14 @@ function ReactionRow({ reactions, entityType, entityId, onOptimisticUpdate }) {
               paddingVertical: 4,
               borderRadius: 999,
               borderWidth: 1,
-              borderColor: isMine ? PEARL : '#2A323D',
-              backgroundColor: isMine ? 'rgba(217,213,204,0.15)' : 'transparent',
+              borderColor: isMine ? PEARL : '#2A2A31',
+              backgroundColor: isMine ? 'rgba(214,210,201,0.15)' : 'transparent',
               opacity: busy ? 0.6 : 1,
             }}
           >
             <Text style={{ fontSize: 13 }}>{r.emoji}</Text>
             {count > 0 && (
-              <Text style={{ fontSize: 11, fontFamily: 'Figtree_600SemiBold', color: isMine ? PEARL : '#A9B0BA' }}>
+              <Text style={{ fontSize: 11, fontFamily: 'Figtree_600SemiBold', color: isMine ? PEARL : '#B3B2AC' }}>
                 {count}
               </Text>
             )}
@@ -129,13 +129,13 @@ function SessionCard({ item, onOptimisticUpdate }) {
         <Avatar name={item.who} />
         <View style={{ flex: 1, minWidth: 0 }}>
           <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-            <Text style={{ fontSize: 14, fontFamily: 'Figtree_600SemiBold', color: '#F4F1EA' }}>{item.who}</Text>
-            <Text style={{ fontSize: 12, fontFamily: 'IBMPlexMono_500Medium', color: '#66707E' }}>{relativeTime(item.ts)}</Text>
+            <Text style={{ fontSize: 14, fontFamily: 'Figtree_600SemiBold', color: '#F1EEE7' }}>{item.who}</Text>
+            <Text style={{ fontSize: 12, fontFamily: 'IBMPlexMono_500Medium', color: '#727170' }}>{relativeTime(item.ts)}</Text>
           </View>
-          <Text style={{ fontSize: 12, fontFamily: 'Figtree_400Regular', color: '#A9B0BA', marginTop: 2 }} numberOfLines={1}>
+          <Text style={{ fontSize: 12, fontFamily: 'Figtree_400Regular', color: '#B3B2AC', marginTop: 2 }} numberOfLines={1}>
             {item.className}
           </Text>
-          <Text style={{ fontSize: 13, fontFamily: 'IBMPlexMono_500Medium', color: '#F4F1EA', marginTop: 4 }}>
+          <Text style={{ fontSize: 13, fontFamily: 'IBMPlexMono_500Medium', color: '#F1EEE7', marginTop: 4 }}>
             {statsLine}
           </Text>
           <ReactionRow
@@ -157,15 +157,15 @@ function AchievementCard({ item, onOptimisticUpdate }) {
         <Avatar name={item.who} />
         <View style={{ flex: 1, minWidth: 0 }}>
           <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-            <Text style={{ fontSize: 14, fontFamily: 'Figtree_600SemiBold', color: '#F4F1EA' }}>{item.who}</Text>
-            <Text style={{ fontSize: 12, fontFamily: 'IBMPlexMono_500Medium', color: '#66707E' }}>{relativeTime(item.ts)}</Text>
+            <Text style={{ fontSize: 14, fontFamily: 'Figtree_600SemiBold', color: '#F1EEE7' }}>{item.who}</Text>
+            <Text style={{ fontSize: 12, fontFamily: 'IBMPlexMono_500Medium', color: '#727170' }}>{relativeTime(item.ts)}</Text>
           </View>
-          <Text style={{ fontSize: 12, fontFamily: 'Figtree_400Regular', color: '#A9B0BA', marginTop: 2 }}>
+          <Text style={{ fontSize: 12, fontFamily: 'Figtree_400Regular', color: '#B3B2AC', marginTop: 2 }}>
             Unlocked achievement
           </Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
             <Ionicons name="trophy-outline" size={16} color={PEARL} />
-            <Text style={{ fontSize: 13, fontFamily: 'Figtree_600SemiBold', color: '#F4F1EA' }}>{item.name}</Text>
+            <Text style={{ fontSize: 13, fontFamily: 'Figtree_600SemiBold', color: '#F1EEE7' }}>{item.name}</Text>
           </View>
           <ReactionRow
             reactions={item.reactions}
@@ -186,12 +186,12 @@ function TierUpCard({ item }) {
         <Avatar name={item.who} />
         <View style={{ flex: 1, minWidth: 0 }}>
           <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-            <Text style={{ fontSize: 14, fontFamily: 'Figtree_600SemiBold', color: '#F4F1EA' }}>{item.who}</Text>
-            <Text style={{ fontSize: 12, fontFamily: 'IBMPlexMono_500Medium', color: '#66707E' }}>{relativeTime(item.ts)}</Text>
+            <Text style={{ fontSize: 14, fontFamily: 'Figtree_600SemiBold', color: '#F1EEE7' }}>{item.who}</Text>
+            <Text style={{ fontSize: 12, fontFamily: 'IBMPlexMono_500Medium', color: '#727170' }}>{relativeTime(item.ts)}</Text>
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
             <Ionicons name="medal-outline" size={16} color={PEARL} />
-            <Text style={{ fontSize: 13, fontFamily: 'Figtree_400Regular', color: '#F4F1EA' }}>
+            <Text style={{ fontSize: 13, fontFamily: 'Figtree_400Regular', color: '#F1EEE7' }}>
               reached <Text style={{ fontFamily: 'ArchivoExpanded-SemiBold' }}>{item.tier}</Text>
             </Text>
           </View>
@@ -292,7 +292,7 @@ export default function SocialFeedPanel({ header = null, contentPadding = false 
   if (loading) {
     return wrapState(
       <View style={{ alignItems: 'center', paddingVertical: 64 }}>
-        <ActivityIndicator color="#F4F1EA" />
+        <ActivityIndicator color="#F1EEE7" />
       </View>
     )
   }
@@ -305,9 +305,9 @@ export default function SocialFeedPanel({ header = null, contentPadding = false 
     return wrapState(
       <Card>
         <View style={{ alignItems: 'center', paddingVertical: 32, gap: 8 }}>
-          <Ionicons name="people-outline" size={28} color="#66707E" />
-          <Text style={{ fontSize: 14, fontFamily: 'Figtree_600SemiBold', color: '#F4F1EA' }}>No activity yet</Text>
-          <Text style={{ fontSize: 12, fontFamily: 'Figtree_400Regular', color: '#A9B0BA', textAlign: 'center', maxWidth: 240 }}>
+          <Ionicons name="people-outline" size={28} color="#727170" />
+          <Text style={{ fontSize: 14, fontFamily: 'Figtree_600SemiBold', color: '#F1EEE7' }}>No activity yet</Text>
+          <Text style={{ fontSize: 12, fontFamily: 'Figtree_400Regular', color: '#B3B2AC', textAlign: 'center', maxWidth: 240 }}>
             Add friends to see their workouts here.
           </Text>
         </View>
@@ -354,15 +354,15 @@ export default function SocialFeedPanel({ header = null, contentPadding = false 
           paddingVertical: 12,
           borderRadius: 12,
           borderWidth: 1,
-          borderColor: '#2A323D',
-          backgroundColor: '#181D24',
+          borderColor: '#2A2A31',
+          backgroundColor: '#1C1C21',
           alignItems: 'center',
           opacity: loadingMore ? 0.5 : 1,
         }}
       >
         {loadingMore
-          ? <ActivityIndicator size="small" color="#A9B0BA" />
-          : <Text style={{ fontSize: 14, fontFamily: 'Figtree_500Medium', color: '#A9B0BA' }}>Load more</Text>
+          ? <ActivityIndicator size="small" color="#B3B2AC" />
+          : <Text style={{ fontSize: 14, fontFamily: 'Figtree_500Medium', color: '#B3B2AC' }}>Load more</Text>
         }
       </Pressable>
     )

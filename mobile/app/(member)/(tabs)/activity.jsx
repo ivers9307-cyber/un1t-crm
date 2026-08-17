@@ -16,7 +16,7 @@ import { View, Text, Pressable } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { SessionsScreen } from './sessions'
 import { ProgressScreen } from './progress'
-import { PEARL } from 'shared/accent'
+import { PEARL } from '../../../lib/member/brand'
 
 const SEGMENTS = ['History', 'Trends', 'Records']
 
@@ -30,7 +30,7 @@ export default function Activity() {
       <View className="px-5 pt-4 pb-1">
         <View
           className="flex-row rounded-xl bg-iron-surface p-1 gap-1"
-          style={{ borderWidth: 1, borderColor: '#2A323D' }}
+          style={{ borderWidth: 1, borderColor: '#2A2A31' }}
         >
           {SEGMENTS.map((s) => {
             const active = seg === s
@@ -48,7 +48,7 @@ export default function Activity() {
                   backgroundColor: active ? PEARL : 'transparent',
                 }}
               >
-                <Text className="text-sm font-body-semibold" style={{ color: active ? '#0F1216' : '#A9B0BA' }}>
+                <Text className="text-sm font-body-semibold" style={{ color: active ? '#131316' : '#B3B2AC' }}>
                   {s}
                 </Text>
               </Pressable>

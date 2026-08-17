@@ -34,7 +34,7 @@ import { isBurn } from 'shared/heart-rate'
 import { dublinDateKey, dublinWeekStartMs, DUBLIN_DAY_MS } from 'shared/dublin-time'
 import ProfileCompletionPrompt from '../../../components/member/ProfileCompletionPrompt'
 import AppleHealthResyncCard from '../../../components/member/AppleHealthResyncCard'
-import { accentFromSessions, hardestZone, PEARL } from 'shared/accent'
+import { accentFromSessions, hardestZone, PEARL } from '../../../lib/member/brand'
 import { zoneColorDark } from 'shared/zone-colors'
 import PosterHeader from '../../../components/member/ui/PosterHeader'
 import Pips from '../../../components/member/ui/Pips'
@@ -323,9 +323,10 @@ export default function Home() {
   const latestSession = sessions[0] || null
   const showConnectDevice = !connectDismissed && sessions.length === 0
 
-  // Afterglow: the chrome accent is EARNED from the trailing week's training
-  // (shared/accent.js — hardest zone sustained >=3 min, clamped Z3-Z5; quiet
-  // weeks rest on Pearl). Drives the glow, eyebrow state, ring and chips.
+  // The chrome accent is EARNED from the trailing week's training (shared
+  // rule via lib/member/brand — hardest zone sustained >=3 min, clamped
+  // Z3-Z5). P4b: lit = volt, quiet weeks rest on Pearl. Drives the glow,
+  // eyebrow state, ring and chips.
   const earned = useMemo(() => accentFromSessions(accentSessions, Date.now()), [accentSessions])
 
   // This week's sessions as pips, each in that session's hardest-zone colour.
@@ -352,7 +353,7 @@ export default function Home() {
   if (loading) {
     return (
       <SafeAreaView className="flex-1 bg-iron-bg items-center justify-center" edges={['left', 'right']}>
-        <ActivityIndicator color="#F4F1EA" size="large" />
+        <ActivityIndicator color="#F1EEE7" size="large" />
       </SafeAreaView>
     )
   }
@@ -673,7 +674,7 @@ function hexWithAlpha(hex, alpha) {
   const a = Math.round(Math.max(0, Math.min(1, alpha)) * 255)
   const aa = a.toString(16).padStart(2, '0')
   // Guard against short/invalid hex — fall back to pearl (unlit accent).
-  if (typeof hex !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(hex)) return `#D9D5CC${aa}`
+  if (typeof hex !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(hex)) return `#D6D2C9${aa}`
   return `${hex}${aa}`
 }
 
@@ -729,7 +730,7 @@ function WhatsNextCard({ prompt, accent = PEARL, onPress }) {
             <Text className="text-xs text-chalk-2" numberOfLines={1}>{prompt.subtitle}</Text>
           ) : null}
         </View>
-        {onPress ? <Ionicons name="chevron-forward" size={14} color="#66707E" /> : null}
+        {onPress ? <Ionicons name="chevron-forward" size={14} color="#727170" /> : null}
       </View>
     </Card>
   )
@@ -749,7 +750,7 @@ function CoachKudosCard({ kudos, accent = PEARL, onPress }) {
         style={
           unseen
             ? { borderColor: accent, backgroundColor: hexWithAlpha(accent, 0.06) }
-            : { borderColor: '#2A323D' }
+            : { borderColor: '#2A2A31' }
         }
       >
         <View className="flex-row items-center justify-between">
@@ -763,7 +764,7 @@ function CoachKudosCard({ kudos, accent = PEARL, onPress }) {
             {unseen && (
               <View className="h-2 w-2 rounded-full" style={{ backgroundColor: accent }} />
             )}
-            <Ionicons name="chevron-forward" size={14} color="#66707E" />
+            <Ionicons name="chevron-forward" size={14} color="#727170" />
           </View>
         </View>
         <View className="mt-3 flex-row gap-3">
@@ -820,7 +821,7 @@ function WeekDigestCard({ digest, accent = PEARL, onDismiss }) {
           <Text className="mt-0.5 text-xs text-chalk-2" numberOfLines={1}>{weekLabel}</Text>
         </View>
         <Pressable onPress={onDismiss} hitSlop={10} className="active:opacity-60 -mr-1 -mt-1">
-          <Ionicons name="close" size={20} color="#66707E" />
+          <Ionicons name="close" size={20} color="#727170" />
         </Pressable>
       </View>
 
@@ -861,7 +862,7 @@ function WeekStat({ value, label, dim = false }) {
     <View className="flex-1 rounded-2xl bg-iron-surface px-3 py-3">
       <Text
         className="text-2xl font-display-black"
-        style={{ color: dim ? '#66707E' : '#F4F1EA' }}
+        style={{ color: dim ? '#727170' : '#F1EEE7' }}
         numberOfLines={1}
       >
         {value}
@@ -885,7 +886,7 @@ function LatestSessionCard({ session, onPress }) {
       <Card>
         <View className="flex-row items-center justify-between">
           <Text className="text-base font-display text-chalk">Latest session</Text>
-          <Ionicons name="chevron-forward" size={14} color="#66707E" />
+          <Ionicons name="chevron-forward" size={14} color="#727170" />
         </View>
         <View className="mt-3 flex-row items-start justify-between gap-3">
           <View className="flex-1 min-w-0">
@@ -938,7 +939,7 @@ function RecentSessionsCard({ sessions, onSessionPress, onSeeAll }) {
 
       {sessions.length === 0 ? (
         <View className="mt-4 items-center py-6">
-          <Ionicons name="heart-outline" size={28} color="#66707E" />
+          <Ionicons name="heart-outline" size={28} color="#727170" />
           <Text className="mt-2 text-sm font-body-medium text-chalk">No sessions yet</Text>
           <Text className="mt-1 text-xs text-chalk-2 text-center">
             Train with a heart rate monitor and your sessions will appear here.
@@ -999,7 +1000,7 @@ function ConnectDeviceCard({ onDismiss }) {
       <View className="flex-row items-start justify-between">
         <Text className="text-base font-display text-chalk">Connect a device</Text>
         <Pressable onPress={onDismiss} hitSlop={8} className="active:opacity-60">
-          <Ionicons name="close" size={18} color="#66707E" />
+          <Ionicons name="close" size={18} color="#727170" />
         </Pressable>
       </View>
       <Text className="mt-2 text-sm text-chalk-2">
@@ -1025,7 +1026,7 @@ function AchievementsCard({ latest, unlocked, total }) {
     <Card>
       <View className="flex-row items-center justify-between">
         <View className="flex-row items-center gap-1.5">
-          <Ionicons name="trophy-outline" size={16} color="#F4F1EA" />
+          <Ionicons name="trophy-outline" size={16} color="#F1EEE7" />
           <Text className="text-base font-display text-chalk">Achievements</Text>
         </View>
         <Pressable onPress={() => router.push('/account/achievements')} hitSlop={8}>
@@ -1055,7 +1056,7 @@ function AchievementChip({ rule }) {
   const ionIconName = lucideToIonicon(rule.icon)
   return (
     <View className="flex-row items-center gap-1 rounded-full border border-iron-hairline bg-iron-raised px-2.5 py-1">
-      {ionIconName && <Ionicons name={ionIconName} size={12} color="#A9B0BA" />}
+      {ionIconName && <Ionicons name={ionIconName} size={12} color="#B3B2AC" />}
       <Text className="text-xs text-chalk-2">{rule.name}</Text>
     </View>
   )
@@ -1083,7 +1084,7 @@ function GoalsCard({ goals, sessions }) {
     <Card>
       <View className="flex-row items-center justify-between">
         <View className="flex-row items-center gap-1.5">
-          <Ionicons name="radio-button-on-outline" size={16} color="#F4F1EA" />
+          <Ionicons name="radio-button-on-outline" size={16} color="#F1EEE7" />
           <Text className="text-base font-display text-chalk">Goals</Text>
         </View>
         <Pressable onPress={() => router.push('/account/goals')} hitSlop={8}>

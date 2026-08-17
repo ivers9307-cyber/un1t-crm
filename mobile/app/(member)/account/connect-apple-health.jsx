@@ -173,11 +173,11 @@ export default function ConnectAppleHealth() {
       <SafeAreaView className="flex-1 bg-iron-bg" edges={['left', 'right']}>
         <ScrollView contentContainerClassName="p-5 pb-24">
           <Pressable onPress={() => router.back()} className="flex-row items-center gap-1 mb-4 self-start active:opacity-60">
-            <Ionicons name="chevron-back-outline" size={18} color="#A9B0BA" />
+            <Ionicons name="chevron-back-outline" size={18} color="#B3B2AC" />
             <Text className="text-sm text-chalk-2">Back</Text>
           </Pressable>
           <View className="mt-24 items-center px-6">
-            <Ionicons name="phone-portrait-outline" size={32} color="#A9B0BA" />
+            <Ionicons name="phone-portrait-outline" size={32} color="#B3B2AC" />
             <Text className="mt-4 text-center text-base text-chalk-2">
               Apple Health is available on iPhone only.
             </Text>
@@ -191,7 +191,7 @@ export default function ConnectAppleHealth() {
     <SafeAreaView className="flex-1 bg-iron-bg" edges={['left', 'right']}>
       <ScrollView contentContainerClassName="p-5 pb-24">
         <Pressable onPress={() => router.back()} className="flex-row items-center gap-1 mb-4 self-start active:opacity-60">
-          <Ionicons name="chevron-back-outline" size={18} color="#A9B0BA" />
+          <Ionicons name="chevron-back-outline" size={18} color="#B3B2AC" />
           <Text className="text-sm text-chalk-2">Back</Text>
         </Pressable>
 
@@ -240,7 +240,7 @@ export default function ConnectAppleHealth() {
               disabled={busy}
               className="flex-row items-center justify-center gap-2 rounded-xl bg-chalk px-4 py-3 active:opacity-80 disabled:opacity-50"
             >
-              {busy ? <ActivityIndicator size="small" color="#0F1216" /> : <Ionicons name="refresh-outline" size={16} color="#0F1216" />}
+              {busy ? <ActivityIndicator size="small" color="#131316" /> : <Ionicons name="refresh-outline" size={16} color="#131316" />}
               <Text className="text-sm font-body-semibold text-iron-bg">Sync now</Text>
             </Pressable>
 
@@ -260,7 +260,7 @@ export default function ConnectAppleHealth() {
               disabled={busy}
               className="flex-row items-center justify-center gap-2 rounded-xl bg-chalk px-4 py-3.5 active:opacity-80 disabled:opacity-50"
             >
-              {busy ? <ActivityIndicator size="small" color="#0F1216" /> : <Ionicons name="heart" size={16} color="#0F1216" />}
+              {busy ? <ActivityIndicator size="small" color="#131316" /> : <Ionicons name="heart" size={16} color="#131316" />}
               <Text className="text-base font-body-semibold text-iron-bg">
                 {busy ? 'Connecting…' : 'Connect Apple Health'}
               </Text>

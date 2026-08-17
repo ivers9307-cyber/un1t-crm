@@ -10,7 +10,7 @@ export default function Pips({ slots, filled = [], className = '' }) {
         <View
           key={i}
           className="flex-1 h-2 rounded-full"
-          style={{ backgroundColor: filled[i] || '#2A323D', maxWidth: 40 }}
+          style={{ backgroundColor: filled[i] || '#2A2A31', maxWidth: 40 }}
         />
       ))}
     </View>

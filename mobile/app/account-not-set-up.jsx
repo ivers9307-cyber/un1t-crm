@@ -26,7 +26,7 @@ export default function AccountNotSetUp() {
       <StatusBar style="light" />
       <View className="flex-1 items-center justify-center px-8">
         <View className="w-16 h-16 rounded-full bg-iron-surface border border-iron-hairline items-center justify-center mb-6">
-          <Ionicons name="person-outline" size={28} color="#A9B0BA" />
+          <Ionicons name="person-outline" size={28} color="#B3B2AC" />
         </View>
         <Text className="text-chalk text-xl font-display-bold text-center mb-3">
           Your account isn’t set up yet
