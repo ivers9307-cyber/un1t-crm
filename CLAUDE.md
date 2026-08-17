@@ -160,3 +160,29 @@ Feature deep-dives also in `docs/`: `roster-v2.md`, `events.md`, `staff-attendan
 ## API reference
 
 OpenAPI 3.1 generated from the Zod schemas (`src/lib/openapi.js`): `/api/openapi.json` (raw) and `/api-docs` (Swagger UI). Register every new route/schema in `openapi.js` so the spec stays in sync.
+
+## champ-app shared sync rule (Repset merge P1, 2026-08-17)
+
+Phase 1 of the Repset one-app merge landed champ-app's `shared/` modules here as
+**copies, not moves** — champ-app's live backend still consumes its own `shared/`
+and stays authoritative for its copies until backend consolidation.
+
+**Modules that exist in BOTH repos and are consumed by the champ-app server**
+(empirically derived from `champ-app/src` imports of `../shared` / `@/shared`):
+`achievement-progress`, `brand`, `challenges`, `cohort-board`,
+`customer-notifications`, `customer-push-channels`, `dublin-time`, `format`,
+`goals`, `heart-rate`, `hr-analytics`, `hr-session-report`,
+`progress-analytics`, `sessions-list`, `share-card`, `social`, `tier-window`,
+`tiers`, `wearable-trends-view`, `workout-detail`.
+
+- **Mirror rule:** any edit to one of these modules in either repo MUST be
+  mirrored in the other repo **in the same working session**. No drift.
+- **Divergence window:** until the P2 app-tree port merges, ANY change to
+  champ-app `shared/` (not just the list above) must be mirrored into
+  `un1t-crm/shared/`.
+- **Pre-existing cross-repo pairs** (now three-way, since the shared copies
+  live here too): `src/lib/tiers.js` ↔ `shared/tiers.js`,
+  `src/lib/tv-zone-colors.js` ↔ `shared/zone-colors.js`,
+  `src/lib/hr-analytics.js` ↔ `shared/hr-analytics.js`.
+- `shared/customer-push-channels.js` was the ONE filename collision at landing
+  time (verbatim copies, comment-only diff) — un1t-crm's copy stands.
