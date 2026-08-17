@@ -2,7 +2,7 @@
 // is pure so most tests hit it directly. sendPostClassEmail is
 // tested with mocked Supabase + Postmark to confirm orchestration.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/postmark', () => ({
   sendTransactionalEmail: vi.fn(),
@@ -126,6 +126,59 @@ describe('composeEmail', () => {
     expect(out.html).toContain('/api/preferences/hr-emails')
     expect(out.html).toContain(`token=${UNSUB_TOKEN}`)
     expect(out.html).not.toContain('cid=c-1')
+  })
+
+  // REPSET-P6.C — the session CTA is a MEMBER link and must build on the
+  // member-app base, never on this repo's own NEXT_PUBLIC_APP_URL (the CRM
+  // host, which has no /sessions route — every CTA 404'd in prod).
+  it('session CTA builds on the member-app base in both HTML and text', () => {
+    const out = composeEmail(ctx(), { nowMs: NOW })
+    expect(out.html).toContain('https://app.champfitness.ie/sessions/sess-1')
+    expect(out.text).toContain('https://app.champfitness.ie/sessions/sess-1')
+  })
+
+  it('unsubscribe link stays on the CRM base', () => {
+    const out = composeEmail(ctx(), { nowMs: NOW })
+    expect(out.html).toContain('https://crm.un1tdublin.com/api/preferences/hr-emails')
+  })
+})
+
+// The bases are module-level consts, so the env-sensitive cases reimport
+// the module with the env stubbed FIRST.
+describe('composeEmail — URL bases vs env (module reimport)', () => {
+  async function freshCompose(env) {
+    vi.resetModules()
+    for (const [k, v] of Object.entries(env)) vi.stubEnv(k, v)
+    const mod = await import('./hr-post-class-email.js')
+    return mod.composeEmail(ctx(), { nowMs: NOW })
+  }
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.resetModules()
+  })
+
+  // The live bug: in THIS repo NEXT_PUBLIC_APP_URL is the CRM host.
+  // The old code built the session CTA on it → 404 in every email.
+  it('prod config (NEXT_PUBLIC_APP_URL = CRM host): CTA still on the member app', async () => {
+    const out = await freshCompose({ NEXT_PUBLIC_APP_URL: 'https://crm.un1tdublin.com' })
+    expect(out.html).toContain('https://app.champfitness.ie/sessions/sess-1')
+    expect(out.text).toContain('https://app.champfitness.ie/sessions/sess-1')
+    expect(out.html).not.toContain('https://crm.un1tdublin.com/sessions/')
+  })
+
+  it('NEXT_PUBLIC_CHAMP_APP_URL overrides the member-app base (same var invite-app uses)', async () => {
+    const out = await freshCompose({
+      NEXT_PUBLIC_APP_URL: 'https://crm.un1tdublin.com',
+      NEXT_PUBLIC_CHAMP_APP_URL: 'https://members.example.com',
+    })
+    expect(out.html).toContain('https://members.example.com/sessions/sess-1')
+    expect(out.text).toContain('https://members.example.com/sessions/sess-1')
+  })
+
+  it('NEXT_PUBLIC_APP_URL_CRM still drives the unsubscribe base, untouched', async () => {
+    const out = await freshCompose({ NEXT_PUBLIC_APP_URL_CRM: 'https://crm.example.com' })
+    expect(out.html).toContain('https://crm.example.com/api/preferences/hr-emails')
   })
 
   // Belt and braces: one contact in prod has no contact_preferences row, and a
