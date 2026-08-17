@@ -393,15 +393,15 @@ force-uninstalls anything.
 
 Run strictly in this order — each step gates the next.
 
-1. **Merge the staged-rollout OTA gate** (separate PR — the Phase-5 exit
-   gate from the delivery plan; not yet opened as of this doc). Today
+1. **Merge the staged-rollout OTA gate — PR #1439** (the Phase-5 exit
+   gate from the delivery plan). Without it,
    `.github/workflows/eas-update.yml` publishes an OTA to the production
    channel on EVERY push to `main` touching `mobile/**` or `shared/**`.
    Pre-launch the blast radius is ~16 staff; post-launch it is every member
-   install (~1,100 people) with no rollout curve. The gate (manual
-   approval step, or an environment-protected job) MUST be live before the
-   app is public. **Do not submit for review until this is merged** —
-   cross-reference the gate PR number here when it opens.
+   install (~1,100 people) with no rollout curve. #1439 changes the publish
+   to a 10% staged rollout with a ramp/halt runbook
+   (`mobile/docs/ota-rollout.md`). **Do not submit for review until it is
+   merged and the first staged publish has been ramped per the runbook.**
 2. **Screenshots** captured per §4 (needs the seeded demo account, which
    §2 needs anyway).
 3. **Metadata**: paste §1 copy into the 2.3.0 version + App Information;
