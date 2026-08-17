@@ -2,9 +2,9 @@
 // merged app: a paired studio kiosk and an active "view as user" session
 // must NEVER upsert a member push token (mirrors the staff registrar's
 // guards — see lib/push-register.js). Member registration creates ONLY the
-// customer Android channel set, PLUS the new `class_reminders` channel id
-// (see below); the staff registrar keeps creating only staff channels, so
-// a dual-identity device ends up with both sets — correct.
+// customer Android channel set (which since P3.1 includes `class_reminders`);
+// the staff registrar keeps creating only staff channels, so a dual-identity
+// device ends up with both sets — correct.
 
 import * as Notifications from 'expo-notifications'
 import * as Device from 'expo-device'
@@ -13,19 +13,6 @@ import { Platform } from 'react-native'
 import { api } from './api'
 import { readImpersonate } from '../impersonate'
 import { CUSTOMER_ANDROID_CHANNELS } from 'shared/customer-push-channels'
-
-// NEW per-identity channel id (stage C). The legacy map's `reminders`
-// channel is kept verbatim (channels are immutable once created, and the
-// senders still stamp channelId from shared/customer-push-channels.js —
-// that map is under the two-repo sync rule and must NOT change here).
-// Senders flip to `class_reminders` in Phase 3; creating it now means
-// every updated device already has the channel when they do.
-const CLASS_REMINDERS_CHANNEL = Object.freeze({
-  id: 'class_reminders',
-  name: 'Class reminders',
-  description: 'Reminders before your booked classes.',
-  importance: 'high',
-})
 
 export async function registerForPushNotifications() {
   if (!Device.isDevice) return { skipped: true, reason: 'simulator' }
@@ -66,15 +53,10 @@ export async function registerForPushNotifications() {
           Notifications.AndroidImportance.DEFAULT,
       })
     }
-    // Stage C: the additional per-identity channel — IN ADDITION to the
-    // legacy customer map above, never replacing it (see module header).
-    await Notifications.setNotificationChannelAsync(CLASS_REMINDERS_CHANNEL.id, {
-      name: CLASS_REMINDERS_CHANNEL.name,
-      description: CLASS_REMINDERS_CHANNEL.description,
-      importance:
-        Notifications.AndroidImportance[CLASS_REMINDERS_CHANNEL.importance.toUpperCase()] ??
-        Notifications.AndroidImportance.DEFAULT,
-    })
+    // Since P3.1 the shared map itself owns `class_reminders` (renamed from
+    // 'reminders'), so the loop above creates it — the stage-C inline spec
+    // this registrar used to carry is gone. The retired 'reminders' channel
+    // lingers on existing installs but no sender stamps it any more.
   }
   const projectId = Constants.expoConfig?.extra?.eas?.projectId
   let token
