@@ -10,7 +10,7 @@
 // Callers with a "was this nudge sent?" ledger (send-class-booking-reminders)
 // use `failed` to tell a pipeline failure apart from "nothing to send".
 
-import { customerAndroidChannelId } from '@shared/customer-push-channels'
+import { customerAndroidChannelId, LEGACY_CHANNEL_ALIASES } from '@shared/customer-push-channels'
 
 const EXPO_URL = 'https://exp.host/--/api/v2/push/send'
 const BATCH = 100
@@ -87,8 +87,14 @@ export async function sendCustomerPush(db, contactIds, payload) {
     if (prefErr) {
       console.warn(`[customer-push] push_prefs lookup failed (sending to all): ${prefErr.message || prefErr}`)
     } else if (prefRows) {
+      // Either-key-mutes (P3 rename): prefs rows written before the
+      // 'reminders' → 'class_reminders' rename — or forever by the old
+      // champ mobile build — carry the legacy key, so an opt-out under
+      // EITHER the current id or any legacy alias wins, even against an
+      // explicit `true` under the other key. Opt-out integrity first.
+      const muteKeys = [channelId, ...(LEGACY_CHANNEL_ALIASES[channelId] || [])]
       const optedOut = new Set(
-        prefRows.filter((r) => r.push_prefs?.[channelId] === false).map((r) => r.id)
+        prefRows.filter((r) => muteKeys.some((k) => r.push_prefs?.[k] === false)).map((r) => r.id)
       )
       allowedIds = ids.filter((id) => !optedOut.has(id))
       skipped = ids.length - allowedIds.length

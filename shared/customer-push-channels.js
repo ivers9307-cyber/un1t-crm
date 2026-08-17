@@ -24,7 +24,13 @@
 // iOS ignores channelId entirely.
 
 export const CUSTOMER_ANDROID_CHANNELS = Object.freeze({
-  reminders: Object.freeze({
+  // Renamed from 'reminders' in P3 (Repset one-app merge): the merged binary
+  // registers BOTH channel sets and the STAFF map (shared/push-channels.js)
+  // also owns a 'reminders' id ("Reminders") — same id, different spec, so
+  // the two collided. Channels are immutable (see above), so the rename is a
+  // NEW id; the old 'reminders' channel lingers on existing installs but no
+  // sender stamps it any more. Phase 2 already creates this id client-side.
+  class_reminders: Object.freeze({
     name: 'Class reminders',
     description: 'Reminders before your booked classes.',
     importance: 'high',
@@ -52,7 +58,11 @@ export const CUSTOMER_ANDROID_CHANNELS = Object.freeze({
 // data.type → channel id.
 const CUSTOMER_TYPE_CHANNELS = Object.freeze({
   // Pre-class reminder cron (un1t-crm, mig 323) — time-sensitive.
-  class_reminder: 'reminders',
+  class_reminder: 'class_reminders',
+  // Race-event reminder cron (un1t-crm src/lib/event-attendee-reminders.js).
+  // A booked-thing reminder — same importance class as class_reminder. Was
+  // MISSING from this map, silently falling through to 'default' (P3 fix).
+  event_reminder: 'class_reminders',
   // Social layer (champ-app routes).
   friend_request: 'social',
   feed: 'social',
@@ -67,6 +77,19 @@ const CUSTOMER_TYPE_CHANNELS = Object.freeze({
   challenge: 'progress',
   // First-90-days pace nudge (un1t-crm notify-onboarding-pace cron, PULSE-90).
   onboarding_pace: 'progress',
+})
+
+// P3 rename ledger: current channel id → the pref key(s) it used to be known
+// by. contacts.push_prefs rows written before the 'reminders' →
+// 'class_reminders' rename — and FOREVER by the retiring champ-app mobile
+// build, which bundles the old map and keeps writing the old key — carry the
+// legacy key, so both servers' sendCustomerPush mute check must honour BOTH:
+// a member who muted class reminders stays muted whichever key their row
+// carries (either-key-mutes; opt-out integrity beats re-enablement edges).
+// This alias may only be dropped once no push_prefs row anywhere carries the
+// old key; with the old app still writing it, treat it as permanent.
+export const LEGACY_CHANNEL_ALIASES = Object.freeze({
+  class_reminders: Object.freeze(['reminders']),
 })
 
 /**
