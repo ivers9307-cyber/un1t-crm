@@ -22,7 +22,7 @@ import { Stack, SplashScreen, useRouter } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import * as Notifications from 'expo-notifications'
 import {
   useFonts,
@@ -31,12 +31,17 @@ import {
   Poppins_700Bold,
   Poppins_800ExtraBold,
 } from '@expo-google-fonts/poppins'
+// PHASE2 — Graft (member-tree) faces; see the useFonts call below.
+import { Figtree_400Regular, Figtree_500Medium, Figtree_600SemiBold } from '@expo-google-fonts/figtree'
+import { IBMPlexMono_500Medium } from '@expo-google-fonts/ibm-plex-mono'
 import { AuthProvider, useAuth } from '../lib/auth-context'
+import { IdentityProvider, useIdentity } from '../lib/identity-context'
 // GEO-ATT — importing from lib/geofence also runs its module top-level
 // TaskManager.defineTask, so the background geofence task is registered
 // on every launch (including headless OS relaunches for region events).
 import { syncGeofences } from '../lib/geofence'
-import { routeForNotification } from '../lib/notification-nav'
+import { resolveNotificationTap, presentationForNotification } from '../lib/notification-side'
+import { writeLastSide } from '../lib/last-side'
 import { ForegroundOtaUpdater } from '../lib/foreground-ota'
 import { BiometricLockProvider } from '../lib/biometric-lock'
 import { StudioPinProvider } from '../lib/studio-pin'
@@ -47,50 +52,87 @@ import RootErrorBoundary from '../components/RootErrorBoundary'
 // flash of the login screen for already-logged-in users.
 SplashScreen.preventAutoHideAsync()
 
-// Reads auth state and hides the splash. Renders nothing — its only job
-// is to side-effect on the loading flag. Lives outside the navigation
-// tree so its re-renders don't churn the Stack.
-function SplashGate() {
-  const { loading } = useAuth()
+// PHASE2 stage C — ONE foreground-presentation handler for both shells
+// (was module scope in lib/push-register.js). Branches per payload type:
+// staff types keep the sound+badge banner the staff app always had;
+// member types keep champ's silent banner. Module scope (not a
+// component) so it can't double-register on re-render.
+Notifications.setNotificationHandler({
+  handleNotification: async (notification) =>
+    presentationForNotification(notification?.request?.content?.data),
+})
+
+// Reads auth + identity state and hides the splash. Renders nothing —
+// its only job is to side-effect on the flags. Lives outside the
+// navigation tree so its re-renders don't churn the Stack.
+//
+// Stage C: the splash now holds for (a) the font settle — the member
+// tree's Archivo/Figtree faces; `fontsReady` is true once they load OR
+// fail, so a font failure can never wedge boot — and (b) the identity
+// resolution, so the entry redirect (app/index.jsx) lands in the right
+// shell with no flash of the wrong one. Resolution is time-boxed inside
+// IdentityProvider, so this cannot hang either.
+function SplashGate({ fontsReady }) {
+  const { session, loading } = useAuth()
+  const { resolving } = useIdentity()
   useEffect(() => {
-    if (!loading) SplashScreen.hideAsync()
-  }, [loading])
+    if (loading || !fontsReady) return
+    if (session && resolving) return
+    SplashScreen.hideAsync()
+  }, [loading, fontsReady, session, resolving])
   return null
 }
 
-// NOTIF.2 — deep-link the user into the relevant detail screen when
-// they tap a push notification. The payload's `data` object carries
-// `type` ('task_reminder' | 'swap_inbound' | …) and the entity id;
-// the type → route mapping lives in lib/notification-nav.js (pure,
-// unit-tested). We also handle the *cold-start* case via
-// getLastNotificationResponseAsync() — taps that opened the app
-// from killed state fire the listener before the navigation tree is
-// ready, so we replay them once on mount.
+// NOTIF.2 + PHASE2 stage C — ONE tap router for both shells. The payload's
+// `data.type` is looked up in the STAFF map first (lib/notification-nav.js),
+// then the member map (lib/member/notification-nav.js) — the merged
+// decision is pure + unit-tested (lib/notification-side.js) and carries
+// the OWNING SIDE. Before deep-linking we FLIP the persisted last-side to
+// the owner, so the next boot lands in the shell the user was just pushed
+// into. Staff taps keep today's router.push; a member tap replaces (the
+// user lands in the other shell — back-navigating into the staff stack
+// from a member push would be wrong). Kiosk/impersonation never receive
+// member pushes (registration is guarded), and unknown types keep the
+// log-only behaviour.
+//
+// Cold-start taps (killed state) are replayed once via
+// getLastNotificationResponseAsync, guarded by a ref so hourly
+// TOKEN_REFRESHED session churn can't re-yank the user (champ's fix).
 function NotificationRouter() {
   const router = useRouter()
   const { session, loading } = useAuth()
+  const coldStartHandled = useRef(false)
 
   useEffect(() => {
     if (loading || !session) return
 
-    function handle(response) {
+    async function handle(response) {
       const data = response?.notification?.request?.content?.data
       if (!data) return
-      const route = routeForNotification(data)
-      if (route) {
-        router.push(route)
-      } else if (route === undefined) {
+      const resolved = resolveNotificationTap(data)
+      if (resolved === null) return // known type, deliberately no navigation
+      if (resolved === undefined) {
         // A data.type this build doesn't know — log it so the gap
         // surfaces instead of a silent dead tap.
         console.error('[notif-router] unhandled push type', data.type)
+        return
       }
+      // Persist the owning side BEFORE navigating so a crash-after-nav
+      // still boots into the right shell.
+      await writeLastSide(resolved.side).catch(() => {})
+      if (resolved.side === 'member') router.replace(resolved.path)
+      else router.push(resolved.path)
     }
 
-    // Cold-start: replay the last tap that opened the app.
+    // Cold-start: replay the last tap that opened the app — at most once
+    // per launch.
     let cancelled = false
-    Notifications.getLastNotificationResponseAsync().then(r => {
-      if (!cancelled && r) handle(r)
-    }).catch(() => { /* best-effort */ })
+    if (!coldStartHandled.current) {
+      coldStartHandled.current = true
+      Notifications.getLastNotificationResponseAsync().then(r => {
+        if (!cancelled && r) handle(r)
+      }).catch(() => { /* best-effort */ })
+    }
 
     const sub = Notifications.addNotificationResponseReceivedListener(handle)
     return () => { cancelled = true; sub.remove() }
@@ -118,46 +160,56 @@ export default function RootLayout() {
   // system font until the family is ready (expo-font resolves the
   // fontFamily on later renders). expo-font's native module is
   // already in the build (Ionicons dep), so this is OTA-safe.
-  useFonts({
+  //
+  // PHASE2 (one-app merge, stage B) — the Graft brand faces (Afterglow
+  // system) load here too: Archivo Expanded for EARNED numbers +
+  // headings, Figtree for body, IBM Plex Mono for body-sourced
+  // telemetry. Champ's settle-on-error pattern is kept below
+  // (`fontsLoaded || !!fontError`): EITHER state counts as settled so a
+  // font-load failure can never wedge rendering — screens fall back to
+  // the system font. Staff splash still gates on auth only (SplashGate),
+  // exactly as before this merge.
+  const [fontsLoaded, fontError] = useFonts({
     Poppins_400Regular,
     Poppins_600SemiBold,
     Poppins_700Bold,
     Poppins_800ExtraBold,
+    'ArchivoExpanded-SemiBold': require('../assets/fonts/ArchivoExpanded-600.ttf'),
+    'ArchivoExpanded-Bold': require('../assets/fonts/ArchivoExpanded-700.ttf'),
+    'ArchivoExpanded-Black': require('../assets/fonts/ArchivoExpanded-800.ttf'),
+    Figtree_400Regular,
+    Figtree_500Medium,
+    Figtree_600SemiBold,
+    IBMPlexMono_500Medium,
   })
+  // Settled = loaded OR errored — EITHER counts, so a font-load failure can
+  // never wedge boot. Stage C: SplashGate consumes this (the member tree's
+  // brand faces should be up before its shell paints; staff simply gets the
+  // same settle-guarantee it already had).
+  const fontsReady = fontsLoaded || !!fontError
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <RootErrorBoundary>
       <SafeAreaProvider>
         <AuthProvider>
+          <IdentityProvider>
           <StudioPinProvider>
           <BiometricLockProvider>
             <StatusBar style="dark" />
-            <SplashGate />
+            <SplashGate fontsReady={fontsReady} />
             <NotificationRouter />
             <GeofenceSync />
             <ForegroundOtaUpdater />
+            {/* PHASE2 (one-app merge) — two route groups: (staff) carries the
+                ENTIRE pre-merge staff app (its Stack — moved verbatim — lives
+                in app/(staff)/_layout.jsx; group folders add no URL segment so
+                every staff path and push deep link is byte-identical), and
+                (member) carries the ported Graft member tree. Stage C: the
+                resolver (app/index.jsx + IdentityProvider) owns entry. */}
             <Stack screenOptions={{ headerShown: false }}>
-              <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-              <Stack.Screen name="tasks" options={{ headerShown: false }} />
-              <Stack.Screen name="bookings" options={{ headerShown: false }} />
-              <Stack.Screen name="radar" options={{ headerShown: false }} />
-              <Stack.Screen name="assistant" options={{ headerShown: false }} />
-              <Stack.Screen name="staff" options={{ headerShown: false }} />
-              <Stack.Screen name="cars" options={{ headerShown: false }} />
-              <Stack.Screen name="races" options={{ headerShown: false }} />
-              {/* Single-file routes have no folder _layout to host a header,
-                  so enable the native header here (each screen still supplies
-                  its own title + BackHeaderLeft). Without this they inherit
-                  the headerless root stack and render under the status bar —
-                  the same bug the folder sections fix via their _layout.jsx. */}
-              <Stack.Screen name="approvals" options={{ headerShown: true, headerStyle: { backgroundColor: '#FFFFFF' }, headerTitleStyle: { fontWeight: '600' }, headerTintColor: '#111827' }} />
-              <Stack.Screen name="customise-bar" options={{ headerShown: true, headerStyle: { backgroundColor: '#FFFFFF' }, headerTitleStyle: { fontWeight: '600' }, headerTintColor: '#111827' }} />
-              <Stack.Screen name="location-features" options={{ headerShown: true, headerStyle: { backgroundColor: '#FFFFFF' }, headerTitleStyle: { fontWeight: '600' }, headerTintColor: '#111827' }} />
-              <Stack.Screen name="orders" options={{ headerShown: true, headerStyle: { backgroundColor: '#FFFFFF' }, headerTitleStyle: { fontWeight: '600' }, headerTintColor: '#111827' }} />
-              <Stack.Screen name="accounting" options={{ headerShown: true, headerStyle: { backgroundColor: '#FFFFFF' }, headerTitleStyle: { fontWeight: '600' }, headerTintColor: '#111827' }} />
-              <Stack.Screen name="events" options={{ headerShown: false }} />
+              <Stack.Screen name="(staff)" options={{ headerShown: false }} />
+              <Stack.Screen name="(member)" options={{ headerShown: false }} />
             </Stack>
             {/* GEO-ATT.12 — full-screen permission-gate OVERLAY. Sibling
                 of <Stack> (SplashGate pattern: reads useAuth in its own
@@ -168,6 +220,7 @@ export default function RootLayout() {
             <LocationGate />
           </BiometricLockProvider>
           </StudioPinProvider>
+          </IdentityProvider>
         </AuthProvider>
       </SafeAreaProvider>
       </RootErrorBoundary>

@@ -18,7 +18,7 @@ import { createContext, useContext, useEffect, useState, useCallback } from 'rea
 import { supabase } from './supabase'
 import { api } from './api'
 import { readImpersonate, writeImpersonate, clearImpersonate } from './impersonate'
-import { unregisterCurrentDevicePush } from './push-register'
+import { performFullSignOut } from './sign-out'
 
 const AuthContext = createContext(null)
 
@@ -158,43 +158,15 @@ export function AuthProvider({ children }) {
     return { success: true, data }
   }, [])
 
+  // PHASE2 stage C — the sign-out body moved to lib/sign-out.js as THE
+  // teardown union for the one-session model: impersonation stop → staff
+  // push unregister → member push unregister (if a member identity was
+  // active) → per-contact Apple-Health key cleanup → identity-history
+  // clears (has_ever_been_staff, last-side) → supabase.auth.signOut
+  // scope:'local'. The kiosk idle-lock (StudioPinProvider) and the member
+  // shell's sign-out call the same function.
   const signOut = useCallback(async () => {
-    // If a "view as user" session is active, close it first so its audit
-    // row gets a precise ended_at + the local target is cleared, rather
-    // than dangling open until the close-stale-impersonations cron reaps
-    // it. Best-effort — never block logout on it.
-    try {
-      const imp = await readImpersonate()
-      if (imp?.targetId) {
-        await api('/api/mobile/impersonate/stop', { method: 'POST' })
-        await clearImpersonate()
-      }
-    } catch {
-      // ignore — the reaper cron is the backstop
-    }
-    // Delete this device's push-token registration while the JWT is
-    // still valid (the authed DELETE is scoped to user_id server-side,
-    // so it must run BEFORE supabase.auth.signOut clears the session).
-    // Runs AFTER the impersonation-stop above so the delete executes
-    // as the real signed-in user, not a View-as target. Best-effort: a
-    // network blip must never block sign-out — worst case the token
-    // stays registered until the next sign-in re-upserts it. Without
-    // this, a shared/studio device kept receiving the PREVIOUS user's
-    // notifications (lead alerts, WhatsApp — customer PII) after
-    // sign-out, because a still-valid token never triggers the
-    // server's DeviceNotRegistered pruning.
-    try {
-      await unregisterCurrentDevicePush()
-    } catch {
-      // ignore — next sign-in re-registers for the new user
-    }
-    // scope:'local' — revoke THIS device's session only. supabase-js
-    // defaults to scope:'global', which revokes every refresh token the
-    // user holds — so a studio kiosk's 5-minute idle lock (StudioPinProvider
-    // calls this signOut) was signing the staffer out of their own phone
-    // and the web CRM. Local scope still kills the kiosk-minted session
-    // server-side; personal sign-out likewise stays per-device.
-    await supabase.auth.signOut({ scope: 'local' })
+    await performFullSignOut()
   }, [])
 
   const setActiveLocationId = useCallback(async (locationId) => {

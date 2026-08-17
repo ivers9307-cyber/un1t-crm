@@ -9,6 +9,34 @@
 // /api/* routes for orchestration (push registration, assistant chat,
 // WhatsApp send, etc.); most CRUD goes direct to Supabase via RLS.
 
+import { withInfoPlist } from 'expo/config-plugins'
+
+// PHASE2 (one-app merge) — ported from champ-app/mobile/app.config.js.
+// HealthKit background delivery uses the HealthKit background-delivery
+// entitlement (added by the @kingstinct/react-native-healthkit plugin with
+// `background: true`), not a UIBackgroundMode. expo-notifications needs
+// UIBackgroundModes to include 'remote-notification' for push, and GEO-ATT
+// needs 'location' for geofence wakes. This plugin is registered EARLY in
+// the plugins array (before the HealthKit plugin) so Expo runs its
+// Info.plist mod LAST, giving it the final say — it unions the modes so
+// background sync + push + geofencing coexist. It only ever deletes
+// 'fetch'/'processing' — 'location' (and anything else already present)
+// survives the Set round-trip untouched.
+const withUnionedBackgroundModes = (config) =>
+  withInfoPlist(config, (cfg) => {
+    const modes = new Set(cfg.modResults.UIBackgroundModes || [])
+    // Push needs 'remote-notification'. The app registers NO BGTask/background-
+    // fetch — HealthKit background delivery uses its ENTITLEMENT (added by the
+    // HealthKit plugin), not a UIBackgroundMode. Strip 'fetch'/'processing':
+    // 'processing' without BGTaskSchedulerPermittedIdentifiers fails App Store
+    // validation at upload.
+    modes.add('remote-notification')
+    modes.delete('fetch')
+    modes.delete('processing')
+    cfg.modResults.UIBackgroundModes = Array.from(modes)
+    return cfg
+  })
+
 export default ({ config }) => ({
   ...config,
   // REBRAND.2 (2026-07-27) — "CF Studio" → "Repset", the platform brand
@@ -73,7 +101,13 @@ export default ({ config }) => ({
   // Adds expo-location + expo-task-manager (NATIVE modules) → new EAS
   // Build + store release, NOT an OTA; runtimeVersion bumps to 2.2.0 in
   // lockstep (see the runtimeVersion comment log below).
-  version: '2.2.0',
+  //
+  // 2.3.0 (PHASE2 one-app merge) — the member app (Graft/champ-app) folds
+  // into this binary. Adds @kingstinct/react-native-healthkit +
+  // react-native-nitro-modules + react-native-svg (all NATIVE modules) →
+  // new EAS Build + store release, NOT an OTA; runtimeVersion bumps to
+  // 2.3.0 in lockstep (native lane bump — see the runtimeVersion log).
+  version: '2.3.0',
   // We ship iOS + Android only. Without this, Expo defaults to
   // ['ios','android','web'] and `eas update` exports for web too —
   // which crashes the publish because react-native-web isn't installed.
@@ -93,7 +127,10 @@ export default ({ config }) => ({
   // rename, cfstudio:// has been live in the wild). Expo accepts an
   // array here and registers every entry in CFBundleURLTypes / the
   // Android intent filter.
-  scheme: ['repset', 'cfstudio'],
+  // PHASE2 — `un1tapp` joins the array: it is the member app's (Graft)
+  // scheme, so Graft-era QR codes and deep links keep resolving into
+  // the merged one-app binary.
+  scheme: ['repset', 'cfstudio', 'un1tapp'],
   userInterfaceStyle: 'automatic',
   splash: {
     image: './assets/splash.png',
@@ -184,6 +221,25 @@ export default ({ config }) => ({
         // on transparent (Android masks it). iOS uses the app icon.
         icon: './assets/notification-icon.png',
         color: '#131316',
+      },
+    ],
+    // PHASE2 — registered BEFORE the HealthKit plugin so Expo composes
+    // same-mod plugins such that this one's Info.plist mod runs LAST — it
+    // has the final say on UIBackgroundModes (unions 'remote-notification'
+    // back in for push; never touches 'location', which GEO-ATT needs).
+    withUnionedBackgroundModes,
+    // PHASE2 — direct HealthKit (Apple Health), ported from champ-app.
+    // `background: true` adds the HealthKit entitlement + background-
+    // delivery entitlement + the usage strings below. NATIVE module →
+    // new EAS Build (runtimeVersion 2.3.0 lane), NOT an OTA.
+    [
+      '@kingstinct/react-native-healthkit',
+      {
+        background: true,
+        NSHealthShareUsageDescription:
+          'Repset reads your Apple Health workouts and heart rate to score your sessions, track your progress over time, and include you in gym challenges.',
+        NSHealthUpdateUsageDescription:
+          'Repset can save workout summaries back to Apple Health.',
       },
     ],
     // FACE-ID — biometric app-lock. faceIDPermission writes
@@ -306,7 +362,17 @@ export default ({ config }) => ({
   // installs stop receiving OTAs (frozen, NOT crashed) until users
   // install the 2.2.0 binary. Merge only as part of the 2.2.0 store
   // release.
-  runtimeVersion: '2.2.0',
+  //
+  // 2.3.0 — PHASE2 one-app merge native lane. HealthKit
+  // (@kingstinct/react-native-healthkit), react-native-nitro-modules and
+  // react-native-svg are NEW NATIVE MODULES, so a fresh OTA lane is
+  // mandatory: 2.2.x installs freeze (NOT crash) until users install the
+  // 2.3.0 binary. This stays an EXPLICIT STRING — never switch to the
+  // 'fingerprint' policy: PR #295 tried it and it broke the iOS
+  // "Configure expo-updates" Xcode build phase (the phase recomputes the
+  // fingerprint in a restricted build sandbox and errors, failing the
+  // production build — EAS build e02f3944).
+  runtimeVersion: '2.3.0',
   extra: {
     // Supabase URL + anon key are PUBLIC by design — the anon key is
     // protected by Row-Level Security on the database, not by secrecy
@@ -324,6 +390,12 @@ export default ({ config }) => ({
     apiBaseUrl:
       process.env.EXPO_PUBLIC_API_BASE_URL ||
       'https://crm.un1tdublin.com',
+    // PHASE2 — the member-app (champ) deployment. The merged app still
+    // calls a few member-facing /api/* routes that live on the champ
+    // Next.js deployment; the member's Supabase token is valid for both.
+    champApiBaseUrl:
+      process.env.EXPO_PUBLIC_CHAMP_API_BASE_URL ||
+      'https://app.champfitness.ie',
     // EAS project ID — used by `eas update` to know where to publish,
     // and by Expo Notifications.getExpoPushTokenAsync() to scope push
     // tokens to this project once we're off Expo Go's shared channel.
