@@ -224,10 +224,11 @@ describe('classifyAdvisories', () => {
 // date, id/package mix-up) fails locally on `npm test` instead.
 //
 // The mobile file arrived with DEPAUDIT.2, which turned on the mobile tree's
-// audit for the first time. It carries the two linkify-it advisories that have
-// NO published fix at any version (npm reports fixAvailable:false against a
-// range of <=5.0.1), so an accept is the only option short of dropping
-// markdown rendering from the contracts screen.
+// audit for the first time. It shipped EMPTY (the linkify-it pair it briefly
+// carried was fixed by the override instead — see the comment on the
+// empty-state test below, and CHANGELOG 478/479). As of DEPAUDIT.3 /
+// CHANGELOG 533 it carries exactly the two image-size accepts, the one case
+// where no patched version exists at any version.
 describe('the shipped allowlist files', () => {
   const load = (p) => JSON.parse(readFileSync(new URL(p, import.meta.url), 'utf8'))
 
@@ -255,7 +256,7 @@ describe('the shipped allowlist files', () => {
     })
   }
 
-  // Both trees accept NOTHING. Empty is the healthy state, and it is worth
+  // The web tree accepts NOTHING. Empty is the healthy state, and it is worth
   // asserting rather than assuming: an accept that creeps in without a
   // reviewer noticing is exactly how a gate stops being a gate.
   //
@@ -266,11 +267,31 @@ describe('the shipped allowlist files', () => {
   // constraints", not "no patched version published". linkify-it 5.0.2 is
   // patched, and an `overrides` entry in mobile/package.json changes the
   // constraint. They are fixed, not accepted. See CHANGELOG 478.
-  it.each([
-    ['web', '../.audit-allowlist.json'],
-    ['mobile', '../mobile/.audit-allowlist.json'],
-  ])('%s accepts nothing — empty is the healthy state', (_label, path) => {
-    expect(load(path).accepted).toEqual([])
+  it.each([['web', '../.audit-allowlist.json']])(
+    '%s accepts nothing — empty is the healthy state',
+    (_label, path) => {
+      expect(load(path).accepted).toEqual([])
+    },
+  )
+
+  // Mobile accepts EXACTLY the two image-size advisories — and nothing else.
+  // This is materially different from the linkify-it lesson above, and the
+  // distinction was verified against the REGISTRY, not npm's report:
+  // linkify-it's fixAvailable:false was a constraint artefact (5.0.2 existed;
+  // an override changed the constraint and fixed it). For image-size, the
+  // GitHub Advisory API shows first_patched_version: none for BOTH ids, and
+  // the npm registry's latest published image-size IS the vulnerable 2.0.2 —
+  // no version exists to override to. metro also pins ^1.0.2, and 2.x would
+  // break its string-path call in metro/src/Assets.js (2.x's sync API is
+  // Uint8Array-only) even if a patched 2.x existed. See CHANGELOG 533.
+  //
+  // Exact-match on sorted ids, so ANY additional accept — or a swap to a
+  // different id — still fails here and forces a reviewed decision.
+  it('mobile accepts exactly the two unpatchable image-size advisories', () => {
+    const ids = load('../mobile/.audit-allowlist.json')
+      .accepted.map((e) => e.id)
+      .sort()
+    expect(ids).toEqual(['GHSA-5p2g-fcmc-qvqq', 'GHSA-w3rx-r6r6-pgpr'])
   })
 })
 

@@ -11,8 +11,27 @@
     "`--package-lock-only` (verified 2026-08-07 — identical reports with and without it). That is the honest",
     "posture for this tree anyway, since mobile's only devDependency is @babel/core.",
     "",
-    "Empty is the healthy state, and it IS empty — the two linkify-it advisories that were briefly accepted",
-    "here are fixed instead, by the `linkify-it: ^5.0.2` override in mobile/package.json. See CHANGELOG 479."
+    "Empty is the healthy state — the two linkify-it advisories that were briefly accepted here are fixed",
+    "instead, by the `linkify-it: ^5.0.2` override in mobile/package.json. See CHANGELOG 479.",
+    "",
+    "The image-size accepts below are NOT fixable as of 2026-08-17: the vulnerable range is <= 2.0.2 and",
+    "2.0.2 is the LATEST published version — no patched release exists to bump or override to (upstream's",
+    "last release is 2025-04-02; verified against the GitHub advisories and the npm registry). Re-check",
+    "`npm view image-size versions` at expiry; the moment a patched release lands, fix via override on",
+    "metro's `image-size` dep and delete both entries."
   ],
-  "accepted": []
+  "accepted": [
+    {
+      "id": "GHSA-w3rx-r6r6-pgpr",
+      "package": "image-size",
+      "reason": "Build-time only, first-party input only. image-size is reached solely via expo > @expo/metro > metro (Assets.js), which parses the dimensions of image assets checked into THIS repo during bundling/export — it is not in the shipped app bundle and never parses attacker-supplied images. The DoS (infinite loop on a crafted ICNS file) could only hang our own build, and only if a malicious ICNS were committed to the repo. No patched version exists (vulnerable range <= 2.0.2 = every published release).",
+      "expires": "2026-11-15"
+    },
+    {
+      "id": "GHSA-5p2g-fcmc-qvqq",
+      "package": "image-size",
+      "reason": "Same code path and posture as GHSA-w3rx-r6r6-pgpr: metro's build-time asset dimension probe over repo-owned images; JXL/HEIF infinite-loop variant. Not runtime-reachable in the app; worst case is a hung CI build from a malicious committed image. No patched version exists (vulnerable range <= 2.0.2 = every published release).",
+      "expires": "2026-11-15"
+    }
+  ]
 }
