@@ -140,7 +140,13 @@ export async function POST(request) {
   const { data: authData, error: authError } = await db.auth.admin.inviteUserByEmail(
     body.email,
     {
-      data: { full_name: body.full_name },
+      // Phase 0a (Repset merge): positive marker consumed by the DB
+      // trigger handle_new_user(). Today the trigger mints a staff
+      // profile for any signup without a customer/host marker, so this
+      // is a no-op; a follow-up migration inverts that to REQUIRE
+      // invited_for='staff'. Route ships first — migration-first would
+      // silently break staff invites.
+      data: { full_name: body.full_name, invited_for: 'staff' },
       ...(appUrl ? { redirectTo: `${appUrl}/reset-password` } : {}),
     }
   )
