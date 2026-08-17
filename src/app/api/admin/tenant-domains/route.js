@@ -18,7 +18,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, tenantHostname, tenantDomainBrandConfigSchema } from '@/lib/schemas'
-import { resolveBrand } from '@/lib/brands'
+import { resolveBrand, getCrmHostnames } from '@/lib/brands'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -53,20 +53,19 @@ export async function locationOrgMismatchError(db, locationId, organizationId) {
 
 /**
  * Hostnames the DB tier must never carry. The in-code registry is
- * checked directly; the CRM host comes from NEXT_PUBLIC_APP_URL
- * (tolerate an unset env — dev/tests — by skipping that check, the
- * same posture as tenant-domains-edge.js).
+ * checked directly; the CRM hosts are the SET from getCrmHostnames()
+ * (REPSET-P6 dual-domain: {crm.un1tdublin.com, crm.repset.ie} plus
+ * the NEXT_PUBLIC_APP_URL host) — an admin must not be able to
+ * insert ANY of them as a tenant row, or that row would brand-gate
+ * the staff CRM on that domain. hostname arrives lowercased by the
+ * tenantHostname schema.
  */
 export function reservedHostnameError(hostname) {
   if (resolveBrand(hostname)) {
     return `"${hostname}" is handled by the in-code brand registry (src/lib/brands.js) — it must not have a tenant_domains row.`
   }
-  try {
-    if (new URL(process.env.NEXT_PUBLIC_APP_URL).hostname.toLowerCase() === hostname) {
-      return `"${hostname}" is the CRM's own hostname — a brand row here would gate the staff CRM itself.`
-    }
-  } catch {
-    // Env unset/malformed — nothing to check against.
+  if (getCrmHostnames().includes(hostname)) {
+    return `"${hostname}" is the CRM's own hostname — a brand row here would gate the staff CRM itself.`
   }
   return null
 }

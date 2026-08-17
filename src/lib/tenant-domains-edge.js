@@ -20,11 +20,13 @@
 // TTL window per isolate. Failures are cached too — a down DB costs
 // one attempt per window, not one per request.
 //
-// Runtime: imported by src/proxy.js (Edge). Only @supabase/ssr may
-// be imported here — its client is fetch-based and Edge-safe (same
-// shape as the proxy's SAAS-3 api_keys lookup). No node: imports,
-// no zod (write-time validation lives in the admin routes; this
-// read side re-normalises defensively instead).
+// Runtime: imported by src/proxy.js (Edge). Only @supabase/ssr and
+// the pure in-code ./brands.js module may be imported here — the
+// ssr client is fetch-based and Edge-safe (same shape as the
+// proxy's SAAS-3 api_keys lookup); brands.js is plain JS the proxy
+// already runs on Edge. No node: imports, no zod (write-time
+// validation lives in the admin routes; this read side
+// re-normalises defensively instead).
 //
 // SAAS-6/7 HANDOFF SEAM: welcome-front-page.js (org chooser) and
 // default-favicon.js resolve "whose front page / whose favicon" —
@@ -34,6 +36,7 @@
 // byte-identical (un1tdublin.com has no row here by design).
 
 import { createServerClient } from '@supabase/ssr'
+import { getCrmHostnames } from './brands.js'
 
 export const TENANT_DOMAINS_CACHE_TTL_MS = 5 * 60 * 1000 // domain churn is rare
 
@@ -65,17 +68,15 @@ export function _resetTenantDomainsCache() {
   cache = { rows: null, at: 0 }
 }
 
-// The CRM's own hostname (from NEXT_PUBLIC_APP_URL) never has a row
-// by design — skip even the cache consult for it so the primary
-// hostname provably never pays this tier, and a mistakenly-created
-// row for it can never brand-gate the staff CRM. Resilient to an
-// unset/malformed env (dev, tests): we just don't skip.
+// The CRM's own hostnames never have rows by design — skip even the
+// cache consult for them so NO CRM host ever pays this tier, and a
+// mistakenly-created row can never brand-gate the staff CRM on any
+// of its domains. REPSET-P6: SET-valued — {crm.un1tdublin.com,
+// crm.repset.ie} plus the NEXT_PUBLIC_APP_URL host (previews); see
+// getCrmHostnames() in brands.js. Resilient to an unset/malformed
+// env — the static set still guards.
 function isCrmHostname(hostKey) {
-  try {
-    return new URL(process.env.NEXT_PUBLIC_APP_URL).hostname.toLowerCase() === hostKey
-  } catch {
-    return false
-  }
+  return getCrmHostnames().includes(hostKey)
 }
 
 function makeEdgeClient() {

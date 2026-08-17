@@ -8,8 +8,12 @@
 // anyone hitting the payment hostname. Pin the obvious-but-subtle
 // edge cases so future-me notices breakage before staging does.
 
-import { describe, it, expect } from 'vitest'
-import { BRANDS, resolveBrand, isFrameworkAsset, getLegacyBrandRows, CRM_DEFAULT_HOSTNAME } from './brands.js'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { BRANDS, resolveBrand, isFrameworkAsset, getLegacyBrandRows, getCrmHostnames, CRM_DEFAULT_HOSTNAME } from './brands.js'
+
+afterEach(() => {
+  vi.unstubAllEnvs()
+})
 
 describe('BRANDS registry shape', () => {
   it('has at least the two known brands', () => {
@@ -164,6 +168,58 @@ describe('getLegacyBrandRows — read-only display descriptors for the admin vie
     const marketing = getLegacyBrandRows().find((r) => r.key === 'un1t-marketing')
     expect(marketing.hostname).toBe('un1tdublin.com')
     expect(marketing.extraHostnames).toContain('www.un1tdublin.com')
+  })
+
+  // REPSET-P6 — dual-domain: BOTH CRM hosts must show as managed-in-code
+  // rows, or an admin looking at /admin/tenant-domains would think
+  // crm.repset.ie is unclaimed and try to add it as a tenant row.
+  it('the CRM row shows BOTH CRM hostnames (canonical primary, repset as extra)', () => {
+    const crmRow = getLegacyBrandRows().find((r) => r.key === 'crm-default')
+    expect(crmRow.hostname).toBe('crm.un1tdublin.com')
+    expect(crmRow.extraHostnames).toContain('crm.repset.ie')
+  })
+
+  it('a preview NEXT_PUBLIC_APP_URL host joins the CRM row as an extra hostname', () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://preview-abc.vercel.app')
+    const crmRow = getLegacyBrandRows().find((r) => r.key === 'crm-default')
+    expect(crmRow.hostname).toBe('crm.un1tdublin.com')
+    expect(crmRow.extraHostnames).toContain('preview-abc.vercel.app')
+    expect(crmRow.extraHostnames).toContain('crm.repset.ie')
+  })
+})
+
+// REPSET-P6 — the CRM hostname concept is SET-valued: the platform
+// gains crm.repset.ie while crm.un1tdublin.com keeps serving forever.
+// Everything that used to compare against ONE host derived from
+// NEXT_PUBLIC_APP_URL consults this set instead.
+describe('getCrmHostnames — dual-domain CRM host set', () => {
+  it('defaults to both CRM hosts, canonical (un1tdublin) first', () => {
+    expect(getCrmHostnames()).toEqual(['crm.un1tdublin.com', 'crm.repset.ie'])
+  })
+
+  it('CRM_HOSTNAMES env comma-list overrides, order preserved (canonical first)', () => {
+    vi.stubEnv('CRM_HOSTNAMES', 'crm.staging.example.com, crm.other.example.com')
+    expect(getCrmHostnames()).toEqual(['crm.staging.example.com', 'crm.other.example.com'])
+  })
+
+  it('lowercases and drops empty entries', () => {
+    vi.stubEnv('CRM_HOSTNAMES', ' CRM.Un1tDublin.com ,, crm.repset.ie ')
+    expect(getCrmHostnames()).toEqual(['crm.un1tdublin.com', 'crm.repset.ie'])
+  })
+
+  it('appends the NEXT_PUBLIC_APP_URL hostname when not already listed (previews)', () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://preview-abc.vercel.app')
+    expect(getCrmHostnames()).toEqual(['crm.un1tdublin.com', 'crm.repset.ie', 'preview-abc.vercel.app'])
+  })
+
+  it('does not duplicate the NEXT_PUBLIC_APP_URL host when already in the set', () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://crm.un1tdublin.com')
+    expect(getCrmHostnames()).toEqual(['crm.un1tdublin.com', 'crm.repset.ie'])
+  })
+
+  it('tolerates an unset/malformed NEXT_PUBLIC_APP_URL (dev/tests)', () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'not a url')
+    expect(getCrmHostnames()).toEqual(['crm.un1tdublin.com', 'crm.repset.ie'])
   })
 })
 

@@ -29,9 +29,10 @@ vi.mock('@/lib/supabase', () => ({
 
 import { POST } from './route'
 
-function makeRequest(body) {
+function makeRequest(body, { origin } = {}) {
   return new Request('http://test/api/public/offers/3-month-membership/checkout', {
-    method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' },
+    method: 'POST', body: JSON.stringify(body),
+    headers: { 'content-type': 'application/json', ...(origin ? { origin } : {}) },
   })
 }
 const goodBody = { name: 'Jane Doe', email: 'jane@example.com', phone: '0871234567' }
@@ -66,6 +67,42 @@ describe('POST /api/public/offers/[slug]/checkout', () => {
       amount_cents: 49700, buyer_email: 'jane@example.com',
     }))
   })
+  // REPSET-P6 — the Origin allowlist for the Revolut redirect target
+  // accepts repset.ie + subdomains alongside un1tdublin.com. A forged
+  // Origin must still never point Revolut's redirect off-brand, and
+  // the no-Origin default stays the marketing host (unchanged).
+  describe('redirect Origin allowlist (dual-domain)', () => {
+    async function redirectUrlFor(origin) {
+      const res = await POST(makeRequest(goodBody, { origin }), props)
+      expect(res.status).toBe(200)
+      return createOrder.mock.calls[0][0].redirectUrl
+    }
+
+    it('keeps an un1tdublin.com origin (existing behaviour)', async () => {
+      expect(await redirectUrlFor('https://un1tdublin.com')).toMatch(/^https:\/\/un1tdublin\.com\/offers\//)
+    })
+
+    it('keeps a repset.ie apex origin', async () => {
+      expect(await redirectUrlFor('https://repset.ie')).toMatch(/^https:\/\/repset\.ie\/offers\//)
+    })
+
+    it('keeps a repset.ie subdomain origin (www., crm.)', async () => {
+      expect(await redirectUrlFor('https://www.repset.ie')).toMatch(/^https:\/\/www\.repset\.ie\/offers\//)
+      createOrder.mockClear()
+      expect(await redirectUrlFor('https://crm.repset.ie')).toMatch(/^https:\/\/crm\.repset\.ie\/offers\//)
+    })
+
+    it('a suffix-lookalike host falls back to the default (evilrepset.ie, evilun1tdublin.com)', async () => {
+      expect(await redirectUrlFor('https://evilrepset.ie')).toMatch(/^https:\/\/www\.un1tdublin\.com\/offers\//)
+      createOrder.mockClear()
+      expect(await redirectUrlFor('https://evilun1tdublin.com')).toMatch(/^https:\/\/www\.un1tdublin\.com\/offers\//)
+    })
+
+    it('a foreign origin falls back to the default', async () => {
+      expect(await redirectUrlFor('https://attacker.example.com')).toMatch(/^https:\/\/www\.un1tdublin\.com\/offers\//)
+    })
+  })
+
   it('404 unknown slug', async () => {
     state.offer = null
     expect((await POST(makeRequest(goodBody), props)).status).toBe(404)

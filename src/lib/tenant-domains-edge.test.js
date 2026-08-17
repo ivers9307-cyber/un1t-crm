@@ -127,6 +127,26 @@ describe('resolveTenantDomainBrand — resolution', () => {
     expect(await resolveTenantDomainBrand('crm.un1tdublin.com', { db })).toBe(null)
     expect(db.spy).not.toHaveBeenCalled()
   })
+
+  // REPSET-P6 — dual-domain: BOTH CRM hosts skip this tier, even when
+  // NEXT_PUBLIC_APP_URL names only one of them (prod config). Neither
+  // host ever pays the DB lookup, and a mistaken row can never
+  // brand-gate the staff CRM on either domain.
+  it('EVERY CRM host in the set skips this tier, whatever NEXT_PUBLIC_APP_URL says', async () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://crm.un1tdublin.com')
+    for (const host of ['crm.un1tdublin.com', 'crm.repset.ie']) {
+      _resetTenantDomainsCache()
+      const db = counted(fixture([{ ...ROW, hostname: host }]))
+      expect(await resolveTenantDomainBrand(host, { db })).toBe(null)
+      expect(db.spy).not.toHaveBeenCalled()
+    }
+  })
+
+  it('CRM hosts skip this tier case-insensitively and with a port suffix', async () => {
+    const db = counted(fixture([{ ...ROW, hostname: 'crm.repset.ie' }]))
+    expect(await resolveTenantDomainBrand('CRM.Repset.IE:3000', { db })).toBe(null)
+    expect(db.spy).not.toHaveBeenCalled()
+  })
 })
 
 describe('resolveTenantDomainBrand — TTL cache', () => {
