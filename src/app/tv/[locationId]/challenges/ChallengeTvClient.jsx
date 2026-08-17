@@ -1,6 +1,7 @@
 'use client'
 
-// In-studio challenge TV board — Graft/Afterglow ledger (GRAFT-TV 2026-08).
+// In-studio challenge TV board — Repset ledger (P4a reskin of the
+// Graft/Afterglow board — palette + signature only; layout unchanged).
 //
 // Polls /api/public/challenges/[locationId] every 45s (+ on mount).
 // Shows the first active individual challenge's standings, rolling 8 rows
@@ -11,11 +12,11 @@
 // Auto-roll: 2.6 s interval advances pageIndex; resets on fresh poll data.
 // Orientation: detected via matchMedia; forced via ?orientation=portrait|landscape.
 //
-// Presentation: iron canvas, Archivo Expanded earned numbers, Figtree names,
+// Presentation: ink canvas, Archivo Expanded earned numbers, Figtree names,
 // IBM Plex Mono telemetry. Flat ledger rows with distance-to-leader pips —
-// no medals, no pills: only the leader runs Furnace, ranks 1-3 read full
-// chalk, everyone else rests at chalk-2. Kicker + glow in Furnace (a
-// challenge is heat; the floor board's LIVE is Redline).
+// no medals, no pills: only the leader runs volt, ranks 1-3 read full
+// bone, everyone else rests at bone-2. Kicker + glow in volt (a
+// challenge is earned heat; the floor board's LIVE is Redline).
 //
 // Sizing note: the approved mockup draws the board inside a 900px-wide TV
 // frame; a kiosk TV renders at ~1920 CSS px, so the mockup's px values are
@@ -25,28 +26,29 @@
 import { useEffect, useCallback, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { pageSlice } from '@/lib/tv-roll'
-import { graftDisplay, graftBody, graftMono } from '@/fonts/graft'
+import { repsetDisplay, repsetBody, repsetMono } from '@/fonts/repset'
 import { ZONE_COLORS_DARK } from '@/lib/tv-zone-colors'
 
 const POLL_MS = 45_000
 const ROLL_MS = 2_600
 
-// Afterglow tokens — dark-canvas board chrome.
-const IRON = '#0F1216' // canvas (never pure black)
-const CHALK = '#F4F1EA' // primary text (never #FFF)
-const CHALK_2 = '#A9B0BA'
-const CHALK_3 = '#66707E'
-const HAIRLINE = '#2A323D'
-const ROW_RULE = '#232B36' // board row separators + pip track
-const RAISED = '#202730'
-const PIP_FILL = '#8B93A0'
-const FURNACE = ZONE_COLORS_DARK[4] // heat is earned: kicker, glow, the leader
+// Repset tokens (P4a) — dark-canvas board chrome. Zone DATA colours stay in
+// @/lib/tv-zone-colors, untouched.
+const INK = '#131316' // canvas (never pure black)
+const BONE = '#F1EEE7' // primary text (never #FFF)
+const BONE_2 = '#B1AEA6'
+const BONE_3 = '#75726B'
+const HAIRLINE = '#30303A'
+const ROW_RULE = '#292931' // board row separators + pip track
+const RAISED = '#26262D'
+const PIP_FILL = '#92909A'
+const VOLT = '#D6FF3D' // heat is earned: kicker, glow, the leader
 const REDLINE = ZONE_COLORS_DARK[5] // attention only (connection issue)
 
 // Font stacks off the next/font CSS variables set on the root <main>.
-const DISPLAY = { fontFamily: 'var(--font-graft-display), system-ui, sans-serif' }
-const BODY = { fontFamily: 'var(--font-graft-body), system-ui, sans-serif' }
-const MONO = { fontFamily: 'var(--font-graft-mono), ui-monospace, monospace' }
+const DISPLAY = { fontFamily: 'var(--font-repset-display), system-ui, sans-serif' }
+const BODY = { fontFamily: 'var(--font-repset-body), system-ui, sans-serif' }
+const MONO = { fontFamily: 'var(--font-repset-mono), ui-monospace, monospace' }
 
 function metricLabel(metric) {
   if (metric === 'points') return 'UN1T Points'
@@ -136,8 +138,8 @@ export default function ChallengeTvClient({ locationId }) {
 
   const size = portrait ? 12 : 8
 
-  const rootClass = `relative flex min-h-screen flex-col overflow-hidden ${graftDisplay.variable} ${graftBody.variable} ${graftMono.variable}`
-  const rootStyle = { backgroundColor: IRON, color: CHALK, ...BODY }
+  const rootClass = `relative flex min-h-screen flex-col overflow-hidden ${repsetDisplay.variable} ${repsetBody.variable} ${repsetMono.variable}`
+  const rootStyle = { backgroundColor: INK, color: BONE, ...BODY }
 
   // Collective challenge → big progress bar.
   if (firstActive?.mode === 'collective') {
@@ -145,7 +147,7 @@ export default function ChallengeTvClient({ locationId }) {
     const pctDisplay = Math.round((pct || 0) * 100)
     return (
       <main className={rootClass} style={rootStyle}>
-        <FurnaceGlow />
+        <VoltGlow />
         <Header
           locationName={locationName}
           challengeName={firstActive.name}
@@ -158,18 +160,18 @@ export default function ChallengeTvClient({ locationId }) {
           <div className="text-center">
             <p
               className="text-lg uppercase"
-              style={{ ...MONO, letterSpacing: '0.28em', color: FURNACE }}
+              style={{ ...MONO, letterSpacing: '0.28em', color: VOLT }}
             >
               {metricLabel(firstActive.metric)}
             </p>
             <p
               className="mt-3 text-7xl tabular-nums leading-none"
-              style={{ ...DISPLAY, fontWeight: 800, color: CHALK }}
+              style={{ ...DISPLAY, fontWeight: 800, color: BONE }}
             >
               {pctDisplay}
               <span className="text-4xl">%</span>
             </p>
-            <p className="mt-3 text-2xl tabular-nums" style={{ ...MONO, color: CHALK_2 }}>
+            <p className="mt-3 text-2xl tabular-nums" style={{ ...MONO, color: BONE_2 }}>
               {total ?? 0} / {target ?? '?'}
             </p>
           </div>
@@ -181,12 +183,12 @@ export default function ChallengeTvClient({ locationId }) {
             >
               <div
                 className="h-full rounded-full transition-[width] duration-500"
-                style={{ width: `${pctDisplay}%`, backgroundColor: FURNACE }}
+                style={{ width: `${pctDisplay}%`, backgroundColor: VOLT }}
               />
             </div>
             <p
               className="mt-4 text-center text-sm uppercase"
-              style={{ ...MONO, letterSpacing: '0.22em', color: CHALK_3 }}
+              style={{ ...MONO, letterSpacing: '0.22em', color: BONE_3 }}
             >
               gym-wide goal
             </p>
@@ -220,7 +222,7 @@ export default function ChallengeTvClient({ locationId }) {
 
   return (
     <main className={rootClass} style={rootStyle}>
-      <FurnaceGlow />
+      <VoltGlow />
       <Header
         locationName={locationName}
         challengeName={boardLabel}
@@ -236,7 +238,7 @@ export default function ChallengeTvClient({ locationId }) {
             ...MONO,
             borderColor: `${REDLINE}80`,
             backgroundColor: `${REDLINE}1A`,
-            color: CHALK,
+            color: BONE,
           }}
         >
           Connection issue: {error}. Retrying…
@@ -291,7 +293,7 @@ export default function ChallengeTvClient({ locationId }) {
           {pages > 1 && (
             <p
               className="pb-4 text-center text-sm tabular-nums"
-              style={{ ...MONO, color: CHALK_3 }}
+              style={{ ...MONO, color: BONE_3 }}
             >
               {page + 1} / {pages}
             </p>
@@ -306,13 +308,13 @@ export default function ChallengeTvClient({ locationId }) {
 
 // ── sub-components ────────────────────────────────────────────────────────────
 
-// Furnace glow, top-centre — the challenge board runs warm.
-function FurnaceGlow() {
+// Volt glow, top-centre — the challenge board runs on earned heat.
+function VoltGlow() {
   return (
     <div
       aria-hidden="true"
       className="pointer-events-none absolute -top-32 left-1/2 h-72 w-[70%] -translate-x-1/2"
-      style={{ background: `radial-gradient(closest-side, ${FURNACE}24, transparent)` }}
+      style={{ background: `radial-gradient(closest-side, ${VOLT}24, transparent)` }}
     />
   )
 }
@@ -321,37 +323,37 @@ function Header({ locationName, challengeName, metric, now, endsOn }) {
   return (
     <header
       className="relative flex items-start justify-between px-12 pb-5 pt-7"
-      style={{ borderBottom: `2px solid ${CHALK}` }}
+      style={{ borderBottom: `2px solid ${BONE}` }}
     >
       <div>
         <p
           className="flex items-center gap-3 text-lg uppercase"
-          style={{ ...MONO, letterSpacing: '0.28em', color: FURNACE }}
+          style={{ ...MONO, letterSpacing: '0.28em', color: VOLT }}
         >
           <span
             aria-hidden="true"
             className="inline-block h-3 w-3 rounded-full"
-            style={{ backgroundColor: FURNACE, boxShadow: `0 0 12px ${FURNACE}99` }}
+            style={{ backgroundColor: VOLT, boxShadow: `0 0 12px ${VOLT}99` }}
           />
           Challenge
         </p>
         <h1
           className="mt-2 text-4xl leading-tight"
-          style={{ ...DISPLAY, fontWeight: 700, color: CHALK }}
+          style={{ ...DISPLAY, fontWeight: 700, color: BONE }}
         >
           {locationName}
         </h1>
-        <p className="mt-1 text-xl leading-tight" style={{ ...BODY, color: CHALK_2 }}>
+        <p className="mt-1 text-xl leading-tight" style={{ ...BODY, color: BONE_2 }}>
           {challengeName}
           {metric ? ` · ${metricLabel(metric)}` : ''}
         </p>
       </div>
       <div className="text-right" style={MONO}>
-        <p className="text-3xl tabular-nums" style={{ color: CHALK }}>
+        <p className="text-3xl tabular-nums" style={{ color: BONE }}>
           {now.toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' })}
         </p>
         {endsOn && (
-          <p className="mt-1 text-base" style={{ color: CHALK_3 }}>
+          <p className="mt-1 text-base" style={{ color: BONE_3 }}>
             ends {endsOn}
           </p>
         )}
@@ -361,21 +363,21 @@ function Header({ locationName, challengeName, metric, now, endsOn }) {
 }
 
 // One ledger row: rank · name (· LEADER chip) · distance-to-leader pips · value.
-// Heat is earned, not awarded: the leader runs Furnace, ranks 1-3 read full
-// chalk, everyone else rests at chalk-2. No medals.
+// Heat is earned, not awarded: the leader runs volt, ranks 1-3 read full
+// bone, everyone else rests at bone-2. No medals.
 function Row({ row, metric, leaderValue, portrait }) {
   const isLeader = row.rank === 1
   const isTop = row.rank <= 3
   const filled = filledPips(row.value, leaderValue)
-  const valueColor = isLeader ? FURNACE : isTop ? CHALK : CHALK_2
-  const unitColor = isLeader ? FURNACE : CHALK_3
+  const valueColor = isLeader ? VOLT : isTop ? BONE : BONE_2
+  const unitColor = isLeader ? VOLT : BONE_3
 
   return (
     <div className="flex items-center gap-5 py-4" style={{ borderBottom: `1px solid ${ROW_RULE}` }}>
       {/* Rank — mono, two digits */}
       <span
         className="w-12 shrink-0 text-right text-xl tabular-nums leading-none"
-        style={{ ...MONO, color: isLeader ? FURNACE : CHALK_3 }}
+        style={{ ...MONO, color: isLeader ? VOLT : BONE_3 }}
       >
         {String(row.rank).padStart(2, '0')}
       </span>
@@ -384,14 +386,14 @@ function Row({ row, metric, leaderValue, portrait }) {
       <span className="flex w-64 min-w-0 shrink-0 items-center">
         <span
           className="truncate text-2xl font-semibold leading-tight"
-          style={{ ...BODY, color: CHALK }}
+          style={{ ...BODY, color: BONE }}
         >
           {row.name}
         </span>
         {isLeader && !portrait && (
           <span
             className="ml-3 shrink-0 rounded-full border px-2.5 py-0.5 text-sm uppercase leading-tight"
-            style={{ ...MONO, letterSpacing: '0.16em', color: FURNACE, borderColor: `${FURNACE}80` }}
+            style={{ ...MONO, letterSpacing: '0.16em', color: VOLT, borderColor: `${VOLT}80` }}
           >
             Leader
           </span>
@@ -404,7 +406,7 @@ function Row({ row, metric, leaderValue, portrait }) {
           <span
             key={i}
             className="h-2.5 flex-1 rounded-full"
-            style={{ backgroundColor: i < filled ? (isLeader ? FURNACE : PIP_FILL) : ROW_RULE }}
+            style={{ backgroundColor: i < filled ? (isLeader ? VOLT : PIP_FILL) : ROW_RULE }}
           />
         ))}
       </span>
@@ -426,34 +428,35 @@ function Row({ row, metric, leaderValue, portrait }) {
   )
 }
 
-// The Graft signature bar — mono handoff line left, Stack mark + wordmark
-// right. Same shape as the live board's footer (duplicated inline on purpose;
-// no shared component file).
+// The Repset signature bar — mono handoff line left, tally mark + wordmark
+// right. The tally: three rounded bone bars struck through by a volt
+// diagonal — reps counted, set done. Same shape as the live board's footer
+// (duplicated inline on purpose; no shared component file).
 function FooterSignature() {
   return (
     <div
       className="flex items-center justify-between px-12 py-4"
-      style={{ borderTop: `1px solid ${HAIRLINE}`, backgroundColor: IRON }}
+      style={{ borderTop: `1px solid ${HAIRLINE}`, backgroundColor: INK }}
     >
       <span
         className="text-sm uppercase"
-        style={{ ...MONO, letterSpacing: '0.18em', color: CHALK_3 }}
+        style={{ ...MONO, letterSpacing: '0.18em', color: BONE_3 }}
       >
         Full board in your app
       </span>
       <div className="flex items-center gap-2.5">
         <svg viewBox="0 0 1024 1024" className="h-6 w-6 rounded-md" aria-hidden="true">
-          <rect width="1024" height="1024" fill="#0F1216" />
-          <rect x="199" y="721" width="470" height="122" rx="61" fill="#F4F1EA" />
-          <rect x="277" y="541" width="470" height="122" rx="61" fill="#F4F1EA" />
-          <rect x="355" y="361" width="470" height="122" rx="61" fill="#F4F1EA" />
-          <rect x="433" y="181" width="282" height="122" rx="61" fill="#FFA928" />
+          <rect width="1024" height="1024" fill="#131316" />
+          <rect x="230" y="200" width="116" height="624" rx="58" fill="#F1EEE7" />
+          <rect x="454" y="200" width="116" height="624" rx="58" fill="#F1EEE7" />
+          <rect x="678" y="200" width="116" height="624" rx="58" fill="#F1EEE7" />
+          <line x1="176" y1="812" x2="848" y2="212" stroke="#D6FF3D" strokeWidth="116" strokeLinecap="round" />
         </svg>
         <span
           className="text-2xl lowercase"
-          style={{ ...DISPLAY, fontWeight: 800, letterSpacing: '-0.01em', color: CHALK }}
+          style={{ ...DISPLAY, fontWeight: 800, letterSpacing: '-0.01em', color: BONE }}
         >
-          graft
+          repset<span style={{ color: VOLT }}>.</span>
         </span>
       </div>
     </div>
@@ -463,10 +466,10 @@ function FooterSignature() {
 function EmptyBoard() {
   return (
     <div className="flex flex-1 flex-col items-center justify-center px-8 text-center">
-      <p className="text-2xl font-semibold" style={{ ...BODY, color: CHALK_2 }}>
+      <p className="text-2xl font-semibold" style={{ ...BODY, color: BONE_2 }}>
         No active challenge
       </p>
-      <p className="mt-3 text-sm" style={{ ...MONO, color: CHALK_3 }}>
+      <p className="mt-3 text-sm" style={{ ...MONO, color: BONE_3 }}>
         The leaderboard appears automatically when a challenge is running.
       </p>
     </div>
