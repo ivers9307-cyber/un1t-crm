@@ -35,7 +35,11 @@ import { logInfo, logWarn, logError } from '@/lib/log'
 import { formatWeekdayShortDateTimeInTZ } from '@/lib/dates'
 
 const HISTORY_LOOKBACK_DAYS = 90
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://app.champfitness.ie'
+// REPSET-P6.C — member links build on the MEMBER-APP base. In this repo
+// NEXT_PUBLIC_APP_URL is the CRM host (which has no /sessions route), so
+// defaulting from it 404'd the session CTA in every post-class email.
+// NEXT_PUBLIC_CHAMP_APP_URL is the same var invite-app uses.
+const CHAMP_APP_URL = process.env.NEXT_PUBLIC_CHAMP_APP_URL || 'https://app.champfitness.ie'
 const CRM_URL = process.env.NEXT_PUBLIC_APP_URL_CRM || 'https://crm.un1tdublin.com'
 
 // ── (1) load ────────────────────────────────────────────────────
@@ -207,7 +211,8 @@ export function composeEmail(ctx, { nowMs = Date.now() } = {}) {
   const avg = Number.isFinite(session.avg_hr_bpm) ? session.avg_hr_bpm : null
   const durationMin = computeDurationMin(session)
 
-  const sessionUrl = `${APP_URL}/sessions/${session.id}`
+  // Member-facing deep link — champ-app base, NOT the CRM (see top).
+  const sessionUrl = `${CHAMP_APP_URL}/sessions/${session.id}`
 
   const na = report.next_action
 
