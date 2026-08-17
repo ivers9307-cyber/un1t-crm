@@ -3,6 +3,7 @@ import { ANDROID_CHANNELS, androidChannelId } from '@shared/push-channels'
 import {
   CUSTOMER_ANDROID_CHANNELS,
   customerAndroidChannelId,
+  LEGACY_CHANNEL_ALIASES,
 } from '@shared/customer-push-channels'
 import { NOTIFICATION_CATEGORIES } from './notifications-registry'
 
@@ -30,7 +31,7 @@ const CUSTOMER_TYPES = [
   'class_reminder', 'friend_request', 'feed',
   'session_report', 'achievement', 'goal', 'tier_up',
   'monthly_target_hit', 'streak_at_risk', 'winback', 'challenge',
-  'onboarding_pace',
+  'onboarding_pace', 'event_reminder',
 ]
 
 describe('staff push channels (shared/push-channels)', () => {
@@ -95,10 +96,10 @@ describe('customer push channels (shared/customer-push-channels)', () => {
   })
 
   it('class reminders are the only high-importance customer channel', () => {
-    expect(customerAndroidChannelId('class_reminder')).toBe('reminders')
-    expect(CUSTOMER_ANDROID_CHANNELS.reminders.importance).toBe('high')
+    expect(customerAndroidChannelId('class_reminder')).toBe('class_reminders')
+    expect(CUSTOMER_ANDROID_CHANNELS.class_reminders.importance).toBe('high')
     const others = Object.entries(CUSTOMER_ANDROID_CHANNELS)
-      .filter(([id]) => id !== 'reminders')
+      .filter(([id]) => id !== 'class_reminders')
     for (const [, spec] of others) {
       expect(spec.importance).toBe('default')
     }
@@ -108,5 +109,27 @@ describe('customer push channels (shared/customer-push-channels)', () => {
     expect(CUSTOMER_ANDROID_CHANNELS.default).toBeDefined()
     expect(customerAndroidChannelId('nope')).toBe('default')
     expect(customerAndroidChannelId()).toBe('default')
+  })
+
+  it('event_reminder rides the class_reminders channel, not default (was silently unmapped)', () => {
+    expect(customerAndroidChannelId('event_reminder')).toBe('class_reminders')
+  })
+
+  // The P3 collision this rename fixes: the merged Repset binary registers
+  // BOTH channel sets, and both maps owned a 'reminders' id with different
+  // display names. Only the shared legacy 'default' id may overlap.
+  it('no customer channel id collides with a staff channel id except the shared legacy default', () => {
+    const staff = new Set(Object.keys(ANDROID_CHANNELS))
+    const collisions = Object.keys(CUSTOMER_ANDROID_CHANNELS).filter((id) => staff.has(id))
+    expect(collisions).toEqual(['default'])
+  })
+
+  it('legacy aliases cover the retired reminders pref key and never shadow a live channel id', () => {
+    expect(LEGACY_CHANNEL_ALIASES.class_reminders).toEqual(['reminders'])
+    const live = Object.keys(CUSTOMER_ANDROID_CHANNELS)
+    for (const [current, aliases] of Object.entries(LEGACY_CHANNEL_ALIASES)) {
+      expect(live).toContain(current)
+      for (const alias of aliases) expect(live).not.toContain(alias)
+    }
   })
 })

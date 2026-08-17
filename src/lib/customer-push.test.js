@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { sendCustomerPush } from './customer-push.js'
 
 // prefRows feeds the contacts.push_prefs lookup (only queried for typed,
@@ -166,5 +167,61 @@ describe('sendCustomerPush — Expo failure handling (retry + failed count)', ()
     const d = db([{ id: '1', expo_push_token: 'ExponentPushToken[dead]' }], { deleteError: { message: 'rls says no' } })
     const out = await sendCustomerPush(d, 'c1', { title: 't', body: 'b' })
     expect(out.invalidated).toBe(0)
+  })
+})
+
+describe('sendCustomerPush — legacy pref-key aliases (P3: reminders → class_reminders)', () => {
+  const ok = () => ({ ok: true, json: async () => ({ data: [{ status: 'ok' }] }) })
+  const token = (c) => ({ id: c, expo_push_token: `ExponentPushToken[${c}]` })
+
+  it('legacy reminders:false still mutes a class_reminder send', async () => {
+    const d = db([token('c1')], { prefRows: [{ id: 'c1', push_prefs: { reminders: false } }] })
+    const out = await sendCustomerPush(d, 'c1', { title: 't', body: 'b', data: { type: 'class_reminder' } })
+    expect(out).toEqual({ sent: 0, invalidated: 0, failed: 0, skipped: 1 })
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+
+  it('new class_reminders:false mutes a class_reminder send', async () => {
+    const d = db([token('c1')], { prefRows: [{ id: 'c1', push_prefs: { class_reminders: false } }] })
+    const out = await sendCustomerPush(d, 'c1', { title: 't', body: 'b', data: { type: 'class_reminder' } })
+    expect(out).toEqual({ sent: 0, invalidated: 0, failed: 0, skipped: 1 })
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+
+  it('neither key set → sends (fail-open unchanged)', async () => {
+    global.fetch.mockResolvedValue(ok())
+    const d = db([token('c1')], { prefRows: [{ id: 'c1', push_prefs: { social: false } }] })
+    const out = await sendCustomerPush(d, 'c1', { title: 't', body: 'b', data: { type: 'class_reminder' } })
+    expect(out.sent).toBe(1)
+    expect(out.skipped).toBe(0)
+  })
+
+  it('EITHER-KEY-MUTES: explicit class_reminders:true does NOT override legacy reminders:false — a muted member stays muted whichever key their row carries (opt-out integrity)', async () => {
+    const d = db([token('c1')], { prefRows: [{ id: 'c1', push_prefs: { class_reminders: true, reminders: false } }] })
+    const out = await sendCustomerPush(d, 'c1', { title: 't', body: 'b', data: { type: 'class_reminder' } })
+    expect(out).toEqual({ sent: 0, invalidated: 0, failed: 0, skipped: 1 })
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+
+  it('event_reminder stamps the class_reminders channel (not default) and honours its mute', async () => {
+    global.fetch.mockResolvedValue(ok())
+    const d = db([token('c1')], { prefRows: [] })
+    await sendCustomerPush(d, 'c1', { title: 't', body: 'b', data: { type: 'event_reminder' } })
+    const posted = JSON.parse(global.fetch.mock.calls[0][1].body)
+    expect(posted[0].channelId).toBe('class_reminders')
+    // prefs WERE consulted — a default-channel send would have skipped the query
+    expect(d.queried.contactIds).toEqual(['c1'])
+
+    const muted = db([token('c2')], { prefRows: [{ id: 'c2', push_prefs: { reminders: false } }] })
+    const out = await sendCustomerPush(muted, 'c2', { title: 't', body: 'b', data: { type: 'event_reminder' } })
+    expect(out.skipped).toBe(1)
+  })
+})
+
+describe('staff sender isolation (P3)', () => {
+  it('src/lib/push.js is untouched — no LEGACY_CHANNEL_ALIASES / customer map import (its fail-closed gating is deliberate and out of scope)', () => {
+    const staffSrc = readFileSync(new URL('./push.js', import.meta.url), 'utf8')
+    expect(staffSrc).not.toContain('LEGACY_CHANNEL_ALIASES')
+    expect(staffSrc).not.toContain('customer-push-channels')
   })
 })
