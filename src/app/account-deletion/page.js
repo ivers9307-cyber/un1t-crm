@@ -5,7 +5,7 @@
 // creates user accounts. Must be publicly accessible (no auth) so
 // reviewers can verify the page exists and explains the process.
 //
-// UN1T CRM is an internal staff tool — accounts are provisioned by
+// Repset is an internal staff tool — accounts are provisioned by
 // admins, not self-served — so the "deletion request" flow is the
 // existing GDPR-compliant master-only delete path operating on
 // behalf of the user. This page surfaces that path publicly: who to
@@ -14,9 +14,9 @@
 export const runtime = 'nodejs'
 
 export const metadata = {
-  title: 'Account deletion · UN1T Dublin',
+  title: 'Account deletion · Repset',
   description:
-    'How to request deletion of your UN1T CRM account and associated personal data.',
+    'How to request deletion of your Repset account and associated personal data.',
 }
 
 export default function AccountDeletion() {
@@ -30,7 +30,7 @@ export default function AccountDeletion() {
 
         <section className="prose prose-gray max-w-none">
           <p>
-            UN1T CRM is an internal staff application used by employees and
+            Repset is an internal staff application used by employees and
             contractors of UN1T Dublin Ltd. Accounts are created and managed by
             UN1T administrators rather than by self-service sign-up. If you no
             longer wish your data to be held by us, you can request deletion at
@@ -41,7 +41,7 @@ export default function AccountDeletion() {
           <p>
             Email <a className="underline" href="mailto:privacy@un1tdublin.com">
             privacy@un1tdublin.com</a> from the email address associated with
-            your UN1T CRM account, with the subject line:
+            your Repset account, with the subject line:
           </p>
           <p className="font-mono bg-gray-100 px-3 py-2 rounded inline-block">
             Account deletion request
@@ -78,7 +78,7 @@ export default function AccountDeletion() {
 
           <h2 className="text-xl font-semibold mt-8 mb-3">If your account was a contact, not a staff account</h2>
           <p>
-            UN1T CRM also stores contact records for members of the public who
+            Repset also stores contact records for members of the public who
             have interacted with UN1T (gym members, event attendees, race
             registrants). If you are a member of the public and want your
             contact record deleted, the same email address — <a className="underline"

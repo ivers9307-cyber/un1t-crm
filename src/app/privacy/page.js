@@ -23,7 +23,7 @@
 export const runtime = 'nodejs'
 
 export const metadata = {
-  title: 'Privacy policy · UN1T Dublin',
+  title: 'Privacy policy · Repset',
   description:
     'How Champ Fitness Ltd (trading as UN1T Dublin) collects, uses, and protects personal data in the Repset web application and the Repset iOS app.',
 }
