@@ -12,7 +12,11 @@ import { supabase } from './supabase'
 import { readImpersonate } from './impersonate'
 import { buildAuthHeaders } from './api-headers'
 
-const API_BASE = Constants.expoConfig?.extra?.apiBaseUrl
+// REPSET-P6.S2 — exported so every hand-rolled client wrapper (checklists,
+// inbox approvals, issues, maintenance) builds on the SAME base as api(),
+// resolved once through app.config.js extra.apiBaseUrl (EXPO_PUBLIC_
+// override first, canonical repset default second). One flip point.
+export const API_BASE = Constants.expoConfig?.extra?.apiBaseUrl
 
 if (!API_BASE) {
   // eslint-disable-next-line no-console

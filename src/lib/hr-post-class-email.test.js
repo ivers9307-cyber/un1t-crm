@@ -133,13 +133,15 @@ describe('composeEmail', () => {
   // host, which has no /sessions route — every CTA 404'd in prod).
   it('session CTA builds on the member-app base in both HTML and text', () => {
     const out = composeEmail(ctx(), { nowMs: NOW })
-    expect(out.html).toContain('https://app.champfitness.ie/sessions/sess-1')
-    expect(out.text).toContain('https://app.champfitness.ie/sessions/sess-1')
+    // REPSET-P6.S2 — code default flipped to the canonical repset member host.
+    expect(out.html).toContain('https://api.repset.ie/sessions/sess-1')
+    expect(out.text).toContain('https://api.repset.ie/sessions/sess-1')
   })
 
   it('unsubscribe link stays on the CRM base', () => {
     const out = composeEmail(ctx(), { nowMs: NOW })
-    expect(out.html).toContain('https://crm.un1tdublin.com/api/preferences/hr-emails')
+    // REPSET-P6.S2 — code default flipped to the canonical repset CRM host.
+    expect(out.html).toContain('https://crm.repset.ie/api/preferences/hr-emails')
   })
 })
 
@@ -161,10 +163,10 @@ describe('composeEmail — URL bases vs env (module reimport)', () => {
   // The live bug: in THIS repo NEXT_PUBLIC_APP_URL is the CRM host.
   // The old code built the session CTA on it → 404 in every email.
   it('prod config (NEXT_PUBLIC_APP_URL = CRM host): CTA still on the member app', async () => {
-    const out = await freshCompose({ NEXT_PUBLIC_APP_URL: 'https://crm.un1tdublin.com' })
-    expect(out.html).toContain('https://app.champfitness.ie/sessions/sess-1')
-    expect(out.text).toContain('https://app.champfitness.ie/sessions/sess-1')
-    expect(out.html).not.toContain('https://crm.un1tdublin.com/sessions/')
+    const out = await freshCompose({ NEXT_PUBLIC_APP_URL: 'https://crm.repset.ie' })
+    expect(out.html).toContain('https://api.repset.ie/sessions/sess-1')
+    expect(out.text).toContain('https://api.repset.ie/sessions/sess-1')
+    expect(out.html).not.toContain('https://crm.repset.ie/sessions/')
   })
 
   it('NEXT_PUBLIC_CHAMP_APP_URL overrides the member-app base (same var invite-app uses)', async () => {

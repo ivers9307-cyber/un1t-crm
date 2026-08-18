@@ -6,11 +6,9 @@
 // "View as user" (x-impersonate-target) keeps working — never
 // hand-roll an Authorization header here.
 
-import { authHeaders } from './api'
-
-const API_BASE =
-  process.env.EXPO_PUBLIC_API_BASE_URL ||
-  'https://crm.un1tdublin.com'
+// REPSET-P6.S2 — base comes from the shared extra.apiBaseUrl resolution in
+// lib/api.js (EXPO_PUBLIC_API_BASE_URL override, canonical repset default).
+import { authHeaders, API_BASE } from './api'
 
 /**
  * GET /api/equipment/due — what's due for inspection at the active

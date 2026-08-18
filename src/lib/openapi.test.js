@@ -16,6 +16,13 @@ describe('getOpenApiSpec', () => {
     expect(spec.info.version).toMatch(/^\d+\.\d+\.\d+$/)
   })
 
+  // REPSET-P6.S2 — canonical host leads the server list; the legacy host
+  // stays listed second so existing integrations keep a documented base.
+  it('lists the canonical repset host first and the legacy host second', () => {
+    expect(spec.servers[0].url).toBe('https://crm.repset.ie')
+    expect(spec.servers.map((s) => s.url)).toContain('https://crm.un1tdublin.com')
+  })
+
   it('declares the pre-existing browser/integration auth schemes', () => {
     expect(spec.components.securitySchemes).toHaveProperty('BearerAuth')
     expect(spec.components.securitySchemes).toHaveProperty('CookieAuth')

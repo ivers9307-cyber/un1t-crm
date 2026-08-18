@@ -1,7 +1,7 @@
 'use client'
 
 // "Invite to App" — sends a magic-link invite for the customer-facing
-// app (champ-app at app.champfitness.ie).
+// member app.
 //
 // Two visual states:
 //   - Not yet linked    → "Invite to App"
@@ -12,6 +12,15 @@
 
 import { useState } from 'react'
 import { Smartphone, Check } from 'lucide-react'
+
+// REPSET-P6.S2 — the tooltip names the member-app host. Derived from the
+// SAME env var the invite route builds the magic link with (NEXT_PUBLIC_*
+// vars are inlined into the client bundle at build time), so the copy can
+// never drift from where the invite actually lands; code default = the
+// canonical repset member host.
+const MEMBER_APP_HOST = (process.env.NEXT_PUBLIC_CHAMP_APP_URL || 'https://api.repset.ie')
+  .replace(/^https?:\/\//, '')
+  .replace(/\/+$/, '')
 
 export default function InviteToAppButton({ contactId, hasUserAccount }) {
   const [busy, setBusy] = useState(false)
@@ -59,7 +68,7 @@ export default function InviteToAppButton({ contactId, hasUserAccount }) {
         className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition shadow-sm ${variantClasses} disabled:opacity-50 disabled:cursor-not-allowed`}
         title={hasUserAccount
           ? 'Sends a fresh sign-in link to the member by email.'
-          : 'Sends a magic-link invite by email so the member can sign in to app.champfitness.ie.'}
+          : `Sends a magic-link invite by email so the member can sign in to ${MEMBER_APP_HOST}.`}
       >
         <Icon size={14} />
         {busy ? 'Sending…' : label}

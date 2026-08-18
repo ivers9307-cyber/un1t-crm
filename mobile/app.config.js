@@ -5,7 +5,7 @@
 // EXPO_PUBLIC_ prefix is required by Expo to bundle them client-side).
 //
 // API base URL points at the Next.js deployment (e.g.
-// https://crm.un1tdublin.com). The mobile app calls a small subset of
+// https://crm.repset.ie). The mobile app calls a small subset of
 // /api/* routes for orchestration (push registration, assistant chat,
 // WhatsApp send, etc.); most CRUD goes direct to Supabase via RLS.
 
@@ -377,7 +377,7 @@ export default ({ config }) => ({
     // Supabase URL + anon key are PUBLIC by design — the anon key is
     // protected by Row-Level Security on the database, not by secrecy
     // (it's the same key embedded in every browser session at
-    // crm.un1tdublin.com). Hardcoding here means EAS Update / EAS
+    // crm.repset.ie). Hardcoding here means EAS Update / EAS
     // Build don't need any env vars set — the bundle always has the
     // right values. Local dev can still override via mobile/.env if
     // someone needs to point at a staging Supabase project.
@@ -387,15 +387,18 @@ export default ({ config }) => ({
     supabaseAnonKey:
       process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ||
       'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml5dnRiamp4ZGdnaWFkend3dmRqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzczNzYzOTQsImV4cCI6MjA5Mjk1MjM5NH0.GdUgg4Z3X9Djh57DKEP55yTgkcixualtn8LwEx3P9P8',
+    // REPSET-P6.S2 — env override stays primary; the code defaults are the
+    // canonical repset hosts. This is the OTA-able flip: publishing an
+    // update rebases every installed app onto repset without a store build.
     apiBaseUrl:
       process.env.EXPO_PUBLIC_API_BASE_URL ||
-      'https://crm.un1tdublin.com',
+      'https://crm.repset.ie',
     // PHASE2 — the member-app (champ) deployment. The merged app still
     // calls a few member-facing /api/* routes that live on the champ
     // Next.js deployment; the member's Supabase token is valid for both.
     champApiBaseUrl:
       process.env.EXPO_PUBLIC_CHAMP_API_BASE_URL ||
-      'https://app.champfitness.ie',
+      'https://api.repset.ie',
     // EAS project ID — used by `eas update` to know where to publish,
     // and by Expo Notifications.getExpoPushTokenAsync() to scope push
     // tokens to this project once we're off Expo Go's shared channel.

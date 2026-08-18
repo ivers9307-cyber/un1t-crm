@@ -18,7 +18,7 @@ export function getAppUrl() {
   if (!raw) {
     throw new Error(
       'NEXT_PUBLIC_APP_URL is not set. Configure it in your environment ' +
-      '(e.g. https://crm.un1tdublin.com in production, http://localhost:3000 in dev).'
+      '(e.g. https://crm.repset.ie in production, http://localhost:3000 in dev).'
     )
   }
   return raw.replace(/\/+$/, '')

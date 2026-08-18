@@ -209,7 +209,7 @@ export default function Login() {
                 <Text className="text-sm text-un1t-subtle underline">Use a login code instead</Text>
               </Pressable>
               <Text className="text-xs text-un1t-subtle text-center mt-3">
-                Forgot your password? Use the web app at{'\n'}crm.un1tdublin.com to reset it.
+                Forgot your password? Use the web app at{'\n'}crm.repset.ie to reset it.
               </Text>
             </>
           )}
