@@ -27,7 +27,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro, ImagePlus, X as XIcon, Tv, Flag, GraduationCap, Mic, Star, DoorOpen, UserPlus, Image as ImageIcon, Mail } from 'lucide-react'
+import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro, ImagePlus, X as XIcon, Tv, Flag, GraduationCap, Mic, Star, DoorOpen, UserPlus, Image as ImageIcon, Mail, MessageSquare } from 'lucide-react'
 import Link from 'next/link'
 import { toSlug } from '@/lib/slug'
 
@@ -264,6 +264,9 @@ export default function RaceEventForm({ race, locationId }) {
   const [confirmationSubject, setConfirmationSubject] = useState(race?.confirmation_email_subject || '')
   const [confirmationIntro, setConfirmationIntro] = useState(race?.confirmation_email_intro || '')
   const [confirmationTemplateId, setConfirmationTemplateId] = useState(race?.confirmation_email_template_id || '')
+  // EVENTS-SMS-TOGGLE (mig 552) — per-event opt-in for the registration SMS
+  // confirmation. Off by default for new events; existing events reflect the DB.
+  const [confirmationSmsEnabled, setConfirmationSmsEnabled] = useState(!!race?.confirmation_sms_enabled)
   const [reminderSubject, setReminderSubject] = useState(race?.reminder_email_subject || '')
   const [reminderIntro, setReminderIntro] = useState(race?.reminder_email_intro || '')
   const [reminderTemplateId, setReminderTemplateId] = useState(race?.reminder_email_template_id || '')
@@ -509,6 +512,8 @@ export default function RaceEventForm({ race, locationId }) {
       confirmation_email_subject: confirmationSubject.trim() || null,
       confirmation_email_intro: confirmationIntro.trim() || null,
       confirmation_email_template_id: confirmationTemplateId || null,
+      // EVENTS-SMS-TOGGLE (mig 552) — always sent so toggling it off persists.
+      confirmation_sms_enabled: confirmationSmsEnabled,
       reminder_email_subject: reminderSubject.trim() || null,
       reminder_email_intro: reminderIntro.trim() || null,
       reminder_email_template_id: reminderTemplateId || null,
@@ -1207,6 +1212,27 @@ export default function RaceEventForm({ race, locationId }) {
             onTemplateId={setConfirmationTemplateId}
             templates={emailTemplates}
           />
+
+          {/* EVENTS-SMS-TOGGLE (mig 552) — the signup confirmation can ALSO go
+              out as a text message. OFF by default; the email above always
+              sends. The pre-event reminder below is email + push only (no SMS). */}
+          <label className="flex items-start gap-3 pt-4 border-t border-un1t-border cursor-pointer">
+            <input
+              type="checkbox"
+              checked={confirmationSmsEnabled}
+              onChange={e => setConfirmationSmsEnabled(e.target.checked)}
+              className="mt-0.5 cursor-pointer"
+            />
+            <span>
+              <span className="flex items-center gap-1.5 text-sm font-medium text-un1t-text">
+                <MessageSquare size={14} className="text-un1t-subtle" /> Send a text message (SMS) confirmation
+              </span>
+              <span className="block text-[11px] text-un1t-subtle mt-1">
+                Off by default. Texts the registrant a short confirmation on signup, on top of the email above.
+                Sender ID is set per location in Settings → Locations → SMS.
+              </span>
+            </span>
+          </label>
 
           <div className="pt-4 border-t border-un1t-border">
             <EventEmailFields

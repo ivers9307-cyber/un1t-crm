@@ -47,3 +47,21 @@ describe('events UpdateSchema email config', () => {
     ).toThrow()
   })
 })
+
+// EVENTS-SMS-TOGGLE (mig 552) — per-event opt-in for the registration SMS
+// confirmation. Optional boolean; flows through the generic scalar patch in
+// PUT (omit = leave untouched).
+describe('events UpdateSchema SMS confirmation toggle', () => {
+  it('parses clean when the flag is omitted (leave untouched)', () => {
+    expect(UpdateSchema.parse({ name: 'Renamed event' }).confirmation_sms_enabled).toBeUndefined()
+  })
+
+  it('accepts an explicit boolean either way', () => {
+    expect(UpdateSchema.parse({ confirmation_sms_enabled: true }).confirmation_sms_enabled).toBe(true)
+    expect(UpdateSchema.parse({ confirmation_sms_enabled: false }).confirmation_sms_enabled).toBe(false)
+  })
+
+  it('rejects a non-boolean', () => {
+    expect(() => UpdateSchema.parse({ confirmation_sms_enabled: 'sure' })).toThrow()
+  })
+})

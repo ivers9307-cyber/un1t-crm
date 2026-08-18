@@ -40,6 +40,24 @@ function fmtWaveTime(t) {
 }
 
 /**
+ * Decide whether to send the race-registration SMS confirmation.
+ *
+ * SMS is opt-in per event (race_events.confirmation_sms_enabled, mig 552,
+ * default false) — so a legacy event with no flag set never texts. The
+ * EMAIL receipt is a separate path above and is never gated by this. The
+ * once-only guard (confirmation_sms_sent_at) still applies on top.
+ *
+ * @param {{ confirmation_sms_enabled?: boolean } | null | undefined} race
+ * @param {{ confirmation_sms_sent_at?: string | null } | null | undefined} payment
+ * @returns {{ send: boolean, reason?: 'disabled_for_event' | 'already_sent' }}
+ */
+export function shouldSendSmsConfirmation(race, payment) {
+  if (!race?.confirmation_sms_enabled) return { send: false, reason: 'disabled_for_event' }
+  if (payment?.confirmation_sms_sent_at) return { send: false, reason: 'already_sent' }
+  return { send: true }
+}
+
+/**
  * Send the race-registration confirmation. Reads the parent race
  * + registration + team_members and composes UN1T-branded copy.
  * Stamps confirmation_*_sent_at on the payment row to enforce
@@ -66,6 +84,7 @@ export async function sendRaceConfirmations({ db, paymentId }) {
         venue_name, venue_address,
         accent_hex, hero_image_url,
         confirmation_email_subject, confirmation_email_intro, confirmation_email_template_id,
+        confirmation_sms_enabled,
         locations:location_id ( id, name, twilio_alpha_sender_id )
       ),
       registration:race_registration_id (
@@ -156,8 +175,11 @@ export async function sendRaceConfirmations({ db, paymentId }) {
     result.skipped.push('email:already_sent')
   }
 
-  // SMS — only if not already sent and we have a phone + location.
-  if (!payment.confirmation_sms_sent_at) {
+  // SMS — opt-in per event (EVENTS-SMS-TOGGLE, mig 552). A disabled event
+  // (or any legacy event with the flag unset) skips here; the email receipt
+  // above is unaffected. Idempotent via confirmation_sms_sent_at.
+  const smsGate = shouldSendSmsConfirmation(race, payment)
+  if (smsGate.send) {
     try {
       const r = await sendSms({ db, payment, location, ctx })
       if (r.status === 'sent') {
@@ -172,7 +194,7 @@ export async function sendRaceConfirmations({ db, paymentId }) {
       result.failed.push(`sms:${e.message || 'failed'}`)
     }
   } else {
-    result.skipped.push('sms:already_sent')
+    result.skipped.push(`sms:${smsGate.reason}`)
   }
 
   return result
