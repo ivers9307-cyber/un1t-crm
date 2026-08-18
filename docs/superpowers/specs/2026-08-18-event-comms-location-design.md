@@ -59,7 +59,9 @@ where `event` carries at least `{ location_id, host_id, sending_location_id }`. 
 2. **host event** (`event.host_id` present) and no override → target = org master via `resolveMasterLocationId(db, { organization_id, anchor_location_id: event.location_id })` (org derived from the anchor location); falls back to `event.location_id` (anchor) when no master is configured — never to a wrong location.
 3. **normal event** → target = `event.location_id`.
 
-Then load the target location row (`id, name, twilio_alpha_sender_id, organization_id`), apply `overlayConnections(db, row, ['twilio_sender'])` (registry dual-read, matching the current send paths), and return it. On any lookup failure, fall back to the event's own embedded location so a send is never blocked. Pure-ish: all IO through the injected `db`, so it is unit-testable with a stub.
+Then load the target location row (`id, name, twilio_alpha_sender_id, organization_id`), apply `overlayConnections(db, row, ['twilio_sender'])` (registry dual-read, matching the current send paths), and return it. On any lookup failure, fall back to the event's own embedded location so a send is never blocked.
+
+Split for testability: a **pure** `pickCommsLocationTarget(event, masterLocationId)` holds the tier logic (override → host-master → own location), unit-tested exhaustively; the async `resolveEventCommsLocation(db, event)` wrapper derives the master id, calls the picker, loads + overlays the row.
 
 Callers use `row` for SMS (`sendLocationSms({ location: row })`) and `row.id` for email (`sendTransactionalEmail({ locationId: row.id })`).
 
@@ -77,9 +79,9 @@ Callers use `row` for SMS (`sendLocationSms({ location: row })`) and `row.id` fo
 
 ## UI + API
 
-- `src/components/RaceEventForm.jsx` — a **"Send comms from"** dropdown listing real UN1T locations (`is_host_anchor=false`, active), shown for host events, defaulting to the org master. State + save-payload field.
-- `src/app/api/events/route.js` (create) + `[id]/route.js` (update) — `sending_location_id: uuidLike.nullable().optional()` on both schemas; create defaults it to the org master for host events when omitted; update patches it through the generic scalar patch; `loadRace` selects it back. Validate the id is a real, in-org, non-anchor location (IDOR guard, mirroring the email-template guard).
-- `src/lib/host-events.js` — the host-portal create path stamps `sending_location_id` = `resolveMasterLocationId(...)` at creation for explicitness (resolver still covers NULL).
+- `src/components/RaceEventForm.jsx` — a **"Send comms from"** dropdown listing real UN1T locations (`is_host_anchor=false`, active), shown for host events, its default selection pre-set to the org master. State + save-payload field.
+- `src/app/api/events/route.js` (create) + `[id]/route.js` (update) — `sending_location_id: uuidLike.nullable().optional()` on both schemas; create persists what's sent (the form supplies the master default — no route-side defaulting), update patches it through the generic scalar patch; `loadRace` selects it back. Validate the id is a real, in-org, non-anchor location (IDOR guard, mirroring the email-template guard).
+- **No** change to the host self-serve create path (`/api/host/events`): it leaves `sending_location_id` NULL and the resolver yields the org master — hosts don't choose UN1T's identity. No `host-events.js` create change; the resolver is the single defaulting mechanism.
 
 ## Testing (TDD)
 
