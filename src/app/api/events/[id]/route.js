@@ -67,6 +67,9 @@ export const UpdateSchema = z.object({
   reminder_email_intro: z.string().max(4000).nullable().optional(),
   confirmation_email_template_id: uuidLike.nullable().optional(),
   reminder_email_template_id: uuidLike.nullable().optional(),
+  // EVENT-COMMS-LOC (mig 553) — flows through the generic scalar patch; in-org
+  // non-anchor validated in PUT.
+  sending_location_id: uuidLike.nullable().optional(),
   // EVENTS-SMS-TOGGLE (mig 552) — per-event opt-in for the registration SMS
   // confirmation. Flows through the generic scalar patch in PUT (omit = leave
   // untouched). The email receipt is separate and unaffected.
@@ -89,7 +92,7 @@ async function loadRace(db, id) {
       confirmation_email_subject, confirmation_email_intro,
       reminder_email_subject, reminder_email_intro,
       confirmation_email_template_id, reminder_email_template_id,
-      confirmation_sms_enabled,
+      confirmation_sms_enabled, sending_location_id,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
       registrations:race_registrations (
         id, status, race_started_at, race_finished_at, registered_at, wave_id,
@@ -215,6 +218,23 @@ export async function PUT(request, props) {
       if (!tpl || tpl.location_id !== existing.location_id) {
         return NextResponse.json({ success: false, error: 'invalid_template' }, { status: 400 })
       }
+    }
+  }
+
+  // EVENT-COMMS-LOC (mig 553) — sending-location IDOR guard. The comms
+  // identity location must be a real, non-anchor location in THIS event's
+  // organization (resolved from the event's location). Without this, an
+  // operator could point an event's SMS/email identity at another org's
+  // location. NULL/absent = no override, no check needed. Value reaches the
+  // DB through the generic `updates = { ...body }` patch below.
+  if (body.sending_location_id) {
+    const { data: loc } = await db.from('locations')
+      .select('organization_id').eq('id', existing.location_id).single()
+    const { data: send } = await db.from('locations')
+      .select('id, organization_id, is_host_anchor')
+      .eq('id', body.sending_location_id).maybeSingle()
+    if (!loc || !send || send.is_host_anchor || send.organization_id !== loc.organization_id) {
+      return NextResponse.json({ success: false, error: 'invalid_sending_location' }, { status: 400 })
     }
   }
 
