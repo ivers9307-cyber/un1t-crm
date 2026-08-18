@@ -97,6 +97,10 @@ export const CreateSchema = z.object({
   reminder_email_intro: z.string().max(4000).nullable().optional(),
   confirmation_email_template_id: uuidLike.nullable().optional(),
   reminder_email_template_id: uuidLike.nullable().optional(),
+  // EVENTS-SMS-TOGGLE (mig 552) — per-event opt-in for the registration SMS
+  // confirmation. Optional here; the POST route defaults it to false, so a
+  // legacy/default event never texts. The email receipt is separate.
+  confirmation_sms_enabled: z.boolean().optional(),
   // Waves (mig 083) — at least one required for a usable race.
   // Server normalises by start_time ascending; UNIQUE on
   // (race_event_id, start_time) catches duplicates from the DB side.
@@ -327,6 +331,8 @@ export async function POST(request) {
       reminder_email_intro: body.reminder_email_intro ?? null,
       confirmation_email_template_id: body.confirmation_email_template_id ?? null,
       reminder_email_template_id: body.reminder_email_template_id ?? null,
+      // EVENTS-SMS-TOGGLE (mig 552) — default OFF; the email receipt is separate.
+      confirmation_sms_enabled: body.confirmation_sms_enabled ?? false,
     })
     .select()
     .single()

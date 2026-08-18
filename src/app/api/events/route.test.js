@@ -69,3 +69,28 @@ describe('events CreateSchema email config', () => {
     ).toThrow()
   })
 })
+
+// EVENTS-SMS-TOGGLE (mig 552) — per-event opt-in for the registration SMS
+// confirmation. Optional boolean on the schema; the POST route defaults it
+// to false when omitted, so a legacy/default event never texts.
+describe('events CreateSchema SMS confirmation toggle', () => {
+  const base = {
+    location_id: '00000000-0000-0000-0000-000000000001',
+    name: 'Hyrox Sim',
+    race_date: '2026-08-01',
+    waves: [{ start_time: '09:00' }],
+  }
+
+  it('parses clean with the flag absent (route defaults it off)', () => {
+    expect(CreateSchema.parse({ ...base }).confirmation_sms_enabled).toBeUndefined()
+  })
+
+  it('accepts an explicit boolean either way', () => {
+    expect(CreateSchema.parse({ ...base, confirmation_sms_enabled: true }).confirmation_sms_enabled).toBe(true)
+    expect(CreateSchema.parse({ ...base, confirmation_sms_enabled: false }).confirmation_sms_enabled).toBe(false)
+  })
+
+  it('rejects a non-boolean', () => {
+    expect(() => CreateSchema.parse({ ...base, confirmation_sms_enabled: 'yes' })).toThrow()
+  })
+})
