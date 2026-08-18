@@ -313,6 +313,32 @@ export default function RaceEventForm({ race, locationId }) {
   // payees; a Revolut/UN1T host is the implicit default (host_id '').
   const stripeHosts = hosts.filter((h) => h.payment_provider === 'stripe_connect')
   const selectedHost = stripeHosts.find((h) => h.id === hostId) || null
+  // EVENT-COMMS-LOC (mig 553) — for host events, which real UN1T location's
+  // Twilio sender + email identity this event's confirmation/reminder texts
+  // and emails use. Host events sit on a sender-less per-host anchor
+  // location, so this override is only surfaced when hostId is set. Options
+  // are the org's real (non-anchor) locations, fetched per event location —
+  // mirrors the emailTemplates fetch above. A fetch failure just leaves the
+  // list empty (operator keeps whatever was already saved).
+  const [sendingLocationId, setSendingLocationId] = useState(race?.sending_location_id || '')
+  const [locationOptions, setLocationOptions] = useState([]) // {id,name,is_master}
+  useEffect(() => {
+    if (!locationId) return
+    let cancelled = false
+    fetch(`/api/locations/sendable?event_location_id=${encodeURIComponent(locationId)}`)
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return
+        const opts = Array.isArray(j?.data) ? j.data : []
+        setLocationOptions(opts)
+        if (!sendingLocationId) {
+          const master = opts.find((o) => o.is_master)
+          if (master) setSendingLocationId(master.id)
+        }
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [locationId]) // eslint-disable-line react-hooks/exhaustive-deps
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
@@ -491,6 +517,9 @@ export default function RaceEventForm({ race, locationId }) {
       shared,
       // EVENTS-HOST.4 — payout routing. '' → null = internal UN1T (Revolut).
       host_id: hostId || null,
+      // EVENT-COMMS-LOC (mig 553) — '' → null = resolved at send time
+      // (host event → org master location; normal event → its own location).
+      sending_location_id: sendingLocationId || null,
       member_fee_cents: memberPricingEnabled ? memberFeeCents : null,
       non_member_fee_cents: nonMemberFeeCents,
       // TV logos: race-only. For non-race kinds we send an empty
@@ -1198,6 +1227,29 @@ export default function RaceEventForm({ race, locationId }) {
               </p>
             </div>
           </div>
+
+          {/* EVENT-COMMS-LOC (mig 553) — host events sit on a sender-less
+              per-host anchor location, so their texts/emails need a real
+              UN1T location's identity to send from. Hidden for internal
+              UN1T events (hostId empty) — those already send from their
+              own location. */}
+          {hostId && (
+            <div className="pb-1">
+              <label className="block text-sm text-un1t-subtle mb-1">Send comms from</label>
+              <select
+                value={sendingLocationId}
+                onChange={(e) => setSendingLocationId(e.target.value)}
+                className="w-full max-w-md bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+              >
+                {locationOptions.map((o) => (
+                  <option key={o.id} value={o.id}>{o.name}{o.is_master ? ' (default)' : ''}</option>
+                ))}
+              </select>
+              <p className="text-[11px] text-un1t-muted mt-1">
+                Which UN1T location&apos;s Twilio sender + email identity this event&apos;s texts and emails use.
+              </p>
+            </div>
+          )}
 
           <EventEmailFields
             title="Signup confirmation"
