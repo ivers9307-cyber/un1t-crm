@@ -27,6 +27,7 @@ import { sendCustomerPush } from '@/lib/customer-push'
 import { addDaysISO, dublinTodayStr } from '@/lib/dublin-time'
 import { formatWeekdayLongDateInTZ } from '@/lib/dates'
 import { buildEventEmailShell, resolveEventEmail, escapeHtml } from '@/lib/event-email'
+import { resolveEventCommsLocation } from '@/lib/event-comms-location'
 
 const EVENT_REMINDER_PAGE = 1000
 
@@ -144,7 +145,7 @@ function buildEventReminderPush({ ev, offset, whenLabel }) {
 // Send the reminder email to the registration's captain contact. Transactional,
 // so marketing consent is irrelevant; the HARD administrative opt-out and
 // bounced/complained email states still suppress it.
-async function sendReminderEmail({ db, ev, reg, offset, whenLabel, locationName, members }) {
+async function sendReminderEmail({ db, ev, reg, offset, whenLabel, locationName, members, commsLocationId }) {
   const c = reg?.contact
   const to = c?.email
   if (!to) return { status: 'skipped', reason: 'no_email' }
@@ -182,7 +183,7 @@ async function sendReminderEmail({ db, ev, reg, offset, whenLabel, locationName,
     subject,
     htmlBody,
     contactId: reg.contact_id || null,
-    locationId: ev.location_id || null,
+    locationId: commsLocationId || null,
     tag: 'event-reminder',
   })
   return { status: 'sent' }
@@ -212,7 +213,7 @@ export async function runEventReminders({ db, todayStr } = {}) {
   // (lead_gen events have no date/time and are pure capture forms). Small set.
   const { data: events, error: evErr } = await db
     .from('race_events')
-    .select(`id, name, slug, race_date, start_time, location_id, kind, active,
+    .select(`id, name, slug, race_date, start_time, location_id, host_id, sending_location_id, kind, active,
              venue_name, venue_address,
              accent_hex, hero_image_url,
              reminder_email_subject, reminder_email_intro, reminder_email_template_id,
@@ -237,6 +238,10 @@ export async function runEventReminders({ db, todayStr } = {}) {
     // the real venue is on ev.venue_name. Prefer it so the reminder shows the
     // actual venue. UN1T events have no venue_name → the location name stands.
     const locationName = ev.venue_name || ev.locations?.name || ''
+    const commsLocation = await resolveEventCommsLocation(db, {
+      location_id: ev.location_id, host_id: ev.host_id, sending_location_id: ev.sending_location_id,
+    })
+    const commsLocationId = commsLocation?.id || ev.location_id || null
 
     // Confirmed registrations for this event — paginate past the 1k-row cap.
     const registrations = []
@@ -305,7 +310,7 @@ export async function runEventReminders({ db, todayStr } = {}) {
         // any send failure) we KEEP the claim: an opted-out registrant must
         // not be re-attempted on tomorrow's tick for the same offset.
         try {
-          await sendReminderEmail({ db, ev, reg, offset, whenLabel, locationName, members })
+          await sendReminderEmail({ db, ev, reg, offset, whenLabel, locationName, members, commsLocationId })
         } catch (e) {
           logError('event-reminders', 'email send failed', { err: e, registrationId: reg.id })
         }
