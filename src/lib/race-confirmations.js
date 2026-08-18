@@ -14,7 +14,7 @@
 // retries on non-2xx) without duplicate messages.
 
 import { sendTransactionalEmail } from './postmark'
-import { sendLocationSms, TwilioError, getOrgDefaultSenderId, effectiveSenderLocation } from './twilio'
+import { sendLocationSms, TwilioError, resolveSenderLocation } from './twilio'
 import { formatWeekdayLongDateInTZ } from './dates'
 import { getAppUrl } from './app-url'
 import { signCheckinToken } from './event-checkin-tokens'
@@ -320,16 +320,10 @@ async function sendSms({ db, payment, location, ctx }) {
   if (!payment.contact_phone) return { status: 'skipped', reason: 'no_phone' }
   if (!location) return { status: 'skipped', reason: 'no_location' }
 
-  // SENDER-ORG-FALLBACK — hosted events sit on a per-host ANCHOR location with
-  // no Twilio sender; without this the send falls through getLocationSenderId
-  // to the global TWILIO_FROM default (the CCF Autos sender), so a UN1T event
-  // texts from the wrong brand. Resolve the event org's own sender first; if
-  // the org has none either, the existing global fallback still applies.
-  let senderLocation = location
-  if (!location.twilio_alpha_sender_id && location.organization_id) {
-    const orgSenderId = await getOrgDefaultSenderId(db, location.organization_id)
-    senderLocation = effectiveSenderLocation(location, orgSenderId)
-  }
+  // SENDER-ORG-FALLBACK — a hosted event sits on a per-host ANCHOR location
+  // with no Twilio sender; resolveSenderLocation swaps in the org's own sender
+  // so it never falls through to the global CCF Autos default.
+  const senderLocation = await resolveSenderLocation(db, location)
 
   const lines = []
   lines.push(`UN1T: Team ${ctx.teamName} is in for ${ctx.raceName} on ${ctx.raceDateLabel}.`)

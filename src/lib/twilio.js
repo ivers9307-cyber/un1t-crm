@@ -224,6 +224,25 @@ export async function getOrgDefaultSenderId(db, organizationId) {
 }
 
 /**
+ * One-call sender resolution for any SMS attributed to an event's location:
+ * keep the location's own sender when it has one (no query), otherwise swap in
+ * the location's ORG default sender, otherwise leave it untouched so the
+ * global TWILIO_FROM fallback still applies. This is the shared entry point for
+ * every event SMS path (race confirmations + the registration payment-link
+ * route) so a senderless host-anchor location never texts from the CCF Autos
+ * default. Pass the location that already reflects any registry overlay.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} db  service-role client
+ * @param {{ twilio_alpha_sender_id?: string | null, organization_id?: string | null } | null | undefined} location
+ * @returns {Promise<typeof location>}
+ */
+export async function resolveSenderLocation(db, location) {
+  if (!location || location.twilio_alpha_sender_id || !location.organization_id) return location
+  const orgSenderId = await getOrgDefaultSenderId(db, location.organization_id)
+  return effectiveSenderLocation(location, orgSenderId)
+}
+
+/**
  * Validate an alpha sender ID before persisting. Twilio's rules
  * (https://www.twilio.com/docs/glossary/what-alphanumeric-sender-id):
  * 1-11 characters; letters, numbers AND spaces are allowed; must
