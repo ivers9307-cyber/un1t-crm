@@ -433,6 +433,13 @@ Run strictly in this order — each step gates the next.
 4. **Review prep**: demo account created via the staff invite route, demo
    location seeded, §2 notes + credentials into App Review Information,
    optional walkthrough recording attached.
+   ⚠️ **Trap**: any demo/staff account minted programmatically (SQL insert,
+   admin API) has `auth.users.email_confirmed_at = NULL`, and Supabase
+   rejects password sign-in for unconfirmed emails — the app just says
+   "password is incorrect". Confirm it before handing credentials to
+   Apple: `UPDATE auth.users SET email_confirmed_at = now() WHERE email =
+   '<demo email>';` (accounts created through the normal invite/OTP flow
+   confirm themselves).
 5. **Domain-migration reality check** — see the Stage-3 runbook,
    `docs/domain-migration-stage3.md`. The Meta/Postmark/Stripe provider
    re-registrations in that runbook are NOT required for submission (they
