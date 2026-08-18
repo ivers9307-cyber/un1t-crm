@@ -58,10 +58,15 @@ on:
   # Path-filtered so web-only pushes (src/, supabase/, docs, CLAUDE.md)
   # don't trigger a needless publish. PRs run web CI first, so by the
   # time a change is on main it's already been checked.
+  # mobile/docs/** is excluded: runbooks aren't bundled, but a publish
+  # from a docs-only push would still mint a new update group (metro
+  # hash churn) and stack a fresh 10% rollout on top of whatever ramp
+  # is in flight.
   push:
     branches: [main]
     paths:
       - 'mobile/**'
+      - '!mobile/docs/**'
       - 'shared/**'
   # Manual re-publish on demand stays available.
   workflow_dispatch: {}
