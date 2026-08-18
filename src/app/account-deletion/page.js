@@ -25,7 +25,7 @@ export default function AccountDeletion() {
       <div className="mx-auto max-w-3xl px-6 py-12">
         <header className="mb-10">
           <h1 className="text-3xl font-bold tracking-tight">Account and data deletion</h1>
-          <p className="mt-2 text-sm text-gray-500">Last updated 6 May 2026</p>
+          <p className="mt-2 text-sm text-gray-500">Last updated 18 August 2026</p>
         </header>
 
         <section className="prose prose-gray max-w-none">
@@ -83,7 +83,11 @@ export default function AccountDeletion() {
             registrants). If you are a member of the public and want your
             contact record deleted, the same email address — <a className="underline"
             href="mailto:privacy@un1tdublin.com">privacy@un1tdublin.com</a> —
-            handles those requests under the same 30-day window.
+            handles those requests under the same 30-day window. Deleting a
+            contact record includes any health and fitness data collected
+            through the member app (heart-rate sessions, workouts synced
+            from Apple Health or Strava, body-composition scan results, and
+            weight), subject only to the legal retention exceptions above.
           </p>
 
           <h2 className="text-xl font-semibold mt-8 mb-3">Contact</h2>
@@ -95,7 +99,7 @@ export default function AccountDeletion() {
           </p>
           <p>
             For our full privacy policy, see <a className="underline" href="/privacy">
-            crm.un1tdublin.com/privacy</a>.
+            crm.repset.ie/privacy</a>.
           </p>
         </section>
       </div>
