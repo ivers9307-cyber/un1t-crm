@@ -404,6 +404,16 @@ force-uninstalls anything.
 
 ## 8. Launch-day order
 
+> **⚠️ GATE 0 — UNLISTED → PUBLIC CONVERSION (discovered 18 Aug 2026):** the ASC
+> record is currently distributed as an **Unlisted App** (link-only, invisible
+> in search) — a leftover from the staff-tool era. There is NO self-serve
+> toggle: file a conversion request with Apple (developer.apple.com/contact →
+> App Store Connect topic), citing app 6770890839 and the consumer audience
+> arriving in 2.3.0. Submit the request EARLY (days of turnaround) and in
+> parallel with everything below — but the app is not truly launched until
+> Apple confirms public distribution, no matter what else is approved.
+
+
 Run strictly in this order — each step gates the next.
 
 1. **Merge the staged-rollout OTA gate — PR #1439** (the Phase-5 exit
