@@ -1,6 +1,6 @@
 # Repset — Mac shell
 
-A native Mac app that wraps the web CRM at `crm.un1tdublin.com` in a
+A native Mac app that wraps the web CRM at `crm.repset.ie` in a
 WKWebView window. Lives in the dock, persists the user's session
 across launches, and distributes through the **Mac App Store** as an
 unlisted app alongside the existing iOS app (Universal Purchase on
@@ -19,7 +19,7 @@ code in here — un1t-crm is the application.
 
 The shell runs in the macOS App Sandbox (mandatory for App Store
 distribution). Its `entitlements.plist` requests only outbound
-network access (to talk to crm.un1tdublin.com) and print. No file
+network access (to talk to crm.repset.ie) and print. No file
 access, no camera, no microphone — the embedded web app inherits
 the standard WKWebView surface.
 
@@ -140,7 +140,7 @@ web CRM. WKWebView persists cookies across launches in its own
 sandboxed data container at
 `~/Library/Containers/com.un1tdublin.crm/Data/Library/WebKit/`. The
 shell's configured boot URL is
-`https://crm.un1tdublin.com/studio-login`
+`https://crm.repset.ie/studio-login`
 (set in `src-tauri/tauri.conf.json` →
 `app.windows[0].url`), so paired Macs always land at the PIN entry
 pad. Combined with the studio-device PIN-auth foundation from

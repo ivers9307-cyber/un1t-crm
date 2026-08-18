@@ -230,7 +230,7 @@ The run summary surfaces the next steps once upload succeeds.
      sizes). Screenshot the running Mac app from one of the
      reception studios once we have a build installed.
    - Support URL
-   - Privacy policy URL (reuse <https://crm.un1tdublin.com/privacy>)
+   - Privacy policy URL (reuse <https://crm.repset.ie/privacy>)
 4. Select the uploaded build for this version.
 5. **Submit for Review**. Because the app record is already
    approved for unlisted distribution, the macOS platform
