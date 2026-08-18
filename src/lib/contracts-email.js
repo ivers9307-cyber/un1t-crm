@@ -20,7 +20,9 @@ import { formatFullDateTimeInTZ } from './dates.js'
 import { getLocationBranding } from './location-branding.js'
 
 function appUrl() {
-  return process.env.NEXT_PUBLIC_APP_URL || 'https://crm.un1tdublin.com'
+  // REPSET-P6.S2 — env stays primary; the code default is the canonical
+  // repset host (the legacy host keeps serving, but links lead with repset).
+  return process.env.NEXT_PUBLIC_APP_URL || 'https://crm.repset.ie'
 }
 
 // CONTRACTS-PDF.1 — raw-bytes ceiling for an email attachment. Postmark's

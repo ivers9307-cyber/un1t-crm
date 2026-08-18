@@ -30,7 +30,9 @@ import { logInfo, logError } from '@/lib/log'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const CHAMP_APP_URL = process.env.NEXT_PUBLIC_CHAMP_APP_URL || 'https://app.champfitness.ie'
+// REPSET-P6.S2 — env stays primary; the code default is the canonical
+// repset member host (the legacy host keeps serving during the cutover).
+const CHAMP_APP_URL = process.env.NEXT_PUBLIC_CHAMP_APP_URL || 'https://api.repset.ie'
 const ALLOWED_INVITE_ROLES = ['owner', 'manager']
 
 export async function POST(_request, props) {

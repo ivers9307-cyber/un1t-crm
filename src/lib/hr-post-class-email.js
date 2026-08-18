@@ -39,8 +39,10 @@ const HISTORY_LOOKBACK_DAYS = 90
 // NEXT_PUBLIC_APP_URL is the CRM host (which has no /sessions route), so
 // defaulting from it 404'd the session CTA in every post-class email.
 // NEXT_PUBLIC_CHAMP_APP_URL is the same var invite-app uses.
-const CHAMP_APP_URL = process.env.NEXT_PUBLIC_CHAMP_APP_URL || 'https://app.champfitness.ie'
-const CRM_URL = process.env.NEXT_PUBLIC_APP_URL_CRM || 'https://crm.un1tdublin.com'
+// REPSET-P6.S2 — env stays primary; code defaults are the canonical repset
+// hosts (member CTA → api.repset.ie, CRM/unsubscribe → crm.repset.ie).
+const CHAMP_APP_URL = process.env.NEXT_PUBLIC_CHAMP_APP_URL || 'https://api.repset.ie'
+const CRM_URL = process.env.NEXT_PUBLIC_APP_URL_CRM || 'https://crm.repset.ie'
 
 // ── (1) load ────────────────────────────────────────────────────
 

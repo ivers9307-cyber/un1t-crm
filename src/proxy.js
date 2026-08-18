@@ -4,6 +4,7 @@ import { resolveBrand, isFrameworkAsset } from '@/lib/brands'
 import { resolveTenantDomainBrand } from '@/lib/tenant-domains-edge'
 import { isApiKeyToken, sha256HexEdge } from '@/lib/api-keys-edge'
 import { readSupportModeEdge, decideSupportWriteBlock } from '@/lib/support-session-edge'
+import { decideLegacyHostRedirect } from '@/lib/legacy-host-redirect'
 
 // Constant-time string compare. Implemented inline because the proxy runs
 // in the Edge runtime which doesn't expose node:crypto.timingSafeEqual. The
@@ -30,6 +31,29 @@ function timingSafeEqualEdge(a, b) {
 // hash so Next re-emits the middleware on the next build.
 export async function proxy(request) {
   const hostname = request.headers.get('host') || ''
+
+  // ── Legacy CRM host → canonical repset host (REPSET-P6.S2) ───────
+  // Env-gated safety valve, default OFF. When REDIRECT_LEGACY_CRM_HOST=1,
+  // GET/HEAD page requests arriving on the exact legacy host
+  // (crm.un1tdublin.com) 308 to https://crm.repset.ie preserving the full
+  // path + query. The decision table — flag, exact-host match, method,
+  // the /api/* + /auth/callback + /reset-password exclusions — is pure
+  // and unit-tested in src/lib/legacy-host-redirect.test.js. Because it
+  // matches ONLY the exact CRM host it cannot interfere with the brand
+  // hosts resolved below (marketing un1tdublin.com, pay.ccfautos.com,
+  // DB-tier tenant domains all fall straight through).
+  {
+    const legacy = decideLegacyHostRedirect({
+      enabled: process.env.REDIRECT_LEGACY_CRM_HOST === '1',
+      host: hostname,
+      method: request.method,
+      pathname: request.nextUrl.pathname,
+      search: request.nextUrl.search,
+    })
+    if (legacy) {
+      return NextResponse.redirect(legacy.location, legacy.status)
+    }
+  }
 
   // ── Multi-brand routing (MULTIBRAND.1) ───────────────────────────
   // Tenant brands sharing this deployment (pay.ccfautos.com, the

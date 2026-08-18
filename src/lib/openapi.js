@@ -6083,7 +6083,10 @@ function buildSpec() {
         ' Covers the public, inbound-webhook, bridge and mobile integration surface; planned outbound events appear under webhooks.',
     },
     servers: [
-      { url: 'https://crm.un1tdublin.com', description: 'Production' },
+      // REPSET-P6.S2 — canonical host leads; legacy host stays listed so
+      // existing integrations pointed at it keep a documented base URL.
+      { url: 'https://crm.repset.ie', description: 'Production' },
+      { url: 'https://crm.un1tdublin.com', description: 'Production (legacy host)' },
       { url: 'http://localhost:3000', description: 'Local dev' },
     ],
   })
