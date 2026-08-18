@@ -331,14 +331,17 @@ export default function RaceEventForm({ race, locationId }) {
         if (cancelled) return
         const opts = Array.isArray(j?.data) ? j.data : []
         setLocationOptions(opts)
-        if (!sendingLocationId) {
+        // Only HOST events carry a sending-location override; a normal event
+        // must keep NULL so its comms resolve to its own location_id (spec
+        // non-goal). Default the picker to the org master for host events only.
+        if (hostId && !sendingLocationId) {
           const master = opts.find((o) => o.is_master)
           if (master) setSendingLocationId(master.id)
         }
       })
       .catch(() => {})
     return () => { cancelled = true }
-  }, [locationId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [locationId, hostId]) // eslint-disable-line react-hooks/exhaustive-deps
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
@@ -519,7 +522,9 @@ export default function RaceEventForm({ race, locationId }) {
       host_id: hostId || null,
       // EVENT-COMMS-LOC (mig 553) — '' → null = resolved at send time
       // (host event → org master location; normal event → its own location).
-      sending_location_id: sendingLocationId || null,
+      // EVENT-COMMS-LOC — host events only; a normal event keeps NULL so its
+      // comms resolve to its own location_id (never stamped with the master).
+      sending_location_id: hostId ? (sendingLocationId || null) : null,
       member_fee_cents: memberPricingEnabled ? memberFeeCents : null,
       non_member_fee_cents: nonMemberFeeCents,
       // TV logos: race-only. For non-race kinds we send an empty

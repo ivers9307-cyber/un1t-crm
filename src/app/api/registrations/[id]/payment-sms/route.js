@@ -115,11 +115,9 @@ export async function POST(_request, props) {
   const payLink = `${getAppUrl()}/event-pay/${payment.id}`
   const body = `Hi ${firstName}, here's your link to pay ${amount}and secure your spot for ${raceName}: ${payLink}${signoff}`
 
-  // SENDER-ORG-FALLBACK — mirror race-confirmations: a hosted event's anchor
-  // location has no Twilio sender, so resolve the org's own sender before
-  // sending, else the payment link texts from the global CCF Autos default.
   // EVENT-COMMS-LOC — send the payment link from the event's comms location
-  // (host events → org master, not the sender-less anchor).
+  // (host events → the org master, not the sender-less anchor). resolveSenderLocation
+  // is the inner safety net if that resolved location itself lacks a sender.
   const commsLocation = await resolveEventCommsLocation(db, {
     location_id: reg.race_events.location_id,
     host_id: reg.race_events.host_id,

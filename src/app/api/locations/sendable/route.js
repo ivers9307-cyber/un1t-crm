@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -12,6 +13,9 @@ export const dynamic = 'force-dynamic'
 export async function GET(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!hasPermission(user, 'races')) {
+    return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
+  }
   const eventLocationId = new URL(request.url).searchParams.get('event_location_id')
   if (!eventLocationId) return NextResponse.json({ success: true, data: [] })
   const guard = assertLocationAccess(user, eventLocationId)
