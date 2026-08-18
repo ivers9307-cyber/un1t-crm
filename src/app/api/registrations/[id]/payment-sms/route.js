@@ -29,7 +29,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { MANAGER_ROLES } from '@/lib/schemas'
-import { sendLocationSms, TwilioError } from '@/lib/twilio'
+import { sendLocationSms, TwilioError, resolveSenderLocation } from '@/lib/twilio'
 import { getAppUrl } from '@/lib/app-url'
 import { overlayConnections } from '@/lib/connection-registry'
 
@@ -62,7 +62,7 @@ export async function POST(_request, props) {
       id, status,
       race_events!inner (
         id, name, location_id,
-        locations:location_id ( id, name, twilio_alpha_sender_id )
+        locations:location_id ( id, name, twilio_alpha_sender_id, organization_id )
       )
     `)
     .eq('id', params.id)
@@ -114,10 +114,15 @@ export async function POST(_request, props) {
   const payLink = `${getAppUrl()}/event-pay/${payment.id}`
   const body = `Hi ${firstName}, here's your link to pay ${amount}and secure your spot for ${raceName}: ${payLink}${signoff}`
 
+  // SENDER-ORG-FALLBACK — mirror race-confirmations: a hosted event's anchor
+  // location has no Twilio sender, so resolve the org's own sender before
+  // sending, else the payment link texts from the global CCF Autos default.
+  const senderLocation = await resolveSenderLocation(db, reg.race_events.locations)
+
   let twilioResult
   try {
     twilioResult = await sendLocationSms({
-      location: reg.race_events.locations,
+      location: senderLocation,
       to: payment.contact_phone,
       body,
     })
