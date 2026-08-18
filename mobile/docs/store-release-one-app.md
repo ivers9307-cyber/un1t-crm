@@ -75,7 +75,7 @@ What each staff member can see and do is controlled by their role and location a
 
 Staff who are also members can switch between the two sides from their profile — one account, one app.
 
-For privacy and data-handling details, see https://crm.un1tdublin.com/privacy
+For privacy and data-handling details, see https://crm.repset.ie/privacy
 ```
 (~1,600 chars — comfortably under the 4,000 limit. Deliberately plain: no
 superlatives, no "revolutionary", and no mention of class capacity,
@@ -111,9 +111,22 @@ Repset is now one app for the whole studio.
   The member social features (kudos, challenge leaderboards) are
   member-to-member within a gym, not open user-generated content — if Apple
   asks, they are moderated by studio staff via the CRM.
-- **Privacy Policy URL** stays `https://crm.un1tdublin.com/privacy` — but the
-  page itself MUST be updated to cover health data before submission (see
-  §3; App Review checks that the policy matches the privacy labels).
+- **Privacy Policy URL** changes to **`https://crm.repset.ie/privacy`**
+  (domain migration, Phase 6 — crm.repset.ie is the canonical CRM host).
+  The page itself MUST be updated to cover health data AND be live on the
+  repset host before submission (see §3; App Review checks that the policy
+  matches the privacy labels, and clicks the URL).
+- **Support URL** — set it to **`https://crm.repset.ie/technical`**.
+  > **⚠️ Do NOT carry forward the inherited value.** The staff-era ASC
+  > reference (`docs/repset-asc-metadata.md`) cited
+  > `https://crm.un1tdublin.com/support`, and that URL has NEVER been a real
+  > page: there is no `/support` route in the CRM (`src/app/` has only the
+  > `api/support-session` API route), so it 307-redirects to the staff
+  > login screen (`/login?redirect=%2Fsupport`). If the live ASC listing
+  > still carries it, App Review's click-through lands on a login wall —
+  > fix it on the 2.3.0 version page. `/technical` is the live, public,
+  > allowlisted platform page (UN1T communications platform, with a
+  > contact link) — a real page a reviewer or member can land on.
 
 ---
 
@@ -197,7 +210,7 @@ Nothing in the app is used for tracking (no ad SDKs, no data brokers, no
 cross-app identifiers), so the "Used for Tracking" answer stays **No**
 across the board and no ATT prompt is needed.
 
-**Prerequisite:** update `https://crm.un1tdublin.com/privacy` to describe the
+**Prerequisite:** update `https://crm.repset.ie/privacy` to describe the
 health-data collection (what is read from HealthKit, what the straps
 capture, retention, and that it is never sold or used for advertising)
 BEFORE submitting — App Review cross-checks the policy against the labels,
@@ -348,7 +361,7 @@ store records breaks nothing in the wild.
    and the record keeps the history.
 
 Note for both stores: users who already installed the old member app are
-handled by comms (see §8, step 6), not by store mechanics — nothing here
+handled by comms (see §8, step 8), not by store mechanics — nothing here
 force-uninstalls anything.
 
 ---
@@ -410,18 +423,25 @@ Run strictly in this order — each step gates the next.
 4. **Review prep**: demo account created via the staff invite route, demo
    location seeded, §2 notes + credentials into App Review Information,
    optional walkthrough recording attached.
-5. **Submit**: iOS per §7 (build attached to the version → Add for Review →
+5. **Domain-migration reality check** — see the Stage-3 runbook,
+   `docs/domain-migration-stage3.md`. The Meta/Postmark/Stripe provider
+   re-registrations in that runbook are NOT required for submission (they
+   gate webhooks and integrations, not App Review). What IS required
+   before submitting: `https://crm.repset.ie/privacy` (updated per §3) and
+   the demo account's sign-in path must be **live on the repset host** —
+   the metadata now cites crm.repset.ie, and App Review clicks through.
+6. **Submit**: iOS per §7 (build attached to the version → Add for Review →
    Submit). Android per §5.3 in parallel (internal → smoke test → hold at
    internal until Apple approves, then promote so the two stores go public
    together-ish).
-6. **After Apple approval**: release with **Phased Release ON** (App Store
+7. **After Apple approval**: release with **Phased Release ON** (App Store
    version page → Phased Release for Automatic Updates → the 7-day curve:
    1%→2%→5%→10%→20%→50%→100%). Recommendation: ON. It only throttles
    automatic updates — anyone can pull the update manually — and it is the
    only rollback-adjacent lever Apple gives us. Pause it from the same page
    if anything goes wrong. On Play, the staged-rollout percentage (§5.3)
    is the same lever.
-7. **Member comms** — only after both stores are live. Per the estate rule,
+8. **Member comms** — only after both stores are live. Per the estate rule,
    ALL member-facing launch copy (announcement email/WhatsApp, "download
    Repset" instructions, what happens to the old app) is authored and sent
    through the CRM communications tools — sequences/broadcasts with

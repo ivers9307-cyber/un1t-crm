@@ -437,7 +437,7 @@ App: **UN1T communications platform** (`1650634536237918`), live. The programmat
 | 10.4 | App Domains | `un1tdublin.com`, `crm.un1tdublin.com` | ADD `repset.ie`, `crm.repset.ie` (keep old) | Dashboard → Settings → Basic (API access to settings is disabled — dashboard only) |
 | 10.5 | JS SDK / FB Login allowed domains | the two un1tdublin origins | ADD `https://crm.repset.ie/` | FB Login product settings |
 | 10.6 | IG business-login trio (callback/deauthorize/data-deletion) | console-parked un1tdublin URLs — **endpoints unimplemented in code, inert** | repset equivalents | console-text edit, zero runtime risk |
-| 10.7 | Privacy/Terms/data-deletion URLs | `www.un1tdublin.com/privacy` etc. | move only once repset.ie legal pages exist (Stage 5) | dashboard |
+| 10.7 | Privacy/Terms/data-deletion URLs | `www.un1tdublin.com/privacy` etc. | `crm.repset.ie/privacy` + `/terms` — gated on the **Stage-5 legal-pages PR** (branch `phase6/stage5-legal-pages`) being merged AND live on the repset host; the store docs already cite the repset URLs (`mobile/docs/store-release-one-app.md` §1, `docs/repset-asc-metadata.md`) | dashboard |
 | 10.8 | Contact email | `stillorgan@un1t.com` — **unverified** | — | verify while in the dashboard (housekeeping, unrelated) |
 
 Verify after 10.1/10.2: send a WhatsApp/IG message to the gym → appears in the inbox; Meta retries failed deliveries ~24h so nothing is lost even mid-flip. WA approved templates carry MARKETING links (un1tdublin) — correctly unchanged, no re-submission.

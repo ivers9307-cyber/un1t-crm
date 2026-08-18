@@ -38,8 +38,12 @@ Productivity
 
 ### Privacy Policy URL
 ```
-https://crm.un1tdublin.com/privacy
+https://crm.repset.ie/privacy
 ```
+(Updated for the Phase-6 domain migration — crm.repset.ie is the canonical
+CRM host. The page must be live on the repset host before any submission
+that cites it; the old crm.un1tdublin.com host keeps redirecting, but ASC
+should carry the canonical URL.)
 
 ### Bundle ID
 ```
@@ -84,7 +88,7 @@ Repset mirrors the permission model of the UN1T CRM web app — what each staff 
 
 This app is restricted to current UN1T staff and contractors. A valid UN1T account is required to sign in; the app cannot be used by members of the public.
 
-For privacy and data-handling details, see https://crm.un1tdublin.com/privacy
+For privacy and data-handling details, see https://crm.repset.ie/privacy
 ```
 (4000-char limit. Above is ~1,000 chars — comfortably under.)
 
@@ -96,9 +100,18 @@ gym,crm,staff,scheduling,roster,bookings,invoices,whatsapp,studio,operations
 
 ### Support URL
 ```
-https://crm.un1tdublin.com/support
+https://crm.repset.ie/technical
 ```
-(If this URL doesn't exist yet, set up a simple Notion/landing page or point at a mailto link. Apple does click through — a 404 fails review.)
+> **⚠️ This value changed — the old one was never real.** Earlier revisions
+> of this doc (and possibly the live ASC listing — check the version page)
+> cited `https://crm.un1tdublin.com/support`. **No `/support` route has ever
+> existed in the CRM** (`src/app/` contains only the `api/support-session`
+> API route); the URL 307-redirects to the staff login screen
+> (`/login?redirect=%2Fsupport`). Apple does click through — a login wall or
+> 404 fails review. `/technical` is a live, public, allowlisted page
+> describing the platform, with a working contact link. If the live listing
+> still shows the `/support` URL, correct it at the next editable version
+> (the 2.3.0 submission — see `mobile/docs/store-release-one-app.md` §1).
 
 ### Marketing URL (optional)
 ```
@@ -177,7 +190,7 @@ Once signed in, the reviewer will see:
 - Schedule is empty for the test account because they have no shifts assigned — this is intentional, not a bug
 - The More tab includes Policies, Profile, and Sign Out
 
-Note on the "Impersonate" feature: master accounts can sign in as another user for support purposes. The review account is not a master, so this feature is hidden by design. The web app (crm.un1tdublin.com) is where master operators run this flow; the iOS app is read/write but follows the same permission model.
+Note on the "Impersonate" feature: master accounts can sign in as another user for support purposes. The review account is not a master, so this feature is hidden by design. The web app (crm.repset.ie) is where master operators run this flow; the iOS app is read/write but follows the same permission model.
 
 If anything is unclear, please reach out to richard@un1tdublin.com before issuing a rejection — happy to walk through any flow over a quick call.
 ```
