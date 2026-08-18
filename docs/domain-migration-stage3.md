@@ -35,8 +35,8 @@ has been observed.
 | 6 | Zoom | — | **No action** — Server-to-Server OAuth, outbound only; nothing URL-shaped is registered with Zoom | [x] n/a |
 | 7 | InBody / Lookin'Body — portal webhook URL | Richard (InBody portal) | Portal Step 4 test passes against crm.repset.ie; next real scan lands in `inbody_webhook_events` | [ ] |
 | 8 | Supabase — Auth Site URL (+ redirect allow-list) | Richard (Supabase dashboard) | Site URL = `https://crm.repset.ie`; legacy hosts remain in Additional Redirect URLs | [ ] |
-| 9 | Postmark — webhooks (all servers/streams) | Orchestrator fills | *see MCP inventory* | [ ] |
-| 10 | Meta — WhatsApp + Instagram webhooks, ES/OAuth surfaces | Orchestrator fills | *see MCP inventory* | [ ] |
+| 9 | Postmark — webhooks (edit IN PLACE; incl. shim secret 9.6) | Richard (Postmark UI + supabase secret) | all URLs read crm.repset.ie + positive inbound test | [ ] |
+| 10 | Meta — WA+IG webhook flips + domains (dashboard; token-gated) | Richard (Meta dashboard) | list_subscriptions shows crm.repset.ie + live message lands | [ ] |
 
 ---
 
@@ -405,21 +405,42 @@ ships dark until `ZOOM_*` is set — `src/lib/settings-tree.js:290`.)
 
 ---
 
-## 9. Postmark — *placeholder: see MCP inventory*
+## 9. Postmark — inventoried 18 Aug 2026 (read-only MCP, server CRM.UN1T 19058588)
 
-> Filled by the orchestrator from the Postmark MCP inventory (servers, message
-> streams, and each server's webhook URLs — including the Supabase Edge shim
-> indirection on the support-inbox inbound webhook, which must NOT be flattened
-> to a direct Vercel URL; see `docs/architecture/INTEGRATIONS.md:17`).
+**Owner: Richard (Postmark UI — the estate's MCP is deliberately read-only).**
 
-## 10. Meta (WhatsApp + Instagram) — *placeholder: see MCP inventory*
+| # | Where | Current URL | New URL | How |
+|---|---|---|---|---|
+| 9.1 | Webhook ID **23904688**, stream **broadcast** (Open/Click/Delivery/Bounce/SpamComplaint/SubscriptionChange) | `https://crm.un1tdublin.com/api/webhooks/postmark` | `https://crm.repset.ie/api/webhooks/postmark` | CRM.UN1T → Message Streams → Broadcast → Webhooks → **edit ID 23904688 IN PLACE** |
+| 9.2 | Webhook ID **23952512**, stream **outbound** (same six triggers) | same | same new | same path, Transactional stream, **edit IN PLACE** |
+| 9.3 | Server-level legacy Bounce/Open/Delivery/Click fields | mirror of 9.2 | — | verify in UI they are the mirrored view; if separate legacy entries exist, update or retire (double-delivery is harmless — route dedups on RecordType+MessageID) |
+| 9.4 | **Inbound stream** hook (`InboundHookUrl`) — invoice ingest | `https://crm.un1tdublin.com/api/webhooks/invoices-inbound/<48-char token>` | same path+token **verbatim** on `crm.repset.ie` | CRM.UN1T → Default Inbound Stream → Settings → Webhook. The path token IS the auth — copy exactly |
+| 9.5 | Second server (email ticketing), inbound | `https://iyvtbjjxdggiadzwwvdj.supabase.co/functions/v1/postmark-inbound-shim/<token>` | **NO CHANGE** (no CRM host in it; never flatten to a direct Vercel URL) | confirm-only in UI |
 
-> Filled by the orchestrator from the Meta asset map / MCP inventory (app
-> webhook callback URLs for the `whatsapp_business_account` and `instagram`
-> objects, verify tokens, Embedded Signup / Tech Provider surfaces, and the
-> `/technical` page URL cited on the Access Verification form). Current
-> registered callbacks are on the legacy host (`docs/whatsapp-setup.md`,
-> `docs/instagram-setup.md:24`).
+⚠️ **9.1/9.2 must be edited IN PLACE**: the receiving route authenticates via the stored `X-Webhook-Token` custom header (`POSTMARK_WEBHOOK_TOKEN`). Delete-and-recreate loses the header and every event 403s (`token_mismatch`, `[security]`-prefixed in logs).
+
+**9.6 — the hidden non-Postmark item:** the ticketing shim forwards to the CRM via the Supabase edge secret **`CRM_WEBHOOK_BASE_URL`** (`supabase/functions/postmark-inbound-shim/index.ts:282,332`), currently the un1tdublin host. Flip: `supabase secrets set CRM_WEBHOOK_BASE_URL=https://crm.repset.ie` on project `iyvtbjjxdggiadzwwvdj`.
+
+**9.7 — account-wide audit gap:** the MCP is bound to one server token; the account holds at least a second (ticketing) server and possibly INTEG-B3 tenant servers (sending-only, no webhooks by construction). Eyeball the account's server list once in the UI to confirm no other registrations exist.
+
+Verify after: re-send any email → `postmark_webhook_queue` rows drain via `/api/cron/process-postmark-webhooks`; `/admin/webhook-dead-letter` stays empty; a test invoice email to `<slug>-invoices@mail.un1tdublin.com` lands `status='received'` (silent-by-design failure modes make a positive test the only proof). MX for `mail.un1tdublin.com` is marketing infra and does NOT change.
+
+## 10. Meta (WhatsApp + Instagram) — inventoried + attempted 18 Aug 2026
+
+App: **UN1T communications platform** (`1650634536237918`), live. The programmatic flip was attempted and deliberately STOPPED: `devtools_webhook_manage subscribe` requires the **verify-token VALUE at call time** (env-held secret — must never enter a transcript). **Owner: Richard, via the Meta dashboard "Edit callback URL" flow** (same handshake; Meta only commits the new URL after the handshake succeeds, so a failed attempt is a no-op — zero-downtime by construction, verified against the route code: GET handshake is token-based, POST auth is body-HMAC, neither is host-bound).
+
+| # | Surface | Current | New | How |
+|---|---|---|---|---|
+| 10.1 | IG webhook (topic `instagram`) — flip FIRST, lower stakes | `https://crm.un1tdublin.com/api/webhooks/instagram`, 5 fields | `https://crm.repset.ie/api/webhooks/instagram` | Dashboard → Webhooks → Instagram → Edit callback URL + existing verify token. Fields (keep all 5, verbatim): `messages, messaging_postbacks, message_reactions, comments, message_edit` |
+| 10.2 | WA webhook (topic `whatsapp_business_account`) | `https://crm.un1tdublin.com/api/webhooks/whatsapp`, 13 fields | `https://crm.repset.ie/api/webhooks/whatsapp` | Same flow. Fields — **baseline-verbatim 13** (note `template_category_update` has NO `message_` prefix): `messages, message_template_status_update, message_template_quality_update, template_category_update, message_template_components_update, phone_number_quality_update, phone_number_name_update, account_update, flows, user_preferences, business_capability_update, history, smb_app_state_sync, smb_message_echoes` |
+| 10.3 | **Per-WABA callback override check** | unknown — invisible to the MCP | — | Eyeball WhatsApp Manager → the WABA's webhook config. If an override exists, the app-level flip is inert until it is cleared/updated |
+| 10.4 | App Domains | `un1tdublin.com`, `crm.un1tdublin.com` | ADD `repset.ie`, `crm.repset.ie` (keep old) | Dashboard → Settings → Basic (API access to settings is disabled — dashboard only) |
+| 10.5 | JS SDK / FB Login allowed domains | the two un1tdublin origins | ADD `https://crm.repset.ie/` | FB Login product settings |
+| 10.6 | IG business-login trio (callback/deauthorize/data-deletion) | console-parked un1tdublin URLs — **endpoints unimplemented in code, inert** | repset equivalents | console-text edit, zero runtime risk |
+| 10.7 | Privacy/Terms/data-deletion URLs | `www.un1tdublin.com/privacy` etc. | move only once repset.ie legal pages exist (Stage 5) | dashboard |
+| 10.8 | Contact email | `stillorgan@un1t.com` — **unverified** | — | verify while in the dashboard (housekeeping, unrelated) |
+
+Verify after 10.1/10.2: send a WhatsApp/IG message to the gym → appears in the inbox; Meta retries failed deliveries ~24h so nothing is lost even mid-flip. WA approved templates carry MARKETING links (un1tdublin) — correctly unchanged, no re-submission.
 
 ---
 
