@@ -26,7 +26,7 @@ export default function TermsOfService() {
       <div className="mx-auto max-w-3xl px-6 py-12">
         <header className="mb-10">
           <h1 className="text-3xl font-bold tracking-tight">Terms of Service</h1>
-          <p className="mt-2 text-sm text-gray-500">Last updated 16 July 2026</p>
+          <p className="mt-2 text-sm text-gray-500">Last updated 18 August 2026</p>
         </header>
 
         <section className="prose prose-gray max-w-none">
@@ -36,7 +36,7 @@ export default function TermsOfService() {
             Ltd, trading as UN1T Dublin
             (&ldquo;UN1T&rdquo;, &ldquo;we&rdquo;, &ldquo;us&rdquo;),
             including <strong>un1tdublin.com</strong> and{' '}
-            <strong>crm.un1tdublin.com</strong> (together, the
+            <strong>crm.repset.ie</strong> (together, the
             &ldquo;Service&rdquo;). By using the Service you agree to these
             terms. If you do not agree, please do not use the Service.
           </p>

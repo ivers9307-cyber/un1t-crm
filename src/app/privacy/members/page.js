@@ -52,7 +52,7 @@ function PlatformMemberPrivacyPolicy() {
       <div className="mx-auto max-w-3xl px-6 py-12">
         <header className="mb-10">
           <h1 className="text-3xl font-bold tracking-tight">Privacy policy</h1>
-          <p className="mt-2 text-sm text-gray-500">Last updated 19 June 2026</p>
+          <p className="mt-2 text-sm text-gray-500">Last updated 18 August 2026</p>
         </header>
 
         <section className="prose prose-gray max-w-none">
@@ -91,7 +91,7 @@ function PlatformMemberPrivacyPolicy() {
             <li><strong>Membership:</strong> membership type, class bookings, attendance history, and account preferences.</li>
             <li><strong>Payment:</strong> billing details and transaction records. Card details are handled by our payment provider and are not stored by us.</li>
             <li><strong>Health &amp; fitness:</strong> information you choose to share, such as PAR-Q answers, injuries, or goals (special category data).</li>
-            <li><strong>Member app &amp; connected fitness data:</strong> if you use our member app and connect Apple Health or a heart-rate monitor, the workout and heart-rate data you authorise (including per-session effort, heart-rate zones and points), and any InBody body-composition scan results.</li>
+            <li><strong>Member app &amp; connected fitness data:</strong> if you use our member app and connect Apple Health, a heart-rate monitor, or Strava, the workout and heart-rate data you authorise (including per-session effort, heart-rate zones and points), any InBody body-composition scan results, and your weight where you provide it.</li>
             <li><strong>Marketing &amp; leads:</strong> enquiry details and messages you send via web forms, WhatsApp, or social media, plus your marketing preferences.</li>
             <li><strong>Technical:</strong> IP address, device and browser type, cookies, and pages visited.</li>
             <li><strong>CCTV:</strong> images captured by cameras in public areas of our premises.</li>
@@ -102,18 +102,39 @@ function PlatformMemberPrivacyPolicy() {
             it, though this can limit our ability to tailor sessions safely.
           </p>
           <p>
-            <strong>Apple Health and the member app.</strong> If you connect Apple
-            Health (or a heart-rate monitor) in our member app, we read only the
-            workout and heart-rate data you authorise, and only to provide the app
-            to you &mdash; to score your own sessions and show your own progress,
-            streaks, points and gym challenges. This health and fitness data is
-            <strong> never used for advertising, never used to track you</strong>{' '}
-            across other apps or websites, and is <strong>never sold or shared</strong>{' '}
-            with third parties for their own purposes. It is stored in our secure
-            systems (hosted in the EU) and is visible only to you and, where you
-            are a coaching member, the coach you work with. You can disconnect
-            Apple Health at any time in the app&rsquo;s settings, and you can ask
-            us to delete your data using the contact details below.
+            <strong>Health and fitness data in the member app.</strong> If you
+            use our member app, you can choose to connect health and fitness
+            data sources &mdash; none of this happens unless you take that
+            step yourself. Depending on what you connect, we collect:
+            heart-rate readings from a chest strap you wear during class
+            (captured by the studio&rsquo;s receiver while the class runs);
+            workouts and heart-rate data read from Apple Health, only after
+            you grant permission on your device (the app can also write a
+            summary of a completed session back to Apple Health); InBody
+            body-composition scan results taken at the studio and shared
+            into your coaching; your weight, entered during profile setup or
+            read from Apple Health, which we use to estimate calories; and
+            activities imported from Strava, if you connect your own Strava
+            account.
+          </p>
+          <p>
+            We use this data only to provide the app to you &mdash; to score
+            your sessions (effort points and heart-rate zones), show your
+            progress and streaks, count you into gym challenges, and support
+            any coaching you have asked for. It is <strong>never used for
+            advertising, never sold, and never used to track you</strong>{' '}
+            across other apps or websites, and it is not read on the staff
+            side of the app. You see your own data; your studio&rsquo;s
+            coaches can see summary-level statistics (such as a
+            session&rsquo;s effort score) in order to coach you, and raw
+            heart-rate data is never shown to other members. It is stored in
+            our secure systems (hosted in the EU). You can disconnect Apple
+            Health or Strava at any time in the app&rsquo;s settings, and
+            you can ask us to delete this data with the rest of your data
+            &mdash; see our{' '}
+            <a className="underline" href="/account-deletion">account and
+            data deletion page</a>{' '}
+            or use the contact details below.
           </p>
 
           <h2 className="text-xl font-semibold mt-8 mb-3">3. How we use your data</h2>
