@@ -175,6 +175,55 @@ export function getLocationSenderId(location) {
 }
 
 /**
+ * Apply an org-level fallback sender to a location that has none of its own.
+ *
+ * Pure. Returns the location unchanged when it already has a
+ * `twilio_alpha_sender_id`, or when there is no `orgSenderId` to apply. When
+ * the location has no sender AND an org sender is supplied, returns a shallow
+ * copy carrying that sender so getLocationSenderId resolves to it — instead of
+ * falling through to the cross-brand TWILIO_FROM / FALLBACK_SENDER default.
+ *
+ * The motivating case: hosted events live on a per-host ANCHOR location that
+ * has no sender, so their confirmation SMS was resolving to the CCF Autos
+ * default. See getOrgDefaultSenderId + race-confirmations.js.
+ *
+ * @param {{ twilio_alpha_sender_id?: string | null } | null | undefined} location
+ * @param {string | null | undefined} orgSenderId
+ * @returns {typeof location}
+ */
+export function effectiveSenderLocation(location, orgSenderId) {
+  if (!location) return location
+  if (location.twilio_alpha_sender_id) return location
+  if (!orgSenderId) return location
+  return { ...location, twilio_alpha_sender_id: orgSenderId }
+}
+
+/**
+ * Resolve an organization's own default SMS sender — the sender of its oldest
+ * location that has one. Used as the fallback for an event whose location has
+ * no sender (e.g. the per-host anchor location a hosted event sits on) so a
+ * UN1T event never falls through to the cross-brand TWILIO_FROM default.
+ * Returns null when the org has no configured sender (the caller then keeps the
+ * existing global fallback) or on any query error — it never guesses.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} db  service-role client
+ * @param {string | null | undefined} organizationId
+ * @returns {Promise<string | null>}
+ */
+export async function getOrgDefaultSenderId(db, organizationId) {
+  if (!organizationId) return null
+  const { data, error } = await db
+    .from('locations')
+    .select('twilio_alpha_sender_id, created_at')
+    .eq('organization_id', organizationId)
+    .not('twilio_alpha_sender_id', 'is', null)
+    .order('created_at', { ascending: true })
+    .limit(1)
+  if (error || !data?.length) return null
+  return data[0].twilio_alpha_sender_id || null
+}
+
+/**
  * Validate an alpha sender ID before persisting. Twilio's rules
  * (https://www.twilio.com/docs/glossary/what-alphanumeric-sender-id):
  * 1-11 characters; letters, numbers AND spaces are allowed; must

@@ -14,7 +14,7 @@
 // retries on non-2xx) without duplicate messages.
 
 import { sendTransactionalEmail } from './postmark'
-import { sendLocationSms, TwilioError } from './twilio'
+import { sendLocationSms, TwilioError, getOrgDefaultSenderId, effectiveSenderLocation } from './twilio'
 import { formatWeekdayLongDateInTZ } from './dates'
 import { getAppUrl } from './app-url'
 import { signCheckinToken } from './event-checkin-tokens'
@@ -85,7 +85,7 @@ export async function sendRaceConfirmations({ db, paymentId }) {
         accent_hex, hero_image_url,
         confirmation_email_subject, confirmation_email_intro, confirmation_email_template_id,
         confirmation_sms_enabled,
-        locations:location_id ( id, name, twilio_alpha_sender_id )
+        locations:location_id ( id, name, twilio_alpha_sender_id, organization_id )
       ),
       registration:race_registration_id (
         id, wave_id,
@@ -320,6 +320,17 @@ async function sendSms({ db, payment, location, ctx }) {
   if (!payment.contact_phone) return { status: 'skipped', reason: 'no_phone' }
   if (!location) return { status: 'skipped', reason: 'no_location' }
 
+  // SENDER-ORG-FALLBACK — hosted events sit on a per-host ANCHOR location with
+  // no Twilio sender; without this the send falls through getLocationSenderId
+  // to the global TWILIO_FROM default (the CCF Autos sender), so a UN1T event
+  // texts from the wrong brand. Resolve the event org's own sender first; if
+  // the org has none either, the existing global fallback still applies.
+  let senderLocation = location
+  if (!location.twilio_alpha_sender_id && location.organization_id) {
+    const orgSenderId = await getOrgDefaultSenderId(db, location.organization_id)
+    senderLocation = effectiveSenderLocation(location, orgSenderId)
+  }
+
   const lines = []
   lines.push(`UN1T: Team ${ctx.teamName} is in for ${ctx.raceName} on ${ctx.raceDateLabel}.`)
   if (ctx.waveLabel) lines.push(`Wave: ${ctx.waveLabel}.`)
@@ -327,7 +338,7 @@ async function sendSms({ db, payment, location, ctx }) {
   const body = lines.join(' ')
 
   try {
-    await sendLocationSms({ location, to: payment.contact_phone, body })
+    await sendLocationSms({ location: senderLocation, to: payment.contact_phone, body })
   } catch (e) {
     const msg = e instanceof TwilioError
       ? `Twilio ${e.code || e.status || ''}: ${e.message}`.trim()
