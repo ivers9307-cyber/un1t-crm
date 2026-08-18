@@ -20,6 +20,7 @@ import { getAppUrl } from './app-url'
 import { signCheckinToken } from './event-checkin-tokens'
 import { buildEventEmailShell, resolveEventEmail } from './event-email'
 import { overlayConnections } from '@/lib/connection-registry'
+import { resolveEventCommsLocation } from './event-comms-location'
 
 function fmtRaceDate(dateStr) {
   if (!dateStr) return ''
@@ -80,7 +81,7 @@ export async function sendRaceConfirmations({ db, paymentId }) {
       confirmation_email_sent_at, confirmation_sms_sent_at,
       race_event_id, race_registration_id,
       race:race_event_id (
-        id, name, slug, race_date, location_id,
+        id, name, slug, race_date, location_id, host_id, sending_location_id,
         venue_name, venue_address,
         accent_hex, hero_image_url,
         confirmation_email_subject, confirmation_email_intro, confirmation_email_template_id,
@@ -110,6 +111,16 @@ export async function sendRaceConfirmations({ db, paymentId }) {
   if (payment.race?.locations) {
     payment.race.locations = await overlayConnections(db, payment.race.locations, ['twilio_sender'])
   }
+
+  // EVENT-COMMS-LOC — the real location whose SMS + email identity this event's
+  // comms use (host events resolve off their org master, not the sender-less
+  // anchor). Falls back to the embedded location when unresolved.
+  const commsLocation = await resolveEventCommsLocation(db, {
+    location_id: payment.race?.location_id,
+    host_id: payment.race?.host_id,
+    sending_location_id: payment.race?.sending_location_id,
+  })
+  const commsLocationId = commsLocation?.id || payment.race?.location_id || null
 
   const race = payment.race
   const reg = payment.registration
@@ -159,7 +170,7 @@ export async function sendRaceConfirmations({ db, paymentId }) {
   // Email — only if not already sent.
   if (!payment.confirmation_email_sent_at) {
     try {
-      const r = await sendEmail({ db, payment, ctx })
+      const r = await sendEmail({ db, payment, ctx, commsLocationId })
       if (r.status === 'sent') {
         await db.from('race_payments')
           .update({ confirmation_email_sent_at: new Date().toISOString() })
@@ -181,7 +192,7 @@ export async function sendRaceConfirmations({ db, paymentId }) {
   const smsGate = shouldSendSmsConfirmation(race, payment)
   if (smsGate.send) {
     try {
-      const r = await sendSms({ db, payment, location, ctx })
+      const r = await sendSms({ db, payment, location, ctx, commsLocation })
       if (r.status === 'sent') {
         await db.from('race_payments')
           .update({ confirmation_sms_sent_at: new Date().toISOString() })
@@ -279,7 +290,7 @@ export function buildConfirmationEmailHtml(ctx) {
   })
 }
 
-async function sendEmail({ db, payment, ctx }) {
+async function sendEmail({ db, payment, ctx, commsLocationId }) {
   if (!payment.contact_email) return { status: 'skipped', reason: 'no_email' }
 
   const race = payment.race || {}
@@ -310,20 +321,20 @@ async function sendEmail({ db, payment, ctx }) {
     subject,
     htmlBody,
     contactId: payment.contact_id || null,
-    locationId: payment.race?.location_id || null,
+    locationId: commsLocationId,
     tag: 'race-registration-confirmation',
   })
   return { status: 'sent' }
 }
 
-async function sendSms({ db, payment, location, ctx }) {
+async function sendSms({ db, payment, location, ctx, commsLocation }) {
   if (!payment.contact_phone) return { status: 'skipped', reason: 'no_phone' }
   if (!location) return { status: 'skipped', reason: 'no_location' }
 
   // SENDER-ORG-FALLBACK — a hosted event sits on a per-host ANCHOR location
   // with no Twilio sender; resolveSenderLocation swaps in the org's own sender
   // so it never falls through to the global CCF Autos default.
-  const senderLocation = await resolveSenderLocation(db, location)
+  const senderLocation = await resolveSenderLocation(db, commsLocation || location)
 
   const lines = []
   lines.push(`UN1T: Team ${ctx.teamName} is in for ${ctx.raceName} on ${ctx.raceDateLabel}.`)

@@ -94,3 +94,21 @@ describe('events CreateSchema SMS confirmation toggle', () => {
     expect(() => CreateSchema.parse({ ...base, confirmation_sms_enabled: 'yes' })).toThrow()
   })
 })
+
+describe('events CreateSchema sending_location_id', () => {
+  const base = {
+    location_id: '00000000-0000-0000-0000-000000000001',
+    name: 'Hyrox Sim', race_date: '2026-08-01', waves: [{ start_time: '09:00' }],
+  }
+  it('parses clean when omitted', () => {
+    expect(CreateSchema.parse({ ...base }).sending_location_id).toBeUndefined()
+  })
+  it('accepts a uuid and null', () => {
+    expect(CreateSchema.parse({ ...base, sending_location_id: '11111111-1111-1111-1111-111111111111' }).sending_location_id)
+      .toBe('11111111-1111-1111-1111-111111111111')
+    expect(CreateSchema.parse({ ...base, sending_location_id: null }).sending_location_id).toBeNull()
+  })
+  it('rejects a non-uuid', () => {
+    expect(() => CreateSchema.parse({ ...base, sending_location_id: 'nope' })).toThrow()
+  })
+})

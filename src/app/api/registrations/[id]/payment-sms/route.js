@@ -32,6 +32,7 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import { sendLocationSms, TwilioError, resolveSenderLocation } from '@/lib/twilio'
 import { getAppUrl } from '@/lib/app-url'
 import { overlayConnections } from '@/lib/connection-registry'
+import { resolveEventCommsLocation } from '@/lib/event-comms-location'
 
 export const runtime = 'nodejs'
 
@@ -61,7 +62,7 @@ export async function POST(_request, props) {
     .select(`
       id, status,
       race_events!inner (
-        id, name, location_id,
+        id, name, location_id, host_id, sending_location_id,
         locations:location_id ( id, name, twilio_alpha_sender_id, organization_id )
       )
     `)
@@ -114,10 +115,15 @@ export async function POST(_request, props) {
   const payLink = `${getAppUrl()}/event-pay/${payment.id}`
   const body = `Hi ${firstName}, here's your link to pay ${amount}and secure your spot for ${raceName}: ${payLink}${signoff}`
 
-  // SENDER-ORG-FALLBACK — mirror race-confirmations: a hosted event's anchor
-  // location has no Twilio sender, so resolve the org's own sender before
-  // sending, else the payment link texts from the global CCF Autos default.
-  const senderLocation = await resolveSenderLocation(db, reg.race_events.locations)
+  // EVENT-COMMS-LOC — send the payment link from the event's comms location
+  // (host events → the org master, not the sender-less anchor). resolveSenderLocation
+  // is the inner safety net if that resolved location itself lacks a sender.
+  const commsLocation = await resolveEventCommsLocation(db, {
+    location_id: reg.race_events.location_id,
+    host_id: reg.race_events.host_id,
+    sending_location_id: reg.race_events.sending_location_id,
+  })
+  const senderLocation = await resolveSenderLocation(db, commsLocation || reg.race_events.locations)
 
   let twilioResult
   try {

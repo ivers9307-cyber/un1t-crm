@@ -97,6 +97,9 @@ export const CreateSchema = z.object({
   reminder_email_intro: z.string().max(4000).nullable().optional(),
   confirmation_email_template_id: uuidLike.nullable().optional(),
   reminder_email_template_id: uuidLike.nullable().optional(),
+  // EVENT-COMMS-LOC (mig 553) — the real UN1T location this event's SMS + email
+  // send from. In-org non-anchor validated below.
+  sending_location_id: uuidLike.nullable().optional(),
   // EVENTS-SMS-TOGGLE (mig 552) — per-event opt-in for the registration SMS
   // confirmation. Optional here; the POST route defaults it to false, so a
   // legacy/default event never texts. The email receipt is separate.
@@ -294,6 +297,22 @@ export async function POST(request) {
     }
   }
 
+  // EVENT-COMMS-LOC (mig 553) — sending-location IDOR guard. The comms
+  // identity location must be a real, non-anchor location in THIS event's
+  // organization (resolved from the event's location). Without this, an
+  // operator could point an event's SMS/email identity at another org's
+  // location. NULL/absent = no override, no check needed.
+  if (body.sending_location_id) {
+    const { data: loc } = await db.from('locations')
+      .select('organization_id').eq('id', body.location_id).single()
+    const { data: send } = await db.from('locations')
+      .select('id, organization_id, is_host_anchor')
+      .eq('id', body.sending_location_id).maybeSingle()
+    if (!loc || !send || send.is_host_anchor || send.organization_id !== loc.organization_id) {
+      return NextResponse.json({ success: false, error: 'invalid_sending_location' }, { status: 400 })
+    }
+  }
+
   const { data, error } = await db
     .from('race_events')
     .insert({
@@ -333,6 +352,7 @@ export async function POST(request) {
       reminder_email_template_id: body.reminder_email_template_id ?? null,
       // EVENTS-SMS-TOGGLE (mig 552) — default OFF; the email receipt is separate.
       confirmation_sms_enabled: body.confirmation_sms_enabled ?? false,
+      sending_location_id: body.sending_location_id ?? null,
     })
     .select()
     .single()

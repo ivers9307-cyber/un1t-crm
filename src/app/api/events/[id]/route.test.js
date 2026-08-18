@@ -65,3 +65,17 @@ describe('events UpdateSchema SMS confirmation toggle', () => {
     expect(() => UpdateSchema.parse({ confirmation_sms_enabled: 'sure' })).toThrow()
   })
 })
+
+describe('events UpdateSchema sending_location_id', () => {
+  it('parses clean when omitted', () => {
+    expect(UpdateSchema.parse({ name: 'x' }).sending_location_id).toBeUndefined()
+  })
+  it('accepts a uuid and null', () => {
+    expect(UpdateSchema.parse({ sending_location_id: '22222222-2222-2222-2222-222222222222' }).sending_location_id)
+      .toBe('22222222-2222-2222-2222-222222222222')
+    expect(UpdateSchema.parse({ sending_location_id: null }).sending_location_id).toBeNull()
+  })
+  it('rejects a non-uuid', () => {
+    expect(() => UpdateSchema.parse({ sending_location_id: 'nope' })).toThrow()
+  })
+})
