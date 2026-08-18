@@ -1,5 +1,5 @@
 // /terms — public Terms of Service for the UN1T Dublin website and
-// platform. Linked as the Terms of Service URL on the Meta app
+// the Repset platform. Linked as the Terms of Service URL on the Meta app
 // (WhatsApp Tech Provider) and available from the public site.
 //
 // Standalone server-rendered markup so it loads without auth. Unlike
@@ -15,9 +15,9 @@
 export const runtime = 'nodejs'
 
 export const metadata = {
-  title: 'Terms of Service · UN1T Dublin',
+  title: 'Terms of Service · Repset',
   description:
-    'The terms on which Champ Fitness Ltd (trading as UN1T Dublin) provides its website, booking pages, member communications, and CRM platform.',
+    'The terms on which Champ Fitness Ltd (trading as UN1T Dublin) provides its website, booking pages, member communications, and the Repset platform.',
 }
 
 export default function TermsOfService() {
@@ -32,8 +32,8 @@ export default function TermsOfService() {
         <section className="prose prose-gray max-w-none">
           <p>
             These terms govern your use of the websites, booking pages, member
-            communications, and software platform provided by Champ Fitness
-            Ltd, trading as UN1T Dublin
+            communications, and the Repset software platform provided by Champ
+            Fitness Ltd, trading as UN1T Dublin
             (&ldquo;UN1T&rdquo;, &ldquo;we&rdquo;, &ldquo;us&rdquo;),
             including <strong>un1tdublin.com</strong> and{' '}
             <strong>crm.repset.ie</strong> (together, the
@@ -45,7 +45,8 @@ export default function TermsOfService() {
           <p>
             Champ Fitness Ltd, trading as UN1T Dublin, is a company
             registered in Ireland. We operate the
-            UN1T fitness studios and the software platform used to run them,
+            UN1T fitness studios, and we build and operate Repset, the
+            software platform used to run them —
             including class bookings, member communications, and related
             business tools. You can contact us at{' '}
             <a className="underline" href="mailto:hello@un1tdublin.com">hello@un1tdublin.com</a>.
@@ -57,7 +58,7 @@ export default function TermsOfService() {
             booking and payment pages, messages we send you (by email, SMS, or
             WhatsApp) where you have asked to hear from us or have an active
             relationship with us, and — for staff and authorised business
-            customers — the CRM platform used to operate the business. Some
+            customers — the Repset platform used to operate the business. Some
             parts of the Service are only available to signed-in staff or to
             business customers who have entered into a separate agreement with
             us.
