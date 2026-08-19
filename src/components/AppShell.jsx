@@ -50,7 +50,7 @@ import { Analytics } from '@vercel/analytics/next'
 // host was bounced to /login → which that host rewrites to /welcome, i.e. the
 // server-rendered policy flashed then vanished into the studio chooser.
 // Mirrors the proxy.js + brands.js allowlists — add new paths in ALL THREE.
-const PUBLIC_PATHS = ['/login', '/auth/callback', '/reset-password', '/welcome', '/stillorgan', '/hatch-street', '/free-class', '/start', '/offers', '/deposit', '/book', '/event', '/event-pay', '/class-pay', '/tv', '/present', '/studio-login', '/bca', '/host-connect', '/host', '/h', '/unsubscribe', '/preferences', '/view-email', '/privacy', '/terms', '/legal', '/technical', '/ccf']
+const PUBLIC_PATHS = ['/login', '/auth/callback', '/reset-password', '/welcome', '/stillorgan', '/hatch-street', '/free-class', '/start', '/offers', '/deposit', '/book', '/event', '/event-pay', '/class-pay', '/tv', '/present', '/studio-login', '/bca', '/host-connect', '/host', '/h', '/unsubscribe', '/preferences', '/view-email', '/privacy', '/terms', '/legal', '/technical', '/ccf', '/use-the-app']
 
 export default function AppShell({ user, children, isLinkedHost = false }) {
   const pathname = usePathname()

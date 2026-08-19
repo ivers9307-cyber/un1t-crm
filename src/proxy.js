@@ -5,6 +5,7 @@ import { resolveTenantDomainBrand } from '@/lib/tenant-domains-edge'
 import { isApiKeyToken, sha256HexEdge } from '@/lib/api-keys-edge'
 import { readSupportModeEdge, decideSupportWriteBlock } from '@/lib/support-session-edge'
 import { decideLegacyHostRedirect } from '@/lib/legacy-host-redirect'
+import { decideStaffWebLock, STUDIO_SESSION_COOKIE } from '@/lib/staff-web-lock'
 
 // Constant-time string compare. Implemented inline because the proxy runs
 // in the Edge runtime which doesn't expose node:crypto.timingSafeEqual. The
@@ -194,7 +195,7 @@ export async function proxy(request) {
   // (Gmail clips a message over ~102KB, taking the footer and its unsubscribe
   // link with it). Authorised by an HMAC token that names one campaign and no
   // contact, so there is no session to gate on and nothing personal behind it.
-  const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/event/', '/event-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/api/fleet/', '/deposit/', '/welcome', '/free-class', '/start', '/offers', '/.well-known/', '/privacy', '/terms', '/legal/', '/technical', '/ccf', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/']
+  const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/event/', '/event-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/api/fleet/', '/deposit/', '/welcome', '/free-class', '/start', '/offers', '/.well-known/', '/privacy', '/terms', '/legal/', '/technical', '/ccf', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/', '/use-the-app']
   const isPublic = publicPaths.some(p => request.nextUrl.pathname.startsWith(p))
   if (isPublic) return NextResponse.next()
 
@@ -309,6 +310,24 @@ export async function proxy(request) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     url.searchParams.set('redirect', request.nextUrl.pathname)
+    return NextResponse.redirect(url)
+  }
+
+  // STAFF-WEB-LOCK — with the flag on, an authenticated page request from a
+  // staff session is walled off to /use-the-app (every resolved profile on
+  // this host is a staff role, so no profiles lookup is needed). Studio
+  // devices ride the studio_session cookie exemption; TVs/present/cast and
+  // /api/* returned earlier and never reach this. Decision + full rationale
+  // in src/lib/staff-web-lock.js.
+  const lock = decideStaffWebLock({
+    enabled: process.env.STAFF_WEB_LOCK === '1',
+    pathname: request.nextUrl.pathname,
+    hasStudioSession: Boolean(request.cookies.get(STUDIO_SESSION_COOKIE)?.value),
+  })
+  if (lock) {
+    const url = request.nextUrl.clone()
+    url.pathname = lock.redirect
+    url.search = ''
     return NextResponse.redirect(url)
   }
 
