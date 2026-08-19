@@ -8,32 +8,50 @@
 # gate.) Failing in GitHub Actions surfaces breakage early, before a
 # broken bundle reaches the queue.
 #
-# The two triggers are deliberately ASYMMETRIC — see the long note on
-# `pull_request:` below. Short version: the PR trigger is unfiltered
-# because it is the branch-protection gate and an absent check is a
-# deadlock; the push trigger stays path-filtered because nothing waits
-# on it, but its allowlist had real build-critical holes and they are
-# now closed.
+# The two triggers are deliberately ASYMMETRIC, in TWO ways, and both
+# asymmetries exist for the same reason — a PR run is a gate, a main run
+# is a record:
+#   - paths:       filtered on push, UNFILTERED on pull_request. An absent
+#                  required check is a permanent block.
+#   - concurrency: PR runs are grouped per PR and supersede each other; push
+#                  runs are grouped per COMMIT and always complete. On a PR
+#                  the superseded SHA is one nobody is merging; on main it is
+#                  one somebody already merged and Vercel already shipped.
+# Long form on `pull_request:` and `concurrency:` below. The exact branch-
+# protection settings this file assumes are written out in the ENABLING
+# BRANCH PROTECTION block between them — read that before turning
+# protection on, and before removing anything here.
 
 name: Web CI
 
 on:
   # ─── push: main ──────────────────────────────────────────────────
   # The post-merge run. Nothing WAITS on this one — it is the "is main
-  # still sound" record, and the only test of the actually-merged tree
-  # when a PR was behind main at merge time. Because nothing blocks on
-  # it, a path filter here has no deadlock failure mode, so it stays
-  # (a docs-only merge need not burn 5 runner-minutes).
+  # still sound" RECORD, and the only test of the actually-merged tree
+  # when a PR was behind main at merge time. It is a detector, never a
+  # gate: by the time it reports, Vercel has already deployed the merge
+  # commit to production. Do not reason about it as if it prevented
+  # anything. Because nothing blocks on it, a path filter here has no
+  # deadlock failure mode, so it stays (a docs-only merge need not burn
+  # 5 runner-minutes).
   #
-  # It does have a MISS failure mode, and that has fired: commit a1e57a8
-  # landed a check-mobile-parity rule change with no CI because
-  # scripts/** was not watched. CI-GATE.1 audited the whole repo root for
-  # the same class and closed nine more paths plus two widenings — each
-  # new entry below carries the reason it can independently turn a check
-  # red, and three of them were not previously suspected. The test
-  # for adding a path here is: "can a change to this, on its own, fail
-  # `npm test`, `npm run lint`, a `check:*` script, `next build`, or the
-  # Vercel deploy?"
+  # Two ways the record can come up EMPTY, both now closed:
+  #
+  #   1. MISS — an edited path is not watched. Fired on commit a1e57a8:
+  #      a check-mobile-parity rule change landed with no CI because
+  #      scripts/** was not watched. CI-GATE.1 audited the whole repo
+  #      root for that class and closed nine paths plus two widenings;
+  #      CI-GATE.2 closed the one it missed (.audit-allowlist.json).
+  #      Each entry below carries the reason it can independently turn a
+  #      check red. The test for adding a path is: "can a change to this,
+  #      on its own, fail `npm test`, `npm run lint`, a `check:*` script,
+  #      `next build`, or the Vercel deploy?"
+  #
+  #   2. CANCELLATION — a closely-following merge superseded the run.
+  #      This was eating 19% of them; see the concurrency: block below,
+  #      where it is fixed. CI-GATE.1's comment claimed the push trigger
+  #      had "no deadlock mode, only a miss mode", which was two thirds
+  #      of the truth, and the missing third was the larger hole.
   push:
     branches: [main]
     paths:
@@ -56,6 +74,15 @@ on:
       - 'evals/**'
       - 'package.json'
       - 'package-lock.json'
+      # CI-GATE.2 — tests/dependency-audit.test.js pins this file's
+      # accepted[] to EMPTY and validates every entry's reason length and
+      # expiry date, so a lone commit adding an accept (the normal reason
+      # anyone edits it) fails `npm test` with nothing else watching. The
+      # mobile twin is covered incidentally by mobile/**; this one was in
+      # no trigger at all — dependency-audit.yml filters its own
+      # pull_request to package.json/package-lock.json/mobile/package*.json,
+      # so that workflow does not cover it either.
+      - '.audit-allowlist.json'
       - 'eslint.config.mjs'
       - 'eslint.mobile-imports.config.mjs'
       - 'eslint.mobile.config.mjs'
@@ -165,23 +192,156 @@ on:
   #     and so does not start a run: close/reopen it (fires `reopened`)
   #     or push a commit. `edited` is not added here because it also
   #     fires on every title and description edit.
-  #   - Fork PRs report both checks: the jobs need no secrets (the build
-  #     comment below explains why). A first-time contributor's run needs
-  #     maintainer approval, so the checks sit pending — blocked, not
-  #     falsely green, which is the correct direction.
   #   - No duplicate runs: the push trigger is `branches: [main]`, so a
   #     same-repo PR branch push fires only `pull_request`.
+  #   - FORK PRs — read this before believing a green check. This repo is
+  #     PUBLIC (`gh api repos/… → visibility: public`). For a
+  #     `pull_request` event GitHub runs the workflow definition FROM THE
+  #     MERGE REF, i.e. the contributor's copy of this file. A fork PR
+  #     that keeps `name: Test & lint` / `name: Next build` and replaces
+  #     the steps with `run: true` produces two GREEN required checks
+  #     having tested nothing. (Renaming the jobs is the safe direction —
+  #     the checks then go absent, which blocks.) The jobs need no secrets
+  #     and `default_workflow_permissions` is `read`, so this is not a
+  #     token-exfiltration hole; it is a "the gate can be handed a forged
+  #     pass" hole. Actions' fork approval policy is currently
+  #     `first_time_contributors`, so a contributor with one merged PR
+  #     runs unapproved. CI-GATE.1's note here said the opposite ("blocked,
+  #     not falsely green") and was wrong.
+  #     ⇒ The required checks protect main from OUR OWN mistakes. They do
+  #       NOT make an untrusted contributor's PR safe. Reading the diff —
+  #       or "Require a pull request before merging" with an approving
+  #       review — is what covers that. See the enabling note below.
+  #     ⇒ Exposure today is theoretical: `gh api …/contributors` returns
+  #       ivers9307-cyber, dependabot[bot], vercel[bot] and nobody else.
+  #       It is written down because it stops being theoretical the first
+  #       time somebody outside opens a PR, and a green check is exactly
+  #       the thing nobody re-audits.
   pull_request:
     branches: [main]
 
-# One in-flight run per ref. github.ref is refs/pull/<n>/merge on a PR and
-# refs/heads/main on a push, so a PR can never cancel main's run or another
-# PR's. Safe alongside required checks: cancellation only happens when a new
-# commit supersedes the old head SHA, and protection evaluates the checks on
-# the CURRENT head — the cancelled run belongs to a SHA nobody is merging.
+# ═══ ENABLING BRANCH PROTECTION — the settings this file assumes ═══════
+# CI-GATE.2. No repo settings are touched by this workflow; this is the
+# spec for the manual step, written down so the reasoning survives it.
+# Settings → Branches → add a rule on `main`:
+#
+#   ✅ Require status checks to pass before merging
+#        required checks, EXACTLY these two (the `name:` values below,
+#        not the job ids `check` / `build`):
+#          • Test & lint
+#          • Next build
+#        Nothing else may be listed. Dependency audit, eas-update and
+#        mobile-export are all path-filtered on their own triggers, so
+#        requiring any of them re-creates the never-reports deadlock
+#        that dropping the PR path filter above exists to avoid.
+#
+#   ✅ Require branches to be up to date before merging
+#        NOT optional, and the one setting most likely to be argued away
+#        as thrash. Without it two PRs that are each green against an
+#        OLDER main can both merge — PR A adds a caller, PR B renames the
+#        callee — and main goes red from a semantic conflict neither run
+#        could see. Vercel auto-deploys main, so that red build is IN
+#        PRODUCTION before the post-merge run reports. The push run is a
+#        detector, not a gate (see the push trigger note); it cannot
+#        substitute for this, and #1454 is what "detector only" looks
+#        like. Cost is real but small and bounded: every merge re-runs
+#        ~5.5min against fresh main, and a burst serialises (the four
+#        merges of 2026-08-16T08:14 would have taken ~22min instead of
+#        8s). Pay it. If it is ever turned OFF, say so out loud rather
+#        than quietly — the residual hole is exactly the paragraph above.
+#
+#   ✅ Do not allow bypassing the above settings  (admin enforcement ON)
+#        This is a single-maintainer repo: every merge is performed by
+#        the admin, so leaving the bypass armed hands the ONLY merger a
+#        one-click "merge anyway" on a red or missing check — the same
+#        click that shipped a red build to prod on #1454, now with a
+#        confirmation dialog in front of it. The argument against a
+#        machine that can fake green (option (b) above) is the same
+#        argument against a human who can wave one through. The escape
+#        hatch is not a permanently-armed bypass: it is Settings →
+#        uncheck → merge → re-check, which takes seconds and leaves a
+#        trail.
+#
+#   ✅ Require a pull request before merging, REQUIRED APPROVALS: 0
+#        Works fine solo — it is the approvals count, not the PR itself,
+#        that a single maintainer cannot satisfy. Set it so "no direct
+#        pushes to main" is stated by a setting instead of resting on
+#        the side effect that required checks also reject a bare push.
+#        The ship loop already opens a PR for everything, so this costs
+#        nothing and closes the "just this once" push.
+#
+#   ⬜ Required approvals: 1 — NOT enableable solo (you cannot approve
+#        your own PR), so it is deliberately out of this gate. State the
+#        consequence rather than leaving it implied: the two required
+#        checks are a guard against OUR OWN mistakes and nothing more.
+#        A review is what would cover an untrusted contributor, and a
+#        fork can hand the checks a forged pass — see the FORK PRs note
+#        above. Turn this on the day a second human gets write access,
+#        and set Actions → General → Fork pull request workflows to
+#        "Require approval for all outside collaborators" at the same
+#        time.
+#
+# KNOWN RESIDUAL — `Next build` is not hermetic. Two files still pull
+# fonts from Google's CDN at build time: src/app/offers/layout.js
+# (Archivo, Archivo_Black) and src/app/ccf/page.js (Barlow,
+# Barlow_Condensed), both `next/font/google`, both compiled by
+# `npm run build`. src/fonts/repset.js and src/fonts/poppins.js already
+# moved to next/font/local for exactly this reason ("keeps the build
+# hermetic — no build-time fetch to fonts.googleapis.com, so a Google
+# outage can't fail `next build`"); those two never got the treatment,
+# and offers/layout.js still carries a header comment claiming it is
+# self-hosted, which it is not. On 2026-08-12 a fonts.gstatic.com hash
+# rotation made `next build` fail locally for about a day with 9
+# unresolvable archivo_* module errors. Making Next build a REQUIRED
+# check converts that from a nuisance into a merge freeze.
+# Measured counterweight, and the reason this is a note rather than a
+# blocker: CI's build job stayed GREEN on main throughout that outage —
+# the failure was only ever reproduced locally. So the exposure is
+# structural, not observed, and the fix (commit the woff2 files and
+# convert both to next/font/local) changes rendered type on two LIVE
+# public marketing surfaces — its own PR, with eyes on both pages, not
+# a rider on a CI-config change. If it does recur before then, uncheck
+# admin enforcement for the one merge rather than reverting this.
+# ══════════════════════════════════════════════════════════════════════
+
+# CI-GATE.2 — the concurrency GROUP is asymmetric, and that is the fix; the
+# cancel-in-progress flag alone is not enough (see "why not just false").
+#
+#   pull_request → group per PR (github.ref is refs/pull/<n>/merge), cancel
+#   in progress. A new push to the PR supersedes the old head SHA, branch
+#   protection evaluates the checks on the CURRENT head, and the cancelled
+#   run belongs to a SHA nobody is merging. Superseding is free here.
+#
+#   push: main → group per COMMIT (github.sha), never cancelled. On main the
+#   superseded SHA IS a SHA somebody merged, and Vercel has already deployed
+#   it. A per-commit group means a merge's run cannot be cancelled OR
+#   displaced by a later merge; bursts simply run in parallel. Actions
+#   minutes are free on a public repo, so parallel costs nothing real.
+#
+# What this fixes, measured rather than assumed: over 200 Web CI runs
+# (2026-08-12..19) the push event was 65 success / 16 cancelled / 2 failure —
+# 19% of merges to main left NO CI result on their merge commit, because
+# every push shared the single group web-ci-refs/heads/main. Worst observed
+# case 2026-08-16T08:14:44..52Z: four merges (#1418/#1419/#1420/#1421) inside
+# eight seconds, three runs cancelled, one survivor. Run 32263362220 (#1457,
+# 2026-08-19) is the same shape — cancelled 29s in by the next merge.
+# That silently defeated the reason CI-GATE.1 added vercel.json,
+# next.config.js, postcss/tailwind.config.js and supabase/** to the push
+# trigger: "a cron edit must not be the one merge of the day with no CI
+# result attached to it" is not true if the next merge cancels it.
+#
+# Why not just `cancel-in-progress: false` (the obvious one-line fix): it
+# under-fixes, and the way it under-fixes is invisible. With a shared group
+# GitHub makes the newcomer PENDING and then "any previously pending job or
+# workflow in the concurrency group will be canceled" — so a burst of four
+# yields run 1 (in progress) plus run 4 (pending) and cancels 2 and 3. It
+# would have repaired the two-merge case and left the actual worst observed
+# case behaving exactly as before. The flag is kept below anyway: it is
+# correct on its own terms and it keeps the intent readable if someone later
+# collapses the group expression.
 concurrency:
-  group: web-ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: web-ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
