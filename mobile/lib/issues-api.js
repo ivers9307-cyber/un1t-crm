@@ -131,5 +131,5 @@ export const ISSUE_STATUS_TONE = Object.freeze({
   open:         { bg: 'bg-amber-500/15',  fg: 'text-amber-200',  border: 'border-amber-500/30' },
   in_progress:  { bg: 'bg-blue-500/15',   fg: 'text-blue-200',   border: 'border-blue-500/30' },
   resolved:     { bg: 'bg-green-500/15',  fg: 'text-green-200',  border: 'border-green-500/30' },
-  closed:       { bg: 'bg-un1t-gray/40',  fg: 'text-un1t-light', border: 'border-un1t-gray' },
+  closed:       { bg: 'bg-un1t-border/40',  fg: 'text-un1t-subtle', border: 'border-un1t-border' },
 })

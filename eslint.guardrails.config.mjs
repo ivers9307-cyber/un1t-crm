@@ -47,6 +47,9 @@ const config = [
       'guardrails/no-zulu-template-date': 'error',
       'guardrails/no-utc-today': 'error',
       'guardrails/no-low-contrast-chip': 'error',
+      // Repo-wide, unlike its per-path sibling below: a dead token is dead on
+      // every surface, light or dark, so there is no area to survey first.
+      'guardrails/no-dead-un1t-token': 'error',
       'guardrails/no-unescaped-ilike-pattern': 'error',
       'guardrails/no-untyped-button-in-form': 'error',
       'guardrails/no-discarded-single-error': 'error',

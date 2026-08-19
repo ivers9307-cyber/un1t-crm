@@ -349,7 +349,7 @@ const ROSTER_OPTS = [{ value: 'week', label: 'Week' }, { value: 'month', label: 
 
 function RosterToggle({ value, onChange }) {
   return (
-    <View className="flex-row bg-un1t-dark border border-un1t-border rounded-lg p-0.5 self-start mb-3">
+    <View className="flex-row bg-un1t-surface border border-un1t-border rounded-lg p-0.5 self-start mb-3">
       {ROSTER_OPTS.map(opt => {
         const active = value === opt.value
         return (

@@ -100,12 +100,12 @@ export default async function AutomationsPage() {
       )}
       {canDevices && (
         <Link href="/automations/devices"
-          className="block bg-un1t-dark border border-un1t-gray rounded-lg p-4 hover:border-un1t-mid transition">
+          className="block bg-un1t-surface border border-un1t-border rounded-lg p-4 hover:border-un1t-muted transition">
           <div className="flex items-center gap-2">
-            <Plug size={16} className="text-un1t-light" />
-            <h2 className="font-semibold text-un1t-white">Devices</h2>
+            <Plug size={16} className="text-un1t-subtle" />
+            <h2 className="font-semibold text-un1t-text">Devices</h2>
           </div>
-          <p className="text-sm text-un1t-light mt-1">Schedules &amp; class-linked power for smart plugs and switches.</p>
+          <p className="text-sm text-un1t-subtle mt-1">Schedules &amp; class-linked power for smart plugs and switches.</p>
         </Link>
       )}
       {canFlows && <AutomationsFlowList sequences={sequences} />}

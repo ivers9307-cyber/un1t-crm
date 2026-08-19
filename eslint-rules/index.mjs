@@ -576,9 +576,10 @@ const noDiscardedSingleError = {
 // to police the rest of that tree with a bespoke file-scanning vitest instead of
 // a lint rule. This rule subsumes that scan.
 //
-// The palette is a LIGHT theme with INVERTED token names (`un1t-black` is white),
-// so the dark-theme instinct of "accent at -300/-400" lands washed-out grey on
-// white. CLAUDE.md settles it: status/accent text on light cards uses the -700
+// The palette is a LIGHT theme (its token names were inverted — `un1t-black`
+// held white — until UI-FOUND.1 renamed them to intent names; see
+// no-dead-un1t-token below), so the dark-theme instinct of "accent at
+// -300/-400" lands washed-out grey on white. CLAUDE.md settles it: status/accent text on light cards uses the -700
 // ramp. -500 is included because it is the same mistake one stop up and the
 // bright hues (yellow/lime/green/cyan) fail AA badly there.
 //
@@ -663,6 +664,85 @@ const noLowContrastAccentText = {
   },
 }
 
+// A un1t-* colour token that was RENAMED AWAY by UI-FOUND.1 (and mirrored in
+// mobile by MOB-UI.1): black→bg, dark→surface, gray→border, mid→muted,
+// light→subtle, white→text. The old names are not aliases — they were deleted
+// from both tailwind configs.
+//
+// This is a different failure from the two contrast rules above. Those flag a
+// colour that is WRONG; this one flags a colour that does not EXIST. Tailwind
+// does not error on an unknown token, it simply emits no css, so the utility is
+// inert and the element silently inherits from its parent. Nothing warns: not
+// the build, not the type system, not a test. 142 sites in src/ and 3 in
+// mobile/ survived the rename that way for weeks, and the way it finally
+// surfaced was an operator asking what was meant to be inside the black box on
+// /offer-sales (2026-08-19) — the "Mark fulfilled" label carried
+// `text-un1t-black`, which after the rename set no colour at all, so white-on-
+// dark became near-black-on-dark.
+//
+// Fixable: unlike the contrast rules (where the right ramp is a judgement call)
+// the mapping here is exact, so `--fix` is the migration.
+//
+// The trailing `(?![\w-])` boundary is what lets this run at ERROR repo-wide —
+// `un1t-dark-logo.png` and `un1t-lightbox` merely start with a dead name and
+// are not tokens. A trailing `/40` opacity modifier IS matched: the modifier is
+// not part of the token name. Only string literals and template chunks are
+// inspected, never comments — the configs and this file legitimately name the
+// old tokens while documenting the rename.
+const DEAD_UN1T_TOKENS = {
+  black: 'bg',
+  dark: 'surface',
+  gray: 'border',
+  mid: 'muted',
+  light: 'subtle',
+  white: 'text',
+}
+const DEAD_UN1T_TOKEN = /un1t-(black|dark|gray|mid|light|white)(?![\w-])/g
+
+const noDeadUn1tToken = {
+  meta: {
+    type: 'problem',
+    fixable: 'code',
+    docs: {
+      description:
+        'Disallow un1t-* colour tokens that UI-FOUND.1 renamed away (black/dark/gray/mid/light/white). They are absent from both tailwind configs, so Tailwind emits no css and the element silently inherits — an invisible failure, not a wrong colour.',
+    },
+    schema: [],
+    messages: {
+      deadToken:
+        '`un1t-{{old}}` no longer exists — UI-FOUND.1 renamed it to `un1t-{{replacement}}` (mobile followed in MOB-UI.1). Tailwind emits NO css for an unknown token, so this class is inert and the element inherits instead: that is how the /offer-sales "Mark fulfilled" button shipped as an unreadable black box. Use `un1t-{{replacement}}`, or run `npm run check:guardrails -- --fix`.',
+    },
+  },
+  create(context) {
+    const source = context.sourceCode || context.getSourceCode()
+    function check(node) {
+      const text = source.getText(node)
+      for (const match of text.matchAll(DEAD_UN1T_TOKEN)) {
+        const old = match[1]
+        const replacement = DEAD_UN1T_TOKENS[old]
+        const start = node.range[0] + match.index
+        const range = [start, start + match[0].length]
+        context.report({
+          node,
+          messageId: 'deadToken',
+          data: { old, replacement },
+          fix: (fixer) => fixer.replaceTextRange(range, `un1t-${replacement}`),
+        })
+      }
+    }
+    return {
+      Literal(node) {
+        if (typeof node.value === 'string') check(node)
+      },
+      // Per CHUNK, not per template: fixing the whole literal would have to
+      // reproduce the ${…} expressions, and the chunk ranges are exact.
+      TemplateElement(node) {
+        check(node)
+      },
+    }
+  },
+}
+
 export default {
   rules: {
     'no-catch-on-supabase-builder': noCatchOnSupabaseBuilder,
@@ -671,6 +751,7 @@ export default {
     'no-utc-today': noUtcToday,
     'no-low-contrast-chip': noLowContrastChip,
     'no-low-contrast-accent-text': noLowContrastAccentText,
+    'no-dead-un1t-token': noDeadUn1tToken,
     'no-unescaped-ilike-pattern': noUnescapedIlikePattern,
     'no-untyped-button-in-form': noUntypedButtonInForm,
     'no-discarded-single-error': noDiscardedSingleError,

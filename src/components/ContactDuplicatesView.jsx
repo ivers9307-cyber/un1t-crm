@@ -265,7 +265,7 @@ export default function ContactDuplicatesView({ suggestions, locationId }) {
 
           {/* Dry-run results */}
           {scanResult && !applyResult && (
-            <div className="rounded-lg bg-un1t-dark border border-un1t-border px-4 py-3 space-y-2">
+            <div className="rounded-lg bg-un1t-surface border border-un1t-border px-4 py-3 space-y-2">
               <p className="text-sm text-un1t-text font-medium">Scan results</p>
               <ul className="text-sm text-un1t-subtle space-y-0.5">
                 <li>

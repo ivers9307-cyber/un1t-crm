@@ -292,7 +292,7 @@ function ShiftActionMenu({ shift, shiftDate, onClose, onDone }) {
             <button
               type="button"
               onClick={() => setPanel('swap')}
-              className="w-full text-left px-3 py-2.5 rounded-lg border border-un1t-border bg-un1t-surface hover:bg-un1t-dark text-sm text-un1t-text transition-colors"
+              className="w-full text-left px-3 py-2.5 rounded-lg border border-un1t-border bg-un1t-surface hover:bg-un1t-border text-sm text-un1t-text transition-colors"
             >
               <span className="font-medium">Post for swap</span>
               <span className="block text-xs text-un1t-subtle mt-0.5">Open to anyone — first to claim takes it</span>
@@ -300,7 +300,7 @@ function ShiftActionMenu({ shift, shiftDate, onClose, onDone }) {
             <button
               type="button"
               onClick={openTargetPicker}
-              className="w-full text-left px-3 py-2.5 rounded-lg border border-un1t-border bg-un1t-surface hover:bg-un1t-dark text-sm text-un1t-text transition-colors"
+              className="w-full text-left px-3 py-2.5 rounded-lg border border-un1t-border bg-un1t-surface hover:bg-un1t-border text-sm text-un1t-text transition-colors"
             >
               <span className="font-medium">Swap with a specific coach…</span>
               <span className="block text-xs text-un1t-subtle mt-0.5">Send the request straight to one colleague</span>
@@ -308,7 +308,7 @@ function ShiftActionMenu({ shift, shiftDate, onClose, onDone }) {
             <button
               type="button"
               onClick={() => setPanel('adjust')}
-              className="w-full text-left px-3 py-2.5 rounded-lg border border-un1t-border bg-un1t-surface hover:bg-un1t-dark text-sm text-un1t-text transition-colors"
+              className="w-full text-left px-3 py-2.5 rounded-lg border border-un1t-border bg-un1t-surface hover:bg-un1t-border text-sm text-un1t-text transition-colors"
             >
               <span className="font-medium">Adjust time</span>
               <span className="block text-xs text-un1t-subtle mt-0.5">
@@ -372,7 +372,7 @@ function ShiftActionMenu({ shift, shiftDate, onClose, onDone }) {
                     type="button"
                     disabled={saving}
                     onClick={() => handlePostTargetedSwap(p.id)}
-                    className="w-full text-left px-3 py-2.5 text-sm text-un1t-text hover:bg-un1t-dark transition-colors disabled:opacity-50"
+                    className="w-full text-left px-3 py-2.5 text-sm text-un1t-text hover:bg-un1t-surface transition-colors disabled:opacity-50"
                   >
                     {p.full_name || 'Unnamed coach'}
                   </button>
@@ -577,7 +577,7 @@ const MODE_LABELS = { week: 'Week', month: 'Upcoming' }
 
 function ModeToggle({ mode, onChange }) {
   return (
-    <div className="flex items-center rounded-lg border border-un1t-border bg-un1t-dark overflow-hidden text-xs font-medium">
+    <div className="flex items-center rounded-lg border border-un1t-border bg-un1t-surface overflow-hidden text-xs font-medium">
       {['week', 'month'].map((m) => (
         <button
           key={m}
@@ -632,7 +632,7 @@ function CalCell({ day, showLocation: _showLocation, onShiftClick }) {
 
   return (
     <div className={`min-h-[72px] p-1 border-b border-r border-un1t-border flex flex-col gap-0.5 ${
-      day.inMonth ? '' : 'bg-un1t-dark'
+      day.inMonth ? '' : 'bg-un1t-surface'
     }`}>
       {/* Date number */}
       <div className="flex items-center justify-end mb-0.5">
@@ -742,7 +742,7 @@ export default function MonthRoster({ weeks, monthLabel, monthSummary, weekPanel
           <button
             type="button"
             onClick={() => { setTimeOffSuccess(false); setTimeOffOpen(true) }}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-un1t-border bg-un1t-surface text-xs text-un1t-subtle hover:text-un1t-text hover:bg-un1t-dark transition-colors"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-un1t-border bg-un1t-surface text-xs text-un1t-subtle hover:text-un1t-text hover:bg-un1t-border transition-colors"
           >
             <CalendarOff size={13} aria-hidden="true" />
             Request time off
