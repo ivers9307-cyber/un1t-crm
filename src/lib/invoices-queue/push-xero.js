@@ -342,6 +342,21 @@ export async function pushQueueRowToXero(queueId) {
   if (!fields.invoice_date) {
     throw new XeroError('This receipt has no invoice date. Open the row in /invoices, set the date from the receipt, and send again — a bill cannot be filed to the right VAT period without one.')
   }
+  // ZERO-TOTAL.1 — deliberately NO "total must be > 0" guard here, though the
+  // obvious instinct is to add one.
+  //
+  // The fix for an unreadable total belongs in the schema (see
+  // requiredMoney in invoice-extraction.js): a total Claude could not read now
+  // fails extraction outright instead of coercing to 0, so no NEW row can
+  // arrive here with a phantom zero. Nothing pending carries one either —
+  // checked against the live queue, every zero-total row is already forwarded.
+  //
+  // And a zero total is not self-evidently wrong here. The three live examples
+  // are CCF Autos customs SADs (deferred VAT on imported vehicles, booked to
+  // the "VRT/VAT for Cars" contact), each reviewed by a human hours after
+  // extraction and then forwarded on purpose. Blocking would break that flow
+  // to defend against a population that is currently empty. If those pushes
+  // turn out to have been mistakes, the guard goes here — one `if`.
 
   // OAuth + tenant lookup. withFreshToken returns the connection
   // alongside xfetch so we can compute the deep-link URL with the

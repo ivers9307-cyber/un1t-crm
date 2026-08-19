@@ -234,6 +234,96 @@ describe('scoreExtractionConfidence', () => {
   })
 })
 
+// ZERO-TOTAL.1 — the mirror image of RECEIPT-NULLS.1, found auditing it.
+// `total` was a bare z.coerce.number(), and zod coerces null AND '' to 0
+// (only undefined is rejected). So a blurry receipt where Claude could not
+// read the amount did not error — it landed as a €0 bill, and scored HIGH
+// confidence, because 0 is finite and 0+0-0 reconciles perfectly. The
+// operator's own review is the control here, and it was being shown a
+// confident number nobody had read.
+//
+// Where RECEIPT-NULLS.1 was too strict (threw good data away), this was too
+// lenient (invented a number). The fix distinguishes "the document states
+// zero" from "we could not read it" — exactly the distinction the sibling
+// extractor already makes (recon/hunt-scoring.js keeps total nullable and
+// refuses to auto-match when it is null).
+describe('invoiceFieldsSchema — an unreadable total is not zero', () => {
+  const base = {
+    supplier_name: 'Tesco Ireland',
+    invoice_number: null,
+    invoice_date: '2026-07-15',
+    currency: 'EUR',
+    subtotal: 13.50,
+    tax_amount: 0,
+    total: 13.50,
+    line_items: [{ description: 'Batteries', quantity: 1, unit_amount: 13.50 }],
+  }
+
+  it('REJECTS a null total rather than recording €0', () => {
+    expect(invoiceFieldsSchema.safeParse({ ...base, total: null }).success).toBe(false)
+  })
+
+  it('rejects an empty-string total (zod coerced this to 0 too)', () => {
+    expect(invoiceFieldsSchema.safeParse({ ...base, total: '' }).success).toBe(false)
+    expect(invoiceFieldsSchema.safeParse({ ...base, total: '   ' }).success).toBe(false)
+  })
+
+  it('rejects a missing total', () => {
+    const { total, ...noTotal } = base
+    void total
+    expect(invoiceFieldsSchema.safeParse(noTotal).success).toBe(false)
+  })
+
+  it('rejects an unparseable total', () => {
+    expect(invoiceFieldsSchema.safeParse({ ...base, total: 'abc' }).success).toBe(false)
+  })
+
+  it('still accepts a total Claude DID read, string or number', () => {
+    expect(invoiceFieldsSchema.safeParse({ ...base, total: '13.50' }).data.total).toBe(13.5)
+    expect(invoiceFieldsSchema.safeParse({ ...base, total: 13.5 }).data.total).toBe(13.5)
+  })
+
+  it('accepts a genuine zero — a document that STATES zero is not the same as unread', () => {
+    const r = invoiceFieldsSchema.safeParse({ ...base, subtotal: 0, tax_amount: 0, total: 0 })
+    expect(r.success).toBe(true)
+    expect(r.data.total).toBe(0)
+  })
+
+  // subtotal/tax_amount are a different case: a till receipt states a total
+  // and frequently no VAT breakdown at all, so absent legitimately means 0.
+  it('treats an absent subtotal / tax_amount as zero rather than failing', () => {
+    for (const missing of [null, '', undefined]) {
+      const r = invoiceFieldsSchema.safeParse({ ...base, subtotal: missing, tax_amount: missing })
+      expect(r.success).toBe(true)
+      expect(r.data.subtotal).toBe(0)
+      expect(r.data.tax_amount).toBe(0)
+    }
+  })
+
+  it('still rejects a garbage subtotal — lenient about absent, not about junk', () => {
+    expect(invoiceFieldsSchema.safeParse({ ...base, subtotal: 'abc' }).success).toBe(false)
+  })
+})
+
+describe('scoreExtractionConfidence — a zero total is never high confidence', () => {
+  const high = { supplier_name: 'Acme', invoice_number: 'INV-1', invoice_date: '2026-05-17', subtotal: 100, tax_amount: 23, total: 123 }
+
+  it('scores medium on a zero total even though 0+0-0 reconciles perfectly', () => {
+    expect(scoreExtractionConfidence({ ...high, subtotal: 0, tax_amount: 0, total: 0 })).toBe('medium')
+  })
+
+  it('scores medium on the exact all-zero shape the old coercion produced', () => {
+    expect(scoreExtractionConfidence({
+      supplier_name: 'Tesco Ireland', invoice_number: 'T-1', invoice_date: '2026-07-15',
+      subtotal: 0, tax_amount: 0, total: 0,
+    })).toBe('medium')
+  })
+
+  it('still scores high on a real invoice', () => {
+    expect(scoreExtractionConfidence(high)).toBe('high')
+  })
+})
+
 describe('applyDueDateDefault', () => {
   it('fills a missing due_date with issue date + 30 days', () => {
     const out = applyDueDateDefault({ invoice_date: '2026-05-07', due_date: null })

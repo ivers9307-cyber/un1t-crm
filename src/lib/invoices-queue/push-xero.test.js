@@ -325,6 +325,36 @@ describe('pushQueueRowToXero — happy path (existing contact)', () => {
   })
 })
 
+// ZERO-TOTAL.1 — a zero total is deliberately NOT blocked on the send. The
+// unreadable-total fix lives in the extraction schema (requiredMoney), so no
+// new row can carry a phantom zero, and the only €0 rows that have ever been
+// pushed are CCF Autos customs SADs — deferred VAT on imported vehicles,
+// booked to the "VRT/VAT for Cars" contact, each reviewed by a human hours
+// after extraction and forwarded on purpose. This test pins that decision so
+// the guard is not "tightened" back in without first establishing that those
+// pushes were mistakes.
+describe('pushQueueRowToXero — a deliberate zero-total bill still sends', () => {
+  it('sends a deferred-VAT customs SAD whose payable total is zero', async () => {
+    nextRow = {
+      id: 'q1', location_id: 'loc1', status: 'data_approved',
+      source_type: 'supplier_email',
+      extracted_fields: {
+        supplier_name: 'British Car Auctions Ltd', invoice_number: '26IEDUB105BF6K3AR4',
+        invoice_date: '2026-04-17', currency: 'EUR',
+        subtotal: 13507.33, tax_amount: 0, total: 0,
+        xero_account_id: 'A1', account_code: '315',
+        xero_contact_ref: { kind: 'existing', xero_contact_id: 'C-VRT', name: 'VRT/VAT for Cars' },
+      },
+    }
+    xfetchMock
+      .mockResolvedValueOnce({ Invoices: [] })
+      .mockResolvedValueOnce({ Invoices: [{ InvoiceID: 'INV-SAD', InvoiceNumber: '26IEDUB105BF6K3AR4' }] })
+
+    const r = await pushQueueRowToXero('q1')
+    expect(r.billId).toBe('INV-SAD')
+  })
+})
+
 describe('pushQueueRowToXero — 0%-VAT bill books as No VAT (XERO-BILL-VAT.1)', () => {
   it("POSTs TaxType 'NONE' on every line so Xero can't add the account's 23%", async () => {
     nextRow = {
