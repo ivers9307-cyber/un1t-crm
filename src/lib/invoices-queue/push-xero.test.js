@@ -246,6 +246,52 @@ describe('pushQueueRowToXero — guard rails', () => {
     }
     await expect(pushQueueRowToXero('q1')).rejects.toThrow(/No Xero supplier picked/)
   })
+
+  // RECEIPT-NULLS.1 — invoice_date is nullable at extraction now (a till
+  // receipt often has no readable date), so this is the backstop: a bill
+  // must NOT reach Xero without one. Blocking beats defaulting to the
+  // received date — an invented date lands the VAT in the wrong period,
+  // and a silent fallback is exactly what CLAUDE.md forbids. The operator
+  // fills the date in during the review they already do.
+  it('throws when invoice_date is missing — never invents one for Xero', async () => {
+    nextRow = {
+      id: 'q1', location_id: 'loc1', status: 'data_approved',
+      source_type: 'fte_expense_item',
+      extracted_fields: {
+        supplier_name: 'Tesco Ireland', invoice_number: null, invoice_date: null,
+        total: 13.5, xero_account_id: 'A1', account_code: '400',
+        xero_contact_ref: { kind: 'existing', xero_contact_id: 'C1', name: 'Tesco' },
+      },
+    }
+    await expect(pushQueueRowToXero('q1')).rejects.toThrow(/no invoice date/i)
+  })
+})
+
+// RECEIPT-NULLS.1 — Xero's InvoiceNumber/Reference are optional on an
+// ACCPAY bill, so a numberless receipt should omit them rather than post
+// an explicit null (which Xero stores as the literal string "null" on
+// some endpoints). Same conditional-spread idiom the payload already uses
+// for DueDate.
+describe('buildBillPayload — receipts with no invoice number', () => {
+  const base = { supplier_name: 'Tesco Ireland', invoice_date: '2026-07-15', total: 13.5, currency: 'EUR' }
+
+  it('omits InvoiceNumber and Reference entirely when the number is null', () => {
+    const payload = buildBillPayload({ ...base, invoice_number: null }, { supplierContactId: 'C1' })
+    expect('InvoiceNumber' in payload).toBe(false)
+    expect('Reference' in payload).toBe(false)
+    expect(payload.Date).toBe('2026-07-15')
+  })
+
+  it('still stamps both when the number IS present', () => {
+    const payload = buildBillPayload({ ...base, invoice_number: 'INV-9' }, { supplierContactId: 'C1' })
+    expect(payload.InvoiceNumber).toBe('INV-9')
+    expect(payload.Reference).toBe('INV-9')
+  })
+
+  it('describes the line without a dangling "Invoice" when the number is null', () => {
+    const payload = buildBillPayload({ ...base, invoice_number: null }, { supplierContactId: 'C1' })
+    expect(payload.LineItems[0].Description).toBe('Tesco Ireland')
+  })
 })
 
 describe('pushQueueRowToXero — happy path (existing contact)', () => {
