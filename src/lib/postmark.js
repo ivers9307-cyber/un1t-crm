@@ -3,6 +3,7 @@ import { resolvePostmarkToken } from './postmark-token'
 import { applyAudienceFilter, applyAudienceFilterAsync } from './audience-filter'
 import { htmlToPlainText } from './email-content'
 import { resolveEmailSender } from './tenant-email'
+import { withSendMarker } from './postmark-send-marker'
 
 const POSTMARK_API_URL = 'https://api.postmarkapp.com'
 
@@ -778,6 +779,12 @@ export async function sendTransactionalEmail({
     stream: 'outbound',  // Postmark transactional stream
     tag: tag || 'transactional',
     sender: sender || undefined,
+    // POSTMARK-RACE.1 — the marker is stamped on EXACTLY the condition the
+    // email_sends insert below is gated on. `contactId` falsy means this send
+    // is deliberately unlogged (an ops alert, a staff notice, a race
+    // confirmation for a payer with no contact), and marking it would promise
+    // the webhook processor a row that is never coming.
+    metadata: contactId ? withSendMarker() : undefined,
   })
 
   // Log to email_sends
@@ -909,6 +916,9 @@ export async function sendMarketingEmail({
     tag: tag || 'marketing',
     unsubscribeUrl,
     sender: sender || undefined,
+    // POSTMARK-RACE.1 — same pairing as sendTransactionalEmail: marked iff the
+    // insert below will run.
+    metadata: contactId ? withSendMarker() : undefined,
   })
 
   // Log to email_sends (same shape as the campaign + transactional paths).

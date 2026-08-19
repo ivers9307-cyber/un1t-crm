@@ -22,6 +22,30 @@ describe('statusForVerifyFailure', () => {
   )
 })
 
+describe('responseForOutcome — deferred (POSTMARK-RACE.1)', () => {
+  // The event is genuinely unprocessed, so 500 would be the honest code for a
+  // generic failure — but not for THIS failure. QStash retries within seconds,
+  // and the thing being waited on is an email_sends insert whose worst measured
+  // commit lag on prod is 13.2s; QStash would spend the row's whole retry
+  // budget inside a window it cannot outrun, and the budget is what bounds the
+  // dead-letter. 200 retires the QStash message and hands recovery to the
+  // 10-minute sweeper cron, which is the delivery guarantee this queue has
+  // always had. The row itself is still pending with attempts+1 — nothing is
+  // acknowledged as done.
+  it('answers 200 so QStash retires the message and the sweeper takes over', () => {
+    expect(responseForOutcome({ status: 'deferred', error: 'send_row_not_yet_committed', attempts: 1 })).toEqual({
+      status: 200,
+      body: { success: true, deferred: true },
+    })
+  })
+
+  it('is distinct from skipped — a skip means someone else handled it', () => {
+    expect(responseForOutcome({ status: 'deferred' }).body).not.toEqual(
+      responseForOutcome({ status: 'skipped' }).body
+    )
+  })
+})
+
 describe('responseForOutcome', () => {
   it('processed → 200 success', () => {
     expect(responseForOutcome({ status: 'processed' })).toEqual({

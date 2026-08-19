@@ -16,6 +16,40 @@ import { applyMarketingPreferencesBulk } from './marketing-consent.js'
 import { findBcaSubmissionByMessageId, recordBcaPostmarkEvent } from './bca-events.js'
 import { recordTicketMessageDelivery } from './email-delivery-status.js'
 import { escapeLikePattern } from './like-escape.js'
+import { expectsEmailSendRow, SEND_ROW_NOT_YET_COMMITTED } from './postmark-send-marker.js'
+
+/**
+ * POSTMARK-RACE.1 — the one decision this file makes about a missing send row.
+ *
+ * Until now "no email_sends row" was always answered the same way: do nothing
+ * and return ok, which stamps the queue row processed and destroys the event.
+ * Prod says that answer is wrong for a third of Delivery traffic — 3,231 of
+ * 10,191 events over 21 days were processed BEFORE their row committed, and
+ * all 3,231 lost their delivery (measured: delivered_at NULL on 3,231/3,231 of
+ * them, and set on 6,960/6,960 of the events that were processed after their
+ * row landed — a perfect split, no other explanation left standing).
+ *
+ * The marker is what separates the two populations. See postmark-send-marker.js
+ * for why absence, Metadata-presence and Tag allowlists all fail at this:
+ *   marked   → a row IS coming. Fail the event so the queue retries it; the
+ *              10-minute sweeper re-runs it long after the worst measured
+ *              commit lag (13.2s over 3,231 samples, nothing beyond 60s).
+ *   unmarked → nothing will ever be written. Drop it, exactly as before.
+ *
+ * Unmarked is also what mail sent by the PREVIOUS deploy looks like, so the
+ * rollout degrades to today's behaviour rather than to a retry storm.
+ *
+ * @returns {{ok: false, error: string}|null} — a result to return, or null to
+ *   carry on with the old behaviour.
+ */
+function retryForRacedSendRow(body, messageId, recordType) {
+  if (!expectsEmailSendRow(body)) return null
+  console.warn(
+    `[postmark processor] ${recordType} for message ${messageId} arrived before its email_sends ` +
+    'row committed (crm_send marker present) — event left UNPROCESSED so the queue retries it.'
+  )
+  return { ok: false, error: SEND_ROW_NOT_YET_COMMITTED }
+}
 
 /**
  * K8 — the one way this file resolves "which send is this event about".
@@ -201,9 +235,19 @@ export async function processPostmarkEvent(db, body) {
             .select('id', { count: 'exact', head: true })
             .eq('postmark_message_id', messageId)
           if (!knownSends) {
-            console.error(
-              `[postmark processor] Delivery for unknown message ${messageId} — no email_sends row; ` +
-              'delivery NOT recorded and the retry will be deduped. Suspect the send-loop insert race.'
+            // POSTMARK-RACE.1 — this is where the loss used to become permanent.
+            // The old code logged and returned ok, so the queue row was stamped
+            // processed and neither consumer ever looked at it again.
+            const retry = retryForRacedSendRow(body, messageId, 'Delivery')
+            if (retry) return retry
+            // Unmarked: mail this system never records (ops alert crons, host
+            // campaigns with their own ledger, campaign test sends, anything
+            // sent with no contact to attribute). Correctly ignored — and no
+            // longer at console.error, because ~31/day of legitimate noise
+            // masquerading as an error is what buried the real defect.
+            console.warn(
+              `[postmark processor] Delivery for message ${messageId} with no email_sends row and no ` +
+              'crm_send marker — not ours to record, ignored.'
             )
           }
         }
@@ -227,6 +271,15 @@ export async function processPostmarkEvent(db, body) {
           .eq('postmark_message_id', messageId)
 
         const openSend = await findSendByMessageId(db, messageId, 'id, contact_id, campaign_id')
+
+        // POSTMARK-RACE.1 — 143 Opens over 21 days were processed before their
+        // row existed. Smaller than Delivery (a human has to open the mail
+        // first) but the same loss: engagement recency, the open counter and
+        // the hygiene un-suppression all hang off `openSend`.
+        if (!openSend) {
+          const retry = retryForRacedSendRow(body, messageId, 'Open')
+          if (retry) return retry
+        }
 
         if (openSend) {
           // EMAIL-HYGIENE.1 — an open is engagement: clear the hygiene
@@ -295,6 +348,14 @@ export async function processPostmarkEvent(db, body) {
         const clickedUrl = body.OriginalLink
 
         const clickSend = await findSendByMessageId(db, messageId, 'id, contact_id, campaign_id, location_id')
+
+        // POSTMARK-RACE.1 — same shape as Open. Rare in the measured window
+        // (1 event in 21 days) but a click is the strongest engagement signal
+        // there is, and campaign_link_clicks only ever gets written here.
+        if (!clickSend) {
+          const retry = retryForRacedSendRow(body, messageId, 'Click')
+          if (retry) return retry
+        }
 
         if (clickSend) {
           // EMAIL-HYGIENE.1 — a click is engagement: clear the hygiene
@@ -387,6 +448,23 @@ export async function processPostmarkEvent(db, body) {
         const now = new Date().toISOString()
         const bounceType = body.Type === 'HardBounce' ? 'hard' : body.Type === 'SoftBounce' ? 'soft' : 'transient'
 
+        // POSTMARK-RACE.1 — the lookup moved AHEAD of the writes and is no
+        // longer gated on `hard`. Two reasons, both prod-driven:
+        //   • 17 Bounces over 21 days were processed before their row existed.
+        //     A lost bounce is worse than a lost delivery stat: the hard-bounce
+        //     branch below is what marks the contact and auto-unsubscribes, so
+        //     losing one means we keep mailing an address that rejected us and
+        //     keep spending sender reputation on it, for every location.
+        //   • A soft/transient bounce did no lookup at all, so its two blind
+        //     updates no-opped in total silence — there was nothing to detect
+        //     the miss WITH. One extra `.maybeSingle()` on ~7 bounces a day
+        //     buys that detection.
+        const bounceSend = await findSendByMessageId(db, messageId, 'contact_id, campaign_id, location_id')
+        if (!bounceSend) {
+          const retry = retryForRacedSendRow(body, messageId, 'Bounce')
+          if (retry) return retry
+        }
+
         await db.from('email_sends')
           .update({ status: 'bounced', bounced_at: now, bounce_type: bounceType })
           .eq('postmark_message_id', messageId)
@@ -402,8 +480,7 @@ export async function processPostmarkEvent(db, body) {
           // carries it on every row (populated 19,206/19,206 live), and it is
           // the honest answer: the mail that bounced was sent by that
           // location, so that is the list the address is being taken off.
-          const bounceSend = await findSendByMessageId(db, messageId, 'contact_id, campaign_id, location_id')
-
+          // (The lookup itself now happens once, above.)
           if (bounceSend) {
             await db.from('contacts')
               .update({ email_status: 'bounced' })
@@ -445,6 +522,14 @@ export async function processPostmarkEvent(db, body) {
         // CONSENTLOC.1 — see the HardBounce handler; location_id feeds the
         // auto-unsubscribe's consent_log row.
         const complaintSend = await findSendByMessageId(db, messageId, 'contact_id, campaign_id, location_id')
+
+        // POSTMARK-RACE.1 — a complaint drives the same auto-unsubscribe as a
+        // hard bounce. None raced in the measured window (3 events total), but
+        // the consequence of losing one is identical, so it gets the same guard.
+        if (!complaintSend) {
+          const retry = retryForRacedSendRow(body, messageId, 'SpamComplaint')
+          if (retry) return retry
+        }
 
         if (complaintSend) {
           await db.from('contacts')
@@ -509,6 +594,21 @@ export async function processPostmarkEvent(db, body) {
           // consent_log writer in the estate, and the one whose rows mig 517
           // had to coalesce a location onto.
           const unsubSend = await findSendByMessageId(db, messageId, 'contact_id, campaign_id, location_id')
+
+          // POSTMARK-RACE.1 — the RFC 8058 one-click unsubscribe. Losing one
+          // is the worst outcome in this file: the person pressed the button
+          // and we carry on mailing them.
+          //
+          // The REACTIVATION branch above deliberately gets no such guard. It
+          // resolves through `Recipient` when the message lookup misses, which
+          // is its normal path (Postmark-side suppression clears carry the zero
+          // GUID and match nothing), so "no send row" is not evidence of a race
+          // there — retrying it would burn the budget and dead-letter honest
+          // events.
+          if (!unsubSend) {
+            const retry = retryForRacedSendRow(body, messageId, 'SubscriptionChange')
+            if (retry) return retry
+          }
 
           if (unsubSend) {
             // UNSUB.2 follow-up — route through applyMarketingPreferencesBulk

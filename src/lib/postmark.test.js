@@ -30,6 +30,7 @@ import {
   sendEmail,
   isTransientSendError,
   sendMarketingEmail,
+  sendTransactionalEmail,
   getLocationInboxReplyTo,
   getDefaultMailboxAddress,
 } from './postmark.js'
@@ -791,5 +792,73 @@ describe('sendEmail — Cc and Bcc on the wire', () => {
     expect(body.Cc).toBeUndefined()
     expect(body.Bcc).toBeUndefined()
     expect('Cc' in JSON.parse(fetchSpy.mock.calls[0][1].body)).toBe(false)
+  })
+})
+
+// ── POSTMARK-RACE.1 — the marker must pair EXACTLY with the email_sends row ──
+//
+// The webhook processor treats `Metadata.crm_send` as a promise that a row is
+// coming: a Delivery that finds no row is retried instead of discarded. That
+// makes an over-generous marker the one way this design can hurt — marked mail
+// that never writes a row would burn the retry budget and land honest noise in
+// webhook_dead_letter. These two paths gate their insert on `contactId`, so the
+// marker must too, and the pairing is asserted on the ACTUAL Postmark wire
+// payload rather than on an intermediate.
+describe('POSTMARK-RACE.1 — crm_send marker pairs with the email_sends insert', () => {
+  beforeEach(() => { process.env.POSTMARK_API_KEY = 'test-token' })
+  afterEach(() => { vi.restoreAllMocks() })
+
+  function okFetch() {
+    return vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ MessageID: 'pm-msg-1', To: 'a@x.ie', SubmittedAt: '2026-07-10T10:00:00Z' }),
+    })
+  }
+  const wire = (spy) => JSON.parse(spy.mock.calls[0][1].body)
+
+  it('sendMarketingEmail marks the send when a contact will be logged', async () => {
+    const fetchSpy = okFetch()
+    createServerClient.mockReturnValue({ from: vi.fn(() => ({ insert: vi.fn().mockResolvedValue({ error: null }) })) })
+
+    await sendMarketingEmail({
+      to: 'a@x.ie', subject: 'S', htmlBody: '<p>x</p>', contactId: 'c1', locationId: 'loc-1',
+      unsubscribeUrl: 'https://crm.test/unsubscribe/tok-1',
+    })
+
+    expect(wire(fetchSpy).Metadata).toEqual({ crm_send: '1' })
+  })
+
+  it('sendMarketingEmail leaves an unlogged send UNMARKED', async () => {
+    const fetchSpy = okFetch()
+
+    await sendMarketingEmail({
+      to: 'a@x.ie', subject: 'S', htmlBody: '<p>x</p>',
+      unsubscribeUrl: 'https://crm.test/unsubscribe/tok-1',
+    })
+
+    expect(wire(fetchSpy).Metadata).toEqual({})
+  })
+
+  it('sendTransactionalEmail marks the send when a contact will be logged', async () => {
+    const fetchSpy = okFetch()
+    createServerClient.mockReturnValue({ from: vi.fn(() => ({ insert: vi.fn().mockResolvedValue({ error: null }) })) })
+
+    await sendTransactionalEmail({
+      to: 'a@x.ie', subject: 'S', htmlBody: '<p>x</p>', contactId: 'c1', locationId: 'loc-1',
+    })
+
+    expect(wire(fetchSpy).Metadata).toEqual({ crm_send: '1' })
+  })
+
+  it('sendTransactionalEmail leaves an unlogged send UNMARKED', async () => {
+    // This is the whole (b) population on the transactional stream: alert
+    // crons, staff notices, a race confirmation for a payer with no contact.
+    // 378 such Delivery events over 21 days must keep being ignored.
+    const fetchSpy = okFetch()
+
+    await sendTransactionalEmail({ to: 'ops@un1t.ie', subject: 'S', htmlBody: '<p>x</p>' })
+
+    expect(wire(fetchSpy).Metadata).toEqual({})
   })
 })

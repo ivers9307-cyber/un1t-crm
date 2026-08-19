@@ -24,6 +24,7 @@
 
 import { processPostmarkEvent } from './postmark-webhook-processor.js'
 import { deadLetterWebhook, resolveEmailSendLocation } from './webhook-dead-letter.js'
+import { SEND_ROW_NOT_YET_COMMITTED } from './postmark-send-marker.js'
 import { logError } from './log.js'
 
 export const MAX_ATTEMPTS = 5 // give up after this many failures per event
@@ -114,7 +115,7 @@ async function captureExhaustedRow(db, row, { attempts, error }) {
  *
  * @param {SupabaseClient} db — service-role client
  * @param {{id: string, payload: object, attempts: number}} row
- * @returns {Promise<{status: 'processed'|'skipped'|'failed', error?: string, attempts?: number, deadLettered?: boolean}>}
+ * @returns {Promise<{status: 'processed'|'skipped'|'failed'|'deferred', error?: string, attempts?: number, deadLettered?: boolean}>}
  */
 export async function claimAndProcessQueueRow(db, row) {
   const { data: claimed } = await db
@@ -151,6 +152,21 @@ export async function claimAndProcessQueueRow(db, row) {
 
   const error = result.error || 'unknown'
 
+  // POSTMARK-RACE.1 — "the row has not committed yet" is a failure, but not a
+  // FAULT. It travels the identical release path (claim given back, attempts++,
+  // dead-lettered if it spends the budget) — that bounding is what stops a
+  // marker on mail whose insert genuinely died from looping forever. The only
+  // thing the distinct status changes is the HTTP code the QStash worker
+  // answers with: 200 instead of 500, so QStash retires the message rather than
+  // spending its own fast retries inside a window it cannot outrun. Recovery is
+  // then the 10-minute sweeper cron, which is ~45x the worst commit lag ever
+  // measured (13.2s) instead of racing it.
+  //
+  // The EXHAUSTING attempt is deliberately not deferred (see below): once the
+  // budget is spent the row is dead-lettered and terminal, and reporting that
+  // as a 200 would hide a genuine incident — a send whose email_sends insert
+  // never landed at all — behind a routine-looking response.
+
   // Attempts as the DB holds them at claim time, not as the caller
   // snapshotted them. The consumers race by design: a batch selected before
   // someone else's failed attempt released the row carries a stale count, and
@@ -167,6 +183,7 @@ export async function claimAndProcessQueueRow(db, row) {
   // never reach here again; the `prevAttempts <` half makes "capture once"
   // a property of this function rather than of every caller's WHERE clause.
   const deadLettered = prevAttempts < MAX_ATTEMPTS && attempts >= MAX_ATTEMPTS
+  const deferred = error === SEND_ROW_NOT_YET_COMMITTED && !deadLettered
   if (deadLettered) {
     logError('postmark-queue', 'queue row exhausted — dead-lettered', {
       id: row?.id,
@@ -197,7 +214,7 @@ export async function claimAndProcessQueueRow(db, row) {
       })
     }
   }
-  return { status: 'failed', error, attempts, deadLettered }
+  return { status: deferred ? 'deferred' : 'failed', error, attempts, deadLettered }
 }
 
 /** One release attempt. Never throws; true = the UPDATE reported success. */

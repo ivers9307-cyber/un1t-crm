@@ -213,6 +213,10 @@ function stubDeliveryDb({ send = null, stampError = null } = {}) {
     b.is = (col, val) => { b._filters.push(['is', col, val]); return b }
     b.not = (col, op, val) => { b._filters.push(['not', col, op, val]); return b }
     b.or = (expr) => { b._filters.push(['or', expr]); return b }
+    // COMMSFIX.C.7 — the SubscriptionChange reactivation branch resolves a
+    // contact by Recipient with .ilike(escapeLikePattern(...)); without this
+    // the handler throws and the test reads as a behaviour failure.
+    b.ilike = (col, val) => { b._filters.push(['ilike', col, val]); return b }
     b.single = () => settle('single')
     b.maybeSingle = () => settle('single')
     b.then = (resolve, reject) => settle('list').then(resolve, reject)
@@ -402,9 +406,15 @@ describe('processPostmarkEvent — Delivery transition guard (COMMSFIX.C.1)', ()
   // one case that means data loss — no email_sends row exists AT ALL for the
   // message — has to be loud. A replay of an already-delivered message also
   // returns zero updated rows and must stay quiet.
-  it('logs loudly when a Delivery arrives for a message with no email_sends row', async () => {
+  // POSTMARK-RACE.1 moved this line from console.error to console.warn AND
+  // narrowed what it means. It now fires only for an UNMARKED message — mail
+  // this system never records — because the marked case is no longer merely
+  // logged, it is retried (see the raced-send-row suite below). Keeping ~31
+  // ignorable events a day at error level is what let the real defect hide in
+  // the Vercel error feed for months.
+  it('names the message when a Delivery arrives for one with no email_sends row', async () => {
     const db = stubDeliveryTransitionDb({ updatedRows: [], existingSendCount: 0 })
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     await processPostmarkEvent(db, DELIVERY)
 
@@ -415,12 +425,15 @@ describe('processPostmarkEvent — Delivery transition guard (COMMSFIX.C.1)', ()
 
   it('stays quiet for a replayed Delivery whose send row is already delivered', async () => {
     const db = stubDeliveryTransitionDb({ updatedRows: [], existingSendCount: 1 })
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     await processPostmarkEvent(db, DELIVERY)
 
-    expect(spy).not.toHaveBeenCalled()
-    spy.mockRestore()
+    expect(errSpy).not.toHaveBeenCalled()
+    expect(warnSpy).not.toHaveBeenCalled()
+    errSpy.mockRestore()
+    warnSpy.mockRestore()
   })
 
   it('does NOT run the fallback when the message-id match already stamped a row', async () => {
@@ -967,5 +980,190 @@ describe('processPostmarkEvent — engagement recency stamps (GAPS-P1.2)', () =>
     expect(r.ok).toBe(true)
     expect(stampCalls(db, 'stamp_contact_email_open')).toEqual([])
     expect(stampCalls(db, 'stamp_contact_email_click')).toEqual([])
+  })
+})
+
+// ── POSTMARK-RACE.1 — an event that arrived before its send row committed ────
+//
+// The defect: `postmark_message_id` is minted by Postmark and only known once
+// the send API returns, so no send path can write its email_sends row before
+// Postmark starts delivering — and the campaign path sends a batch of up to
+// 500 before it inserts. Prod, 21 days: 3,231 of 10,191 Delivery events were
+// processed BEFORE their row committed, and every one of them lost its
+// delivery (delivered_at NULL on 3,231/3,231, set on 6,960/6,960 of the rest).
+// The loss was PERMANENT because the processor returned ok, which let
+// claimAndProcessQueueRow stamp the queue row processed; Postmark's own retry
+// was already deduped at ingest, so nothing ever looked at the event again.
+//
+// The fix cannot be "retry every miss" — 655 events over the same window are
+// for mail this system never records (ops-alert crons, host campaigns, test
+// sends), and 277 of those carry Metadata, so absence and Metadata-presence
+// are both useless as the test. The crm_send marker makes it explicit.
+import { SEND_ROW_NOT_YET_COMMITTED, withSendMarker } from './postmark-send-marker.js'
+
+const MARKED = withSendMarker({ campaign_id: 'camp1', contact_id: 'c1' })
+
+describe('processPostmarkEvent — raced send row (POSTMARK-RACE.1)', () => {
+  it('leaves a MARKED Delivery unprocessed when no email_sends row exists yet', async () => {
+    const db = stubDeliveryTransitionDb({ updatedRows: [], existingSendCount: 0 })
+
+    const r = await processPostmarkEvent(db, { ...DELIVERY, Metadata: MARKED })
+
+    // Not ok — this is the whole fix. An ok here is what stamped the queue row
+    // processed and destroyed the event.
+    expect(r).toEqual({ ok: false, error: SEND_ROW_NOT_YET_COMMITTED })
+  })
+
+  it('DROPS an unmarked Delivery with no send row — genuine noise never loops', async () => {
+    const db = stubDeliveryTransitionDb({ updatedRows: [], existingSendCount: 0 })
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    // A real (b)-population payload: an ops alert cron, tagged, no marker.
+    const r = await processPostmarkEvent(db, {
+      ...DELIVERY, Tag: 'cron.health-check', Metadata: {},
+    })
+
+    expect(r).toEqual({ ok: true })
+    // Ignored noise is no longer reported as an error — ~31/day of it is what
+    // buried the real defect in the Vercel error feed.
+    expect(errSpy).not.toHaveBeenCalled()
+    expect(warnSpy.mock.calls.flat().join(' ')).toMatch(/not ours to record/)
+    errSpy.mockRestore()
+    warnSpy.mockRestore()
+  })
+
+  it('records the delivery on the retry, once the row has landed', async () => {
+    // Attempt 1: nothing there.
+    const first = stubDeliveryTransitionDb({ updatedRows: [], existingSendCount: 0 })
+    expect(await processPostmarkEvent(first, { ...DELIVERY, Metadata: MARKED }))
+      .toEqual({ ok: false, error: SEND_ROW_NOT_YET_COMMITTED })
+    expect(first.rpcCalls).toEqual([])
+
+    // Attempt 2 (a later sweeper tick): the insert has committed.
+    const second = stubDeliveryTransitionDb({
+      updatedRows: [{ id: 's1', campaign_id: 'camp1', contact_id: 'c1' }],
+    })
+    expect(await processPostmarkEvent(second, { ...DELIVERY, Metadata: MARKED })).toEqual({ ok: true })
+
+    const stamp = second.sendUpdates.find(u => 'delivered_at' in (u.values || {}))
+    expect(stamp.values.delivered_at).toBe(DELIVERY.DeliveredAt)
+    // The transition guard is still in place, so a third delivery of the same
+    // event increments nothing.
+    expect(stamp.filters).toContainEqual(['is', 'delivered_at', null])
+    expect(second.rpcCalls).toContainEqual([
+      'increment_campaign_metric', { p_campaign_id: 'camp1', p_field: 'total_delivered' },
+    ])
+  })
+
+  it('counts the delivery EXACTLY once across the failed attempt and the retry', async () => {
+    const attempt1 = stubDeliveryTransitionDb({ updatedRows: [], existingSendCount: 0 })
+    await processPostmarkEvent(attempt1, { ...DELIVERY, Metadata: MARKED })
+    const attempt2 = stubDeliveryTransitionDb({ updatedRows: [{ id: 's1', campaign_id: 'camp1' }] })
+    await processPostmarkEvent(attempt2, { ...DELIVERY, Metadata: MARKED })
+    // A third delivery of the same message finds delivered_at already set, so
+    // the guarded UPDATE returns zero rows and nothing increments.
+    const attempt3 = stubDeliveryTransitionDb({ updatedRows: [], existingSendCount: 1 })
+    await processPostmarkEvent(attempt3, { ...DELIVERY, Metadata: MARKED })
+
+    const increments = [...attempt1.rpcCalls, ...attempt2.rpcCalls, ...attempt3.rpcCalls]
+      .filter(([fn, args]) => fn === 'increment_campaign_metric' && args.p_field === 'total_delivered')
+    expect(increments).toHaveLength(1)
+  })
+
+  it('a replayed Delivery whose row is already delivered is NOT retried, even when marked', async () => {
+    // existingSendCount 1 = the row is there and already stamped. Zero updated
+    // rows here means "already recorded", not "missing" — retrying it would
+    // spin a fully-processed event round the queue for no reason.
+    const db = stubDeliveryTransitionDb({ updatedRows: [], existingSendCount: 1 })
+
+    expect(await processPostmarkEvent(db, { ...DELIVERY, Metadata: MARKED })).toEqual({ ok: true })
+  })
+
+  it.each([
+    ['Open', { RecordType: 'Open', MessageID: 'pm-r', FirstOpen: true }],
+    ['Click', { RecordType: 'Click', MessageID: 'pm-r', OriginalLink: 'https://un1t.ie/x' }],
+  ])('%s: a marked event with no send row is retried rather than silently dropped', async (_l, base) => {
+    const db = stubEngagementDb({ send: null })
+
+    expect(await processPostmarkEvent(db, { ...base, Metadata: MARKED }))
+      .toEqual({ ok: false, error: SEND_ROW_NOT_YET_COMMITTED })
+    // Nothing was written on the failed attempt, so the retry is clean.
+    expect(db.contactUpdates).toEqual([])
+  })
+
+  it.each([
+    ['Open', { RecordType: 'Open', MessageID: 'pm-r', FirstOpen: true }],
+    ['Click', { RecordType: 'Click', MessageID: 'pm-r', OriginalLink: 'https://un1t.ie/x' }],
+  ])('%s: an UNMARKED event with no send row still succeeds (unchanged)', async (_l, base) => {
+    const db = stubEngagementDb({ send: null })
+    expect(await processPostmarkEvent(db, base)).toEqual({ ok: true })
+  })
+})
+
+// ── The consent-critical record types ────────────────────────────────────────
+//
+// A lost Delivery skews a stat. A lost Bounce / SpamComplaint / one-click
+// unsubscribe means we keep mailing someone who rejected us — 17 Bounces over
+// the measured 21 days were processed before their row existed, and each one
+// silently skipped the contact marking AND the auto-unsubscribe.
+describe('processPostmarkEvent — raced consent events (POSTMARK-RACE.1)', () => {
+  const cases = [
+    ['Bounce (hard)', { RecordType: 'Bounce', MessageID: 'pm-c', Type: 'HardBounce' }],
+    ['Bounce (soft)', { RecordType: 'Bounce', MessageID: 'pm-c', Type: 'SoftBounce' }],
+    ['SpamComplaint', { RecordType: 'SpamComplaint', MessageID: 'pm-c' }],
+    ['SubscriptionChange (one-click unsubscribe)', {
+      RecordType: 'SubscriptionChange', MessageID: 'pm-c', SuppressSending: true,
+    }],
+  ]
+
+  it.each(cases)('%s: marked with no send row → retried, and NOTHING is unsubscribed yet', async (_l, base) => {
+    const db = stubDeliveryDb({ send: null })
+    applyMarketingPreferencesBulk.mockResolvedValue({ ok: true, changed: [] })
+
+    const r = await processPostmarkEvent(db, { ...base, Metadata: MARKED })
+
+    expect(r).toEqual({ ok: false, error: SEND_ROW_NOT_YET_COMMITTED })
+    expect(applyMarketingPreferencesBulk).not.toHaveBeenCalled()
+  })
+
+  it.each(cases)('%s: unmarked with no send row → dropped as before, no loop', async (_l, base) => {
+    const db = stubDeliveryDb({ send: null })
+    applyMarketingPreferencesBulk.mockResolvedValue({ ok: true, changed: [] })
+
+    expect(await processPostmarkEvent(db, base)).toEqual({ ok: true })
+  })
+
+  it('applies the hard-bounce suppression on the retry, once the row is there', async () => {
+    const db = stubDeliveryDb({ send: { contact_id: 'c1', campaign_id: 'camp1', location_id: 'loc1' } })
+    applyMarketingPreferencesBulk.mockResolvedValue({ ok: true, changed: ['email_marketing'] })
+
+    const r = await processPostmarkEvent(db, {
+      RecordType: 'Bounce', MessageID: 'pm-c', Type: 'HardBounce', Metadata: MARKED,
+    })
+
+    expect(r).toEqual({ ok: true })
+    expect(applyMarketingPreferencesBulk).toHaveBeenCalledWith(db, expect.objectContaining({
+      contactId: 'c1', source: 'postmark_hard_bounce', locationId: 'loc1',
+    }))
+  })
+
+  // The reactivation branch resolves by Recipient when the message lookup
+  // misses — that IS its normal path (Postmark-side suppression clears carry
+  // the zero GUID and match no send row). "No send row" is therefore not
+  // evidence of a race there, and retrying would burn the budget on honest
+  // events until they dead-lettered.
+  it('never retries a SubscriptionChange REACTIVATION, marked or not', async () => {
+    const db = stubDeliveryDb({ send: null })
+
+    const r = await processPostmarkEvent(db, {
+      RecordType: 'SubscriptionChange',
+      MessageID: '00000000-0000-0000-0000-000000000000',
+      SuppressSending: false,
+      Recipient: 'nobody@example.com',
+      Metadata: MARKED,
+    })
+
+    expect(r).toEqual({ ok: true })
   })
 })

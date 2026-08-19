@@ -105,6 +105,16 @@ export async function GET(request) {
       summary.skipped = (summary.skipped || 0) + 1
     } else if (outcome.status === 'processed') {
       summary.processed += 1
+    } else if (outcome.status === 'deferred') {
+      // POSTMARK-RACE.1 — the send row had not committed when we looked. The
+      // row is pending again with attempts+1 and THIS cron is its recovery
+      // path, so it lands in a later tick's `processed`. Counted separately
+      // rather than as `failed`: a steady trickle here is the race being
+      // absorbed as designed, whereas a rising count that never converts to
+      // processed means sends are being made whose email_sends insert is
+      // failing — a genuinely different incident, and the heartbeat's
+      // last_outcome is where an operator would see the difference.
+      summary.deferred = (summary.deferred || 0) + 1
     } else {
       summary.failed += 1
       const attempt = outcome.attempts ?? (row.attempts || 0) + 1

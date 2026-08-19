@@ -42,6 +42,17 @@ export function responseForOutcome(outcome) {
   if (outcome.status === 'skipped') {
     return { status: 200, body: { success: true, skipped: true } }
   }
+  // POSTMARK-RACE.1 — the event's email_sends row had not committed when we
+  // looked. The queue row is back to pending with attempts+1, so the sweeper
+  // cron re-runs it ~10 minutes from now — comfortably past the worst commit
+  // lag ever measured on prod (13.2s across 3,231 samples). 200, not 500:
+  // QStash's own retries fire within seconds and would burn the retry budget
+  // inside the very window they cannot outrun. Nothing is lost by retiring the
+  // QStash message — the queue table has always been the delivery guarantee
+  // here, and QStash only ever the latency optimisation.
+  if (outcome.status === 'deferred') {
+    return { status: 200, body: { success: true, deferred: true } }
+  }
   return {
     status: 500,
     body: { success: false, error: outcome.error || 'processing_failed' },
@@ -109,6 +120,12 @@ export async function POST(request) {
   }
 
   const outcome = await claimAndProcessQueueRow(db, row)
+  if (outcome.status === 'deferred') {
+    console.warn(
+      `[qstash postmark worker] event ${row.id} deferred (attempt ${outcome.attempts}) — ` +
+      'send row not committed yet; the sweeper cron will retry it.'
+    )
+  }
   if (outcome.status === 'failed') {
     const attempt = outcome.attempts ?? (row.attempts || 0) + 1
     if (outcome.deadLettered) {
