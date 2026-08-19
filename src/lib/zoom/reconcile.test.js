@@ -61,6 +61,83 @@ describe('diffContacts', () => {
   })
 })
 
+/**
+ * ZOOMSYNC.4 — the trap. Filtering an unusable number out of the desired state
+ * is not a neutral act: this diff reads "in Zoom, not in desired" as a delete,
+ * so a naive filter deletes live directory entries for the numbers Zoom
+ * happened to accept before anything checked them. The deletion guard does not
+ * save you — at 6,330 owned entries its threshold is ~317, and the live
+ * population of such numbers is ~2.
+ */
+describe('diffContacts — protected keys (the delete trap)', () => {
+  it('(a) never enqueues anything for an unusable number Zoom never created', () => {
+    // The common case: the number is out of `desired` (buildDesiredContacts
+    // dropped it) and was never in Zoom, so the run is a no-op for it.
+    const d = diffContacts(desired([]), existing([]), new Set(['+87654567890']))
+    expect(d.creates).toEqual([]); expect(d.updates).toEqual([]); expect(d.deletes).toEqual([])
+    expect(d.withheld).toEqual({ creates: 0, updates: 0, deletes: [] })
+  })
+
+  it('(b) LEAVES an unusable number that is already in Zoom alone — no delete', () => {
+    const d = diffContacts(
+      desired([]),
+      existing([['+4407502871075', 'Aoife Ryan', 'z1']]),
+      new Set(['+4407502871075']),
+    )
+    expect(d.deletes).toEqual([])
+    expect(d.withheld.deletes).toEqual(['+4407502871075'])
+  })
+
+  it('still deletes an entry that is simply gone from the CRM', () => {
+    // The distinction that makes the withholding safe: protected means "the CRM
+    // still produces this number and it is unusable", NOT "unknown".
+    const d = diffContacts(
+      desired([]),
+      existing([['+353871111111', 'Aoife Ryan', 'z1'], ['+4407502871075', 'Ben Ó Sé', 'z2']]),
+      new Set(['+4407502871075']),
+    )
+    expect(d.deletes).toEqual([{ e164: '+353871111111', zoomId: 'z1' }])
+    expect(d.withheld.deletes).toEqual(['+4407502871075'])
+  })
+
+  it('self-clears: once the number is fixed in the CRM the stale entry deletes normally', () => {
+    // Next run, the contact carries +353871111111 instead. The old key is no
+    // longer produced, so it is no longer protected, so the ordinary delete
+    // path removes it — with the guard watching.
+    const d = diffContacts(
+      desired([['+353871111111', 'Aoife Ryan']]),
+      existing([['+4407502871075', 'Aoife Ryan', 'z1']]),
+      new Set(),
+    )
+    expect(d.creates).toEqual([{ e164: '+353871111111', name: 'Aoife Ryan', contactId: 'u1' }])
+    expect(d.deletes).toEqual([{ e164: '+4407502871075', zoomId: 'z1' }])
+  })
+
+  it('does not re-enqueue a create for a PARKED number that is still in desired', () => {
+    // A parked number passed validation but Zoom refused it anyway. It stays in
+    // `desired` (nothing is wrong with it by our rules), so only the park stops
+    // the nightly re-enqueue.
+    const d = diffContacts(desired([['+299123456', 'Aoife Ryan']]), existing([]), new Set(['+299123456']))
+    expect(d.creates).toEqual([])
+    expect(d.withheld.creates).toBe(1)
+  })
+
+  it('does not re-enqueue an update for a parked number', () => {
+    const d = diffContacts(
+      desired([['+299123456', 'Aoife Byrne', 'u2']]),
+      existing([['+299123456', 'Aoife Ryan', 'z1']]),
+      new Set(['+299123456']),
+    )
+    expect(d.updates).toEqual([])
+    expect(d.withheld.updates).toBe(1)
+  })
+
+  it('protects nothing when no set is passed — the caller owns that truth', () => {
+    const d = diffContacts(desired([]), existing([['+87654567890', 'Aoife Ryan', 'z1']]))
+    expect(d.deletes).toEqual([{ e164: '+87654567890', zoomId: 'z1' }])
+  })
+})
+
 describe('applyDeletionGuard', () => {
   const del = (n) => Array.from({ length: n }, (_, i) => ({ e164: `+35387000000${i}`, zoomId: `z${i}` }))
 

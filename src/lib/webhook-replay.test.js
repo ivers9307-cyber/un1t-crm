@@ -76,6 +76,10 @@ describe('isReplayable', () => {
   it('returns true for postmark', () => expect(isReplayable('postmark')).toBe(true))
   it('returns false for glofox', () => expect(isReplayable('glofox')).toBe(false))
   it('returns false for unknown provider', () => expect(isReplayable('stripe')).toBe(false))
+  // ZOOMSYNC.4 — deliberate, like postmark_queue: a replay would re-send the
+  // identical write to Zoom and collect the identical 400. These rows are
+  // fixed by correcting the contact's phone number, then resolving the row.
+  it('returns false for zoom_contact_sync', () => expect(isReplayable('zoom_contact_sync')).toBe(false))
   it('returns false for empty string', () => expect(isReplayable('')).toBe(false))
   it('returns false for prototype properties', () => expect(isReplayable('toString')).toBe(false))
 

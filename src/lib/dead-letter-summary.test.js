@@ -96,6 +96,33 @@ describe('summarizeDeadLetter — sent-but-unfiled ticket mail', () => {
   })
 })
 
+describe('summarizeDeadLetter — zoom_contact_sync (ZOOMSYNC.4)', () => {
+  it('leads with the number, which is the thing to go and fix', () => {
+    const s = summarizeDeadLetter({
+      provider: 'zoom_contact_sync',
+      event_type: 'create',
+      payload: { op: 'create', e164: '+87654567890', name: 'Aoife Ryan', contactId: 'c-1' },
+    })
+    expect(s).toBe('create +87654567890 — contact c-1')
+  })
+
+  it('does not echo the member name — the number and the id are enough to act', () => {
+    const s = summarizeDeadLetter({
+      provider: 'zoom_contact_sync',
+      payload: { op: 'update', e164: '+353871111111', name: 'Aoife Ryan', contactId: 'c-2' },
+    })
+    expect(s).not.toContain('Aoife')
+  })
+
+  it('says nothing when the payload carries no number', () => {
+    expect(summarizeDeadLetter({ provider: 'zoom_contact_sync', payload: {} })).toBe('')
+  })
+
+  it('is labelled for an operator', () => {
+    expect(providerLabel('zoom_contact_sync')).toBe('Zoom directory write refused')
+  })
+})
+
 describe('summarizeDeadLetter — unknown providers', () => {
   it('says nothing rather than echoing arbitrary payload fields', () => {
     expect(summarizeDeadLetter({ provider: 'glofox', payload: { secret_token: 'abc' } })).toBe('')

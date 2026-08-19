@@ -48,6 +48,10 @@ export async function GET(request) {
     counts: out.counts ?? null,
     enqueued: out.enqueued ?? 0,
     guardTripped: out.guardTripped ?? false,
+    // ZOOMSYNC.4 — a run that enqueues nothing because everything left is
+    // unusable must not read as "ran and idle", which is the exact distinction
+    // last_outcome exists to draw.
+    ...(out.withheld ? { withheld: out.withheld } : {}),
     ...(out.skipped ? { skipped: out.skipped } : {}),
     ...(out.failures?.length ? { failureCount: out.failures.length } : {}),
   }).catch((err) => logWarn('cron-zoom-contact-sync', 'heartbeat failed', { err }))

@@ -42,6 +42,11 @@ export const DEAD_LETTER_PROVIDER_LABELS = Object.freeze({
   email_ticket_forward: 'Forward — sent, not filed',
   glofox: 'Glofox',
   inbody: 'InBody',
+  // ZOOMSYNC.4 — a Zoom Phone directory write Zoom permanently refused (4xx).
+  // Not replayable: the same bytes get the same verdict. The fix is the phone
+  // number on the contact; resolving the row here un-parks it for the next
+  // nightly run.
+  zoom_contact_sync: 'Zoom directory write refused',
 })
 
 export function providerLabel(provider) {
@@ -103,6 +108,18 @@ export function summarizeDeadLetter(row) {
     const head = parts.join(' ')
     const tail = ticket ? `not filed on ticket ${ticket}` : 'not filed'
     return head ? `${head} — delivered, ${tail}` : `Delivered, ${tail}`
+  }
+
+  // Zoom directory write (zoom_contact_sync): the payload is our own job, so
+  // its shape is known exactly. The number is the fact that matters — it is
+  // what an operator has to go and fix on the contact.
+  if (provider === 'zoom_contact_sync') {
+    const op = clip(p.op || row?.event_type, 20)
+    const number = clip(p.e164, 24)
+    const contact = clip(p.contactId, 40)
+    const head = [op, number].filter(Boolean).join(' ')
+    if (!head) return ''
+    return contact ? `${head} — contact ${contact}` : head
   }
 
   // Unknown providers: say nothing rather than risk echoing a payload field
