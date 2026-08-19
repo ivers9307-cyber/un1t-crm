@@ -326,8 +326,34 @@ describe('consent_log.location_id (CONSENTLOC.1)', () => {
       contactId: 'c24', prefs: { email_marketing: false }, source: 'postmark_hard_bounce',
     })
 
+    // Pin the outcome itself, not just "the two agree" — two identical
+    // failures would satisfy a bare a-equals-b, and the invariant being
+    // asserted is about WHO ends up opted out.
+    expect(a).toEqual({ ok: true, skipped: null, changed: ['email_marketing'] })
     expect(a).toEqual(b)
-    expect(withLoc.calls.prefUpserts).toEqual(withoutLoc.calls.prefUpserts)
+    expect(withLoc.calls.prefUpserts).toHaveLength(1)
+    expect(withoutLoc.calls.prefUpserts).toHaveLength(1)
+
+    // `updated_at` is minted from the wall clock INSIDE each call, so the two
+    // sequential invocations disagree by exactly 1ms whenever they straddle a
+    // millisecond boundary — measured at ~0.1% of pairs on an idle machine.
+    // That is what turned this test red on Actions run 32276263058 with no
+    // source change, and green on the next push: the whole diff was one digit
+    // in a timestamp, which vitest's print depth hid ("expected [ { contact_id:
+    // 'c24', …(2) } ] to deeply equal [ { contact_id: 'c24', …(2) } ]").
+    //
+    // A per-row update stamp is not consent — two calls at two instants SHOULD
+    // carry two stamps — so comparing it asserted nothing about the invariant
+    // in this test's name. Pin the consent-bearing columns exactly, and the
+    // stamp by shape (same idiom as bounce-escalation.test.js's evaluatedAt).
+    const exceptStamp = (rows) => rows.map((r) => ({ ...r, updated_at: null }))
+    expect(exceptStamp(withLoc.calls.prefUpserts)).toEqual(exceptStamp(withoutLoc.calls.prefUpserts))
     expect(withLoc.calls.contactUpdates).toEqual(withoutLoc.calls.contactUpdates)
+
+    // Blanking it above must not let a MISSING stamp through: both sides still
+    // have to write a real ISO timestamp.
+    for (const row of [...withLoc.calls.prefUpserts, ...withoutLoc.calls.prefUpserts]) {
+      expect(row.updated_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
+    }
   })
 })
