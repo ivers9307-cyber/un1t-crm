@@ -51,13 +51,16 @@ describe('ALL_NAV structure', () => {
     }
   })
 
-  it('pins exactly two section-less items: the Account-home + Dashboard links', () => {
+  it('pins exactly three section-less items: Account home, Dashboard, Approvals', () => {
     // REPSET-ACCOUNT.1 — the Account-home portfolio entry pins above the
     // Dashboard link (Account tier sits above Studio). Order matters.
+    // Approvals pins beneath Dashboard (restored by operator request,
+    // 19 Aug 2026 — see the entry's comment in nav-items.js).
     const pinned = ALL_NAV.filter((i) => !i.section)
-    expect(pinned.map((i) => i.href)).toEqual(['/portfolio', '/dashboard'])
+    expect(pinned.map((i) => i.href)).toEqual(['/portfolio', '/dashboard', '/approvals'])
     expect(pinned[0].masterOrOwnerOnly).toBe(true) // owner+/master only
     expect(pinned[1].dashboardGroup).toBe(true)
+    expect(pinned[2].permission).toBe('approvals_inbox')
   })
 
   it('gives every entry a label, an icon, and a visibility gate', () => {
@@ -360,10 +363,16 @@ describe('HOME.3 — queues section retired', () => {
     expect(sectionIds).not.toContain('queues')
   })
 
-  it('removes the standalone Approvals and Issues sidebar entries — the needs-attention queue is the entry point now', () => {
+  it('removes the standalone Issues sidebar entry — the needs-attention queue is its entry point', () => {
     const hrefs = ALL_NAV.flatMap((i) => [i.href, ...(i.children || []).map((c) => c.href)])
-    expect(hrefs).not.toContain('/approvals')
     expect(hrefs).not.toContain('/issues')
+  })
+
+  it('keeps Approvals as a pinned sectionless row (HOME.3 retired it; restored by operator request 19 Aug 2026)', () => {
+    const approvals = ALL_NAV.find((i) => i.href === '/approvals')
+    expect(approvals).toBeTruthy()
+    expect(approvals.section).toBeUndefined()
+    expect(approvals.permission).toBe('approvals_inbox')
   })
 })
 

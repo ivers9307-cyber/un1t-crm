@@ -58,6 +58,7 @@ import {
   Settings, Car,
   Megaphone, Building2,
   Wrench, Handshake, HeartPulse, Wallet, UsersRound,
+  ClipboardCheck,
 } from 'lucide-react'
 
 // The sidebar Dashboard link is visible if ANY of these are true. The
@@ -92,6 +93,14 @@ export const ALL_NAV = [
   // so the org portfolio lives at /portfolio.
   { href: '/portfolio',  label: 'Account home', icon: Building2,       masterOrOwnerOnly: true },
   { href: '/dashboard',  label: 'Dashboard',   icon: LayoutDashboard, dashboardGroup: true },
+
+  // HOME.3 retired this row in favour of the needs-attention queue;
+  // RESTORED by operator request (Richard, 19 Aug 2026) — the queue
+  // surfaces approval items, but he wants the dedicated dashboard one
+  // click away as a pinned row too. Issues stays retired. Pinned
+  // (sectionless) rather than reviving the old 'queues' section, so
+  // the hub programme's section groups stay as HUBS.2 left them.
+  { href: '/approvals',  label: 'Approvals',   icon: ClipboardCheck,  permission: 'approvals_inbox' },
 
   // ── Messages hub ──────────────────────────────────────────────
   // HUBS.2f Task 1 — sixth application of the hub-collapse pattern
