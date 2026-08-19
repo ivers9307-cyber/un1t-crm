@@ -54,6 +54,27 @@ export function providerLabel(provider) {
 }
 
 /**
+ * Confirm-dialog wording for Discard, which does NOT mean the same thing for
+ * every provider (ZOOMSYNC.4).
+ *
+ * For the email family Discard really is inert bookkeeping: the event is over,
+ * nothing will re-derive it, and the row just stops nagging. For
+ * zoom_contact_sync it is load-bearing — the nightly reconcile re-derives the
+ * write from the contact row every night, and the dead-letter row is the ONLY
+ * thing suppressing it. Discarding there is the operator saying "this number
+ * is not getting fixed", and the suppression is permanent by design. Telling
+ * them it merely "stays on record" would describe the opposite of what happens.
+ */
+export function discardConfirmText(provider) {
+  if (provider === 'zoom_contact_sync') {
+    return 'Discard this number? It stops counting as unresolved AND stays suppressed — '
+      + 'the nightly Zoom sync will not try it again. Fix the number on the contact and '
+      + 'mark it resolved instead if you want it published.'
+  }
+  return 'Discard this event? It stays on record but stops counting as unresolved.'
+}
+
+/**
  * One plain-text line describing what a dead-letter row captured — who/what,
  * never the body. Returns '' when there is nothing safe/useful to say (the
  * table shows the provider label and error either way).

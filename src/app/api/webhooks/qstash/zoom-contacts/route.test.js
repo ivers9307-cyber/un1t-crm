@@ -12,11 +12,17 @@ vi.mock('@/lib/zoom/external-contacts', () => ({
 }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({ db: true })) }))
 vi.mock('@/lib/webhook-dead-letter', () => ({ deadLetterWebhook: vi.fn(async () => {}) }))
+// Only the budget probe is stubbed — isPermanentZoomFailure stays REAL, since
+// the status classification is the thing most of this file is asserting.
+vi.mock('@/lib/zoom/failures', async (importOriginal) => ({
+  ...(await importOriginal()),
+  parkingBudgetExhausted: vi.fn(async () => false),
+}))
 
 import { verifyQStashSignature } from '@/lib/qstash'
 import { createContact, updateContact, deleteContact } from '@/lib/zoom/external-contacts'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
-import { ZOOM_SYNC_PROVIDER } from '@/lib/zoom/failures'
+import { ZOOM_SYNC_PROVIDER, parkingBudgetExhausted } from '@/lib/zoom/failures'
 import { POST } from './route'
 
 const post = (body) => new Request('https://x.test/api/webhooks/qstash/zoom-contacts', {
@@ -31,6 +37,7 @@ beforeEach(() => {
   vi.mocked(updateContact).mockResolvedValue({ ok: true })
   vi.mocked(deleteContact).mockResolvedValue({ ok: true })
   vi.mocked(deadLetterWebhook).mockClear()
+  vi.mocked(parkingBudgetExhausted).mockResolvedValue(false)
 })
 
 describe('POST /api/webhooks/qstash/zoom-contacts', () => {
@@ -144,5 +151,41 @@ describe('POST /api/webhooks/qstash/zoom-contacts — permanent failures', () =>
     expect((await POST(post(badNumberJob))).status).toBe(200)
     expect((await POST(post({ op: 'delete', e164: '+353871111111', zoomId: 'z1' }))).status).toBe(200)
     expect(deadLetterWebhook).not.toHaveBeenCalled()
+  })
+
+  // The circuit breaker. A 4xx per number is triage; a 4xx on every number is
+  // an account-level refusal (lost scope, lapsed plan, quota) wearing the same
+  // status code. Parking those would convert one credential fault into
+  // thousands of permanent per-number suppressions, so past the budget the
+  // worker stops parking and hands it back as a loud transient instead.
+  describe('parking budget', () => {
+    it('stops parking and 500s once the budget is spent', async () => {
+      vi.mocked(parkingBudgetExhausted).mockResolvedValue(true)
+      vi.mocked(createContact).mockResolvedValue({ ok: false, status: 400, error: 'no scope' })
+      const res = await POST(post(badNumberJob))
+      expect(res.status).toBe(500)
+      expect(await res.json()).toMatchObject({ success: false, error: 'park_budget_exhausted' })
+      // Nothing suppressed: no dead-letter row, so no number is withheld from
+      // the next reconcile once the underlying cause is fixed.
+      expect(deadLetterWebhook).not.toHaveBeenCalled()
+    })
+
+    it('still parks normally while the budget holds', async () => {
+      vi.mocked(createContact).mockResolvedValue({ ok: false, status: 400, error: 'bad number' })
+      const res = await POST(post(badNumberJob))
+      expect(res.status).toBe(200)
+      expect(deadLetterWebhook).toHaveBeenCalledTimes(1)
+    })
+
+    // The budget only ever gates the PARK decision — a transient failure was
+    // never going to be parked, and must keep its retryable 500 either way.
+    it('does not consult the budget for a transient failure', async () => {
+      vi.mocked(parkingBudgetExhausted).mockResolvedValue(true)
+      vi.mocked(createContact).mockResolvedValue({ ok: false, status: 503, error: 'zoom down' })
+      const res = await POST(post(badNumberJob))
+      expect(res.status).toBe(500)
+      expect(await res.json()).toMatchObject({ error: 'zoom down' })
+      expect(deadLetterWebhook).not.toHaveBeenCalled()
+    })
   })
 })

@@ -132,6 +132,34 @@ export const NATIONAL_LENGTHS = Object.freeze({
   1: [10, 10],   // NANP — always exactly 10, by definition of the plan
 })
 
+/**
+ * Country codes whose national significant number LEGITIMATELY begins with 0,
+ * so the trunk-zero rule below must not fire for them.
+ *
+ * The splice this catches (a national trunk prefix left in front of a national
+ * number that already carries its country code) is wrong in almost every
+ * country — but not all, and the first draft of this file asserted "every",
+ * which would have silently dropped a real member.
+ *   '39'  Italy — the well-known exception. Since the 1998 renumbering the
+ *         leading 0 is part of the number itself for LANDLINES, so Rome is
+ *         +39 06… and Milan +39 02…. Italian MOBILES start 3 and are
+ *         unaffected either way.
+ *   '378' San Marino — dialled through the Italian plan, +378 0549 ……
+ *   '225' Côte d'Ivoire — the 2021 move to 10 digits put 01/05/07/25/27 at the
+ *         front of the national number, zero included.
+ *
+ * NOT EXHAUSTIVE, and deliberately so. Several African plans renumbered the
+ * same way (Gabon +241 is the likely next member) but are unconfirmed here and
+ * hold zero rows in prod, so they are left out rather than guessed at. Getting
+ * that wrong in this direction is the CHEAP failure and is now self-announcing:
+ * an omitted country's number is rejected before enqueue, appears in the
+ * rejects report on /settings/integrations/zoom-contacts under "Country code
+ * followed by a national 0", and adding its code here is the whole fix. The
+ * expensive direction is the opposite one, so widen this set on evidence and
+ * never narrow it.
+ */
+export const NSN_KEEPS_LEADING_ZERO = Object.freeze(new Set(['39', '378', '225']))
+
 // E.164: a '+', a non-zero leading digit, at most 15 digits total. The lower
 // bound of 8 matches normaliseForZoom's MIN_DIGITS rather than E.164's
 // theoretical minimum — nothing shorter has ever been a real member's number.
@@ -165,8 +193,14 @@ export function e164Rejection(e164) {
   // has no place for it, so a 0 straight after the country code means the two
   // notations were spliced: +4407502871075, +9109607976617, +35300000000 are
   // all live rows. Caught here rather than in a length rule because it is wrong
-  // in every country, including the ones with no entry below.
-  if (nsn.startsWith('0')) return 'trunk_zero'
+  // in almost every country — including the ones with no entry in
+  // NATIONAL_LENGTHS below — with the handful of genuine exceptions named in
+  // NSN_KEEPS_LEADING_ZERO, where the 0 is part of the number.
+  if (!NSN_KEEPS_LEADING_ZERO.has(cc) && nsn.startsWith('0')) return 'trunk_zero'
+  // Only reachable for an exempt country, where the check above no longer
+  // stands between a placeholder and the directory. An all-zero national
+  // number is not one, in Italy or anywhere else.
+  if (/^0+$/.test(nsn)) return 'national_length'
   // Nothing real is a country code plus three digits; this also stops a
   // truncated import passing on a country code alone.
   if (nsn.length < 4) return 'national_length'

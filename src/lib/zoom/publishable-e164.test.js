@@ -132,9 +132,31 @@ describe('national length', () => {
 })
 
 describe('trunk zero', () => {
-  it('is wrong in every country, including ones with no length rule', () => {
+  it('is wrong in almost every country, including ones with no length rule', () => {
     expect(e164Rejection('+490171234567')).toBe('trunk_zero')
     expect(e164Rejection('+3530871234567')).toBe('trunk_zero')
+  })
+
+  // The exception this rule got wrong on its first draft. Italy is not an edge
+  // case to be clever about — since 1998 the leading 0 IS the landline number,
+  // so +39 06… (Rome) and +39 02… (Milan) are correct E.164 and rejecting them
+  // would silently drop a member from every staff handset. Prod holds 4 Italian
+  // contacts today, all mobiles, so this is a latent false-reject pinned here
+  // before it can bite, not a live one.
+  it('does NOT fire for the countries whose national number really starts 0', () => {
+    expect(e164Rejection('+390612345678')).toBe(null)   // Rome landline
+    expect(e164Rejection('+390212345678')).toBe(null)   // Milan landline
+    expect(e164Rejection('+3780549882914')).toBe(null)  // San Marino
+    expect(e164Rejection('+2250712345678')).toBe(null)  // Côte d'Ivoire, 2021 plan
+  })
+
+  it('still accepts an Italian mobile, which never carries the 0', () => {
+    expect(e164Rejection('+393331234567')).toBe(null)
+  })
+
+  // Exempting a country must not turn it into a hole for placeholders.
+  it('rejects an all-zero national number even for an exempt country', () => {
+    expect(e164Rejection('+39000000000')).toBe('national_length')
   })
 })
 

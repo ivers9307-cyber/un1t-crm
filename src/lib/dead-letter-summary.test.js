@@ -4,7 +4,9 @@
 // facts appear AND the body text does not.
 
 import { describe, it, expect } from 'vitest'
-import { summarizeDeadLetter, providerLabel, DEAD_LETTER_PROVIDER_LABELS } from './dead-letter-summary.js'
+import {
+  summarizeDeadLetter, providerLabel, discardConfirmText, DEAD_LETTER_PROVIDER_LABELS,
+} from './dead-letter-summary.js'
 
 describe('providerLabel', () => {
   it('labels every registered provider and falls back to the raw key', () => {
@@ -139,5 +141,25 @@ describe('summarizeDeadLetter — length cap', () => {
     })
     expect(s.length).toBeLessThan(200)
     expect(s).toContain('…')
+  })
+})
+
+// Discard means different things per provider, and the copy has to say which.
+// For the email family the event is over and the row is bookkeeping. For
+// zoom_contact_sync the row is the ONLY thing suppressing a nightly retry, so
+// discarding is a permanent decision — describing that as "stays on record"
+// would tell the operator the opposite of what happens.
+describe('discardConfirmText', () => {
+  it('warns that a discarded Zoom number stays suppressed', () => {
+    const t = discardConfirmText('zoom_contact_sync')
+    expect(t).toMatch(/suppressed/i)
+    expect(t).toMatch(/will not try it again/i)
+  })
+
+  it('keeps the plain wording for every other provider', () => {
+    for (const p of ['postmark_inbound', 'postmark_queue', 'email_ticket_reply', 'glofox', undefined]) {
+      expect(discardConfirmText(p)).toBe(
+        'Discard this event? It stays on record but stops counting as unresolved.')
+    }
   })
 })
