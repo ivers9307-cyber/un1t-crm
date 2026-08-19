@@ -75,7 +75,7 @@ export default function OfferSalesList({ pending, fulfilled }) {
             {pending.map((r) => (
               <li
                 key={r.id}
-                className={`rounded-lg border p-4 flex flex-wrap items-center gap-3 justify-between bg-un1t-black ${focus === r.id ? 'border-un1t-text' : 'border-un1t-border'}`}
+                className={`rounded-lg border p-4 flex flex-wrap items-center gap-3 justify-between bg-un1t-bg ${focus === r.id ? 'border-un1t-text' : 'border-un1t-border'}`}
               >
                 <div className="min-w-0">
                   <p className="font-medium text-un1t-text">{r.buyer_name || r.buyer_email}</p>
@@ -97,7 +97,7 @@ export default function OfferSalesList({ pending, fulfilled }) {
                     type="button"
                     onClick={() => markFulfilled(r.id)}
                     disabled={busy === r.id}
-                    className="px-4 py-2 rounded-md bg-un1t-text text-un1t-black text-sm font-medium disabled:opacity-50"
+                    className="px-4 py-2 rounded-md bg-un1t-text text-un1t-bg text-sm font-medium disabled:opacity-50"
                   >
                     {busy === r.id ? 'Saving…' : 'Mark fulfilled'}
                   </button>

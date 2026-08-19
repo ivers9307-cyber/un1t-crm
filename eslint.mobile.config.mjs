@@ -55,6 +55,7 @@ import js from '@eslint/js'
 import globals from 'globals'
 import nextCoreWebVitals from 'eslint-config-next/core-web-vitals'
 import reactHooks from 'eslint-plugin-react-hooks'
+import guardrails from './eslint-rules/index.mjs'
 
 // eslint-plugin-react is not a direct dependency of this repo — it arrives as a
 // transitive of eslint-config-next and currently sits at
@@ -107,7 +108,7 @@ const config = [
   // ─── The app itself: ESM + JSX, React Native runtime ──────────────────────
   {
     files: ['mobile/**/*.{js,jsx,mjs}'],
-    plugins: { react: reactPlugin, 'react-hooks': reactHooks },
+    plugins: { react: reactPlugin, 'react-hooks': reactHooks, guardrails },
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'module',
@@ -134,6 +135,15 @@ const config = [
       // stays ON for every OTHER empty block (if/for/while), which are real
       // defects.
       'no-empty': ['error', { allowEmptyCatch: true }],
+
+      // The one guardrails rule that crosses the web/mobile seam. mobile/
+      // carries its OWN tailwind.config.js, and MOB-UI.1 renamed its un1t
+      // palette to match the web's UI-FOUND.1 names — so a stale `bg-un1t-dark`
+      // is exactly as dead in a .jsx screen as in a web component, and fails
+      // the same silent way (no css, element inherits). Three had survived
+      // here. The other guardrails rules stay web-only: they police supabase-js
+      // and next/form idioms that mobile does not use.
+      'guardrails/no-dead-un1t-token': 'error',
 
       // The two headline classes from the ticket. Both ERROR: a warning would
       // not fail `eslint`, which is how mobile defects stayed invisible.

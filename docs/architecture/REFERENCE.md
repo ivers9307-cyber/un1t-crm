@@ -24,7 +24,9 @@
 
 **Audience filter whitelist** — `buildAudienceQuery()` (postmark) and `buildWhatsAppAudience()` (whatsapp) both delegate to `applyAudienceFilter()` in `src/lib/audience-filter.js`, which only allows the (field, op) combinations registered in `AUDIENCE_FIELDS`. Prevents campaign authors from filtering on arbitrary columns or smuggling PostgREST traversal paths like `profiles.role`.
 
-**Light theme with inverted token names** — The `un1t` colour palette in `tailwind.config.js` uses inverted naming for historical reasons: `un1t-black` = #FFFFFF (white bg), `un1t-dark` = #F7F8FA (card bg), `un1t-gray` = #E2E5E9 (borders), `un1t-mid` = #94A3B8 (muted), `un1t-light` = #64748B (secondary text), `un1t-white` = #111827 (primary text), `un1t-accent` = #1E293B (button hover). All components use these tokens. Use literal `text-white` only on coloured backgrounds (bg-blue-*, bg-green-*).
+**Light theme, intent-named tokens** — The `un1t` palette in `tailwind.config.js` (and `mobile/tailwind.config.js`, kept in step): `un1t-bg` = #FFFFFF (page background), `un1t-surface` = #F7F8FA (cards / raised), `un1t-border` = #E2E5E9 (hairlines), `un1t-muted` = #94A3B8 (secondary text), `un1t-subtle` = #64748B (tertiary text), `un1t-text` = #111827 (primary text), `un1t-accent` = #1E293B (button hover). All components use these tokens. Use literal `text-white` only on coloured backgrounds (bg-blue-*, bg-green-*).
+
+The names were **inverted** until UI-FOUND.1 (`un1t-black` held #FFFFFF), and mobile followed in MOB-UI.1 — the old names are **deleted, not aliased**. This paragraph documented them as current for weeks afterwards, which is how 198 dead references were still being *written* into new features long after the rename: Tailwind emits no css for an unknown token, so a stale `bg-un1t-dark` is not a wrong colour but no colour at all, and the element silently inherits. It surfaced when an operator asked what was meant to be inside the black box on `/offer-sales` — the "Mark fulfilled" label was `text-un1t-black`. `check:guardrails` (`no-dead-un1t-token`) now blocks the old names repo-wide, on web and mobile, and `--fix` performs the rename.
 
 **Report generation** — Shared logic in `src/lib/report-generator.js` used by both manual API route and Vercel cron (`/api/cron/run-scheduled-reports`, daily 7 AM UTC in `vercel.json`). Report types: `staff_hours`, `staff_cost`, `time_off_summary`, `roster_coverage`, `utilisation`. Period boundaries are computed in UTC; if the cron schedule is ever moved earlier than 01:00 UTC, revisit `calculatePeriodForSchedule` so "yesterday" still aligns with Dublin local time.
 
@@ -567,7 +569,7 @@ while (true) {
 
 Reference implementation: `src/lib/pipeline-reclassify.js` (contacts + deals). Don't re-roll — copy from there.
 
-**Light theme palette — text on light cards.** The codebase migrated to a light theme; `un1t-dark` (#F7F8FA) is a near-white card background, not the dark name suggests. Status text on these cards needs the **-700 ramp**, not -300. The dark-theme-tuned values (`text-amber-300`, `text-red-300`, `text-blue-100`) look washed-out and unreadable against the light surface.
+**Light theme palette — text on light cards.** The codebase migrated to a light theme; `un1t-surface` (#F7F8FA) is a near-white card background — it was called `un1t-dark` until UI-FOUND.1, which is the confusion the rename removed. Status text on these cards needs the **-700 ramp**, not -300. The dark-theme-tuned values (`text-amber-300`, `text-red-300`, `text-blue-100`) look washed-out and unreadable against the light surface.
 
 | Use case | Class |
 |---|---|

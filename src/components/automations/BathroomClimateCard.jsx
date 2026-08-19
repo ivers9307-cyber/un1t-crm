@@ -141,19 +141,19 @@ export default function BathroomClimateCard({ locationId, glofoxConnected, devic
   }
 
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <ShowerHead size={16} className="text-blue-500" />
-            <h2 className="font-semibold text-un1t-white">Bathroom climate control</h2>
+            <h2 className="font-semibold text-un1t-text">Bathroom climate control</h2>
           </div>
-          <p className="text-sm text-un1t-light mt-1">
+          <p className="text-sm text-un1t-subtle mt-1">
             Turn the bathroom AC on after each class starts and off on a timer — automatically, on the class schedule.
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <span className={`text-xs font-semibold ${enabled ? 'text-emerald-700' : 'text-un1t-light'}`}>
+          <span className={`text-xs font-semibold ${enabled ? 'text-emerald-700' : 'text-un1t-subtle'}`}>
             {enabled ? 'On' : 'Off'}
           </span>
           <button
@@ -163,7 +163,7 @@ export default function BathroomClimateCard({ locationId, glofoxConnected, devic
             aria-pressed={enabled}
             aria-label={enabled ? 'Turn automation off' : 'Turn automation on'}
             title={!enabled && !canEnable ? 'Connect Glofox + pick at least one AC unit to enable' : (enabled ? 'Turn off' : 'Turn on')}
-            className={`inline-flex h-6 w-11 items-center rounded-full border transition disabled:opacity-50 disabled:cursor-not-allowed ${enabled ? 'bg-emerald-500 border-emerald-600' : 'bg-un1t-mid border-un1t-mid'}`}
+            className={`inline-flex h-6 w-11 items-center rounded-full border transition disabled:opacity-50 disabled:cursor-not-allowed ${enabled ? 'bg-emerald-500 border-emerald-600' : 'bg-un1t-muted border-un1t-muted'}`}
           >
             <span className={`h-5 w-5 rounded-full bg-white shadow-sm transition ${enabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
           </button>
@@ -188,16 +188,16 @@ export default function BathroomClimateCard({ locationId, glofoxConnected, devic
 
       {/* Synced schedule (the spine) — click a class to exclude its weekly slot */}
       {glofoxConnected && (
-        <div className="mt-4 border-t border-un1t-gray/60 pt-3">
+        <div className="mt-4 border-t border-un1t-border/60 pt-3">
           <div className="flex items-center justify-between mb-1">
-            <p className="text-xs font-semibold text-un1t-white inline-flex items-center gap-1">
+            <p className="text-xs font-semibold text-un1t-text inline-flex items-center gap-1">
               <CalendarClock size={13} /> Upcoming classes (from Glofox)
             </p>
-            <button type="button" onClick={loadSchedule} className="text-[11px] underline text-un1t-light">
+            <button type="button" onClick={loadSchedule} className="text-[11px] underline text-un1t-subtle">
               {schedLoading ? 'Refreshing…' : 'Refresh'}
             </button>
           </div>
-          <p className="text-[10px] text-un1t-light mb-2">Click a class to exclude its weekly time slot. Times in Dublin.</p>
+          <p className="text-[10px] text-un1t-subtle mb-2">Click a class to exclude its weekly time slot. Times in Dublin.</p>
 
           {excludedSlots.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-2">
@@ -211,7 +211,7 @@ export default function BathroomClimateCard({ locationId, glofoxConnected, devic
           )}
 
           {schedule.length === 0 && !schedLoading && (
-            <p className="text-[11px] text-un1t-light">No classes synced yet — the schedule refreshes every 15&nbsp;min, or hit “Run schedule check now” below.</p>
+            <p className="text-[11px] text-un1t-subtle">No classes synced yet — the schedule refreshes every 15&nbsp;min, or hit “Run schedule check now” below.</p>
           )}
           {schedule.length > 0 && (
             <ul className="space-y-0.5 max-h-64 overflow-y-auto pr-1">
@@ -225,19 +225,19 @@ export default function BathroomClimateCard({ locationId, glofoxConnected, devic
                   <li key={c.glofox_event_id}>
                     <button type="button" onClick={() => toggleSlot(slotKey(c.starts_at))}
                       title={excluded ? 'Excluded — click to include again' : 'Click to exclude this weekly time slot'}
-                      className={`flex w-full items-center gap-3 text-[11px] rounded px-2 py-1 text-left hover:bg-un1t-gray/30 ${cls}`}>
-                      <span className="text-un1t-light tabular-nums shrink-0 w-36">{fmtDublin(c.starts_at)}</span>
-                      <span className="text-un1t-white truncate flex-1">{c.name || 'Class'}</span>
+                      className={`flex w-full items-center gap-3 text-[11px] rounded px-2 py-1 text-left hover:bg-un1t-border/30 ${cls}`}>
+                      <span className="text-un1t-subtle tabular-nums shrink-0 w-36">{fmtDublin(c.starts_at)}</span>
+                      <span className="text-un1t-text truncate flex-1">{c.name || 'Class'}</span>
                       {excluded
                         ? <span className="text-amber-700 shrink-0">excluded</span>
-                        : (typeof c.capacity === 'number' && <span className="text-un1t-light shrink-0">cap {c.capacity}</span>)}
+                        : (typeof c.capacity === 'number' && <span className="text-un1t-subtle shrink-0">cap {c.capacity}</span>)}
                     </button>
                   </li>
                 )
               })}
             </ul>
           )}
-          <p className="mt-1.5 text-[10px] text-un1t-light">
+          <p className="mt-1.5 text-[10px] text-un1t-subtle">
             {filters.length ? 'Highlighted = will run.' : 'Runs for every class'} {excludedSlots.length ? `· ${excludedSlots.length} slot${excludedSlots.length === 1 ? '' : 's'} excluded` : ''} · changes apply on Save below.
           </p>
         </div>
@@ -245,16 +245,16 @@ export default function BathroomClimateCard({ locationId, glofoxConnected, devic
 
       {/* Config */}
       {hasDevices && (
-        <div className="mt-4 border-t border-un1t-gray/60 pt-3 space-y-3">
+        <div className="mt-4 border-t border-un1t-border/60 pt-3 space-y-3">
           <div>
-            <p className="text-xs font-semibold text-un1t-white mb-1.5">Which AC unit(s) to control</p>
+            <p className="text-xs font-semibold text-un1t-text mb-1.5">Which AC unit(s) to control</p>
             <div className="flex flex-wrap gap-2">
               {enabledDevices.map((d) => (
                 <button
                   key={d.id}
                   type="button"
                   onClick={() => toggleDevice(d.id)}
-                  className={`text-xs px-2.5 py-1 rounded-full border transition ${deviceIds.includes(d.id) ? 'bg-blue-500/10 border-blue-500/40 text-blue-700' : 'border-un1t-gray text-un1t-light hover:border-un1t-mid'}`}
+                  className={`text-xs px-2.5 py-1 rounded-full border transition ${deviceIds.includes(d.id) ? 'bg-blue-500/10 border-blue-500/40 text-blue-700' : 'border-un1t-border text-un1t-subtle hover:border-un1t-muted'}`}
                 >
                   {d.label}
                 </button>
@@ -263,24 +263,24 @@ export default function BathroomClimateCard({ locationId, glofoxConnected, devic
           </div>
 
           <div className="flex flex-wrap gap-4">
-            <label className="text-xs text-un1t-light">
+            <label className="text-xs text-un1t-subtle">
               Start after class begins (min)
               <input type="number" min="0" value={delayMin} onChange={(e) => setDelayMin(e.target.value)}
-                className="ml-2 w-16 rounded border border-un1t-gray bg-un1t-black px-2 py-1 text-un1t-white" />
+                className="ml-2 w-16 rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-un1t-text" />
             </label>
-            <label className="text-xs text-un1t-light">
+            <label className="text-xs text-un1t-subtle">
               Run for (min)
               <input type="number" min="1" value={durationMin} onChange={(e) => setDurationMin(e.target.value)}
-                className="ml-2 w-16 rounded border border-un1t-gray bg-un1t-black px-2 py-1 text-un1t-white" />
+                className="ml-2 w-16 rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-un1t-text" />
             </label>
           </div>
 
           <div>
-            <label className="text-xs text-un1t-light block">
+            <label className="text-xs text-un1t-subtle block">
               Only these classes (optional, comma-separated — leave blank for all)
               <input type="text" value={filterText} onChange={(e) => setFilterText(e.target.value)}
                 placeholder="e.g. DR1VE, TEMPO"
-                className="mt-1 w-full rounded border border-un1t-gray bg-un1t-black px-2 py-1 text-un1t-white" />
+                className="mt-1 w-full rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-un1t-text" />
             </label>
           </div>
 
@@ -298,25 +298,25 @@ export default function BathroomClimateCard({ locationId, glofoxConnected, devic
 
       {/* Test affordances */}
       {hasDevices && (
-        <div className="mt-3 border-t border-un1t-gray/60 pt-3">
-          <p className="text-[11px] text-un1t-light mb-2">Try it without waiting for a class:</p>
+        <div className="mt-3 border-t border-un1t-border/60 pt-3">
+          <p className="text-[11px] text-un1t-subtle mb-2">Try it without waiting for a class:</p>
           <div className="flex flex-wrap items-center gap-2">
             <button type="button" onClick={() => runNow(false)} disabled={run?.phase === 'running' || deviceIds.length === 0}
-              className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded border border-un1t-gray text-un1t-white hover:border-un1t-mid disabled:opacity-40">
+              className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded border border-un1t-border text-un1t-text hover:border-un1t-muted disabled:opacity-40">
               <Play size={12} /> Run schedule check now
             </button>
             <button type="button" onClick={testDevices} disabled={run?.phase === 'running' || deviceIds.length === 0}
-              className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded border border-un1t-gray text-un1t-white hover:border-un1t-mid disabled:opacity-40">
+              className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded border border-un1t-border text-un1t-text hover:border-un1t-muted disabled:opacity-40">
               <Zap size={12} /> Test AC now
             </button>
             <button type="button" onClick={() => runNow(true)} disabled={run?.phase === 'running' || deviceIds.length === 0}
-              className="text-[11px] underline text-un1t-light">
+              className="text-[11px] underline text-un1t-subtle">
               Preview only
             </button>
           </div>
 
           {run?.phase === 'running' && (
-            <p className="mt-2 text-[11px] text-un1t-light inline-flex items-center gap-1"><Loader2 size={11} className="animate-spin" /> Working…</p>
+            <p className="mt-2 text-[11px] text-un1t-subtle inline-flex items-center gap-1"><Loader2 size={11} className="animate-spin" /> Working…</p>
           )}
           {run?.phase === 'error' && <p className="mt-2 text-[11px] text-red-700">{run.message}</p>}
           {run?.phase === 'tested' && (
@@ -332,10 +332,10 @@ export default function BathroomClimateCard({ locationId, glofoxConnected, devic
             <div className="mt-2 text-[11px] space-y-0.5">
               {!run.glofox_configured && <p className="text-amber-700">Glofox isn&apos;t connected — no schedule to check.</p>}
               {run.glofox_configured && (run.planned?.length || 0) === 0 && (
-                <p className="text-un1t-light">No class is within its shower window right now — nothing to turn on yet.</p>
+                <p className="text-un1t-subtle">No class is within its shower window right now — nothing to turn on yet.</p>
               )}
               {(run.actions || []).map((a, i) => (
-                <p key={i} className={a.status === 'fired' ? 'text-emerald-700' : a.status === 'failed' ? 'text-red-700' : 'text-un1t-light'}>
+                <p key={i} className={a.status === 'fired' ? 'text-emerald-700' : a.status === 'failed' ? 'text-red-700' : 'text-un1t-subtle'}>
                   {a.status === 'fired' ? '✓ turned on' : a.status === 'skipped' ? '· already on' : a.status === 'would_fire' ? '→ would turn on' : `✗ ${a.status}`}
                   {' '}for {a.class_name || a.glofox_event_id}{a.error ? ` — ${a.error}` : ''}
                 </p>
@@ -347,17 +347,17 @@ export default function BathroomClimateCard({ locationId, glofoxConnected, devic
       )}
 
       {/* Recent activity — what the cron actually did (autonomous + on-demand) */}
-      <div className="mt-3 border-t border-un1t-gray/60 pt-3">
+      <div className="mt-3 border-t border-un1t-border/60 pt-3">
         <div className="flex items-center justify-between mb-1">
-          <p className="text-xs font-semibold text-un1t-white inline-flex items-center gap-1">
+          <p className="text-xs font-semibold text-un1t-text inline-flex items-center gap-1">
             <Activity size={13} /> Recent activity
           </p>
-          <button type="button" onClick={loadHistory} className="text-[11px] underline text-un1t-light">
+          <button type="button" onClick={loadHistory} className="text-[11px] underline text-un1t-subtle">
             {histLoading ? 'Refreshing…' : 'Refresh'}
           </button>
         </div>
         {history.length === 0 && (
-          <p className="text-[11px] text-un1t-light">
+          <p className="text-[11px] text-un1t-subtle">
             Nothing yet — the automation hasn&apos;t run for a class so far. Each time it turns the AC on (or skips / fails) for a class, it shows here.
           </p>
         )}
@@ -365,11 +365,11 @@ export default function BathroomClimateCard({ locationId, glofoxConnected, devic
           <ul className="space-y-0.5 max-h-56 overflow-y-auto pr-1">
             {history.map((h, i) => (
               <li key={i} className="flex items-center gap-2 text-[11px]">
-                <span className="text-un1t-light tabular-nums shrink-0 w-36">{fmtDublin(h.fired_at)}</span>
-                <span className={`shrink-0 font-medium ${h.status === 'fired' ? 'text-emerald-700' : h.status === 'failed' ? 'text-red-700' : 'text-un1t-light'}`}>
+                <span className="text-un1t-subtle tabular-nums shrink-0 w-36">{fmtDublin(h.fired_at)}</span>
+                <span className={`shrink-0 font-medium ${h.status === 'fired' ? 'text-emerald-700' : h.status === 'failed' ? 'text-red-700' : 'text-un1t-subtle'}`}>
                   {h.status === 'fired' ? '✓ on' : h.status === 'failed' ? '✗ failed' : '· skipped'}
                 </span>
-                <span className="text-un1t-white truncate flex-1">
+                <span className="text-un1t-text truncate flex-1">
                   {h.class_name || h.glofox_event_id}{h.device_label ? ` · ${h.device_label}` : ''}
                   {h.status === 'failed' && h.error ? ` — ${h.error}` : ''}
                   {h.status === 'skipped' && h.reason ? ` — ${String(h.reason).replace(/_/g, ' ')}` : ''}

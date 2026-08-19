@@ -163,6 +163,70 @@ ruleTester.run('no-low-contrast-accent-text', plugin.rules['no-low-contrast-acce
   ],
 })
 
+// TOKENDEAD.1 — the third colour rule, and the only one about a token that does
+// not EXIST. UI-FOUND.1 renamed the un1t palette (black→bg, dark→surface,
+// gray→border, mid→muted, light→subtle, white→text) and mobile followed in
+// MOB-UI.1, but 142 call sites in src/ and 3 in mobile/ kept the old names.
+// Tailwind does not error on an unknown token — it emits NO css — so the class
+// is inert and the element silently inherits: the "Mark fulfilled" button on
+// /offer-sales rendered black-on-black and was operator-reported as an empty
+// box on 2026-08-19. Fixable, because the mapping is exact and mechanical.
+ruleTester.run('no-dead-un1t-token', plugin.rules['no-dead-un1t-token'], {
+  valid: [
+    // the post-rename token set
+    '"bg-un1t-bg text-un1t-text"',
+    '"bg-un1t-surface border border-un1t-border"',
+    '"text-un1t-muted hover:text-un1t-subtle"',
+    '"px-4 py-2 bg-un1t-accent rounded-md"',
+    // other palettes are none of this rule's business
+    '"bg-black text-white"',
+    '"bg-gray-900 text-gray-400"',
+    // LONGER identifiers that merely begin with a dead token name — an asset
+    // path or a css class of our own, not a palette token. The trailing
+    // boundary is the whole reason this rule can run at ERROR repo-wide.
+    '"/logos/un1t-dark-logo.png"',
+    '"un1t-lightbox-overlay"',
+    '"https://cdn.example.com/un1t-white-paper.pdf"',
+  ],
+  invalid: [
+    // one per renamed token, each asserting the exact replacement
+    { code: '"bg-un1t-black"', output: '"bg-un1t-bg"', errors: [{ messageId: 'deadToken', data: { old: 'black', replacement: 'bg' } }] },
+    { code: '"bg-un1t-dark"', output: '"bg-un1t-surface"', errors: [{ messageId: 'deadToken', data: { old: 'dark', replacement: 'surface' } }] },
+    { code: '"border-un1t-gray"', output: '"border-un1t-border"', errors: [{ messageId: 'deadToken', data: { old: 'gray', replacement: 'border' } }] },
+    { code: '"bg-un1t-mid"', output: '"bg-un1t-muted"', errors: [{ messageId: 'deadToken', data: { old: 'mid', replacement: 'muted' } }] },
+    { code: '"text-un1t-light"', output: '"text-un1t-subtle"', errors: [{ messageId: 'deadToken', data: { old: 'light', replacement: 'subtle' } }] },
+    { code: '"text-un1t-white"', output: '"text-un1t-text"', errors: [{ messageId: 'deadToken', data: { old: 'white', replacement: 'text' } }] },
+    // THE /offer-sales button: dark bg + a label the rename turned invisible
+    {
+      code: '"px-4 py-2 rounded-md bg-un1t-text text-un1t-black text-sm"',
+      output: '"px-4 py-2 rounded-md bg-un1t-text text-un1t-bg text-sm"',
+      errors: [{ messageId: 'deadToken' }],
+    },
+    // an opacity modifier is not part of the token name
+    { code: '"bg-un1t-gray/40"', output: '"bg-un1t-border/40"', errors: [{ messageId: 'deadToken' }] },
+    // variant prefixes do not exempt it (the MonthRoster hover states)
+    { code: '"hover:bg-un1t-dark"', output: '"hover:bg-un1t-surface"', errors: [{ messageId: 'deadToken' }] },
+    // several in one string — one report each, all fixed in a single pass
+    {
+      code: '"bg-un1t-dark border border-un1t-gray text-un1t-white"',
+      output: '"bg-un1t-surface border border-un1t-border text-un1t-text"',
+      errors: [{ messageId: 'deadToken' }, { messageId: 'deadToken' }, { messageId: 'deadToken' }],
+    },
+    // template literal: judged and fixed per static chunk, so the ${…} survives
+    {
+      code: 'const c = `p-4 bg-un1t-black ${x} text-un1t-light`',
+      output: 'const c = `p-4 bg-un1t-bg ${x} text-un1t-subtle`',
+      errors: [{ messageId: 'deadToken' }, { messageId: 'deadToken' }],
+    },
+    // the class living in a config map rather than on JSX (mobile issues-api)
+    {
+      code: "const s = { bg: 'bg-un1t-gray/40', fg: 'text-un1t-light' }",
+      output: "const s = { bg: 'bg-un1t-border/40', fg: 'text-un1t-subtle' }",
+      errors: [{ messageId: 'deadToken' }, { messageId: 'deadToken' }],
+    },
+  ],
+})
+
 jsxRuleTester.run('no-untyped-button-in-form', plugin.rules['no-untyped-button-in-form'], {
   valid: [
     // no <form> ancestor in this file — outside a form the default is inert

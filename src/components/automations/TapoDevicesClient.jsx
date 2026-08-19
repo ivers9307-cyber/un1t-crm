@@ -8,7 +8,7 @@
 // (PATCH config) + /api/tapo/devices/[id]/toggle (POST override). We
 // refresh() after every mutation so the row reflects server truth
 // (override/last_state/last_seen come back on each write). Styling
-// mirrors ClassClimateCard: un1t-dark cards, un1t-black inputs, chips
+// mirrors ClassClimateCard: un1t-surface cards, un1t-bg inputs, chips
 // as `bg-<c>-500/10 text-<c>-700`.
 
 import { useState, useEffect, useCallback } from 'react'
@@ -72,7 +72,7 @@ function stateDot(device) {
     return { cls: 'bg-amber-500', title: 'No contact for over 5 min' }
   }
   if (device.last_state === 'on') return { cls: 'bg-emerald-500', title: 'On' }
-  return { cls: 'bg-un1t-mid', title: 'Off' }
+  return { cls: 'bg-un1t-muted', title: 'Off' }
 }
 
 function overrideActive(override) {
@@ -133,7 +133,7 @@ export default function TapoDevicesClient({ locationName }) {
 
   if (loading) {
     return (
-      <p className="text-[11px] text-un1t-light inline-flex items-center gap-1">
+      <p className="text-[11px] text-un1t-subtle inline-flex items-center gap-1">
         <Loader2 size={11} className="animate-spin" /> Loading devices…
       </p>
     )
@@ -144,8 +144,8 @@ export default function TapoDevicesClient({ locationName }) {
       {loadError && <p className="text-[11px] text-red-700">{loadError}</p>}
 
       {devices.length === 0 && (
-        <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
-          <p className="text-sm text-un1t-light">
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+          <p className="text-sm text-un1t-subtle">
             No devices yet — they appear here once the gym bridge reports them.
           </p>
         </div>
@@ -205,10 +205,10 @@ function AdoptCard({ device, onDone }) {
   }
 
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
       <div className="flex items-center gap-2">
-        <Plug size={15} className="text-un1t-light shrink-0" />
-        <span className="font-medium text-un1t-white truncate">
+        <Plug size={15} className="text-un1t-subtle shrink-0" />
+        <span className="font-medium text-un1t-text truncate">
           {device.name || device.sidecar_device_id}
         </span>
         <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-700 shrink-0">
@@ -216,7 +216,7 @@ function AdoptCard({ device, onDone }) {
         </span>
       </div>
       {device.last_seen_at && (
-        <p className="text-[10px] text-un1t-light mt-1">Last seen {fmtDublin(device.last_seen_at)}</p>
+        <p className="text-[10px] text-un1t-subtle mt-1">Last seen {fmtDublin(device.last_seen_at)}</p>
       )}
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <input
@@ -224,7 +224,7 @@ function AdoptCard({ device, onDone }) {
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="Name this device"
-          className="flex-1 min-w-40 rounded border border-un1t-gray bg-un1t-black px-2 py-1 text-sm text-un1t-white"
+          className="flex-1 min-w-40 rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-sm text-un1t-text"
         />
         <button type="button" onClick={adopt} disabled={busy}
           className="text-xs font-semibold px-3 py-1.5 rounded bg-un1t-text text-un1t-bg disabled:opacity-40">
@@ -339,23 +339,23 @@ function ManagedCard({ device, onDone }) {
   }
 
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${dot.cls}`} title={dot.title} aria-label={dot.title} />
-            <span className="font-semibold text-un1t-white truncate">{device.name || device.sidecar_device_id}</span>
+            <span className="font-semibold text-un1t-text truncate">{device.name || device.sidecar_device_id}</span>
             <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-700 shrink-0">
               {device.kind}
             </span>
           </div>
-          <p className="text-[10px] text-un1t-light mt-1">
+          <p className="text-[10px] text-un1t-subtle mt-1">
             {device.last_seen_at ? `Last seen ${fmtDublin(device.last_seen_at)}` : 'Never seen'}
           </p>
         </div>
         <div className="flex flex-col items-end gap-1.5 shrink-0">
           <button type="button" onClick={toggle} disabled={toggling}
-            className="text-xs font-semibold px-3 py-1.5 rounded border border-un1t-gray text-un1t-white hover:border-un1t-mid disabled:opacity-40">
+            className="text-xs font-semibold px-3 py-1.5 rounded border border-un1t-border text-un1t-text hover:border-un1t-muted disabled:opacity-40">
             {toggling ? <Loader2 size={12} className="animate-spin inline" /> : (device.last_state === 'on' ? 'Turn off' : 'Turn on')}
           </button>
           {hasOverride && (
@@ -364,7 +364,7 @@ function ManagedCard({ device, onDone }) {
                 Manual until {fmtOverrideUntil(device.override.until)}
               </span>
               <button type="button" onClick={clearOverride} disabled={toggling}
-                className="text-[11px] underline text-un1t-light disabled:opacity-40">
+                className="text-[11px] underline text-un1t-subtle disabled:opacity-40">
                 Clear
               </button>
             </div>
@@ -375,23 +375,23 @@ function ManagedCard({ device, onDone }) {
       {toggleError && <p className="mt-2 text-[11px] text-red-700">{toggleError}</p>}
 
       {/* Config */}
-      <div className="mt-4 border-t border-un1t-gray/60 pt-3 space-y-3">
+      <div className="mt-4 border-t border-un1t-border/60 pt-3 space-y-3">
         <div className="flex flex-wrap gap-3">
-          <label className="text-xs text-un1t-light flex-1 min-w-40">
+          <label className="text-xs text-un1t-subtle flex-1 min-w-40">
             Name
             <input type="text" value={name} onChange={(e) => { setName(e.target.value); setSaved(false) }}
-              className="mt-1 w-full rounded border border-un1t-gray bg-un1t-black px-2 py-1 text-un1t-white" />
+              className="mt-1 w-full rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-un1t-text" />
           </label>
-          <label className="text-xs text-un1t-light flex-1 min-w-40">
+          <label className="text-xs text-un1t-subtle flex-1 min-w-40">
             Zone (optional)
             <input type="text" value={zone} onChange={(e) => { setZone(e.target.value); setSaved(false) }}
               placeholder="e.g. Studio 1"
-              className="mt-1 w-full rounded border border-un1t-gray bg-un1t-black px-2 py-1 text-un1t-white" />
+              className="mt-1 w-full rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-un1t-text" />
           </label>
-          <label className="text-xs text-un1t-light">
+          <label className="text-xs text-un1t-subtle">
             Schedule
             <select value={mode} onChange={(e) => { setMode(e.target.value); setSaved(false) }}
-              className="mt-1 block rounded border border-un1t-gray bg-un1t-black px-2 py-1 text-un1t-white">
+              className="mt-1 block rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-un1t-text">
               <option value="none">Manual only</option>
               <option value="fixed">Fixed hours</option>
               <option value="class">Class-linked</option>
@@ -402,34 +402,34 @@ function ManagedCard({ device, onDone }) {
         {mode === 'fixed' && (
           <div className="space-y-2">
             {windows.length === 0 && (
-              <p className="text-[11px] text-un1t-light">No windows yet — add one below.</p>
+              <p className="text-[11px] text-un1t-subtle">No windows yet — add one below.</p>
             )}
             {windows.map((win, i) => (
-              <div key={i} className="rounded border border-un1t-gray/60 p-2 space-y-2">
+              <div key={i} className="rounded border border-un1t-border/60 p-2 space-y-2">
                 <div className="flex flex-wrap gap-1.5">
                   {DAY_LABELS.map((d) => {
                     const on = win.days.includes(d.n)
                     return (
                       <button key={d.n} type="button" onClick={() => toggleDay(i, d.n)}
-                        className={`text-[11px] px-2 py-0.5 rounded-full border transition ${on ? 'bg-blue-500/10 border-blue-500/40 text-blue-700' : 'border-un1t-gray text-un1t-light hover:border-un1t-mid'}`}>
+                        className={`text-[11px] px-2 py-0.5 rounded-full border transition ${on ? 'bg-blue-500/10 border-blue-500/40 text-blue-700' : 'border-un1t-border text-un1t-subtle hover:border-un1t-muted'}`}>
                         {d.label}
                       </button>
                     )
                   })}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <label className="text-[11px] text-un1t-light inline-flex items-center gap-1">
+                  <label className="text-[11px] text-un1t-subtle inline-flex items-center gap-1">
                     On
                     <input type="time" value={win.on} onChange={(e) => setWindowTime(i, 'on', e.target.value)}
-                      className="rounded border border-un1t-gray bg-un1t-black px-2 py-1 text-un1t-white" />
+                      className="rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-un1t-text" />
                   </label>
-                  <label className="text-[11px] text-un1t-light inline-flex items-center gap-1">
+                  <label className="text-[11px] text-un1t-subtle inline-flex items-center gap-1">
                     Off
                     <input type="time" value={win.off} onChange={(e) => setWindowTime(i, 'off', e.target.value)}
-                      className="rounded border border-un1t-gray bg-un1t-black px-2 py-1 text-un1t-white" />
+                      className="rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-un1t-text" />
                   </label>
                   <button type="button" onClick={() => removeWindow(i)}
-                    className="ml-auto text-[11px] text-un1t-light hover:text-red-700 inline-flex items-center gap-1">
+                    className="ml-auto text-[11px] text-un1t-subtle hover:text-red-700 inline-flex items-center gap-1">
                     <X size={12} /> Remove
                   </button>
                 </div>
@@ -437,7 +437,7 @@ function ManagedCard({ device, onDone }) {
             ))}
             {windows.length < 8 && (
               <button type="button" onClick={addWindow}
-                className="text-[11px] underline text-un1t-light inline-flex items-center gap-1">
+                className="text-[11px] underline text-un1t-subtle inline-flex items-center gap-1">
                 <Plus size={12} /> Add window
               </button>
             )}
@@ -446,17 +446,17 @@ function ManagedCard({ device, onDone }) {
 
         {mode === 'class' && (
           <div className="flex flex-wrap gap-4">
-            <label className="text-xs text-un1t-light">
+            <label className="text-xs text-un1t-subtle">
               On (min before class)
               <input type="number" min="0" max="120" value={leadMin}
                 onChange={(e) => { setLeadMin(e.target.value); setSaved(false) }}
-                className="ml-2 w-16 rounded border border-un1t-gray bg-un1t-black px-2 py-1 text-un1t-white" />
+                className="ml-2 w-16 rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-un1t-text" />
             </label>
-            <label className="text-xs text-un1t-light">
+            <label className="text-xs text-un1t-subtle">
               Off (min after class)
               <input type="number" min="0" max="120" value={lagMin}
                 onChange={(e) => { setLagMin(e.target.value); setSaved(false) }}
-                className="ml-2 w-16 rounded border border-un1t-gray bg-un1t-black px-2 py-1 text-un1t-white" />
+                className="ml-2 w-16 rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-un1t-text" />
             </label>
           </div>
         )}
