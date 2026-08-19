@@ -54,7 +54,19 @@ export const DB_BRAND_DEFAULTS = Object.freeze({
   // tenant's own legal entity once configured (tenant-privacy.js).
   // '/legal/' (SAAS4-C4): the public subprocessor register — tenant
   // privacy notices reference it.
-  allowedPaths: Object.freeze(['/welcome', '/book/', '/event/', '/privacy', '/legal/', '/api/public/', '/api/webhooks/']),
+  // '/account-deletion' (PUBPATH.1): this is the FOURTH public-path
+  // allowlist, and it is the one the recurring "public page isn't public"
+  // defect hides in — it sits one file away from brands.js and reads like
+  // documentation rather than routing. '/privacy' above is startsWith-
+  // matched and therefore already serves /privacy AND /privacy/members on a
+  // tenant domain; BOTH of those pages link to /account-deletion with a
+  // host-relative href (src/app/privacy/page.js, .../members/page.js), so
+  // without this entry the tenant's own privacy notice promises a deletion
+  // page and the fallback hands the reader the studio chooser instead.
+  // Nothing tenant-specific is behind it (static copy naming an email
+  // address), so it exposes nothing new — same argument as /privacy.
+  // LATENT, not live: tenant_domains has zero rows today.
+  allowedPaths: Object.freeze(['/welcome', '/book/', '/event/', '/privacy', '/legal/', '/account-deletion', '/api/public/', '/api/webhooks/']),
   rootHandler: 'rewrite',
   rootRewriteTo: '/welcome',
   fallbackHandler: 'rewrite',

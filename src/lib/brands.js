@@ -88,8 +88,33 @@ export const BRANDS = [
       '/terms',         // Terms of Service (Meta App Review + site footer)
       '/legal/',        // SAAS4-C4: /legal/subprocessors (public subprocessor register)
       '/technical',     // Tech-provider service page (Meta Access Verification URL)
+      // PUBPATH.1 — /account-deletion is the Google Play "Account Deletion URL"
+      // + Apple 5.1.1(v) page, and BOTH public privacy pages link to it with a
+      // host-relative href (/privacy → src/app/privacy/page.js, /privacy/members
+      // → .../members/page.js — both allowlisted above). Without this entry that
+      // link, followed on un1tdublin.com, fallback-rewrote to /welcome: the
+      // policy promised a deletion page and delivered the studio chooser.
+      '/account-deletion',
+      // PUBPATH.1 — the paste-anywhere event-signup iframe. Its own header
+      // documents the snippet as <iframe src="https://un1tdublin.com/embed/
+      // event/<slug>"> — i.e. THIS host — and it was allowlisted in proxy.js
+      // but not here, so on the marketing host every third-party embed
+      // rewrote to /welcome. Trailing slash: the brand matcher is a raw
+      // startsWith, and only /embed/* is meant to resolve.
+      '/embed/',
       '/book/',         // public Calendly-style booking pages
       '/event/',        // public race / workshop / etc. signup pages
+      // PUBPATH.1 — the checkout leg of the two above. RaceSignupWidget
+      // sends every PAID signup to a HOST-RELATIVE /event-pay/<id>
+      // (src/components/RaceSignupWidget.jsx:428), and in the embed it does
+      // so via window.open(url, '_top') — resolved against the iframe
+      // document's origin, i.e. THIS host. So without this entry a paid
+      // signup on un1tdublin.com creates the registration and then rewrites
+      // the payer to /welcome: money not taken, registration stranded
+      // unpaid. un1t-hosts has carried '/event/' + '/event-pay/' as a pair
+      // since HOST-PORTAL.1 (below) for exactly this reason — the marketing
+      // host only ever had half of it. Live paid events exist today.
+      '/event-pay/',
       '/race/',         // race kiosk + signup
       '/api/public/',   // backing API for all of the above
       '/api/webhooks/', // future-proof if a payment redirect lands here

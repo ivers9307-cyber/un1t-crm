@@ -18,6 +18,12 @@ const PAGES = [
   'src/app/terms/page.js',
   // SAAS4-C4 — the public subprocessor register joins the single-entity rule.
   'src/app/legal/subprocessors/page.js',
+  // PUBPATH.1 — /account-deletion was outside this list and had drifted: it
+  // still named the retired "UN1T Dublin Ltd". It is a legal page in every
+  // sense that matters (it is the Google Play "Account Deletion URL" and the
+  // Apple 5.1.1(v) page, and both privacy pages link to it), so a reviewer
+  // comparing it against /privacy saw two different data controllers.
+  'src/app/account-deletion/page.js',
 ]
 
 const read = (p) => readFileSync(join(process.cwd(), p), 'utf8')
