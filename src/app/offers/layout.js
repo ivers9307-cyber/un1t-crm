@@ -21,10 +21,15 @@ export default async function OffersLayout({ children }) {
   // formatSaleDeadline(). A literal date here disagreed with the countdown
   // the moment the operator moved ends_at in SQL.
   const db = createServerClient()
+  // Only DATED offers can produce a deadline line. Gift cards carry
+  // ends_at NULL, and Postgres sorts NULLs first on DESC — without this
+  // filter a live gift card would win the ordering and blank out a real
+  // sale's deadline in the footer.
   const { data } = await db
     .from('sale_offers')
     .select('ends_at')
     .eq('active', true)
+    .not('ends_at', 'is', null)
     .order('ends_at', { ascending: false })
     .limit(1)
     .maybeSingle()

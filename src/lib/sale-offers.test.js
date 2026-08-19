@@ -10,6 +10,7 @@ vi.mock('./ops-alerts', () => ({ sendOpsAlert: (...a) => sendOpsAlert(...a) }))
 import {
   OFFER_SALE_TAG,
   offerIsOpen,
+  offerHasDeadline,
   formatEuro,
   formatSaleDeadline,
   resolveOfferPurchaseByOrderId,
@@ -53,6 +54,27 @@ describe('formatEuro', () => {
     expect(formatEuro(49700)).toBe('€497')
     expect(formatEuro(104400)).toBe('€1,044')
     expect(formatEuro(206800)).toBe('€2,068')
+  })
+})
+
+describe('evergreen offers (gift cards, GIFTCARD.1)', () => {
+  const evergreen = { active: true, starts_at: '2026-08-01T00:00:00Z', ends_at: null }
+
+  // new Date(null) is the epoch, so an unguarded `now <= ends_at` closes an
+  // evergreen offer instantly. This is the regression that guard exists for.
+  it('is open indefinitely when ends_at is null', () => {
+    expect(offerIsOpen(evergreen, new Date('2026-08-12T10:00:00Z'))).toBe(true)
+    expect(offerIsOpen(evergreen, new Date('2035-01-01T00:00:00Z'))).toBe(true)
+  })
+
+  it('still respects starts_at and active', () => {
+    expect(offerIsOpen(evergreen, new Date('2026-07-01T00:00:00Z'))).toBe(false)
+    expect(offerIsOpen({ ...evergreen, active: false }, new Date('2026-09-01T00:00:00Z'))).toBe(false)
+  })
+
+  it('offerHasDeadline separates a timed sale from an evergreen product', () => {
+    expect(offerHasDeadline(evergreen)).toBe(false)
+    expect(offerHasDeadline({ ends_at: '2026-08-10T22:59:59Z' })).toBe(true)
   })
 })
 
