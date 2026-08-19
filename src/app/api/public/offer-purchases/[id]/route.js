@@ -24,7 +24,7 @@ export async function GET(_request, props) {
 
   const { data: row } = await db
     .from('offer_purchases')
-    .select('id, state, revolut_order_id, location_id, buyer_name, buyer_email, buyer_phone, amount_cents, offer:offer_id ( id, name, bonus_headline )')
+    .select('id, state, revolut_order_id, location_id, buyer_name, buyer_email, buyer_phone, amount_cents, offer:offer_id ( id, name, bonus_headline, category )')
     .eq('id', id)
     .maybeSingle()
   if (!row) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })

@@ -5,7 +5,7 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
-import { offerIsOpen, formatEuro, formatSaleDeadline } from '@/lib/sale-offers'
+import { offerIsOpen, offerHasDeadline, formatEuro, formatSaleDeadline } from '@/lib/sale-offers'
 import SaleCountdown from '@/components/offers/SaleCountdown'
 import OfferCheckout from '@/components/offers/OfferCheckout'
 
@@ -13,6 +13,19 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 function includesFor(offer) {
+  // GIFTCARD.1 — a gift card is a value, not a product with a term. It must
+  // NOT claim classes are being added to the buyer's own account (the
+  // membership/pack copy below does), and the 5-year validity is stated
+  // because Irish law (Consumer Protection (Gift Vouchers) Act 2019) sets a
+  // 5-year minimum and the buyer is entitled to know it before paying.
+  if (offer.category === 'gift_card') {
+    return [
+      offer.description,
+      'Spend it on any membership, class pack or drop-in at UN1T Stillorgan',
+      'Valid for 5 years from the date of purchase',
+      'We email you the gift card details within 24 hours, ready to hand over',
+    ]
+  }
   if (offer.category === 'membership') {
     return [
       'Unlimited coached 45-minute classes, 7 days a week',
@@ -39,6 +52,7 @@ export default async function OfferPage(props) {
   if (!offer) notFound()
 
   const open = offerIsOpen(offer)
+  const isGift = offer.category === 'gift_card'
   const [titleTop, ...titleRest] = offer.name.split(' ')
   const priceLabel = formatEuro(offer.price_cents)
   const was = offer.category === 'membership' ? formatEuro(offer.price_cents + 10000) : null
@@ -53,10 +67,12 @@ export default async function OfferPage(props) {
         <h1 className="ofr-display" style={{ fontSize: 'clamp(40px,6vw,72px)', lineHeight: .95 }}>
           {titleTop}<br />{titleRest.join(' ')}
         </h1>
-        <p className="ofr-display ofr-outline" style={{ marginTop: 6, fontSize: 'clamp(40px,6vw,72px)', lineHeight: .95 }}>
-          {offer.bonus_headline}
-        </p>
-        {open && (
+        {!isGift && (
+          <p className="ofr-display ofr-outline" style={{ marginTop: 6, fontSize: 'clamp(40px,6vw,72px)', lineHeight: .95 }}>
+            {offer.bonus_headline}
+          </p>
+        )}
+        {open && offerHasDeadline(offer) && (
           <div className="ofr-deadline">
             <b>Sale ends</b>
             <SaleCountdown endsAt={offer.ends_at} />
@@ -76,9 +92,13 @@ export default async function OfferPage(props) {
           <OfferCheckout slug={offer.slug} priceLabel={priceLabel} resumePurchaseId={resumePurchaseId} />
         ) : (
           <div style={{ paddingTop: 24 }}>
-            <p className="ofr-display" style={{ fontSize: 28 }}>The sale has ended</p>
+            <p className="ofr-display" style={{ fontSize: 28 }}>
+              {offerHasDeadline(offer) ? 'The sale has ended' : 'Not available right now'}
+            </p>
             <p style={{ color: '#9a9a9a', marginTop: 12, fontSize: 14, lineHeight: 1.6 }}>
-              This offer closed on {formatSaleDeadline(offer.ends_at, { uppercase: false })}. Keep an eye on your inbox for the next one.
+              {offerHasDeadline(offer)
+                ? `This offer closed on ${formatSaleDeadline(offer.ends_at, { uppercase: false })}. Keep an eye on your inbox for the next one.`
+                : 'This one is off sale at the moment. Get in touch and we will sort you out.'}
             </p>
           </div>
         )}
