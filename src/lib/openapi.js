@@ -3069,6 +3069,27 @@ registry.registerPath({
 })
 
 registry.registerPath({
+  method: 'post',
+  path: '/api/admin/webhook-dead-letter/bulk-resolve',
+  tags: ['Admin'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Acknowledge every open dead-letter row of one provider (master/owner only)',
+  description: 'Bulk form of {id}/resolve, for a provider that can park a whole population behind a single cause (ZOOMSYNC.4): zoom_contact_sync parks a row per phone number, so an account-level Zoom refusal — a dropped scope, a lapsed plan, a quota — would otherwise take one click per number to clear after the credential is fixed. Updates pending/failed rows only and stamps resolved_at, exactly like the single-row route. `provider` is REQUIRED and there is no all-providers mode: a blanket clear would let a Zoom cleanup silently acknowledge an unread inbound email.',
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      provider: z.string().openapi({ description: 'webhook_dead_letter.provider key, e.g. zoom_contact_sync' }),
+      status: z.enum(['resolved', 'discarded']).optional().openapi({ description: 'Default resolved' }),
+    }).openapi('DeadLetterBulkResolve') } } },
+  },
+  responses: {
+    200: { description: '{ success, data: { provider, status, updated } }' },
+    400: { description: 'Missing provider or invalid target status', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not master or owner', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
   method: 'get',
   path: '/api/admin/tenant-domains',
   tags: ['Admin'],

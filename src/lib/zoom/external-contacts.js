@@ -78,7 +78,11 @@ export async function createContact({ e164, name, contactId }) {
   // rejects the duplicate id/number with a 409; that is the desired end state,
   // so it counts as success and the pipeline stays idempotent.
   if (!res.ok && res.status === 409) return { ok: true, duplicate: true }
-  if (!res.ok) return { ok: false, error: `create ${e164}: ${res.error}` }
+  // ZOOMSYNC.4 — `status` rides along on every failure so the worker can tell a
+  // permanent verdict on the payload (4xx) from a transient one (5xx, network,
+  // rate limit). Without it the only signal was a string, and every failure was
+  // retried forever.
+  if (!res.ok) return { ok: false, status: res.status, error: `create ${e164}: ${res.error}` }
   return { ok: true }
 }
 
@@ -87,7 +91,7 @@ export async function updateContact({ zoomId, name, contactId }) {
     method: 'PATCH',
     body: { name, description: descriptionFor(contactId) },
   })
-  if (!res.ok) return { ok: false, error: `update ${zoomId}: ${res.error}` }
+  if (!res.ok) return { ok: false, status: res.status, error: `update ${zoomId}: ${res.error}` }
   return { ok: true }
 }
 
@@ -95,6 +99,6 @@ export async function deleteContact({ zoomId }) {
   const res = await zoomFetch(`/phone/external_contacts/${zoomId}`, { method: 'DELETE' })
   // Already gone is the desired end state.
   if (!res.ok && res.status === 404) return { ok: true, alreadyGone: true }
-  if (!res.ok) return { ok: false, error: `delete ${zoomId}: ${res.error}` }
+  if (!res.ok) return { ok: false, status: res.status, error: `delete ${zoomId}: ${res.error}` }
   return { ok: true }
 }

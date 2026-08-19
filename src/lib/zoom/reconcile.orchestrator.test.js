@@ -15,12 +15,18 @@ vi.mock('./sync-runs', () => ({
   finishRun: vi.fn(async () => {}),
   pruneRuns: vi.fn(async () => {}),
 }))
+vi.mock('./failures', () => ({
+  loadParkedNumbers: vi.fn(async () => new Set()),
+  ZOOM_SYNC_PROVIDER: 'zoom_contact_sync',
+  isPermanentZoomFailure: vi.fn(() => true),
+}))
 
 import { listOwnedContacts } from './external-contacts'
 import { buildDesiredContacts } from './desired-contacts'
 import { zoomConfigured } from './client'
 import { publishQueuePush } from '@/lib/qstash'
 import { startRun, finishRun, pruneRuns } from './sync-runs'
+import { loadParkedNumbers } from './failures'
 import { runZoomContactSync, PUBLISH_CONCURRENCY } from './reconcile'
 
 const desiredMap = (n, prefix = 'Name') => new Map(
@@ -34,6 +40,7 @@ beforeEach(() => {
   vi.mocked(listOwnedContacts).mockResolvedValue({ ok: true, contacts: new Map(), scanned: 0 })
   vi.mocked(startRun).mockClear()
   vi.mocked(finishRun).mockClear()
+  vi.mocked(loadParkedNumbers).mockResolvedValue(new Set())
 })
 
 describe('runZoomContactSync', () => {
@@ -178,6 +185,82 @@ describe('runZoomContactSync', () => {
     expect(out.limited).toBe(true)
     const ops = vi.mocked(publishQueuePush).mock.calls.map((c) => c[0].body.op)
     expect(ops).toEqual(['create', 'create', 'create', 'update']) // limit spends itself on creates first
+  })
+})
+
+/**
+ * ZOOMSYNC.4 — end of the failing-forever loop, asserted through the real
+ * orchestrator rather than the pure diff: the previous behaviour was that
+ * these jobs WERE published, every night, and 400'd every night.
+ */
+describe('runZoomContactSync — unusable and parked numbers', () => {
+  it('never publishes a job for a parked number', async () => {
+    vi.mocked(loadParkedNumbers).mockResolvedValue(new Set(['+353870000001']))
+    const out = await runZoomContactSync({})
+    expect(out.enqueued).toBe(2)
+    const published = vi.mocked(publishQueuePush).mock.calls.map((c) => c[0].body.e164)
+    expect(published).not.toContain('+353870000001')
+    expect(out.withheld.creates).toBe(1)
+    expect(out.withheld.parked).toBe(1)
+  })
+
+  it('withholds the delete for an unusable number Zoom already holds', async () => {
+    vi.mocked(buildDesiredContacts).mockResolvedValue({
+      ok: true, desired: new Map(), invalid: new Set(['+4407502871075']), stats: {},
+    })
+    vi.mocked(listOwnedContacts).mockResolvedValue({
+      ok: true,
+      contacts: new Map([['+4407502871075', { name: 'Aoife Ryan', zoomId: 'z1' }]]),
+      scanned: 1,
+    })
+
+    const out = await runZoomContactSync({})
+
+    expect(out.counts.deletes).toBe(0)
+    expect(out.withheld.deletes).toBe(1)
+    expect(out.withheld.invalid).toBe(1)
+    expect(publishQueuePush).not.toHaveBeenCalled()
+    // Nothing to override: this was never a guard decision, so the run is fine.
+    expect(out.guardTripped).toBe(false)
+    expect(out.ok).toBe(true)
+  })
+
+  it('records the residue on the run row via the existing stats jsonb (no migration)', async () => {
+    vi.mocked(loadParkedNumbers).mockResolvedValue(new Set(['+353870000001']))
+    vi.mocked(buildDesiredContacts).mockResolvedValue({
+      ok: true, desired: desiredMap(3), invalid: new Set(['+87654567890']), stats: { scanned: 8605 },
+    })
+    const out = await runZoomContactSync({ db: {} })
+    expect(out.stats).toEqual(expect.objectContaining({ scanned: 8605, parked: 1, withheldDeletes: 0 }))
+    expect(finishRun).toHaveBeenCalledWith(
+      expect.anything(), 'run-1',
+      expect.objectContaining({ stats: expect.objectContaining({ parked: 1 }) }),
+    )
+  })
+
+  it('reports the residue on a dry run too — a preview must not hide it', async () => {
+    vi.mocked(loadParkedNumbers).mockResolvedValue(new Set(['+353870000001']))
+    const out = await runZoomContactSync({ dry: true })
+    expect(out.withheld).toEqual(expect.objectContaining({ parked: 1, creates: 1 }))
+  })
+
+  it('returns no list of withheld numbers — counts only, so the guard redaction cannot be bypassed', async () => {
+    vi.mocked(buildDesiredContacts).mockResolvedValue({
+      ok: true, desired: new Map(), invalid: new Set(['+4407502871075']), stats: {},
+    })
+    vi.mocked(listOwnedContacts).mockResolvedValue({
+      ok: true,
+      contacts: new Map([['+4407502871075', { name: 'Aoife Ryan', zoomId: 'z1' }]]),
+      scanned: 1,
+    })
+    const out = await runZoomContactSync({})
+    expect(JSON.stringify(out.withheld)).not.toContain('4407502871075')
+  })
+
+  it('behaves exactly as before when nothing is parked or invalid', async () => {
+    const out = await runZoomContactSync({})
+    expect(out.enqueued).toBe(3)
+    expect(out.withheld).toEqual({ invalid: 0, parked: 0, creates: 0, updates: 0, deletes: 0 })
   })
 })
 

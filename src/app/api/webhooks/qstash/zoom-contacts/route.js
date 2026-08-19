@@ -3,16 +3,28 @@
 //
 // Status-code contract with QStash retries:
 //   200 — applied (including the idempotent 409-duplicate and 404-already-gone
-//         cases, which external-contacts.js already folds into ok:true)
+//         cases, which external-contacts.js already folds into ok:true), OR
+//         ZOOMSYNC.4: Zoom gave a permanent 4xx verdict and the job has been
+//         PARKED — retrying identical bytes cannot change that answer, so the
+//         only useful thing left is to stop and show a human
 //   400 — the job is malformed; retrying will never help
 //   401 — signature rejected (QStash retries; a rotated key heals it)
 //   503 — OUR signing keys are unset, i.e. we are misconfigured, not them
-//   500 — Zoom failed; QStash should retry, and every write here is idempotent
+//   500 — Zoom failed transiently; QStash should retry, and every write here is
+//         idempotent. ZOOMSYNC.4 also returns 500 for a PERMANENT refusal once
+//         the parking budget is spent: at that volume the 4xx is an
+//         account-level refusal, not a verdict on the number, and staying
+//         loudly retryable is better than suppressing thousands of members
 
 import { NextResponse } from 'next/server'
 import { verifyQStashSignature, ZOOM_CONTACTS_WORKER_PATH } from '@/lib/qstash'
 import { getAppUrl } from '@/lib/app-url'
+import { createServerClient } from '@/lib/supabase'
+import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 import { createContact, updateContact, deleteContact } from '@/lib/zoom/external-contacts'
+import {
+  isPermanentZoomFailure, parkingBudgetExhausted, PARK_BUDGET, ZOOM_SYNC_PROVIDER,
+} from '@/lib/zoom/failures'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -67,6 +79,45 @@ export async function POST(request) {
   }
 
   if (!result.ok) {
+    // ZOOMSYNC.4 — a 4xx is Zoom's verdict on these exact bytes. Retrying is
+    // what produced 280 identical errors in 7 days; park it instead, so the
+    // number is visible on /admin/webhook-dead-letter and the nightly reconcile
+    // stops re-deriving it (loadParkedNumbers reads pending rows of this
+    // provider). Resolving the row there is the un-park.
+    if (isPermanentZoomFailure(result.status)) {
+      // A 4xx per number is triage; a 4xx on EVERY number is an outage wearing
+      // a 4xx (lost scope, lapsed plan, quota) and must not be laundered into
+      // thousands of permanent per-number suppressions. Past the budget stop
+      // parking and hand it back as a 500 — retryable, loud, nothing
+      // suppressed. See parkingBudgetExhausted().
+      if (await parkingBudgetExhausted(createServerClient())) {
+        console.error(
+          `[qstash zoom-contacts worker] ${job.op} refused (${result.status}) but the parking ` +
+          `budget of ${PARK_BUDGET} is spent — NOT parking. This many permanent refusals is an ` +
+          `account-level Zoom problem (scope, plan or quota), not ${job.e164}: ${result.error}`
+        )
+        return NextResponse.json(
+          { success: false, error: 'park_budget_exhausted', zoom: result.error },
+          { status: 500 },
+        )
+      }
+      console.error(
+        `[qstash zoom-contacts worker] ${job.op} PERMANENTLY refused (${result.status}) ` +
+        `— parked in webhook_dead_letter (provider ${ZOOM_SYNC_PROVIDER}): ${result.error}`
+      )
+      // deadLetterWebhook never throws and never blocks; a capture failure must
+      // not turn this into a retry loop of its own.
+      await deadLetterWebhook(createServerClient(), {
+        provider: ZOOM_SYNC_PROVIDER,
+        eventType: job.op,
+        payload: job,
+        error: result.error,
+      })
+      // 200 deliberately: the delivery was handled, and there is nothing for
+      // QStash to retry. The failure lives on as a dead-letter row, not as a
+      // queue entry that burns its budget re-asking a settled question.
+      return NextResponse.json({ success: true, op: job.op, parked: true })
+    }
     console.error(`[qstash zoom-contacts worker] ${job.op} failed: ${result.error}`)
     return NextResponse.json({ success: false, error: result.error }, { status: 500 })
   }

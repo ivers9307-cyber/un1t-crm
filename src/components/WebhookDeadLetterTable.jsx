@@ -23,7 +23,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { RefreshCw, AlertCircle, Loader2, CheckCircle2, Trash2, RotateCcw } from 'lucide-react'
-import { providerLabel, summarizeDeadLetter } from '@/lib/dead-letter-summary'
+import { providerLabel, summarizeDeadLetter, discardConfirmText } from '@/lib/dead-letter-summary'
 
 // Light-theme status chips (un1t-* palette — -700 text ramp per the
 // check:guardrails no-low-contrast-chip rule).
@@ -113,6 +113,37 @@ export default function WebhookDeadLetterTable() {
 
   const actionable = (row) => row.status === 'pending' || row.status === 'failed'
 
+  // Open rows of the CURRENTLY SELECTED provider — the bulk action's exact
+  // scope. It is offered only with a provider chosen, never across sources:
+  // clearing a Zoom backlog must not quietly acknowledge an unread inbound
+  // email too. Recovery path for the mass-park case — a provider that parks
+  // per phone number can leave dozens of rows behind one credential fault, and
+  // a per-row-only un-park would mean dozens of clicks right after the
+  // operator fixed the single cause.
+  const bulkOpenCount = useMemo(
+    () => (provider ? rows.filter((r) => r.provider === provider && matchesTab(r, 'open')).length : 0),
+    [rows, provider]
+  )
+
+  async function bulkResolve() {
+    setBusyId('bulk')
+    setActionError(null)
+    try {
+      const res = await fetch('/api/admin/webhook-dead-letter/bulk-resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, status: 'resolved' }),
+      })
+      const json = await res.json()
+      if (!res.ok || json.success === false) throw new Error(json.error || `HTTP ${res.status}`)
+      await load()
+    } catch (e) {
+      setActionError(`Bulk resolve: ${e.message || 'action failed'}`)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   return (
     <div>
       {/* Filter bar */}
@@ -141,6 +172,24 @@ export default function WebhookDeadLetterTable() {
             <option key={p} value={p}>{providerLabel(p)}</option>
           ))}
         </select>
+        {bulkOpenCount > 0 ? (
+          <button
+            type="button"
+            disabled={busyId === 'bulk'}
+            onClick={() => {
+              if (confirm(
+                `Mark all ${bulkOpenCount} open ${providerLabel(provider)} rows as resolved? `
+                + 'Use this after fixing the one underlying cause — it acknowledges every row '
+                + 'for this source, so anything still genuinely broken will simply come back.'
+              )) bulkResolve()
+            }}
+            className="flex items-center gap-1 text-xs font-medium text-green-700 border border-un1t-border rounded-lg px-2.5 py-1.5 hover:bg-green-500/10 disabled:opacity-50"
+          >
+            {busyId === 'bulk'
+              ? <Loader2 size={13} className="animate-spin" />
+              : <CheckCircle2 size={13} />} Resolve all {bulkOpenCount}
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={load}
@@ -223,7 +272,7 @@ export default function WebhookDeadLetterTable() {
                       type="button"
                       disabled={busy}
                       onClick={() => {
-                        if (confirm('Discard this event? It stays on record but stops counting as unresolved.')) {
+                        if (confirm(discardConfirmText(row.provider))) {
                           act(row, 'resolve', { status: 'discarded' })
                         }
                       }}

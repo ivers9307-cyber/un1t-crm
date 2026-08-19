@@ -172,6 +172,53 @@ describe('buildDesiredContacts', () => {
     expect(res.stats.rejected).toBe(1)
   })
 
+  // ZOOMSYNC.4 — the numbers that read as phone numbers, passed
+  // normaliseForZoom, and were enqueued nightly for Zoom to 400 forever.
+  describe('numbers Zoom will not accept', () => {
+    it.each([
+      ['+87654567890', 'no such country code'],
+      ['+800860588525', 'a UIFN service number'],
+      ['+35382247706573', 'too many digits for Ireland'],
+      ['+35386921983289', 'too many digits for Ireland'],
+    ])('keeps %s out of the desired state (%s)', async (phone) => {
+      const res = await buildDesiredContacts(stubDb([
+        row({ id: 'good', phone: '+353871111111' }),
+        row({ id: 'bad', phone }),
+      ]))
+      expect([...res.desired.keys()]).toEqual(['+353871111111'])
+      expect(res.stats.invalidE164).toBe(1)
+      // Counted apart from `rejected`: unparseable is a data-entry problem,
+      // this is a number that looked fine right up until Zoom refused it.
+      expect(res.stats.rejected).toBe(0)
+    })
+
+    it('returns them as `invalid` so the reconcile can protect the key', async () => {
+      // The trap: a key that merely disappears from desired reads to
+      // diffContacts as a delete against a live directory entry.
+      const res = await buildDesiredContacts(stubDb([row({ id: 'bad', phone: '+87654567890' })]))
+      expect(res.invalid).toEqual(new Set(['+87654567890']))
+    })
+
+    it('keys `invalid` by the number that WOULD have been published', async () => {
+      // Not the raw CRM string — the reconcile matches against what Zoom
+      // holds, which is normaliseForZoom's output.
+      const res = await buildDesiredContacts(stubDb([row({ id: 'bad', phone: '00 44 (0) 7502 871075' })]))
+      expect(res.invalid).toEqual(new Set(['+4407502871075']))
+    })
+
+    it('leaves the ordinary Irish and British numbers alone', async () => {
+      const res = await buildDesiredContacts(stubDb([
+        row({ id: 'a', phone: '+353871111111' }),
+        row({ id: 'b', phone: '087 111 2222' }),
+        row({ id: 'c', phone: '07700900123' }),
+        row({ id: 'd', phone: '+3531000450010' }),
+      ]))
+      expect(res.desired.size).toBe(4)
+      expect(res.stats.invalidE164).toBe(0)
+      expect(res.invalid.size).toBe(0)
+    })
+  })
+
   it('skips a row with no usable name rather than pushing a blank', async () => {
     const res = await buildDesiredContacts(stubDb([
       row({ id: 'a', first_name: '  ', last_name: null, phone: '+353871111111' }),
@@ -227,6 +274,21 @@ describe('buildDesiredContacts — collect mode', () => {
     expect(byId.junk.reason).toBe('unparseable')
     expect(byId.noname.reason).toBe('no_name')
     expect(byId.ok).toBeUndefined()
+  })
+
+  it('gives an unusable number its own reason and a specific detail', async () => {
+    // The operator has to FIX these in the CRM, so "invalid" alone is not
+    // actionable — which rule it broke is the correction.
+    const res = await buildDesiredContacts(stubDb([
+      row({ id: 'cc', phone: '+87654567890' }),
+      row({ id: 'len', phone: '+35382247706573' }),
+      row({ id: 'svc', phone: '+800860588525' }),
+    ]), { collectRejects: true })
+
+    const byId = Object.fromEntries(res.rejects.map((r) => [r.id, r]))
+    expect(byId.cc).toMatchObject({ reason: 'invalid_e164', detail: 'unassigned_country_code' })
+    expect(byId.len).toMatchObject({ reason: 'invalid_e164', detail: 'national_length' })
+    expect(byId.svc).toMatchObject({ reason: 'invalid_e164', detail: 'service_number' })
   })
 
   it('carries the name and raw value so the report is readable', async () => {
