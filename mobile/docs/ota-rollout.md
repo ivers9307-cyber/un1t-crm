@@ -31,13 +31,52 @@ OTA from a docs-only push (#1451) and from a
 under [the rule](#the-rule--no-zombie-partials) for a publish that
 changed nothing.
 
+### Three things on that list still publish a no-op
+
+The allowlist is per-directory, so it over-triggers in three known places.
+None of these is a bug to be surprised by — they are listed here so nobody
+rediscovers them mid-ramp, and all three are pinned in
+`tests/ota-trigger-paths.test.js`.
+
+- **App icon / splash art.** `mobile/assets/**` is listed because the
+  Archivo fonts are `require()`d, but the four PNGs beside them
+  (`icon.png`, `splash.png`, `adaptive-icon.png`, `notification-icon.png`)
+  are referenced only from `mobile/app.config.js` — native-build inputs.
+  Changing one produces a byte-identical JS bundle **and still publishes**.
+  During a rebrand or a launch week, swap art in the same push as real
+  code, or do it deliberately and ramp.
+- **Test and fixture files.** `mobile/lib/**` and `shared/**` are listed
+  wholesale, so the 36 `*.test.js` under `mobile/lib/` and the 62
+  `*.test.js` / `__tests__/` / `__fixtures__/` files under `shared/` all
+  publish. A **test-only** change does mint an update group; it has
+  happened twice in real history (`2941c7c8`, `206a0366`). Narrowing needs
+  a `!` exclusion, which is the denylist this replaced.
+- **Anything new under `shared/`.** `shared/**` is wholesale on purpose
+  (mobile pulls it transitively and the set churns weekly), so a new
+  `shared/README.md` or `shared/docs/` would publish. `check:ota-paths`
+  walks `mobile/` only and will still report clean.
+
 **Adding a directory under `mobile/`?** Decide whether it ships: add it
 to the trigger, or to `NON_BUNDLE` in
 `scripts/check-ota-trigger-paths.mjs`. `npm run check:ota-paths` fails
 until you do. Do **not** answer an unwanted trigger with a `!` negation —
-that is the denylist this replaced. If the allowlist ever misses a
-genuinely-bundled file, the recovery is one click: run the **EAS Update**
-workflow via `workflow_dispatch`.
+that is the denylist this replaced.
+
+> **`check:ota-paths` is a signal on PRs, a gate on publish.** `main` has
+> no branch protection and no rulesets, so a red Web CI blocks no merge and
+> a direct-to-main push skips PR checks entirely. What actually stops a
+> misclassified path is the same check running inline in the **EAS Update**
+> job, where it aborts the publish. Treat the PR-side run as the early
+> warning, not the wall.
+
+**Recovery if the allowlist misses a genuinely-bundled file:** run the
+**EAS Update** workflow via `workflow_dispatch`. That is one dispatch
+**plus a manual ramp**, not one click — the job takes no inputs, so it
+publishes from **main HEAD** (whatever else has landed since, not just the
+missed commit) at the same hard-coded `--rollout-percentage 10`. The
+recovery publish is itself a staged partial and starts its own 48h
+[ramp-or-rollback](#the-rule--no-zombie-partials) clock. Still the cheaper
+failure than an unwanted publish — but budget the ramp step.
 
 Why: P5 exit gate of the Repset one-app merge. Instant full-fleet publish
 was fine for 16 staff phones; it is not acceptable with ~1,100 members on

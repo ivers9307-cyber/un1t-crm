@@ -140,6 +140,36 @@ describe('what publishes an OTA', () => {
     'a mobile dependency bump': ['mobile/package.json', 'mobile/package-lock.json'],
     'a shared module (wholesale on purpose)': ['shared/permissions.js'],
     'a web-only shared module (accepted over-trigger)': ['shared/pipeline-classifier.js'],
+    // ── ACCEPTED OVER-TRIGGERS ──────────────────────────────────────────
+    // These publish a no-op update group. They are pinned HERE, asserting
+    // the behaviour we actually have, so the next reader finds them in the
+    // table instead of during a ramp. Each is documented in
+    // mobile/docs/ota-rollout.md → "Three things on that list still
+    // publish a no-op". Do NOT "fix" any of them with a `!` negation —
+    // that is the denylist this file exists to keep out.
+    //
+    // The app icon: mobile/assets/** is in for the require()d fonts, but
+    // the 4 PNGs beside them are referenced only from app.config.js
+    // (native-build inputs), so an icon swap ships a byte-identical bundle.
+    'the app icon (accepted over-trigger — native-build input)': ['mobile/assets/icon.png'],
+    'the splash art (accepted over-trigger — native-build input)': ['mobile/assets/splash.png'],
+    // Test files: mobile/lib/** and shared/** are wholesale, so 36 + 62
+    // test/fixture files publish. Both of these are REAL history — commits
+    // 206a0366 and 2941c7c8 each published on a test-only intersection.
+    'a mobile test file only (accepted over-trigger — real: 206a0366)': [
+      'mobile/lib/staff-edit.test.js',
+    ],
+    'a shared test file only (accepted over-trigger — real: 2941c7c8)': [
+      'shared/permissions.test.js',
+    ],
+    'a shared fixture only (accepted over-trigger)': [
+      'shared/__fixtures__/session-report.fixture.json',
+    ],
+    // The version bump: `npm run version:patch` edits ONLY this file, and
+    // it is step 1 of both store-submission flows. runtimeVersion does not
+    // move with `version`, so the group lands on the LIVE lane. The script
+    // no longer pushes by default — see mobile/scripts/bump-version.mjs.
+    'a version bump alone (npm run version:patch)': ['mobile/app.config.js'],
     'screenshots alongside a real code change': [
       'mobile/asc-screenshots/IMG_6564@6.5.png',
       'mobile/lib/api.js',

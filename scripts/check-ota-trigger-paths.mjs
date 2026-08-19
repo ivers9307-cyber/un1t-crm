@@ -21,11 +21,37 @@
 // it, while the author still has the context to classify it correctly.
 //
 // Scope, deliberately: classification is at TOP-LEVEL-ENTRY granularity
-// (mobile/app, mobile/eas.json, …), not per file. That is coarse, but it
-// is complete — every path under mobile/ sits beneath exactly one
-// top-level entry, so the allowlist is exhaustive over the tree by
-// construction. Metro's true transitive closure from index.js cannot be
-// expressed in a static YAML paths filter anyway.
+// (mobile/app, mobile/eas.json, …), not per file. Every path under mobile/
+// sits beneath exactly one top-level entry, so the classification COVERS
+// the tree — but read that as coverage, not as a safety guarantee. Three
+// gaps follow from the granularity, and all three are known:
+//
+//   1. NON_BUNDLE is a per-directory ASSERTION, frozen at the moment it was
+//      written, and nothing here rechecks it. `scripts` says "not imported
+//      by the app" because that was verified true on 2026-08-19 (every
+//      relative import/require/dynamic-import specifier under mobile/app,
+//      mobile/lib, mobile/components and mobile/index.js was resolved
+//      against the allowlist; the only apparent hit, mobile/lib/colors.js,
+//      was inside a comment). If someone later adds mobile/scripts/foo.js
+//      and imports it from mobile/lib/*, Metro bundles it, this check still
+//      reports "clean" (the entry is already classified), and the push
+//      silently publishes nothing. FOLLOW-UP: an import-graph reachability
+//      assertion would close this; it is not built yet.
+//   2. A per-FILE over-trigger inside a bundle entry is invisible here.
+//      `mobile/lib/**` is listed, so all 36 `*.test.js` files under it
+//      publish; `shared/**` is wholesale, so its 62 test/fixture files
+//      publish too. Both are accepted over-triggers, pinned in
+//      tests/ota-trigger-paths.test.js so they are visible rather than
+//      forgotten. GitHub's paths filter has no exclusion form other than
+//      `!`, which is the denylist this replaced — so narrowing them is not
+//      a free move.
+//   3. The tree-walk below covers mobile/ ONLY. shared/ is wholesale by
+//      design, so nothing under it can be UNDER-published and there is
+//      nothing to classify — but that also means a new shared/docs/ or
+//      shared/README.md publishes an OTA and this check still says clean.
+//
+// Metro's true transitive closure from index.js cannot be expressed in a
+// static YAML paths filter anyway.
 //
 // This does NOT talk to GitHub. It reproduces the documented filter
 // semantics locally:
@@ -174,18 +200,36 @@ export function wouldFire(files, patterns) {
   return files.some((f) => isIncluded(f, patterns))
 }
 
-/** Top-level entries under mobile/ that git actually tracks. */
+/**
+ * Top-level entries under mobile/ that git would carry.
+ *
+ * Enumerated from the INDEX + WORKING TREE, not from HEAD. That distinction
+ * is the whole point: CLAUDE.md puts `check:ota-paths` in the CI mirror you
+ * run BEFORE `git commit`, and the ship loop is branch → changes + mirror →
+ * commit → push. `git ls-tree HEAD mobile/` reads the last commit, so a
+ * developer who creates mobile/hooks/ and runs the mirror would be told
+ * "OTA trigger paths: clean" — the one message this design depends on being
+ * trustworthy — and would only learn otherwise once the directory was
+ * already on main, silently publishing nothing.
+ *
+ * `--cached` covers tracked + staged, `--others --exclude-standard` covers
+ * untracked-but-not-gitignored. `-z` because filenames may contain spaces
+ * or, in this repo, parentheses.
+ */
 function trackedMobileEntries(root) {
-  const out = execFileSync('git', ['ls-tree', '--name-only', 'HEAD', 'mobile/'], {
-    cwd: root,
-    encoding: 'utf8',
-  })
-  return out
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .map((l) => l.replace(/^mobile\//, '').replace(/\/$/, ''))
-    .sort()
+  const out = execFileSync(
+    'git',
+    ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', 'mobile/'],
+    { cwd: root, encoding: 'utf8' }
+  )
+  const entries = new Set()
+  for (const p of out.split('\0')) {
+    if (!p) continue
+    const rel = p.replace(/^mobile\//, '')
+    if (!rel) continue
+    entries.add(rel.split('/')[0]) // top-level entry only
+  }
+  return [...entries].sort()
 }
 
 function main() {
@@ -254,7 +298,18 @@ function main() {
     console.log(`\n\x1b[1mOTA trigger paths: clean\x1b[0m`)
     console.log(
       `  ${entries.length} top-level entries under mobile/ — ${covered.length} bundle (trigger a publish), ` +
-        `${Object.keys(NON_BUNDLE).length} non-bundle (inert).\n`
+        `${Object.keys(NON_BUNDLE).length} non-bundle (inert).`
+    )
+    // Say what this check does NOT cover, so "clean" is not read as more
+    // than it is. Both lines are accepted design, not undiscovered risk.
+    console.log(
+      `  Not inspected: shared/** (wholesale by design — every entry under it publishes,`
+    )
+    console.log(
+      `  including its ${'`'}*.test.js${'`'}/__tests__/__fixtures__; nothing there can be UNDER-published).`
+    )
+    console.log(
+      `  Advisory, not a gate: main has no branch protection, so a red run blocks no merge.\n`
     )
     process.exit(0)
   }

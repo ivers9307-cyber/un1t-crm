@@ -98,7 +98,9 @@ The two platforms have parallel-but-not-identical setup paths. iOS specifics fir
    npm run version:minor    # 0.1.0 -> 0.2.0   (new feature)
    npm run version:major    # 0.1.0 -> 1.0.0   (breaking / milestone)
    ```
-   The script (`mobile/scripts/bump-version.mjs`) edits `app.config.js`, commits with a descriptive message, tags the commit `mobile-vX.Y.Z`, and pushes — all in one go. Add `--no-commit` and/or `--no-push` if you want to stage manually. EAS Build auto-increments `buildNumber` on every native build, so we only manage the marketing version here.
+   The script (`mobile/scripts/bump-version.mjs`) edits `app.config.js`, commits with a descriptive message, and tags the commit `mobile-vX.Y.Z`. **It does not push** — pass `--push` when you mean to, or run `git push --follow-tags` yourself. Add `--no-commit` to stage manually. EAS Build auto-increments `buildNumber` on every native build, so we only manage the marketing version here.
+
+   > ⚠️ **Pushing this commit to `main` publishes an OTA.** `mobile/app.config.js` is in `eas-update.yml`'s publish allowlist (it carries `runtimeVersion`), so the bump commit mints an update group at **10%** — and `version` and `runtimeVersion` are **two separate literals** (`app.config.js:110` and `:375`). Bumping `version` to 2.3.1 leaves the runtime lane at `2.3.0`, so the group lands on the **currently live lane**, demoting the other ~90% of same-lane devices to the previous group and starting a fresh 48h ramp-or-rollback clock (`mobile/docs/ota-rollout.md`). That is why the push is opt-in. Do it on a branch, or push deliberately and ramp. **Never during a launch window** — see `mobile/docs/store-release-one-app.md` §8.
 2. Verify lock file is in sync (see "Before pushing" above) — `npm ci` is what EAS runs and the lock-drift failure is silent in local dev.
 3. Trigger build via the **Release iOS** EAS Workflow at expo.dev → Workflows → Run. ~15–25 min build, automatically followed by submit (~3–5 min upload + 10–20 min Apple processing). For first-time builds or when EAS Workflows is unavailable, fall back to the CLI route.
 4. The build appears under App Store Connect → My Apps → Repset → TestFlight tab once Apple finishes processing.
@@ -131,7 +133,7 @@ If we ever want to re-enable automated submit, the path is either: (1) become Cl
 - Internal Testing track configured in Play Console with the staff tester email list.
 
 **Per-version submission flow:**
-1. Bump version (shared with iOS): `npm run version:patch` from `mobile/`.
+1. Bump version (shared with iOS): `npm run version:patch` from `mobile/`. Same warning as the iOS flow above — the commit touches `mobile/app.config.js`, so **pushing it to `main` publishes a 10% OTA on the current runtime lane**. The script no longer pushes by default.
 2. Trigger the `Release` EAS Workflow at expo.dev → Workflows → Run. iOS auto-submits; Android only builds.
 3. Once the Android build is green: open it on expo.dev, click **Download** to get the `.aab`.
 4. Play Console → Testing → Internal testing → **Create new release** → drag the `.aab` in → fill release notes → **Save → Review release → Start rollout to Internal testing**.

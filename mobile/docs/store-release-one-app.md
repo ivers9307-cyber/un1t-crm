@@ -280,6 +280,17 @@ demo studio data only.
 > `mobile/**`; `npm run check:ota-paths` guards it, and
 > `mobile/docs/ota-rollout.md` has the full list.
 
+> ⚠️ **App ICON and SPLASH art are the exception — those DO publish.**
+> `mobile/assets/**` is *inside* the allowlist (the Archivo fonts beside
+> them are `require()`d), so committing a new `icon.png`, `splash.png`,
+> `adaptive-icon.png` or `notification-icon.png` mints an update group at
+> 10% even though the JS bundle is byte-identical — those four PNGs are
+> referenced only from `mobile/app.config.js`, i.e. they are native-build
+> inputs. This matters here because §4 is the same step where rebrand art
+> gets regenerated. Do it in the same push as real code, or push it
+> deliberately and ramp. Same for `mobile/app.config.js` itself (§7's
+> version bump) — see §8.
+
 ---
 
 ## 5. Google Play
@@ -429,6 +440,22 @@ force-uninstalls anything.
 > parallel with everything below — but the app is not truly launched until
 > Apple confirms public distribution, no matter what else is approved.
 
+> **⚠️ LAUNCH-WINDOW FREEZE on bundle-path pushes to `main`.** While a build
+> is in Apple review AND its runtime lane is ramped, treat every push to
+> `main` that touches a publish path as a production event needing a
+> deliberate ramp plan — not a routine merge. The publish paths are listed
+> in `mobile/docs/ota-rollout.md`; the three that catch people out are
+> **`mobile/app.config.js`** (the §7 version bump — `runtimeVersion` does
+> *not* move with `version`, so the group lands on the LIVE lane),
+> **`mobile/assets/**`** (icon/splash art — §4), and **test-only changes**
+> under `mobile/lib/` or `shared/`. Each mints a fresh group at 10%,
+> demoting the ~90% already on the ramped group and starting a new 48h
+> ramp-or-rollback clock. If you must land one, ramp it immediately per the
+> runbook, or hold it until the review outcome is known.
+>
+> Current state at time of writing (2026-08-19): **2.3.0 build 24 is in
+> Apple review and the 2.3.0 OTA lane is ramped to 100%.** Staff still on
+> the 2.2.0 binary are on their own lane and unaffected.
 
 Run strictly in this order — each step gates the next.
 
