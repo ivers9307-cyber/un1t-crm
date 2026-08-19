@@ -80,6 +80,47 @@ const SUPPORTED_MIME = new Set([
   'image/webp',
 ])
 
+/**
+ * MIME-SNIFF.1 — identify a document from its own first bytes.
+ *
+ * The stored mime is not trustworthy. `invoices_queue.attachment_mime_type`
+ * is set by whichever enqueue path created the row, and one of them
+ * (contractor invoices) hard-coded 'application/pdf' for years because its
+ * source column is named `pdf_path`. A contractor's phone photo therefore
+ * arrived labelled PDF, went into the `document` branch below, and Anthropic
+ * rejected it: "The PDF specified was not valid" (400) — an error that says
+ * nothing about the real cause.
+ *
+ * Sniffing closes the class at the only place that holds the actual bytes,
+ * so a wrong label anywhere upstream — any source, past or future — can no
+ * longer pick the wrong content block.
+ *
+ * Returns null when the bytes match nothing known: the caller then falls
+ * back to the declared mime and the SUPPORTED_MIME gate reports a clear
+ * unsupported-type error. Deliberately narrow — these five are exactly what
+ * Anthropic accepts, and guessing beyond the signature would reintroduce
+ * the "confident but wrong" failure this removes.
+ *
+ * @param {Buffer|Uint8Array|null} bytes
+ * @returns {string|null} one of SUPPORTED_MIME, or null if unrecognised
+ */
+export function sniffMimeFromBytes(bytes) {
+  if (!bytes || bytes.length < 4) return null
+  const b = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)
+  const starts = (...sig) => sig.every((byte, i) => b[i] === byte)
+
+  if (starts(0x25, 0x50, 0x44, 0x46)) return 'application/pdf'          // %PDF
+  if (starts(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) return 'image/png'
+  if (starts(0xff, 0xd8, 0xff)) return 'image/jpeg'
+  if (starts(0x47, 0x49, 0x46, 0x38)) return 'image/gif'                // GIF8
+  // WebP is a RIFF container: 'RIFF' ....(size).... 'WEBP'. Both halves
+  // must match — a .wav is also RIFF and must not be called an image.
+  if (starts(0x52, 0x49, 0x46, 0x46) && b.length >= 12 && b.toString('ascii', 8, 12) === 'WEBP') {
+    return 'image/webp'
+  }
+  return null
+}
+
 // Zod schema for the JSON Claude returns. Loose on number parsing
 // (Claude sometimes returns "€1,234.56" as a string) — coerce.
 // INVOICES — default the due date to 30 days after the issue date when
@@ -122,8 +163,24 @@ const lineItem = z.object({
 const invoiceFields = z.object({
   supplier_name: z.string().min(1).max(300),
   supplier_address: z.string().max(1000).nullable().optional(),
-  invoice_number: z.string().min(1).max(100),
-  invoice_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'invoice_date must be YYYY-MM-DD'),
+  // RECEIPT-NULLS.1 — nullable, because a till receipt is not an invoice:
+  // it routinely carries no invoice number, and often no date the model can
+  // read off a crumpled thermal print. Both were required, so Claude
+  // correctly answering `null` failed validation and the WHOLE extraction
+  // was binned — supplier, total and line items included. That killed a
+  // Tesco receipt (invoice_date, row ee83a2f6) and a card receipt
+  // (invoice_number, e216cb1b) outright, with the operator shown only a
+  // schema error.
+  //
+  // The pipeline was always built for a partial read:
+  // scoreExtractionConfidence() scores a payload missing either field as
+  // 'medium', and the /extract route notes "Operator always reviews
+  // regardless". The schema was just stricter than the pipeline it feeds.
+  // The regex still applies when a value IS present, so nullable does not
+  // mean "anything goes", and push-xero blocks the Xero send if the
+  // operator never fills the date in.
+  invoice_number: z.string().min(1).max(100).nullable(),
+  invoice_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'invoice_date must be YYYY-MM-DD').nullable(),
   due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'due_date must be YYYY-MM-DD').nullable().optional(),
   currency: z.string().length(3).default('EUR'),
   subtotal: z.coerce.number(),
@@ -294,6 +351,20 @@ export async function extractInvoiceFieldsFromBytes(bytes, mime, meta = {}) {
     } catch {
       return { ok: false, error: 'This looks like a HEIC image (iPhone default) we could not convert. Please re-upload the receipt as JPEG or PDF.' }
     }
+  }
+  // MIME-SNIFF.1 — the bytes outrank the label. Done AFTER the HEIC branch
+  // (which rewrites both) and BEFORE the support gate, so a row whose stored
+  // mime is wrong is corrected rather than rejected, and a row whose mime is
+  // missing entirely can still be processed. Only overrides when the sniff
+  // recognises the signature; an unknown one leaves the declared mime to be
+  // judged by the gate below.
+  const sniffed = sniffMimeFromBytes(bytes)
+  if (sniffed && sniffed !== mime) {
+    // Not an error: the queue row simply disagreed with the file. Worth a
+    // line because a mislabelled row means an upstream enqueue path is
+    // guessing (that is how contractor invoices shipped as fake PDFs).
+    console.warn(`[invoice-extraction] declared mime ${mime || '(missing)'} but bytes are ${sniffed} — trusting the bytes`)
+    mime = sniffed
   }
   if (!SUPPORTED_MIME.has(mime || '')) {
     return {

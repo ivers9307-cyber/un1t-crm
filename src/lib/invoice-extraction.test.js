@@ -10,7 +10,108 @@
 // out of scope here — those are I/O paths covered by smoke tests.
 
 import { describe, it, expect } from 'vitest'
-import { invoiceFieldsSchema, scoreExtractionConfidence, applyDueDateDefault } from  './invoice-extraction.js'
+import { invoiceFieldsSchema, scoreExtractionConfidence, applyDueDateDefault, sniffMimeFromBytes } from  './invoice-extraction.js'
+
+// RECEIPT-NULLS.1 — a till receipt is not an invoice. It routinely has no
+// invoice number, and often no date the model can read off a crumpled
+// thermal print. Both fields were non-nullable, so Claude correctly
+// answering `null` failed schema validation and the ENTIRE extraction was
+// discarded — the operator got "Extracted JSON failed schema validation"
+// and no data at all, on a receipt whose supplier and total were read
+// perfectly. Live twice: a Tesco receipt (invoice_date, queue row
+// ee83a2f6) and a card receipt (invoice_number, e216cb1b, June).
+//
+// The system was already designed for this: scoreExtractionConfidence
+// downgrades a payload missing either field to 'medium', and the extract
+// route's comment says "Operator always reviews regardless". The schema
+// was simply stricter than the pipeline it feeds.
+describe('invoiceFieldsSchema — receipts with no number or date', () => {
+  const receipt = {
+    supplier_name: 'Tesco Ireland',
+    invoice_number: null,
+    invoice_date: null,
+    currency: 'EUR',
+    subtotal: 13.50,
+    tax_amount: 0,
+    total: 13.50,
+    line_items: [{ description: 'Energizer Max D Batteries 4 Pack', quantity: 1, unit_amount: 13.50 }],
+  }
+
+  it('accepts a null invoice_date (the Tesco receipt)', () => {
+    const r = invoiceFieldsSchema.safeParse({ ...receipt, invoice_number: 'T-1' })
+    expect(r.success).toBe(true)
+    expect(r.data.invoice_date).toBeNull()
+  })
+
+  it('accepts a null invoice_number (the June card receipt)', () => {
+    const r = invoiceFieldsSchema.safeParse({ ...receipt, invoice_date: '2026-07-15' })
+    expect(r.success).toBe(true)
+    expect(r.data.invoice_number).toBeNull()
+  })
+
+  it('accepts both null at once, keeping the fields it DID read', () => {
+    const r = invoiceFieldsSchema.safeParse(receipt)
+    expect(r.success).toBe(true)
+    expect(r.data.supplier_name).toBe('Tesco Ireland')
+    expect(r.data.total).toBe(13.5)
+  })
+
+  it('still rejects a malformed date — nullable is not "anything goes"', () => {
+    const r = invoiceFieldsSchema.safeParse({ ...receipt, invoice_date: '15 Jul 2026' })
+    expect(r.success).toBe(false)
+  })
+
+  it('still requires supplier_name — a receipt with no vendor is unusable', () => {
+    const r = invoiceFieldsSchema.safeParse({ ...receipt, supplier_name: null })
+    expect(r.success).toBe(false)
+  })
+
+  it('lands at medium confidence, which is what routes the operator to it', () => {
+    expect(scoreExtractionConfidence(receipt)).toBe('medium')
+  })
+})
+
+// MIME-SNIFF.1 — the stored mime cannot be trusted, so read the bytes.
+// enqueue.js hard-coded 'application/pdf' for every contractor invoice
+// (its source column is literally named pdf_path), so James Barr's phone
+// photo was sent to Anthropic inside a `document` block and came back
+// "The PDF specified was not valid" (400). Sniffing here fixes the class
+// for EVERY source, not just the one that was wrong.
+describe('sniffMimeFromBytes', () => {
+  const bytes = (...n) => Buffer.from(n)
+
+  it('detects a PNG', () => {
+    expect(sniffMimeFromBytes(bytes(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00))).toBe('image/png')
+  })
+
+  it('detects a JPEG', () => {
+    expect(sniffMimeFromBytes(bytes(0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10))).toBe('image/jpeg')
+  })
+
+  it('detects a PDF', () => {
+    expect(sniffMimeFromBytes(Buffer.from('%PDF-1.7\n%âãÏÓ'))).toBe('application/pdf')
+  })
+
+  it('detects a GIF', () => {
+    expect(sniffMimeFromBytes(Buffer.from('GIF89a....'))).toBe('image/gif')
+  })
+
+  it('detects a WebP (RIFF container — the WEBP tag is at byte 8)', () => {
+    const webp = Buffer.concat([Buffer.from('RIFF'), Buffer.from([0x20, 0, 0, 0]), Buffer.from('WEBPVP8 ')])
+    expect(sniffMimeFromBytes(webp)).toBe('image/webp')
+  })
+
+  it('does NOT mistake a RIFF wav for a WebP', () => {
+    const wav = Buffer.concat([Buffer.from('RIFF'), Buffer.from([0x20, 0, 0, 0]), Buffer.from('WAVEfmt ')])
+    expect(sniffMimeFromBytes(wav)).toBeNull()
+  })
+
+  it('returns null for something it cannot identify, rather than guessing', () => {
+    expect(sniffMimeFromBytes(Buffer.from('just some text'))).toBeNull()
+    expect(sniffMimeFromBytes(Buffer.alloc(0))).toBeNull()
+    expect(sniffMimeFromBytes(null)).toBeNull()
+  })
+})
 
 describe('invoiceFieldsSchema', () => {
   const valid = {

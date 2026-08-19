@@ -39,6 +39,69 @@ const STORAGE_BUCKETS = Object.freeze({
   email_hunt: 'hunted-invoices',
 })
 
+// CONTRACTOR-MIME.1 — extension → mime, for the sources that store a path
+// and nothing else. Only the five types Anthropic accepts (plus the HEIC
+// pair, which extractInvoiceFieldsFromBytes converts): anything else
+// resolves to null, which surfaces downstream as a clear "Unsupported MIME
+// type for OCR" instead of a confident wrong answer.
+const MIME_BY_EXT = Object.freeze({
+  pdf: 'application/pdf',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  heic: 'image/heic',
+  heif: 'image/heif',
+})
+
+function mimeFromPath(path) {
+  const name = String(path || '').split('/').pop() || ''
+  if (!name.includes('.')) return null
+  return MIME_BY_EXT[name.split('.').pop().toLowerCase()] || null
+}
+
+/**
+ * Resolve an attachment's real mime + size.
+ *
+ * Every enqueue path but one reads these off its source row
+ * (`receipt_mime_type`, `doc.mime_type`, …). Contractor invoices have no
+ * such columns — the table stores only `pdf_path` — so that path
+ * hard-coded 'application/pdf' and a null size. Contractors upload phone
+ * photos: a .png went out labelled PDF, was sent to Anthropic as a
+ * `document` block, and came back "The PDF specified was not valid"
+ * (queue row ad57c308). The label was the only thing wrong with it.
+ *
+ * Storage is the authority — it records the content type observed at
+ * upload (it had this file correct as image/png) and the byte size, which
+ * is why it is tried first. The lookup is best-effort in every sense: any
+ * failure falls back to the file extension, and enqueue NEVER fails because
+ * metadata could not be read. A queue row with an imperfect mime is
+ * recoverable; a missing queue row is an invoice nobody gets paid for.
+ *
+ * @returns {Promise<{ mime: string|null, size: number|null }>}
+ */
+async function resolveAttachmentMeta(db, bucket, path) {
+  const fallback = { mime: mimeFromPath(path), size: null }
+  if (!bucket || !path) return fallback
+  try {
+    const parts = String(path).split('/')
+    const name = parts.pop()
+    const { data, error } = await db.storage.from(bucket).list(parts.join('/'), { search: name })
+    if (error) return fallback
+    const hit = (data || []).find((o) => o.name === name)
+    const mime = hit?.metadata?.mimetype
+    const size = Number(hit?.metadata?.size)
+    return {
+      // A generic octet-stream tells us nothing the extension doesn't.
+      mime: mime && mime !== 'application/octet-stream' ? mime : fallback.mime,
+      size: Number.isFinite(size) && size > 0 ? size : null,
+    }
+  } catch {
+    return fallback
+  }
+}
+
 /**
  * Build a synthetic extracted_fields payload for a receiptless
  * expense item (mileage, cash-in-hand, etc). We have the
@@ -206,6 +269,11 @@ export async function enqueueFromContractorInvoice(invoiceId) {
   }
 
   const contractorName = inv.contractor?.full_name || 'Contractor'
+  // CONTRACTOR-MIME.1 — `pdf_path` is a historical name, not a guarantee:
+  // contractors submit phone photos too. Resolve what the file actually is
+  // instead of asserting PDF (which produced an Anthropic 400 that read as
+  // a corrupt document rather than a wrong label).
+  const attachment = await resolveAttachmentMeta(db, STORAGE_BUCKETS.contractor_invoice, inv.pdf_path)
   const { data: inserted, error: insErr } = await db
     .from('invoices_queue')
     .insert({
@@ -215,8 +283,8 @@ export async function enqueueFromContractorInvoice(invoiceId) {
       attachment_bucket: STORAGE_BUCKETS.contractor_invoice,
       attachment_path: inv.pdf_path,
       attachment_filename: inv.pdf_path?.split('/').pop() || null,
-      attachment_size_bytes: null,
-      attachment_mime_type: 'application/pdf',
+      attachment_size_bytes: attachment.size,
+      attachment_mime_type: attachment.mime,
       sender_email: inv.contractor?.email || null,
       subject: `${contractorName} — ${inv.period_start || ''}${inv.invoice_number ? ` · ${inv.invoice_number}` : ''}`.trim(),
       status: 'quality_approved',
