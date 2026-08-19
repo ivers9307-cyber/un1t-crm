@@ -44,6 +44,10 @@ on:
       # CI so newly-tenanted tables get their routes checked.
       - 'supabase/migrations/**'
       - '.github/workflows/web-ci.yml'
+      # OTA-PATHS.1 — check:ota-paths validates eas-update.yml's publish
+      # trigger. Without watching that file, editing the trigger would
+      # skip the only check that inspects it.
+      - '.github/workflows/eas-update.yml'
   # Also run on every PR targeting main — without this, branches
   # were never CI-checked and we only found out about failures after
   # a merge. Discovered May 2026 after every Web CI run on main had
@@ -69,6 +73,7 @@ on:
       - 'scripts/**'
       - 'supabase/migrations/**'
       - '.github/workflows/web-ci.yml'
+      - '.github/workflows/eas-update.yml' # see push paths note (OTA-PATHS.1)
 
 concurrency:
   group: web-ci-${{ github.ref }}
@@ -167,6 +172,17 @@ jobs:
       # scripts/check-bundle-sql.mjs.
       - name: Bundle SQL drift
         run: npm run check:bundle-sql
+
+      # OTA-PATHS.1 — eas-update.yml's trigger is an ALLOWLIST of paths
+      # that genuinely enter the Metro bundle, so a new non-bundle file
+      # under mobile/ is inert instead of publishing a no-op OTA to
+      # production phones. This is the other half of that bargain: it
+      # fails the moment a new top-level entry under mobile/ is neither
+      # in the trigger nor declared non-bundle, so an allowlist miss is
+      # caught on the PR that creates the directory rather than as a
+      # silently-missing update days later.
+      - name: OTA trigger paths
+        run: npm run check:ota-paths
 
   # SAAS4-W0.3 (INFRA_BACKLOG #7) — `next build` as a first-class CI gate.
   # Vitest runs on mocked imports, so a missing/renamed export or an

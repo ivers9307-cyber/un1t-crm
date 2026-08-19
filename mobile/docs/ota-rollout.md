@@ -2,9 +2,42 @@
 
 **Since P5-OTA (2026-08-17), every auto-published OTA starts at 10%.**
 `.github/workflows/eas-update.yml` publishes with `--rollout-percentage 10`
-on each push to `main` touching `mobile/**` or `shared/**`. Devices outside
-the 10% cohort keep serving the *previous latest* update on branch `main`.
-Ramping to 100% is a manual step — this file is the runbook.
+on each push to `main` touching a path that genuinely enters the Metro
+bundle (see [What actually publishes](#what-actually-publishes)), or
+`shared/**`. Devices outside the 10% cohort keep serving the *previous
+latest* update on branch `main`. Ramping to 100% is a manual step — this
+file is the runbook.
+
+## What actually publishes
+
+The trigger is an **allowlist**, not `mobile/**`. Publishing paths:
+
+    mobile/app/**            mobile/index.js           mobile/global.css
+    mobile/components/**     mobile/app.config.js      mobile/package.json
+    mobile/lib/**            mobile/babel.config.js    mobile/package-lock.json
+    mobile/assets/**         mobile/metro.config.js    shared/**
+                             mobile/tailwind.config.js
+
+Everything else under `mobile/` is **inert** and publishes nothing —
+`docs/`, `asc-screenshots/`, `certs/`, `scripts/`, `eas.json`, `.eas/`,
+`.audit-allowlist.json`, `.env.example`. So committing fresh App Store
+screenshots, accepting a dependency advisory, or editing this runbook
+does **not** mint an update group.
+
+It used to. `mobile/**` with `!` negations bolted on published a no-op
+OTA from a docs-only push (#1451) and from a
+`mobile/.audit-allowlist.json`-only push (#1434) — each stacking a fresh
+10% rollout on top of whatever ramp was in flight, plus a 48h obligation
+under [the rule](#the-rule--no-zombie-partials) for a publish that
+changed nothing.
+
+**Adding a directory under `mobile/`?** Decide whether it ships: add it
+to the trigger, or to `NON_BUNDLE` in
+`scripts/check-ota-trigger-paths.mjs`. `npm run check:ota-paths` fails
+until you do. Do **not** answer an unwanted trigger with a `!` negation —
+that is the denylist this replaced. If the allowlist ever misses a
+genuinely-bundled file, the recovery is one click: run the **EAS Update**
+workflow via `workflow_dispatch`.
 
 Why: P5 exit gate of the Repset one-app merge. Instant full-fleet publish
 was fine for 16 staff phones; it is not acceptable with ~1,100 members on
@@ -79,7 +112,10 @@ radius warrants it, and apply the same 48h rule.
   if A was the problem. Halting means republishing the last *good* group,
   not just waiting for the next merge. And when ramping after stacked
   publishes, ramp the **newest** group; older partials become moot once a
-  newer update is fully rolled out.
+  newer update is fully rolled out. The commonest *accidental* source of a
+  stacked partial — a push whose only mobile files were non-bundle ones —
+  is closed by the allowlist above, but a real code push mid-ramp still
+  stacks, by design.
 - The job summary of each publish run shows runtimeVersion, rollout % and
   group id — check there before reaching for the EAS dashboard.
 - `eas update:edit` needs `EXPO_TOKEN`/login locally: run it from `mobile/`
