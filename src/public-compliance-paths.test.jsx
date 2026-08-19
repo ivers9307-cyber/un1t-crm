@@ -1,18 +1,25 @@
 // PUBPATH.1 — "these compliance paths are public on EVERY host".
 //
-// This app makes a path public in THREE places (CLAUDE.md invariant):
+// This app makes a path public in FOUR places (CLAUDE.md invariant):
 //
 //   1. src/proxy.js `publicPaths`            — else an anonymous request 307s to /login
 //   2. src/components/AppShell.jsx PUBLIC_PATHS — else the client shell renders null
 //                                                and redirects to /login on hydration
 //   3. src/lib/brands.js allowedPaths        — else the marketing host (un1tdublin.com)
 //                                                fallback-rewrites the path to /welcome
+//   4. DB_BRAND_DEFAULTS in src/lib/tenant-domains-edge.js — same rewrite, for any
+//                                                SAAS-8 tenant_domains hostname
 //
-// Missing one of the three is a recurring defect, not a one-off: AppShell's own
+// FOUR, not three. The first draft of this file said three and would have
+// taught the next author to miss the same list — docs/CHANGELOG.md's SAAS4-C4
+// entry had already named all four, and tier 4 is the easiest to lose because
+// it lives in a different file and reads like config rather than routing.
+//
+// Missing one of the four is a recurring defect, not a one-off: AppShell's own
 // comments record it for /unsubscribe, /privacy and (LOCCOMMS.4) /preferences —
-// each time the proxy list was right and the third list was forgotten, so the
+// each time the proxy list was right and another list was forgotten, so the
 // page server-rendered and then vanished. The 2026-08 platform audit found it
-// twice more: /account-deletion (in NONE of the three, while its own header
+// twice more: /account-deletion (in NONE of them, while its own header
 // claims "Must be publicly accessible (no auth) so reviewers can verify") and
 // /embed/event/[slug] (in the proxy only, so every third-party iframe — the
 // entire audience the route exists for — blanked and bounced).
@@ -24,9 +31,14 @@
 // have a session, so a login wall is not a degraded experience, it is a total
 // outage — and for the store URL, a live app-review rejection vector.
 //
-// This file is the guard. It exercises the REAL brand registry and the REAL
-// proxy (only Supabase + the DB brand tier are faked), and renders the REAL
-// AppShell, so it fails if any ONE of the three lists loses an entry.
+// A page is not "public" until its whole FLOW is: section 5 below follows the
+// embed's post-submit hop to the checkout, which is where allowlisting only
+// the entry page leaves a paying visitor stranded.
+//
+// This file is the guard. It exercises the REAL brand registry, the REAL DB
+// brand defaults and the REAL proxy (only Supabase and the tenant_domains row
+// lookup are faked), and renders the REAL AppShell, so it fails if any ONE of
+// the four lists loses an entry.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -34,13 +46,22 @@ import { renderToStaticMarkup } from 'react-dom/server'
 // ── proxy scaffolding (mirrors proxy.test.js) ────────────────────────
 // @supabase/ssr is faked so the cookie gate resolves a controllable
 // user. @/lib/brands is deliberately NOT mocked — the marketing-host
-// allowlist is one of the three things under test.
+// allowlist is one of the four things under test.
 const ssrClient = {
   auth: { getUser: vi.fn(async () => ({ data: { user: null } })) },
   from: () => { throw new Error('no table access expected in these tests') },
 }
 vi.mock('@supabase/ssr', () => ({ createServerClient: () => ssrClient }))
-vi.mock('@/lib/tenant-domains-edge', () => ({ resolveTenantDomainBrand: async () => null }))
+
+// The tenant-domain tier is faked only at the ROW LOOKUP — what the DB
+// would have returned. Its allowlist (DB_BRAND_DEFAULTS) is imported for
+// real below and fed straight in, so tier 4 is genuinely under test: drop
+// an entry from the real frozen array and section 6 fails.
+let tenantBrandImpl = async () => null
+vi.mock('@/lib/tenant-domains-edge', async (importOriginal) => ({
+  ...(await importOriginal()),
+  resolveTenantDomainBrand: (...args) => tenantBrandImpl(...args),
+}))
 
 // ── AppShell scaffolding ─────────────────────────────────────────────
 // AppShell is a client component whose public/protected decision reads
@@ -55,6 +76,7 @@ vi.mock('next/navigation', () => ({
 
 import { proxy } from './proxy.js'
 import { BRANDS } from './lib/brands.js'
+import { DB_BRAND_DEFAULTS } from './lib/tenant-domains-edge.js'
 import AppShell from './components/AppShell.jsx'
 
 // The paths this file defends, with why they must never regress.
@@ -69,8 +91,16 @@ const COMPLIANCE_PATHS = [
   },
 ]
 
+// The embed's post-submit hop. RaceSignupWidget sends a PAID signup to a
+// host-relative /event-pay/<id> via window.open(url, '_top'), which resolves
+// against the iframe document's origin — the marketing host, per the embed
+// page's own documented snippet. Allowlisting only the entry page takes the
+// registration and then rewrites the payer to the studio chooser.
+const EMBED_CHECKOUT_PATH = '/event-pay/00000000-0000-4000-8000-000000000001'
+
 const MARKETING_HOST = 'un1tdublin.com'
 const CRM_HOST = 'crm.un1tdublin.com'
+const TENANT_HOST = 'fitness.example.com'
 
 function makeReq({ host = CRM_HOST, path = '/', method = 'GET', cookies = {} } = {}) {
   return {
@@ -101,6 +131,7 @@ beforeEach(() => {
   vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'http://localhost:54321')
   vi.stubEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY', 'anon-key')
   pathnameImpl = '/'
+  tenantBrandImpl = async () => null
 })
 
 afterEach(() => {
@@ -210,5 +241,106 @@ describe('AppShell renders the compliance paths bare instead of blanking', () =>
       <AppShell user={null}><p>page-body</p></AppShell>
     )
     expect(html).toBe('')
+  })
+})
+
+// ── 5. the embed's post-submit hop (the FLOW, not just the page) ──────
+//
+// Section 3 proves /embed/event/<slug> RENDERS on un1tdublin.com. That is
+// only the first half. RaceSignupWidget posts the registration and then,
+// for any non-free event, navigates to a HOST-RELATIVE /event-pay/<id>
+// (src/components/RaceSignupWidget.jsx) — in the embed via
+// window.open(url, '_top'), so the URL resolves against the iframe
+// document's origin, which the embed page's own header documents as
+// https://un1tdublin.com. The marketing brand listed '/event/' but not
+// '/event-pay/', so that hop hit the fallback: the registration was
+// created and the payer landed on the studio chooser, unpaid.
+//
+// un1t-hosts has carried the pair since HOST-PORTAL.1 ('/event/' with the
+// comment "+ the checkout"), which is the shape every host allowlisting a
+// signup page needs.
+
+describe('the embed checkout leg resolves on every host that serves the embed', () => {
+  it('marketing host does not rewrite the checkout to /welcome', async () => {
+    const res = await proxy(makeReq({ host: MARKETING_HOST, path: EMBED_CHECKOUT_PATH }))
+    expect(
+      rewrittenTo(res),
+      'paid embed signup dead-ends: /event-pay/ is missing from the un1t-marketing allowlist',
+    ).toBe(null)
+    expect(admitted(res)).toBe(true)
+  })
+
+  it('CRM host admits the checkout anonymously', async () => {
+    const res = await proxy(makeReq({ host: CRM_HOST, path: EMBED_CHECKOUT_PATH }))
+    expect(admitted(res)).toBe(true)
+  })
+
+  it('AppShell renders the checkout with no session', () => {
+    pathnameImpl = EMBED_CHECKOUT_PATH
+    const html = renderToStaticMarkup(
+      <AppShell user={null}><p>page-body</p></AppShell>
+    )
+    expect(html).toContain('page-body')
+  })
+
+  it('every host that serves /event/ also serves its checkout', () => {
+    // The structural rule behind the three assertions above: a brand that
+    // admits the signup page but not the checkout takes registrations it
+    // cannot collect payment for. Catches the same gap on a brand added later.
+    for (const brand of BRANDS) {
+      if (!brand.allowedPaths.includes('/event/')) continue
+      expect(
+        brand.allowedPaths,
+        `brand '${brand.id}' allows /event/ but not its checkout /event-pay/`,
+      ).toContain('/event-pay/')
+    }
+  })
+})
+
+// ── 6. the FOURTH allowlist — SAAS-8 tenant domains ──────────────────
+//
+// Any hostname the in-code registry misses is resolved against
+// tenant_domains (mig 415); a row with no explicit brand override gets
+// DB_BRAND_DEFAULTS, which rides the identical proxy handler block. Its
+// allowlist includes '/privacy' — startsWith-matched, so also
+// /privacy/members — and BOTH of those pages link to /account-deletion
+// with a host-relative href. Without the entry a tenant's own privacy
+// notice promises a deletion page and delivers /welcome.
+//
+// Zero tenant_domains rows exist today, so this tier is LATENT — which is
+// exactly why it needs a test rather than an operator noticing.
+
+describe('tenant-domain brand defaults serve /account-deletion', () => {
+  beforeEach(() => {
+    // What resolveTenantDomainBrand builds for a row with brand = {}:
+    // the real frozen defaults, unmodified.
+    tenantBrandImpl = async (hostname) =>
+      hostname && hostname.split(':')[0] === TENANT_HOST
+        ? { id: `tenant:${TENANT_HOST}`, hostnames: [TENANT_HOST], ...DB_BRAND_DEFAULTS }
+        : null
+  })
+
+  it('/account-deletion is not rewritten to /welcome', async () => {
+    const res = await proxy(makeReq({ host: TENANT_HOST, path: '/account-deletion' }))
+    expect(
+      rewrittenTo(res),
+      '/account-deletion is missing from DB_BRAND_DEFAULTS.allowedPaths',
+    ).toBe(null)
+    expect(admitted(res)).toBe(true)
+  })
+
+  it('control — /privacy (the page that links to it) is already served', async () => {
+    const res = await proxy(makeReq({ host: TENANT_HOST, path: '/privacy/members' }))
+    expect(rewrittenTo(res)).toBe(null)
+    expect(admitted(res)).toBe(true)
+  })
+
+  it('control — a CRM path on a tenant host still rewrites to /welcome', async () => {
+    const res = await proxy(makeReq({ host: TENANT_HOST, path: '/dashboard' }))
+    expect(rewrittenTo(res)).toContain('/welcome')
+  })
+
+  it('the defaults name it explicitly', () => {
+    expect(DB_BRAND_DEFAULTS.allowedPaths).toContain('/account-deletion')
   })
 })

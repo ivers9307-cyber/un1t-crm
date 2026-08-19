@@ -104,6 +104,17 @@ export const BRANDS = [
       '/embed/',
       '/book/',         // public Calendly-style booking pages
       '/event/',        // public race / workshop / etc. signup pages
+      // PUBPATH.1 — the checkout leg of the two above. RaceSignupWidget
+      // sends every PAID signup to a HOST-RELATIVE /event-pay/<id>
+      // (src/components/RaceSignupWidget.jsx:428), and in the embed it does
+      // so via window.open(url, '_top') — resolved against the iframe
+      // document's origin, i.e. THIS host. So without this entry a paid
+      // signup on un1tdublin.com creates the registration and then rewrites
+      // the payer to /welcome: money not taken, registration stranded
+      // unpaid. un1t-hosts has carried '/event/' + '/event-pay/' as a pair
+      // since HOST-PORTAL.1 (below) for exactly this reason — the marketing
+      // host only ever had half of it. Live paid events exist today.
+      '/event-pay/',
       '/race/',         // race kiosk + signup
       '/api/public/',   // backing API for all of the above
       '/api/webhooks/', // future-proof if a payment redirect lands here

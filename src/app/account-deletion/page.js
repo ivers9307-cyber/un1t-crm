@@ -12,11 +12,12 @@
 // email, what gets deleted, what's retained for legal reasons.
 //
 // PUBPATH.1 — "publicly accessible" is not automatic. A public path in
-// this app needs THREE allowlist entries (CLAUDE.md): src/proxy.js
-// publicPaths, AppShell's PUBLIC_PATHS, and — for the marketing host —
-// the un1t-marketing allowedPaths in src/lib/brands.js. This page shipped
-// in none of them, so the header above was aspirational: an anonymous
-// reviewer got a 307 to /login. Regression guard in
+// this app needs FOUR allowlist entries (CLAUDE.md): src/proxy.js
+// publicPaths, AppShell's PUBLIC_PATHS, the un1t-marketing allowedPaths in
+// src/lib/brands.js (the marketing host), and DB_BRAND_DEFAULTS in
+// src/lib/tenant-domains-edge.js (the SAAS-8 tenant-domain tier). This page
+// shipped in none of them, so the header above was aspirational: an
+// anonymous reviewer got a 307 to /login. Regression guard in
 // src/public-compliance-paths.test.jsx.
 //
 // Legal entity: Champ Fitness Ltd (trading as UN1T Dublin), the entity

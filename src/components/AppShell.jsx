@@ -49,10 +49,18 @@ import { Analytics } from '@vercel/analytics/next'
 // to them). They were missing here, so a logged-out visitor on the marketing
 // host was bounced to /login → which that host rewrites to /welcome, i.e. the
 // server-rendered policy flashed then vanished into the studio chooser.
-// Mirrors the proxy.js + brands.js allowlists — add new paths in ALL THREE.
+// Mirrors the proxy.js + brands.js allowlists — add new paths in ALL FOUR.
+//
+// FOUR, not three (PUBPATH.1 corrected the count): (1) src/proxy.js
+// publicPaths, (2) this list, (3) the un1t-marketing allowedPaths in
+// src/lib/brands.js, and (4) DB_BRAND_DEFAULTS.allowedPaths in
+// src/lib/tenant-domains-edge.js — the SAAS-8 tenant-domain tier, which is
+// the easiest to miss because it lives in a different file and reads like
+// config. docs/CHANGELOG.md's SAAS4-C4 entry already named all four.
+//
 // '/account-deletion' + '/embed' — PUBPATH.1, the same defect one more time.
 // '/account-deletion' is the Play Console "Account Deletion URL" + the Apple
-// 5.1.1(v) page, and it was missing from all THREE lists; '/embed' (the
+// 5.1.1(v) page, and it was missing from all FOUR lists; '/embed' (the
 // paste-anywhere event-signup iframe, /embed/event/[slug]) was in proxy.js
 // but not here, so a third-party iframe server-rendered the page and this
 // gate then blanked it and redirected the visitor's frame to /login — dead
