@@ -1,8 +1,10 @@
 # Auto-publish JS-only updates to EAS so the iOS app pulls them next
 # time it's opened.
 #
-# Triggers on every push to main that touches mobile/ or shared/.
-# Skips when only web (src/, supabase/, scripts/, CLAUDE.md, etc.)
+# Triggers on every push to main that touches a path which genuinely
+# enters the Metro bundle (an ALLOWLIST — see the `on:` block for why),
+# or shared/. Skips when only web (src/, supabase/, scripts/, CLAUDE.md)
+# or non-bundle mobile files (docs, store screenshots, eas.json…)
 # changed — those don't affect the bundle the iPhone is running.
 #
 # How a push lands on a phone:
@@ -27,7 +29,8 @@ name: EAS Update
 # working end-to-end on v1.2.1 — a published update recovered the live binary
 # from a boot-crash). Publishes to branch `main`; the `production` channel is
 # mapped to `main` (`eas channel:edit`) so App Store builds receive it.
-# Path-filtered to mobile/** + shared/** — shared/* is imported by the mobile
+# Path-filtered to an allowlist of bundle-entering mobile paths + shared/**
+# (see the `on:` block) — shared/* is imported by the mobile
 # bundle, so a shared change SHOULD republish to keep web + mobile in sync.
 # (The old "shared triggers could brick the app" caution was era-specific:
 # back then ANY OTA boot-crashed, so more triggers = more risk. That root
@@ -54,21 +57,127 @@ name: EAS Update
 # `eas update:roll-back-to-embedded --channel production` as the hammer),
 # then publish a fix. See mobile/docs/OTA_BOOT_CRASH_FINDINGS.md.
 on:
-  # Auto-publish a JS OTA when mobile/ or shared/ code lands on main.
-  # Path-filtered so web-only pushes (src/, supabase/, docs, CLAUDE.md)
-  # don't trigger a needless publish. PRs run web CI first, so by the
-  # time a change is on main it's already been checked.
-  # mobile/docs/** is excluded: runbooks aren't bundled, but a publish
-  # from a docs-only push would still mint a new update group (metro
-  # hash churn) and stack a fresh 10% rollout on top of whatever ramp
-  # is in flight.
+  # ── ALLOWLIST, not a denylist. Read this before adding a path. ────────
+  #
+  # This filter lists the paths that genuinely enter the Metro bundle.
+  # Anything else under mobile/ is inert by default and publishes nothing.
+  #
+  # WHY (OTA-PATHS.1, 2026-08-19). This started as `mobile/**` with
+  # negations bolted on as each new non-bundle file type was discovered.
+  # That denylist failed twice in eight days:
+  #   - #1451 (ddf01aef, 08-18): a docs-only push published an OTA. #1455
+  #     answered it with ONE negation, `!mobile/docs/**` — the symptom.
+  #   - #1434 (2ce8971c, 08-17): a push whose only mobile file was
+  #     `mobile/.audit-allowlist.json` published an OTA. Still open after
+  #     #1455, because the negation only covered docs. (Also settles a
+  #     glob question empirically: `mobile/**` DOES match dotfiles.)
+  # Still uncovered by that denylist at the time of writing:
+  # asc-screenshots/, certs/, scripts/, eas.json, .eas/, .env.example.
+  # Every future non-bundle file type would have re-opened it again.
+  #
+  # The two failure modes, and why the allowlist wins:
+  #   - Denylist miss  → an UNWANTED publish. It mints a new update group
+  #     at 10% on top of whatever ramp is in flight, so devices outside
+  #     the new cohort keep serving the older group, and the 48h
+  #     ramp-or-rollback rule in mobile/docs/ota-rollout.md now applies to
+  #     a no-op. Recovery is expensive (republish the last good group).
+  #   - Allowlist miss → a MISSED publish. Recovery is one `workflow_dispatch`
+  #     below PLUS a manual ramp. Be precise about that cost, because it is
+  #     half the argument: `workflow_dispatch: {}` takes no inputs, so it
+  #     republishes from whatever is on main HEAD at that moment (not the
+  #     missed commit — it ships everything else that landed since), and it
+  #     reaches the same `Publish update` step, hard-coded to
+  #     `--rollout-percentage 10`. So the recovery publish is itself a staged
+  #     partial that starts its own 48h ramp-or-rollback clock.
+  # It is still the cheaper miss — a 10% partial you chose beats republishing
+  # a last-good group to undo one you didn't — but it is not free.
+  #
+  # Loudness is the tiebreak. A denylist miss is loud but expensive; an
+  # allowlist miss is silent but cheaper — and its silence is SURFACED by
+  # `npm run check:ota-paths`, which fails the moment a new top-level entry
+  # under mobile/ is classified as neither bundle nor non-bundle. Surfaced,
+  # not prevented: `main` has NO branch protection and no rulesets (checked
+  # 2026-08-19), so a red Web CI blocks no merge and a direct-to-main push
+  # skips PR checks entirely. What makes it bite is the inline gate in this
+  # workflow's own job below, which runs the same check and ABORTS the
+  # publish. Until main gets branch protection with `Test & lint` required,
+  # the PR-side run is a signal and the inline run is the gate.
+  #
+  # Either way the allowlist's failure is caught by the person with the
+  # context to classify it, while the denylist's failure can only ever be
+  # caught in production. There is no equivalent guard possible for a
+  # denylist: detecting "someone added a new non-bundle path" requires
+  # exactly the same classification list, and once you have that list the
+  # allowlist is strictly safer, because an UNCLASSIFIED path defaults to
+  # "don't publish" instead of "publish".
+  #
+  # ADDING A PATH: if it changes the JS/assets Metro emits, add it here
+  # AND to scripts/check-ota-trigger-paths.mjs. If it doesn't, add it to
+  # that script's NON_BUNDLE map with a reason. The guard forces the choice.
+  #
+  # NOTE: `!mobile/docs/**` is GONE, not reverted — under an allowlist it
+  # is redundant (mobile/docs/** matches no positive pattern, so it never
+  # fires), and keeping a stray negation would invite the next person to
+  # "just add one more" and slide back to a denylist. #1455's behaviour is
+  # preserved and is regression-tested in tests/ota-trigger-paths.test.js.
+  #
+  # NOTE: this workflow file is deliberately NOT in its own trigger
+  # (mobile-export.yml lists itself, but that one only verifies). Editing
+  # the publish pipeline must not publish.
   push:
     branches: [main]
     paths:
-      - 'mobile/**'
-      - '!mobile/docs/**'
+      # Source that Metro walks from the `main` entry point (index.js).
+      - 'mobile/app/**'
+      - 'mobile/components/**'
+      - 'mobile/lib/**'
+      # Bundled assets: the Archivo fonts are require()d from
+      # app/_layout.jsx:177-179, so Metro ships them in the update.
+      #
+      # ACCEPTED OVER-TRIGGER, stated plainly because it is the one live
+      # instance of the failure this PR exists to kill. mobile/assets holds
+      # 8 tracked files: 3 fonts + a licence, and 4 PNGs — icon.png,
+      # splash.png, adaptive-icon.png, notification-icon.png. The PNGs are
+      # referenced ONLY from mobile/app.config.js:123,136,201,222 (config-
+      # plugin / native-build inputs); no require() or import of them exists
+      # anywhere under mobile/app|lib|components or shared/. So an icon or
+      # splash swap produces a byte-identical JS bundle and still mints a
+      # fresh update group at 10% on the live runtime lane.
+      #
+      # Kept wholesale anyway: narrowing to `mobile/assets/fonts/**` would
+      # strand any future require()d image under mobile/assets/, and this
+      # guard classifies at top-level-entry granularity — with only
+      # `fonts/**` listed, its `mobile/assets/__probe__` probe stops
+      # matching and `assets` reports UNCLASSIFIED. A missed font beats a
+      # no-op publish. Narrow it only after the guard learns sub-entry
+      # granularity AND an import-graph reachability assertion exists.
+      # Until then: swap store art in the same push as real code, or do it
+      # deliberately and ramp. See mobile/docs/store-release-one-app.md §4.
+      - 'mobile/assets/**'
+      - 'mobile/index.js'
+      # Config that changes what Metro emits: expo config + runtimeVersion,
+      # the Babel transform, the resolver, and the NativeWind stylesheet.
+      - 'mobile/app.config.js'
+      - 'mobile/babel.config.js'
+      - 'mobile/metro.config.js'
+      - 'mobile/tailwind.config.js'
+      - 'mobile/global.css'
+      # The dependency tree IS bundle content, and `npm ci` is
+      # lockfile-exact — the lock is load-bearing for Hermes bytecode ABI.
+      - 'mobile/package.json'
+      - 'mobile/package-lock.json'
+      # shared/ stays WHOLESALE on purpose. Mobile imports 48 of the 119
+      # modules today via the `shared` package seam, but that is a static
+      # count of DIRECT imports — it misses shared→shared transitive
+      # pulls, and the set churns every week. A missed OTA for a real
+      # shared change is worse than an occasional extra publish for a
+      # web-only module, so this one deliberately over-triggers.
       - 'shared/**'
-  # Manual re-publish on demand stays available.
+  # Manual re-publish on demand stays available. This is also the recovery
+  # path if the allowlist above ever misses a genuinely-bundled file — but
+  # it takes no inputs, so it publishes from main HEAD (not the missed
+  # commit) at the same hard-coded 10%, and needs the same manual ramp as
+  # any other publish. See mobile/docs/ota-rollout.md.
   workflow_dispatch: {}
 
 # Cancel any in-flight update if a newer push lands while this is
@@ -192,12 +301,23 @@ jobs:
         working-directory: .
         run: npm ci --legacy-peer-deps
 
-      - name: Gate — vitest + mobile-imports + mobile-parity
+      # check:ota-paths is here, and not only in web-ci, because web-ci is a
+      # PARALLEL workflow on a main push — a red one has never blocked this
+      # publish — and `main` has no branch protection, so its PR-side run
+      # gates nothing either. Run inline it becomes a real gate: an
+      # unclassified top-level entry under mobile/ ABORTS the publish
+      # instead of merely annotating a PR. It is pure Node against the
+      # checked-out tree (no network, no install cost beyond the npm ci
+      # above). `npm test` already runs tests/ota-trigger-paths.test.js, so
+      # a trigger edit that breaks the fires/does-not-fire table also
+      # aborted before this — the tree-walk half was the part missing.
+      - name: Gate — vitest + mobile-imports + mobile-parity + ota-paths
         working-directory: .
         run: |
           npm test
           npm run check:mobile-imports
           npm run check:mobile-parity
+          npm run check:ota-paths
 
       # NOTE (MOBILE-AUDIT.2): a signed-publish step lived here briefly
       # (#446) and was reverted — EAS Update code signing is Enterprise-

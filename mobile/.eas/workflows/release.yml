@@ -20,6 +20,12 @@
 #
 # Pre-flight checklist:
 #   - Bump `version` in mobile/app.config.js (use `npm run version:patch`).
+#     That commit touches a PUBLISH path: mobile/app.config.js is in
+#     eas-update.yml's allowlist, so landing it on main publishes an OTA
+#     at 10% on the CURRENT runtime lane (runtimeVersion does not move
+#     with `version`). The script does not push by default — push it
+#     deliberately and ramp per mobile/docs/ota-rollout.md, and not while
+#     a build is in Apple review (store-release-one-app.md §8).
 #   - Ensure mobile/package-lock.json is in sync with package.json
 #     (the build refuses npm ci otherwise — see CLAUDE.md "Before
 #     pushing").

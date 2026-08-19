@@ -20,6 +20,7 @@
     "check:location-scoping": "node scripts/check-location-scoping.mjs",
     "check:rls-restrictive": "node scripts/check-rls-restrictive.mjs",
     "check:bundle-sql": "node scripts/check-bundle-sql.mjs",
+    "check:ota-paths": "node scripts/check-ota-trigger-paths.mjs",
     "check:dependency-audit": "npm audit --omit=dev --audit-level=high --json | node scripts/check-dependency-audit.mjs .audit-allowlist.json 'web runtime deps'",
     "check:dependency-audit:mobile": "cd mobile && npm audit --audit-level=high --package-lock-only --json | node ../scripts/check-dependency-audit.mjs .audit-allowlist.json 'mobile deps (whole tree)'",
     "check:guardrails": "eslint --config eslint.guardrails.config.mjs 'src/**/*.{js,jsx}' 'shared/**/*.js'",

@@ -17,11 +17,13 @@ inherits its one-time App Information fields and pre-submission checklist).
 >    (post-P2 `main` qualifies). EAS capability-sync reads the app config of
 >    the CWD — running from a pre-merge tree UN-TICKS HealthKit on the App ID
 >    and has already reverted the portal capability twice.
-> 3. **The staged-rollout OTA gate must be merged before public launch** —
->    see [Launch-day order](#8-launch-day-order). Today
->    `.github/workflows/eas-update.yml` auto-publishes an OTA on every push
->    to `main` touching `mobile/**` or `shared/**`; post-launch that is an
->    instant, ungated push to ~1,100 member devices.
+> 3. **The staged-rollout OTA gate is MERGED** (#1439) — every auto-publish
+>    now starts at 10% with a manual ramp, so a push to `main` is no longer
+>    an instant, ungated shove to ~1,100 member devices. Two things still
+>    bind: the trigger is an **allowlist** of bundle-entering paths (a
+>    screenshots-, docs- or `eas.json`-only commit publishes nothing — §4
+>    and `mobile/docs/ota-rollout.md`), and every rollout must be ramped to
+>    100 or rolled back **within 48h**.
 
 ---
 
@@ -263,6 +265,31 @@ demo studio data only.
    styling).
 4. Member shots: switch to Personal via the avatar, open the seeded session
    for shot 1.
+5. Normalise sizes with `bash scripts/resize-screenshots.sh <pngs>`, then
+   commit the finals to `mobile/asc-screenshots/` (originals under
+   `asc-screenshots/source/`) and upload them to ASC by hand.
+
+> **Committing screenshots does NOT publish an OTA.** `mobile/asc-screenshots/`
+> is outside `eas-update.yml`'s publish allowlist, along with `docs/`,
+> `certs/`, `scripts/`, `eas.json` and `.audit-allowlist.json`. This is worth
+> stating because it was **not** true until OTA-PATHS.1: the trigger was
+> `mobile/**`, so a screenshots-only commit would mint a fresh update group
+> at 10% on top of an already-ramped rollout — leaving devices outside the
+> new cohort on the older group and starting a 48h ramp-or-rollback clock
+> for a publish that changed no code. Do not "simplify" that trigger back to
+> `mobile/**`; `npm run check:ota-paths` guards it, and
+> `mobile/docs/ota-rollout.md` has the full list.
+
+> ⚠️ **App ICON and SPLASH art are the exception — those DO publish.**
+> `mobile/assets/**` is *inside* the allowlist (the Archivo fonts beside
+> them are `require()`d), so committing a new `icon.png`, `splash.png`,
+> `adaptive-icon.png` or `notification-icon.png` mints an update group at
+> 10% even though the JS bundle is byte-identical — those four PNGs are
+> referenced only from `mobile/app.config.js`, i.e. they are native-build
+> inputs. This matters here because §4 is the same step where rebrand art
+> gets regenerated. Do it in the same push as real code, or push it
+> deliberately and ramp. Same for `mobile/app.config.js` itself (§7's
+> version bump) — see §8.
 
 ---
 
@@ -413,18 +440,34 @@ force-uninstalls anything.
 > parallel with everything below — but the app is not truly launched until
 > Apple confirms public distribution, no matter what else is approved.
 
+> **⚠️ LAUNCH-WINDOW FREEZE on bundle-path pushes to `main`.** While a build
+> is in Apple review AND its runtime lane is ramped, treat every push to
+> `main` that touches a publish path as a production event needing a
+> deliberate ramp plan — not a routine merge. The publish paths are listed
+> in `mobile/docs/ota-rollout.md`; the three that catch people out are
+> **`mobile/app.config.js`** (the §7 version bump — `runtimeVersion` does
+> *not* move with `version`, so the group lands on the LIVE lane),
+> **`mobile/assets/**`** (icon/splash art — §4), and **test-only changes**
+> under `mobile/lib/` or `shared/`. Each mints a fresh group at 10%,
+> demoting the ~90% already on the ramped group and starting a new 48h
+> ramp-or-rollback clock. If you must land one, ramp it immediately per the
+> runbook, or hold it until the review outcome is known.
+>
+> Current state at time of writing (2026-08-19): **2.3.0 build 24 is in
+> Apple review and the 2.3.0 OTA lane is ramped to 100%.** Staff still on
+> the 2.2.0 binary are on their own lane and unaffected.
 
 Run strictly in this order — each step gates the next.
 
-1. **Merge the staged-rollout OTA gate — PR #1439** (the Phase-5 exit
-   gate from the delivery plan). Without it,
-   `.github/workflows/eas-update.yml` publishes an OTA to the production
-   channel on EVERY push to `main` touching `mobile/**` or `shared/**`.
-   Pre-launch the blast radius is ~16 staff; post-launch it is every member
-   install (~1,100 people) with no rollout curve. #1439 changes the publish
-   to a 10% staged rollout with a ramp/halt runbook
-   (`mobile/docs/ota-rollout.md`). **Do not submit for review until it is
-   merged and the first staged publish has been ramped per the runbook.**
+1. ~~**Merge the staged-rollout OTA gate — PR #1439**~~ — **DONE.**
+   `.github/workflows/eas-update.yml` publishes at `--rollout-percentage 10`
+   with a ramp/halt runbook (`mobile/docs/ota-rollout.md`). The publish
+   trigger has since been narrowed from `mobile/**` to an **allowlist** of
+   bundle-entering paths (OTA-PATHS.1), so non-bundle commits — screenshots,
+   docs, `eas.json`, the audit allowlist — no longer mint a no-op update
+   group on top of a live ramp. Still binding: **ramp to 100 or roll back
+   within 48h**; never answer an unwanted trigger with a `!` negation
+   (`npm run check:ota-paths` rejects it).
 2. **Screenshots** captured per §4 (needs the seeded demo account, which
    §2 needs anyway).
 3. **Metadata**: paste §1 copy into the 2.3.0 version + App Information;
