@@ -11,9 +11,25 @@ import './offers.css'
 const archivo = Archivo({ subsets: ['latin'], weight: ['500', '600', '700'], variable: '--font-archivo' })
 const archivoBlack = Archivo_Black({ subsets: ['latin'], weight: '400', variable: '--font-archivo-black' })
 
-export const metadata = {
-  title: 'Lock In Your Membership — UN1T Stillorgan',
-  robots: { index: false, follow: false },
+// GIFTCARD.3 — the title was the last hard-coded piece of campaign copy on
+// this surface. It survived the storefront flip and sat in the browser tab
+// (and any link preview) advertising a sale that had ended, above a page
+// selling gift cards. Derived from what is actually active, like everything
+// else here.
+export async function generateMetadata() {
+  const db = createServerClient()
+  const { data } = await db
+    .from('sale_offers')
+    .select('category')
+    .eq('active', true)
+  const cats = new Set((data || []).map((o) => o.category))
+  const giftOnly = cats.size > 0 && cats.size === 1 && cats.has('gift_card')
+  return {
+    title: giftOnly
+      ? 'Gift Cards — UN1T Stillorgan'
+      : 'Lock In Your Membership — UN1T Stillorgan',
+    robots: { index: false, follow: false },
+  }
 }
 
 export default async function OffersLayout({ children }) {
