@@ -50,7 +50,18 @@ import { Analytics } from '@vercel/analytics/next'
 // host was bounced to /login → which that host rewrites to /welcome, i.e. the
 // server-rendered policy flashed then vanished into the studio chooser.
 // Mirrors the proxy.js + brands.js allowlists — add new paths in ALL THREE.
-const PUBLIC_PATHS = ['/login', '/auth/callback', '/reset-password', '/welcome', '/stillorgan', '/hatch-street', '/free-class', '/start', '/offers', '/deposit', '/book', '/event', '/event-pay', '/class-pay', '/tv', '/present', '/studio-login', '/bca', '/host-connect', '/host', '/h', '/unsubscribe', '/preferences', '/view-email', '/privacy', '/terms', '/legal', '/technical', '/ccf', '/use-the-app']
+// '/account-deletion' + '/embed' — PUBPATH.1, the same defect one more time.
+// '/account-deletion' is the Play Console "Account Deletion URL" + the Apple
+// 5.1.1(v) page, and it was missing from all THREE lists; '/embed' (the
+// paste-anywhere event-signup iframe, /embed/event/[slug]) was in proxy.js
+// but not here, so a third-party iframe server-rendered the page and this
+// gate then blanked it and redirected the visitor's frame to /login — dead
+// for the entire audience the route exists for. Both are anonymous-by-
+// definition surfaces: store reviewers and third-party site visitors have no
+// session. Note the matcher is segment-aware (`=== p || startsWith(p + '/')`),
+// so entries here carry NO trailing slash — '/embed' covers /embed/event/x.
+// Regression guard: src/public-compliance-paths.test.jsx.
+const PUBLIC_PATHS = ['/login', '/auth/callback', '/reset-password', '/welcome', '/stillorgan', '/hatch-street', '/free-class', '/start', '/offers', '/deposit', '/book', '/event', '/event-pay', '/class-pay', '/tv', '/present', '/studio-login', '/bca', '/host-connect', '/host', '/h', '/unsubscribe', '/preferences', '/view-email', '/privacy', '/terms', '/legal', '/technical', '/account-deletion', '/embed', '/ccf', '/use-the-app']
 
 export default function AppShell({ user, children, isLinkedHost = false }) {
   const pathname = usePathname()

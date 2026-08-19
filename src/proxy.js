@@ -195,7 +195,15 @@ export async function proxy(request) {
   // (Gmail clips a message over ~102KB, taking the footer and its unsubscribe
   // link with it). Authorised by an HMAC token that names one campaign and no
   // contact, so there is no session to gate on and nothing personal behind it.
-  const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/event/', '/event-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/api/fleet/', '/deposit/', '/welcome', '/free-class', '/start', '/offers', '/.well-known/', '/privacy', '/terms', '/legal/', '/technical', '/ccf', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/', '/use-the-app']
+  // /account-deletion — PUBPATH.1. App-store compliance surface: it is the URL
+  // registered in the Google Play Console's "Account Deletion URL" field
+  // (docs/architecture/MOBILE.md — https://crm.un1tdublin.com/account-deletion,
+  // i.e. THIS host) and the Apple Guideline 5.1.1(v) deletion page, so a store
+  // reviewer with no session must reach it. It shipped auth-walled: the page's
+  // own header says "Must be publicly accessible (no auth) so reviewers can
+  // verify" while every anonymous hit 307'd to /login. Nothing personal is
+  // behind it — it is static copy naming an email address.
+  const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/event/', '/event-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/api/fleet/', '/deposit/', '/welcome', '/free-class', '/start', '/offers', '/.well-known/', '/privacy', '/terms', '/legal/', '/technical', '/account-deletion', '/ccf', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/', '/use-the-app']
   const isPublic = publicPaths.some(p => request.nextUrl.pathname.startsWith(p))
   if (isPublic) return NextResponse.next()
 

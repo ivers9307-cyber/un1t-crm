@@ -10,6 +10,21 @@
 // existing GDPR-compliant master-only delete path operating on
 // behalf of the user. This page surfaces that path publicly: who to
 // email, what gets deleted, what's retained for legal reasons.
+//
+// PUBPATH.1 — "publicly accessible" is not automatic. A public path in
+// this app needs THREE allowlist entries (CLAUDE.md): src/proxy.js
+// publicPaths, AppShell's PUBLIC_PATHS, and — for the marketing host —
+// the un1t-marketing allowedPaths in src/lib/brands.js. This page shipped
+// in none of them, so the header above was aspirational: an anonymous
+// reviewer got a 307 to /login. Regression guard in
+// src/public-compliance-paths.test.jsx.
+//
+// Legal entity: Champ Fitness Ltd (trading as UN1T Dublin), the entity
+// Richard settled across every public legal page in SAAS4-W0.2 — see
+// src/app/privacy/members/page.js. This page had drifted back to the
+// pre-2026-07-19 name; tests/legal-entity-consistency.test.js now covers
+// it, and that test greps this SOURCE — so the retired name must not
+// appear here even inside a comment.
 
 export const runtime = 'nodejs'
 
@@ -31,10 +46,10 @@ export default function AccountDeletion() {
         <section className="prose prose-gray max-w-none">
           <p>
             Repset is an internal staff application used by employees and
-            contractors of UN1T Dublin Ltd. Accounts are created and managed by
-            UN1T administrators rather than by self-service sign-up. If you no
-            longer wish your data to be held by us, you can request deletion at
-            any time using the process below.
+            contractors of Champ Fitness Ltd, trading as UN1T Dublin. Accounts
+            are created and managed by UN1T administrators rather than by
+            self-service sign-up. If you no longer wish your data to be held by
+            us, you can request deletion at any time using the process below.
           </p>
 
           <h2 className="text-xl font-semibold mt-8 mb-3">How to request deletion</h2>
@@ -92,7 +107,7 @@ export default function AccountDeletion() {
 
           <h2 className="text-xl font-semibold mt-8 mb-3">Contact</h2>
           <p>
-            <strong>UN1T Dublin Ltd</strong><br />
+            <strong>Champ Fitness Ltd</strong> (trading as UN1T Dublin)<br />
             Email: <a className="underline" href="mailto:privacy@un1tdublin.com">
             privacy@un1tdublin.com</a><br />
             Postal address available on request.
