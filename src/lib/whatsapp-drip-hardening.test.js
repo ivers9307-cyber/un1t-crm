@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
-  isFrequencyCapError, fetchDripDoneContactIds, CAPPED_RETRY_HOURS,
+  isFrequencyCapError, fetchDripDoneContactIds, CAPPED_RETRY_HOURS, claimDripRecipient,
+  STUCK_CLAIM_MINUTES, OWED_RETRY_STATUSES,
   broadcastQualityBlockError, classifyBlastFailure, blastAbortPatch, blastAbortNotification,
 } from './whatsapp.js'
 import { applyMetaUserPreference } from './whatsapp-consent.js'
@@ -44,6 +45,174 @@ describe('fetchDripDoneContactIds — capped retry window', () => {
     ])
     const done = await fetchDripDoneContactIds(db, 'bc1')
     expect(done.sort()).toEqual(['a', 'b', 'd'])
+  })
+})
+
+// ── BAREWRITE.3 — the drip claim is a MUTEX, not just a dedupe ──────────────
+// The drip claimed with an upsert while the blast path it says it mirrors uses
+// an insert. Upsert succeeds on conflict, so two overlapping cron ticks (Vercel
+// does not skip an overlapping run) both claimed the same contact and both sent
+// the same marketing template. Insert alone would have broken the OTHER
+// property: a 'capped' (Meta 131049) row is deliberately re-selected after
+// CAPPED_RETRY_HOURS, and by then a row exists. Both are pinned here.
+//
+// A `whatsapp_broadcast_recipients` that actually enforces
+// UNIQUE(broadcast_id, contact_id) (mig 331).
+function recipientsTable(seed = []) {
+  const rows = seed.map(r => ({ ...r }))
+  const key = (b, c) => `${b}|${c}`
+  const db = {
+    rows,
+    from(table) {
+      if (table !== 'whatsapp_broadcast_recipients') throw new Error(`unexpected table ${table}`)
+      return {
+        insert(row) {
+          const clash = rows.find(r => key(r.broadcast_id, r.contact_id) === key(row.broadcast_id, row.contact_id))
+          if (clash) {
+            return Promise.resolve({ error: { code: '23505', message: 'duplicate key value violates unique constraint "whatsapp_broadcast_recipients_broadcast_id_contact_id_key"' } })
+          }
+          rows.push({ ...row })
+          return Promise.resolve({ error: null })
+        },
+        update(patch) {
+          const preds = []
+          const b = {
+            eq(col, val) { preds.push(r => r[col] === val); return b },
+            // The claim lease's CAS predicate. Modelled as a real string
+            // comparison, which is what PostgREST does on a timestamptz sent as
+            // an ISO string.
+            lt(col, val) { preds.push(r => r[col] != null && String(r[col]) < String(val)); return b },
+            select: async () => {
+              const matched = rows.filter(r => preds.every(p => p(r)))
+              for (const r of matched) Object.assign(r, patch)
+              return { data: matched.map(r => ({ id: `${r.broadcast_id}:${r.contact_id}` })), error: null }
+            },
+          }
+          return b
+        },
+      }
+    },
+  }
+  return db
+}
+
+describe('claimDripRecipient — the per-recipient mutex', () => {
+  it('claims a fresh contact by INSERT, and a second concurrent tick loses', async () => {
+    const db = recipientsTable()
+
+    const first = await claimDripRecipient(db, 'bc1', 'c1')
+    const second = await claimDripRecipient(db, 'bc1', 'c1')
+
+    expect(first).toEqual({ claimed: true })
+    // The whole point: the upsert version returned claimed:true here and the
+    // template went out twice.
+    expect(second).toEqual({ claimed: false, reason: 'already_claimed' })
+    expect(db.rows).toHaveLength(1)
+    expect(db.rows[0]).toMatchObject({ status: 'pending' })
+  })
+
+  it('re-claims a parked capped row (the retry the upsert existed for) — once', async () => {
+    const db = recipientsTable([
+      { broadcast_id: 'bc1', contact_id: 'c1', status: 'capped', error_message: 'ecosystem', failed_at: '2026-08-01T00:00:00.000Z' },
+    ])
+
+    const first = await claimDripRecipient(db, 'bc1', 'c1')
+    const second = await claimDripRecipient(db, 'bc1', 'c1')
+
+    expect(first).toEqual({ claimed: true, retry: true })
+    expect(second).toEqual({ claimed: false, reason: 'already_claimed' })
+    // The park is cleared so the row reads as a live claim, not a stale failure.
+    expect(db.rows[0]).toMatchObject({ status: 'pending', error_message: null, failed_at: null })
+  })
+
+  it('never re-claims a row that already sent, or one another tick is mid-send on', async () => {
+    for (const status of ['sent', 'pending', 'failed', 'delivered']) {
+      const db = recipientsTable([{ broadcast_id: 'bc1', contact_id: 'c1', status }])
+      expect(await claimDripRecipient(db, 'bc1', 'c1')).toEqual({ claimed: false, reason: 'already_claimed' })
+      expect(db.rows[0].status).toBe(status)
+    }
+  })
+
+  it('reports a real DB failure as itself, so the caller skips rather than sending unrecorded', async () => {
+    const db = {
+      from: () => ({ insert: async () => ({ error: { code: '08006', message: 'connection reset' } }) }),
+    }
+    expect(await claimDripRecipient(db, 'bc1', 'c1')).toEqual({ claimed: false, reason: 'connection reset' })
+  })
+})
+
+// ── BAREWRITE.5 — THE CLAIM IS A LEASE, NOT A TOMBSTONE ────────────────────
+//
+// Claiming before the send closed the duplicate hole and opened a worse one: a
+// process kill between the claim and sendTemplateMessage (Vercel timeout, OOM,
+// deploy mid-request) leaves a row at 'pending' with nothing sent. Nothing
+// re-opened 'pending' and no surface showed it — whatsapp-broadcast-stats' only
+// figure that counts it (`unaccounted`) is rendered by WABroadcastEditor solely
+// when the broadcast ALSO has capped rows, and even then it is labelled "have
+// not been attempted yet". So that contact silently never received their drip
+// step, permanently, which is strictly worse than main (main re-sent).
+//
+// The lease is the fix: an abandoned claim re-opens after STUCK_CLAIM_MINUTES.
+// The residual risk becomes a DUPLICATE in the narrow case where the send did
+// reach Meta but the promote write did not — visible to the customer, and the
+// direction this codebase has agreed to fail in.
+describe('the drip claim lease — an abandoned claim is recoverable, not permanent', () => {
+  const STALE = new Date(Date.now() - (STUCK_CLAIM_MINUTES + 5) * 60_000).toISOString()
+  const FRESH_CLAIM = new Date(Date.now() - 1 * 60_000).toISOString()
+
+  it('fetchDripDoneContactIds re-opens an abandoned pending claim, and only that one', async () => {
+    const db = pagedDb([
+      { contact_id: 'a', status: 'sent', failed_at: null, created_at: STALE },
+      // The killed-mid-send claim. Before the lease this was 'done' forever.
+      { contact_id: 'b', status: 'pending', failed_at: null, created_at: STALE },
+      // A tick that is genuinely in flight right now — must NOT be re-opened.
+      { contact_id: 'c', status: 'pending', failed_at: null, created_at: FRESH_CLAIM },
+      // Unknown age. Never re-send on a guess.
+      { contact_id: 'd', status: 'pending', failed_at: null, created_at: null },
+    ])
+    const done = await fetchDripDoneContactIds(db, 'bc1')
+    expect(done.sort()).toEqual(['a', 'c', 'd'])
+  })
+
+  it('claimDripRecipient re-claims an abandoned pending row — once', async () => {
+    const db = recipientsTable([
+      { broadcast_id: 'bc1', contact_id: 'c1', status: 'pending', created_at: STALE },
+    ])
+
+    const first = await claimDripRecipient(db, 'bc1', 'c1')
+    // A second tick arriving after the first re-claimed finds a FRESH lease.
+    const second = await claimDripRecipient(db, 'bc1', 'c1')
+
+    expect(first).toEqual({ claimed: true, reclaimed: true })
+    expect(second).toEqual({ claimed: false, reason: 'already_claimed' })
+    expect(db.rows).toHaveLength(1)
+  })
+
+  it('never re-claims a pending row still inside its lease', async () => {
+    const db = recipientsTable([
+      { broadcast_id: 'bc1', contact_id: 'c1', status: 'pending', created_at: FRESH_CLAIM },
+    ])
+    expect(await claimDripRecipient(db, 'bc1', 'c1')).toEqual({ claimed: false, reason: 'already_claimed' })
+    expect(db.rows[0].created_at).toBe(FRESH_CLAIM)
+  })
+
+  it('a fresh INSERT claim stamps created_at, so the lease is measured from the claim', async () => {
+    const db = recipientsTable()
+    const now = Date.parse('2026-08-20T10:00:00.000Z')
+    expect(await claimDripRecipient(db, 'bc1', 'c1', now)).toEqual({ claimed: true })
+    expect(db.rows[0].created_at).toBe('2026-08-20T10:00:00.000Z')
+  })
+
+  it('a capped RETRY claim restamps created_at, so the retry is not instantly stale', async () => {
+    // Without the restamp the re-claimed row inherits a created_at older than
+    // CAPPED_RETRY_HOURS, i.e. older than any lease — so the very next tick
+    // would treat a live claim as abandoned and send a second time.
+    const db = recipientsTable([
+      { broadcast_id: 'bc1', contact_id: 'c1', status: 'capped', failed_at: STALE, created_at: STALE },
+    ])
+    const now = Date.parse('2026-08-20T10:00:00.000Z')
+    expect(await claimDripRecipient(db, 'bc1', 'c1', now)).toEqual({ claimed: true, retry: true })
+    expect(db.rows[0].created_at).toBe('2026-08-20T10:00:00.000Z')
   })
 })
 
@@ -161,5 +330,48 @@ describe('applyMetaUserPreference', () => {
     expect((await applyMetaUserPreference(consentDb({ contact: null, writes }), { wa_id: '1', value: 'stop' })).applied).toBe(false)
     expect((await applyMetaUserPreference(consentDb({ contact: { id: 'c1' }, writes }), { wa_id: '1', value: 'nonsense' })).applied).toBe(false)
     expect(writes).toEqual([])
+  })
+})
+
+// DRIP-LEASE.2 — finalisation must not go terminal over an outstanding lease.
+//
+// The lease added in BAREWRITE.4 re-claims a 'pending' row after
+// STUCK_CLAIM_MINUTES, but a lease only helps if a LATER TICK RUNS. Both
+// finalisation branches in sendDripChunk counted only 'capped' when deciding
+// whether to hold the broadcast open, so a drip could flip to terminal 'sent'
+// with an in-lease 'pending' claim outstanding: no further tick, no re-claim,
+// that contact's message lost for good — a loss main did not have.
+//
+// The rule now lives in ONE constant because the bug was two copies of it: the
+// 'capped' guard sat two lines from the exhausted check and was simply not
+// extended when leases arrived.
+describe('OWED_RETRY_STATUSES — a drip may not finalise over an owed tick', () => {
+  it('counts an outstanding lease as owed, not just a frequency-capped park', () => {
+    expect(OWED_RETRY_STATUSES).toContain('capped')  // frequency cap (131049), re-opens when the park expires
+    expect(OWED_RETRY_STATUSES).toContain('pending') // claimed, outcome unknown — the lease still owes it a tick
+  })
+
+  it('terminal statuses are NOT owed a tick (finalising over them is correct)', () => {
+    for (const terminal of ['sent', 'delivered', 'read', 'failed']) {
+      expect(OWED_RETRY_STATUSES).not.toContain(terminal)
+    }
+  })
+
+  it('both finalisation branches share the constant, so they cannot drift apart again', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { fileURLToPath } = await import('node:url')
+    const src = readFileSync(fileURLToPath(new URL('./whatsapp.js', import.meta.url)), 'utf8')
+
+    // Every head-count of the recipients table that decides finalisation must go
+    // through the shared constant. A bare .eq('status', 'capped') here is the
+    // regression: it re-strands in-lease rows.
+    const finalisationCounts = src.match(/whatsapp_broadcast_recipients'\)\s*\n?\s*\.select\('id', \{ count: 'exact', head: true \}\)[^\n]*/g) || []
+    const owedChecks = finalisationCounts.filter((line) => /'capped'|OWED_RETRY_STATUSES/.test(line))
+
+    expect(owedChecks.length).toBeGreaterThanOrEqual(2) // the two finalisation branches
+    for (const line of owedChecks) {
+      expect(line).toContain('OWED_RETRY_STATUSES')
+      expect(line).not.toMatch(/\.eq\('status', 'capped'\)/)
+    }
   })
 })

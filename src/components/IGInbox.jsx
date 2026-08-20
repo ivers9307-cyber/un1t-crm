@@ -287,6 +287,16 @@ export default function IGInbox({ locationId, initialConversationId, embedded = 
       await loadThread(selectedId)
       await fetchApprovals(selectedId)
       await loadConversations()
+      // BAREWRITE.4 — the send route reports a DELIVERED message whose
+      // bookkeeping failed (the thread row, or the Mia take-over stamp) as
+      // `warnings`. Meta has the DM either way, so this is not an error — but
+      // it is exactly the case where an operator would otherwise retype the
+      // message (sending it twice) or assume Mia is paused when she is not.
+      // Nothing read this array until now, so the route was warning into a
+      // vacuum. Set AFTER the reloads so nothing they do can clear it.
+      if (Array.isArray(data.warnings) && data.warnings.length > 0) {
+        setError(data.warnings.join(' '))
+      }
     } catch (err) {
       setError(err.message || 'Failed to send')
     } finally {

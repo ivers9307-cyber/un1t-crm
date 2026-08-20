@@ -168,16 +168,33 @@ export async function ensureAnchorLocation(db, host) {
 // location when configured (Stillorgan for UN1T Group, mig 464);
 // otherwise the host's anchor location — fail-open to the pre-master
 // behaviour, never to a wrong location. Errors also fall back.
+//
+// FAIL-OPEN IS ONLY RIGHT FOR CONTACT HOMING. For SENDER selection the same
+// fallback IS the wrong location — the host anchor has no Twilio/email
+// identity, so falling back there sends under the wrong brand. That caller
+// (`resolveEventCommsLocation`) must use `resolveMasterLocationIdStrict`
+// below, which surfaces the read failure instead of folding it into the
+// anchor. Keep the two apart; do not "simplify" them back together.
 export async function resolveMasterLocationId(db, host) {
   try {
-    if (!host?.organization_id) return host?.anchor_location_id || null
-    const { data } = await db
-      .from('organizations')
-      .select('master_location_id')
-      .eq('id', host.organization_id)
-      .maybeSingle()
-    return data?.master_location_id || host.anchor_location_id || null
+    return await resolveMasterLocationIdStrict(db, host)
   } catch {
     return host?.anchor_location_id || null
   }
+}
+
+// The same lookup with the fail-open removed: a read error THROWS rather than
+// resolving to the anchor. Use this wherever the answer selects an identity
+// (sender, brand) rather than a home for a row.
+export async function resolveMasterLocationIdStrict(db, host) {
+  if (!host?.organization_id) return host?.anchor_location_id || null
+  const { data, error } = await db
+    .from('organizations')
+    .select('master_location_id')
+    .eq('id', host.organization_id)
+    .maybeSingle()
+  if (error) {
+    throw new Error(`resolveMasterLocationId: organizations read failed for org ${host.organization_id} (falling back would pick the host's sender-less anchor): ${error.message}`)
+  }
+  return data?.master_location_id || host.anchor_location_id || null
 }
