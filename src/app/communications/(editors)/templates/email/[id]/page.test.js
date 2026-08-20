@@ -85,7 +85,7 @@ beforeEach(() => vi.clearAllMocks())
 describe('/communications/templates/email/[id] page', () => {
   it('redirects to /login without a session', async () => {
     getCurrentUser.mockResolvedValue(null)
-    await expect(EditTemplatePage(props())).rejects.toThrow('NEXT_REDIRECT:/login')
+    await expect(EditTemplatePage(props())).rejects.toThrow(/^NEXT_REDIRECT:\/login$/)
   })
 
   it('404s a template at a location outside the user assignments (IDOR)', async () => {

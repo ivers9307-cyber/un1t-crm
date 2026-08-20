@@ -6,20 +6,18 @@
 //         tabs. Multiple statuses can be joined with commas:
 //         ?status=open,in_progress (default).
 //
-// Auth: owner OR master at the active location. Per the
-// REPORT-ISSUE.1 design ("All owners at the studio").
+// Auth: isIssueHandler — owner OR master at the active location (the
+// REPORT-ISSUE.1 design, "All owners at the studio"), OR the grantable
+// `issues_inbox` permission (HUBDOOR.1). One definition, shared with the
+// /issues page and every other handler route: src/lib/issues-access.js.
 
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
 import { listInboxIssues, ISSUE_INBOX_OPEN_STATUSES } from '@/lib/issues'
+import { isIssueHandler } from '@/lib/issues-access'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-
-function isHandler(user) {
-  if (user?.role === 'master' || user?.profileRole === 'master' || user?.isMaster) return true
-  return user?.role === 'owner'
-}
 
 const ALLOWED_STATUSES = ['open', 'in_progress', 'resolved', 'closed']
 
@@ -34,9 +32,9 @@ function parseStatuses(url) {
 export const GET = withAuth(
   {},
   async ({ user, db, locationId, request }) => {
-    if (!isHandler(user)) {
+    if (!isIssueHandler(user)) {
       return NextResponse.json(
-        { success: false, error: 'Only owner + master can read the issues inbox.' },
+        { success: false, error: 'Only issue handlers can read the issues inbox.' },
         { status: 403 }
       )
     }

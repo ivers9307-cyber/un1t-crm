@@ -48,41 +48,41 @@ beforeEach(() => vi.clearAllMocks())
 describe('/sales index page', () => {
   it('redirects to /login without a session', async () => {
     getCurrentUser.mockResolvedValue(null)
-    await expect(SalesIndexPage()).rejects.toThrow('NEXT_REDIRECT:/login')
+    await expect(SalesIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/login$/)
   })
 
   it('redirects to /pipeline when the user holds pipeline (+ others)', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { pipeline: true, contacts: true, activities: true } })
     )
-    await expect(SalesIndexPage()).rejects.toThrow('NEXT_REDIRECT:/pipeline')
+    await expect(SalesIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/pipeline$/)
   })
 
   it('redirects to /contacts when pipeline is absent but contacts is held', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { pipeline: false, contacts: true, activities: true } })
     )
-    await expect(SalesIndexPage()).rejects.toThrow('NEXT_REDIRECT:/contacts')
+    await expect(SalesIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/contacts$/)
   })
 
   it('redirects to /activities when only activities is held', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { pipeline: false, contacts: false, activities: true } })
     )
-    await expect(SalesIndexPage()).rejects.toThrow('NEXT_REDIRECT:/activities')
+    await expect(SalesIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/activities$/)
   })
 
   it('redirects to / when none of the three are held', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { pipeline: false, contacts: false, activities: false } })
     )
-    await expect(SalesIndexPage()).rejects.toThrow('NEXT_REDIRECT:/')
+    await expect(SalesIndexPage()).rejects.toThrow(/NEXT_REDIRECT:\/$/)
   })
 
   it('redirects to /contacts when the location gate denies pipeline for everyone, even with pipeline permission held', async () => {
     const u = user({ perms: { pipeline: true, contacts: true, activities: true } })
     u.activeLocation = { id: 'loc1', features: { pipeline: false } }
     getCurrentUser.mockResolvedValue(u)
-    await expect(SalesIndexPage()).rejects.toThrow('NEXT_REDIRECT:/contacts')
+    await expect(SalesIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/contacts$/)
   })
 })

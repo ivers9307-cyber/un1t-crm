@@ -89,7 +89,7 @@ describe('/communications/sent/[channel]/[id] — routing', () => {
 
   it('sends a signed-out visitor to /login', async () => {
     getCurrentUser.mockResolvedValue(null)
-    await expect(SendDetailPage(args('sms', 's1'))).rejects.toThrow('NEXT_REDIRECT:/login')
+    await expect(SendDetailPage(args('sms', 's1'))).rejects.toThrow(/^NEXT_REDIRECT:\/login$/)
   })
 })
 
@@ -97,7 +97,7 @@ describe('/communications/sent/[channel]/[id] — per-channel gates', () => {
   for (const [channel, id, permission] of [['sms', 's1', 'sms'], ['whatsapp', 'b1', 'whatsapp'], ['email', 'c1', 'email']]) {
     it(`${channel}: bounces to the hub without the ${permission} permission`, async () => {
       hasPermission.mockImplementation((_u, key) => key !== permission)
-      await expect(SendDetailPage(args(channel, id))).rejects.toThrow('NEXT_REDIRECT:/communications')
+      await expect(SendDetailPage(args(channel, id))).rejects.toThrow(/^NEXT_REDIRECT:\/communications$/)
     })
 
     it(`${channel}: 404s a row at another location (never 403)`, async () => {

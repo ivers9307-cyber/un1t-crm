@@ -941,10 +941,70 @@ const noUncheckedSupabaseWrite = {
   },
 }
 
+// HUBDOOR.3 — `expect(page()).rejects.toThrow('NEXT_REDIRECT:/x')` is a
+// SUBSTRING match, and every redirect target in this app is a path that
+// begins with '/'. So `toThrow('NEXT_REDIRECT:/')` — the natural way to
+// assert "bounced to home" — passes against EVERY redirect the page could
+// possibly throw, and the longer ones are prefixes of each other
+// ('/schedule' passes on '/schedule/expenses', '/settings' on
+// '/settings/scoring', '/events' on '/events/[id]/checkin'). The assertion
+// still goes green after the behaviour it pins has changed, which is worse
+// than having no assertion at all: it reads as coverage.
+//
+// It was not hypothetical. Every hub-index suite asserted its fallback this
+// way, and the Operations one had been passing on a redirect to
+// '/admin/fleet' — `fleet_restart` defaults ON for every role and the
+// fixture never denied it, so the suite that existed to prove "a user with
+// no Operations permission lands on '/'" was in fact proving nothing. All
+// 83 sites are now anchored regexes; this rule is what stops the 84th.
+//
+// Deliberately narrow: only literals beginning with NEXT_REDIRECT. A plain
+// `toThrow('Not found')` is a normal, useful substring assertion — it is the
+// prefix-shaped path namespace that makes THIS one vacuous.
+const REDIRECT_THROW_MATCHERS = new Set(['toThrow', 'toThrowError'])
+
+const noSubstringRedirectAssertion = {
+  meta: {
+    type: 'problem',
+    docs: {
+      description:
+        "Disallow toThrow('NEXT_REDIRECT:…') with a string argument — toThrow(string) is a substring match, so the assertion passes against any redirect target that has the asserted one as a prefix.",
+    },
+    schema: [],
+    messages: {
+      substring:
+        "toThrow(string) is a SUBSTRING match, so this passes against any redirect whose target starts with '{{target}}' — including '/' matching every redirect there is. Anchor it: toThrow(/^NEXT_REDIRECT:{{escaped}}$/).",
+    },
+  },
+  create(context) {
+    return {
+      CallExpression(node) {
+        const callee = node.callee
+        if (callee?.type !== 'MemberExpression' || callee.computed) return
+        if (!REDIRECT_THROW_MATCHERS.has(callee.property?.name)) return
+        const arg = node.arguments?.[0]
+        let value = null
+        if (arg?.type === 'Literal' && typeof arg.value === 'string') value = arg.value
+        else if (arg?.type === 'TemplateLiteral' && arg.expressions.length === 0) {
+          value = arg.quasis[0]?.value?.cooked ?? null
+        }
+        if (value == null || !value.startsWith('NEXT_REDIRECT')) return
+        const target = value.slice('NEXT_REDIRECT:'.length)
+        context.report({
+          node: arg,
+          messageId: 'substring',
+          data: { target, escaped: target.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&') },
+        })
+      },
+    }
+  },
+}
+
 export default {
   rules: {
     'no-catch-on-supabase-builder': noCatchOnSupabaseBuilder,
     'no-unchecked-supabase-write': noUncheckedSupabaseWrite,
+    'no-substring-redirect-assertion': noSubstringRedirectAssertion,
     'no-uncapped-supabase-limit': noUncappedSupabaseLimit,
     'no-zulu-template-date': noZuluTemplateDate,
     'no-utc-today': noUtcToday,
