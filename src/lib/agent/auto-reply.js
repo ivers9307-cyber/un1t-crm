@@ -49,6 +49,10 @@ import { BOOKING_TOOLS, executeBookingTool } from './booking-tools'
 import { EVENT_TOOLS, EVENT_TOOL_NAMES, executeEventTool } from './event-tools'
 import { CARD_TOOLS, CARD_TOOL_NAMES, executeCardTool } from './card-tools'
 import { anthropicMessages } from '@/lib/anthropic'
+// MIA-HYGIENE.4 — the agent's own caught failures never reached error_events
+// (mig 435 only ever saw errors that escaped Next), so Vercel log retention
+// was the entire forensic window for a Mia outage.
+import { recordErrorEvent } from '@/lib/error-events'
 import { getAiCapStatus } from '@/lib/usage-caps'
 import { checkSpend } from '@/lib/wallet-enforcement'
 
@@ -755,7 +759,15 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
         )
         if (aborted) { claimLost = true; break }
         if (!res.ok) {
-          console.error('[radar-agent] Anthropic error', res.status, await res.text().catch(() => ''))
+          const errBody = await res.text().catch(() => '')
+          console.error('[radar-agent] Anthropic error', res.status, errBody)
+          await noteModelFailure(trace, adapter, {
+            kind: 'model_error',
+            status: res.status,
+            attempts: MODEL_MAX_ATTEMPTS,
+            message: errBody || `HTTP ${res.status}`,
+            conversationId,
+          })
           // COMMS-AUDIT 2026-07-10 — a model outage must not mean dead air:
           // send the holding message + page managers via the soft-handoff
           // path (its agent_last_reply_at debounce keeps webhook retries /
@@ -890,6 +902,11 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       }
     } catch (err) {
       console.error('[radar-agent] model call failed', err?.message)
+      await noteModelFailure(trace, adapter, {
+        kind: 'model_exception',
+        message: err?.message || String(err),
+        conversationId,
+      })
       // Same soft handoff as the non-2xx path above — holding message once
       // (debounced) + manager push, agent stays armed for when the model
       // comes back.
@@ -909,6 +926,14 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       console.warn('[radar-agent] turn abandoned', JSON.stringify({
         channel: adapter.name, conversationId, reason: stopFailure,
       }))
+      // A refusal or a twice-truncated turn is a model failure too — the
+      // customer got a holding message instead of an answer, so it belongs in
+      // the trace and in error_events alongside outages.
+      await noteModelFailure(trace, adapter, {
+        kind: stopFailure,
+        message: `stop_reason=${trace.stopReason || 'unknown'}`,
+        conversationId,
+      })
       return await softHandoff(db, adapter, {
         conversationId, locationId, recipient, contactId, connection, settings,
         lastReplyAt: conv?.agent_last_reply_at,
@@ -1106,6 +1131,35 @@ async function handoff(db, adapter, { conversationId, locationId, recipient, con
 // Manager-push copy for a model (Anthropic API) failure taking the
 // soft-handoff path — the customer got the holding message, but the reply
 // they were owed never existed, so a human needs to pick the thread up.
+// MIA-HYGIENE.4 — record an agent-side model failure in BOTH places that
+// matter after the fact: the turn's decision trace (agent_decisions.meta, so
+// the inbox can say why Mia went quiet) and error_events (mig 435, so the row
+// outlives Vercel's log window and Sentinel can alert on it). Best-effort by
+// construction — recordErrorEvent swallows its own failures and is storm-
+// guarded, and this must never change whether the customer gets a reply.
+function noteModelFailure(trace, adapter, { kind, status, attempts, message, conversationId }) {
+  if (trace) {
+    trace.error = {
+      kind,
+      ...(Number.isFinite(status) ? { status } : {}),
+      ...(Number.isFinite(attempts) ? { attempts } : {}),
+      ...(message ? { message: String(message) } : {}),
+    }
+  }
+  return recordErrorEvent({
+    vercel_id: null,
+    runtime: process.env.NEXT_RUNTIME || null,
+    // Not a route — name the agent path so these rows are filterable apart
+    // from request failures.
+    route_path: `agent:${adapter?.name || 'unknown'}${conversationId ? `:${conversationId}` : ''}`,
+    route_type: 'agent',
+    method: null,
+    name: kind,
+    message: String(message ?? (Number.isFinite(status) ? `HTTP ${status}` : kind)).slice(0, 500),
+    digest: null,
+  })
+}
+
 function modelFailureNotify(adapter) {
   return {
     title: `${adapter.label} · agent unavailable`,
