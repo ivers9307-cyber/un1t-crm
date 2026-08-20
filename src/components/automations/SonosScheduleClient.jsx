@@ -25,6 +25,7 @@
 import { Suspense, useState, useEffect, useCallback } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Loader2, AlertCircle, Music2, ExternalLink, Play, Plus, X, Trash2 } from 'lucide-react'
+import { dublinDateKey, dublinDayStartMs, dublinAddDays } from '@/lib/dublin-time'
 
 const DAY_LABELS = [
   { n: 1, label: 'Mon' },
@@ -47,6 +48,26 @@ function fmtDublin(iso) {
       hour: '2-digit', minute: '2-digit', hour12: false,
     })
   } catch { return iso }
+}
+
+// "Leave the music alone until midnight [tonight]" — the design spec's own
+// suggested preset. Always the NEXT Europe/Dublin local midnight, computed
+// via the shared Dublin-time helpers — never hand-roll this with local
+// Date math (see src/lib/dublin-time.js and the CLAUDE.md timezone
+// invariant: never mix local-time Date parsing with toISOString()
+// formatting). dublinDateKey(now) is always the calendar day containing
+// `now`, so dublinDayStartMs(tomorrow) is always strictly after `now` —
+// including when it's already past midnight, "tonight" means the coming one.
+function untilMidnightTonightIso() {
+  const todayKey = dublinDateKey(Date.now())
+  const tomorrowKey = dublinAddDays(todayKey, 1)
+  return new Date(dublinDayStartMs(tomorrowKey)).toISOString()
+}
+
+// The shorter presets are plain durations from now — no Dublin wall clock
+// involved, so no DST handling needed.
+function hoursFromNowIso(hours) {
+  return new Date(Date.now() + hours * 3600_000).toISOString()
 }
 
 // Every value src/app/api/sonos/callback/route.js can redirect back with,
@@ -534,6 +555,8 @@ function ScheduleCard({ schedule, players, favorites, onReload }) {
         </div>
       </div>
 
+      <ScheduleOverride scheduleId={schedule.id} override={schedule.override} onReload={onReload} />
+
       {/* Speakers */}
       <div className="mt-3 border-t border-un1t-border/60 pt-3">
         <p className="text-xs font-semibold text-un1t-text mb-1.5">Speakers</p>
@@ -675,6 +698,112 @@ function ScheduleCard({ schedule, players, favorites, onReload }) {
         )}
         {deleteError && <p className="mt-1 text-[11px] text-red-700">{deleteError}</p>}
       </div>
+    </div>
+  )
+}
+
+// Suppresses the schedule's boundary actions for a bounded period — for a
+// private event or filming. Deliberately NOT a pause: it never touches
+// playback, only whether the cron opens/closes a window (see planAction's
+// own comments in src/lib/sonos/groups.js). `override` is read straight off
+// the schedule prop rather than copied into local state — same as
+// last_applied/last_state above, it's server-driven, refreshed via onReload
+// (and the 60s poll in SonosScheduleInner). Liveness is recomputed inline on
+// every render, never cached, so an expired override stops showing as live
+// the moment it's rendered again, with no timer of its own required — and it
+// mirrors planAction's own check exactly: state === 'off' && until && until
+// (as ms) is still in the future.
+function ScheduleOverride({ scheduleId, override, onReload }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+
+  const live = Boolean(override?.state === 'off' && override.until && new Date(override.until).getTime() > Date.now())
+
+  // Always PATCHes `override` alone — never name/player_ids/enabled/windows
+  // — so this can never clobber a save in flight, and never the reverse.
+  async function patchOverride(value) {
+    setBusy(true); setError(null)
+    try {
+      const res = await fetch(`/api/sonos/schedules/${scheduleId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ override: value }),
+      })
+      const j = await res.json()
+      if (!res.ok || j.success === false) throw new Error(j.error || 'Could not update the override')
+      await onReload()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="mt-3 border-t border-un1t-border/60 pt-3">
+      <p className="text-xs font-semibold text-un1t-text mb-1.5">Override</p>
+
+      {live ? (
+        <>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-700">
+              <AlertCircle size={12} /> Leaving the music alone until {fmtDublin(override.until)}
+            </span>
+            <button
+              type="button"
+              onClick={() => patchOverride(null)}
+              disabled={busy}
+              className="text-[11px] underline text-un1t-subtle hover:text-un1t-text disabled:opacity-40"
+            >
+              {busy ? 'Clearing…' : 'Clear override'}
+            </button>
+          </div>
+          <p className="mt-1.5 text-[11px] text-un1t-subtle">
+            Not pausing anything — if music is already playing, it keeps playing. This only stops the
+            schedule opening or closing a window until then.
+          </p>
+        </>
+      ) : (
+        <>
+          <p className="text-[11px] text-un1t-subtle mb-2">
+            Stop this schedule opening or closing a window for a while — for a private event or filming.
+            It doesn&apos;t touch playback: if music is already playing, it keeps playing; this only stops
+            the CRM acting until the override ends.
+          </p>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] text-un1t-subtle">Leave the music alone</span>
+            <button
+              type="button"
+              disabled={busy}
+              title="Leave the music alone until midnight tonight"
+              onClick={() => patchOverride({ state: 'off', until: untilMidnightTonightIso() })}
+              className="text-xs px-2.5 py-1 rounded-full border border-un1t-border text-un1t-text hover:border-un1t-muted disabled:opacity-40"
+            >
+              until midnight
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              title="Leave the music alone for 1 hour"
+              onClick={() => patchOverride({ state: 'off', until: hoursFromNowIso(1) })}
+              className="text-xs px-2.5 py-1 rounded-full border border-un1t-border text-un1t-text hover:border-un1t-muted disabled:opacity-40"
+            >
+              for 1 hour
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              title="Leave the music alone for 3 hours"
+              onClick={() => patchOverride({ state: 'off', until: hoursFromNowIso(3) })}
+              className="text-xs px-2.5 py-1 rounded-full border border-un1t-border text-un1t-text hover:border-un1t-muted disabled:opacity-40"
+            >
+              for 3 hours
+            </button>
+          </div>
+        </>
+      )}
+
+      {error && <p className="mt-1.5 text-[11px] text-red-700">{error}</p>}
     </div>
   )
 }
