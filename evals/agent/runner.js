@@ -15,7 +15,13 @@
 
 import { buildCachedSystem } from '@/lib/agent/prompt'
 import { formatHistoryForClaude, parseAgentResponse, resolveAgentEffort } from '@/lib/agent/core'
-import { CACHED_ACCOUNT_TOOLS, AGENT_MODEL, MAX_TOOL_ITERATIONS } from '@/lib/agent/auto-reply'
+import {
+  CACHED_ACCOUNT_TOOLS,
+  AGENT_MODEL,
+  AGENT_THINKING,
+  MODEL_MAX_TOKENS,
+  MAX_TOOL_ITERATIONS,
+} from '@/lib/agent/auto-reply'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 
@@ -72,9 +78,13 @@ async function liveCallModel({ system, messages, apiKey, effort = EVAL_EFFORT })
       'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
     },
+    // MIA-SONNET5 — model, thinking mode and max_tokens all come from
+    // production rather than being restated here. The harness is only useful
+    // insofar as it sends what production sends.
     body: JSON.stringify({
       model: AGENT_MODEL,
-      max_tokens: 600,
+      max_tokens: MODEL_MAX_TOKENS,
+      thinking: AGENT_THINKING,
       output_config: { effort },
       system,
       messages,

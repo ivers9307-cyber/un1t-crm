@@ -56,13 +56,38 @@ import { recordErrorEvent } from '@/lib/error-events'
 import { getAiCapStatus } from '@/lib/usage-caps'
 import { checkSpend } from '@/lib/wallet-enforcement'
 
-export const AGENT_MODEL = 'claude-sonnet-4-6'
+// MIA-SONNET5 — Claude Sonnet 5. Reaches previous Opus-tier quality on
+// agentic work, and Mia was unusually cheap to migrate: she never sent
+// temperature/top_p (which Sonnet 5 rejects) and never used assistant
+// prefills, so the request shape carried over unchanged.
+export const AGENT_MODEL = 'claude-sonnet-5'
+
+// Sonnet 5 runs ADAPTIVE thinking when `thinking` is omitted, where Sonnet 4.6
+// ran with thinking off — a silent default change, so it is set explicitly
+// here rather than inherited.
+//
+// Adaptive, not disabled, on purpose: with thinking disabled Sonnet 5 is
+// measurably less willing to reach for tools, and Mia's whole value is tool
+// use (verify → list → book). Disabling it to save tokens would trade her
+// core function for a rounding error.
+//
+// Measured on real Mia turns before choosing (2026-08-20): adaptive spends
+// almost nothing on short transactional turns — 0 thinking blocks at effort
+// low AND medium, 1 at high, with total output never above 115 tokens against
+// a 4.6 baseline of 32. The model calibrates thinking to task complexity, so
+// the usual "adaptive will eat max_tokens" worry does not apply at this shape.
+// Exported, like CACHED_ACCOUNT_TOOLS, so the eval harness sends the exact
+// request shape production sends. MIA-HYGIENE.7 is the cautionary tale: the
+// harness kept its own "same shape as production" copy, it drifted, and a
+// whole paid eval run died on a 400.
+export const AGENT_THINKING = { type: 'adaptive' }
 
 // Prompt caching (CACHE.1): ACCOUNT_TOOLS (~4k tokens) is byte-identical on
 // every inbound message and renders BEFORE the per-customer (dynamic) system
 // prompt — so the tool block is the one stable, cacheable prefix on this path.
 // Marking the LAST tool ephemeral caches the whole tool block (clears the
-// 2048-token minimum for claude-sonnet-4-6); the dynamic system + messages
+// 1024-token cacheable-prefix minimum on Sonnet 5, which the ~11.9k-token
+// block clears many times over); the dynamic system + messages
 // after it stay uncached. Built once from the shared const so we never mutate
 // it. No anthropic-beta header needed — caching is GA on version 2023-06-01.
 // AGENT-HANDS.1 — the booking tools join the cached block. Still one
@@ -111,11 +136,19 @@ const MODEL_TIMEOUT_MS = 60_000
 const MODEL_MAX_ATTEMPTS = 3
 const MODEL_RETRY_BASE_MS = 250
 const MODEL_RETRY_AFTER_CAP_MS = 5_000
-// max_tokens for the reply. 600 is right for the "a sentence or two" house
-// style; a truncated turn retries once at the raised cap before handing off
-// rather than sending a cut-off (possibly sentinel-splitting) reply.
-const MODEL_MAX_TOKENS = 600
-const MODEL_MAX_TOKENS_RETRY = 1000
+// max_tokens for the reply. A truncated turn retries once at the raised cap
+// before handing off rather than sending a cut-off (possibly sentinel-
+// splitting) reply.
+//
+// MIA-SONNET5 — doubled from 600/1000. Two independent reasons, both measured
+// rather than guessed: Sonnet 5's tokenizer produces ~31% more tokens for the
+// same text (9,059 → 11,907 on Mia's real prefix), so a 4.6-tuned ceiling is
+// tighter than it looks; and max_tokens now also has to cover adaptive
+// thinking, which is cheap here but not free at higher effort. A typical turn
+// measures 60-115 output tokens, so this is ~10x headroom — the cap exists to
+// stop a runaway, not to shape the reply (the prompt does that).
+export const MODEL_MAX_TOKENS = 1200
+const MODEL_MAX_TOKENS_RETRY = 2400
 // Cost/abuse ceilings (operator-overridable via settings.customer_agent.limits).
 const DEFAULT_LIMITS = { convHour: 20, locDay: 500 }
 
@@ -747,6 +780,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
           {
             model: AGENT_MODEL,
             max_tokens: maxTokens,
+            thinking: AGENT_THINKING,
             output_config: { effort: agentEffort },
             system,
             messages,

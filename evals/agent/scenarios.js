@@ -339,7 +339,14 @@ export const SCENARIOS = [
       // the membership details, so a short companion line ("sent over some
       // cards…") is IDEAL; demanding the text restate prices failed good
       // behaviour in live runs. Keep this loose.
-      match: ['(card|plan|membership|option|detail)'],
+      //
+      // MIA-SONNET5 — this was `match: ['(card|plan|membership|option|detail)']`,
+      // which asserted a VOCABULARY rather than the behaviour the comment
+      // above describes. Sonnet 5 answers "Sent! Let me know if you want help
+      // picking one or want to try a class first." — precisely the ideal
+      // companion line, containing none of those five nouns. minReplyChars
+      // states the real requirement: she still replied in her own words.
+      minReplyChars: 30,
     },
   },
   {

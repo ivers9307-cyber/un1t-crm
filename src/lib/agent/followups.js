@@ -27,7 +27,9 @@ import { getLocationBranding } from '@/lib/location-branding'
 import { anthropicMessages } from '@/lib/anthropic'
 import { dublinTodayStr } from '@/lib/dublin-time'
 
-const AGENT_MODEL = 'claude-sonnet-4-6'
+// MIA-SONNET5 — kept in step with the inbound reply path so a nudge sounds
+// like the same person who answers the thread.
+const AGENT_MODEL = 'claude-sonnet-5'
 const H_MS = 3600_000
 
 export const FOLLOWUP_DEFAULTS = {
@@ -339,7 +341,11 @@ export async function composeAgentText({ location, settings, historyRows, instru
       // latency-tolerant generation. Without this the call ran at the API
       // default (`high`), which EFFORT.1 already rejected for the inbound
       // reply path.
-      { model: AGENT_MODEL, max_tokens: 300, output_config: { effort: 'low' }, system, messages },
+      // MIA-SONNET5 — 300 → 600. This path has NO tools, so it needs no
+      // tool-eagerness, but Sonnet 5's tokenizer alone adds ~31% and adaptive
+      // thinking shares the same ceiling; a truncated nudge would be sent as
+      // a real message, so the cap gets room rather than a coin flip.
+      { model: AGENT_MODEL, max_tokens: 600, thinking: { type: 'adaptive' }, output_config: { effort: 'low' }, system, messages },
       { apiKey, locationId: location.id, source: 'followups' }
     )
     if (!res.ok) return { error: `model_http_${res.status}` }
