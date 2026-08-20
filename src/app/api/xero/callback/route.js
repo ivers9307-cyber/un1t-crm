@@ -16,6 +16,7 @@ import { createServerClient } from '@/lib/supabase'
 import { exchangeAuthorizationCode, listConnectedTenants, XeroError } from '@/lib/xero/client'
 import { pullAccounts } from '@/lib/xero/accounts-sync'
 import { pullTaxRates } from '@/lib/xero/tax-rates-sync'
+import { pullContacts } from '@/lib/xero/contacts-sync'
 import { safeReturnTo, decodeReturnTo } from '@/lib/xero/return-to'
 import { chooseTenantToBind } from '@/lib/xero/tenant-binding'
 
@@ -114,6 +115,11 @@ export async function GET(req) {
       location_id: r.location_id,
       location_name: r.locations?.name || null,
     }))
+    // XERO-ONE-ORG.2 — remember what this location was bound to, because a
+    // reconnect that lands on a DIFFERENT org makes every cached Xero id for
+    // this location wrong (accounts, tax rates and contacts are all per-org).
+    const previousTenantId = existingRows.find((r) => r.location_id === locationId)?.tenant_id || null
+
     const choice = chooseTenantToBind(tenants, existingRows, locationId)
     if (!choice.ok) {
       const msg = choice.reason === 'all_taken'
@@ -146,6 +152,19 @@ export async function GET(req) {
     // connection row by the helpers; never block the connect redirect.
     try { await pullAccounts(locationId) } catch (e) { console.warn(`[xero connect] accounts sync: ${e?.message || e}`) }
     try { await pullTaxRates(locationId) } catch (e) { console.warn(`[xero connect] tax-rate sync: ${e?.message || e}`) }
+
+    // XERO-ONE-ORG.2 — contacts are NOT normally pulled on connect (it pages
+    // the whole address book, and the operator has a Sync contacts button).
+    // But when the org CHANGES, the cached contacts belong to the previous
+    // company: every id in them is dead in the new org, and picking one is an
+    // opaque "existing contact could not be found" at send time. Observed
+    // live — Stillorgan was reconnected onto its correct org and kept 415
+    // contacts from the old one. Both sync helpers upsert-then-delete-stale,
+    // so this replaces rather than merges.
+    const tenantChanged = previousTenantId && previousTenantId !== tenant.tenantId
+    if (tenantChanged) {
+      try { await pullContacts(locationId) } catch (e) { console.warn(`[xero connect] contacts sync after org change: ${e?.message || e}`) }
+    }
 
     // Name the org that was bound. When more than one was free the pick was
     // arbitrary, so say so — that is the moment to catch a wrong binding.
