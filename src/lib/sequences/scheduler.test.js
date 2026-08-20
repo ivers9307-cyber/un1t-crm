@@ -243,6 +243,66 @@ describe('isGoalMet', () => {
     expect(db.from).not.toHaveBeenCalled()
   })
 
+  // SEQEXIT.2 — "booked a class since we started chasing them".
+  const BOOKED = (last_booked_at) => ({ id: 'c1', last_booked_at })
+  const ENROLLED = '2026-08-20T09:00:00.000Z'
+
+  it('booked_since_enrolment: true only when the booking is AFTER the enrolment', async () => {
+    expect(
+      await isGoalMet({
+        db: {},
+        contact: BOOKED('2026-08-20T10:30:00.000Z'),
+        goalConfig: { type: 'booked_since_enrolment' },
+        enrolledAt: ENROLLED,
+      }),
+    ).toBe(true)
+  })
+
+  it('booked_since_enrolment: false for a booking that PREDATES the enrolment — this is the whole point', async () => {
+    // A lapsed member or an old trial who booked once, years ago, is exactly
+    // who this audience is meant to include. Keying on "has ever booked"
+    // would exit them before the first email.
+    expect(
+      await isGoalMet({
+        db: {},
+        contact: BOOKED('2024-01-05T11:00:00.000Z'),
+        goalConfig: { type: 'booked_since_enrolment' },
+        enrolledAt: ENROLLED,
+      }),
+    ).toBe(false)
+  })
+
+  it('booked_since_enrolment: fails CLOSED with no enrolment timestamp or no booking', async () => {
+    // Exiting is irreversible with no re-entry path, so "we cannot tell"
+    // must never take the exit branch.
+    expect(
+      await isGoalMet({
+        db: {},
+        contact: BOOKED('2026-08-20T10:30:00.000Z'),
+        goalConfig: { type: 'booked_since_enrolment' },
+      }),
+    ).toBe(false)
+    expect(
+      await isGoalMet({
+        db: {},
+        contact: BOOKED(null),
+        goalConfig: { type: 'booked_since_enrolment' },
+        enrolledAt: ENROLLED,
+      }),
+    ).toBe(false)
+  })
+
+  it('booked_since_enrolment: costs no DB round trip', async () => {
+    const db = { from: vi.fn() }
+    await isGoalMet({
+      db,
+      contact: BOOKED('2026-08-20T10:30:00.000Z'),
+      goalConfig: { type: 'booked_since_enrolment' },
+      enrolledAt: ENROLLED,
+    })
+    expect(db.from).not.toHaveBeenCalled()
+  })
+
   it('tag_added: false when tag is empty/whitespace', async () => {
     expect(
       await isGoalMet({
