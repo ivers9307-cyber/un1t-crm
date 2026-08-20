@@ -23,6 +23,111 @@ export function pickCommsLocationTarget(event, masterLocationId) {
 }
 
 /**
+ * Is this location row an OPS-ONLY anchor whose name must never be shown to a
+ * customer?
+ *
+ * `ensureAnchorLocation` (host-events.js) mints exactly one hidden location per
+ * host, named `"<host> (host events)"` and flagged `is_host_anchor`. It is a
+ * bookkeeping row — it holds a host's events so they can hang off a location —
+ * and its name is an internal label, not a venue. In prod today one such row
+ * exists and two ACTIVE upcoming events sit on it.
+ *
+ * The flag is the real test. The name suffix is a second, deliberately
+ * redundant one: this predicate is called from three different modules, each
+ * with its own hand-written `select()`, and a select that forgets
+ * `is_host_anchor` would otherwise silently re-open the exact defect. A false
+ * positive costs a blank sign-off; a false negative texts a customer an
+ * internal string. Prefer the blank.
+ *
+ * Pure.
+ *
+ * @param {{ is_host_anchor?: boolean|null, name?: string|null }|null|undefined} location
+ * @returns {boolean}
+ */
+export function isHostAnchorLocation(location) {
+  if (!location) return false
+  if (location.is_host_anchor === true) return true
+  return typeof location.name === 'string' && /\(host events\)\s*$/i.test(location.name.trim())
+}
+
+/** First non-anchor, non-empty `name` among the given location rows. */
+function firstPublicLocationName(locations) {
+  for (const loc of locations) {
+    if (isHostAnchorLocation(loc)) continue
+    const name = typeof loc?.name === 'string' ? loc.name.trim() : ''
+    if (name) return name
+  }
+  return ''
+}
+
+/**
+ * WHERE THE EVENT IS. The factual venue claim: the email "Where" row, the
+ * `{{location}}` merge tag operators write copy against, the public signup
+ * page's venue line.
+ *
+ * Order: the event's own venue name → the event's OWN location → ''.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * WHY THE COMMS LOCATION IS NOT IN THIS LIST
+ * ─────────────────────────────────────────────────────────────────────────
+ * It was, in the first cut of this change, and that was a new bug wearing the
+ * old one's clothes. `resolveEventCommsLocation` answers "whose Twilio + email
+ * identity does this event send under" — mig 553 defines `sending_location_id`
+ * as exactly that, an identity override, explicitly NOT a venue. For a host
+ * event with no `sending_location_id` it resolves to the ORG MASTER, a real gym
+ * the attendee may never have heard of.
+ *
+ * So ranking it above the event's own location meant: an operator repoints a
+ * Hatch Street event's SENDING identity at Stillorgan for deliverability, and
+ * the attendee's "Where" row silently changes from Hatch Street to Stillorgan —
+ * a confident, specific, wrong address someone may travel to. The defect this
+ * whole change exists to fix ("<host> (host events)") is at least self-evidently
+ * not a venue; this one is not. An OMITTED "Where" row is strictly better than a
+ * wrong one, and every call site renders '' as "omit this line".
+ *
+ * Pure.
+ *
+ * @param {object} args
+ * @param {string|null|undefined} args.venueName       race_events.venue_name
+ * @param {object|null|undefined} args.eventLocation   the event's own location row
+ * @returns {string} a customer-safe venue name, or '' when there is none
+ */
+export function pickAudienceVenueName({ venueName, eventLocation } = {}) {
+  const venue = typeof venueName === 'string' ? venueName.trim() : ''
+  if (venue) return venue
+  return firstPublicLocationName([eventLocation])
+}
+
+/**
+ * WHO IS MESSAGING YOU. The brand sign-off at the end of an SMS — not a claim
+ * about geography, so the SENDING identity legitimately ranks here.
+ *
+ * Order: the event's own venue name → the resolved comms location → the event's
+ * own location → ''. Anchor rows are skipped at every tier.
+ *
+ * NEVER returns an ops-only anchor name. That is the whole point: the
+ * payment-link SMS used to sign off with `reg.race_events.locations.name`
+ * unconditionally, so a registrant of a hosted event got a text ending
+ * `— <host> (host events)`.
+ *
+ * The alpha sender already carries the brand, so '' (no sign-off at all) is a
+ * perfectly good answer — better than an internal bookkeeping string.
+ *
+ * Pure.
+ *
+ * @param {object} args
+ * @param {string|null|undefined} args.venueName       race_events.venue_name
+ * @param {object|null|undefined} args.commsLocation   resolveEventCommsLocation's row
+ * @param {object|null|undefined} args.eventLocation   the event's own location row
+ * @returns {string} a customer-safe name, or '' when there is none
+ */
+export function pickAudienceSignoffName({ venueName, commsLocation, eventLocation } = {}) {
+  const venue = typeof venueName === 'string' ? venueName.trim() : ''
+  if (venue) return venue
+  return firstPublicLocationName([commsLocation, eventLocation])
+}
+
+/**
  * THIS FUNCTION NEVER THROWS. Every read failure degrades to `null`, which
  * every caller already turns into "use the event's own location".
  *
@@ -149,7 +254,11 @@ export async function resolveEventCommsLocation(db, event) {
   // Hop 3 — the sending location row itself.
   const { data: row, error: rowError } = await db
     .from('locations')
-    .select('id, name, twilio_alpha_sender_id, organization_id')
+    // `is_host_anchor` is here for pickAudienceLocationName, not for sending:
+    // an explicit `sending_location_id` CAN legitimately resolve to an anchor,
+    // and that is still the right row to take the Twilio sender from — it is
+    // only the NAME that must never reach a customer.
+    .select('id, name, is_host_anchor, twilio_alpha_sender_id, organization_id')
     .eq('id', targetId)
     .maybeSingle()
   if (rowError) {

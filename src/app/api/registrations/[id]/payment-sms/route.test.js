@@ -24,16 +24,23 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/app-url', () => ({ getAppUrl: () => 'https://crm.test' }))
 vi.mock('@/lib/connection-registry', () => ({ overlayConnections: vi.fn(async (_db, row) => row) }))
 
+// PARTIAL mocks — see race-confirmations.sendonce.test.js. These three "LINK
+// NOT LOST" cases are regression guards; an export added to twilio.js or
+// event-comms-location.js must not be able to turn them red (and therefore
+// inert) without touching this file.
 const sendLocationSms = vi.fn(async () => ({ sid: 'SM1' }))
 const resolveSenderLocation = vi.fn(async (_db, l) => l)
-vi.mock('@/lib/twilio', () => ({
+const resolveTenantSmsSender = vi.fn(async (_db, l) => ({ location: l, senderId: 'UN1T Dub', source: 'location' }))
+vi.mock('@/lib/twilio', async (importOriginal) => ({
+  ...(await importOriginal()),
   sendLocationSms: (...a) => sendLocationSms(...a),
   resolveSenderLocation: (...a) => resolveSenderLocation(...a),
-  TwilioError: class TwilioError extends Error {},
+  resolveTenantSmsSender: (...a) => resolveTenantSmsSender(...a),
 }))
 
 const resolveEventCommsLocation = vi.fn(async () => ({ id: 'MASTER', name: 'Stillorgan' }))
-vi.mock('@/lib/event-comms-location', () => ({
+vi.mock('@/lib/event-comms-location', async (importOriginal) => ({
+  ...(await importOriginal()),
   resolveEventCommsLocation: (...a) => resolveEventCommsLocation(...a),
 }))
 
@@ -85,6 +92,7 @@ beforeEach(() => {
   createServerClient.mockImplementation(() => makeDb())
   sendLocationSms.mockImplementation(async () => ({ sid: 'SM1' }))
   resolveSenderLocation.mockImplementation(async (_db, l) => l)
+  resolveTenantSmsSender.mockImplementation(async (_db, l) => ({ location: l, senderId: 'UN1T Dub', source: 'location' }))
 })
 
 describe('payment-sms — an unresolvable comms location', () => {
@@ -97,10 +105,12 @@ describe('payment-sms — an unresolvable comms location', () => {
     expect(res.status).toBe(200)
     expect((await res.json()).success).toBe(true)
     expect(sendLocationSms).toHaveBeenCalledTimes(1)
-    // resolveSenderLocation is handed the event's OWN location — the fallback
+    // The sender resolver is handed the event's OWN location — the fallback
     // the whole route already had, and the inner safety net for a sender-less
-    // anchor still applies on top of it.
-    expect(resolveSenderLocation).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: 'ANCHOR' }))
+    // anchor still applies on top of it. (SENDER-REGISTRY.1 swapped
+    // resolveSenderLocation for resolveTenantSmsSender here; the property under
+    // test is unchanged — WHICH location the sender is resolved from.)
+    expect(resolveTenantSmsSender).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: 'ANCHOR' }))
   })
 
   it('LINK NOT LOST: a resolver returning null (the fail-open path) sends too', async () => {
@@ -118,6 +128,6 @@ describe('payment-sms — an unresolvable comms location', () => {
     const res = await POST(new Request('http://x', { method: 'POST' }), props)
 
     expect(res.status).toBe(200)
-    expect(resolveSenderLocation).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: 'MASTER' }))
+    expect(resolveTenantSmsSender).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: 'MASTER' }))
   })
 })

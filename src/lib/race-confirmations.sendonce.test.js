@@ -31,12 +31,22 @@ const sendTransactionalEmail = vi.fn(async () => ({ ok: true }))
 const resolveEventCommsLocation = vi.fn(async () => ({ id: 'LOC', name: 'Stillorgan' }))
 
 vi.mock('./postmark', () => ({ sendTransactionalEmail: (...a) => sendTransactionalEmail(...a) }))
-vi.mock('./twilio', () => ({
+
+// PARTIAL mocks, deliberately. A whole-module factory that lists only the
+// exports this file happens to use turns the ADDITION of an export elsewhere
+// into a red suite here — and these seven tests are the send-then-stamp
+// regression guards, so disarming them is exactly the accident to avoid.
+// `importOriginal` keeps every other export real, so a new one cannot break us.
+vi.mock('./twilio', async (importOriginal) => ({
+  ...(await importOriginal()),
   sendLocationSms: vi.fn(async () => ({ sid: 'SM1' })),
   resolveSenderLocation: vi.fn(async (_db, l) => l),
-  TwilioError: class TwilioError extends Error {},
+  resolveTenantSmsSender: vi.fn(async (_db, l) => ({ location: l, senderId: 'UN1T', source: 'location' })),
 }))
-vi.mock('./event-comms-location', () => ({ resolveEventCommsLocation: (...a) => resolveEventCommsLocation(...a) }))
+vi.mock('./event-comms-location', async (importOriginal) => ({
+  ...(await importOriginal()),
+  resolveEventCommsLocation: (...a) => resolveEventCommsLocation(...a),
+}))
 vi.mock('@/lib/connection-registry', () => ({ overlayConnections: vi.fn(async (_db, row) => row) }))
 vi.mock('./event-email', () => ({
   resolveEventEmail: vi.fn(async () => ({ subject: 'You are in', htmlBody: '<p>hi</p>' })),
@@ -56,6 +66,11 @@ function makeWorld({ stampFails = false, alreadySent = null, onStamp = null } = 
   const calls = []
   const row = {
     id: PAYMENT_ID,
+    // Present ON PURPOSE. With no contact_id the consent gate short-circuits
+    // before it queries anything, so these tests would pass without the fake db
+    // ever modelling `contacts` — coverage by accident, and it would evaporate
+    // the day a fixture grew a contact. Give it one, and model the table.
+    contact_id: 'c0000000-0000-0000-0000-000000000001',
     contact_email: 'runner@example.com',
     contact_phone: null,
     contact_name: 'A Runner',
@@ -85,6 +100,25 @@ function makeWorld({ stampFails = false, alreadySent = null, onStamp = null } = 
 
   const db = {
     from(table) {
+      // A contact with nothing suppressing: these tests are about send ORDER,
+      // not consent. race-confirmations.consent.test.js owns the gate itself.
+      if (table === 'contacts') {
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({
+                data: {
+                  id: 'c0000000-0000-0000-0000-000000000001',
+                  email_status: 'active',
+                  sms_status: 'active',
+                  contact_preferences: { email_administrative: true, sms_administrative: true },
+                },
+                error: null,
+              }),
+            }),
+          }),
+        }
+      }
       if (table !== 'race_payments') throw new Error(`unexpected table ${table}`)
       return {
         select: () => ({ eq: () => ({ single: async () => ({ data: { ...row }, error: null }) }) }),

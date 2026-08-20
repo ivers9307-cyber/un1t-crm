@@ -14,13 +14,14 @@
 // retries on non-2xx) without duplicate messages.
 
 import { sendTransactionalEmail } from './postmark'
-import { sendLocationSms, TwilioError, resolveSenderLocation } from './twilio'
+import { sendLocationSms, TwilioError, resolveTenantSmsSender } from './twilio'
 import { formatWeekdayLongDateInTZ } from './dates'
 import { getAppUrl } from './app-url'
 import { signCheckinToken } from './event-checkin-tokens'
 import { buildEventEmailShell, resolveEventEmail } from './event-email'
 import { overlayConnections } from '@/lib/connection-registry'
-import { resolveEventCommsLocation } from './event-comms-location'
+import { resolveEventCommsLocation, pickAudienceVenueName } from './event-comms-location'
+import { checkTransactionalConsent } from './transactional-consent'
 import { logError } from './log'
 
 function fmtRaceDate(dateStr) {
@@ -76,7 +77,7 @@ export async function sendRaceConfirmations({ db, paymentId }) {
   const { data: payment, error } = await db
     .from('race_payments')
     .select(`
-      id, contact_email, contact_phone, contact_name,
+      id, contact_id, contact_email, contact_phone, contact_name,
       amount_cents, currency, member_count, non_member_count,
       member_fee_cents, non_member_fee_cents, status,
       confirmation_email_sent_at, confirmation_sms_sent_at,
@@ -87,7 +88,7 @@ export async function sendRaceConfirmations({ db, paymentId }) {
         accent_hex, hero_image_url,
         confirmation_email_subject, confirmation_email_intro, confirmation_email_template_id,
         confirmation_sms_enabled,
-        locations:location_id ( id, name, twilio_alpha_sender_id, organization_id )
+        locations:location_id ( id, name, is_host_anchor, twilio_alpha_sender_id, organization_id )
       ),
       registration:race_registration_id (
         id, wave_id,
@@ -186,11 +187,25 @@ export async function sendRaceConfirmations({ db, paymentId }) {
     waveLabel: wave
       ? (wave.label ? `${wave.label} · ${fmtWaveTime(wave.start_time)}` : fmtWaveTime(wave.start_time))
       : '',
-    // Host events hang off a hidden internal anchor location ("<host>
-    // (host events)"); the real venue lives in race.venue_name. Prefer it
-    // so the attendee's receipt shows the actual venue, not the ops string.
-    // UN1T events have no venue_name → falls through to the location name.
-    locationName: race?.venue_name || location?.name || '',
+    // EVENT-COPY.1 — this value reaches the customer three times: the "Where"
+    // row, the `UN1T · <loc>` email footer, and the `{{location}}` merge tag
+    // operators write copy against. All three are claims about WHERE THE EVENT
+    // IS, so this is the VENUE helper, not the sign-off one: venue_name → the
+    // event's OWN location (anchors skipped) → ''.
+    //
+    // It used to be `venue_name || location.name`, which is right whenever a
+    // venue is set but falls straight onto the anchor's internal label ("<host>
+    // (host events)") when it is not — and `venue_name` is only mandatory for
+    // HOST-submitted events, never for a staff-created one.
+    //
+    // `commsLocation` is deliberately NOT consulted here even though it is in
+    // scope: it is a SENDER identity (mig 553), and letting it answer a venue
+    // question prints a real gym the event is not held at. See
+    // pickAudienceVenueName's header.
+    locationName: pickAudienceVenueName({
+      venueName: race?.venue_name,
+      eventLocation: location,
+    }),
     teamName: team?.name || '',
     teamSize: team?.size || 0,
     teamMembers: teamMembersWithQr,
@@ -401,6 +416,41 @@ export function buildConfirmationEmailHtml(ctx) {
 async function sendEmail({ db, payment, ctx, commsLocationId }) {
   if (!payment.contact_email) return { status: 'skipped', reason: 'no_email' }
 
+  // EVENT-CONSENT.1 — the check this path never had. Same gate the sibling
+  // TRANSACTIONAL senders apply (booking-confirmations.js, event-attendee-
+  // reminders.js), now shared rather than copied: hard signals
+  // (bounced/complained) plus the ADMINISTRATIVE opt-out.
+  //
+  // ADMINISTRATIVE, NOT MARKETING, and the difference is not academic: of the
+  // 193 completed race payments in prod, 47 belong to contacts who have opted
+  // out of MARKETING email and 0 to contacts who have opted out of
+  // administrative. Gating a paid-registration receipt — which carries the
+  // per-person check-in QR — on the marketing flag would silently delete a
+  // quarter of them. See transactional-consent.js for the query.
+  //
+  // An UNREADABLE consent row sends anyway and logs (checkTransactionalConsent
+  // owns that). This function is invoked only on a FRESH payment transition, so
+  // a suppression that fires by accident is permanent and takes the attendee's
+  // check-in QR with it; a receipt sent to a hard-bounced address is dropped by
+  // Postmark's own suppression list at no cost to anyone.
+  //
+  // `unrecoverable: true` is doing real work here and is not decoration —
+  // `markRacePaymentStatus` returns `applied: null` once the payment is already
+  // 'completed', so no webhook redelivery, no cron and no operator screen ever
+  // re-runs this. It buys two things: EVERY suppression is logged at error
+  // level (an operator can then post the QR by hand), and the mig-151 ClassPass
+  // blanket — which is what `email_administrative = false` means for 1626 of
+  // the 1627 contacts that carry it, with zero human opt-outs on record — stops
+  // being able to delete a receipt for money we took. Hard signals and genuine
+  // person-set opt-outs still suppress. Read transactional-consent.js's header
+  // before narrowing or widening this.
+  const gate = await checkTransactionalConsent({
+    db, contactId: payment.contact_id, channel: 'email',
+    module: 'race-confirmations', meta: { paymentId: payment.id },
+    unrecoverable: true,
+  })
+  if (!gate.allowed) return { status: 'skipped', reason: gate.reason }
+
   const race = payment.race || {}
   const mergeContact = {
     first_name: (payment.contact_name || '').split(' ')[0] || '',
@@ -439,10 +489,51 @@ async function sendSms({ db, payment, location, ctx, commsLocation }) {
   if (!payment.contact_phone) return { status: 'skipped', reason: 'no_phone' }
   if (!location) return { status: 'skipped', reason: 'no_location' }
 
-  // SENDER-ORG-FALLBACK — a hosted event sits on a per-host ANCHOR location
-  // with no Twilio sender; resolveSenderLocation swaps in the org's own sender
-  // so it never falls through to the global CCF Autos default.
-  const senderLocation = await resolveSenderLocation(db, commsLocation || location)
+  // EVENT-CONSENT.1 — the SMS half of the gate the sibling paths apply:
+  // sms_status (three-state: active / opted_out / invalid) plus
+  // sms_administrative. Unreadable → send + log, same reasoning as the email.
+  // `unrecoverable: true` for the same reason too — this leg is invoked from
+  // the same one-shot transition and nothing re-runs it either.
+  const gate = await checkTransactionalConsent({
+    db, contactId: payment.contact_id, channel: 'sms',
+    module: 'race-confirmations', meta: { paymentId: payment.id },
+    unrecoverable: true,
+  })
+  if (!gate.allowed) return { status: 'skipped', reason: gate.reason }
+
+  // SENDER-REGISTRY.1 — a hosted event can sit on a per-host ANCHOR location
+  // with no Twilio sender, so the sender comes from the org. What changed is
+  // what happens when the ORG has none either: the old `resolveSenderLocation`
+  // handed the location back untouched and `getLocationSenderId` then fell
+  // through to `TWILIO_FROM || 'CCFautos'` — CCF Autos being a different
+  // business in this estate, not a neutral default. A gym registrant getting a
+  // race confirmation from a used-car dealership's sender reads as a scam and
+  // cannot be un-sent.
+  //
+  // So this leg SKIPS rather than sends under the wrong brand — and skipping is
+  // affordable here in a way it would not be for the email: this whole leg is
+  // opt-in per event (`confirmation_sms_enabled`, false for every event in prod
+  // today), the EMAIL receipt above is a separate leg that is unaffected, and
+  // it is the email that carries the per-person check-in QR. The attendee loses
+  // a courtesy text, not their proof of entry. `result.skipped` records the
+  // reason and the log line names the location to configure.
+  //
+  // 'unreadable' is kept separate from 'none' on purpose. Both skip — the
+  // fallback is the same wrong brand either way — but they are different facts
+  // and the log has to say which, or an operator chases a configuration that
+  // was never missing.
+  const { location: senderLocation, source } = await resolveTenantSmsSender(db, commsLocation || location)
+  if (source === 'none' || source === 'unreadable') {
+    logError('race-confirmations', source === 'unreadable'
+      ? 'tenant SMS sender lookup FAILED (not "unset") — SKIPPING the confirmation text rather than sending it from another brand; retry the lookup before touching any configuration (the email receipt is unaffected)'
+      : 'no tenant SMS sender for this event — SKIPPING the confirmation text rather than sending it from another brand (the email receipt is unaffected)', {
+      paymentId: payment.id,
+      raceEventId: payment.race?.id || null,
+      senderLocationId: (commsLocation || location)?.id || null,
+      senderSource: source,
+    })
+    return { status: 'skipped', reason: source === 'unreadable' ? 'sms_sender_unreadable' : 'no_tenant_sms_sender' }
+  }
 
   const lines = []
   lines.push(`UN1T: Team ${ctx.teamName} is in for ${ctx.raceName} on ${ctx.raceDateLabel}.`)

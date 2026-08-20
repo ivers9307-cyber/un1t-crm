@@ -27,7 +27,13 @@ const sendTransactionalEmail = vi.fn(async () => ({ ok: true }))
 const resolveEventCommsLocation = vi.fn(async () => ({ id: 'MASTER' }))
 
 vi.mock('@/lib/postmark', () => ({ sendTransactionalEmail: (...a) => sendTransactionalEmail(...a) }))
-vi.mock('@/lib/event-comms-location', () => ({ resolveEventCommsLocation: (...a) => resolveEventCommsLocation(...a) }))
+// PARTIAL — see race-confirmations.sendonce.test.js: a factory that lists only
+// the exports used today makes a later export addition break these "REMINDER
+// NOT LOST" guards, which is the one thing they must never do quietly.
+vi.mock('@/lib/event-comms-location', async (importOriginal) => ({
+  ...(await importOriginal()),
+  resolveEventCommsLocation: (...a) => resolveEventCommsLocation(...a),
+}))
 vi.mock('@/lib/customer-push', () => ({ sendCustomerPush: vi.fn(async () => ({})) }))
 vi.mock('@/lib/app-url', () => ({ getAppUrl: () => 'https://crm.test' }))
 vi.mock('@/lib/event-checkin-tokens', () => ({ signCheckinToken: () => 'tok' }))
