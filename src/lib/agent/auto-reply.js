@@ -73,7 +73,10 @@ export const ALL_AGENT_TOOLS = [...ACCOUNT_TOOLS, ...BOOKING_TOOLS, ...EVENT_TOO
 // buildCachedSystem for the measurement). The intra-turn tool_result marker
 // further down keeps the 5-minute default: it caches a prefix that only lives
 // for the rest of the turn, so the 1h write premium would buy nothing.
-const CACHED_ACCOUNT_TOOLS = ALL_AGENT_TOOLS.map((tool, i) =>
+// Exported so the eval harness sends the EXACT block production sends. It used
+// to rebuild its own copy "in the same shape", which silently drifted the
+// moment the TTL changed here and cost a full eval run to a 400.
+export const CACHED_ACCOUNT_TOOLS = ALL_AGENT_TOOLS.map((tool, i) =>
   i === ALL_AGENT_TOOLS.length - 1
     ? { ...tool, cache_control: { type: 'ephemeral', ttl: '1h' } }
     : tool,

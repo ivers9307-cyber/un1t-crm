@@ -350,6 +350,38 @@ describe('agent turn — tool executor exceptions', () => {
     expect(body.system[0].cache_control).toEqual({ type: 'ephemeral', ttl: '1h' })
   })
 
+  // The API rejects a request where a 1h breakpoint appears AFTER a 5m one:
+  // "a ttl='1h' cache_control block must not come after a ttl='5m' block",
+  // evaluated across tools → system → messages in that order. Production's
+  // order (tools 1h, system 1h, tool_result 5m) is descending and therefore
+  // legal, but nothing asserted it until the eval harness hit the 400 for
+  // real. Assert the invariant, not just the individual markers.
+  it('never places a longer-lived cache breakpoint after a shorter-lived one', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(toolTurn())
+      .mockResolvedValueOnce(textTurn('All set.'))
+    vi.stubGlobal('fetch', fetchMock)
+    executeAccountTool.mockResolvedValueOnce({ ok: true })
+    const calls = []
+    const db = agentDb({ conv: CONV, history: HISTORY, calls })
+
+    await runChannelAgent(db, makeAdapter(), ctx)
+
+    // The second call is the one that carries all three block families.
+    const body = JSON.parse(fetchMock.mock.calls[1][1].body)
+    const rank = (cc) => (cc ? (cc.ttl === '1h' ? 2 : 1) : 0)
+    const sequence = [
+      ...body.tools.map(t => rank(t.cache_control)),
+      ...body.system.map(b => rank(b.cache_control)),
+      ...body.messages.flatMap(m => (Array.isArray(m.content) ? m.content : []).map(c => rank(c.cache_control))),
+    ].filter(Boolean)
+
+    expect(sequence.length).toBeGreaterThan(1)
+    for (let i = 1; i < sequence.length; i++) {
+      expect(sequence[i]).toBeLessThanOrEqual(sequence[i - 1])
+    }
+  })
+
   it('the same tool throwing twice abandons the turn as tool_error, not model failure', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(toolTurn()))
     executeAccountTool.mockRejectedValue(new Error('boom'))
