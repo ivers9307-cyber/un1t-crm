@@ -21,7 +21,7 @@ const DEFAULTS = {
   publicPath:       'stillorgan',
   consultSlug:      'free-un1t-consultation',
   heading:          'Your first 3 classes are free',
-  subhead:          'Book your first class now — pop in your details to start.',
+  subhead:          'Pick a time that suits you. It takes about 30 seconds.',
   consentLabel:     "I'd like to hear from UN1T Stillorgan by email, SMS and WhatsApp.",
   classDoneTitle:   "You're being booked in 🎉",
   classDoneBody:    "That's the first of your 3 free classes — watch for a WhatsApp confirming it. See you at UN1T Stillorgan!",
@@ -41,7 +41,21 @@ export default function ClassFunnel(props) {
   // consultSlug is different: an explicit '' means "no consult upsell" and MUST
   // be honoured, so read it straight from props and only default when absent.
   const consultSlug = props?.consultSlug ?? DEFAULTS.consultSlug
-  const [step, setStep] = useState('details') // details | calendar | classpick | payment | done | classdone
+  // STARTCONV.1 — LAND ON THE PICKER, not the form.
+  //
+  // Measured 2026-08-20: of 138 people who arrived from the 3-Class Trial
+  // email, 26 submitted the details form — 112 left without ever seeing a
+  // single class time. The form asked for four fields plus a consent tick
+  // before showing any value, and hid the one thing that decides whether this
+  // is viable for someone: is there a time they can actually make. Someone who
+  // can't do 6:30am or 6pm was abandoning BEFORE finding that out, so in the
+  // telemetry they were indistinguishable from someone who just drifted off.
+  //
+  // Nothing is lost by moving the form later: detailsNext never made a server
+  // call, so no lead was ever captured at that step. Capture has always
+  // happened at the booking POST, which is now simply one step further on.
+  const [step, setStep] = useState('classpick') // classpick | details | calendar | payment | done | classdone
+  const [chosenClass, setChosenClass] = useState(null)
   const [payment, setPayment] = useState(null) // { paymentId, checkout } when requiresPayment
   const [path, setPath] = useState('class')   // 'class' (default) | 'consultation' (upsell only)
   // Marketing-consent defaults to ticked (operator's call — pre-ticked + required;
@@ -183,7 +197,13 @@ export default function ClassFunnel(props) {
   // flipping path→consultation loads the consult event, step→calendar loads its days.
   function addConsult() { setError(null); setPath('consultation'); setStep('calendar') }
 
-  function detailsNext(e) {
+  function pickClass(c) {
+    setError(null)
+    setChosenClass(c)
+    setStep('details')
+  }
+
+  async function detailsNext(e) {
     e.preventDefault()
     setError(null)
     if (!form.first_name.trim() || !form.last_name.trim() || !form.email.trim() || !form.phone.trim() || !form.consent) {
@@ -193,7 +213,10 @@ export default function ClassFunnel(props) {
       setError('Please enter a valid mobile number (e.g. 087 123 4567).'); return
     }
     fireStep('details')
-    setStep('classpick')
+    // STARTCONV.1 — the form submit IS the booking now. `details` still fires
+    // first and separately, so the drop between seeing times and completing
+    // the form stays measurable.
+    await bookClass(chosenClass)
   }
 
   async function book(slot) {
@@ -220,6 +243,7 @@ export default function ClassFunnel(props) {
 
   async function bookClass(c) {
     if (submitting) return
+    if (!c) { setError('Pick a class first.'); setStep('classpick'); return }
     setSubmitting(true); setError(null)
     try {
       const r = await fetch('/api/public/class-booking', {
@@ -233,7 +257,19 @@ export default function ClassFunnel(props) {
         }),
       })
       const j = await r.json().catch(() => ({}))
-      if (!r.ok || j.success === false) { setError(j.error || 'Something went wrong — please try again.'); return }
+      if (!r.ok || j.success === false) {
+        // STARTCONV.1 — the class can fill while they are typing. Send them
+        // back to the picker rather than leaving them on a form whose submit
+        // can never succeed. `form` is component state, so everything they
+        // typed survives the step change — say so, or it reads as lost work.
+        if (j.code === 'class_unavailable') {
+          setChosenClass(null)
+          setStep('classpick')
+          setError('That class filled up while you were typing. Pick another one — your details are saved.')
+          return
+        }
+        setError(j.error || 'Something went wrong — please try again.'); return
+      }
       if (j.data?.requiresPayment) {
         setPayment({ paymentId: j.data.paymentId, checkout: j.data.checkout })
         fireStep('payment_view')
@@ -286,9 +322,28 @@ export default function ClassFunnel(props) {
 
       {step === 'details' && (
         <form onSubmit={detailsNext} className="space-y-3.5">
+          {/* STARTCONV.1 — keep the chosen class on screen. It is what they
+              came for, it is the reason to finish the form, and if the class
+              fills mid-typing they need to recognise what changed. */}
+          {chosenClass && (
+            <div className="mb-4 rounded-xl border-2 border-white/20 px-4 py-3">
+              <div className="text-[11px] uppercase tracking-wider text-white/50">You&apos;re booking</div>
+              <div className="mt-1 flex items-center justify-between gap-3">
+                <span className="text-base"><span className="font-bold">{chosenClass.time}</span> · {chosenClass.name}</span>
+                <button
+                  type="button"
+                  onClick={() => { setError(null); setStep('classpick') }}
+                  className="shrink-0 text-xs underline text-white/60 hover:text-white"
+                >
+                  Change
+                </button>
+              </div>
+              {chosenClass.day_label && <div className="mt-1 text-xs text-white/50">{chosenClass.day_label}</div>}
+            </div>
+          )}
           <div className="mb-4">
-            <h1 className="font-display font-extrabold uppercase text-3xl mb-2">{heading}</h1>
-            <p className="text-white/60 text-sm">{subhead}</p>
+            <h1 className="font-display font-extrabold uppercase text-2xl mb-2">Last step</h1>
+            <p className="text-white/60 text-sm">We just need these to book you in.</p>
           </div>
           <input className={inputCls} placeholder="First name" value={form.first_name} onChange={set('first_name')} maxLength={120} autoComplete="given-name" />
           <input className={inputCls} placeholder="Last name" value={form.last_name} onChange={set('last_name')} maxLength={120} autoComplete="family-name" />
@@ -299,7 +354,9 @@ export default function ClassFunnel(props) {
             <span>{consentLabel} <a href="/privacy" target="_blank" rel="noreferrer" className="underline">Privacy</a></span>
           </label>
           {error && <p className="text-sm text-red-300">{error}</p>}
-          <button type="submit" className="lp-btn w-full">Next →</button>
+          <button type="submit" disabled={submitting} className="lp-btn w-full disabled:opacity-50">
+            {submitting ? 'Booking…' : 'Confirm my class →'}
+          </button>
         </form>
       )}
 
@@ -338,7 +395,12 @@ export default function ClassFunnel(props) {
 
       {step === 'classpick' && (
         <div>
-          <h1 className="font-display font-extrabold uppercase text-2xl mb-4">Pick a class</h1>
+          {/* STARTCONV.1 — the picker is the landing step now, so it carries
+              the headline the details form used to. */}
+          <div className="mb-4">
+            <h1 className="font-display font-extrabold uppercase text-3xl mb-2">{heading}</h1>
+            <p className="text-white/60 text-sm">{subhead}</p>
+          </div>
           {classesLoading && <p className="text-white/50 text-sm">Loading classes…</p>}
           {!classesLoading && classes.length === 0 && <p className="text-white/50 text-sm">No classes are bookable online right now — message us and we&apos;ll get you booked in.</p>}
           {!classesLoading && classes.length > 0 && (
@@ -347,7 +409,7 @@ export default function ClassFunnel(props) {
                 {classDays.map((d) => {
                   const lbl = classes.find((c) => c.day === d)?.day_label || d
                   return (
-                    <button key={d} onClick={() => setSelectedClassDay(d)}
+                    <button key={d} type="button" onClick={() => setSelectedClassDay(d)}
                       className={`shrink-0 px-4 py-3 rounded-xl border-2 text-sm ${selectedClassDay === d ? 'border-white bg-white text-black' : 'border-white/20 text-white'}`}>
                       {lbl}
                     </button>
@@ -356,7 +418,7 @@ export default function ClassFunnel(props) {
               </div>
               <div className="space-y-2">
                 {dayClasses.map((c) => (
-                  <button key={c.event_id} disabled={submitting} onClick={() => bookClass(c)}
+                  <button key={c.event_id} type="button" disabled={submitting} onClick={() => pickClass(c)}
                     className="w-full px-4 py-3 rounded-xl border-2 border-white/20 hover:border-white text-left disabled:opacity-50">
                     <span><span className="font-bold">{c.time}</span> · {c.name}</span>
                   </button>
