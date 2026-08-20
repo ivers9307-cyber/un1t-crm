@@ -232,6 +232,29 @@ describe('tickCampaignSend — transient vs permanent errors (CAMPAIGN-REL.1)', 
     expect(inserts[0].ops[0].args[0]).toHaveLength(1)
     expect(inserts[0].ops[0].args[0][0].postmark_message_id).toBe('pm-1')
   })
+
+  // POSTMARK-RACE.1 — campaigns are 100% of the measured loss: all 3,231
+  // Delivery events that outran their email_sends row over 21 days carried a
+  // `campaign-<uuid>` tag. The batch cannot write the row first (Postmark mints
+  // the MessageID, and the API call for up to 500 recipients takes seconds
+  // during which Postmark is already delivering), so the marker is what tells
+  // the webhook processor to wait rather than discard.
+  it('stamps the crm_send marker on every message in the batch', async () => {
+    const { db } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0), makeRecipient('r2', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }, { ErrorCode: 0, MessageID: 'pm-2' }])
+
+    await tickCampaignSend(db, campaign)
+
+    const batch = sendBatch.mock.calls.at(-1)[0]
+    expect(batch).toHaveLength(2)
+    for (const email of batch) {
+      // POSTMARK-RACE.2 — the value is the send instant, not a constant.
+      expect(Number(email.metadata.crm_send)).toBeGreaterThan(Date.now() - 60_000)
+      // The existing attribution is preserved, not replaced.
+      expect(email.metadata.campaign_id).toBe(campaign.id)
+      expect(email.metadata.contact_id).toEqual(expect.any(String))
+    }
+  })
 })
 
 describe('tickCampaignSend — stuck-sending reclaim (CAMPAIGN-REL.2)', () => {

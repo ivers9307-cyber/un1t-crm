@@ -3,6 +3,7 @@ import { resolvePostmarkToken } from './postmark-token'
 import { applyAudienceFilter, applyAudienceFilterAsync } from './audience-filter'
 import { htmlToPlainText } from './email-content'
 import { resolveEmailSender } from './tenant-email'
+import { withSendMarker } from './postmark-send-marker'
 
 const POSTMARK_API_URL = 'https://api.postmarkapp.com'
 
@@ -778,11 +779,17 @@ export async function sendTransactionalEmail({
     stream: 'outbound',  // Postmark transactional stream
     tag: tag || 'transactional',
     sender: sender || undefined,
+    // POSTMARK-RACE.1 — the marker is stamped on EXACTLY the condition the
+    // email_sends insert below is gated on. `contactId` falsy means this send
+    // is deliberately unlogged (an ops alert, a staff notice, a race
+    // confirmation for a payer with no contact), and marking it would promise
+    // the webhook processor a row that is never coming.
+    metadata: contactId ? withSendMarker() : undefined,
   })
 
   // Log to email_sends
   if (contactId) {
-    await db.from('email_sends').insert({
+    const { error: logErr } = await db.from('email_sends').insert({
       contact_id: contactId,
       location_id: locationId,
       source_type: sourceType,
@@ -795,6 +802,16 @@ export async function sendTransactionalEmail({
       postmark_stream: 'outbound',
       status: 'sent',
     })
+    // POSTMARK-RACE.2 — this insert's error was discarded, and the marker
+    // stamped above PROMISES the webhook processor that the row is coming. A
+    // silent failure here therefore did not just lose the send log: it made
+    // every subsequent webhook for this message look like a race. Logged, not
+    // thrown — the mail genuinely went out and the caller must still see that.
+    if (logErr) {
+      console.error('[postmark] email_sends insert failed (transactional):', logErr.message, {
+        messageId: result.messageId, contactId,
+      })
+    }
   }
 
   return result
@@ -909,11 +926,14 @@ export async function sendMarketingEmail({
     tag: tag || 'marketing',
     unsubscribeUrl,
     sender: sender || undefined,
+    // POSTMARK-RACE.1 — same pairing as sendTransactionalEmail: marked iff the
+    // insert below will run.
+    metadata: contactId ? withSendMarker() : undefined,
   })
 
   // Log to email_sends (same shape as the campaign + transactional paths).
   if (contactId) {
-    await db.from('email_sends').insert({
+    const { error: logErr } = await db.from('email_sends').insert({
       contact_id: contactId,
       location_id: locationId,
       source_type: sourceType,
@@ -926,6 +946,14 @@ export async function sendMarketingEmail({
       postmark_stream: 'broadcast',
       status: 'sent',
     })
+    // POSTMARK-RACE.2 — see sendTransactionalEmail; the marker promises this
+    // row exists, so a silent insert failure here mislabels every later webhook
+    // for the message as a race.
+    if (logErr) {
+      console.error('[postmark] email_sends insert failed (marketing):', logErr.message, {
+        messageId: result.messageId, contactId,
+      })
+    }
   }
 
   return result

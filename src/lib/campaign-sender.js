@@ -84,6 +84,7 @@ import { getAppUrl } from './app-url.js'
 import { logInfo } from './log.js'
 import { buildCampaignViewUrl, prependViewInBrowserLink, fetchLocationEmailCopy } from './campaign-web-view.js'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
+import { withSendMarker } from './postmark-send-marker.js'
 
 const CHUNK_SIZE = 500             // recipients per cron tick per campaign
 const AUDIENCE_PAGE_SIZE = 1000    // audience load page (CAMPAIGN.11)
@@ -732,10 +733,17 @@ export async function tickCampaignSend(db, campaign) {
       replyTo: campaign.reply_to || locationReplyTo || undefined,
       stream,
       tag: `campaign-${campaignId}`,
-      metadata: {
+      // POSTMARK-RACE.1 — `crm_send` promises the webhook processor that an
+      // email_sends row is coming for this message, so a Delivery that beats
+      // the insert below is retried instead of discarded. Safe to promise
+      // unconditionally here: every result carrying a MessageID gets a
+      // sendRecords entry a few lines down, and if that insert genuinely fails
+      // the retry budget converts the promise into a dead-letter row — which
+      // is the artefact this path has never had.
+      metadata: withSendMarker({
         campaign_id: campaignId,
         contact_id: contact.id,
-      },
+      }),
       unsubscribeUrl,
       _recipientId: row.id,
       _contactId: contact.id,

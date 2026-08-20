@@ -22,6 +22,7 @@ import {
   outboundAttachmentsField,
 } from '@/lib/email-outbound-attachments-server'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
+import { withSendMarker } from '@/lib/postmark-send-marker'
 import { loadSendingMailbox, loadOwnAddresses } from '../_helpers'
 
 // POST /api/email/tickets/compose — start a conversation (EMAIL-TICKET.5).
@@ -241,7 +242,12 @@ export async function POST(request) {
     htmlBody: textToHtml(outboundText),
     textBody: outboundText,
     tag: 'ticket-compose',
-    metadata: { mailbox_id: mailbox.id, contact_id: contact?.id || '' },
+    // POSTMARK-RACE.1 — marked iff `sendLogRow` will be built, which is the
+    // same `contact?.id` condition. An outbound ticket mail to an address with
+    // no contact writes no email_sends row and must stay unmarked.
+    metadata: contact?.id
+      ? withSendMarker({ mailbox_id: mailbox.id, contact_id: contact.id })
+      : { mailbox_id: mailbox.id, contact_id: '' },
     // undefined when there are none, so the Postmark payload is byte-identical
     // to every email this route has ever sent.
     attachments: collected.postmark,
