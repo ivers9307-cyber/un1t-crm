@@ -118,11 +118,22 @@ export async function POST(_request, props) {
   // EVENT-COMMS-LOC — send the payment link from the event's comms location
   // (host events → the org master, not the sender-less anchor). resolveSenderLocation
   // is the inner safety net if that resolved location itself lacks a sender.
-  const commsLocation = await resolveEventCommsLocation(db, {
-    location_id: reg.race_events.location_id,
-    host_id: reg.race_events.host_id,
-    sending_location_id: reg.race_events.sending_location_id,
-  })
+  // BAREWRITE.1 — resolveEventCommsLocation throws rather than silently
+  // falling back to the sender-less anchor (wrong-brand sender) when it cannot
+  // read the location rows. Refuse the send and say so; the operator retries.
+  let commsLocation
+  try {
+    commsLocation = await resolveEventCommsLocation(db, {
+      location_id: reg.race_events.location_id,
+      host_id: reg.race_events.host_id,
+      sending_location_id: reg.race_events.sending_location_id,
+    })
+  } catch (e) {
+    return NextResponse.json({
+      success: false,
+      error: `Could not resolve which studio this text should send from, so nothing was sent (sending it anyway risks the wrong brand on the message). Try again: ${e.message}`,
+    }, { status: 503 })
+  }
   const senderLocation = await resolveSenderLocation(db, commsLocation || reg.race_events.locations)
 
   let twilioResult
@@ -149,7 +160,10 @@ export async function POST(_request, props) {
   // captain's contact timeline. Never blocks the response.
   if (payment.contact_id) {
     try {
-      await db.from('activities').insert({
+      // Genuinely best-effort (the comment above) — but the error is READ, not
+      // discarded: the try/catch alone catches nothing here, because a
+      // supabase builder resolves with `{ data, error }` instead of throwing.
+      const { error: timelineError } = await db.from('activities').insert({
         contact_id: payment.contact_id,
         location_id: locationId,
         type: 'sms_sent',
@@ -157,6 +171,7 @@ export async function POST(_request, props) {
         note: body,
         created_by: user.id,
       })
+      if (timelineError) console.warn(`[payment-sms] activity log failed: ${timelineError.message}`)
     } catch (e) {
       console.warn(`[payment-sms] activity log failed: ${e?.message || e}`)
     }

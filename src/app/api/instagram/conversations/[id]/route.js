@@ -48,10 +48,14 @@ export async function GET(request, props) {
     .limit(limit)
   const messages = (messagesDesc || []).slice().reverse()
 
-  // Mark as read.
-  await db.from('instagram_conversations')
+  // Mark as read. BAREWRITE.1 — genuinely best-effort: this is a side effect
+  // of READING the thread, and a failed clear only means the unread badge
+  // lingers until the next open. The error is read and logged rather than
+  // discarded, so a systematic failure is visible.
+  const { error: readError } = await db.from('instagram_conversations')
     .update({ unread_count: 0 })
     .eq('id', params.id)
+  if (readError) console.error('[ig-conversation] clearing unread_count failed (non-fatal):', readError.message)
 
   return NextResponse.json({ success: true, conversation, messages: messages || [] })
 }

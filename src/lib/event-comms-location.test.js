@@ -88,4 +88,44 @@ describe('resolveEventCommsLocation', () => {
   it('returns null for a null event', async () => {
     expect(await resolveEventCommsLocation(makeDb({}), null)).toBeNull()
   })
+
+  // ── BAREWRITE.1 — an UNREADABLE row is not an ABSENT row ──────────────────
+  // Both reads used to discard `error`, and the tier logic falls through on a
+  // null: a transient failure on the anchor read left masterLocationId null,
+  // pickCommsLocationTarget handed back the host's sender-less anchor, and the
+  // event's comms went out under the wrong brand. "Could not read it" and
+  // "there is no such row" must stay distinguishable.
+  function makeFailingDb(errorOnId) {
+    return {
+      from() {
+        let id = null
+        const b = {
+          select() { return b },
+          eq(col, val) { if (col === 'id') id = val; return b },
+          maybeSingle() {
+            return id === errorOnId
+              ? Promise.resolve({ data: null, error: { message: 'connection reset' } })
+              : Promise.resolve({ data: { id, organization_id: 'ORG' }, error: null })
+          },
+        }
+        return b
+      },
+    }
+  }
+
+  it('throws (does NOT fall back to the anchor) when the anchor read fails', async () => {
+    const db = makeFailingDb('ANCHOR')
+    await expect(
+      resolveEventCommsLocation(db, { location_id: 'ANCHOR', host_id: 'H', sending_location_id: null }),
+    ).rejects.toThrow(/anchor location read failed/)
+    // The wrong-brand fallback is never reached.
+    expect(resolveMasterLocationId).not.toHaveBeenCalled()
+  })
+
+  it('throws when the sending-location read fails, rather than returning null', async () => {
+    const db = makeFailingDb('LOC')
+    await expect(
+      resolveEventCommsLocation(db, { location_id: 'LOC', host_id: null, sending_location_id: null }),
+    ).rejects.toThrow(/sending location read failed/)
+  })
 })

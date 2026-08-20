@@ -238,9 +238,20 @@ export async function runEventReminders({ db, todayStr } = {}) {
     // the real venue is on ev.venue_name. Prefer it so the reminder shows the
     // actual venue. UN1T events have no venue_name → the location name stands.
     const locationName = ev.venue_name || ev.locations?.name || ''
-    const commsLocation = await resolveEventCommsLocation(db, {
-      location_id: ev.location_id, host_id: ev.host_id, sending_location_id: ev.sending_location_id,
-    })
+    // BAREWRITE.1 — resolveEventCommsLocation now THROWS when it cannot read
+    // the location rows, instead of returning null and letting the caller fall
+    // back to the sender-less anchor (a wrong-brand send). Skip this event for
+    // this tick rather than aborting the whole loop; no claims are taken, so
+    // the next tick re-attempts the same offset.
+    let commsLocation = null
+    try {
+      commsLocation = await resolveEventCommsLocation(db, {
+        location_id: ev.location_id, host_id: ev.host_id, sending_location_id: ev.sending_location_id,
+      })
+    } catch (e) {
+      logError('event-reminders', 'comms location unresolved — event skipped this tick', { err: e, eventId: ev.id })
+      continue
+    }
     const commsLocationId = commsLocation?.id || ev.location_id || null
 
     // Confirmed registrations for this event — paginate past the 1k-row cap.

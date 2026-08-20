@@ -172,9 +172,20 @@ export async function sendRaceConfirmations({ db, paymentId }) {
     try {
       const r = await sendEmail({ db, payment, ctx, commsLocationId })
       if (r.status === 'sent') {
-        await db.from('race_payments')
-          .update({ confirmation_email_sent_at: new Date().toISOString() })
+        // BAREWRITE.1 — the stamp IS the send-once guard, and it used to be a
+        // bare await. A failed stamp leaves confirmation_email_sent_at null,
+        // so the next payment-webhook retry re-enters this branch and sends
+        // the attendee a SECOND receipt — the exact thing the stamp exists to
+        // prevent. `count: 'exact'` because a zero-row UPDATE is not an error
+        // in PostgREST: the row MUST exist (we selected this payment), so
+        // "matched nothing" means the guard is not in place either.
+        const { error: stampErr, count: stamped } = await db.from('race_payments')
+          .update({ confirmation_email_sent_at: new Date().toISOString() }, { count: 'exact' })
           .eq('id', payment.id)
+        if (stampErr || !stamped) {
+          result.failed.push(`email:sent_but_stamp_failed:${stampErr?.message || 'no row updated'}`)
+          console.error('[race-confirmations] email sent but send-once stamp failed — a webhook retry will duplicate it:', payment.id, stampErr?.message || 'no row updated')
+        }
         result.sent.push('email')
       } else {
         result.skipped.push(`email:${r.reason}`)
@@ -194,9 +205,15 @@ export async function sendRaceConfirmations({ db, paymentId }) {
     try {
       const r = await sendSms({ db, payment, location, ctx, commsLocation })
       if (r.status === 'sent') {
-        await db.from('race_payments')
-          .update({ confirmation_sms_sent_at: new Date().toISOString() })
+        // BAREWRITE.1 — same send-once stamp as the email leg above; a lost
+        // stamp means the next retry sends a duplicate SMS. See that comment.
+        const { error: stampErr, count: stamped } = await db.from('race_payments')
+          .update({ confirmation_sms_sent_at: new Date().toISOString() }, { count: 'exact' })
           .eq('id', payment.id)
+        if (stampErr || !stamped) {
+          result.failed.push(`sms:sent_but_stamp_failed:${stampErr?.message || 'no row updated'}`)
+          console.error('[race-confirmations] SMS sent but send-once stamp failed — a webhook retry will duplicate it:', payment.id, stampErr?.message || 'no row updated')
+        }
         result.sent.push('sms')
       } else {
         result.skipped.push(`sms:${r.reason}`)
@@ -354,7 +371,10 @@ async function sendSms({ db, payment, location, ctx, commsLocation }) {
   // Activity timeline mirror — best-effort.
   if (payment.contact_id) {
     try {
-      await db.from('activities').insert({
+      // Genuinely best-effort: a lost timeline line costs an audit row, never
+      // a customer message. The error is still READ (not discarded) so a
+      // systematic failure shows up in logs instead of nowhere.
+      const { error: logErr } = await db.from('activities').insert({
         contact_id: payment.contact_id,
         location_id: payment.race?.location_id || null,
         type: 'sms_sent',
@@ -362,6 +382,7 @@ async function sendSms({ db, payment, location, ctx, commsLocation }) {
         subject: `Race confirmation: ${ctx.raceName}`,
         note: body,
       })
+      if (logErr) console.error('[race-confirmations] activity log insert failed (non-fatal):', logErr.message)
     } catch {
       // Don't fail the comms because the activity insert blew up.
     }

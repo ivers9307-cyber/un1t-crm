@@ -96,6 +96,55 @@ const config = [
     },
   },
   {
+    // BAREWRITE.1 — `guardrails/no-unchecked-supabase-write` is armed PER-PATH,
+    // for the same reason no-low-contrast-accent-text above is: an ERROR-level
+    // repo-wide rule only works on a clean baseline, and this one's baseline is
+    // not clean.
+    //
+    // MEASURED, with an AST over src/ + shared/ + mobile/ + scripts/ (grep
+    // undercuts this class about five-fold — multi-line chains are the house
+    // style — so it was counted with the rule's own semantics, not a regex):
+    //   477 production sites, across 201 files, plus 3 in test files.
+    //   Of those 477:
+    //     45  write to a log/telemetry table (activities, consent_log,
+    //         impersonation_log, glofox_sync_runs, recon_runs/hunts) — a lost
+    //         write costs an audit line, not behaviour. The nearest thing to
+    //         "genuinely fire-and-forget" the population has.
+    //    135  sit in a handler that answers `success: true` within the next 80
+    //         lines — the caller reports success on a write it never checked.
+    //    297  are other behavioural writes, of which 58 are send-once /
+    //         processed stamps: the duplicate-customer-message and
+    //         lost-webhook-event shapes CLAUDE.md already has war stories for.
+    // So the "harmless fire-and-forget" reading of this class does not survive
+    // measurement: under 10% of it is log-only, and even those lose CRM
+    // history. Fixing all 477 in one PR would be ~477 mechanical edits mixed
+    // with the six behavioural ones — unreviewable, and the six are the point.
+    //
+    // TO ARM ANOTHER PATH: clean it (run `npm run check:guardrails` with the
+    // path added and drive it to zero), then add its line here. Same one-line
+    // ratchet as the accent-text list.
+    //
+    // Armed today = the paths this PR cleaned: the campaign send path, the
+    // event/race comms path, staff creation, and the Instagram inbox.
+    // NOT armed and deliberately so: mobile/** is outside this config
+    // entirely (it has its own linters), so the mobile member auto-link fix in
+    // mobile/lib/member/contact-context.jsx is protected by tests, not by this
+    // rule.
+    files: [
+      'src/lib/campaign-sender.js',
+      'src/lib/race-confirmations.js',
+      'src/lib/event-comms-location.js',
+      'src/lib/event-attendee-reminders.js',
+      'src/app/api/staff/route.js',
+      'src/app/api/instagram/**',
+      'src/app/api/registrations/**',
+    ],
+    plugins: { guardrails },
+    rules: {
+      'guardrails/no-unchecked-supabase-write': 'error',
+    },
+  },
+  {
     // Genuinely DARK surfaces — TV boards + the presentation screen render on
     // black; low text ramps are the correct idiom there, so the light-theme
     // chip-contrast rule does not apply. The public event booking flow

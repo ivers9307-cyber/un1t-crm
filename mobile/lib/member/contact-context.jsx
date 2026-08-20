@@ -25,7 +25,7 @@ import { supabase } from './supabase'
 import { api } from './api'
 import { performFullSignOut } from '../sign-out'
 import { useIdentity } from '../identity-context'
-import { NO_MEMBER, shouldAttemptLinkContact, getHasEverBeenStaff, writeCachedMemberContactId } from '../identity'
+import { UNKNOWN, probeMember, shouldAttemptLinkContact, getHasEverBeenStaff, writeCachedMemberContactId } from '../identity'
 
 const CONTACT_COLUMNS = 'id, name, email, dob, gender, weight_kg, profile_setup_completed_at'
 
@@ -43,11 +43,26 @@ export function AuthProvider({ children }) {
   const loadContact = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { setContact(null); return }
-    let { data } = await supabase
-      .from('contacts')
-      .select(CONTACT_COLUMNS)
-      .eq('user_id', user.id)
-      .maybeSingle()
+    // BAREWRITE.1 — the member leg is a TRI-state probe, not a boolean. This
+    // read used to discard `error` and then hand shouldAttemptLinkContact a
+    // hard-coded NO_MEMBER, so a transient failure (offline, 5xx, RLS blip)
+    // read as "CONFIRMED no contacts row" and fired the silent self-link —
+    // exactly the "any unknown leg ⇒ no self-link" rule identity.js exists to
+    // enforce. probeMember() already encodes the correct fold; use it rather
+    // than re-deriving the state here.
+    const probe = await probeMember({
+      fetchContact: () => supabase
+        .from('contacts')
+        .select(CONTACT_COLUMNS)
+        .eq('user_id', user.id)
+        .maybeSingle(),
+    })
+    let data = probe.contact || null
+    if (probe.state === UNKNOWN) {
+      // Unreadable leg: leave whatever the identity spine already resolved in
+      // place rather than blanking a known contact on a transient failure.
+      return
+    }
     if (!data) {
       // App-first member who never clicked the web invite link — self-link
       // by email, ONLY when the identity policy allows (see header).
@@ -55,10 +70,16 @@ export function AuthProvider({ children }) {
       // probe that landed after this provider mounted still hard-disables
       // the fallback.
       const hasEverBeenStaff = await getHasEverBeenStaff()
-      if (shouldAttemptLinkContact({ staffState, hasEverBeenStaff, memberState: NO_MEMBER })) {
+      if (shouldAttemptLinkContact({ staffState, hasEverBeenStaff, memberState: probe.state })) {
         try { await api('/api/mobile/link-contact', { method: 'POST' }) } catch { /* best-effort */ }
-        const reread = await supabase.from('contacts').select(CONTACT_COLUMNS).eq('user_id', user.id).maybeSingle()
-        data = reread.data
+        const reread = await probeMember({
+          fetchContact: () => supabase.from('contacts').select(CONTACT_COLUMNS).eq('user_id', user.id).maybeSingle(),
+        })
+        // An unreadable re-read is not "the link produced nothing" — hold the
+        // current contact rather than publishing a null the next render would
+        // read as "not a member".
+        if (reread.state === UNKNOWN) return
+        data = reread.contact || null
       }
     }
     if (data?.id) writeCachedMemberContactId(data.id).catch(() => {})

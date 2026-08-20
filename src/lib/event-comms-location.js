@@ -29,13 +29,26 @@ export function pickCommsLocationTarget(event, masterLocationId) {
 export async function resolveEventCommsLocation(db, event) {
   if (!event) return null
 
+  // BAREWRITE.1 — both reads below used to discard `error`, which is a real
+  // problem HERE (unlike a plain lookup) because the tier logic FALLS THROUGH
+  // on a null: a transient failure on the anchor read makes masterLocationId
+  // null, and pickCommsLocationTarget then quietly hands back the host's
+  // sender-less anchor location instead of the org master — the wrong-brand
+  // sender. "We could not read it" and "there is no such row" must not
+  // collapse into the same fall-through, so an error throws and the caller
+  // keeps its existing send-failed handling rather than sending as the wrong
+  // brand. (`.maybeSingle()` stays: 0 rows IS a legitimate answer here, so
+  // this is the "answer it in the code" fix, not a discarded error.)
   let masterLocationId = null
   if (!event.sending_location_id && event.host_id && event.location_id) {
-    const { data: anchor } = await db
+    const { data: anchor, error: anchorError } = await db
       .from('locations')
       .select('organization_id')
       .eq('id', event.location_id)
       .maybeSingle()
+    if (anchorError) {
+      throw new Error(`resolveEventCommsLocation: anchor location read failed (would have fallen back to a wrong-brand sender): ${anchorError.message}`)
+    }
     masterLocationId = await resolveMasterLocationId(db, {
       organization_id: anchor?.organization_id || null,
       anchor_location_id: event.location_id,
@@ -45,11 +58,14 @@ export async function resolveEventCommsLocation(db, event) {
   const targetId = pickCommsLocationTarget(event, masterLocationId)
   if (!targetId) return null
 
-  const { data: row } = await db
+  const { data: row, error: rowError } = await db
     .from('locations')
     .select('id, name, twilio_alpha_sender_id, organization_id')
     .eq('id', targetId)
     .maybeSingle()
+  if (rowError) {
+    throw new Error(`resolveEventCommsLocation: sending location read failed: ${rowError.message}`)
+  }
   if (!row) return null
 
   return overlayConnections(db, row, ['twilio_sender'])

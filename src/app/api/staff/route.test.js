@@ -31,7 +31,7 @@ import { createServerClient } from '@/lib/supabase'
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 
-function mockDb({ inviteError } = {}) {
+function mockDb({ inviteError, profileUpdate, clearError } = {}) {
   const inviteUserByEmail = vi.fn((_email, _opts) =>
     Promise.resolve(inviteError
       ? { data: null, error: inviteError }
@@ -43,7 +43,11 @@ function mockDb({ inviteError } = {}) {
     from: vi.fn((table) => {
       if (table === 'profiles') {
         return {
-          update: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ error: null })) })),
+          // BAREWRITE.1 — the route now asks for `{ count: 'exact' }` and
+          // refuses to report success on a role/permission write it cannot
+          // confirm, so the stub must model PostgREST's real contract: an
+          // UPDATE that matches nothing returns NO error and count 0.
+          update: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve(profileUpdate || { error: null, count: 1 })) })),
           select: vi.fn(() => ({
             eq: vi.fn(() => ({
               single: vi.fn(() => Promise.resolve({
@@ -56,7 +60,7 @@ function mockDb({ inviteError } = {}) {
       }
       if (table === 'profile_locations') {
         return {
-          delete: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ error: null })) })),
+          delete: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ error: clearError ? { message: clearError } : null })) })),
           insert: vi.fn(() => Promise.resolve({ error: null })),
         }
       }
@@ -126,5 +130,61 @@ describe('POST /api/staff', () => {
     expect(res.status).toBe(409)
     const body = await res.json()
     expect(body.code).toBe('user_exists')
+  })
+})
+
+// ── BAREWRITE.1 — the staff-create privilege writes ──────────────────────────
+// `await db.from('profiles').update(updates).eq('id', newUserId)` was a BARE
+// await. supabase-js resolves with { data, error } rather than throwing, so a
+// failed update produced a resolved promise and the route answered 201 with a
+// staff member who had been created with the DEFAULT role instead of the
+// requested role, permissions and compensation — a quiet privilege
+// mis-assignment. The adjacent profile_locations INSERT was already
+// error-checked, which is why a total failure surfaced while a partial one did
+// not. A zero-row UPDATE counts as a failure here: the row must exist, and
+// PostgREST reports no error for a match of nothing.
+describe('POST /api/staff — unchecked write regressions', () => {
+  it('refuses to report success when the role/permission update errors', async () => {
+    getCurrentUser.mockResolvedValue(ownerUser)
+    const { db } = mockDb({ profileUpdate: { error: { message: 'permission denied' }, count: null } })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(postReq({
+      email: 'new@example.com', full_name: 'New Coach',
+      assignments: [{ location_id: LOC, role: 'owner' }],
+    }))
+
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    expect(body.error).toMatch(/permission denied/)
+  })
+
+  it('refuses to report success when the role update matches ZERO rows (no error)', async () => {
+    getCurrentUser.mockResolvedValue(ownerUser)
+    const { db } = mockDb({ profileUpdate: { error: null, count: 0 } })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(postReq({
+      email: 'new@example.com', full_name: 'New Coach',
+      assignments: [{ location_id: LOC, role: 'owner' }],
+    }))
+
+    expect(res.status).toBe(500)
+    expect((await res.json()).error).toMatch(/profile row not found/)
+  })
+
+  it('refuses to report success when the default-access clear fails', async () => {
+    getCurrentUser.mockResolvedValue(ownerUser)
+    const { db } = mockDb({ clearError: 'deadlock detected' })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(postReq({
+      email: 'new@example.com', full_name: 'New Coach',
+      assignments: [{ location_id: LOC, role: 'staff' }],
+    }))
+
+    expect(res.status).toBe(500)
+    expect((await res.json()).error).toMatch(/deadlock detected/)
   })
 })

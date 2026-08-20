@@ -149,12 +149,26 @@ export async function DELETE(request, props) {
 
   // Forget the identity too, or the next inbound would re-link it instantly
   // and the unlink would look broken.
+  //
+  // BAREWRITE.1 — this used to be a bare `await` with the result discarded, so
+  // a failed clear returned `{ success: true }` and the operator watched the
+  // thread silently re-link on the next inbound DM: precisely the outcome the
+  // comment above calls unacceptable. Surface it. A ZERO-row result is NOT an
+  // error here — the `.eq('instagram_igsid', …)` guard means "clear it only if
+  // it still points at this thread", so someone else having already cleared or
+  // re-pointed it is a legitimate no-op, which is why count is not judged.
   if (conversation.contact_id && conversation.ig_user_id) {
-    await db.from('contacts')
+    const { error: forgetError } = await db.from('contacts')
       .update({ instagram_igsid: null })
       .eq('id', conversation.contact_id)
       .eq('location_id', conversation.location_id)
       .eq('instagram_igsid', conversation.ig_user_id)
+    if (forgetError) {
+      return NextResponse.json({
+        success: false,
+        error: `Thread unlinked, but clearing the Instagram identity on the contact failed — the next inbound DM would re-link it. Retry: ${forgetError.message}`,
+      }, { status: 500 })
+    }
   }
 
   return NextResponse.json({ success: true })

@@ -83,7 +83,16 @@ export async function POST(request, props) {
   await markInstagramSeen(conversation.ig_user_id, { connection: conn })
 
   const now = new Date().toISOString()
-  await db.from('instagram_messages').insert({
+  // BAREWRITE.1 — both writes below were bare awaits. Meta has ALREADY
+  // delivered the DM at this point, so neither failure may un-send it and
+  // neither may 500 the request; but both were previously invisible, and each
+  // has a real consequence: a lost message row means the operator's own reply
+  // never appears in the thread (they retype it, the customer gets it twice),
+  // and a lost conversation stamp leaves agent_active TRUE so Mia keeps
+  // replying on a thread a human just took over. Report them on the success
+  // response as warnings so the inbox can surface the mismatch.
+  const warnings = []
+  const { error: messageError } = await db.from('instagram_messages').insert({
     conversation_id: params.id,
     contact_id: conversation.contact_id || null,
     location_id: conversation.location_id,
@@ -95,9 +104,13 @@ export async function POST(request, props) {
     source: 'operator',
     sent_at: now,
   })
+  if (messageError) {
+    console.error('[ig-send] message delivered but not recorded:', messageError.message)
+    warnings.push('The message was delivered but could not be saved to the thread — do not resend it.')
+  }
 
   // Take over: stop the agent + stamp the thread.
-  await db.from('instagram_conversations').update({
+  const { error: threadError } = await db.from('instagram_conversations').update({
     last_message_at: now,
     last_message_direction: 'outbound',
     last_message_preview: text.substring(0, 100),
@@ -105,6 +118,15 @@ export async function POST(request, props) {
     agent_handed_off_at: conversation.agent_handed_off_at || now,
     updated_at: now,
   }).eq('id', params.id)
+  if (threadError) {
+    console.error('[ig-send] take-over stamp failed — Mia may still be active on this thread:', threadError.message)
+    warnings.push('The message was delivered but Mia could not be paused on this thread — pause her manually.')
+  }
 
-  return NextResponse.json({ success: true, messageId: result.messageId, agent_active: false })
+  return NextResponse.json({
+    success: true,
+    messageId: result.messageId,
+    agent_active: !!threadError,
+    ...(warnings.length ? { warnings } : {}),
+  })
 }

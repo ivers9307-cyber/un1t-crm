@@ -743,9 +743,123 @@ const noDeadUn1tToken = {
   },
 }
 
+// ── BAREWRITE.1 — the other half of the discarded-error class ────────────────
+//
+// no-discarded-single-error (above) closed the half where a result IS
+// destructured but `error` is left out. The half it structurally cannot see is
+// the BARE AWAITED WRITE:
+//
+//     await db.from('contacts').update({ instagram_igsid: null }).eq('id', id)
+//
+// There is no `.single()` and nothing is destructured, so there is no discarded
+// binding to flag — and because supabase-js RESOLVES with `{ data, error }`
+// instead of throwing, a failed write produces a resolved promise and the
+// caller proceeds exactly as if it had succeeded. Four of the six live sites
+// this rule was written for ended with the route returning `{ success: true }`
+// on a write that had not happened (IG unlink, staff role/permission
+// assignment) or with a send-once stamp lost so the next webhook retry sent the
+// customer a duplicate message (race confirmations, campaign recipients).
+//
+// WHAT IT FLAGS: an `await`ed supabase chain containing a MUTATION —
+// .insert/.update/.upsert/.delete, or a .rpc() call — whose result is
+// completely unbound, i.e. the AwaitExpression's direct parent is an
+// ExpressionStatement. That is the one shape in which the error is
+// unobservable by construction.
+//
+// DELIBERATE NON-FLAGS (each is a real way the error IS reachable):
+//   - a destructured or assigned result — `const { error } = await …`, and
+//     equally `const { data } = await …`, which is no-discarded-single-error's
+//     territory and a much larger population (measured: 1,078 read sites);
+//     this rule stays strictly on the totally-unbound shape.
+//   - a member access on the awaited value — `(await db.from(t).insert(r))
+//     ?.error`, the idiom campaign-sender used for its retryable insert.
+//   - `.then(({ error }) => …)` as the outermost call: the callback may bind
+//     error, and the repo already treats `.then`-consumed chains as invisible
+//     (see no-discarded-single-error's KNOWN LIMITS).
+//   - `db.storage.*` — those return REAL Promises with their own error shape,
+//     the same carve-out no-catch-on-supabase-builder makes.
+//   - a `return`ed or otherwise consumed chain: the caller owns the error.
+//
+// KNOWN LIMITS, same species as its siblings': one expression only. A builder
+// assembled across statements and awaited through a variable is invisible, and
+// so is a chain handed to a helper that awaits it internally
+// (`await writeOrLog(db.from(t).update(u), …)` — the idiom campaign-sender.js
+// now uses to keep eighteen call sites readable). That laundering is only
+// acceptable because the helper genuinely reads the error in ONE auditable
+// place; it is not a way to quiet the rule.
+//
+// It also cannot see a ZERO-ROW UPDATE: PostgREST returns NO error when an
+// UPDATE matches nothing, so `{ error }` alone still misses "the row vanished".
+// Where the row MUST exist, the fix is `.update(patch, { count: 'exact' })` and
+// a count check — done at the staff-create, race-confirmation and IG-agent
+// sites. No AST rule can tell those apart from the many legitimate
+// zero-row-is-fine writes (every CAS `.is(col, null)` guard in
+// campaign-sender.js is one), so this stays a documented human obligation.
+//
+// SCOPE: armed PER-PATH in eslint.guardrails.config.mjs, not repo-wide. The
+// measured baseline is 477 production sites across 201 files — see that file's
+// comment for the arming rationale and the counts.
+const MUTATION_METHODS = new Set(['insert', 'update', 'upsert', 'delete'])
+
+// Walk DOWN a chain; return the mutation method name if any link is one, or
+// 'rpc' when the chain roots at .rpc(). Null when the chain only reads.
+function chainMutationMethod(node) {
+  let cur = node
+  let found = null
+  while (cur) {
+    if (cur.type === 'CallExpression') {
+      const c = cur.callee
+      if (c && c.type === 'MemberExpression' && c.property) {
+        if (MUTATION_METHODS.has(c.property.name)) found = c.property.name
+        else if (c.property.name === 'rpc' && !found) found = 'rpc'
+      }
+      cur = c && c.type === 'MemberExpression' ? c.object : null
+    } else if (cur.type === 'MemberExpression') {
+      cur = cur.object
+    } else {
+      cur = null
+    }
+  }
+  return found
+}
+
+const noUncheckedSupabaseWrite = {
+  meta: {
+    type: 'problem',
+    docs: {
+      description:
+        'Disallow an awaited supabase write (insert/update/upsert/delete/rpc) whose result is completely unbound. supabase-js resolves with { data, error } rather than throwing, so a bare awaited write reports success to the caller whatever happened.',
+    },
+    schema: [],
+    messages: {
+      unchecked:
+        'This {{method}} is awaited but its result is discarded entirely — supabase-js RESOLVES with `{ data, error }` instead of throwing, so a failed write is indistinguishable from a successful one here and the code below proceeds as if it had happened. Destructure the error and handle it as the call site deserves: surface it where the caller reports success, log it where the write is genuinely best-effort (say so in a comment). If the row MUST exist, judge the row count too — `.update(patch, { count: \'exact\' })` — because PostgREST reports NO error for an UPDATE that matches nothing. Do not answer this with a disable comment.',
+    },
+  },
+  create(context) {
+    return {
+      'ExpressionStatement > AwaitExpression'(node) {
+        const call = node.argument
+        if (!call || call.type !== 'CallExpression') return
+        const callee = call.callee
+        if (!callee || callee.type !== 'MemberExpression' || !callee.property) return
+        // `.then(cb)` — the callback may bind error (documented blind spot).
+        if (callee.property.name === 'then') return
+        const method = chainMutationMethod(call)
+        if (!method) return
+        if (!chainRootIsSupabase(call)) return
+        // storage.* returns real Promises with their own shape.
+        if (chainContainsStorage(call)) return
+        context.report({ node: call, messageId: 'unchecked', data: { method: `.${method}()` } })
+      },
+    }
+  },
+}
+
 export default {
   rules: {
     'no-catch-on-supabase-builder': noCatchOnSupabaseBuilder,
+    'no-unchecked-supabase-write': noUncheckedSupabaseWrite,
     'no-uncapped-supabase-limit': noUncappedSupabaseLimit,
     'no-zulu-template-date': noZuluTemplateDate,
     'no-utc-today': noUtcToday,
