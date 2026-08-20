@@ -92,6 +92,12 @@ describe('token calls', () => {
     expect(out).toMatchObject({ ok: true, body: { access_token: 'at', refresh_token: 'rt' } })
   })
 
+  it('returns body: null when the response is not JSON', async () => {
+    global.fetch.mockResolvedValue({ ok: true, status: 200, text: async () => 'not json at all' })
+    const out = await exchangeCode(cfg, 'the-code')
+    expect(out).toEqual({ ok: true, statusCode: 200, body: null })
+  })
+
   it('never throws on a network failure', async () => {
     global.fetch.mockRejectedValue(new Error('ECONNRESET'))
     const out = await refreshAccessToken(cfg, 'rt')
