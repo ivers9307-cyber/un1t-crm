@@ -492,6 +492,14 @@ export function applyMergeTags(html, contact, extras = {}) {
     '{{location_name}}': extras.location_name || '',
     '{{unsubscribe_url}}': extras.unsubscribe_url || '',
     '{{preference_url}}': extras.preference_url || '',
+    // STARTPREFILL.1 — a capability token the /start funnel exchanges for this
+    // contact's own details, so an email that says "your classes are waiting"
+    // stops asking them to type their name in. Deliberately the TOKEN and not a
+    // finished URL: the funnel's public address differs per location and is
+    // operator-editable, so the operator owns the link and this owns the
+    // identity. Empty when the caller did not mint one — the link then still
+    // works, just without the prefill.
+    '{{booking_token}}': extras.booking_token || '',
     '{{current_year}}': new Date().getFullYear().toString(),
     '{{glofox_passcode}}': contact.glofox_passcode || '',
   }

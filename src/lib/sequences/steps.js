@@ -38,6 +38,7 @@ import {
 } from '@/lib/whatsapp'
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
 import { logWarn } from '@/lib/log'
+import { signStartPrefillToken } from '@/lib/start-prefill-token'
 import { getLocationBranding } from '@/lib/location-branding'
 import { isFrequencyCapped, frequencyCapDeferUntil, FrequencyCapDeferral, stampMarketingTouch } from '@/lib/frequency-cap'
 import { overlayConnections } from '@/lib/connection-registry'
@@ -269,9 +270,21 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
     })
     return null
   }
+  // STARTPREFILL.1 — minted per send, so every email carries a fresh token and
+  // the TTL is measured from when THAT email went out rather than from an
+  // enrolment weeks earlier. Best-effort: a signing failure (an unset secret in
+  // some environment) must lose the prefill, never the email.
+  let bookingToken = ''
+  try {
+    bookingToken = signStartPrefillToken({ contactId: contact.id })
+  } catch (e) {
+    logWarn('sequences', `booking token not minted for ${contact.id}: ${e.message || e}`, { contactId: contact.id })
+  }
+
   const mergedSubject = applyMergeTags(subject, contact, { location_name: locationName })
   const merged = applyMergeTags(html, contact, {
     location_name: locationName,
+    booking_token: bookingToken,
     unsubscribe_url: unsubscribeUrl,
     // Derived from the unsubscribe URL because both endpoints resolve the same
     // token column. Safe to split now that the null case returned above.
