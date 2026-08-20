@@ -75,7 +75,11 @@ export function resolveDayWindows(device, dateStr, occurrences = []) {
       // transition — Sat 22:00 → Sun 02:00 over spring-forward is 23 real
       // hours for the day, only 4 wall-clock hours but 3 real hours here.
       if (offAt <= onAt) offAt = dublinWallMs(addDaysISO(dateStr, 1), w.off)
-      out.push({ on_at: onAt, off_at: offAt })
+      // `source` is the window this resolved pair came from. The engine
+      // itself never reads it — it exists so a caller that needs the
+      // window's payload (Sonos: volume + favourite) can get it without
+      // re-deriving which window is active and re-doing the DST maths.
+      out.push({ on_at: onAt, off_at: offAt, source: w })
     }
     return out.sort((a, b) => a.on_at - b.on_at)
   }

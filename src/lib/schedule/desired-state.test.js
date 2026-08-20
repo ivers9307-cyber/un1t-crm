@@ -167,3 +167,32 @@ describe('desiredState', () => {
     expect(desiredState(null, T('12:00'), DAY, [])).toBe(null)
   })
 })
+
+describe('resolveDayWindows source passthrough', () => {
+  it('carries the originating window so callers can read its payload', () => {
+    const device = {
+      enabled: true,
+      schedule_mode: 'fixed',
+      fixed_windows: [
+        { days: [1, 2, 3, 4, 5], on: '06:00', off: '21:30', volume: 35, favorite_id: 'fv-1' },
+      ],
+    }
+    // 2026-08-24 is a Monday.
+    const windows = resolveDayWindows(device, '2026-08-24')
+    expect(windows).toHaveLength(1)
+    expect(windows[0].source.volume).toBe(35)
+    expect(windows[0].source.favorite_id).toBe('fv-1')
+  })
+
+  it('keeps carrying the source through the yesterday-tail path', () => {
+    const device = {
+      enabled: true,
+      schedule_mode: 'fixed',
+      // Saturday 22:00 -> Sunday 02:00. 2026-08-22 is a Saturday (ISO dow 6).
+      fixed_windows: [{ days: [6], on: '22:00', off: '02:00', volume: 20, favorite_id: 'fv-late' }],
+    }
+    const windows = resolveServeWindows(device, '2026-08-23') // Sunday
+    expect(windows).toHaveLength(1)
+    expect(windows[0].source.favorite_id).toBe('fv-late')
+  })
+})
