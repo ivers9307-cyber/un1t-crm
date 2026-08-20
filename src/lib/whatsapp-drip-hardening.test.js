@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   isFrequencyCapError, fetchDripDoneContactIds, CAPPED_RETRY_HOURS, claimDripRecipient,
+  STUCK_CLAIM_MINUTES,
   broadcastQualityBlockError, classifyBlastFailure, blastAbortPatch, blastAbortNotification,
 } from './whatsapp.js'
 import { applyMetaUserPreference } from './whatsapp-consent.js'
@@ -74,11 +75,15 @@ function recipientsTable(seed = []) {
           return Promise.resolve({ error: null })
         },
         update(patch) {
-          const filters = {}
+          const preds = []
           const b = {
-            eq(col, val) { filters[col] = val; return b },
+            eq(col, val) { preds.push(r => r[col] === val); return b },
+            // The claim lease's CAS predicate. Modelled as a real string
+            // comparison, which is what PostgREST does on a timestamptz sent as
+            // an ISO string.
+            lt(col, val) { preds.push(r => r[col] != null && String(r[col]) < String(val)); return b },
             select: async () => {
-              const matched = rows.filter(r => Object.entries(filters).every(([c, v]) => r[c] === v))
+              const matched = rows.filter(r => preds.every(p => p(r)))
               for (const r of matched) Object.assign(r, patch)
               return { data: matched.map(r => ({ id: `${r.broadcast_id}:${r.contact_id}` })), error: null }
             },
@@ -133,6 +138,81 @@ describe('claimDripRecipient — the per-recipient mutex', () => {
       from: () => ({ insert: async () => ({ error: { code: '08006', message: 'connection reset' } }) }),
     }
     expect(await claimDripRecipient(db, 'bc1', 'c1')).toEqual({ claimed: false, reason: 'connection reset' })
+  })
+})
+
+// ── BAREWRITE.5 — THE CLAIM IS A LEASE, NOT A TOMBSTONE ────────────────────
+//
+// Claiming before the send closed the duplicate hole and opened a worse one: a
+// process kill between the claim and sendTemplateMessage (Vercel timeout, OOM,
+// deploy mid-request) leaves a row at 'pending' with nothing sent. Nothing
+// re-opened 'pending' and no surface showed it — whatsapp-broadcast-stats' only
+// figure that counts it (`unaccounted`) is rendered by WABroadcastEditor solely
+// when the broadcast ALSO has capped rows, and even then it is labelled "have
+// not been attempted yet". So that contact silently never received their drip
+// step, permanently, which is strictly worse than main (main re-sent).
+//
+// The lease is the fix: an abandoned claim re-opens after STUCK_CLAIM_MINUTES.
+// The residual risk becomes a DUPLICATE in the narrow case where the send did
+// reach Meta but the promote write did not — visible to the customer, and the
+// direction this codebase has agreed to fail in.
+describe('the drip claim lease — an abandoned claim is recoverable, not permanent', () => {
+  const STALE = new Date(Date.now() - (STUCK_CLAIM_MINUTES + 5) * 60_000).toISOString()
+  const FRESH_CLAIM = new Date(Date.now() - 1 * 60_000).toISOString()
+
+  it('fetchDripDoneContactIds re-opens an abandoned pending claim, and only that one', async () => {
+    const db = pagedDb([
+      { contact_id: 'a', status: 'sent', failed_at: null, created_at: STALE },
+      // The killed-mid-send claim. Before the lease this was 'done' forever.
+      { contact_id: 'b', status: 'pending', failed_at: null, created_at: STALE },
+      // A tick that is genuinely in flight right now — must NOT be re-opened.
+      { contact_id: 'c', status: 'pending', failed_at: null, created_at: FRESH_CLAIM },
+      // Unknown age. Never re-send on a guess.
+      { contact_id: 'd', status: 'pending', failed_at: null, created_at: null },
+    ])
+    const done = await fetchDripDoneContactIds(db, 'bc1')
+    expect(done.sort()).toEqual(['a', 'c', 'd'])
+  })
+
+  it('claimDripRecipient re-claims an abandoned pending row — once', async () => {
+    const db = recipientsTable([
+      { broadcast_id: 'bc1', contact_id: 'c1', status: 'pending', created_at: STALE },
+    ])
+
+    const first = await claimDripRecipient(db, 'bc1', 'c1')
+    // A second tick arriving after the first re-claimed finds a FRESH lease.
+    const second = await claimDripRecipient(db, 'bc1', 'c1')
+
+    expect(first).toEqual({ claimed: true, reclaimed: true })
+    expect(second).toEqual({ claimed: false, reason: 'already_claimed' })
+    expect(db.rows).toHaveLength(1)
+  })
+
+  it('never re-claims a pending row still inside its lease', async () => {
+    const db = recipientsTable([
+      { broadcast_id: 'bc1', contact_id: 'c1', status: 'pending', created_at: FRESH_CLAIM },
+    ])
+    expect(await claimDripRecipient(db, 'bc1', 'c1')).toEqual({ claimed: false, reason: 'already_claimed' })
+    expect(db.rows[0].created_at).toBe(FRESH_CLAIM)
+  })
+
+  it('a fresh INSERT claim stamps created_at, so the lease is measured from the claim', async () => {
+    const db = recipientsTable()
+    const now = Date.parse('2026-08-20T10:00:00.000Z')
+    expect(await claimDripRecipient(db, 'bc1', 'c1', now)).toEqual({ claimed: true })
+    expect(db.rows[0].created_at).toBe('2026-08-20T10:00:00.000Z')
+  })
+
+  it('a capped RETRY claim restamps created_at, so the retry is not instantly stale', async () => {
+    // Without the restamp the re-claimed row inherits a created_at older than
+    // CAPPED_RETRY_HOURS, i.e. older than any lease — so the very next tick
+    // would treat a live claim as abandoned and send a second time.
+    const db = recipientsTable([
+      { broadcast_id: 'bc1', contact_id: 'c1', status: 'capped', failed_at: STALE, created_at: STALE },
+    ])
+    const now = Date.parse('2026-08-20T10:00:00.000Z')
+    expect(await claimDripRecipient(db, 'bc1', 'c1', now)).toEqual({ claimed: true, retry: true })
+    expect(db.rows[0].created_at).toBe('2026-08-20T10:00:00.000Z')
   })
 })
 

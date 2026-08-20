@@ -260,10 +260,11 @@ describe('applyMetaUserPreference — same upsert semantics', () => {
     expect(prefWrite.opts).toMatchObject({ onConflict: 'contact_id' })
   })
 
-  // Same BAREWRITE.4 property as the keyword path — and it holds here for the
-  // structural reason that both paths now share ONE helper, so they cannot
-  // drift apart again (they already did once: the keyword path grew an upsert
-  // while this one kept an update).
+  // Same BAREWRITE.4 property as the keyword path, and it holds here because
+  // both paths run the one `applyConsentWrites` helper. Note the two paths had
+  // NOT previously drifted — 85afb1c0 moved both to `.upsert` in one commit —
+  // so the helper is not a repair, it is insurance on a judgement (STOP needs
+  // EITHER gate, START needs BOTH) that is too easy to get wrong twice.
   it('a failed wa_status write still writes the preference flag, and reports partial', async () => {
     const writes = []
     const db = stubDb({ writes, failOn: { contacts: 'connection reset' } })

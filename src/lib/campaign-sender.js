@@ -309,6 +309,18 @@ export async function tickCampaignSend(db, campaign) {
     }
 
     if (contacts.length === 0) {
+      // A `warning`, not an `error`, for the same reason as the rotation bumps
+      // — and it is NOT the same as the finalise at the end of the send loop.
+      // This one runs inside populate, where `send_started_at` is still null,
+      // which is one of the three conditions campaignFailurePatch tests for
+      // "genuinely stuck". `campaigns.last_error` is never cleared by the cron
+      // (only /api/campaigns/[id]/send clears it), so any campaign carrying an
+      // old error would be flipped to 'failed' by ONE transient blip here — and
+      // 'failed' is terminal: the cron only picks 'queued'/'sending', so
+      // nothing ever finishes it. `main` was silent and simply looped, and the
+      // loop is RIGHT: the campaign stays 'sending', the next tick re-runs
+      // populate, finds the same empty audience and finalises the moment the
+      // write lands. Keep the self-healing, add the visibility, drop the kill.
       const emptyErr = await writeOrLog(
         db.from('campaigns').update({
           status: 'sent',
@@ -316,7 +328,9 @@ export async function tickCampaignSend(db, campaign) {
           total_recipients: 0,
         }).eq('id', campaignId),
         'finalise empty-audience campaign', campaignId)
-      return emptyErr ? { phase: 'populate', sent: 0, error: emptyErr.message } : { phase: 'populate', sent: 0 }
+      return emptyErr
+        ? { phase: 'populate', sent: 0, warning: `could not finalise an empty-audience campaign (it stays open and the next tick retries): ${emptyErr.message}` }
+        : { phase: 'populate', sent: 0 }
     }
 
     // CAMPAIGN-AB — assign the test slice at populate time so it's

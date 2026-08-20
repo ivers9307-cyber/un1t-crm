@@ -173,6 +173,65 @@ describe('tickCampaignSend — location bundle/feature gate (TENANT.8)', () => {
     expect(patch.status).toBe('failed')
   })
 
+  // ── BAREWRITE.5 — nor may a lost EMPTY-AUDIENCE finalise kill the campaign ──
+  //
+  // The same shape one function lower down, and it needed the same answer.
+  // BAREWRITE.1 surfaced this write's error as `result.error`, which reaches
+  // campaignFailurePatch. The empty-audience finalise runs inside POPULATE, so
+  // `send_started_at` is still null — one of the three conditions for "genuinely
+  // stuck" — and the cron never clears `campaigns.last_error` (only
+  // /api/campaigns/[id]/send does), so any campaign carrying an older error is
+  // flipped to 'failed' by ONE transient blip here. 'failed' is terminal: the
+  // cron picks only 'queued'/'sending'.
+  //
+  // What `main` did was silent, but it was also RIGHT: the campaign stays open
+  // and the next tick re-runs populate, finds the same empty audience, and
+  // finalises the moment the write lands. Keep the self-healing loop, add the
+  // visibility, drop the kill.
+  it('reports a FAILED empty-audience finalise as a warning, never as an error', async () => {
+    const db = {
+      from(table) {
+        if (table === 'campaigns') {
+          const b = { update: () => b, eq: () => Promise.resolve({ error: { message: 'connection reset' } }) }
+          return b
+        }
+        const p = new Proxy({}, {
+          get(_, method) {
+            if (method === 'then') return Promise.resolve({}).then.bind(Promise.resolve({}))
+            return () => p
+          },
+        })
+        return p
+      },
+      rpc: () => Promise.resolve({ error: null }),
+    }
+
+    const result = await tickCampaignSend(db, {
+      ...baseCampaign,
+      locations: { name: 'Stillorgan', features: {} },
+    })
+
+    expect(result.phase).toBe('populate')
+    // THE REGRESSION: an `error` here reaches campaignFailurePatch.
+    expect(result.error).toBeUndefined()
+    expect(result.warning).toMatch(/could not finalise an empty-audience campaign/i)
+  })
+
+  it('proves that kill too: a campaign with an older last_error and no send_started_at is marked failed', async () => {
+    // Exactly the row the cron re-reads for a campaign that errored once before
+    // and has not started sending — which is every campaign still in populate.
+    const patch = campaignFailurePatch(
+      {
+        id: 'camp-1',
+        created_at: new Date(Date.now() - 60 * 60_000).toISOString(),
+        send_started_at: null,
+        last_error: 'audience load failed: connection reset',
+      },
+      'connection reset',
+    )
+    expect(patch.status).toBe('failed')
+  })
+
   it('cancel-requested still processes even when the bundle is off (cancel check runs first)', async () => {
     const { db } = makeDb()
     const result = await tickCampaignSend(db, {

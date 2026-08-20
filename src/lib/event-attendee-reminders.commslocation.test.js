@@ -14,8 +14,9 @@
 // The reminder was therefore not deferred, it was DESTROYED — and for a T-1
 // reminder that is the last one the attendee was ever going to get, carrying
 // their check-in QR codes. All of that to avoid a sender the fallback resolves
-// to the same organisation and (on every prod location pair) the same Twilio
-// alpha sender.
+// to the same organisation and — for every event prod holds today, though not
+// for every location pair in it — the same Twilio alpha sender. See
+// event-comms-location.js for the measurement and its expiry condition.
 //
 // This test pins the property from the caller's side: a comms-location failure
 // never costs an attendee their reminder.

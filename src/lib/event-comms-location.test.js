@@ -100,19 +100,23 @@ describe('resolveEventCommsLocation', () => {
   //     tenant_email_domains keyed on the location's organization_id), and a
   //     host anchor and its org master are in the same organisation BY
   //     CONSTRUCTION (ensureAnchorLocation / resolveMasterLocationIdStrict);
-  //   • SMS identity is the location's alpha sender, falling back to the ORG
-  //     default. Measured against prod 2026-08-20: one host anchor exists
-  //     ("Pride Training Club (host events)") and its sender is `UN1T Dub` —
-  //     identical to its org master's; the only sending_location_id overrides
-  //     point at that same master. No prod pair differs.
+  //   • SMS identity is NOT structural — the alpha sender is per LOCATION, and
+  //     inside UN1T Group Hatch Street is `UN1THATCH` while Stillorgan is
+  //     `UN1T Dub`. What IS true, measured read-only against prod 2026-08-20
+  //     over all 13 race_events, is that no event resolves to a (target,
+  //     fallback) pair whose senders differ — the single Hatch event is plain
+  //     (no host, no override), so its target IS its fallback. Give a Hatch
+  //     event a host or a sending_location_id and that stops holding; the
+  //     query and the condition are written out in event-comms-location.js.
   //
   // Against that, every caller here is delivering a message a customer paid for
   // or asked for, and nothing retries: race-confirmations is only invoked on a
   // FRESH payment transition, and the event-reminders cron runs DAILY against a
   // fixed day-offset, so a skipped tick destroys the reminder rather than
-  // deferring it. The throw was trading a certain loss against an impossible
-  // one. What survives is VISIBILITY — every discarded read is reported through
-  // logError with the ids to act on.
+  // deferring it. The throw was trading a certain loss against one that cannot
+  // currently occur. What survives is VISIBILITY — every discarded read is
+  // reported through logError with the ids to act on, including the
+  // crossesLocation flag that fires the day the SMS half stops being true.
   //
   // These tests are the old ones INVERTED: the same four failure points, now
   // asserting the message is never lost.
@@ -184,7 +188,7 @@ describe('resolveEventCommsLocation', () => {
   })
 
   // The two hops BAREWRITE.3 kept failing CLOSED. These are the receipts the
-  // guard was costing: on this data the fallback resolves to the same org and
+  // guard was costing: on prod's data the fallback resolves to the same org and
   // the same alpha sender, so the throw bought nothing and deleted the message.
   it('RECEIPT NOT LOST: an unreadable sending_location_id override returns null, it does NOT throw', async () => {
     const db = makeFailingDb('OVR')
@@ -213,7 +217,8 @@ describe('resolveEventCommsLocation', () => {
       MASTER: { id: 'MASTER', name: 'Stillorgan', twilio_alpha_sender_id: 'UN1T Dub', organization_id: 'ORG' },
     })
     const row = await resolveEventCommsLocation(db, { location_id: 'ANCHOR', host_id: 'H', sending_location_id: null })
-    // Same organisation ⇒ same email identity; same alpha sender in prod.
+    // Same organisation ⇒ same email identity; and for every event pair prod
+    // holds today, the same alpha sender.
     expect(row?.id).toBe('ANCHOR')
   })
 

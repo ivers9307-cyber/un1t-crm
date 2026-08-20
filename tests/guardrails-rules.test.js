@@ -404,8 +404,8 @@ ruleTester.run('no-unchecked-supabase-write', plugin.rules['no-unchecked-supabas
     // Passed to a helper that awaits and checks it internally (campaign-sender's
     // writeOrLog idiom). A documented blind spot, not a supported escape.
     'async () => { await writeOrLog(db.from("x").update(u).eq("id", id), "what", id) }',
-    // Reads are not this rule's business — that is the 1,078-site population
-    // no-discarded-single-error owns half of.
+    // Reads are not this rule's business at all — a discarded read error is a
+    // different question, and no-discarded-single-error owns half of it.
     'async () => { await db.from("x").select("*").eq("id", id) }',
     'async () => { const { data } = await db.from("x").select("*").eq("id", id).maybeSingle() }',
     // storage returns a real Promise with its own shape.

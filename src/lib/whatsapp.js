@@ -916,6 +916,27 @@ export async function fetchAllWhatsAppAudience(db, filter, locationId) {
   return rows
 }
 
+// BAREWRITE.5 — HOW LONG A DRIP CLAIM IS GOOD FOR.
+//
+// The claim below is taken BEFORE the template goes out, so a process kill in
+// between (a Vercel timeout, an OOM, a deploy mid-request) leaves a row at
+// 'pending' with nothing sent. Without a lease that row is FOREVER: 'pending'
+// is not retryable in fetchDripDoneContactIds, claimDripRecipient will not
+// re-claim it, and it is not rendered on any surface either — the only figure
+// that counts it (`unaccounted`, whatsapp-broadcast-stats.js) is printed solely
+// when the broadcast also has capped rows, and then it is labelled "have not
+// been attempted yet". So a stuck claim was a permanent, invisible loss of a
+// marketing message main WOULD have sent, which is the one thing this whole
+// campaign says never to trade for.
+//
+// The lease converts that permanent loss back into a bounded duplicate RISK,
+// which is the direction this codebase has agreed to fail in. It is safe to
+// make it short-ish: the drip cron is every 15 minutes and its route caps at
+// maxDuration = 300s, so no honest in-flight tick can still be holding a claim
+// an hour later. Anything still 'pending' after that is not in flight, it is
+// abandoned.
+export const STUCK_CLAIM_MINUTES = 60
+
 // Paginate the already-processed contact_ids for one broadcast (sent OR failed —
 // both insert a recipients row, so both are skipped on resume). Also >1k-safe: a
 // long-running drip accumulates thousands of recipient rows.
@@ -925,13 +946,15 @@ export async function fetchDripDoneContactIds(db, broadcastId) {
   // 'capped' rows (Meta frequency cap, 131049) re-open after this long — the
   // recipient is retried by a later tick instead of being done forever.
   const retryBefore = Date.now() - CAPPED_RETRY_HOURS * 60 * 60 * 1000
+  // An abandoned claim re-opens after this long — see STUCK_CLAIM_MINUTES.
+  const claimExpiredBefore = Date.now() - STUCK_CLAIM_MINUTES * 60 * 1000
   const ids = []
   let start = 0
   while (true) {
     const end = Math.min(start + PAGE - 1, HARD_LIMIT - 1)
     const { data: page, error } = await db
       .from('whatsapp_broadcast_recipients')
-      .select('contact_id, status, failed_at')
+      .select('contact_id, status, failed_at, created_at')
       .eq('broadcast_id', broadcastId)
       .order('contact_id', { ascending: true })
       .range(start, end)
@@ -939,8 +962,13 @@ export async function fetchDripDoneContactIds(db, broadcastId) {
     if (!Array.isArray(page) || page.length === 0) break
     for (const r of page) {
       if (!r.contact_id) continue
-      const retryable = r.status === 'capped' && r.failed_at && new Date(r.failed_at).getTime() <= retryBefore
-      if (!retryable) ids.push(r.contact_id)
+      const cappedRetryable = r.status === 'capped' && r.failed_at && new Date(r.failed_at).getTime() <= retryBefore
+      // A claim nobody finished. Treated exactly like a capped park: re-opened
+      // for a later tick rather than counted as done. A missing created_at is
+      // NOT treated as expired — an unknown age must not re-send a message.
+      const claimAbandoned = r.status === 'pending' && r.created_at
+        && new Date(r.created_at).getTime() <= claimExpiredBefore
+      if (!cappedRetryable && !claimAbandoned) ids.push(r.contact_id)
     }
     if (page.length < PAGE) break
     if (ids.length >= HARD_LIMIT) break
@@ -964,35 +992,87 @@ export async function fetchDripDoneContactIds(db, broadcastId) {
  * The upsert was not gratuitous, which is why this is not a one-word revert: a
  * contact parked as 'capped' (Meta 131049) is deliberately re-selected by
  * fetchDripDoneContactIds after CAPPED_RETRY_HOURS, and by then a row EXISTS,
- * so a bare insert would fail and the retry would never send. Both properties
- * are kept by making each path its own CAS:
+ * so a bare insert would fail and the retry would never send. Each path
+ * therefore gets its own CAS:
  *   • no row yet   → INSERT; the UNIQUE constraint is the mutex.
  *   • 'capped' row → UPDATE … WHERE status = 'capped' RETURNING id; the status
  *     transition is the mutex (whichever tick flips it first wins, the other
  *     matches zero rows and skips).
- * Any other existing status ('pending' / 'sent' / 'failed') means somebody else
- * holds the claim — skip, exactly as the blast does.
+ *   • ABANDONED 'pending' row → UPDATE … WHERE status = 'pending'
+ *     AND created_at < now − STUCK_CLAIM_MINUTES RETURNING id.
  *
- * @returns {Promise<{claimed: boolean, reason?: 'already_claimed'|string, retry?: boolean}>}
+ * THE THIRD PATH IS THE HONEST PRICE OF CLAIMING FIRST, so state the trade
+ * rather than bury it. Claiming before the send means a process kill in between
+ * (Vercel timeout, OOM, deploy mid-request) leaves a 'pending' row with nothing
+ * sent. BAREWRITE.2/.3 shipped exactly that and defended it as "a stuck
+ * 'pending' is visible". It was not: nothing re-opens 'pending', and no surface
+ * shows it (see STUCK_CLAIM_MINUTES). That is a permanent, silent loss of a
+ * message main would have sent — worse than main, and the one outcome this
+ * campaign refuses.
+ *
+ * So the claim is a LEASE, not a tombstone. What each choice actually costs:
+ *   no claim at all  → two overlapping ticks both send. A duplicate marketing
+ *                      template, every time they overlap.
+ *   claim, no lease  → a process kill silently drops that contact's drip step
+ *                      forever, and nobody finds out.
+ *   claim + lease    → concurrent ticks still cannot both send (the CAS is a
+ *                      real mutex within the lease), and an abandoned claim is
+ *                      retried after STUCK_CLAIM_MINUTES. The residual risk is
+ *                      a DUPLICATE in the narrow case where the send actually
+ *                      reached Meta but the promote write did not — the message
+ *                      goes out twice, an hour apart.
+ * The third is chosen because a duplicate is visible to the customer and
+ * survivable; a silent drop is neither. It is the same reasoning as
+ * race-confirmations' send-then-stamp, reaching a different mechanism only
+ * because this row HAS somewhere to hang a lease and that one does not.
+ *
+ * The re-claim rewrites `created_at`, which is what makes the lease restart and
+ * what makes the CAS exclusive: a second tick arriving after the first has
+ * re-claimed no longer matches `created_at < cutoff`. Nothing reads
+ * `created_at` on this table for any other purpose (checked across src/ —
+ * the only recipient-row ordering is on `sms_broadcast_recipients`).
+ *
+ * Any other existing status ('sent' / 'delivered' / 'read' / 'failed', or a
+ * 'pending' still inside its lease) means somebody else holds it — skip,
+ * exactly as the blast does.
+ *
+ * @returns {Promise<{claimed: boolean, reason?: 'already_claimed'|string, retry?: boolean, reclaimed?: boolean}>}
  */
-export async function claimDripRecipient(db, broadcastId, contactId) {
+export async function claimDripRecipient(db, broadcastId, contactId, now = Date.now()) {
+  const nowIso = new Date(now).toISOString()
   const { error: insertErr } = await db.from('whatsapp_broadcast_recipients').insert({
     broadcast_id: broadcastId,
     contact_id: contactId,
     status: 'pending',
+    // Written explicitly rather than left to the column default: created_at is
+    // the lease stamp, so the value the lease is measured against must be the
+    // one this claim wrote.
+    created_at: nowIso,
   })
   if (!insertErr) return { claimed: true }
   if (!isUniqueViolation(insertErr)) return { claimed: false, reason: insertErr.message }
 
   const { data, error: retryErr } = await db.from('whatsapp_broadcast_recipients')
-    .update({ status: 'pending', error_message: null, failed_at: null })
+    .update({ status: 'pending', error_message: null, failed_at: null, created_at: nowIso })
     .eq('broadcast_id', broadcastId)
     .eq('contact_id', contactId)
     .eq('status', 'capped')
     .select('id')
   if (retryErr) return { claimed: false, reason: retryErr.message }
-  if (!Array.isArray(data) || data.length === 0) return { claimed: false, reason: 'already_claimed' }
-  return { claimed: true, retry: true }
+  if (Array.isArray(data) && data.length > 0) return { claimed: true, retry: true }
+
+  // Nothing capped. Last chance: an abandoned claim whose lease has run out.
+  const staleBefore = new Date(now - STUCK_CLAIM_MINUTES * 60 * 1000).toISOString()
+  const { data: reclaimed, error: reclaimErr } = await db.from('whatsapp_broadcast_recipients')
+    .update({ status: 'pending', error_message: null, failed_at: null, created_at: nowIso })
+    .eq('broadcast_id', broadcastId)
+    .eq('contact_id', contactId)
+    .eq('status', 'pending')
+    .lt('created_at', staleBefore)
+    .select('id')
+  if (reclaimErr) return { claimed: false, reason: reclaimErr.message }
+  if (!Array.isArray(reclaimed) || reclaimed.length === 0) return { claimed: false, reason: 'already_claimed' }
+  return { claimed: true, reclaimed: true }
 }
 
 // Postgres unique_violation. Matched on the code, with the message as a
@@ -1581,14 +1661,16 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
   const dripSentContactIds = []
 
   for (const contact of toSend) {
-    // CLAIM-FIRST, and now genuinely the same mutex the blast sender uses —
-    // see claimDripRecipient. The recipients row is the ONLY dedupe this drip
-    // has (fetchDripDoneContactIds excludes every contact that already has
-    // one), and it used to be written AFTER the template went out with a bare
-    // `await` whose error nothing could see, so a lost row re-selected the
-    // contact next tick and sent the same marketing template again. Claiming
-    // first makes a DB hiccup cost at most a missing message, never a duplicate
-    // one; a row stuck at 'pending' is the accepted outcome the blast has too.
+    // CLAIM-FIRST WITH A LEASE — see claimDripRecipient for the trade-off, in
+    // full, including what it costs. Short version: the recipients row is the
+    // ONLY dedupe this drip has (fetchDripDoneContactIds excludes every contact
+    // that already has one), and on main it was written AFTER the template went
+    // out with a bare `await` whose error nothing could see, so a lost row
+    // re-selected the contact next tick and re-sent the same marketing
+    // template. Claiming first closes that; leasing the claim stops the fix
+    // becoming a permanent silent DROP when the process dies between the claim
+    // and the send. The residual risk is a duplicate an hour later, never a
+    // message that quietly never happened.
     const claim = await claimDripRecipient(db, broadcastId, contact.id)
     if (!claim.claimed) {
       if (claim.reason !== 'already_claimed') {
@@ -1606,7 +1688,12 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
         broadcast_id: broadcastId, contact_id: contact.id,
         wa_message_id: result.messageId, status: 'sent', sent_at: new Date().toISOString(),
       }, { onConflict: 'broadcast_id,contact_id' })
-      if (promoteErr) console.error(`[drip ${broadcastId}] sent to ${contact.id} but the recipient row stayed 'pending' (counts will under-report; no re-send):`, promoteErr.message)
+      // A lost promote leaves the row at 'pending' with the message ALREADY
+      // out. The lease then re-opens it after STUCK_CLAIM_MINUTES and a later
+      // tick sends it a second time. That is the duplicate this ordering
+      // deliberately accepts rather than risk a silent drop — say so, loudly,
+      // because it is the one case where the recovery causes the harm.
+      if (promoteErr) console.error(`[drip ${broadcastId}] sent to ${contact.id} but the recipient row stayed 'pending' — the claim lease will re-open it in ${STUCK_CLAIM_MINUTES}m and this contact may receive the template TWICE:`, promoteErr.message)
       const conversationId = await getOrCreateConversation(db, contact, broadcast.location_id)
       await db.from('whatsapp_messages').insert({
         conversation_id: conversationId,
@@ -1627,14 +1714,15 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
       // mark the number undeliverable or trip the auto-pause.
       if (isFrequencyCapError({ message: err.message })) {
         console.warn(`[drip ${broadcastId}] frequency-capped ${contact.wa_phone} — retrying next day`)
-        // A lost park leaves the claim at 'pending', which reads as done — the
-        // contact is never retried. That is the safe direction (no duplicate),
-        // but it is a real loss, so say it.
+        // A lost park leaves the claim at 'pending'. Nothing was sent, so the
+        // right outcome is a retry, and the claim lease gives it one after
+        // STUCK_CLAIM_MINUTES instead of the CAPPED_RETRY_HOURS this park would
+        // have set. Sooner than intended, never never.
         const { error: parkErr } = await db.from('whatsapp_broadcast_recipients').upsert({
           broadcast_id: broadcastId, contact_id: contact.id,
           status: 'capped', error_message: err.message, failed_at: new Date().toISOString(),
         }, { onConflict: 'broadcast_id,contact_id' })
-        if (parkErr) console.error(`[drip ${broadcastId}] could not park ${contact.id} as 'capped' — it stays 'pending' and will NOT be retried:`, parkErr.message)
+        if (parkErr) console.error(`[drip ${broadcastId}] could not park ${contact.id} as 'capped' — it stays 'pending' and the claim lease will retry it in ${STUCK_CLAIM_MINUTES}m rather than after ${CAPPED_RETRY_HOURS}h:`, parkErr.message)
         capped++
         continue
       }
@@ -1643,7 +1731,7 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
         broadcast_id: broadcastId, contact_id: contact.id,
         status: 'failed', error_message: err.message, failed_at: new Date().toISOString(),
       }, { onConflict: 'broadcast_id,contact_id' })
-      if (parkErr) console.error(`[drip ${broadcastId}] could not park ${contact.id} as 'failed' — it stays 'pending':`, parkErr.message)
+      if (parkErr) console.error(`[drip ${broadcastId}] could not park ${contact.id} as 'failed' — it stays 'pending' and the claim lease will retry the send in ${STUCK_CLAIM_MINUTES}m:`, parkErr.message)
       // Permanently-undeliverable number → flag so future audiences skip it.
       await markUndeliverableIfPermanent(db, contact.id, { message: err.message })
       failed++; consecutiveFailures++

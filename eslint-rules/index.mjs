@@ -754,11 +754,11 @@ const noDeadUn1tToken = {
 // There is no `.single()` and nothing is destructured, so there is no discarded
 // binding to flag — and because supabase-js RESOLVES with `{ data, error }`
 // instead of throwing, a failed write produces a resolved promise and the
-// caller proceeds exactly as if it had succeeded. Four of the six live sites
-// this rule was written for ended with the route returning `{ success: true }`
-// on a write that had not happened (IG unlink, staff role/permission
-// assignment) or with a send-once stamp lost so the next webhook retry sent the
-// customer a duplicate message (race confirmations, campaign recipients).
+// caller proceeds exactly as if it had succeeded. The live sites this rule was
+// written for ended with the route returning `{ success: true }` on a write
+// that had not happened (IG unlink, staff role/permission assignment) or with a
+// send-once stamp lost so the next webhook retry sent the customer a duplicate
+// message (race confirmations, campaign recipients).
 //
 // WHAT IT FLAGS: an `await`ed supabase chain containing a MUTATION —
 // .insert/.update/.upsert/.delete, or a .rpc() call — whose result is
@@ -770,12 +770,9 @@ const noDeadUn1tToken = {
 // mutation destructured without `error`. That was originally waved through as
 // "no-discarded-single-error's territory", and that was simply WRONG: the
 // sibling rule only fires on a `.single()` chain, so a write destructured as
-// `{ data }` with no `.single()` is seen by NEITHER rule. Measured across
-// src/ + shared/ + mobile/ + scripts/: 40 such production write sites, 33 of
-// them with no `.single()`/`.maybeSingle()` anywhere in the chain and so
-// outside the sibling by construction — including the postmark queue-marking
-// write CLAUDE.md's POSTMARK-RACE invariant is about. Reads keep the carve-out
-// (1,078 sites, a different question); this is writes only.
+// `{ data }` with no `.single()` is seen by NEITHER rule — the postmark
+// queue-marking write CLAUDE.md's POSTMARK-RACE invariant is about is one of
+// them. Discarded-error READS keep the sibling's carve-out; this is writes only.
 //
 // DELIBERATE NON-FLAGS (each is a real way the error IS reachable):
 //   - a destructured result that BINDS `error` — `const { error } = await …`,
@@ -801,16 +798,17 @@ const noDeadUn1tToken = {
 // assembled across statements and awaited through a variable is invisible, and
 // so is a chain handed to a helper that awaits it internally
 // (`await writeOrLog(db.from(t).update(u), …)` — the idiom campaign-sender.js
-// now uses to keep eighteen call sites readable). That laundering is only
-// acceptable because the helper genuinely reads the error in ONE auditable
-// place; it is not a way to quiet the rule.
+// now uses; `grep -c 'await writeOrLog(' src/lib/campaign-sender.js` says how
+// many sites it hides). That laundering is only acceptable because the helper
+// genuinely reads the error in ONE auditable place; it is not a way to quiet
+// the rule.
 //
 // It also cannot see a ZERO-ROW UPDATE: PostgREST returns NO error when an
 // UPDATE matches nothing, so `{ error }` alone still misses "the row vanished".
 // Where the row MUST exist, judge the rows the write actually touched —
 // `.update(patch).eq('id', id).select('id')` then `data.length` (the
 // staff-create and IG-agent sites), or make the write itself the mutex with a
-// CAS + `.select()` (race-confirmations' claimSendOnce). No AST rule can tell
+// CAS + `.select()` (`claimDripRecipient` in whatsapp.js). No AST rule can tell
 // those apart from the many legitimate zero-row-is-fine writes (every CAS
 // `.is(col, null)` guard in campaign-sender.js is one), so this stays a
 // documented human obligation.
@@ -818,11 +816,13 @@ const noDeadUn1tToken = {
 // And it cannot see a bare write sitting inside a `try { … } catch { … }` as
 // anything other than a bare write — which is the subtlest member of the class,
 // because the reader sees error handling that cannot fire for a supabase
-// result. Measured: 183 such sites across 90 files.
+// result. That is how whatsapp-consent.js survived two audits.
 //
-// SCOPE: armed PER-PATH in eslint.guardrails.config.mjs, not repo-wide. The
-// measured baseline is 477 production sites across 201 files — see that file's
-// comment for the arming rationale and the counts.
+// SCOPE: armed PER-PATH in eslint.guardrails.config.mjs, not repo-wide, because
+// the repo-wide baseline is not clean. See that file's comment for the arming
+// rationale and for the command that measures any path you are thinking of
+// arming — no census figure is quoted here or there, because the only figure
+// worth trusting is the one the reader's own run prints.
 const MUTATION_METHODS = new Set(['insert', 'update', 'upsert', 'delete'])
 
 // Walk DOWN a chain; return the mutation method name if any link is one, or

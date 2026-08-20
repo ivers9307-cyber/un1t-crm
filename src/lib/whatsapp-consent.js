@@ -259,8 +259,17 @@ export async function applyMetaUserPreference(db, pref = {}) {
 
   const optingOut = pref.value === 'stop'
   // Exactly the same writes and the same BAREWRITE.4 shape as the keyword path
-  // above — one helper, so the two paths cannot drift apart again (they already
-  // did once: the keyword path grew an upsert while this one kept an update).
+  // above, through one helper.
+  //
+  // AN EARLIER VERSION OF THIS COMMENT SAID THE TWO PATHS HAD ALREADY DRIFTED —
+  // "the keyword path grew an upsert while this one kept an update". That is
+  // false, and the history says so: 85afb1c0 (COMMS-AUDIT 2026-07-10) changed
+  // BOTH from `.update` to `.upsert` in the same commit, and no revision of this
+  // file has ever had one shape in one path and the other shape in the other.
+  // The real reason for the helper is smaller and true: the two paths must make
+  // the same partial-failure judgement (attempt every write, then decide), and
+  // that judgement is subtle enough — STOP needs EITHER gate, START needs BOTH —
+  // that maintaining it twice is how it would come apart. One copy, one test.
   const outcome = await applyConsentWrites(db, contact.id, optingOut, 'meta_user_preferences')
   if (!consentTookEffect(optingOut, outcome)) {
     return {

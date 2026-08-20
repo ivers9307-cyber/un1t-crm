@@ -5,9 +5,11 @@
 // row and this route answer 503, telling the operator to try again. That refuses
 // an action a human explicitly asked for, over a read whose only job is to pick
 // between the event's own location and its org master — the same organisation,
-// therefore the same email identity, and (on every location pair in prod) the
-// same Twilio alpha sender. `resolveSenderLocation` is already the inner safety
-// net for a sender-less anchor.
+// therefore the same email identity, and — for every event prod holds today,
+// though not for every location pair in it — the same Twilio alpha sender (the
+// measurement and its expiry condition are in event-comms-location.js).
+// `resolveSenderLocation` is already the inner safety net for a sender-less
+// anchor.
 //
 // BAREWRITE.4 fails open: log it, send from the event's own location.
 

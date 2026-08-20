@@ -122,10 +122,13 @@ export async function POST(_request, props) {
   // BAREWRITE.4 — resolveEventCommsLocation FAILS OPEN. It logs an unreadable
   // location row (structurally, via logError) and returns null; the
   // `|| reg.race_events.locations` fallback below is the event's own location,
-  // which resolves to the same email identity (per-organisation) and the same
-  // alpha sender on every location pair in prod. BAREWRITE.1 had it throw and
-  // this route answer 503 — refusing to send a payment link an operator asked
-  // for, over a read that only chooses between two identical senders.
+  // which resolves to the same email identity (per-organisation, structural)
+  // and — for every event prod holds today, though not for every location pair
+  // in prod — the same Twilio alpha sender. See event-comms-location.js for the
+  // measurement and for the condition that would end that. BAREWRITE.1 had it
+  // throw and this route answer 503, refusing to send a payment link an
+  // operator had explicitly asked for over a read that, today, only ever
+  // chooses between two identical senders.
   let commsLocation = null
   try {
     commsLocation = await resolveEventCommsLocation(db, {

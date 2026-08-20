@@ -49,17 +49,50 @@ export function pickCommsLocationTarget(event, masterLocationId) {
  *     and `resolveMasterLocationIdStrict` only ever returns a location inside
  *     that same org. So target and fallback are STRUCTURALLY the same email
  *     identity — not merely the same today.
- *   • SMS identity is `locations.twilio_alpha_sender_id`, falling back through
- *     `resolveSenderLocation` to the ORG's default sender when the location has
- *     none. Measured against prod on 2026-08-20: the estate has exactly one host
- *     anchor ("Pride Training Club (host events)", org UN1T Group) and its
- *     sender is `UN1T Dub` — byte-identical to its org master's (Stillorgan).
- *     The only `sending_location_id` overrides in the data point at that same
- *     Stillorgan row. There is no pair of (target, fallback) locations in prod
- *     for which the alpha sender differs.
+ *   • SMS identity is NOT structural. It is `locations.twilio_alpha_sender_id`,
+ *     a per-LOCATION string, falling back through `resolveSenderLocation` to the
+ *     org's default sender when the location has none — and two locations in the
+ *     SAME organisation genuinely do differ today: UN1T Hatch Street is
+ *     `UN1THATCH`, UN1T Stillorgan is `UN1T Dub`, both under UN1T Group. So the
+ *     honest claim is narrower than "it cannot differ", and it is a claim about
+ *     the DATA, not about the code:
+ *
+ *       Measured read-only against prod on 2026-08-20, over all 13 `race_events`
+ *       rows: for every one of them the (target, fallback) pair resolves to the
+ *       SAME alpha sender, so there is no event in prod today whose fallback
+ *       would change the SMS brand.
+ *
+ *       Reproduce it (read-only) — for each event compute the target the tier
+ *       logic above picks and compare its sender with `event.location_id`'s:
+ *
+ *         with resolved as (
+ *           select e.id, e.location_id as fallback_id,
+ *             coalesce(e.sending_location_id,
+ *               case when e.host_id is not null
+ *                    then coalesce(o.master_location_id, e.location_id)
+ *                    else e.location_id end) as target_id
+ *           from race_events e
+ *           left join locations el on el.id = e.location_id
+ *           left join organizations o on o.id = el.organization_id)
+ *         select count(*) from resolved r
+ *         join locations fl on fl.id = r.fallback_id
+ *         join locations tl on tl.id = r.target_id
+ *         where coalesce(tl.twilio_alpha_sender_id,'~')
+ *               is distinct from coalesce(fl.twilio_alpha_sender_id,'~');
+ *
+ *       That count is 0 today. It is 0 only because the single Hatch Street
+ *       event is a PLAIN event — no `host_id`, no `sending_location_id` — so its
+ *       target IS its fallback. THE CONDITION UNDER WHICH THIS STOPS BEING TRUE:
+ *       give any Hatch Street event a `sending_location_id` (or a host, whose
+ *       org master is Stillorgan) and the pair becomes (`UN1T Dub`,
+ *       `UN1THATCH`), and a read failure here would then land the SMS on the
+ *       wrong sender. That is precisely what the `crossesLocation` field on the
+ *       log line below exists to catch. Do not re-derive this from the comment —
+ *       re-run the query.
  *
  * So the throw was trading a CERTAIN, silent, unrecoverable loss of a paying
- * customer's receipt against a wrong-brand send that cannot currently happen.
+ * customer's receipt against a wrong-brand send that no event in prod can
+ * currently produce.
  * Removing a silent failure must not create a louder one — the win here is
  * VISIBILITY, and that is what stays: every discarded read is reported through
  * `logError` with the ids needed to act on it, at error level, so Sentinel can
@@ -124,10 +157,13 @@ export async function resolveEventCommsLocation(db, event) {
       err: rowError,
       locationId: targetId,
       eventLocationId: event.location_id || null,
-      // True when the fallback is a DIFFERENT row than the one we wanted. Not
-      // an error condition (see the header: same org ⇒ same email identity, and
-      // no prod pair differs on the SMS sender) — but it is the field to alert
-      // on if that ever stops being true.
+      // True when the fallback is a DIFFERENT row than the one we wanted.
+      // Same org ⇒ same EMAIL identity structurally, so this is never an email
+      // problem. The SMS alpha sender is per-location and CAN differ inside one
+      // org (Hatch `UN1THATCH` vs Stillorgan `UN1T Dub`); it happens not to
+      // differ for any (target, fallback) pair prod holds today — see the
+      // header for the query that says so. This is the field to alert on the
+      // day that changes.
       crossesLocation: targetId !== (event.location_id || null),
     })
     return null

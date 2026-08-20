@@ -8,9 +8,12 @@
 // retry it (`markRacePaymentStatus` returns `applied: null` once the payment is
 // already 'completed', so a provider redelivery never re-invokes us).
 // BAREWRITE.3 narrowed the throw to brand-crossing events; BAREWRITE.4 removed
-// it, because the brand cannot differ — email identity resolves per
-// ORGANISATION, and no location pair in prod differs on the SMS alpha sender
-// (the measurement is in event-comms-location.js).
+// it, because the brand cannot differ for any event prod holds today — email
+// identity resolves per ORGANISATION (structural), and no race_event resolves
+// to a (target, fallback) pair with different Twilio alpha senders. Two
+// locations in ONE org do have different senders, so that second half is a fact
+// about the data with an expiry date: the measurement, the query and the
+// condition that ends it are in event-comms-location.js.
 //
 // These tests deliberately do NOT mock ./event-comms-location. Mocking the
 // resolver is what let the two halves drift: the resolver's own suite proved it
@@ -141,8 +144,8 @@ describe('a transient location read failure', () => {
 
   // The two shapes BAREWRITE.1/.3 silently deleted. Both are receipts for money
   // already taken; both now go out, from the event's own location — the same
-  // organisation as the target, hence the same email identity and the same
-  // alpha sender.
+  // organisation as the target, hence the same email identity, and the same
+  // alpha sender for every event pair prod holds today.
   it('RECEIPT NOT LOST — a HOST event still sends, from the event location', async () => {
     const { db, row } = makeWorld({ host_id: 'H', location_id: 'ANCHOR' })
 

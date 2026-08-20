@@ -128,10 +128,14 @@ export async function sendRaceConfirmations({ db, paymentId }) {
   // so a transient DB blip permanently cost a PAYING attendee their receipt and
   // their per-person check-in QR, and the only trace was a log line inside a
   // 200. BAREWRITE.3 narrowed the throw to brand-crossing events; BAREWRITE.4
-  // removed it entirely, because the brand it protected cannot differ (email
-  // identity is resolved per ORGANISATION, and no prod location pair differs on
-  // the SMS alpha sender — the reasoning and the prod measurement are in
-  // event-comms-location.js).
+  // removed it entirely, because the brand it protected cannot currently
+  // differ: email identity is resolved per ORGANISATION (structural), and no
+  // event in prod today resolves to a (target, fallback) pair with different
+  // Twilio alpha senders — although two locations in one org DO have different
+  // senders, so that second half is a fact about the DATA and has an expiry
+  // date. The measurement, the query that reproduces it and the condition that
+  // would invalidate it are all in event-comms-location.js — read them there
+  // before relying on this sentence.
   //
   // The resolver now never throws; it logs and returns null. This try/catch is
   // belt-and-braces for a future hop that forgets, and it CONTINUES rather than
