@@ -64,3 +64,102 @@ describe('resolveGroupIds', () => {
     expect(resolveGroupIds(null, null)).toEqual([])
   })
 })
+
+import { planAction } from './groups'
+
+// 2026-08-24 is a Monday. Dublin is UTC+1 in August, so 06:00 Dublin is
+// 05:00Z and 21:30 Dublin is 20:30Z.
+const MONDAY = '2026-08-24'
+const at = (hhmmZ) => new Date(`2026-08-24T${hhmmZ}:00Z`).getTime()
+const OPEN_AT = at('05:00')
+
+const schedule = {
+  enabled: true,
+  windows: [{ days: [1, 2, 3, 4, 5], on: '06:00', off: '21:30', volume: 35, favorite_id: 'fv-1' }],
+  override: null,
+  last_applied: null,
+}
+
+describe('planAction', () => {
+  it('opens the window on the first tick inside it, carrying volume and favourite', () => {
+    expect(planAction(schedule, at('05:00'), MONDAY)).toEqual({
+      action: 'open', windowOnAt: OPEN_AT, volume: 35, favoriteId: 'fv-1',
+    })
+  })
+
+  it('still opens on a LATER tick if the boundary minute was missed', () => {
+    // A missed cron tick must self-heal. Edge-detection on playback state
+    // would not: it would see the window already begun and do nothing.
+    expect(planAction(schedule, at('05:07'), MONDAY)).toMatchObject({ action: 'open' })
+  })
+
+  it('does nothing once the window is applied', () => {
+    const s = { ...schedule, last_applied: { window_on_at: OPEN_AT, action: 'open' } }
+    expect(planAction(s, at('12:00'), MONDAY)).toBe(null)
+  })
+
+  it('does not resume music a human paused mid-window', () => {
+    // The whole point of exactly-once: a coach who pauses stays paused.
+    const s = { ...schedule, last_applied: { window_on_at: OPEN_AT, action: 'open' } }
+    expect(planAction(s, at('14:00'), MONDAY)).toBe(null)
+  })
+
+  it('closes the window it opened, once the window has ended', () => {
+    const s = { ...schedule, last_applied: { window_on_at: OPEN_AT, action: 'open' } }
+    expect(planAction(s, at('20:30'), MONDAY)).toEqual({ action: 'close', windowOnAt: OPEN_AT })
+  })
+
+  it('does not close twice', () => {
+    const s = { ...schedule, last_applied: { window_on_at: OPEN_AT, action: 'close' } }
+    expect(planAction(s, at('20:35'), MONDAY)).toBe(null)
+  })
+
+  it('does NOT pause a window it never opened', () => {
+    // Recovery after downtime spanning a whole window: pausing here would
+    // silence music a coach started by hand.
+    expect(planAction(schedule, at('20:35'), MONDAY)).toBe(null)
+  })
+
+  it('does nothing outside every window with no open on record', () => {
+    expect(planAction(schedule, at('03:00'), MONDAY)).toBe(null)
+  })
+
+  it('does nothing when the schedule is disabled', () => {
+    expect(planAction({ ...schedule, enabled: false }, at('05:00'), MONDAY)).toBe(null)
+  })
+
+  it('no-ops entirely while a suppression override is live', () => {
+    const s = {
+      ...schedule,
+      override: { state: 'off', until: new Date(at('23:00')).toISOString() },
+    }
+    expect(planAction(s, at('05:00'), MONDAY)).toBe(null)
+  })
+
+  it('resumes normal service once the override expires', () => {
+    const s = {
+      ...schedule,
+      override: { state: 'off', until: new Date(at('04:00')).toISOString() },
+    }
+    expect(planAction(s, at('05:00'), MONDAY)).toMatchObject({ action: 'open' })
+  })
+
+  it('does not fire on a day the window does not run', () => {
+    // 2026-08-23 is a Sunday; the window is Mon-Fri.
+    expect(planAction(schedule, new Date('2026-08-23T05:00:00Z').getTime(), '2026-08-23')).toBe(null)
+  })
+
+  it('treats a re-run (last_applied cleared) as unapplied', () => {
+    // This is exactly what the "run now" button does.
+    const s = { ...schedule, last_applied: null }
+    expect(planAction(s, at('12:00'), MONDAY)).toMatchObject({ action: 'open' })
+  })
+
+  it('defaults a missing volume to a sane level rather than silence', () => {
+    const s = {
+      ...schedule,
+      windows: [{ days: [1, 2, 3, 4, 5], on: '06:00', off: '21:30', favorite_id: 'fv-1' }],
+    }
+    expect(planAction(s, at('05:00'), MONDAY)).toMatchObject({ volume: 30 })
+  })
+})
