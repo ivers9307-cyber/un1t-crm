@@ -324,6 +324,79 @@ describe('scoreExtractionConfidence — a zero total is never high confidence', 
   })
 })
 
+// EMPTY-STRING-FIELDS.1 — the third round of the same defect, caught live.
+// RECEIPT-NULLS.1 taught the schema that a receipt may have no date, by
+// accepting `null`. But the INBOX's version of "no date" is an empty string:
+// `strField` renders a null as '' so the input box is blank, and saving sends
+// that '' straight back. '' is a string, so it hit the YYYY-MM-DD regex and
+// the operator got "Invalid request body" on the very receipt the previous
+// fix had just rescued (row ee83a2f6, Tesco €13.50).
+//
+// So both spellings of "empty" have to mean the same thing. Normalising in
+// the SCHEMA rather than the form covers every client — the inbox, a future
+// mobile editor, and any direct API caller — and it stores a canonical null
+// instead of letting '' and null both accumulate in extracted_fields.
+describe('invoiceFieldsSchema — an empty box means null, not ""', () => {
+  const stored = {
+    supplier_name: 'Tesco Ireland',
+    invoice_number: '62NW-1701-8059-B5VP',
+    invoice_date: null,
+    currency: 'EUR',
+    subtotal: 13.5,
+    tax_amount: 0,
+    total: 13.5,
+    line_items: [],
+  }
+
+  it('accepts the row exactly as the database holds it (regression pin)', () => {
+    expect(invoiceFieldsSchema.safeParse(stored).success).toBe(true)
+  })
+
+  it('accepts an empty invoice_date and normalises it to null', () => {
+    const r = invoiceFieldsSchema.safeParse({ ...stored, invoice_date: '' })
+    expect(r.success).toBe(true)
+    expect(r.data.invoice_date).toBeNull()
+  })
+
+  it('accepts an empty invoice_number and normalises it to null', () => {
+    const r = invoiceFieldsSchema.safeParse({ ...stored, invoice_number: '' })
+    expect(r.success).toBe(true)
+    expect(r.data.invoice_number).toBeNull()
+  })
+
+  it('treats a whitespace-only box as empty too', () => {
+    const r = invoiceFieldsSchema.safeParse({ ...stored, invoice_date: '   ', invoice_number: '  ' })
+    expect(r.success).toBe(true)
+    expect(r.data.invoice_date).toBeNull()
+    expect(r.data.invoice_number).toBeNull()
+  })
+
+  it('normalises the other optional boxes the editor renders', () => {
+    const r = invoiceFieldsSchema.safeParse({
+      ...stored, due_date: '', supplier_address: '', account_code: '', xero_account_id: '', category: '',
+    })
+    expect(r.success).toBe(true)
+    expect(r.data.due_date).toBeNull()
+    expect(r.data.supplier_address).toBeNull()
+    expect(r.data.account_code).toBeNull()
+    expect(r.data.category).toBeNull()
+  })
+
+  it('still rejects a half-typed date — empty is fine, wrong is not', () => {
+    expect(invoiceFieldsSchema.safeParse({ ...stored, invoice_date: '2026-07' }).success).toBe(false)
+    expect(invoiceFieldsSchema.safeParse({ ...stored, invoice_date: '15/07/2026' }).success).toBe(false)
+  })
+
+  it('still rejects an emptied supplier_name — that one is genuinely required', () => {
+    expect(invoiceFieldsSchema.safeParse({ ...stored, supplier_name: '' }).success).toBe(false)
+    expect(invoiceFieldsSchema.safeParse({ ...stored, supplier_name: '   ' }).success).toBe(false)
+  })
+
+  it('still rejects an emptied total — ZERO-TOTAL.1 stays enforced', () => {
+    expect(invoiceFieldsSchema.safeParse({ ...stored, total: '' }).success).toBe(false)
+  })
+})
+
 describe('applyDueDateDefault', () => {
   it('fills a missing due_date with issue date + 30 days', () => {
     const out = applyDueDateDefault({ invoice_date: '2026-05-07', due_date: null })
