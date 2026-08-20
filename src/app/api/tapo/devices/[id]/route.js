@@ -3,7 +3,7 @@
 // TAPO-T1.4 — staff-facing config for one Tapo device: rename, set
 // zone label, enable/adopt, and choose the schedule (none | fixed
 // windows | class-linked). The pure desired-state engine
-// (src/lib/tapo/desired-state.js) reads these fields; the bridge
+// (src/lib/schedule/desired-state.js) reads these fields; the bridge
 // executes.
 //
 // Service-role route: RLS does nothing, so we authorize in app code.

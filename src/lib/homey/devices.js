@@ -13,7 +13,7 @@
 // 2026-08-01) — the CRM adopt flow (src/lib/homey/reconcile.js,
 // HOMEYD.3) auto-registers them disabled.
 
-import { desiredState } from '@/lib/tapo/desired-state'
+import { desiredState } from '@/lib/schedule/desired-state'
 
 const HOMEY_PREFIX = 'homey:'
 
