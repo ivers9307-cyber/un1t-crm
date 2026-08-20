@@ -33,6 +33,7 @@ import { sendLocationSms, TwilioError, resolveSenderLocation } from '@/lib/twili
 import { getAppUrl } from '@/lib/app-url'
 import { overlayConnections } from '@/lib/connection-registry'
 import { resolveEventCommsLocation } from '@/lib/event-comms-location'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
@@ -118,11 +119,29 @@ export async function POST(_request, props) {
   // EVENT-COMMS-LOC — send the payment link from the event's comms location
   // (host events → the org master, not the sender-less anchor). resolveSenderLocation
   // is the inner safety net if that resolved location itself lacks a sender.
-  const commsLocation = await resolveEventCommsLocation(db, {
-    location_id: reg.race_events.location_id,
-    host_id: reg.race_events.host_id,
-    sending_location_id: reg.race_events.sending_location_id,
-  })
+  // BAREWRITE.4 — resolveEventCommsLocation FAILS OPEN. It logs an unreadable
+  // location row (structurally, via logError) and returns null; the
+  // `|| reg.race_events.locations` fallback below is the event's own location,
+  // which resolves to the same email identity (per-organisation, structural)
+  // and — for every event prod holds today, though not for every location pair
+  // in prod — the same Twilio alpha sender. See event-comms-location.js for the
+  // measurement and for the condition that would end that. BAREWRITE.1 had it
+  // throw and this route answer 503, refusing to send a payment link an
+  // operator had explicitly asked for over a read that, today, only ever
+  // chooses between two identical senders.
+  let commsLocation = null
+  try {
+    commsLocation = await resolveEventCommsLocation(db, {
+      location_id: reg.race_events.location_id,
+      host_id: reg.race_events.host_id,
+      sending_location_id: reg.race_events.sending_location_id,
+    })
+  } catch (e) {
+    logError('payment-sms', 'comms location resolver threw; sending from the event location instead', {
+      err: e, registrationId: params.id,
+    })
+    commsLocation = null
+  }
   const senderLocation = await resolveSenderLocation(db, commsLocation || reg.race_events.locations)
 
   let twilioResult
@@ -149,7 +168,10 @@ export async function POST(_request, props) {
   // captain's contact timeline. Never blocks the response.
   if (payment.contact_id) {
     try {
-      await db.from('activities').insert({
+      // Genuinely best-effort (the comment above) — but the error is READ, not
+      // discarded: the try/catch alone catches nothing here, because a
+      // supabase builder resolves with `{ data, error }` instead of throwing.
+      const { error: timelineError } = await db.from('activities').insert({
         contact_id: payment.contact_id,
         location_id: locationId,
         type: 'sms_sent',
@@ -157,6 +179,7 @@ export async function POST(_request, props) {
         note: body,
         created_by: user.id,
       })
+      if (timelineError) console.warn(`[payment-sms] activity log failed: ${timelineError.message}`)
     } catch (e) {
       console.warn(`[payment-sms] activity log failed: ${e?.message || e}`)
     }

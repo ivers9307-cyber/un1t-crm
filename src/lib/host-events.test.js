@@ -6,7 +6,7 @@ import {
   deriveSlug,
   HOST_EVENT_KINDS,
 } from './host-events'
-import { ensureAnchorLocation, resolveMasterLocationId } from './host-events'
+import { ensureAnchorLocation, resolveMasterLocationId, resolveMasterLocationIdStrict } from './host-events'
 
 function fakeDb() {
   const calls = { inserted: null, updatedHost: null }
@@ -163,5 +163,31 @@ describe('resolveMasterLocationId', () => {
     const throwing = { from: () => { throw new Error('boom') } }
     expect(await resolveMasterLocationId(throwing, { organization_id: 'org-1', anchor_location_id: 'anchor-1' })).toBe('anchor-1')
     expect(await resolveMasterLocationId(orgDb({}), { anchor_location_id: 'anchor-1' })).toBe('anchor-1')
+  })
+
+  // ── BAREWRITE.1 follow-up — the middle hop of the event-sender chain ──────
+  // This function discarded the read's `error` and folded the failure into the
+  // anchor fallback. That is right for HOST-MASTER.1 contact homing and WRONG
+  // for sender selection: the anchor has no Twilio/email identity, so the
+  // fail-open IS the wrong-brand send that resolveEventCommsLocation exists to
+  // prevent. Hardening only the reads either side of it left the hole open.
+  const erroringDb = {
+    from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: 'connection reset' } }) }) }) }),
+  }
+
+  it('the fail-open variant still swallows a read error (contact homing is unchanged)', async () => {
+    expect(await resolveMasterLocationId(erroringDb, { organization_id: 'org-1', anchor_location_id: 'anchor-1' })).toBe('anchor-1')
+  })
+
+  it('the STRICT variant throws on a read error instead of returning the anchor', async () => {
+    await expect(
+      resolveMasterLocationIdStrict(erroringDb, { organization_id: 'org-1', anchor_location_id: 'anchor-1' }),
+    ).rejects.toThrow(/organizations read failed/)
+  })
+
+  it('the STRICT variant agrees with the fail-open one on every non-error path', async () => {
+    expect(await resolveMasterLocationIdStrict(orgDb({ master_location_id: 'master-1' }), { organization_id: 'org-1', anchor_location_id: 'anchor-1' })).toBe('master-1')
+    expect(await resolveMasterLocationIdStrict(orgDb({ master_location_id: null }), { organization_id: 'org-1', anchor_location_id: 'anchor-1' })).toBe('anchor-1')
+    expect(await resolveMasterLocationIdStrict(orgDb({}), { anchor_location_id: 'anchor-1' })).toBe('anchor-1')
   })
 })

@@ -10,6 +10,17 @@ import reactHooks from 'eslint-plugin-react-hooks'
 import nextPlugin from '@next/eslint-plugin-next'
 import guardrails from './eslint-rules/index.mjs'
 
+// HUBDOOR.3 removed the GLOBAL test ignore (a flat-config object carrying only
+// `ignores` drops the file from EVERY later block, which would have hidden the
+// test-only rule from the very files it exists to lint). The exclusion moved to
+// a per-block `ignores` instead — which means it is now something each product
+// block must OPT INTO, and a block added later that forgets it silently starts
+// linting test files at ERROR. That already nearly happened once: BAREWRITE.1's
+// `no-unchecked-supabase-write` block arrived from main with no `ignores` of its
+// own (it did not need one then) and auto-merged textually clean.
+// ANY product block below MUST carry `ignores: NO_TESTS`.
+const NO_TESTS = ['**/*.test.js', '**/*.test.jsx']
+
 const config = [
   {
     ignores: [
@@ -32,7 +43,7 @@ const config = [
     // shared/ is the web/mobile data seam — full of Supabase fetchers, so the
     // same defect classes (1k-row cap, Dublin-time parsing) apply there too.
     files: ['src/**/*.{js,jsx}', 'shared/**/*.js'],
-    ignores: ['**/*.test.js', '**/*.test.jsx'],
+    ignores: NO_TESTS,
     // react-hooks + @next/next are registered with NO rules enabled, only so the
     // inline `// eslint-disable react-hooks/*` / `@next/next/*` comments in the
     // components don't trip "Definition for rule not found" under this standalone
@@ -95,10 +106,100 @@ const config = [
       'src/components/WATemplateEditor.jsx',
       'src/components/WhatsappTemplatesList.jsx',
     ],
-    ignores: ['**/*.test.js', '**/*.test.jsx'],
+    ignores: NO_TESTS,
     plugins: { guardrails },
     rules: {
       'guardrails/no-low-contrast-accent-text': 'error',
+    },
+  },
+  {
+    // BAREWRITE.1 — `guardrails/no-unchecked-supabase-write` is armed PER-PATH,
+    // for the same reason no-low-contrast-accent-text above is: an ERROR-level
+    // repo-wide rule only works on a clean baseline, and this one's baseline is
+    // not clean.
+    //
+    // NO CENSUS FIGURE IS PUBLISHED HERE, AND THAT IS DELIBERATE. Four
+    // successive revisions of PR #1472 quoted a repo-wide site count; every one
+    // of them was a different number, none survived an independent re-run, and
+    // one of them reached CLAUDE.md. A count that a reader cannot reproduce is
+    // not evidence, it is folklore that hardens into an invariant — this estate
+    // already had one saying "BOTH" when there were four allowlists, and that
+    // wording is why the defect it described kept coming back. So the only
+    // figure this file will ever state is the one your own run prints.
+    //
+    // TO MEASURE A PATH (and it is the same command the gate runs, so the two
+    // can never disagree): add the path to the `files` list below and run
+    //
+    //     npm run check:guardrails
+    //
+    // Every remaining site in that path is then printed, with file and line.
+    // Grep is not a substitute — multi-line chains are the house style here, so
+    // a regex undercounts this class badly; the rule reads the AST.
+    //
+    // TO ARM A PATH: measure it as above, drive it to zero, and leave its line
+    // in the list. Same one-line ratchet as the accent-text list.
+    //
+    // ARM BY DANGER, NOT BY CONVENIENCE. The most dangerous remaining sites are
+    // the least visible ones: a bare write inside a `try { … } catch { … }`
+    // whose catch cannot fire for it, because a supabase builder resolves with
+    // `{ data, error }` rather than throwing. Those read as handled, which is
+    // how whatsapp-consent.js shipped a STOP path that answered `applied: true`
+    // and texted "You've been unsubscribed" on a write that had failed, and
+    // survived two audits doing it.
+    //
+    // Armed today = the paths this PR cleaned: the campaign send path and its
+    // cron, the event/race comms path, staff creation, the Instagram inbox, and
+    // the WhatsApp inbound webhook.
+    //
+    // NOT ARMED, stated plainly rather than left as an omission:
+    //
+    //  • `mobile/**` is outside this config entirely (it has its own linters),
+    //    so the member auto-link fix in mobile/lib/member/contact-context.jsx is
+    //    protected by a source-scanning test, not by this rule.
+    //
+    //  • `src/lib/whatsapp.js`. This is the file whose drip path this PR
+    //    hardened, so leaving it unarmed is a real gap and worth naming: a new
+    //    bare write in sendDripChunk would not be caught. It stays unarmed
+    //    because its remaining sites are NOT the mechanical log-it kind the
+    //    webhook route's were. The blast sender's promote/park writes on
+    //    `whatsapp_broadcast_recipients` need exactly the claim-vs-duplicate
+    //    judgement `claimDripRecipient` and race-confirmations' stamp ordering
+    //    have now been through twice, and that judgement is a follow-up with
+    //    its own tests, not a mechanical sweep stapled to a PR already reviewed
+    //    four times for over-correcting. Do it next; the ordering question is
+    //    the same one, with the same default: never trade a possible duplicate
+    //    for a certain silent loss.
+    files: [
+      'src/lib/campaign-sender.js',
+      'src/app/api/cron/run-campaigns/route.js',
+      'src/lib/race-confirmations.js',
+      'src/lib/event-comms-location.js',
+      'src/lib/event-attendee-reminders.js',
+      'src/lib/host-events.js',
+      // The WhatsApp STOP/START path — found in the residue sweep, and worse
+      // than any of the sites this PR set out to fix. Both of its paths wrote
+      // the three consent rows (audience flag, wa_status, consent_log) as bare
+      // awaits inside a try/catch that CANNOT fire for a supabase result, so a
+      // failed opt-out still answered `applied: true` and told the customer
+      // "You've been unsubscribed" while they stayed in every marketing
+      // audience.
+      'src/lib/whatsapp-consent.js',
+      // The inbound WhatsApp webhook — the caller of that consent path, cleaned
+      // to zero here. Every one of its writes is LOGGED, never surfaced and
+      // never failed on: Meta disables a subscription that stops answering
+      // 2xx, so nothing in this handler may refuse, and each of these writes
+      // loses a record rather than a message. Logging is the whole win here —
+      // the consent bug lived in this file's blast radius for months precisely
+      // because its writes looked handled and reported nothing.
+      'src/app/api/webhooks/whatsapp/route.js',
+      'src/app/api/staff/route.js',
+      'src/app/api/instagram/**',
+      'src/app/api/registrations/**',
+    ],
+    ignores: NO_TESTS,
+    plugins: { guardrails },
+    rules: {
+      'guardrails/no-unchecked-supabase-write': 'error',
     },
   },
   {
@@ -144,5 +245,6 @@ const config = [
     },
   },
 ]
+
 
 export default config
