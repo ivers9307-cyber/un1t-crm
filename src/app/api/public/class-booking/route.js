@@ -115,6 +115,15 @@ export async function POST(request) {
   if (!contactId) return NextResponse.json({ success: false, error: 'Could not capture your details. Please try again.' }, { status: 500 })
 
   try { await db.from('contacts').update({ lead_source: leadSource }).eq('id', contactId).is('lead_source', null) } catch (e) { logWarn('classbook', 'lead_source failed', { err: e }) }
+  // FUNNEL.5 — LAST-touch alongside first-touch. The line above is
+  // stamp-if-null and therefore permanent, so nothing recorded that this
+  // contact came back, or through what. Stamped unconditionally, and
+  // best-effort: losing it must never cost the booking.
+  try {
+    await db.from('contacts')
+      .update({ last_lead_source: leadSource, last_lead_source_at: new Date().toISOString() })
+      .eq('id', contactId)
+  } catch (e) { logWarn('classbook', 'last_lead_source failed', { err: e }) }
   // ADS-REPORT.2 — first-touch ad-click attribution (stamp-if-null). Marketing
   // params are low-trust: sanitised + length-capped. Only stamp when a real ad
   // signal is present so organic /start visitors never get ad_provider='meta'.

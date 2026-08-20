@@ -311,3 +311,70 @@ describe('idempotency', () => {
     expect(classifyContact(c, NOW)).toBe(classifyContact(c, NOW))
   })
 })
+
+// ── FUNNEL.5 — a booked class in the diary is not dormant ──────────
+//
+// Every rule in the funnel branch keys on ATTENDANCE, and booking does not
+// move last_attended_at, so a re-engaging contact was filed as a ghost until
+// they physically turned up. Measured the evening the 3-Class Trial sequence
+// went out: 12 booked through /start, 10 sat in `dormant`, 8 had an upcoming
+// class at the moment of classification.
+
+describe('FUNNEL.5 — an upcoming booked class overrides dormant', () => {
+  const NOW = Date.parse('2026-08-21T09:00:00Z')
+  const ago = (days) => new Date(NOW - days * 86400000).toISOString()
+  const upcoming = (hours) => ([{ status: 'BOOKED', time_start: Math.floor((NOW + hours * 3600_000) / 1000) }])
+  const past = (hours) => ([{ status: 'BOOKED', time_start: Math.floor((NOW - hours * 3600_000) / 1000) }])
+
+  it('an aged-out signup who has never attended but has booked → new_lead, not dormant', () => {
+    // The 11-of-12 case: a Glofox join date, no attendance, long past the
+    // new-lead window, and a class in the diary.
+    const base = { glofox_membership_status: 'trial', joined_at: ago(200), last_attended_at: null }
+    expect(classifyContact({ ...base, recent_bookings: [] }, NOW)).toBe('dormant')
+    expect(classifyContact({ ...base, recent_bookings: upcoming(48) }, NOW)).toBe('new_lead')
+  })
+
+  it('an ex-trainer who aged out and has booked again → new_lead, not dormant', () => {
+    // No COMPLETED class in this cycle, so new_lead rather than first_class —
+    // the attended count describes a previous visit.
+    const base = {
+      glofox_membership_status: 'trial',
+      joined_at: ago(300),
+      last_attended_at: ago(180),
+    }
+    expect(classifyContact({ ...base, recent_bookings: [] }, NOW)).toBe('dormant')
+    expect(classifyContact({ ...base, recent_bookings: upcoming(72) }, NOW)).toBe('new_lead')
+  })
+
+  it('a booking they already MISSED is not re-engagement — still dormant', () => {
+    const base = { glofox_membership_status: 'trial', joined_at: ago(200), last_attended_at: null }
+    expect(classifyContact({ ...base, recent_bookings: past(24) }, NOW)).toBe('dormant')
+  })
+
+  it('a CANCELLED upcoming booking does not count', () => {
+    const base = { glofox_membership_status: 'trial', joined_at: ago(200), last_attended_at: null }
+    const cancelled = [{ status: 'CANCELLED', time_start: Math.floor((NOW + 48 * 3600_000) / 1000) }]
+    expect(classifyContact({ ...base, recent_bookings: cancelled }, NOW)).toBe('dormant')
+  })
+
+  it('does NOT override the off-funnel piles that outrank the funnel', () => {
+    // A paying member with a class booked is a member using their membership,
+    // not a re-acquisition. Same for the platform piles.
+    const bookings = upcoming(24)
+    expect(classifyContact({ glofox_membership_status: 'member', converted_at: ago(400), recent_bookings: bookings }, NOW)).toBe('member')
+    expect(classifyContact({ glofox_membership_status: 'classpass_payg', recent_bookings: bookings }, NOW)).toBe('classpass')
+  })
+
+  it('an actively-training contact is unaffected — attendance rules still win', () => {
+    const recent = {
+      glofox_membership_status: 'trial',
+      joined_at: ago(20),
+      last_attended_at: ago(2),
+      recent_bookings: [
+        { status: 'ATTENDED', time_start: Math.floor((NOW - 2 * 86400000) / 1000) },
+        ...upcoming(48),
+      ],
+    }
+    expect(classifyContact(recent, NOW)).toBe('first_class')
+  })
+})
