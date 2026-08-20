@@ -52,37 +52,37 @@ beforeEach(() => vi.clearAllMocks())
 describe('/team index page', () => {
   it('redirects to /login without a session', async () => {
     getCurrentUser.mockResolvedValue(null)
-    await expect(TeamIndexPage()).rejects.toThrow('NEXT_REDIRECT:/login')
+    await expect(TeamIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/login$/)
   })
 
   it('redirects to /schedule when both keys are granted', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { schedule: true, contracts: true } })
     )
-    await expect(TeamIndexPage()).rejects.toThrow('NEXT_REDIRECT:/schedule')
+    await expect(TeamIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/schedule$/)
   })
 
   it('redirects to /contracts when schedule is denied but contracts is granted', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { schedule: false, contracts: true } })
     )
-    await expect(TeamIndexPage()).rejects.toThrow('NEXT_REDIRECT:/contracts')
+    await expect(TeamIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/contracts$/)
   })
 
   it('redirects to /contracts when only contracts is held', async () => {
     getCurrentUser.mockResolvedValue(user({ perms: { contracts: true } }))
-    await expect(TeamIndexPage()).rejects.toThrow('NEXT_REDIRECT:/contracts')
+    await expect(TeamIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/contracts$/)
   })
 
   it('redirects to /policies when neither key is held', async () => {
     getCurrentUser.mockResolvedValue(user())
-    await expect(TeamIndexPage()).rejects.toThrow('NEXT_REDIRECT:/policies')
+    await expect(TeamIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/policies$/)
   })
 
   it('redirects to /contracts when the location gate denies schedule for everyone, even with schedule permission held', async () => {
     const u = user({ perms: { schedule: true, contracts: true } })
     u.activeLocation = { id: 'loc1', features: { schedule: false } }
     getCurrentUser.mockResolvedValue(u)
-    await expect(TeamIndexPage()).rejects.toThrow('NEXT_REDIRECT:/contracts')
+    await expect(TeamIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/contracts$/)
   })
 })

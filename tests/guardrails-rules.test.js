@@ -359,3 +359,58 @@ ruleTester.run('no-discarded-single-error', plugin.rules['no-discarded-single-er
     },
   ],
 })
+
+// HUBDOOR.3 — the vacuous-redirect-assertion rule. The defect it pins is a
+// test that stays green after the behaviour changed: `toThrow(string)` is a
+// substring match, and every redirect target here is a '/'-prefixed path, so
+// `toThrow('NEXT_REDIRECT:/')` accepts EVERY redirect and the longer targets
+// accept each other's children.
+ruleTester.run(
+  'no-substring-redirect-assertion',
+  plugin.rules['no-substring-redirect-assertion'],
+  {
+    valid: [
+      // anchored regex — the shape the rule is steering toward
+      'expect(p()).rejects.toThrow(/^NEXT_REDIRECT:\\/$/)',
+      'expect(p()).rejects.toThrow(/^NEXT_REDIRECT:\\/admin\\/fleet$/)',
+      // a plain message assertion is a normal, useful substring match — the
+      // rule is deliberately narrow to the prefix-shaped path namespace
+      'expect(f()).toThrow("Not found")',
+      'expect(f()).toThrow("hub-index-chains: unknown hub")',
+      // a variable, not a literal: nothing to read, nothing to claim
+      'expect(p()).rejects.toThrow(expected)',
+      // an interpolated template is out of scope for the same reason
+      'expect(p()).rejects.toThrow(`NEXT_REDIRECT:${target}`)',
+      // not the matcher
+      'log("NEXT_REDIRECT:/")',
+    ],
+    invalid: [
+      // the fully vacuous one: passes against any redirect at all
+      {
+        code: "expect(p()).rejects.toThrow('NEXT_REDIRECT:/')",
+        errors: [{ messageId: 'substring' }],
+      },
+      // the real Operations case — '/'-only assertion passing on /admin/fleet
+      {
+        code: 'await expect(OperationsIndexPage()).rejects.toThrow("NEXT_REDIRECT:/")',
+        errors: [{ messageId: 'substring' }],
+      },
+      // a longer target is still a prefix of its own children
+      // ('/schedule' passes on '/schedule/expenses')
+      {
+        code: "expect(p()).rejects.toThrow('NEXT_REDIRECT:/schedule')",
+        errors: [{ messageId: 'substring' }],
+      },
+      // constant template literal — same substring semantics
+      {
+        code: 'expect(p()).rejects.toThrow(`NEXT_REDIRECT:/settings`)',
+        errors: [{ messageId: 'substring' }],
+      },
+      // toThrowError is the same matcher under another name
+      {
+        code: "expect(p()).rejects.toThrowError('NEXT_REDIRECT:/login')",
+        errors: [{ messageId: 'substring' }],
+      },
+    ],
+  }
+)

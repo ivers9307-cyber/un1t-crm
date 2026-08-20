@@ -38,21 +38,21 @@ beforeEach(() => vi.clearAllMocks())
 describe('/live redirect page', () => {
   it('redirects to /login without a session', async () => {
     getCurrentUser.mockResolvedValue(null)
-    await expect(LiveRedirectPage()).rejects.toThrow('NEXT_REDIRECT:/login')
+    await expect(LiveRedirectPage()).rejects.toThrow(/^NEXT_REDIRECT:\/login$/)
   })
 
   it('redirects to / when the user lacks studio_management, even with an active location', async () => {
     getCurrentUser.mockResolvedValue(user({ perms: { studio_management: false } }))
-    await expect(LiveRedirectPage()).rejects.toThrow('NEXT_REDIRECT:/')
+    await expect(LiveRedirectPage()).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
   })
 
   it('redirects to /live/<activeLocation> when the user holds studio_management', async () => {
     getCurrentUser.mockResolvedValue(user({ activeLocationId: 'loc9', perms: { studio_management: true } }))
-    await expect(LiveRedirectPage()).rejects.toThrow('NEXT_REDIRECT:/live/loc9')
+    await expect(LiveRedirectPage()).rejects.toThrow(/^NEXT_REDIRECT:\/live\/loc9$/)
   })
 
   it('redirects to / when studio_management is held but there is no active location', async () => {
     getCurrentUser.mockResolvedValue(user({ activeLocationId: null, perms: { studio_management: true } }))
-    await expect(LiveRedirectPage()).rejects.toThrow('NEXT_REDIRECT:/')
+    await expect(LiveRedirectPage()).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
   })
 })

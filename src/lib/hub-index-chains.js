@@ -42,10 +42,12 @@
 //                  assertion that the gap is known and accepted. Empty for
 //                  every hub but Members; see its note.
 //
-// Every `target` below is a route whose OWN gate the step satisfies
-// (verified against each page's guard), so a redirect out of here never
-// lands on a second bounce. That statement is only true because of
-// `roles`, and it used to be false:
+// WHAT THIS MODULE GUARANTEES, EXACTLY: every `target` below is a route
+// whose own PERMISSION and ROLE gate the winning step satisfies — read off
+// each destination's guard, all 25 of them, and re-read at HUBDOOR.3. So a
+// step can never hand someone a door the destination refuses them *on the
+// grant*. That statement is only true because of `roles`, and it used to be
+// false:
 //
 // TWO of these targets gate on a ROLE FLOOR as well as a permission key —
 // Money's /orders and Members' /challenges are both
@@ -74,6 +76,29 @@
 // /orders has always redirected on it, and HUBDOOR.2 gave /challenges the
 // server gate it never had (src/app/(members)/challenges/layout.js) so the
 // page can no longer render-then-bounce a client-side white flash.
+//
+// WHAT IT DOES NOT GUARANTEE — the header used to say "a redirect out of
+// here never lands on a second bounce", full stop, and that is a wider
+// claim than the module can keep, so it is narrowed here rather than left
+// for the next person to trust wrongly. FIVE targets carry a second
+// precondition that is not a grant at all — an ACTIVE LOCATION —
+//
+//     /activities, /hyrox, /tv-displays  (…redirect('/') if !locationId)
+//     /communications/send               (…redirect('/communications'))
+//     /live                              (…redirect('/') with no active id)
+//
+// — and a permission-keyed chain cannot see session state. It is not
+// papered over with a `needsActiveLocation` flag because skipping such a
+// step would send the same user to the same fallback the destination
+// already sends them to: the flag would buy one fewer HTTP redirect and a
+// new thing to keep in sync, not a different outcome. Nor is it reachable
+// today by the persona it would hurt: a master (the archetypal
+// no-active-location session) resolves every key true, so step 1 wins for
+// them in all six hubs, and no hub's step 1 is on that list. Anyone else
+// resolving one of those five keys true is doing so through an assignment
+// at a location. If a step is ever added whose target both is location-
+// preconditioned and can win for a location-less session, that is the
+// moment this stops being a note and becomes a step-skip.
 
 import { CHALLENGE_ADMIN_ROLES } from './challenges-access'
 import { MANAGER_ROLES } from './schemas'

@@ -25,6 +25,12 @@
 // on '/admin/fleet' by accident, since fleet_restart defaults ON for every
 // role and the fixture never denied it. The fallback assertions below are
 // now anchored regexes, and both fleet keys joined allDenied.
+//
+// HUBDOOR.3 — that second bug was a WHOLE-SUITE shape, not a local slip:
+// 84 sites across 23 suites asserted a redirect with a bare string. All are
+// anchored now, and `guardrails/no-substring-redirect-assertion` (ERROR,
+// eslint-rules/index.mjs) is what keeps them that way — it is the one
+// guardrails rule that lints test files.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -70,63 +76,63 @@ beforeEach(() => vi.clearAllMocks())
 describe('/operations index page', () => {
   it('redirects to /login without a session', async () => {
     getCurrentUser.mockResolvedValue(null)
-    await expect(OperationsIndexPage()).rejects.toThrow('NEXT_REDIRECT:/login')
+    await expect(OperationsIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/login$/)
   })
 
   it('redirects to /maintenance when equipment_admin is held (others denied)', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { equipment_admin: true } })
     )
-    await expect(OperationsIndexPage()).rejects.toThrow('NEXT_REDIRECT:/maintenance')
+    await expect(OperationsIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/maintenance$/)
   })
 
   it('redirects to /maintenance when only equipment_inspect is held', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { equipment_inspect: true } })
     )
-    await expect(OperationsIndexPage()).rejects.toThrow('NEXT_REDIRECT:/maintenance')
+    await expect(OperationsIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/maintenance$/)
   })
 
   it('redirects to /studio-management when only studio_management is held', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { studio_management: true } })
     )
-    await expect(OperationsIndexPage()).rejects.toThrow('NEXT_REDIRECT:/studio-management')
+    await expect(OperationsIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/studio-management$/)
   })
 
   it('redirects to /tv-displays when only tv_displays is held', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { tv_displays: true } })
     )
-    await expect(OperationsIndexPage()).rejects.toThrow('NEXT_REDIRECT:/tv-displays')
+    await expect(OperationsIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/tv-displays$/)
   })
 
   it('redirects to /presentations when only presentations is held', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { presentations: true } })
     )
-    await expect(OperationsIndexPage()).rejects.toThrow('NEXT_REDIRECT:/presentations')
+    await expect(OperationsIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/presentations$/)
   })
 
   it('redirects to /admin/fleet when only fleet_restart is held (HUBDOOR.1 — this persona used to bounce to /)', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { fleet_restart: true } })
     )
-    await expect(OperationsIndexPage()).rejects.toThrow('NEXT_REDIRECT:/admin/fleet')
+    await expect(OperationsIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/admin\/fleet$/)
   })
 
   it('redirects to /admin/fleet when only fleet_admin is held', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { fleet_admin: true } })
     )
-    await expect(OperationsIndexPage()).rejects.toThrow('NEXT_REDIRECT:/admin/fleet')
+    await expect(OperationsIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/admin\/fleet$/)
   })
 
   it('fleet is LAST in the chain — any in-hub tab still wins', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { fleet_admin: true, presentations: true } })
     )
-    await expect(OperationsIndexPage()).rejects.toThrow('NEXT_REDIRECT:/presentations')
+    await expect(OperationsIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/presentations$/)
   })
 
   // Anchored: 'NEXT_REDIRECT:/' as a bare string is a substring of every
@@ -148,6 +154,6 @@ describe('/operations index page', () => {
       features: { equipment_admin: false, equipment_inspect: false },
     })
     getCurrentUser.mockResolvedValue(u)
-    await expect(OperationsIndexPage()).rejects.toThrow('NEXT_REDIRECT:/studio-management')
+    await expect(OperationsIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/studio-management$/)
   })
 })

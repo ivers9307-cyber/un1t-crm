@@ -64,12 +64,12 @@ beforeEach(() => vi.clearAllMocks())
 describe('/schedule/expenses approver gate', () => {
   it('redirects to /login without a session', async () => {
     getCurrentUser.mockResolvedValue(null)
-    await expect(ExpensesPage()).rejects.toThrow('NEXT_REDIRECT:/login?redirect=/schedule/expenses')
+    await expect(ExpensesPage()).rejects.toThrow(/^NEXT_REDIRECT:\/login\?redirect=\/schedule\/expenses$/)
   })
 
   it('redirects to /schedule for a non-FTE manager with no grant and no owner role', async () => {
     getCurrentUser.mockResolvedValue(user({ role: 'manager', employment_type: 'fte_ish' }))
-    await expect(ExpensesPage()).rejects.toThrow('NEXT_REDIRECT:/schedule')
+    await expect(ExpensesPage()).rejects.toThrow(/^NEXT_REDIRECT:\/schedule$/)
   })
 
   it('gives reviewer access to a manager explicitly granted approvals_fte_expenses', async () => {

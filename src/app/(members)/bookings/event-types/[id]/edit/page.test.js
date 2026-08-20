@@ -82,7 +82,7 @@ describe('/bookings/event-types/[id]/edit page', () => {
   it('redirects to /login without a session', async () => {
     getCurrentUser.mockResolvedValue(null)
     createServerClient.mockReturnValue(mockDb({}))
-    await expect(EditBookingTypePage(props())).rejects.toThrow('NEXT_REDIRECT:/login')
+    await expect(EditBookingTypePage(props())).rejects.toThrow(/^NEXT_REDIRECT:\/login$/)
   })
 
   it('renders the not-found panel for a foreign-location event (IDOR)', async () => {

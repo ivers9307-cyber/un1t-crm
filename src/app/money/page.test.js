@@ -81,7 +81,7 @@ beforeEach(() => vi.clearAllMocks())
 describe('/money index page', () => {
   it('redirects to /login without a session', async () => {
     getCurrentUser.mockResolvedValue(null)
-    await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/login')
+    await expect(MoneyIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/login$/)
   })
 
   it('redirects to /accounting when all seven keys are granted', async () => {
@@ -98,7 +98,7 @@ describe('/money index page', () => {
         },
       })
     )
-    await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/accounting')
+    await expect(MoneyIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/accounting$/)
   })
 
   it('redirects to /invoices when accounting_hub is denied but the rest are granted', async () => {
@@ -115,12 +115,12 @@ describe('/money index page', () => {
         },
       })
     )
-    await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/invoices')
+    await expect(MoneyIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/invoices$/)
   })
 
   it('redirects to /card-receipts when only card_receipts is held', async () => {
     getCurrentUser.mockResolvedValue(user({ perms: { card_receipts: true } }))
-    await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/card-receipts')
+    await expect(MoneyIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/card-receipts$/)
   })
 
   // HUBDOOR.2 — /orders has ALWAYS gated on MANAGER_ROLES as well as the
@@ -154,14 +154,14 @@ describe('/money index page', () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { approvals_contractor_invoices: true } })
     )
-    await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/schedule/invoices')
+    await expect(MoneyIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/schedule\/invoices$/)
   })
 
   it('redirects to /schedule/expenses when only approvals_fte_expenses is held', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { approvals_fte_expenses: true } })
     )
-    await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/schedule/expenses')
+    await expect(MoneyIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/schedule\/expenses$/)
   })
 
   it('redirects to /schedule/invoices ahead of /schedule/expenses when both approver keys are held but not approvals_offer_purchases (chain order)', async () => {
@@ -173,14 +173,14 @@ describe('/money index page', () => {
         },
       })
     )
-    await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/schedule/invoices')
+    await expect(MoneyIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/schedule\/invoices$/)
   })
 
   it('redirects to /offer-sales when only approvals_offer_purchases is held', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { approvals_offer_purchases: true } })
     )
-    await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/offer-sales')
+    await expect(MoneyIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/offer-sales$/)
   })
 
   // DEEP.4 final review — offers now precedes both approver keys in the
@@ -196,7 +196,7 @@ describe('/money index page', () => {
         },
       })
     )
-    await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/offer-sales')
+    await expect(MoneyIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/offer-sales$/)
   })
 
   it('redirects to / when none of the seven are held', async () => {
@@ -218,7 +218,7 @@ describe('/money index page', () => {
     })
     u.activeLocation = { id: 'loc1', features: { accounting_hub: false } }
     getCurrentUser.mockResolvedValue(u)
-    await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/invoices')
+    await expect(MoneyIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/invoices$/)
   })
 
   it('redirects to /schedule/invoices when the location gate denies orders for everyone, even with orders permission held (approvals_contractor_invoices is exempt from location gating)', async () => {
@@ -230,7 +230,7 @@ describe('/money index page', () => {
     })
     u.activeLocation = { id: 'loc1', features: { orders: false } }
     getCurrentUser.mockResolvedValue(u)
-    await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/schedule/invoices')
+    await expect(MoneyIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/schedule\/invoices$/)
   })
 
   // BUNDLES.5 final-review fix 1 — the "Money chrome leak". Before this

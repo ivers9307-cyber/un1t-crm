@@ -76,53 +76,53 @@ beforeEach(() => vi.clearAllMocks())
 describe('/marketing index page', () => {
   it('redirects to /login without a session', async () => {
     getCurrentUser.mockResolvedValue(null)
-    await expect(MarketingIndexPage()).rejects.toThrow('NEXT_REDIRECT:/login')
+    await expect(MarketingIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/login$/)
   })
 
   it('redirects to /automations when automations is held (others denied)', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { automations: true } })
     )
-    await expect(MarketingIndexPage()).rejects.toThrow('NEXT_REDIRECT:/automations')
+    await expect(MarketingIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/automations$/)
   })
 
   it('redirects to /automations when only email is held', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { email: true } })
     )
-    await expect(MarketingIndexPage()).rejects.toThrow('NEXT_REDIRECT:/automations')
+    await expect(MarketingIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/automations$/)
   })
 
   it('redirects to /automations when only device_control is held', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { device_control: true } })
     )
-    await expect(MarketingIndexPage()).rejects.toThrow('NEXT_REDIRECT:/automations')
+    await expect(MarketingIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/automations$/)
   })
 
   it('redirects to /settings/landing-page when only landing_page is held', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { landing_page: true } })
     )
-    await expect(MarketingIndexPage()).rejects.toThrow('NEXT_REDIRECT:/settings/landing-page')
+    await expect(MarketingIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/settings\/landing-page$/)
   })
 
   it('redirects to /communications/send when only sms is held (HUBDOOR.1 — this persona used to bounce to /)', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { sms: true } })
     )
-    await expect(MarketingIndexPage()).rejects.toThrow('NEXT_REDIRECT:/communications/send')
+    await expect(MarketingIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/communications\/send$/)
   })
 
   it('sms stays behind automations and landing_page in the chain (tab order)', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { sms: true, automations: true } })
     )
-    await expect(MarketingIndexPage()).rejects.toThrow('NEXT_REDIRECT:/automations')
+    await expect(MarketingIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/automations$/)
     getCurrentUser.mockResolvedValue(
       user({ perms: { sms: true, landing_page: true } })
     )
-    await expect(MarketingIndexPage()).rejects.toThrow('NEXT_REDIRECT:/settings/landing-page')
+    await expect(MarketingIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/settings\/landing-page$/)
   })
 
   // Anchored: 'NEXT_REDIRECT:/' as a bare string is a SUBSTRING of every
@@ -149,6 +149,6 @@ describe('/marketing index page', () => {
       features: { automations: false, email: false, whatsapp: false },
     })
     getCurrentUser.mockResolvedValue(u)
-    await expect(MarketingIndexPage()).rejects.toThrow('NEXT_REDIRECT:/settings/landing-page')
+    await expect(MarketingIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/settings\/landing-page$/)
   })
 })

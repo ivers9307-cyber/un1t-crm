@@ -41,13 +41,13 @@ beforeEach(() => vi.clearAllMocks())
 describe('/settings/scoring page', () => {
   it('redirects to /login without a session', async () => {
     getCurrentUser.mockResolvedValue(null)
-    await expect(ScoringSettingsPage()).rejects.toThrow('NEXT_REDIRECT:/login')
+    await expect(ScoringSettingsPage()).rejects.toThrow(/^NEXT_REDIRECT:\/login$/)
   })
 
   for (const role of NON_MANAGER_ROLES) {
     it(`redirects to /settings for role "${role}" (not manager+)`, async () => {
       getCurrentUser.mockResolvedValue(user(role))
-      await expect(ScoringSettingsPage()).rejects.toThrow('NEXT_REDIRECT:/settings')
+      await expect(ScoringSettingsPage()).rejects.toThrow(/^NEXT_REDIRECT:\/settings$/)
     })
   }
 

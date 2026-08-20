@@ -62,7 +62,7 @@ beforeEach(() => vi.clearAllMocks())
 describe('/members index page', () => {
   it('redirects to /login without a session', async () => {
     getCurrentUser.mockResolvedValue(null)
-    await expect(MembersIndexPage()).rejects.toThrow('NEXT_REDIRECT:/login')
+    await expect(MembersIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/login$/)
   })
 
   it('redirects to /bookings when all seven keys are granted', async () => {
@@ -79,7 +79,7 @@ describe('/members index page', () => {
         },
       })
     )
-    await expect(MembersIndexPage()).rejects.toThrow('NEXT_REDIRECT:/bookings')
+    await expect(MembersIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/bookings$/)
   })
 
   it('redirects to /events when bookings is denied but the rest are granted', async () => {
@@ -96,7 +96,7 @@ describe('/members index page', () => {
         },
       })
     )
-    await expect(MembersIndexPage()).rejects.toThrow('NEXT_REDIRECT:/events')
+    await expect(MembersIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/events$/)
   })
 
   // HUBDOOR.2 — /challenges gates on MANAGER_ROLES as well as the key
@@ -127,18 +127,18 @@ describe('/members index page', () => {
 
   it('redirects to /pulse when only pulse_admin is held', async () => {
     getCurrentUser.mockResolvedValue(user({ perms: { pulse_admin: true } }))
-    await expect(MembersIndexPage()).rejects.toThrow('NEXT_REDIRECT:/pulse')
+    await expect(MembersIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/pulse$/)
   })
 
   it('redirects to /live when only studio_management is held', async () => {
     getCurrentUser.mockResolvedValue(user({ perms: { studio_management: true } }))
-    await expect(MembersIndexPage()).rejects.toThrow('NEXT_REDIRECT:/live')
+    await expect(MembersIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/live$/)
   })
 
   it('redirects to /studio-management/timer when only class_timer is held', async () => {
     getCurrentUser.mockResolvedValue(user({ perms: { class_timer: true } }))
     await expect(MembersIndexPage()).rejects.toThrow(
-      'NEXT_REDIRECT:/studio-management/timer'
+      /^NEXT_REDIRECT:\/studio-management\/timer$/
     )
   })
 
@@ -146,7 +146,7 @@ describe('/members index page', () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { approvals_hyrox_sessions: true } })
     )
-    await expect(MembersIndexPage()).rejects.toThrow('NEXT_REDIRECT:/hyrox')
+    await expect(MembersIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/hyrox$/)
   })
 
   it('redirects to / when none of the seven are held', async () => {
@@ -168,6 +168,6 @@ describe('/members index page', () => {
     })
     u.activeLocation = { id: 'loc1', features: { bookings: false } }
     getCurrentUser.mockResolvedValue(u)
-    await expect(MembersIndexPage()).rejects.toThrow('NEXT_REDIRECT:/events')
+    await expect(MembersIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/events$/)
   })
 })
