@@ -69,3 +69,55 @@ export function getSonosConfig(env = process.env) {
     redirectUri: String(env.SONOS_REDIRECT_URI).trim(),
   }
 }
+
+export function buildAuthorizeUrl(cfg, state) {
+  const u = new URL(OAUTH_AUTHORIZE_URL)
+  u.searchParams.set('client_id', cfg.clientId)
+  u.searchParams.set('response_type', 'code')
+  u.searchParams.set('scope', 'playback-control-all')
+  u.searchParams.set('redirect_uri', cfg.redirectUri)
+  u.searchParams.set('state', state)
+  return u.toString()
+}
+
+// Sonos wants the client credentials as HTTP Basic, never in the form body.
+function basicAuth(cfg) {
+  return `Basic ${Buffer.from(`${cfg.clientId}:${cfg.clientSecret}`).toString('base64')}`
+}
+
+async function tokenCall(cfg, params) {
+  try {
+    const res = await fetch(OAUTH_TOKEN_URL, {
+      method: 'POST',
+      headers: {
+        authorization: basicAuth(cfg),
+        'content-type': 'application/x-www-form-urlencoded',
+        'user-agent': USER_AGENT,
+      },
+      body: new URLSearchParams(params),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      cache: 'no-store',
+    })
+    let parsed = null
+    const text = await res.text().catch(() => '')
+    if (text) { try { parsed = JSON.parse(text) } catch { parsed = null } }
+    return { ok: res.ok, statusCode: res.status, body: parsed }
+  } catch {
+    return { ok: false, statusCode: 0, networkError: true, body: null }
+  }
+}
+
+export function exchangeCode(cfg, code) {
+  return tokenCall(cfg, {
+    grant_type: 'authorization_code',
+    code,
+    redirect_uri: cfg.redirectUri,
+  })
+}
+
+// Sonos does NOT rotate refresh tokens — the same value comes back every
+// time. So callers persist only the access token and its expiry; there is
+// no rotation race to guard against (unlike xero_connections).
+export function refreshAccessToken(cfg, refreshToken) {
+  return tokenCall(cfg, { grant_type: 'refresh_token', refresh_token: refreshToken })
+}
