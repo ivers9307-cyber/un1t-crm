@@ -94,7 +94,8 @@ describe('resolveEventCommsLocation', () => {
   // BAREWRITE.1 made an unreadable row THROW, on the theory that falling
   // through to the event's own location could send under the wrong brand.
   // BAREWRITE.3 narrowed the throw to the brand-crossing hops. BAREWRITE.4
-  // removes it, because the brand it was protecting cannot differ:
+  // removes it, because the brand it was protecting cannot differ for any event
+  // prod holds today — and the two halves of that are NOT equally solid:
   //
   //   • email identity resolves per ORGANISATION (resolveEmailSender →
   //     tenant_email_domains keyed on the location's organization_id), and a
