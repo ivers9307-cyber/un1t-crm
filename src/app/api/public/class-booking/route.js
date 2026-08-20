@@ -97,7 +97,13 @@ export async function POST(request) {
     chosen = classes.find((c) => c.event_id === b.event_id) || null
   } catch (e) { logWarn('classbook', 'class validate failed', { err: e }) }
   if (!chosen) {
-    return NextResponse.json({ success: false, error: 'That class is no longer available — please pick another.' }, { status: 400 })
+    // STARTCONV.1 — a machine-readable code, because the funnel now collects
+    // details AFTER the class is chosen. That widens the gap between picking
+    // and submitting from milliseconds to however long someone takes typing,
+    // so this stopped being a rarity. The client branches on `code` to send
+    // them back to the picker with their details intact; matching on the
+    // prose would break the moment anyone edits it.
+    return NextResponse.json({ success: false, code: 'class_unavailable', error: 'That class is no longer available — please pick another.' }, { status: 400 })
   }
 
   // restrictToOrg (LEADCAP.1): a public form must not resolve (and then enqueue
