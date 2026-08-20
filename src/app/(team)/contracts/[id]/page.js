@@ -9,7 +9,7 @@ import Link from 'next/link'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { getContractingEntity } from '@/lib/contracting-entity'
+import { contractCountersignatureLabel } from '@/lib/contracting-entity'
 import ContractRevokeButton from '@/components/ContractRevokeButton'
 import ContractResendButton from '@/components/ContractResendButton'
 import ContractPrintButton from '@/components/ContractPrintButton'
@@ -71,13 +71,13 @@ export default async function ContractDetailAdmin(props) {
   if (!c) notFound()
 
   // LEGALENT.1 — the countersignature label asserts the CONTRACTING
-  // COMPANY, so it is resolved from the org's configured legal entity
-  // (org_settings, mig 425) rather than the literal it used to be.
-  // Falls back to the resolved brand, never to another org's company.
-  const { label: entityLabel } = await getContractingEntity(db, {
-    organizationId: c.organization_id,
-    locationId: c.location_id,
-  })
+  // COMPANY. It is read from the contract's own FROZEN variables_data,
+  // never resolved live: a contract issued since LEGALENT.1 carries the
+  // entity beside its frozen body, and one issued before it keeps what
+  // it was issued and signed under. Same helper as the recipient page,
+  // the mobile screen and the stored PDF, so the four can never
+  // disagree about who the document is with.
+  const entityLabel = contractCountersignatureLabel(c)
 
   const badge = STATUS_BADGE[c.status] || { label: c.status, class: 'bg-un1t-border text-un1t-subtle' }
   // Both actions share the same gate (issued/viewed + owner/master) —

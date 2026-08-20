@@ -13,7 +13,7 @@ import { redirect, notFound } from 'next/navigation'
 import Link from 'next/link'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { getContractingEntity } from '@/lib/contracting-entity'
+import { contractCountersignatureLabel } from '@/lib/contracting-entity'
 import ContractSignForm from '@/components/ContractSignForm'
 import ContractPrintButton from '@/components/ContractPrintButton'
 import ContractBody from '@/components/ContractBody'
@@ -69,14 +69,13 @@ export default async function AccountContractDetail(props) {
   }
 
   // LEGALENT.1 — the countersignature label asserts the CONTRACTING
-  // COMPANY on a document this member is about to sign, so it is
-  // resolved from the org's configured legal entity (org_settings,
-  // mig 425) rather than the literal it used to be. Falls back to the
-  // resolved brand, never to another org's company.
-  const { label: entityLabel } = await getContractingEntity(db, {
-    organizationId: c.organization_id,
-    locationId: c.location_id,
-  })
+  // COMPANY on the member's own copy of the document, including its
+  // print view. It is read from the contract's own FROZEN
+  // variables_data, never resolved live, so signing this page and then
+  // configuring org_settings can never change what an executed
+  // document says about who it is with. Same helper as the issuer
+  // page, the mobile screen and the stored PDF.
+  const entityLabel = contractCountersignatureLabel(c)
 
   const signed = c.status === 'signed'
   const declined = c.status === 'declined'

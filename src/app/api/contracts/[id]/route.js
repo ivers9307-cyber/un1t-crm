@@ -25,7 +25,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
 import { canTransition } from '@/lib/contracts'
-import { getContractingEntity } from '@/lib/contracting-entity'
+import { contractCountersignatureLabel } from '@/lib/contracting-entity'
 
 export const runtime = 'nodejs'
 
@@ -103,14 +103,12 @@ export async function GET(_request, props) {
 
   // LEGALENT.1 — the mobile signing screen renders the same
   // countersignature block as the web pages, and it cannot import
-  // src/lib (the shared/ seam is the only route, and this needs a
-  // service-role read anyway), so the resolved contracting entity
-  // rides along on the payload. Read-only, additive: an older client
-  // that ignores the field behaves exactly as before.
-  const { label: contractingEntity } = await getContractingEntity(db, {
-    organizationId: contract.organization_id,
-    locationId: contract.location_id,
-  })
+  // src/lib (the shared/ seam is the only route), so the label rides
+  // along on the payload. It is the contract's own FROZEN entity, the
+  // same helper the two web pages and the stored PDF use, so the four
+  // surfaces cannot disagree. Additive: an older client that ignores
+  // the field behaves exactly as before.
+  const contractingEntity = contractCountersignatureLabel(contract)
 
   return NextResponse.json({
     success: true,

@@ -199,10 +199,12 @@ export default function ContractDetail() {
           {/* Dual-signature block */}
           <View className="mt-8 pt-4 border-t border-gray-300">
             {/* LEGALENT.1 — the contracting company comes from the API
-                (GET /api/contracts/[id] resolves it from the org's
-                configured legal entity, falling back to the brand).
-                An older API build omits the field; render the block
-                without a company claim rather than a wrong one. */}
+                (GET /api/contracts/[id] reads the contract's own FROZEN
+                variables_data.legal_entity_name, so this screen shows
+                exactly what the web pages and the stored PDF show, for
+                the life of the document). An older API build omits the
+                field; render the block without a company claim rather
+                than a wrong one. */}
             <Text className="text-[10px] uppercase tracking-wider text-gray-500">
               {c.contracting_entity ? `For ${c.contracting_entity}` : 'Countersigned'}
             </Text>
