@@ -329,8 +329,20 @@ async function hasInboundAfter(db, adapter, conversationId, sinceIso) {
 // Two signals: (1) the conversation's agent gate was flipped off (the inbox
 // human-send route stamps a manual take-over), or (2) a HUMAN outbound landed
 // after turn start (a staff reply mid-generation, before the gate flip
-// committed). Either means Mia must stay quiet. Best-effort: a check failure
-// returns false so a genuine reply is never blocked by a transient DB error.
+// committed). Either means Mia must stay quiet.
+//
+// MIA-HYGIENE.3 — this guard FAILS CLOSED: if it cannot establish that the
+// thread is still Mia's, it reports a takeover and the reply is dropped. It
+// used to return false on any failure, which aimed the uncertainty squarely at
+// the outcome the guard exists to prevent. The failure modes are not
+// symmetric: a dropped agent reply is recoverable (the handoff cooldown
+// re-arms her, and the missed-inbound sweep re-runs the turn), while a second
+// message landing on top of a human's is not, and it breaks the standing rule
+// that a human-led thread belongs to the human. Richard, 2026-08-20.
+//
+// Note the supabase-js shape trap this also closes: a failed query RESOLVES as
+// { data: null, error } instead of throwing, so a catch-only guard never saw a
+// read failure at all — it was indistinguishable from "nobody took over".
 export async function humanTookOverDuringTurn(db, adapter, conversationId, sinceIso) {
   if (!conversationId) return false
   try {
@@ -340,28 +352,43 @@ export async function humanTookOverDuringTurn(db, adapter, conversationId, since
     // conv-select in runChannelAgentInner below and the adapter.name ===
     // 'whatsapp' branch already used for wa_card_sets further down this file.
     const isWhatsApp = adapter.name === 'whatsapp'
-    const { data: conv } = await db.from(adapter.conversationsTable)
+    const { data: conv, error: convError } = await db.from(adapter.conversationsTable)
       .select(isWhatsApp ? 'agent_active, agent_paused_at' : 'agent_active')
       .eq('id', conversationId)
       .single()
+    if (convError) return takeoverCheckFailed(adapter, conversationId, 'conversation_read', convError)
     // A sticky pause mid-turn is also a takeover: Mia must not talk over an
     // operator who just paused the thread while she was generating.
     if (conv && (conv.agent_active === false || conv.agent_paused_at)) return true
 
-    const { data: lastOut } = await db.from(adapter.messagesTable)
+    const { data: lastOut, error: lastOutError } = await db.from(adapter.messagesTable)
       .select(`${adapter.humanOutboundColumns || 'source'}, created_at`)
       .eq('conversation_id', conversationId)
       .eq('direction', 'outbound')
       .order('created_at', { ascending: false })
       .limit(1)
+    if (lastOutError) return takeoverCheckFailed(adapter, conversationId, 'last_outbound_read', lastOutError)
     const row = Array.isArray(lastOut) ? lastOut[0] : null
     if (!row || !adapter.isHumanOutbound?.(row)) return false
     // Only a human message from THIS turn counts — an old human message with a
     // since-cooldown re-arm must not suppress the legitimately re-armed reply.
     return !sinceIso || !row.created_at || row.created_at >= sinceIso
-  } catch {
-    return false
+  } catch (err) {
+    return takeoverCheckFailed(adapter, conversationId, 'exception', err)
   }
+}
+
+// Log the drop loudly and report a takeover. A silently-dropped reply is the
+// kind of thing that reads as "Mia ignored me" weeks later with nothing in the
+// logs to explain it, so every fail-closed drop names its stage.
+function takeoverCheckFailed(adapter, conversationId, stage, err) {
+  console.warn('[radar-agent] takeover check failed — dropping reply', JSON.stringify({
+    channel: adapter?.name || null,
+    conversationId: conversationId || null,
+    stage,
+    error: String(err?.message || err || '').slice(0, 160),
+  }))
+  return true
 }
 
 async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
