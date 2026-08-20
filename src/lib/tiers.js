@@ -1,6 +1,18 @@
-// KEEP IN SYNC with champ-app/shared/tiers.js (verbatim copy below line 1).
 // Status-tier ladder. Pure — months-hit count in, tier out.
 // un1t-crm uses it for the tier-up push (name+colour); champ-app for the dashboard badge.
+//
+// SYNC RULE (corrected by PAIRSYNC.1 — line 1 used to say "verbatim copy
+// below line 1", and it had NOT been one since the windowed-decay helpers
+// landed): shared/tiers.js is the SUBSET. Everything down to `nextTier` must
+// stay byte-identical with shared/tiers.js and champ-app/shared/tiers.js —
+// the ladder is what decides which badge a member sees, on three surfaces.
+// The rolling-window decay block BELOW it is un1t-crm-only, because only the
+// CRM reads `location.settings.scoring.tier_window_months`.
+//
+// Enforced by tests/shared-pair-sync.test.js (mode 'web-superset'): every
+// export shared declares must be byte-equal here, TIERS must deep-equal, and
+// tierForMonths/nextTier must agree across the whole ladder. Adding another
+// web-only export means declaring it in that manifest.
 export const TIERS = [
   { slug: 'bronze',   name: 'Bronze',   months: 1,  color: '#c77b3a' },
   { slug: 'silver',   name: 'Silver',   months: 3,  color: '#c2c8ce' },

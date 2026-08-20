@@ -195,5 +195,23 @@ and stays authoritative for its copies until backend consolidation.
   live here too): `src/lib/tiers.js` ↔ `shared/tiers.js`,
   `src/lib/tv-zone-colors.js` ↔ `shared/zone-colors.js`,
   `src/lib/hr-analytics.js` ↔ `shared/hr-analytics.js`.
+- 🔴 **The IN-REPO half of this rule is now a test, not a comment**
+  (`tests/shared-pair-sync.test.js`, PAIRSYNC.1). Every module present in
+  BOTH `shared/` and `src/lib/` must be classified in its manifest —
+  `reexport` (proven by runtime identity, the pattern to prefer),
+  `identical`, `web-superset`, `diverged` or `unrelated` — each with a
+  reason. A new duplicated module fails the suite until someone classifies
+  it. **Byte-identity was the wrong assertion and would have failed on main:
+  three pairs had ALREADY drifted when their "byte-identical" comments were
+  written** — `tiers` (web grew the windowed-decay helpers, which
+  `src/lib/live-class.js` depends on, so they must NOT be deleted to force
+  identity), `heart-rate` (zone LABELS differ, `'Z1'` vs `'Zone 1'`), and
+  `goals` (**UTC vs Europe/Dublin week boundaries and a different `periodEnd`
+  arity, while web reads `@/lib/goals` and mobile reads `shared/goals` for
+  the same member's progress — OPEN**). Those three are pinned in mode
+  `diverged`, which fires in BOTH directions: a newly-drifted export fails,
+  and so does a silent re-sync. **The champ-app leg is unguardable from this
+  repo** — nothing here can read that repo, so the ~20-module rule above
+  still rests on discipline.
 - `shared/customer-push-channels.js` was the ONE filename collision at landing
   time (verbatim copies, comment-only diff) — un1t-crm's copy stands.
