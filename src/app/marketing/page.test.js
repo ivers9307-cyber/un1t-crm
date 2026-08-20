@@ -6,7 +6,7 @@
 // activeAssignment.permissions overrides, the same fixture shape used
 // by src/lib/dashboard-redirect.test.js's `user()` factory (role +
 // activeLocation + activeAssignment.permissions). Every fixture below
-// sets all five gate keys EXPLICITLY — role defaults for staff grant
+// sets all six gate keys EXPLICITLY — role defaults for staff grant
 // many of them, so an omitted key would pass for the wrong reason.
 //
 // Chain order (automations/email/whatsapp/device_control first — the
@@ -22,6 +22,16 @@
 // landing_page routes to /settings/landing-page — the in-app editor —
 // NEVER to /welcome, which is the PUBLIC landing page itself and is
 // never an in-app pathname (the sidebar entry for it opens a new tab).
+//
+// HUBDOOR.1 — `sms` is the SIXTH gate key, and it was missing from both
+// the chain and this fixture. DEEP.4 Task 2 put `sms` in the Marketing
+// sidebar union so an sms-only holder would get a door to the campaign
+// pages, but this index had no sms branch, so that exact persona clicked
+// Marketing and landed on the '/' fallback. The chain now lives in
+// src/lib/hub-index-chains.js (which is also where nav-items.test.js
+// checks it against the union); these cases prove it end-to-end through
+// the page. `sms: false` joins allDenied so the fallback case fails for
+// the right reason rather than riding on a role default.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -42,8 +52,8 @@ import { getCurrentUser } from '@/lib/auth'
 
 // Stable user fixture — explicit per-user permission overrides
 // (tier 2 of the resolver) so each test controls exactly which of the
-// five gate keys the fixture holds, regardless of role defaults.
-// ALL five keys are always passed explicitly.
+// six gate keys the fixture holds, regardless of role defaults.
+// ALL six keys are always passed explicitly.
 function user({ role = 'staff', perms = {}, features = {} } = {}) {
   const allDenied = {
     automations: false,
@@ -51,6 +61,7 @@ function user({ role = 'staff', perms = {}, features = {} } = {}) {
     whatsapp: false,
     device_control: false,
     landing_page: false,
+    sms: false,
   }
   return {
     id: 'u1',
@@ -96,9 +107,31 @@ describe('/marketing index page', () => {
     await expect(MarketingIndexPage()).rejects.toThrow('NEXT_REDIRECT:/settings/landing-page')
   })
 
-  it('redirects to / when none of the five keys are held', async () => {
+  it('redirects to /communications/send when only sms is held (HUBDOOR.1 — this persona used to bounce to /)', async () => {
+    getCurrentUser.mockResolvedValue(
+      user({ perms: { sms: true } })
+    )
+    await expect(MarketingIndexPage()).rejects.toThrow('NEXT_REDIRECT:/communications/send')
+  })
+
+  it('sms stays behind automations and landing_page in the chain (tab order)', async () => {
+    getCurrentUser.mockResolvedValue(
+      user({ perms: { sms: true, automations: true } })
+    )
+    await expect(MarketingIndexPage()).rejects.toThrow('NEXT_REDIRECT:/automations')
+    getCurrentUser.mockResolvedValue(
+      user({ perms: { sms: true, landing_page: true } })
+    )
+    await expect(MarketingIndexPage()).rejects.toThrow('NEXT_REDIRECT:/settings/landing-page')
+  })
+
+  // Anchored: 'NEXT_REDIRECT:/' as a bare string is a SUBSTRING of every
+  // other target, so an unanchored fallback assertion passes against any
+  // redirect at all — see src/app/operations/page.test.js's header for the
+  // gap that hid behind exactly this.
+  it('redirects to / when none of the six keys are held', async () => {
     getCurrentUser.mockResolvedValue(user())
-    await expect(MarketingIndexPage()).rejects.toThrow('NEXT_REDIRECT:/')
+    await expect(MarketingIndexPage()).rejects.toThrow(/NEXT_REDIRECT:\/$/)
   })
 
   // device_control deliberately left denied here (the fixture default) —

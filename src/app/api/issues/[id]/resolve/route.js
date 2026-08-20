@@ -13,6 +13,7 @@ import { logWarn } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { getEquipment, updateEquipment } from '@/lib/equipment-db'
 import { shouldReturnToService, EQUIPMENT_STATUS } from '@/lib/equipment'
+import { isIssueHandler } from '@/lib/issues-access'
 
 const ResolveBody = z.object({
   notes: z.string().optional(),
@@ -21,17 +22,12 @@ const ResolveBody = z.object({
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-function isHandler(user) {
-  if (user?.role === 'master' || user?.profileRole === 'master' || user?.isMaster) return true
-  return user?.role === 'owner'
-}
-
 export const POST = withAuth(
   {},
   async ({ user, db, locationId, params, request }) => {
-    if (!isHandler(user)) {
+    if (!isIssueHandler(user)) {
       return NextResponse.json(
-        { success: false, error: 'Only owner + master can resolve issues.' },
+        { success: false, error: 'Only issue handlers can resolve issues.' },
         { status: 403 }
       )
     }

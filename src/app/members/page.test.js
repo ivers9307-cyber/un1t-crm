@@ -130,7 +130,7 @@ describe('/members index page', () => {
 
   it('redirects to / when none of the seven are held', async () => {
     getCurrentUser.mockResolvedValue(user())
-    await expect(MembersIndexPage()).rejects.toThrow('NEXT_REDIRECT:/')
+    await expect(MembersIndexPage()).rejects.toThrow(/NEXT_REDIRECT:\/$/)
   })
 
   it('redirects to /events when the location gate denies bookings for everyone, even with bookings permission held', async () => {

@@ -182,7 +182,7 @@ describe('/money index page', () => {
 
   it('redirects to / when none of the seven are held', async () => {
     getCurrentUser.mockResolvedValue(user())
-    await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/')
+    await expect(MoneyIndexPage()).rejects.toThrow(/NEXT_REDIRECT:\/$/)
   })
 
   it('redirects to /invoices when the location gate denies accounting_hub for everyone, even with accounting_hub permission held', async () => {
@@ -237,6 +237,6 @@ describe('/money index page', () => {
     })
     u.activeLocation = { id: 'loc1', features: { bundle_money: false } }
     getCurrentUser.mockResolvedValue(u)
-    await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/')
+    await expect(MoneyIndexPage()).rejects.toThrow(/NEXT_REDIRECT:\/$/)
   })
 })

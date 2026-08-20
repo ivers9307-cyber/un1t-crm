@@ -482,9 +482,21 @@ export const ALL_NAV = [
   //    and Presentations (PRESENT — run a slide deck across multiple
   //    screens from a laptop for workshops/events) before this PR
   //    folded those two, plus Studio itself, into this single entry.
+  //
+  // HUBDOOR.1 — the review fix above added the two fleet keys to the union
+  // but nothing else: /operations' own index chain had no fleet branch, so
+  // the persona it was written for clicked the entry and bounced to '/'.
+  // The chain (now src/lib/hub-index-chains.js) grew a
+  // fleet_restart|fleet_admin → /admin/fleet step, and '/admin/fleet' joins
+  // extraActivePaths below so the entry they clicked stays lit on arrival.
+  // Claiming it is uncontested — no other nav entry owns any /admin path
+  // (the Platform Console is a separate tier, platform-nav.js) — so this is
+  // not the longest-match race that kept Money out of /schedule/*; there is
+  // simply no other candidate, and without the claim the sidebar goes dark
+  // on a page the Operations hub deliberately links to.
   { href: '/operations', label: 'Operations', icon: Wrench,
     anyPermission: ['equipment_admin', 'equipment_inspect', 'studio_management', 'tv_displays', 'presentations', 'fleet_restart', 'fleet_admin'],
-    extraActivePaths: ['/maintenance', '/studio-management', '/tv-displays', '/presentations', '/checklists'],
+    extraActivePaths: ['/maintenance', '/studio-management', '/tv-displays', '/presentations', '/checklists', '/admin/fleet'],
     section: 'operations' },
 
   // ── modules — vertical modules zone (header-less) ────────────────

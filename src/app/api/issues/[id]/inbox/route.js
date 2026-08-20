@@ -3,26 +3,24 @@
 // Distinct from /api/issues/[id] (PR 1) which is submitter-only
 // (returns 404 if the caller isn't the submitter). This route
 // returns the full inbox shape — submitter name, claimant,
-// resolver, location — to owner + master at the issue's location.
+// resolver, location — to issue handlers at the issue's location:
+// owner + master by role, or anyone holding `issues_inbox` (HUBDOOR.1,
+// src/lib/issues-access.js).
 
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
 import { getInboxIssue } from '@/lib/issues'
+import { isIssueHandler } from '@/lib/issues-access'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-function isHandler(user) {
-  if (user?.role === 'master' || user?.profileRole === 'master' || user?.isMaster) return true
-  return user?.role === 'owner'
-}
-
 export const GET = withAuth(
   {},
   async ({ user, db, locationId, params }) => {
-    if (!isHandler(user)) {
+    if (!isIssueHandler(user)) {
       return NextResponse.json(
-        { success: false, error: 'Only owner + master can read the issues inbox.' },
+        { success: false, error: 'Only issue handlers can read the issues inbox.' },
         { status: 403 }
       )
     }
