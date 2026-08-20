@@ -19,12 +19,15 @@ import { sendEmail } from './postmark.js'
 import { formatFullDateTimeInTZ } from './dates.js'
 import { getLocationBranding } from './location-branding.js'
 import { getContractingEntity } from './contracting-entity.js'
+import { getAppUrl } from './app-url.js'
 
-function appUrl() {
-  // REPSET-P6.S2 — env stays primary; the code default is the canonical
-  // repset host (the legacy host keeps serving, but links lead with repset).
-  return process.env.NEXT_PUBLIC_APP_URL || 'https://crm.repset.ie'
-}
+// URLSEAM.1 — every link in these emails (/account/contracts/<id>,
+// /contracts/<id>, /privacy) is served by THIS deployment, so the base is
+// this deployment's own host and `getAppUrl()` is the only accessor for it.
+// It used to be `NEXT_PUBLIC_APP_URL || '<literal>'`; the literal made the
+// links ignore the seam on any deploy where the env is set to something else
+// (a preview, or the next domain change) while looking correct in prod.
+// getAppUrl throws when unset — deliberately, per CLAUDE.md.
 
 // CONTRACTS-PDF.1 — raw-bytes ceiling for an email attachment. Postmark's
 // documented limit is 10MB for the entire message, and base64 inflates the
@@ -83,7 +86,7 @@ function emailShell(innerHtml, branding) {
       ${innerHtml}
     </div>
     <div style="padding:24px 32px;border-top:1px solid #e5e7eb;font-size:11px;color:#6b7280;text-align:center;">
-      ${escapeHtml(branding?.entityLabel || branding?.companyName || 'UN1T')} · <a href="${appUrl()}/privacy" style="color:#6b7280;">Privacy</a>
+      ${escapeHtml(branding?.entityLabel || branding?.companyName || 'UN1T')} · <a href="${getAppUrl()}/privacy" style="color:#6b7280;">Privacy</a>
     </div>
   </div>
 </body>
@@ -102,7 +105,7 @@ function emailShell(innerHtml, branding) {
 export async function sendContractIssuedEmail({ contract, recipient, issuer, templateName }) {
   if (!recipient?.email) return { ok: false, error: 'No recipient email' }
   const branding = await getBranding(contract)
-  const reviewUrl = `${appUrl()}/account/contracts/${contract.id}`
+  const reviewUrl = `${getAppUrl()}/account/contracts/${contract.id}`
   const subject = `Action required: ${templateName || 'Your contract'} from UN1T`
   const innerHtml = `
     <h2 style="font-size:20px;margin:0 0 16px 0;">A contract is ready for your review</h2>
@@ -153,7 +156,7 @@ export async function sendContractIssuedEmail({ contract, recipient, issuer, tem
 export async function sendContractReminderEmail({ contract, recipient, templateName }) {
   if (!recipient?.email) return { ok: false, error: 'No recipient email' }
   const branding = await getBranding(contract)
-  const reviewUrl = `${appUrl()}/account/contracts/${contract.id}`
+  const reviewUrl = `${getAppUrl()}/account/contracts/${contract.id}`
   const subject = `Reminder: ${templateName || 'Your contract'} is awaiting your signature`
   const innerHtml = `
     <h2 style="font-size:20px;margin:0 0 16px 0;">Your contract is still awaiting signature</h2>
@@ -201,8 +204,8 @@ export async function sendContractReminderEmail({ contract, recipient, templateN
  */
 export async function sendContractSignedEmails({ contract, recipient, issuer, templateName, pdfBuffer = null }) {
   const branding = await getBranding(contract)
-  const recipientUrl = `${appUrl()}/account/contracts/${contract.id}`
-  const issuerUrl = `${appUrl()}/contracts/${contract.id}`
+  const recipientUrl = `${getAppUrl()}/account/contracts/${contract.id}`
+  const issuerUrl = `${getAppUrl()}/contracts/${contract.id}`
   const results = { recipient: null, issuer: null }
 
   // Postmark's hard limit is 10MB for the WHOLE message including the
@@ -291,7 +294,7 @@ export async function sendContractSignedEmails({ contract, recipient, issuer, te
 export async function sendContractDeclinedEmail({ contract, recipient, issuer, templateName }) {
   if (!issuer?.email) return { ok: false, error: 'No issuer email' }
   const branding = await getBranding(contract)
-  const issuerUrl = `${appUrl()}/contracts/${contract.id}`
+  const issuerUrl = `${getAppUrl()}/contracts/${contract.id}`
   const subject = `Declined: ${recipient?.full_name || 'recipient'} — ${templateName || 'contract'}`
   const innerHtml = `
     <h2 style="font-size:20px;margin:0 0 16px 0;">Contract declined</h2>

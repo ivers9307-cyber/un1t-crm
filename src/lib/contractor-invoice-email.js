@@ -14,6 +14,12 @@ import { periodLabel } from './contractor-invoices.js'
 import { formatFullDateTimeInTZ } from './dates.js'
 import { getLocationBranding } from './location-branding.js'
 import { resolvePostmarkToken } from './postmark-token.js'
+// URLSEAM.1 — /schedule/invoices is served by THIS deployment, so the base is
+// this deployment's own host. The local `NEXT_PUBLIC_APP_URL || '<literal>'`
+// helper this replaces made the link ignore the seam wherever the env said
+// something else (a preview deploy, the next domain change) while looking
+// correct in prod. getAppUrl throws when unset — deliberately, per CLAUDE.md.
+import { getAppUrl } from './app-url.js'
 
 const POSTMARK_API_URL = 'https://api.postmarkapp.com'
 
@@ -23,12 +29,6 @@ function getPostmarkToken() {
 
 function getFromAddress() {
   return process.env.POSTMARK_FROM_EMAIL || 'UN1T <hello@un1t.ie>'
-}
-
-function appUrl() {
-  // REPSET-P6.S2 — env stays primary; the code default is the canonical
-  // repset host (the legacy host keeps serving, but links lead with repset).
-  return process.env.NEXT_PUBLIC_APP_URL || 'https://crm.repset.ie'
 }
 
 async function postmarkSend({ to, subject, htmlBody, textBody, tag, metadata }) {
@@ -111,7 +111,7 @@ export async function sendInvoiceApprovedEmail(invoiceId) {
         <tr><td style="padding:4px 12px 4px 0;color:#666">Amount</td><td style="padding:4px 0">€${Number(inv.invoice_amount).toFixed(2)}</td></tr>
         <tr><td style="padding:4px 12px 4px 0;color:#666">Approved at</td><td style="padding:4px 0">${formatFullDateTimeInTZ(inv.approved_at)}</td></tr>
       </table>
-      <p>You can review your submission history at <a href="${appUrl()}/schedule/invoices">${appUrl()}/schedule/invoices</a>.</p>
+      <p>You can review your submission history at <a href="${getAppUrl()}/schedule/invoices">${getAppUrl()}/schedule/invoices</a>.</p>
       <p style="color:#666;font-size:13px;margin-top:24px">
         Thanks for your work this month.
       </p>
@@ -122,7 +122,7 @@ export async function sendInvoiceApprovedEmail(invoiceId) {
     `Your invoice for ${period} has been approved and forwarded for payment.\n\n` +
     `Amount: €${Number(inv.invoice_amount).toFixed(2)}\n` +
     `Approved at: ${formatFullDateTimeInTZ(inv.approved_at)}\n\n` +
-    `Review your submission history: ${appUrl()}/schedule/invoices\n`
+    `Review your submission history: ${getAppUrl()}/schedule/invoices\n`
 
   const messageId = await postmarkSend({
     to: inv.contractor.email,
@@ -157,7 +157,7 @@ export async function sendInvoiceDeclinedEmail(invoiceId) {
           <div>${escapeHtml(inv.decline_reason)}</div>
         </div>
       ` : ''}
-      <p>You can resubmit a corrected invoice for the same month at <a href="${appUrl()}/schedule/invoices">${appUrl()}/schedule/invoices</a>.</p>
+      <p>You can resubmit a corrected invoice for the same month at <a href="${getAppUrl()}/schedule/invoices">${getAppUrl()}/schedule/invoices</a>.</p>
       <p style="color:#666;font-size:13px;margin-top:24px">
         If you have questions about the reason, reply directly to this email and the studio team will get back to you.
       </p>
@@ -167,7 +167,7 @@ export async function sendInvoiceDeclinedEmail(invoiceId) {
     `Hi ${inv.contractor.full_name || 'there'},\n\n` +
     `Your invoice for ${period} needs an adjustment before it can be approved.\n\n` +
     (inv.decline_reason ? `Reason: ${inv.decline_reason}\n\n` : '') +
-    `Resubmit a corrected invoice: ${appUrl()}/schedule/invoices\n`
+    `Resubmit a corrected invoice: ${getAppUrl()}/schedule/invoices\n`
 
   const messageId = await postmarkSend({
     to: inv.contractor.email,
