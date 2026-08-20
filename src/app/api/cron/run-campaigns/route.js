@@ -202,6 +202,19 @@ export async function GET(request) {
         summary.errors.push({ campaign_id: campaign.id, phase: result.phase, error: result.error })
         console.warn(`[cron run-campaigns] campaign ${campaign.id} (${campaign.name}) phase=${result.phase} error: ${result.error}`)
       }
+      // BAREWRITE.4 — a tick may report a problem that must be VISIBLE without
+      // being grounds to kill the campaign. The rotation bumps are the case
+      // that forced the distinction: the bundle-disabled path writes
+      // `last_error` every tick by design, so any `error` it returns satisfies
+      // campaignFailurePatch's "already failing" test on the very first
+      // occurrence and one transient blip marked the campaign 'failed'
+      // permanently. Warnings are logged at error level and counted, but never
+      // reach campaignFailurePatch.
+      if (result.warning) {
+        summary.warnings = summary.warnings || []
+        summary.warnings.push({ campaign_id: campaign.id, phase: result.phase, warning: result.warning })
+        console.error(`[cron run-campaigns] campaign ${campaign.id} (${campaign.name}) phase=${result.phase} WARNING: ${result.warning}`)
+      }
     } catch (err) {
       const msg = err?.message || String(err)
       tickError = msg

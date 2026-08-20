@@ -47,6 +47,7 @@ vi.mock('@/lib/usage-caps', () => ({ getEmailCapStatus: vi.fn(async () => ({ cap
 vi.mock('@/lib/campaign-fairness', () => ({ pickFairCampaigns: (rows) => rows || [] }))
 
 import { GET } from './route.js'
+import { tickCampaignSend } from '@/lib/campaign-sender'
 
 const GOOD = {
   id: 'camp-ok', location_id: 'loc-1', status: 'scheduled',
@@ -98,5 +99,57 @@ describe('run-campaigns promote step — empty-body guard', () => {
     await GET(req())
     const promote = updates.find(u => u.patch?.status === 'queued')
     expect(promote.filters.find(([c]) => c === 'id')[1]).toEqual(['camp-ok'])
+  })
+})
+
+// ── BAREWRITE.4 — a tick WARNING is surfaced, but never kills the campaign ───
+//
+// Some tick failures must be visible without being grounds to destroy the
+// campaign — a lost `campaigns.updated_at` rotation bump is the case that
+// forced the distinction. Because the bundle-disabled path stamps `last_error`
+// on every tick by design, ANY error it returns satisfies campaignFailurePatch's
+// "already failing" test on its first occurrence, so returning the bump failure
+// as an error turned one transient blip into status='failed' forever.
+describe('run-campaigns — warnings are reported without feeding the kill switch', () => {
+  // The row shape the cron re-reads on the tick after a bundle-disabled one:
+  // last_error already set (by the gate itself), never populated, past grace.
+  const bundleDisabled = {
+    id: 'camp-bundle-off',
+    name: 'July offer',
+    location_id: 'loc-1',
+    status: 'queued',
+    created_at: new Date(Date.now() - 60 * 60_000).toISOString(),
+    send_started_at: null,
+    last_error: 'Skipped — email is disabled at this location (feature toggle or bundle off).',
+  }
+
+  it('a warning is counted and logged, and NOTHING is written to the campaign row', async () => {
+    tables.campaigns = [bundleDisabled]
+    tickCampaignSend.mockResolvedValue({
+      phase: 'bundle_disabled', sent: 0,
+      warning: 'rotation bump failed (campaign will pin a per-tick slot until a later write lands): connection reset',
+    })
+
+    const body = await (await GET(req())).json()
+
+    expect(body.warnings).toHaveLength(1)
+    expect(body.warnings[0]).toMatchObject({ campaign_id: 'camp-bundle-off', phase: 'bundle_disabled' })
+    // Not an error, and — the point — no failure patch written at all.
+    expect(body.errors).toEqual([])
+    expect(updates.find(u => u.patch?.status === 'failed')).toBeUndefined()
+    expect(updates.find(u => u.patch?.last_error)).toBeUndefined()
+  })
+
+  it('THE REGRESSION: the same message returned as an `error` marks the campaign failed', async () => {
+    tables.campaigns = [bundleDisabled]
+    tickCampaignSend.mockResolvedValue({
+      phase: 'bundle_disabled', sent: 0,
+      error: 'rotation bump failed (campaign would pin a per-tick slot): connection reset',
+    })
+
+    await GET(req())
+
+    // This is what the branch did on the FIRST transient bump failure.
+    expect(updates.find(u => u.patch?.status === 'failed')).toBeTruthy()
   })
 })

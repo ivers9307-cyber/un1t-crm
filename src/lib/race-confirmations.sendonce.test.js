@@ -1,19 +1,29 @@
-// sendRaceConfirmations — the send-once guard.
+// sendRaceConfirmations — the send-once guard, and which way it fails.
 //
-// BAREWRITE.1 found both stamps written with a bare `await` AFTER the message
-// went out, so a silently failed stamp let the next payment-webhook retry send
-// the attendee a DUPLICATE receipt. Detecting the loss was not a fix: nothing
-// retried the stamp, and all four callers answer 200 regardless, so the
-// duplicate still went out.
+// Three shapes have been tried, and the trade-off is the whole story:
 //
-// The stamp is now a CLAIM taken BEFORE the send (the shape the WhatsApp blast
-// sender already uses for its recipient rows), with a CAS on `IS NULL` so a
-// concurrent delivery loses cleanly, and a release when nothing was sent. The
-// failure direction flips: a lost claim costs a receipt, never a duplicate.
+//   main         both stamps written with a BARE `await` AFTER the send. The
+//                stamp error was invisible. Real defect, but the ORDER was
+//                right: a message never went missing.
+//   BAREWRITE.2  CLAIM the stamp before sending, making the write a mutex.
+//                Removed a duplicate risk and created a PERMANENT LOSS — a
+//                process kill between the claim and the send (Vercel timeout,
+//                OOM, deploy mid-request) leaves the column stamped with
+//                nothing sent, and nothing retries: `markRacePaymentStatus`
+//                returns `applied: null` once the payment is already
+//                'completed', so a provider redelivery never re-invokes us.
+//                It also produced a case where two overlapping deliveries sent
+//                NOTHING between them — the loser skipped as `already_claimed`
+//                while the winner's send failed and released the claim.
+//   BAREWRITE.4  back to send-then-stamp, with the stamp error READ and logged,
+//                and the CAS kept so a concurrent stamp is detected.
 //
-// Also pinned here: resolveEventCommsLocation's throw is caught rather than
-// escaping four call sites that all answer 200 — an unreadable sending
-// location must be a recorded failure, not a silently missing receipt.
+// The judgement: a duplicate receipt is an annoyance the customer can see and
+// ignore; a missing one means they cannot check in on race day, because the
+// per-person QR codes are in it. Losing a customer-facing message is worse than
+// sending it twice, so this path fails toward the duplicate — and says so.
+//
+// These tests pin the ORDER and both failure directions.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -40,7 +50,9 @@ import { sendRaceConfirmations } from './race-confirmations'
 const PAYMENT_ID = 'p0000000-0000-0000-0000-000000000001'
 
 // A world where race_payments is real state, so the CAS behaves like the CAS.
-function makeWorld({ emailStampFails = false, releaseFails = false, alreadySent = null } = {}) {
+// `onStamp` runs at the moment the stamp UPDATE executes — that is where a
+// concurrent invocation is simulated.
+function makeWorld({ stampFails = false, alreadySent = null, onStamp = null } = {}) {
   const calls = []
   const row = {
     id: PAYMENT_ID,
@@ -81,20 +93,14 @@ function makeWorld({ emailStampFails = false, releaseFails = false, alreadySent 
           const b = {
             eq() { return b },
             is(col) { state.isNullOn = col; return b },
+            // UPDATE … WHERE col IS NULL … RETURNING id — the stamp.
             select: async () => {
-              // The CLAIM: an UPDATE … WHERE col IS NULL … RETURNING id.
-              calls.push({ op: 'claim', column: state.isNullOn })
-              if (emailStampFails) return { data: null, error: { message: 'connection reset' } }
+              calls.push({ op: 'stamp', column: state.isNullOn })
+              if (onStamp) onStamp(row)
+              if (stampFails) return { data: null, error: { message: 'connection reset' } }
               if (row[state.isNullOn] != null) return { data: [], error: null }
               row[state.isNullOn] = patch[state.isNullOn]
               return { data: [{ id: PAYMENT_ID }], error: null }
-            },
-            // The RELEASE: a plain UPDATE with no `.select()`.
-            then(resolve, reject) {
-              calls.push({ op: 'release', patch })
-              if (releaseFails) return Promise.resolve({ error: { message: 'still down' } }).then(resolve, reject)
-              for (const k of Object.keys(patch)) row[k] = patch[k]
-              return Promise.resolve({ error: null }).then(resolve, reject)
             },
           }
           return b
@@ -111,8 +117,8 @@ beforeEach(() => {
   resolveEventCommsLocation.mockImplementation(async () => ({ id: 'LOC', name: 'Stillorgan' }))
 })
 
-describe('sendRaceConfirmations — send-once claim', () => {
-  it('claims the stamp BEFORE the email goes out', async () => {
+describe('sendRaceConfirmations — send-once ordering', () => {
+  it('sends FIRST and stamps after, so a crash before the stamp cannot suppress the receipt', async () => {
     const { db, row, calls } = makeWorld()
     let stampAtSendTime
     sendTransactionalEmail.mockImplementation(async () => {
@@ -123,65 +129,94 @@ describe('sendRaceConfirmations — send-once claim', () => {
     const result = await sendRaceConfirmations({ db, paymentId: PAYMENT_ID })
 
     expect(result.sent).toContain('email')
-    // The whole point: the guard was already in place when the message left.
-    expect(stampAtSendTime).toBeTruthy()
-    expect(calls[0]).toMatchObject({ op: 'claim', column: 'confirmation_email_sent_at' })
+    // THE REGRESSION. Under claim-first this was already truthy at send time,
+    // which is precisely what made a process kill here permanent and silent.
+    expect(stampAtSendTime).toBeNull()
+    expect(calls.filter(c => c.op === 'stamp')).toHaveLength(1)
+    expect(row.confirmation_email_sent_at).toBeTruthy()
     expect(sendTransactionalEmail).toHaveBeenCalledTimes(1)
   })
 
-  it('does NOT send when the claim cannot be written', async () => {
-    const { db, row } = makeWorld({ emailStampFails: true })
+  it('RECEIPT NOT LOST: a stamp write that FAILS never costs the message', async () => {
+    const { db, row } = makeWorld({ stampFails: true })
     const result = await sendRaceConfirmations({ db, paymentId: PAYMENT_ID })
 
-    expect(sendTransactionalEmail).not.toHaveBeenCalled()
+    // Claim-first refused to send at all here. The message is what matters.
+    expect(sendTransactionalEmail).toHaveBeenCalledTimes(1)
+    expect(result.sent).toContain('email')
+    // …and the lost stamp is loud, not silent: it is a real defect (a later
+    // re-run would send again), just not one worth withholding a receipt over.
+    expect(result.failed.some(f => f.startsWith('email:stamp_failed'))).toBe(true)
     expect(row.confirmation_email_sent_at).toBeNull()
-    expect(result.sent).not.toContain('email')
-    expect(result.failed.some(f => f.startsWith('email:claim_failed'))).toBe(true)
   })
 
-  it('loses the CAS to a concurrent delivery instead of sending twice', async () => {
-    // The row was read with a null stamp, but another invocation claimed it in
-    // between — exactly the race a read-then-check could never see.
-    const { db, row } = makeWorld()
-    row.confirmation_email_sent_at = '2026-08-19T10:00:00.000Z'
-
+  it('does not re-send when the stamp is already set (the ordinary idempotent case)', async () => {
+    const { db } = makeWorld({ alreadySent: '2026-08-19T10:00:00.000Z' })
     const result = await sendRaceConfirmations({ db, paymentId: PAYMENT_ID })
+
     expect(sendTransactionalEmail).not.toHaveBeenCalled()
     expect(result.skipped).toContain('email:already_sent')
   })
 
-  it('releases the claim when the send throws, so the receipt is not suppressed forever', async () => {
-    const { db, row } = makeWorld()
+  it('reports a genuine duplicate when a concurrent invocation stamped mid-send', async () => {
+    // The accepted cost of this ordering: both invocations read a null stamp,
+    // both sent. The CAS catches it after the fact so it is recorded rather
+    // than hidden — the customer got two receipts, which is the safe direction.
+    const { db, row } = makeWorld({
+      onStamp: (r) => { r.confirmation_email_sent_at = '2026-08-19T10:00:00.000Z' },
+    })
+
+    const result = await sendRaceConfirmations({ db, paymentId: PAYMENT_ID })
+
+    expect(sendTransactionalEmail).toHaveBeenCalledTimes(1)
+    expect(result.failed).toContain('email:duplicate_send')
+    expect(row.confirmation_email_sent_at).toBeTruthy()
+  })
+
+  it('does NOT stamp when the send itself failed, so a later run still delivers', async () => {
+    const { db, row, calls } = makeWorld()
     sendTransactionalEmail.mockRejectedValue(new Error('postmark 500'))
 
     const result = await sendRaceConfirmations({ db, paymentId: PAYMENT_ID })
 
     expect(row.confirmation_email_sent_at).toBeNull()
+    expect(calls.filter(c => c.op === 'stamp')).toHaveLength(0)
     expect(result.failed.some(f => f.includes('postmark 500'))).toBe(true)
-    expect(result.failed).not.toContain('email:claim_stuck')
   })
 
-  it('says so loudly when the send failed AND the claim could not be released', async () => {
-    const { db, row } = makeWorld({ releaseFails: true })
-    sendTransactionalEmail.mockRejectedValue(new Error('postmark 500'))
+  it('TWO OVERLAPPING DELIVERIES: at least one receipt always goes out', async () => {
+    // Under claim-first, this exact sequence sent NOTHING: the loser skipped as
+    // `already_claimed`, and the winner's failed send released the claim, so
+    // both invocations returned having delivered nothing at all.
+    const { db, row } = makeWorld()
+    let attempt = 0
+    sendTransactionalEmail.mockImplementation(async () => {
+      attempt += 1
+      if (attempt === 1) throw new Error('postmark 500')
+      return { ok: true }
+    })
 
-    const result = await sendRaceConfirmations({ db, paymentId: PAYMENT_ID })
+    const [a, b] = await Promise.all([
+      sendRaceConfirmations({ db, paymentId: PAYMENT_ID }),
+      sendRaceConfirmations({ db, paymentId: PAYMENT_ID }),
+    ])
 
-    // The stamp stands with nothing sent — an operator has to clear it.
+    expect(sendTransactionalEmail).toHaveBeenCalledTimes(2)
+    expect([...a.sent, ...b.sent]).toContain('email')
     expect(row.confirmation_email_sent_at).toBeTruthy()
-    expect(result.failed).toContain('email:claim_stuck')
   })
 
-  it('records an unresolvable comms location instead of letting the throw escape', async () => {
+  it('a resolver that throws is caught and the receipt still goes out', async () => {
     const { db, row } = makeWorld()
     resolveEventCommsLocation.mockRejectedValue(new Error('sending location read failed'))
 
-    // It must not throw out of the function — four callers catch nothing here.
     const result = await sendRaceConfirmations({ db, paymentId: PAYMENT_ID })
 
-    expect(result.failed.some(f => f.startsWith('comms_location:'))).toBe(true)
-    expect(sendTransactionalEmail).not.toHaveBeenCalled()
-    // Nothing claimed, so a later invocation still delivers cleanly.
-    expect(row.confirmation_email_sent_at).toBeNull()
+    expect(result.sent).toContain('email')
+    // Fell back to the event's own location — same org, same sender.
+    expect(sendTransactionalEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ locationId: 'LOC' }),
+    )
+    expect(row.confirmation_email_sent_at).toBeTruthy()
   })
 })

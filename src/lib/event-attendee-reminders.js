@@ -238,19 +238,23 @@ export async function runEventReminders({ db, todayStr } = {}) {
     // the real venue is on ev.venue_name. Prefer it so the reminder shows the
     // actual venue. UN1T events have no venue_name → the location name stands.
     const locationName = ev.venue_name || ev.locations?.name || ''
-    // BAREWRITE.1 — resolveEventCommsLocation now THROWS when it cannot read
-    // the location rows, instead of returning null and letting the caller fall
-    // back to the sender-less anchor (a wrong-brand send). Skip this event for
-    // this tick rather than aborting the whole loop; no claims are taken, so
-    // the next tick re-attempts the same offset.
+    // BAREWRITE.4 — resolveEventCommsLocation FAILS OPEN: it logs an
+    // unreadable row and returns null, and the `|| ev.location_id` below is the
+    // fallback. BAREWRITE.1 had it throw and this loop `continue`d, with a
+    // comment claiming the next tick would re-attempt — that was wrong twice
+    // over. This cron runs ONCE A DAY, and reminders are keyed to a fixed
+    // day-offset from the event date, so "the next tick" is tomorrow, by which
+    // point the offset this tick was sending has passed: the reminder was not
+    // deferred, it was DESTROYED. Never skip an attendee's reminder over a
+    // read that only decides which of two same-brand senders to use.
     let commsLocation = null
     try {
       commsLocation = await resolveEventCommsLocation(db, {
         location_id: ev.location_id, host_id: ev.host_id, sending_location_id: ev.sending_location_id,
       })
     } catch (e) {
-      logError('event-reminders', 'comms location unresolved — event skipped this tick', { err: e, eventId: ev.id })
-      continue
+      logError('event-reminders', 'comms location resolver threw; sending from the event location instead', { err: e, eventId: ev.id })
+      commsLocation = null
     }
     const commsLocationId = commsLocation?.id || ev.location_id || null
 

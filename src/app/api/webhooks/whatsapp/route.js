@@ -107,7 +107,16 @@ export async function POST(request) {
           // Meta's in-app "stop marketing messages" control — a consent signal
           // separate from STOP keywords. Best-effort per entry; never throws out.
           for (const pref of change.value?.user_preferences || []) {
-            try { await applyMetaUserPreference(db, pref) }
+            try {
+              const r = await applyMetaUserPreference(db, pref)
+              // BAREWRITE.4 — `applied: false` is the ordinary answer for an
+              // unknown category / unknown value / no matching contact, so
+              // gate the log on `failures` (a write actually went wrong)
+              // rather than on `applied`. Otherwise the real signal drowns.
+              if (r?.failures?.length) {
+                console.error(`[wa-webhook] user_preferences ${pref?.value} for contact ${r.contactId || 'unknown'} — ${r.applied ? 'applied only PARTIALLY' : 'NOT applied'}: ${r.failures.join('; ')}`)
+              }
+            }
             catch (e) { console.error('[wa-webhook] user_preferences failed:', e?.message) }
           }
           continue
@@ -231,18 +240,29 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId) {
 
   contact = pickInboundContact(existingContacts, defaultLocationId)
   if (contact) {
+    // BAREWRITE.4 — every write in this handler is LOGGED, not surfaced and not
+    // failed on. That is the correct handling for this file specifically: Meta
+    // disables a subscription that stops returning 2xx, so nothing here may
+    // refuse, and every one of these writes is bookkeeping whose loss costs a
+    // record rather than a message. The rule is armed on this path anyway,
+    // because "log it" is what makes a systematic failure visible at all — the
+    // consent bug two functions down survived two audits precisely because its
+    // writes looked handled and reported nothing.
+    //
     // Ensure wa_phone is set on the contact (store without + to match Meta's format)
-    await db.from('contacts')
+    const { error: phoneErr } = await db.from('contacts')
       .update({ wa_phone: phoneWithout })
       .eq('id', contact.id)
       .is('wa_phone', null)
+    if (phoneErr) console.error(`[wa-webhook] wa_phone backfill failed for contact ${contact.id}:`, phoneErr.message)
 
     // Reactivate a number previously flagged undeliverable — an inbound message
     // proves they're on WhatsApp. Only flips 'undeliverable' (never opted_out/blocked).
-    await db.from('contacts')
+    const { error: reactivateErr } = await db.from('contacts')
       .update({ wa_status: 'active' })
       .eq('id', contact.id)
       .eq('wa_status', 'undeliverable')
+    if (reactivateErr) console.error(`[wa-webhook] undeliverable→active reactivation failed for contact ${contact.id} (future audiences will keep skipping them):`, reactivateErr.message)
   }
 
   // Determine location: contact's location wins if known (their
@@ -262,9 +282,10 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId) {
     conversationId = existingConv.id
     // If contact was found but conversation wasn't linked yet, link it now
     if (contact && !existingConv.contact_id) {
-      await db.from('whatsapp_conversations')
+      const { error: linkErr } = await db.from('whatsapp_conversations')
         .update({ contact_id: contact.id })
         .eq('id', conversationId)
+      if (linkErr) console.error(`[wa-webhook] linking conversation ${conversationId} to contact ${contact.id} failed (the thread stays unattributed in the inbox):`, linkErr.message)
       // CTWA backfill: the click id landed while the sender was unknown —
       // move it onto the newly linked contact (fires the Lead event once).
       if (existingConv.ctwa_clid) {
@@ -308,9 +329,10 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId) {
 
   // Update profile name if we have one (it can change)
   if (senderName) {
-    await db.from('whatsapp_conversations')
+    const { error: nameErr } = await db.from('whatsapp_conversations')
       .update({ wa_profile_name: senderName })
       .eq('id', conversationId)
+    if (nameErr) console.error(`[wa-webhook] profile-name refresh failed for conversation ${conversationId}:`, nameErr.message)
   }
 
   // Refresh 24h window (inbound message opens the window)
@@ -417,7 +439,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId) {
   }
 
   // Update conversation
-  await db.from('whatsapp_conversations').update({
+  const { error: convStampErr } = await db.from('whatsapp_conversations').update({
     last_message_at: timestamp.toISOString(),
     last_message_direction: 'inbound',
     last_message_preview: body?.substring(0, 100) || `[${messageType}]`,
@@ -426,8 +448,16 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId) {
     // starts fresh from this message.
     agent_followup_stage: 0,
   }).eq('id', conversationId)
+  // A lost stamp leaves the thread looking answered and un-bumped in the
+  // inbox's ordering — the message itself is already recorded above.
+  if (convStampErr) console.error(`[wa-webhook] inbound conversation stamp failed for ${conversationId} (the thread will not rise in the inbox):`, convStampErr.message)
   // Atomic unread bump (best-effort) — replaces the read-modify-write above.
-  try { await db.rpc('increment_whatsapp_conversation_unread', { p_conversation_id: conversationId }) } catch {}
+  // The try/catch is NOT the error handler: an rpc resolves with { error }
+  // rather than throwing, so the destructure is what actually sees a failure.
+  try {
+    const { error: unreadErr } = await db.rpc('increment_whatsapp_conversation_unread', { p_conversation_id: conversationId })
+    if (unreadErr) console.error(`[wa-webhook] unread bump failed for conversation ${conversationId}:`, unreadErr.message)
+  } catch {}
 
   // WA-MEDIA.1 — re-host inbound media into the whatsapp-media bucket now,
   // so the inbox shows it without a first-view round-trip and it survives
@@ -473,7 +503,13 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId) {
         keyword,
       })
       if (!consent?.applied) {
-        console.error(`[wa-webhook] ${keyword.toUpperCase()} from contact ${contact.id} was NOT applied (${consent?.reason || 'unknown'}) — the contact is still in marketing audiences and got no acknowledgement`)
+        console.error(`[wa-webhook] ${keyword.toUpperCase()} from contact ${contact.id} was NOT applied (${consent?.reason || 'unknown'}) — the contact is still in marketing audiences and got no acknowledgement: ${(consent?.failures || []).join('; ') || 'no detail'}`)
+      } else if (consent.partial) {
+        // BAREWRITE.4 — a PARTIAL opt-out is applied (at least one suppression
+        // gate landed, which is why the customer was acknowledged) but it is
+        // still a defect: say so at error level rather than letting a `true`
+        // swallow it.
+        console.error(`[wa-webhook] ${keyword.toUpperCase()} from contact ${contact.id} applied only PARTIALLY — one or more consent writes were lost: ${(consent.failures || []).join('; ')}`)
       }
     }
   }
@@ -594,9 +630,13 @@ async function handleStatusUpdate(db, status) {
   if (pricingPatch) Object.assign(updates, pricingPatch)
 
   // Update message record
-  await db.from('whatsapp_messages')
+  const { error: msgStatusErr } = await db.from('whatsapp_messages')
     .update(updates)
     .eq('wa_message_id', messageId)
+  // A lost status write freezes the message at its previous state in the
+  // inbox (a delivered message still reading 'sent'). Meta does not re-send a
+  // status it has already delivered, so this is the only chance to record it.
+  if (msgStatusErr) console.error(`[wa-webhook] message status write failed for ${messageId} (status ${statusValue} is lost — Meta will not resend it):`, msgStatusErr.message)
 
   // Update broadcast recipient if this was a broadcast message.
   // K8 — `.maybeSingle()`, not `.single()`: Meta sends status callbacks for
@@ -629,10 +669,12 @@ async function handleStatusUpdate(db, status) {
       recipUpdates.error_message = status.errors?.[0]?.title
     }
 
-    await db.from('whatsapp_broadcast_recipients')
+    const { error: recipErr } = await db.from('whatsapp_broadcast_recipients')
       .update(recipUpdates)
       .eq('broadcast_id', msg.broadcast_id)
       .eq('contact_id', msg.contact_id)
+    // Reporting only — the recipient row's terminal state. Never re-sends.
+    if (recipErr) console.error(`[wa-webhook] broadcast recipient status write failed (broadcast ${msg.broadcast_id}, contact ${msg.contact_id}) — the broadcast report will under-count:`, recipErr.message)
 
     // An async failure that means "not a WhatsApp number" → flag the contact so
     // future audiences skip it (reversible on inbound). Best-effort, never throws.
@@ -651,8 +693,11 @@ async function handleStatusUpdate(db, status) {
         : 'total_failed'
 
       // Atomic; best-effort — a counter must never break the status webhook.
+      // (The try/catch is not the error handler: an rpc resolves with
+      // { error } rather than throwing. The destructure is.)
       try {
-        await db.rpc('increment_whatsapp_broadcast_metric', { p_broadcast_id: msg.broadcast_id, p_metric: metricField })
+        const { error: metricErr } = await db.rpc('increment_whatsapp_broadcast_metric', { p_broadcast_id: msg.broadcast_id, p_metric: metricField })
+        if (metricErr) console.error(`[wa-webhook] broadcast metric ${metricField} bump failed (broadcast ${msg.broadcast_id}):`, metricErr.message)
       } catch {}
 
       // A message counted as a successful send (total_sent = dispatched:
@@ -660,7 +705,8 @@ async function handleStatusUpdate(db, status) {
       // or the "sent" figure permanently over-counts async failures.
       if (statusValue === 'failed' && ['sent', 'delivered', 'read'].includes(prevStatus)) {
         try {
-          await db.rpc('increment_whatsapp_broadcast_metric', { p_broadcast_id: msg.broadcast_id, p_metric: 'total_sent', p_delta: -1 })
+          const { error: decErr } = await db.rpc('increment_whatsapp_broadcast_metric', { p_broadcast_id: msg.broadcast_id, p_metric: 'total_sent', p_delta: -1 })
+          if (decErr) console.error(`[wa-webhook] total_sent decrement failed (broadcast ${msg.broadcast_id}) — the sent figure now permanently over-counts an async failure:`, decErr.message)
         } catch {}
       }
     }
@@ -720,7 +766,8 @@ async function handleCoexistenceEvent(db, field, value) {
       const { data: row } = await db.from('whatsapp_numbers').select('signup_meta').eq('id', owner.id).maybeSingle()
       const meta = row?.signup_meta || {}
       const nextSync = nextHistorySyncState(meta.history_sync, value, new Date().toISOString())
-      await db.from('whatsapp_numbers').update({ signup_meta: { ...meta, history_sync: nextSync } }).eq('id', owner.id)
+      const { error: syncErr } = await db.from('whatsapp_numbers').update({ signup_meta: { ...meta, history_sync: nextSync } }).eq('id', owner.id)
+      if (syncErr) console.error(`[wa-webhook] history-sync status update failed for number ${owner.id}:`, syncErr.message)
     } catch (e) { console.error('[wa-webhook] history-sync status update failed:', e?.message) }
   }
 }

@@ -205,16 +205,24 @@ export async function tickCampaignSend(db, campaign) {
   if (!isFeatureEnabledAtLocation(campaign.locations, 'email')) {
     // The updated_at bump IS the rotation — if it is lost, this campaign stays
     // at the head of the ascending pick order and occupies a per-tick slot on
-    // every tick, forever. It was a bare await until BAREWRITE.1, and merely
-    // LOGGING the loss (the first cut) left that behaviour untouched: the
-    // error has to reach the cron. Returning it hands run-campaigns
-    // campaignFailurePatch, whose `last_error` write re-triggers the
-    // `campaigns_updated_at` trigger — so the rotation is restored by the very
-    // path that records the problem, and a campaign that keeps failing the
-    // bump eventually leaves the pick window as 'failed' instead of pinning a
-    // slot forever. Note this reports the BUMP's failure, not the bundle gate
-    // itself: a clean bump still returns no error, so the deliberate
-    // "disabled is a valid state, never an error" posture above is unchanged.
+    // every tick until the next successful write. It was a bare await until
+    // BAREWRITE.1.
+    //
+    // BAREWRITE.4 — it is reported as a `warning`, NOT an `error`, and that
+    // distinction is load-bearing on THIS path specifically. The bundle gate
+    // writes `last_error` on every single tick by design, so a bundle-disabled
+    // campaign always enters the next tick with `last_error` already set. A
+    // returned `error` reaches campaignFailurePatch, whose "genuinely stuck"
+    // test is (last_error already present) && (no send_started_at) && (older
+    // than the grace window) — and a bundle-disabled campaign satisfies the
+    // last two permanently. So the branch's `error` turned ONE transient bump
+    // failure into a campaign marked 'failed' forever, needing an operator to
+    // resurrect it. That is a louder failure than the silent one it replaced,
+    // which is exactly what this PR exists not to do.
+    //
+    // A warning is surfaced by the cron (logged at error level, counted in the
+    // response) without feeding the kill switch. A lost rotation bump is a
+    // fairness problem, never a reason to destroy a campaign.
     const bumpErr = await writeOrLog(
       db.from('campaigns')
         .update({
@@ -224,7 +232,7 @@ export async function tickCampaignSend(db, campaign) {
         .eq('id', campaignId),
       'bundle-disabled rotation bump', campaignId)
     return bumpErr
-      ? { phase: 'bundle_disabled', sent: 0, error: `rotation bump failed (campaign would pin a per-tick slot): ${bumpErr.message}` }
+      ? { phase: 'bundle_disabled', sent: 0, warning: `rotation bump failed (campaign will pin a per-tick slot until a later write lands): ${bumpErr.message}` }
       : { phase: 'bundle_disabled', sent: 0 }
   }
 
@@ -399,15 +407,16 @@ export async function tickCampaignSend(db, campaign) {
     // ticks at most MAX_CAMPAIGNS_PER_TICK campaigns) — otherwise an
     // hours-long wait would pin one of the per-tick slots and starve
     // other queued campaigns.
-    // Same as the bundle-gate bump above: a lost bump is not an observation,
-    // it is the harm, so it goes back to the cron rather than only to the log.
+    // Same as the bundle-gate bump above, and a `warning` for the same reason:
+    // it must reach the cron, but a lost rotation bump is never grounds for
+    // marking a campaign 'failed'.
     const bumpErr = await writeOrLog(
       db.from('campaigns')
         .update({ updated_at: new Date().toISOString() })
         .eq('id', campaignId),
       'ab_waiting rotation bump', campaignId)
     return bumpErr
-      ? { phase: 'ab_waiting', sent: 0, error: `rotation bump failed (campaign would pin a per-tick slot): ${bumpErr.message}` }
+      ? { phase: 'ab_waiting', sent: 0, warning: `rotation bump failed (campaign will pin a per-tick slot until a later write lands): ${bumpErr.message}` }
       : { phase: 'ab_waiting', sent: 0 }
   }
 
@@ -536,7 +545,7 @@ export async function tickCampaignSend(db, campaign) {
             .eq('id', campaignId),
           'cap_deferred rotation bump', campaignId)
         return bumpErr
-          ? { phase: 'cap_deferred', deferred: capHeld, sent: 0, error: `rotation bump failed (campaign would pin a per-tick slot): ${bumpErr.message}` }
+          ? { phase: 'cap_deferred', deferred: capHeld, sent: 0, warning: `rotation bump failed (campaign will pin a per-tick slot until a later write lands): ${bumpErr.message}` }
           : { phase: 'cap_deferred', deferred: capHeld, sent: 0 }
       }
     }

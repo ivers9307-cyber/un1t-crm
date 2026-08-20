@@ -89,12 +89,33 @@ describe('resolveEventCommsLocation', () => {
     expect(await resolveEventCommsLocation(makeDb({}), null)).toBeNull()
   })
 
-  // ── BAREWRITE.1 — an UNREADABLE row is not an ABSENT row ──────────────────
-  // Both reads used to discard `error`, and the tier logic falls through on a
-  // null: a transient failure on the anchor read left masterLocationId null,
-  // pickCommsLocationTarget handed back the host's sender-less anchor, and the
-  // event's comms went out under the wrong brand. "Could not read it" and
-  // "there is no such row" must stay distinguishable.
+  // ── BAREWRITE.4 — A READ FAILURE NEVER COSTS THE MESSAGE, AT ANY HOP ───────
+  //
+  // BAREWRITE.1 made an unreadable row THROW, on the theory that falling
+  // through to the event's own location could send under the wrong brand.
+  // BAREWRITE.3 narrowed the throw to the brand-crossing hops. BAREWRITE.4
+  // removes it, because the brand it was protecting cannot differ:
+  //
+  //   • email identity resolves per ORGANISATION (resolveEmailSender →
+  //     tenant_email_domains keyed on the location's organization_id), and a
+  //     host anchor and its org master are in the same organisation BY
+  //     CONSTRUCTION (ensureAnchorLocation / resolveMasterLocationIdStrict);
+  //   • SMS identity is the location's alpha sender, falling back to the ORG
+  //     default. Measured against prod 2026-08-20: one host anchor exists
+  //     ("Pride Training Club (host events)") and its sender is `UN1T Dub` —
+  //     identical to its org master's; the only sending_location_id overrides
+  //     point at that same master. No prod pair differs.
+  //
+  // Against that, every caller here is delivering a message a customer paid for
+  // or asked for, and nothing retries: race-confirmations is only invoked on a
+  // FRESH payment transition, and the event-reminders cron runs DAILY against a
+  // fixed day-offset, so a skipped tick destroys the reminder rather than
+  // deferring it. The throw was trading a certain loss against an impossible
+  // one. What survives is VISIBILITY — every discarded read is reported through
+  // logError with the ids to act on.
+  //
+  // These tests are the old ones INVERTED: the same four failure points, now
+  // asserting the message is never lost.
   function makeFailingDb(errorOnId) {
     return {
       from() {
@@ -113,20 +134,16 @@ describe('resolveEventCommsLocation', () => {
     }
   }
 
-  it('throws (does NOT fall back to the anchor) when the anchor read fails', async () => {
+  it('RECEIPT NOT LOST: a failed ANCHOR read resolves to null instead of throwing', async () => {
     const db = makeFailingDb('ANCHOR')
     await expect(
       resolveEventCommsLocation(db, { location_id: 'ANCHOR', host_id: 'H', sending_location_id: null }),
-    ).rejects.toThrow(/anchor location read failed/)
-    // The wrong-brand fallback is never reached.
+    ).resolves.toBeNull()
+    // The org-master lookup is skipped (we have no organization_id to give it),
+    // so the caller's `|| event.location_id` fallback stands — same org, same
+    // sender, message still goes out.
     expect(resolveMasterLocationIdStrict).not.toHaveBeenCalled()
   })
-
-  // ── BAREWRITE.3 — the throw is only worth its price where it prevents a
-  // BRAND CROSSING. Every caller falls back to the event's own location_id on a
-  // null, so when the unreadable target IS that same location_id the throw
-  // changes nothing about which sender would be used — it only deletes the
-  // message. These two tests pin the asymmetry from both sides.
 
   it('RECEIPT NOT LOST: a plain event whose own location read fails returns null (same-location fallback), it does NOT throw', async () => {
     const db = makeFailingDb('LOC')
@@ -166,34 +183,62 @@ describe('resolveEventCommsLocation', () => {
     ).resolves.toBeNull()
   })
 
-  it('WRONG BRAND IMPOSSIBLE: an explicit sending_location_id override that cannot be read THROWS (the fallback is a different location)', async () => {
+  // The two hops BAREWRITE.3 kept failing CLOSED. These are the receipts the
+  // guard was costing: on this data the fallback resolves to the same org and
+  // the same alpha sender, so the throw bought nothing and deleted the message.
+  it('RECEIPT NOT LOST: an unreadable sending_location_id override returns null, it does NOT throw', async () => {
     const db = makeFailingDb('OVR')
     await expect(
       resolveEventCommsLocation(db, { location_id: 'LOC', host_id: null, sending_location_id: 'OVR' }),
-    ).rejects.toThrow(/sending location read failed for OVR/)
+    ).resolves.toBeNull()
   })
 
-  it('WRONG BRAND IMPOSSIBLE: a host event whose ORG MASTER row cannot be read THROWS rather than falling back to the anchor', async () => {
+  it('RECEIPT NOT LOST: a host event whose ORG MASTER row cannot be read returns null, it does NOT throw', async () => {
     resolveMasterLocationIdStrict.mockResolvedValue('MASTER')
     const db = makeFailingDb('MASTER')
     await expect(
       resolveEventCommsLocation(db, { location_id: 'ANCHOR', host_id: 'H', sending_location_id: null }),
-    ).rejects.toThrow(/sending location read failed for MASTER/)
+    ).resolves.toBeNull()
   })
 
-  // The MIDDLE hop. Hardening the two reads either side of it was not enough:
-  // resolveMasterLocationId (the contact-homing helper) folds its own read
-  // error into the anchor, so a failure there still produced
-  // masterLocationId = anchor and a wrong-brand send. This branch now calls
-  // the strict variant, so the failure has to travel.
-  it('propagates a master-lookup failure instead of sending from the anchor', async () => {
+  // The MIDDLE hop. `resolveMasterLocationIdStrict` still THROWS — that is its
+  // job, and `resolveMasterLocationId` (the contact-homing helper) still needs
+  // the strict variant to exist. What changed is where the throw stops: it is
+  // caught HERE and logged, so the distinction between "unreadable" and
+  // "absent" survives in the log without escaping to the send path.
+  it('RECEIPT NOT LOST: a master-lookup throw is caught, logged, and degraded to the anchor', async () => {
     resolveMasterLocationIdStrict.mockRejectedValue(new Error('organizations read failed'))
     const db = makeDb({
-      ANCHOR: { organization_id: 'ORG' },
+      ANCHOR: { id: 'ANCHOR', name: 'Pride (host events)', twilio_alpha_sender_id: 'UN1T Dub', organization_id: 'ORG' },
       MASTER: { id: 'MASTER', name: 'Stillorgan', twilio_alpha_sender_id: 'UN1T Dub', organization_id: 'ORG' },
     })
-    await expect(
-      resolveEventCommsLocation(db, { location_id: 'ANCHOR', host_id: 'H', sending_location_id: null }),
-    ).rejects.toThrow(/organizations read failed/)
+    const row = await resolveEventCommsLocation(db, { location_id: 'ANCHOR', host_id: 'H', sending_location_id: null })
+    // Same organisation ⇒ same email identity; same alpha sender in prod.
+    expect(row?.id).toBe('ANCHOR')
+  })
+
+  // The property, stated once and checked at EVERY hop rather than case by
+  // case — a future hop that reaches for a throw fails here.
+  it('NEVER THROWS: every read in the chain can fail and the call still resolves', async () => {
+    resolveMasterLocationIdStrict.mockRejectedValue(new Error('organizations read failed'))
+    const allReadsFail = {
+      from() {
+        const b = {
+          select() { return b },
+          eq() { return b },
+          maybeSingle() { return Promise.resolve({ data: null, error: { message: 'connection reset' } }) },
+        }
+        return b
+      },
+    }
+    const events = [
+      { location_id: 'LOC', host_id: null, sending_location_id: null },        // plain
+      { location_id: 'ANCHOR', host_id: 'H', sending_location_id: null },      // host
+      { location_id: 'LOC', host_id: null, sending_location_id: 'OVR' },       // override
+      { location_id: 'ANCHOR', host_id: 'H', sending_location_id: 'OVR' },     // host + override
+    ]
+    for (const ev of events) {
+      await expect(resolveEventCommsLocation(allReadsFail, ev)).resolves.toBeNull()
+    }
   })
 })

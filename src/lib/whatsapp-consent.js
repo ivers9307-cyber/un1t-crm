@@ -5,9 +5,13 @@
 // inbound TEXT message is an exact keyword match (parseConsentKeyword in
 // whatsapp.js). Nothing here throws: a consent write must never fail the
 // webhook (which always 200s so Meta doesn't disable the subscription). That
-// is NOT the same as best-effort — the two authoritative writes report
-// `applied: false` on failure so the caller can log it and no acknowledgement
-// is sent for a change that did not happen.
+// is NOT the same as best-effort — every write is ATTEMPTED regardless of what
+// the others did, the failures are collected, and the result says whether the
+// change took effect (`applied`) and whether anything was lost on the way
+// (`partial` / `failures`), so the caller can log it and no acknowledgement is
+// sent for a change that did not happen at all. A failure in one write must
+// never prevent another suppression signal being written — see
+// applyConsentWrites.
 //
 // STOP:
 //   - contact_preferences.whatsapp_marketing → false (the broadcast /
@@ -29,11 +33,116 @@
 
 import { sendTextMessage } from './whatsapp'
 import { consentActionFor } from './consent-actions'
+import { logError } from './log'
 
 const ACK_STOP =
   "You've been unsubscribed from WhatsApp marketing messages. Reply START at any time to opt back in."
 const ACK_START =
   "You're opted back in to WhatsApp messages. Reply STOP at any time to unsubscribe."
+
+/**
+ * Apply BOTH authoritative consent writes, independently, and report what
+ * landed. Never throws.
+ *
+ * BAREWRITE.4 — this exists because the shape of the fix matters more than the
+ * fix. BAREWRITE.1 correctly stopped the function claiming `applied: true` on a
+ * write it never checked, but it implemented that by RETURNING EARLY on the
+ * first failure — so a failed `contact_preferences` upsert now also skipped the
+ * `contacts.wa_status` write that used to run regardless. On main a partial
+ * failure still left ONE suppression signal standing; on that branch it left
+ * ZERO. A STOP that half-failed suppressed nothing at all, which is strictly
+ * worse than the silent bug it replaced.
+ *
+ * The rule this file now follows: **removing a silent failure must never create
+ * a louder one.** Every suppression signal is ATTEMPTED, whatever the others
+ * did; only then is the outcome judged. Where an opt-out partially fails the
+ * resting state is MORE suppression plus a loud, structured error — never less.
+ *
+ * The two writes are genuinely independent gates, not two halves of one:
+ *   • `contact_preferences.whatsapp_marketing` — the AUDIENCE gate
+ *     (buildWhatsAppAudience filters on it; the broadcast/drip/sequence
+ *     selectors never see a contact whose flag is false).
+ *   • `contacts.wa_status` — the HARD per-send signal (every WA send path
+ *     excludes 'opted_out'/'blocked').
+ * Either one alone suppresses real traffic. So for a STOP, "took effect" means
+ * at least one of them landed — the same floor main achieved — not both.
+ *
+ * @returns {Promise<{prefOk: boolean, statusOk: boolean, failures: string[]}>}
+ */
+async function applyConsentWrites(db, contactId, optingOut, source) {
+  const failures = []
+
+  // 1. The marketing consent flag (source of truth for audiences).
+  //    UPSERT by contact_id (same convention as marketing-consent.js):
+  //    a contact without a preferences row matched zero rows under the
+  //    old .update(), so STOP flipped wa_status but never the flag —
+  //    the contact stayed in marketing audiences.
+  const { error: prefError } = await db
+    .from('contact_preferences')
+    .upsert(
+      { contact_id: contactId, whatsapp_marketing: !optingOut, updated_at: new Date().toISOString() },
+      { onConflict: 'contact_id' },
+    )
+  if (prefError) failures.push(`contact_preferences.whatsapp_marketing: ${prefError.message}`)
+
+  // 2. The hard wa_status signal on the contact row. ATTEMPTED WHATEVER
+  //    STEP 1 DID — see the header. This is the write whose loss the early
+  //    return used to cause.
+  const { error: statusError } = await db
+    .from('contacts')
+    .update({ wa_status: optingOut ? 'opted_out' : 'active' })
+    .eq('id', contactId)
+  if (statusError) failures.push(`contacts.wa_status: ${statusError.message}`)
+
+  // 3. Audit trail. Best-effort ON PURPOSE and never part of the verdict:
+  //    refusing to acknowledge over a lost log line would leave the customer
+  //    un-answered on a change that did take effect.
+  const { error: logRowError } = await db.from('consent_log').insert({
+    contact_id: contactId,
+    channel: 'whatsapp_marketing',
+    action: consentActionFor(!optingOut),
+    source,
+  })
+  if (logRowError) failures.push(`consent_log (audit only): ${logRowError.message}`)
+
+  const prefOk = !prefError
+  const statusOk = !statusError
+
+  if (failures.length > 0) {
+    // Loud and STRUCTURED — Sentinel keys on module+event, not on prose.
+    // `suppressed` is the honest summary of where the contact actually stands.
+    logError('wa-consent', 'consent write(s) failed', {
+      contactId,
+      source,
+      direction: optingOut ? 'opt_out' : 'opt_in',
+      prefOk,
+      statusOk,
+      // For a STOP: is the contact suppressed on ANY path at all?
+      suppressed: optingOut ? (prefOk || statusOk) : null,
+      failures,
+    })
+  }
+
+  return { prefOk, statusOk, failures }
+}
+
+/**
+ * Did the consent change take effect to at least the degree main achieved?
+ *
+ * STOP  — true when EITHER suppression signal landed. One gate alone keeps the
+ *         contact out of real traffic, and refusing the acknowledgement over
+ *         the other one buys no extra suppression while leaving a customer who
+ *         asked to stop with no answer at all (and no prompt to retry).
+ * START — true only when BOTH landed. The failure direction is reversed here:
+ *         a partial opt-in leaves the contact still suppressed on one gate, so
+ *         "You're opted back in" would be a promise we have not kept, and the
+ *         safe resting state (still suppressed) costs the customer nothing but
+ *         marketing they asked for. Under-claiming is the safe error here;
+ *         over-claiming is not.
+ */
+function consentTookEffect(optingOut, { prefOk, statusOk }) {
+  return optingOut ? (prefOk || statusOk) : (prefOk && statusOk)
+}
 
 /**
  * Apply a parsed consent keyword for a contact. Never throws.
@@ -48,9 +157,12 @@ const ACK_START =
  * @param {string|null} args.locationId
  * @param {string|null} args.conversationId  thread to attribute the ack to
  * @param {'stop'|'start'} args.keyword
- * @returns {Promise<{applied: boolean, action?: string, reason?: string}>}
- *   `applied: false` means the consent change did NOT land and no
- *   acknowledgement was sent — the caller should log it, loudly.
+ * @returns {Promise<{applied: boolean, action?: string, reason?: string,
+ *   failures?: string[], partial?: boolean}>}
+ *   `applied: false` means the consent change did NOT land at all and no
+ *   acknowledgement was sent. `applied: true` with a non-empty `failures`
+ *   means it landed on at least one gate but not every one — still loud, and
+ *   still the caller's business to report.
  */
 export async function applyWhatsappConsentKeyword({ db, contact, waPhone, locationId, conversationId, keyword }) {
   if (!contact?.id || !['stop', 'start'].includes(keyword)) return { applied: false }
@@ -58,57 +170,24 @@ export async function applyWhatsappConsentKeyword({ db, contact, waPhone, locati
   const optingOut = keyword === 'stop'
   const action = consentActionFor(!optingOut)
 
-  // BAREWRITE.1 (follow-up) — these three writes were BARE awaits inside a
-  // try/catch, which is the most dangerous member of the class because it
-  // READS as handled: supabase builders resolve with `{ data, error }` instead
-  // of throwing, so that catch could never fire for any of them. The function
-  // then returned `applied: true` unconditionally and sent the customer "You've
-  // been unsubscribed from WhatsApp marketing messages" — while they were still
-  // in every marketing audience. The step-1 comment below already records an
-  // earlier incarnation of exactly this bug.
+  // BAREWRITE.1 found these three writes as BARE awaits inside a try/catch,
+  // which is the most dangerous member of the class because it READS as
+  // handled: supabase builders resolve with `{ data, error }` instead of
+  // throwing, so that catch could never fire for any of them. The function then
+  // returned `applied: true` unconditionally and sent the customer "You've been
+  // unsubscribed from WhatsApp marketing messages" while they were still in
+  // every marketing audience.
   //
-  // The two AUTHORITATIVE legs (the audience flag and wa_status) now fail the
-  // function: never tell someone they are unsubscribed when the flag did not
-  // flip. The audit-trail insert does not — losing an audit line is not a
-  // reason to leave a real opt-out unacknowledged — but it is logged.
-
-  // 1. The marketing consent flag (source of truth for audiences).
-  //    UPSERT by contact_id (same convention as marketing-consent.js):
-  //    a contact without a preferences row matched zero rows under the
-  //    old .update(), so STOP flipped wa_status but never the flag —
-  //    the contact stayed in marketing audiences.
-  const { error: prefError } = await db
-    .from('contact_preferences')
-    .upsert(
-      { contact_id: contact.id, whatsapp_marketing: !optingOut, updated_at: new Date().toISOString() },
-      { onConflict: 'contact_id' },
-    )
-  if (prefError) {
-    console.error(`[wa-consent] ${keyword} preference write FAILED for contact ${contact.id} — not acknowledging, the contact is still in marketing audiences:`, prefError.message)
-    return { applied: false, reason: 'preference_write_failed' }
-  }
-
-  // 2. The hard wa_status signal on the contact row.
-  const { error: statusError } = await db
-    .from('contacts')
-    .update({ wa_status: optingOut ? 'opted_out' : 'active' })
-    .eq('id', contact.id)
-  if (statusError) {
-    console.error(`[wa-consent] ${keyword} wa_status write FAILED for contact ${contact.id} — not acknowledging:`, statusError.message)
-    return { applied: false, reason: 'status_write_failed' }
-  }
-
-  // 3. Audit trail. Best-effort ON PURPOSE: the consent change above has
-  //    already landed, so refusing to acknowledge over a lost log line would
-  //    leave the customer un-answered on a change that did take effect.
-  const { error: logError } = await db.from('consent_log').insert({
-    contact_id: contact.id,
-    channel: 'whatsapp_marketing',
-    action,
-    source: 'whatsapp_keyword',
-  })
-  if (logError) {
-    console.error(`[wa-consent] ${keyword} applied but the consent_log row was lost for contact ${contact.id}:`, logError.message)
+  // BAREWRITE.4 keeps that verdict but fixes its shape: see applyConsentWrites
+  // above. Every write is attempted; the early return that could leave a STOP
+  // with ZERO suppression is gone.
+  const outcome = await applyConsentWrites(db, contact.id, optingOut, 'whatsapp_keyword')
+  if (!consentTookEffect(optingOut, outcome)) {
+    return {
+      applied: false,
+      reason: optingOut ? 'no_suppression_signal_landed' : 'opt_in_incomplete',
+      failures: outcome.failures,
+    }
   }
 
   // 4. Acknowledge — best-effort, and recorded in the thread so the
@@ -153,7 +232,9 @@ export async function applyWhatsappConsentKeyword({ db, contact, waPhone, locati
     console.warn(`[wa-consent] ack send failed for contact ${contact.id}:`, e?.message || e)
   }
 
-  return { applied: true, action }
+  return outcome.failures.length > 0
+    ? { applied: true, action, partial: true, failures: outcome.failures }
+    : { applied: true, action }
 }
 
 /**
@@ -177,35 +258,22 @@ export async function applyMetaUserPreference(db, pref = {}) {
   if (!contact) return { applied: false, reason: 'no_contact' }
 
   const optingOut = pref.value === 'stop'
-  // Same three writes, same BAREWRITE.1 correction as the keyword path above:
-  // the try/catch that used to wrap them could not fire for a supabase result,
-  // so `applied: true` was unconditional.
-  // Upsert, not update — see applyWhatsappConsentKeyword: a contact
-  // with no preferences row must still get the flag flipped.
-  const { error: prefError } = await db.from('contact_preferences')
-    .upsert(
-      { contact_id: contact.id, whatsapp_marketing: !optingOut, updated_at: new Date().toISOString() },
-      { onConflict: 'contact_id' },
-    )
-  if (prefError) {
-    console.error(`[wa-consent] user_preferences preference write FAILED for contact ${contact.id}:`, prefError.message)
-    return { applied: false, reason: 'write_failed' }
+  // Exactly the same writes and the same BAREWRITE.4 shape as the keyword path
+  // above — one helper, so the two paths cannot drift apart again (they already
+  // did once: the keyword path grew an upsert while this one kept an update).
+  const outcome = await applyConsentWrites(db, contact.id, optingOut, 'meta_user_preferences')
+  if (!consentTookEffect(optingOut, outcome)) {
+    return {
+      applied: false,
+      reason: optingOut ? 'no_suppression_signal_landed' : 'opt_in_incomplete',
+      failures: outcome.failures,
+      contactId: contact.id,
+    }
   }
-  const { error: statusError } = await db.from('contacts')
-    .update({ wa_status: optingOut ? 'opted_out' : 'active' })
-    .eq('id', contact.id)
-  if (statusError) {
-    console.error(`[wa-consent] user_preferences wa_status write FAILED for contact ${contact.id}:`, statusError.message)
-    return { applied: false, reason: 'write_failed' }
-  }
-  const { error: logError } = await db.from('consent_log').insert({
-    contact_id: contact.id,
-    channel: 'whatsapp_marketing',
+  return {
+    applied: true,
     action: consentActionFor(!optingOut),
-    source: 'meta_user_preferences',
-  })
-  if (logError) {
-    console.error(`[wa-consent] user_preferences applied but the consent_log row was lost for contact ${contact.id}:`, logError.message)
+    contactId: contact.id,
+    ...(outcome.failures.length > 0 ? { partial: true, failures: outcome.failures } : {}),
   }
-  return { applied: true, action: consentActionFor(!optingOut), contactId: contact.id }
 }

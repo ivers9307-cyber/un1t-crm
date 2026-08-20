@@ -23,6 +23,50 @@ export function pickCommsLocationTarget(event, masterLocationId) {
 }
 
 /**
+ * THIS FUNCTION NEVER THROWS. Every read failure degrades to `null`, which
+ * every caller already turns into "use the event's own location".
+ *
+ * That is a deliberate reversal of BAREWRITE.1/.3, and the reasoning is worth
+ * keeping because the same trade will come up again.
+ *
+ * BAREWRITE.1 made both reads THROW rather than fall through, on the theory
+ * that a transient read failure could silently pick the host's sender-less
+ * anchor and send under the wrong brand. The theory was sound; the price was
+ * not. Every caller of this function is delivering a message a customer has
+ * already paid for or asked for, and a throw costs that message outright, with
+ * no retry: race-confirmations is invoked only on a FRESH payment transition
+ * (`markRacePaymentStatus` returns `applied: null` once the payment is already
+ * 'completed'), so a payment-provider redelivery cannot re-run it. One transient
+ * blip = one paying attendee who never gets their receipt, or their check-in QR.
+ *
+ * BAREWRITE.3 narrowed the throw to the brand-crossing hops. BAREWRITE.4 removes
+ * it, because the brand it was protecting cannot actually differ:
+ *
+ *   • EMAIL identity is resolved per ORGANISATION, not per location —
+ *     `resolveEmailSender` → `loadLiveRowForLocation` reads the location's
+ *     `organization_id` and then `tenant_email_domains` for that org. A host
+ *     anchor is created with its host's `organization_id` (`ensureAnchorLocation`),
+ *     and `resolveMasterLocationIdStrict` only ever returns a location inside
+ *     that same org. So target and fallback are STRUCTURALLY the same email
+ *     identity — not merely the same today.
+ *   • SMS identity is `locations.twilio_alpha_sender_id`, falling back through
+ *     `resolveSenderLocation` to the ORG's default sender when the location has
+ *     none. Measured against prod on 2026-08-20: the estate has exactly one host
+ *     anchor ("Pride Training Club (host events)", org UN1T Group) and its
+ *     sender is `UN1T Dub` — byte-identical to its org master's (Stillorgan).
+ *     The only `sending_location_id` overrides in the data point at that same
+ *     Stillorgan row. There is no pair of (target, fallback) locations in prod
+ *     for which the alpha sender differs.
+ *
+ * So the throw was trading a CERTAIN, silent, unrecoverable loss of a paying
+ * customer's receipt against a wrong-brand send that cannot currently happen.
+ * Removing a silent failure must not create a louder one — the win here is
+ * VISIBILITY, and that is what stays: every discarded read is reported through
+ * `logError` with the ids needed to act on it, at error level, so Sentinel can
+ * key on it. If a future location is configured with a genuinely different
+ * sender from its org master, this log is the signal that says so — and the fix
+ * then is to give the anchor the right sender, not to delete the message.
+ *
  * @param {import('@supabase/supabase-js').SupabaseClient} db  service-role client
  * @param {{ sending_location_id?: string|null, host_id?: string|null, location_id?: string|null }|null} event
  * @returns {Promise<object|null>} the location row to send from (twilio_sender overlaid), or null
@@ -30,27 +74,12 @@ export function pickCommsLocationTarget(event, masterLocationId) {
 export async function resolveEventCommsLocation(db, event) {
   if (!event) return null
 
-  // BAREWRITE.1 — both reads below used to discard `error`, which is a real
-  // problem HERE (unlike a plain lookup) because the tier logic FALLS THROUGH
-  // on a null: a transient failure on the anchor read makes masterLocationId
-  // null, and pickCommsLocationTarget then quietly hands back the host's
-  // sender-less anchor location instead of the org master — the wrong-brand
-  // sender. "We could not read it" and "there is no such row" must not
-  // collapse into the same fall-through, so an error throws and the caller
-  // keeps its existing send-failed handling rather than sending as the wrong
-  // brand. (`.maybeSingle()` stays: 0 rows IS a legitimate answer here, so
-  // this is the "answer it in the code" fix, not a discarded error.)
-  //
-  // BAREWRITE.3 — but ONLY where fail-open could cross a brand. The throw is
-  // paid for by the message that does not go out, so it has to buy something:
-  // on the anchor read below it does (the fallback is the sender-less anchor),
-  // and on the target read it does only when the target differs from the
-  // event's own location — see the long note at that read.
-  //
-  // The MIDDLE hop matters just as much: `resolveMasterLocationId` is
-  // HOST-MASTER.1's contact-homing helper and deliberately fails OPEN to the
-  // anchor, which for sender selection is exactly the wrong-brand fallback
-  // this function exists to prevent. Call the strict variant, which throws.
+  // Hop 1 — the anchor's organisation, needed to find the org master.
+  // Both reads below used to discard `error`, which is what BAREWRITE.1 was
+  // right to object to: the tier logic FALLS THROUGH on a null, so "we could
+  // not read it" and "there is no such row" collapsed into the same answer with
+  // nothing recorded anywhere. They are still distinguished — the difference
+  // now goes to the log instead of to a throw.
   let masterLocationId = null
   if (!event.sending_location_id && event.host_id && event.location_id) {
     const { data: anchor, error: anchorError } = await db
@@ -59,46 +88,47 @@ export async function resolveEventCommsLocation(db, event) {
       .eq('id', event.location_id)
       .maybeSingle()
     if (anchorError) {
-      throw new Error(`resolveEventCommsLocation: anchor location read failed (would have fallen back to a wrong-brand sender): ${anchorError.message}`)
+      logError('event-comms-location', 'anchor location read failed; sending from the event location instead of the org master', {
+        err: anchorError, eventLocationId: event.location_id, hostId: event.host_id,
+      })
+    } else {
+      // Hop 2 — the org master. `resolveMasterLocationIdStrict` is the variant
+      // that surfaces a read failure instead of folding it into the anchor
+      // (`resolveMasterLocationId` is HOST-MASTER.1's contact-homing helper and
+      // deliberately fails open). We want the distinction — but we want it in
+      // the log, not as an escaping throw, so it is caught here.
+      try {
+        masterLocationId = await resolveMasterLocationIdStrict(db, {
+          organization_id: anchor?.organization_id || null,
+          anchor_location_id: event.location_id,
+        })
+      } catch (e) {
+        logError('event-comms-location', 'org master read failed; sending from the event location instead', {
+          err: e, eventLocationId: event.location_id, organizationId: anchor?.organization_id || null,
+        })
+      }
     }
-    masterLocationId = await resolveMasterLocationIdStrict(db, {
-      organization_id: anchor?.organization_id || null,
-      anchor_location_id: event.location_id,
-    })
   }
 
   const targetId = pickCommsLocationTarget(event, masterLocationId)
   if (!targetId) return null
 
+  // Hop 3 — the sending location row itself.
   const { data: row, error: rowError } = await db
     .from('locations')
     .select('id, name, twilio_alpha_sender_id, organization_id')
     .eq('id', targetId)
     .maybeSingle()
   if (rowError) {
-    // BAREWRITE.3 — fail CLOSED only where failing open could cross a BRAND.
-    //
-    // BAREWRITE.1 made this read throw for every event, which over-charged for
-    // the guarantee. Every caller treats a null return the same way: it falls
-    // back to the event's own `location_id` (race-confirmations
-    // `commsLocation?.id || payment.race.location_id` and `commsLocation ||
-    // race.locations`; payment-sms `commsLocation || reg.race_events.locations`;
-    // event-attendee-reminders `commsLocation?.id || ev.location_id`). So when
-    // the target we could not read IS `event.location_id`, the fallback resolves
-    // to the SAME location — the same Twilio sender, the same email identity,
-    // the same brand — and the throw buys nothing while costing a paying
-    // attendee their receipt. Plain (non-host, no-override) events are exactly
-    // that case, and they are the overwhelming majority.
-    //
-    // When the target DIFFERS from `event.location_id` — a host event resolved
-    // to its org master, or an explicit `sending_location_id` override — the
-    // fallback is a different location than the one that was chosen, which is
-    // the wrong-brand send this function exists to prevent. That still throws.
-    if (targetId !== event.location_id) {
-      throw new Error(`resolveEventCommsLocation: sending location read failed for ${targetId} (falling back to the event's own location ${event.location_id || 'none'} would send under a different brand): ${rowError.message}`)
-    }
-    logError('event-comms-location', 'sending location read failed; falling back to the event location (same id, same brand)', {
-      err: rowError, locationId: targetId,
+    logError('event-comms-location', 'sending location read failed; falling back to the event location', {
+      err: rowError,
+      locationId: targetId,
+      eventLocationId: event.location_id || null,
+      // True when the fallback is a DIFFERENT row than the one we wanted. Not
+      // an error condition (see the header: same org ⇒ same email identity, and
+      // no prod pair differs on the SMS sender) — but it is the field to alert
+      // on if that ever stops being true.
+      crossesLocation: targetId !== (event.location_id || null),
     })
     return null
   }

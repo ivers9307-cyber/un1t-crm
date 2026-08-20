@@ -1,22 +1,25 @@
 // sendRaceConfirmations × resolveEventCommsLocation — the seam, unmocked.
 //
 // BAREWRITE.1 made the sender lookup throw so a discarded read error could not
-// route a message from the wrong brand's sender. Right goal, over-charged: the
-// final read threw for EVERY event, and for a PLAIN one (host_id null, no
-// sending_location_id override) the target of that read is the event's own
-// location_id — the exact value this function already falls back to. So a
-// transient DB blip stopped buying anything and started costing a PAYING
-// attendee their receipt, silently, inside an HTTP 200 the payment provider
-// never retries.
+// route a message from the wrong brand's sender. Right goal, wrong price: the
+// throw escaped to here, `sendRaceConfirmations` returned before sending, and
+// every caller answers HTTP 200 — so a transient DB blip silently cost a PAYING
+// attendee their receipt AND their per-person check-in QR, with nothing to
+// retry it (`markRacePaymentStatus` returns `applied: null` once the payment is
+// already 'completed', so a provider redelivery never re-invokes us).
+// BAREWRITE.3 narrowed the throw to brand-crossing events; BAREWRITE.4 removed
+// it, because the brand cannot differ — email identity resolves per
+// ORGANISATION, and no location pair in prod differs on the SMS alpha sender
+// (the measurement is in event-comms-location.js).
 //
 // These tests deliberately do NOT mock ./event-comms-location. Mocking the
 // resolver is what let the two halves drift: the resolver's own suite proved it
 // threw, race-confirmations' suite proved the throw was caught, and nobody
-// asked what the customer got. Both properties are asserted here end to end:
-//   1. RECEIPT NOT LOST — plain event + unreadable location row → the email
-//      still goes out, from the event's own location.
-//   2. WRONG BRAND IMPOSSIBLE — host event / explicit override + unreadable
-//      location row → nothing is sent and nothing is claimed.
+// asked what the customer got. The property asserted end to end is now the
+// single one that matters:
+//
+//   A LOCATION READ FAILURE NEVER COSTS THE RECEIPT — for a plain event, a
+//   host event, or an explicit sending_location_id override alike.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -136,24 +139,46 @@ describe('a transient location read failure', () => {
     expect(row.confirmation_email_sent_at).toBeTruthy()
   })
 
-  it('WRONG BRAND IMPOSSIBLE — a HOST event sends nothing, and claims nothing', async () => {
+  // The two shapes BAREWRITE.1/.3 silently deleted. Both are receipts for money
+  // already taken; both now go out, from the event's own location — the same
+  // organisation as the target, hence the same email identity and the same
+  // alpha sender.
+  it('RECEIPT NOT LOST — a HOST event still sends, from the event location', async () => {
     const { db, row } = makeWorld({ host_id: 'H', location_id: 'ANCHOR' })
 
     const result = await sendRaceConfirmations({ db, paymentId: PAYMENT_ID })
 
-    expect(sendTransactionalEmail).not.toHaveBeenCalled()
-    expect(result.failed.some(f => f.startsWith('comms_location:'))).toBe(true)
-    // Nothing claimed → a later invocation delivers both legs cleanly.
-    expect(row.confirmation_email_sent_at).toBeNull()
+    expect(result.sent).toContain('email')
+    expect(result.failed).toEqual([])
+    expect(sendTransactionalEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ to: 'runner@example.com', locationId: 'ANCHOR' }),
+    )
+    expect(row.confirmation_email_sent_at).toBeTruthy()
   })
 
-  it('WRONG BRAND IMPOSSIBLE — an explicit sending_location_id override sends nothing either', async () => {
+  it('RECEIPT NOT LOST — an explicit sending_location_id override still sends', async () => {
     const { db, row } = makeWorld({ sending_location_id: 'OTHER' })
 
     const result = await sendRaceConfirmations({ db, paymentId: PAYMENT_ID })
 
-    expect(sendTransactionalEmail).not.toHaveBeenCalled()
-    expect(result.failed.some(f => f.startsWith('comms_location:'))).toBe(true)
-    expect(row.confirmation_email_sent_at).toBeNull()
+    expect(result.sent).toContain('email')
+    expect(result.failed).toEqual([])
+    expect(sendTransactionalEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ locationId: 'LOC' }),
+    )
+    expect(row.confirmation_email_sent_at).toBeTruthy()
+  })
+
+  it('RECEIPT NOT LOST — even a resolver that THROWS outright cannot cost the receipt', async () => {
+    // Belt-and-braces: the resolver no longer throws, but a future hop that
+    // forgets must not be able to delete a paid attendee's receipt. The
+    // middle-hop helper is the one place a throw can still originate.
+    resolveMasterLocationIdStrict.mockImplementation(async () => { throw new Error('organizations read failed') })
+    const { db, row } = makeWorld({ host_id: 'H', location_id: 'ANCHOR' })
+
+    const result = await sendRaceConfirmations({ db, paymentId: PAYMENT_ID })
+
+    expect(result.sent).toContain('email')
+    expect(row.confirmation_email_sent_at).toBeTruthy()
   })
 })

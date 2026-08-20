@@ -117,36 +117,27 @@ export async function sendRaceConfirmations({ db, paymentId }) {
   // comms use (host events resolve off their org master, not the sender-less
   // anchor). Falls back to the embedded location when unresolved.
   //
-  // resolveEventCommsLocation THROWS when it cannot read the rows that decide
-  // the sender, rather than falling through to a wrong-brand one. That throw
-  // used to escape this whole function — past both send legs, out through all
-  // four callers, every one of which answers 200 — so an unreadable location
-  // meant a paid attendee silently got no receipt at all and nothing retried.
-  // Catch it here and make it a first-class result instead: nothing has been
-  // sent and no send-once stamp has been claimed at this point, so a later
-  // invocation for the same payment still delivers both legs cleanly.
+  // BAREWRITE.4 — A READ FAILURE HERE MUST NEVER COST THE RECEIPT.
   //
-  // BAREWRITE.3 — that catch was right, but the throw behind it was firing for
-  // PLAIN events too, where the fallback below (`payment.race.location_id`)
-  // resolves to the very location the failed read was looking up. The resolver
-  // now fails open in exactly that case and returns null, so a transient blip
-  // on an ordinary UN1T event no longer costs a paying attendee their receipt.
-  // What still reaches this catch is the genuinely brand-crossing case: a host
-  // event, or an explicit sending_location_id override, whose sender rows are
-  // unreadable. There, no message is the right answer.
+  // BAREWRITE.1 made resolveEventCommsLocation THROW when it could not read the
+  // rows that decide the sender, and this function turned that throw into an
+  // early return: nothing sent, `comms_location:…` on `failed`, and every one
+  // of the four callers answering 200. Since the payment webhooks only invoke
+  // us on a FRESH transition (`markRacePaymentStatus` returns `applied: null`
+  // once the payment is already 'completed'), a redelivery cannot re-run us —
+  // so a transient DB blip permanently cost a PAYING attendee their receipt and
+  // their per-person check-in QR, and the only trace was a log line inside a
+  // 200. BAREWRITE.3 narrowed the throw to brand-crossing events; BAREWRITE.4
+  // removed it entirely, because the brand it protected cannot differ (email
+  // identity is resolved per ORGANISATION, and no prod location pair differs on
+  // the SMS alpha sender — the reasoning and the prod measurement are in
+  // event-comms-location.js).
   //
-  // WHY THIS DOES NOT BECOME A NON-2xx to the payment webhook. A provider retry
-  // would be safe (nothing claimed, nothing sent) but INERT: the Revolut and
-  // Stripe handlers only call this on a fresh state transition
-  // (`markRacePaymentStatus(...).applied?.status === 'completed'`), and on
-  // redelivery the payment is already 'completed', so `updates` is empty,
-  // `applied` is null and we are never called again. A 5xx would therefore buy
-  // retries that cannot deliver the receipt, while telling the provider we
-  // failed to process a payment state we HAVE committed — and both providers
-  // disable an endpoint that keeps failing. The two public register routes call
-  // us inline during a customer's own POST, where a 5xx would show an error for
-  // a registration that succeeded. So: answer 200, and make the failure a
-  // structured, matchable signal instead of free text inside it.
+  // The resolver now never throws; it logs and returns null. This try/catch is
+  // belt-and-braces for a future hop that forgets, and it CONTINUES rather than
+  // returning — the fallback on the next line is the event's own location,
+  // which is exactly what main used and what the SMS/email senders resolve to
+  // anyway.
   let commsLocation = null
   try {
     commsLocation = await resolveEventCommsLocation(db, {
@@ -155,12 +146,10 @@ export async function sendRaceConfirmations({ db, paymentId }) {
       sending_location_id: payment.race?.sending_location_id,
     })
   } catch (e) {
-    const msg = e?.message || String(e)
-    logError('race-confirmations', 'comms location unresolved — NOTHING was sent (no receipt, no SMS); re-run once the read recovers', {
+    logError('race-confirmations', 'comms location resolver threw; sending from the event location instead (the receipt still goes out)', {
       err: e, paymentId, raceEventId: payment.race?.id || null,
     })
-    result.failed.push(`comms_location:${msg}`)
-    return result
+    commsLocation = null
   }
   const commsLocationId = commsLocation?.id || payment.race?.location_id || null
 
@@ -211,34 +200,19 @@ export async function sendRaceConfirmations({ db, paymentId }) {
 
   // Email — only if not already sent.
   if (!payment.confirmation_email_sent_at) {
-    const claim = await claimSendOnce(db, payment.id, 'confirmation_email_sent_at')
-    if (!claim.claimed) {
-      if (claim.reason === 'already_claimed') {
-        result.skipped.push('email:already_sent')
-      } else {
-        result.failed.push(`email:claim_failed:${claim.reason}`)
-        console.error('[race-confirmations] could not claim the email send-once stamp — NOT sending (a send without the stamp duplicates on the next webhook retry):', payment.id, claim.reason)
-      }
+    let outcome = null
+    try {
+      outcome = await sendEmail({ db, payment, ctx, commsLocationId })
+    } catch (e) {
+      outcome = { status: 'threw', reason: e?.message || 'failed' }
+    }
+    if (outcome.status === 'sent') {
+      result.sent.push('email')
+      await stampSendOnce(db, payment.id, 'confirmation_email_sent_at', result, 'email')
+    } else if (outcome.status === 'threw') {
+      result.failed.push(`email:${outcome.reason}`)
     } else {
-      let outcome = null
-      try {
-        outcome = await sendEmail({ db, payment, ctx, commsLocationId })
-      } catch (e) {
-        outcome = { status: 'threw', reason: e?.message || 'failed' }
-      }
-      if (outcome.status === 'sent') {
-        result.sent.push('email')
-      } else {
-        // Nothing went out, so hand the claim back — otherwise a transient
-        // send failure would permanently suppress the attendee's receipt.
-        const released = await releaseSendOnce(db, payment.id, 'confirmation_email_sent_at')
-        if (outcome.status === 'threw') result.failed.push(`email:${outcome.reason}`)
-        else result.skipped.push(`email:${outcome.reason}`)
-        if (!released) {
-          result.failed.push('email:claim_stuck')
-          console.error('[race-confirmations] email did not send AND the send-once claim could not be released — this attendee will never get a receipt without an operator clearing confirmation_email_sent_at:', payment.id)
-        }
-      }
+      result.skipped.push(`email:${outcome.reason}`)
     }
   } else {
     result.skipped.push('email:already_sent')
@@ -249,33 +223,20 @@ export async function sendRaceConfirmations({ db, paymentId }) {
   // above is unaffected. Idempotent via confirmation_sms_sent_at.
   const smsGate = shouldSendSmsConfirmation(race, payment)
   if (smsGate.send) {
-    // Same claim-first shape as the email leg above.
-    const claim = await claimSendOnce(db, payment.id, 'confirmation_sms_sent_at')
-    if (!claim.claimed) {
-      if (claim.reason === 'already_claimed') {
-        result.skipped.push('sms:already_sent')
-      } else {
-        result.failed.push(`sms:claim_failed:${claim.reason}`)
-        console.error('[race-confirmations] could not claim the SMS send-once stamp — NOT sending:', payment.id, claim.reason)
-      }
+    // Same send-then-stamp shape as the email leg above.
+    let outcome = null
+    try {
+      outcome = await sendSms({ db, payment, location, ctx, commsLocation })
+    } catch (e) {
+      outcome = { status: 'threw', reason: e?.message || 'failed' }
+    }
+    if (outcome.status === 'sent') {
+      result.sent.push('sms')
+      await stampSendOnce(db, payment.id, 'confirmation_sms_sent_at', result, 'sms')
+    } else if (outcome.status === 'threw') {
+      result.failed.push(`sms:${outcome.reason}`)
     } else {
-      let outcome = null
-      try {
-        outcome = await sendSms({ db, payment, location, ctx, commsLocation })
-      } catch (e) {
-        outcome = { status: 'threw', reason: e?.message || 'failed' }
-      }
-      if (outcome.status === 'sent') {
-        result.sent.push('sms')
-      } else {
-        const released = await releaseSendOnce(db, payment.id, 'confirmation_sms_sent_at')
-        if (outcome.status === 'threw') result.failed.push(`sms:${outcome.reason}`)
-        else result.skipped.push(`sms:${outcome.reason}`)
-        if (!released) {
-          result.failed.push('sms:claim_stuck')
-          console.error('[race-confirmations] SMS did not send AND the send-once claim could not be released — an operator must clear confirmation_sms_sent_at:', payment.id)
-        }
-      }
+      result.skipped.push(`sms:${outcome.reason}`)
     }
   } else {
     result.skipped.push(`sms:${smsGate.reason}`)
@@ -285,43 +246,73 @@ export async function sendRaceConfirmations({ db, paymentId }) {
 }
 
 /**
- * CLAIM one of the send-once stamps BEFORE the message goes out.
+ * Stamp one of the send-once columns AFTER the message has actually gone out.
  *
- * BAREWRITE.1 stamped AFTER sending with a bare `await`, so a lost stamp meant
- * the next payment-webhook retry sent the attendee a duplicate — the exact
- * thing the stamp exists to prevent. Detecting the loss (the first cut) did not
- * change that: nothing retried the stamp and every caller still answers 200.
+ * THE ORDER IS THE WHOLE DESIGN, and it has now been wrong in both directions,
+ * so the trade-off is written down rather than re-derived:
  *
- * Claim-first makes the write the mutex instead of a receipt, the same shape
- * `sendWhatsAppBroadcast` uses for its recipient rows ("a DB hiccup here can't
- * re-send"). `.is(col, null)` is the CAS, and `.select('id')` returns the rows
- * that actually matched — a row count verifiable by construction rather than
- * by a Content-Range header. Zero rows means somebody else claimed it (a
- * concurrent webhook delivery), which the old read-then-check could not see.
+ *   • BAREWRITE.1 found this as a BARE `await` — the error was invisible, so a
+ *     lost stamp was completely silent. That part was a real defect.
+ *   • BAREWRITE.2/.3 "fixed" it by CLAIMING the stamp before sending, making
+ *     the write a mutex. That removed a duplicate risk and created a permanent
+ *     loss: a process kill between the claim and the send (a Vercel timeout, an
+ *     OOM, a deploy mid-request) leaves the column stamped with nothing sent,
+ *     and NOTHING retries — `markRacePaymentStatus` returns `applied: null`
+ *     once the payment is 'completed', so the payment webhook never calls us
+ *     again. It also produced a two-delivery case where NEITHER leg sent: the
+ *     loser skipped as `already_claimed` while the winner's send failed and
+ *     released the claim.
+ *   • BAREWRITE.4 goes back to send-then-stamp, with the error READ and logged.
  *
- * The failure direction flips with it: a lost claim now means NO message rather
- * than a DUPLICATE message, and the send path hands the claim straight back
- * (`releaseSendOnce`) whenever nothing went out.
+ * What each order actually costs, on this path:
+ *   claim-first  → a rare process kill silently and permanently destroys a
+ *                  paying attendee's receipt AND their check-in QR.
+ *   send-first   → two genuinely concurrent invocations for the same payment
+ *                  can both send, i.e. a DUPLICATE receipt.
+ * A duplicate receipt is an annoyance the customer can see and ignore. A
+ * missing one means they cannot check in on race day. Losing a customer-facing
+ * message is worse than sending it twice, so this fails toward the duplicate.
  *
- * @returns {Promise<{claimed: boolean, reason?: 'already_claimed'|string}>}
+ * How narrow the duplicate window really is: the pre-read
+ * (`if (!payment.confirmation_email_sent_at)`) closes the sequential case, so a
+ * duplicate needs two invocations overlapping inside one send. There are only
+ * two ways to get two: a payment provider delivering the same event twice
+ * concurrently before either marks the payment 'completed', or the return-page
+ * poll racing the webhook. Both are rare, and neither is made more likely by
+ * this change.
+ *
+ * `.is(col, null)` is kept as a CAS so the stamp cannot clobber a concurrent
+ * winner's timestamp, and `.select('id')` returns the rows actually touched —
+ * a count verifiable by construction rather than by a Content-Range header.
+ * Zero rows here means the other invocation stamped first, which is a duplicate
+ * we have already sent: record it as such rather than as a success.
  */
-async function claimSendOnce(db, paymentId, column) {
+async function stampSendOnce(db, paymentId, column, result, leg) {
   const { data, error } = await db.from('race_payments')
     .update({ [column]: new Date().toISOString() })
     .eq('id', paymentId)
     .is(column, null)
     .select('id')
-  if (error) return { claimed: false, reason: error.message }
-  if (!Array.isArray(data) || data.length === 0) return { claimed: false, reason: 'already_claimed' }
-  return { claimed: true }
-}
-
-/** Hand a claimed stamp back when the send did not happen. */
-async function releaseSendOnce(db, paymentId, column) {
-  const { error } = await db.from('race_payments')
-    .update({ [column]: null })
-    .eq('id', paymentId)
-  return !error
+  if (error) {
+    // The message IS out. The stamp is not. Nothing here can un-send it, and
+    // no caller may fail over it — but it must not be silent, because the row
+    // now under-reports and a later invocation (if one ever happens) would
+    // send again.
+    result.failed.push(`${leg}:stamp_failed:${error.message}`)
+    logError('race-confirmations', 'confirmation sent but the send-once stamp was NOT written — a later re-run would send it again', {
+      err: error, paymentId, column, leg,
+    })
+    return
+  }
+  if (!Array.isArray(data) || data.length === 0) {
+    // The CAS matched nothing: a concurrent invocation stamped it between our
+    // pre-read and now, which means it also sent. This is the duplicate this
+    // ordering deliberately accepts; say so, don't hide it.
+    result.failed.push(`${leg}:duplicate_send`)
+    logError('race-confirmations', 'a concurrent invocation had already stamped this leg — the attendee received a DUPLICATE', {
+      paymentId, column, leg,
+    })
+  }
 }
 
 /**

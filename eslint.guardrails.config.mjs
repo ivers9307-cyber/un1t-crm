@@ -101,49 +101,73 @@ const config = [
     // repo-wide rule only works on a clean baseline, and this one's baseline is
     // not clean.
     //
-    // MEASURED by running the RULE ITSELF over src/ + shared/ + mobile/ +
-    // scripts/, so the baseline and the gate can never drift apart (grep
-    // undercuts this class about five-fold — multi-line chains are the house
-    // style — so a regex was never going to answer it):
-    //   477 production sites across 201 files before this PR; 437 bare + 38
-    //   destructured-without-`error` across 205 files after it.
-    //   Of the original 477:
-    //     45  write to a log/telemetry table (activities, consent_log,
-    //         impersonation_log, glofox_sync_runs, recon_runs/hunts) — a lost
-    //         write costs an audit line, not behaviour. The nearest thing to
-    //         "genuinely fire-and-forget" the population has.
-    //    135  sit in a handler that answers `success: true` within the next 80
-    //         lines — the caller reports success on a write it never checked.
-    //    297  are other behavioural writes, of which 58 are send-once /
-    //         processed stamps: the duplicate-customer-message and
-    //         lost-webhook-event shapes CLAUDE.md already has war stories for.
-    // So the "harmless fire-and-forget" reading of this class does not survive
-    // measurement: under 10% of it is log-only, and even those lose CRM
-    // history. Fixing all 477 in one PR would be ~477 mechanical edits mixed
-    // with the six behavioural ones — unreviewable, and the six are the point.
+    // MEASURED by running THIS RULE over `src/**/*.{js,jsx}` + `shared/**/*.js`
+    // (test files excluded), so the baseline and the gate can never drift apart
+    // — grep undercounts this class several-fold, because multi-line chains are
+    // the house style, so a regex was never going to answer it. Re-measure by
+    // pointing an eslint config with only this rule at those globs.
+    //
+    //                                  origin/main      this branch
+    //   bare (nothing bound)                 542              490
+    //   destructured without `error`          40               38
+    //   TOTAL                                582              528
+    //   files                                264              253
+    //
+    // Of the 528 that remain, both figures reproducible from the same run:
+    //    41  write to a log/telemetry table (activities, consent_log,
+    //        impersonation_log, glofox_sync_runs, recon_*, audit_log,
+    //        webhook_events) — a lost write costs an audit line, not
+    //        behaviour. The nearest thing to "genuinely fire-and-forget" the
+    //        population has, and it is under 8% of it.
+    //   149  sit within 80 lines of a `success: true` in the same file — the
+    //        caller reports success on a write it never checked.
+    // So the "it's all harmless fire-and-forget" reading does not survive
+    // measurement. Fixing all 528 in one PR would be ~528 mechanical edits
+    // mixed with the behavioural ones — unreviewable, and the behavioural ones
+    // are the point.
     //
     // ARM IN THIS ORDER. The most dangerous subclass is not the most visible
-    // one: 174 of the remaining bare writes, across 89 files, sit INSIDE a
+    // one: a large share of the remaining bare writes sit INSIDE a
     // `try { … } catch { … }` whose catch cannot fire for them, because a
     // supabase builder resolves with `{ data, error }` rather than throwing.
     // Those read as handled, which is why whatsapp-consent.js survived two
-    // audits. Concentrations today: postmark-webhook-processor.js 19,
-    // whatsapp/conversations/[id]/add-contact 7, sequences/scheduler.js 7,
-    // agent/auto-reply.js 6, recon/hunt.js 6, whatsapp.js 6,
-    // sequences/steps.js 5, webhooks/whatsapp 4, contact-merge.js 4.
+    // audits. Biggest concentrations today (rule output, 2026-08-20):
+    // postmark-webhook-processor.js 21, whatsapp.js 20, agent/auto-reply.js 12,
+    // public/events/[slug]/register 10, sequences/scheduler.js 10,
+    // sequences/steps.js 9, recon/hunt.js 8,
+    // whatsapp/conversations/[id]/add-contact 7, external-export.js 7,
+    // person-links.js 7.
     //
     // TO ARM ANOTHER PATH: clean it (run `npm run check:guardrails` with the
     // path added and drive it to zero), then add its line here. Same one-line
     // ratchet as the accent-text list.
     //
-    // Armed today = the paths this PR cleaned: the campaign send path, the
-    // event/race comms path, staff creation, and the Instagram inbox.
-    // NOT armed and deliberately so: mobile/** is outside this config
-    // entirely (it has its own linters), so the mobile member auto-link fix in
-    // mobile/lib/member/contact-context.jsx is protected by tests, not by this
-    // rule.
+    // Armed today = the paths this PR cleaned: the campaign send path and its
+    // cron, the event/race comms path, staff creation, the Instagram inbox, and
+    // the WhatsApp inbound webhook.
+    //
+    // NOT ARMED, stated plainly rather than left as an omission:
+    //
+    //  • `mobile/**` is outside this config entirely (it has its own linters),
+    //    so the member auto-link fix in mobile/lib/member/contact-context.jsx is
+    //    protected by a source-scanning test, not by this rule.
+    //
+    //  • `src/lib/whatsapp.js` — 20 sites, measured with the rule itself on
+    //    2026-08-20. This is the file BAREWRITE.2 hardened the drip path in, so
+    //    leaving it unarmed is a real gap and worth naming: a new bare write in
+    //    sendDripChunk would not be caught. It stays unarmed because its
+    //    remaining sites are NOT the mechanical log-it kind the webhook route's
+    //    were. The blast sender's promote/park writes
+    //    (whatsapp_broadcast_recipients around L1250/L1291) need exactly the
+    //    claim-vs-duplicate judgement `claimDripRecipient` and
+    //    race-confirmations' stamp ordering just went through twice, and that
+    //    judgement is a follow-up with its own tests — not 20 edits stapled to a
+    //    PR that has already been reviewed three times for over-correcting.
+    //    Do it next; the ordering question is the same one, with the same
+    //    default: never trade a possible duplicate for a certain silent loss.
     files: [
       'src/lib/campaign-sender.js',
+      'src/app/api/cron/run-campaigns/route.js',
       'src/lib/race-confirmations.js',
       'src/lib/event-comms-location.js',
       'src/lib/event-attendee-reminders.js',
@@ -154,6 +178,14 @@ const config = [
       // opt-out still answered `applied: true` and told the customer "You've
       // been unsubscribed" while they stayed in every marketing audience.
       'src/lib/whatsapp-consent.js',
+      // The inbound WhatsApp webhook — the caller of that consent path, cleaned
+      // to zero in BAREWRITE.4 (11 sites). Every one is LOGGED, never surfaced
+      // and never failed on: Meta disables a subscription that stops answering
+      // 2xx, so nothing in this handler may refuse, and each of these writes
+      // loses a record rather than a message. Logging is the whole win here —
+      // the consent bug lived in this file's blast radius for months precisely
+      // because its writes looked handled and reported nothing.
+      'src/app/api/webhooks/whatsapp/route.js',
       'src/app/api/staff/route.js',
       'src/app/api/instagram/**',
       'src/app/api/registrations/**',

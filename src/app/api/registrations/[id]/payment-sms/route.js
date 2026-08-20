@@ -33,6 +33,7 @@ import { sendLocationSms, TwilioError, resolveSenderLocation } from '@/lib/twili
 import { getAppUrl } from '@/lib/app-url'
 import { overlayConnections } from '@/lib/connection-registry'
 import { resolveEventCommsLocation } from '@/lib/event-comms-location'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
@@ -118,10 +119,14 @@ export async function POST(_request, props) {
   // EVENT-COMMS-LOC — send the payment link from the event's comms location
   // (host events → the org master, not the sender-less anchor). resolveSenderLocation
   // is the inner safety net if that resolved location itself lacks a sender.
-  // BAREWRITE.1 — resolveEventCommsLocation throws rather than silently
-  // falling back to the sender-less anchor (wrong-brand sender) when it cannot
-  // read the location rows. Refuse the send and say so; the operator retries.
-  let commsLocation
+  // BAREWRITE.4 — resolveEventCommsLocation FAILS OPEN. It logs an unreadable
+  // location row (structurally, via logError) and returns null; the
+  // `|| reg.race_events.locations` fallback below is the event's own location,
+  // which resolves to the same email identity (per-organisation) and the same
+  // alpha sender on every location pair in prod. BAREWRITE.1 had it throw and
+  // this route answer 503 — refusing to send a payment link an operator asked
+  // for, over a read that only chooses between two identical senders.
+  let commsLocation = null
   try {
     commsLocation = await resolveEventCommsLocation(db, {
       location_id: reg.race_events.location_id,
@@ -129,10 +134,10 @@ export async function POST(_request, props) {
       sending_location_id: reg.race_events.sending_location_id,
     })
   } catch (e) {
-    return NextResponse.json({
-      success: false,
-      error: `Could not resolve which studio this text should send from, so nothing was sent (sending it anyway risks the wrong brand on the message). Try again: ${e.message}`,
-    }, { status: 503 })
+    logError('payment-sms', 'comms location resolver threw; sending from the event location instead', {
+      err: e, registrationId: params.id,
+    })
+    commsLocation = null
   }
   const senderLocation = await resolveSenderLocation(db, commsLocation || reg.race_events.locations)
 
