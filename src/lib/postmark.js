@@ -900,6 +900,11 @@ export async function getLocationInboxReplyTo(locationId) {
  */
 export async function sendMarketingEmail({
   to, subject, htmlBody, contactId, locationId, tag, unsubscribeUrl, replyTo,
+  // SEQSENDER.1 — optional per-send From ("Dean Nolan" <dean@un1tdublin.com>),
+  // the same lever campaign-sender.js has always had. Omitted (the case for
+  // every caller before this) → undefined → sendEmail falls through to
+  // POSTMARK_FROM_EMAIL exactly as before.
+  from,
   sourceType = 'sequence', sequenceId = null, sequenceStepId = null,
 }) {
   // EMAIL-INBOX.1 — marketing sends default their Reply-To to the
@@ -921,6 +926,7 @@ export async function sendMarketingEmail({
     to,
     subject,
     htmlBody,
+    from,
     replyTo: resolvedReplyTo || undefined,
     stream: 'broadcast',  // Postmark marketing stream — attaches List-Unsubscribe headers
     tag: tag || 'marketing',
@@ -931,6 +937,19 @@ export async function sendMarketingEmail({
     metadata: contactId ? withSendMarker() : undefined,
   })
 
+  // SEQSENDER.1 — mirror sendEmail's own From precedence (see the `From:` line
+  // in its body) so email_sends records the address that actually went on the
+  // wire. Reading sender.fromEmail alone was already only accidentally right:
+  // resolveEmailSender returns a populated fromEmail even when serverToken is
+  // null, and the tenant From is applied ONLY when that token exists. Without
+  // this, a per-sequence `from` would send correctly and log the wrong sender,
+  // which is the kind of quiet drift that makes a deliverability question
+  // unanswerable months later.
+  const tenantFrom = sender?.serverToken
+    ? (sender.fromName ? `${sender.fromName} <${sender.fromEmail}>` : sender.fromEmail)
+    : null
+  const loggedFromEmail = tenantFrom || from || process.env.POSTMARK_FROM_EMAIL
+
   // Log to email_sends (same shape as the campaign + transactional paths).
   if (contactId) {
     const { error: logErr } = await db.from('email_sends').insert({
@@ -940,7 +959,7 @@ export async function sendMarketingEmail({
       sequence_id: sequenceId,
       sequence_step_id: sequenceStepId,
       subject,
-      from_email: sender?.fromEmail || process.env.POSTMARK_FROM_EMAIL,
+      from_email: loggedFromEmail,
       to_email: to,
       postmark_message_id: result.messageId,
       postmark_stream: 'broadcast',
