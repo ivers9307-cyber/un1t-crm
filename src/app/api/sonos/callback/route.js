@@ -59,7 +59,17 @@ export async function GET(request) {
   if (!code || !state) return back({ sonos: 'bad_callback' })
 
   const cfg = getSonosConfig()
-  if (!cfg || cfg.error) return back({ sonos: 'not_configured' })
+  // null = dormant (feature not turned on for this deploy yet) — stays
+  // quiet, same as runSonosReconcile's own `if (!cfg) return { skipped }`
+  // with no log. cfg.error = MISCONFIGURED, which client.js's header
+  // comment says must be loud; mirror reconcile.js's `logWarn(MODULE,
+  // 'misconfigured', { error: cfg.error })` exactly so the two paths grep
+  // the same way.
+  if (!cfg) return back({ sonos: 'not_configured' })
+  if (cfg.error) {
+    logWarn('sonos-callback', 'misconfigured', { error: cfg.error })
+    return back({ sonos: 'not_configured' })
+  }
 
   // verifyState's entire security guarantee is the HMAC over CRON_SECRET —
   // this route has no session to fall back on. `process.env.CRON_SECRET ||
@@ -68,7 +78,10 @@ export async function GET(request) {
   // would let anyone forge a state naming any location. /api/sonos/connect
   // already refuses to MINT a state under this condition; fail closed the
   // same way here on the ACCEPTING side rather than falling through.
-  if (!process.env.CRON_SECRET) return back({ sonos: 'not_configured' })
+  if (!process.env.CRON_SECRET) {
+    logWarn('sonos-callback', 'CRON_SECRET unset — cannot verify state')
+    return back({ sonos: 'not_configured' })
+  }
 
   const claims = verifyState(state, process.env.CRON_SECRET)
   if (!claims?.locationId) return back({ sonos: 'bad_state' })
@@ -144,6 +157,14 @@ export async function GET(request) {
     return back({ sonos: 'save_failed' })
   }
   if (clash && clash.location_id !== claims.locationId) {
+    // Symmetric with the 23505 race-handler below — same outcome, caught
+    // earlier. Location ids and the household id are internal identifiers,
+    // not secrets.
+    logWarn('sonos-callback', 'household already linked to a different location', {
+      householdId,
+      attemptedLocationId: claims.locationId,
+      existingLocationId: clash.location_id,
+    })
     return back({ sonos: 'household_taken' })
   }
 

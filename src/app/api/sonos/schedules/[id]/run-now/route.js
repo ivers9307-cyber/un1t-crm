@@ -10,6 +10,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
+import { uuidLike } from '@/lib/schemas'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -23,6 +24,11 @@ export async function POST(request, { params }) {
   const locationId = user.activeLocation?.id
   if (!locationId) return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
   const { id } = await params
+  // Malformed id -> 404, never 500 from a Postgres type-cast error, and
+  // never 400 either — detail routes 404 so ids can't be enumerated.
+  if (!uuidLike.safeParse(id).success) {
+    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
 
   const db = createServerClient()
   const { data, error } = await db
