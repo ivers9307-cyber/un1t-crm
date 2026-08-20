@@ -27,7 +27,8 @@ import { sendCustomerPush } from '@/lib/customer-push'
 import { addDaysISO, dublinTodayStr } from '@/lib/dublin-time'
 import { formatWeekdayLongDateInTZ } from '@/lib/dates'
 import { buildEventEmailShell, resolveEventEmail, escapeHtml } from '@/lib/event-email'
-import { resolveEventCommsLocation } from '@/lib/event-comms-location'
+import { resolveEventCommsLocation, pickAudienceVenueName } from '@/lib/event-comms-location'
+import { transactionalEmailSuppression } from '@/lib/transactional-consent'
 
 const EVENT_REMINDER_PAGE = 1000
 
@@ -149,14 +150,17 @@ async function sendReminderEmail({ db, ev, reg, offset, whenLabel, locationName,
   const c = reg?.contact
   const to = c?.email
   if (!to) return { status: 'skipped', reason: 'no_email' }
-  // LOCCOMMS.5 — see booking-confirmations.js: transactional mail follows the
-  // transaction, not a marketing list.
-  if (c?.email_status && ['bounced', 'complained'].includes(c.email_status)) {
-    return { status: 'skipped', reason: `email_status=${c.email_status}` }
-  }
-  const prefs = c?.contact_preferences
-  const adminConsent = Array.isArray(prefs) ? prefs[0]?.email_administrative : prefs?.email_administrative
-  if (adminConsent === false) return { status: 'skipped', reason: 'opted_out_administrative_email' }
+  // LOCCOMMS.5 — transactional mail follows the transaction, not a marketing
+  // list. EVENT-CONSENT.1 moved the rule itself into transactional-consent.js
+  // so this path, booking-confirmations and race-confirmations share ONE
+  // definition of the administrative family instead of three copies that drift.
+  // Behaviour is unchanged: hard signals (bounced/complained) + the
+  // `email_administrative` opt-out, reading the prefs embed in either shape.
+  // The consent row here rides the registration query, so there is no separate
+  // read that could fail — an unreadable registration already skips the whole
+  // event, and the claim row is not written for it.
+  const suppression = transactionalEmailSuppression(c)
+  if (suppression) return { status: 'skipped', reason: suppression }
 
   const defaultSubject = offset === '3d'
     ? `Reminder: ${ev.name} is in 3 days`
@@ -217,7 +221,7 @@ export async function runEventReminders({ db, todayStr } = {}) {
              venue_name, venue_address,
              accent_hex, hero_image_url,
              reminder_email_subject, reminder_email_intro, reminder_email_template_id,
-             locations:location_id ( id, name )`)
+             locations:location_id ( id, name, is_host_anchor )`)
     .in('race_date', [d3, d1])
     .eq('active', true)
     .neq('kind', 'lead_gen')
@@ -234,10 +238,6 @@ export async function runEventReminders({ db, todayStr } = {}) {
     const offset = reminderOffsetForDate(ev.race_date, today)
     if (!offset) continue
     result.events++
-    // Host events point at a hidden anchor location ("<host> (host events)");
-    // the real venue is on ev.venue_name. Prefer it so the reminder shows the
-    // actual venue. UN1T events have no venue_name → the location name stands.
-    const locationName = ev.venue_name || ev.locations?.name || ''
     // BAREWRITE.4 — resolveEventCommsLocation FAILS OPEN: it logs an
     // unreadable row and returns null, and the `|| ev.location_id` below is the
     // fallback. BAREWRITE.1 had it throw and this loop `continue`d, with a
@@ -257,6 +257,22 @@ export async function runEventReminders({ db, todayStr } = {}) {
       commsLocation = null
     }
     const commsLocationId = commsLocation?.id || ev.location_id || null
+
+    // EVENT-COPY.1 — the label the attendee reads (the "Where" row and the
+    // `UN1T · <loc>` email footer). Was `ev.venue_name || ev.locations?.name`,
+    // which lands on the ops-only anchor label ("<host> (host events)") for any
+    // hosted event without a venue name — staff-created host events have no
+    // required `venue_name`. Now: venue → the event's own location, anchors
+    // skipped, '' rather than an internal string (the shell omits an empty
+    // "Where" row).
+    //
+    // VENUE, not sign-off: `commsLocation` is resolved just above and is a
+    // SENDER identity, so it must not answer "where is this event". See
+    // pickAudienceVenueName's header.
+    const locationName = pickAudienceVenueName({
+      venueName: ev.venue_name,
+      eventLocation: ev.locations,
+    })
 
     // Confirmed registrations for this event — paginate past the 1k-row cap.
     const registrations = []
