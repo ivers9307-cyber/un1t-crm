@@ -17,6 +17,21 @@ import { createServerClient } from '@/lib/supabase'
 function makeReq() { return new Request('http://localhost/api/live/loc1/detections') }
 const props = { params: Promise.resolve({ locationId: 'loc1' }) }
 
+// SEC-LIVE-API.1 — the gate now also requires `studio_management` at the
+// location, so fixtures need the shape hasPermissionForLocation reads.
+function userAt(role, { studio = true, locationId = 'loc1' } = {}) {
+  return {
+    id: 'u1',
+    role,
+    isMaster: false,
+    locations: [{ id: locationId, features: {} }],
+    assignmentsByLocation: {
+      [locationId]: { role, permissions: studio === null ? {} : { studio_management: studio } },
+    },
+    roleTemplatesByLocation: {},
+  }
+}
+
 beforeEach(() => { vi.clearAllMocks(); getUserLocationIds.mockReturnValue(['loc1']) })
 
 describe('GET /api/live/[locationId]/detections', () => {
@@ -27,14 +42,14 @@ describe('GET /api/live/[locationId]/detections', () => {
   })
 
   it('403 when the location is not in scope', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'coach', isMaster: false })
+    getCurrentUser.mockResolvedValue(userAt('head_coach'))
     getUserLocationIds.mockReturnValue(['other'])
     const res = await GET(makeReq(), props)
     expect(res.status).toBe(403)
   })
 
   it('200 returns enriched detections', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'coach', isMaster: false })
+    getCurrentUser.mockResolvedValue(userAt('head_coach'))
     createServerClient.mockReturnValue({
       from: () => ({
         select: () => ({ eq: () => ({ order: () => ({ limit: () => Promise.resolve({ data: [{ id: 'd1', device_key: 'ant:1' }], error: null }) }) }) }),

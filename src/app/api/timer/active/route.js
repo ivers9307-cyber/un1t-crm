@@ -1,9 +1,18 @@
 // GET /api/timer/active?location_id=<uuid>  — the live timer run for the
-// control UIs. Any staff at the location (mirrors /api/live/[locationId]).
+// control UIs.
+//
+// SEC-LIVE-API.1 — auth: a member of the location holding `class_timer` there.
+// This was the one route in the timer family with no permission check (it was
+// written to mirror the then-ungated /api/live/[locationId]); its four
+// siblings and the /studio-management/timer page all require `class_timer`.
+// No floor risk: `class_timer` defaults TRUE for every role, the studio TV
+// reads timer state from the public board payload (/api/public/live) rather
+// than this route, and the mobile timer screen is gated on the same key.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { hasPermissionForLocation } from '@/lib/permissions'
 import { uuidLike } from '@/lib/schemas'
 import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
 import { matchTemplateToClassName, buildTimeline, computeEffectiveElapsedMs, resolveTimerState } from '@/lib/class-timer'
@@ -22,6 +31,9 @@ export async function GET(request) {
   }
   if (!user.isMaster && !getUserLocationIds(user).includes(locationId)) {
     return NextResponse.json({ success: false, error: 'Location not in your scope' }, { status: 403 })
+  }
+  if (!hasPermissionForLocation(user, locationId, 'class_timer')) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
   const db = createServerClient()

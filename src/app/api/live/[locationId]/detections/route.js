@@ -7,10 +7,12 @@
 // (contact_devices) + a live-now flag (open heart_rate_session). Separate from
 // the 2s /api/live poll so the hot live board stays lean; this polls slower.
 //
-// Auth: any staff at the location (mirrors GET /api/live/[locationId]).
+// Auth (SEC-LIVE-API.1): member of the location + `studio_management` there,
+// mirroring GET /api/live/[locationId] and the /live page.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
+import { guardLiveLocation } from '@/lib/live-access'
 import { createServerClient } from '@/lib/supabase'
 import { resolveDetectionLinks } from '@/lib/hr-detections'
 
@@ -22,11 +24,9 @@ const MAX_ROWS = 500
 export async function GET(_request, props) {
   const params = await props.params
   const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })
   const locationId = params.locationId
-  if (!user.isMaster && !getUserLocationIds(user).includes(locationId)) {
-    return NextResponse.json({ ok: false, error: 'Location not in your scope' }, { status: 403 })
-  }
+  const denied = guardLiveLocation(user, locationId)
+  if (denied) return denied
 
   const db = createServerClient()
   const { data: rows, error } = await db

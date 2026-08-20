@@ -62,24 +62,39 @@ function makeDb({
   }
 }
 
+// SEC-LIVE-API.1 — the gate now also requires `studio_management` at the
+// location, so fixtures need the shape hasPermissionForLocation reads.
+function userAt(role, { studio = true, locationId = 'loc1' } = {}) {
+  return {
+    id: 'u1',
+    role,
+    isMaster: false,
+    locations: [{ id: locationId, features: {} }],
+    assignmentsByLocation: {
+      [locationId]: { role, permissions: studio === null ? {} : { studio_management: studio } },
+    },
+    roleTemplatesByLocation: {},
+  }
+}
+
 beforeEach(() => { vi.clearAllMocks(); getUserLocationIds.mockReturnValue(['loc1']) })
 
 describe('POST /api/live/[locationId]/register-device', () => {
   it('403 for a non-coach role', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'staff', isMaster: false })
+    getCurrentUser.mockResolvedValue(userAt('staff'))
     const res = await POST(reqWith({ device_key: 'ant:1', contact_id: CONTACT_ID }), props)
     expect(res.status).toBe(403)
   })
 
   it('404 when the contact is not at this location (IDOR guard)', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'coach', isMaster: false })
+    getCurrentUser.mockResolvedValue(userAt('head_coach'))
     createServerClient.mockReturnValue(makeDb({ contact: { id: 'c1', location_id: 'other' } }))
     const res = await POST(reqWith({ device_key: 'ant:1', contact_id: CONTACT_ID }), props)
     expect(res.status).toBe(404)
   })
 
   it('200 upserts a contact_devices row', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'coach', isMaster: false })
+    getCurrentUser.mockResolvedValue(userAt('head_coach'))
     const captured = {}
     createServerClient.mockReturnValue(makeDb({ captured }))
     const res = await POST(reqWith({ device_key: 'ant:45075', contact_id: CONTACT_ID, device_type: 'watch', label: 'Garmin' }), props)
@@ -91,7 +106,7 @@ describe('POST /api/live/[locationId]/register-device', () => {
   })
 
   it('409 with the holder name when another SAME-location contact holds the strap (steal guard)', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'coach', isMaster: false })
+    getCurrentUser.mockResolvedValue(userAt('head_coach'))
     const captured = {}
     createServerClient.mockReturnValue(makeDb({
       activeRegs: [{ contact_id: 'c-other', is_active: true, contacts: { name: 'Bob Walsh', location_id: 'loc1' } }],
@@ -105,7 +120,7 @@ describe('POST /api/live/[locationId]/register-device', () => {
   })
 
   it('409 WITHOUT a name when the holder is at another location (no cross-tenant leak)', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'coach', isMaster: false })
+    getCurrentUser.mockResolvedValue(userAt('head_coach'))
     createServerClient.mockReturnValue(makeDb({
       activeRegs: [{ contact_id: 'c-other', is_active: true, contacts: { name: 'Bob Walsh', location_id: 'loc2' } }],
     }))
@@ -116,7 +131,7 @@ describe('POST /api/live/[locationId]/register-device', () => {
   })
 
   it('the claiming contact re-registering their own strap is not a conflict', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'coach', isMaster: false })
+    getCurrentUser.mockResolvedValue(userAt('head_coach'))
     createServerClient.mockReturnValue(makeDb({
       activeRegs: [{ contact_id: CONTACT_ID, is_active: true, contacts: { name: 'Alice', location_id: 'loc1' } }],
     }))
@@ -125,7 +140,7 @@ describe('POST /api/live/[locationId]/register-device', () => {
   })
 
   it('adopts the open contact-less session: stamps contact_id + max_hr (HR-CLAIM.1)', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'coach', isMaster: false })
+    getCurrentUser.mockResolvedValue(userAt('head_coach'))
     const captured = {}
     createServerClient.mockReturnValue(makeDb({
       contact: { id: 'c1', location_id: 'loc1', max_hr_override: 190, dob: null },
@@ -140,7 +155,7 @@ describe('POST /api/live/[locationId]/register-device', () => {
   })
 
   it('skips adoption when the member already has an open session (mig 343)', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'coach', isMaster: false })
+    getCurrentUser.mockResolvedValue(userAt('head_coach'))
     const captured = {}
     createServerClient.mockReturnValue(makeDb({
       memberOpen: { id: 's-mine' },
@@ -155,7 +170,7 @@ describe('POST /api/live/[locationId]/register-device', () => {
   })
 
   it('a failed adoption never fails the registration', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'coach', isMaster: false })
+    getCurrentUser.mockResolvedValue(userAt('head_coach'))
     createServerClient.mockReturnValue(makeDb({
       anon: { id: 's-anon', contact_id: null, ended_at: null },
       adoptError: { code: '23505', message: 'duplicate open session' },
@@ -175,7 +190,7 @@ describe('DELETE /api/live/[locationId]/register-device (unregister)', () => {
   }
 
   it('404 when the contact is not at this location (IDOR guard)', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'coach', isMaster: false })
+    getCurrentUser.mockResolvedValue(userAt('head_coach'))
     createServerClient.mockReturnValue({
       from: () => ({ select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { id: 'c1', location_id: 'other' }, error: null }) }) }) }),
     })
@@ -184,7 +199,7 @@ describe('DELETE /api/live/[locationId]/register-device (unregister)', () => {
   })
 
   it('200 deactivates the device for a contact at this location', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'coach', isMaster: false })
+    getCurrentUser.mockResolvedValue(userAt('head_coach'))
     let updated = null
     createServerClient.mockReturnValue({
       from: (table) => {
