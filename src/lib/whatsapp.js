@@ -937,6 +937,14 @@ export async function fetchAllWhatsAppAudience(db, filter, locationId) {
 // abandoned.
 export const STUCK_CLAIM_MINUTES = 60
 
+// Statuses that still OWE the contact a tick, so a drip carrying any of them must
+// NOT go terminal. Shared by both finalisation branches in sendDripChunk on
+// purpose: they used to spell the list out separately, one counted only 'capped',
+// and a 'pending' lease finalised over was stranded for good — the broadcast went
+// terminal, no later tick ran, and the STUCK_CLAIM_MINUTES re-claim never fired.
+// Two copies of one rule is how that happened; keep it one copy.
+export const OWED_RETRY_STATUSES = ['capped', 'pending']
+
 // Paginate the already-processed contact_ids for one broadcast (sent OR failed —
 // both insert a recipients row, so both are skipped on resume). Also >1k-safe: a
 // long-running drip accumulates thousands of recipient rows.
@@ -1624,12 +1632,12 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
 
   if (toSend.length === 0) {
     if (exhausted) {
-      // 'capped' rows (frequency cap, 131049) are still owed a retry — hold the
-      // drip open so a later tick re-picks them once their park expires.
-      const { count: cappedPending } = await db.from('whatsapp_broadcast_recipients')
-        .select('id', { count: 'exact', head: true }).eq('broadcast_id', broadcastId).eq('status', 'capped')
-      if ((cappedPending || 0) > 0) {
-        return { status: 'sending', skipped: 'awaiting_capped_retry', capped: cappedPending, sent: 0, failed: 0 }
+      // Hold the drip open while anything still owes the contact a tick — see
+      // OWED_RETRY_STATUSES for why 'pending' counts as well as 'capped'.
+      const { count: owedRetry } = await db.from('whatsapp_broadcast_recipients')
+        .select('id', { count: 'exact', head: true }).eq('broadcast_id', broadcastId).in('status', OWED_RETRY_STATUSES)
+      if ((owedRetry || 0) > 0) {
+        return { status: 'sending', skipped: 'awaiting_capped_retry', capped: owedRetry, sent: 0, failed: 0 }
       }
       let deliverySummary = null
       try {
@@ -1753,15 +1761,17 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
     .select('id', { count: 'exact', head: true }).eq('broadcast_id', broadcastId).eq('status', 'failed')
 
   // We truly exhausted the audience only if we sent the last batch WITHOUT auto-
-  // pausing partway (a pause leaves unsent contacts for the resume), and no
-  // 'capped' rows are still owed a next-day retry.
-  let cappedPending = 0
+  // pausing partway (a pause leaves unsent contacts for the resume), and nothing
+  // is still owed a tick — see OWED_RETRY_STATUSES. Going terminal over either a
+  // parked 'capped' row or an outstanding 'pending' lease strands that contact for
+  // good, because no later tick will run.
+  let owedRetry = 0
   if (exhausted && !autoPaused) {
     const { count } = await db.from('whatsapp_broadcast_recipients')
-      .select('id', { count: 'exact', head: true }).eq('broadcast_id', broadcastId).eq('status', 'capped')
-    cappedPending = count || 0
+      .select('id', { count: 'exact', head: true }).eq('broadcast_id', broadcastId).in('status', OWED_RETRY_STATUSES)
+    owedRetry = count || 0
   }
-  const reallyExhausted = exhausted && !autoPaused && (sent + failed + capped) >= toSend.length && cappedPending === 0
+  const reallyExhausted = exhausted && !autoPaused && (sent + failed + capped) >= toSend.length && owedRetry === 0
   const outcome = dripOutcome({ autoPaused, exhausted: reallyExhausted }, new Date().toISOString())
 
   await db.from('whatsapp_broadcasts').update({

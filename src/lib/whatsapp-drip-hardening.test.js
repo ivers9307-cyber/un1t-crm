@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   isFrequencyCapError, fetchDripDoneContactIds, CAPPED_RETRY_HOURS, claimDripRecipient,
-  STUCK_CLAIM_MINUTES,
+  STUCK_CLAIM_MINUTES, OWED_RETRY_STATUSES,
   broadcastQualityBlockError, classifyBlastFailure, blastAbortPatch, blastAbortNotification,
 } from './whatsapp.js'
 import { applyMetaUserPreference } from './whatsapp-consent.js'
@@ -330,5 +330,48 @@ describe('applyMetaUserPreference', () => {
     expect((await applyMetaUserPreference(consentDb({ contact: null, writes }), { wa_id: '1', value: 'stop' })).applied).toBe(false)
     expect((await applyMetaUserPreference(consentDb({ contact: { id: 'c1' }, writes }), { wa_id: '1', value: 'nonsense' })).applied).toBe(false)
     expect(writes).toEqual([])
+  })
+})
+
+// DRIP-LEASE.2 — finalisation must not go terminal over an outstanding lease.
+//
+// The lease added in BAREWRITE.4 re-claims a 'pending' row after
+// STUCK_CLAIM_MINUTES, but a lease only helps if a LATER TICK RUNS. Both
+// finalisation branches in sendDripChunk counted only 'capped' when deciding
+// whether to hold the broadcast open, so a drip could flip to terminal 'sent'
+// with an in-lease 'pending' claim outstanding: no further tick, no re-claim,
+// that contact's message lost for good — a loss main did not have.
+//
+// The rule now lives in ONE constant because the bug was two copies of it: the
+// 'capped' guard sat two lines from the exhausted check and was simply not
+// extended when leases arrived.
+describe('OWED_RETRY_STATUSES — a drip may not finalise over an owed tick', () => {
+  it('counts an outstanding lease as owed, not just a frequency-capped park', () => {
+    expect(OWED_RETRY_STATUSES).toContain('capped')  // frequency cap (131049), re-opens when the park expires
+    expect(OWED_RETRY_STATUSES).toContain('pending') // claimed, outcome unknown — the lease still owes it a tick
+  })
+
+  it('terminal statuses are NOT owed a tick (finalising over them is correct)', () => {
+    for (const terminal of ['sent', 'delivered', 'read', 'failed']) {
+      expect(OWED_RETRY_STATUSES).not.toContain(terminal)
+    }
+  })
+
+  it('both finalisation branches share the constant, so they cannot drift apart again', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { fileURLToPath } = await import('node:url')
+    const src = readFileSync(fileURLToPath(new URL('./whatsapp.js', import.meta.url)), 'utf8')
+
+    // Every head-count of the recipients table that decides finalisation must go
+    // through the shared constant. A bare .eq('status', 'capped') here is the
+    // regression: it re-strands in-lease rows.
+    const finalisationCounts = src.match(/whatsapp_broadcast_recipients'\)\s*\n?\s*\.select\('id', \{ count: 'exact', head: true \}\)[^\n]*/g) || []
+    const owedChecks = finalisationCounts.filter((line) => /'capped'|OWED_RETRY_STATUSES/.test(line))
+
+    expect(owedChecks.length).toBeGreaterThanOrEqual(2) // the two finalisation branches
+    for (const line of owedChecks) {
+      expect(line).toContain('OWED_RETRY_STATUSES')
+      expect(line).not.toMatch(/\.eq\('status', 'capped'\)/)
+    }
   })
 })
