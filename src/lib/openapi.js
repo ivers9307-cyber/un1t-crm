@@ -4454,7 +4454,7 @@ registry.registerPath({
   path: '/api/live/{locationId}',
   tags: ['Live HR'],
   security: [{ CookieAuth: [] }],
-  summary: 'Current live HR sessions + available straps for a location (staff)',
+  summary: 'Current live HR sessions + available straps for a location (studio_management)',
   request: { params: z.object({ locationId: uuidLike }) },
   responses: {
     200: {
@@ -4473,7 +4473,7 @@ registry.registerPath({
         },
       },
     },
-    403: { description: 'Location not in scope', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Location not in scope, or studio_management not held there', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -4501,7 +4501,7 @@ registry.registerPath({
   responses: {
     200: { description: 'Paired — returns session_id' },
     400: { description: 'Missing required fields or pair failed', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Coach role or location scope required', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Coach role, location scope and studio_management all required', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -4531,7 +4531,7 @@ registry.registerPath({
         },
       },
     },
-    403: { description: 'Manager role or location scope required', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Manager role, location scope and studio_management all required', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -4551,7 +4551,7 @@ registry.registerPath({
         },
       },
     },
-    403: { description: 'Manager role or location scope required', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Manager role, location scope and studio_management all required', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
