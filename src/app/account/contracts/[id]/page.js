@@ -13,6 +13,7 @@ import { redirect, notFound } from 'next/navigation'
 import Link from 'next/link'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { getContractingEntity } from '@/lib/contracting-entity'
 import ContractSignForm from '@/components/ContractSignForm'
 import ContractPrintButton from '@/components/ContractPrintButton'
 import ContractBody from '@/components/ContractBody'
@@ -67,6 +68,16 @@ export default async function AccountContractDetail(props) {
     c.status = 'viewed'
   }
 
+  // LEGALENT.1 — the countersignature label asserts the CONTRACTING
+  // COMPANY on a document this member is about to sign, so it is
+  // resolved from the org's configured legal entity (org_settings,
+  // mig 425) rather than the literal it used to be. Falls back to the
+  // resolved brand, never to another org's company.
+  const { label: entityLabel } = await getContractingEntity(db, {
+    organizationId: c.organization_id,
+    locationId: c.location_id,
+  })
+
   const signed = c.status === 'signed'
   const declined = c.status === 'declined'
   const revoked = c.status === 'revoked'
@@ -104,7 +115,7 @@ export default async function AccountContractDetail(props) {
 
         <div className="mt-10 pt-6 border-t border-gray-300 grid grid-cols-1 sm:grid-cols-2 gap-6">
           <SignatureBlock
-            label="For UN1T Dublin Ltd"
+            label={`For ${entityLabel}`}
             name={c.issuer_signature}
             timestamp={c.issued_at}
           />
