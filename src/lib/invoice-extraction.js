@@ -144,6 +144,29 @@ export function applyDueDateDefault(fields) {
   return due ? { ...fields, due_date: due } : fields
 }
 
+// ZERO-TOTAL.1 — "the document says zero" and "we could not read it" are
+// different answers, and a bare z.coerce.number() collapses them: zod coerces
+// BOTH null and '' to 0 (only undefined is rejected). So a blurry receipt
+// whose amount Claude could not make out was recorded as a €0 bill — and
+// scored HIGH confidence, since 0 is finite and 0+0-0 reconciles exactly. The
+// operator's review is the control on this pipeline, and it was being handed a
+// confident number nobody had read.
+//
+// The sibling extractor already models this correctly: recon/hunt-scoring.js
+// keeps `total` nullable (`.nullable()` short-circuits before coercion, so
+// null survives as null) and its caller refuses to auto-match a null total.
+// Here the document is the only source of truth, so an unreadable total is a
+// failed extraction — say so, rather than inventing zero.
+//
+// A money value the document MUST state. Rejects null, '', whitespace and
+// unparseable text; accepts a real number, a numeric string, and a genuine 0.
+const requiredMoney = z.union([z.number(), z.string().trim().min(1)]).pipe(z.coerce.number())
+
+// A money value that may legitimately be absent: a till receipt states a
+// total and frequently no VAT breakdown at all, so "missing" really does mean
+// zero here. Lenient about absent, still strict about junk ('abc' rejected).
+const optionalMoney = z.coerce.number().optional().transform((v) => v ?? 0)
+
 const lineItem = z.object({
   description: z.string().min(1).max(500),
   quantity: z.coerce.number().nonnegative(),
@@ -183,9 +206,11 @@ const invoiceFields = z.object({
   invoice_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'invoice_date must be YYYY-MM-DD').nullable(),
   due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'due_date must be YYYY-MM-DD').nullable().optional(),
   currency: z.string().length(3).default('EUR'),
-  subtotal: z.coerce.number(),
-  tax_amount: z.coerce.number(),
-  total: z.coerce.number(),
+  // ZERO-TOTAL.1 — see requiredMoney/optionalMoney above. The total is the
+  // one number the document must actually state; the breakdown may be absent.
+  subtotal: optionalMoney,
+  tax_amount: optionalMoney,
+  total: requiredMoney,
   // INVOICES.3 — top-level category. Optional because the existing
   // car_documents invoice flow doesn't ask for one (we only added
   // the prompt instruction for the inbound_invoices path). Validated
@@ -497,6 +522,12 @@ export function scoreExtractionConfidence(f) {
     Boolean(fields.supplier_name) &&
     Boolean(fields.invoice_number) &&
     Boolean(fields.invoice_date) &&
-    Number.isFinite(Number(fields.total))
+    // ZERO-TOTAL.1 — `> 0`, not merely finite. A zero total used to sail
+    // through here: 0 is finite, and the reconciliation check above passes
+    // trivially when subtotal+tax_amount-total is 0-0-0, so a row whose
+    // amount was never read presented as HIGH confidence. A genuine €0
+    // document scoring 'medium' is harmless — medium only means the
+    // operator looks at it, which is right for a zero-value bill anyway.
+    Number(fields.total) > 0
   return allRequired && reconciles ? 'high' : 'medium'
 }
