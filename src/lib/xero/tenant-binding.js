@@ -63,6 +63,22 @@ export function chooseTenantToBind(tenants, existing, locationId) {
   if (!tenants || !tenants.length) return { ok: false, reason: 'none_granted' }
   const { free, taken } = classifyTenants(tenants, existing, locationId)
   if (!free.length) return { ok: false, reason: 'all_taken', taken }
+
+  // XERO-ONE-ORG.4 — a RECONNECT keeps the org it is already on.
+  //
+  // Without this the function returns free[0], and "free" includes the
+  // location's own current binding alongside any org nobody holds — so the
+  // winner is whatever Xero happens to list first. That is the original
+  // tenants[0] defect wearing a different hat, and it became live the moment
+  // CCF Autos was disconnected: its org went back into the free pool, so a
+  // routine Stillorgan reconnect could have silently moved it off Champ
+  // Fitness and started filing a gym's bills into a consultancy again.
+  // Reconnecting is what an operator does when a token expires; it must never
+  // change which company gets billed.
+  const current = (existing || []).find((r) => r?.location_id === locationId)?.tenant_id
+  const keep = current ? free.find((t) => t.tenantId === current) : null
+  if (keep) return { ok: true, tenant: keep, ambiguous: false, alternatives: [] }
+
   return {
     ok: true,
     tenant: free[0],
