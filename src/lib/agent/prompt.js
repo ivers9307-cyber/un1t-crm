@@ -338,7 +338,13 @@ export function buildCustomerSystemPrompt(opts = {}) {
  */
 export function buildCachedSystem(opts = {}) {
   const { stable, volatile } = buildCustomerSystemPromptParts(opts)
-  const blocks = [{ type: 'text', text: stable, cache_control: { type: 'ephemeral' } }]
+  // MIA-HYGIENE.5 — 1h TTL. WhatsApp threads breathe: a customer replies in
+  // twenty minutes, not two, so the 5-minute default expired between almost
+  // every pair of turns and this prefix was re-written rather than read (51%
+  // of live calls cold-wrote ~10k tokens over the 30 days to 2026-08-19).
+  // 1h writes bill 2x base vs 1.25x and break even at three reads, which a
+  // single conversation clears.
+  const blocks = [{ type: 'text', text: stable, cache_control: { type: 'ephemeral', ttl: '1h' } }]
   if (volatile) blocks.push({ type: 'text', text: volatile })
   return blocks
 }

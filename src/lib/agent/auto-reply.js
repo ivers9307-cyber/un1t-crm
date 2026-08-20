@@ -69,9 +69,13 @@ export const AGENT_MODEL = 'claude-sonnet-4-6'
 // byte-identical stable prefix; the ephemeral marker moves to the last
 // tool of the COMBINED array so the whole block caches.
 export const ALL_AGENT_TOOLS = [...ACCOUNT_TOOLS, ...BOOKING_TOOLS, ...EVENT_TOOLS, ...CARD_TOOLS]
+// MIA-HYGIENE.5 — 1h TTL on this cross-turn breakpoint (see prompt.js
+// buildCachedSystem for the measurement). The intra-turn tool_result marker
+// further down keeps the 5-minute default: it caches a prefix that only lives
+// for the rest of the turn, so the 1h write premium would buy nothing.
 const CACHED_ACCOUNT_TOOLS = ALL_AGENT_TOOLS.map((tool, i) =>
   i === ALL_AGENT_TOOLS.length - 1
-    ? { ...tool, cache_control: { type: 'ephemeral' } }
+    ? { ...tool, cache_control: { type: 'ephemeral', ttl: '1h' } }
     : tool,
 )
 // Don't re-acknowledge a burst of non-text messages — one soft handoff

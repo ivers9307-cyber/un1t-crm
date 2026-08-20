@@ -322,8 +322,32 @@ describe('agent turn — tool executor exceptions', () => {
     const toolResult = followUp.messages.at(-1).content[0]
     expect(toolResult).toMatchObject({ type: 'tool_result', tool_use_id: 'tu-1', is_error: true })
     expect(JSON.parse(toolResult.content)).toMatchObject({ error: 'tool_failed' })
-    // ...and it carries the intra-turn cache breakpoint.
+    // ...and it carries the intra-turn cache breakpoint. This one stays on the
+    // DEFAULT 5-minute TTL deliberately: it caches a prefix that only exists
+    // for the rest of this turn, so paying the 1h write premium (2x base vs
+    // 1.25x) would buy nothing.
     expect(toolResult.cache_control).toEqual({ type: 'ephemeral' })
+  })
+
+  // MIA-HYGIENE.5 — the cross-turn breakpoints (tool block + stable system)
+  // carry a 1h TTL. WhatsApp conversations have gaps longer than the 5-minute
+  // default, so the ~10k-token prefix was being re-written instead of read on
+  // 51% of live calls (measured over 30 days, 2026-08). Untested until now.
+  it('sends the stable tool block with a 1h cache breakpoint on its last tool', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(textTurn('Sure, what day suits?'))
+    vi.stubGlobal('fetch', fetchMock)
+    const calls = []
+    const db = agentDb({ conv: CONV, history: HISTORY, calls })
+
+    await runChannelAgent(db, makeAdapter(), ctx)
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    const marked = body.tools.filter(t => t.cache_control)
+    // Exactly one breakpoint, on the LAST tool, so the whole block caches as
+    // one prefix and the 4-breakpoint request cap is never at risk.
+    expect(marked).toHaveLength(1)
+    expect(body.tools.at(-1).cache_control).toEqual({ type: 'ephemeral', ttl: '1h' })
+    expect(body.system[0].cache_control).toEqual({ type: 'ephemeral', ttl: '1h' })
   })
 
   it('the same tool throwing twice abandons the turn as tool_error, not model failure', async () => {
