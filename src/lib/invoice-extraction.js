@@ -167,6 +167,22 @@ const requiredMoney = z.union([z.number(), z.string().trim().min(1)]).pipe(z.coe
 // zero here. Lenient about absent, still strict about junk ('abc' rejected).
 const optionalMoney = z.coerce.number().optional().transform((v) => v ?? 0)
 
+// EMPTY-STRING-FIELDS.1 — "" and null are the same answer: no value.
+//
+// RECEIPT-NULLS.1 taught this schema that a receipt may carry no date, by
+// accepting null. But the inbox editor's version of "no date" is an EMPTY
+// STRING — `strField` renders a null as '' so the box is blank, and saving
+// posts that '' straight back. '' is a string, so it met the YYYY-MM-DD regex
+// and failed, and the operator got "Invalid request body" on the very receipt
+// the previous fix had just rescued.
+//
+// Normalising here rather than in the form is deliberate: the schema is the
+// contract every client shares (the inbox, a future mobile editor, a direct
+// API call), and it keeps extracted_fields canonical — one spelling of empty
+// in the database, not '' from the editor and null from the extractor.
+const blankToNull = (schema) =>
+  z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? null : v), schema)
+
 const lineItem = z.object({
   description: z.string().min(1).max(500),
   quantity: z.coerce.number().nonnegative(),
@@ -184,8 +200,10 @@ const lineItem = z.object({
 // includes the category as a hint to the bookkeeper finishing the
 // draft in Xero.
 const invoiceFields = z.object({
-  supplier_name: z.string().min(1).max(300),
-  supplier_address: z.string().max(1000).nullable().optional(),
+  // EMPTY-STRING-FIELDS.1 — trim() before min(1): a box holding only spaces
+  // is empty, and this field is the one that genuinely may not be.
+  supplier_name: z.string().trim().min(1).max(300),
+  supplier_address: blankToNull(z.string().max(1000).nullable().optional()),
   // RECEIPT-NULLS.1 — nullable, because a till receipt is not an invoice:
   // it routinely carries no invoice number, and often no date the model can
   // read off a crumpled thermal print. Both were required, so Claude
@@ -202,9 +220,9 @@ const invoiceFields = z.object({
   // The regex still applies when a value IS present, so nullable does not
   // mean "anything goes", and push-xero blocks the Xero send if the
   // operator never fills the date in.
-  invoice_number: z.string().min(1).max(100).nullable(),
-  invoice_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'invoice_date must be YYYY-MM-DD').nullable(),
-  due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'due_date must be YYYY-MM-DD').nullable().optional(),
+  invoice_number: blankToNull(z.string().trim().min(1).max(100).nullable()),
+  invoice_date: blankToNull(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'invoice_date must be YYYY-MM-DD').nullable()),
+  due_date: blankToNull(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'due_date must be YYYY-MM-DD').nullable().optional()),
   currency: z.string().length(3).default('EUR'),
   // ZERO-TOTAL.1 — see requiredMoney/optionalMoney above. The total is the
   // one number the document must actually state; the breakdown may be absent.
@@ -215,18 +233,18 @@ const invoiceFields = z.object({
   // car_documents invoice flow doesn't ask for one (we only added
   // the prompt instruction for the inbound_invoices path). Validated
   // against the enum so the inbox UI can rely on the value if set.
-  category: z.enum(INVOICE_CATEGORIES).nullable().optional(),
+  category: blankToNull(z.enum(INVOICE_CATEGORIES).nullable().optional()),
   // INVOICES.3 — operator-editable account code free-text field.
   // Claude can suggest one if the supplier maps obviously to a
   // standard chart-of-accounts entry; otherwise this stays null and
   // the operator fills it in (or leaves it for Xero's own OCR to
   // assign during the draft-bill flow).
-  account_code: z.string().max(50).nullable().optional(),
+  account_code: blankToNull(z.string().max(50).nullable().optional()),
   // XERO-API.2 — Xero AccountID for the picked chart-of-accounts
   // line (uuid-shaped string from /Accounts). Mirrored alongside
   // account_code (the human-visible code, e.g. "400") so the
   // existing audit / hint surfaces still read it.
-  xero_account_id: z.string().max(100).nullable().optional(),
+  xero_account_id: blankToNull(z.string().max(100).nullable().optional()),
   // XERO-API.2 — structured ref for the picked supplier. Two shapes:
   //   { kind: 'existing', xero_contact_id, name, email? }
   //   { kind: 'new', name }
