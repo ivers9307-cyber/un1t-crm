@@ -45,9 +45,14 @@ describe('guardLiveLocation — read gate', () => {
     expect(guardLiveLocation(userAt(LOC, 'staff', { studio: true }), LOC)).toBeNull()
   })
 
-  // The whole point of the fix: these two are refused the /live PAGE today,
-  // and were able to poll the same payload from the API.
-  it('403s a head_coach on the role default (studio_management unset)', () => {
+  // These two are refused the /live PAGE and were able to poll the same
+  // payload from the API. NOTE (SEC-LIVE-API.2): the first case is the
+  // RESOLVER's behaviour with no role template — at Stillorgan a template row
+  // grants head_coach `studio_management`, so no real head_coach there is in
+  // this state. The second case is the one prod actually has: exactly one
+  // account, a manager with an explicit false. `roleTemplatesByLocation: {}`
+  // in the fixture is what makes the first case reachable at all.
+  it('403s a head_coach on the role default (studio_management unset, no template)', () => {
     const res = guardLiveLocation(userAt(LOC, 'head_coach', { studio: null }), LOC)
     expect(res?.status).toBe(403)
   })
@@ -59,6 +64,23 @@ describe('guardLiveLocation — read gate', () => {
 
   it('lets master through without a per-location assignment', () => {
     expect(guardLiveLocation({ id: 'm', role: 'master', isMaster: true }, LOC)).toBeNull()
+  })
+
+  // SEC-LIVE-API.2 — the correction that halved-and-then-some the measured
+  // blast radius. `location_role_permissions` (tier 2.5) is consulted BEFORE
+  // the code role default, and Stillorgan grants head_coach + staff
+  // `studio_management` there. Reasoning from the defaults alone reported 6
+  // locked-out accounts when the real number is 1.
+  it('lets the role template grant the permission over a false code default', () => {
+    const user = userAt(LOC, 'head_coach', { studio: null })
+    user.roleTemplatesByLocation = { [LOC]: { [LIVE_PERMISSION]: true } }
+    expect(guardLiveLocation(user, LOC)).toBeNull()
+  })
+
+  it('still lets an explicit per-user false beat a permissive role template', () => {
+    const user = userAt(LOC, 'manager', { studio: false })
+    user.roleTemplatesByLocation = { [LOC]: { [LIVE_PERMISSION]: true } }
+    expect(guardLiveLocation(user, LOC)?.status).toBe(403)
   })
 
   it('honours the tier-1 location feature gate, even for master', () => {
@@ -132,5 +154,49 @@ describe('guardLiveSession — no existence oracle', () => {
 
   it('lets a permitted coach at the session location through', () => {
     expect(guardLiveSession(userAt(LOC, 'head_coach'), { location_id: LOC })).toBeNull()
+  })
+})
+
+// SEC-LIVE-API.2 — the mutation role must resolve at the SESSION's location,
+// not at the caller-chosen active one. Without this the route's only role
+// check was its pre-lookup test against `user.role`, so head_coach@L2 +
+// staff@L1 could send `x-active-location: L2` and end a session on L1.
+describe('guardLiveSession — mutation role resolves at the session location', () => {
+  function multiLocationUser() {
+    // staff at LOC (holds studio_management there), head_coach at OTHER.
+    const user = userAt(LOC, 'staff', {
+      studio: true,
+      extra: [{ id: OTHER, role: 'head_coach', studio: true }],
+    })
+    user.role = 'head_coach' // active location is OTHER
+    return user
+  }
+
+  it('404s the borrowed-coach-role case at the session location', () => {
+    const res = guardLiveSession(multiLocationUser(), { location_id: LOC }, { roles: LIVE_MUTATION_ROLES })
+    expect(res?.status).toBe(404)
+  })
+
+  it('allows the same caller at the location where they DO hold the role', () => {
+    expect(
+      guardLiveSession(multiLocationUser(), { location_id: OTHER }, { roles: LIVE_MUTATION_ROLES }),
+    ).toBeNull()
+  })
+
+  it('refuses a wrong role with the same body as a missing id — still no oracle', async () => {
+    const missing = guardLiveSession(multiLocationUser(), null, { roles: LIVE_MUTATION_ROLES })
+    const wrongRole = guardLiveSession(multiLocationUser(), { location_id: LOC }, { roles: LIVE_MUTATION_ROLES })
+    const bodies = await Promise.all([missing, wrongRole].map((r) => r.text()))
+    expect(missing.status).toBe(wrongRole.status)
+    expect(new Set(bodies).size).toBe(1)
+  })
+
+  it('leaves master alone', () => {
+    const master = { id: 'm', role: 'master', isMaster: true }
+    expect(guardLiveSession(master, { location_id: LOC }, { roles: LIVE_MUTATION_ROLES })).toBeNull()
+  })
+
+  it('is a no-op when no roles are passed (read callers keep their shape)', () => {
+    expect(guardLiveSession(multiLocationUser(), { location_id: LOC })).toBeNull()
   })
 })

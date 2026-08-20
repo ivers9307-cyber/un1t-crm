@@ -28,9 +28,12 @@ export async function POST(_request, props) {
     return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })
   }
   // Pre-lookup role check: no id has been touched yet, so a 403 here is safe.
-  // Resolved against the user's active-location role — the session's location
-  // isn't known until after the lookup, and the post-lookup guard re-checks
-  // both membership and `studio_management` at the session's real location.
+  // It can only see `user.role`, the ACTIVE-location role, because the
+  // session's location is unknown until the lookup below — so it is a cheap
+  // first pass, NOT the gate. SEC-LIVE-API.2: the real role decision is
+  // re-made inside guardLiveSession at `session.location_id`, otherwise a
+  // caller who is head_coach at L2 and merely staff at L1 could pick L2 as
+  // their active location and end a session on L1's floor.
   if (!user.isMaster && !LIVE_MUTATION_ROLES.includes(user.role)) {
     return NextResponse.json({ ok: false, error: 'Coach only' }, { status: 403 })
   }
@@ -42,7 +45,7 @@ export async function POST(_request, props) {
     .select('id, location_id')
     .eq('id', params.id)
     .maybeSingle()
-  const denied = guardLiveSession(user, session)
+  const denied = guardLiveSession(user, session, { roles: LIVE_MUTATION_ROLES })
   if (denied) return denied
 
   const out = await endSession(db, params.id)
