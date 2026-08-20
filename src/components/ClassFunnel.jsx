@@ -56,6 +56,10 @@ export default function ClassFunnel(props) {
   // happened at the booking POST, which is now simply one step further on.
   const [step, setStep] = useState('classpick') // classpick | details | calendar | payment | done | classdone
   const [chosenClass, setChosenClass] = useState(null)
+  // STARTPREFILL.1 — drives the "these are the details we have" note, so
+  // someone reading a prefilled form knows why it is filled and that it is
+  // theirs to correct.
+  const [prefilled, setPrefilled] = useState(false)
   const [payment, setPayment] = useState(null) // { paymentId, checkout } when requiresPayment
   const [path, setPath] = useState('class')   // 'class' (default) | 'consultation' (upsell only)
   // Marketing-consent defaults to ticked (operator's call — pre-ticked + required;
@@ -139,6 +143,38 @@ export default function ClassFunnel(props) {
     sessionRef.current = sid
     // Landed on the funnel — the step events that follow reveal the drop-off.
     fireStep('view')
+
+    // STARTPREFILL.1 — if the visitor arrived from an email we already hold
+    // their details in, fill the form in for them. PREFILL, NEVER SKIP: the
+    // sequence copy encourages forwarding ("bring someone with you"), so a
+    // link that jumped straight to booking would silently book the friend
+    // under the original recipient's identity. Shown-but-filled makes that
+    // visible and self-correcting — the friend sees a name that isn't theirs
+    // and edits it.
+    //
+    // Best-effort throughout: any failure leaves an ordinary empty form, which
+    // is exactly what a cold visitor gets. Never blocks the funnel.
+    const c = p.get('c')
+    if (c) {
+      fetch(`/api/public/start-prefill?c=${encodeURIComponent(c)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => {
+          if (!j?.success || !j.data) return
+          const d = j.data
+          setForm((f) => ({
+            ...f,
+            // Only fill a field the visitor has not already typed into, so a
+            // slow response can never overwrite what someone is mid-way
+            // through entering.
+            first_name: f.first_name || d.first_name || '',
+            last_name: f.last_name || d.last_name || '',
+            email: f.email || d.email || '',
+            phone: f.phone || d.phone || '',
+          }))
+          setPrefilled(true)
+        })
+        .catch(() => {})
+    }
   }, [])
 
   // Consultation: load the event once chosen.
@@ -343,7 +379,11 @@ export default function ClassFunnel(props) {
           )}
           <div className="mb-4">
             <h1 className="font-display font-extrabold uppercase text-2xl mb-2">Last step</h1>
-            <p className="text-white/60 text-sm">We just need these to book you in.</p>
+            <p className="text-white/60 text-sm">
+              {prefilled
+                ? 'These are the details we have for you — change anything that looks wrong.'
+                : 'We just need these to book you in.'}
+            </p>
           </div>
           <input className={inputCls} placeholder="First name" value={form.first_name} onChange={set('first_name')} maxLength={120} autoComplete="given-name" />
           <input className={inputCls} placeholder="Last name" value={form.last_name} onChange={set('last_name')} maxLength={120} autoComplete="family-name" />

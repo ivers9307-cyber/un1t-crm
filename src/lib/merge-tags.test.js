@@ -55,6 +55,7 @@ describe('the registry and applyMergeTags() agree', () => {
       location_name: 'UN1T Stillorgan',
       unsubscribe_url: 'https://example.com/unsubscribe/tok',
       preference_url: 'https://example.com/preferences/tok',
+      booking_token: 'cGF5bG9hZA.c2ln',
     }
     for (const { tag } of MERGE_TAGS) {
       const out = applyMergeTags(`<p>${tag}</p>`, contact, extras)
