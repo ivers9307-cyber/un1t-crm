@@ -18,7 +18,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
+import { guardLiveLocation, LIVE_MUTATION_ROLES } from '@/lib/live-access'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
@@ -30,17 +31,9 @@ import { logInfo, logWarn } from '@/lib/log'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const ALLOWED_ROLES = ['owner', 'manager', 'head_coach', 'coach']
-
+// SEC-LIVE-API.1 — coach role at the location AND `studio_management` there.
 function guard(user, locationId) {
-  if (!user) return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })
-  if (!user.isMaster && !ALLOWED_ROLES.includes(user.role)) {
-    return NextResponse.json({ ok: false, error: 'Coach only' }, { status: 403 })
-  }
-  if (!user.isMaster && !getUserLocationIds(user).includes(locationId)) {
-    return NextResponse.json({ ok: false, error: 'Location not in your scope' }, { status: 403 })
-  }
-  return null
+  return guardLiveLocation(user, locationId, { roles: LIVE_MUTATION_ROLES })
 }
 
 const RegisterSchema = z.object({
