@@ -112,3 +112,123 @@ describe('token calls', () => {
     expect(JSON.stringify(out)).not.toContain('shhh')
   })
 })
+
+import { sonosGetGroups, sonosSetGroupVolume, sonosLoadFavorite, sonosPause } from './client'
+
+describe('control api calls', () => {
+  beforeEach(() => { global.fetch = vi.fn() })
+  afterEach(() => { vi.restoreAllMocks() })
+
+  const okEmpty = { ok: true, status: 200, text: async () => '{}' }
+
+  it('gets groups for a household with a bearer token and a user-agent', async () => {
+    global.fetch.mockResolvedValue({ ok: true, status: 200, text: async () => '{"groups":[],"players":[]}' })
+    const out = await sonosGetGroups('tok', 'Sonos_HH1')
+    const [url, opts] = global.fetch.mock.calls[0]
+    expect(url).toBe('https://api.ws.sonos.com/control/api/v1/households/Sonos_HH1/groups')
+    expect(opts.headers.authorization).toBe('Bearer tok')
+    expect(opts.headers['user-agent']).toBeTruthy()
+    expect(out).toMatchObject({ ok: true, statusCode: 200 })
+  })
+
+  it('url-encodes a household id', async () => {
+    global.fetch.mockResolvedValue(okEmpty)
+    await sonosGetGroups('tok', 'HH/with slash')
+    expect(global.fetch.mock.calls[0][0]).toContain('HH%2Fwith%20slash')
+  })
+
+  it('posts group volume as an integer body', async () => {
+    global.fetch.mockResolvedValue(okEmpty)
+    await sonosSetGroupVolume('tok', 'GRP1', 35)
+    const [url, opts] = global.fetch.mock.calls[0]
+    expect(url).toBe('https://api.ws.sonos.com/control/api/v1/groups/GRP1/groupVolume')
+    expect(opts.method).toBe('POST')
+    expect(JSON.parse(opts.body)).toEqual({ volume: 35 })
+  })
+
+  it('clamps volume into the 0-100 range Sonos accepts', async () => {
+    global.fetch.mockResolvedValue(okEmpty)
+    await sonosSetGroupVolume('tok', 'GRP1', 140)
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body)).toEqual({ volume: 100 })
+    await sonosSetGroupVolume('tok', 'GRP1', -5)
+    expect(JSON.parse(global.fetch.mock.calls[1][1].body)).toEqual({ volume: 0 })
+  })
+
+  it('loads a favourite and starts playback', async () => {
+    global.fetch.mockResolvedValue(okEmpty)
+    await sonosLoadFavorite('tok', 'GRP1', 'fv-1')
+    const [url, opts] = global.fetch.mock.calls[0]
+    expect(url).toBe('https://api.ws.sonos.com/control/api/v1/groups/GRP1/favorites')
+    expect(JSON.parse(opts.body)).toEqual({ favoriteId: 'fv-1', playOnCompletion: true })
+  })
+
+  it('pauses a group', async () => {
+    global.fetch.mockResolvedValue(okEmpty)
+    await sonosPause('tok', 'GRP1')
+    expect(global.fetch.mock.calls[0][0])
+      .toBe('https://api.ws.sonos.com/control/api/v1/groups/GRP1/playback/pause')
+  })
+
+  it('never throws when the network dies mid-command', async () => {
+    global.fetch.mockRejectedValue(new Error('ETIMEDOUT'))
+    await expect(sonosPause('tok', 'GRP1')).resolves.toMatchObject({ ok: false, statusCode: 0 })
+  })
+})
+
+import { withFreshToken } from './client'
+
+function fakeDb(conn, captured = {}) {
+  return {
+    from: () => ({
+      select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: conn, error: null }) }) }),
+      update: (patch) => { captured.patch = patch; return { eq: async () => ({ error: null }) } },
+    }),
+    _captured: captured,
+  }
+}
+
+describe('withFreshToken', () => {
+  beforeEach(() => { global.fetch = vi.fn() })
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('returns the stored token when it is still fresh', async () => {
+    const conn = {
+      id: 'c1', household_id: 'HH1', refresh_token: 'rt', access_token: 'at',
+      access_token_expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    }
+    const out = await withFreshToken(fakeDb(conn), 'loc-1', cfg)
+    expect(out).toMatchObject({ ok: true, token: 'at', householdId: 'HH1' })
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+
+  it('refreshes when inside the expiry margin and persists only the access token', async () => {
+    const captured = {}
+    const conn = {
+      id: 'c1', household_id: 'HH1', refresh_token: 'rt', access_token: 'old',
+      access_token_expires_at: new Date(Date.now() + 60 * 1000).toISOString(),
+    }
+    global.fetch.mockResolvedValue({
+      ok: true, status: 200,
+      text: async () => JSON.stringify({ access_token: 'new', refresh_token: 'rt', expires_in: 86400 }),
+    })
+    const out = await withFreshToken(fakeDb(conn, captured), 'loc-1', cfg)
+    expect(out).toMatchObject({ ok: true, token: 'new' })
+    expect(captured.patch.access_token).toBe('new')
+    expect(captured.patch).not.toHaveProperty('refresh_token')
+  })
+
+  it('reports not-connected rather than throwing when there is no row', async () => {
+    const out = await withFreshToken(fakeDb(null), 'loc-1', cfg)
+    expect(out).toMatchObject({ ok: false, reason: 'not_connected' })
+  })
+
+  it('reports a revoked grant so the UI can prompt a re-link', async () => {
+    const conn = {
+      id: 'c1', household_id: 'HH1', refresh_token: 'rt', access_token: 'old',
+      access_token_expires_at: new Date(Date.now() - 1000).toISOString(),
+    }
+    global.fetch.mockResolvedValue({ ok: false, status: 400, text: async () => '{"error":"invalid_grant"}' })
+    const out = await withFreshToken(fakeDb(conn), 'loc-1', cfg)
+    expect(out).toMatchObject({ ok: false, reason: 'refresh_failed', statusCode: 400 })
+  })
+})

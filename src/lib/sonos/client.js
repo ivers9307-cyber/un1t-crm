@@ -121,3 +121,107 @@ export function exchangeCode(cfg, code) {
 export function refreshAccessToken(cfg, refreshToken) {
   return tokenCall(cfg, { grant_type: 'refresh_token', refresh_token: refreshToken })
 }
+
+// Never throws. Always resolves to { ok, statusCode, body }, or
+// { ok: false, statusCode: 0, networkError: true, body: null } on a
+// network/timeout failure — a reconcile tick must not blow up because the
+// studio's line dropped.
+async function apiCall(token, method, path, body) {
+  try {
+    const res = await fetch(API_BASE + path, {
+      method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        'user-agent': USER_AGENT,
+        ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      cache: 'no-store',
+    })
+    let parsed = null
+    const text = await res.text().catch(() => '')
+    if (text) { try { parsed = JSON.parse(text) } catch { parsed = null } }
+    return { ok: res.ok, statusCode: res.status, body: parsed }
+  } catch {
+    return { ok: false, statusCode: 0, networkError: true, body: null }
+  }
+}
+
+const enc = (s) => encodeURIComponent(String(s))
+
+export function sonosGetHouseholds(token) {
+  return apiCall(token, 'GET', '/households')
+}
+
+// One call returns groups, players AND each group's playbackState — the
+// whole read side of a reconcile tick.
+export function sonosGetGroups(token, householdId) {
+  return apiCall(token, 'GET', `/households/${enc(householdId)}/groups`)
+}
+
+export function sonosGetFavorites(token, householdId) {
+  return apiCall(token, 'GET', `/households/${enc(householdId)}/favorites`)
+}
+
+export function sonosSetGroupVolume(token, groupId, volume) {
+  // Sonos rejects >100 outright and reads any negative as 0. Clamp here so
+  // a bad stored value is a quiet no-op rather than a 400 that aborts the
+  // window and leaves the favourite unloaded.
+  const v = Math.max(0, Math.min(100, Math.round(Number(volume) || 0)))
+  return apiCall(token, 'POST', `/groups/${enc(groupId)}/groupVolume`, { volume: v })
+}
+
+export function sonosLoadFavorite(token, groupId, favoriteId) {
+  return apiCall(token, 'POST', `/groups/${enc(groupId)}/favorites`, {
+    favoriteId: String(favoriteId),
+    playOnCompletion: true,
+  })
+}
+
+export function sonosPause(token, groupId) {
+  return apiCall(token, 'POST', `/groups/${enc(groupId)}/playback/pause`)
+}
+
+const REFRESH_MARGIN_MS = 5 * 60 * 1000
+
+// Loads a location's connection and returns a usable access token,
+// refreshing first if it is inside the margin. Never throws — every
+// failure is a tagged result the caller can act on, because the two
+// callers are a cron tick (log and move on) and a UI route (prompt a
+// re-link).
+export async function withFreshToken(db, locationId, cfg) {
+  const { data: conn, error } = await db
+    .from('sonos_connections')
+    .select('*')
+    .eq('location_id', locationId)
+    .maybeSingle()
+
+  if (error) return { ok: false, reason: 'db_error', message: error.message }
+  if (!conn) return { ok: false, reason: 'not_connected' }
+
+  const expiresAt = new Date(conn.access_token_expires_at || 0).getTime()
+  const fresh = Number.isFinite(expiresAt) && expiresAt - Date.now() > REFRESH_MARGIN_MS
+  if (fresh && conn.access_token) {
+    return { ok: true, token: conn.access_token, householdId: conn.household_id, connection: conn }
+  }
+
+  const refreshed = await refreshAccessToken(cfg, conn.refresh_token)
+  if (!refreshed.ok || !refreshed.body?.access_token) {
+    return { ok: false, reason: 'refresh_failed', statusCode: refreshed.statusCode }
+  }
+
+  const token = refreshed.body.access_token
+  const newExpiry = new Date(Date.now() + (refreshed.body.expires_in || 86400) * 1000).toISOString()
+
+  // Only the access token and its expiry are persisted. Sonos returns the
+  // SAME refresh token every time, so rewriting it would be a no-op that
+  // buys a read-modify-write race for nothing.
+  const { error: upErr } = await db
+    .from('sonos_connections')
+    .update({ access_token: token, access_token_expires_at: newExpiry, updated_at: new Date().toISOString() })
+    .eq('id', conn.id)
+  if (upErr) return { ok: false, reason: 'db_error', message: upErr.message }
+
+  return { ok: true, token, householdId: conn.household_id, connection: conn }
+}
