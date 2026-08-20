@@ -105,3 +105,39 @@ describe('validateTenantChoice', () => {
     expect(r.ok).toBe(true)
   })
 })
+
+// XERO-ONE-ORG.4 — reconnecting must not move a location to another org.
+// This became live when CCF Autos was disconnected: its org returned to the
+// free pool, so "first free" could have silently pulled Stillorgan off Champ
+// Fitness on the next routine reconnect.
+describe('chooseTenantToBind — a reconnect keeps its own org', () => {
+  const STILL_ON_CHAMP = [{ tenant_id: 'champ-01', location_id: STILLORGAN, location_name: 'UN1T Stillorgan' }]
+
+  it('keeps the current org even when Xero lists a free one FIRST', () => {
+    // GIVERS is unclaimed (CCF disconnected) and listed first — the trap.
+    const r = chooseTenantToBind([GIVERS, CHAMP], STILL_ON_CHAMP, STILLORGAN)
+    expect(r.tenant).toEqual(CHAMP)
+    expect(r.ambiguous).toBe(false)
+  })
+
+  it('still binds a free org when the location has no current binding', () => {
+    const r = chooseTenantToBind([GIVERS, CHAMP], [], STILLORGAN)
+    expect(r.tenant).toEqual(GIVERS)
+  })
+
+  it('falls back to a free org when the current one is no longer granted', () => {
+    // Access to Champ was revoked in Xero; only Givers comes back.
+    const r = chooseTenantToBind([GIVERS], STILL_ON_CHAMP, STILLORGAN)
+    expect(r.ok).toBe(true)
+    expect(r.tenant).toEqual(GIVERS)
+  })
+
+  it('does not let one location keep an org another location has taken', () => {
+    const conflicting = [
+      { tenant_id: 'champ-01', location_id: STILLORGAN, location_name: 'UN1T Stillorgan' },
+      { tenant_id: 'ccf-01', location_id: CCF_LOC, location_name: 'CCF Autos' },
+    ]
+    const r = chooseTenantToBind([CCF, CHAMP], conflicting, STILLORGAN)
+    expect(r.tenant).toEqual(CHAMP)
+  })
+})
