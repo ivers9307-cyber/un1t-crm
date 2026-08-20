@@ -21,6 +21,7 @@ import { signCheckinToken } from './event-checkin-tokens'
 import { buildEventEmailShell, resolveEventEmail } from './event-email'
 import { overlayConnections } from '@/lib/connection-registry'
 import { resolveEventCommsLocation } from './event-comms-location'
+import { logError } from './log'
 
 function fmtRaceDate(dateStr) {
   if (!dateStr) return ''
@@ -124,6 +125,28 @@ export async function sendRaceConfirmations({ db, paymentId }) {
   // Catch it here and make it a first-class result instead: nothing has been
   // sent and no send-once stamp has been claimed at this point, so a later
   // invocation for the same payment still delivers both legs cleanly.
+  //
+  // BAREWRITE.3 — that catch was right, but the throw behind it was firing for
+  // PLAIN events too, where the fallback below (`payment.race.location_id`)
+  // resolves to the very location the failed read was looking up. The resolver
+  // now fails open in exactly that case and returns null, so a transient blip
+  // on an ordinary UN1T event no longer costs a paying attendee their receipt.
+  // What still reaches this catch is the genuinely brand-crossing case: a host
+  // event, or an explicit sending_location_id override, whose sender rows are
+  // unreadable. There, no message is the right answer.
+  //
+  // WHY THIS DOES NOT BECOME A NON-2xx to the payment webhook. A provider retry
+  // would be safe (nothing claimed, nothing sent) but INERT: the Revolut and
+  // Stripe handlers only call this on a fresh state transition
+  // (`markRacePaymentStatus(...).applied?.status === 'completed'`), and on
+  // redelivery the payment is already 'completed', so `updates` is empty,
+  // `applied` is null and we are never called again. A 5xx would therefore buy
+  // retries that cannot deliver the receipt, while telling the provider we
+  // failed to process a payment state we HAVE committed — and both providers
+  // disable an endpoint that keeps failing. The two public register routes call
+  // us inline during a customer's own POST, where a 5xx would show an error for
+  // a registration that succeeded. So: answer 200, and make the failure a
+  // structured, matchable signal instead of free text inside it.
   let commsLocation = null
   try {
     commsLocation = await resolveEventCommsLocation(db, {
@@ -133,7 +156,9 @@ export async function sendRaceConfirmations({ db, paymentId }) {
     })
   } catch (e) {
     const msg = e?.message || String(e)
-    console.error(`[race-confirmations] comms location unresolved for payment ${paymentId} — NOTHING was sent (no receipt, no SMS); re-run once the read recovers:`, msg)
+    logError('race-confirmations', 'comms location unresolved — NOTHING was sent (no receipt, no SMS); re-run once the read recovers', {
+      err: e, paymentId, raceEventId: payment.race?.id || null,
+    })
     result.failed.push(`comms_location:${msg}`)
     return result
   }

@@ -949,6 +949,60 @@ export async function fetchDripDoneContactIds(db, broadcastId) {
   return ids
 }
 
+/**
+ * CLAIM one drip recipient BEFORE the template goes out — the per-recipient
+ * mutex, not just a dedupe.
+ *
+ * BAREWRITE.2 moved the drip's recipient write ahead of the send and said it
+ * mirrored the blast sender. It did not: the blast INSERTs, so the UNIQUE
+ * (broadcast_id, contact_id) constraint (mig 331) rejects a concurrent pass and
+ * the template goes out exactly once. The drip UPSERTed, which succeeds on
+ * conflict — so two overlapping cron ticks (Vercel cron does NOT skip an
+ * overlapping run; campaign-sender.js documents that hazard) both "claimed" the
+ * same contact and both sent. Dedupe across ticks, no mutex within them.
+ *
+ * The upsert was not gratuitous, which is why this is not a one-word revert: a
+ * contact parked as 'capped' (Meta 131049) is deliberately re-selected by
+ * fetchDripDoneContactIds after CAPPED_RETRY_HOURS, and by then a row EXISTS,
+ * so a bare insert would fail and the retry would never send. Both properties
+ * are kept by making each path its own CAS:
+ *   • no row yet   → INSERT; the UNIQUE constraint is the mutex.
+ *   • 'capped' row → UPDATE … WHERE status = 'capped' RETURNING id; the status
+ *     transition is the mutex (whichever tick flips it first wins, the other
+ *     matches zero rows and skips).
+ * Any other existing status ('pending' / 'sent' / 'failed') means somebody else
+ * holds the claim — skip, exactly as the blast does.
+ *
+ * @returns {Promise<{claimed: boolean, reason?: 'already_claimed'|string, retry?: boolean}>}
+ */
+export async function claimDripRecipient(db, broadcastId, contactId) {
+  const { error: insertErr } = await db.from('whatsapp_broadcast_recipients').insert({
+    broadcast_id: broadcastId,
+    contact_id: contactId,
+    status: 'pending',
+  })
+  if (!insertErr) return { claimed: true }
+  if (!isUniqueViolation(insertErr)) return { claimed: false, reason: insertErr.message }
+
+  const { data, error: retryErr } = await db.from('whatsapp_broadcast_recipients')
+    .update({ status: 'pending', error_message: null, failed_at: null })
+    .eq('broadcast_id', broadcastId)
+    .eq('contact_id', contactId)
+    .eq('status', 'capped')
+    .select('id')
+  if (retryErr) return { claimed: false, reason: retryErr.message }
+  if (!Array.isArray(data) || data.length === 0) return { claimed: false, reason: 'already_claimed' }
+  return { claimed: true, retry: true }
+}
+
+// Postgres unique_violation. Matched on the code, with the message as a
+// fallback for clients that surface only prose.
+function isUniqueViolation(error) {
+  if (!error) return false
+  if (error.code === '23505') return true
+  return /duplicate key value|already exists/i.test(error.message || '')
+}
+
 // AGENT-TAKEOVER — should Mia be paused on each recipient's thread for this
 // send? True when the operator is personally managing the replies: an
 // INDIVIDUAL targeted send (audience of 1 — a 1:1 message that just happens to
@@ -1527,20 +1581,19 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
   const dripSentContactIds = []
 
   for (const contact of toSend) {
-    // CLAIM-FIRST, mirroring the blast sender above. The recipients row is the
-    // ONLY dedupe this drip has — fetchDripDoneContactIds excludes every
-    // contact that already has one — and it used to be written AFTER the
-    // template went out, with a bare `await` whose error nothing could see. A
-    // lost row therefore re-selected the contact on the next tick and sent the
-    // same marketing template again. Writing the row BEFORE the send makes a
-    // DB hiccup cost at most a missing message, never a duplicate one; a row
-    // stuck at 'pending' is the same accepted outcome the blast path has.
-    const { error: claimErr } = await db.from('whatsapp_broadcast_recipients').upsert({
-      broadcast_id: broadcastId, contact_id: contact.id,
-      status: 'pending', error_message: null, failed_at: null,
-    }, { onConflict: 'broadcast_id,contact_id' })
-    if (claimErr) {
-      console.error(`[drip ${broadcastId}] could not claim recipient ${contact.id} — skipping rather than sending unrecorded:`, claimErr.message)
+    // CLAIM-FIRST, and now genuinely the same mutex the blast sender uses —
+    // see claimDripRecipient. The recipients row is the ONLY dedupe this drip
+    // has (fetchDripDoneContactIds excludes every contact that already has
+    // one), and it used to be written AFTER the template went out with a bare
+    // `await` whose error nothing could see, so a lost row re-selected the
+    // contact next tick and sent the same marketing template again. Claiming
+    // first makes a DB hiccup cost at most a missing message, never a duplicate
+    // one; a row stuck at 'pending' is the accepted outcome the blast has too.
+    const claim = await claimDripRecipient(db, broadcastId, contact.id)
+    if (!claim.claimed) {
+      if (claim.reason !== 'already_claimed') {
+        console.error(`[drip ${broadcastId}] could not claim recipient ${contact.id} — skipping rather than sending unrecorded:`, claim.reason)
+      }
       continue
     }
     try {

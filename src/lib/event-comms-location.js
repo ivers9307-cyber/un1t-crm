@@ -6,6 +6,7 @@
 
 import { resolveMasterLocationIdStrict } from './host-events'
 import { overlayConnections } from './connection-registry'
+import { logError } from './log'
 
 /**
  * Pure tier logic: which location id an event's comms should use.
@@ -40,6 +41,12 @@ export async function resolveEventCommsLocation(db, event) {
   // brand. (`.maybeSingle()` stays: 0 rows IS a legitimate answer here, so
   // this is the "answer it in the code" fix, not a discarded error.)
   //
+  // BAREWRITE.3 — but ONLY where fail-open could cross a brand. The throw is
+  // paid for by the message that does not go out, so it has to buy something:
+  // on the anchor read below it does (the fallback is the sender-less anchor),
+  // and on the target read it does only when the target differs from the
+  // event's own location — see the long note at that read.
+  //
   // The MIDDLE hop matters just as much: `resolveMasterLocationId` is
   // HOST-MASTER.1's contact-homing helper and deliberately fails OPEN to the
   // anchor, which for sender selection is exactly the wrong-brand fallback
@@ -69,7 +76,31 @@ export async function resolveEventCommsLocation(db, event) {
     .eq('id', targetId)
     .maybeSingle()
   if (rowError) {
-    throw new Error(`resolveEventCommsLocation: sending location read failed: ${rowError.message}`)
+    // BAREWRITE.3 — fail CLOSED only where failing open could cross a BRAND.
+    //
+    // BAREWRITE.1 made this read throw for every event, which over-charged for
+    // the guarantee. Every caller treats a null return the same way: it falls
+    // back to the event's own `location_id` (race-confirmations
+    // `commsLocation?.id || payment.race.location_id` and `commsLocation ||
+    // race.locations`; payment-sms `commsLocation || reg.race_events.locations`;
+    // event-attendee-reminders `commsLocation?.id || ev.location_id`). So when
+    // the target we could not read IS `event.location_id`, the fallback resolves
+    // to the SAME location — the same Twilio sender, the same email identity,
+    // the same brand — and the throw buys nothing while costing a paying
+    // attendee their receipt. Plain (non-host, no-override) events are exactly
+    // that case, and they are the overwhelming majority.
+    //
+    // When the target DIFFERS from `event.location_id` — a host event resolved
+    // to its org master, or an explicit `sending_location_id` override — the
+    // fallback is a different location than the one that was chosen, which is
+    // the wrong-brand send this function exists to prevent. That still throws.
+    if (targetId !== event.location_id) {
+      throw new Error(`resolveEventCommsLocation: sending location read failed for ${targetId} (falling back to the event's own location ${event.location_id || 'none'} would send under a different brand): ${rowError.message}`)
+    }
+    logError('event-comms-location', 'sending location read failed; falling back to the event location (same id, same brand)', {
+      err: rowError, locationId: targetId,
+    })
+    return null
   }
   if (!row) return null
 

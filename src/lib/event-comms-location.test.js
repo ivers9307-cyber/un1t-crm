@@ -122,11 +122,63 @@ describe('resolveEventCommsLocation', () => {
     expect(resolveMasterLocationIdStrict).not.toHaveBeenCalled()
   })
 
-  it('throws when the sending-location read fails, rather than returning null', async () => {
+  // ── BAREWRITE.3 — the throw is only worth its price where it prevents a
+  // BRAND CROSSING. Every caller falls back to the event's own location_id on a
+  // null, so when the unreadable target IS that same location_id the throw
+  // changes nothing about which sender would be used — it only deletes the
+  // message. These two tests pin the asymmetry from both sides.
+
+  it('RECEIPT NOT LOST: a plain event whose own location read fails returns null (same-location fallback), it does NOT throw', async () => {
     const db = makeFailingDb('LOC')
+    // host_id null + no override → target === event.location_id === 'LOC'.
     await expect(
       resolveEventCommsLocation(db, { location_id: 'LOC', host_id: null, sending_location_id: null }),
-    ).rejects.toThrow(/sending location read failed/)
+    ).resolves.toBeNull()
+  })
+
+  // Fails the Nth `.maybeSingle()` of the call and serves every other one, so a
+  // test can break the TARGET read while the anchor read ahead of it succeeds.
+  function makeDbFailingOnNthRead(n) {
+    let reads = 0
+    return {
+      from() {
+        let id = null
+        const b = {
+          select() { return b },
+          eq(col, val) { if (col === 'id') id = val; return b },
+          maybeSingle() {
+            reads += 1
+            return reads === n
+              ? Promise.resolve({ data: null, error: { message: 'connection reset' } })
+              : Promise.resolve({ data: { id, organization_id: 'ORG' }, error: null })
+          },
+        }
+        return b
+      },
+    }
+  }
+
+  it('RECEIPT NOT LOST: a host event with no org master resolves to its own anchor, so a failed target read there is fail-open too', async () => {
+    resolveMasterLocationIdStrict.mockResolvedValue(null) // no master → target === anchor
+    // Read 1 = the anchor's organization_id (ok); read 2 = the target row (fails).
+    await expect(
+      resolveEventCommsLocation(makeDbFailingOnNthRead(2), { location_id: 'ANCHOR', host_id: 'H', sending_location_id: null }),
+    ).resolves.toBeNull()
+  })
+
+  it('WRONG BRAND IMPOSSIBLE: an explicit sending_location_id override that cannot be read THROWS (the fallback is a different location)', async () => {
+    const db = makeFailingDb('OVR')
+    await expect(
+      resolveEventCommsLocation(db, { location_id: 'LOC', host_id: null, sending_location_id: 'OVR' }),
+    ).rejects.toThrow(/sending location read failed for OVR/)
+  })
+
+  it('WRONG BRAND IMPOSSIBLE: a host event whose ORG MASTER row cannot be read THROWS rather than falling back to the anchor', async () => {
+    resolveMasterLocationIdStrict.mockResolvedValue('MASTER')
+    const db = makeFailingDb('MASTER')
+    await expect(
+      resolveEventCommsLocation(db, { location_id: 'ANCHOR', host_id: 'H', sending_location_id: null }),
+    ).rejects.toThrow(/sending location read failed for MASTER/)
   })
 
   // The MIDDLE hop. Hardening the two reads either side of it was not enough:

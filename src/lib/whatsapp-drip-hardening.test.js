@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
-  isFrequencyCapError, fetchDripDoneContactIds, CAPPED_RETRY_HOURS,
+  isFrequencyCapError, fetchDripDoneContactIds, CAPPED_RETRY_HOURS, claimDripRecipient,
   broadcastQualityBlockError, classifyBlastFailure, blastAbortPatch, blastAbortNotification,
 } from './whatsapp.js'
 import { applyMetaUserPreference } from './whatsapp-consent.js'
@@ -44,6 +44,95 @@ describe('fetchDripDoneContactIds — capped retry window', () => {
     ])
     const done = await fetchDripDoneContactIds(db, 'bc1')
     expect(done.sort()).toEqual(['a', 'b', 'd'])
+  })
+})
+
+// ── BAREWRITE.3 — the drip claim is a MUTEX, not just a dedupe ──────────────
+// The drip claimed with an upsert while the blast path it says it mirrors uses
+// an insert. Upsert succeeds on conflict, so two overlapping cron ticks (Vercel
+// does not skip an overlapping run) both claimed the same contact and both sent
+// the same marketing template. Insert alone would have broken the OTHER
+// property: a 'capped' (Meta 131049) row is deliberately re-selected after
+// CAPPED_RETRY_HOURS, and by then a row exists. Both are pinned here.
+//
+// A `whatsapp_broadcast_recipients` that actually enforces
+// UNIQUE(broadcast_id, contact_id) (mig 331).
+function recipientsTable(seed = []) {
+  const rows = seed.map(r => ({ ...r }))
+  const key = (b, c) => `${b}|${c}`
+  const db = {
+    rows,
+    from(table) {
+      if (table !== 'whatsapp_broadcast_recipients') throw new Error(`unexpected table ${table}`)
+      return {
+        insert(row) {
+          const clash = rows.find(r => key(r.broadcast_id, r.contact_id) === key(row.broadcast_id, row.contact_id))
+          if (clash) {
+            return Promise.resolve({ error: { code: '23505', message: 'duplicate key value violates unique constraint "whatsapp_broadcast_recipients_broadcast_id_contact_id_key"' } })
+          }
+          rows.push({ ...row })
+          return Promise.resolve({ error: null })
+        },
+        update(patch) {
+          const filters = {}
+          const b = {
+            eq(col, val) { filters[col] = val; return b },
+            select: async () => {
+              const matched = rows.filter(r => Object.entries(filters).every(([c, v]) => r[c] === v))
+              for (const r of matched) Object.assign(r, patch)
+              return { data: matched.map(r => ({ id: `${r.broadcast_id}:${r.contact_id}` })), error: null }
+            },
+          }
+          return b
+        },
+      }
+    },
+  }
+  return db
+}
+
+describe('claimDripRecipient — the per-recipient mutex', () => {
+  it('claims a fresh contact by INSERT, and a second concurrent tick loses', async () => {
+    const db = recipientsTable()
+
+    const first = await claimDripRecipient(db, 'bc1', 'c1')
+    const second = await claimDripRecipient(db, 'bc1', 'c1')
+
+    expect(first).toEqual({ claimed: true })
+    // The whole point: the upsert version returned claimed:true here and the
+    // template went out twice.
+    expect(second).toEqual({ claimed: false, reason: 'already_claimed' })
+    expect(db.rows).toHaveLength(1)
+    expect(db.rows[0]).toMatchObject({ status: 'pending' })
+  })
+
+  it('re-claims a parked capped row (the retry the upsert existed for) — once', async () => {
+    const db = recipientsTable([
+      { broadcast_id: 'bc1', contact_id: 'c1', status: 'capped', error_message: 'ecosystem', failed_at: '2026-08-01T00:00:00.000Z' },
+    ])
+
+    const first = await claimDripRecipient(db, 'bc1', 'c1')
+    const second = await claimDripRecipient(db, 'bc1', 'c1')
+
+    expect(first).toEqual({ claimed: true, retry: true })
+    expect(second).toEqual({ claimed: false, reason: 'already_claimed' })
+    // The park is cleared so the row reads as a live claim, not a stale failure.
+    expect(db.rows[0]).toMatchObject({ status: 'pending', error_message: null, failed_at: null })
+  })
+
+  it('never re-claims a row that already sent, or one another tick is mid-send on', async () => {
+    for (const status of ['sent', 'pending', 'failed', 'delivered']) {
+      const db = recipientsTable([{ broadcast_id: 'bc1', contact_id: 'c1', status }])
+      expect(await claimDripRecipient(db, 'bc1', 'c1')).toEqual({ claimed: false, reason: 'already_claimed' })
+      expect(db.rows[0].status).toBe(status)
+    }
+  })
+
+  it('reports a real DB failure as itself, so the caller skips rather than sending unrecorded', async () => {
+    const db = {
+      from: () => ({ insert: async () => ({ error: { code: '08006', message: 'connection reset' } }) }),
+    }
+    expect(await claimDripRecipient(db, 'bc1', 'c1')).toEqual({ claimed: false, reason: 'connection reset' })
   })
 })
 
