@@ -93,6 +93,14 @@ export const AGENT_THINKING = { type: 'adaptive' }
 // AGENT-HANDS.1 — the booking tools join the cached block. Still one
 // byte-identical stable prefix; the ephemeral marker moves to the last
 // tool of the COMBINED array so the whole block caches.
+// NOTE — strict tool use (`strict: true`) is NOT applied here, and that is a
+// measured decision, not an oversight. Sonnet 5 supports it, but the API caps
+// OPTIONAL parameters across all tool schemas in a request at 24 and Mia sits
+// at 29, so a strict request is rejected outright:
+//   "Schemas contains too many optional parameters (29) … (limit: 24)."
+// Adopting it means shedding 5 optional parameters — several are deliberately
+// optional (verify_identity takes email OR surname) — or going strict on a
+// subset of tools. See tool-schemas.test.js, which tracks the budget.
 export const ALL_AGENT_TOOLS = [...ACCOUNT_TOOLS, ...BOOKING_TOOLS, ...EVENT_TOOLS, ...CARD_TOOLS]
 // MIA-HYGIENE.5 — 1h TTL on this cross-turn breakpoint (see prompt.js
 // buildCachedSystem for the measurement). The intra-turn tool_result marker
