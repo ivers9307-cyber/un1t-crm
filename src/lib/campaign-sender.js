@@ -205,8 +205,17 @@ export async function tickCampaignSend(db, campaign) {
   if (!isFeatureEnabledAtLocation(campaign.locations, 'email')) {
     // The updated_at bump IS the rotation — if it is lost, this campaign stays
     // at the head of the ascending pick order and occupies a per-tick slot on
-    // every tick, forever. It was a bare await until BAREWRITE.1.
-    await writeOrLog(
+    // every tick, forever. It was a bare await until BAREWRITE.1, and merely
+    // LOGGING the loss (the first cut) left that behaviour untouched: the
+    // error has to reach the cron. Returning it hands run-campaigns
+    // campaignFailurePatch, whose `last_error` write re-triggers the
+    // `campaigns_updated_at` trigger — so the rotation is restored by the very
+    // path that records the problem, and a campaign that keeps failing the
+    // bump eventually leaves the pick window as 'failed' instead of pinning a
+    // slot forever. Note this reports the BUMP's failure, not the bundle gate
+    // itself: a clean bump still returns no error, so the deliberate
+    // "disabled is a valid state, never an error" posture above is unchanged.
+    const bumpErr = await writeOrLog(
       db.from('campaigns')
         .update({
           updated_at: new Date().toISOString(),
@@ -214,7 +223,9 @@ export async function tickCampaignSend(db, campaign) {
         })
         .eq('id', campaignId),
       'bundle-disabled rotation bump', campaignId)
-    return { phase: 'bundle_disabled', sent: 0 }
+    return bumpErr
+      ? { phase: 'bundle_disabled', sent: 0, error: `rotation bump failed (campaign would pin a per-tick slot): ${bumpErr.message}` }
+      : { phase: 'bundle_disabled', sent: 0 }
   }
 
   // Phase 1 — if the campaign has not finished populating, populate it.
@@ -388,12 +399,16 @@ export async function tickCampaignSend(db, campaign) {
     // ticks at most MAX_CAMPAIGNS_PER_TICK campaigns) — otherwise an
     // hours-long wait would pin one of the per-tick slots and starve
     // other queued campaigns.
-    await writeOrLog(
+    // Same as the bundle-gate bump above: a lost bump is not an observation,
+    // it is the harm, so it goes back to the cron rather than only to the log.
+    const bumpErr = await writeOrLog(
       db.from('campaigns')
         .update({ updated_at: new Date().toISOString() })
         .eq('id', campaignId),
       'ab_waiting rotation bump', campaignId)
-    return { phase: 'ab_waiting', sent: 0 }
+    return bumpErr
+      ? { phase: 'ab_waiting', sent: 0, error: `rotation bump failed (campaign would pin a per-tick slot): ${bumpErr.message}` }
+      : { phase: 'ab_waiting', sent: 0 }
   }
 
   if (abPhase === 'decide') {
@@ -416,11 +431,16 @@ export async function tickCampaignSend(db, campaign) {
       })
     }
     // CAS on ab_winner IS NULL — exactly one overlapping tick decides.
-    const { data: won } = await db.from('campaigns')
+    // The error is bound (BAREWRITE.1 follow-up): without it a failed CAS
+    // returns data:null, which is byte-identical to "a concurrent tick won" —
+    // so a persistent DB failure would look like a permanent race and the
+    // campaign would sit in 'decide' forever with nothing recorded anywhere.
+    const { data: won, error: casError } = await db.from('campaigns')
       .update({ ab_winner: winner, ab_decided_at: new Date().toISOString() })
       .eq('id', campaignId)
       .is('ab_winner', null)
       .select('id')
+    if (casError) return { phase: 'ab_decide', sent: 0, error: `ab_winner CAS failed: ${casError.message}` }
     if (!won || won.length === 0) {
       // A concurrent tick decided first; the next tick sends with its winner.
       return { phase: 'ab_decide', sent: 0 }
@@ -510,12 +530,14 @@ export async function tickCampaignSend(db, campaign) {
         // Leave the campaign 'sending' (acceptable — the window is hours)
         // and rotate it to the back of the cron's pick order, mirroring
         // ab_waiting, so an hours-long cap hold can't pin a per-tick slot.
-        await writeOrLog(
+        const bumpErr = await writeOrLog(
           db.from('campaigns')
             .update({ updated_at: new Date().toISOString() })
             .eq('id', campaignId),
           'cap_deferred rotation bump', campaignId)
-        return { phase: 'cap_deferred', deferred: capHeld, sent: 0 }
+        return bumpErr
+          ? { phase: 'cap_deferred', deferred: capHeld, sent: 0, error: `rotation bump failed (campaign would pin a per-tick slot): ${bumpErr.message}` }
+          : { phase: 'cap_deferred', deferred: capHeld, sent: 0 }
       }
     }
 
@@ -564,7 +586,7 @@ export async function tickCampaignSend(db, campaign) {
   // status='queued' after our row lock releases, matches 0 of these ids,
   // and claims a different chunk — so no recipient is ever sent twice.
   const candidateIds = candidateRows.map(r => r.id)
-  const { data: claimedRows } = await db
+  const { data: claimedRows, error: claimError } = await db
     .from('campaign_recipients')
     // claimed_at starts the CAMPAIGN-REL.2 lease clock — see
     // reclaimStuckSending above.
@@ -572,6 +594,10 @@ export async function tickCampaignSend(db, campaign) {
     .in('id', candidateIds)
     .eq('status', 'queued')
     .select('id')
+  // Same reason as the ab_winner CAS above: a failed claim and a lost race
+  // both arrive as an empty list, so without the error a broken claim reads
+  // as "another tick has it" every tick and the campaign never sends.
+  if (claimError) return { phase: 'send', sent: 0, bounced: 0, error: `recipient claim failed: ${claimError.message}` }
   const claimedIds = new Set((claimedRows || []).map(r => r.id))
   const claimed = candidateRows.filter(r => claimedIds.has(r.id))
   if (claimed.length === 0) {

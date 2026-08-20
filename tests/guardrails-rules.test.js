@@ -362,9 +362,18 @@ ruleTester.run('no-discarded-single-error', plugin.rules['no-discarded-single-er
 
 // ── BAREWRITE.1 ──────────────────────────────────────────────────────────────
 // no-unchecked-supabase-write. The `invalid` block below is the load-bearing
-// half: every one of the SIX live defect sites this rule was written for is
-// reproduced there verbatim (modulo variable names), so the suite proves the
-// rule would have caught each of them at PR time rather than in production.
+// half: the FOUR WRITE-side defect sites this rule was written for (1 IG
+// unlink, 2 campaign rotation bump, 3 both race send-once stamps, 4 the staff
+// profiles update and its sibling delete) are reproduced there verbatim, so
+// the suite proves the rule would have caught each of them at PR time.
+//
+// It does NOT cover sites 5 and 6, and an earlier version of this comment
+// claimed it did. Both are discarded-error READS — mobile/lib/member/
+// contact-context.jsx and src/lib/event-comms-location.js are `maybeSingle()`
+// lookups — and reads are explicitly outside this rule (see the `valid` list).
+// They are guarded by their own tests instead: src/lib/event-comms-location
+// .test.js and mobile/lib/member/contact-context.source.test.js. Do not read
+// the ratchet as protecting the read side; it does not.
 ruleTester.run('no-unchecked-supabase-write', plugin.rules['no-unchecked-supabase-write'], {
   valid: [
     // The error IS bound — the whole point.
@@ -376,8 +385,19 @@ ruleTester.run('no-unchecked-supabase-write', plugin.rules['no-unchecked-supabas
     'async () => { const res = await db.from("x").upsert(r) }',
     // Member access on the awaited value (campaign-sender's retryable insert).
     'async () => { const err = (await db.from("x").insert(r))?.error }',
-    // .then(({ error }) => …) — the callback may bind error.
+    // .then(cb) — allowed only when the callback can actually reach the error.
     'async () => { await db.rpc("f", { p: 1 }).then(({ error }) => { if (error) log(error) }) }',
+    'async () => { await db.from("x").update(u).eq("id", id).then(({ error, data }) => log(error, data)) }',
+    // A plain identifier parameter can read `.error` off the result.
+    'async () => { await db.from("x").insert(r).then(res => { if (res.error) log(res.error) }) }',
+    // A rest element keeps everything reachable.
+    'async () => { await db.from("x").insert(r).then(({ ...rest }) => log(rest)) }',
+    // A callback we cannot see inside — assume it handles the result.
+    'async () => { await db.from("x").insert(r).then(handleResult) }',
+    // Destructured WITH error, in either order or renamed.
+    'async () => { const { data, error } = await db.from("x").update(u).eq("id", id).select("id") }',
+    'async () => { const { error: e, data } = await db.from("x").insert(r).select() }',
+    'async () => { const { ...whole } = await db.from("x").insert(r) }',
     // Returned — the caller owns the error.
     'async () => { return db.from("x").update(u).eq("id", id) }',
     'async () => { return await db.from("x").update(u).eq("id", id) }',
@@ -439,6 +459,37 @@ ruleTester.run('no-unchecked-supabase-write', plugin.rules['no-unchecked-supabas
     {
       code: 'async () => { await db.from("a").insert(r); await db.from("b").update(u).eq("id", i) }',
       errors: [{ messageId: 'unchecked' }, { messageId: 'unchecked' }],
+    },
+    // ── `.then()` IS NOT A SILENCER. Skipping every `.then` unconditionally
+    // made `.then(() => {})` a one-token way past an ERROR-level armed path
+    // with the error just as discarded — the disable comment the rule's own
+    // message forbids, spelled differently.
+    {
+      code: 'async () => { await db.from("x").update(u).eq("id", id).then(() => {}) }',
+      errors: [{ messageId: 'unchecked' }],
+    },
+    {
+      code: 'async () => { await db.from("x").insert(r).then(({ data }) => log(data)) }',
+      errors: [{ messageId: 'unchecked' }],
+    },
+    // ── DESTRUCTURED WITHOUT `error`. Neither rule saw this shape: this one
+    // only looked at completely-unbound results, and no-discarded-single-error
+    // only fires on a `.single()` chain, so a write destructured as `{ data }`
+    // with no `.single()` fell between them. 40 production sites, 33 of them
+    // with no `.single()`/`.maybeSingle()` anywhere in the chain.
+    {
+      code: 'async () => { const { data } = await db.from("campaign_recipients").update({ status: "sending" }).in("id", ids).eq("status", "queued").select("id") }',
+      errors: [{ messageId: 'destructuredWithoutError' }],
+    },
+    {
+      code: 'async () => { const { count } = await db.from("x").delete().eq("id", id) }',
+      errors: [{ messageId: 'destructuredWithoutError' }],
+    },
+    // The postmark queue-marking write CLAUDE.md's POSTMARK-RACE invariant is
+    // about, in the shape it ships in.
+    {
+      code: 'async () => { const { data: marked } = await db.from("postmark_webhook_queue").update({ status: "processed" }).eq("id", row.id).select("id") }',
+      errors: [{ messageId: 'destructuredWithoutError' }],
     },
   ],
 })

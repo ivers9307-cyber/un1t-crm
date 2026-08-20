@@ -451,12 +451,17 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId) {
   // Consent keywords — the broadcast footer promises "Reply STOP to
   // Unsubscribe", so honour an exact STOP/START text reply: flip
   // whatsapp_marketing + wa_status, write the consent_log audit row,
-  // and acknowledge in-thread. Best-effort (the helper never throws);
-  // unknown senders (no contact row) are skipped.
+  // and acknowledge in-thread. The helper never throws, and the webhook still
+  // 200s either way (Meta disables a subscription on non-2xx) — but a REFUSED
+  // opt-out is not a non-event: it means the customer asked to stop and is
+  // still in every marketing audience, with no acknowledgement sent. Say so at
+  // error level rather than discarding the result, which is what let the
+  // never-firing catch inside the helper hide for so long.
+  // Unknown senders (no contact row) are skipped.
   if (messageType === 'text' && contact?.id) {
     const keyword = parseConsentKeyword(body)
     if (keyword) {
-      await applyWhatsappConsentKeyword({
+      const consent = await applyWhatsappConsentKeyword({
         db,
         contact,
         // The contact lookup above is a minimal select (no wa_phone) —
@@ -467,6 +472,9 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId) {
         conversationId,
         keyword,
       })
+      if (!consent?.applied) {
+        console.error(`[wa-webhook] ${keyword.toUpperCase()} from contact ${contact.id} was NOT applied (${consent?.reason || 'unknown'}) — the contact is still in marketing audiences and got no acknowledgement`)
+      }
     }
   }
 

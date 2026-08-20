@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { pickCommsLocationTarget, resolveEventCommsLocation } from './event-comms-location'
-import { resolveMasterLocationId } from './host-events'
+import { resolveMasterLocationIdStrict } from './host-events'
 
 // Isolate the async wrapper from its two IO helpers so we can unit-test its
 // target-selection + row-load + fallback logic (the DB composition) directly.
-vi.mock('./host-events', () => ({ resolveMasterLocationId: vi.fn() }))
+vi.mock('./host-events', () => ({ resolveMasterLocationIdStrict: vi.fn() }))
 vi.mock('./connection-registry', () => ({ overlayConnections: vi.fn((_db, row) => row) }))
 
 describe('pickCommsLocationTarget', () => {
@@ -59,11 +59,11 @@ describe('resolveEventCommsLocation', () => {
     const db = makeDb({ LOC: { id: 'LOC', name: 'Hatch', twilio_alpha_sender_id: 'UN1THATCH', organization_id: 'ORG' } })
     const row = await resolveEventCommsLocation(db, { location_id: 'LOC', host_id: null, sending_location_id: null })
     expect(row?.id).toBe('LOC')
-    expect(resolveMasterLocationId).not.toHaveBeenCalled()
+    expect(resolveMasterLocationIdStrict).not.toHaveBeenCalled()
   })
 
   it('returns the org master row for a host event with no override', async () => {
-    resolveMasterLocationId.mockResolvedValue('MASTER')
+    resolveMasterLocationIdStrict.mockResolvedValue('MASTER')
     const db = makeDb({
       ANCHOR: { organization_id: 'ORG' },
       MASTER: { id: 'MASTER', name: 'Stillorgan', twilio_alpha_sender_id: 'UN1T Dub', organization_id: 'ORG' },
@@ -76,7 +76,7 @@ describe('resolveEventCommsLocation', () => {
     const db = makeDb({ OVR: { id: 'OVR', name: 'Hatch', twilio_alpha_sender_id: 'UN1THATCH', organization_id: 'ORG' } })
     const row = await resolveEventCommsLocation(db, { location_id: 'ANCHOR', host_id: 'H', sending_location_id: 'OVR' })
     expect(row?.id).toBe('OVR')
-    expect(resolveMasterLocationId).not.toHaveBeenCalled()
+    expect(resolveMasterLocationIdStrict).not.toHaveBeenCalled()
   })
 
   it('returns null when the target location row is not found (safe fallback for callers)', async () => {
@@ -119,7 +119,7 @@ describe('resolveEventCommsLocation', () => {
       resolveEventCommsLocation(db, { location_id: 'ANCHOR', host_id: 'H', sending_location_id: null }),
     ).rejects.toThrow(/anchor location read failed/)
     // The wrong-brand fallback is never reached.
-    expect(resolveMasterLocationId).not.toHaveBeenCalled()
+    expect(resolveMasterLocationIdStrict).not.toHaveBeenCalled()
   })
 
   it('throws when the sending-location read fails, rather than returning null', async () => {
@@ -127,5 +127,21 @@ describe('resolveEventCommsLocation', () => {
     await expect(
       resolveEventCommsLocation(db, { location_id: 'LOC', host_id: null, sending_location_id: null }),
     ).rejects.toThrow(/sending location read failed/)
+  })
+
+  // The MIDDLE hop. Hardening the two reads either side of it was not enough:
+  // resolveMasterLocationId (the contact-homing helper) folds its own read
+  // error into the anchor, so a failure there still produced
+  // masterLocationId = anchor and a wrong-brand send. This branch now calls
+  // the strict variant, so the failure has to travel.
+  it('propagates a master-lookup failure instead of sending from the anchor', async () => {
+    resolveMasterLocationIdStrict.mockRejectedValue(new Error('organizations read failed'))
+    const db = makeDb({
+      ANCHOR: { organization_id: 'ORG' },
+      MASTER: { id: 'MASTER', name: 'Stillorgan', twilio_alpha_sender_id: 'UN1T Dub', organization_id: 'ORG' },
+    })
+    await expect(
+      resolveEventCommsLocation(db, { location_id: 'ANCHOR', host_id: 'H', sending_location_id: null }),
+    ).rejects.toThrow(/organizations read failed/)
   })
 })

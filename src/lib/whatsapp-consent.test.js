@@ -21,18 +21,25 @@ import { sendTextMessage } from './whatsapp'
 // Chainable stub that records every write. `upsert` resolves directly
 // (the code awaits the builder); `update` supports the .eq(...) /
 // .eq().eq() chains used across the module.
-function stubDb({ writes }) {
+//
+// `failOn` is a { table: message } map — a resolved `{ error }`, which is what
+// supabase-js actually does. It never throws, on purpose: the writes here used
+// to sit in a try/catch that could not fire, which is exactly how a failed
+// opt-out kept returning `applied: true`.
+function stubDb({ writes, failOn = {} }) {
+  const resultFor = (table) =>
+    failOn[table] ? { error: { message: failOn[table] } } : { error: null }
   return {
     from(table) {
       return {
         upsert: (row, opts) => {
           writes.push({ table, op: 'upsert', row, opts })
-          return Promise.resolve({ error: null })
+          return Promise.resolve(resultFor(table))
         },
         update: (patch) => {
           const record = (filters) => {
             writes.push({ table, op: 'update', patch, filters })
-            return Promise.resolve({ error: null })
+            return Promise.resolve(resultFor(table))
           }
           const chain = (filters) => ({
             eq: (col, val) => chain({ ...filters, [col]: val }),
@@ -42,7 +49,7 @@ function stubDb({ writes }) {
         },
         insert: (row) => {
           writes.push({ table, op: 'insert', row })
-          return Promise.resolve({ error: null })
+          return Promise.resolve(resultFor(table))
         },
         select: () => ({
           or: () => ({ limit: () => Promise.resolve({ data: [{ id: 'c1' }] }) }),
@@ -133,6 +140,61 @@ describe('applyWhatsappConsentKeyword — STOP', () => {
   })
 })
 
+// ── BAREWRITE.1 follow-up — a consent write that fails must not be ACKED ────
+// All three writes were bare `await`s inside a try/catch. supabase-js resolves
+// with { data, error } rather than throwing, so that catch could never fire:
+// the function fell through, returned `applied: true`, and sent the customer
+// "You've been unsubscribed from WhatsApp marketing messages" while they were
+// still in every marketing audience. The sole caller discarded the result and
+// its comment said "best-effort (the helper never throws)" — true, and exactly
+// why nothing was ever detected. Telling someone they are unsubscribed when
+// they are not is the worst available outcome here, so the two AUTHORITATIVE
+// legs now refuse; the audit-trail insert stays best-effort and logs.
+describe('applyWhatsappConsentKeyword — a failed write is never acknowledged', () => {
+  it('refuses when the marketing-preference upsert fails, and sends NO ack', async () => {
+    const writes = []
+    const db = stubDb({ writes, failOn: { contact_preferences: 'connection reset' } })
+    const r = await applyWhatsappConsentKeyword({
+      db, contact: { id: 'c1' }, waPhone: '353871234567',
+      locationId: 'loc1', conversationId: 'conv1', keyword: 'stop',
+    })
+
+    expect(r).toMatchObject({ applied: false })
+    expect(sendTextMessage).not.toHaveBeenCalled()
+    // And it stops there — no half-applied wa_status, no audit row claiming
+    // an opt-out that did not happen.
+    expect(writes.find(w => w.table === 'contacts')).toBeUndefined()
+    expect(writes.find(w => w.table === 'consent_log')).toBeUndefined()
+  })
+
+  it('refuses when the wa_status write fails, and sends NO ack', async () => {
+    const writes = []
+    const db = stubDb({ writes, failOn: { contacts: 'deadlock detected' } })
+    const r = await applyWhatsappConsentKeyword({
+      db, contact: { id: 'c1' }, waPhone: '353871234567',
+      locationId: 'loc1', conversationId: 'conv1', keyword: 'stop',
+    })
+
+    expect(r).toMatchObject({ applied: false })
+    expect(sendTextMessage).not.toHaveBeenCalled()
+    expect(writes.find(w => w.table === 'consent_log')).toBeUndefined()
+  })
+
+  it('still applies and acknowledges when only the audit row is lost', async () => {
+    const writes = []
+    const db = stubDb({ writes, failOn: { consent_log: 'table locked' } })
+    const r = await applyWhatsappConsentKeyword({
+      db, contact: { id: 'c1' }, waPhone: '353871234567',
+      locationId: 'loc1', conversationId: 'conv1', keyword: 'stop',
+    })
+
+    // The consent change itself landed — refusing here would leave the
+    // customer un-answered on a change that DID take effect.
+    expect(r).toMatchObject({ applied: true, action: 'opt_out' })
+    expect(sendTextMessage).toHaveBeenCalled()
+  })
+})
+
 describe('applyMetaUserPreference — same upsert semantics', () => {
   it('stop upserts the preferences row (contact may have none)', async () => {
     const writes = []
@@ -146,5 +208,15 @@ describe('applyMetaUserPreference — same upsert semantics', () => {
     expect(prefWrite?.op).toBe('upsert')
     expect(prefWrite.row).toMatchObject({ contact_id: 'c1', whatsapp_marketing: false })
     expect(prefWrite.opts).toMatchObject({ onConflict: 'contact_id' })
+  })
+
+  it('reports write_failed instead of applied when a leg fails', async () => {
+    const writes = []
+    const db = stubDb({ writes, failOn: { contacts: 'connection reset' } })
+    const r = await applyMetaUserPreference(db, {
+      wa_id: '353871234567', category: 'marketing_messages', value: 'stop',
+    })
+    expect(r).toMatchObject({ applied: false, reason: 'write_failed' })
+    expect(writes.find(w => w.table === 'consent_log')).toBeUndefined()
   })
 })

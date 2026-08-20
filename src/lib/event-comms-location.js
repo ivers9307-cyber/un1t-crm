@@ -4,7 +4,7 @@
 // instead, so BOTH sms (sendLocationSms) and email (resolveEmailSender) send
 // from a real location. See spec 2026-08-18-event-comms-location-design.md.
 
-import { resolveMasterLocationId } from './host-events'
+import { resolveMasterLocationIdStrict } from './host-events'
 import { overlayConnections } from './connection-registry'
 
 /**
@@ -39,6 +39,11 @@ export async function resolveEventCommsLocation(db, event) {
   // keeps its existing send-failed handling rather than sending as the wrong
   // brand. (`.maybeSingle()` stays: 0 rows IS a legitimate answer here, so
   // this is the "answer it in the code" fix, not a discarded error.)
+  //
+  // The MIDDLE hop matters just as much: `resolveMasterLocationId` is
+  // HOST-MASTER.1's contact-homing helper and deliberately fails OPEN to the
+  // anchor, which for sender selection is exactly the wrong-brand fallback
+  // this function exists to prevent. Call the strict variant, which throws.
   let masterLocationId = null
   if (!event.sending_location_id && event.host_id && event.location_id) {
     const { data: anchor, error: anchorError } = await db
@@ -49,7 +54,7 @@ export async function resolveEventCommsLocation(db, event) {
     if (anchorError) {
       throw new Error(`resolveEventCommsLocation: anchor location read failed (would have fallen back to a wrong-brand sender): ${anchorError.message}`)
     }
-    masterLocationId = await resolveMasterLocationId(db, {
+    masterLocationId = await resolveMasterLocationIdStrict(db, {
       organization_id: anchor?.organization_id || null,
       anchor_location_id: event.location_id,
     })

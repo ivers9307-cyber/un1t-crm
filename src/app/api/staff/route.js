@@ -198,14 +198,26 @@ export async function POST(request) {
   // `{ success: true }`. That is a quiet privilege mis-assignment, and it was
   // the only unchecked leg here — the profile_locations insert below already
   // surfaced its error, so a TOTAL failure was visible while a partial one was
-  // not. `count: 'exact'`: the row must exist (we just created the auth user),
-  // so zero rows matched is itself the bug, and PostgREST reports no error for
-  // it.
-  const { error: profileError, count: profileRows } = await db
+  // not.
+  //
+  // The row must exist (we just created the auth user and its trigger minted
+  // the profile), so zero rows matched is itself the bug — and PostgREST
+  // reports NO error for an UPDATE that matches nothing. `.select('id')` is how
+  // that count is obtained: it returns the rows the UPDATE actually touched.
+  //
+  // `{ count: 'exact' }` on a bodyless PATCH would also work — postgrest-js
+  // reads `count` off Content-Range, and PostgREST does emit it for a mutation
+  // (prod evidence: prune-hr-detections' heartbeat last_outcome carries
+  // non-zero `detections_deleted`, which comes only from a `.delete({ count:
+  // 'exact' })`). `.select()` is used anyway because it is verifiable by
+  // construction rather than by a response header, and one returned id is
+  // cheaper than the reasoning.
+  const { error: profileError, data: profileRows } = await db
     .from('profiles')
-    .update(updates, { count: 'exact' })
+    .update(updates)
     .eq('id', newUserId)
-  if (profileError || !profileRows) {
+    .select('id')
+  if (profileError || !profileRows?.length) {
     return NextResponse.json({
       success: false,
       error: `Staff login was created but the role/permissions could not be saved — the account would have defaulted to the wrong access level, so nothing else was applied. Delete the user and retry: ${profileError?.message || 'profile row not found'}`,

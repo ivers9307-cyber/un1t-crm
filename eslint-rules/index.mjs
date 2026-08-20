@@ -766,16 +766,33 @@ const noDeadUn1tToken = {
 // ExpressionStatement. That is the one shape in which the error is
 // unobservable by construction.
 //
+// It ALSO flags the near-miss shape `const { data } = await <mutation>` — a
+// mutation destructured without `error`. That was originally waved through as
+// "no-discarded-single-error's territory", and that was simply WRONG: the
+// sibling rule only fires on a `.single()` chain, so a write destructured as
+// `{ data }` with no `.single()` is seen by NEITHER rule. Measured across
+// src/ + shared/ + mobile/ + scripts/: 40 such production write sites, 33 of
+// them with no `.single()`/`.maybeSingle()` anywhere in the chain and so
+// outside the sibling by construction — including the postmark queue-marking
+// write CLAUDE.md's POSTMARK-RACE invariant is about. Reads keep the carve-out
+// (1,078 sites, a different question); this is writes only.
+//
 // DELIBERATE NON-FLAGS (each is a real way the error IS reachable):
-//   - a destructured or assigned result — `const { error } = await …`, and
-//     equally `const { data } = await …`, which is no-discarded-single-error's
-//     territory and a much larger population (measured: 1,078 read sites);
-//     this rule stays strictly on the totally-unbound shape.
+//   - a destructured result that BINDS `error` — `const { error } = await …`,
+//     `const { data, error } = await …`, and a rest element (`const { ...r }`)
+//     which keeps it reachable.
+//   - a plain assignment / variable binding — `const res = await …` — the
+//     whole result object is in hand.
 //   - a member access on the awaited value — `(await db.from(t).insert(r))
 //     ?.error`, the idiom campaign-sender used for its retryable insert.
-//   - `.then(({ error }) => …)` as the outermost call: the callback may bind
-//     error, and the repo already treats `.then`-consumed chains as invisible
-//     (see no-discarded-single-error's KNOWN LIMITS).
+//   - `.then(cb)` ONLY when `cb`'s first parameter can reach the error: an
+//     ObjectPattern containing `error` (or a rest element), a plain identifier
+//     parameter (the callback can read `.error` off it), or a callback this
+//     rule cannot see inside (an identifier reference, not an inline
+//     function). A literal `.then(() => {})` is NOT a non-flag — it binds
+//     nothing, and skipping it unconditionally made `.then(() => {})` a
+//     one-token silencer on an ERROR-level armed path, which is exactly the
+//     disable comment the rule message forbids.
 //   - `db.storage.*` — those return REAL Promises with their own error shape,
 //     the same carve-out no-catch-on-supabase-builder makes.
 //   - a `return`ed or otherwise consumed chain: the caller owns the error.
@@ -790,11 +807,18 @@ const noDeadUn1tToken = {
 //
 // It also cannot see a ZERO-ROW UPDATE: PostgREST returns NO error when an
 // UPDATE matches nothing, so `{ error }` alone still misses "the row vanished".
-// Where the row MUST exist, the fix is `.update(patch, { count: 'exact' })` and
-// a count check — done at the staff-create, race-confirmation and IG-agent
-// sites. No AST rule can tell those apart from the many legitimate
-// zero-row-is-fine writes (every CAS `.is(col, null)` guard in
-// campaign-sender.js is one), so this stays a documented human obligation.
+// Where the row MUST exist, judge the rows the write actually touched —
+// `.update(patch).eq('id', id).select('id')` then `data.length` (the
+// staff-create and IG-agent sites), or make the write itself the mutex with a
+// CAS + `.select()` (race-confirmations' claimSendOnce). No AST rule can tell
+// those apart from the many legitimate zero-row-is-fine writes (every CAS
+// `.is(col, null)` guard in campaign-sender.js is one), so this stays a
+// documented human obligation.
+//
+// And it cannot see a bare write sitting inside a `try { … } catch { … }` as
+// anything other than a bare write — which is the subtlest member of the class,
+// because the reader sees error handling that cannot fire for a supabase
+// result. Measured: 183 such sites across 90 files.
 //
 // SCOPE: armed PER-PATH in eslint.guardrails.config.mjs, not repo-wide. The
 // measured baseline is 477 production sites across 201 files — see that file's
@@ -833,24 +857,85 @@ const noUncheckedSupabaseWrite = {
     schema: [],
     messages: {
       unchecked:
-        'This {{method}} is awaited but its result is discarded entirely — supabase-js RESOLVES with `{ data, error }` instead of throwing, so a failed write is indistinguishable from a successful one here and the code below proceeds as if it had happened. Destructure the error and handle it as the call site deserves: surface it where the caller reports success, log it where the write is genuinely best-effort (say so in a comment). If the row MUST exist, judge the row count too — `.update(patch, { count: \'exact\' })` — because PostgREST reports NO error for an UPDATE that matches nothing. Do not answer this with a disable comment.',
+        'This {{method}} is awaited but its result is discarded entirely — supabase-js RESOLVES with `{ data, error }` instead of throwing, so a failed write is indistinguishable from a successful one here and the code below proceeds as if it had happened. Destructure the error and handle it as the call site deserves: surface it where the caller reports success, log it where the write is genuinely best-effort (say so in a comment). If the row MUST exist, judge the rows it touched too — `.select(\'id\')` and check `data.length` — because PostgREST reports NO error for an UPDATE that matches nothing. Do not answer this with a disable comment, and do not answer it with `.then(() => {})` either.',
+      destructuredWithoutError:
+        'This {{method}} is awaited and destructured, but the pattern does not bind `error` — so the failure is discarded just as completely as a bare await, and no-discarded-single-error does NOT cover it (that rule only fires on a `.single()` chain). A failed write lands here as `data: null`, which reads exactly like "no rows". Add `error` to the pattern and handle it.',
     },
   },
   create(context) {
+    // Can the error still be reached through this binding pattern?
+    function patternBindsError(pattern) {
+      if (!pattern) return true
+      // `const res = await …` / a callback param `r` — the object is in hand.
+      if (pattern.type !== 'ObjectPattern') return true
+      for (const prop of pattern.properties || []) {
+        // `{ ...rest }` keeps everything reachable.
+        if (prop.type === 'RestElement' || prop.type === 'ExperimentalRestProperty') return true
+        const key = prop.key
+        if (!key) continue
+        const name = key.type === 'Identifier' ? key.name : (key.type === 'Literal' ? key.value : null)
+        if (name === 'error') return true
+        // A computed key could be anything — don't guess.
+        if (prop.computed) return true
+      }
+      return false
+    }
+
+    // `.then(cb)`: only a callback whose first parameter can reach the error
+    // counts as handling. `.then(() => {})` binds nothing and is flagged.
+    function thenCallbackBindsError(call) {
+      const cb = call.arguments?.[0]
+      if (!cb) return false
+      // Not an inline function (an identifier, a member expression) — we cannot
+      // see inside it, so we assume it handles the result.
+      if (cb.type !== 'ArrowFunctionExpression' && cb.type !== 'FunctionExpression') return true
+      const param = cb.params?.[0]
+      if (!param) return false
+      return patternBindsError(param)
+    }
+
+    function isSupabaseMutation(call) {
+      if (!call || call.type !== 'CallExpression') return null
+      const callee = call.callee
+      if (!callee || callee.type !== 'MemberExpression' || !callee.property) return null
+      const method = chainMutationMethod(call)
+      if (!method) return null
+      if (!chainRootIsSupabase(call)) return null
+      // storage.* returns real Promises with their own shape.
+      if (chainContainsStorage(call)) return null
+      return method
+    }
+
     return {
       'ExpressionStatement > AwaitExpression'(node) {
         const call = node.argument
         if (!call || call.type !== 'CallExpression') return
         const callee = call.callee
         if (!callee || callee.type !== 'MemberExpression' || !callee.property) return
-        // `.then(cb)` — the callback may bind error (documented blind spot).
-        if (callee.property.name === 'then') return
-        const method = chainMutationMethod(call)
+        if (callee.property.name === 'then') {
+          if (thenCallbackBindsError(call)) return
+          // A `.then` whose callback cannot see the error: report against the
+          // mutation chain it was called on.
+          const inner = callee.object
+          const method = isSupabaseMutation(inner)
+          if (!method) return
+          context.report({ node: call, messageId: 'unchecked', data: { method: `.${method}()` } })
+          return
+        }
+        const method = isSupabaseMutation(call)
         if (!method) return
-        if (!chainRootIsSupabase(call)) return
-        // storage.* returns real Promises with their own shape.
-        if (chainContainsStorage(call)) return
         context.report({ node: call, messageId: 'unchecked', data: { method: `.${method}()` } })
+      },
+      // `const { data } = await db.from(t).update(u).eq(…)` — destructured, but
+      // not in a way that can see the failure. Seen by neither this rule's
+      // original shape nor no-discarded-single-error.
+      'VariableDeclarator > AwaitExpression'(node) {
+        const declarator = node.parent
+        if (!declarator || declarator.init !== node) return
+        if (patternBindsError(declarator.id)) return
+        const method = isSupabaseMutation(node.argument)
+        if (!method) return
+        context.report({ node: node.argument, messageId: 'destructuredWithoutError', data: { method: `.${method}()` } })
       },
     }
   },

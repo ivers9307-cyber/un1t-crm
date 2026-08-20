@@ -1527,16 +1527,33 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
   const dripSentContactIds = []
 
   for (const contact of toSend) {
+    // CLAIM-FIRST, mirroring the blast sender above. The recipients row is the
+    // ONLY dedupe this drip has — fetchDripDoneContactIds excludes every
+    // contact that already has one — and it used to be written AFTER the
+    // template went out, with a bare `await` whose error nothing could see. A
+    // lost row therefore re-selected the contact on the next tick and sent the
+    // same marketing template again. Writing the row BEFORE the send makes a
+    // DB hiccup cost at most a missing message, never a duplicate one; a row
+    // stuck at 'pending' is the same accepted outcome the blast path has.
+    const { error: claimErr } = await db.from('whatsapp_broadcast_recipients').upsert({
+      broadcast_id: broadcastId, contact_id: contact.id,
+      status: 'pending', error_message: null, failed_at: null,
+    }, { onConflict: 'broadcast_id,contact_id' })
+    if (claimErr) {
+      console.error(`[drip ${broadcastId}] could not claim recipient ${contact.id} — skipping rather than sending unrecorded:`, claimErr.message)
+      continue
+    }
     try {
       const components = buildTemplateComponents(template, contact, variableMapping, broadcast.header_media_url, { companyName: branding.companyName, locationId: broadcast.location_id })
       const result = await sendTemplateMessage(contact.wa_phone, template.name, template.language, components, { config })
 
-      // Upsert (not insert): a contact retried after a 'capped' park has an
-      // existing (broadcast, contact) row that this success must overwrite.
-      await db.from('whatsapp_broadcast_recipients').upsert({
+      // Promote the claimed row. Upsert (not update): the claim above may have
+      // raced, and a contact retried after a 'capped' park already has a row.
+      const { error: promoteErr } = await db.from('whatsapp_broadcast_recipients').upsert({
         broadcast_id: broadcastId, contact_id: contact.id,
         wa_message_id: result.messageId, status: 'sent', sent_at: new Date().toISOString(),
       }, { onConflict: 'broadcast_id,contact_id' })
+      if (promoteErr) console.error(`[drip ${broadcastId}] sent to ${contact.id} but the recipient row stayed 'pending' (counts will under-report; no re-send):`, promoteErr.message)
       const conversationId = await getOrCreateConversation(db, contact, broadcast.location_id)
       await db.from('whatsapp_messages').insert({
         conversation_id: conversationId,
@@ -1557,18 +1574,23 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
       // mark the number undeliverable or trip the auto-pause.
       if (isFrequencyCapError({ message: err.message })) {
         console.warn(`[drip ${broadcastId}] frequency-capped ${contact.wa_phone} — retrying next day`)
-        await db.from('whatsapp_broadcast_recipients').upsert({
+        // A lost park leaves the claim at 'pending', which reads as done — the
+        // contact is never retried. That is the safe direction (no duplicate),
+        // but it is a real loss, so say it.
+        const { error: parkErr } = await db.from('whatsapp_broadcast_recipients').upsert({
           broadcast_id: broadcastId, contact_id: contact.id,
           status: 'capped', error_message: err.message, failed_at: new Date().toISOString(),
         }, { onConflict: 'broadcast_id,contact_id' })
+        if (parkErr) console.error(`[drip ${broadcastId}] could not park ${contact.id} as 'capped' — it stays 'pending' and will NOT be retried:`, parkErr.message)
         capped++
         continue
       }
       console.error(`[drip ${broadcastId}] send to ${contact.wa_phone} failed:`, err.message)
-      await db.from('whatsapp_broadcast_recipients').upsert({
+      const { error: parkErr } = await db.from('whatsapp_broadcast_recipients').upsert({
         broadcast_id: broadcastId, contact_id: contact.id,
         status: 'failed', error_message: err.message, failed_at: new Date().toISOString(),
       }, { onConflict: 'broadcast_id,contact_id' })
+      if (parkErr) console.error(`[drip ${broadcastId}] could not park ${contact.id} as 'failed' — it stays 'pending':`, parkErr.message)
       // Permanently-undeliverable number → flag so future audiences skip it.
       await markUndeliverableIfPermanent(db, contact.id, { message: err.message })
       failed++; consecutiveFailures++

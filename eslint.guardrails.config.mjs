@@ -101,11 +101,13 @@ const config = [
     // repo-wide rule only works on a clean baseline, and this one's baseline is
     // not clean.
     //
-    // MEASURED, with an AST over src/ + shared/ + mobile/ + scripts/ (grep
+    // MEASURED by running the RULE ITSELF over src/ + shared/ + mobile/ +
+    // scripts/, so the baseline and the gate can never drift apart (grep
     // undercuts this class about five-fold — multi-line chains are the house
-    // style — so it was counted with the rule's own semantics, not a regex):
-    //   477 production sites, across 201 files, plus 3 in test files.
-    //   Of those 477:
+    // style — so a regex was never going to answer it):
+    //   477 production sites across 201 files before this PR; 437 bare + 38
+    //   destructured-without-`error` across 205 files after it.
+    //   Of the original 477:
     //     45  write to a log/telemetry table (activities, consent_log,
     //         impersonation_log, glofox_sync_runs, recon_runs/hunts) — a lost
     //         write costs an audit line, not behaviour. The nearest thing to
@@ -119,6 +121,16 @@ const config = [
     // measurement: under 10% of it is log-only, and even those lose CRM
     // history. Fixing all 477 in one PR would be ~477 mechanical edits mixed
     // with the six behavioural ones — unreviewable, and the six are the point.
+    //
+    // ARM IN THIS ORDER. The most dangerous subclass is not the most visible
+    // one: 174 of the remaining bare writes, across 89 files, sit INSIDE a
+    // `try { … } catch { … }` whose catch cannot fire for them, because a
+    // supabase builder resolves with `{ data, error }` rather than throwing.
+    // Those read as handled, which is why whatsapp-consent.js survived two
+    // audits. Concentrations today: postmark-webhook-processor.js 19,
+    // whatsapp/conversations/[id]/add-contact 7, sequences/scheduler.js 7,
+    // agent/auto-reply.js 6, recon/hunt.js 6, whatsapp.js 6,
+    // sequences/steps.js 5, webhooks/whatsapp 4, contact-merge.js 4.
     //
     // TO ARM ANOTHER PATH: clean it (run `npm run check:guardrails` with the
     // path added and drive it to zero), then add its line here. Same one-line
@@ -135,6 +147,13 @@ const config = [
       'src/lib/race-confirmations.js',
       'src/lib/event-comms-location.js',
       'src/lib/event-attendee-reminders.js',
+      'src/lib/host-events.js',
+      // The WhatsApp STOP/START path. Not one of the six — found in the
+      // residue sweep, and worse than any of them: six bare writes inside a
+      // try/catch that could not fire for a supabase result, so a failed
+      // opt-out still answered `applied: true` and told the customer "You've
+      // been unsubscribed" while they stayed in every marketing audience.
+      'src/lib/whatsapp-consent.js',
       'src/app/api/staff/route.js',
       'src/app/api/instagram/**',
       'src/app/api/registrations/**',

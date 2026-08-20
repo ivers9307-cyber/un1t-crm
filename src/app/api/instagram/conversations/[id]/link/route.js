@@ -142,21 +142,29 @@ export async function DELETE(request, props) {
   const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return guard
 
-  const { error } = await db.from('instagram_conversations')
-    .update({ contact_id: null, updated_at: new Date().toISOString() })
-    .eq('id', conversation.id)
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-
-  // Forget the identity too, or the next inbound would re-link it instantly
-  // and the unlink would look broken.
+  // Forget the identity FIRST, then drop the thread's contact_id.
   //
-  // BAREWRITE.1 — this used to be a bare `await` with the result discarded, so
-  // a failed clear returned `{ success: true }` and the operator watched the
-  // thread silently re-link on the next inbound DM: precisely the outcome the
-  // comment above calls unacceptable. Surface it. A ZERO-row result is NOT an
-  // error here — the `.eq('instagram_igsid', …)` guard means "clear it only if
-  // it still points at this thread", so someone else having already cleared or
-  // re-pointed it is a legitimate no-op, which is why count is not judged.
+  // Order is load-bearing, and getting it wrong is what BAREWRITE.1 shipped.
+  // The identity clear must happen or the next inbound DM re-links the thread
+  // instantly (resolveContactForInstagramThread step 1 looks the contact up by
+  // `instagram_igsid` and links on the spot) and the unlink looks broken —
+  // which is why a failed clear is a 500 and not a swallowed `await`.
+  //
+  // But the retry the operator is told to perform has to REDO the clear, and
+  // the only handle on which contact to clear is `conversation.contact_id`. If
+  // we nulled the conversation first, a failed clear would leave the retry
+  // reading `contact_id = null`, skipping the clear entirely and answering
+  // `{ success: true }` with the IGSID still set: the same silent re-link, one
+  // click later, via the recovery path. Clearing first makes both legs
+  // re-runnable — a failed clear leaves the thread still linked (so the retry
+  // sees the same state and redoes both), and a failed conversation update
+  // leaves an already-cleared identity that the retry's `.eq('instagram_igsid',
+  // …)` guard turns into a legitimate zero-row no-op.
+  //
+  // A ZERO-row result on the clear is NOT an error: that guard means "clear it
+  // only if it still points at this thread", so someone else having already
+  // cleared or re-pointed it is a valid outcome. That is why count is not
+  // judged here.
   if (conversation.contact_id && conversation.ig_user_id) {
     const { error: forgetError } = await db.from('contacts')
       .update({ instagram_igsid: null })
@@ -166,10 +174,15 @@ export async function DELETE(request, props) {
     if (forgetError) {
       return NextResponse.json({
         success: false,
-        error: `Thread unlinked, but clearing the Instagram identity on the contact failed — the next inbound DM would re-link it. Retry: ${forgetError.message}`,
+        error: `Clearing the Instagram identity on the contact failed, so the thread was left linked rather than half-unlinked (an unlinked thread with the identity still set re-links on the next inbound DM). Retry: ${forgetError.message}`,
       }, { status: 500 })
     }
   }
+
+  const { error } = await db.from('instagram_conversations')
+    .update({ contact_id: null, updated_at: new Date().toISOString() })
+    .eq('id', conversation.id)
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
   return NextResponse.json({ success: true })
 }

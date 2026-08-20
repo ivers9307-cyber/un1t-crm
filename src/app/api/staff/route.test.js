@@ -43,11 +43,16 @@ function mockDb({ inviteError, profileUpdate, clearError } = {}) {
     from: vi.fn((table) => {
       if (table === 'profiles') {
         return {
-          // BAREWRITE.1 — the route now asks for `{ count: 'exact' }` and
-          // refuses to report success on a role/permission write it cannot
-          // confirm, so the stub must model PostgREST's real contract: an
-          // UPDATE that matches nothing returns NO error and count 0.
-          update: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve(profileUpdate || { error: null, count: 1 })) })),
+          // BAREWRITE.1 — the route refuses to report success on a
+          // role/permission write it cannot confirm, so the stub models
+          // PostgREST's real contract: `.select()` after an UPDATE returns the
+          // rows it actually touched, and an UPDATE that matches nothing
+          // returns NO error and an EMPTY array.
+          update: vi.fn(() => ({
+            eq: vi.fn(() => ({
+              select: vi.fn(() => Promise.resolve(profileUpdate || { error: null, data: [{ id: 'new-user-id' }] })),
+            })),
+          })),
           select: vi.fn(() => ({
             eq: vi.fn(() => ({
               single: vi.fn(() => Promise.resolve({
@@ -146,7 +151,7 @@ describe('POST /api/staff', () => {
 describe('POST /api/staff — unchecked write regressions', () => {
   it('refuses to report success when the role/permission update errors', async () => {
     getCurrentUser.mockResolvedValue(ownerUser)
-    const { db } = mockDb({ profileUpdate: { error: { message: 'permission denied' }, count: null } })
+    const { db } = mockDb({ profileUpdate: { error: { message: 'permission denied' }, data: null } })
     createServerClient.mockReturnValue(db)
 
     const res = await POST(postReq({
@@ -162,7 +167,7 @@ describe('POST /api/staff — unchecked write regressions', () => {
 
   it('refuses to report success when the role update matches ZERO rows (no error)', async () => {
     getCurrentUser.mockResolvedValue(ownerUser)
-    const { db } = mockDb({ profileUpdate: { error: null, count: 0 } })
+    const { db } = mockDb({ profileUpdate: { error: null, data: [] } })
     createServerClient.mockReturnValue(db)
 
     const res = await POST(postReq({
