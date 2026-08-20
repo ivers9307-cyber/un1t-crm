@@ -290,6 +290,15 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
   // sendTransactionalEmail → 'outbound', which never attached the RFC
   // 8058 List-Unsubscribe one-click headers). unsubscribeUrl is passed
   // through so sendEmail adds those headers alongside the visible footer.
+  // SEQSENDER.1 (mig 555) — a sequence may name its own sender. Built here the
+  // same way campaign-sender.js builds a campaign's, because the application
+  // owns the display name: Postmark does not stamp a signature's name onto a
+  // bare address. from_email NULL (every pre-existing sequence) → undefined →
+  // the global POSTMARK_FROM_EMAIL default, unchanged.
+  const sequenceFrom = sequence.from_email
+    ? (sequence.from_name ? `${sequence.from_name} <${sequence.from_email}>` : sequence.from_email)
+    : undefined
+
   const result = await sendMarketingEmail({
     to: contact.email,
     subject: mergedSubject,
@@ -298,6 +307,9 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
     locationId: sequence.location_id,
     tag: `seq-${sequence.id}`,
     unsubscribeUrl,
+    from: sequenceFrom,
+    // NULL keeps EMAIL-INBOX.1's default (the location's unified-inbox address).
+    replyTo: sequence.reply_to || undefined,
     sourceType: 'sequence',
     sequenceId: sequence.id,
     sequenceStepId: step.id,
