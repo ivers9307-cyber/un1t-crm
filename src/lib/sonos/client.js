@@ -18,6 +18,7 @@ const OAUTH_AUTHORIZE_URL = 'https://api.sonos.com/login/v3/oauth'
 const OAUTH_TOKEN_URL = 'https://api.sonos.com/login/v3/oauth/access'
 const API_BASE = 'https://api.ws.sonos.com/control/api/v1'
 const REQUEST_TIMEOUT_MS = 8000
+const REFRESH_MARGIN_MS = 5 * 60 * 1000
 
 // Sonos names a missing User-Agent as a throttling trigger.
 const USER_AGENT = 'un1t-crm/1.0 (+https://crm.repset.ie)'
@@ -182,8 +183,6 @@ export function sonosLoadFavorite(token, groupId, favoriteId) {
 export function sonosPause(token, groupId) {
   return apiCall(token, 'POST', `/groups/${enc(groupId)}/playback/pause`)
 }
-
-const REFRESH_MARGIN_MS = 5 * 60 * 1000
 
 // Loads a location's connection and returns a usable access token,
 // refreshing first if it is inside the margin. Never throws — every

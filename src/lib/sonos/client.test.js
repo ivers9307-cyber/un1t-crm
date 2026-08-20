@@ -113,7 +113,14 @@ describe('token calls', () => {
   })
 })
 
-import { sonosGetGroups, sonosSetGroupVolume, sonosLoadFavorite, sonosPause } from './client'
+import {
+  sonosGetHouseholds,
+  sonosGetGroups,
+  sonosGetFavorites,
+  sonosSetGroupVolume,
+  sonosLoadFavorite,
+  sonosPause,
+} from './client'
 
 describe('control api calls', () => {
   beforeEach(() => { global.fetch = vi.fn() })
@@ -128,7 +135,24 @@ describe('control api calls', () => {
     expect(url).toBe('https://api.ws.sonos.com/control/api/v1/households/Sonos_HH1/groups')
     expect(opts.headers.authorization).toBe('Bearer tok')
     expect(opts.headers['user-agent']).toBeTruthy()
+    expect(opts.headers['content-type']).toBeUndefined()
     expect(out).toMatchObject({ ok: true, statusCode: 200 })
+  })
+
+  it('gets households with a bearer token', async () => {
+    global.fetch.mockResolvedValue({ ok: true, status: 200, text: async () => '{"households":[]}' })
+    await sonosGetHouseholds('tok')
+    const [url, opts] = global.fetch.mock.calls[0]
+    expect(url).toBe('https://api.ws.sonos.com/control/api/v1/households')
+    expect(opts.headers.authorization).toBe('Bearer tok')
+  })
+
+  it('gets favorites for a household', async () => {
+    global.fetch.mockResolvedValue({ ok: true, status: 200, text: async () => '{"items":[]}' })
+    await sonosGetFavorites('tok', 'Sonos_HH1')
+    const [url, opts] = global.fetch.mock.calls[0]
+    expect(url).toBe('https://api.ws.sonos.com/control/api/v1/households/Sonos_HH1/favorites')
+    expect(opts.headers.authorization).toBe('Bearer tok')
   })
 
   it('url-encodes a household id', async () => {
@@ -177,11 +201,21 @@ describe('control api calls', () => {
 
 import { withFreshToken } from './client'
 
-function fakeDb(conn, captured = {}) {
+function fakeDb(conn, captured = {}, opts = {}) {
   return {
     from: () => ({
-      select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: conn, error: null }) }) }),
-      update: (patch) => { captured.patch = patch; return { eq: async () => ({ error: null }) } },
+      select: () => ({
+        eq: () => ({
+          maybeSingle: async () => ({
+            data: opts.selectError ? null : conn,
+            error: opts.selectError || null,
+          }),
+        }),
+      }),
+      update: (patch) => {
+        captured.patch = patch
+        return { eq: async () => ({ error: opts.updateError || null }) }
+      },
     }),
     _captured: captured,
   }
@@ -230,5 +264,31 @@ describe('withFreshToken', () => {
     global.fetch.mockResolvedValue({ ok: false, status: 400, text: async () => '{"error":"invalid_grant"}' })
     const out = await withFreshToken(fakeDb(conn), 'loc-1', cfg)
     expect(out).toMatchObject({ ok: false, reason: 'refresh_failed', statusCode: 400 })
+  })
+
+  it('reports a db_error rather than throwing when the lookup select fails', async () => {
+    const out = await withFreshToken(
+      fakeDb(null, {}, { selectError: { message: 'connection refused' } }),
+      'loc-1',
+      cfg,
+    )
+    expect(out).toMatchObject({ ok: false, reason: 'db_error' })
+  })
+
+  it('reports a db_error rather than throwing when persisting the refreshed token fails', async () => {
+    const conn = {
+      id: 'c1', household_id: 'HH1', refresh_token: 'rt', access_token: 'old',
+      access_token_expires_at: new Date(Date.now() - 1000).toISOString(),
+    }
+    global.fetch.mockResolvedValue({
+      ok: true, status: 200,
+      text: async () => JSON.stringify({ access_token: 'new', refresh_token: 'rt', expires_in: 86400 }),
+    })
+    const out = await withFreshToken(
+      fakeDb(conn, {}, { updateError: { message: 'write conflict' } }),
+      'loc-1',
+      cfg,
+    )
+    expect(out).toMatchObject({ ok: false, reason: 'db_error' })
   })
 })
