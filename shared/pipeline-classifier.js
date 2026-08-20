@@ -243,15 +243,42 @@ export function classifyContact(contact, now = Date.now()) {
   const sinceAttended = daysSince(contact.last_attended_at, now)
   const sinceJoined   = daysSince(contact.joined_at, now)
 
+  // FUNNEL.5 — A BOOKED CLASS IN THE DIARY IS NOT DORMANT.
+  //
+  // 'dormant' means "aged-out leads, ex_members, ghosts" (see the taxonomy
+  // above). Someone who has just booked a class for next week is none of
+  // those, but until now that is exactly where they landed: every rule below
+  // keys on ATTENDANCE, and booking does not move last_attended_at. So a
+  // re-engaging contact stayed filed as a ghost until they physically turned
+  // up — and if they never did, the pipeline never showed they had tried.
+  //
+  // Measured 2026-08-20, the evening the 3-Class Trial sequence went out: 12
+  // people booked through /start, 10 of them sat in `dormant`, and 8 had an
+  // upcoming BOOKED class at the moment they were classified. The board was
+  // asserting something demonstrably false about live customers.
+  //
+  // This is the same shape as the cold_lead rule directly above, which is
+  // auto-revoked when someone trains after being dismissed: an action by the
+  // contact overrides an off-funnel pile they were sorted into by decay.
+  //
+  // Deliberately UPCOMING only (nextBookedClass ignores anything in the past).
+  // A booking they already missed is not re-engagement, and if they attended
+  // it, last_attended_at moved and the attendance rules below handle them
+  // properly anyway.
+  const hasUpcomingClass = nextBookedClass(contact.recent_bookings, now) !== null
+
   if (attended >= 1) {
     const stillActive = sinceAttended !== null
       && sinceAttended <= PIPELINE_THRESHOLDS.FUNNEL_ACTIVITY_DAYS
-    if (!stillActive) return 'dormant'
+    // Back in the diary after aging out: top of the funnel, not a ghost. They
+    // have no COMPLETED class in this cycle, so new_lead rather than
+    // first_class — the count below describes a previous visit, not this one.
+    if (!stillActive) return hasUpcomingClass ? 'new_lead' : 'dormant'
     if (attended >= PIPELINE_THRESHOLDS.TRIAL_DONE_MIN_ATTENDED) return 'trial_done'
     return attended === 2 ? 'second_class' : 'first_class'
   }
 
   const recentlyJoined = sinceJoined !== null
     && sinceJoined <= PIPELINE_THRESHOLDS.NEW_LEAD_WINDOW_DAYS
-  return recentlyJoined ? 'new_lead' : 'dormant'
+  return (recentlyJoined || hasUpcomingClass) ? 'new_lead' : 'dormant'
 }
