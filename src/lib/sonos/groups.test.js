@@ -162,4 +162,38 @@ describe('planAction', () => {
     }
     expect(planAction(s, at('05:00'), MONDAY)).toMatchObject({ volume: 30 })
   })
+
+  // Guards the silent-restart failure: `active.on_at` is always a raw
+  // epoch-ms number, but if last_applied.window_on_at ever came back as a
+  // string (a timestamptz column, a .toISOString() "to make it readable",
+  // any serialisation that stringifies), a strict === against the number
+  // would silently never match. Every tick inside the window would then
+  // take the open branch and re-issue loadFavorite, restarting the studio
+  // playlist every sixty seconds.
+  it('suppresses re-open when window_on_at was persisted as a numeric string', () => {
+    const s = { ...schedule, last_applied: { window_on_at: String(OPEN_AT), action: 'open' } }
+    expect(planAction(s, at('12:00'), MONDAY)).toBe(null)
+  })
+
+  // Same silent-restart guard as above, covering the other realistic
+  // string shape a jsonb round-trip or schema change could produce.
+  it('suppresses re-open when window_on_at was persisted as an ISO string', () => {
+    const s = { ...schedule, last_applied: { window_on_at: new Date(OPEN_AT).toISOString(), action: 'open' } }
+    expect(planAction(s, at('12:00'), MONDAY)).toBe(null)
+  })
+
+  it('closes with a numeric windowOnAt even when the stored value was a string, so the stringy value does not propagate into the next write', () => {
+    const s = { ...schedule, last_applied: { window_on_at: String(OPEN_AT), action: 'open' } }
+    const result = planAction(s, at('20:30'), MONDAY)
+    expect(result).toEqual({ action: 'close', windowOnAt: OPEN_AT })
+    expect(typeof result.windowOnAt).toBe('number')
+  })
+
+  it('does not close on an unparseable window_on_at, since it cannot identify which window it opened', () => {
+    // Inventing a close here could silence music someone started by hand —
+    // the same reasoning as "does NOT pause a window it never opened",
+    // just reached via a corrupt record instead of a missing one.
+    const s = { ...schedule, last_applied: { window_on_at: 'garbage', action: 'open' } }
+    expect(planAction(s, at('20:35'), MONDAY)).toBe(null)
+  })
 })

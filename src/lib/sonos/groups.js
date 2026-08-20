@@ -43,6 +43,24 @@ export function resolveGroupIds(groups, playerIds) {
 
 const DEFAULT_VOLUME = 30
 
+// last_applied.window_on_at comes back from jsonb and SHOULD be the raw
+// epoch-ms number planAction emitted. Normalise anyway: if it ever arrives
+// as a string — a timestamptz column, a .toISOString() "to make it
+// readable", any serialisation that stringifies — a strict === against
+// active.on_at silently never matches, every tick re-opens the window, and
+// loadFavorite restarts the playlist every sixty seconds. Silent, and
+// exactly the failure exactly-once exists to prevent.
+const toMs = (v) => {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v)
+    if (Number.isFinite(n)) return n          // "1756011600000"
+    const d = new Date(v).getTime()           // "2026-08-24T05:00:00.000Z"
+    return Number.isFinite(d) ? d : null
+  }
+  return null
+}
+
 // → null | { action:'open', windowOnAt, volume, favoriteId }
 //        | { action:'close', windowOnAt }
 //
@@ -79,7 +97,7 @@ export function planAction(schedule, nowMs, dateStr) {
   if (active) {
     // Inside a window whose on_at we have already actioned — whether we
     // opened it or have since closed it — there is nothing left to do.
-    if (last && last.window_on_at === active.on_at) return null
+    if (last && toMs(last.window_on_at) === active.on_at) return null
     const src = active.source || {}
     return {
       action: 'open',
@@ -92,7 +110,16 @@ export function planAction(schedule, nowMs, dateStr) {
   // Outside every window. Close only what we opened: if there is no record
   // of opening, a pause here would silence music somebody started by hand
   // (the case where the CRM was down for a whole window and came back after).
-  if (last?.action === 'open') return { action: 'close', windowOnAt: last.window_on_at }
+  if (last?.action === 'open') {
+    const wo = toMs(last.window_on_at)
+    // wo === null means window_on_at was unparseable — a corrupt or
+    // unexpected record that still claims action:'open'. Falling through to
+    // the final `return null` (no close fires) is deliberate, not an
+    // oversight: we cannot identify which window we opened, and inventing a
+    // close/pause could silence music someone started by hand, the same
+    // hazard the "no record at all" branch above already exists to avoid.
+    if (wo !== null) return { action: 'close', windowOnAt: wo }
+  }
 
   return null
 }
