@@ -1,12 +1,18 @@
 -- SONOS.6 — studio music moves off the Homey Pro onto the Sonos Control API.
 --
 -- Two tables:
---   sonos_connections — one OAuth grant per location. location_id is the
---     PRIMARY KEY, so "one location = one Sonos household" is structural
---     rather than a rule the callback is trusted to remember. This is the
---     same failure shape as the Xero tenants[0] bug (mig 554), which put
---     101 bills / ~EUR 99k into the wrong legal entity before anyone
---     noticed. Cheap to prevent up front.
+--   sonos_connections — one OAuth grant per location. location_id carries a
+--     NOT NULL UNIQUE constraint, not the PRIMARY KEY — the same b-tree
+--     guarantee with no NULL loophole, but row identity runs on a separate
+--     surrogate id, matching xero_connections (mig 029): src/lib/sonos/
+--     client.js reads a row by location_id and later writes it back by id.
+--     household_id is UNIQUE too, and that is the constraint that actually
+--     mirrors the Xero tenants[0] bug (mig 554): three locations resolved
+--     to one tenant and posted 101 bills / ~EUR 99k into the wrong legal
+--     entity before anyone noticed. location_id UNIQUE alone only stops
+--     one location acquiring two connection rows; it says nothing about
+--     two locations sharing one household — household_id UNIQUE is what
+--     forbids that outright.
 --   sonos_schedules — the music windows. Several rows per location are
 --     allowed so a second zone (reception vs floor) needs no migration.
 --
@@ -32,6 +38,18 @@ COMMENT ON COLUMN public.sonos_connections.location_id IS
   'SONOS.6 — UNIQUE: one location = one Sonos household. The callback stores the household the operator picked, never households[0].';
 COMMENT ON COLUMN public.sonos_connections.refresh_token IS
   'Sonos does not rotate refresh tokens — the same value is returned on every refresh, so this column is written once at link time.';
+
+-- household_id UNIQUE — the direction that actually mirrors the Xero
+-- tenants[0] bug (see header): a household cannot straddle two locations
+-- either. Two multi-site gyms each run their own household on their own
+-- network, so sharing is always a misconfiguration, never a legitimate
+-- setup. Named CONSTRAINT (mig 554's style) so a violation reports
+-- something a human can read, rather than a bare unique index.
+ALTER TABLE public.sonos_connections
+  ADD CONSTRAINT sonos_connections_household_id_unique UNIQUE (household_id);
+
+COMMENT ON CONSTRAINT sonos_connections_household_id_unique ON public.sonos_connections IS
+  'SONOS.6 — one Sonos household serves exactly one location, never shared. Two locations on one household would have each other''s music schedules driving their speakers. Correct a wrong binding by disconnecting the other location first, then re-linking the correct one.';
 
 CREATE TABLE public.sonos_schedules (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

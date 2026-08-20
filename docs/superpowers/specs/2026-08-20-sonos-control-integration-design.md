@@ -106,8 +106,9 @@ Env is only `SONOS_CLIENT_ID` / `SONOS_CLIENT_SECRET` / `SONOS_REDIRECT_URI`, fr
 
 ```sql
 sonos_connections
-  location_id uuid PRIMARY KEY REFERENCES locations(id)   -- one household per location
-  household_id text NOT NULL
+  id uuid PRIMARY KEY
+  location_id uuid NOT NULL UNIQUE REFERENCES locations(id)   -- one household per location
+  household_id text NOT NULL UNIQUE                           -- one location per household
   refresh_token text NOT NULL
   access_token text
   access_token_expires_at timestamptz
