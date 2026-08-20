@@ -3,6 +3,7 @@ import AppShellServer from '@/components/AppShellServer'
 import StudioLockOverlay from '@/components/StudioLockOverlay'
 import CookieConsent from '@/components/CookieConsent'
 import { resolveDefaultFaviconUrl } from '@/lib/default-favicon'
+import { resolveDefaultSiteName } from '@/lib/default-site-name'
 
 // PERF.3 — Vercel SpeedInsights + Analytics are now mounted inside
 // AppShell's authenticated branch (not at the root layout). Pre-auth
@@ -36,18 +37,38 @@ import { resolveDefaultFaviconUrl } from '@/lib/default-favicon'
 // because the share is a member-facing booking link not an internal
 // admin tool.
 //
+// CHROME.1 — the name is no longer a literal. It used to read
+// "UN1T Dublin", which is (a) the wrong product name on the staff
+// CRM now that the platform chrome is Repset — this string labels
+// roughly 160 of the app's 188 pages, i.e. nearly every staff tab —
+// and (b) a tenant hardcode in the one file every page renders
+// through. resolveDefaultSiteName reads the operator's own
+// company_settings.company_name (the field /settings →
+// BrandingSettings already writes) behind the same TTL cache the
+// favicon uses, and falls back to the PLATFORM name only when no
+// operator has configured one. So the gym's own identity wins
+// wherever a customer can see it, and an unconfigured deployment
+// says Repset rather than another tenant's gym.
+//
+// The old marketing tagline is gone with it: it was UN1T copy that
+// no operator could edit. company_settings has no tagline column —
+// if one is wanted, that is where it belongs, not here.
+//
 // Per-page upgrades (richer previews showing the actual event name
 // + description) live on individual page files via generateMetadata
 // — see src/app/event/[slug]/page.js for the event signup example.
 export async function generateMetadata() {
-  const faviconUrl = await resolveDefaultFaviconUrl()
+  const [faviconUrl, siteName] = await Promise.all([
+    resolveDefaultFaviconUrl(),
+    resolveDefaultSiteName(),
+  ])
   return {
-    title: 'UN1T Dublin',
-    description: 'UN1T Dublin — strength, conditioning, racing.',
+    title: siteName,
+    description: siteName,
     openGraph: {
-      title: 'UN1T Dublin',
-      description: 'UN1T Dublin — strength, conditioning, racing.',
-      siteName: 'UN1T Dublin',
+      title: siteName,
+      description: siteName,
+      siteName,
       type: 'website',
     },
     icons: {

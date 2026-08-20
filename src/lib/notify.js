@@ -99,7 +99,9 @@ export async function notifyUsers(userIds, payload) {
   const fallbackTargets = (profiles || []).filter(p => p.email && allowed.has(p.id))
   if (!fallbackTargets.length) return totals
 
-  const subject = payload.emailSubject || registry.emailSubject || payload.title || 'UN1T notification'
+  // CHROME.1 — this fallback goes to STAFF (`profiles` rows above), so it is
+  // platform chrome, not gym identity.
+  const subject = payload.emailSubject || registry.emailSubject || payload.title || 'Repset notification'
   const html = payload.emailHtml || defaultFallbackHtml(payload, registry)
 
   for (const target of fallbackTargets) {
@@ -148,9 +150,12 @@ export async function notifyUsers(userIds, payload) {
  * their own template.
  */
 function defaultFallbackHtml(payload, registry) {
-  const title = escapeHtml(payload.title || registry?.label || 'UN1T notification')
+  const title = escapeHtml(payload.title || registry?.label || 'Repset notification')
   const body = escapeHtml(payload.body || '')
-  const note = `<p style="margin-top:24px;font-size:12px;color:#666">You're receiving this email because you don't have the UN1T CRM mobile app installed. To stop emails like this, install the app and grant push permission, or have an admin turn off the "${registry?.label || 'this'}" notification for your account.</p>`
+  // CHROME.1 — the staff app ships to the stores as "Repset"
+  // (mobile/app.config.js `name`). The old copy pointed staff at an app
+  // under the legacy gym name, which is not a title they can search for.
+  const note = `<p style="margin-top:24px;font-size:12px;color:#666">You're receiving this email because you don't have the Repset mobile app installed. To stop emails like this, install the app and grant push permission, or have an admin turn off the "${registry?.label || 'this'}" notification for your account.</p>`
   return `
     <div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#111">
       <h2 style="font-size:18px;margin:0 0 12px 0">${title}</h2>

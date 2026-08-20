@@ -236,7 +236,11 @@ function LoginInner() {
           </form>
         )}
 
-        <p className="text-center text-xs text-un1t-muted mt-8">UN1T CRM</p>
+        {/* CHROME.1 — the PLATFORM footer, not the gym's. The gym's own
+            identity is the <h1> above, which already resolves from
+            company_settings (operator-editable); this small print names
+            the product the operator is signing in to. */}
+        <p className="text-center text-xs text-un1t-muted mt-8">Repset</p>
       </div>
     </div>
   )

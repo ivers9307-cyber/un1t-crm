@@ -6093,10 +6093,13 @@ function buildSpec() {
   const doc = generator.generateDocument({
     openapi: '3.1.0',
     info: {
-      title: 'UN1T CRM API',
+      // CHROME.1 — platform chrome. This spec documents the PLATFORM's HTTP
+      // API to integrators; it names no gym and must not carry a tenant's
+      // brand. (The servers list below already leads with crm.repset.ie.)
+      title: 'Repset CRM API',
       version: '1.1.0',
       description:
-        'HTTP API for the UN1T gym CRM. Most endpoints accept either a Supabase ' +
+        'HTTP API for the Repset gym CRM. Most endpoints accept either a Supabase ' +
         'session cookie (browser) or a Bearer token for n8n / external integrations — ' +
         'a per-organization `unitk_…` API key (org-scoped) or the legacy shared ' +
         'CRM_API_KEY (unscoped). Mutating endpoints validate request bodies via Zod schemas; ' +
