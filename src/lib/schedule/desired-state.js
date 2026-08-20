@@ -79,7 +79,12 @@ export function resolveDayWindows(device, dateStr, occurrences = []) {
       // itself never reads it — it exists so a caller that needs the
       // window's payload (Sonos: volume + favourite) can get it without
       // re-deriving which window is active and re-doing the DST maths.
-      out.push({ on_at: onAt, off_at: offAt, source: w })
+      // It's a shallow copy, not the caller's own window object, so a
+      // consumer reading the payload can't reach back through it and
+      // mutate the schedule it was given. Object.freeze(w) was considered
+      // and rejected: w IS the caller's input, so freezing it in place
+      // would mutate the caller's data structure as a side effect.
+      out.push({ on_at: onAt, off_at: offAt, source: { ...w } })
     }
     return out.sort((a, b) => a.on_at - b.on_at)
   }
