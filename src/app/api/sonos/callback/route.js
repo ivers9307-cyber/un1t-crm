@@ -23,6 +23,13 @@ import { logWarn } from '@/lib/log'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
+// How long a signed state is trusted for. signState stamps `ts` but nothing
+// checked it until now, so a captured `state` value stayed cryptographically
+// valid forever. Sonos's own `code` is single-use and short-lived, which
+// already bounds the practical exposure, but the timestamp is free to check
+// on an endpoint that has no auth of its own beyond this signature.
+const STATE_MAX_AGE_MS = 10 * 60 * 1000 // 10 minutes
+
 export async function GET(request) {
   // The redirect target is built off THIS request's own URL, not an env
   // var. NEXT_PUBLIC_SITE_URL does not exist anywhere else in this repo —
@@ -66,6 +73,15 @@ export async function GET(request) {
   const claims = verifyState(state, process.env.CRON_SECRET)
   if (!claims?.locationId) return back({ sonos: 'bad_state' })
 
+  // Reject a stale state before doing anything else with the claims (this
+  // also skips the exchangeCode round trip for a state that's already too
+  // old to use). A missing or non-numeric ts fails CLOSED — treated as
+  // expired, not as no-limit.
+  const ts = claims.ts
+  if (typeof ts !== 'number' || !Number.isFinite(ts) || Date.now() - ts > STATE_MAX_AGE_MS) {
+    return back({ sonos: 'state_expired' })
+  }
+
   const tokenRes = await exchangeCode(cfg, code)
   if (!tokenRes.ok || !tokenRes.body?.refresh_token) {
     logWarn('sonos-callback', 'code exchange failed', { statusCode: tokenRes.statusCode })
@@ -79,7 +95,19 @@ export async function GET(request) {
 
   // A Sonos account with several households cannot be resolved for the
   // operator — guessing is how the wrong-entity bug happened. Ask.
-  const chosen = url.searchParams.get('household_id')
+  //
+  // The choice comes from the SIGNED state (claims.householdId), never a
+  // callback query param. By the point we reach this line, `code` has
+  // already been spent by exchangeCode above — OAuth codes are single-use
+  // and short-lived — so a second hit on THIS callback carrying the same
+  // code (the only way a `?household_id=` on a callback URL could ever
+  // arrive) would fail exchange_failed before it got here; the operator
+  // could never actually complete a re-pick that way. Instead, the
+  // pick_household redirect below sends them back through
+  // /api/sonos/connect?household_id=X, which mints a brand-new authorization
+  // code AND signs the choice into a fresh state — that fresh code is what
+  // makes the re-pick attempt work at all.
+  const chosen = claims.householdId || null
   if (households.length > 1 && !chosen) {
     return back({ sonos: 'pick_household', ids: households.map((h) => h.id).join(',') })
   }

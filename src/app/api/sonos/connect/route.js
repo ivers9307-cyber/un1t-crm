@@ -28,7 +28,7 @@ export function verifyState(state, secret) {
   try { return JSON.parse(Buffer.from(raw, 'base64url').toString()) } catch { return null }
 }
 
-export async function GET() {
+export async function GET(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!hasPermission(user, 'device_control')) {
@@ -44,6 +44,18 @@ export async function GET() {
     return NextResponse.json({ success: false, error: 'CRON_SECRET is required to sign the OAuth state' }, { status: 503 })
   }
 
-  const state = signState({ locationId, profileId: user.id, ts: Date.now() }, process.env.CRON_SECRET)
+  // Optional: set when the operator is RE-ENTERING this route after the
+  // callback sent them to pick a household (see the `pick_household` guard
+  // in the callback). It travels inside the SIGNED state, not as a callback
+  // query param, because by the time the callback runs, the authorization
+  // `code` from THAT attempt is already spent — codes are single-use and
+  // short-lived, so a second callback request could never reuse it anyway.
+  // Routing the re-pick back through here instead mints a fresh code AND a
+  // fresh signed state carrying the choice, which is what makes the second
+  // attempt actually completable.
+  const url = new URL(request.url)
+  const householdId = url.searchParams.get('household_id') || null
+
+  const state = signState({ locationId, profileId: user.id, householdId, ts: Date.now() }, process.env.CRON_SECRET)
   return NextResponse.redirect(buildAuthorizeUrl(cfg, state))
 }
