@@ -197,6 +197,13 @@ jobs:
   update:
     name: Publish update
     runs-on: ubuntu-latest
+    # `issues: write` is for the OTABLOCK.1 notify step at the end of the job —
+    # a failed publish opens/refreshes one tracking issue, because a red run on
+    # `main` has no PR to hang an X on and is the signal that was already
+    # proven not to reach anyone. `contents: read` is the checkout.
+    permissions:
+      contents: read
+      issues: write
     defaults:
       run:
         working-directory: mobile
@@ -217,14 +224,205 @@ jobs:
           eas-version: 18.9.1
           token: ${{ secrets.EXPO_TOKEN }}
 
+      # ── Pre-flight: is a staged rollout already in progress? ───────────────
+      #
+      # OTABLOCK.1 (2026-08-20). EAS refuses a publish while an un-ramped
+      # rollout exists on the same runtime version:
+      #
+      #   "Cannot publish a new update with this runtime version while a
+      #    rollout is in progress for the same runtime version. Before
+      #    publishing a new update, the latest rollout percentage must be set
+      #    to 100% or the rollout update deleted."
+      #
+      # That is the safety interlock working as designed — it is what stops a
+      # second partial stacking on an unfinished one. But the pipeline handled
+      # it terribly. It surfaced ONLY at the very last step, after ~5 minutes
+      # of install + Metro export + a 6.6MB bundle upload to Expo's CDN, as a
+      # GraphQL error at the bottom of a log nobody opens. Two merged changes
+      # (BAREWRITE.1→.5 and LEGALENT.1+.2, runs 32366213354 / 32379797895 on
+      # 2026-08-20) therefore never reached a single device, and the only
+      # signal was a red workflow.
+      #
+      # Two deliberate NON-goals:
+      #   • This step does NOT ramp or delete anything. Auto-ramping would
+      #     defeat the interlock, and auto-deleting would silently discard a
+      #     partially-delivered update. Resolving a rollout is an OPERATOR
+      #     decision — mobile/docs/ota-rollout.md.
+      #   • This step does NOT make the pipeline succeed when it cannot
+      #     publish. A blocked publish must stay red; it just has to be red
+      #     EARLY and legibly, and it has to tell someone (see the notify step
+      #     at the end of this job).
+      #
+      # It FAILS OPEN by construction. If the CLI errors, the JSON shape is
+      # not what we expect, or the runtime version can't be read out of
+      # app.config.js, it logs loudly and lets the publish proceed — which is
+      # exactly today's behaviour, so the worst case of a wrong guess here is
+      # the status quo. It only ever aborts on a POSITIVE reading: an update
+      # group on branch `main`, on the runtime lane we are about to publish,
+      # with a rollout percentage strictly between 0 and 100.
+      - name: Pre-flight — refuse to build into a blocked rollout
+        id: rollout_preflight
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          set -uo pipefail
+          # The script goes to a FILE via a quoted heredoc, not `node -e "…"`.
+          # A double-quoted inline script would let the shell expand $ and `
+          # inside the JavaScript — the same class of bug as a workflow
+          # injection, and this file already uses the heredoc idiom for the
+          # Babel parse step below.
+          cat > rollout-preflight.mjs << 'PREFLIGHT_EOF'
+          import { readFileSync, appendFileSync } from 'node:fs'
+
+          const runtime = process.env.RUNTIME
+          const summaryPath = process.env.GITHUB_STEP_SUMMARY
+          const envPath = process.env.GITHUB_ENV
+
+          let doc
+          try {
+            doc = JSON.parse(readFileSync('rollout-preflight.json', 'utf8'))
+          } catch {
+            console.log('::warning::Pre-flight could not parse the update list — proceeding (fail-open).')
+            process.exit(0)
+          }
+
+          // Walk the WHOLE document rather than assuming a page shape: eas-cli
+          // has moved this between a bare array and { currentPage: [...] }
+          // across versions, and a shape guess that silently matches nothing
+          // is exactly the blind spot this step exists to remove. Any object
+          // carrying both a matching runtimeVersion and a numeric
+          // rolloutPercentage strictly inside (0, 100) counts.
+          // `group` is carried DOWN the walk: eas-cli nests the per-platform
+          // update objects inside their group, and those children repeat the
+          // runtimeVersion/rolloutPercentage but not the group id. Without
+          // inheriting it, one blocked group is reported two or three times
+          // under its children's ids, which reads like several stuck rollouts.
+          const found = new Map()
+          const walk = (n, group) => {
+            if (Array.isArray(n)) return n.forEach((c) => walk(c, group))
+            if (!n || typeof n !== 'object') return
+            const here = n.group || group
+            const pct = Number(n.rolloutPercentage)
+            if (n.runtimeVersion === runtime && Number.isFinite(pct) && pct > 0 && pct < 100) {
+              const key = here || n.id || 'unknown'
+              if (!found.has(key)) found.set(key, { key, pct, message: n.message || '' })
+            }
+            Object.values(n).forEach((c) => walk(c, here))
+          }
+          walk(doc, null)
+
+          if (found.size === 0) {
+            console.log(`No in-progress rollout on runtime ${runtime} — clear to publish.`)
+            process.exit(0)
+          }
+
+          const rows = [...found.values()].map(
+            (f) => `- group \`${f.key}\` at **${f.pct}%**${f.message ? ` — ${f.message}` : ''}`,
+          )
+          const summary = [
+            '## OTA publish BLOCKED — a staged rollout is still in progress',
+            '',
+            `Runtime lane: **${runtime}** · branch \`main\``,
+            '',
+            'EAS refuses a new update while an earlier one on the same runtime is',
+            'part-way through its rollout. In progress right now:',
+            '',
+            ...rows,
+            '',
+            'Nothing was built or uploaded — this job stopped before Metro ran.',
+            '',
+            '**An operator must clear it. This pipeline deliberately will not** —',
+            'auto-ramping would defeat the interlock and auto-deleting would discard',
+            'an update some devices already have.',
+            '',
+            '```',
+            'cd mobile',
+            'npx eas-cli@18.9.1 update:edit <GROUP_ID> --rollout-percentage 100   # ramp',
+            '# or, to discard it:',
+            'npx eas-cli@18.9.1 update:delete <GROUP_ID>',
+            '```',
+            '',
+            'Then re-run this workflow (Actions → EAS Update → Run workflow). It',
+            'publishes from **main HEAD**, not from the commit that was blocked, and it',
+            'starts its own 10% rollout. Runbook: `mobile/docs/ota-rollout.md`.',
+          ].join('\n')
+
+          if (summaryPath) appendFileSync(summaryPath, summary + '\n')
+          if (envPath) appendFileSync(envPath, 'ROLLOUT_BLOCKED=1\n')
+          console.log(`::error::OTA publish blocked: a rollout is in progress on runtime ${runtime}. Nothing was built. See the job summary and mobile/docs/ota-rollout.md.`)
+          process.exit(1)
+          PREFLIGHT_EOF
+
+          # runtimeVersion is an explicit string literal in app.config.js (the
+          # fingerprint policy is banned — PR #295 broke the iOS build with it),
+          # so a one-line read is enough and cannot be fooled by the `version:`
+          # literal above it, which is a separate field.
+          RUNTIME=$(sed -n "s/^[[:space:]]*runtimeVersion:[[:space:]]*'\([^']*\)'.*/\1/p" app.config.js | head -1)
+          export RUNTIME
+          if [ -z "$RUNTIME" ]; then
+            echo "::warning::Pre-flight could not read runtimeVersion from mobile/app.config.js — skipping the rollout check and proceeding (fail-open)."
+            rm -f rollout-preflight.mjs
+            exit 0
+          fi
+          echo "Runtime lane about to be published: $RUNTIME"
+
+          if ! eas update:list --branch main --limit 10 --non-interactive --json > rollout-preflight.json 2>rollout-preflight.err; then
+            echo "::warning::Pre-flight could not list updates — skipping the rollout check and proceeding (fail-open). CLI stderr follows."
+            cat rollout-preflight.err || true
+            rm -f rollout-preflight.mjs rollout-preflight.json rollout-preflight.err
+            exit 0
+          fi
+
+          node rollout-preflight.mjs
+          status=$?
+          rm -f rollout-preflight.mjs rollout-preflight.json rollout-preflight.err
+          exit $status
+
       - name: Install dependencies
         # `npm ci` (lockfile-exact), NOT `npm install`. `eas build` installs the
         # binary's deps with `npm ci`; the OTA bundle must use the SAME tree so
         # its Hermes bytecode is ABI-compatible with the engine in the binary.
         # `npm install` can resolve a newer tree → mismatched bytecode → the
-        # 2026-06-03 boot-crash. `--legacy-peer-deps` preserves the prior peer
-        # resolution (there is no .npmrc in the repo).
-        run: npm ci --legacy-peer-deps
+        # 2026-06-03 boot-crash.
+        #
+        # OTATREE.1 (2026-08-20) — `--legacy-peer-deps` REMOVED. It used to sit
+        # here with the comment "preserves the prior peer resolution (there is
+        # no .npmrc in the repo)". That reason was exactly backwards, and it
+        # contradicted mobile/docs/store-release-one-app.md §7, which forbids
+        # the flag against this lockfile.
+        #
+        # Measured on this lockfile (`npm ci --dry-run`, with and without):
+        #   npm 11.12.1 → the flag PRUNES 13 entries. Two peer roots:
+        #     @react-native/metro-config       (peer of @react-native/
+        #       community-cli-plugin and of react-native-worklets, whose babel
+        #       plugin is in mobile/babel.config.js) — takes with it
+        #       @react-native/metro-babel-transformer → @react-native/babel-preset
+        #       → @babel/plugin-transform-{react-jsx-self,react-jsx-source,
+        #       regenerator}.  6 entries, all Metro/Babel compile-path packages.
+        #     @testing-library/dom             (peer of @testing-library/
+        #       user-event, a dependency of expo-router) — takes with it
+        #       @types/aria-query, dom-accessibility-api, lz-string, and nested
+        #       pretty-format@27 / react-is@17 / ansi-styles@5.  7 entries,
+        #       test-only.
+        #   npm 10.9.4 (what Node 22 ships, i.e. this runner today) → prunes 0.
+        # So the divergence is real but LATENT: it appears the day this runner's
+        # Node moves 22 → 24, silently, in the pipeline that publishes to
+        # production phones.
+        #
+        # The decisive argument does not rest on the 13 either. There is no
+        # .npmrc anywhere in this repo, so EAS Build installs the BINARY's tree
+        # with a plain `npm ci`. A flag here could therefore only ever create
+        # the tree mismatch this step exists to prevent. Plain `npm ci` is also
+        # measured clean on this lockfile (real install, exit 0, no ERESOLVE).
+        #
+        # Honest caveat, so the next reader does not over-claim: the 6
+        # compile-path packages are NOT reachable from this project's actual
+        # bundler entry points — metro.config.js goes through expo/metro-config
+        # and babel.config.js through babel-preset-expo, and neither requires
+        # @react-native/babel-preset (they only name it in comments). Dropping
+        # the flag is about building from the same tree as the binary, not
+        # about a bundle that is known to differ.
+        run: npm ci
 
       # Pre-flight syntax check on every JSX/JS file. ~5 sec. Catches
       # the most damaging class of bug — a broken bundle being pushed
@@ -299,7 +497,19 @@ jobs:
       # crash class), and web↔mobile permission parity.
       - name: Install root dependencies (for CI-mirror gates)
         working-directory: .
-        run: npm ci --legacy-peer-deps
+        # OTATREE.1 — plain `npm ci`, matching web-ci.yml. This step exists to
+        # MIRROR Web CI, and it was not mirroring it: on the same commit
+        # (e7d45752, 2026-08-20) web-ci's plain `npm ci` installed 762 packages
+        # and this step's `npm ci --legacy-peer-deps` installed 768. A gate that
+        # runs against a different tree than the CI it stands in for can pass
+        # while the real CI fails, and vice versa.
+        #
+        # Residual, deliberately NOT changed here: web-ci runs Node 24 and this
+        # workflow runs Node 22 (see `Set up Node` above), so the two npm majors
+        # still resolve slightly different trees. Bumping the publish job's Node
+        # is a change to the toolchain that emits Hermes bytecode for production
+        # phones and wants its own PR — this one only removes the flag.
+        run: npm ci
 
       # check:ota-paths is here, and not only in web-ci, because web-ci is a
       # PARALLEL workflow on a main push — a red one has never blocked this
@@ -382,3 +592,71 @@ jobs:
             ]
             require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n")
           ' || echo "Job summary generation failed (non-fatal)"
+
+      # ── Tell someone when the OTA did NOT ship ────────────────────────────
+      #
+      # OTABLOCK.1. "The only signal was a red workflow nobody reads" is the
+      # actual defect behind two merged changes never reaching a device. A job
+      # summary is better than a GraphQL error, but it is still only visible to
+      # someone who already opened the run — so a failure also opens (or
+      # refreshes) ONE tracking issue, the same pattern dependency-audit.yml
+      # uses for its scheduled run, and for the same reason: a failure on
+      # `main` has no PR to hang a red X on.
+      #
+      # Fixed title, so `gh issue list --search` finds the existing one and we
+      # comment instead of opening a fresh issue on every blocked push.
+      #
+      # Workflow-injection safety: nothing from the event payload is
+      # interpolated into `run:`. The only expressions are github.repository,
+      # github.run_id, github.sha and github.server_url — all runner-controlled
+      # — and every one is passed through `env:`, never substituted inline. In
+      # particular the commit MESSAGE (attacker-influenceable on a fork PR, and
+      # the classic vector) is deliberately NOT included; the sha is enough to
+      # find the commit.
+      - name: Notify — the OTA did not publish
+        if: failure()
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TITLE: 'EAS Update: an OTA publish failed — commits on main are not on devices'
+        run: |
+          set -uo pipefail
+          if [ "${ROLLOUT_BLOCKED:-}" = "1" ]; then
+            cause=$(printf '%s\n' \
+              "**Cause: a staged rollout is still in progress.** The pre-flight check stopped this run" \
+              "BEFORE Metro ran, so nothing was built or uploaded." \
+              "" \
+              "An operator has to clear it — ramp the in-flight group to 100% or delete it:" \
+              "" \
+              '```' \
+              "cd mobile" \
+              "npx eas-cli@18.9.1 update:list --branch main --limit 5   # find the group + its %" \
+              "npx eas-cli@18.9.1 update:edit <GROUP_ID> --rollout-percentage 100" \
+              '```' \
+              "" \
+              "This pipeline will not ramp or delete a rollout for you: that interlock is what stops" \
+              "a second partial stacking on an unfinished one.")
+          else
+            cause="**Cause: see the failing step in the run.** If the log ends in \"Cannot publish a new update with this runtime version while a rollout is in progress\", the pre-flight check above did not catch it — read \`mobile/docs/ota-rollout.md\` § *Publish blocked by an in-progress rollout*."
+          fi
+          body=$(printf '%s\n' \
+            "The **EAS Update** workflow failed, so the JS on production phones is now BEHIND \`main\`." \
+            "Every commit merged since the last successful publish is undelivered until this is resolved." \
+            "" \
+            "- Run: $RUN_URL" \
+            "- Commit: \`$SHA\`" \
+            "" \
+            "$cause" \
+            "" \
+            "After clearing the cause, re-run via **Actions → EAS Update → Run workflow**. It takes no" \
+            "inputs, so it publishes from **main HEAD** (everything that has landed since, not just the" \
+            "blocked commit) and starts its own 10% rollout with its own 48h ramp-or-rollback clock.")
+          existing=$(gh issue list --repo "$REPO" --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" --body "$body"
+          else
+            gh issue create --repo "$REPO" --title "$TITLE" --body "$body"
+          fi

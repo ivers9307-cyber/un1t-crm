@@ -90,9 +90,72 @@ is unchanged. Do **not** bump the pin to change rollout behaviour.
 
 **Every rollout is ramped to 100 or rolled back within 48 hours.**
 A partial rollout left sitting means two cohorts run different code
-indefinitely, bug reports stop reproducing, and the next auto-publish
-stacks a second partial on top (users outside the new 10% get the previous
-latest update *even if that one is itself mid-rollout*). Ramp it or kill it.
+indefinitely, bug reports stop reproducing, and — the part this document
+got wrong until 2026-08-20 — **every later publish on that runtime is
+REFUSED outright.** Ramp it or kill it.
+
+## Publish blocked by an in-progress rollout
+
+**Symptom.** The **EAS Update** workflow fails with:
+
+> Cannot publish a new update with this runtime version while a rollout is
+> in progress for the same runtime version. Before publishing a new update,
+> the latest rollout percentage must be set to 100% or the rollout update
+> deleted.
+
+**What it means.** An earlier update group on the same `runtimeVersion` is
+sitting at something between 1% and 99%. EAS will not mint a second partial
+on top of it. This is the interlock working — it is what stops two unfinished
+cohorts existing at once — but while it holds, **`main` and production phones
+diverge silently.** Every commit merged after the block lands in the repo and
+in nobody's app.
+
+It has already happened: a 10% group published 2026-08-19 was never ramped,
+and the next two publishes (`BAREWRITE.1→.5`, `LEGALENT.1+.2`, both merged
+2026-08-20) were refused. Two shipped changes, zero devices, and the only
+signal was a red workflow.
+
+> **This corrects an earlier claim in this file.** The Gotchas section used
+> to say a push mid-rollout "stacks" a second partial. It does not — it is
+> rejected. Anyone reasoning from the old text would expect an unramped
+> rollout to cost at most a confusing cohort split, not a total publish
+> outage, which is a large part of why the block sat unnoticed.
+
+**How you find out now** (OTABLOCK.1, 2026-08-20):
+
+1. The workflow runs a **pre-flight** before installing or bundling
+   anything. If a rollout is in progress on the lane it is about to publish,
+   it stops there — no Metro run, no 6.6MB upload — and writes the stuck
+   group id, its percentage and the ramp command into the **job summary**.
+   Previously the refusal arrived at the very last step, ~5 minutes in, as a
+   GraphQL error.
+2. Any failure of that workflow **opens (or comments on) a tracking issue**
+   titled *"EAS Update: an OTA publish failed — commits on main are not on
+   devices"*. Same pattern as the scheduled dependency audit, and for the
+   same reason: a red run on `main` has no PR to hang an X on.
+3. The pre-flight **fails open**. If the EAS CLI errors, prints something
+   unparseable, or `runtimeVersion` can't be read out of `app.config.js`, it
+   logs a warning and lets the publish proceed exactly as before. It only
+   ever blocks on a positive reading. `tests/ota-rollout-preflight.test.js`
+   runs the real shell from the real workflow against a stub CLI and pins
+   both directions.
+
+**How to clear it** — this is an **operator** action. The pipeline will not
+ramp or delete a rollout for you, deliberately: auto-ramping would defeat the
+interlock, and auto-deleting would throw away an update some devices are
+already running.
+
+    cd mobile
+    npx eas-cli@18.9.1 update:list --branch main --limit 5   # find the group + %
+    # then EITHER finish it:
+    npx eas-cli@18.9.1 update:edit <GROUP_ID> --rollout-percentage 100
+    # OR discard it (only if that bundle should never have shipped):
+    npx eas-cli@18.9.1 update:delete <GROUP_ID>
+
+Then re-run **Actions → EAS Update → Run workflow**. It takes no inputs, so
+it publishes from **main HEAD** — everything that has landed since, not just
+the commit that was blocked — and starts its own 10% rollout with its own
+48h clock.
 
 ## Ramp 10 → 100
 
@@ -145,16 +208,18 @@ radius warrants it, and apply the same 48h rule.
 
 ## Gotchas
 
-- **A new push mid-rollout stacks.** The workflow publishes every qualifying
-  `main` push at 10%. If update B lands while update A is at 10%, devices
-  outside B's cohort serve A (the previous latest) — including A's bad code
-  if A was the problem. Halting means republishing the last *good* group,
-  not just waiting for the next merge. And when ramping after stacked
-  publishes, ramp the **newest** group; older partials become moot once a
-  newer update is fully rolled out. The commonest *accidental* source of a
-  stacked partial — a push whose only mobile files were non-bundle ones —
-  is closed by the allowlist above, but a real code push mid-ramp still
-  stacks, by design.
+- **A new push mid-rollout is REFUSED, not stacked.** This bullet used to
+  claim the opposite and it was wrong — see
+  [Publish blocked by an in-progress rollout](#publish-blocked-by-an-in-progress-rollout).
+  While update A sits at 10% on runtime R, a push that would publish update
+  B on runtime R fails; devices keep serving A and `main` quietly runs ahead
+  of production. So an unramped partial is not merely a confusing cohort
+  split, it is a **publish outage** on that lane. Ramp or delete A first.
+  (Two things that still hold from the old text: halting a bad rollout means
+  republishing the last *good* group rather than waiting for the next merge;
+  and older partials become moot once a newer update is fully rolled out.)
+  Cross-lane is unaffected — the refusal is scoped to `runtimeVersion`, so a
+  2.2.0 hotfix partial does not block a 2.3.0 publish.
 - The job summary of each publish run shows runtimeVersion, rollout % and
   group id — check there before reaching for the EAS dashboard.
 - `eas update:edit` needs `EXPO_TOKEN`/login locally: run it from `mobile/`

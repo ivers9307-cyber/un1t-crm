@@ -410,6 +410,38 @@ force-uninstalls anything.
   (Plain `npm ci` — never `--legacy-peer-deps` against this lockfile, it
   prunes 13 peer entries. And per the top-of-doc rule: post-merge checkout
   ONLY, or EAS un-ticks HealthKit on the App ID.)
+
+  **The pipeline now agrees with this** (OTATREE.1, 2026-08-20). Until then
+  `.github/workflows/eas-update.yml` and `mobile-export.yml` both installed
+  with `--legacy-peer-deps` while this document forbade it, and a reader
+  could not tell which was true. The flag is gone from both. Measured on
+  this lockfile with `npm ci --dry-run`:
+
+  - **npm 11.12.1** — the flag prunes exactly the 13 entries named above,
+    from two peer roots. `@react-native/metro-config` (peer of
+    `@react-native/community-cli-plugin` and of `react-native-worklets`,
+    whose Babel plugin is in `mobile/babel.config.js`) takes with it
+    `@react-native/metro-babel-transformer` → `@react-native/babel-preset` →
+    `@babel/plugin-transform-{react-jsx-self,react-jsx-source,regenerator}`:
+    six Metro/Babel compile-path packages. `@testing-library/dom` (peer of
+    `@testing-library/user-event`, a dependency of `expo-router`) takes
+    `@types/aria-query`, `dom-accessibility-api`, `lz-string` and nested
+    `pretty-format@27` / `react-is@17` / `ansi-styles@5`: seven test-only.
+  - **npm 10.9.4** (what Node 22 ships, i.e. the CI runner today) — prunes
+    **0**. The divergence was latent, waiting for a Node bump.
+
+  The decisive reason does not depend on those 13 at all: **there is no
+  `.npmrc` anywhere in this repo**, so EAS Build installs the binary's tree
+  with a plain `npm ci`. Any flag on the OTA side could only ever create the
+  tree mismatch the pinned install exists to prevent. Plain `npm ci` is also
+  measured clean here — real install, exit 0, no `ERESOLVE`.
+
+  Honest limit, so nobody over-claims: those six compile-path packages are
+  **not reachable** from this project's actual bundler entry points —
+  `metro.config.js` goes through `expo/metro-config` and `babel.config.js`
+  through `babel-preset-expo`, and neither requires `@react-native/babel-preset`
+  (they name it only in comments). The point is building from the same tree
+  as the binary, not a bundle known to differ.
 - **iOS submit** (Richard runs this — agent tooling is blocked from
   eas submit):
   ```

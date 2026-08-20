@@ -26,7 +26,13 @@ Pre-P2 anchor: `2ce8971c0bc23fa4e8c65396cf3da006806f1cf1`
 
     # 4. Install and publish
     cd /tmp/crm-2.2.0-hotfix/mobile
-    npm ci --legacy-peer-deps
+    # Plain `npm ci` (OTATREE.1, 2026-08-20). `--legacy-peer-deps` used to be
+    # here; it prunes 13 peer entries under npm 11 and EAS Build installs the
+    # binary's tree with a plain `npm ci` (there is no .npmrc), so the flag
+    # could only ever build the hotfix from a different tree than the 2.2.0
+    # binary it has to be bytecode-compatible with. See
+    # store-release-one-app.md §7.
+    npm ci
     npx eas-cli update --branch main --message "hotfix: <desc> (2.2.0 lane)" --non-interactive
 
     # 5. Verify: the new update group must show runtimeVersion 2.2.0
