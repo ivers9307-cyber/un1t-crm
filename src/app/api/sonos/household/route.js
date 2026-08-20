@@ -36,9 +36,25 @@ export async function GET() {
   }
 
   const { groups, players } = mapGroups(groupsRes.body)
+  // A failed favourites fetch is a DIFFERENT fact from the household
+  // genuinely having none saved — groupsRes.ok already proved the household
+  // itself answered, so folding a favourites-only failure into `favorites:
+  // []` would tell the UI (and the operator) "nothing saved", which also
+  // silently blocks adding a window. Surface it as its own signal instead —
+  // an error the UI can offer a retry for, not a false statement about the
+  // Sonos account.
+  const favoritesFailed = !favRes.ok
   // getFavorites returns the array under `items`, NOT `favorites` — verified
   // against the reference docs. Capped at 70 by Sonos.
-  const favorites = (favRes.body?.items || []).map((f) => ({ id: f.id, name: f.name || '' }))
+  const favorites = favoritesFailed ? [] : (favRes.body?.items || []).map((f) => ({ id: f.id, name: f.name || '' }))
 
-  return NextResponse.json({ success: true, connected: true, reachable: true, groups, players, favorites })
+  return NextResponse.json({
+    success: true,
+    connected: true,
+    reachable: true,
+    groups,
+    players,
+    favorites,
+    ...(favoritesFailed ? { favoritesFailed: true, favoritesStatusCode: favRes.statusCode } : {}),
+  })
 }
