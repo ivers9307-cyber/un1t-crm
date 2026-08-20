@@ -235,6 +235,10 @@ export const EXEMPT = {
     race_events:
       'Master/owner-gated one-off admin backfill that walks EVERY hosted event to link host contacts at each host\'s anchor location — hosted-events hosts are a platform-level surface, and the route returns counts only (no tenant rows).',
   },
+  'src/app/api/public/start-prefill/route.js': {
+    contacts:
+      'STARTPREFILL.1 — public booking-form prefill. The contacts row is reached ONLY via an HMAC-signed, time-limited capability token that names exactly one contact id (src/lib/start-prefill-token.js); there is no session and therefore no tenant to scope to, so the capability IS the scoping — the same argument as /api/unsubscribe/[token] and hr-emails above. Verified in src/lib/start-prefill-token.test.js: a forged, tampered, expired, expiry-less or wrong-secret token all resolve to null before this query is reached. The response is narrowed to the four fields the booking form has inputs for, and every failure returns an identical 404 so token validity cannot be probed.',
+  },
   'src/app/api/preferences/hr-emails/route.js': {
     contacts:
       'Public one-click HR-email unsubscribe. The contacts row is reached ONLY via a resolved per-contact capability (contact_preferences.unsubscribe_token, or the legacy contact+session pair whose session must belong to that contact), which names exactly one contact — the capability IS the scoping, exactly as on /api/unsubscribe/[token] (HRPREF-AUTH.1). Was genuinely unscoped before: it took a bare contact id.',
