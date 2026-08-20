@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, extname } from 'node:path'
-import { contractingEntityLabel, getContractingEntity } from '../src/lib/contracting-entity.js'
+import {
+  contractingEntityLabel,
+  getContractingEntity,
+  contractCountersignatureLabel,
+  LEGACY_COUNTERSIGNATURE_ENTITY,
+} from '../src/lib/contracting-entity.js'
 
 // SAAS4-W0.2 — the four public legal pages must name ONE legal entity.
 // Before 2026-07-19 they named two (a company formed from the gym brand
@@ -75,14 +80,42 @@ describe('legal pages name a single legal entity', () => {
 // therefore pin the ABSENCE of a literal plus the PRESENCE of the
 // resolver, which is what stops the next edit from hard-coding
 // whichever company the author happens to be thinking about.
-const CONTRACT_SURFACES = [
-  { file: 'src/app/(team)/contracts/[id]/page.js', needs: 'getContractingEntity' },
-  { file: 'src/app/account/contracts/[id]/page.js', needs: 'getContractingEntity' },
-  { file: 'src/app/api/contracts/[id]/route.js', needs: 'getContractingEntity' },
+//
+// LEGALENT.2 split this list in two, because the two halves must NOT
+// behave the same way:
+//
+//   DOCUMENT surfaces render an already-issued (often already-SIGNED)
+//   contract. They must read the contract's own FROZEN entity, never
+//   resolve live — resolving live rewrites what an executed document
+//   says about its counterparty, twice over (once on merge, again when
+//   the operator configures org_settings). All four are pinned to the
+//   one helper so the screen, the phone and the archived PDF cannot
+//   drift apart.
+//
+//   LIVE surfaces mint something new — a contract at issue time, an
+//   email being composed right now — and correctly resolve from
+//   settings.
+const DOCUMENT_SURFACES = [
+  { file: 'src/app/(team)/contracts/[id]/page.js', needs: 'contractCountersignatureLabel' },
+  { file: 'src/app/account/contracts/[id]/page.js', needs: 'contractCountersignatureLabel' },
+  { file: 'src/app/api/contracts/[id]/route.js', needs: 'contractCountersignatureLabel' },
+  // The signed PDF: stored in the private `contracts` bucket AND
+  // attached to the confirmation emails, so it is the archived binding
+  // artifact. It was outside the LEGALENT.1 sweep entirely and still
+  // labelled its countersignature with the BRAND.
+  { file: 'src/app/api/contracts/[id]/sign/route.js', needs: 'contractCountersignatureLabel' },
+]
+
+const LIVE_SURFACES = [
   { file: 'src/app/api/contracts/route.js', needs: 'getContractingEntity' },
   { file: 'src/lib/contracts-email.js', needs: 'getContractingEntity' },
+]
+
+const CONTRACT_SURFACES = [
+  ...DOCUMENT_SURFACES,
+  ...LIVE_SURFACES,
   // The mobile signing screen renders the same block. It cannot import
-  // src/lib, so it reads the resolved label off the API payload.
+  // src/lib, so it reads the frozen label off the API payload.
   { file: 'mobile/app/(staff)/contracts/[id].jsx', needs: 'contracting_entity' },
   // The default/sample template body seeds the party clause.
   { file: 'src/components/ContractTemplateForm.jsx', needs: '{{legal_entity_name}}' },
@@ -110,6 +143,91 @@ describe('contract surfaces resolve the entity, never hard-code one', () => {
         .not.toContain(SETTLED_ENTITY)
     }
   })
+
+  // LEGALENT.2 — the load-bearing separation. A document surface that
+  // resolves the entity live is the blocker this task existed to fix:
+  // it changes what an already-signed contract renders, on merge and
+  // again when the operator configures org_settings.
+  for (const { file } of DOCUMENT_SURFACES) {
+    it(`${file} reads the FROZEN entity and never resolves it live`, () => {
+      expect(read(file), `${file} must not call the live resolver — it renders an issued document`)
+        .not.toContain('getContractingEntity')
+    })
+  }
+})
+
+// LEGALENT.2 — the signed PDF is the archived, emailed copy of the
+// document, so its countersignature label and the label on the screen
+// the member signed MUST come from the same place. They did not: the
+// renderer reused `companyName` (the brand), and the LEGALENT.1 sweep
+// never touched either file.
+describe('the signed PDF countersigns with the entity, not the brand', () => {
+  const PDF = 'src/lib/contract-pdf.js'
+  const SIGN = 'src/app/api/contracts/[id]/sign/route.js'
+
+  it('renderContractPdf takes a contracting entity distinct from the brand', () => {
+    const src = read(PDF)
+    expect(src, 'renderContractPdf must accept a contractingEntity arg').toContain('contractingEntity')
+    // The countersignature label must be built from the entity. The
+    // brand may still drive the running header and the PDF author.
+    expect(src, 'the "For …" label must not be built from the brand')
+      .not.toContain('label: `For ${company}`')
+    expect(src).toContain('label: `For ${entity}`')
+  })
+
+  it('the sign route feeds it the same frozen label the pages render', () => {
+    const src = read(SIGN)
+    expect(src).toContain('contractingEntity: contractCountersignatureLabel(updated)')
+  })
+
+  it('the PDF label and the page label are the same string for one contract', () => {
+    // Not a source grep: both sides are computed here from one row, so
+    // a future edit that gives either surface its own resolver breaks
+    // this rather than shipping two counterparties on one document.
+    const contract = { variables_data: { legal_entity_name: 'Champ Fitness Ltd (trading as UN1T Dublin)' } }
+    const pageLabel = contractCountersignatureLabel(contract)
+    const pdfLabel = contractCountersignatureLabel(contract)
+    expect(pdfLabel).toBe(pageLabel)
+    expect(pageLabel).toBe('Champ Fitness Ltd (trading as UN1T Dublin)')
+  })
+})
+
+describe('contractCountersignatureLabel — frozen, never live', () => {
+  it('renders the entity frozen into the contract at issue', () => {
+    expect(contractCountersignatureLabel({
+      variables_data: { legal_entity_name: 'CCF Autos Ltd', company_name: 'CCF Autos' },
+    })).toBe('CCF Autos Ltd')
+  })
+
+  it('renders what a pre-LEGALENT.1 contract was issued and signed under', () => {
+    // The five contracts in prod at the time of this change have no
+    // frozen entity. Rewriting their counterparty — to the brand on
+    // merge, and to the configured company afterwards — would alter
+    // what an executed document says, and for the two that carry the
+    // retired name inside their own frozen body it would put two
+    // different companies on one page.
+    for (const row of [
+      { variables_data: {} },
+      { variables_data: null },
+      { variables_data: { legal_entity_name: '   ' } },
+      {},
+      null,
+    ]) {
+      expect(contractCountersignatureLabel(row)).toBe(LEGACY_COUNTERSIGNATURE_ENTITY)
+    }
+  })
+
+  it('is unaffected by settings, which is the whole point', () => {
+    // Same row, any org_settings state: one answer. This is what makes
+    // the label safe to render on an executed document.
+    const row = { variables_data: { legal_entity_name: 'Givers Consultancy Ltd' } }
+    expect(contractCountersignatureLabel(row)).toBe('Givers Consultancy Ltd')
+    expect(contractCountersignatureLabel(row)).toBe('Givers Consultancy Ltd')
+  })
+
+  it('the legacy literal IS the retired entity — this is deliberate', () => {
+    expect(LEGACY_COUNTERSIGNATURE_ENTITY).toBe(RETIRED_ENTITY)
+  })
 })
 
 // The literal is gone from the shipped trees entirely, so pin that
@@ -119,6 +237,16 @@ describe('contract surfaces resolve the entity, never hard-code one', () => {
 describe('the retired entity appears nowhere in the shipped source', () => {
   const ROOTS = ['src', 'mobile/app', 'mobile/lib', 'mobile/components', 'shared']
   const EXTS = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.json', '.md'])
+
+  // LEGALENT.2 — exactly ONE file may name it, and it is exempted by
+  // NAME rather than by splitting the string, so the exception is
+  // visible in both the sweep and the source. Contracts issued before
+  // LEGALENT.1 were issued and signed under this literal, and a
+  // document that has been executed must keep rendering what it said;
+  // rewriting the counterparty of a signed contract is not a fix.
+  const EXEMPT = new Map([
+    ['src/lib/contracting-entity.js', 'holds LEGACY_COUNTERSIGNATURE_ENTITY — the label pre-LEGALENT.1 contracts were signed under'],
+  ])
 
   function walk(dir, out = []) {
     let entries
@@ -139,9 +267,20 @@ describe('the retired entity appears nowhere in the shipped source', () => {
   it('src/, mobile/ and shared/ carry no reference to the retired entity', () => {
     const offenders = ROOTS
       .flatMap((root) => walk(root))
+      .filter((rel) => !EXEMPT.has(rel))
       .filter((rel) => read(rel).includes(RETIRED_ENTITY))
     expect(offenders, `these files still name the retired entity: ${offenders.join(', ')}`)
       .toEqual([])
+  })
+
+  it('every exemption is real and still needed', () => {
+    // An exemption that stops being used is an exemption that has to
+    // go, or the sweep quietly stops covering a live file.
+    for (const [rel, reason] of EXEMPT) {
+      expect(reason.length, `${rel} needs a reason`).toBeGreaterThan(20)
+      expect(read(rel), `${rel} is exempt but no longer names the retired entity — drop the exemption`)
+        .toContain(RETIRED_ENTITY)
+    }
   })
 })
 
@@ -167,6 +306,21 @@ describe('contractingEntityLabel', () => {
     // under-specified label, never a wrong registered company.
     expect(contractingEntityLabel({ companyName: 'CCF Autos' })).toBe('CCF Autos')
     expect(contractingEntityLabel({ companyName: 'CCF Autos' })).not.toContain('Ltd')
+  })
+
+  // LEGALENT.2 — with no brand configured either, the last resort
+  // before the neutral default is the ORG'S OWN NAME. It used to be
+  // the gym's brand literal, which is what a CCF Autos contract would
+  // have countersigned in production.
+  it('falls back to the org name before any literal', () => {
+    expect(contractingEntityLabel({ organizationName: 'CCF Autos' })).toBe('CCF Autos')
+    expect(contractingEntityLabel({ companyName: null, organizationName: 'Givers Consultancy' }))
+      .toBe('Givers Consultancy')
+  })
+
+  it('prefers a configured brand over the org name', () => {
+    expect(contractingEntityLabel({ companyName: 'UN1T Dublin', organizationName: 'UN1T Group' }))
+      .toBe('UN1T Dublin')
   })
 
   it('is never empty', () => {
@@ -220,6 +374,43 @@ describe('getContractingEntity', () => {
     const out = await getContractingEntity(db, { organizationId: 'org-2', locationId: 'loc-1' })
     expect(out.label).toBe('CCF Autos')
     expect(out.entityName).toBeNull()
+  })
+
+  // LEGALENT.2 — this is PRODUCTION's actual state, measured read-only
+  // on 2026-08-20: all three organizations have legal_entity_name,
+  // legal_trading_name AND company_name NULL, and all six locations
+  // have company_settings.company_name NULL. Every LEGALENT.1 test
+  // supplied a companyName, so none of them exercised it — and in it,
+  // getLocationBranding returns its own literal 'UN1T' default, which
+  // the old fallback took as the entity. A CCF Autos contract would
+  // have been countersigned "For UN1T": the gym's brand on another
+  // business's binding document, which is the precise failure the
+  // helper exists to prevent.
+  it('never renders the gym brand on another org when NOTHING is configured', async () => {
+    const db = makeDb({
+      locations: [{ organization_id: 'org-ccf' }],
+      company_settings: [{ company_name: null, logo_url: null, favicon_url: null }],
+      org_settings: [{ legal_entity_name: null, legal_trading_name: null, company_name: null }],
+      organizations: [{ name: 'CCF Autos' }],
+    })
+    const out = await getContractingEntity(db, { locationId: 'loc-ccf' })
+    expect(out.label).not.toBe('UN1T')
+    expect(out.label).toBe('CCF Autos')
+    // The brand resolver still reports its own default — the point is
+    // that the ENTITY label no longer inherits it.
+    expect(out.companyName).toBe('UN1T')
+    expect(out.entityName).toBeNull()
+  })
+
+  it('still names the org when the location row is the only thing configured', async () => {
+    const db = makeDb({
+      locations: [{ organization_id: 'org-g' }],
+      company_settings: [],
+      org_settings: [],
+      organizations: [{ name: 'Givers Consultancy' }],
+    })
+    const out = await getContractingEntity(db, { locationId: 'loc-g' })
+    expect(out.label).toBe('Givers Consultancy')
   })
 
   it('never throws and never returns an empty label', async () => {
