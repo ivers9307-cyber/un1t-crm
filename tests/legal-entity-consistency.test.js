@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, extname } from 'node:path'
 import {
@@ -178,6 +178,54 @@ describe('the signed PDF countersigns with the entity, not the brand', () => {
   it('the sign route feeds it the same frozen label the pages render', () => {
     const src = read(SIGN)
     expect(src).toContain('contractingEntity: contractCountersignatureLabel(updated)')
+  })
+
+  // A source grep proves the argument is threaded, not that the string
+  // reaches the page. @react-pdf compiles text into glyph codes against
+  // an embedded font subset, so the rendered bytes cannot be searched
+  // (probed: neither the brand nor the entity survives as plain text,
+  // and two renders of identical input differ anyway). So capture the
+  // element tree at the renderer boundary instead — the last thing
+  // renderContractPdf builds before handing it over.
+  it('the rendered document really carries "For <entity>", not the brand', async () => {
+    const captured = []
+    vi.doMock('@react-pdf/renderer', () => ({
+      Document: 'Document',
+      Page: 'Page',
+      Text: 'Text',
+      View: 'View',
+      StyleSheet: { create: (s) => s },
+      renderToBuffer: (doc) => { captured.push(doc); return Promise.resolve(Buffer.from('%PDF-')) },
+    }))
+    const { renderContractPdf } = await import('../src/lib/contract-pdf.js')
+
+    await renderContractPdf({
+      bodyRendered: '# Agreement',
+      issuerSignature: 'Issuer',
+      templateName: 'Coach Employment Contract',
+      companyName: 'A-BRAND-ONLY',
+      contractingEntity: 'AN-ENTITY-ONLY',
+    })
+
+    // Flatten every string that ended up in the tree.
+    const strings = []
+    const walkTree = (node) => {
+      if (node == null || node === false) return
+      if (typeof node === 'string') { strings.push(node); return }
+      if (Array.isArray(node)) { node.forEach(walkTree); return }
+      if (node.props) walkTree(node.props.children)
+    }
+    walkTree(captured[0])
+
+    expect(captured, 'renderToBuffer must have been called').toHaveLength(1)
+    expect(strings, 'the countersignature must name the entity')
+      .toContain('For AN-ENTITY-ONLY')
+    expect(strings, 'the countersignature must NOT name the brand')
+      .not.toContain('For A-BRAND-ONLY')
+    // The brand legitimately survives as the running header wordmark.
+    expect(strings).toContain('A-BRAND-ONLY')
+    vi.doUnmock('@react-pdf/renderer')
+    vi.resetModules()
   })
 
   it('the PDF label and the page label are the same string for one contract', () => {
