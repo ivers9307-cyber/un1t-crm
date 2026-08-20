@@ -11,6 +11,7 @@ import {
   runEventReminderTriggers,
   runAnniversaryTriggers,
   runInactivityTriggers,
+  runAudienceMatchTriggers,
 } from '@/lib/sequences'
 import { runEventReminderSends } from '@/lib/event-reminders'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
@@ -64,6 +65,18 @@ export async function GET(request) {
     anniversaryErr = e.message || String(e)
     console.warn(`[cron] anniversary triggers failed: ${anniversaryErr}`)
   }
+  // AUDIENCEMATCH.1 — sweep audience_match sequences BEFORE runSequences, so a
+  // contact enrolled this tick is picked up by the runner in the same tick
+  // rather than waiting five minutes for the next one. Independent + best
+  // effort like its siblings: a failure here must never stop due enrolments
+  // from being processed below.
+  let audienceStats = null, audienceErr = null
+  try { audienceStats = await runAudienceMatchTriggers() }
+  catch (e) {
+    audienceErr = e.message || String(e)
+    console.warn(`[cron] audience_match triggers failed: ${audienceErr}`)
+  }
+
   let inactivityStats = null, inactivityErr = null
   try { inactivityStats = await runInactivityTriggers() }
   catch (e) {
@@ -84,7 +97,8 @@ export async function GET(request) {
     const triggerErrors =
       (triggerStats?.errored || 0) +
       (anniversaryStats?.errored || 0) +
-      (inactivityStats?.errored || 0)
+      (inactivityStats?.errored || 0) +
+      (audienceStats?.errored || 0)
     return NextResponse.json({
       success: true,
       // Non-zero means N individual sequences did nothing this tick —
@@ -97,6 +111,8 @@ export async function GET(request) {
       anniversary_error: anniversaryErr,
       inactivity: inactivityStats,
       inactivity_error: inactivityErr,
+      audience_match: audienceStats,
+      audience_match_error: audienceErr,
       reminder_sends: reminderSendStats,
       reminder_sends_error: reminderSendErr,
     })
