@@ -49,7 +49,7 @@ ALTER TABLE public.sonos_connections
   ADD CONSTRAINT sonos_connections_household_id_unique UNIQUE (household_id);
 
 COMMENT ON CONSTRAINT sonos_connections_household_id_unique ON public.sonos_connections IS
-  'SONOS.6 — one Sonos household serves exactly one location, never shared. Two locations on one household would have each other''s music schedules driving their speakers. Correct a wrong binding by disconnecting the other location first, then re-linking the correct one.';
+  'SONOS.6 — one Sonos household serves exactly one location, never shared. Two locations on one household would have each other''s music schedules driving their speakers. Correct a wrong binding by deleting the other location''s row directly — there is no in-app disconnect yet.';
 
 CREATE TABLE public.sonos_schedules (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

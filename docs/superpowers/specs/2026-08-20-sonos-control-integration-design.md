@@ -38,7 +38,7 @@ Group resolution rule: find the group whose `playerIds` contains the schedule's 
 
 ### One location = one household
 
-`sonos_connections.location_id` is `UNIQUE`, and the household id is stored explicitly at link time from the operator's selection — **never `households[0]`**. This is the same mistake shape as the Xero `tenants[0]` bug that bound three locations to one org and put 101 bills (~€99k) in the wrong entity. Cheap to prevent on day one.
+`sonos_connections.location_id` is `UNIQUE`, which stops one location from acquiring two connection rows. `household_id` is `UNIQUE` too — stored explicitly at link time from the operator's selection, **never `households[0]`** — and that second constraint is the one that actually mirrors the Xero `tenants[0]` bug: three locations resolved to one org and put 101 bills (~€99k) in the wrong entity. Cheap to prevent on day one.
 
 ## The command model — exactly once per window
 
@@ -99,6 +99,8 @@ Quota is 1,000 requests/minute; spike arrest at 100 requests/second. This design
 Because refresh tokens do not rotate, none of `xero_connections`' rotation-race handling is needed — no read-modify-write contention on the token row, no risk of a concurrent refresh invalidating the stored value. Refresh when `access_token_expires_at` is inside a 5-minute margin; persist the new access token and expiry only.
 
 **Linking is one-time and staff-driven.** `/api/sonos/connect` builds the authorize URL with a signed `state`; `/api/sonos/callback` validates `state`, exchanges the code, reads `GET /households`, and stores the chosen household plus the refresh token. Re-linking after a revoke is a button, not a deploy — deliberately unlike the hand-pasted `HOMEY_*` env triple.
+
+**A `household_id` collision needs its own error path in the callback, not a generic save failure.** Postgres `ON CONFLICT (location_id)` does not catch a conflict on the separate `household_id` unique index — a colliding insert hard-fails instead of upserting — so the callback must catch that case explicitly and name the other location, following the pattern in `src/lib/xero/tenant-binding.js`'s `validateTenantChoice`.
 
 Env is only `SONOS_CLIENT_ID` / `SONOS_CLIENT_SECRET` / `SONOS_REDIRECT_URI`, from the Control Integration registered at `integration.sonos.com`. Config is tri-state like the Homey client: all unset = dormant (cron stamps its heartbeat and exits `{skipped:true}`, never pages); partially set = misconfigured, logged loudly every tick; all set = live.
 
