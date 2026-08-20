@@ -283,7 +283,20 @@ function signatureColumn({ label, name, timestamp, ip }) {
  * @param {string} args.signedAt           ISO timestamp
  * @param {string} args.signedIp           recipient's IP at signing
  * @param {string} args.templateName
- * @param {string} args.companyName
+ * @param {string} args.companyName        the BRAND — running header wordmark
+ *                                         and PDF author metadata only
+ * @param {string} [args.contractingEntity] LEGALENT.1 — the CONTRACTING
+ *   COMPANY, for the "For …" countersignature label. It is a legal-entity
+ *   claim and must not be the brand: this PDF is uploaded to the private
+ *   `contracts` bucket AND attached to the signature-confirmation emails, so
+ *   it is the archived binding artifact the member keeps. It used to reuse
+ *   `companyName`, which meant that the moment an operator configured
+ *   org_settings.legal_entity_name the screen would say one company and the
+ *   stored PDF another — two counterparties on one executed document.
+ *   Callers pass contractCountersignatureLabel(contract) (the contract's own
+ *   frozen entity), which is exactly what the web pages and the mobile screen
+ *   render, so the four can never diverge. Omitted -> falls back to the brand,
+ *   i.e. the pre-LEGALENT.1 behaviour.
  * @returns {Promise<Buffer>}
  */
 export async function renderContractPdf({
@@ -295,9 +308,11 @@ export async function renderContractPdf({
   signedIp,
   templateName,
   companyName,
+  contractingEntity,
 } = {}) {
   const blocks = parseContractBlocks(bodyRendered)
   const company = companyName || 'UN1T'
+  const entity = String(contractingEntity ?? '').trim() || company
 
   const doc = el(
     Document,
@@ -315,7 +330,7 @@ export async function renderContractPdf({
       el(
         View,
         { style: styles.sigWrap, wrap: false },
-        signatureColumn({ label: `For ${company}`, name: issuerSignature, timestamp: issuedAt }),
+        signatureColumn({ label: `For ${entity}`, name: issuerSignature, timestamp: issuedAt }),
         signatureColumn({
           label: 'Employee / Contractor',
           name: recipientSignature,

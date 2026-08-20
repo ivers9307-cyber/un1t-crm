@@ -36,7 +36,7 @@ function makeDb(rowsByTable) {
 }
 
 const baseArgs = {
-  contract: { id: 'ct-1', location_id: 'loc-1', profile_id: 'p-1', signed_at: '2026-05-08T18:50:00Z' },
+  contract: { id: 'ct-1', location_id: 'loc-1', organization_id: 'org-1', profile_id: 'p-1', signed_at: '2026-05-08T18:50:00Z' },
   recipient: { full_name: 'Sarah Test', email: 'sarah@test.com' },
   issuer: { full_name: 'Boss Person', email: 'boss@test.com' },
   templateName: 'Coach Agreement',
@@ -174,5 +174,52 @@ describe('issuer notification links point at /contracts (HUBS.2d)', () => {
     const { htmlBody } = sendEmail.mock.calls[0][0]
     expect(htmlBody).toContain(`/contracts/${baseArgs.contract.id}`)
     expect(htmlBody).not.toContain('/admin/contracts')
+  })
+})
+
+// LEGALENT.1 — the footer names the CONTRACTING COMPANY. It used to be
+// a literal naming a company formed from the gym brand that appears in
+// no register, on an email a member receives alongside a document they
+// are about to sign. It now resolves the same way the countersignature
+// block does: org_settings.legal_entity_name (mig 425), falling back
+// to the resolved brand.
+describe('contract email footer names the contracting entity (LEGALENT.1)', () => {
+  it('renders the org\'s configured legal entity and trading name', async () => {
+    createServerClient.mockReturnValue(makeDb({
+      company_settings: [{ company_name: 'UN1T', logo_url: null, favicon_url: null }],
+      org_settings: [{ legal_entity_name: 'Champ Fitness Ltd', legal_trading_name: 'UN1T Dublin' }],
+    }))
+
+    await sendContractIssuedEmail(baseArgs)
+
+    const { htmlBody } = sendEmail.mock.calls[0][0]
+    expect(htmlBody).toContain('Champ Fitness Ltd (trading as UN1T Dublin)')
+  })
+
+  it('falls back to the BRAND when the org has no legal entity configured', async () => {
+    // The load-bearing rule: every business in this estate is its own
+    // legal entity, so an unconfigured org must render an
+    // under-specified footer, never another company's registered name.
+    createServerClient.mockReturnValue(makeDb({
+      company_settings: [{ company_name: 'CCF Autos', logo_url: null, favicon_url: null }],
+      org_settings: [],
+    }))
+
+    await sendContractIssuedEmail(baseArgs)
+
+    const { htmlBody } = sendEmail.mock.calls[0][0]
+    expect(htmlBody).toContain('CCF Autos ·')
+    expect(htmlBody).not.toContain('Champ Fitness')
+  })
+
+  it('escapes the entity label in the footer', async () => {
+    createServerClient.mockReturnValue(makeDb({
+      org_settings: [{ legal_entity_name: 'Tom & Jerry Ltd', legal_trading_name: null }],
+    }))
+
+    await sendContractIssuedEmail(baseArgs)
+
+    const { htmlBody } = sendEmail.mock.calls[0][0]
+    expect(htmlBody).toContain('Tom &amp; Jerry Ltd ·')
   })
 })

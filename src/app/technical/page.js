@@ -1,7 +1,17 @@
 // /technical — public B2B service page for Repset, the communications
-// platform (the software UN1T Dublin Ltd builds and provides to UN1T
+// platform (the software Champ Fitness Ltd builds and provides to UN1T
 // gym franchises). Repset is the software brand; UN1T is the gym brand
 // the software is operated for — keep the two distinct in all copy.
+//
+// LEGALENT.1 — the LEGAL ENTITY named here is Champ Fitness Ltd
+// (trading as UN1T Dublin), the entity settled in SAAS4-W0.2 and the
+// one /terms, /privacy, /privacy/members and
+// /legal/subprocessors already name. This page used to name a
+// different (and likely non-existent) company formed from the gym
+// brand — on the very page Meta cross-checks against the Tech
+// Provider Access Verification form. "UN1T Dublin" as a gym BRAND is
+// correct and stays; only the registered-company claims changed.
+// tests/legal-entity-consistency.test.js pins it.
 //
 // This page is the website URL cited in Meta's Tech Provider Access
 // Verification: Meta requires a live page showing the service the
@@ -34,7 +44,7 @@ export const runtime = 'nodejs'
 export const metadata = {
   title: 'Repset · Technology',
   description:
-    'Repset — a gym CRM with WhatsApp and Instagram messaging in one shared inbox, built and provided by UN1T Dublin Ltd to UN1T gym franchises.',
+    'Repset — a gym CRM with WhatsApp and Instagram messaging in one shared inbox, built and provided by Champ Fitness Ltd (trading as UN1T Dublin) to UN1T gym franchises.',
 }
 
 // Repset brand volt — the accent that closes the wordmark's full stop
@@ -92,7 +102,7 @@ export default function TechnicalPage() {
       <section className="relative pt-36 pb-20 md:pt-48 md:pb-28 border-b border-white/10">
         <div className="max-w-6xl mx-auto px-6">
           <p className="lp-reveal text-[11px] uppercase tracking-[0.3em] text-white/45 font-semibold mb-6">
-            UN1T Dublin Ltd · Technology
+            Champ Fitness Ltd · Technology
           </p>
           <div className="lp-reveal lp-d1 font-display font-extrabold lowercase text-3xl md:text-4xl tracking-tight mb-5">
             repset<span style={{ color: VOLT }} aria-hidden="true">.</span>
@@ -182,10 +192,10 @@ export default function TechnicalPage() {
             not just developers.
           </h2>
           <p className="lp-reveal lp-d1 mt-8 text-white/70 leading-relaxed max-w-2xl">
-            UN1T Dublin Ltd is registered in Ireland. We operate the UN1T
-            studios in Dublin — Stillorgan and Hatch Street — and we build and
-            run Repset, the software platform behind them. Every feature
-            exists because a real gym needed it.
+            Champ Fitness Ltd, trading as UN1T Dublin, is registered in
+            Ireland. We operate the UN1T studios in Dublin — Stillorgan and
+            Hatch Street — and we build and run Repset, the software platform
+            behind them. Every feature exists because a real gym needed it.
           </p>
           <p className="lp-reveal lp-d2 mt-4 text-white/70 leading-relaxed max-w-2xl">
             Interested in Repset for your UN1T franchise? Email{' '}
