@@ -12,9 +12,9 @@
 // Chain order (automations/email/whatsapp/device_control first — the
 // /automations page itself gates on that same OR, VERIFIED by reading
 // the page: canCurated || canFlows || canDevices, where canDevices is
-// device_control alone — a device_control-only holder sees the Tapo
-// section rendered by /automations/devices and would otherwise
-// dead-end at this index's fallback; then landing_page) and the final
+// device_control alone — a device_control-only holder sees the Studio
+// music (Sonos) section rendered inline on /automations and would
+// otherwise dead-end at this index's fallback; then landing_page) and the final
 // fallback ('/', unlike /team's universal-access /policies —
 // Marketing has no open-to-all tab) both come straight from the page
 // brief.

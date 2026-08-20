@@ -80,9 +80,8 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   }
 
-  // Dormant until configured — same pattern as the Homey integration. The
-  // heartbeat still stamps, so cron_health does not report this as stale
-  // merely for being unconfigured.
+  // Dormant until configured. The heartbeat still stamps, so cron_health
+  // does not report this as stale merely for being unconfigured.
   if (!tailscaleConfigured()) {
     await stampHeartbeat('fleet-health', { configured: false })
     return NextResponse.json({ success: true, data: { configured: false, checked: 0 } })
