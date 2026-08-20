@@ -13,12 +13,20 @@
 
 -- 1. The new cron's heartbeat. last_ok_at seeded to now() so the first tick
 --    has a budget to land in rather than starting stale.
+--
+--    60 + 840 = a 900s total budget, matching homey-reconcile's own seed
+--    (mig 471) exactly. cron_health computes staleness as
+--    expected_interval_seconds + grace_seconds, and mig 471 chose that
+--    generous figure because the cron cannot commit until a cloud API
+--    round trip returns. sonos-reconcile has the same shape — OAuth
+--    refresh plus per-location group reads against the Sonos Control API —
+--    so it gets the same budget rather than a new number.
 INSERT INTO public.cron_heartbeats (name, last_ok_at, expected_interval_seconds, grace_seconds, notes)
 VALUES (
   'sonos-reconcile',
   now(),
   60,
-  900,
+  840,
   'SONOS.15 — per-minute Sonos schedule application. Dormant (skipped:true) until SONOS_* env vars are set; still stamps.'
 )
 ON CONFLICT (name) DO UPDATE

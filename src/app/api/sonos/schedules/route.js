@@ -5,9 +5,13 @@ import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
+import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+
+// Named so the query's cap and the truncation check can never drift apart.
+const MAX_SCHEDULES_PER_LOCATION = 50
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
 const MINUTES_PER_DAY = 24 * 60
@@ -128,8 +132,16 @@ export async function GET() {
     .select('*')
     .eq('location_id', locationId)
     .order('created_at', { ascending: true })
-    .limit(50)
+    .limit(MAX_SCHEDULES_PER_LOCATION)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  // A cap that truncates in silence reads as "that's everything". Say so
+  // instead — same fix the reconcile cron already carries for its own cap.
+  if (data?.length === MAX_SCHEDULES_PER_LOCATION) {
+    logWarn('sonos-schedules', 'schedule cap reached, list may be truncated', {
+      locationId,
+      cap: MAX_SCHEDULES_PER_LOCATION,
+    })
+  }
   return NextResponse.json({ success: true, schedules: data || [] })
 }
 
