@@ -7,6 +7,14 @@
 -- cron ships would page immediately, and leaving homey-reconcile behind
 -- after its cron is gone would page forever.
 --
+-- The heartbeat is not the only reason the order matters. Step 3 drops
+-- tapo_devices, and until the deploy lands, /automations/devices and the
+-- /api/tapo/devices* routes are still live and still read that table.
+-- Applying this first therefore 500s those surfaces for any staff member
+-- using them until the deploy catches up. It is a per-request failure, not
+-- an outage, and nothing pages for it — which is exactly why it would be
+-- easy to miss. Deploy first.
+--
 -- What the Homey held, measured 2026-08-20 before removal: 50 tapo_devices
 -- rows, ZERO with a schedule (schedule_mode = 'none' across the board), and
 -- 46 unreachable since 2026-08-10. Nothing automated depended on it.

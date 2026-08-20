@@ -1,8 +1,15 @@
-// TAPO-T1 — pure schedule engine. Resolves a device's day into
-// concrete on/off windows (UTC ms) and answers "what should this
-// device be right now?". No DB, no network — TDD'd, TZ-safe via
+// TAPO-T1 (moved here by SONOS.1) — pure schedule engine. Resolves a
+// day into concrete on/off windows (UTC ms) and answers "what should
+// this be right now?". No DB, no network — TDD'd, TZ-safe via
 // dublin-time's Intl-based day-start math (works regardless of
 // server TZ).
+//
+// The TAPO-T1 tag is where this was born, not where it lives. The Tapo
+// and Homey paths were deleted in SONOS.14; this engine was deliberately
+// moved out of src/lib/tapo/ first so that deletion could not take it.
+// Its consumer is now the Sonos planner (src/lib/sonos/groups.js), which
+// calls resolveServeWindows for the ACTIVE WINDOW's identity and payload
+// rather than desiredState's collapsed on/off — see planAction.
 //
 // zone is a label in v1: class mode follows the LOCATION-WIDE
 // timetable (class_occurrences has no zone column — mirrors
