@@ -19,6 +19,7 @@
 
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
+import { CHALLENGE_ADMIN_ROLES } from '@/lib/challenges-access'
 import HubTabs from '@/components/HubTabs'
 
 export const dynamic = 'force-dynamic'
@@ -26,7 +27,11 @@ export const dynamic = 'force-dynamic'
 const TABS = [
   { id: 'bookings',   label: 'Bookings',    href: '/bookings',                perms: ['bookings'] },
   { id: 'events',     label: 'Events',      href: '/events',                  perms: ['races'] },
-  { id: 'challenges', label: 'Challenges',  href: '/challenges',              perms: ['challenges'] },
+  // HUBDOOR.2 — `roles` is the destination's role floor. /challenges gates
+  // on MANAGER_ROLES as well as the key (canAdminChallenges), so offering
+  // the tab on the key alone showed a staff-role holder of `challenges` a
+  // tab that bounced them. A tab with no `roles` has no floor.
+  { id: 'challenges', label: 'Challenges',  href: '/challenges',              perms: ['challenges'], roles: CHALLENGE_ADMIN_ROLES },
   { id: 'pulse',      label: 'Pulse',       href: '/pulse',                   perms: ['pulse_admin'] },
   { id: 'live',       label: 'Live HR',     href: '/live',                    perms: ['studio_management'] },
   { id: 'timer',      label: 'Class timer', href: '/studio-management/timer', perms: ['class_timer'] },
@@ -37,8 +42,8 @@ export default async function MembersHubLayout({ children }) {
   const user = await getCurrentUser()
   if (!user) return children
   const tabs = TABS
-    .filter(t => t.perms.some(p => hasPermission(user, p)))
-    .map(({ perms: _p, ...t }) => t)
+    .filter(t => (!t.roles || t.roles.includes(user.role)) && t.perms.some(p => hasPermission(user, p)))
+    .map(({ perms: _p, roles: _r, ...t }) => t)
   return (
     <>
       {tabs.length > 1 && (

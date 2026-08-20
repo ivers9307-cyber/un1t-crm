@@ -8,11 +8,20 @@
 
 import { describe, it, expect } from 'vitest'
 import { HUB_INDEX_CHAINS, resolveHubIndexTarget } from './hub-index-chains'
+import { MANAGER_ROLES } from './schemas'
 
-// A tiny stand-in for hasPermission: the user IS their key set.
-const holder = (...keys) => new Set(keys)
+// A tiny stand-in for hasPermission: the user IS their key set, plus the
+// active-location role the role floors read. HUBDOOR.2 added the role
+// dimension; 'manager' is the default because it clears every floor the
+// chains declare, so every pre-existing case reads unchanged.
+const holder = (...keys) => {
+  const keySet = new Set(keys)
+  return { role: 'manager', has: (k) => keySet.has(k) }
+}
+const asRole = (role, ...keys) => ({ ...holder(...keys), role })
 const can = (user, key) => user.has(key)
 const target = (hub, ...keys) => resolveHubIndexTarget(holder(...keys), hub, can)
+const targetAs = (role, hub, ...keys) => resolveHubIndexTarget(asRole(role, ...keys), hub, can)
 
 describe('HUB_INDEX_CHAINS shape', () => {
   it('covers exactly the six collapsed hubs', () => {
@@ -94,6 +103,59 @@ describe('resolveHubIndexTarget — first match wins, in tab order', () => {
 
   it('throws on an unknown hub rather than returning a silent undefined', () => {
     expect(() => resolveHubIndexTarget(holder(), '/nope', can)).toThrow(/unknown hub/)
+  })
+})
+
+// HUBDOOR.2 — the review finding on HUBDOOR.1. Two targets gate on a role
+// floor as well as a key, and a step carrying only the key would redirect
+// a below-floor holder into a page that bounces them back out: the exact
+// defect this module exists to prevent, committed by the module itself.
+describe('role floors — a key below the destination role floor is not a door', () => {
+  it('declares a floor on exactly the two role-gated targets, and it is MANAGER_ROLES', () => {
+    const floors = Object.entries(HUB_INDEX_CHAINS).flatMap(([hub, { chain }]) =>
+      chain.filter((s) => s.roles).map((s) => [hub, s.target, [...s.roles]]),
+    )
+    expect(floors).toEqual([
+      ['/members', '/challenges', [...MANAGER_ROLES]],
+      ['/money', '/orders', [...MANAGER_ROLES]],
+    ])
+  })
+
+  it('Members: a manager holding challenges lands on Challenges', () => {
+    expect(targetAs('manager', '/members', 'challenges')).toBe('/challenges')
+    expect(targetAs('head_coach', '/members', 'challenges')).toBe('/challenges')
+  })
+
+  it('Members: a STAFF holder of challenges falls through, never into the bounce', () => {
+    expect(targetAs('staff', '/members', 'challenges')).toBe('/')
+    expect(targetAs('reception', '/members', 'challenges')).toBe('/')
+  })
+
+  it('Members: falling through means the NEXT step still wins, not the fallback', () => {
+    expect(targetAs('staff', '/members', 'challenges', 'pulse_admin')).toBe('/pulse')
+    // …and a manager still takes Challenges first, in tab order.
+    expect(targetAs('manager', '/members', 'challenges', 'pulse_admin')).toBe('/challenges')
+  })
+
+  it('Money: same shape on /orders, which has carried the floor since HUBS.2c', () => {
+    expect(targetAs('manager', '/money', 'orders')).toBe('/orders')
+    expect(targetAs('staff', '/money', 'orders')).toBe('/')
+    expect(targetAs('staff', '/money', 'orders', 'card_receipts')).toBe('/card-receipts')
+  })
+
+  it('a master whose ACTIVE-LOCATION role is staff is refused, exactly as both pages refuse them', () => {
+    // user.role is resolveActiveLocationRole's answer, and that is the
+    // field /orders and /api/challenges both read. Being more generous
+    // here would put them on a page that redirects them straight out.
+    expect(targetAs('staff', '/members', 'challenges')).toBe('/')
+    expect(targetAs('master', '/members', 'challenges')).toBe('/challenges')
+  })
+
+  it('a floorless step is unaffected by role', () => {
+    for (const role of ['staff', 'reception', 'head_coach', 'manager', 'owner', 'master']) {
+      expect(targetAs(role, '/operations', 'fleet_restart')).toBe('/admin/fleet')
+      expect(targetAs(role, '/marketing', 'sms')).toBe('/communications/send')
+    }
   })
 })
 

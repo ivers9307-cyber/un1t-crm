@@ -29,6 +29,17 @@
 //     the KEY path respects a studio that has switched `issues_inbox` off,
 //     while the ROLE path still does not. Same reason: closing that would
 //     be a tightening. Prod has one such location (SourceIt).
+//   - A widening can drag a SIDE EFFECT along with it. Resolving an
+//     equipment-linked issue returns the asset to service (EQUIP-MAINT.2),
+//     a mutation whose direct route requires `equipment_admin` — which
+//     owner and master hold by default and manager and head_coach do not.
+//     Before this change the two gates coincided by accident because only
+//     owner/master reached the resolve route at all. They no longer do, so
+//     that side effect now carries its OWN `equipment_admin` check
+//     (src/app/api/issues/[id]/resolve/route.js): a granted handler
+//     resolves the issue, and the asset stays off the floor for whoever
+//     owns the register. When you widen a gate here, walk the routes it
+//     opens and ask what ELSE each one touches.
 //
 // Deliberately NOT routed through here: the submit route's push fan-out
 // (`sendPushToRolesAtLocation(locationId, ['owner','master'], …)` in

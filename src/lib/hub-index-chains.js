@@ -28,24 +28,55 @@
 // have caught both of the above when they were written.
 //
 // Shape, per hub:
-//   chain          ordered [{ keys, target }]; the FIRST step whose `keys`
-//                  the user holds any of wins. Order MIRRORS the hub's tab
-//                  strip (each (hub)/layout.js TABS array) so an operator's
-//                  landing tab is the leftmost one they can see.
-//   fallback       where a user holding none of the chain's keys goes.
-//                  '/' everywhere except Team, whose /policies tab is
-//                  login-only so its chain never dead-ends.
-//   visibilityOnly union keys that deliberately reach NO surface, each
-//                  with the reason. Not a TODO list — an assertion that
-//                  the gap is known and accepted. Empty for every hub but
-//                  Members; see its note.
+//   chain          ordered [{ keys, roles?, target }]; the FIRST step the
+//                  user satisfies wins — they must hold ANY of `keys` and,
+//                  where `roles` is present, hold one of those ACTIVE-
+//                  LOCATION roles. Order MIRRORS the hub's tab strip (each
+//                  (hub)/layout.js TABS array) so an operator's landing tab
+//                  is the leftmost one they can see.
+//   fallback       where a user satisfying no step goes. '/' everywhere
+//                  except Team, whose /policies tab is login-only so its
+//                  chain never dead-ends.
+//   visibilityOnly union keys that deliberately reach NO surface for
+//                  ANYONE, each with the reason. Not a TODO list — an
+//                  assertion that the gap is known and accepted. Empty for
+//                  every hub but Members; see its note.
 //
-// Every `target` below is a route whose OWN gate the step's keys satisfy
+// Every `target` below is a route whose OWN gate the step satisfies
 // (verified against each page's guard), so a redirect out of here never
-// lands on a second bounce. The one long-standing exception is Money's
-// /orders, which additionally requires MANAGER_ROLES — a pre-existing
-// overshow documented on the Money hub entry and the (money) tab strip,
-// carried forward unchanged rather than silently fixed here.
+// lands on a second bounce. That statement is only true because of
+// `roles`, and it used to be false:
+//
+// TWO of these targets gate on a ROLE FLOOR as well as a permission key —
+// Money's /orders and Members' /challenges are both
+// `MANAGER_ROLES.includes(user.role) && hasPermission(user, <key>)`. A
+// step carrying only the key would hand a `staff`/`reception` holder of
+// that key a redirect into a page that bounces them straight back out,
+// which is precisely the defect shape this module exists to prevent. So
+// the role floor is recorded here as data and the resolver honours it: a
+// key-holder below the floor falls THROUGH to the next step, and to the
+// fallback if there is none.
+//
+// That leaves an accepted, declared overshow: `orders`/`challenges` are in
+// their hub's sidebar `anyPermission` union without a role qualifier
+// (unions are permission-keyed; nav-items.js has no role dimension), so a
+// staff-role holder of one of those keys still LIGHTS the hub entry and
+// then lands on the fallback. Narrowing the union would take the entry
+// away from a manager who holds only that key, and widening either page's
+// gate would be loosening a gate to make a door work. The honest options
+// are a role-aware union or retiring the grant — both registry decisions,
+// neither a redirect line. Prod population of both personas: 0 (every
+// `orders`/`challenges` holder today is manager+; verified 2026-08-20
+// across all 21 active profile_locations assignments). The set is pinned
+// in nav-items.test.js so a THIRD one cannot appear undeclared.
+//
+// The role floor is enforced at the destination too, not just here:
+// /orders has always redirected on it, and HUBDOOR.2 gave /challenges the
+// server gate it never had (src/app/(members)/challenges/layout.js) so the
+// page can no longer render-then-bounce a client-side white flash.
+
+import { CHALLENGE_ADMIN_ROLES } from './challenges-access'
+import { MANAGER_ROLES } from './schemas'
 
 export const HUB_INDEX_CHAINS = Object.freeze({
   // /sales — tab order: Pipeline, Contacts, Tasks.
@@ -66,7 +97,12 @@ export const HUB_INDEX_CHAINS = Object.freeze({
     chain: Object.freeze([
       { keys: ['bookings'], target: '/bookings' },
       { keys: ['races'], target: '/events' },
-      { keys: ['challenges'], target: '/challenges' },
+      // Role floor: /challenges and /api/challenges both require
+      // MANAGER_ROLES on top of the key (canAdminChallenges). A staff or
+      // reception holder of `challenges` falls through to /pulse, /live,
+      // … and to '/' if they hold nothing else — never into a page that
+      // would bounce them.
+      { keys: ['challenges'], roles: CHALLENGE_ADMIN_ROLES, target: '/challenges' },
       { keys: ['pulse_admin'], target: '/pulse' },
       { keys: ['studio_management'], target: '/live' },
       { keys: ['class_timer'], target: '/studio-management/timer' },
@@ -95,7 +131,11 @@ export const HUB_INDEX_CHAINS = Object.freeze({
       { keys: ['accounting_hub'], target: '/accounting' },
       { keys: ['invoices_inbox'], target: '/invoices' },
       { keys: ['card_receipts'], target: '/card-receipts' },
-      { keys: ['orders'], target: '/orders' },
+      // Role floor: src/app/(money)/orders/page.js redirects unless
+      // MANAGER_ROLES.includes(user.role) AND hasPermission('orders').
+      // Long-standing (HUBS.2c documented the overshow); now honoured
+      // rather than merely noted, so the step cannot double-bounce.
+      { keys: ['orders'], roles: MANAGER_ROLES, target: '/orders' },
       { keys: ['approvals_offer_purchases'], target: '/offer-sales' },
       { keys: ['approvals_contractor_invoices'], target: '/schedule/invoices' },
       { keys: ['approvals_fte_expenses'], target: '/schedule/expenses' },
@@ -174,6 +214,23 @@ export const HUB_INDEX_CHAINS = Object.freeze({
 })
 
 /**
+ * Does `user` clear a step's role floor?
+ *
+ * Compares against `user.role`, the ACTIVE-LOCATION role
+ * (src/lib/auth.js resolveActiveLocationRole) — deliberately the same
+ * field both destination gates read, so this can never be more generous
+ * than the page it sends someone to. A master whose active assignment
+ * says 'staff' is refused by /orders and /api/challenges alike, so they
+ * are refused here too rather than being redirected into that refusal.
+ *
+ * A step with no `roles` has no floor and is open to any role.
+ */
+function clearsRoleFloor(user, step) {
+  if (!step.roles) return true
+  return step.roles.includes(user?.role)
+}
+
+/**
  * Where should `user` land when they open a hub's bare index URL?
  *
  * @param {object|null} user            getCurrentUser() result
@@ -185,6 +242,7 @@ export function resolveHubIndexTarget(user, hubHref, can) {
   const hub = HUB_INDEX_CHAINS[hubHref]
   if (!hub) throw new Error(`hub-index-chains: unknown hub "${hubHref}"`)
   for (const step of hub.chain) {
+    if (!clearsRoleFloor(user, step)) continue
     if (step.keys.some((k) => can(user, k))) return step.target
   }
   return hub.fallback

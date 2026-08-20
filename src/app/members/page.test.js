@@ -99,9 +99,30 @@ describe('/members index page', () => {
     await expect(MembersIndexPage()).rejects.toThrow('NEXT_REDIRECT:/events')
   })
 
-  it('redirects to /challenges when only challenges is held', async () => {
-    getCurrentUser.mockResolvedValue(user({ perms: { challenges: true } }))
-    await expect(MembersIndexPage()).rejects.toThrow('NEXT_REDIRECT:/challenges')
+  // HUBDOOR.2 — /challenges gates on MANAGER_ROLES as well as the key
+  // (canAdminChallenges, mirroring /api/challenges), so the chain step
+  // carries that floor. This case used to assert the DEFECT: the fixture
+  // role defaults to 'staff', and a staff holder of `challenges` was
+  // being redirected into a page whose own gate refuses them.
+  it('redirects to /challenges when only challenges is held, at a role that clears the floor', async () => {
+    getCurrentUser.mockResolvedValue(user({ role: 'manager', perms: { challenges: true } }))
+    await expect(MembersIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/challenges$/)
+    getCurrentUser.mockResolvedValue(user({ role: 'head_coach', perms: { challenges: true } }))
+    await expect(MembersIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/challenges$/)
+  })
+
+  it('does NOT send a staff or reception holder of challenges into that bounce', async () => {
+    for (const role of ['staff', 'reception']) {
+      getCurrentUser.mockResolvedValue(user({ role, perms: { challenges: true } }))
+      await expect(MembersIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
+    }
+  })
+
+  it('a below-floor challenges holder still takes the NEXT step they can open', async () => {
+    getCurrentUser.mockResolvedValue(
+      user({ role: 'staff', perms: { challenges: true, pulse_admin: true } })
+    )
+    await expect(MembersIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/pulse$/)
   })
 
   it('redirects to /pulse when only pulse_admin is held', async () => {

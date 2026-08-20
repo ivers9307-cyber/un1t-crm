@@ -325,17 +325,58 @@ describe('every hub sidebar union key reaches a real surface', () => {
   // The end-to-end statement of the same thing, one persona per key: a
   // user holding EXACTLY one union key must not be redirected to the
   // hub's fallback. Reads as the bug report each defect was.
+  //
+  // HUBDOOR.2 — the persona now carries a ROLE, because two chain steps
+  // declare a role floor matching their destination's own gate. The
+  // persona is built AT a role that clears the step, which is the honest
+  // reading of the invariant: the question is whether the key reaches a
+  // surface for the population that can hold it usefully, not whether it
+  // reaches one for every role in the enum. The complementary statement —
+  // that a BELOW-floor holder is not sent into a bounce — is
+  // hub-index-chains.test.js's role-floor suite, and the set of floors is
+  // pinned there so a third one cannot be added silently.
+  const can = (user, key) => user.has(key)
+  const stepFor = (hub, key) => hub.chain.find((s) => s.keys.includes(key))
+  const personaFor = (hub, key) => {
+    const step = stepFor(hub, key)
+    const keySet = new Set([key])
+    // Any role that clears this step's floor; 'staff' where there is none.
+    return { role: step?.roles ? step.roles[step.roles.length - 1] : 'staff', has: (k) => keySet.has(k) }
+  }
+
   it('a single-key holder never lands on the hub fallback', () => {
-    const can = (user, key) => user.has(key)
     for (const item of unionEntries) {
       const hub = HUB_INDEX_CHAINS[item.href]
       if (!hub) continue
       for (const key of item.anyPermission) {
         if (hub.visibilityOnly.includes(key)) continue
-        const landed = resolveHubIndexTarget(new Set([key]), item.href, can)
+        const landed = resolveHubIndexTarget(personaFor(hub, key), item.href, can)
         expect(landed, `${item.href}: a "${key}"-only holder lands on the fallback`).not.toBe(hub.fallback)
       }
     }
+  })
+
+  // The accepted overshow, stated rather than left to be discovered: a
+  // union is permission-keyed and has no role dimension, so a below-floor
+  // holder of a role-gated key still LIGHTS the hub entry and then lands
+  // on the fallback. Narrowing the union would take the entry from a
+  // manager holding only that key; widening either page's gate would be
+  // loosening a gate to make a door work. Both are registry decisions.
+  // Prod population of both personas: 0 (verified 2026-08-20).
+  it('names every union key whose door is role-conditional', () => {
+    const conditional = []
+    for (const item of unionEntries) {
+      const hub = HUB_INDEX_CHAINS[item.href]
+      if (!hub) continue
+      for (const key of item.anyPermission) {
+        const step = stepFor(hub, key)
+        if (step?.roles) conditional.push([item.href, key])
+      }
+    }
+    expect(conditional).toEqual([
+      ['/members', 'challenges'],
+      ['/money', 'orders'],
+    ])
   })
 })
 

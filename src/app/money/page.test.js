@@ -123,9 +123,28 @@ describe('/money index page', () => {
     await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/card-receipts')
   })
 
-  it('redirects to /orders when only orders is held', async () => {
-    getCurrentUser.mockResolvedValue(user({ perms: { orders: true } }))
-    await expect(MoneyIndexPage()).rejects.toThrow('NEXT_REDIRECT:/orders')
+  // HUBDOOR.2 — /orders has ALWAYS gated on MANAGER_ROLES as well as the
+  // key; the chain now honours that floor instead of merely noting it, so
+  // the step can no longer redirect a staff-role `orders` holder into a
+  // page that redirects them straight back out. This case previously
+  // asserted that bounce (the fixture role defaults to 'staff').
+  it('redirects to /orders when only orders is held, at a role that clears the floor', async () => {
+    getCurrentUser.mockResolvedValue(user({ role: 'manager', perms: { orders: true } }))
+    await expect(MoneyIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/orders$/)
+  })
+
+  it('does NOT send a staff or reception holder of orders into that bounce', async () => {
+    for (const role of ['staff', 'reception']) {
+      getCurrentUser.mockResolvedValue(user({ role, perms: { orders: true } }))
+      await expect(MoneyIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
+    }
+  })
+
+  it('a below-floor orders holder still takes the NEXT step they can open', async () => {
+    getCurrentUser.mockResolvedValue(
+      user({ role: 'staff', perms: { orders: true, approvals_offer_purchases: true } })
+    )
+    await expect(MoneyIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/offer-sales$/)
   })
 
   // DEEP.4 final review — the two approver keys sit AFTER
