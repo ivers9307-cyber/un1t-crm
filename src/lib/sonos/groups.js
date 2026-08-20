@@ -92,6 +92,9 @@ export function planAction(schedule, nowMs, dateStr) {
   )
 
   const last = schedule.last_applied
+  // windows is sorted ascending by on_at, so when two windows overlap on
+  // the same day .find() keeps the earliest-starting one — a deliberate
+  // tie-break, not an accident. Nothing at validation stops that overlap.
   const active = windows.find((w) => nowMs >= w.on_at && nowMs < w.off_at)
 
   if (active) {
@@ -103,6 +106,14 @@ export function planAction(schedule, nowMs, dateStr) {
       action: 'open',
       windowOnAt: active.on_at,
       volume: Number.isFinite(Number(src.volume)) ? Number(src.volume) : DEFAULT_VOLUME,
+      // No favorite_id: pass null through rather than refuse to open. A
+      // refusal would leave the room silent with zero signal, which is
+      // worse for whoever is debugging this at 7am than a repeating log
+      // line. The cost: Sonos rejects the null, the open sequence fails,
+      // last_applied is deliberately not stamped (see above), so the
+      // WHOLE open sequence — including setVolume — retries every tick.
+      // A schedule missing its favourite therefore silently re-stomps any
+      // volume a human set, every sixty seconds, until the data is fixed.
       favoriteId: src.favorite_id || null,
     }
   }

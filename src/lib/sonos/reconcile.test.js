@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { runSonosReconcile } from './reconcile'
+import { logWarn } from '@/lib/log'
+
+vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn() }))
 
 const MONDAY_0500Z = new Date('2026-08-24T05:00:00Z').getTime()
 const OPEN_AT = MONDAY_0500Z
@@ -123,5 +126,20 @@ describe('runSonosReconcile', () => {
     const two = [baseSchedule, { ...baseSchedule, id: 's2', name: 'Reception' }]
     await runSonosReconcile(makeDb(two), deps({ getGroups }))
     expect(getGroups).toHaveBeenCalledTimes(1)
+  })
+
+  it('warns when the schedule load returns exactly the cap, since anything past it was silently dropped', async () => {
+    // 200 mirrors MAX_SCHEDULES, a module-private constant in reconcile.js
+    // — not imported, so this only needs revisiting if that value changes.
+    // All 200 are disabled so the run stays cheap: this test is about the
+    // load path noticing the cap, not about planAction's decisions.
+    const manySchedules = Array.from({ length: 200 }, (_, i) => ({ ...baseSchedule, id: `s${i}`, enabled: false }))
+    const out = await runSonosReconcile(makeDb(manySchedules), deps())
+    expect(out).toMatchObject({ ok: true, applied: 0, failed: 0 })
+    expect(logWarn).toHaveBeenCalledWith(
+      'sonos-reconcile',
+      expect.stringContaining('dropped'),
+      { cap: 200 },
+    )
   })
 })

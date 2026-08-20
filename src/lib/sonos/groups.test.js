@@ -196,4 +196,35 @@ describe('planAction', () => {
     const s = { ...schedule, last_applied: { window_on_at: 'garbage', action: 'open' } }
     expect(planAction(s, at('20:35'), MONDAY)).toBe(null)
   })
+
+  // Documents the missing-favourite decision (see the comment on
+  // favoriteId in groups.js): a window with no favorite_id still opens —
+  // refusing would leave the room silent with zero signal — but the
+  // favourite comes back null rather than defaulted to something
+  // plausible, unlike the missing-volume case above.
+  it('opens with a null favourite rather than silence when favorite_id is missing', () => {
+    const s = {
+      ...schedule,
+      windows: [{ days: [1, 2, 3, 4, 5], on: '06:00', off: '21:30', volume: 35 }],
+    }
+    const result = planAction(s, at('05:00'), MONDAY)
+    expect(result.action).toBe('open')
+    expect(result.favoriteId).toBe(null)
+  })
+
+  // Documents current tie-break behaviour for two windows that overlap on
+  // the same day (see the comment on the .find() in planAction). Rejecting
+  // overlaps at the API/validation layer is tracked separately — this only
+  // pins what the engine does today.
+  it('resolves an overlap between two windows to the earliest-starting one', () => {
+    const s = {
+      ...schedule,
+      windows: [
+        { days: [1, 2, 3, 4, 5], on: '06:00', off: '21:30', volume: 35, favorite_id: 'fv-1' },
+        { days: [1], on: '10:00', off: '12:00', volume: 40, favorite_id: 'fv-2' },
+      ],
+    }
+    // 11:00 Dublin (10:00Z) sits inside both windows.
+    expect(planAction(s, at('10:00'), MONDAY)).toMatchObject({ action: 'open', favoriteId: 'fv-1' })
+  })
 })

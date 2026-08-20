@@ -12,6 +12,11 @@ import { dublinDayStr } from '@/lib/dublin-time'
 
 const MODULE = 'sonos-reconcile'
 
+// Single source of truth for the schedules-per-tick cap: read by both the
+// query's .limit() and the reached-cap check below, so the two can never
+// drift apart.
+const MAX_SCHEDULES = 200
+
 // Pausing a group that has nothing loaded returns 499
 // ERROR_PLAYBACK_NO_CONTENT. That is the desired end state, not a failure —
 // treat it as success or every close-window tick retries forever.
@@ -39,10 +44,17 @@ export async function runSonosReconcile(db, deps = {}) {
     .from('sonos_schedules')
     .select('*')
     .eq('enabled', true)
-    .limit(200)
+    .limit(MAX_SCHEDULES)
   if (error) {
     logWarn(MODULE, 'schedule load failed', { error: error.message })
     return { ok: false }
+  }
+  if (schedules?.length === MAX_SCHEDULES) {
+    // Reaching the cap means this tick can't tell "exactly MAX_SCHEDULES
+    // enabled schedules exist" from "more exist and .limit() silently
+    // dropped the rest". Warn either way — it's the only signal an
+    // operator gets before some room just quietly stops playing on time.
+    logWarn(MODULE, 'schedule cap reached, excess schedules dropped this tick', { cap: MAX_SCHEDULES })
   }
   if (!schedules?.length) return { ok: true, applied: 0, failed: 0 }
 
