@@ -200,6 +200,7 @@
     { "path": "/api/cron/equipment-inspection-reminder", "schedule": "0 6 * * *" },
     { "path": "/api/cron/equipment-inspection-sweep", "schedule": "0 19 * * *" },
     { "path": "/api/cron/homey-reconcile", "schedule": "* * * * *" },
+    { "path": "/api/cron/sonos-reconcile", "schedule": "* * * * *" },
     { "path": "/api/cron/fleet-health", "schedule": "*/5 * * * *" },
     { "path": "/api/cron/attribution-health", "schedule": "45 21 * * *" },
     { "path": "/api/cron/zoom-contact-sync", "schedule": "30 4 * * *" },
