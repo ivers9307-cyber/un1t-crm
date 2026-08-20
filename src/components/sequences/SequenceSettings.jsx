@@ -319,8 +319,15 @@ export default function SequenceSettings({ sequence }) {
 
           {/* Goal */}
           <Labeled label="Goal — auto-exit when…" hint="The contact leaves the sequence early once this is met.">
-            <Select value={goalType} onChange={setGoalType} options={[['', 'No goal'], ['pipeline_stage', 'Reaches a pipeline stage'], ['membership_state', 'Reaches a membership state'], ['tag_added', 'Gets a tag'], ['booking_made', 'Books an event']]} />
+            <Select value={goalType} onChange={setGoalType} options={[['', 'No goal'], ['pipeline_stage', 'Reaches a pipeline stage'], ['membership_state', 'Reaches a membership state'], ['tag_added', 'Gets a tag'], ['booked_since_enrolment', 'Books a class'], ['booking_made', 'Books an event']]} />
           </Labeled>
+          {goalType === 'booked_since_enrolment' && (
+            <p className="text-xs text-un1t-subtle">
+              Exits when the contact books a Glofox class <em>after</em> joining this sequence. Use this for
+              any chase whose audience can include people who have trained here before — a “first booking”
+              tag only ever fires once per contact, so it cannot end their chase.
+            </p>
+          )}
           {goalType === 'pipeline_stage' && (
             <Labeled label="Stage"><Select value={goal.value || PIPELINE_SLUGS[0]} onChange={v => { setGoal({ ...goal, value: v }); touch() }} options={PIPELINE_SLUGS} /></Labeled>
           )}

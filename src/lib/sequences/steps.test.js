@@ -826,6 +826,53 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     )
   })
 
+  // SEQSENDER.1 (mig 555) — a sequence may name its own sender.
+  it('SEQSENDER.1 — sends with no `from` when the sequence names no sender (every pre-existing sequence)', async () => {
+    const db = emailDb()
+    await steps.sendEmailStep(db, { enrollment: { id: 'e9' }, step, sequence, contact: consentedContact })
+    const arg = pm.sendMarketingEmail.mock.calls[0][0]
+    expect(arg.from).toBeUndefined()
+    expect(arg.replyTo).toBeUndefined()
+  })
+
+  it('SEQSENDER.1 — builds "Name <address>" from the sequence and passes reply_to through', async () => {
+    const db = emailDb()
+    await steps.sendEmailStep(db, {
+      enrollment: { id: 'e9' },
+      step,
+      sequence: { ...sequence, from_name: 'Dean Nolan', from_email: 'dean@un1tdublin.com', reply_to: 'dean@un1tdublin.com' },
+      contact: consentedContact,
+    })
+    expect(pm.sendMarketingEmail).toHaveBeenCalledWith(expect.objectContaining({
+      from: 'Dean Nolan <dean@un1tdublin.com>',
+      replyTo: 'dean@un1tdublin.com',
+    }))
+  })
+
+  it('SEQSENDER.1 — a bare from_email with no from_name sends the address alone, not "undefined <addr>"', async () => {
+    const db = emailDb()
+    await steps.sendEmailStep(db, {
+      enrollment: { id: 'e9' },
+      step,
+      sequence: { ...sequence, from_email: 'dean@un1tdublin.com' },
+      contact: consentedContact,
+    })
+    expect(pm.sendMarketingEmail).toHaveBeenCalledWith(expect.objectContaining({
+      from: 'dean@un1tdublin.com',
+    }))
+  })
+
+  it('SEQSENDER.1 — from_name WITHOUT from_email is ignored, never sent as a nameless header', async () => {
+    const db = emailDb()
+    await steps.sendEmailStep(db, {
+      enrollment: { id: 'e9' },
+      step,
+      sequence: { ...sequence, from_name: 'Dean Nolan' },
+      contact: consentedContact,
+    })
+    expect(pm.sendMarketingEmail.mock.calls[0][0].from).toBeUndefined()
+  })
+
   it('sends via sendMarketingEmail (broadcast stream), NOT sendTransactionalEmail, with unsubscribe URL + atomic sequence attribution', async () => {
     const db = emailDb()
     const out = await steps.sendEmailStep(db, { enrollment: { id: 'e9' }, step, sequence, contact: consentedContact })

@@ -239,6 +239,14 @@ async function loadQuietHours(db, locationId) {
  *   check FIRST for exactly this reason). Reads the already-loaded
  *   contact — no DB round trip.
  *
+ * SEQEXIT.2:
+ *   { type: 'booked_since_enrolment' }  — takes no value.
+ *   "They booked a class, stop chasing them", for an audience that can
+ *   include people who have trained here before. Compares
+ *   contacts.last_booked_at against the enrolment, so it means booked
+ *   SINCE the chase started rather than has ever booked. Requires
+ *   `enrolledAt`; without it the check fails closed (see the branch).
+ *
  * Deprecated goal-type alias (CLASSIFY.2):
  *   { type: 'lead_status', value: '<slug>' } — kept for back-compat
  *   with existing sequence rows. Reads pipeline_stage_slug. Emits a
@@ -251,9 +259,11 @@ async function loadQuietHours(db, locationId) {
  * @param {SupabaseClient} args.db
  * @param {object} args.contact
  * @param {object} args.goalConfig
+ * @param {string|null} [args.enrolledAt] — sequence_enrollments.enrolled_at,
+ *   required only by the time-relative 'booked_since_enrolment' goal.
  * @returns {Promise<boolean>}
  */
-export async function isGoalMet({ db, contact, goalConfig }) {
+export async function isGoalMet({ db, contact, goalConfig, enrolledAt = null }) {
   if (!goalConfig?.type) return false
   try {
     if (goalConfig.type === 'pipeline_stage') {
@@ -284,6 +294,32 @@ export async function isGoalMet({ db, contact, goalConfig }) {
         .eq('tag', tag)
         .is('removed_at', null)
       return (count || 0) > 0
+    }
+    if (goalConfig.type === 'booked_since_enrolment') {
+      // SEQEXIT.2 — "they booked a class, stop chasing them", for an audience
+      // that may include people who have trained here before.
+      //
+      // The obvious signal does not work for that audience. The
+      // glofox_first_booking tag is applied by the Glofox webhook only when
+      // `!contact.last_booked_at` (see api/webhooks/glofox/route.js), i.e. once
+      // per contact FOREVER — so it can never end a chase aimed at a lapsed
+      // member or an old trial who books again. Keying on the per-booking
+      // glofox_booking_created tag fails the other way: it persists, so anyone
+      // with a historical booking is exited before the first step and never
+      // hears from the sequence at all (measured on the live 3-Class Trial
+      // audience: 73 of 2,455).
+      //
+      // contacts.last_booked_at is the honest signal. It is advance-only,
+      // maintained by the booking webhook's member sync and the nightly Glofox
+      // sync, and comparing it against the enrolment makes the check mean
+      // "booked SINCE we started chasing" rather than "has ever booked".
+      //
+      // Fails CLOSED, like membership_state above: with no enrolment timestamp
+      // we cannot tell, and exiting is irreversible with no re-entry path, so
+      // uncertainty must never take the exit branch.
+      if (!enrolledAt) return false
+      if (!contact.last_booked_at) return false
+      return new Date(contact.last_booked_at) > new Date(enrolledAt)
     }
     if (goalConfig.type === 'booking_made') {
       let q = db
@@ -410,7 +446,11 @@ export async function runSequences({ now = new Date() } = {}) {
       // auto-exit BEFORE processing the next step. exit_reason
       // distinguishes from natural completion.
       if (sequence.goal_config) {
-        const goalMet = await isGoalMet({ db, contact, goalConfig: sequence.goal_config })
+        const goalMet = await isGoalMet({
+          db, contact, goalConfig: sequence.goal_config,
+          // SEQEXIT.2 — the 'booked_since_enrolment' goal is time-relative.
+          enrolledAt: enrollment.enrolled_at,
+        })
         if (goalMet) {
           await db.from('sequence_enrollments').update({
             status: 'exited',

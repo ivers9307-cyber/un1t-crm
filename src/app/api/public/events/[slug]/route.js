@@ -8,6 +8,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { loadForMode } from '@/lib/event-signups'
 import { eventIsPublic } from '@/lib/host-events'
+import { isHostAnchorLocation, pickAudienceVenueName } from '@/lib/event-comms-location'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
@@ -40,7 +41,7 @@ export async function GET(request, props) {
       members_only, payment_currency,
       hero_image_url, accent_hex, active, status,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
-      locations:location_id ( id, name, address, timezone )
+      locations:location_id ( id, name, address, timezone, is_host_anchor )
     `)
     .eq('slug', params.slug)
     .eq('active', true)
@@ -123,8 +124,38 @@ export async function GET(request, props) {
   // could still be on existing rows).
    
   const { capacity: _omit, ...racePublic } = data
+
+  // EVENT-COPY.1 — NEVER let the ops-only anchor label leave this endpoint.
+  //
+  // `RaceSignupWidget` renders `race.venue_name || location?.name`, which is the
+  // exact `venue_name || location.name` pattern the comms modules just stopped
+  // using — and the widget cannot judge the row, because it is a client
+  // component and this response is all it sees. `ensureAnchorLocation` names a
+  // host's anchor "<host> (host events)", so a staff-created host event with no
+  // venue name would render that internal string as the venue on
+  // /event/[slug] and /embed/event/[slug] — a public, higher-traffic surface
+  // than any of the comms paths.
+  //
+  // Sanitising server-side rather than in the widget is deliberate: this is a
+  // PUBLIC endpoint, so the internal label should not be in the payload at all,
+  // never mind on the page. Resolve the venue here and blank the anchor's own
+  // name/address so no present or future client can fall back onto them.
+  const isAnchor = isHostAnchorLocation(racePublic.locations)
+  const publicLocation = racePublic.locations
+    ? (({ is_host_anchor: _flag, ...loc }) => (isAnchor ? { ...loc, name: null, address: null } : loc))(racePublic.locations)
+    : racePublic.locations
+
   return NextResponse.json({
     success: true,
-    data: { ...racePublic, waves: publicWaves, registration_state },
+    data: {
+      ...racePublic,
+      locations: publicLocation,
+      venue_name: pickAudienceVenueName({
+        venueName: racePublic.venue_name,
+        eventLocation: racePublic.locations,
+      }) || null,
+      waves: publicWaves,
+      registration_state,
+    },
   })
 }
