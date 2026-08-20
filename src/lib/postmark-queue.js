@@ -156,11 +156,14 @@ export async function claimAndProcessQueueRow(db, row) {
   // FAULT. It travels the identical release path (claim given back, attempts++,
   // dead-lettered if it spends the budget) — that bounding is what stops a
   // marker on mail whose insert genuinely died from looping forever. The only
-  // thing the distinct status changes is the HTTP code the QStash worker
-  // answers with: 200 instead of 500, so QStash retires the message rather than
-  // spending its own fast retries inside a window it cannot outrun. Recovery is
-  // then the 10-minute sweeper cron, which is ~45x the worst commit lag ever
-  // measured (13.2s) instead of racing it.
+  // thing the distinct status changes is what the QStash worker does next: it
+  // answers 200 instead of 500 (so QStash retires the message rather than
+  // spending its own fast retries inside a window it cannot outrun) and
+  // re-publishes the row to itself with a 60s delay — ~4.5x the worst commit
+  // lag ever measured (13.2s) instead of racing it. The sweeper cron sits
+  // behind that as the guarantee for a QStash outage; it is NOT the primary
+  // recovery path, because at BATCH_SIZE/10min it cannot absorb a campaign
+  // burst (POSTMARK-RACE.2).
   //
   // The EXHAUSTING attempt is deliberately not deferred (see below): once the
   // budget is spent the row is dead-lettered and terminal, and reporting that

@@ -826,7 +826,13 @@ describe('POSTMARK-RACE.1 — crm_send marker pairs with the email_sends insert'
       unsubscribeUrl: 'https://crm.test/unsubscribe/tok-1',
     })
 
-    expect(wire(fetchSpy).Metadata).toEqual({ crm_send: '1' })
+    // POSTMARK-RACE.2 — the marker value IS the send instant, so the row's
+    // absence can later be dated. A constant could only say "a row was
+    // written", which the processor read as "a row is coming".
+    const marker = wire(fetchSpy).Metadata.crm_send
+    expect(Number(marker)).toBeGreaterThan(Date.now() - 60_000)
+    expect(Number(marker)).toBeLessThanOrEqual(Date.now())
+    expect(Object.keys(wire(fetchSpy).Metadata)).toEqual(['crm_send'])
   })
 
   it('sendMarketingEmail leaves an unlogged send UNMARKED', async () => {
@@ -848,7 +854,13 @@ describe('POSTMARK-RACE.1 — crm_send marker pairs with the email_sends insert'
       to: 'a@x.ie', subject: 'S', htmlBody: '<p>x</p>', contactId: 'c1', locationId: 'loc-1',
     })
 
-    expect(wire(fetchSpy).Metadata).toEqual({ crm_send: '1' })
+    // POSTMARK-RACE.2 — the marker value IS the send instant, so the row's
+    // absence can later be dated. A constant could only say "a row was
+    // written", which the processor read as "a row is coming".
+    const marker = wire(fetchSpy).Metadata.crm_send
+    expect(Number(marker)).toBeGreaterThan(Date.now() - 60_000)
+    expect(Number(marker)).toBeLessThanOrEqual(Date.now())
+    expect(Object.keys(wire(fetchSpy).Metadata)).toEqual(['crm_send'])
   })
 
   it('sendTransactionalEmail leaves an unlogged send UNMARKED', async () => {

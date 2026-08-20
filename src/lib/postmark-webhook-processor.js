@@ -16,7 +16,12 @@ import { applyMarketingPreferencesBulk } from './marketing-consent.js'
 import { findBcaSubmissionByMessageId, recordBcaPostmarkEvent } from './bca-events.js'
 import { recordTicketMessageDelivery } from './email-delivery-status.js'
 import { escapeLikePattern } from './like-escape.js'
-import { expectsEmailSendRow, SEND_ROW_NOT_YET_COMMITTED } from './postmark-send-marker.js'
+import {
+  expectsEmailSendRow,
+  readSendMarker,
+  sendMarkerAgeMs,
+  SEND_ROW_NOT_YET_COMMITTED,
+} from './postmark-send-marker.js'
 
 /**
  * POSTMARK-RACE.1 — the one decision this file makes about a missing send row.
@@ -29,26 +34,44 @@ import { expectsEmailSendRow, SEND_ROW_NOT_YET_COMMITTED } from './postmark-send
  * them, and set on 6,960/6,960 of the events that were processed after their
  * row landed — a perfect split, no other explanation left standing).
  *
- * The marker is what separates the two populations. See postmark-send-marker.js
- * for why absence, Metadata-presence and Tag allowlists all fail at this:
- *   marked   → a row IS coming. Fail the event so the queue retries it; the
- *              10-minute sweeper re-runs it long after the worst measured
- *              commit lag (13.2s over 3,231 samples, nothing beyond 60s).
- *   unmarked → nothing will ever be written. Drop it, exactly as before.
+ * The marker is what separates the populations. See postmark-send-marker.js
+ * for why absence, Metadata-presence and Tag allowlists all fail at this, and
+ * for why the marker carries the send INSTANT rather than a constant:
+ *   marked, fresh → a row IS coming. Fail the event so the queue retries it.
+ *   marked, stale → a row WAS written and is gone (contact erasure cascades),
+ *                   or the insert failed outright. Either way it is not coming
+ *                   back; retrying it five times and dead-lettering it as
+ *                   "not yet committed" states something false. Drop, loudly.
+ *   unmarked      → nothing will ever be written. Drop it, exactly as before.
  *
- * Unmarked is also what mail sent by the PREVIOUS deploy looks like, so the
+ * Unmarked is also what mail sent by an OLDER deploy looks like, so the
  * rollout degrades to today's behaviour rather than to a retry storm.
  *
- * @returns {{ok: false, error: string}|null} — a result to return, or null to
- *   carry on with the old behaviour.
+ * @returns {{retry: {ok: false, error: string}|null, reason: 'race'|'stale'|'unmarked'}}
+ *   `retry` non-null = return it; `reason` lets the caller decide whether it
+ *   still owes a log line (only the unmarked case is logged by the caller —
+ *   the other two are logged here, uniformly across record types).
  */
-function retryForRacedSendRow(body, messageId, recordType) {
-  if (!expectsEmailSendRow(body)) return null
+function classifyMissingSendRow(body, messageId, recordType) {
+  const { present } = readSendMarker(body)
+  if (!present) return { retry: null, reason: 'unmarked' }
+
+  if (!expectsEmailSendRow(body)) {
+    const ageMs = sendMarkerAgeMs(body)
+    console.warn(
+      `[postmark processor] ${recordType} for message ${messageId} carries a crm_send marker stamped ` +
+      `${ageMs === null ? 'an unknown time' : `${Math.round(ageMs / 1000)}s`} ago — far beyond the worst measured ` +
+      'commit lag (13.2s), so the email_sends row is deleted or was never written, not pending. ' +
+      'Dropped rather than deferred: a retry would dead-letter it under a false reason.'
+    )
+    return { retry: null, reason: 'stale' }
+  }
+
   console.warn(
     `[postmark processor] ${recordType} for message ${messageId} arrived before its email_sends ` +
-    'row committed (crm_send marker present) — event left UNPROCESSED so the queue retries it.'
+    'row committed (crm_send marker present and fresh) — event left UNPROCESSED so the queue retries it.'
   )
-  return { ok: false, error: SEND_ROW_NOT_YET_COMMITTED }
+  return { retry: { ok: false, error: SEND_ROW_NOT_YET_COMMITTED }, reason: 'race' }
 }
 
 /**
@@ -187,11 +210,40 @@ export async function processPostmarkEvent(db, body) {
         // nothing. Two concurrent workers race on the row lock and only one
         // sees a row back. Reading campaign_id off the returned row also drops
         // the follow-up SELECT the old code needed.
+        // POSTMARK-RACE.2 — the timestamp and the status are written
+        // SEPARATELY, because they need different guards.
+        //
+        // The transition guard has to stay on `delivered_at` alone: it is what
+        // makes the returned rows exactly the ones this event moved, and
+        // therefore what makes the counter increment exactly once. But `status`
+        // is a lattice — 'sent' → 'delivered' → 'opened' → 'clicked' — and a
+        // deferred Delivery now comes back MINUTES later, by which time an Open
+        // that landed in between has legitimately advanced it. Writing
+        // status:'delivered' under a delivered_at-only guard regresses that
+        // row, which is precisely what the recovery backfill's
+        // `CASE WHEN es.status = 'sent'` exists to prevent (1,205 of the 3,231
+        // recoverable rows are already opened/clicked; 114 of them opened
+        // within 10 minutes of the send).
+        //
+        // Filtering the single UPDATE on status would be worse than leaving it
+        // alone: an already-opened row would match nothing, `deliveredSends`
+        // would come back empty, the count probe below would find the row, and
+        // delivered_at — the thing that was being lost — would be lost again.
+        // So the timestamp is written unconditionally under the unchanged
+        // transition guard, and the status promotion follows as a separate,
+        // monotonic write.
         const { data: deliveredSends } = await db.from('email_sends')
-          .update({ status: 'delivered', delivered_at: body.DeliveredAt })
+          .update({ delivered_at: body.DeliveredAt })
           .eq('postmark_message_id', messageId)
           .is('delivered_at', null)
           .select('id, campaign_id, contact_id')
+
+        if ((deliveredSends || []).length) {
+          await db.from('email_sends')
+            .update({ status: 'delivered' })
+            .eq('postmark_message_id', messageId)
+            .eq('status', 'sent')
+        }
 
         // 'sending' belongs here: the chunk claim flips queued→sending before
         // the batch goes out, and the Delivery webhook regularly beats the
@@ -238,17 +290,20 @@ export async function processPostmarkEvent(db, body) {
             // POSTMARK-RACE.1 — this is where the loss used to become permanent.
             // The old code logged and returned ok, so the queue row was stamped
             // processed and neither consumer ever looked at it again.
-            const retry = retryForRacedSendRow(body, messageId, 'Delivery')
+            const { retry, reason } = classifyMissingSendRow(body, messageId, 'Delivery')
             if (retry) return retry
             // Unmarked: mail this system never records (ops alert crons, host
             // campaigns with their own ledger, campaign test sends, anything
             // sent with no contact to attribute). Correctly ignored — and no
             // longer at console.error, because ~31/day of legitimate noise
-            // masquerading as an error is what buried the real defect.
-            console.warn(
-              `[postmark processor] Delivery for message ${messageId} with no email_sends row and no ` +
-              'crm_send marker — not ours to record, ignored.'
-            )
+            // masquerading as an error is what buried the real defect. The
+            // stale-marker case has already logged its own, different line.
+            if (reason === 'unmarked') {
+              console.warn(
+                `[postmark processor] Delivery for message ${messageId} with no email_sends row and no ` +
+                'crm_send marker — not ours to record, ignored.'
+              )
+            }
           }
         }
 
@@ -277,7 +332,7 @@ export async function processPostmarkEvent(db, body) {
         // first) but the same loss: engagement recency, the open counter and
         // the hygiene un-suppression all hang off `openSend`.
         if (!openSend) {
-          const retry = retryForRacedSendRow(body, messageId, 'Open')
+          const { retry } = classifyMissingSendRow(body, messageId, 'Open')
           if (retry) return retry
         }
 
@@ -353,7 +408,7 @@ export async function processPostmarkEvent(db, body) {
         // (1 event in 21 days) but a click is the strongest engagement signal
         // there is, and campaign_link_clicks only ever gets written here.
         if (!clickSend) {
-          const retry = retryForRacedSendRow(body, messageId, 'Click')
+          const { retry } = classifyMissingSendRow(body, messageId, 'Click')
           if (retry) return retry
         }
 
@@ -461,7 +516,7 @@ export async function processPostmarkEvent(db, body) {
         //     buys that detection.
         const bounceSend = await findSendByMessageId(db, messageId, 'contact_id, campaign_id, location_id')
         if (!bounceSend) {
-          const retry = retryForRacedSendRow(body, messageId, 'Bounce')
+          const { retry } = classifyMissingSendRow(body, messageId, 'Bounce')
           if (retry) return retry
         }
 
@@ -527,7 +582,7 @@ export async function processPostmarkEvent(db, body) {
         // hard bounce. None raced in the measured window (3 events total), but
         // the consequence of losing one is identical, so it gets the same guard.
         if (!complaintSend) {
-          const retry = retryForRacedSendRow(body, messageId, 'SpamComplaint')
+          const { retry } = classifyMissingSendRow(body, messageId, 'SpamComplaint')
           if (retry) return retry
         }
 
@@ -606,7 +661,7 @@ export async function processPostmarkEvent(db, body) {
           // there — retrying it would burn the budget and dead-letter honest
           // events.
           if (!unsubSend) {
-            const retry = retryForRacedSendRow(body, messageId, 'SubscriptionChange')
+            const { retry } = classifyMissingSendRow(body, messageId, 'SubscriptionChange')
             if (retry) return retry
           }
 

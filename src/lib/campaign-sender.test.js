@@ -248,7 +248,8 @@ describe('tickCampaignSend — transient vs permanent errors (CAMPAIGN-REL.1)', 
     const batch = sendBatch.mock.calls.at(-1)[0]
     expect(batch).toHaveLength(2)
     for (const email of batch) {
-      expect(email.metadata).toEqual(expect.objectContaining({ crm_send: '1' }))
+      // POSTMARK-RACE.2 — the value is the send instant, not a constant.
+      expect(Number(email.metadata.crm_send)).toBeGreaterThan(Date.now() - 60_000)
       // The existing attribution is preserved, not replaced.
       expect(email.metadata.campaign_id).toBe(campaign.id)
       expect(email.metadata.contact_id).toEqual(expect.any(String))
