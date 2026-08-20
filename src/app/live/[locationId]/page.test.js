@@ -99,13 +99,13 @@ describe('/live/[locationId] page', () => {
   it('redirects to /login without a session', async () => {
     getCurrentUser.mockResolvedValue(null)
     createServerClient.mockReturnValue(mockDb({}))
-    await expect(LiveClassPage(props())).rejects.toThrow('NEXT_REDIRECT:/login')
+    await expect(LiveClassPage(props())).rejects.toThrow(/^NEXT_REDIRECT:\/login$/)
   })
 
   it('redirects to / when the user lacks studio_management, even at their own location', async () => {
     getCurrentUser.mockResolvedValue(user({ perms: { studio_management: false } }))
     createServerClient.mockReturnValue(mockDb({ location: { id: 'loc1', name: 'Stillorgan' } }))
-    await expect(LiveClassPage(props('loc1'))).rejects.toThrow('NEXT_REDIRECT:/')
+    await expect(LiveClassPage(props('loc1'))).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
   })
 
   it('404s for a foreign location even when the user holds studio_management', async () => {
@@ -137,7 +137,7 @@ describe('/live/[locationId] page', () => {
       user({ isMaster: true, locations: [{ id: 'loc7', features: { studio_management: false } }] }),
     )
     createServerClient.mockReturnValue(mockDb({ location: { id: 'loc7', name: 'CCF Autos' } }))
-    await expect(LiveClassPage(props('loc7'))).rejects.toThrow('NEXT_REDIRECT:/')
+    await expect(LiveClassPage(props('loc7'))).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
   })
 
   // The SEC-LIVE-API.2 defect, in the shape prod actually had it: permitted at
@@ -154,7 +154,7 @@ describe('/live/[locationId] page', () => {
       }),
     )
     createServerClient.mockReturnValue(mockDb({ location: { id: 'loc2', name: 'Stillorgan' } }))
-    await expect(LiveClassPage(props('loc2'))).rejects.toThrow('NEXT_REDIRECT:/')
+    await expect(LiveClassPage(props('loc2'))).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
   })
 
   // The same alignment in the other direction: denied where they are standing,

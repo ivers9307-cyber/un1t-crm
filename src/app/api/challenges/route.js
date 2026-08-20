@@ -4,7 +4,13 @@ import { getCurrentUser, getUserLocationIds, assertLocationAccess } from '@/lib/
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
+import { uuidLike } from '@/lib/schemas'
+// HUBDOOR.2 — the role floor is exported from challenges-access so the
+// page gate, the (members) tab strip and the Members redirect chain are
+// bound to THIS route's rule rather than each re-deriving it. Same value
+// (MANAGER_ROLES); the two-step check stays so the 403 keeps saying which
+// half failed.
+import { CHALLENGE_ADMIN_ROLES } from '@/lib/challenges-access'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -29,7 +35,7 @@ export const CreateSchema = z.object({
 
 function guard(user) {
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  if (!CHALLENGE_ADMIN_ROLES.includes(user.role)) return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   if (!hasPermission(user, 'challenges')) return NextResponse.json({ success: false, error: 'Challenges feature is disabled at this location' }, { status: 403 })
   return null
 }

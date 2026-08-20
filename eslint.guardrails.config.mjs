@@ -10,6 +10,17 @@ import reactHooks from 'eslint-plugin-react-hooks'
 import nextPlugin from '@next/eslint-plugin-next'
 import guardrails from './eslint-rules/index.mjs'
 
+// HUBDOOR.3 removed the GLOBAL test ignore (a flat-config object carrying only
+// `ignores` drops the file from EVERY later block, which would have hidden the
+// test-only rule from the very files it exists to lint). The exclusion moved to
+// a per-block `ignores` instead — which means it is now something each product
+// block must OPT INTO, and a block added later that forgets it silently starts
+// linting test files at ERROR. That already nearly happened once: BAREWRITE.1's
+// `no-unchecked-supabase-write` block arrived from main with no `ignores` of its
+// own (it did not need one then) and auto-merged textually clean.
+// ANY product block below MUST carry `ignores: NO_TESTS`.
+const NO_TESTS = ['**/*.test.js', '**/*.test.jsx']
+
 const config = [
   {
     ignores: [
@@ -20,14 +31,19 @@ const config = [
       'out/**',
       'dist/**',
       'build/**',
-      '**/*.test.js',
-      '**/*.test.jsx',
+      // NOTE: test files are NOT ignored globally any more (HUBDOOR.3). A
+      // flat-config object carrying only `ignores` drops the file from EVERY
+      // block, which would have made `no-substring-redirect-assertion` — a
+      // rule about test assertions — unrunnable. The product rules keep their
+      // old scope via a per-block `ignores` instead; only the last block below
+      // sees a test file, and only for that one rule.
     ],
   },
   {
     // shared/ is the web/mobile data seam — full of Supabase fetchers, so the
     // same defect classes (1k-row cap, Dublin-time parsing) apply there too.
     files: ['src/**/*.{js,jsx}', 'shared/**/*.js'],
+    ignores: NO_TESTS,
     // react-hooks + @next/next are registered with NO rules enabled, only so the
     // inline `// eslint-disable react-hooks/*` / `@next/next/*` comments in the
     // components don't trip "Definition for rule not found" under this standalone
@@ -90,6 +106,7 @@ const config = [
       'src/components/WATemplateEditor.jsx',
       'src/components/WhatsappTemplatesList.jsx',
     ],
+    ignores: NO_TESTS,
     plugins: { guardrails },
     rules: {
       'guardrails/no-low-contrast-accent-text': 'error',
@@ -179,6 +196,7 @@ const config = [
       'src/app/api/instagram/**',
       'src/app/api/registrations/**',
     ],
+    ignores: NO_TESTS,
     plugins: { guardrails },
     rules: {
       'guardrails/no-unchecked-supabase-write': 'error',
@@ -205,6 +223,28 @@ const config = [
       'guardrails/no-low-contrast-chip': 'off',
     },
   },
+  {
+    // HUBDOOR.3 — the ONE block that lints test files, for the ONE rule that
+    // is about a test assertion. `toThrow('NEXT_REDIRECT:/…')` is a substring
+    // match against a namespace of prefix-shaped paths, so it goes green
+    // against redirects it was never meant to accept — the Operations hub
+    // fallback suite passed on '/admin/fleet' for weeks that way. Every
+    // product rule above is scoped to exclude tests, so nothing else changes
+    // shape by test files becoming visible to this config.
+    files: ['**/*.test.js', '**/*.test.jsx'],
+    plugins: { guardrails },
+    linterOptions: { reportUnusedDisableDirectives: 'off' },
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      parserOptions: { ecmaFeatures: { jsx: true } },
+      globals: { ...globals.node, ...globals.browser },
+    },
+    rules: {
+      'guardrails/no-substring-redirect-assertion': 'error',
+    },
+  },
 ]
+
 
 export default config

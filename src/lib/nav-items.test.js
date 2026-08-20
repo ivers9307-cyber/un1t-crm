@@ -22,6 +22,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { ALL_NAV, NAV_SECTIONS, DASHBOARD_LINK_PERM_KEYS, activeHrefFor } from './nav-items'
+import { HUB_INDEX_CHAINS, resolveHubIndexTarget } from './hub-index-chains'
 
 const sectionIds = NAV_SECTIONS.map((s) => s.id)
 const itemsIn = (id) => ALL_NAV.filter((i) => i.section === id)
@@ -245,7 +246,137 @@ describe('Operations hub', () => {
     // permission revoked) still sees the Operations sidebar entry and
     // can discover the fleet tab from it.
     expect(ops.anyPermission).toEqual(['equipment_admin', 'equipment_inspect', 'studio_management', 'tv_displays', 'presentations', 'fleet_restart', 'fleet_admin'])
-    expect(ops.extraActivePaths).toEqual(['/maintenance', '/studio-management', '/tv-displays', '/presentations', '/checklists'])
+    // HUBDOOR.1 — '/admin/fleet' joins the list: the Operations index now
+    // redirects a fleet-only holder there, and nothing else in ALL_NAV
+    // claims any /admin path, so without this the sidebar would go dark on
+    // a page this hub deliberately sends people to.
+    expect(ops.extraActivePaths).toEqual(['/maintenance', '/studio-management', '/tv-displays', '/presentations', '/checklists', '/admin/fleet'])
+  })
+
+  it('HUBDOOR.1: /admin/fleet lights Operations (uncontested — no other entry owns an /admin path)', () => {
+    expect(activeHrefFor('/admin/fleet', ALL_NAV)).toEqual({
+      itemHref: '/operations',
+      matchedPath: '/admin/fleet',
+    })
+  })
+})
+
+// ============================================================
+// HUBDOOR.1 — the invariant that would have caught defects A and B.
+//
+// Every prior test in this file pins what is IN a hub entry's
+// `anyPermission` union. None of them asked the only question that
+// matters to the person holding the key: does clicking this sidebar entry
+// land me on a surface I can use? Twice it didn't. `sms` was added to
+// Marketing's union (DEEP.4 Task 2) and the fleet keys to Operations'
+// (ADMIN.2h Task 2 review fix), each with a written rationale about the
+// persona it was for — and in neither case did the hub's index page grow
+// the matching redirect branch, so exactly that persona clicked the door
+// and bounced to '/'.
+//
+// The chains now live as data in hub-index-chains.js, so the union and the
+// chain can be compared mechanically. A key may be in a union for exactly
+// two reasons: it appears in that hub's redirect chain, or it is declared
+// `visibilityOnly` with a written reason. Silently missing is a failure.
+// ============================================================
+describe('every hub sidebar union key reaches a real surface', () => {
+  // Entries that gate on a union but are NOT redirect indexes. Messages
+  // (/communications) renders a real landing page whose own layout admits
+  // all four of its union keys and whose cards are per-channel, so every
+  // member of that union genuinely lands somewhere it can use.
+  const RENDERED_LANDINGS = ['/communications']
+
+  const unionEntries = ALL_NAV.filter((i) => i.anyPermission)
+
+  it('every unioned entry is either a known redirect index or a known rendered landing', () => {
+    for (const item of unionEntries) {
+      const known = Boolean(HUB_INDEX_CHAINS[item.href]) || RENDERED_LANDINGS.includes(item.href)
+      expect(known, `${item.href} has an anyPermission union but no chain and is not a declared landing`).toBe(true)
+    }
+  })
+
+  it('no union key is silently missing from its hub chain', () => {
+    for (const item of unionEntries) {
+      const hub = HUB_INDEX_CHAINS[item.href]
+      if (!hub) continue
+      const reachable = new Set([...hub.chain.flatMap((s) => s.keys), ...hub.visibilityOnly])
+      for (const key of item.anyPermission) {
+        expect(
+          reachable.has(key),
+          `${item.href}: sidebar union key "${key}" reaches no chain step and is not declared visibilityOnly — this persona clicks the entry and bounces to ${hub.fallback}`,
+        ).toBe(true)
+      }
+    }
+  })
+
+  it('every chain key is actually in its hub union (no branch only reachable by URL)', () => {
+    for (const [href, hub] of Object.entries(HUB_INDEX_CHAINS)) {
+      const item = ALL_NAV.find((i) => i.href === href)
+      if (!item?.anyPermission) continue // Team is openToAll: no union to match
+      for (const key of hub.chain.flatMap((s) => s.keys)) {
+        expect(
+          item.anyPermission.includes(key),
+          `${href}: chain step key "${key}" is not in the sidebar union, so nobody holding only it ever sees the entry`,
+        ).toBe(true)
+      }
+    }
+  })
+
+  // The end-to-end statement of the same thing, one persona per key: a
+  // user holding EXACTLY one union key must not be redirected to the
+  // hub's fallback. Reads as the bug report each defect was.
+  //
+  // HUBDOOR.2 — the persona now carries a ROLE, because two chain steps
+  // declare a role floor matching their destination's own gate. The
+  // persona is built AT a role that clears the step, which is the honest
+  // reading of the invariant: the question is whether the key reaches a
+  // surface for the population that can hold it usefully, not whether it
+  // reaches one for every role in the enum. The complementary statement —
+  // that a BELOW-floor holder is not sent into a bounce — is
+  // hub-index-chains.test.js's role-floor suite, and the set of floors is
+  // pinned there so a third one cannot be added silently.
+  const can = (user, key) => user.has(key)
+  const stepFor = (hub, key) => hub.chain.find((s) => s.keys.includes(key))
+  const personaFor = (hub, key) => {
+    const step = stepFor(hub, key)
+    const keySet = new Set([key])
+    // Any role that clears this step's floor; 'staff' where there is none.
+    return { role: step?.roles ? step.roles[step.roles.length - 1] : 'staff', has: (k) => keySet.has(k) }
+  }
+
+  it('a single-key holder never lands on the hub fallback', () => {
+    for (const item of unionEntries) {
+      const hub = HUB_INDEX_CHAINS[item.href]
+      if (!hub) continue
+      for (const key of item.anyPermission) {
+        if (hub.visibilityOnly.includes(key)) continue
+        const landed = resolveHubIndexTarget(personaFor(hub, key), item.href, can)
+        expect(landed, `${item.href}: a "${key}"-only holder lands on the fallback`).not.toBe(hub.fallback)
+      }
+    }
+  })
+
+  // The accepted overshow, stated rather than left to be discovered: a
+  // union is permission-keyed and has no role dimension, so a below-floor
+  // holder of a role-gated key still LIGHTS the hub entry and then lands
+  // on the fallback. Narrowing the union would take the entry from a
+  // manager holding only that key; widening either page's gate would be
+  // loosening a gate to make a door work. Both are registry decisions.
+  // Prod population of both personas: 0 (verified 2026-08-20).
+  it('names every union key whose door is role-conditional', () => {
+    const conditional = []
+    for (const item of unionEntries) {
+      const hub = HUB_INDEX_CHAINS[item.href]
+      if (!hub) continue
+      for (const key of item.anyPermission) {
+        const step = stepFor(hub, key)
+        if (step?.roles) conditional.push([item.href, key])
+      }
+    }
+    expect(conditional).toEqual([
+      ['/members', 'challenges'],
+      ['/money', 'orders'],
+    ])
   })
 })
 

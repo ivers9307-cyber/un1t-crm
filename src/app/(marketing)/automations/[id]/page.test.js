@@ -96,25 +96,25 @@ describe('/automations/[id] builder page', () => {
   it('redirects to /login without a session', async () => {
     getCurrentUser.mockResolvedValue(null)
     createServerClient.mockReturnValue(mockDb({ sequence: mySequence }))
-    await expect(SequenceBuilderPage(props())).rejects.toThrow('NEXT_REDIRECT:/login')
+    await expect(SequenceBuilderPage(props())).rejects.toThrow(/^NEXT_REDIRECT:\/login$/)
   })
 
   it('redirects to / when the user holds none of email/whatsapp', async () => {
     getCurrentUser.mockResolvedValue(user({ perms: { email: false, whatsapp: false } }))
     createServerClient.mockReturnValue(mockDb({ sequence: mySequence }))
-    await expect(SequenceBuilderPage(props())).rejects.toThrow('NEXT_REDIRECT:/')
+    await expect(SequenceBuilderPage(props())).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
   })
 
   it('redirects to / for a device_control-only user (devices is a separate surface)', async () => {
     getCurrentUser.mockResolvedValue(user({ perms: { device_control: true } }))
     createServerClient.mockReturnValue(mockDb({ sequence: mySequence }))
-    await expect(SequenceBuilderPage(props())).rejects.toThrow('NEXT_REDIRECT:/')
+    await expect(SequenceBuilderPage(props())).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
   })
 
   it('redirects to / for an automations-only user (curated cards never link here)', async () => {
     getCurrentUser.mockResolvedValue(user({ perms: { automations: true } }))
     createServerClient.mockReturnValue(mockDb({ sequence: mySequence }))
-    await expect(SequenceBuilderPage(props())).rejects.toThrow('NEXT_REDIRECT:/')
+    await expect(SequenceBuilderPage(props())).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
   })
 
   it('renders the builder for an email holder at the sequence location', async () => {

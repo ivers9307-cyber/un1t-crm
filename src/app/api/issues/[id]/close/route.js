@@ -5,21 +5,17 @@ import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
 import { closeIssue, getInboxIssue } from '@/lib/issues'
 import { logAuditEvent } from '@/lib/audit'
+import { isIssueHandler } from '@/lib/issues-access'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-function isHandler(user) {
-  if (user?.role === 'master' || user?.profileRole === 'master' || user?.isMaster) return true
-  return user?.role === 'owner'
-}
-
 export const POST = withAuth(
   {},
   async ({ user, db, locationId, params, request }) => {
-    if (!isHandler(user)) {
+    if (!isIssueHandler(user)) {
       return NextResponse.json(
-        { success: false, error: 'Only owner + master can close issues.' },
+        { success: false, error: 'Only issue handlers can close issues.' },
         { status: 403 }
       )
     }
