@@ -287,13 +287,86 @@ describe('the embed checkout leg resolves on every host that serves the embed', 
     // The structural rule behind the three assertions above: a brand that
     // admits the signup page but not the checkout takes registrations it
     // cannot collect payment for. Catches the same gap on a brand added later.
-    for (const brand of BRANDS) {
-      if (!brand.allowedPaths.includes('/event/')) continue
+    //
+    // AUDIT-13.B widened this to the FOURTH tier. It used to walk BRANDS
+    // only, and DB_BRAND_DEFAULTS — a different file, same handler block —
+    // carried '/event/' without '/event-pay/' for exactly that reason.
+    const tiers = [
+      ...BRANDS.map((b) => [`brand '${b.id}'`, b.allowedPaths]),
+      ['DB_BRAND_DEFAULTS (tenant-domain tier)', DB_BRAND_DEFAULTS.allowedPaths],
+    ]
+    for (const [label, allowed] of tiers) {
+      if (!allowed.includes('/event/')) continue
       expect(
-        brand.allowedPaths,
-        `brand '${brand.id}' allows /event/ but not its checkout /event-pay/`,
+        allowed,
+        `${label} allows /event/ but not its checkout /event-pay/`,
       ).toContain('/event-pay/')
     }
+  })
+})
+
+// ── 5b. the LEGACY alias pair (AUDIT-13.B) ───────────────────────────
+//
+// next.config.js forever-rewrites /race/:slug → /event/:slug and
+// /race-pay/:paymentId → /event-pay/:paymentId, with a comment calling
+// them "the critical ones — shared externally". They were in NEITHER the
+// proxy list nor AppShell's, so every anonymous hit 307'd to /login on the
+// CRM host — the rewrite never got a chance, because middleware runs
+// BEFORE afterFiles rewrites.
+//
+// These are NOT dead config, which is the reason to allowlist rather than
+// delete them:
+//   - src/lib/agent/event-tools.js mints `${appUrl}/race/<slug>` as the
+//     signup_url Mia hands customers in WhatsApp — two call sites, live.
+//   - src/app/api/public/races/[slug]/register/route.js and
+//     src/lib/race-register-solo.js both set the Revolut post-payment
+//     returnUrl to `${baseUrl}/race/<slug>/confirmed`.
+// Both audiences are anonymous by definition: a WhatsApp recipient and a
+// payer returning from a card form.
+
+const LEGACY_ALIAS_PATHS = [
+  { path: '/race/summer-hyrox', why: "Mia's signup_url — agent/event-tools.js" },
+  { path: '/race/summer-hyrox/confirmed', why: 'Revolut post-payment returnUrl' },
+  { path: '/race/summer-hyrox/display', why: 'studio TV board' },
+  { path: '/race-pay/00000000-0000-4000-8000-000000000001', why: 'legacy checkout leg' },
+]
+
+describe('the legacy /race aliases resolve for an anonymous visitor', () => {
+  for (const { path, why } of LEGACY_ALIAS_PATHS) {
+    it(`CRM host admits ${path} — ${why}`, async () => {
+      const res = await proxy(makeReq({ host: CRM_HOST, path }))
+      expect(admitted(res), `${path} 307s to /login: missing from proxy publicPaths`).toBe(true)
+      expect(ssrClient.auth.getUser).not.toHaveBeenCalled()
+    })
+
+    it(`AppShell renders ${path} with no session`, () => {
+      pathnameImpl = path
+      const html = renderToStaticMarkup(
+        <AppShell user={null}><p>page-body</p></AppShell>
+      )
+      expect(html, `${path} is missing from AppShell PUBLIC_PATHS`).toContain('page-body')
+    })
+
+    it(`marketing host does not rewrite ${path} to /welcome`, async () => {
+      const res = await proxy(makeReq({ host: MARKETING_HOST, path }))
+      expect(rewrittenTo(res), `${path} fell through to the /welcome fallback`).toBe(null)
+      expect(admitted(res)).toBe(true)
+    })
+  }
+
+  it('the marketing allowlist carries the alias PAIR, not just the entry page', () => {
+    const allowed = marketingBrand().allowedPaths
+    expect(allowed).toContain('/race/')
+    expect(allowed, "'/race/' without '/race-pay/' strands the payer").toContain('/race-pay/')
+  })
+
+  it('control — /races (the OPERATOR alias) stays auth-gated', async () => {
+    // /races/* rewrites to the staff /events/* pages. Those are staff
+    // surfaces and must keep their login wall; only the public /race/
+    // singular pair is anonymous.
+    const res = await proxy(makeReq({ host: CRM_HOST, path: '/races/abc/teams' }))
+    expect(admitted(res)).toBe(false)
+    expect(res.headers.get('location') || '').toContain('/login')
   })
 })
 

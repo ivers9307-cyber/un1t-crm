@@ -3,11 +3,13 @@
 // Staff HR test mode (mig 321): while active, a registered strap routes to its
 // member's session any time (no live class). Time-boxed + self-expiring.
 // POST body: { minutes?: number }  (default 120, clamped 1..240)
-// Auth: master / owner / manager / head_coach at the location.
+// Auth (SEC-LIVE-API.1): master / owner / manager / head_coach at the
+// location, who ALSO hold `studio_management` there.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
+import { guardLiveLocation, LIVE_MUTATION_ROLES } from '@/lib/live-access'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { logInfo } from '@/lib/log'
@@ -15,17 +17,13 @@ import { logInfo } from '@/lib/log'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const ALLOWED_ROLES = ['owner', 'manager', 'head_coach']
 const DEFAULT_MINUTES = 120
 const MAX_MINUTES = 240
 
 const Body = z.object({ minutes: z.number().int().positive().optional() })
 
 function guard(user, locationId) {
-  if (!user) return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })
-  if (!user.isMaster && !ALLOWED_ROLES.includes(user.role)) return NextResponse.json({ ok: false, error: 'Manager only' }, { status: 403 })
-  if (!user.isMaster && !getUserLocationIds(user).includes(locationId)) return NextResponse.json({ ok: false, error: 'Location not in your scope' }, { status: 403 })
-  return null
+  return guardLiveLocation(user, locationId, { roles: LIVE_MUTATION_ROLES })
 }
 
 export async function POST(request, props) {

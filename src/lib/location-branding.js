@@ -13,16 +13,32 @@
 // request-scoped client. Never throws — a branding lookup must not break a
 // send path; on any miss/error it returns the brand-neutral default.
 
-const DEFAULT_COMPANY_NAME = 'UN1T'
+// The one place the unconfigured gym wordmark is spelled. Exported since
+// CHROME.1 so the customer-facing metadata resolver in default-site-name.js
+// floors on the SAME literal every other customer-facing surface already
+// renders, instead of introducing a second copy that can drift.
+export const DEFAULT_COMPANY_NAME = 'UN1T'
 
 /**
  * @param {object} db          a supabase-js client
  * @param {string} locationId  the location whose branding to resolve
- * @returns {Promise<{ companyName: string, logoUrl: string|null, faviconUrl: string|null }>}
+ * @returns {Promise<{ companyName: string, companyNameConfigured: boolean, logoUrl: string|null, faviconUrl: string|null }>}
  *          companyName is always a non-empty string (defaults to 'UN1T').
+ *          LEGALENT.1 added companyNameConfigured: false means nobody set a
+ *          name and companyName is this module's literal default. Every
+ *          existing caller renders a wordmark, for which the default is the
+ *          right answer; a caller making a CLAIM about a company (a contract
+ *          countersignature, a party clause) must not treat one org's brand
+ *          as another org's, so it reads this flag — see
+ *          src/lib/contracting-entity.js.
  */
 export async function getLocationBranding(db, locationId) {
-  const fallback = { companyName: DEFAULT_COMPANY_NAME, logoUrl: null, faviconUrl: null }
+  const fallback = {
+    companyName: DEFAULT_COMPANY_NAME,
+    companyNameConfigured: false,
+    logoUrl: null,
+    faviconUrl: null,
+  }
   if (!db || !locationId) return fallback
   try {
     const { data, error } = await db
@@ -37,7 +53,7 @@ export async function getLocationBranding(db, locationId) {
 
     // Fully configured at the location level — no org lookup needed.
     if (name && logoUrl && faviconUrl) {
-      return { companyName: name, logoUrl, faviconUrl }
+      return { companyName: name, companyNameConfigured: true, logoUrl, faviconUrl }
     }
 
     // Inherit any unset field from the location's organisation defaults.
@@ -50,6 +66,7 @@ export async function getLocationBranding(db, locationId) {
 
     return {
       companyName: name || DEFAULT_COMPANY_NAME,
+      companyNameConfigured: Boolean(name),
       logoUrl,
       faviconUrl,
     }

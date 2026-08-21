@@ -4,11 +4,14 @@
 // + the list of available straps the bridge is broadcasting that
 // aren't yet routed. The coach view polls this every ~2s.
 //
-// Auth: any staff at the location can view. Non-staff (customers,
-// staff at other locations) get 403.
+// Auth (SEC-LIVE-API.1): a member of the location who holds
+// `studio_management` there — the same permission /live/[locationId]
+// requires. Anyone else gets 401/403; see src/lib/live-access.js for why the
+// studio TVs are unaffected.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
+import { guardLiveLocation } from '@/lib/live-access'
 import { createServerClient } from '@/lib/supabase'
 import { getLiveSessions, getAvailableStraps } from '@/lib/live-class'
 import { getClassRoster, mergeRosterWithSessions } from '@/lib/class-bookings'
@@ -19,13 +22,9 @@ export const dynamic = 'force-dynamic'
 export async function GET(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })
-  }
   const locationId = params.locationId
-  if (!user.isMaster && !getUserLocationIds(user).includes(locationId)) {
-    return NextResponse.json({ ok: false, error: 'Location not in your scope' }, { status: 403 })
-  }
+  const denied = guardLiveLocation(user, locationId)
+  if (denied) return denied
 
   const db = createServerClient()
   const [sessions, availableStraps, rosterData, { data: bridges }] = await Promise.all([

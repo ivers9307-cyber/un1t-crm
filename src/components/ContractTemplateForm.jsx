@@ -61,6 +61,7 @@ const PROFILE_VAR_HELP = [
   { group: 'Location', key: 'location_phone',      sample: '01 234 5678',                     desc: 'The location\'s phone number.' },
   { group: 'Location', key: 'location_email',      sample: 'stillorgan@un1tdublin.com',        desc: 'The location\'s email address.' },
   { group: 'Location', key: 'company_name',        sample: 'UN1T',                             desc: 'Operator-configured brand name (location, falling back to org default).' },
+  { group: 'Location', key: 'legal_entity_name',   sample: 'Champ Fitness Ltd (trading as UN1T Dublin)', desc: 'The contracting COMPANY. Set it on Settings → Organisation → legal entity; falls back to the brand name if unset. Use this, not company_name, in a party clause.' },
 ]
 
 export default function ContractTemplateForm({ initial, isEdit = false }) {
@@ -277,7 +278,7 @@ export default function ContractTemplateForm({ initial, isEdit = false }) {
             onChange={e => setBody(e.target.value)}
             rows={20}
             className="w-full bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm font-mono"
-            placeholder="# Contract&#10;&#10;This Agreement is between UN1T Dublin Ltd and {{full_name}}..."
+            placeholder="# Contract&#10;&#10;This Agreement is between {{legal_entity_name}} and {{full_name}}..."
           />
           <details className="mt-3 text-xs text-un1t-subtle" open>
             <summary className="cursor-pointer font-semibold text-un1t-text mb-2">
@@ -370,12 +371,19 @@ export default function ContractTemplateForm({ initial, isEdit = false }) {
   )
 }
 
+// LEGALENT.1 — the party clause names the CONTRACTING COMPANY, so the
+// sample seeds the {{legal_entity_name}} auto-fill (resolved at issue
+// time from the org's configured legal entity, falling back to the
+// brand) instead of the literal it used to carry. A literal here is
+// worse than anywhere else: it is copied into every template an
+// operator creates from this default, and from there frozen into every
+// contract those templates issue.
 const DEFAULT_BODY = `# Employment Agreement
 
-This Agreement is made between UN1T Dublin Ltd ("UN1T") and {{full_name}} ("the Employee") on {{today}}.
+This Agreement is made between {{legal_entity_name}} ("the Company") and {{full_name}} ("the Employee") on {{today}}.
 
 ## 1. Position
-The Employee will be employed as a {{role}}, reporting to a UN1T Dublin manager.
+The Employee will be employed as a {{role}}, reporting to a {{company_name}} manager.
 
 ## 2. Compensation
 - Annual salary: {{annual_salary}}
@@ -390,5 +398,5 @@ The Employee will be employed as a {{role}}, reporting to a UN1T Dublin manager.
 
 ---
 
-By countersigning at issue and signing electronically in the UN1T staff portal, both parties agree to the terms above.
+By countersigning at issue and signing electronically in the {{company_name}} staff portal, both parties agree to the terms above.
 `

@@ -117,7 +117,16 @@ problem.
 - no `updates.codeSigningCertificate` (code signing never wired — see `mobile/docs/eas-update-code-signing.md`, task #37; worth doing in the next build while a rebuild is required anyway, but unrelated to this crash).
 
 `.github/workflows/eas-update.yml` (the culprit, **fixed in PR #295**):
-- ⚠️ installed with `npm install --legacy-peer-deps` → **`npm ci --legacy-peer-deps`**.
+- ⚠️ installed with `npm install --legacy-peer-deps` → **`npm ci --legacy-peer-deps`**
+  → **plain `npm ci`** (OTATREE.1, 2026-08-20). PR #295's fix was `npm install`
+  → `npm ci`, which was the load-bearing half; the `--legacy-peer-deps` rider
+  came along for the ride and was never the point. It then sat here for two
+  months contradicting `store-release-one-app.md` §7, which forbids the flag
+  against this lockfile. EAS Build installs the BINARY's tree with a plain
+  `npm ci` (there is no `.npmrc` in the repo), so keeping the flag on the OTA
+  side could only re-open the very tree divergence this document is about.
+  Measured: the flag prunes 13 peer entries under npm 11.12.1 and 0 under
+  npm 10.9.4.
 - ⚠️ `eas-version: latest` → **pinned `18.9.1`**.
 - ⚠️ auto-published on every push to `main` touching `mobile/**` or `shared/**` → **changed to manual `workflow_dispatch`** (a web-only `shared/**` change could re-brick the app, and nothing was boot-tested before prod).
 

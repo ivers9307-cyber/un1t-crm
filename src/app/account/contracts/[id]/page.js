@@ -13,6 +13,7 @@ import { redirect, notFound } from 'next/navigation'
 import Link from 'next/link'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { contractCountersignatureLabel } from '@/lib/contracting-entity'
 import ContractSignForm from '@/components/ContractSignForm'
 import ContractPrintButton from '@/components/ContractPrintButton'
 import ContractBody from '@/components/ContractBody'
@@ -67,6 +68,15 @@ export default async function AccountContractDetail(props) {
     c.status = 'viewed'
   }
 
+  // LEGALENT.1 — the countersignature label asserts the CONTRACTING
+  // COMPANY on the member's own copy of the document, including its
+  // print view. It is read from the contract's own FROZEN
+  // variables_data, never resolved live, so signing this page and then
+  // configuring org_settings can never change what an executed
+  // document says about who it is with. Same helper as the issuer
+  // page, the mobile screen and the stored PDF.
+  const entityLabel = contractCountersignatureLabel(c)
+
   const signed = c.status === 'signed'
   const declined = c.status === 'declined'
   const revoked = c.status === 'revoked'
@@ -104,7 +114,7 @@ export default async function AccountContractDetail(props) {
 
         <div className="mt-10 pt-6 border-t border-gray-300 grid grid-cols-1 sm:grid-cols-2 gap-6">
           <SignatureBlock
-            label="For UN1T Dublin Ltd"
+            label={`For ${entityLabel}`}
             name={c.issuer_signature}
             timestamp={c.issued_at}
           />

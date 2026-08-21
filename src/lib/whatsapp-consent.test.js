@@ -21,18 +21,25 @@ import { sendTextMessage } from './whatsapp'
 // Chainable stub that records every write. `upsert` resolves directly
 // (the code awaits the builder); `update` supports the .eq(...) /
 // .eq().eq() chains used across the module.
-function stubDb({ writes }) {
+//
+// `failOn` is a { table: message } map — a resolved `{ error }`, which is what
+// supabase-js actually does. It never throws, on purpose: the writes here used
+// to sit in a try/catch that could not fire, which is exactly how a failed
+// opt-out kept returning `applied: true`.
+function stubDb({ writes, failOn = {} }) {
+  const resultFor = (table) =>
+    failOn[table] ? { error: { message: failOn[table] } } : { error: null }
   return {
     from(table) {
       return {
         upsert: (row, opts) => {
           writes.push({ table, op: 'upsert', row, opts })
-          return Promise.resolve({ error: null })
+          return Promise.resolve(resultFor(table))
         },
         update: (patch) => {
           const record = (filters) => {
             writes.push({ table, op: 'update', patch, filters })
-            return Promise.resolve({ error: null })
+            return Promise.resolve(resultFor(table))
           }
           const chain = (filters) => ({
             eq: (col, val) => chain({ ...filters, [col]: val }),
@@ -42,7 +49,7 @@ function stubDb({ writes }) {
         },
         insert: (row) => {
           writes.push({ table, op: 'insert', row })
-          return Promise.resolve({ error: null })
+          return Promise.resolve(resultFor(table))
         },
         select: () => ({
           or: () => ({ limit: () => Promise.resolve({ data: [{ id: 'c1' }] }) }),
@@ -133,6 +140,111 @@ describe('applyWhatsappConsentKeyword — STOP', () => {
   })
 })
 
+// ── BAREWRITE.4 — A FAILED WRITE MUST NEVER BLOCK ANOTHER SUPPRESSION WRITE ──
+//
+// Three shapes have now been tried here, and the middle one was the worst:
+//
+//  main         all three writes bare `await`s inside a try/catch that could
+//               not fire for a supabase result. Both suppression writes were
+//               ATTEMPTED, but the function returned `applied: true`
+//               unconditionally and told the customer "You've been
+//               unsubscribed" even when nothing landed.
+//  BAREWRITE.1  fixed the false acknowledgement by RETURNING EARLY on the first
+//               failed write — so a failed contact_preferences upsert now also
+//               skipped the contacts.wa_status write. A half-failing STOP left
+//               ZERO suppression where main left ONE. Strictly worse.
+//  BAREWRITE.4  attempt every write, collect the failures, then judge.
+//
+// The property these tests pin is the one that matters: FAILING ONE WRITE MUST
+// NEVER COST THE OTHER. Each write is failed independently and the resulting
+// suppression state is asserted to be no weaker than main's.
+describe('BAREWRITE.4 — one failed consent write never suppresses the others', () => {
+  // The two authoritative suppression gates, in the order the function writes
+  // them. Each is failed on its own; the OTHER must still be attempted.
+  const SUPPRESSION_WRITES = [
+    { failing: 'contact_preferences', other: 'contacts' },
+    { failing: 'contacts', other: 'contact_preferences' },
+  ]
+
+  for (const { failing, other } of SUPPRESSION_WRITES) {
+    it(`STOP: a failed ${failing} write still writes ${other} (main's floor, never below it)`, async () => {
+      const writes = []
+      const db = stubDb({ writes, failOn: { [failing]: 'connection reset' } })
+      const r = await applyWhatsappConsentKeyword({
+        db, contact: { id: 'c1' }, waPhone: '353871234567',
+        locationId: 'loc1', conversationId: 'conv1', keyword: 'stop',
+      })
+
+      // THE REGRESSION. Under BAREWRITE.1 this write never happened when the
+      // first leg failed, leaving the contact suppressed on nothing at all.
+      const surviving = writes.find(w => w.table === other)
+      expect(surviving, `${other} must still be written when ${failing} fails`).toBeDefined()
+      if (other === 'contacts') expect(surviving.patch).toEqual({ wa_status: 'opted_out' })
+      else expect(surviving.row).toMatchObject({ contact_id: 'c1', whatsapp_marketing: false })
+
+      // The audit row is attempted too — losing a log line is not a reason to
+      // skip the audit trail for the half that DID land.
+      expect(writes.find(w => w.table === 'consent_log')).toBeDefined()
+
+      // One gate landed, so the opt-out took effect: acknowledge it, but say
+      // loudly that it was only partial.
+      expect(r.applied).toBe(true)
+      expect(r.partial).toBe(true)
+      expect(r.failures.join(' ')).toContain(failing)
+      expect(sendTextMessage).toHaveBeenCalled()
+    })
+  }
+
+  it('STOP: only when BOTH suppression writes fail is nothing acknowledged', async () => {
+    const writes = []
+    const db = stubDb({ writes, failOn: { contact_preferences: 'down', contacts: 'down' } })
+    const r = await applyWhatsappConsentKeyword({
+      db, contact: { id: 'c1' }, waPhone: '353871234567',
+      locationId: 'loc1', conversationId: 'conv1', keyword: 'stop',
+    })
+
+    // Both were still ATTEMPTED — that is the whole point.
+    expect(writes.find(w => w.table === 'contact_preferences')).toBeDefined()
+    expect(writes.find(w => w.table === 'contacts')).toBeDefined()
+    // …and only now, with zero suppression anywhere, is the ack withheld.
+    expect(r).toMatchObject({ applied: false, reason: 'no_suppression_signal_landed' })
+    expect(r.failures).toHaveLength(2)
+    expect(sendTextMessage).not.toHaveBeenCalled()
+  })
+
+  it('START: a partial opt-in is NOT acknowledged (the failure direction reverses)', async () => {
+    const writes = []
+    const db = stubDb({ writes, failOn: { contacts: 'deadlock detected' } })
+    const r = await applyWhatsappConsentKeyword({
+      db, contact: { id: 'c1' }, waPhone: '353871234567',
+      locationId: 'loc1', conversationId: 'conv1', keyword: 'start',
+    })
+
+    // Still attempted both — the flag flipped even though wa_status did not.
+    expect(writes.find(w => w.table === 'contact_preferences').row).toMatchObject({ whatsapp_marketing: true })
+    expect(writes.find(w => w.table === 'contacts')).toBeDefined()
+    // But the contact is still 'opted_out' on the hard gate, so nothing will
+    // actually reach them: promising "You're opted back in" would be a lie,
+    // and under-claiming is the safe error for an opt-IN.
+    expect(r).toMatchObject({ applied: false, reason: 'opt_in_incomplete' })
+    expect(sendTextMessage).not.toHaveBeenCalled()
+  })
+
+  it('still applies and acknowledges when only the audit row is lost', async () => {
+    const writes = []
+    const db = stubDb({ writes, failOn: { consent_log: 'table locked' } })
+    const r = await applyWhatsappConsentKeyword({
+      db, contact: { id: 'c1' }, waPhone: '353871234567',
+      locationId: 'loc1', conversationId: 'conv1', keyword: 'stop',
+    })
+
+    // Both suppression gates landed — refusing here would leave the customer
+    // un-answered on a change that DID take effect.
+    expect(r).toMatchObject({ applied: true, action: 'opt_out', partial: true })
+    expect(sendTextMessage).toHaveBeenCalled()
+  })
+})
+
 describe('applyMetaUserPreference — same upsert semantics', () => {
   it('stop upserts the preferences row (contact may have none)', async () => {
     const writes = []
@@ -146,5 +258,33 @@ describe('applyMetaUserPreference — same upsert semantics', () => {
     expect(prefWrite?.op).toBe('upsert')
     expect(prefWrite.row).toMatchObject({ contact_id: 'c1', whatsapp_marketing: false })
     expect(prefWrite.opts).toMatchObject({ onConflict: 'contact_id' })
+  })
+
+  // Same BAREWRITE.4 property as the keyword path, and it holds here because
+  // both paths run the one `applyConsentWrites` helper. Note the two paths had
+  // NOT previously drifted — 85afb1c0 moved both to `.upsert` in one commit —
+  // so the helper is not a repair, it is insurance on a judgement (STOP needs
+  // EITHER gate, START needs BOTH) that is too easy to get wrong twice.
+  it('a failed wa_status write still writes the preference flag, and reports partial', async () => {
+    const writes = []
+    const db = stubDb({ writes, failOn: { contacts: 'connection reset' } })
+    const r = await applyMetaUserPreference(db, {
+      wa_id: '353871234567', category: 'marketing_messages', value: 'stop',
+    })
+    expect(writes.find(w => w.table === 'contact_preferences').row).toMatchObject({ whatsapp_marketing: false })
+    expect(writes.find(w => w.table === 'consent_log')).toBeDefined()
+    expect(r).toMatchObject({ applied: true, partial: true, contactId: 'c1' })
+    expect(r.failures.join(' ')).toContain('contacts.wa_status')
+  })
+
+  it('reports applied:false only when NO suppression signal landed', async () => {
+    const writes = []
+    const db = stubDb({ writes, failOn: { contacts: 'down', contact_preferences: 'down' } })
+    const r = await applyMetaUserPreference(db, {
+      wa_id: '353871234567', category: 'marketing_messages', value: 'stop',
+    })
+    expect(writes.find(w => w.table === 'contact_preferences')).toBeDefined()
+    expect(writes.find(w => w.table === 'contacts')).toBeDefined()
+    expect(r).toMatchObject({ applied: false, reason: 'no_suppression_signal_landed' })
   })
 })

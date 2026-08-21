@@ -130,6 +130,12 @@ export const LOCATION_VAR_KEYS = [
   'location_phone',
   'location_email',
   'company_name',
+  // LEGALENT.1 — the contracting COMPANY (org_settings.legal_entity_name,
+  // mig 425), distinct from company_name, which is the brand. A party
+  // clause must name the entity; resolved server-side at issue time via
+  // getContractingEntity() and always non-empty (it degrades to the
+  // brand), so it can never leave an unresolved placeholder.
+  'legal_entity_name',
 ]
 
 /**
@@ -146,15 +152,17 @@ export const LOCATION_VAR_KEYS = [
  * @param {object} [opts]
  * @param {object|null} [opts.location] — { name, address, phone, email }
  * @param {object|null} [opts.branding] — { companyName } (from getLocationBranding)
+ * @param {object|null} [opts.entity]   — { label } (from getContractingEntity)
  * @returns {Record<string, string>}
  */
-export function locationVariables({ location, branding } = {}) {
+export function locationVariables({ location, branding, entity } = {}) {
   const v = {}
   if (location?.name) v.location_name = String(location.name)
   if (location?.address) v.location_address = String(location.address)
   if (location?.phone) v.location_phone = String(location.phone)
   if (location?.email) v.location_email = String(location.email)
   if (branding?.companyName) v.company_name = String(branding.companyName)
+  if (entity?.label) v.legal_entity_name = String(entity.label)
   return v
 }
 

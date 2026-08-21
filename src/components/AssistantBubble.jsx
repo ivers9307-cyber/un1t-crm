@@ -176,7 +176,7 @@ export default function AssistantBubble({ user }) {
                 <Sparkles size={16} className="text-white" />
               </div>
               <div>
-                <span className="text-sm font-semibold">UN1T Assistant</span>
+                <span className="text-sm font-semibold">Repset Assistant</span>
                 <p className="text-[10px] text-un1t-subtle">Powered by Claude</p>
               </div>
             </div>
@@ -198,7 +198,7 @@ export default function AssistantBubble({ user }) {
                     <Bot size={14} className="text-white" />
                   </div>
                   <div className="bg-un1t-border/30 rounded-xl rounded-tl-sm px-3 py-2.5 text-sm max-w-[280px]">
-                    Hi {user?.full_name?.split(' ')[0] || 'there'}! I'm your UN1T assistant. I can help you navigate the CRM, answer questions, or take actions for you. What can I help with?
+                    Hi {user?.full_name?.split(' ')[0] || 'there'}! I'm your Repset assistant. I can help you navigate the CRM, answer questions, or take actions for you. What can I help with?
                   </div>
                 </div>
 

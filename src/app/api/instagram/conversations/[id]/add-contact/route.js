@@ -92,7 +92,9 @@ export async function POST(request, props) {
   }
 
   try {
-    await db.from('activities').insert({
+    // Genuinely best-effort (see the catch below) — but read the error rather
+    // than discarding it, so a systematic timeline failure is visible in logs.
+    const { error: timelineError } = await db.from('activities').insert({
       contact_id: contact.id,
       location_id: conversation.location_id,
       kind: 'event',
@@ -101,6 +103,7 @@ export async function POST(request, props) {
       note: `Created from the Instagram conversation${conversation.ig_username ? ` with @${conversation.ig_username}` : ''}.`,
       done: true,
     })
+    if (timelineError) console.error('[ig-add-contact] timeline entry failed (non-fatal):', timelineError.message)
   } catch { /* timeline entry is a nicety, never fail the create */ }
 
   return NextResponse.json({ success: true, contact_id: contact.id })

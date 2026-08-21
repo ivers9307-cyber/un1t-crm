@@ -4322,129 +4322,400 @@ registry.registerPath({
   },
 })
 
-// Tapo devices (TAPO-T1) — staff registry/config/toggle, gated by the
-// device_control permission. Lives under the Automations tag: the UI
-// surface is /automations/devices. Note: these routes return
-// { success, devices } / { success, device } (not the data envelope).
-const TapoDevice = z.object({
+// Sonos studio-music schedules (SONOS.6-16) — replaces the TapoDevice block
+// that used to live here (deleted SONOS.14; mig 561 dropped tapo_devices).
+// Same device_control permission, same Automations tag; the UI surface is
+// now /automations/sonos. Response envelopes are { success, schedules } /
+// { success, schedule } — matching the old Tapo routes' convention, not the
+// { success, data } standard envelope. GET /household never errors past
+// auth: connection/reachability trouble is reported IN a 200 body, since
+// "Sonos is unreachable" is a normal state for the config page to render.
+//
+// SonosWindow/SonosSchedulePayload mirror — hand-duplicated, not imported —
+// the Window/SchedulePayload Zod schemas exported from
+// src/app/api/sonos/schedules/route.js. This file derives its schemas from
+// src/lib (see file header), never from src/app/api, so the shapes live
+// here too; keep the two definitions in sync by hand.
+const SonosWindow = z.object({
+  days: z.array(z.number().int().min(1).max(7)).min(1),
+  on: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+  off: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+  volume: z.number().int().min(0).max(100),
+  favorite_id: z.string().min(1).max(128),
+}).openapi('SonosWindow', {
+  description: 'A recurring playback window. Enforced server-side, not representable here: on must differ '
+    + 'from off, and no two windows on a schedule may overlap on a shared day — an overlapping save is '
+    + 'rejected with 400 rather than silently letting the earlier window always win.',
+})
+
+const SonosSchedulePayload = z.object({
+  name: z.string().min(1).max(80).optional(),
+  player_ids: z.array(z.string().min(1)).max(32).optional(),
+  enabled: z.boolean().optional(),
+  windows: z.array(SonosWindow).max(16).optional(),
+}).openapi('SonosSchedulePayload')
+
+const SonosSchedulePatch = SonosSchedulePayload.extend({
+  // Suppression only — deliberately no {state:"on"}: that would have to
+  // invent a volume and a favourite, and the honest source for both is a
+  // window (mig 560 column comment on sonos_schedules.override).
+  override: z.object({
+    state: z.literal('off'),
+    until: z.string().datetime(),
+  }).nullable().optional(),
+}).openapi('SonosSchedulePatch')
+
+const SonosSchedule = z.object({
   id: uuidLike,
   location_id: uuidLike,
-  sidecar_device_id: z.string(),
-  name: z.string().nullable(),
-  kind: z.enum(['plug', 'switch']),
-  zone: z.string().nullable(),
+  name: z.string(),
+  player_ids: z.array(z.string()),
   enabled: z.boolean(),
-  schedule_mode: z.enum(['none', 'fixed', 'class']),
-  fixed_windows: z.array(z.object({
-    days: z.array(z.number().int().min(1).max(7)),
-    on: z.string(),
-    off: z.string(),
-  })),
-  class_rule: z.object({
-    lead_min: z.number().int().optional(),
-    lag_min: z.number().int().optional(),
-  }),
-  override: z.object({
-    state: z.enum(['on', 'off']),
-    until: z.string(),
-    set_by: uuidLike,
+  windows: z.array(SonosWindow),
+  override: z.object({ state: z.literal('off'), until: z.string().datetime() }).nullable(),
+  last_applied: z.object({
+    window_on_at: z.number(),
+    action: z.enum(['open', 'close']),
+    at: z.string().datetime(),
   }).nullable(),
-  last_state: z.enum(['on', 'off']).nullable(),
-  last_seen_at: z.string().nullable(),
-  created_at: z.string(),
-  updated_at: z.string(),
-}).openapi('TapoDevice')
+  last_state: z.object({
+    group_id: z.string(),
+    playback_state: z.string().nullable(),
+    at: z.string().datetime(),
+  }).nullable(),
+  created_at: z.string().datetime(),
+  updated_at: z.string().datetime(),
+}).openapi('SonosSchedule', {
+  description: 'last_applied/last_state are written by the sonos-reconcile cron (unregistered here — '
+    + 'cron routes never are), so a freshly created schedule has both null.',
+})
+
+const SonosScheduleResponse = z.object({ success: z.literal(true), schedule: SonosSchedule }).openapi('SonosScheduleResponse')
+
+const SonosGroup = z.object({
+  id: z.string(),
+  name: z.string(),
+  coordinatorId: z.string().nullable(),
+  playbackState: z.string().nullable(),
+  playerIds: z.array(z.string()),
+}).openapi('SonosGroup')
+
+const SonosPlayer = z.object({
+  id: z.string(),
+  name: z.string(),
+}).openapi('SonosPlayer')
+
+const SonosFavorite = z.object({
+  id: z.string(),
+  name: z.string(),
+}).openapi('SonosFavorite')
+
+// SONOSLIVE.4/5 — live control + now-playing. Hand-duplicated from
+// src/lib/sonos/actions.js (ACTIONS) and src/lib/sonos/live.js (the `code`
+// tag union), same rule as the schedule schemas above: this file never
+// imports from src/app/api or src/lib/sonos, so the shapes are kept here
+// and updated by hand when those files change.
+const SonosControlBody = z.object({
+  schedule_id: z.string(),
+  action: z.enum([
+    'volume_up', 'volume_down', 'set_volume',
+    'play', 'pause', 'skip_next', 'skip_previous', 'load_favorite',
+  ]),
+  value: z.union([z.number(), z.string()]).optional(),
+}).openapi('SonosControlBody', {
+  description: 'value is read per action: volume_up/volume_down take an optional step size (default 5, '
+    + 'range 1-100, sign ignored — direction lives in the action name); set_volume takes a required integer '
+    + '0-100; load_favorite takes a required non-empty favorite id. play/pause/skip_next/skip_previous '
+    + 'ignore value.',
+})
+
+// The `code` tag is a stable machine-readable union runLiveAction '
+// (src/lib/sonos/live.js) returns; the route maps each to the HTTP status
+// below. `applied`/`failedGroups` appear only on a multi-group dispatch-
+// loop failure: volume_up/volume_down are RELATIVE, not idempotent, so a
+// caller must not blindly retry the whole action when `applied` already
+// lists groups that changed before `failedGroups` failed — a blind retry
+// would move an already-changed group a second time.
+const SonosControlErrorResponse = ErrorResponse.extend({
+  code: z.enum([
+    'invalid', 'not_found', 'not_configured', 'not_connected', 'no_group',
+    'fixed_volume', 'regrouped', 'no_content', 'rate_limited', 'unreachable',
+    'db_error', 'failed',
+  ]).optional()
+    .describe('Present only on failures returned by the control dispatch (runLiveAction). The auth/validation '
+      + 'guards that run before dispatch — no active location, a malformed body, an unusable schedule_id — '
+      + 'return a 400/404 with no code at all.'),
+  applied: z.array(z.string()).optional(),
+  failedGroups: z.array(z.string()).optional(),
+}).openapi('SonosControlErrorResponse')
+
+const SonosTrack = z.object({
+  name: z.string().nullable(),
+  artist: z.string().nullable(),
+  album: z.string().nullable(),
+  imageUrl: z.string().nullable(),
+}).openapi('SonosTrack')
+
+const SonosNowPlayingResponse = z.union([
+  z.object({
+    success: z.literal(true),
+    live: z.literal(false),
+    reason: z.enum(['not_configured', 'not_connected', 'refresh_failed', 'db_error', 'unreachable', 'no_group']),
+    statusCode: z.number().int().optional(),
+  }).openapi('SonosNowPlayingOffline', {
+    description: 'Deliberately a 200, not an error status — not-connected and unreachable are normal states '
+      + 'the control strip renders a specific panel for, polled every 10s. statusCode is present only when '
+      + 'reason is unreachable (the failed Sonos groups call\'s HTTP status).',
+  }),
+  z.object({
+    success: z.literal(true),
+    live: z.literal(true),
+    groupId: z.string(),
+    playbackState: z.string().nullable(),
+    volume: z.number().int().nullable(),
+    muted: z.boolean().nullable(),
+    fixedVolume: z.boolean(),
+    volumeFailed: z.boolean(),
+    metadataFailed: z.boolean(),
+    track: SonosTrack.nullable(),
+    source: z.string().nullable(),
+  }).openapi('SonosNowPlayingLive', {
+    description: 'TRAP: fixedVolume:false does NOT mean "not fixed" when volumeFailed is true — the volume '
+      + 'GET failed and fixedVolume just defaults to false in that case. A client must check volumeFailed '
+      + 'before trusting fixedVolume (or volume/muted, which are null on the same failure). Likewise track/source '
+      + 'fall back to null both when Sonos legitimately has no metadata AND when the metadata GET failed — check '
+      + 'metadataFailed before reading them as "nothing playing".',
+  }),
+]).openapi('SonosNowPlayingResponse')
 
 registry.registerPath({
   method: 'get',
-  path: '/api/tapo/devices',
+  path: '/api/sonos/household',
   tags: ['Automations'],
   security: [{ CookieAuth: [] }],
-  summary: 'List Tapo devices at the active location (device_control)',
-  description: 'Full registry including enabled=false rows — those are bridge-discovered devices awaiting adoption (staff name + enable them).',
+  summary: 'Live Sonos household snapshot for the config UI (device_control)',
+  description:
+    'connected:false carries a reason (not_configured | not_connected | db_error | refresh_failed) and no '
+    + 'groups/players/favorites. connected:true with reachable:false carries a statusCode from the failed '
+    + 'Sonos groups call. connected:true with reachable:true carries groups, players and favorites — '
+    + 'favorites is read off the Sonos API\'s `items` key (not `favorites`) and capped at 70 by Sonos itself.',
   responses: {
     200: {
-      description: 'Devices (enabled first, then by name)',
-      content: { 'application/json': { schema: z.object({ success: z.literal(true), devices: z.array(TapoDevice) }).openapi('TapoDeviceListResponse') } },
+      description: 'Household snapshot — shape varies with connected/reachable, see description',
+      content: {
+        'application/json': {
+          schema: z.object({
+            success: z.literal(true),
+            connected: z.boolean(),
+            reason: z.enum(['not_configured', 'not_connected', 'db_error', 'refresh_failed']).optional(),
+            reachable: z.boolean().optional(),
+            statusCode: z.number().int().optional(),
+            groups: z.array(SonosGroup).optional(),
+            players: z.array(SonosPlayer).optional(),
+            favorites: z.array(SonosFavorite).optional(),
+          }).openapi('SonosHouseholdResponse'),
+        },
+      },
     },
+    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
 registry.registerPath({
-  method: 'patch',
-  path: '/api/tapo/devices/{id}',
+  method: 'get',
+  path: '/api/sonos/schedules',
   tags: ['Automations'],
   security: [{ CookieAuth: [] }],
-  summary: 'Update a Tapo device config (device_control)',
-  description: 'Rename, set zone label, enable/adopt, and choose the schedule (none | fixed windows | class-linked). All body fields optional — send only what changed; an empty patch is a 400. Missing OR cross-location ids return 404 (no ID enumeration).',
-  request: {
-    params: z.object({ id: uuidLike }),
-    body: {
-      content: {
-        'application/json': {
-          schema: z.object({
-            name: z.string().min(1).max(120).optional(),
-            zone: z.string().max(60).nullable().optional(),
-            enabled: z.boolean().optional(),
-            schedule_mode: z.enum(['none', 'fixed', 'class']).optional(),
-            fixed_windows: z.array(z.object({
-              days: z.array(z.number().int().min(1).max(7)).min(1),
-              on: z.string(),
-              off: z.string(),
-            })).max(8).optional(),
-            class_rule: z.object({
-              lead_min: z.number().int().min(0).max(120),
-              lag_min: z.number().int().min(0).max(120),
-            }).optional(),
-          }).openapi('TapoDeviceConfigPatch'),
-        },
-      },
-    },
-  },
+  summary: 'List Sonos schedules at the active location (device_control)',
+  description: 'Ordered oldest-first, capped at 50 rows. A location that hits the cap is logged '
+    + 'server-side (logWarn) but the cap is not surfaced in the response.',
   responses: {
     200: {
-      description: 'Updated device row',
-      content: { 'application/json': { schema: z.object({ success: z.literal(true), device: TapoDevice }).openapi('TapoDeviceResponse') } },
+      description: "Schedules for the caller's active location",
+      content: { 'application/json': { schema: z.object({ success: z.literal(true), schedules: z.array(SonosSchedule) }).openapi('SonosScheduleListResponse') } },
     },
-    400: { description: 'Validation failed or no editable fields supplied', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Device not found (or not at your active location)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Database error', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
 registry.registerPath({
   method: 'post',
-  path: '/api/tapo/devices/{id}/toggle',
+  path: '/api/sonos/schedules',
   tags: ['Automations'],
   security: [{ CookieAuth: [] }],
-  summary: 'Set or clear a manual override on a Tapo device (device_control)',
-  description: 'Exactly one of `state` / `clear`. `state` writes an override honoured ahead of any schedule until `until` (default: upcoming Dublin midnight); `clear: true` hands control back to the schedule. The bridge applies it on its next reconcile tick.',
+  summary: 'Create a Sonos schedule at the active location (device_control)',
+  description: 'Every field is optional (the row falls back to its column defaults — name "Studio music", '
+    + 'enabled false, empty player_ids/windows) — the config UI sends a full shape in practice, but nothing '
+    + 'here requires it.',
+  request: {
+    body: { content: { 'application/json': { schema: SonosSchedulePayload } } },
+  },
+  responses: {
+    200: { description: 'Created schedule row', content: { 'application/json': { schema: SonosScheduleResponse } } },
+    400: { description: 'Validation failed (bad window shape, on === off, or two windows overlap on a shared day), or the caller has no active location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Database error', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/sonos/schedules/{id}',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Update a Sonos schedule (device_control)',
+  description:
+    'All body fields optional — send only what changed; an empty patch is a 400. `override` additionally '
+    + 'accepts {state:"off", until} to suppress playback until a set time, or null to clear a suppression. '
+    + 'Missing OR cross-location ids return 404 (no ID enumeration); the WHERE clause is scoped by '
+    + 'location_id, not just the read-back, so a guessed id from another location cannot be written.',
   request: {
     params: z.object({ id: uuidLike }),
-    body: {
+    body: { content: { 'application/json': { schema: SonosSchedulePatch } } },
+  },
+  responses: {
+    200: { description: 'Updated schedule row', content: { 'application/json': { schema: SonosScheduleResponse } } },
+    400: { description: 'Validation failed, no editable fields supplied, or the caller has no active location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Schedule not found (or not at your active location)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Database error', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/sonos/schedules/{id}',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Delete a Sonos schedule (device_control)',
+  description:
+    'Location-scoped in the WHERE clause. Only a malformed id 404s (anti-enumeration); a well-formed id '
+    + 'for a nonexistent or cross-location row still deletes zero rows and returns 200 — PostgREST does not '
+    + 'error on a no-op DELETE, so this route is idempotent rather than 404-on-already-gone.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Deleted (or already gone)', content: { 'application/json': { schema: z.object({ success: z.literal(true) }) } } },
+    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Malformed id', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Database error', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/sonos/schedules/{id}/run-now',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Apply the schedule\'s currently-active window immediately (device_control)',
+  description:
+    'SONOSLIVE.6: no longer clears last_applied and waits for the next cron tick. It now runs the same '
+    + 'volume-then-favourite path the sonos-reconcile cron (unregistered here — cron routes never are) uses '
+    + 'and stamps last_applied as an open, exactly as a cron-driven open would — immediate, and the close\'s '
+    + 'precondition (a record of having opened) is written rather than destroyed. A no-op only when there is '
+    + 'no active window right now, or the schedule is disabled — both now report distinctly as 409 rather '
+    + 'than a silent no-op 200. On a partial dispatch failure, last_applied is deliberately NOT stamped, so '
+    + 'the next cron tick retries. Missing OR cross-location ids return 404 (no ID enumeration).',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: {
+      description: 'Applied. A bookkeeping failure after a successful apply still reports success, with a '
+        + 'warning field, rather than telling the operator the music did not start when it did.',
       content: {
         'application/json': {
-          schema: z.object({
-            state: z.enum(['on', 'off']).optional(),
-            clear: z.boolean().optional(),
-            until: z.string().optional(),
-          }).openapi('TapoDeviceToggle'),
+          schema: z.union([
+            z.object({ success: z.literal(true), groups: z.array(z.string()) }),
+            z.object({ success: z.literal(true), warning: z.string() }),
+          ]).openapi('SonosRunNowResponse'),
         },
       },
     },
+    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Schedule not found (or not at your active location)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: {
+      description: 'The current state blocks an immediate apply: the schedule is switched off, no window is '
+        + 'active right now, Sonos is not connected, or none of this schedule\'s speakers are online.',
+      content: { 'application/json': { schema: ErrorResponse } },
+    },
+    500: { description: 'Database error', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Sonos did not answer, or the dispatch loop failed partway through', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Sonos is not configured', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/sonos/control',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Immediate live control of a schedule\'s speakers — volume, transport, favourite (device_control)',
+  description:
+    'SONOSLIVE.3/4: writes nothing to sonos_schedules, deliberately — the schedule only acts at window '
+    + 'boundaries, so a live change simply persists until the next one; there is no suppression or '
+    + 'reconciliation to invent here. Works even while the schedule is disabled or overridden, on purpose: '
+    + 'both of those govern whether the CRON acts, not whether a human may act right now. On failure the '
+    + 'body may carry `applied`/`failedGroups` (see SonosControlErrorResponse) — check those before retrying '
+    + 'a multi-group volume_up/volume_down, since retrying blind can double-apply the step to a group that '
+    + 'already changed.',
+  request: {
+    body: { content: { 'application/json': { schema: SonosControlBody } } },
   },
   responses: {
     200: {
-      description: 'Updated device row (override set or cleared)',
-      content: { 'application/json': { schema: z.object({ success: z.literal(true), device: TapoDevice }).openapi('TapoDeviceToggleResponse') } },
+      description: 'Applied to every resolved group',
+      content: { 'application/json': { schema: z.object({ success: z.literal(true), groups: z.array(z.string()) }).openapi('SonosControlResponse') } },
     },
-    400: { description: 'Validation failed (both/neither of state+clear, or until not a future ISO datetime)', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Two distinct shapes. An unknown action or an unusable value for a known action comes back from dispatch and carries code: invalid. A malformed body or a caller with no active location is rejected by the guards that run BEFORE dispatch and carries no code at all — which is why code is optional on this schema.', content: { 'application/json': { schema: SonosControlErrorResponse } } },
     401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Device not found (or not at your active location)', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Schedule not found, or not at your active location (code: not_found)', content: { 'application/json': { schema: SonosControlErrorResponse } } },
+    409: {
+      description: 'The current state blocks this action — code distinguishes which: not_connected (Sonos '
+        + 'is not connected), no_group (none of this schedule\'s speakers are online), fixed_volume (these '
+        + 'speakers are set to a fixed volume), regrouped (the group changed between resolve and act — retry '
+        + 'is safe), no_content (nothing is loaded on these speakers, so play/pause/skip have nothing to '
+        + 'act on).',
+      content: { 'application/json': { schema: SonosControlErrorResponse } },
+    },
+    429: { description: 'Rate limited by Sonos — try again shortly (code: rate_limited)', content: { 'application/json': { schema: SonosControlErrorResponse } } },
+    500: { description: 'Database error (code: db_error)', content: { 'application/json': { schema: SonosControlErrorResponse } } },
+    502: { description: 'Sonos is unreachable, or a call in the dispatch loop failed (code: unreachable or failed)', content: { 'application/json': { schema: SonosControlErrorResponse } } },
+    503: { description: 'Sonos is not configured (code: not_configured)', content: { 'application/json': { schema: SonosControlErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/sonos/now-playing',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Live now-playing readout for a schedule\'s resolved speaker group (device_control)',
+  description:
+    'SONOSLIVE.5: not-connected and unreachable states return HTTP 200, not an error status — they are '
+    + 'normal expected states the control strip renders a specific panel for (polled every 10s while a strip '
+    + 'is open). Genuine auth/scoping failures (missing session, missing permission, no active location, '
+    + 'unknown or cross-location schedule id) still return 401/403/400/404 as normal. See '
+    + 'SonosNowPlayingLive\'s description for the volumeFailed trap.',
+  request: {
+    query: z.object({ schedule_id: uuidLike }),
+  },
+  responses: {
+    200: { description: 'Offline-state or live-state readout, see SonosNowPlayingResponse', content: { 'application/json': { schema: SonosNowPlayingResponse } } },
+    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Malformed schedule_id, not found, or not at your active location', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Database error reading the schedule row', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -4454,7 +4725,7 @@ registry.registerPath({
   path: '/api/live/{locationId}',
   tags: ['Live HR'],
   security: [{ CookieAuth: [] }],
-  summary: 'Current live HR sessions + available straps for a location (staff)',
+  summary: 'Current live HR sessions + available straps for a location (studio_management)',
   request: { params: z.object({ locationId: uuidLike }) },
   responses: {
     200: {
@@ -4473,7 +4744,7 @@ registry.registerPath({
         },
       },
     },
-    403: { description: 'Location not in scope', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Location not in scope, or studio_management not held there', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -4501,7 +4772,7 @@ registry.registerPath({
   responses: {
     200: { description: 'Paired — returns session_id' },
     400: { description: 'Missing required fields or pair failed', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Coach role or location scope required', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Coach role, location scope and studio_management all required', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -4531,7 +4802,7 @@ registry.registerPath({
         },
       },
     },
-    403: { description: 'Manager role or location scope required', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Manager role, location scope and studio_management all required', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -4551,7 +4822,7 @@ registry.registerPath({
         },
       },
     },
-    403: { description: 'Manager role or location scope required', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Manager role, location scope and studio_management all required', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -6093,10 +6364,13 @@ function buildSpec() {
   const doc = generator.generateDocument({
     openapi: '3.1.0',
     info: {
-      title: 'UN1T CRM API',
+      // CHROME.1 — platform chrome. This spec documents the PLATFORM's HTTP
+      // API to integrators; it names no gym and must not carry a tenant's
+      // brand. (The servers list below already leads with crm.repset.ie.)
+      title: 'Repset CRM API',
       version: '1.1.0',
       description:
-        'HTTP API for the UN1T gym CRM. Most endpoints accept either a Supabase ' +
+        'HTTP API for the Repset gym CRM. Most endpoints accept either a Supabase ' +
         'session cookie (browser) or a Bearer token for n8n / external integrations — ' +
         'a per-organization `unitk_…` API key (org-scoped) or the legacy shared ' +
         'CRM_API_KEY (unscoped). Mutating endpoints validate request bodies via Zod schemas; ' +

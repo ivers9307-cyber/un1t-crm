@@ -6,6 +6,7 @@
 // obvious negatives (wrong domain, bad slug shape).
 
 import { describe, it, expect } from 'vitest'
+import { WEB_PERMISSIONS } from 'shared/permissions'
 import {
   parseInboundAddress,
   INBOUND_INVOICE_SUPPORTED_MIME,
@@ -181,5 +182,40 @@ describe('safeInboundFilename', () => {
     const long = 'a'.repeat(400)
     const result = safeInboundFilename(long)
     expect(result.length).toBe(200)
+  })
+})
+
+// AUDIT-13.E — the staff-facing hint must name an address this parser
+// actually accepts.
+//
+// shared/permissions.js told operators to forward supplier invoices to
+// <slug>-invoices@un1tdublin.com. The apex keeps its OWN MX records (the
+// marketing mailbox) and only mail.un1tdublin.com is delegated to
+// Postmark's inbound infra — see the DOMAIN constant's comment — so mail
+// to the hinted address landed in the marketing mailbox and never reached
+// this parser. Other UI (LocationForm, InvoicesInbox) already showed the
+// mail. subdomain, which is how the drift went unnoticed.
+//
+// Asserted by round-trip rather than string equality: the hint is fed to
+// the real parser, so the two can never drift apart again regardless of
+// how either is worded.
+describe('the permission hint names the address the parser accepts', () => {
+  const hint = WEB_PERMISSIONS.find((p) => p.key === 'invoices_inbox')?.hint || ''
+
+  it('the hint quotes an address', () => {
+    expect(hint).toMatch(/<slug>-invoices@\S+/)
+  })
+
+  it('that address, with a real slug, parses back to the slug', () => {
+    const quoted = hint.match(/<slug>-invoices@([a-z0-9.-]*[a-z0-9])/i)?.[0]
+    const address = quoted.replace('<slug>', 'stillorgan')
+    expect(
+      parseInboundAddress(address),
+      `the hint sends operators to ${address}, which this parser rejects`,
+    ).toBe('stillorgan')
+  })
+
+  it('control — the apex (no mail. subdomain) is still rejected', () => {
+    expect(parseInboundAddress('stillorgan-invoices@un1tdublin.com')).toBeNull()
   })
 })

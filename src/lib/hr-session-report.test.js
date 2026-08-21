@@ -33,6 +33,32 @@ describe('buildSessionReport', () => {
     expect(report.summary.z4plus_minutes).toBe(15)
   })
 
+  // PAIRSYNC.1 — ported from shared/hr-session-report.test.js, which had both
+  // of these and this file did not. The module itself is byte-identical
+  // between the two copies and both assert against the same fixture, so the
+  // web suite was simply testing less: only the ABOVE-threshold case was
+  // covered here, i.e. nothing pinned the Burn boolean actually going false.
+  it('no Burn when Zone 4+ is under 12 min', () => {
+    const r = buildSessionReport(
+      {
+        ...fixture.ctx,
+        session: { ...fixture.ctx.session, zones_seconds: { 4: 300, 5: 60 } }, // 6 min
+      },
+      { nowMs: fixture.nowMs },
+    )
+    expect(r.summary.burn).toBe(false)
+    expect(r.summary.z4plus_minutes).toBe(6)
+  })
+
+  it('degrades safely with missing zones (no Burn, z4plus 0)', () => {
+    const r = buildSessionReport(
+      { ...fixture.ctx, session: { ...fixture.ctx.session, zones_seconds: null } },
+      { nowMs: fixture.nowMs },
+    )
+    expect(r.summary.burn).toBe(false)
+    expect(r.summary.z4plus_minutes).toBe(0)
+  })
+
   it('maps the recent + peak trends (both up, enough data)', () => {
     expect(report.comparisons.vs_recent).toMatchObject({ field: 'effort_points', direction: 'up', has_enough_data: true })
     expect(report.comparisons.vs_recent_peak).toMatchObject({ field: 'peak_hr_bpm', has_enough_data: true })

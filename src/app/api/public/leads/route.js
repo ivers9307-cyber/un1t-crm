@@ -77,6 +77,11 @@ export async function POST(request) {
   // a richer existing attribution). Best-effort.
   try {
     await db.from('contacts').update({ lead_source: leadSource }).eq('id', contactId).is('lead_source', null)
+    // FUNNEL.5 — LAST-touch alongside the first-touch stamp above, so a
+    // contact re-entering through the website records what brought them back.
+    await db.from('contacts')
+      .update({ last_lead_source: leadSource, last_lead_source_at: new Date().toISOString() })
+      .eq('id', contactId)
   } catch (e) { logWarn('leads', 'lead_source set failed', { err: e }) }
 
   // CAPI: paid-funnel website Lead event. Contact-keyed event_id so repeat

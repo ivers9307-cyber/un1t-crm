@@ -359,3 +359,192 @@ ruleTester.run('no-discarded-single-error', plugin.rules['no-discarded-single-er
     },
   ],
 })
+
+// ── BAREWRITE.1 ──────────────────────────────────────────────────────────────
+// no-unchecked-supabase-write. The `invalid` block below is the load-bearing
+// half: the FOUR WRITE-side defect sites this rule was written for (1 IG
+// unlink, 2 campaign rotation bump, 3 both race send-once stamps, 4 the staff
+// profiles update and its sibling delete) are reproduced there verbatim, so
+// the suite proves the rule would have caught each of them at PR time.
+//
+// It does NOT cover sites 5 and 6, and an earlier version of this comment
+// claimed it did. Both are discarded-error READS — mobile/lib/member/
+// contact-context.jsx and src/lib/event-comms-location.js are `maybeSingle()`
+// lookups — and reads are explicitly outside this rule (see the `valid` list).
+// They are guarded by their own tests instead: src/lib/event-comms-location
+// .test.js and mobile/lib/member/contact-context.source.test.js. Do not read
+// the ratchet as protecting the read side; it does not.
+ruleTester.run('no-unchecked-supabase-write', plugin.rules['no-unchecked-supabase-write'], {
+  valid: [
+    // The error IS bound — the whole point.
+    'async () => { const { error } = await db.from("x").update(u).eq("id", id) }',
+    'async () => { const { error, count } = await db.from("x").update(u, { count: "exact" }).eq("id", id) }',
+    'async () => { const { error: e } = await db.from("x").insert(r) }',
+    // Assigned, not discarded — the caller owns it.
+    'async () => { let res; res = await db.from("x").delete().eq("id", id) }',
+    'async () => { const res = await db.from("x").upsert(r) }',
+    // Member access on the awaited value (campaign-sender's retryable insert).
+    'async () => { const err = (await db.from("x").insert(r))?.error }',
+    // .then(cb) — allowed only when the callback can actually reach the error.
+    'async () => { await db.rpc("f", { p: 1 }).then(({ error }) => { if (error) log(error) }) }',
+    'async () => { await db.from("x").update(u).eq("id", id).then(({ error, data }) => log(error, data)) }',
+    // A plain identifier parameter can read `.error` off the result.
+    'async () => { await db.from("x").insert(r).then(res => { if (res.error) log(res.error) }) }',
+    // A rest element keeps everything reachable.
+    'async () => { await db.from("x").insert(r).then(({ ...rest }) => log(rest)) }',
+    // A callback we cannot see inside — assume it handles the result.
+    'async () => { await db.from("x").insert(r).then(handleResult) }',
+    // Destructured WITH error, in either order or renamed.
+    'async () => { const { data, error } = await db.from("x").update(u).eq("id", id).select("id") }',
+    'async () => { const { error: e, data } = await db.from("x").insert(r).select() }',
+    'async () => { const { ...whole } = await db.from("x").insert(r) }',
+    // Returned — the caller owns the error.
+    'async () => { return db.from("x").update(u).eq("id", id) }',
+    'async () => { return await db.from("x").update(u).eq("id", id) }',
+    // Passed to a helper that awaits and checks it internally (campaign-sender's
+    // writeOrLog idiom). A documented blind spot, not a supported escape.
+    'async () => { await writeOrLog(db.from("x").update(u).eq("id", id), "what", id) }',
+    // Reads are not this rule's business at all — a discarded read error is a
+    // different question, and no-discarded-single-error owns half of it.
+    'async () => { await db.from("x").select("*").eq("id", id) }',
+    'async () => { const { data } = await db.from("x").select("*").eq("id", id).maybeSingle() }',
+    // storage returns a real Promise with its own shape.
+    'async () => { await db.storage.from("b").remove([p]) }',
+    'async () => { await db.storage.from("b").upload(p, f) }',
+    // Not a supabase chain at all.
+    'async () => { await queue.insert(row) }',
+    'async () => { await fetch(u) }',
+  ],
+  invalid: [
+    // ── SITE 1 — IG unlink. The route returned { success: true } and the next
+    // inbound DM re-linked the thread the operator had just unlinked.
+    {
+      code: 'async () => { await db.from("contacts").update({ instagram_igsid: null }).eq("id", cid).eq("location_id", lid).eq("instagram_igsid", igsid) }',
+      errors: [{ messageId: 'unchecked' }],
+    },
+    // ── SITE 2 — campaign bundle-gate rotation bump. A lost updated_at pinned
+    // the campaign at the head of the cron's fair-pick order forever.
+    {
+      code: 'async () => { await db.from("campaigns").update({ updated_at: now, last_error: msg }).eq("id", campaignId) }',
+      errors: [{ messageId: 'unchecked' }],
+    },
+    // ── SITE 3 — race confirmation send-once stamps (both legs). A lost stamp
+    // means the next payment-webhook retry sends a DUPLICATE confirmation.
+    {
+      code: 'async () => { await db.from("race_payments").update({ confirmation_email_sent_at: now }).eq("id", payment.id) }',
+      errors: [{ messageId: 'unchecked' }],
+    },
+    {
+      code: 'async () => { await db.from("race_payments").update({ confirmation_sms_sent_at: now }).eq("id", payment.id) }',
+      errors: [{ messageId: 'unchecked' }],
+    },
+    // ── SITE 4 — staff-create profile update + the adjacent delete. A silent
+    // failure creates the staff member with the DEFAULT role, and the route
+    // still answers success: a quiet privilege mis-assignment.
+    {
+      code: 'async () => { await db.from("profiles").update(updates).eq("id", newUserId) }',
+      errors: [{ messageId: 'unchecked' }],
+    },
+    {
+      code: 'async () => { await db.from("profile_locations").delete().eq("profile_id", newUserId) }',
+      errors: [{ messageId: 'unchecked' }],
+    },
+    // Every mutation verb, and the rpc equivalent.
+    { code: 'async () => { await db.from("x").insert(row) }', errors: [{ messageId: 'unchecked' }] },
+    { code: 'async () => { await db.from("x").upsert(row) }', errors: [{ messageId: 'unchecked' }] },
+    { code: 'async () => { await db.rpc("recalculate_campaign_stats", { p: id }) }', errors: [{ messageId: 'unchecked' }] },
+    // A mutation buried mid-chain still counts.
+    { code: 'async () => { await db.from("x").update(u).eq("a", 1).eq("b", 2).is("c", null) }', errors: [{ messageId: 'unchecked' }] },
+    // Two on the same statement list — both reported.
+    {
+      code: 'async () => { await db.from("a").insert(r); await db.from("b").update(u).eq("id", i) }',
+      errors: [{ messageId: 'unchecked' }, { messageId: 'unchecked' }],
+    },
+    // ── `.then()` IS NOT A SILENCER. Skipping every `.then` unconditionally
+    // made `.then(() => {})` a one-token way past an ERROR-level armed path
+    // with the error just as discarded — the disable comment the rule's own
+    // message forbids, spelled differently.
+    {
+      code: 'async () => { await db.from("x").update(u).eq("id", id).then(() => {}) }',
+      errors: [{ messageId: 'unchecked' }],
+    },
+    {
+      code: 'async () => { await db.from("x").insert(r).then(({ data }) => log(data)) }',
+      errors: [{ messageId: 'unchecked' }],
+    },
+    // ── DESTRUCTURED WITHOUT `error`. Neither rule saw this shape: this one
+    // only looked at completely-unbound results, and no-discarded-single-error
+    // only fires on a `.single()` chain, so a write destructured as `{ data }`
+    // with no `.single()` fell between them. 40 production sites, 33 of them
+    // with no `.single()`/`.maybeSingle()` anywhere in the chain.
+    {
+      code: 'async () => { const { data } = await db.from("campaign_recipients").update({ status: "sending" }).in("id", ids).eq("status", "queued").select("id") }',
+      errors: [{ messageId: 'destructuredWithoutError' }],
+    },
+    {
+      code: 'async () => { const { count } = await db.from("x").delete().eq("id", id) }',
+      errors: [{ messageId: 'destructuredWithoutError' }],
+    },
+    // The postmark queue-marking write CLAUDE.md's POSTMARK-RACE invariant is
+    // about, in the shape it ships in.
+    {
+      code: 'async () => { const { data: marked } = await db.from("postmark_webhook_queue").update({ status: "processed" }).eq("id", row.id).select("id") }',
+      errors: [{ messageId: 'destructuredWithoutError' }],
+    },
+  ],
+})
+
+// HUBDOOR.3 — the vacuous-redirect-assertion rule. The defect it pins is a
+// test that stays green after the behaviour changed: `toThrow(string)` is a
+// substring match, and every redirect target here is a '/'-prefixed path, so
+// `toThrow('NEXT_REDIRECT:/')` accepts EVERY redirect and the longer targets
+// accept each other's children.
+ruleTester.run(
+  'no-substring-redirect-assertion',
+  plugin.rules['no-substring-redirect-assertion'],
+  {
+    valid: [
+      // anchored regex — the shape the rule is steering toward
+      'expect(p()).rejects.toThrow(/^NEXT_REDIRECT:\\/$/)',
+      'expect(p()).rejects.toThrow(/^NEXT_REDIRECT:\\/admin\\/fleet$/)',
+      // a plain message assertion is a normal, useful substring match — the
+      // rule is deliberately narrow to the prefix-shaped path namespace
+      'expect(f()).toThrow("Not found")',
+      'expect(f()).toThrow("hub-index-chains: unknown hub")',
+      // a variable, not a literal: nothing to read, nothing to claim
+      'expect(p()).rejects.toThrow(expected)',
+      // an interpolated template is out of scope for the same reason
+      'expect(p()).rejects.toThrow(`NEXT_REDIRECT:${target}`)',
+      // not the matcher
+      'log("NEXT_REDIRECT:/")',
+    ],
+    invalid: [
+      // the fully vacuous one: passes against any redirect at all
+      {
+        code: "expect(p()).rejects.toThrow('NEXT_REDIRECT:/')",
+        errors: [{ messageId: 'substring' }],
+      },
+      // the real Operations case — '/'-only assertion passing on /admin/fleet
+      {
+        code: 'await expect(OperationsIndexPage()).rejects.toThrow("NEXT_REDIRECT:/")',
+        errors: [{ messageId: 'substring' }],
+      },
+      // a longer target is still a prefix of its own children
+      // ('/schedule' passes on '/schedule/expenses')
+      {
+        code: "expect(p()).rejects.toThrow('NEXT_REDIRECT:/schedule')",
+        errors: [{ messageId: 'substring' }],
+      },
+      // constant template literal — same substring semantics
+      {
+        code: 'expect(p()).rejects.toThrow(`NEXT_REDIRECT:/settings`)',
+        errors: [{ messageId: 'substring' }],
+      },
+      // toThrowError is the same matcher under another name
+      {
+        code: "expect(p()).rejects.toThrowError('NEXT_REDIRECT:/login')",
+        errors: [{ messageId: 'substring' }],
+      },
+    ],
+  }
+)

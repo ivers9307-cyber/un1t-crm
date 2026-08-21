@@ -452,7 +452,13 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   // location_id points at a hidden internal anchor ("<host> (host events)",
   // null address). Prefer the venue fields when set so the public surfaces
   // show where the event actually is. UN1T events have no venue_name, so
-  // these fall through to the anchor location's own name/address unchanged.
+  // these fall through to the location's own name/address unchanged.
+  //
+  // EVENT-COPY.1 — the `|| location?.name` fallback is SAFE only because
+  // /api/public/events/[slug] already resolved `venue_name` and blanked the
+  // name+address of an ops-only anchor row before serving it. This is a client
+  // component: it cannot tell an anchor from a gym, so it must not try. If you
+  // ever feed this widget from another endpoint, sanitise there the same way.
   const venueName = race.venue_name || location?.name || null
   const venueAddress = race.venue_address || location?.address || null
   const closedReasons = {

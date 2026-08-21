@@ -191,7 +191,38 @@ export async function POST(request) {
   if (body.annual_leave_entitlement != null) updates.annual_leave_entitlement = body.annual_leave_entitlement
   if (body.overtime_rate !== undefined) updates.overtime_rate = body.overtime_rate
 
-  await db.from('profiles').update(updates).eq('id', newUserId)
+  // BAREWRITE.1 — this was a bare await. The auth-signup trigger has already
+  // minted the profile with the DEFAULT role, so a silently-failed update does
+  // not leave the staff member half-created: it leaves them created with the
+  // WRONG role, permissions and comp, and the route still answered
+  // `{ success: true }`. That is a quiet privilege mis-assignment, and it was
+  // the only unchecked leg here — the profile_locations insert below already
+  // surfaced its error, so a TOTAL failure was visible while a partial one was
+  // not.
+  //
+  // The row must exist (we just created the auth user and its trigger minted
+  // the profile), so zero rows matched is itself the bug — and PostgREST
+  // reports NO error for an UPDATE that matches nothing. `.select('id')` is how
+  // that count is obtained: it returns the rows the UPDATE actually touched.
+  //
+  // `{ count: 'exact' }` on a bodyless PATCH would also work — postgrest-js
+  // reads `count` off Content-Range, and PostgREST does emit it for a mutation
+  // (prod evidence: prune-hr-detections' heartbeat last_outcome carries
+  // non-zero `detections_deleted`, which comes only from a `.delete({ count:
+  // 'exact' })`). `.select()` is used anyway because it is verifiable by
+  // construction rather than by a response header, and one returned id is
+  // cheaper than the reasoning.
+  const { error: profileError, data: profileRows } = await db
+    .from('profiles')
+    .update(updates)
+    .eq('id', newUserId)
+    .select('id')
+  if (profileError || !profileRows?.length) {
+    return NextResponse.json({
+      success: false,
+      error: `Staff login was created but the role/permissions could not be saved — the account would have defaulted to the wrong access level, so nothing else was applied. Delete the user and retry: ${profileError?.message || 'profile row not found'}`,
+    }, { status: 500 })
+  }
 
   // SECURITY.1 — second leg of the dual-write.
   const compFields = {}
@@ -208,7 +239,18 @@ export async function POST(request) {
   // Insert assignments. The trigger that auto-created the profile may
   // also have inserted a default profile_locations row — clear first
   // so we have full control over what lands.
-  await db.from('profile_locations').delete().eq('profile_id', newUserId)
+  // BAREWRITE.1 — if this clear fails silently, the trigger's DEFAULT
+  // profile_locations row survives and the insert below ADDS to it: the staff
+  // member ends up with an access grant nobody asked for, on top of the ones
+  // that were requested. No row-count check — the trigger row is not
+  // guaranteed to exist, so zero rows deleted is a legitimate outcome.
+  const { error: clearError } = await db.from('profile_locations').delete().eq('profile_id', newUserId)
+  if (clearError) {
+    return NextResponse.json({
+      success: false,
+      error: `Staff login was created but the default location access could not be cleared, so the requested assignments were not applied (they would have been added on top of it). Delete the user and retry: ${clearError.message}`,
+    }, { status: 500 })
+  }
 
   if (assignments.length > 0) {
     // PERM-AUDIT.3 — store only the sparse diff vs each assignment's

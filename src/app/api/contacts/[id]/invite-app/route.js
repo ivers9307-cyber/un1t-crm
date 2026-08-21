@@ -3,7 +3,7 @@
 // Master/admin-only: send a magic-link invite for a contact to join
 // the customer-facing app (champ-app at app.champfitness.ie). The
 // invite goes to the contact's email; clicking it lands them at
-// `${CHAMP_APP_URL}/auth/callback` which links auth.users to
+// `${getMemberAppUrl()}/auth/callback` which links auth.users to
 // contacts.user_id (see champ-app's callback route handler).
 //
 // Idempotency:
@@ -26,13 +26,14 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { logInfo, logError } from '@/lib/log'
+// URLSEAM.1 — the member app is a DIFFERENT deployment; its base is
+// NEXT_PUBLIC_CHAMP_APP_URL, never this repo's NEXT_PUBLIC_APP_URL. One
+// accessor so the three copies of the literal stop drifting apart.
+import { getMemberAppUrl } from '@/lib/app-url'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-// REPSET-P6.S2 — env stays primary; the code default is the canonical
-// repset member host (the legacy host keeps serving during the cutover).
-const CHAMP_APP_URL = process.env.NEXT_PUBLIC_CHAMP_APP_URL || 'https://api.repset.ie'
 const ALLOWED_INVITE_ROLES = ['owner', 'manager']
 
 export async function POST(_request, props) {
@@ -75,7 +76,7 @@ export async function POST(_request, props) {
     }
   }
 
-  const redirectTo = `${CHAMP_APP_URL}/auth/callback`
+  const redirectTo = `${getMemberAppUrl()}/auth/callback`
 
   const { data: inviteData, error: inviteErr } = await db.auth.admin.inviteUserByEmail(
     contact.email,

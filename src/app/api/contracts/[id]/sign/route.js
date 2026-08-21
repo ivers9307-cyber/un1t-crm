@@ -21,6 +21,7 @@ import { canTransition } from '@/lib/contracts'
 import { sendContractSignedEmails } from '@/lib/contracts-email'
 import { renderContractPdf } from '@/lib/contract-pdf'
 import { getLocationBranding } from '@/lib/location-branding'
+import { contractCountersignatureLabel } from '@/lib/contracting-entity'
 import { logAuditEvent } from '@/lib/audit'
 import { validateBody } from '@/lib/validate'
 
@@ -154,6 +155,15 @@ export async function POST(request, props) {
       signedIp: updated.signed_ip,
       templateName: detail?.template?.name,
       companyName: branding?.companyName,
+      // LEGALENT.1 — the countersignature label is a legal-entity
+      // claim, not the brand wordmark, and this buffer is both stored
+      // in the private `contracts` bucket and attached to the
+      // confirmation emails below, so it is the archived copy. Read
+      // the contract's OWN frozen entity — the same string the two web
+      // pages and the mobile screen render — so the document and its
+      // PDF can never name two different counterparties. `updated`
+      // comes from the UPDATE's `.select()`, so variables_data is on it.
+      contractingEntity: contractCountersignatureLabel(updated),
     })
     const pdfPath = `${updated.id}/signed.pdf`
     const { error: upErr } = await db.storage
