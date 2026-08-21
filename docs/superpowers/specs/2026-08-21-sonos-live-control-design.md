@@ -19,6 +19,8 @@ The Sonos app already does all of this instantly. Building it into the CRM earns
 
 In: volume (absolute and relative), play, pause, skip forward/back, switch to a different saved favourite, and a live now-playing readout. Web **and** the CRM mobile app.
 
+Also in, because it is the same machinery and it is currently broken: **rebuilding "Run now" to act immediately instead of clearing state and waiting for a cron tick.** See "Fixing Run now" below — as shipped it can strand a window open with nothing to close it, which was observed live.
+
 ## Architecture
 
 One action-dispatched route:
@@ -145,6 +147,27 @@ Every action returns the same envelope as the rest of the integration: `{ succes
 - **Client:** each new call against mocked `global.fetch`, matching the existing `client.test.js` pattern — URL, method, body, and the never-throw contract.
 - **Route:** authorisation (401/403), location scoping (a `schedule_id` from another location must 404, not act), and the `fixed: true` volume refusal.
 - **Explicitly asserted:** that a live action writes **nothing** to `sonos_schedules`. This is the property that keeps live control and the schedule from fighting, and it should fail loudly if someone later "helpfully" stamps `last_applied`.
+
+## Fixing "Run now" — it strands the close
+
+**Observed live on 2026-08-21, and this is the reason the feature is worth building rather than merely convenient.**
+
+`POST /api/sonos/schedules/{id}/run-now` sets `last_applied = null` so the next cron tick treats the active window as unapplied and re-fires it. Two problems follow from clear-and-wait:
+
+1. **It is not immediate.** Up to 60 seconds before anything happens — the original complaint that prompted this whole design.
+2. **It destroys the close's own precondition.** `planAction` will only close a window it has a record of opening (`last.action === 'open'`), deliberately, so that recovery after downtime cannot silence music a human started by hand. `last_applied` *is* that record. Clear it, and if the window ends before a re-open lands, the close never fires.
+
+The observed sequence: window opened 20:55:31; run-now pressed 20:56:08 clearing `last_applied`; the window's `off` was then edited from 22:31 to 20:31, a time already past. Every subsequent tick found no active window (so no open) and no open on record (so no close). The row went unwritten for 72 minutes and **the music played on with nothing scheduled to stop it** until the next morning's window.
+
+Editing a window to an already-past time is the sharp version, but the same gap exists whenever run-now is followed by the window ending before the next tick.
+
+**Fix: run-now applies the window immediately, rather than clearing and waiting.**
+
+It resolves the group, fires volume-then-favourite through the same path the reconcile uses, and **stamps `last_applied` as an open** — exactly as a cron-driven open would. Same code, same stamp, no 60-second wait, and the close's precondition is written rather than destroyed.
+
+Outside any window it does nothing, as today — but it must now *say* so ("no window is active right now") rather than appearing to work. That silent no-op is the other half of what made this confusing.
+
+This makes the existing `last_applied = null` write disappear entirely. Nothing else clears that field.
 
 ## Suggested build order
 
