@@ -26,6 +26,7 @@ import { Suspense, useState, useEffect, useCallback } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Loader2, AlertCircle, Music2, ExternalLink, Play, Plus, X, Trash2 } from 'lucide-react'
 import { dublinDateKey, dublinDayStartMs, dublinAddDays, dublinDayStr } from '@/lib/dublin-time'
+import SonosLiveControl from './SonosLiveControl'
 // Pure, no I/O — the exact function planAction (src/lib/sonos/groups.js) calls
 // via resolveServeWindows to decide whether a window is open right now. Reused
 // here (not re-implemented) so the health indicator below can never compute a
@@ -710,6 +711,8 @@ function ScheduleCard({ schedule, players, favorites, onReload, editable }) {
           </button>
         </div>
       </div>
+
+      <SonosLiveControl scheduleId={schedule.id} favorites={favorites} editable={editable} />
 
       <ScheduleOverride scheduleId={schedule.id} override={schedule.override} onReload={onReload} editable={editable} />
 
