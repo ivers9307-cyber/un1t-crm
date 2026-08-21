@@ -21,6 +21,19 @@
 //     the code verifier in a cookie scoped to the OLD domain; hopping hosts
 //     mid-exchange strands the verifier and the link dies (the estate's
 //     known reset-PKCE failure class, see docs/LESSONS.md).
+//   - NEVER /.well-known/ (AUDIT-13.D) — domain-verification files must be
+//     served BY the domain being verified. public/.well-known/apple-
+//     developer-merchantid-domain-association is Apple Pay's proof for the
+//     embedded Stripe flow, and Apple re-fetches it (registration, renewal,
+//     re-verification), anonymously, on whatever domain Stripe holds. A 308
+//     across hosts is not a valid answer to that fetch, so flipping the flag
+//     would fail Apple Pay verification for the legacy domain and the button
+//     would stop appearing in Safari. The proxy's publicPaths and brands.js
+//     FRAMEWORK_ASSET_PATHS both already carve this path out on every other
+//     host tier; this module was the one that did not. (The eventual cleanup
+//     is deregistering crm.un1tdublin.com in Stripe — until someone has done
+//     that and confirmed it, the exclusion is what keeps the flag safe to
+//     flip.)
 //
 // decideLegacyHostRedirect() is pure so the whole decision table is unit
 // tested (legacy-host-redirect.test.js); src/proxy.js supplies request
@@ -31,8 +44,10 @@ export const LEGACY_CRM_HOST = 'crm.un1tdublin.com'
 export const CANONICAL_CRM_ORIGIN = 'https://crm.repset.ie'
 
 // Paths excluded by SEGMENT (exact match or a deeper segment beneath them),
-// not raw prefix — '/reset-password-info' must not be swallowed.
-const EXCLUDED_PATHS = ['/auth/callback', '/reset-password']
+// not raw prefix — '/reset-password-info' must not be swallowed. The same
+// shape covers '/.well-known' → '/.well-known/<file>' without swallowing a
+// hypothetical '/.well-known-archive'.
+const EXCLUDED_PATHS = ['/auth/callback', '/reset-password', '/.well-known']
 
 function isExcludedPath(pathname) {
   if (pathname.startsWith('/api/')) return true

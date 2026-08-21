@@ -93,9 +93,29 @@ describe('decideLegacyHostRedirect', () => {
     expect(decide({ pathname: '/reset-password', search: '?token_hash=abc' })).toBeNull()
   })
 
+  // AUDIT-13.D — a domain-verification file must be served BY the domain
+  // being verified. public/.well-known/apple-developer-merchantid-domain-
+  // association is Apple Pay's proof for the embedded Stripe flow; Apple
+  // re-fetches it anonymously on the domain Stripe holds, and a 308 across
+  // hosts is not a valid answer. The proxy's publicPaths and brands.js
+  // FRAMEWORK_ASSET_PATHS already carve it out on every other host tier —
+  // this module was the one that did not, so flipping the flag would have
+  // broken Apple Pay verification on the legacy domain.
+  it('never redirects /.well-known/ (Apple Pay domain verification)', () => {
+    expect(
+      decide({ pathname: '/.well-known/apple-developer-merchantid-domain-association' }),
+      'a 308 fails Apple Pay domain verification for the legacy host',
+    ).toBeNull()
+    expect(decide({ pathname: '/.well-known' })).toBeNull()
+    // Any future well-known file (ACME, apple-app-site-association, …)
+    // rides the same exclusion.
+    expect(decide({ pathname: '/.well-known/acme-challenge/xyz' })).toBeNull()
+  })
+
   it('excludes by path segment, not raw prefix', () => {
     // Hypothetical sibling pages must not be swallowed by the exclusions…
     expect(decide({ pathname: '/reset-password-info' })).not.toBeNull()
+    expect(decide({ pathname: '/.well-known-archive' })).not.toBeNull()
     // …while nested segments under the excluded paths stay excluded.
     expect(decide({ pathname: '/auth/callback/next' })).toBeNull()
     expect(decide({ pathname: '/reset-password/confirm' })).toBeNull()

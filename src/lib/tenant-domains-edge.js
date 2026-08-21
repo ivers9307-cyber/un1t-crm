@@ -65,8 +65,22 @@ export const DB_BRAND_DEFAULTS = Object.freeze({
   // page and the fallback hands the reader the studio chooser instead.
   // Nothing tenant-specific is behind it (static copy naming an email
   // address), so it exposes nothing new — same argument as /privacy.
+  // '/event-pay/' (AUDIT-13.B): the PAID LEG of the '/event/' flow already
+  // allowed above — the exact gap PUBPATH.1 closed on the un1t-marketing
+  // brand, still open here. RaceSignupWidget sends every paid signup to a
+  // HOST-RELATIVE /event-pay/<id>, so on a tenant domain the registration
+  // was taken and the payer was rewritten to /welcome, unpaid. Allowlist
+  // the FLOW, not the entry page. LATENT (zero rows), which is precisely
+  // why it needs a test rather than an operator noticing.
+  //
+  // Deliberately NOT here: '/race/' + '/race-pay/', next.config.js's
+  // legacy aliases for the pair above. Those exist to keep externally
+  // shared UN1T links alive, and they are on the CRM + marketing hosts
+  // for that reason; a tenant domain is newer than the E3 rename, so no
+  // legacy /race link for one can exist. Least privilege — add them to a
+  // tenant's own brand override if that ever stops being true.
   // LATENT, not live: tenant_domains has zero rows today.
-  allowedPaths: Object.freeze(['/welcome', '/book/', '/event/', '/privacy', '/legal/', '/account-deletion', '/api/public/', '/api/webhooks/']),
+  allowedPaths: Object.freeze(['/welcome', '/book/', '/event/', '/event-pay/', '/privacy', '/legal/', '/account-deletion', '/api/public/', '/api/webhooks/']),
   rootHandler: 'rewrite',
   rootRewriteTo: '/welcome',
   fallbackHandler: 'rewrite',
