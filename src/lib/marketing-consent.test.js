@@ -1,5 +1,14 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// RESUB-SUPP.1 — the opt-in path now lifts Postmark's own suppression. Mocked
+// so the assertions are about WHEN we call it; the ManualSuppression-only
+// guard itself is pinned in postmark-suppressions.test.js.
+vi.mock('@/lib/postmark-suppressions', () => ({
+  unsuppressAtPostmark: vi.fn(async () => ({ ok: 1, failed: [], skipped: [] })),
+}))
+
 import { applyFormMarketingConsent, applyMarketingPreferencesBulk } from './marketing-consent'
+const { unsuppressAtPostmark } = await import('@/lib/postmark-suppressions')
 
 // LOCCOMMS.2 — applyFormMarketingConsent must record consent at the location
 // the FORM belongs to, which is frequently NOT the location the contact is
@@ -355,5 +364,65 @@ describe('consent_log.location_id (CONSENTLOC.1)', () => {
     for (const row of [...withLoc.calls.prefUpserts, ...withoutLoc.calls.prefUpserts]) {
       expect(row.updated_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
     }
+  })
+})
+
+// ── RESUB-SUPP.1 ───────────────────────────────────────────────────
+//
+// PMSUPP.1 made our opt-outs push a Postmark suppression and taught the
+// preference centre to lift it on a resubscribe. The public FORM path never
+// got the other half, so someone could opt out via a form, be suppressed, opt
+// back in via a form, and be re-granted consent in our database while Postmark
+// went on refusing every send — both systems agreeing they are subscribed
+// while no mail arrives. Four live contacts were in exactly that state.
+
+describe('RESUB-SUPP.1 — an opt-in lifts the Postmark suppression', () => {
+  beforeEach(() => { unsuppressAtPostmark.mockClear() })
+
+  const optedOut = { id: 'c1', email: 'back@example.com', glofox_membership_status: 'lead', email_status: 'active' }
+
+  it('lifts when the email channel actually flips to opted-in', async () => {
+    const { db } = makeDb({ contact: optedOut, prefs: { email_marketing: false, sms_marketing: false, whatsapp_marketing: false } })
+    const out = await applyFormMarketingConsent(db, { contactId: 'c1', consent: true, source: 'event_form' })
+    expect(out.ok).toBe(true)
+    expect(unsuppressAtPostmark).toHaveBeenCalledTimes(1)
+    expect(unsuppressAtPostmark).toHaveBeenCalledWith('back@example.com')
+  })
+
+  it('does NOT lift on an opt-OUT — that direction suppresses, it never releases', async () => {
+    const { db } = makeDb({ contact: optedOut, prefs: { email_marketing: true, sms_marketing: true, whatsapp_marketing: true } })
+    await applyFormMarketingConsent(db, { contactId: 'c1', consent: false, source: 'event_form' })
+    expect(unsuppressAtPostmark).not.toHaveBeenCalled()
+  })
+
+  it('does NOT lift when nothing flipped — the hot path stays free of a Postmark round-trip', async () => {
+    // Every /start booking arrives with consent already true. A Postmark call
+    // per submission would be a foreign API hop on the booking path for a
+    // contact who has no suppression this call created.
+    const { db } = makeDb({ contact: optedOut, prefs: { email_marketing: true, sms_marketing: true, whatsapp_marketing: true } })
+    await applyFormMarketingConsent(db, { contactId: 'c1', consent: true, source: 'start_class' })
+    expect(unsuppressAtPostmark).not.toHaveBeenCalled()
+  })
+
+  it('records the consent even when the lift fails — losing the form submission would be worse', async () => {
+    unsuppressAtPostmark.mockResolvedValueOnce({ ok: 0, failed: [{ email: 'back@example.com', message: 'Postmark down' }], skipped: [] })
+    const { db, calls } = makeDb({ contact: optedOut, prefs: { email_marketing: false, sms_marketing: false, whatsapp_marketing: false } })
+    const out = await applyFormMarketingConsent(db, { contactId: 'c1', consent: true, source: 'event_form' })
+    expect(out.ok).toBe(true)
+    expect(calls.consentLog.some((r) => r.channel === 'email_marketing' && r.action === 'opt_in')).toBe(true)
+  })
+
+  it('survives the lift throwing outright', async () => {
+    unsuppressAtPostmark.mockRejectedValueOnce(new Error('boom'))
+    const { db } = makeDb({ contact: optedOut, prefs: { email_marketing: false, sms_marketing: false, whatsapp_marketing: false } })
+    const out = await applyFormMarketingConsent(db, { contactId: 'c1', consent: true, source: 'event_form' })
+    expect(out.ok).toBe(true)
+  })
+
+  it('skips a contact with no email address', async () => {
+    const noEmail = { ...optedOut, email: null }
+    const { db } = makeDb({ contact: noEmail, prefs: { email_marketing: false, sms_marketing: false, whatsapp_marketing: false } })
+    await applyFormMarketingConsent(db, { contactId: 'c1', consent: true, source: 'event_form' })
+    expect(unsuppressAtPostmark).not.toHaveBeenCalled()
   })
 })
