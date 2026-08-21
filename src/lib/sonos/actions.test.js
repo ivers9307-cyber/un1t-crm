@@ -50,6 +50,27 @@ describe('planLiveAction', () => {
     expect(planLiveAction('set_volume', -1)).toBe(null)
   })
 
+  it('rejects non-numeric-typed values the route validation would not catch', () => {
+    // The route's Zod schema is z.union([z.number(), z.string()]).optional(),
+    // which blocks null/true/[] before this ever runs. Guard them anyway —
+    // this table has to be safe to call directly, not just safe behind Zod.
+    expect(planLiveAction('set_volume', null)).toBe(null)
+    expect(planLiveAction('set_volume', true)).toBe(null)
+    expect(planLiveAction('set_volume', [])).toBe(null)
+    // This is the one Zod does NOT catch: '  ' is a valid string, and
+    // Number('  ') === 0, so a naive Number() coercion turns whitespace
+    // into a silently-accepted volume of 0 (the room goes silent, and the
+    // route reports success). That is exactly the failure this guard
+    // exists to prevent at this layer, not just at the HTTP boundary.
+    expect(planLiveAction('set_volume', '  ')).toBe(null)
+    expect(planLiveAction('set_volume', '')).toBe(null)
+  })
+
+  it('still accepts a numeric string, including one with a trailing .0', () => {
+    expect(planLiveAction('set_volume', '35')).toMatchObject({ call: 'setVolume', args: [35] })
+    expect(planLiveAction('set_volume', '5.0')).toMatchObject({ call: 'setVolume', args: [5] })
+  })
+
   it('maps the transport actions', () => {
     expect(planLiveAction('play')).toMatchObject({ call: 'play', args: [] })
     expect(planLiveAction('pause')).toMatchObject({ call: 'pause', args: [] })

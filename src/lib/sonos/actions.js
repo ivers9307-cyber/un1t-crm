@@ -15,7 +15,19 @@ export const ACTIONS = [
   'play', 'pause', 'skip_next', 'skip_previous', 'load_favorite',
 ]
 
-const isInt = (v) => Number.isFinite(Number(v)) && Number.isInteger(Number(v))
+// Validate the TYPE before coercing. A bare `Number(v)` accepts null, true,
+// [], and whitespace strings (all coerce to 0) — the route's Zod schema
+// (z.union([z.number(), z.string()]).optional()) blocks null/true/[] before
+// this runs, but a whitespace string is a valid string as far as Zod is
+// concerned, so '  ' would otherwise silently become volume 0.
+const isInt = (v) => {
+  if (typeof v === 'number') return Number.isInteger(v)
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v)
+    return Number.isFinite(n) && Number.isInteger(n)
+  }
+  return false
+}
 
 // → null (unknown action or unusable value)
 //   | { call, args, touchesVolume }
