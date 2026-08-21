@@ -292,3 +292,81 @@ describe('withFreshToken', () => {
     expect(out).toMatchObject({ ok: false, reason: 'db_error' })
   })
 })
+
+import {
+  sonosPlay, sonosSkipNext, sonosSkipPrevious,
+  sonosSetRelativeVolume, sonosGetGroupVolume, sonosGetMetadata,
+} from './client'
+
+describe('live control calls', () => {
+  beforeEach(() => { global.fetch = vi.fn() })
+  afterEach(() => { vi.restoreAllMocks() })
+
+  const okEmpty = { ok: true, status: 200, text: async () => '{}' }
+
+  it('plays a group', async () => {
+    global.fetch.mockResolvedValue(okEmpty)
+    await sonosPlay('tok', 'GRP1')
+    const [url, opts] = global.fetch.mock.calls[0]
+    expect(url).toBe('https://api.ws.sonos.com/control/api/v1/groups/GRP1/playback/play')
+    expect(opts.method).toBe('POST')
+  })
+
+  it('skips forward and back on the documented paths', async () => {
+    global.fetch.mockResolvedValue(okEmpty)
+    await sonosSkipNext('tok', 'GRP1')
+    await sonosSkipPrevious('tok', 'GRP1')
+    expect(global.fetch.mock.calls[0][0])
+      .toBe('https://api.ws.sonos.com/control/api/v1/groups/GRP1/playback/skipToNextTrack')
+    expect(global.fetch.mock.calls[1][0])
+      .toBe('https://api.ws.sonos.com/control/api/v1/groups/GRP1/playback/skipToPreviousTrack')
+  })
+
+  it('sends a relative volume delta, not an absolute level', async () => {
+    // Absolute volume for a +/- button makes two people pressing "+" fight
+    // each other: each sends current+5 read from its own stale view.
+    global.fetch.mockResolvedValue(okEmpty)
+    await sonosSetRelativeVolume('tok', 'GRP1', -5)
+    const [url, opts] = global.fetch.mock.calls[0]
+    expect(url).toBe('https://api.ws.sonos.com/control/api/v1/groups/GRP1/groupVolume/relative')
+    expect(JSON.parse(opts.body)).toEqual({ volumeDelta: -5 })
+  })
+
+  it('clamps a relative delta into the -100..100 Sonos accepts', async () => {
+    global.fetch.mockResolvedValue(okEmpty)
+    await sonosSetRelativeVolume('tok', 'GRP1', 900)
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body)).toEqual({ volumeDelta: 100 })
+    await sonosSetRelativeVolume('tok', 'GRP1', -900)
+    expect(JSON.parse(global.fetch.mock.calls[1][1].body)).toEqual({ volumeDelta: -100 })
+  })
+
+  it('rounds a fractional delta rather than sending a float', async () => {
+    global.fetch.mockResolvedValue(okEmpty)
+    await sonosSetRelativeVolume('tok', 'GRP1', 2.6)
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body)).toEqual({ volumeDelta: 3 })
+  })
+
+  it('reads group volume including the fixed flag', async () => {
+    global.fetch.mockResolvedValue({
+      ok: true, status: 200,
+      text: async () => JSON.stringify({ volume: 22, muted: false, fixed: true }),
+    })
+    const out = await sonosGetGroupVolume('tok', 'GRP1')
+    const [url, opts] = global.fetch.mock.calls[0]
+    expect(url).toBe('https://api.ws.sonos.com/control/api/v1/groups/GRP1/groupVolume')
+    expect(opts.method).toBe('GET')
+    expect(out.body).toEqual({ volume: 22, muted: false, fixed: true })
+  })
+
+  it('reads playback metadata', async () => {
+    global.fetch.mockResolvedValue({ ok: true, status: 200, text: async () => '{}' })
+    await sonosGetMetadata('tok', 'GRP1')
+    expect(global.fetch.mock.calls[0][0])
+      .toBe('https://api.ws.sonos.com/control/api/v1/groups/GRP1/playbackMetadata')
+  })
+
+  it('never throws when the network dies', async () => {
+    global.fetch.mockRejectedValue(new Error('ECONNRESET'))
+    await expect(sonosPlay('tok', 'GRP1')).resolves.toMatchObject({ ok: false, statusCode: 0 })
+  })
+})
