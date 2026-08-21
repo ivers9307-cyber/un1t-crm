@@ -76,6 +76,7 @@ export async function GET(request) {
     muted: volRes.ok ? (volRes.body?.muted ?? null) : null,
     fixedVolume: volRes.ok ? (volRes.body?.fixed === true) : false,
     volumeFailed: !volRes.ok,
+    metadataFailed: !metaRes.ok,
     track: track
       ? {
           name: track.name || null,

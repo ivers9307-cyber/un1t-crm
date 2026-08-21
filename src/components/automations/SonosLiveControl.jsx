@@ -104,7 +104,13 @@ export default function SonosLiveControl({ scheduleId, favorites, editable }) {
         // means some groups already moved, so retrying the whole action
         // would double-apply it there. Surface a partial failure instead
         // of an auto-retry; the operator decides what to do next.
-        if (j.failedGroups) setPartialFailure(true)
+        // applied/failedGroups only carry meaning when a schedule spans
+        // more than one group — on the common single-group setup a failed
+        // action comes back as applied: [] and failedGroups: [theOneGroup],
+        // and "changed on some speakers but not all" would be false:
+        // nothing changed. Gate on applied being non-empty; otherwise fall
+        // through to the plain error message below, which is accurate.
+        if (j.applied?.length > 0) setPartialFailure(true)
         throw new Error(j.error || 'That did not work')
       }
       await reload()
@@ -173,7 +179,14 @@ export default function SonosLiveControl({ scheduleId, favorites, editable }) {
           {state.track?.name && <> — {state.track.name}</>}
           {state.track?.artist && <span className="text-un1t-subtle"> · {state.track.artist}</span>}
         </p>
-        {state.source && <p className="text-[11px] text-un1t-subtle">{state.source}</p>}
+        {state.metadataFailed ? (
+          // A failed metadata read looks identical to "nothing playing" —
+          // both leave track/source null. Say so, low-key: the transport
+          // and volume controls still work, this is just a blank readout.
+          <p className="text-[11px] text-un1t-subtle">Track info couldn&apos;t be read</p>
+        ) : (
+          state.source && <p className="text-[11px] text-un1t-subtle">{state.source}</p>
+        )}
       </div>
 
       {/* Transport */}

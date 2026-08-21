@@ -4441,7 +4441,10 @@ const SonosControlErrorResponse = ErrorResponse.extend({
     'invalid', 'not_found', 'not_configured', 'not_connected', 'no_group',
     'fixed_volume', 'regrouped', 'no_content', 'rate_limited', 'unreachable',
     'db_error', 'failed',
-  ]),
+  ]).optional()
+    .describe('Present only on failures returned by the control dispatch (runLiveAction). The auth/validation '
+      + 'guards that run before dispatch — no active location, a malformed body, an unusable schedule_id — '
+      + 'return a 400/404 with no code at all.'),
   applied: z.array(z.string()).optional(),
   failedGroups: z.array(z.string()).optional(),
 }).openapi('SonosControlErrorResponse')
@@ -4473,13 +4476,15 @@ const SonosNowPlayingResponse = z.union([
     muted: z.boolean().nullable(),
     fixedVolume: z.boolean(),
     volumeFailed: z.boolean(),
+    metadataFailed: z.boolean(),
     track: SonosTrack.nullable(),
     source: z.string().nullable(),
   }).openapi('SonosNowPlayingLive', {
     description: 'TRAP: fixedVolume:false does NOT mean "not fixed" when volumeFailed is true — the volume '
       + 'GET failed and fixedVolume just defaults to false in that case. A client must check volumeFailed '
-      + 'before trusting fixedVolume (or volume/muted, which are null on the same failure). track is null '
-      + 'when Sonos reports no metadata; every field inside it is independently nullable per Sonos.',
+      + 'before trusting fixedVolume (or volume/muted, which are null on the same failure). Likewise track/source '
+      + 'fall back to null both when Sonos legitimately has no metadata AND when the metadata GET failed — check '
+      + 'metadataFailed before reading them as "nothing playing".',
   }),
 ]).openapi('SonosNowPlayingResponse')
 
