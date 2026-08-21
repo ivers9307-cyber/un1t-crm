@@ -115,7 +115,12 @@ export const BRANDS = [
       // since HOST-PORTAL.1 (below) for exactly this reason — the marketing
       // host only ever had half of it. Live paid events exist today.
       '/event-pay/',
-      '/race/',         // race kiosk + signup
+      // AUDIT-13.B — the legacy alias PAIR. '/race/' had been here alone
+      // since the E3 rename; '/race-pay/' is its checkout leg, the same
+      // gap PUBPATH.1 closed for '/event/' + '/event-pay/' directly
+      // above. next.config.js rewrites both to their /event* twins.
+      '/race/',         // race kiosk + signup (legacy alias for /event/)
+      '/race-pay/',     // + its checkout (legacy alias for /event-pay/)
       '/api/public/',   // backing API for all of the above
       '/api/webhooks/', // future-proof if a payment redirect lands here
     ],
