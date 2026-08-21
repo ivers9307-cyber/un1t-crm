@@ -460,6 +460,35 @@ jobs:
         # the tree mismatch this step exists to prevent. Plain `npm ci` is also
         # measured clean on this lockfile (real install, exit 0, no ERESOLVE).
         #
+        # SCOPE OF THE "SAME TREE" CLAIM — do not read it as stronger than it
+        # is. This change aligns the FLAG. It does not align the npm major, and
+        # the paragraph above is itself the proof that the major matters (npm 10
+        # prunes 0, npm 11 prunes 13). Nothing pins Node/npm on the EAS side:
+        # there is no .nvmrc or .node-version in this repo, mobile/eas.json has
+        # no `node` field in any build profile, and mobile/package.json has no
+        # eas-build-pre-install hook — so the binary is built with whatever npm
+        # the Expo builder image happens to ship, while this step is pinned to
+        # Node 22 by `actions/setup-node` above.
+        #
+        # Measured residual, so the gap is a known quantity rather than a
+        # worry (`npm ci --dry-run` on mobile/package-lock.json, both majors,
+        # 2026-08-21): npm 10.9.4 resolves 748 packages, npm 11.12.1 resolves
+        # 729, and the entire 19-package delta is cross-platform
+        # `lightningcss-*` optional NATIVE binaries (1.27.0 + 1.33.0 for
+        # android/darwin/freebsd/linux/win32). npm 11 skips the ones that do
+        # not match the host platform; npm 10 installs them all. The HOST
+        # binary is present under both majors, and a `.node` binary for a CSS
+        # transformer cannot enter a Hermes JS bundle. So the residual is real
+        # but benign on this lockfile TODAY.
+        #
+        # Deliberately not pinned here: adding a `node` field to eas.json or a
+        # mobile/.nvmrc would change the BINARY build path, which cannot be
+        # verified from CI and which nobody should touch while 2.3.0 build 24
+        # sits in Apple review. Pin it in a change that can actually run an EAS
+        # build and diff the result — and re-measure the delta above when the
+        # lockfile moves, because "benign" is a property of this lockfile, not
+        # a standing guarantee.
+        #
         # Honest caveat, so the next reader does not over-claim: the 6
         # compile-path packages are NOT reachable from this project's actual
         # bundler entry points — metro.config.js goes through expo/metro-config
