@@ -13,6 +13,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Loader2, AlertCircle, Play, Pause, SkipBack, SkipForward, Volume2, VolumeX } from 'lucide-react'
+import { isPlaying, playbackLabel } from '@/lib/sonos/playback'
 
 const POLL_MS = 10000
 const VOLUME_STEP = 5
@@ -164,9 +165,7 @@ export default function SonosLiveControl({ scheduleId, favorites, editable }) {
   const volumeUnreadable = state.volumeFailed
   const volumeFixed = !state.volumeFailed && state.fixedVolume
   const shownVolume = pendingVolume ?? state.volume ?? 0
-  const playbackLabel = state.playbackState
-    ? state.playbackState.charAt(0).toUpperCase() + state.playbackState.slice(1).toLowerCase()
-    : 'Playing'
+  const label = playbackLabel(state.playbackState)
 
   return (
     <div className="mt-3 border-t border-un1t-border/60 pt-3">
@@ -175,7 +174,7 @@ export default function SonosLiveControl({ scheduleId, favorites, editable }) {
       {/* Readout */}
       <div className="mb-2">
         <p className="text-xs text-un1t-text font-medium">
-          {playbackLabel}
+          {label}
           {state.track?.name && <> — {state.track.name}</>}
           {state.track?.artist && <span className="text-un1t-subtle"> · {state.track.artist}</span>}
         </p>
@@ -196,7 +195,7 @@ export default function SonosLiveControl({ scheduleId, favorites, editable }) {
           className="inline-flex items-center justify-center h-7 w-7 rounded border border-un1t-border text-un1t-text hover:border-un1t-muted disabled:opacity-40">
           <SkipBack size={13} />
         </button>
-        {state.playbackState === 'PLAYING' ? (
+        {isPlaying(state.playbackState) ? (
           <button type="button" onClick={() => send('pause')} disabled={disabled}
             title="Pause"
             className="inline-flex items-center justify-center h-7 w-7 rounded border border-un1t-border text-un1t-text hover:border-un1t-muted disabled:opacity-40">
