@@ -1,6 +1,9 @@
 'use client'
 
-// FUNNEL.1 — Funnel vs Off funnel tab switcher above the Kanban.
+// FUNNEL.1 — tab switcher above the Kanban.
+// RETURNPIPE.1 — a third tab, Returning: customers who trained here before and
+// came back. They follow a different flow from a new lead (Richard,
+// 2026-08-21), so they get their own board rather than a badge on this one.
 //
 // Lives outside the KanbanBoard so the page can SSR each view's
 // stages/deals separately. Uses ?view= query param so the operator
@@ -12,14 +15,15 @@
 // total in each pile, not just what's rendered.
 
 import { useRouter, useSearchParams, usePathname } from 'next/navigation'
-import { Layers, Archive } from 'lucide-react'
+import { Layers, Archive, RotateCcw } from 'lucide-react'
 
 const TABS = [
-  { id: 'active',  label: 'Funnel',     Icon: Layers },
-  { id: 'dormant', label: 'Off funnel', Icon: Archive },
+  { id: 'active',    label: 'Funnel',     Icon: Layers },
+  { id: 'returning', label: 'Returning',  Icon: RotateCcw },
+  { id: 'dormant',   label: 'Off funnel', Icon: Archive },
 ]
 
-export default function PipelineViewSwitcher({ view, activeCount, dormantCount }) {
+export default function PipelineViewSwitcher({ view, activeCount, dormantCount, returningCount = 0 }) {
   const router = useRouter()
   const pathname = usePathname()
   const params = useSearchParams()
@@ -33,7 +37,7 @@ export default function PipelineViewSwitcher({ view, activeCount, dormantCount }
     router.push(qs ? `${pathname}?${qs}` : pathname)
   }
 
-  const counts = { active: activeCount, dormant: dormantCount }
+  const counts = { active: activeCount, returning: returningCount, dormant: dormantCount }
 
   return (
     <div className="border-b border-un1t-border flex items-center gap-1 mb-4">

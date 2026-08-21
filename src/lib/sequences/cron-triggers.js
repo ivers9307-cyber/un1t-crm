@@ -38,6 +38,8 @@ import { dublinDayStr } from '@/lib/dublin-time'
 import { selectAll, selectAllByKeys } from '@/lib/select-all'
 import { contactMatchesSequenceAudience } from './audience.js'
 import { enrolContacts } from './enrol.js'
+import { buildEligibleAudienceQuery } from '@/lib/audience-eligibility'
+import { clampToSendWindow, hasSendWindow } from './scheduler.js'
 import { ANNIVERSARY_FROM_FIELDS, DEFAULT_ANNIVERSARY_FROM_FIELD } from './anniversary-fields.js'
 
 // GAPS-P3.2 — re-exported so callers that already import the runner get
@@ -449,4 +451,129 @@ export async function runInactivityTriggers() {
     }
   }
   return stats
+}
+
+// ─── AUDIENCEMATCH.1: audience_match — "everyone matching, now and ongoing" ───
+
+// Enrolment WRITES per sweep tick, per sequence. Deliberately HALF
+// PROCESS_BATCH_SIZE (scheduler.js), which is the runner's global FIFO budget
+// across every sequence and every location. The irreversible artifact here is
+// the enrolment row, not the send — a row cannot be un-enrolled and re-run —
+// so the write rate IS the abort window. Capping at half leaves 50 slots per
+// tick for real-time triggers, so a 2,000-person backfill can never starve the
+// new-lead nudge behind it. 50/tick = 600/hour.
+export const AUDIENCE_SWEEP_ENROL_CAP = 50
+
+/**
+ * Sweep every active `audience_match` sequence and enrol everyone who matches
+ * its audience but has no enrolment row yet.
+ *
+ * Gated on THREE things, all of which must hold:
+ *   1. `audience_seeded_at` is set — a human confirmed the headcount (mig 556).
+ *   2. `now` is inside the sequence's sending window.
+ *   3. the audience filter is non-empty.
+ *
+ * On (2): the runner only clamps the FOLLOWING step's fire time
+ * (scheduler.js), and enrolContacts hardcodes `next_step_at = now()`. So a
+ * sequence's FIRST step fires whenever enrolment happened — a sweep at 03:00
+ * would mail everyone at 03:05, outside the sequence's own window and inside
+ * the location's quiet hours. Rather than stagger per-row fire times, the
+ * sweep simply does not run outside the window. One rule, no arithmetic, and
+ * it is impossible to mail anyone at 3am.
+ *
+ * On (3): an empty filter matches EVERY contact at the location. Refusing it
+ * is not defensive tidiness — `{logic:'and',filters:[]}` is the builder's
+ * DEFAULT state (audience-filter.js), so it is what a half-configured sequence
+ * looks like, not what "everyone" looks like when someone means it.
+ */
+export async function runAudienceMatchTriggers({ now = new Date() } = {}) {
+  const db = createServerClient()
+  const stats = { fired: 0, skipped: 0, awaiting_seed: 0, out_of_window: 0, errored: 0 }
+
+  const { data: sequences, error } = await db
+    .from('email_sequences')
+    .select('id, location_id, audience_filter, audience_seeded_at, send_window')
+    .eq('trigger_type', 'audience_match')
+    .eq('status', 'active')
+  if (error) throw new Error(`audience_match: sequence lookup failed: ${error.message}`)
+  if (!sequences?.length) return stats
+
+  for (const seq of sequences) {
+    // CRONISO.1 — per-sequence isolation. See the module header.
+    try {
+      // 1. Not confirmed → enrol nobody, forever. This is the guard.
+      if (!seq.audience_seeded_at) { stats.awaiting_seed++; continue }
+
+      // 2. Outside the sending window → the first email would land out of hours.
+      if (!isInsideSendWindow(now, seq.send_window)) { stats.out_of_window++; continue }
+
+      // 3. An empty filter is a half-built sequence, not "everyone".
+      const filters = seq.audience_filter?.filters
+      if (!Array.isArray(filters) || filters.length === 0) {
+        stats.errored++
+        logError('sequences', `audience_match sequence ${seq.id}: audience_filter is empty — refusing to enrol every contact at the location`, { sequenceId: seq.id })
+        continue
+      }
+
+      // Candidates come from the SAME builder the preview and the send path
+      // use (audience-eligibility.js), so the number an operator confirmed and
+      // the set this enrols cannot drift apart.
+      const { query } = await buildEligibleAudienceQuery({
+        db, channel: null, filter: seq.audience_filter, locationId: seq.location_id, columns: 'id',
+      })
+      const matching = await selectAll((from, to) => query.order('id').range(from, to))
+      if (matching.length === 0) { continue }
+
+      // "Already handled" is the enrolment table itself — one permanent row per
+      // (sequence, contact), surviving every status transition. No snapshot needed.
+      const enrolled = await selectAll((from, to) => db
+        .from('sequence_enrollments')
+        .select('contact_id')
+        .eq('sequence_id', seq.id)
+        .order('contact_id')
+        .range(from, to))
+      const seen = new Set(enrolled.map(r => r.contact_id))
+
+      const fresh = matching.map(c => c.id).filter(id => !seen.has(id))
+      if (fresh.length === 0) { continue }
+
+      // Cap the WRITES, not the sends. Whatever is left is picked up next tick;
+      // "matches and has no enrolment row" resumes correctly with no cursor.
+      const batch = fresh.slice(0, AUDIENCE_SWEEP_ENROL_CAP)
+      const { enrolled: n } = await enrolContacts({
+        sequenceId: seq.id,
+        contactIds: batch,
+        // NOT a MANUAL_LIKE source type — this is automatic, so
+        // contacts.automations_exempt still excludes host master-profile leads.
+        sourceType: 'audience_match',
+        sourceRef: null,
+      })
+      stats.fired += n
+      stats.skipped += batch.length - n
+      if (fresh.length > batch.length) {
+        logWarn('sequences', `audience_match sequence ${seq.id}: enrolled ${n} of ${fresh.length} matching, remainder next tick`, {
+          sequenceId: seq.id, enrolled: n, remaining: fresh.length - batch.length,
+        })
+      }
+    } catch (e) {
+      stats.errored++
+      logError('sequences', `audience_match sequence ${seq.id} failed: ${e.message || e}`, { sequenceId: seq.id })
+    }
+  }
+  return stats
+}
+
+/**
+ * True when `now` is inside the sequence's own send window. A sequence with no
+ * window configured is unconstrained here — the runner's quiet-hours fallback
+ * still applies to every step AFTER the first, and refusing to sweep at all
+ * without a window would make the feature unusable for anyone who has not set
+ * one.
+ *
+ * Reuses the runner's own clamp so the two can never disagree about what
+ * "inside the window" means: if clamping `now` returns `now`, we are inside it.
+ */
+export function isInsideSendWindow(now, sendWindow) {
+  if (!hasSendWindow(sendWindow)) return true
+  return clampToSendWindow(now, sendWindow).getTime() === now.getTime()
 }

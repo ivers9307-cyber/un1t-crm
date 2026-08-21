@@ -36,20 +36,46 @@ name: EAS Update
 # back then ANY OTA boot-crashed, so more triggers = more risk. That root
 # cause is fixed.)
 #
-# STAGED ROLLOUT (P5 exit gate, Repset merge — decided 2026-08-17): the
-# publish below carries `--rollout-percentage 10`, so a push to main reaches
-# ~10% of same-runtime devices, not the whole install base. This was the
-# Phase-5 precondition for the public App Store release: an unstaged instant
-# publish was acceptable for 16 staff, not for ~1,100 members on the same
-# `main` branch / `production` channel. Ramping to 100% (and halting a bad
-# rollout) is a MANUAL step — the full runbook is mobile/docs/ota-rollout.md.
-# Rule: every rollout is ramped to 100 or rolled back within 48h; no zombie
-# partials. The pinned eas-cli 18.9.1 supports --rollout-percentage natively
+# ROLLOUT PERCENTAGE — default 100 (Richard's call, 2026-08-21). This
+# REVERSES the P5 staged-rollout gate. The history stays because the
+# trade-off is live, not settled.
+#
+# What P5 decided (2026-08-17): publish at `--rollout-percentage 10`, so a
+# push to main reached ~10% of same-runtime devices rather than the whole
+# install base. An unstaged instant publish was fine for 16 staff phones;
+# it was not judged fine for ~1,100 members on the same `main` branch /
+# `production` channel.
+#
+# Why it was reversed: a staged rollout BLOCKS THE NEXT PUBLISH. EAS
+# refuses a new update on a runtime version while a rollout is in progress
+# for it — "the latest rollout percentage must be set to 100% or the
+# rollout update deleted" — and nothing ramped automatically. The 10%
+# publish on 2026-08-19 (TOKENDEAD.1, group 7a752860) was never ramped, so
+# the next FIVE publishes all failed: BAREWRITE, LEGALENT, FUNNEL.5 and
+# RETURNPIPE.1. They failed SILENTLY — this job is not a required check
+# and `main` has no branch protection — so every merge reported success
+# while phones received nothing for two days. A staged default that nobody
+# ramps is not a safety mechanism; it is an outage that reports green.
+#
+# What the reversal costs, stated plainly: there is no longer a cohort
+# between a bad JS bundle and the entire fleet. Runtime 2.3.0 went public
+# on 2026-08-21 (build 24, Apple phased release), so a bad publish now
+# reaches every 2.3.0 device on next launch. Recovery is unchanged and
+# still two levers: `eas update:republish` the last good group, or
+# `eas update:roll-back-to-embedded --channel production` as the hammer.
+# See mobile/docs/ota-rollout.md.
+#
+# To stage ONE publish anyway: run this workflow via workflow_dispatch and
+# set `rollout_percentage` below 100. Doing so re-arms the deadlock above,
+# so ramp it to 100 before the next merge or that merge's publish fails.
+#
+# The pinned eas-cli 18.9.1 supports --rollout-percentage natively
 # (verified against its own --help), so the Hermes-bytecode version pin is
 # untouched.
 #
-# RESIDUAL RISK + recovery: still no preview-channel boot-gate — a bad JS
-# bundle reaches the 10% cohort on next launch. The pipeline mitigates the
+# RESIDUAL RISK + recovery: still no preview-channel boot-gate — and, at
+# the 100% default, a bad JS bundle reaches EVERY device on the runtime
+# lane on next launch, not a cohort. The pipeline mitigates the
 # boot-crash class (pinned `npm ci` + eas-cli so OTA Hermes bytecode matches
 # the binary; an explicit runtimeVersion string so only same-lane binaries
 # get it). If a bad bundle ships: halt per mobile/docs/ota-rollout.md
@@ -82,15 +108,12 @@ on:
   #     ramp-or-rollback rule in mobile/docs/ota-rollout.md now applies to
   #     a no-op. Recovery is expensive (republish the last good group).
   #   - Allowlist miss → a MISSED publish. Recovery is one `workflow_dispatch`
-  #     below PLUS a manual ramp. Be precise about that cost, because it is
-  #     half the argument: `workflow_dispatch: {}` takes no inputs, so it
-  #     republishes from whatever is on main HEAD at that moment (not the
-  #     missed commit — it ships everything else that landed since), and it
-  #     reaches the same `Publish update` step, hard-coded to
-  #     `--rollout-percentage 10`. So the recovery publish is itself a staged
-  #     partial that starts its own 48h ramp-or-rollback clock.
-  # It is still the cheaper miss — a 10% partial you chose beats republishing
-  # a last-good group to undo one you didn't — but it is not free.
+  #     below. Be precise about that cost: the dispatch takes no ref input,
+  #     so it republishes from whatever is on main HEAD at that moment (not
+  #     the missed commit — it ships everything else that landed since).
+  #     At the 100% default it lands on the whole runtime lane immediately.
+  # It is still the cheaper miss — a publish you chose beats republishing a
+  # last-good group to undo one you didn't — but it is not free.
   #
   # Loudness is the tiebreak. A denylist miss is loud but expensive; an
   # allowlist miss is silent but cheaper — and its silence is SURFACED by
@@ -175,10 +198,19 @@ on:
       - 'shared/**'
   # Manual re-publish on demand stays available. This is also the recovery
   # path if the allowlist above ever misses a genuinely-bundled file — but
-  # it takes no inputs, so it publishes from main HEAD (not the missed
-  # commit) at the same hard-coded 10%, and needs the same manual ramp as
-  # any other publish. See mobile/docs/ota-rollout.md.
-  workflow_dispatch: {}
+  # it takes no ref input, so it publishes from main HEAD (not the missed
+  # commit). See mobile/docs/ota-rollout.md.
+  #
+  # `rollout_percentage` is the ONE knob: default 100 (whole runtime lane).
+  # Set it lower to stage a risky publish — and read the header comment
+  # first, because a partial rollout blocks the NEXT publish until someone
+  # ramps it to 100.
+  workflow_dispatch:
+    inputs:
+      rollout_percentage:
+        description: 'Rollout % for this publish (1-100). 100 = whole runtime lane. Below 100 blocks the next publish until ramped.'
+        required: false
+        default: '100'
 
 # Cancel any in-flight update if a newer push lands while this is
 # running — only the latest commit's bundle should ever be live.
@@ -197,6 +229,11 @@ jobs:
   update:
     name: Publish update
     runs-on: ubuntu-latest
+    # Job-level, not step-level: the publish step passes it to the CLI and
+    # the summary step reports it. `inputs` is empty on a `push` event, so
+    # the `|| '100'` fallback is what makes 100 the default for a merge.
+    env:
+      ROLLOUT_PCT: ${{ inputs.rollout_percentage || '100' }}
     # `issues: write` is for the OTABLOCK.1 notify step at the end of the job —
     # a failed publish opens/refreshes one tracking issue, because a red run on
     # `main` has no PR to hang an X on and is the signal that was already
@@ -541,12 +578,20 @@ jobs:
       # at a glance which commit a given update came from in the EAS
       # dashboard. Squash newlines to keep the eas-update CLI happy.
       #
-      # --rollout-percentage 10: STAGED rollout (P5 exit gate — see the
-      # header comment). Devices outside the 10% keep serving the previous
-      # latest update on the branch. Ramp/halt is manual:
-      # mobile/docs/ota-rollout.md. Supported by the pinned eas-cli 18.9.1;
-      # do NOT bump the pin to change rollout behaviour — the pin exists
-      # for Hermes bytecode compatibility with the binary.
+      # --rollout-percentage: 100 by default (see the header comment for why
+      # the P5 10% gate was reversed on 2026-08-21). A workflow_dispatch run
+      # may lower it to stage one publish; anything below 100 leaves a
+      # rollout in progress that BLOCKS the next publish until ramped, so
+      # halt/ramp procedure still matters: mobile/docs/ota-rollout.md.
+      # Supported by the pinned eas-cli 18.9.1; do NOT bump the pin to change
+      # rollout behaviour — the pin exists for Hermes bytecode compatibility
+      # with the binary.
+      #
+      # Read through an env var, not inlined into the script: a
+      # workflow_dispatch input is attacker-influenced in principle and must
+      # never be interpolated straight into a shell command. The range guard
+      # rejects a fat-fingered 0 or 1000 before the CLI sees it (it cannot
+      # catch a 10 that meant 100 — nothing can).
       #
       # --json so the next step can put the published group id +
       # runtimeVersion in the job summary (non-JSON chatter goes to
@@ -554,18 +599,35 @@ jobs:
       # --non-interactive, which we keep explicit for clarity).
       - name: Publish update
         run: |
+          case "$ROLLOUT_PCT" in
+            ''|*[!0-9]*)
+              echo "rollout_percentage must be an integer 1-100, got '$ROLLOUT_PCT'" >&2
+              exit 1 ;;
+          esac
+          if [ "$ROLLOUT_PCT" -lt 1 ] || [ "$ROLLOUT_PCT" -gt 100 ]; then
+            echo "rollout_percentage must be 1-100, got '$ROLLOUT_PCT'" >&2
+            exit 1
+          fi
           MSG=$(git log -1 --pretty=%s)
-          eas update \
-            --branch main \
-            --message "$MSG" \
-            --rollout-percentage 10 \
-            --non-interactive \
-            --json > eas-update-result.json
+          # At 100, OMIT the flag rather than passing `--rollout-percentage
+          # 100`. A plain publish creates no rollout object at all — the
+          # pre-P5 behaviour that ran for months. Passing 100 explicitly
+          # ought to be equivalent, but "a rollout that happens to sit at
+          # 100%" is precisely the object whose existence blocked five
+          # publishes in Aug 2026. Don't mint one to make a point.
+          if [ "$ROLLOUT_PCT" -eq 100 ]; then
+            set -- --branch main --message "$MSG" --non-interactive --json
+          else
+            set -- --branch main --message "$MSG" \
+              --rollout-percentage "$ROLLOUT_PCT" --non-interactive --json
+          fi
+          eas update "$@" > eas-update-result.json
           cat eas-update-result.json
 
       # Surface what actually shipped: runtime lane (which binaries will
-      # take this update) + rollout % + the group id you need for the
-      # manual ramp (`eas update:edit <group> --rollout-percentage N`).
+      # take this update) + rollout % + the group id you need if you ever
+      # have to ramp or republish (`eas update:edit <group>
+      # --rollout-percentage N`, `eas update:republish --group <id>`).
       # The estate keeps re-learning these by clicking through the EAS
       # dashboard — put them where the eyes already are. Defensive: a
       # summary hiccup must never fail a job whose publish succeeded.
@@ -581,14 +643,16 @@ jobs:
             const runtimes = uniq("runtimeVersion")
             const rollout = uniq("rolloutPercentage")
             const lines = [
-              "## EAS OTA published (staged rollout)",
+              "## EAS OTA published",
               "",
               `- **Runtime version (lane):** ${runtimes.join(", ") || "unknown — check the EAS dashboard"}`,
-              `- **Rollout:** ${rollout.length ? rollout.join(", ") + "%" : "10% (as requested; CLI output omitted the field)"}`,
+              `- **Rollout:** ${rollout.length ? rollout.join(", ") + "%" : (process.env.ROLLOUT_PCT || "100") + "% (as requested; CLI output omitted the field)"}`,
               `- **Update group:** ${groups.join(", ") || "unknown — `eas update:list --branch main`"}`,
               `- **Platforms:** ${uniq("platform").join(", ") || "unknown"}`,
               "",
-              "Ramp to 100% or roll back within 48h — runbook: `mobile/docs/ota-rollout.md`.",
+              Number(process.env.ROLLOUT_PCT || 100) < 100
+                ? "PARTIAL rollout — ramp to 100% or roll back within 48h, or the NEXT publish will fail. Runbook: `mobile/docs/ota-rollout.md`."
+                : "Full rollout — every device on this runtime lane takes it on next launch. Halt runbook: `mobile/docs/ota-rollout.md`.",
             ]
             require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n")
           ' || echo "Job summary generation failed (non-fatal)"

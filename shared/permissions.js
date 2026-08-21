@@ -110,14 +110,15 @@ export const WEB_PERMISSIONS = Object.freeze([
   // the mobile timer screen and every /api/timer/* route). ON for
   // every role by default — revoke per user/role via the Roles tab.
   { key: 'class_timer',       label: 'Class timer',             hint: 'Start, pause and stop the class interval timer on the studio TV, including quick-add presets and timer templates.' },
-  // TAPO-T1.4 — Tapo plug/switch control. Registry, per-device
-  // schedules (fixed windows + class-linked power), and manual
-  // overrides live at /automations/devices. Web-only until the
-  // mobile toggle ships in Tapo Wave T3 (see WEB_ONLY_OK in
-  // scripts/check-mobile-parity.mjs). Owner + manager by default;
-  // head_coach + staff off (on-site operations oversight).
+  // SONOS.16 — device_control now gates Sonos studio-music scheduling;
+  // its old surface (Tapo plug/switch control, TAPO-T1.4) was deleted at
+  // SONOS.14. Per-schedule playback windows (days/on/off/volume/
+  // favourite), manual run-now, and a temporary pause override, live at
+  // /automations/sonos. Web-only — no mobile counterpart planned (see
+  // WEB_ONLY_OK in scripts/check-mobile-parity.mjs). Owner + manager by
+  // default; head_coach + staff off (on-site operations oversight).
   { key: 'device_control', label: 'Device control',
-    hint: 'Tapo plugs/switches: schedules, class-linked power, manual toggles.' },
+    hint: 'Sonos speakers: playback schedules, run-now, temporary pause.' },
   // STUDIO-GROUP.1 — sidebar regroup (May 2026): the four items
   // below used to be top-level sidebar entries gated to master/
   // owner via role-only checks (no per-user permission). They now

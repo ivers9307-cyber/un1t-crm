@@ -102,6 +102,8 @@ const EXEMPT = {
     'Strava does not sign webhook POSTs; GET handshake verifies via STRAVA_WEBHOOK_VERIFY_TOKEN, POST acts only on known owner_ids + fetches with our own token',
   'src/app/api/whatsapp/flow/route.js':
     'WhatsApp Flow data-exchange endpoint — RSA/AES encryption is the credential (only Meta, holding our registered public key, can produce a request we can decrypt; 421 on failure). No tenant data is read before decrypt.',
+  'src/app/api/sonos/callback/route.js':
+    'OAuth callback; authorised by signed state — Sonos redirects the browser here directly (no session to attach), so verifyState (HMAC over CRON_SECRET, imported from ../connect/route) stands in for getCurrentUser. SONOS.12.',
 }
 
 // ─── Inbox channel-permission pass (INBOX-PERM.1) ────────────────────
