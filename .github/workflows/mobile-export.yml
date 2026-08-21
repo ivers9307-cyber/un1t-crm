@@ -54,7 +54,13 @@ jobs:
           node-version: '22'
 
       - name: Install dependencies
-        run: npm ci --legacy-peer-deps
+        # OTATREE.1 — plain `npm ci`, matching eas-update.yml and EAS Build
+        # (no .npmrc anywhere in the repo). This job's whole value is that its
+        # export is the same export the publish job performs; installing from a
+        # different tree than the publish would make a green export prove less
+        # than it appears to. See the long note in eas-update.yml's own
+        # `Install dependencies` step for the measurement.
+        run: npm ci
 
       - name: expo export (compile the OTA bundle)
         run: npx expo export --platform ios --output-dir /tmp/expo-export
