@@ -25,6 +25,52 @@ export function getAppUrl() {
 }
 
 /**
+ * The member-app (champ) origin used when `NEXT_PUBLIC_CHAMP_APP_URL` is
+ * unset. Exported so tests and call sites name the same constant instead of
+ * re-typing the literal — it was copied into three files and they drifted.
+ */
+export const MEMBER_APP_DEFAULT_ORIGIN = 'https://api.repset.ie'
+
+/**
+ * Returns the base URL of the MEMBER app (champ-app) — a DIFFERENT
+ * deployment to this one. Member-facing deep links (`/sessions/<id>`,
+ * `/auth/callback`) live there; this repo's own host has no such routes, and
+ * building them on `getAppUrl()` is what 404'd every post-class-email CTA in
+ * prod (#1444).
+ *
+ * WHY THIS ONE DOES NOT THROW, unlike `getAppUrl()`:
+ *   `NEXT_PUBLIC_APP_URL` is THIS deployment's own host — the CRM can always
+ *   know it, and a missing value is a misconfiguration we want to hear about
+ *   immediately. The member app's host belongs to another service, is not
+ *   currently set on this deployment (REPSET-P6.S2 flipped the *code default*
+ *   to the repset host precisely because nothing sets the env), and the only
+ *   consumer on the send path is a customer email. `NEXT_PUBLIC_APP_URL` is
+ *   documented prod config (docs/architecture/INTEGRATIONS.md) and the live
+ *   campaign sender calls `getAppUrl()` uncaught, so it is provably set;
+ *   `NEXT_PUBLIC_CHAMP_APP_URL` is provably NOT. Throwing here would
+ *   therefore delete every post-class email in prod TODAY, in exchange for
+ *   nothing — the default is already the correct host.
+ *
+ *   NOTE (URLSEAM.1 review): the original version of this comment also cited
+ *   the auto-end sweep re-selecting an unstamped row every 5 minutes. That
+ *   argument no longer distinguishes the two accessors: `composeEmail` now
+ *   calls the THROWING `getAppUrl()` for the unsubscribe base, so
+ *   `sendPostClassEmail` had to close the loop for compose failures in
+ *   general — it now calls `markProcessed` before returning (see the catch in
+ *   hr-post-class-email.js). What survives is the argument above: this host
+ *   belongs to another service and is genuinely unset here.
+ *
+ * Set `NEXT_PUBLIC_CHAMP_APP_URL` on the deployment and this follows it; once
+ * it is set everywhere, this can become a throwing accessor like `getAppUrl`.
+ *
+ * @returns {string} no trailing slash
+ */
+export function getMemberAppUrl() {
+  const raw = process.env.NEXT_PUBLIC_CHAMP_APP_URL || MEMBER_APP_DEFAULT_ORIGIN
+  return raw.replace(/\/+$/, '')
+}
+
+/**
  * Returns the origin of the incoming request — protocol + host, no trailing
  * slash. Use for redirect handlers and any other code that wants the URL
  * the user actually typed (so the redirect can never go to the wrong domain).

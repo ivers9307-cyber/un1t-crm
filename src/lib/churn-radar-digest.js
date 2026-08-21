@@ -137,7 +137,10 @@ function buildLeadSection(summary, history) {
  * @returns {{ subject: string, html: string }}
  */
 export function buildDigestEmail(summary, history = [], opts = {}) {
-  const locationName = opts.locationName || 'UN1T'
+  // CHROME.1 — the studio's name is the OPERATOR's identity and the caller
+  // always passes it (`locationName: loc.name`). The fallback only fires on
+  // a location with no name, so it must not name one particular tenant's gym.
+  const locationName = opts.locationName || 'Your studio'
   const radarUrl = opts.radarUrl || null
   const leadRadarUrl = opts.leadRadarUrl || null
 
@@ -163,7 +166,7 @@ export function buildDigestEmail(summary, history = [], opts = {}) {
   ${churnSection}
   ${leadSection}
   ${cta}
-  <p style="margin:24px 0 0;color:#aaa;font-size:12px;">UN1T radar &middot; sent every Monday. Manage recipients on the churn radar page.</p>
+  <p style="margin:24px 0 0;color:#aaa;font-size:12px;">Repset radar &middot; sent every Monday. Manage recipients on the churn radar page.</p>
 </div>`
 
   return {

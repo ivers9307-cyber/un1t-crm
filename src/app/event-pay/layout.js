@@ -10,9 +10,9 @@
 // company_settings.company_name and floors on the GYM wordmark instead —
 // the same value the login screen, contract emails and Mia already render.
 //
-// Scope: /book/[slug] — the public class-booking page, the single most-shared
-// customer link in the product. This layout already existed (it supplies the
-// clean no-sidebar shell); before CHROME.1 it declared no metadata.
+// Scope: /event-pay/[paymentId] — the embedded checkout a race registrant is
+// sent to. A payment page is the last surface that should carry an unfamiliar
+// brand.
 
 import { customerFacingMetadata } from '@/lib/default-site-name'
 
@@ -20,10 +20,6 @@ export async function generateMetadata() {
   return customerFacingMetadata()
 }
 
-export default function BookingLayout({ children }) {
-  return (
-    <div className="min-h-screen bg-white text-gray-900 flex items-start justify-center p-4 md:p-8">
-      {children}
-    </div>
-  )
+export default function EventPayLayout({ children }) {
+  return children
 }

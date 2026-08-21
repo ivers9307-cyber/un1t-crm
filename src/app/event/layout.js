@@ -10,9 +10,14 @@
 // company_settings.company_name and floors on the GYM wordmark instead —
 // the same value the login screen, contract emails and Mia already render.
 //
-// Scope: /book/[slug] — the public class-booking page, the single most-shared
-// customer link in the product. This layout already existed (it supplies the
-// clean no-sidebar shell); before CHROME.1 it declared no metadata.
+// Scope: /event/[slug]/confirmed (the post-payment page a paying attendee
+// lands on) and /event/[slug]/display (the race-day board on a studio TV).
+// /event/[slug] itself already exports a RICHER generateMetadata — the actual
+// event name and description — and that page-level export still wins here;
+// this layout only catches the two children that had nothing.
+//
+// The display board is a gym-floor surface, and the locked decision holds:
+// it resolves the GYM identity, never the platform's.
 
 import { customerFacingMetadata } from '@/lib/default-site-name'
 
@@ -20,10 +25,6 @@ export async function generateMetadata() {
   return customerFacingMetadata()
 }
 
-export default function BookingLayout({ children }) {
-  return (
-    <div className="min-h-screen bg-white text-gray-900 flex items-start justify-center p-4 md:p-8">
-      {children}
-    </div>
-  )
+export default function EventLayout({ children }) {
+  return children
 }

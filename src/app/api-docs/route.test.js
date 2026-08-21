@@ -11,7 +11,7 @@ describe('GET /api-docs', () => {
     const res = await GET()
     const html = await res.text()
     expect(html).toContain('swagger-ui')
-    expect(html).toContain("name: 'UN1T CRM'")
+    expect(html).toContain("name: 'Repset CRM'")
     expect(html).toContain("name: 'Champ App'")
     expect(html).toContain('/api/openapi.json')
     // Default champ spec host until Stage 2 flips CHAMP_OPENAPI_URL to api.repset.ie
