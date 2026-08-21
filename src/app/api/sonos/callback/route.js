@@ -129,7 +129,7 @@ export async function GET(request) {
 
   const db = createServerClient()
 
-  // sonos_connections carries TWO unique constraints (mig 556): location_id
+  // sonos_connections carries TWO unique constraints (mig 560): location_id
   // (one connection per location) and household_id (one location per
   // household — the constraint that actually mirrors the Xero tenants[0]
   // bug; see src/lib/xero/tenant-binding.js). The upsert below only names
@@ -140,7 +140,7 @@ export async function GET(request) {
   // row; it hard-fails the INSERT itself with a 23505 unique violation, and
   // without this pre-check the operator would see only the generic
   // 'save_failed' with no way to tell what went wrong — there is no
-  // in-app disconnect yet (mig 556's own column comment says as much), so a
+  // in-app disconnect yet (mig 560's own column comment says as much), so a
   // silent failure strands them.
   //
   // Shaped after validateTenantChoice: read who currently holds the

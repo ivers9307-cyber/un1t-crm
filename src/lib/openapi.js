@@ -4323,7 +4323,7 @@ registry.registerPath({
 })
 
 // Sonos studio-music schedules (SONOS.6-16) — replaces the TapoDevice block
-// that used to live here (deleted SONOS.14; mig 557 dropped tapo_devices).
+// that used to live here (deleted SONOS.14; mig 561 dropped tapo_devices).
 // Same device_control permission, same Automations tag; the UI surface is
 // now /automations/sonos. Response envelopes are { success, schedules } /
 // { success, schedule } — matching the old Tapo routes' convention, not the
@@ -4358,7 +4358,7 @@ const SonosSchedulePayload = z.object({
 const SonosSchedulePatch = SonosSchedulePayload.extend({
   // Suppression only — deliberately no {state:"on"}: that would have to
   // invent a volume and a favourite, and the honest source for both is a
-  // window (mig 556 column comment on sonos_schedules.override).
+  // window (mig 560 column comment on sonos_schedules.override).
   override: z.object({
     state: z.literal('off'),
     until: z.string().datetime(),
