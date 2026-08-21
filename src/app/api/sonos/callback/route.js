@@ -19,6 +19,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getSonosConfig, exchangeCode, sonosGetHouseholds } from '@/lib/sonos/client'
 import { verifyState } from '../connect/route'
 import { logWarn } from '@/lib/log'
+import { getRequestOrigin } from '@/lib/app-url'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -40,11 +41,13 @@ export async function GET(request) {
   // collapses to when the env var is unset) throws "Invalid URL" instead
   // of redirecting anywhere. That would have turned EVERY outcome of this
   // route — including the success path — into an unhandled 500 on every
-  // deploy, since nothing sets NEXT_PUBLIC_SITE_URL today. request.url is
-  // always absolute for an inbound request, so build against it instead —
-  // the same approach settingsUrl() uses in src/app/api/xero/callback/route.js.
+  // deploy, since nothing sets NEXT_PUBLIC_SITE_URL today.
+  //
+  // getRequestOrigin() (URLSEAM.1) is the house accessor for exactly this:
+  // the origin the user actually reached us on, so a redirect can never
+  // land on the wrong domain and a preview deploy stays on itself.
   const back = (params) => {
-    const u = new URL('/automations/sonos', request.url)
+    const u = new URL('/automations/sonos', getRequestOrigin(request))
     for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v)
     return NextResponse.redirect(u)
   }

@@ -184,6 +184,43 @@ export function sonosPause(token, groupId) {
   return apiCall(token, 'POST', `/groups/${enc(groupId)}/playback/pause`)
 }
 
+export function sonosPlay(token, groupId) {
+  return apiCall(token, 'POST', `/groups/${enc(groupId)}/playback/play`)
+}
+
+export function sonosSkipNext(token, groupId) {
+  return apiCall(token, 'POST', `/groups/${enc(groupId)}/playback/skipToNextTrack`)
+}
+
+export function sonosSkipPrevious(token, groupId) {
+  return apiCall(token, 'POST', `/groups/${enc(groupId)}/playback/skipToPreviousTrack`)
+}
+
+// Relative, not absolute — Sonos documents this split, and it matters for
+// more than tidiness. Absolute volume for a +/- button means each caller
+// sends `current + step` computed from its OWN possibly-stale reading, so
+// two people pressing "+" at once overwrite each other. A delta is
+// commutative. Sonos clamps the resulting level into 0-100 itself; the
+// delta must be an integer in -100..100.
+export function sonosSetRelativeVolume(token, groupId, delta) {
+  const d = Math.max(-100, Math.min(100, Math.round(Number(delta) || 0)))
+  return apiCall(token, 'POST', `/groups/${enc(groupId)}/groupVolume/relative`, { volumeDelta: d })
+}
+
+// → body { volume, muted, fixed }. `fixed: true` means the group is wired
+// to a fixed-level output and volume commands do nothing — the UI must say
+// so rather than sending commands that silently no-op.
+export function sonosGetGroupVolume(token, groupId) {
+  return apiCall(token, 'GET', `/groups/${enc(groupId)}/groupVolume`)
+}
+
+// → body { container: { name, service: { name } },
+//          currentItem: { track: { name, artist: { name }, album: { name }, imageUrl } } }
+// Every field is nullable per Sonos.
+export function sonosGetMetadata(token, groupId) {
+  return apiCall(token, 'GET', `/groups/${enc(groupId)}/playbackMetadata`)
+}
+
 // Loads a location's connection and returns a usable access token,
 // refreshing first if it is inside the margin. Never throws — every
 // failure is a tagged result the caller can act on, because the two
