@@ -146,7 +146,7 @@ export const WEB_PERMISSIONS = Object.freeze([
   // Master + owner only by default. Finance surface; doesn't fit
   // under Studio Management because it's about supplier bills not
   // on-site operations.
-  { key: 'invoices_inbox', label: 'Invoices',                   hint: 'Operator inbox for supplier invoices emailed in to <slug>-invoices@un1tdublin.com. Quality + data approval before forwarding to Xero. Master + owner only by default.' },
+  { key: 'invoices_inbox', label: 'Invoices',                   hint: 'Operator inbox for supplier invoices emailed in to <slug>-invoices@mail.un1tdublin.com. Quality + data approval before forwarding to Xero. Master + owner only by default.' },
   // RCOV.P0 — receipt-coverage board. Cross-references Xero bank
   // lines against collected receipts (contractor invoices, FTE
   // expenses, card receipts) to find bank activity with no matching
