@@ -17,13 +17,20 @@ inherits its one-time App Information fields and pre-submission checklist).
 >    (post-P2 `main` qualifies). EAS capability-sync reads the app config of
 >    the CWD — running from a pre-merge tree UN-TICKS HealthKit on the App ID
 >    and has already reverted the portal capability twice.
-> 3. **The staged-rollout OTA gate is MERGED** (#1439) — every auto-publish
->    now starts at 10% with a manual ramp, so a push to `main` is no longer
->    an instant, ungated shove to ~1,100 member devices. Two things still
->    bind: the trigger is an **allowlist** of bundle-entering paths (a
->    screenshots-, docs- or `eas.json`-only commit publishes nothing — §4
->    and `mobile/docs/ota-rollout.md`), and every rollout must be ramped to
->    100 or rolled back **within 48h**.
+> 3. **The staged-rollout OTA gate was merged (#1439) and then REVERSED**
+>    (OTAPCT.1, 2026-08-21). It is no longer true that an auto-publish
+>    starts at 10%: `rollout_percentage` defaults to **100**, and at 100 the
+>    workflow omits the flag entirely, so no rollout object and no 48h ramp
+>    clock exist. A push to `main` IS an instant, ungated shove to every
+>    device on the runtime lane — ~1,100 member devices now that 2.3.0 is
+>    public. The gate was reversed because a 10% rollout nobody ramped
+>    BLOCKS the next publish, which silently cost five publishes over two
+>    days; see `mobile/docs/ota-rollout.md`. What still binds: the trigger
+>    is an **allowlist** of bundle-entering paths (a screenshots-, docs- or
+>    `eas.json`-only commit publishes nothing — §4). If you deliberately
+>    stage one via `workflow_dispatch` with `rollout_percentage` < 100, the
+>    ramp-to-100-or-roll-back-within-48h rule applies to *that* publish, and
+>    until you do, the next merge's publish fails.
 
 ---
 
@@ -274,17 +281,18 @@ demo studio data only.
 > `certs/`, `scripts/`, `eas.json` and `.audit-allowlist.json`. This is worth
 > stating because it was **not** true until OTA-PATHS.1: the trigger was
 > `mobile/**`, so a screenshots-only commit would mint a fresh update group
-> at 10% on top of an already-ramped rollout — leaving devices outside the
-> new cohort on the older group and starting a 48h ramp-or-rollback clock
-> for a publish that changed no code. Do not "simplify" that trigger back to
+> for a publish that changed no code. Since OTAPCT.1 that group would go out
+> at **100%**, replacing the live bundle on every device on the runtime lane
+> at next launch. Do not "simplify" that trigger back to
 > `mobile/**`; `npm run check:ota-paths` guards it, and
 > `mobile/docs/ota-rollout.md` has the full list.
 
 > ⚠️ **App ICON and SPLASH art are the exception — those DO publish.**
 > `mobile/assets/**` is *inside* the allowlist (the Archivo fonts beside
 > them are `require()`d), so committing a new `icon.png`, `splash.png`,
-> `adaptive-icon.png` or `notification-icon.png` mints an update group at
-> 10% even though the JS bundle is byte-identical — those four PNGs are
+> `adaptive-icon.png` or `notification-icon.png` mints an update group — at
+> the 100% default since OTAPCT.1 — even though the JS bundle is
+> byte-identical. Those four PNGs are
 > referenced only from `mobile/app.config.js`, i.e. they are native-build
 > inputs. This matters here because §4 is the same step where rebrand art
 > gets regenerated. Do it in the same push as real code, or push it
@@ -480,10 +488,12 @@ force-uninstalls anything.
 > **`mobile/app.config.js`** (the §7 version bump — `runtimeVersion` does
 > *not* move with `version`, so the group lands on the LIVE lane),
 > **`mobile/assets/**`** (icon/splash art — §4), and **test-only changes**
-> under `mobile/lib/` or `shared/`. Each mints a fresh group at 10%,
-> demoting the ~90% already on the ramped group and starting a new 48h
-> ramp-or-rollback clock. If you must land one, ramp it immediately per the
-> runbook, or hold it until the review outcome is known.
+> under `mobile/lib/` or `shared/`. Each mints a fresh group, and since
+> OTAPCT.1 that group goes to the WHOLE runtime lane at once — there is no
+> cohort between a bad bundle and every device on it. If you must land one
+> while a binary is in review, hold it until the review outcome is known, or
+> stage it deliberately via `workflow_dispatch` and ramp it before the next
+> merge (an un-ramped partial blocks that merge's publish).
 >
 > Current state at time of writing (2026-08-19): **2.3.0 build 24 is in
 > Apple review and the 2.3.0 OTA lane is ramped to 100%.** Staff still on

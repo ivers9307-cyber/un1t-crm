@@ -180,6 +180,24 @@ describe('OTA pre-flight — the blocking case', () => {
     expect(summary).toContain('mobile/docs/ota-rollout.md')
   })
 
+  // The first draft of this summary told the operator that re-running the
+  // workflow "starts its own 10% rollout" with a "48h ramp-or-rollback clock".
+  // That was written against the P5 default and was already false when it
+  // landed: OTAPCT.1 (2026-08-21) made `rollout_percentage` default to 100, and
+  // at 100 the publish step OMITS the flag, so no rollout object and no ramp
+  // clock are created. Understating the blast radius inside the one artifact
+  // whose entire job is legibility is the failure mode this whole step exists
+  // to kill, so the corrected fact is pinned rather than left to a comment.
+  it('states the re-run blast radius honestly: 100% default, whole lane, no cohort', () => {
+    const { summary } = runPreflight({ easStdout: blocked })
+    expect(summary).toContain('rollout_percentage')
+    expect(summary).toMatch(/default of \*\*100\*\*/)
+    expect(summary).toMatch(/EVERY\s+device on this runtime lane/)
+    expect(summary).toMatch(/no rollout object is created/)
+    // ...and it must NOT resurrect the claim that a re-run stages itself.
+    expect(summary).not.toMatch(/starts its own 10% rollout/)
+  })
+
   it('reports ONE stuck group, not one per nested platform update', () => {
     const { summary } = runPreflight({ easStdout: blocked })
     const rows = summary.split('\n').filter((l) => l.startsWith('- group '))

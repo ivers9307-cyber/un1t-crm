@@ -102,11 +102,11 @@ on:
   # Every future non-bundle file type would have re-opened it again.
   #
   # The two failure modes, and why the allowlist wins:
-  #   - Denylist miss  → an UNWANTED publish. It mints a new update group
-  #     at 10% on top of whatever ramp is in flight, so devices outside
-  #     the new cohort keep serving the older group, and the 48h
-  #     ramp-or-rollback rule in mobile/docs/ota-rollout.md now applies to
-  #     a no-op. Recovery is expensive (republish the last good group).
+  #   - Denylist miss  → an UNWANTED publish. Since OTAPCT.1 reversed the
+  #     staged default (2026-08-21) that publish goes out at 100%, so a
+  #     no-op bundle replaces the current one on EVERY device on the
+  #     runtime lane at next launch. No cohort holds the old group back.
+  #     Recovery is expensive (republish the last good group).
   #   - Allowlist miss → a MISSED publish. Recovery is one `workflow_dispatch`
   #     below. Be precise about that cost: the dispatch takes no ref input,
   #     so it republishes from whatever is on main HEAD at that moment (not
@@ -165,7 +165,8 @@ on:
       # plugin / native-build inputs); no require() or import of them exists
       # anywhere under mobile/app|lib|components or shared/. So an icon or
       # splash swap produces a byte-identical JS bundle and still mints a
-      # fresh update group at 10% on the live runtime lane.
+      # fresh update group on the live runtime lane — at 100% since OTAPCT.1,
+      # i.e. pushed to every device on that lane, not to a 10% cohort.
       #
       # Kept wholesale anyway: narrowing to `mobile/assets/fonts/**` would
       # strand any future require()d image under mobile/assets/, and this
@@ -380,8 +381,15 @@ jobs:
             '```',
             '',
             'Then re-run this workflow (Actions → EAS Update → Run workflow). It',
-            'publishes from **main HEAD**, not from the commit that was blocked, and it',
-            'starts its own 10% rollout. Runbook: `mobile/docs/ota-rollout.md`.',
+            'publishes from **main HEAD**, not from the commit that was blocked, so it',
+            'ships everything that has landed since.',
+            '',
+            'At the `rollout_percentage` default of **100** that re-run reaches EVERY',
+            'device on this runtime lane on next launch — no cohort, no ramp clock, and',
+            'no rollout object is created. Runtime 2.3.0 is the public lane, so that is',
+            'the whole member fleet, not staff phones. Staging instead means setting',
+            '`rollout_percentage` below 100 on the dispatch, which re-arms exactly the',
+            'deadlock above. Runbook: `mobile/docs/ota-rollout.md`.',
           ].join('\n')
 
           if (summaryPath) appendFileSync(summaryPath, summary + '\n')
@@ -715,9 +723,15 @@ jobs:
             "" \
             "$cause" \
             "" \
-            "After clearing the cause, re-run via **Actions → EAS Update → Run workflow**. It takes no" \
-            "inputs, so it publishes from **main HEAD** (everything that has landed since, not just the" \
-            "blocked commit) and starts its own 10% rollout with its own 48h ramp-or-rollback clock.")
+            "After clearing the cause, re-run via **Actions → EAS Update → Run workflow**. It takes no ref" \
+            "input, so it publishes from **main HEAD** (everything that has landed since, not just the" \
+            "blocked commit)." \
+            "" \
+            "Blast radius of that re-run, stated plainly: the only input is \`rollout_percentage\`, and it" \
+            "defaults to **100**. At 100 the publish creates no rollout object and no ramp clock — it goes" \
+            "to EVERY device on the runtime lane on next launch. Runtime 2.3.0 is the PUBLIC lane, so that" \
+            "is the whole member fleet. To stage it instead, set \`rollout_percentage\` below 100 on the" \
+            "dispatch — which re-arms the deadlock that caused this issue, so ramp it before the next merge.")
           existing=$(gh issue list --repo "$REPO" --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --repo "$REPO" --body "$body"
