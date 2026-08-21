@@ -77,7 +77,7 @@ export async function applyFormMarketingConsent(db, args) {
   //    - decide whether email_status needs flipping
   const { data: contact, error: contactErr } = await db
     .from('contacts')
-    .select('id, glofox_membership_status, email_status')
+    .select('id, email, glofox_membership_status, email_status')
     .eq('id', contactId)
     .maybeSingle()
   if (contactErr) {
@@ -190,6 +190,54 @@ export async function applyFormMarketingConsent(db, args) {
     const nextStatus = emailStatusNormaliseForOptIn(contact.email_status)
     if (nextStatus) {
       await db.from('contacts').update({ email_status: nextStatus }).eq('id', contactId)
+    }
+  }
+
+  // 7. RESUB-SUPP.1 — an opt-in here must ALSO lift Postmark's own suppression.
+  //
+  // PMSUPP.1 made our opt-outs push a suppression to Postmark, and taught the
+  // preference centre to lift it again on a resubscribe. This path — every
+  // public form: the event form, the waitlist, the /start booking funnel —
+  // never got the other half. So someone could opt out through a form, be
+  // suppressed at Postmark by the drift cron, opt back IN through a form, and
+  // be re-granted consent in our database while Postmark went on refusing
+  // every send. Both systems then agree they are subscribed and no mail
+  // arrives, which is invisible from either side.
+  //
+  // Not theoretical: measured 2026-08-21, four contacts sat in exactly that
+  // state (colinmcreynolds@hotmail.com, dnlduffy@gmail.com, murphm53@tcd.ie,
+  // jackoconnor1994@gmail.com). It only surfaced because a sequence step
+  // THROWS on a Postmark rejection and burned five retries doing it.
+  //
+  // 🔴 The lift is safe ONLY because unsuppressAtPostmark reads the reason
+  // first and deletes exclusively a ManualSuppression. It never touches a
+  // HardBounce — Postmark describes deleting one as "reactivating the
+  // associated bounce" — and a SpamComplaint cannot be deleted at all. Consent
+  // is NOT evidence the mailbox works: the click can come from a copy
+  // delivered before the bounce. Do not "simplify" this by deleting
+  // unconditionally.
+  //
+  // Best-effort and last: this is a fire-and-forget side effect on a public
+  // form submission, and the consent decision above is already durably
+  // recorded. Losing the lift leaves someone missing mail they asked for,
+  // which the next opt-in or a human can fix; failing the whole request would
+  // lose the form submission itself.
+  //
+  // Gated on emailFlipped so the hot path (every /start booking arrives with
+  // consent already true) does not make a Postmark round-trip per submission.
+  // A contact who is already opted in has no suppression this call created,
+  // and the daily consent-drift-check is what reconciles pre-existing residue.
+  if (emailFlipped && consent && contact.email) {
+    try {
+      const { unsuppressAtPostmark } = await import('@/lib/postmark-suppressions')
+      const result = await unsuppressAtPostmark(contact.email)
+      if (result?.failed?.length) {
+        logWarn('marketing-consent', 'Postmark suppression lift failed — the opt-in IS recorded, but mail stays blocked until it is lifted', {
+          contactId, message: result.failed[0]?.message,
+        })
+      }
+    } catch (e) {
+      logWarn('marketing-consent', 'Postmark suppression lift threw', { contactId, err: e?.message || String(e) })
     }
   }
 
