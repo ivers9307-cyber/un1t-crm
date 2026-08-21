@@ -37,8 +37,19 @@ const CLIENT = {
 
 const defaultCall = (name, token, groupId, ...args) => CLIENT[name](token, groupId, ...args)
 
-// → { ok: true, groups } | { ok: false, code, reason?, statusCode? }
+// → { ok: true, groups }
+// | { ok: false, code, reason?, statusCode?, applied?, failedGroups? }
+//
 // `code` is a stable tag the route maps to an HTTP status and copy.
+//
+// `applied` and `failedGroups` appear only on a dispatch-loop failure, and
+// only matter for a multi-group schedule: they say which speakers already
+// changed before something went wrong. The caller needs that because
+// volume_up/volume_down are RELATIVE and so not idempotent — retrying the
+// whole action would move an already-changed group a second time. Note
+// there is currently no way to scope a retry to failedGroups; the fields
+// are informational, so a UI should surface a partial failure rather than
+// auto-retry a volume action.
 export async function runLiveAction(db, locationId, scheduleId, action, value, deps = {}) {
   const {
     getConfig = () => getSonosConfig(),
