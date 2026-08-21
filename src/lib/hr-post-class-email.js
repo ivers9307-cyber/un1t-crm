@@ -580,7 +580,25 @@ export async function sendPostClassEmail(db, sessionId, { nowMs = Date.now() } =
   try {
     composed = composeEmail(ctx, { nowMs })
   } catch (e) {
+    // URLSEAM.1 review — this catch used to `return` without stamping, which
+    // re-armed the exact loop `markProcessed` exists to stop: the auto-end
+    // sweep re-selects any session with `email_sent_at IS NULL` every 5
+    // minutes, so a compose that throws meant a re-compose (and a re-fired
+    // "session ready" push) on every tick, forever.
+    //
+    // That was latent before URLSEAM.1 and reachable after it: `composeEmail`
+    // now calls `getAppUrl()` (via unsubscribeUrl), which THROWS by design
+    // when NEXT_PUBLIC_APP_URL is unset. Every way composeEmail can throw is
+    // permanent for the life of the deployment — it is a pure function of the
+    // already-loaded ctx plus env, so nothing about the next tick differs —
+    // which makes "stamp and stop" strictly better than "retry forever".
+    //
+    // The cost is explicit: one customer loses one post-class email, and the
+    // logError below is the only signal. Per CLAUDE.md's "removing a silent
+    // failure must never create a louder one", a lost email beats spamming a
+    // member's phone every 5 minutes until someone notices.
     logError('hr-post-class-email', 'compose threw', { sessionId, err: e })
+    await markProcessed(db, sessionId, nowMs)
     return { ok: false, error: e.message }
   }
 

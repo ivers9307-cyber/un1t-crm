@@ -432,6 +432,27 @@ describe('sendPostClassEmail', () => {
     expect(out).toEqual({ ok: true, skipped: 'already-sent' })
     expect(sendTransactionalEmail).not.toHaveBeenCalled()
   })
+
+  // URLSEAM.1 review — the counterpart to "getAppUrl throws instead of
+  // guessing a host". A throwing compose must still take the row OUT of the
+  // auto-end sweep: the sweep re-selects every session with
+  // `email_sent_at IS NULL` on a 5-minute tick, and composeEmail is a pure
+  // function of the loaded ctx + env, so a throw repeats identically forever.
+  // Without the stamp the fix for one silent failure creates a louder one — a
+  // "session ready" push every 5 minutes to a member's phone.
+  it('a throwing compose still leaves the auto-end sweep (no 5-minute re-push loop)', async () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', '') // unsubscribeUrl → getAppUrl() throws
+    const db = mockDb({ session: fullSessionRow() })
+    const out = await sendPostClassEmail(db, 'sess-1', { nowMs: NOW })
+    expect(out.ok).toBe(false)
+    expect(out.error).toMatch(/NEXT_PUBLIC_APP_URL is not set/)
+    expect(sendTransactionalEmail).not.toHaveBeenCalled()
+    // The whole point: stamped exactly once, so the next sweep tick skips it.
+    expect(db.__stamps).toHaveLength(1)
+    expect(db.__stamps[0]).toEqual(
+      expect.objectContaining({ email_sent_at: new Date(NOW).toISOString() }),
+    )
+  })
 })
 
 // ── loadContextForSession ──────────────────────────────────────
