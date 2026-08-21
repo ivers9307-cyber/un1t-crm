@@ -253,7 +253,20 @@ export function isFrameworkAsset(path) {
 // the full set; this constant is the canonical (first) host.
 // ─────────────────────────────────────────────────────────────────
 
-export const CRM_DEFAULT_HOSTNAME = 'crm.un1tdublin.com'
+// AUDIT-13.F — these two are named for what they ARE, because the
+// previous single constant was called "default" while its comment claimed
+// "canonical" and its value was the legacy host. crm.repset.ie is the
+// canonical CRM host (it is what legacy-host-redirect.js sends traffic TO,
+// as CANONICAL_CRM_ORIGIN); crm.un1tdublin.com serves forever alongside it.
+export const CANONICAL_CRM_HOSTNAME = 'crm.repset.ie'
+export const LEGACY_CRM_HOSTNAME = 'crm.un1tdublin.com'
+
+/**
+ * @deprecated Ambiguous name — it holds the LEGACY host, not the
+ * canonical one. Kept as an alias so nothing outside this module breaks;
+ * prefer CANONICAL_CRM_HOSTNAME / LEGACY_CRM_HOSTNAME.
+ */
+export const CRM_DEFAULT_HOSTNAME = LEGACY_CRM_HOSTNAME
 
 // ─────────────────────────────────────────────────────────────────
 // REPSET-P6 — the CRM hostname concept is SET-valued.
@@ -266,6 +279,12 @@ export const CRM_DEFAULT_HOSTNAME = 'crm.un1tdublin.com'
 //
 // Env-overridable comma-list (same pattern as MARKETING_HOSTNAMES);
 // ordering is canonical-first — index 0 is the canonical CRM host.
+// AUDIT-13.F: it says that because it is now TRUE. The default list used
+// to put the LEGACY host at index 0 while this comment, getLegacyBrandRows
+// below and a test all asserted "canonical first" — display-only then, but
+// a landmine the day anything consumed hosts[0] as the canonical host. The
+// order was the wrong half: crm.repset.ie is what legacy-host-redirect.js
+// redirects TO. Every other consumer uses .includes(), so order-independent.
 // A function, not a module const, so the env is read at call time
 // (tests/previews can stub it without a module reload). The
 // NEXT_PUBLIC_APP_URL hostname is always part of the set (appended
@@ -274,7 +293,7 @@ export const CRM_DEFAULT_HOSTNAME = 'crm.un1tdublin.com'
 // ─────────────────────────────────────────────────────────────────
 
 export function getCrmHostnames() {
-  const hosts = (process.env.CRM_HOSTNAMES || `${CRM_DEFAULT_HOSTNAME},crm.repset.ie`)
+  const hosts = (process.env.CRM_HOSTNAMES || `${CANONICAL_CRM_HOSTNAME},${LEGACY_CRM_HOSTNAME}`)
     .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
   try {
     const appHost = new URL(process.env.NEXT_PUBLIC_APP_URL).hostname.toLowerCase()
@@ -298,14 +317,16 @@ export function getCrmHostnames() {
  */
 export function getLegacyBrandRows() {
   // REPSET-P6: the CRM row carries the WHOLE host set — canonical
-  // first, the rest (crm.repset.ie, any preview APP_URL host) as
+  // first, the rest (the legacy host, any preview APP_URL host) as
   // extras — so an admin never mistakes a CRM host for an unclaimed
-  // hostname and tries to add it as a tenant row.
+  // hostname and tries to add it as a tenant row. AUDIT-13.F: this
+  // comment named crm.repset.ie among "the rest" while calling index 0
+  // canonical, which is how the reversed order stayed invisible.
   const [crmPrimary, ...crmExtras] = getCrmHostnames()
 
   const rows = [{
     key: 'crm-default',
-    hostname: crmPrimary || CRM_DEFAULT_HOSTNAME,
+    hostname: crmPrimary || CANONICAL_CRM_HOSTNAME,
     extraHostnames: crmExtras,
     label: 'CRM (default)',
     description: 'Staff CRM — the default hostnames (auth-gated)',
