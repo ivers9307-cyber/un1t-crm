@@ -25,8 +25,9 @@
 //                  of the sellable funnel. A real membership outranks it.
 //   cold_lead    — operator marked "not worth selling to / not interested"
 //                  (FUNNEL.4, contacts.pipeline_dismissed_at). Off funnel,
-//                  auto-revoked when they attend a class after the
-//                  dismissal. Members/pack/classpass outrank it.
+//                  auto-revoked when they attend a class OR re-enter through a
+//                  public funnel form (RETURNPIPE.3) after the dismissal.
+//                  Members/pack/classpass outrank it.
 //   dormant      — aged-out leads, ex_members, ghosts (off funnel)
 //
 // Attended counts come from contacts.recent_bookings (last 10 from the
@@ -334,7 +335,29 @@ export function classifyContact(contact, now = Date.now()) {
       : null
     const trainedSinceDismissal = attendedMs !== null
       && Number.isFinite(attendedMs) && attendedMs > dismissedMs
-    if (!trainedSinceDismissal) return 'cold_lead'
+
+    // RETURNPIPE.3 — coming back through a public funnel form also revokes it
+    // (Richard, 2026-08-21): "a cold lead that comes in on the /start form
+    // gets reclassified as a lead". Being dismissed is a judgement about
+    // someone who went quiet; filling the form in again is that person
+    // answering. Attending was the only way back before, which meant we told
+    // them nothing had changed right up until they physically arrived.
+    //
+    // last_lead_source_at (mig 557) is stamped on EVERY public funnel entry —
+    // /start's class booking and the website lead form both — so it is the
+    // precise signal for "came in on the form", and it does not wait on a
+    // Glofox booking sync. It persists, so the revocation is permanent: they
+    // only go cold again if a human dismisses them a second time, which
+    // stamps a newer pipeline_dismissed_at.
+    const reEnteredMs = contact.last_lead_source_at
+      ? new Date(contact.last_lead_source_at).getTime() : null
+    const reEnteredSinceDismissal = reEnteredMs !== null
+      && Number.isFinite(reEnteredMs) && reEnteredMs > dismissedMs
+
+    if (!trainedSinceDismissal && !reEnteredSinceDismissal) return 'cold_lead'
+    // Falling through routes them by history, which is exactly the split
+    // asked for: never trained -> new_lead on the acquisition board; trained
+    // before -> the returning board via returnEpisode below.
   }
 
   // ── RETURNING BOARD (RETURNPIPE.1) ─────────────────────────────

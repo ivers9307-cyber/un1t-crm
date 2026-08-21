@@ -474,3 +474,66 @@ describe('RETURNPIPE.1 — splitStagesByFunnel keeps three boards apart', () => 
     expect(returning).toHaveLength(0)
   })
 })
+
+// ── RETURNPIPE.3 — the /start form revokes a Cold dismissal ────────
+//
+// Richard, 2026-08-21: "a cold lead that comes in on the /start form who
+// hasn't trained with us before gets reclassified as a lead and starts on the
+// new lead pipeline; if they have trained before then they come in on the new
+// returning pipeline."
+//
+// 92 of the 112 dismissed contacts are in the live trial sequence, so this is
+// the path that decides whether that campaign's wins are visible.
+
+describe('RETURNPIPE.3 — re-entering a funnel form un-dismisses a cold lead', () => {
+  const NOW = Date.parse('2026-08-21T09:00:00Z')
+  const daysAgo = (d) => new Date(NOW - d * 86400000).toISOString()
+  const att = (d) => ({ status: 'BOOKED', attended: true, time_start: Math.floor((NOW - d * 86400000) / 1000) })
+  const soon = (h) => ({ status: 'BOOKED', time_start: Math.floor((NOW + h * 3600000) / 1000) })
+  const dismissed = { glofox_membership_status: 'trial', joined_at: daysAgo(300), pipeline_dismissed_at: daysAgo(20) }
+
+  it('never trained + came in on the form → new_lead on the ACQUISITION board', () => {
+    expect(classifyContact({
+      ...dismissed, last_attended_at: null,
+      last_lead_source_at: daysAgo(1), recent_bookings: [soon(48)],
+    }, NOW)).toBe('new_lead')
+  })
+
+  it('trained before + came in on the form → the RETURNING board', () => {
+    expect(classifyContact({
+      ...dismissed, last_attended_at: daysAgo(250),
+      last_lead_source_at: daysAgo(1), recent_bookings: [soon(48)],
+    }, NOW)).toBe('returning_booked')
+  })
+
+  it('still cold when the last form entry PREDATES the dismissal', () => {
+    // The dismissal was the more recent judgement — it stands.
+    expect(classifyContact({
+      ...dismissed, last_attended_at: null,
+      last_lead_source_at: daysAgo(60), recent_bookings: [soon(48)],
+    }, NOW)).toBe('cold_lead')
+  })
+
+  it('still cold with no form entry at all — the existing behaviour is unchanged', () => {
+    expect(classifyContact({ ...dismissed, last_attended_at: null, last_lead_source_at: null }, NOW)).toBe('cold_lead')
+    expect(classifyContact({ ...dismissed, last_attended_at: daysAgo(250) }, NOW)).toBe('cold_lead')
+  })
+
+  it('attending after the dismissal still revokes it, as it always did', () => {
+    expect(classifyContact({
+      ...dismissed, last_attended_at: daysAgo(1),
+      recent_bookings: [att(300), att(1)],
+    }, NOW)).toBe('returning_first_class')
+  })
+
+  it('the revocation is permanent — it does not lapse when the booking passes', () => {
+    // last_lead_source_at persists, so they cannot silently snap back to cold
+    // once recent_bookings rolls over. Only a NEW dismissal makes them cold
+    // again, and that stamps a newer pipeline_dismissed_at.
+    const later = NOW + 200 * 86400000
+    expect(classifyContact({
+      ...dismissed, last_attended_at: null,
+      last_lead_source_at: daysAgo(1), recent_bookings: [],
+    }, later)).not.toBe('cold_lead')
+  })
+})
