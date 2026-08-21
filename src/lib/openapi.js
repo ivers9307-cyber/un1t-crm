@@ -4410,6 +4410,79 @@ const SonosFavorite = z.object({
   name: z.string(),
 }).openapi('SonosFavorite')
 
+// SONOSLIVE.4/5 — live control + now-playing. Hand-duplicated from
+// src/lib/sonos/actions.js (ACTIONS) and src/lib/sonos/live.js (the `code`
+// tag union), same rule as the schedule schemas above: this file never
+// imports from src/app/api or src/lib/sonos, so the shapes are kept here
+// and updated by hand when those files change.
+const SonosControlBody = z.object({
+  schedule_id: z.string(),
+  action: z.enum([
+    'volume_up', 'volume_down', 'set_volume',
+    'play', 'pause', 'skip_next', 'skip_previous', 'load_favorite',
+  ]),
+  value: z.union([z.number(), z.string()]).optional(),
+}).openapi('SonosControlBody', {
+  description: 'value is read per action: volume_up/volume_down take an optional step size (default 5, '
+    + 'range 1-100, sign ignored — direction lives in the action name); set_volume takes a required integer '
+    + '0-100; load_favorite takes a required non-empty favorite id. play/pause/skip_next/skip_previous '
+    + 'ignore value.',
+})
+
+// The `code` tag is a stable machine-readable union runLiveAction '
+// (src/lib/sonos/live.js) returns; the route maps each to the HTTP status
+// below. `applied`/`failedGroups` appear only on a multi-group dispatch-
+// loop failure: volume_up/volume_down are RELATIVE, not idempotent, so a
+// caller must not blindly retry the whole action when `applied` already
+// lists groups that changed before `failedGroups` failed — a blind retry
+// would move an already-changed group a second time.
+const SonosControlErrorResponse = ErrorResponse.extend({
+  code: z.enum([
+    'invalid', 'not_found', 'not_configured', 'not_connected', 'no_group',
+    'fixed_volume', 'regrouped', 'no_content', 'rate_limited', 'unreachable',
+    'db_error', 'failed',
+  ]),
+  applied: z.array(z.string()).optional(),
+  failedGroups: z.array(z.string()).optional(),
+}).openapi('SonosControlErrorResponse')
+
+const SonosTrack = z.object({
+  name: z.string().nullable(),
+  artist: z.string().nullable(),
+  album: z.string().nullable(),
+  imageUrl: z.string().nullable(),
+}).openapi('SonosTrack')
+
+const SonosNowPlayingResponse = z.union([
+  z.object({
+    success: z.literal(true),
+    live: z.literal(false),
+    reason: z.enum(['not_configured', 'not_connected', 'refresh_failed', 'db_error', 'unreachable', 'no_group']),
+    statusCode: z.number().int().optional(),
+  }).openapi('SonosNowPlayingOffline', {
+    description: 'Deliberately a 200, not an error status — not-connected and unreachable are normal states '
+      + 'the control strip renders a specific panel for, polled every 10s. statusCode is present only when '
+      + 'reason is unreachable (the failed Sonos groups call\'s HTTP status).',
+  }),
+  z.object({
+    success: z.literal(true),
+    live: z.literal(true),
+    groupId: z.string(),
+    playbackState: z.string().nullable(),
+    volume: z.number().int().nullable(),
+    muted: z.boolean().nullable(),
+    fixedVolume: z.boolean(),
+    volumeFailed: z.boolean(),
+    track: SonosTrack.nullable(),
+    source: z.string().nullable(),
+  }).openapi('SonosNowPlayingLive', {
+    description: 'TRAP: fixedVolume:false does NOT mean "not fixed" when volumeFailed is true — the volume '
+      + 'GET failed and fixedVolume just defaults to false in that case. A client must check volumeFailed '
+      + 'before trusting fixedVolume (or volume/muted, which are null on the same failure). track is null '
+      + 'when Sonos reports no metadata; every field inside it is independently nullable per Sonos.',
+  }),
+]).openapi('SonosNowPlayingResponse')
+
 registry.registerPath({
   method: 'get',
   path: '/api/sonos/household',
@@ -4537,21 +4610,107 @@ registry.registerPath({
   path: '/api/sonos/schedules/{id}/run-now',
   tags: ['Automations'],
   security: [{ CookieAuth: [] }],
-  summary: 'Clear last_applied so the next reconcile tick re-applies the active window (device_control)',
+  summary: 'Apply the schedule\'s currently-active window immediately (device_control)',
   description:
-    'Not a play/stop control — it only clears the exactly-once stamp the sonos-reconcile cron (unregistered '
-    + 'here — cron routes never are) uses to avoid re-issuing loadFavorite every tick. Outside any window '
-    + 'this is a no-op by construction: the cron only opens a window that is currently active, and never '
-    + 'invents a close for a window it has no record of opening. Recovers a window a human overrode; does '
-    + 'nothing the rest of the time. Missing OR cross-location ids return 404 (no ID enumeration).',
+    'SONOSLIVE.6: no longer clears last_applied and waits for the next cron tick. It now runs the same '
+    + 'volume-then-favourite path the sonos-reconcile cron (unregistered here — cron routes never are) uses '
+    + 'and stamps last_applied as an open, exactly as a cron-driven open would — immediate, and the close\'s '
+    + 'precondition (a record of having opened) is written rather than destroyed. A no-op only when there is '
+    + 'no active window right now, or the schedule is disabled — both now report distinctly as 409 rather '
+    + 'than a silent no-op 200. On a partial dispatch failure, last_applied is deliberately NOT stamped, so '
+    + 'the next cron tick retries. Missing OR cross-location ids return 404 (no ID enumeration).',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
-    200: { description: 'Cleared — the next cron tick re-applies the active window, if any', content: { 'application/json': { schema: z.object({ success: z.literal(true) }) } } },
+    200: {
+      description: 'Applied. A bookkeeping failure after a successful apply still reports success, with a '
+        + 'warning field, rather than telling the operator the music did not start when it did.',
+      content: {
+        'application/json': {
+          schema: z.union([
+            z.object({ success: z.literal(true), groups: z.array(z.string()) }),
+            z.object({ success: z.literal(true), warning: z.string() }),
+          ]).openapi('SonosRunNowResponse'),
+        },
+      },
+    },
     400: { description: 'Caller has no active location', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Schedule not found (or not at your active location)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: {
+      description: 'The current state blocks an immediate apply: the schedule is switched off, no window is '
+        + 'active right now, Sonos is not connected, or none of this schedule\'s speakers are online.',
+      content: { 'application/json': { schema: ErrorResponse } },
+    },
     500: { description: 'Database error', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Sonos did not answer, or the dispatch loop failed partway through', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Sonos is not configured', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/sonos/control',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Immediate live control of a schedule\'s speakers — volume, transport, favourite (device_control)',
+  description:
+    'SONOSLIVE.3/4: writes nothing to sonos_schedules, deliberately — the schedule only acts at window '
+    + 'boundaries, so a live change simply persists until the next one; there is no suppression or '
+    + 'reconciliation to invent here. Works even while the schedule is disabled or overridden, on purpose: '
+    + 'both of those govern whether the CRON acts, not whether a human may act right now. On failure the '
+    + 'body may carry `applied`/`failedGroups` (see SonosControlErrorResponse) — check those before retrying '
+    + 'a multi-group volume_up/volume_down, since retrying blind can double-apply the step to a group that '
+    + 'already changed.',
+  request: {
+    body: { content: { 'application/json': { schema: SonosControlBody } } },
+  },
+  responses: {
+    200: {
+      description: 'Applied to every resolved group',
+      content: { 'application/json': { schema: z.object({ success: z.literal(true), groups: z.array(z.string()) }).openapi('SonosControlResponse') } },
+    },
+    400: { description: 'Unknown action, an unusable value for that action, or the caller has no active location (code: invalid)', content: { 'application/json': { schema: SonosControlErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Schedule not found, or not at your active location (code: not_found)', content: { 'application/json': { schema: SonosControlErrorResponse } } },
+    409: {
+      description: 'The current state blocks this action — code distinguishes which: not_connected (Sonos '
+        + 'is not connected), no_group (none of this schedule\'s speakers are online), fixed_volume (these '
+        + 'speakers are set to a fixed volume), regrouped (the group changed between resolve and act — retry '
+        + 'is safe), no_content (nothing is loaded on these speakers, so play/pause/skip have nothing to '
+        + 'act on).',
+      content: { 'application/json': { schema: SonosControlErrorResponse } },
+    },
+    429: { description: 'Rate limited by Sonos — try again shortly (code: rate_limited)', content: { 'application/json': { schema: SonosControlErrorResponse } } },
+    500: { description: 'Database error (code: db_error)', content: { 'application/json': { schema: SonosControlErrorResponse } } },
+    502: { description: 'Sonos is unreachable, or a call in the dispatch loop failed (code: unreachable or failed)', content: { 'application/json': { schema: SonosControlErrorResponse } } },
+    503: { description: 'Sonos is not configured (code: not_configured)', content: { 'application/json': { schema: SonosControlErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/sonos/now-playing',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Live now-playing readout for a schedule\'s resolved speaker group (device_control)',
+  description:
+    'SONOSLIVE.5: not-connected and unreachable states return HTTP 200, not an error status — they are '
+    + 'normal expected states the control strip renders a specific panel for (polled every 10s while a strip '
+    + 'is open). Genuine auth/scoping failures (missing session, missing permission, no active location, '
+    + 'unknown or cross-location schedule id) still return 401/403/400/404 as normal. See '
+    + 'SonosNowPlayingLive\'s description for the volumeFailed trap.',
+  request: {
+    query: z.object({ schedule_id: uuidLike }),
+  },
+  responses: {
+    200: { description: 'Offline-state or live-state readout, see SonosNowPlayingResponse', content: { 'application/json': { schema: SonosNowPlayingResponse } } },
+    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Malformed schedule_id, not found, or not at your active location', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Database error reading the schedule row', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
