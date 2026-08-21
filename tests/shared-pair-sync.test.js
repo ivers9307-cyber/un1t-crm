@@ -48,11 +48,21 @@
 //                 which is a fact someone needs to re-decide.
 //   unrelated     Same filename, different modules, disjoint export surfaces.
 //                 Asserted to STAY disjoint.
+//   shared-constant
+//                 NOT copies — two different modules that must agree on one
+//                 named value (a writer and a reader of the same table).
+//                 Asserted on the RUNTIME VALUE of the named constants.
 //
-// And the property that actually stops the rot: COMPLETENESS. Every module
-// that exists in both `shared/` and `src/lib/` must appear in the manifest.
-// A new duplicated module cannot be added without someone classifying it —
-// the same shape as the check:ota-paths allowlist.
+// And the property that actually stops the rot: COMPLETENESS, in two sweeps.
+// A same-NAME sweep (recursive) requires every module present in both trees to
+// be classified. A cross-NAMED sweep requires every shared/ ↔ src/lib/ pair
+// that shares an exported name to be classified too, or declared coincidental
+// with a reason. A new duplicated module cannot be added without someone
+// saying what it is — the same shape as the check:ota-paths allowlist.
+//
+// The cross-named sweep is not decorative: it is what found the
+// wearable-trends TREND_METRICS pair, which the filename sweep alone could
+// never see and which no comment anywhere claimed.
 //
 // ─── Known limits, on purpose ────────────────────────────────────────────────
 //
@@ -60,6 +70,16 @@
 //     three-way sync rule with ~20 modules in a separate repo; nothing in
 //     this repo can read that repo. This guard covers the in-repo half only,
 //     and says so rather than implying more coverage than it has.
+//   • The cross-named sweep keys on EXPORT NAMES. A duplicate that was
+//     renamed on BOTH sides is invisible to it, and there is one on this tree
+//     right now: src/lib/tiers.js's rolling-window decay helpers
+//     (tierWindowMonths / shiftMonthKey / windowedMonthsHit) re-implement the
+//     same concept as shared/tier-window.js (windowMonthKeys /
+//     monthsHitInWindow / resolveTierMonths) under entirely different names,
+//     so they share nothing for the sweep to catch. Named here rather than
+//     omitted: it has to be added to PAIRS by hand, or the two reconciled.
+//   • Neither sweep looks outside shared/ and src/lib/. A module duplicated
+//     into mobile/lib/ is not covered.
 //   • `diverged` pins export names, not behaviour. It tells you a pair is
 //     known-unsynced and which exports; it does not tell you the divergence
 //     is harmless. Two of the three are recorded here as open questions with
@@ -70,7 +90,7 @@
 //     a false "matches".
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { stripComments } from '../scripts/lib/strip-comments.mjs'
 import { exportBodies, collectExportNames } from '../scripts/lib/export-bodies.mjs'
@@ -195,6 +215,24 @@ const PAIRS = {
       'shared/dublin-time.js asks for its semantics to be mirrored, and today they are.',
   },
 
+  // ── shared-constant: different modules, one value that must agree ──────────
+  'wearable-trends TREND_METRICS': {
+    shared: 'shared/wearable-trends-view.js',
+    web: 'src/lib/wearable-trends.js',
+    mode: 'shared-constant',
+    constants: ['TREND_METRICS'],
+    why:
+      'Not a copied module — a WRITE side and a READ side that must agree on one list. ' +
+      'src/lib/wearable-trends.js owns the writer (samplesToMetricRows filters Apple Health samples ' +
+      'down to TREND_METRICS before inserting member_health_metrics rows); shared/wearable-trends-view.js ' +
+      "owns the reader, and its own comment says the list is exported so callers can server-side filter — " +
+      'because an unfiltered ascending read hits the row cap and returns the OLDEST rows, hiding the ' +
+      "member's latest reading. Add a metric to the writer only and it is stored but never displayed; add " +
+      'it to the reader only and the filter asks for rows that never exist. The two lists are declared ' +
+      'independently, in different files, with no import between them and nothing checking they agree — ' +
+      'this is the check. Found by the cross-named sweep below, not by the filename sweep.',
+  },
+
   // ── unrelated: same filename, different module ─────────────────────────────
   'permissions.js': {
     mode: 'unrelated',
@@ -239,14 +277,143 @@ function driftedExports(sharedSrc, webSrc) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ── The completeness sweep ───────────────────────────────────────────────────
+//
+// Two sweeps, because the first one alone is weaker than its own name.
+//
+// The FILENAME sweep is what the guard shipped with: same basename in both
+// directories → must be classified. It is exact and has no false positives,
+// but it is blind by construction to a duplicate that was renamed on one side
+// — and this repo has one (`shared/zone-colors.js` ↔ `src/lib/tv-zone-colors.js`),
+// so the blind spot is not hypothetical. It was also non-recursive, which meant
+// `src/lib/sdk/me.js` could shadow `shared/sdk/me.js` unseen. Both fixed here:
+// the walk recurses, and the cross-named sweep below covers the renames.
+//
+// The CROSS-NAMED sweep compares every shared/**/*.js against every
+// src/lib/**/*.js by EXPORTED NAME OVERLAP. Any pair sharing at least one
+// top-level export name must be either in PAIRS or in COINCIDENTAL below with
+// a reason. No threshold: the one real finding this sweep produced today
+// (wearable-trends' TREND_METRICS) overlaps on exactly ONE name, so any
+// "ignore small overlaps" rule would have thrown away the thing it caught.
+//
+// Measured cost of having no threshold, on this tree: 21 overlapping pairs
+// total — 10 already-classified same-name pairs, zone-colors, the
+// wearable-trends finding, and 9 genuine name collisions between unrelated
+// modules. Nine allowlist entries is a reviewable amount of noise for a check
+// that forces every future cross-named duplicate to be classified.
+const COINCIDENTAL = {
+  'shared/approval-cards.js::src/lib/contact-view.js':
+    'Both define a local `mergeTimeline`, over different row shapes: approval cards merge approval events, contact-view merges a contact drawer timeline. No shared vocabulary.',
+  'shared/dashboard-metrics.js::src/lib/ads/funnel.js':
+    '`shapeFunnel` twice: the dashboard shapes the membership funnel, ads/funnel shapes a Meta ad funnel. Different stages, different inputs.',
+  'shared/tiers.js::src/lib/hyrox/constants.js':
+    '`TIERS` twice, and deliberately unrelated: shared/tiers.js is the status-tier ladder (months attended), hyrox/constants.js is the Hyrox race division list. The status ladder IS guarded — as the same-name tiers.js pair above.',
+  'shared/share-card.js::src/lib/tv-zone-colors.js':
+    '`dominantZone` twice. tv-zone-colors picks the dominant zone for the TV board glow; share-card picks it for a share image. The zone COLOURS they both build on are guarded by the zone-colors.js pair above; these two consumers are separate.',
+  'shared/share-card.js::src/lib/challenges.js':
+    '`shortName` twice — a display helper for a member name, independently written on both sides. Cosmetic, no contract.',
+  'shared/dashboard-data.js::src/lib/goals.js':
+    '`startOfMonth` twice. goals.js is inside the guarded goals.js pair (mode `diverged`, and startOfMonth is one of the pinned drifted exports); dashboard-data has its own for a dashboard range.',
+  'shared/live-view.js::src/lib/race-control.js':
+    '`formatElapsed` twice, and they deliberately DISAGREE — recorded here so the disagreement is ' +
+    'visible rather than latent. shared/race-control.js (which src/lib/race-control.js re-exports, ' +
+    'so the collision surfaces through the shim) renders a race clock: minutes zero-padded below an ' +
+    'hour ("05:07") and "—" for a null/negative input. shared/live-view.js renders the in-class board ' +
+    'clock: minutes UNpadded ("5:07") and 0:00 for junk input. Two different screens with two ' +
+    'established conventions; unifying them changes a visible clock format and is a product decision, ' +
+    'not a drive-by in a guard. Both live in shared/, so the champ-app leg would see it too.',
+  'shared/live-view.js::src/lib/hr-session-lifecycle.js':
+    '`STALE_AFTER_MS` twice, different subjects: live-view staleness for the in-class board, hr-session-lifecycle staleness for a session record. Coupling them would be wrong.',
+  'shared/pipeline-classifier.js::src/lib/churn-radar.js':
+    '`classifyContact` twice. pipeline-classifier is the funnel-stage classifier (guarded as a `reexport` pair); churn-radar classifies arrears/churn risk. Different outputs entirely.',
+  'shared/dashboard-data.js::src/lib/dates.js':
+    '`isoDate` twice — a one-line YYYY-MM-DD formatter. Too small to be a contract.',
+  'shared/dashboard-data.js::src/lib/schemas.js':
+    '`isoDate` twice, the same one-line YYYY-MM-DD formatter as the dates.js collision above. schemas.js uses it for request validation, dashboard-data for a range label; no contract binds them.',
+}
+
+/** Every .js under a directory, recursively, excluding tests and fixtures. */
+function walkJs(dir, base = dir, out = []) {
+  if (!existsSync(dir)) return out
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const abs = join(dir, entry.name)
+    if (entry.isDirectory()) {
+      if (entry.name === '__tests__' || entry.name === '__fixtures__' || entry.name === 'node_modules') continue
+      walkJs(abs, base, out)
+    } else if (entry.name.endsWith('.js') && !entry.name.endsWith('.test.js')) {
+      out.push(relative(base, abs))
+    }
+  }
+  return out
+}
+
 describe('shared/ ↔ src/lib/ pair inventory is complete', () => {
-  it('every module that exists in BOTH directories is classified', () => {
-    const sameName = readdirSync(join(repo, 'shared'))
-      .filter((f) => f.endsWith('.js') && !f.endsWith('.test.js'))
-      .filter((f) => existsSync(join(repo, 'src', 'lib', f)))
+  it('every module with the SAME NAME in both directories is classified', () => {
+    const sameName = walkJs(join(repo, 'shared'))
+      .filter((rel) => existsSync(join(repo, 'src', 'lib', rel)))
       .sort()
-    const classified = Object.keys(PAIRS).filter((k) => !PAIRS[k].web).sort()
+    const classified = Object.keys(PAIRS)
+      .filter((k) => !PAIRS[k].web && !PAIRS[k].shared)
+      .sort()
     expect(classified).toEqual(sameName)
+  })
+
+  it('every CROSS-NAMED module sharing an export name is classified or declared coincidental', () => {
+    const surfaces = (prefix) => {
+      const root = join(repo, prefix)
+      return walkJs(root).map((rel) => ({
+        key: `${prefix}/${rel.split(sep).join('/')}`,
+        names: new Set(collectExportNames(readFileSync(join(root, rel), 'utf8'))),
+      }))
+    }
+    const sharedMods = surfaces('shared')
+    const webMods = surfaces('src/lib')
+
+    // Pairs the manifest already covers, in the same `a::b` key shape.
+    const known = new Set(
+      Object.entries(PAIRS).map(
+        ([k, c]) => `${c.shared || `shared/${k}`}::${c.web || `src/lib/${k}`}`,
+      ),
+    )
+
+    const unclassified = []
+    for (const s of sharedMods) {
+      for (const w of webMods) {
+        const shared = [...s.names].filter((n) => n !== 'default' && w.names.has(n))
+        if (shared.length === 0) continue
+        const key = `${s.key}::${w.key}`
+        if (known.has(key) || key in COINCIDENTAL) continue
+        unclassified.push(`${key}  (shares: ${shared.sort().join(', ')})`)
+      }
+    }
+
+    expect(
+      unclassified.sort(),
+      'A shared/ module and a src/lib/ module export the same name(s) and neither PAIRS nor ' +
+        'COINCIDENTAL says what that means. Classify it — do not delete this check to go green.',
+    ).toEqual([])
+  })
+
+  it('no stale COINCIDENTAL entry — every declared collision still exists', () => {
+    const surfaceOf = (rel) => new Set(collectExportNames(readFileSync(join(repo, rel), 'utf8')))
+    const stale = []
+    for (const key of Object.keys(COINCIDENTAL)) {
+      const [s, w] = key.split('::')
+      if (!existsSync(join(repo, s)) || !existsSync(join(repo, w))) {
+        stale.push(`${key} — a side no longer exists`)
+        continue
+      }
+      const overlap = [...surfaceOf(s)].filter((n) => n !== 'default' && surfaceOf(w).has(n))
+      if (overlap.length === 0) stale.push(`${key} — the names no longer collide`)
+    }
+    expect(stale, 'Remove these from COINCIDENTAL; an allowlist that outlives its reason is a mute.').toEqual([])
+  })
+
+  it('every COINCIDENTAL entry carries a reason, not just a pass', () => {
+    for (const [key, why] of Object.entries(COINCIDENTAL)) {
+      expect(typeof why, `${key} has no reason`).toBe('string')
+      expect(why.length, `${key}'s reason is too thin`).toBeGreaterThan(60)
+    }
   })
 
   it('every manifest entry points at two files that exist', () => {
@@ -387,6 +554,32 @@ describe('unrelated pairs — same filename, different module', () => {
           `Reclassify the pair — an overlapping name is exactly where a silent divergence hides.`,
       ).toEqual([])
     })
+  }
+})
+
+describe('shared-constant pairs — different modules, one value that must agree', () => {
+  const entries = Object.entries(PAIRS).filter(([, c]) => c.mode === 'shared-constant')
+  for (const [key, cfg] of entries) {
+    for (const name of cfg.constants) {
+      // Asserted on the RUNTIME VALUE, not the source text. These two sides are
+      // not copies of each other — they are a writer and a reader that happen
+      // to need the same list — so their surrounding code differs completely
+      // and only the value is comparable. Deep equality, and order matters:
+      // the reader uses the list to build a server-side filter, so a
+      // re-ordering is harmless but a membership change is not, and pinning
+      // order costs nothing while making the diff obvious.
+      it(`${key}: ${name} holds the same value on both sides`, async () => {
+        const s = await import(/* @vite-ignore */ sharedPathFor(key, cfg))
+        const w = await import(/* @vite-ignore */ webPathFor(key, cfg))
+        expect(s[name], `${name} is not exported from ${cfg.shared}`).toBeDefined()
+        expect(w[name], `${name} is not exported from ${cfg.web}`).toBeDefined()
+        expect(
+          w[name],
+          `${name} disagrees between ${cfg.shared} and ${cfg.web}. These are declared ` +
+            `independently with no import between them; that is why this check exists.`,
+        ).toEqual(s[name])
+      })
+    }
   }
 })
 

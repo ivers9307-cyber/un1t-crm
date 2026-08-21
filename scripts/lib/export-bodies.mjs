@@ -38,8 +38,21 @@ import { stripComments } from './strip-comments.mjs'
 const DECL = /^export\s+(?:async\s+)?(?:function\s*\*?|const|let|var|class)\s+([A-Za-z0-9_$]+)/
 
 /** Replace the CONTENTS of string/template literals with spaces so their
- *  brackets never move the depth counter. Length is preserved so offsets
- *  computed on the masked text index the original text. */
+ *  brackets never move the depth counter. Both length AND line count are
+ *  preserved, so an index or a line number computed on the masked text
+ *  addresses the same place in the original.
+ *
+ *  NEWLINES ARE NEVER MASKED. Blanking them preserved character count but not
+ *  LINE count, and exportBodies() walks the two texts by line index — so a
+ *  module containing a multi-line template literal produced a `maskedLines`
+ *  array shorter than `lines`, and the balancing loop read past its end and
+ *  threw `maskedLines[j] is not iterable`. Measured on this tree: 22 files
+ *  under src/lib/ crashed the extractor that way, every one of them a module
+ *  that builds an email or a prompt from a multi-line template. None were
+ *  reachable from the pair manifest when this was written, which is exactly
+ *  why it went unnoticed until the cross-named sweep in
+ *  tests/shared-pair-sync.test.js started reading every file in both trees.
+ *  A newline cannot affect bracket depth, so keeping it costs nothing. */
 function maskStrings(src) {
   const out = src.split('')
   let i = 0
@@ -48,8 +61,13 @@ function maskStrings(src) {
     if (c === "'" || c === '"' || c === '`') {
       i++
       while (i < src.length && src[i] !== c) {
-        if (src[i] === '\\') { out[i] = ' '; i++; if (i < src.length) { out[i] = ' '; i++ } continue }
-        out[i] = ' '
+        if (src[i] === '\\') {
+          if (src[i] !== '\n') out[i] = ' '
+          i++
+          if (i < src.length) { if (src[i] !== '\n') out[i] = ' '; i++ }
+          continue
+        }
+        if (src[i] !== '\n') out[i] = ' '
         i++
       }
       i++
