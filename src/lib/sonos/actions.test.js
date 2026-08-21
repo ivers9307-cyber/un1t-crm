@@ -30,6 +30,26 @@ describe('planLiveAction', () => {
     expect(planLiveAction('volume_up', -10)).toMatchObject({ args: [10] })
   })
 
+  it('rejects non-numeric-typed step values for volume_up/volume_down, same as set_volume', () => {
+    // The volume_up/down branch shares toFiniteNumber with set_volume now,
+    // so it must reject the same shapes: `true` would otherwise coerce to
+    // 1 (an accepted 1-unit step) and `[5]` to 5 (an accepted 5-unit step).
+    expect(planLiveAction('volume_up', true)).toBe(null)
+    expect(planLiveAction('volume_up', [5])).toBe(null)
+    expect(planLiveAction('volume_up', {})).toBe(null)
+    expect(planLiveAction('volume_up', '  ')).toBe(null)
+    expect(planLiveAction('volume_up', '')).toBe(null)
+  })
+
+  it('still accepts the previously-valid step shapes for volume_up/volume_down', () => {
+    expect(planLiveAction('volume_up', '5')).toMatchObject({ args: [5] })
+    expect(planLiveAction('volume_up', 5)).toMatchObject({ args: [5] })
+    expect(planLiveAction('volume_up', '5.5')).toMatchObject({ args: [6] })
+    // null/undefined still mean "use the default step".
+    expect(planLiveAction('volume_up', null)).toMatchObject({ args: [5] })
+    expect(planLiveAction('volume_up', undefined)).toMatchObject({ args: [5] })
+  })
+
   it('maps set_volume to an absolute level', () => {
     expect(planLiveAction('set_volume', 35)).toMatchObject({ call: 'setVolume', args: [35] })
   })

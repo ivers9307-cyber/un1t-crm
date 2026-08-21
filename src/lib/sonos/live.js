@@ -80,6 +80,15 @@ export async function runLiveAction(db, locationId, scheduleId, action, value, d
   // A fixed-level group ignores volume commands. Refuse rather than firing
   // something that silently does nothing. Only checked when it matters —
   // an extra GET on every skip would be waste.
+  //
+  // Fail OPEN on a failed read (vol.ok === false): deliberately, not by
+  // accident. The alternative — refusing every volume change whenever this
+  // GET blips — would block the common case to guard the rare one (a
+  // genuinely fixed-level group). The accepted cost of failing open: on an
+  // actually-fixed group, the volume command still fires, Sonos accepts it
+  // and silently does nothing, and the caller gets a false-positive
+  // success. That trade is preferred over refusing volume control estate-
+  // wide on a transient read failure.
   if (plan.touchesVolume) {
     const vol = await getGroupVolume(tok.token, groupIds[0])
     if (vol.ok && vol.body?.fixed === true) return { ok: false, code: 'fixed_volume' }
@@ -87,18 +96,29 @@ export async function runLiveAction(db, locationId, scheduleId, action, value, d
 
   const results = []
   for (const groupId of groupIds) {
-    results.push(await call(plan.call, tok.token, groupId, ...plan.args))
+    results.push({ groupId, ...(await call(plan.call, tok.token, groupId, ...plan.args)) })
   }
 
   const failed = results.find((r) => !r.ok)
   if (failed) {
     logWarn(MODULE, 'action failed', { scheduleId, action, statusCode: failed.statusCode })
+
+    // Groups already called before the failure are NOT undone — report
+    // both sides rather than letting `ok: false` read as "nothing
+    // happened". This matters most for volume_up/volume_down: they are
+    // NOT idempotent, so a caller that sees a bare failure and retries the
+    // whole action would apply the relative step a second time to a group
+    // in `applied`. `code` keeps its existing meaning/mapping; `applied`
+    // and `failedGroups` let a retry target only what didn't land.
+    const applied = results.filter((r) => r.ok).map((r) => r.groupId)
+    const failedGroups = results.filter((r) => !r.ok).map((r) => r.groupId)
+
     // 404 = the group changed between resolve and act. Retryable, but not
     // retried in-request — the caller re-resolves on their next attempt.
-    if (failed.statusCode === 404) return { ok: false, code: 'regrouped' }
-    if (failed.statusCode === 499) return { ok: false, code: 'no_content' }
-    if (failed.statusCode === 429) return { ok: false, code: 'rate_limited' }
-    return { ok: false, code: 'failed', statusCode: failed.statusCode }
+    if (failed.statusCode === 404) return { ok: false, code: 'regrouped', applied, failedGroups }
+    if (failed.statusCode === 499) return { ok: false, code: 'no_content', applied, failedGroups }
+    if (failed.statusCode === 429) return { ok: false, code: 'rate_limited', applied, failedGroups }
+    return { ok: false, code: 'failed', statusCode: failed.statusCode, applied, failedGroups }
   }
 
   return { ok: true, groups: groupIds }

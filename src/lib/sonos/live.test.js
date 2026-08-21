@@ -8,6 +8,17 @@ const groupsBody = {
 
 const schedule = { id: 's1', player_ids: ['RINCON_1'] }
 
+// Two distinct groups, so resolveGroupIds (one id per distinct group, in
+// player_ids order) returns two ids: ['GRP_A', 'GRP_B'].
+const twoGroupsBody = {
+  groups: [
+    { id: 'GRP_A', name: 'Studio', playbackState: 'PLAYBACK_STATE_PLAYING', playerIds: ['RINCON_1'] },
+    { id: 'GRP_B', name: 'Floor', playbackState: 'PLAYBACK_STATE_PLAYING', playerIds: ['RINCON_2'] },
+  ],
+  players: [{ id: 'RINCON_1', name: 'Studio' }, { id: 'RINCON_2', name: 'Floor' }],
+}
+const twoGroupSchedule = { id: 's1', player_ids: ['RINCON_1', 'RINCON_2'] }
+
 // Records every table touched so a test can prove no write happened.
 function makeDb(row, touched = []) {
   return {
@@ -116,5 +127,29 @@ describe('runLiveAction', () => {
   it('is dormant when Sonos is not configured', async () => {
     const out = await runLiveAction(makeDb(schedule), 'loc-1', 's1', 'play', undefined, deps({ getConfig: () => null }))
     expect(out).toMatchObject({ ok: false, code: 'not_configured' })
+  })
+
+  it('reports every resolved group on a multi-group success', async () => {
+    const d = deps({ getGroups: async () => ({ ok: true, statusCode: 200, body: twoGroupsBody }) })
+    const out = await runLiveAction(makeDb(twoGroupSchedule), 'loc-1', 's1', 'play', undefined, d)
+    expect(out).toMatchObject({ ok: true, groups: ['GRP_A', 'GRP_B'] })
+  })
+
+  it('reports which group already succeeded when a later group fails, so a retry does not double-apply', async () => {
+    // volume_up/volume_down are NOT idempotent — a caller retrying the
+    // whole action on a bare `ok: false` would apply the step twice to
+    // whichever group is in `applied`.
+    const call = vi.fn()
+      .mockResolvedValueOnce({ ok: true, statusCode: 200 })
+      .mockResolvedValueOnce({ ok: false, statusCode: 404 })
+    const d = deps({ getGroups: async () => ({ ok: true, statusCode: 200, body: twoGroupsBody }), call })
+    const out = await runLiveAction(makeDb(twoGroupSchedule), 'loc-1', 's1', 'volume_up', undefined, d)
+    expect(out).toMatchObject({ ok: false, code: 'regrouped', applied: ['GRP_A'], failedGroups: ['GRP_B'] })
+  })
+
+  it('reports an empty applied list on a single-group failure', async () => {
+    const d = deps({ call: vi.fn(async () => ({ ok: false, statusCode: 404 })) })
+    const out = await runLiveAction(makeDb(schedule), 'loc-1', 's1', 'play', undefined, d)
+    expect(out).toMatchObject({ ok: false, code: 'regrouped', applied: [], failedGroups: ['GRP_A'] })
   })
 })

@@ -20,13 +20,23 @@ export const ACTIONS = [
 // (z.union([z.number(), z.string()]).optional()) blocks null/true/[] before
 // this runs, but a whitespace string is a valid string as far as Zod is
 // concerned, so '  ' would otherwise silently become volume 0.
-const isInt = (v) => {
-  if (typeof v === 'number') return Number.isInteger(v)
+//
+// Shared by both the absolute (set_volume) and relative (volume_up/down)
+// branches, so neither can drift back to a bare `Number(v)` — a bare
+// coercion accepts `true` (→1) and `[5]` (→5) as usable numbers, which
+// would read as a real step size instead of the garbage input it is.
+const toFiniteNumber = (v) => {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null
   if (typeof v === 'string' && v.trim() !== '') {
     const n = Number(v)
-    return Number.isFinite(n) && Number.isInteger(n)
+    return Number.isFinite(n) ? n : null
   }
-  return false
+  return null
+}
+
+const isInt = (v) => {
+  const n = toFiniteNumber(v)
+  return n !== null && Number.isInteger(n)
 }
 
 // → null (unknown action or unusable value)
@@ -40,8 +50,8 @@ export function planLiveAction(action, value) {
     case 'volume_down': {
       // A caller sending a negative step means "a step of this size", not
       // "invert my direction" — direction lives in the action name.
-      const raw = value === undefined || value === null ? DEFAULT_VOLUME_STEP : Number(value)
-      if (!Number.isFinite(raw)) return null
+      const raw = value === undefined || value === null ? DEFAULT_VOLUME_STEP : toFiniteNumber(value)
+      if (raw === null) return null
       const size = Math.abs(Math.round(raw))
       if (size < 1 || size > 100) return null
       const delta = action === 'volume_up' ? size : -size
