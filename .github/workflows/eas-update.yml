@@ -53,7 +53,7 @@ name: EAS Update
 # publish on 2026-08-19 (TOKENDEAD.1, group 7a752860) was never ramped, so
 # the next FIVE publishes all failed: BAREWRITE, LEGALENT, FUNNEL.5 and
 # RETURNPIPE.1. They failed SILENTLY — this job is not a required check
-# and `main` has no branch protection — so every merge reported success
+# and at the time `main` had no branch protection — so every merge reported success
 # while phones received nothing for two days. A staged default that nobody
 # ramps is not a safety mechanism; it is an outage that reports green.
 #
@@ -704,7 +704,7 @@ jobs:
               "This pipeline will not ramp or delete a rollout for you: that interlock is what stops" \
               "a second partial stacking on an unfinished one.")
           else
-            cause="**Cause: see the failing step in the run.** If the log ends in \"Cannot publish a new update with this runtime version while a rollout is in progress\", the pre-flight check above did not catch it — read \`mobile/docs/ota-rollout.md\` § *Publish blocked by an in-progress rollout*."
+            cause="**Cause: see the failing step in the run.** If the log ends in \"Cannot publish a new update with this runtime version while a rollout is in progress\", the pre-flight check above did not catch it — read \`mobile/docs/ota-rollout.md\` § *Ramp a partial to 100* / § *Gotchas*."
           fi
           body=$(printf '%s\n' \
             "The **EAS Update** workflow failed, so the JS on production phones is now BEHIND \`main\`." \

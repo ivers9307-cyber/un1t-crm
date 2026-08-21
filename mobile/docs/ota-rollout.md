@@ -18,7 +18,7 @@ nothing ramped automatically. The 10% publish on 08-19 (`TOKENDEAD.1`,
 group `7a752860-079e-4431-bdd7-2feb2d03f86f`) was never ramped, so the next
 **five** publishes all failed — BAREWRITE, LEGALENT, FUNNEL.5,
 RETURNPIPE.1. They failed *silently*: this job is not a required check and
-`main` has no branch protection, so every merge reported green while phones
+at the time `main` had no branch protection, so every merge reported green while phones
 received nothing for two days. A staged default that nobody ramps is not a
 safety mechanism; it is an outage that reports success.
 
