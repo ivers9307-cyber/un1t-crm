@@ -59,6 +59,16 @@ export async function POST(request, { params }) {
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   if (!schedule) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 
+  // planAction returns null for BOTH a disabled schedule and a schedule
+  // with no active window right now — collapsing them into one message
+  // points an operator debugging "run now does nothing" at the wrong fix.
+  // A disabled schedule needs "turn it on"; a window gap needs "check your
+  // window times". Check enabled first, before planAction ever runs, so
+  // the two stay distinguishable.
+  if (!schedule.enabled) {
+    return NextResponse.json({ success: false, error: 'This schedule is switched off — turn it on first' }, { status: 409 })
+  }
+
   const nowMs = Date.now()
   // planAction is asked what should happen with last_applied ignored, which
   // is exactly what "run it now" means: re-apply the active window whether
