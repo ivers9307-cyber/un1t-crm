@@ -81,12 +81,16 @@ function isOverrideLive(override, nowMs) {
 // reusing resolveServeWindows (the reconcile's own window resolver) fed the
 // same device-shaped object planAction builds, so it can never disagree
 // with the cron about which window is active.
-//   - Inside an active window, `last_state.at` (NOT `last_applied.at` —
-//     run-now clears last_applied but leaves last_state alone, so
-//     last_applied alone reads "never applied" right after a legitimate
-//     recovery click) should be at/after the window's start, allowing a
-//     little grace for the per-minute cron's own tick lag. If it isn't,
-//     the open is either about to land or stuck.
+//   - Inside an active window, `last_state.at` should be at/after the
+//     window's start, allowing a little grace for the per-minute cron's
+//     own tick lag. If it isn't, the open is either about to land or
+//     stuck. `last_state.at` rather than `last_applied.at` because it is
+//     stamped on EVERY applied action, open and close alike, so it is the
+//     better freshness signal for "is this schedule being serviced".
+//     (Run-now used to clear `last_applied` and leave `last_state`, which
+//     was the original reason for the split; SONOSLIVE.6 changed it to
+//     write both together, so the two no longer diverge — but the reason
+//     above still stands on its own.)
 //   - Outside any window — including because the schedule is off, or an
 //     override is suppressing it — going quiet is the NORMAL state. There
 //     is no "should have acted" fact to check there, so the indicator only

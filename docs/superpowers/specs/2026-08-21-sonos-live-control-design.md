@@ -103,7 +103,9 @@ Using absolute volume for +/− buttons makes two people pressing "+" fight each
 
 Playback state comes from the existing `GET /households/{id}/groups` response — no extra call. Volume and metadata are two additional GETs.
 
-Polled every **10 seconds** while a control strip is open, versus the existing 60s household poll. Two GETs per 10s is 12/min against a 1,000/min quota — a rounding error. Polling stops when the strip is closed or the tab is hidden.
+Polled every **10 seconds** while a control strip is open, versus the existing 60s household poll. Polling stops when the strip is closed or the tab is hidden.
+
+The real cost is **three** Sonos calls per poll, not two: the groups read is needed to resolve the ephemeral group before either of the others can be issued, so it is not *additional* but it is not free either. That is 18 requests/minute per open panel against a 1,000/min quota, shared with the per-minute reconcile cron and the household config route. Roughly 50 simultaneously-open panels would saturate it — far beyond a gym with a handful of staff, but worth knowing before this is ever put on a wall-mounted screen in every room.
 
 All metadata fields are nullable per Sonos; the UI degrades to "Playing" with no track detail rather than rendering blanks.
 

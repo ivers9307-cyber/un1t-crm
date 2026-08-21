@@ -4675,7 +4675,7 @@ registry.registerPath({
       description: 'Applied to every resolved group',
       content: { 'application/json': { schema: z.object({ success: z.literal(true), groups: z.array(z.string()) }).openapi('SonosControlResponse') } },
     },
-    400: { description: 'Unknown action, an unusable value for that action, or the caller has no active location (code: invalid)', content: { 'application/json': { schema: SonosControlErrorResponse } } },
+    400: { description: 'Two distinct shapes. An unknown action or an unusable value for a known action comes back from dispatch and carries code: invalid. A malformed body or a caller with no active location is rejected by the guards that run BEFORE dispatch and carries no code at all — which is why code is optional on this schema.', content: { 'application/json': { schema: SonosControlErrorResponse } } },
     401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Schedule not found, or not at your active location (code: not_found)', content: { 'application/json': { schema: SonosControlErrorResponse } } },
