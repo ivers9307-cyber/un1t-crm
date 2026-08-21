@@ -33,16 +33,31 @@ import { buildSessionReport } from '@/lib/hr-session-report'
 import { normalizeClassName } from '@/lib/hr-analytics'
 import { logInfo, logWarn, logError } from '@/lib/log'
 import { formatWeekdayShortDateTimeInTZ } from '@/lib/dates'
+import { getAppUrl, getMemberAppUrl } from '@/lib/app-url'
 
 const HISTORY_LOOKBACK_DAYS = 90
+
+// This email spans TWO hosts and they are different services:
+//
+//   member CTA  → /sessions/<id>              lives on the MEMBER app
+//   unsubscribe → /api/preferences/hr-emails  lives on THIS app (the CRM)
+//
 // REPSET-P6.C — member links build on the MEMBER-APP base. In this repo
 // NEXT_PUBLIC_APP_URL is the CRM host (which has no /sessions route), so
-// defaulting from it 404'd the session CTA in every post-class email.
-// NEXT_PUBLIC_CHAMP_APP_URL is the same var invite-app uses.
-// REPSET-P6.S2 — env stays primary; code defaults are the canonical repset
-// hosts (member CTA → api.repset.ie, CRM/unsubscribe → crm.repset.ie).
-const CHAMP_APP_URL = process.env.NEXT_PUBLIC_CHAMP_APP_URL || 'https://api.repset.ie'
-const CRM_URL = process.env.NEXT_PUBLIC_APP_URL_CRM || 'https://crm.repset.ie'
+// defaulting from it 404'd the session CTA in every post-class email (#1444).
+//
+// URLSEAM.1 — the unsubscribe base used to read `NEXT_PUBLIC_APP_URL_CRM`,
+// an env var that exists NOWHERE else in this repo (it is a champ-app-ism)
+// and is set on no deployment, so it ALWAYS fell through to a hard-coded
+// host. That is the silent env fallback CLAUDE.md forbids: the link ignored
+// the real seam, so a preview deploy or a domain change could not follow it,
+// and it only looked correct because the literal happened to match prod.
+// The unsubscribe endpoint is served by THIS deployment, so the correct
+// source is this deployment's own accessor — `getAppUrl()`, which throws
+// when unset instead of guessing.
+//
+// Both bases are resolved per call (not at module load) so a stubbed env is
+// honoured and the throw lands at the site that needs the value.
 
 // ── (1) load ────────────────────────────────────────────────────
 
@@ -214,7 +229,7 @@ export function composeEmail(ctx, { nowMs = Date.now() } = {}) {
   const durationMin = computeDurationMin(session)
 
   // Member-facing deep link — champ-app base, NOT the CRM (see top).
-  const sessionUrl = `${CHAMP_APP_URL}/sessions/${session.id}`
+  const sessionUrl = `${getMemberAppUrl()}/sessions/${session.id}`
 
   const na = report.next_action
 
@@ -457,7 +472,8 @@ function unsubscribeUrl({ contactId, sessionId, unsubscribeToken }) {
   const params = unsubscribeToken
     ? new URLSearchParams({ scope: 'hr', token: unsubscribeToken })
     : new URLSearchParams({ scope: 'hr', cid: contactId || '', sid: sessionId || '' })
-  return `${CRM_URL}/api/preferences/hr-emails?${params.toString()}`
+  // CRM base — this deployment serves /api/preferences/hr-emails (see top).
+  return `${getAppUrl()}/api/preferences/hr-emails?${params.toString()}`
 }
 
 function escapeHtml(s) {
@@ -564,7 +580,25 @@ export async function sendPostClassEmail(db, sessionId, { nowMs = Date.now() } =
   try {
     composed = composeEmail(ctx, { nowMs })
   } catch (e) {
+    // URLSEAM.1 review — this catch used to `return` without stamping, which
+    // re-armed the exact loop `markProcessed` exists to stop: the auto-end
+    // sweep re-selects any session with `email_sent_at IS NULL` every 5
+    // minutes, so a compose that throws meant a re-compose (and a re-fired
+    // "session ready" push) on every tick, forever.
+    //
+    // That was latent before URLSEAM.1 and reachable after it: `composeEmail`
+    // now calls `getAppUrl()` (via unsubscribeUrl), which THROWS by design
+    // when NEXT_PUBLIC_APP_URL is unset. Every way composeEmail can throw is
+    // permanent for the life of the deployment — it is a pure function of the
+    // already-loaded ctx plus env, so nothing about the next tick differs —
+    // which makes "stamp and stop" strictly better than "retry forever".
+    //
+    // The cost is explicit: one customer loses one post-class email, and the
+    // logError below is the only signal. Per CLAUDE.md's "removing a silent
+    // failure must never create a louder one", a lost email beats spamming a
+    // member's phone every 5 minutes until someone notices.
     logError('hr-post-class-email', 'compose threw', { sessionId, err: e })
+    await markProcessed(db, sessionId, nowMs)
     return { ok: false, error: e.message }
   }
 

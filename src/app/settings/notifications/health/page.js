@@ -265,7 +265,7 @@ export default async function PushHealthPage() {
                           <TestPushButton recipientId={p.id} recipientName={p.full_name} />
                         ) : (
                           <a
-                            href={`mailto:${p.email}?subject=${encodeURIComponent('Install the UN1T CRM mobile app')}&body=${encodeURIComponent('Hi ' + (p.full_name?.split(' ')[0] || '') + ',\n\nPlease install the UN1T CRM mobile app from TestFlight and grant push notification permission so you can receive task and booking reminders.\n\nThanks')}`}
+                            href={`mailto:${p.email}?subject=${encodeURIComponent('Install the Repset mobile app')}&body=${encodeURIComponent('Hi ' + (p.full_name?.split(' ')[0] || '') + ',\n\nPlease install the Repset mobile app from TestFlight and grant push notification permission so you can receive task and booking reminders.\n\nThanks')}`}
                             className="inline-flex items-center gap-1 text-[11px] text-un1t-subtle hover:text-un1t-text border border-un1t-border rounded px-2 py-1"
                           >
                             <Mail size={11} /> Nudge

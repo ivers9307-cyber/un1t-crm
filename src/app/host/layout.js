@@ -10,9 +10,10 @@
 // company_settings.company_name and floors on the GYM wordmark instead —
 // the same value the login screen, contract emails and Mia already render.
 //
-// Scope: /book/[slug] — the public class-booking page, the single most-shared
-// customer link in the product. This layout already existed (it supplies the
-// clean no-sidebar shell); before CHROME.1 it declared no metadata.
+// Scope: /host/login, /host/set-password and the gated /host/(portal) pages.
+// The (portal) route group keeps its own layout (the host-session gate); this
+// one sits above it and only contributes metadata, so both the gated and the
+// ungated host pages are covered.
 
 import { customerFacingMetadata } from '@/lib/default-site-name'
 
@@ -20,10 +21,6 @@ export async function generateMetadata() {
   return customerFacingMetadata()
 }
 
-export default function BookingLayout({ children }) {
-  return (
-    <div className="min-h-screen bg-white text-gray-900 flex items-start justify-center p-4 md:p-8">
-      {children}
-    </div>
-  )
+export default function HostLayout({ children }) {
+  return children
 }

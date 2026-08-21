@@ -70,8 +70,12 @@ function sentHtml(fetchMock) {
   return JSON.parse(fetchMock.mock.calls[0][1].body).HtmlBody
 }
 
+// URLSEAM.1 — /schedule/invoices is served by THIS deployment, so the link
+// base comes from getAppUrl(), which THROWS when NEXT_PUBLIC_APP_URL is unset
+// (CLAUDE.md: no silent env fallbacks). Configure it the way prod does.
 beforeEach(() => {
   vi.stubEnv('POSTMARK_API_KEY', 'test-token')
+  vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://crm.repset.ie')
 })
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -144,5 +148,33 @@ describe('Postmark token fallback', () => {
 
     expect(res.messageId).toBe('mid-1')
     expect(fetchMock.mock.calls[0][1].headers['X-Postmark-Server-Token']).toBe('server-token-only')
+  })
+})
+
+// URLSEAM.1 — the link base is a SEAM, not a literal. It used to be
+// `NEXT_PUBLIC_APP_URL || '<hard-coded host>'`, so a deploy whose env named
+// a different host still linked to the old one. getAppUrl() is the only
+// accessor and it throws rather than guessing.
+describe('link base follows the NEXT_PUBLIC_APP_URL seam (URLSEAM.1)', () => {
+  it('builds the submission-history link on the configured host, preview included', async () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://un1t-crm-git-x.vercel.app')
+    vi.mocked(createServerClient).mockReturnValue(mockClient({ companySettings: [] }))
+    const fetchMock = stubPostmark()
+
+    await sendInvoiceApprovedEmail('inv-1')
+
+    const html = sentHtml(fetchMock)
+    expect(html).toContain('https://un1t-crm-git-x.vercel.app/schedule/invoices')
+    expect(html).not.toContain('crm.repset.ie')
+    expect(html).not.toContain('crm.un1tdublin.com')
+  })
+
+  it('throws instead of guessing a host when the env is unset', async () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', '')
+    vi.mocked(createServerClient).mockReturnValue(mockClient({ companySettings: [] }))
+    const fetchMock = stubPostmark()
+
+    await expect(sendInvoiceApprovedEmail('inv-1')).rejects.toThrow(/NEXT_PUBLIC_APP_URL is not set/)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

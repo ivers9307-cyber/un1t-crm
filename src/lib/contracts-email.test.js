@@ -6,7 +6,7 @@
 // against the mock db, so these tests exercise the actual table lookup
 // and assert the rendered HTML carries the configured logo + name.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('./postmark.js', () => ({ sendEmail: vi.fn() }))
 vi.mock('./supabase.js', () => ({ createServerClient: vi.fn() }))
@@ -42,10 +42,18 @@ const baseArgs = {
   templateName: 'Coach Agreement',
 }
 
+// URLSEAM.1 — every link in these emails is served by THIS deployment, so
+// the base comes from getAppUrl(), which THROWS when NEXT_PUBLIC_APP_URL is
+// unset (CLAUDE.md: no silent env fallbacks). Configure it the way prod does.
+const CRM_HOST = 'https://crm.repset.ie'
+
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.stubEnv('NEXT_PUBLIC_APP_URL', CRM_HOST)
   sendEmail.mockResolvedValue(undefined)
 })
+
+afterEach(() => { vi.unstubAllEnvs() })
 
 describe('contract email branding header', () => {
   it('renders the configured logo + company name from company_settings', async () => {
@@ -221,5 +229,33 @@ describe('contract email footer names the contracting entity (LEGALENT.1)', () =
 
     const { htmlBody } = sendEmail.mock.calls[0][0]
     expect(htmlBody).toContain('Tom &amp; Jerry Ltd ·')
+  })
+})
+
+// URLSEAM.1 — the link base is a SEAM, not a literal. It used to be
+// `NEXT_PUBLIC_APP_URL || '<hard-coded host>'`, so on any deploy whose env
+// named a different host (a preview, the next domain change) the links
+// silently pointed at the old one. getAppUrl() is the only accessor and it
+// throws rather than guessing.
+describe('link base follows the NEXT_PUBLIC_APP_URL seam (URLSEAM.1)', () => {
+  it('builds every link on the configured host, including a preview host', async () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://un1t-crm-git-x.vercel.app')
+    createServerClient.mockReturnValue(makeDb({}))
+
+    await sendContractIssuedEmail(baseArgs)
+
+    const { htmlBody } = sendEmail.mock.calls[0][0]
+    expect(htmlBody).toContain('https://un1t-crm-git-x.vercel.app/account/contracts/ct-1')
+    expect(htmlBody).toContain('https://un1t-crm-git-x.vercel.app/privacy')
+    expect(htmlBody).not.toContain('crm.repset.ie')
+    expect(htmlBody).not.toContain('crm.un1tdublin.com')
+  })
+
+  it('throws instead of guessing a host when the env is unset', async () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', '')
+    createServerClient.mockReturnValue(makeDb({}))
+
+    await expect(sendContractIssuedEmail(baseArgs)).rejects.toThrow(/NEXT_PUBLIC_APP_URL is not set/)
+    expect(sendEmail).not.toHaveBeenCalled()
   })
 })

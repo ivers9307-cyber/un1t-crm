@@ -7,8 +7,14 @@
 // existing HR helpers (it re-implements none of the maths) and adds
 // the version envelope + the null slots for later slices.
 //
-// KEEP IN SYNC across champ-app + un1t-crm (champ-app is canon). Both repos
-// assert against src/lib/__fixtures__/session-report.fixture.json.
+// KEEP IN SYNC across champ-app + un1t-crm (champ-app is canon).
+//
+// Each copy asserts against the fixture NEXT TO IT — shared/__fixtures__/ and
+// src/lib/__fixtures__/session-report.fixture.json. This comment used to name
+// only the src/lib path in both copies, which is wrong for the shared one and
+// reads as "there is a single fixture". There are two files; they are
+// byte-identical, and tests/shared-pair-sync.test.js now asserts that. If they
+// ever diverge, both suites keep passing against different inputs.
 
 import { zoneBreakdown, burnSeconds, isBurn } from './heart-rate.js'
 import { buildSessionAnalytics } from './hr-analytics.js'
