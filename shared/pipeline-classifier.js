@@ -61,6 +61,23 @@ export const FUNNEL_STAGE_SLUGS = Object.freeze([
   'converted',
 ])
 
+// RETURNPIPE.1 — the RETURNING board, in journey order. A separate pipeline
+// because a returning customer follows a different flow from a new one
+// (Richard, 2026-08-21): they are not being sold the idea of the gym, they are
+// being re-sold a place they already know. Stage names are his.
+//
+// 'returning_booked' is the entry column: they have a class in the diary but
+// have not turned up yet. Without it a booking is invisible until attendance,
+// which is the defect FUNNEL.5 fixed on the acquisition board — and
+// booked-but-never-showed would be an absence rather than a visible drop-off.
+export const RETURNING_STAGE_SLUGS = Object.freeze([
+  'returning_booked',
+  'returning_first_class',
+  'returning_second_class',
+  'returning_final_class',
+  'returning_converted',
+])
+
 // Off-funnel populations, display order. pack_member is a first-class
 // group (FUNNEL.3): buying a Class Pack IS a conversion, reported in
 // its own pile, never cycled back into the funnel.
@@ -87,7 +104,10 @@ export function splitStagesByFunnel(stages) {
     .filter((s) => s && s.archived !== true)
 
   const slugOrder = (s) => {
-    const i = (s.is_dormant ? OFF_FUNNEL_STAGE_SLUGS : FUNNEL_STAGE_SLUGS).indexOf(s.slug)
+    const list = (s.board || 'acquisition') === 'returning'
+      ? RETURNING_STAGE_SLUGS
+      : (s.is_dormant ? OFF_FUNNEL_STAGE_SLUGS : FUNNEL_STAGE_SLUGS)
+    const i = list.indexOf(s.slug)
     return i === -1 ? Number.MAX_SAFE_INTEGER : i
   }
   const byOrder = (a, b) => {
@@ -99,9 +119,17 @@ export function splitStagesByFunnel(stages) {
     return slugOrder(a) - slugOrder(b)
   }
 
+  // RETURNPIPE.1 — `board` is the third axis. A stage with no board (every row
+  // predating mig 558, and anything a caller hands us without the column)
+  // reads as 'acquisition', so the two original groups are byte-identical to
+  // what they were and no existing caller changes behaviour.
+  const boardOf = (s) => s.board || 'acquisition'
+  const acquisition = live.filter((s) => boardOf(s) === 'acquisition')
+
   return {
-    funnel: live.filter((s) => !s.is_dormant).sort(byOrder),
-    offFunnel: live.filter((s) => Boolean(s.is_dormant)).sort(byOrder),
+    funnel: acquisition.filter((s) => !s.is_dormant).sort(byOrder),
+    offFunnel: acquisition.filter((s) => Boolean(s.is_dormant)).sort(byOrder),
+    returning: live.filter((s) => boardOf(s) === 'returning').sort(byOrder),
   }
 }
 
@@ -121,6 +149,12 @@ export const PIPELINE_THRESHOLDS = {
   // classify to the off-funnel pack_member stage (sticky via
   // contacts.pack_customer_at) and never re-enter the funnel. FUNNEL.3.
   PACK_CUSTOMER_MIN_CREDITS: 4,
+  // RETURNPIPE.1 — a break of this many days between attendances means they
+  // LEFT and came back, rather than simply trained irregularly. Matched to
+  // FUNNEL_ACTIVITY_DAYS on purpose: 60 days is already this system's
+  // definition of "no longer active", so a return is re-entry after the
+  // acquisition funnel had given up on them.
+  RETURN_GAP_DAYS: 60,
 }
 
 // Helper: days elapsed between an ISO timestamp and `now` (epoch ms).
@@ -159,6 +193,72 @@ export function nextBookedClass(recentBookings, now = Date.now()) {
   return soonest === null ? null : new Date(soonest).toISOString()
 }
 
+/**
+ * RETURNPIPE.1 — how far into THIS return the contact is, or null when they
+ * are not on a return journey at all.
+ *
+ * A "return" is re-entry after the acquisition funnel had already given up:
+ * the first attendance following a gap of >= RETURN_GAP_DAYS, or — for
+ * someone who has trained before and has a class in the diary but has not
+ * turned up yet — the booking itself.
+ *
+ * Counting is scoped to the episode, never lifetime. Someone who trained nine
+ * times two years ago and has just come back once is on their FIRST class
+ * back; reading their old total would drop them straight into "Final class"
+ * and tell a coach the opposite of what is true.
+ *
+ * Derived entirely from data already on the contact — no episode table, no
+ * per-contact stamp to backfill or keep in sync — so it works retroactively
+ * on everyone already in the database.
+ *
+ * @returns {{attended: number, hasUpcoming: boolean}|null}
+ */
+export function returnEpisode(contact, now = Date.now()) {
+  if (!contact || typeof contact !== 'object') return null
+
+  const gapMs = PIPELINE_THRESHOLDS.RETURN_GAP_DAYS * DAY_MS
+  const hasUpcoming = nextBookedClass(contact.recent_bookings, now) !== null
+
+  // Attendances we can see, oldest first. recent_bookings holds the last 10
+  // from the Glofox sync, so this is a window and not a full history — a gap
+  // inside the window is evidence of a return; the absence of one is not
+  // evidence there was never a break.
+  const attendedTimes = (Array.isArray(contact.recent_bookings) ? contact.recent_bookings : [])
+    .filter((b) => b && b.attended === true && Number.isFinite(Number(b.time_start)))
+    .map((b) => Number(b.time_start) * 1000)
+    .filter((ms) => ms <= now)
+    .sort((a, b) => a - b)
+
+  // Find the LAST gap in the window; everything after it is this episode.
+  let episodeStart = null
+  for (let i = 1; i < attendedTimes.length; i++) {
+    if (attendedTimes[i] - attendedTimes[i - 1] >= gapMs) episodeStart = attendedTimes[i]
+  }
+
+  if (episodeStart !== null) {
+    return { attended: attendedTimes.filter((t) => t >= episodeStart).length, hasUpcoming }
+  }
+
+  // No gap visible in the window. The other shape of a return: they trained
+  // long enough ago to have fallen out of the funnel, and have now booked.
+  // last_attended_at is advance-only and persists after recent_bookings has
+  // rolled past, so it is the reliable long-memory signal here.
+  const sinceAttended = daysSince(contact.last_attended_at, now)
+  const lapsed = sinceAttended !== null && sinceAttended >= PIPELINE_THRESHOLDS.RETURN_GAP_DAYS
+  if (lapsed && hasUpcoming) return { attended: 0, hasUpcoming: true }
+
+  return null
+}
+
+/** RETURNPIPE.1 — episode progress → the returning board's stage. */
+function returningStage(episode) {
+  if (!episode) return null
+  if (episode.attended <= 0) return episode.hasUpcoming ? 'returning_booked' : null
+  if (episode.attended === 1) return 'returning_first_class'
+  if (episode.attended === 2) return 'returning_second_class'
+  return 'returning_final_class'
+}
+
 export function classifyContact(contact, now = Date.now()) {
   if (!contact || typeof contact !== 'object') return 'dormant'
   const status = contact.glofox_membership_status || null
@@ -167,7 +267,12 @@ export function classifyContact(contact, now = Date.now()) {
   if (status === 'member' || status === 'credit_member') {
     const sinceConverted = daysSince(contact.converted_at, now)
     if (sinceConverted !== null && sinceConverted <= PIPELINE_THRESHOLDS.CONVERTED_WINDOW_DAYS) {
-      return 'converted'
+      // RETURNPIPE.1 — a win belongs to the board that earned it. Someone who
+      // came back and re-joined is the returning pipeline's Converted column,
+      // not the acquisition funnel's. Bounded to the same CONVERTED_WINDOW as
+      // before, so a member outside it still falls through to 'member' exactly
+      // as today — this can only ever move someone already in Converted.
+      return returnEpisode(contact, now) ? 'returning_converted' : 'converted'
     }
     return 'member'
   }
@@ -230,6 +335,24 @@ export function classifyContact(contact, now = Date.now()) {
     const trainedSinceDismissal = attendedMs !== null
       && Number.isFinite(attendedMs) && attendedMs > dismissedMs
     if (!trainedSinceDismissal) return 'cold_lead'
+  }
+
+  // ── RETURNING BOARD (RETURNPIPE.1) ─────────────────────────────
+  // Checked here, at the top of the funnel-candidate section, so it can only
+  // ever reroute someone who would otherwise land in the acquisition funnel or
+  // in dormant. Every pile above — member, gympass, classpass, ex_member,
+  // pack_member, cold_lead — is untouched, which is the whole 3,000+ contact
+  // majority of the board.
+  //
+  // cold_lead deliberately still wins: a dismissal is an explicit human
+  // judgement, and the existing rule only lets ATTENDING overturn it. 92 of
+  // the 112 dismissed contacts are in the live trial sequence, so if that
+  // decision should change it is a product call, not something to slip in
+  // behind a layout change.
+  const episode = returnEpisode(contact, now)
+  if (episode) {
+    const stage = returningStage(episode)
+    if (stage) return stage
   }
 
   // ── Funnel candidates: lead/cold/tour/no_sale_*/trial/null ─────
