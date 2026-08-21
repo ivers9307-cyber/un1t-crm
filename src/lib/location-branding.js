@@ -13,7 +13,11 @@
 // request-scoped client. Never throws — a branding lookup must not break a
 // send path; on any miss/error it returns the brand-neutral default.
 
-const DEFAULT_COMPANY_NAME = 'UN1T'
+// The one place the unconfigured gym wordmark is spelled. Exported since
+// CHROME.1 so the customer-facing metadata resolver in default-site-name.js
+// floors on the SAME literal every other customer-facing surface already
+// renders, instead of introducing a second copy that can drift.
+export const DEFAULT_COMPANY_NAME = 'UN1T'
 
 /**
  * @param {object} db          a supabase-js client

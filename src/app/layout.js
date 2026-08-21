@@ -54,6 +54,17 @@ import { resolveDefaultSiteName } from '@/lib/default-site-name'
 // no operator could edit. company_settings has no tagline column —
 // if one is wanted, that is where it belongs, not here.
 //
+// REVIEW FOLLOW-UP — this is now the PLATFORM default only. Prod's one
+// company_settings row has company_name NULL (org_settings is empty), so
+// this resolver really does return "Repset" today, and the customer-facing
+// pages that used to inherit it — /book, /event-pay, /host, /host-connect,
+// /reset-password, /account — would have shown customers a brand they have
+// no relationship with. Each of those subtrees now declares its own
+// metadata via customerFacingMetadata() (src/lib/default-site-name.js),
+// which floors on the gym wordmark instead of the platform's. A new
+// customer-facing route must do the same; src/lib/brand-chrome.test.js
+// pins the ones that exist.
+//
 // Per-page upgrades (richer previews showing the actual event name
 // + description) live on individual page files via generateMetadata
 // — see src/app/event/[slug]/page.js for the event signup example.
@@ -64,10 +75,14 @@ export async function generateMetadata() {
   ])
   return {
     title: siteName,
-    description: siteName,
+    // No `description`. It used to be a hard-coded UN1T marketing tagline —
+    // not operator-editable, and untrue for any other tenant. CHROME.1's
+    // first cut replaced it with `siteName`, which previews a shared link
+    // with a one-word description; that is worse than none. The editable
+    // home for one is a company_settings column (see
+    // customerFacingMetadata in src/lib/default-site-name.js), not this file.
     openGraph: {
       title: siteName,
-      description: siteName,
       siteName,
       type: 'website',
     },
