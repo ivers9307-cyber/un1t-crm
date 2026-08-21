@@ -27,7 +27,7 @@
 //
 //   mobile/app.config.js is in .github/workflows/eas-update.yml's publish
 //   allowlist (it carries runtimeVersion), so the bump commit landing on
-//   main publishes an OTA at --rollout-percentage 10. And `version` and
+//   main publishes an OTA to the whole runtime lane. And `version` and
 //   `runtimeVersion` are TWO SEPARATE LITERALS (app.config.js:110 and
 //   :375) — bumping `version` to 2.3.1 leaves the runtime lane at 2.3.0,
 //   so the new group lands on the CURRENTLY LIVE lane, demoting the other

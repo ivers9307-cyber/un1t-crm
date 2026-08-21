@@ -35,6 +35,7 @@ export const AUDIENCE_CONTINUOUS_HINT =
 // schema.js TRIGGER_TYPES / the PUT route enum / the runner).
 const TRIGGER_OPTIONS = [
   ['manual', 'Manual — you enrol contacts yourself'],
+  ['audience_match', 'Everyone who matches the audience below — and anyone who starts matching later'],
   ['contact_created', 'When a new lead is created'],
   ['booking_created', 'When a booking is created'],
   ['first_booking', 'On a contact’s first booking'],
@@ -201,6 +202,15 @@ export default function SequenceSettings({ sequence }) {
             <Labeled label="Trigger — what starts this flow">
               <Select value={triggerType} onChange={changeTrigger} options={TRIGGER_OPTIONS} />
             </Labeled>
+            {triggerType === 'audience_match' && (
+              <p className="text-[11px] text-un1t-subtle leading-relaxed">
+                The audience below becomes the enrolment rule. Publishing enrols <span className="font-semibold">nobody</span> —
+                you start it once, from this page, after seeing how many people it would reach.
+                From then on anyone who starts matching is enrolled automatically, within five
+                minutes, and you never have to come back. Editing the audience asks you to confirm
+                the new number before it starts again.
+              </p>
+            )}
             {triggerType === 'contact_created' && (
               <p className="text-[11px] text-un1t-subtle leading-relaxed">
                 Fires when a lead is created by staff in the CRM, through the website form, by the

@@ -1174,7 +1174,7 @@ export async function findExistingContact(db, locationId, mapped) {
   // set: the funnel classifier counts attended classes from recent_bookings
   // and gates the Converted column on converted_at, and a LIST/skipBookings
   // sync doesn't recompute either.
-  const SELECT_COLS = 'id, email, first_name, last_name, phone, dob, joined_at, created_at, glofox_member_id, gympass_member_id, glofox_membership_status, glofox_membership_state, glofox_membership_expiry, lead_source, last_booked_at, last_attended_at, last_payment_at, total_bookings_30d, total_attended_30d, total_attended_7d, total_noshow_30d, trial_credits_remaining, recent_bookings, converted_at, pack_customer_at, pipeline_dismissed_at'
+  const SELECT_COLS = 'id, email, first_name, last_name, phone, dob, joined_at, created_at, glofox_member_id, gympass_member_id, glofox_membership_status, glofox_membership_state, glofox_membership_expiry, lead_source, last_booked_at, last_attended_at, last_payment_at, total_bookings_30d, total_attended_30d, total_attended_7d, total_noshow_30d, trial_credits_remaining, recent_bookings, converted_at, pack_customer_at, pipeline_dismissed_at, last_lead_source_at'
   const queries = []
   queries.push(
     db.from('contacts')

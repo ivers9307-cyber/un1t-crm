@@ -460,7 +460,9 @@ force-uninstalls anything.
 Run strictly in this order — each step gates the next.
 
 1. ~~**Merge the staged-rollout OTA gate — PR #1439**~~ — **DONE.**
-   `.github/workflows/eas-update.yml` publishes at `--rollout-percentage 10`
+   `.github/workflows/eas-update.yml` publishes to the whole runtime lane
+   (default since 2026-08-21; was `--rollout-percentage 10` under the P5
+   gate — see `mobile/docs/ota-rollout.md`)
    with a ramp/halt runbook (`mobile/docs/ota-rollout.md`). The publish
    trigger has since been narrowed from `mobile/**` to an **allowlist** of
    bundle-entering paths (OTA-PATHS.1), so non-bundle commits — screenshots,

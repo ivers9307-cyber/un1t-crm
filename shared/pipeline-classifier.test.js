@@ -112,10 +112,10 @@ describe('splitStagesByFunnel', () => {
   })
 
   it('is defensive about garbage input', () => {
-    expect(splitStagesByFunnel(null)).toEqual({ funnel: [], offFunnel: [] })
-    expect(splitStagesByFunnel(undefined)).toEqual({ funnel: [], offFunnel: [] })
-    expect(splitStagesByFunnel('nope')).toEqual({ funnel: [], offFunnel: [] })
-    expect(splitStagesByFunnel([null, undefined])).toEqual({ funnel: [], offFunnel: [] })
+    expect(splitStagesByFunnel(null)).toEqual({ funnel: [], offFunnel: [], returning: [] })
+    expect(splitStagesByFunnel(undefined)).toEqual({ funnel: [], offFunnel: [], returning: [] })
+    expect(splitStagesByFunnel('nope')).toEqual({ funnel: [], offFunnel: [], returning: [] })
+    expect(splitStagesByFunnel([null, undefined])).toEqual({ funnel: [], offFunnel: [], returning: [] })
   })
 
   it('does not mutate the input array', () => {

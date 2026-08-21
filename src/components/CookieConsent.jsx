@@ -21,7 +21,7 @@
 // intended, either narrow the host check below to the public marketing
 // hosts only, or update that statement. Flagged 2026-06-19.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 const STORAGE_KEY = 'un1t_cookie_consent_v1'
 const EXPIRY_DAYS = 180
@@ -151,6 +151,42 @@ export default function CookieConsent() {
   const [prefsOpen, setPrefsOpen] = useState(false)
   const [analytics, setAnalytics] = useState(false)
   const [marketing, setMarketing] = useState(false)
+  const barRef = useRef(null)
+
+  // STARTCONV.1 — reserve the space the bar occupies.
+  //
+  // The bar is `fixed inset-x-0 bottom-0`, so it is out of flow and nothing
+  // ever accounted for its height. It therefore sits ON TOP of whatever
+  // happens to be at the bottom of the viewport, and because it is fixed you
+  // cannot scroll clear of it — the covered content is unreachable, not just
+  // hidden. On /start that was the booking form's consent tick and its submit
+  // button: on a 375px screen the bar took roughly a third of the viewport and
+  // buried the one control the page exists to offer. Measured 2026-08-20,
+  // alongside 112 of 138 visitors dropping at that step.
+  //
+  // Measured rather than hard-coded because the height changes with viewport
+  // width (the copy rewraps) and with the font the browser actually loads.
+  // Skipped while the preferences modal is open — that renders as a
+  // full-screen overlay, where padding underneath means nothing.
+  useEffect(() => {
+    const el = barRef.current
+    if (!visible || prefsOpen || !el) {
+      document.body.style.paddingBottom = ''
+      return undefined
+    }
+    const apply = () => { document.body.style.paddingBottom = `${el.offsetHeight}px` }
+    apply()
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(apply) : null
+    if (ro) ro.observe(el)
+    window.addEventListener('resize', apply)
+    return () => {
+      if (ro) ro.disconnect()
+      window.removeEventListener('resize', apply)
+      // Always hand the page back exactly as we found it — a stale
+      // padding-bottom after dismissal would leave a dead strip forever.
+      document.body.style.paddingBottom = ''
+    }
+  }, [visible, prefsOpen])
 
   useEffect(() => {
     // Host-scope: the cookie banner + advertising pixels are a PUBLIC
@@ -212,32 +248,35 @@ export default function CookieConsent() {
   if (!visible) return null
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-[9999]">
+    <div ref={barRef} className="fixed inset-x-0 bottom-0 z-[9999]">
       {!prefsOpen ? (
         <div className="border-t-2 border-white bg-black text-white">
-          <div className="mx-auto flex max-w-6xl flex-col items-center gap-4 px-6 py-5 sm:flex-row sm:justify-between">
-            <p className="max-w-2xl text-sm leading-relaxed text-white/75">
+          {/* STARTCONV.1 — tighter on a phone. Wording is unchanged (it is
+              consent copy); only the spacing and control size move, which is
+              what made the bar tall enough to bury the page's own CTA. */}
+          <div className="mx-auto flex max-w-6xl flex-col items-center gap-3 px-4 py-4 sm:flex-row sm:justify-between sm:gap-4 sm:px-6 sm:py-5">
+            <p className="max-w-2xl text-[13px] leading-relaxed text-white/75 sm:text-sm">
               We use cookies to run our site, understand how it is used, and show
               you relevant ads. You can accept all, reject non-essential, or
               choose your preferences. See our{' '}
               <a href="/privacy/members" className="underline hover:text-white">privacy policy</a>.
             </p>
-            <div className="flex shrink-0 flex-wrap gap-2">
+            <div className="flex w-full shrink-0 gap-2 sm:w-auto sm:flex-wrap">
               <button
                 onClick={rejectAll}
-                className="border-2 border-white/40 px-5 py-3 text-xs font-bold uppercase tracking-wider transition-colors hover:border-white"
+                className="flex-1 border-2 border-white/40 px-3 py-2.5 text-[11px] font-bold uppercase tracking-wider transition-colors hover:border-white sm:flex-none sm:px-5 sm:py-3 sm:text-xs"
               >
                 Reject
               </button>
               <button
                 onClick={() => setPrefsOpen(true)}
-                className="border-2 border-white/40 px-5 py-3 text-xs font-bold uppercase tracking-wider transition-colors hover:border-white"
+                className="flex-1 border-2 border-white/40 px-3 py-2.5 text-[11px] font-bold uppercase tracking-wider transition-colors hover:border-white sm:flex-none sm:px-5 sm:py-3 sm:text-xs"
               >
                 Preferences
               </button>
               <button
                 onClick={acceptAll}
-                className="border-2 border-white bg-white px-5 py-3 text-xs font-bold uppercase tracking-wider text-black transition-colors hover:bg-white/80"
+                className="flex-1 border-2 border-white bg-white px-3 py-2.5 text-[11px] font-bold uppercase tracking-wider text-black transition-colors hover:bg-white/80 sm:flex-none sm:px-5 sm:py-3 sm:text-xs"
               >
                 Accept all
               </button>
