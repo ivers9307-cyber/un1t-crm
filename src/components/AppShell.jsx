@@ -69,7 +69,13 @@ import { Analytics } from '@vercel/analytics/next'
 // session. Note the matcher is segment-aware (`=== p || startsWith(p + '/')`),
 // so entries here carry NO trailing slash — '/embed' covers /embed/event/x.
 // Regression guard: src/public-compliance-paths.test.jsx.
-const PUBLIC_PATHS = ['/login', '/auth/callback', '/reset-password', '/welcome', '/stillorgan', '/hatch-street', '/free-class', '/start', '/offers', '/deposit', '/book', '/event', '/event-pay', '/class-pay', '/tv', '/present', '/studio-login', '/bca', '/host-connect', '/host', '/h', '/unsubscribe', '/preferences', '/view-email', '/privacy', '/terms', '/legal', '/technical', '/account-deletion', '/embed', '/ccf', '/use-the-app']
+// AUDIT-13.B — '/race' + '/race-pay' are next.config.js's forever-aliases
+// for '/event' + '/event-pay'. A rewrite changes the path the server
+// renders, not the URL the browser holds, so usePathname() still reports
+// the LEGACY path here and the shell blanked the page it had just
+// rendered. Segment-aware matcher, so no trailing slash (see the proxy's
+// list, which is raw startsWith and therefore keeps one).
+const PUBLIC_PATHS = ['/login', '/auth/callback', '/reset-password', '/welcome', '/stillorgan', '/hatch-street', '/free-class', '/start', '/offers', '/deposit', '/book', '/event', '/event-pay', '/race', '/race-pay', '/class-pay', '/tv', '/present', '/studio-login', '/bca', '/host-connect', '/host', '/h', '/unsubscribe', '/preferences', '/view-email', '/privacy', '/terms', '/legal', '/technical', '/account-deletion', '/embed', '/ccf', '/use-the-app']
 
 export default function AppShell({ user, children, isLinkedHost = false }) {
   const pathname = usePathname()

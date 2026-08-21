@@ -12,7 +12,7 @@ describe('getOpenApiSpec', () => {
 
   it('produces a 3.1 spec with the expected info block', () => {
     expect(spec.openapi).toBe('3.1.0')
-    expect(spec.info.title).toBe('UN1T CRM API')
+    expect(spec.info.title).toBe('Repset CRM API')
     expect(spec.info.version).toMatch(/^\d+\.\d+\.\d+$/)
   })
 

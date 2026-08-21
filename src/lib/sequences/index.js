@@ -6,7 +6,7 @@
 //   cooldown.js       — findBlockedByCooldown
 //   enrol.js          — enrolContacts
 //   triggers.js       — webhook-driven triggerSequencesFor*
-//   cron-triggers.js  — runEventReminderTriggers, runAnniversary, runInactivity
+//   cron-triggers.js  — runEventReminderTriggers, runAnniversary, runInactivity, runAudienceMatch
 //   steps.js          — every step handler (email/whatsapp/sms/tag/field/branch/webhook/task)
 //   scheduler.js      — runSequences + setEnrollmentStatus + helpers
 //
@@ -35,6 +35,9 @@ export {
   runEventReminderTriggers,
   runAnniversaryTriggers,
   runInactivityTriggers,
+  runAudienceMatchTriggers,
+  isInsideSendWindow,
+  AUDIENCE_SWEEP_ENROL_CAP,
 } from './cron-triggers.js'
 export {
   syncSegmentMemberships,

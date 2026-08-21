@@ -1,40 +1,27 @@
 // /marketing — Marketing hub index. Mirrors /operations (HUBS.2e).
 // Automations first (the daily surface: curated toggles + custom
-// flows + devices), then the landing-page editor.
+// flows + devices), then the landing-page editor, then Send.
 //
-// The first branch's OR must match /automations' own gate exactly —
-// canCurated || canFlows || canDevices in src/app/(marketing)/
-// automations/page.js, where canDevices is device_control alone (the
-// Tapo devices section, /automations/devices). Review fix (HUBS.2f):
-// device_control was missing here, so a device_control-only holder
-// (no automations/email/whatsapp) fell through to the '/' fallback
-// instead of landing on the one tab they can actually see.
-//
-// Deliberately routes to /settings/landing-page, NOT /welcome —
-// /welcome is the PUBLIC marketing site itself (rendered for
-// visitors, no auth), never an in-app pathname a signed-in operator
-// should be redirected into. The in-app editor for it lives at
-// /settings/landing-page (LandingPageSettingsForm). The sidebar's own
-// Landing page entry reaches /welcome directly via openInNewTab —
-// this index has nothing to do with that link.
-//
-// Known quirk (traced in review, accepted as-is): a landing_page-only
-// user redirects here to /settings/landing-page, where the sidebar
-// highlights the Settings entry, not Marketing — /settings/landing-page
-// is Settings-owned content (SIDEBAR-IA.1), and no single pathname-based
-// highlight rule can serve both arrival journeys (via Marketing's index
-// redirect, and via Settings directly) at once.
+// HUBDOOR.1 — the chain itself now lives in src/lib/hub-index-chains.js
+// as data, so nav-items.test.js can assert the invariant this page kept
+// breaking: every key in the Marketing sidebar entry's `anyPermission`
+// union must reach a real surface. It didn't. `sms` was added to the
+// union in DEEP.4 Task 2 (an sms-only holder needs a door to
+// /communications/send and /sent, which admit `sms` alone) but no
+// branch here honoured it, so exactly that persona clicked Marketing
+// and bounced to '/'. The `sms` step is the fix; see that module for
+// the full chain, its tab-order rationale, and why the landing-page
+// step targets /settings/landing-page rather than the public /welcome.
 
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
+import { resolveHubIndexTarget } from '@/lib/hub-index-chains'
 
 export const dynamic = 'force-dynamic'
 
 export default async function MarketingIndexPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (hasPermission(user, 'automations') || hasPermission(user, 'email') || hasPermission(user, 'whatsapp') || hasPermission(user, 'device_control')) redirect('/automations')
-  if (hasPermission(user, 'landing_page')) redirect('/settings/landing-page')
-  redirect('/')
+  redirect(resolveHubIndexTarget(user, '/marketing', hasPermission))
 }

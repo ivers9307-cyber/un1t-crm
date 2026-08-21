@@ -83,7 +83,7 @@ The two platforms have parallel-but-not-identical setup paths. iOS specifics fir
 
 **One-time prerequisites (already done as of 2026-05):**
 - Apple Developer Program membership (annual fee).
-- Apple Business Manager account for UN1T Dublin Ltd (requires D-U-N-S; free).
+- Apple Business Manager account for Champ Fitness Ltd, trading as UN1T Dublin (requires D-U-N-S; free) — the settled legal entity (SAAS4-W0.2). LEGALENT.1 corrected the entity named here; confirm the ABM record itself matches before the next enrolment step.
 - Bundle ID `com.un1tdublin.crm` registered at developer.apple.com → Identifiers, with **Push Notifications** capability ticked. (`BUNDLE-ID-RESET`: the original `com.un1tdublin.crmmobileios` was submitted for review then deleted; Apple permanently reserves submitted bundle IDs to the team, so it can't be reused — hence the switch to `com.un1tdublin.crm`.)
 - App Store Connect record created (ID `6770890839`, app name **Repset** (renamed from "CF Studio" with REBRAND.2, 2026-07-27) — the `REBRAND.1` record; the previous UN1T-CRM record `6766947870` was removed), distribution method set to **Custom App for Business or Education**, ABM org listed as recipient.
 - Privacy policy live at `crm.un1tdublin.com/privacy` (page lives at `src/app/privacy/page.js`).

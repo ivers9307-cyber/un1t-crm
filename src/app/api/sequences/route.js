@@ -16,7 +16,7 @@ const SequenceCreateSchema = z.object({
   // FLOW2 (mig 131): added 'webhook' for inbound webhook-fired
   // sequences. Token + optional secret on email_sequences.
   trigger_type: z.enum([
-    'manual', 'booking_created', 'first_booking', 'status_change',
+    'manual', 'audience_match', 'booking_created', 'first_booking', 'status_change',
     'event_reminder', 'tag_added',
     'race_registered', 'race_finished',
     'order_completed', 'order_failed', 'order_abandoned',

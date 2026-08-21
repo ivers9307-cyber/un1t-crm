@@ -34,6 +34,7 @@ import {
   locationVariables,
 } from '@/lib/contracts'
 import { getLocationBranding } from '@/lib/location-branding'
+import { getContractingEntity } from '@/lib/contracting-entity'
 import { notifyContractIssued } from '@/lib/contracts-notify'
 import { logAuditEvent } from '@/lib/audit'
 
@@ -190,7 +191,13 @@ export async function POST(request) {
   //     getLocationBranding); fetch once, reused by the render below.
   const locationRow = recipientLinks.find(l => l.location_id === locationId)?.location || null
   const branding = await getLocationBranding(db, locationId)
-  const locVars = locationVariables({ location: locationRow, branding })
+  //     LEGALENT.1 — {{legal_entity_name}} is the CONTRACTING COMPANY
+  //     (org_settings.legal_entity_name, mig 425), which is what a
+  //     party clause must name; company_name stays the brand. Resolved
+  //     against the org already established above, so a CCF Autos
+  //     contract can never inherit the gym's entity.
+  const entity = await getContractingEntity(db, { organizationId, locationId, branding })
+  const locVars = locationVariables({ location: locationRow, branding, entity })
 
   // 4. Validate custom variables required by the template.
   const customCheck = validateCustomVariables(template.variables_schema, parsed.data.variables)

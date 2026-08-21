@@ -7,10 +7,14 @@
 // (the consult is a post-booking upsell, not a funnel stage — see the spec), so
 // `booked` counts `booked_class` only; summing in `booked_consult` would
 // double-count a session that added a consult after its class.
+// STARTCONV.1 — order follows the funnel, and the funnel changed: the class
+// picker now comes BEFORE the details form. Left as view→details→slots, the
+// dashboard would render a later stage holding more people than an earlier one,
+// which reads as broken data rather than as a reordered flow.
 export const FUNNEL_STAGES = [
   { key: 'view', label: 'Landed on page', steps: ['view'] },
-  { key: 'details', label: 'Entered details', steps: ['details'] },
   { key: 'slots', label: 'Saw the times', steps: ['slots_view'] },
+  { key: 'details', label: 'Entered details', steps: ['details'] },
   { key: 'booked', label: 'Booked', steps: ['booked_class'] },
 ]
 

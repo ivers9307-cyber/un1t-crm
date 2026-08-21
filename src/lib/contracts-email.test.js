@@ -6,7 +6,7 @@
 // against the mock db, so these tests exercise the actual table lookup
 // and assert the rendered HTML carries the configured logo + name.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('./postmark.js', () => ({ sendEmail: vi.fn() }))
 vi.mock('./supabase.js', () => ({ createServerClient: vi.fn() }))
@@ -36,16 +36,24 @@ function makeDb(rowsByTable) {
 }
 
 const baseArgs = {
-  contract: { id: 'ct-1', location_id: 'loc-1', profile_id: 'p-1', signed_at: '2026-05-08T18:50:00Z' },
+  contract: { id: 'ct-1', location_id: 'loc-1', organization_id: 'org-1', profile_id: 'p-1', signed_at: '2026-05-08T18:50:00Z' },
   recipient: { full_name: 'Sarah Test', email: 'sarah@test.com' },
   issuer: { full_name: 'Boss Person', email: 'boss@test.com' },
   templateName: 'Coach Agreement',
 }
 
+// URLSEAM.1 — every link in these emails is served by THIS deployment, so
+// the base comes from getAppUrl(), which THROWS when NEXT_PUBLIC_APP_URL is
+// unset (CLAUDE.md: no silent env fallbacks). Configure it the way prod does.
+const CRM_HOST = 'https://crm.repset.ie'
+
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.stubEnv('NEXT_PUBLIC_APP_URL', CRM_HOST)
   sendEmail.mockResolvedValue(undefined)
 })
+
+afterEach(() => { vi.unstubAllEnvs() })
 
 describe('contract email branding header', () => {
   it('renders the configured logo + company name from company_settings', async () => {
@@ -174,5 +182,80 @@ describe('issuer notification links point at /contracts (HUBS.2d)', () => {
     const { htmlBody } = sendEmail.mock.calls[0][0]
     expect(htmlBody).toContain(`/contracts/${baseArgs.contract.id}`)
     expect(htmlBody).not.toContain('/admin/contracts')
+  })
+})
+
+// LEGALENT.1 — the footer names the CONTRACTING COMPANY. It used to be
+// a literal naming a company formed from the gym brand that appears in
+// no register, on an email a member receives alongside a document they
+// are about to sign. It now resolves the same way the countersignature
+// block does: org_settings.legal_entity_name (mig 425), falling back
+// to the resolved brand.
+describe('contract email footer names the contracting entity (LEGALENT.1)', () => {
+  it('renders the org\'s configured legal entity and trading name', async () => {
+    createServerClient.mockReturnValue(makeDb({
+      company_settings: [{ company_name: 'UN1T', logo_url: null, favicon_url: null }],
+      org_settings: [{ legal_entity_name: 'Champ Fitness Ltd', legal_trading_name: 'UN1T Dublin' }],
+    }))
+
+    await sendContractIssuedEmail(baseArgs)
+
+    const { htmlBody } = sendEmail.mock.calls[0][0]
+    expect(htmlBody).toContain('Champ Fitness Ltd (trading as UN1T Dublin)')
+  })
+
+  it('falls back to the BRAND when the org has no legal entity configured', async () => {
+    // The load-bearing rule: every business in this estate is its own
+    // legal entity, so an unconfigured org must render an
+    // under-specified footer, never another company's registered name.
+    createServerClient.mockReturnValue(makeDb({
+      company_settings: [{ company_name: 'CCF Autos', logo_url: null, favicon_url: null }],
+      org_settings: [],
+    }))
+
+    await sendContractIssuedEmail(baseArgs)
+
+    const { htmlBody } = sendEmail.mock.calls[0][0]
+    expect(htmlBody).toContain('CCF Autos ·')
+    expect(htmlBody).not.toContain('Champ Fitness')
+  })
+
+  it('escapes the entity label in the footer', async () => {
+    createServerClient.mockReturnValue(makeDb({
+      org_settings: [{ legal_entity_name: 'Tom & Jerry Ltd', legal_trading_name: null }],
+    }))
+
+    await sendContractIssuedEmail(baseArgs)
+
+    const { htmlBody } = sendEmail.mock.calls[0][0]
+    expect(htmlBody).toContain('Tom &amp; Jerry Ltd ·')
+  })
+})
+
+// URLSEAM.1 — the link base is a SEAM, not a literal. It used to be
+// `NEXT_PUBLIC_APP_URL || '<hard-coded host>'`, so on any deploy whose env
+// named a different host (a preview, the next domain change) the links
+// silently pointed at the old one. getAppUrl() is the only accessor and it
+// throws rather than guessing.
+describe('link base follows the NEXT_PUBLIC_APP_URL seam (URLSEAM.1)', () => {
+  it('builds every link on the configured host, including a preview host', async () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://un1t-crm-git-x.vercel.app')
+    createServerClient.mockReturnValue(makeDb({}))
+
+    await sendContractIssuedEmail(baseArgs)
+
+    const { htmlBody } = sendEmail.mock.calls[0][0]
+    expect(htmlBody).toContain('https://un1t-crm-git-x.vercel.app/account/contracts/ct-1')
+    expect(htmlBody).toContain('https://un1t-crm-git-x.vercel.app/privacy')
+    expect(htmlBody).not.toContain('crm.repset.ie')
+    expect(htmlBody).not.toContain('crm.un1tdublin.com')
+  })
+
+  it('throws instead of guessing a host when the env is unset', async () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', '')
+    createServerClient.mockReturnValue(makeDb({}))
+
+    await expect(sendContractIssuedEmail(baseArgs)).rejects.toThrow(/NEXT_PUBLIC_APP_URL is not set/)
+    expect(sendEmail).not.toHaveBeenCalled()
   })
 })

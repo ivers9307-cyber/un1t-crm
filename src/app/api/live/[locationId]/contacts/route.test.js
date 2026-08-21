@@ -21,6 +21,21 @@ function makeReq(q = '') {
 }
 const props = { params: Promise.resolve({ locationId: 'loc1' }) }
 
+// SEC-LIVE-API.1 — the gate now also requires `studio_management` at the
+// location, so fixtures need the shape hasPermissionForLocation reads.
+function userAt(role, { studio = true, locationId = 'loc1' } = {}) {
+  return {
+    id: 'u1',
+    role,
+    isMaster: false,
+    locations: [{ id: locationId, features: {} }],
+    assignmentsByLocation: {
+      [locationId]: { role, permissions: studio === null ? {} : { studio_management: studio } },
+    },
+    roleTemplatesByLocation: {},
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   getUserLocationIds.mockReturnValue(['loc1'])
@@ -35,14 +50,14 @@ describe('GET /api/live/[locationId]/contacts', () => {
   })
 
   it('403 when the location is not in scope', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'staff', isMaster: false })
+    getCurrentUser.mockResolvedValue(userAt('staff'))
     getUserLocationIds.mockReturnValue(['other'])
     const res = await GET(makeReq(), props)
     expect(res.status).toBe(403)
   })
 
   it('200 returns contacts without a query term', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'staff', isMaster: false })
+    getCurrentUser.mockResolvedValue(userAt('staff'))
     const contacts = [{ id: 'c1', name: 'Alice' }, { id: 'c2', name: 'Bob' }]
     const terminal = Promise.resolve({ data: contacts, error: null })
     createServerClient.mockReturnValue({
@@ -64,7 +79,7 @@ describe('GET /api/live/[locationId]/contacts', () => {
   })
 
   it('200 returns contacts for a search term', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'staff', isMaster: false })
+    getCurrentUser.mockResolvedValue(userAt('staff'))
     const contacts = [{ id: 'c1', name: 'Alice Smith' }]
     const terminal = Promise.resolve({ data: contacts, error: null })
     const orFn = vi.fn(() => ({ order: () => ({ limit: () => terminal }) }))
@@ -87,7 +102,7 @@ describe('GET /api/live/[locationId]/contacts', () => {
   })
 
   it('ranks the live class roster first, deduped, with the class name (HR-CLAIM.1)', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'staff', isMaster: false })
+    getCurrentUser.mockResolvedValue(userAt('staff'))
     getClassRoster.mockResolvedValue({
       occurrence: { glofox_event_id: 'ev1', class_name: 'UN1T Strength' },
       roster: [

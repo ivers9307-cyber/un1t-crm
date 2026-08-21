@@ -40,7 +40,7 @@ beforeEach(() => vi.clearAllMocks())
 describe('/schedule root — ?view=reporting search param', () => {
   it('redirects to /login without a session', async () => {
     getCurrentUser.mockResolvedValue(null)
-    await expect(SchedulePage({ searchParams: Promise.resolve({}) })).rejects.toThrow('NEXT_REDIRECT:/login')
+    await expect(SchedulePage({ searchParams: Promise.resolve({}) })).rejects.toThrow(/^NEXT_REDIRECT:\/login$/)
   })
 
   it('renders the roster view by default', async () => {

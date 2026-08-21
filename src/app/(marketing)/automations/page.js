@@ -1,7 +1,7 @@
 // src/app/automations/page.js — Automations home (curated toggles + custom flows).
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Plug } from 'lucide-react'
+import { Music2 } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
@@ -99,13 +99,13 @@ export default async function AutomationsPage() {
         </div>
       )}
       {canDevices && (
-        <Link href="/automations/devices"
+        <Link href="/automations/sonos"
           className="block bg-un1t-surface border border-un1t-border rounded-lg p-4 hover:border-un1t-muted transition">
           <div className="flex items-center gap-2">
-            <Plug size={16} className="text-un1t-subtle" />
-            <h2 className="font-semibold text-un1t-text">Devices</h2>
+            <Music2 size={16} className="text-un1t-subtle" />
+            <h2 className="font-semibold text-un1t-text">Studio music</h2>
           </div>
-          <p className="text-sm text-un1t-subtle mt-1">Schedules &amp; class-linked power for smart plugs and switches.</p>
+          <p className="text-sm text-un1t-subtle mt-1">Scheduled Sonos playback — when the music starts, what plays, and how loud.</p>
         </Link>
       )}
       {canFlows && <AutomationsFlowList sequences={sequences} />}

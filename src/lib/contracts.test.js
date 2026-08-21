@@ -186,12 +186,23 @@ describe('locationVariables', () => {
     expect(v).toEqual({ company_name: 'CCF Autos' })
   })
 
-  it('LOCATION_VAR_KEYS lists exactly the five keys this function can produce', () => {
+  it('LOCATION_VAR_KEYS lists exactly the keys this function can produce', () => {
     const v = locationVariables({
       location: { name: 'a', address: 'b', phone: 'c', email: 'd' },
       branding: { companyName: 'e' },
+      entity: { label: 'f' },
     })
     expect(Object.keys(v).sort()).toEqual([...LOCATION_VAR_KEYS].sort())
+  })
+
+  // LEGALENT.1 — the contracting COMPANY, distinct from company_name
+  // (the brand). Resolved server-side by getContractingEntity() at
+  // issue time and always non-empty, so a template's party clause can
+  // never be left with an unresolved {{legal_entity_name}}.
+  it('resolves legal_entity_name from the entity independently of branding', () => {
+    expect(locationVariables({ entity: { label: 'Champ Fitness Ltd (trading as UN1T Dublin)' } }))
+      .toEqual({ legal_entity_name: 'Champ Fitness Ltd (trading as UN1T Dublin)' })
+    expect(locationVariables({ entity: null })).toEqual({})
   })
 })
 

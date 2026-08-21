@@ -17,9 +17,16 @@
 // working off the other would disagree about how many issues are open.
 // One definition, shared.
 //
-// Scope: owner + master at the location (per the "All owners at the
-// studio" routing decision). Non-handlers see a 0-count empty tab
-// (the inbox UI hides 0-count tabs by default).
+// Scope: issue handlers at the location — owner + master by role (the
+// "All owners at the studio" routing decision), OR anyone holding the
+// grantable `issues_inbox` key. HUBDOOR.1 folded the key in so this tab,
+// the /issues page, the six handler API routes and the command palette
+// all resolve the same population; before it, a manager granted
+// `issues_inbox` got a palette command and no tab and no page. The OR
+// lives in canHandleIssues below rather than in canApproveAtActiveLocation
+// (whose `allowedRoles` contract is role-only, shared by six other
+// providers). Non-handlers see a 0-count empty tab (the inbox UI hides
+// 0-count tabs by default).
 //
 // TENANT.8 (item 4) — APPROVALS-LOCATION-SCOPE: every row is
 // eq('location_id', activeId)-filtered to the viewer's own active
@@ -32,8 +39,16 @@ import {
   canApproveAtActiveLocation,
   viewerActiveLocationId,
 } from '../registry'
+import { hasPermission } from '@/lib/permissions'
 
 const HANDLER_ROLES = ['owner']
+
+// Master is handled inside canApproveAtActiveLocation; hasPermission is
+// resolved against the caller's ACTIVE location, the same scope this
+// provider filters its rows to, so the two halves agree on "where".
+function canHandleIssues(user) {
+  return canApproveAtActiveLocation(user, HANDLER_ROLES) || hasPermission(user, 'issues_inbox')
+}
 const OPEN_STATUSES = ['open', 'in_progress']
 
 export const issuesProvider = {
@@ -45,13 +60,13 @@ export const issuesProvider = {
   // staff don't act on issues, so an empty tab would just be noise.
   // Master always sees it (handled inside canApproveAtActiveLocation).
   isVisible(user) {
-    return canApproveAtActiveLocation(user, HANDLER_ROLES)
+    return canHandleIssues(user)
   },
 
   async fetchPending(db, user) {
     const activeId = viewerActiveLocationId(user)
     if (!activeId) return { count: 0, items: [] }
-    if (!canApproveAtActiveLocation(user, HANDLER_ROLES)) {
+    if (!canHandleIssues(user)) {
       return { count: 0, items: [] }
     }
 
@@ -90,7 +105,7 @@ export const issuesProvider = {
   async countPending(db, user) {
     const activeId = viewerActiveLocationId(user)
     if (!activeId) return 0
-    if (!canApproveAtActiveLocation(user, HANDLER_ROLES)) return 0
+    if (!canHandleIssues(user)) return 0
     const { count, error } = await db
       .from('issues')
       .select('*', { count: 'exact', head: true })

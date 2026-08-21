@@ -27,6 +27,9 @@ export async function GET(request) {
   const { searchParams } = new URL(request.url)
   const stageId = searchParams.get('stage_id')
   const offset = Math.max(0, parseInt(searchParams.get('offset') || '0', 10) || 0)
+  // RETURNPIPE.1 — 'returning' deliberately falls through to the 'active'
+  // field set: it is a live flow, so its cards need recent_bookings the same
+  // way the funnel's do. Only 'dormant' ships the trimmed selection.
   const view = searchParams.get('view') === 'dormant' ? 'dormant' : 'active'
   if (!stageId) return NextResponse.json({ success: false, error: 'stage_id required' }, { status: 400 })
 

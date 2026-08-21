@@ -56,8 +56,8 @@ export const dynamic = 'force-dynamic'
 const TABS = [
   // device_control is in this union for the same reason it's in the
   // sidebar entry's anyPermission (review fix, HUBS.2f) — the
-  // Automations page's Tapo devices section (canDevices) gates on it
-  // alone, so a device_control-only holder needs the tab to show too.
+  // Automations page's Studio music (Sonos) section (canDevices) gates
+  // on it alone, so a device_control-only holder needs the tab to show too.
   { id: 'automations', label: 'Automations',  href: '/automations', perms: ['automations', 'email', 'whatsapp', 'device_control'] },
   { id: 'landing',     label: 'Landing page', href: '/welcome',     perms: ['landing_page'], newTab: true },
   { id: 'send',        label: 'Send',         href: '/communications/send',        perms: ['email', 'whatsapp', 'sms'] },

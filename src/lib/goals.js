@@ -1,6 +1,25 @@
-// KEEP IN SYNC with champ-app/shared/goals.js (verbatim copy below line 1).
-// rows go in, progress numbers come out. Isolated so the
-// dashboard card and /account/goals page share the math.
+// Goal progress computation. Supabase-fetched rows go in, progress numbers
+// come out. Isolated so the dashboard card and /account/goals page share the
+// math.
+//
+// ⚠️ THIS IS NOT A COPY OF shared/goals.js, whatever line 1 used to say.
+// It claimed "KEEP IN SYNC with champ-app/shared/goals.js (verbatim copy
+// below line 1)" and that was false: this file is PR #610's original, while
+// shared/goals.js arrived with the Repset P1 champ-app drop (#1433), and the
+// two differ in ways that matter —
+//
+//   • startOfIsoWeek / startOfMonth bucket on **UTC** boundaries here and on
+//     **Europe/Dublin** boundaries in shared/. Near midnight on a Monday
+//     during IST the two credit the same session to different weeks.
+//   • periodEnd takes (periodStart) here and (period, periodStart) there.
+//
+// The web dashboard reads `@/lib/goals`; the mobile member app reads
+// `shared/goals`. Both render the SAME member's weekly goal progress, so the
+// divergence is live and member-visible. It is pinned as a known divergence
+// in tests/shared-pair-sync.test.js (mode 'diverged') rather than papered
+// over: deciding which boundary is correct moves a number members already
+// see, and belongs in its own change. Do not "resolve" it by editing this
+// comment back.
 
 const MS_DAY = 24 * 3600 * 1000
 

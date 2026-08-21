@@ -195,6 +195,17 @@ export async function proxy(request) {
   // (Gmail clips a message over ~102KB, taking the footer and its unsubscribe
   // link with it). Authorised by an HMAC token that names one campaign and no
   // contact, so there is no session to gate on and nothing personal behind it.
+  // /race/ + /race-pay/ — AUDIT-13.B. next.config.js forever-rewrites
+  // these to /event/ + /event-pay/ ("the critical ones — shared
+  // externally"), but middleware runs BEFORE afterFiles rewrites, so the
+  // proxy only ever sees the LEGACY path — and it was in no allowlist, so
+  // every anonymous visitor 307'd to /login before the rewrite could fire.
+  // Not dead config: Mia still MINTS these URLs today
+  // (src/lib/agent/event-tools.js signup_url, `${appUrl}/race/<slug>`) and
+  // both event register paths set the post-payment Revolut returnUrl to
+  // `${baseUrl}/race/<slug>/confirmed`. So the audience is a customer in
+  // WhatsApp and a payer coming back from a card form — neither can ever
+  // have a session.
   // /account-deletion — PUBPATH.1. App-store compliance surface: it is the URL
   // registered in the Google Play Console's "Account Deletion URL" field
   // (docs/architecture/MOBILE.md — https://crm.un1tdublin.com/account-deletion,
@@ -203,7 +214,7 @@ export async function proxy(request) {
   // own header says "Must be publicly accessible (no auth) so reviewers can
   // verify" while every anonymous hit 307'd to /login. Nothing personal is
   // behind it — it is static copy naming an email address.
-  const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/event/', '/event-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/api/fleet/', '/deposit/', '/welcome', '/free-class', '/start', '/offers', '/.well-known/', '/privacy', '/terms', '/legal/', '/technical', '/account-deletion', '/ccf', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/', '/use-the-app']
+  const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/event/', '/event-pay/', '/race/', '/race-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/api/fleet/', '/deposit/', '/welcome', '/free-class', '/start', '/offers', '/.well-known/', '/privacy', '/terms', '/legal/', '/technical', '/account-deletion', '/ccf', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/', '/use-the-app']
   const isPublic = publicPaths.some(p => request.nextUrl.pathname.startsWith(p))
   if (isPublic) return NextResponse.next()
 

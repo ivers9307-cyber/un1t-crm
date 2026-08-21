@@ -55,13 +55,13 @@ beforeEach(() => {
 describe('/admin/health page', () => {
   it('redirects to /login without a session', async () => {
     getCurrentUser.mockResolvedValue(null)
-    await expect(TenantHealthPage()).rejects.toThrow('NEXT_REDIRECT:/login')
+    await expect(TenantHealthPage()).rejects.toThrow(/^NEXT_REDIRECT:\/login$/)
   })
 
   for (const role of NON_MASTER_ROLES) {
     it(`redirects to / for role "${role}" (not master — matches the sibling /admin pages)`, async () => {
       getCurrentUser.mockResolvedValue(user(role))
-      await expect(TenantHealthPage()).rejects.toThrow('NEXT_REDIRECT:/')
+      await expect(TenantHealthPage()).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
       // Never reaches the data layer for a rejected role.
       expect(getTenantHealth).not.toHaveBeenCalled()
     })
@@ -79,6 +79,6 @@ describe('/admin/health page', () => {
     // truth every sibling /admin page reads. Guard against a gate that
     // accidentally reads `user.role` instead.
     getCurrentUser.mockResolvedValue(user('master', 'owner'))
-    await expect(TenantHealthPage()).rejects.toThrow('NEXT_REDIRECT:/')
+    await expect(TenantHealthPage()).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
   })
 })

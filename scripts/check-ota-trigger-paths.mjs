@@ -309,7 +309,7 @@ function main() {
       `  including its ${'`'}*.test.js${'`'}/__tests__/__fixtures__; nothing there can be UNDER-published).`
     )
     console.log(
-      `  Advisory, not a gate: main has no branch protection, so a red run blocks no merge.\n`
+      `  On PRs this is enforced: main requires Test & lint (which runs it) since CI-GATE.1.\n`
     )
     process.exit(0)
   }

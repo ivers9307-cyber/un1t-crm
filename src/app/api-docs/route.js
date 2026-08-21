@@ -7,6 +7,13 @@
 
 export const runtime = 'nodejs'
 
+// CHROME.1 — page title + spec name are PLATFORM chrome (a developer portal
+// behind staff auth), so they read Repset. `urls.primaryName` must stay
+// byte-identical to the matching `urls[].name` or Swagger UI selects no spec
+// and renders an empty page — change the two together, always. The second
+// spec keeps its own product name ("Champ App"); renaming it here would only
+// mislabel a spec this repo does not own.
+
 // Phase 6 (Repset domain separation): the champ backend is gaining
 // api.repset.ie. Stage 1 keeps the default on app.champfitness.ie (which
 // keeps serving forever); Stage 2 flips this via CHAMP_OPENAPI_URL env
@@ -19,7 +26,7 @@ const HTML = `<!DOCTYPE html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>UN1T — API Portal</title>
+    <title>Repset — API Portal</title>
     <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
     <style>
       html, body { margin: 0; padding: 0; }
@@ -33,10 +40,10 @@ const HTML = `<!DOCTYPE html>
       window.addEventListener('load', function () {
         window.ui = SwaggerUIBundle({
           urls: [
-            { url: '/api/openapi.json', name: 'UN1T CRM' },
+            { url: '/api/openapi.json', name: 'Repset CRM' },
             { url: '${CHAMP_OPENAPI_URL}', name: 'Champ App' },
           ],
-          'urls.primaryName': 'UN1T CRM',
+          'urls.primaryName': 'Repset CRM',
           dom_id: '#swagger-ui',
           deepLinking: true,
           presets: [SwaggerUIBundle.presets.apis],

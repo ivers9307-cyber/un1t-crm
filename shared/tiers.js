@@ -1,5 +1,10 @@
-// KEEP IN SYNC with un1t-crm/src/lib/tiers.js (verbatim copy below line 1).
 // Status-tier ladder. Pure — months-hit count in, tier out.
+// SYNC RULE (corrected by PAIRSYNC.1): this file is the SUBSET of
+// un1t-crm/src/lib/tiers.js — everything here must stay byte-identical there,
+// but that copy also carries a rolling-window decay block this one does not
+// (only the CRM reads location.settings.scoring.tier_window_months). Line 1
+// used to claim a "verbatim copy" in both directions and had been wrong since
+// those helpers landed. Enforced by tests/shared-pair-sync.test.js.
 // un1t-crm uses it for the tier-up push (name+colour); champ-app for the dashboard badge.
 export const TIERS = [
   { slug: 'bronze',   name: 'Bronze',   months: 1,  color: '#c77b3a' },

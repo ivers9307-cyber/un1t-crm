@@ -28,6 +28,8 @@
 //
 // Refs: https://www.twilio.com/docs/sms/api/message-resource
 
+import { overlayConnectionsMany } from '@/lib/connection-registry'
+
 const TWILIO_BASE = 'https://api.twilio.com/2010-04-01'
 
 // Last-resort sender used when neither the per-location field nor
@@ -200,37 +202,130 @@ export function effectiveSenderLocation(location, orgSenderId) {
 
 /**
  * Resolve an organization's own default SMS sender — the sender of its oldest
- * location that has one. Used as the fallback for an event whose location has
- * no sender (e.g. the per-host anchor location a hosted event sits on) so a
- * UN1T event never falls through to the cross-brand TWILIO_FROM default.
- * Returns null when the org has no configured sender (the caller then keeps the
- * existing global fallback) or on any query error — it never guesses.
+ * location that has one, AND whether the question could be answered at all.
+ *
+ * "No sender configured" and "the query failed" are different facts and must
+ * not collapse: the first is an operator to-do ("set one in Location
+ * Settings"), the second is a transient blip that the same advice cannot fix.
+ * Folding them together produced an operator-facing error that was simply
+ * false, and — on the unattended race-confirmation leg — a permanent skip on
+ * a path that never retries.
  *
  * @param {import('@supabase/supabase-js').SupabaseClient} db  service-role client
+ * @param {string | null | undefined} organizationId
+ * @returns {Promise<{ senderId: string|null, unreadable: boolean }>}
+ */
+export async function getOrgDefaultSender(db, organizationId) {
+  if (!organizationId) return { senderId: null, unreadable: false }
+  // REGISTRY-AWARE (SENDER-REGISTRY.1). This used to filter in Postgres with
+  // `.not('twilio_alpha_sender_id','is',null).limit(1)` — i.e. it asked the
+  // LEGACY column only, while every actual send resolves its sender through
+  // `overlayConnections(…, ['twilio_sender'])`, which prefers the
+  // channel_connections registry row. Today mig 419's backfill keeps the two in
+  // lockstep so nothing diverges; the moment senders go registry-primary (a
+  // location configured only in `channel_connections`, legacy column null) this
+  // function would find NOTHING, return null, and every org-fallback send would
+  // drop to the global default. That default is another business's sender.
+  //
+  // So: fetch the org's locations, overlay the registry the same way the send
+  // path does, THEN pick the oldest one that has a sender. Ordering is
+  // preserved by overlayConnectionsMany (it maps over the list it is given).
+  // The `.limit()` is a sanity bound, not a filter — an organisation with more
+  // than 200 locations has bigger problems than sender resolution.
+  const { data, error } = await db
+    .from('locations')
+    .select('id, twilio_alpha_sender_id, created_at')
+    .eq('organization_id', organizationId)
+    .order('created_at', { ascending: true })
+    .limit(200)
+  if (error) return { senderId: null, unreadable: true }
+  if (!data?.length) return { senderId: null, unreadable: false }
+  const overlaid = await overlayConnectionsMany(db, data, ['twilio_sender'])
+  for (const loc of overlaid || []) {
+    if (loc?.twilio_alpha_sender_id) return { senderId: loc.twilio_alpha_sender_id, unreadable: false }
+  }
+  return { senderId: null, unreadable: false }
+}
+
+/**
+ * Back-compat wrapper for callers that only want the id and cannot act on the
+ * difference. Prefer `getOrgDefaultSender` on any path where "we could not
+ * read it" and "it is not set" lead to different behaviour or different copy.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} db
  * @param {string | null | undefined} organizationId
  * @returns {Promise<string | null>}
  */
 export async function getOrgDefaultSenderId(db, organizationId) {
-  if (!organizationId) return null
-  const { data, error } = await db
-    .from('locations')
-    .select('twilio_alpha_sender_id, created_at')
-    .eq('organization_id', organizationId)
-    .not('twilio_alpha_sender_id', 'is', null)
-    .order('created_at', { ascending: true })
-    .limit(1)
-  if (error || !data?.length) return null
-  return data[0].twilio_alpha_sender_id || null
+  const { senderId } = await getOrgDefaultSender(db, organizationId)
+  return senderId
+}
+
+/**
+ * Sender resolution for a TENANT-BRANDED path (every event send), with the
+ * global fallback REFUSED rather than taken.
+ *
+ * `getLocationSenderId` ends in `process.env.TWILIO_FROM || 'CCFautos'`. That
+ * terminal literal is CCF Autos — a SEPARATE BUSINESS in this estate, not a
+ * neutral default — so a UN1T gym event whose location and org both lack a
+ * sender texts a paying attendee under a used-car dealership's name. The
+ * attendee cannot tell that from a scam, and it is not recoverable after the
+ * fact. The env var is no better: it is one global string shared by every
+ * tenant, so it can only ever be right for one of them.
+ *
+ * This returns WHERE the sender came from so the caller can decide, instead of
+ * discovering the wrong brand only in the customer's inbox:
+ *
+ *   source: 'location'   — the location's own sender (registry or legacy)
+ *   source: 'org'        — the org's default, applied to a senderless location
+ *   source: 'none'       — NOTHING tenant-scoped is configured. The caller must
+ *                          NOT send: `getLocationSenderId` would fall through.
+ *   source: 'unreadable' — the org lookup FAILED. Also do not send, for the
+ *                          same reason — but say something different, because
+ *                          "set one in Location Settings" is false advice when
+ *                          the sender may well already be set. Collapsing this
+ *                          into 'none' is what made the operator-facing 409 lie.
+ *
+ * Deliberately NOT a hard failure inside this function — see CLAUDE.md, a guard
+ * that fails closed can cost more than the thing it prevents. Each caller
+ * weighs its own trade: the operator-driven payment-link route refuses with an
+ * actionable message (the human is right there and the link is one click from
+ * the clipboard), while the race-confirmation SMS leg skips-with-reason and
+ * lets the EMAIL receipt — which carries the check-in QR — go out untouched.
+ *
+ * Measured read-only against prod 2026-08-20: every location that hosts an
+ * event resolves at 'location', and the one senderless UN1T location resolves
+ * at 'org'. No event in prod today would be refused by this.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} db  service-role client
+ * @param {{ twilio_alpha_sender_id?: string|null, organization_id?: string|null }|null|undefined} location
+ * @returns {Promise<{ location: object|null, senderId: string|null, source: 'location'|'org'|'none'|'unreadable' }>}
+ */
+export async function resolveTenantSmsSender(db, location) {
+  if (!location) return { location: null, senderId: null, source: 'none' }
+  if (location.twilio_alpha_sender_id) {
+    return { location, senderId: location.twilio_alpha_sender_id, source: 'location' }
+  }
+  if (!location.organization_id) return { location, senderId: null, source: 'none' }
+  const { senderId: orgSenderId, unreadable } = await getOrgDefaultSender(db, location.organization_id)
+  if (unreadable) return { location, senderId: null, source: 'unreadable' }
+  if (!orgSenderId) return { location, senderId: null, source: 'none' }
+  return { location: effectiveSenderLocation(location, orgSenderId), senderId: orgSenderId, source: 'org' }
 }
 
 /**
  * One-call sender resolution for any SMS attributed to an event's location:
  * keep the location's own sender when it has one (no query), otherwise swap in
  * the location's ORG default sender, otherwise leave it untouched so the
- * global TWILIO_FROM fallback still applies. This is the shared entry point for
- * every event SMS path (race confirmations + the registration payment-link
- * route) so a senderless host-anchor location never texts from the CCF Autos
- * default. Pass the location that already reflects any registry overlay.
+ * global TWILIO_FROM fallback still applies. Pass the location that already
+ * reflects any registry overlay.
+ *
+ * NOT FOR EVENT PATHS ANY MORE. "leave it untouched so the global fallback
+ * applies" is exactly the hole SENDER-REGISTRY.1 closed: the global fallback is
+ * another business's sender. Event sends use `resolveTenantSmsSender` below,
+ * which reports `source: 'none'` instead of silently handing the caller a
+ * location that will resolve to `CCFautos`. Kept for any non-event caller that
+ * genuinely wants the legacy behaviour.
  *
  * @param {import('@supabase/supabase-js').SupabaseClient} db  service-role client
  * @param {{ twilio_alpha_sender_id?: string | null, organization_id?: string | null } | null | undefined} location

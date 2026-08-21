@@ -62,7 +62,9 @@ function sweep(now) {
  * @param {() => Promise<T>} compute
  * @returns {Promise<T>}
  */
-export function cachedRadarLoad(key, compute) {
+// AUDIT-13.G — module-private. It was exported and never imported; the
+// module's entry point is radarCache() below, which is the only caller.
+function cachedRadarLoad(key, compute) {
   const now = Date.now()
   const hit = store.get(key)
   if (hit && hit.expires > now) return hit.value
