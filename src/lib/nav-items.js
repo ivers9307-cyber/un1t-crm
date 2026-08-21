@@ -303,12 +303,11 @@ export const ALL_NAV = [
   // default tab rather than rendering content itself).
   //
   // Review fix — `device_control` joined the union: the Automations
-  // page also gates its Tapo devices section on device_control alone
-  // (canDevices in src/app/(marketing)/automations/page.js), a
+  // page also gates its Studio music (Sonos) section on device_control
+  // alone (canDevices in src/app/(marketing)/automations/page.js), a
   // population the original union missed entirely. Without it a
   // device_control-only holder saw no Marketing sidebar entry at all,
-  // even though /automations/devices was reachable and useful to
-  // them.
+  // even though /automations was reachable and useful to them.
   //
   // `/welcome` is deliberately ABSENT from extraActivePaths: it's the
   // PUBLIC marketing site (outside auth entirely, per the public-path
@@ -323,9 +322,9 @@ export const ALL_NAV = [
   //
   // Folded-forward context from the old standalone entries:
   //  - Automations (curated toggles + custom email/WhatsApp flows +
-  //    Tapo device control) — visible to anyone holding `automations`
+  //    device control) — visible to anyone holding `automations`
   //    (the curated cards), `email`/`whatsapp` (custom flows), or
-  //    `device_control` (the Tapo devices section); the page itself
+  //    `device_control` (the device-control section); the page itself
   //    (src/app/(marketing)/automations/page.js) gates which sections
   //    render for which permission, matching this union exactly.
   //  - Landing page (HUBS.2a — promoted from a Studio Management child

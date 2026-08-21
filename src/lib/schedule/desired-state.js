@@ -1,8 +1,15 @@
-// TAPO-T1 — pure schedule engine. Resolves a device's day into
-// concrete on/off windows (UTC ms) and answers "what should this
-// device be right now?". No DB, no network — TDD'd, TZ-safe via
+// TAPO-T1 (moved here by SONOS.1) — pure schedule engine. Resolves a
+// day into concrete on/off windows (UTC ms) and answers "what should
+// this be right now?". No DB, no network — TDD'd, TZ-safe via
 // dublin-time's Intl-based day-start math (works regardless of
 // server TZ).
+//
+// The TAPO-T1 tag is where this was born, not where it lives. The Tapo
+// and Homey paths were deleted in SONOS.14; this engine was deliberately
+// moved out of src/lib/tapo/ first so that deletion could not take it.
+// Its consumer is now the Sonos planner (src/lib/sonos/groups.js), which
+// calls resolveServeWindows for the ACTIVE WINDOW's identity and payload
+// rather than desiredState's collapsed on/off — see planAction.
 //
 // zone is a label in v1: class mode follows the LOCATION-WIDE
 // timetable (class_occurrences has no zone column — mirrors
@@ -75,7 +82,16 @@ export function resolveDayWindows(device, dateStr, occurrences = []) {
       // transition — Sat 22:00 → Sun 02:00 over spring-forward is 23 real
       // hours for the day, only 4 wall-clock hours but 3 real hours here.
       if (offAt <= onAt) offAt = dublinWallMs(addDaysISO(dateStr, 1), w.off)
-      out.push({ on_at: onAt, off_at: offAt })
+      // `source` is the window this resolved pair came from. The engine
+      // itself never reads it — it exists so a caller that needs the
+      // window's payload (Sonos: volume + favourite) can get it without
+      // re-deriving which window is active and re-doing the DST maths.
+      // It's a shallow copy, not the caller's own window object, so a
+      // consumer reading the payload can't reach back through it and
+      // mutate the schedule it was given. Object.freeze(w) was considered
+      // and rejected: w IS the caller's input, so freezing it in place
+      // would mutate the caller's data structure as a side effect.
+      out.push({ on_at: onAt, off_at: offAt, source: { ...w } })
     }
     return out.sort((a, b) => a.on_at - b.on_at)
   }

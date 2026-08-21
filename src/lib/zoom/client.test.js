@@ -22,7 +22,7 @@ function jsonResponse(body, status = 200, headers = {}) {
 describe('zoom client', () => {
   // `global.fetch = fn` below is a plain property reassignment, not a
   // vi.spyOn() spy — vi.restoreAllMocks() does not undo it. Save/restore it
-  // ourselves, same as src/lib/homey/client.test.js.
+  // ourselves.
   let originalFetch
   beforeEach(() => {
     originalFetch = global.fetch
