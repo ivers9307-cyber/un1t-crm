@@ -870,7 +870,7 @@ function ScheduleCard({ schedule, players, favorites, onReload, editable }) {
       )}
       {editable && error && <p className="mt-2 text-[11px] text-red-700">{error}</p>}
       {editable && runState === 'done' && (
-        <p className="mt-2 text-[11px] text-blue-700">Queued — the active window (if any) will be reapplied within a minute.</p>
+        <p className="mt-2 text-[11px] text-blue-700">Applied — the active window is playing now.</p>
       )}
       {editable && runState?.warning && (
         <div className={`mt-2 rounded-lg border p-3 text-sm ${toneClasses('warning')}`}>{runState.warning}</div>
