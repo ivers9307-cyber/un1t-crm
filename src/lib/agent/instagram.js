@@ -18,6 +18,7 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import { stampConnectionOk, stampConnectionError, isMetaAuthError } from '@/lib/connection-health'
 import { ensureInstagramMediaRehosted } from '@/lib/instagram-media-server'
 import { resolveContactForInstagramThread } from '@/lib/instagram-contact-link-server'
+import { splitMessageText, INSTAGRAM_TEXT_LIMIT } from '@/lib/message-split'
 import { mediaRenderKind } from '@shared/whatsapp-media'
 
 // IG-MEDIA.1 — map an inbound IG attachment type to the message_type we
@@ -105,26 +106,34 @@ export async function sendInstagramMessage(recipientIgsid, text, opts = {}) {
   if (!token) throw new Error('No Instagram access token for this location')
 
   const igId = conn?.external_account_id || 'me'
-  const res = await fetch(`${IG_GRAPH_URL}/${encodeURIComponent(igId)}/messages`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({
-      recipient: { id: recipientIgsid },
-      message: { text },
-    }),
-  })
-  const result = await res.json().catch(() => ({}))
-  if (!res.ok || result.error) {
-    const msg = result?.error?.message || `Instagram send failed (${res.status})`
-    console.error('[radar-agent] IG send error', msg)
-    // INTEG-A3 — an auth-shaped failure means the stored token is bad:
-    // surface it on the connection row. Transient failures don't stamp.
-    // Best-effort (the helper swallows its own errors); needs a full
-    // connection row (id) — synthetic { access_token } callers just skip.
-    if (conn?.id && isMetaAuthError(result?.error, res.status)) {
-      await stampConnectionError(null, conn.id, msg)
+  // MIA-HYGIENE.6 — Instagram's DM cap is 1000 chars, far lower than
+  // WhatsApp's, so this is the likelier of the two to be crossed by ordinary
+  // copy. Split rather than let Meta reject the whole message.
+  const parts = splitMessageText(text, INSTAGRAM_TEXT_LIMIT)
+  let result = {}
+
+  for (const part of parts) {
+    const res = await fetch(`${IG_GRAPH_URL}/${encodeURIComponent(igId)}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        recipient: { id: recipientIgsid },
+        message: { text: part },
+      }),
+    })
+    result = await res.json().catch(() => ({}))
+    if (!res.ok || result.error) {
+      const msg = result?.error?.message || `Instagram send failed (${res.status})`
+      console.error('[radar-agent] IG send error', msg)
+      // INTEG-A3 — an auth-shaped failure means the stored token is bad:
+      // surface it on the connection row. Transient failures don't stamp.
+      // Best-effort (the helper swallows its own errors); needs a full
+      // connection row (id) — synthetic { access_token } callers just skip.
+      if (conn?.id && isMetaAuthError(result?.error, res.status)) {
+        await stampConnectionError(null, conn.id, msg)
+      }
+      throw new Error(msg)
     }
-    throw new Error(msg)
   }
   // INTEG-A3 — a delivered send proves the connection works right now.
   if (conn?.id) await stampConnectionOk(null, conn.id)

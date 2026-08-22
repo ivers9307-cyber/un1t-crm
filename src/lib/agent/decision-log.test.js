@@ -82,4 +82,37 @@ describe('compactDecisionMeta', () => {
     const meta = compactDecisionMeta({ tools: [{ name: 'save_lead_details', input: loop }] })
     expect(meta.tools[0].input).toBe('{}')
   })
+
+  // MIA-HYGIENE.4 — a model_error row used to carry meta: null, so the trace
+  // said a turn failed but not how. Live example: the 2026-08-12 model_error
+  // on WhatsApp, undiagnosable after the fact because the status code and
+  // attempt count were only ever in a console line Vercel had since rotated.
+  it('records the error kind, status and attempts', () => {
+    const meta = compactDecisionMeta({
+      error: { kind: 'api_error', status: 529, attempts: 3 },
+      iterations: 1,
+    })
+    expect(meta).toEqual({
+      error: { kind: 'api_error', status: 529, attempts: 3 },
+      iterations: 1,
+    })
+  })
+
+  it('clips a long exception message', () => {
+    const meta = compactDecisionMeta({
+      error: { kind: 'exception', message: 'y'.repeat(400) },
+    })
+    expect(meta.error.kind).toBe('exception')
+    expect(meta.error.message.length).toBeLessThanOrEqual(161) // cap + ellipsis
+  })
+
+  it('omits the error key entirely when the turn did not fail', () => {
+    const meta = compactDecisionMeta({ stopReason: 'end_turn', iterations: 1 })
+    expect(meta).not.toHaveProperty('error')
+  })
+
+  it('records an error even when nothing else in the trace is worth keeping', () => {
+    expect(compactDecisionMeta({ error: { kind: 'exception', message: 'boom' } }))
+      .toEqual({ error: { kind: 'exception', message: 'boom' } })
+  })
 })

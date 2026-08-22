@@ -49,25 +49,69 @@ import { BOOKING_TOOLS, executeBookingTool } from './booking-tools'
 import { EVENT_TOOLS, EVENT_TOOL_NAMES, executeEventTool } from './event-tools'
 import { CARD_TOOLS, CARD_TOOL_NAMES, executeCardTool } from './card-tools'
 import { anthropicMessages } from '@/lib/anthropic'
+// MIA-HYGIENE.4 — the agent's own caught failures never reached error_events
+// (mig 435 only ever saw errors that escaped Next), so Vercel log retention
+// was the entire forensic window for a Mia outage.
+import { recordErrorEvent } from '@/lib/error-events'
 import { getAiCapStatus } from '@/lib/usage-caps'
 import { checkSpend } from '@/lib/wallet-enforcement'
 
-export const AGENT_MODEL = 'claude-sonnet-4-6'
+// MIA-SONNET5 — Claude Sonnet 5. Reaches previous Opus-tier quality on
+// agentic work, and Mia was unusually cheap to migrate: she never sent
+// temperature/top_p (which Sonnet 5 rejects) and never used assistant
+// prefills, so the request shape carried over unchanged.
+export const AGENT_MODEL = 'claude-sonnet-5'
+
+// Sonnet 5 runs ADAPTIVE thinking when `thinking` is omitted, where Sonnet 4.6
+// ran with thinking off — a silent default change, so it is set explicitly
+// here rather than inherited.
+//
+// Adaptive, not disabled, on purpose: with thinking disabled Sonnet 5 is
+// measurably less willing to reach for tools, and Mia's whole value is tool
+// use (verify → list → book). Disabling it to save tokens would trade her
+// core function for a rounding error.
+//
+// Measured on real Mia turns before choosing (2026-08-20): adaptive spends
+// almost nothing on short transactional turns — 0 thinking blocks at effort
+// low AND medium, 1 at high, with total output never above 115 tokens against
+// a 4.6 baseline of 32. The model calibrates thinking to task complexity, so
+// the usual "adaptive will eat max_tokens" worry does not apply at this shape.
+// Exported, like CACHED_ACCOUNT_TOOLS, so the eval harness sends the exact
+// request shape production sends. MIA-HYGIENE.7 is the cautionary tale: the
+// harness kept its own "same shape as production" copy, it drifted, and a
+// whole paid eval run died on a 400.
+export const AGENT_THINKING = { type: 'adaptive' }
 
 // Prompt caching (CACHE.1): ACCOUNT_TOOLS (~4k tokens) is byte-identical on
 // every inbound message and renders BEFORE the per-customer (dynamic) system
 // prompt — so the tool block is the one stable, cacheable prefix on this path.
 // Marking the LAST tool ephemeral caches the whole tool block (clears the
-// 2048-token minimum for claude-sonnet-4-6); the dynamic system + messages
+// 1024-token cacheable-prefix minimum on Sonnet 5, which the ~11.9k-token
+// block clears many times over); the dynamic system + messages
 // after it stay uncached. Built once from the shared const so we never mutate
 // it. No anthropic-beta header needed — caching is GA on version 2023-06-01.
 // AGENT-HANDS.1 — the booking tools join the cached block. Still one
 // byte-identical stable prefix; the ephemeral marker moves to the last
 // tool of the COMBINED array so the whole block caches.
+// NOTE — strict tool use (`strict: true`) is NOT applied here, and that is a
+// measured decision, not an oversight. Sonnet 5 supports it, but the API caps
+// OPTIONAL parameters across all tool schemas in a request at 24 and Mia sits
+// at 29, so a strict request is rejected outright:
+//   "Schemas contains too many optional parameters (29) … (limit: 24)."
+// Adopting it means shedding 5 optional parameters — several are deliberately
+// optional (verify_identity takes email OR surname) — or going strict on a
+// subset of tools. See tool-schemas.test.js, which tracks the budget.
 export const ALL_AGENT_TOOLS = [...ACCOUNT_TOOLS, ...BOOKING_TOOLS, ...EVENT_TOOLS, ...CARD_TOOLS]
-const CACHED_ACCOUNT_TOOLS = ALL_AGENT_TOOLS.map((tool, i) =>
+// MIA-HYGIENE.5 — 1h TTL on this cross-turn breakpoint (see prompt.js
+// buildCachedSystem for the measurement). The intra-turn tool_result marker
+// further down keeps the 5-minute default: it caches a prefix that only lives
+// for the rest of the turn, so the 1h write premium would buy nothing.
+// Exported so the eval harness sends the EXACT block production sends. It used
+// to rebuild its own copy "in the same shape", which silently drifted the
+// moment the TTL changed here and cost a full eval run to a 400.
+export const CACHED_ACCOUNT_TOOLS = ALL_AGENT_TOOLS.map((tool, i) =>
   i === ALL_AGENT_TOOLS.length - 1
-    ? { ...tool, cache_control: { type: 'ephemeral' } }
+    ? { ...tool, cache_control: { type: 'ephemeral', ttl: '1h' } }
     : tool,
 )
 // Don't re-acknowledge a burst of non-text messages — one soft handoff
@@ -100,11 +144,19 @@ const MODEL_TIMEOUT_MS = 60_000
 const MODEL_MAX_ATTEMPTS = 3
 const MODEL_RETRY_BASE_MS = 250
 const MODEL_RETRY_AFTER_CAP_MS = 5_000
-// max_tokens for the reply. 600 is right for the "a sentence or two" house
-// style; a truncated turn retries once at the raised cap before handing off
-// rather than sending a cut-off (possibly sentinel-splitting) reply.
-const MODEL_MAX_TOKENS = 600
-const MODEL_MAX_TOKENS_RETRY = 1000
+// max_tokens for the reply. A truncated turn retries once at the raised cap
+// before handing off rather than sending a cut-off (possibly sentinel-
+// splitting) reply.
+//
+// MIA-SONNET5 — doubled from 600/1000. Two independent reasons, both measured
+// rather than guessed: Sonnet 5's tokenizer produces ~31% more tokens for the
+// same text (9,059 → 11,907 on Mia's real prefix), so a 4.6-tuned ceiling is
+// tighter than it looks; and max_tokens now also has to cover adaptive
+// thinking, which is cheap here but not free at higher effort. A typical turn
+// measures 60-115 output tokens, so this is ~10x headroom — the cap exists to
+// stop a runaway, not to shape the reply (the prompt does that).
+export const MODEL_MAX_TOKENS = 1200
+const MODEL_MAX_TOKENS_RETRY = 2400
 // Cost/abuse ceilings (operator-overridable via settings.customer_agent.limits).
 const DEFAULT_LIMITS = { convHour: 20, locDay: 500 }
 
@@ -329,8 +381,20 @@ async function hasInboundAfter(db, adapter, conversationId, sinceIso) {
 // Two signals: (1) the conversation's agent gate was flipped off (the inbox
 // human-send route stamps a manual take-over), or (2) a HUMAN outbound landed
 // after turn start (a staff reply mid-generation, before the gate flip
-// committed). Either means Mia must stay quiet. Best-effort: a check failure
-// returns false so a genuine reply is never blocked by a transient DB error.
+// committed). Either means Mia must stay quiet.
+//
+// MIA-HYGIENE.3 — this guard FAILS CLOSED: if it cannot establish that the
+// thread is still Mia's, it reports a takeover and the reply is dropped. It
+// used to return false on any failure, which aimed the uncertainty squarely at
+// the outcome the guard exists to prevent. The failure modes are not
+// symmetric: a dropped agent reply is recoverable (the handoff cooldown
+// re-arms her, and the missed-inbound sweep re-runs the turn), while a second
+// message landing on top of a human's is not, and it breaks the standing rule
+// that a human-led thread belongs to the human. Richard, 2026-08-20.
+//
+// Note the supabase-js shape trap this also closes: a failed query RESOLVES as
+// { data: null, error } instead of throwing, so a catch-only guard never saw a
+// read failure at all — it was indistinguishable from "nobody took over".
 export async function humanTookOverDuringTurn(db, adapter, conversationId, sinceIso) {
   if (!conversationId) return false
   try {
@@ -340,28 +404,43 @@ export async function humanTookOverDuringTurn(db, adapter, conversationId, since
     // conv-select in runChannelAgentInner below and the adapter.name ===
     // 'whatsapp' branch already used for wa_card_sets further down this file.
     const isWhatsApp = adapter.name === 'whatsapp'
-    const { data: conv } = await db.from(adapter.conversationsTable)
+    const { data: conv, error: convError } = await db.from(adapter.conversationsTable)
       .select(isWhatsApp ? 'agent_active, agent_paused_at' : 'agent_active')
       .eq('id', conversationId)
       .single()
+    if (convError) return takeoverCheckFailed(adapter, conversationId, 'conversation_read', convError)
     // A sticky pause mid-turn is also a takeover: Mia must not talk over an
     // operator who just paused the thread while she was generating.
     if (conv && (conv.agent_active === false || conv.agent_paused_at)) return true
 
-    const { data: lastOut } = await db.from(adapter.messagesTable)
+    const { data: lastOut, error: lastOutError } = await db.from(adapter.messagesTable)
       .select(`${adapter.humanOutboundColumns || 'source'}, created_at`)
       .eq('conversation_id', conversationId)
       .eq('direction', 'outbound')
       .order('created_at', { ascending: false })
       .limit(1)
+    if (lastOutError) return takeoverCheckFailed(adapter, conversationId, 'last_outbound_read', lastOutError)
     const row = Array.isArray(lastOut) ? lastOut[0] : null
     if (!row || !adapter.isHumanOutbound?.(row)) return false
     // Only a human message from THIS turn counts — an old human message with a
     // since-cooldown re-arm must not suppress the legitimately re-armed reply.
     return !sinceIso || !row.created_at || row.created_at >= sinceIso
-  } catch {
-    return false
+  } catch (err) {
+    return takeoverCheckFailed(adapter, conversationId, 'exception', err)
   }
+}
+
+// Log the drop loudly and report a takeover. A silently-dropped reply is the
+// kind of thing that reads as "Mia ignored me" weeks later with nothing in the
+// logs to explain it, so every fail-closed drop names its stage.
+function takeoverCheckFailed(adapter, conversationId, stage, err) {
+  console.warn('[radar-agent] takeover check failed — dropping reply', JSON.stringify({
+    channel: adapter?.name || null,
+    conversationId: conversationId || null,
+    stage,
+    error: String(err?.message || err || '').slice(0, 160),
+  }))
+  return true
 }
 
 async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
@@ -709,6 +788,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
           {
             model: AGENT_MODEL,
             max_tokens: maxTokens,
+            thinking: AGENT_THINKING,
             output_config: { effort: agentEffort },
             system,
             messages,
@@ -728,7 +808,15 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
         )
         if (aborted) { claimLost = true; break }
         if (!res.ok) {
-          console.error('[radar-agent] Anthropic error', res.status, await res.text().catch(() => ''))
+          const errBody = await res.text().catch(() => '')
+          console.error('[radar-agent] Anthropic error', res.status, errBody)
+          await noteModelFailure(trace, adapter, {
+            kind: 'model_error',
+            status: res.status,
+            attempts: MODEL_MAX_ATTEMPTS,
+            message: errBody || `HTTP ${res.status}`,
+            conversationId,
+          })
           // COMMS-AUDIT 2026-07-10 — a model outage must not mean dead air:
           // send the holding message + page managers via the soft-handoff
           // path (its agent_last_reply_at debounce keeps webhook retries /
@@ -863,6 +951,11 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       }
     } catch (err) {
       console.error('[radar-agent] model call failed', err?.message)
+      await noteModelFailure(trace, adapter, {
+        kind: 'model_exception',
+        message: err?.message || String(err),
+        conversationId,
+      })
       // Same soft handoff as the non-2xx path above — holding message once
       // (debounced) + manager push, agent stays armed for when the model
       // comes back.
@@ -882,6 +975,14 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       console.warn('[radar-agent] turn abandoned', JSON.stringify({
         channel: adapter.name, conversationId, reason: stopFailure,
       }))
+      // A refusal or a twice-truncated turn is a model failure too — the
+      // customer got a holding message instead of an answer, so it belongs in
+      // the trace and in error_events alongside outages.
+      await noteModelFailure(trace, adapter, {
+        kind: stopFailure,
+        message: `stop_reason=${trace.stopReason || 'unknown'}`,
+        conversationId,
+      })
       return await softHandoff(db, adapter, {
         conversationId, locationId, recipient, contactId, connection, settings,
         lastReplyAt: conv?.agent_last_reply_at,
@@ -1079,6 +1180,35 @@ async function handoff(db, adapter, { conversationId, locationId, recipient, con
 // Manager-push copy for a model (Anthropic API) failure taking the
 // soft-handoff path — the customer got the holding message, but the reply
 // they were owed never existed, so a human needs to pick the thread up.
+// MIA-HYGIENE.4 — record an agent-side model failure in BOTH places that
+// matter after the fact: the turn's decision trace (agent_decisions.meta, so
+// the inbox can say why Mia went quiet) and error_events (mig 435, so the row
+// outlives Vercel's log window and Sentinel can alert on it). Best-effort by
+// construction — recordErrorEvent swallows its own failures and is storm-
+// guarded, and this must never change whether the customer gets a reply.
+function noteModelFailure(trace, adapter, { kind, status, attempts, message, conversationId }) {
+  if (trace) {
+    trace.error = {
+      kind,
+      ...(Number.isFinite(status) ? { status } : {}),
+      ...(Number.isFinite(attempts) ? { attempts } : {}),
+      ...(message ? { message: String(message) } : {}),
+    }
+  }
+  return recordErrorEvent({
+    vercel_id: null,
+    runtime: process.env.NEXT_RUNTIME || null,
+    // Not a route — name the agent path so these rows are filterable apart
+    // from request failures.
+    route_path: `agent:${adapter?.name || 'unknown'}${conversationId ? `:${conversationId}` : ''}`,
+    route_type: 'agent',
+    method: null,
+    name: kind,
+    message: String(message ?? (Number.isFinite(status) ? `HTTP ${status}` : kind)).slice(0, 500),
+    digest: null,
+  })
+}
+
 function modelFailureNotify(adapter) {
   return {
     title: `${adapter.label} · agent unavailable`,

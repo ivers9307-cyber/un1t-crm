@@ -11,6 +11,9 @@ import { logWarn } from '@/lib/log'
 // MAX_TOOL_ITERATIONS so a normal turn is never truncated.
 const META_MAX_TOOLS = 12
 const META_MAX_INPUT_CHARS = 200
+// MIA-HYGIENE.4 — upstream error text (an Anthropic body, a stack line) can be
+// long; the trace wants the shape of the failure, not the essay.
+const META_MAX_ERROR_CHARS = 160
 
 /**
  * Compact a turn trace into the agent_decisions.meta payload (mig 444).
@@ -37,6 +40,21 @@ export function compactDecisionMeta(trace = {}) {
   }
   if (trace.stopReason) meta.stop_reason = String(trace.stopReason).slice(0, 40)
   if (trace.iterations) meta.iterations = trace.iterations
+  // MIA-HYGIENE.4 — WHY a turn failed. Error rows used to persist meta: null,
+  // so agent_decisions could say a turn errored but never what the API
+  // returned or how many attempts it took, and the only richer record was a
+  // console line inside Vercel's retention window.
+  if (trace.error && typeof trace.error === 'object') {
+    const e = {}
+    if (trace.error.kind) e.kind = String(trace.error.kind).slice(0, 40)
+    if (Number.isFinite(trace.error.status)) e.status = trace.error.status
+    if (Number.isFinite(trace.error.attempts)) e.attempts = trace.error.attempts
+    if (trace.error.message) {
+      const m = String(trace.error.message)
+      e.message = m.length > META_MAX_ERROR_CHARS ? m.slice(0, META_MAX_ERROR_CHARS) + '…' : m
+    }
+    if (Object.keys(e).length) meta.error = e
+  }
   return Object.keys(meta).length ? meta : null
 }
 

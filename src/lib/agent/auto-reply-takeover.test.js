@@ -17,12 +17,16 @@ function makeBuilder(result) {
   }
   return b
 }
-function stubDb({ conv, lastOut, throwOn }) {
+function stubDb({ conv, lastOut, throwOn, convError, lastOutError }) {
   return {
     from(table) {
       if (throwOn === table) return { select: () => { throw new Error('db down') } }
-      if (table === 'whatsapp_conversations') return makeBuilder({ data: conv })
-      if (table === 'whatsapp_messages') return makeBuilder({ data: lastOut })
+      if (table === 'whatsapp_conversations') {
+        return makeBuilder(convError ? { data: null, error: convError } : { data: conv })
+      }
+      if (table === 'whatsapp_messages') {
+        return makeBuilder(lastOutError ? { data: null, error: lastOutError } : { data: lastOut })
+      }
       return makeBuilder({ data: null })
     },
   }
@@ -78,8 +82,28 @@ describe('humanTookOverDuringTurn', () => {
     expect(await humanTookOverDuringTurn(db, whatsappAdapter, 'c1', TURN_START)).toBe(false)
   })
 
-  it('false (never blocks a send) when the check throws', async () => {
+  // MIA-HYGIENE.3 — this guard now FAILS CLOSED. It used to return false on
+  // any failure ("never block a send"), which pointed the uncertainty at the
+  // outcome the guard exists to prevent: a double message into a human-led
+  // thread. The asymmetry decides it — a dropped agent reply is recoverable
+  // (the cooldown re-arm and the missed-inbound sweep both bring Mia back),
+  // while talking over a human is not, and it violates the standing product
+  // stance that a human-led thread belongs to the human. Richard, 2026-08-20.
+  it('true (drops the reply) when the check throws', async () => {
     const db = stubDb({ throwOn: 'whatsapp_conversations' })
-    expect(await humanTookOverDuringTurn(db, whatsappAdapter, 'c1', TURN_START)).toBe(false)
+    expect(await humanTookOverDuringTurn(db, whatsappAdapter, 'c1', TURN_START)).toBe(true)
+  })
+
+  // supabase-js RESOLVES errors as { data: null, error } rather than throwing,
+  // so the old catch-only guard never saw these at all: a failed query looked
+  // exactly like "no takeover" and Mia sent regardless.
+  it('true when the conversation read fails (resolved error, not a throw)', async () => {
+    const db = stubDb({ convError: { message: 'timeout' } })
+    expect(await humanTookOverDuringTurn(db, whatsappAdapter, 'c1', TURN_START)).toBe(true)
+  })
+
+  it('true when the last-outbound read fails (resolved error, not a throw)', async () => {
+    const db = stubDb({ conv: { agent_active: true }, lastOutError: { message: 'timeout' } })
+    expect(await humanTookOverDuringTurn(db, whatsappAdapter, 'c1', TURN_START)).toBe(true)
   })
 })

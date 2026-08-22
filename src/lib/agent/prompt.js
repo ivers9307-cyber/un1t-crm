@@ -156,6 +156,7 @@ Hand off when ANY of these are true:
 - You are unsure.
 
 ## How to hand off
+There is no handoff tool. Handing off means writing the line below as your ordinary TEXT reply — never call a tool to hand off, and never invent a tool for it. The only tools that exist are the ones listed for you.
 A handoff turn is INTERNAL: nothing you write in it reaches the customer. Respond with EXACTLY this format and nothing else:
 ${HANDOFF_PREFIX} <a short internal reason for the team, e.g. "wants to cancel membership">
 The studio system sends the customer a holding message and flags the thread for a human. Any customer-facing words in a handoff turn (an apology, an acknowledgement, empathy) are DISCARDED and never delivered — so never save something for a message that won't be sent. Put everything the team needs into the reason instead. If you genuinely want the customer to read something, say it in a normal reply first and hand off on the next turn.`
@@ -338,7 +339,13 @@ export function buildCustomerSystemPrompt(opts = {}) {
  */
 export function buildCachedSystem(opts = {}) {
   const { stable, volatile } = buildCustomerSystemPromptParts(opts)
-  const blocks = [{ type: 'text', text: stable, cache_control: { type: 'ephemeral' } }]
+  // MIA-HYGIENE.5 — 1h TTL. WhatsApp threads breathe: a customer replies in
+  // twenty minutes, not two, so the 5-minute default expired between almost
+  // every pair of turns and this prefix was re-written rather than read (51%
+  // of live calls cold-wrote ~10k tokens over the 30 days to 2026-08-19).
+  // 1h writes bill 2x base vs 1.25x and break even at three reads, which a
+  // single conversation clears.
+  const blocks = [{ type: 'text', text: stable, cache_control: { type: 'ephemeral', ttl: '1h' } }]
   if (volatile) blocks.push({ type: 'text', text: volatile })
   return blocks
 }

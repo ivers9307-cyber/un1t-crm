@@ -109,6 +109,19 @@ describe('evaluateOutcome', () => {
     })
   })
 
+  // MIA-SONNET5 — "she still replied in text, she didn't just fire a tool and
+  // go silent" was previously approximated by requiring specific nouns in the
+  // reply, which broke the moment the model's phrasing got terser without
+  // getting worse. minReplyChars states the actual requirement.
+  it('minReplyChars requires a substantive text reply', () => {
+    const withText = (text) => ({ ...baseOutcome, text })
+    expect(evaluateOutcome({ minReplyChars: 20 }, withText('Sent! Let me know if you want help picking one.')).pass).toBe(true)
+    expect(evaluateOutcome({ minReplyChars: 20 }, withText('ok')).pass).toBe(false)
+    expect(evaluateOutcome({ minReplyChars: 20 }, withText('')).pass).toBe(false)
+    // Whitespace is not a reply.
+    expect(evaluateOutcome({ minReplyChars: 20 }, withText('          \n   ')).pass).toBe(false)
+  })
+
   it('argMatch checks a field on the first matching call', () => {
     const outcome = {
       ...baseOutcome,

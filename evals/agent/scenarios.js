@@ -218,7 +218,11 @@ export const SCENARIOS = [
     },
     expect: {
       handoff: false,
-      match: ['crm\\.un1tdublin\\.com/race/hyrox-sim'],
+      // Must match the signup_url this scenario actually feeds the model
+      // (above). Phase 6 Stage 4 (#1450) moved that to crm.repset.ie but left
+      // this assertion pinned to the legacy domain, so the scenario asserted a
+      // link it never supplied and could never pass again.
+      match: ['crm\\.repset\\.ie/race/hyrox-sim'],
       notMatch: ["(you(’|')?re|I(’|')?ve)\\s+(now\\s+)?(registered|signed\\s+you\\s+up|booked\\s+you)"],
     },
   },
@@ -335,7 +339,14 @@ export const SCENARIOS = [
       // the membership details, so a short companion line ("sent over some
       // cards…") is IDEAL; demanding the text restate prices failed good
       // behaviour in live runs. Keep this loose.
-      match: ['(card|plan|membership|option|detail)'],
+      //
+      // MIA-SONNET5 — this was `match: ['(card|plan|membership|option|detail)']`,
+      // which asserted a VOCABULARY rather than the behaviour the comment
+      // above describes. Sonnet 5 answers "Sent! Let me know if you want help
+      // picking one or want to try a class first." — precisely the ideal
+      // companion line, containing none of those five nouns. minReplyChars
+      // states the real requirement: she still replied in her own words.
+      minReplyChars: 30,
     },
   },
   {

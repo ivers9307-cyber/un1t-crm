@@ -77,6 +77,10 @@ export default function CustomerAgentClient() {
         membership_signup_url: (settings.membership_signup_url || '').trim() || null,
         membership_cta_label: (settings.membership_cta_label || '').trim() || null,
         handoff_cooldown_hours: settings.handoff_cooldown_hours ?? 12,
+        // MIA-HYGIENE.1 — both were read live by the agent but had no editor,
+        // so they sat permanently on their code defaults. Null = "use default".
+        effort: settings.effort || null,
+        handoff_after_verify_failures: settings.handoff_after_verify_failures ?? null,
         consultation_event_type_id: settings.consultation_event_type_id || null,
         monthly_points_target: settings.monthly_points_target ?? null,
         social_enabled: !!settings.social_enabled,
@@ -266,6 +270,39 @@ export default function CustomerAgentClient() {
             After the agent hands a conversation to a human, it stays out of that thread until a staff member
             resolves it in the inbox (which hands it straight back) — or until this many hours pass. 0 = only a
             resolve brings the agent back.
+          </p>
+        </div>
+
+        {/* MIA-HYGIENE.1 — reasoning effort. The agent has always read this
+            per turn (resolveAgentEffort), but it had no editor, so every
+            location ran on the 'medium' code default. */}
+        <div>
+          <label className="block text-sm font-medium text-un1t-text mb-1">Reasoning effort</label>
+          <select className={inputCls} value={settings.effort || ''}
+            onChange={e => setField('effort', e.target.value || null)}>
+            <option value="">Default (medium)</option>
+            <option value="low">Low — fastest and cheapest, for simple chat</option>
+            <option value="medium">Medium — balanced</option>
+            <option value="high">High — more thorough, slower</option>
+            <option value="max">Max — most thorough, slowest</option>
+          </select>
+          <p className="text-xs text-un1t-subtle mt-1">
+            How much the agent thinks before replying. Medium suits most studios. Raise it if you see
+            shallow answers on booking or identity questions; lower it for faster, cheaper replies.
+          </p>
+        </div>
+
+        {/* MIA-HYGIENE.1 — same story: read live by the verify-fail handoff,
+            never editable. Bounded 1-5 so a typo can't disable the net. */}
+        <div>
+          <label className="block text-sm font-medium text-un1t-text mb-1">Hand off after failed ID checks</label>
+          <input type="number" min={1} max={5} className={inputCls}
+            value={settings.handoff_after_verify_failures ?? ''}
+            placeholder="2"
+            onChange={e => setField('handoff_after_verify_failures', e.target.value === '' ? null : Number(e.target.value))} />
+          <p className="text-xs text-un1t-subtle mt-1">
+            After this many failed identity checks in a row, the agent stops asking and hands the
+            conversation to a human instead of looping the customer. Blank = the default (2).
           </p>
         </div>
 

@@ -19,7 +19,8 @@ import { formatNextClass } from './account-tools'
 import { getLocationBranding } from '@/lib/location-branding'
 import { anthropicMessages } from '@/lib/anthropic'
 
-const AGENT_MODEL = 'claude-sonnet-4-6'
+// MIA-SONNET5 — in step with the inbound reply path (see auto-reply.js).
+const AGENT_MODEL = 'claude-sonnet-5'
 
 const KIND_LABELS = {
   pause: 'pause their membership',
@@ -113,7 +114,8 @@ export function sanitizeSuggestion(text) {
 // instruction. Mirrors followups.js composeAgentText verbatim (same
 // model/max_tokens/system-cache shape) — see file header. Returns
 // { text } or { error }; never throws.
-async function composeAgentText(location, settings, historyRows, instruction, companyName, signal) {
+// Exported for tests (repo convention) — see compose-effort.test.js.
+export async function composeAgentText(location, settings, historyRows, instruction, companyName, signal) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return { error: 'no_api_key' }
   const system = buildCachedSystem({
@@ -132,7 +134,10 @@ async function composeAgentText(location, settings, historyRows, instruction, co
   try {
     // SAAS4-M1 — metered via the shared wrapper (source: approval_suggest).
     const { res, data: body } = await anthropicMessages(
-      { model: AGENT_MODEL, max_tokens: 300, system, messages },
+      // MIA-HYGIENE.2 — effort `low`, same reasoning as the followups path.
+      // MIA-SONNET5 — 300 → 600 for the same tokenizer + adaptive-thinking
+      // headroom reason.
+      { model: AGENT_MODEL, max_tokens: 600, thinking: { type: 'adaptive' }, output_config: { effort: 'low' }, system, messages },
       { apiKey, locationId: location.id, source: 'approval_suggest', signal }
     )
     if (!res.ok) return { error: `model_http_${res.status}` }

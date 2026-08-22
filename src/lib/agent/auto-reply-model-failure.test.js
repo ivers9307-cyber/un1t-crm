@@ -22,12 +22,17 @@ vi.mock('@/lib/push', () => ({
 vi.mock('@/lib/location-branding', () => ({
   getLocationBranding: vi.fn().mockResolvedValue({ companyName: 'UN1T' }),
 }))
+// MIA-HYGIENE.4 — agent failures now mirror into error_events (mig 435).
+vi.mock('@/lib/error-events', () => ({
+  recordErrorEvent: vi.fn().mockResolvedValue(undefined),
+}))
 vi.mock('@/lib/person-links', () => ({
   personGroupResolver: vi.fn().mockResolvedValue({ groupOf: () => null, primaryOf: () => null }),
 }))
 
 import { runChannelAgent } from './auto-reply'
 import { sendPushToRolesAtLocation } from '@/lib/push'
+import { recordErrorEvent } from '@/lib/error-events'
 
 // Minimal chainable stub covering the query shapes runChannelAgentInner
 // issues on the way to the model call. Results keyed by table.
@@ -130,6 +135,56 @@ describe('runChannelAgent — model failure soft handoff', () => {
     expect(sendPushToRolesAtLocation).toHaveBeenCalledTimes(1)
     const [, , payload] = sendPushToRolesAtLocation.mock.calls[0]
     expect(payload.data).toMatchObject({ type: 'whatsapp_agent_handoff', conversation_id: 'conv-1' })
+  })
+
+  // MIA-HYGIENE.4 — the 2026-08-12 model_error row in prod carried meta: null:
+  // the trace knew a turn had failed but not the status, the attempt count or
+  // the upstream message, and the richer detail existed only in a console line
+  // Vercel had long since rotated away.
+  it('non-2xx records the status + attempts in the decision trace and error_events', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 529, text: async () => 'overloaded' }))
+    const calls = []
+    const db = agentDb({ conv: { agent_active: true, contact_id: null, agent_last_reply_at: null }, history: HISTORY, calls })
+
+    await runChannelAgent(db, makeAdapter(), ctx)
+
+    const decision = calls.find(c => c.op === 'insert' && c.table === 'agent_decisions')
+    expect(decision?.row?.meta?.error).toMatchObject({ kind: 'model_error', status: 529, attempts: 3 })
+    expect(decision.row.meta.error.message).toContain('overloaded')
+
+    expect(recordErrorEvent).toHaveBeenCalledTimes(1)
+    expect(recordErrorEvent.mock.calls[0][0]).toMatchObject({
+      route_type: 'agent',
+      route_path: 'agent:whatsapp:conv-1',
+      name: 'model_error',
+    })
+  })
+
+  it('a thrown fetch records the exception message in the decision trace', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNRESET')))
+    const calls = []
+    const db = agentDb({ conv: { agent_active: true, contact_id: null, agent_last_reply_at: null }, history: HISTORY, calls })
+
+    await runChannelAgent(db, makeAdapter(), ctx)
+
+    const decision = calls.find(c => c.op === 'insert' && c.table === 'agent_decisions')
+    expect(decision?.row?.meta?.error).toMatchObject({ kind: 'model_exception', message: 'ECONNRESET' })
+    expect(recordErrorEvent).toHaveBeenCalledTimes(1)
+  })
+
+  it('a successful turn records no error in the trace', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ content: [{ type: 'text', text: 'Sure, what day suits?' }], stop_reason: 'end_turn' }),
+    }))
+    const calls = []
+    const db = agentDb({ conv: { agent_active: true, contact_id: null, agent_last_reply_at: null }, history: HISTORY, calls })
+
+    await runChannelAgent(db, makeAdapter(), ctx)
+
+    const decision = calls.find(c => c.op === 'insert' && c.table === 'agent_decisions')
+    expect(decision?.row?.meta?.error).toBeUndefined()
+    expect(recordErrorEvent).not.toHaveBeenCalled()
   })
 
   it('thrown fetch (network / SDK exception) → same soft handoff', async () => {
