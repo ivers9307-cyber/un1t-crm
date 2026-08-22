@@ -61,9 +61,10 @@ export async function applyOpen(db, { token, schedule, plan, groups, groupIds, n
   const nowIso = new Date(nowMs).toISOString()
   const primary = groupIds[0]
   const group = (groups || []).find((g) => g.id === primary)
-  // window_on_at MUST stay a raw number. A string makes planAction's
-  // equality never match, so every tick re-opens and loadFavorite restarts
-  // the playlist every sixty seconds. Pinned by apply.test.js.
+  // window_on_at stays a raw number. planAction's toMs() would tolerate a
+  // numeric or ISO string, but that tolerance is the safety net, not the
+  // contract — keep the one writer honest so the net never has to catch
+  // anything. Pinned by apply.test.js (typeof === 'number').
   const { error } = await db
     .from('sonos_schedules')
     .update({

@@ -119,7 +119,8 @@ export async function runSonosReconcile(db, deps = {}) {
           // Both outcomes count as failed here. 'sonos' leaves the window
           // unapplied so the next tick retries it; 'stamp' means the music
           // is playing but the record did not save, which the next tick
-          // will re-open — accepted, and loud in the log either way.
+          // will re-open, restarting the playlist, until the write lands —
+          // accepted, and loud in the log either way.
           failed++
           continue
         }
