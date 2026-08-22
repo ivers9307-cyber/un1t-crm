@@ -57,6 +57,12 @@ describe('sendSonosAction', () => {
     })
   })
 
+  it('sends a value of 0 — volume-to-zero is a real request, not an absent one', async () => {
+    // A future tidy to `if (value)` would drop 0 and turn it into a 400.
+    await sendSonosAction('s1', 'set_volume', 0, 'loc-1')
+    expect(api.mock.calls[0][1].body.value).toBe(0)
+  })
+
   it('omits `value` entirely when there is none — not null, not undefined', async () => {
     // The route's Zod schema has value optional; a null would fail
     // z.union([number, string]) and turn every play/pause into a 400.

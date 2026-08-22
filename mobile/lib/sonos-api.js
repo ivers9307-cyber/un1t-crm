@@ -13,12 +13,14 @@
 //
 // Soft failures come back as success: true with live: false / connected:
 // false + a `reason` (now-playing, household). Branch on those fields, not
-// on .success alone. Control failures carry `code`, and on a multi-group
-// schedule `applied` / `failedGroups` — volume_up/down are RELATIVE, so a
-// partial failure must never be blindly retried.
+// on .success alone. Control failures carry `code`, plus `applied` /
+// `failedGroups` (only meaningful when a schedule spans more than one
+// group) — volume_up/down are RELATIVE, so a partial failure must never be
+// blindly retried.
 
 import { api } from './api'
 
+// Returns { success, schedules } — the list is on `schedules`, not `data`.
 export function listSonosSchedules(locationId) {
   return api('/api/sonos/schedules', { locationId })
 }
