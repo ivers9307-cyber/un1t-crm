@@ -196,3 +196,51 @@ describe('resolveDayWindows source passthrough', () => {
     expect(windows[0].source.favorite_id).toBe('fv-late')
   })
 })
+
+// The engine's private dublinWallMs corrected by MINUTE-OF-DAY, which is a
+// whole DAY out whenever the read-back rolls onto the next calendar date. That
+// is every wall-clock at/after (24h - |offset|) in a negative-offset zone —
+// and Dublin itself at 23:00-23:59 during IST. Fixed by moving onto
+// src/lib/tz-time.js, which corrects from the full date+time read-back.
+describe('late-evening IST boundaries stay on their own day (SHELLY.2)', () => {
+  it('a Dublin 23:00-23:30 window does not land a day late', () => {
+    const late = { ...fixedDevice, fixed_windows: [{ days: [1], on: '23:00', off: '23:30' }] }
+    const w = resolveDayWindows(late, DAY, [])
+    expect(w).toHaveLength(1)
+    expect(w[0].on_at).toBe(T('23:00'))
+    expect(w[0].off_at).toBe(T('23:30'))
+  })
+})
+
+describe('tz parameter (SHELLY.2)', () => {
+  const NY = 'America/New_York'
+  const nyDevice = {
+    enabled: true, schedule_mode: 'fixed',
+    fixed_windows: [{ days: [1, 2, 3, 4, 5], on: '07:00', off: '21:30' }],
+    class_rule: {}, override: null,
+  }
+  it('explicit Dublin equals the default', () => {
+    expect(resolveDayWindows(fixedDevice, DAY, [], 'Europe/Dublin')).toEqual(resolveDayWindows(fixedDevice, DAY, []))
+  })
+  it('resolves a New York window to -04:00 instants (day-wrap regression)', () => {
+    const w = resolveDayWindows(nyDevice, DAY, [], NY)
+    expect(w[0].on_at).toBe(Date.parse(`${DAY}T07:00:00-04:00`))
+    expect(w[0].off_at).toBe(Date.parse(`${DAY}T21:30:00-04:00`))
+  })
+  it('overnight Sat 22:00 → Sun 03:00 across NY spring-forward is 5 wall-hours but 4 real hours', () => {
+    const night = { ...nyDevice, fixed_windows: [{ days: [6], on: '22:00', off: '03:00' }] }
+    const w = resolveDayWindows(night, '2026-03-07', [], NY)
+    expect(w[0].on_at).toBe(Date.parse('2026-03-07T22:00:00-05:00'))
+    expect(w[0].off_at).toBe(Date.parse('2026-03-08T03:00:00-04:00')) // 03:00 EDT — the hour 02:00–03:00 never exists
+    expect(w[0].off_at - w[0].on_at).toBe(4 * 3600 * 1000)
+  })
+  it('serves yesterday\'s overnight tail after NY midnight', () => {
+    const night = { ...nyDevice, fixed_windows: [{ days: [6], on: '22:00', off: '02:00' }] }
+    const sunday0030 = Date.parse('2026-07-12T00:30:00-04:00')
+    expect(desiredState(night, sunday0030, '2026-07-12', [], NY)).toBe('on')
+  })
+  it('class mode is unaffected by tz (occurrences are UTC instants)', () => {
+    const w = resolveDayWindows(classDevice, DAY, [occ('06:00', '06:45')], NY)
+    expect(w[0].on_at).toBe(T('06:00') - 15 * 60 * 1000)
+  })
+})
