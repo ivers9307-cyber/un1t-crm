@@ -3,6 +3,7 @@
 
 import { logWarn } from '@/lib/log'
 import { getSonosConfig, withFreshToken, sonosGetGroups, sonosSetGroupVolume, sonosLoadFavorite, sonosPause } from './client'
+import { applyOpen } from './apply'
 import { mapGroups, resolveGroupIds, planAction } from './groups'
 // dublinDayStr(instant), NOT dublinTodayStr() — the latter takes no
 // argument and always reads the real clock, which would quietly ignore an
@@ -104,25 +105,38 @@ export async function runSonosReconcile(db, deps = {}) {
         continue
       }
 
-      let allOk = true
-      for (const groupId of groupIds) {
-        if (plan.action === 'open') {
-          // Volume first: after loadFavorite, the opening seconds would
-          // play at the previous window's level.
-          const v = await setVolume(tok.token, groupId, plan.volume)
-          if (!v.ok) { allOk = false; logWarn(MODULE, 'setVolume failed', { groupId, statusCode: v.statusCode }); continue }
-          const f = await loadFavorite(tok.token, groupId, plan.favoriteId)
-          if (!f.ok) { allOk = false; logWarn(MODULE, 'loadFavorite failed', { groupId, statusCode: f.statusCode }) }
-        } else {
-          const p = await pause(tok.token, groupId)
-          if (!pauseSucceeded(p)) { allOk = false; logWarn(MODULE, 'pause failed', { groupId, statusCode: p.statusCode }) }
+      if (plan.action === 'open') {
+        const out = await applyOpen(db, {
+          token: tok.token,
+          schedule,
+          plan,
+          groups,
+          groupIds,
+          nowMs,
+          deps: { setVolume, loadFavorite },
+        })
+        if (!out.ok) {
+          // Both outcomes count as failed here. 'sonos' leaves the window
+          // unapplied so the next tick retries it; 'stamp' means the music
+          // is playing but the record did not save, which the next tick
+          // will re-open — accepted, and loud in the log either way.
+          failed++
+          continue
         }
+        applied++
+        continue
       }
 
+      // Close. Stays here rather than in apply.js: run-now never closes,
+      // so there is nothing to share.
+      let allOk = true
+      for (const groupId of groupIds) {
+        const p = await pause(tok.token, groupId)
+        if (!pauseSucceeded(p)) { allOk = false; logWarn(MODULE, 'pause failed', { groupId, statusCode: p.statusCode }) }
+      }
       if (!allOk) {
-        // Deliberately do NOT stamp last_applied: leaving the window
-        // unapplied means the next tick retries it, which is what a
-        // transient 5xx deserves. Stamping it would cost the whole window.
+        // Deliberately do NOT stamp last_applied: leaving the close
+        // unapplied means the next tick retries it.
         failed++
         continue
       }
@@ -132,7 +146,7 @@ export async function runSonosReconcile(db, deps = {}) {
       const { error: upErr } = await db
         .from('sonos_schedules')
         .update({
-          last_applied: { window_on_at: plan.windowOnAt, action: plan.action, at: nowIso },
+          last_applied: { window_on_at: plan.windowOnAt, action: 'close', at: nowIso },
           last_state: { group_id: primary, playback_state: group?.playbackState || null, at: nowIso },
           updated_at: nowIso,
         })
