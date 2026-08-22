@@ -195,6 +195,11 @@ const config = [
       'src/app/api/staff/route.js',
       'src/app/api/instagram/**',
       'src/app/api/registrations/**',
+      // SONOSAPPLY.4 — apply.js is the single write site for the open stamp,
+      // exactly the class this rule exists for: a stamp that silently fails
+      // leaves the music playing with no record, and the cron re-opens it
+      // (restarting the playlist) every tick until the write lands.
+      'src/lib/sonos/**',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },
