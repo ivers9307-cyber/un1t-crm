@@ -120,6 +120,15 @@ const PAIRS = {
     webOnly: ['ensureTeamForBooking'],
     why: 'Pure timing helpers live in shared/; the one IO helper (ensureTeamForBooking) stays web-only in src/lib.',
   },
+  'sonos-playback.js': {
+    mode: 'reexport',
+    shared: 'shared/sonos-playback.js',
+    web: 'src/lib/sonos/playback.js',
+    why:
+      'SONOSMOB.1 moved the Sonos playbackState enum + isPlaying/playbackLabel to shared/ for the mobile control ' +
+      'card; the web path is an `export * from` shim. Cross-named (sonos/playback.js vs sonos-playback.js), so the ' +
+      'export-name scan would not pair them on its own — this entry is what makes the identity assertion run.',
+  },
 
   // ── identical: hand-maintained twins that really are twins ─────────────────
   'challenges.js': {
