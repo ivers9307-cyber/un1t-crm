@@ -1,6 +1,7 @@
 // src/lib/sonos/apply.test.js
 import { describe, it, expect, vi } from 'vitest'
 import { applyOpen } from './apply'
+import { logWarn } from '@/lib/log'
 
 vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn() }))
 
@@ -92,9 +93,22 @@ describe('applyOpen', () => {
 
   it('uses the FIRST group id as the primary for last_state', async () => {
     const db = makeDb()
-    await run(db, { groupIds: ['GRP_B', 'GRP_A'] })
+    const deps = okDeps()
+    await run(db, { deps, groupIds: ['GRP_B', 'GRP_A'] })
     expect(db.updates[0].patch.last_state.group_id).toBe('GRP_B')
     expect(db.updates[0].patch.last_state.playback_state).toBe('PLAYBACK_STATE_PAUSED')
+    expect(deps.setVolume).toHaveBeenCalledTimes(2)
+    expect(deps.loadFavorite).toHaveBeenCalledTimes(2)
+    expect(db.updates).toHaveLength(1)
+  })
+
+  it('stamps nothing and reports sonos when there are no groups to apply to', async () => {
+    const db = makeDb()
+    const deps = okDeps()
+    const out = await run(db, { deps, groupIds: [] })
+    expect(out).toEqual({ ok: false, reason: 'sonos' })
+    expect(deps.setVolume).not.toHaveBeenCalled()
+    expect(db.updates).toHaveLength(0)
   })
 
   it('records a null playback_state when the primary group is not in the list', async () => {
@@ -116,6 +130,7 @@ describe('applyOpen', () => {
     expect(deps.loadFavorite).toHaveBeenCalledWith('tok', 'GRP_B', 'fv-1')
     // Deliberately unstamped: the next tick retries the window.
     expect(db.updates).toHaveLength(0)
+    expect(logWarn).toHaveBeenCalledWith('sonos-apply', 'setVolume failed', { scheduleId: 's1', groupId: 'GRP_A', statusCode: 500 })
   })
 
   it('stamps nothing when the favourite fails to load', async () => {

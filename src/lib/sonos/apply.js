@@ -37,6 +37,11 @@ export async function applyOpen(db, { token, schedule, plan, groups, groupIds, n
     loadFavorite = sonosLoadFavorite,
   } = deps
 
+  // Nothing to apply → nothing to stamp. Both callers guard this, but the
+  // invariant belongs here: an open with zero Sonos calls must never be
+  // recorded as applied.
+  if (!groupIds?.length) return { ok: false, reason: 'sonos' }
+
   let allOk = true
   for (const groupId of groupIds) {
     const v = await setVolume(token, groupId, plan.volume)
