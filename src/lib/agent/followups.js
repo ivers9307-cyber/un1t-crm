@@ -310,7 +310,10 @@ async function loadAgentKnowledge(db, locationId) {
 // knowledge and biases the model straight to [[SKIP]]/handoff (the first-class
 // check-in's intro-offer framing depends on those facts). `today` is the Dublin
 // business day for the same reason.
-async function composeAgentText({ location, settings, historyRows, instruction, companyName, knowledge }) {
+// Exported for tests (repo convention) — compose-effort.test.js asserts the
+// request body, which is how MIA-HYGIENE.2 caught this path running at the
+// API-default effort.
+export async function composeAgentText({ location, settings, historyRows, instruction, companyName, knowledge }) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return { error: 'no_api_key' }
   // CACHE.2 — cache the stable prefix (no tools on this path, so it caches the
@@ -332,7 +335,11 @@ async function composeAgentText({ location, settings, historyRows, instruction, 
   try {
     // SAAS4-M1 — metered via the shared wrapper (source: followups).
     const { res, data: body } = await anthropicMessages(
-      { model: AGENT_MODEL, max_tokens: 300, system, messages },
+      // MIA-HYGIENE.2 — effort `low`: a proactive nudge is a short, scoped,
+      // latency-tolerant generation. Without this the call ran at the API
+      // default (`high`), which EFFORT.1 already rejected for the inbound
+      // reply path.
+      { model: AGENT_MODEL, max_tokens: 300, output_config: { effort: 'low' }, system, messages },
       { apiKey, locationId: location.id, source: 'followups' }
     )
     if (!res.ok) return { error: `model_http_${res.status}` }

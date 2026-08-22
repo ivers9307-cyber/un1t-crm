@@ -113,7 +113,8 @@ export function sanitizeSuggestion(text) {
 // instruction. Mirrors followups.js composeAgentText verbatim (same
 // model/max_tokens/system-cache shape) — see file header. Returns
 // { text } or { error }; never throws.
-async function composeAgentText(location, settings, historyRows, instruction, companyName, signal) {
+// Exported for tests (repo convention) — see compose-effort.test.js.
+export async function composeAgentText(location, settings, historyRows, instruction, companyName, signal) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return { error: 'no_api_key' }
   const system = buildCachedSystem({
@@ -132,7 +133,8 @@ async function composeAgentText(location, settings, historyRows, instruction, co
   try {
     // SAAS4-M1 — metered via the shared wrapper (source: approval_suggest).
     const { res, data: body } = await anthropicMessages(
-      { model: AGENT_MODEL, max_tokens: 300, system, messages },
+      // MIA-HYGIENE.2 — effort `low`, same reasoning as the followups path.
+      { model: AGENT_MODEL, max_tokens: 300, output_config: { effort: 'low' }, system, messages },
       { apiKey, locationId: location.id, source: 'approval_suggest', signal }
     )
     if (!res.ok) return { error: `model_http_${res.status}` }

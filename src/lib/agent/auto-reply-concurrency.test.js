@@ -322,8 +322,64 @@ describe('agent turn — tool executor exceptions', () => {
     const toolResult = followUp.messages.at(-1).content[0]
     expect(toolResult).toMatchObject({ type: 'tool_result', tool_use_id: 'tu-1', is_error: true })
     expect(JSON.parse(toolResult.content)).toMatchObject({ error: 'tool_failed' })
-    // ...and it carries the intra-turn cache breakpoint.
+    // ...and it carries the intra-turn cache breakpoint. This one stays on the
+    // DEFAULT 5-minute TTL deliberately: it caches a prefix that only exists
+    // for the rest of this turn, so paying the 1h write premium (2x base vs
+    // 1.25x) would buy nothing.
     expect(toolResult.cache_control).toEqual({ type: 'ephemeral' })
+  })
+
+  // MIA-HYGIENE.5 — the cross-turn breakpoints (tool block + stable system)
+  // carry a 1h TTL. WhatsApp conversations have gaps longer than the 5-minute
+  // default, so the ~10k-token prefix was being re-written instead of read on
+  // 51% of live calls (measured over 30 days, 2026-08). Untested until now.
+  it('sends the stable tool block with a 1h cache breakpoint on its last tool', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(textTurn('Sure, what day suits?'))
+    vi.stubGlobal('fetch', fetchMock)
+    const calls = []
+    const db = agentDb({ conv: CONV, history: HISTORY, calls })
+
+    await runChannelAgent(db, makeAdapter(), ctx)
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    const marked = body.tools.filter(t => t.cache_control)
+    // Exactly one breakpoint, on the LAST tool, so the whole block caches as
+    // one prefix and the 4-breakpoint request cap is never at risk.
+    expect(marked).toHaveLength(1)
+    expect(body.tools.at(-1).cache_control).toEqual({ type: 'ephemeral', ttl: '1h' })
+    expect(body.system[0].cache_control).toEqual({ type: 'ephemeral', ttl: '1h' })
+  })
+
+  // The API rejects a request where a 1h breakpoint appears AFTER a 5m one:
+  // "a ttl='1h' cache_control block must not come after a ttl='5m' block",
+  // evaluated across tools → system → messages in that order. Production's
+  // order (tools 1h, system 1h, tool_result 5m) is descending and therefore
+  // legal, but nothing asserted it until the eval harness hit the 400 for
+  // real. Assert the invariant, not just the individual markers.
+  it('never places a longer-lived cache breakpoint after a shorter-lived one', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(toolTurn())
+      .mockResolvedValueOnce(textTurn('All set.'))
+    vi.stubGlobal('fetch', fetchMock)
+    executeAccountTool.mockResolvedValueOnce({ ok: true })
+    const calls = []
+    const db = agentDb({ conv: CONV, history: HISTORY, calls })
+
+    await runChannelAgent(db, makeAdapter(), ctx)
+
+    // The second call is the one that carries all three block families.
+    const body = JSON.parse(fetchMock.mock.calls[1][1].body)
+    const rank = (cc) => (cc ? (cc.ttl === '1h' ? 2 : 1) : 0)
+    const sequence = [
+      ...body.tools.map(t => rank(t.cache_control)),
+      ...body.system.map(b => rank(b.cache_control)),
+      ...body.messages.flatMap(m => (Array.isArray(m.content) ? m.content : []).map(c => rank(c.cache_control))),
+    ].filter(Boolean)
+
+    expect(sequence.length).toBeGreaterThan(1)
+    for (let i = 1; i < sequence.length; i++) {
+      expect(sequence[i]).toBeLessThanOrEqual(sequence[i - 1])
+    }
   })
 
   it('the same tool throwing twice abandons the turn as tool_error, not model failure', async () => {

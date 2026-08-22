@@ -15,7 +15,7 @@
 
 import { buildCachedSystem } from '@/lib/agent/prompt'
 import { formatHistoryForClaude, parseAgentResponse, resolveAgentEffort } from '@/lib/agent/core'
-import { ALL_AGENT_TOOLS, AGENT_MODEL, MAX_TOOL_ITERATIONS } from '@/lib/agent/auto-reply'
+import { CACHED_ACCOUNT_TOOLS, AGENT_MODEL, MAX_TOOL_ITERATIONS } from '@/lib/agent/auto-reply'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 
@@ -25,14 +25,13 @@ const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 // effort:low" workflow was impossible. Override per run with AGENT_EFFORT=low.
 export const EVAL_EFFORT = resolveAgentEffort(process.env.AGENT_EFFORT)
 
-// Same shape as production: mark the LAST tool ephemeral so the whole
-// byte-identical tool block caches across the eval run (saves ~90% of
-// input cost from scenario 2 onward).
-const CACHED_TOOLS = ALL_AGENT_TOOLS.map((tool, i) =>
-  i === ALL_AGENT_TOOLS.length - 1
-    ? { ...tool, cache_control: { type: 'ephemeral' } }
-    : tool,
-)
+// MIA-HYGIENE.5 — import the production tool block rather than rebuilding one
+// "in the same shape". The hand-rolled copy drifted the moment production
+// moved to a 1h TTL: the run then sent tools(5m) → system(1h), and the API
+// rejects a longer-lived breakpoint that follows a shorter-lived one
+// ("blocks are processed in the order tools, system, messages"), so all 28
+// scenarios 400'd. Same reasoning as importing the tool surface itself.
+const CACHED_TOOLS = CACHED_ACCOUNT_TOOLS
 
 export function buildScenarioRequest(scenario) {
   const p = scenario.prompt || {}

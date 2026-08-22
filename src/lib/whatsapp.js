@@ -15,6 +15,7 @@ import { formatMetaError } from './whatsapp-meta-error.js'
 import { dynamicUrlButtonIndex, urlButtonSendBlock, URL_BUTTON_MAPPING_KEY } from './whatsapp-template-buttons.js'
 import { sendPushToRolesAtLocation } from './push'
 import { MANAGER_ROLES } from './schemas'
+import { splitMessageText, WHATSAPP_TEXT_LIMIT } from './message-split.js'
 
 // WA-MULTI.1 — config is now per-location. Resolution helper +
 // env fallback live in whatsapp-config.js; the META_API_URL +
@@ -59,27 +60,40 @@ function headersFor(config) {
 export async function sendTextMessage(to, text, opts = {}) {
   const config = await resolveConfig(opts)
 
-  const response = await fetch(`${META_API_URL}/${config.phoneNumberId}/messages`, {
-    method: 'POST',
-    headers: headersFor(config),
-    body: JSON.stringify({
-      messaging_product: 'whatsapp',
-      recipient_type: 'individual',
-      to,
-      type: 'text',
-      text: { body: text },
-    }),
-  })
+  // MIA-HYGIENE.6 — Meta rejects a text body over 4096 chars. This used to post
+  // whatever it was handed, so an over-long message threw here and the customer
+  // simply got nothing. Splitting at the channel boundary covers every caller
+  // (agent replies, the 1000-token truncation retry, operator-authored copy)
+  // without teaching any of them about Meta's limits.
+  const parts = splitMessageText(text, WHATSAPP_TEXT_LIMIT)
+  let last = null
 
-  const result = await response.json()
-  if (result.error) {
-    console.error('WhatsApp send error:', result.error)
-    throw new Error(result.error.message || 'Failed to send WhatsApp message')
+  for (const part of parts) {
+    const response = await fetch(`${META_API_URL}/${config.phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: headersFor(config),
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to,
+        type: 'text',
+        text: { body: part },
+      }),
+    })
+
+    const result = await response.json()
+    if (result.error) {
+      console.error('WhatsApp send error:', result.error)
+      throw new Error(result.error.message || 'Failed to send WhatsApp message')
+    }
+    last = result
   }
 
+  // The LAST part's id: it's the message the thread actually ends on, so a
+  // reply/reaction lands where the customer is looking.
   return {
-    messageId: result.messages?.[0]?.id,
-    status: result.messages?.[0]?.message_status || 'sent',
+    messageId: last?.messages?.[0]?.id,
+    status: last?.messages?.[0]?.message_status || 'sent',
   }
 }
 

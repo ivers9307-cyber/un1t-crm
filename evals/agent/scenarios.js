@@ -218,7 +218,11 @@ export const SCENARIOS = [
     },
     expect: {
       handoff: false,
-      match: ['crm\\.un1tdublin\\.com/race/hyrox-sim'],
+      // Must match the signup_url this scenario actually feeds the model
+      // (above). Phase 6 Stage 4 (#1450) moved that to crm.repset.ie but left
+      // this assertion pinned to the legacy domain, so the scenario asserted a
+      // link it never supplied and could never pass again.
+      match: ['crm\\.repset\\.ie/race/hyrox-sim'],
       notMatch: ["(you(’|')?re|I(’|')?ve)\\s+(now\\s+)?(registered|signed\\s+you\\s+up|booked\\s+you)"],
     },
   },
