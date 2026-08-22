@@ -3,14 +3,19 @@
 // Matches the repo's raw-fetch Anthropic convention (see assistant/chat). The
 // runner + publish path are untouched; the result is only ever saved as a draft.
 //
-// Model: Sonnet 4.6, not Opus — emitting a structured graph from an ask is a
+// Model: Sonnet, not Opus — emitting a structured graph from an ask is a
 // constrained generation task, and the validateGraph + self-correct loop is the
 // real quality gate, so Opus-tier reasoning isn't worth the ~2x token cost here.
+// MIA-SONNET5 — moved 4.6 → Sonnet 5 with the rest of the agent estate. The
+// forced `tool_choice` below needs `thinking: disabled` ONLY on Bedrock; this
+// repo calls the Claude API directly, where forced tool choice and adaptive
+// thinking coexist. max_tokens is already 8192, so the ~31% tokenizer growth
+// has ample room.
 import { parseGraphShape, validateGraph, isPureTree } from '../graph/index.js'
 import { EMIT_TOOL, buildAgentSystemPrompt, buildAgentUserMessage, buildFixMessage } from './prompt.js'
 import { anthropicMessages } from '@/lib/anthropic'
 
-const AGENT_MODEL = 'claude-sonnet-4-6'
+const AGENT_MODEL = 'claude-sonnet-5'
 const MAX_ATTEMPTS = 3
 
 async function callClaude(apiKey, system, messages, locationId) {

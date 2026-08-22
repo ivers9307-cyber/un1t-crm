@@ -266,8 +266,14 @@ describe('agent turn — stop_reason handling', () => {
     const result = await runChannelAgent(db, adapter, ctx)
 
     expect(result).toMatchObject({ handled: true, action: 'reply' })
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body).max_tokens).toBe(600)
-    expect(JSON.parse(fetchMock.mock.calls[1][1].body).max_tokens).toBe(1000)
+    // MIA-SONNET5 — 600/1000 → 1200/2400: the tokenizer adds ~31% and adaptive
+    // thinking now shares this ceiling. What matters is the shape (retry is
+    // strictly larger than the first attempt), so assert that too.
+    const firstCap = JSON.parse(fetchMock.mock.calls[0][1].body).max_tokens
+    const retryCap = JSON.parse(fetchMock.mock.calls[1][1].body).max_tokens
+    expect(firstCap).toBe(1200)
+    expect(retryCap).toBe(2400)
+    expect(retryCap).toBeGreaterThan(firstCap)
     // The truncated text never reached the customer.
     expect(adapter.send.mock.calls[0][1]).not.toContain('Monday 6am, Monday 7am, Mon')
   })

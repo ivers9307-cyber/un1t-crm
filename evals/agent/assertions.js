@@ -47,6 +47,13 @@ function evaluateBranch(expect, outcome) {
   for (const pattern of asArray(expect.notMatch)) {
     if (rx(pattern).test(text)) failures.push(`reply matched forbidden /${pattern}/i`)
   }
+  // MIA-SONNET5 — "she still said something of her own" as a first-class
+  // assertion. Scenarios that pair a tool with a companion line used to
+  // approximate this by requiring particular nouns in the reply, which asserts
+  // a vocabulary rather than the behaviour and fails good-but-terser copy.
+  if (typeof expect.minReplyChars === 'number' && text.trim().length < expect.minReplyChars) {
+    failures.push(`reply too short (${text.trim().length} < ${expect.minReplyChars} chars): "${text.trim()}"`)
+  }
   if (typeof expect.handoff === 'boolean') {
     const isHandoff = outcome.action === 'handoff'
     if (isHandoff !== expect.handoff) {

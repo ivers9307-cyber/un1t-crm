@@ -62,7 +62,10 @@ describe('proactive compose paths send an explicit effort', () => {
     expect(bodyOfLastCall().output_config).toEqual({ effort: 'low' })
   })
 
-  it('keeps the 300-token cap and the shared model on both paths', async () => {
+  // MIA-SONNET5 — the cap moved 300 → 600 on both paths: Sonnet 5's tokenizer
+  // adds ~31% and adaptive thinking shares the same ceiling, and a truncated
+  // nudge would go out as a real customer message.
+  it('keeps a shared token cap and the shared model on both paths', async () => {
     await composeFollowupText({
       location: LOCATION, settings: SETTINGS, historyRows: [],
       instruction: 'x', companyName: 'UN1T', knowledge: [],
@@ -71,8 +74,11 @@ describe('proactive compose paths send an explicit effort', () => {
     await composeSuggestionText(LOCATION, SETTINGS, [], 'x', 'UN1T', undefined)
     const suggestionBody = bodyOfLastCall()
 
-    expect(followupBody.max_tokens).toBe(300)
-    expect(suggestionBody.max_tokens).toBe(300)
+    expect(followupBody.max_tokens).toBe(600)
+    expect(suggestionBody.max_tokens).toBe(600)
     expect(suggestionBody.model).toBe(followupBody.model)
+    // Both proactive paths think adaptively, like the reply path.
+    expect(followupBody.thinking).toEqual({ type: 'adaptive' })
+    expect(suggestionBody.thinking).toEqual({ type: 'adaptive' })
   })
 })

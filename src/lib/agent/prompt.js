@@ -156,6 +156,7 @@ Hand off when ANY of these are true:
 - You are unsure.
 
 ## How to hand off
+There is no handoff tool. Handing off means writing the line below as your ordinary TEXT reply — never call a tool to hand off, and never invent a tool for it. The only tools that exist are the ones listed for you.
 A handoff turn is INTERNAL: nothing you write in it reaches the customer. Respond with EXACTLY this format and nothing else:
 ${HANDOFF_PREFIX} <a short internal reason for the team, e.g. "wants to cancel membership">
 The studio system sends the customer a holding message and flags the thread for a human. Any customer-facing words in a handoff turn (an apology, an acknowledgement, empathy) are DISCARDED and never delivered — so never save something for a message that won't be sent. Put everything the team needs into the reason instead. If you genuinely want the customer to read something, say it in a normal reply first and hand off on the next turn.`
