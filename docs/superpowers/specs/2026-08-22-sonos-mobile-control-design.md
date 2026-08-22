@@ -119,12 +119,23 @@ guessed in three places. Move `src/lib/sonos/playback.js` →
 (`export * from '@shared/sonos-playback'`), the pattern `src/lib/class-timer.js`
 uses. The test moves with it to `shared/sonos-playback.test.js` unchanged.
 
-`tests/shared-pair-sync.test.js` only classifies modules present in BOTH
-`shared/` and `src/lib/` under the same basename; `sonos-playback.js` vs
-`sonos/playback.js` do not collide, so no manifest entry is required. One
-is added anyway in `reexport` mode if the test's pairing logic is by basename
-ignoring directory — verify at plan time; the identity assertion is the
-proof either way.
+`tests/shared-pair-sync.test.js` pairs modules by shared export NAME across
+`shared/**` and `src/lib/**` (cross-named pairs included), but an
+`export * from` shim registers as the single name `*`, so the scan would not
+fire on this pair. Add a manifest entry anyway — the identity assertion is
+the point:
+
+```js
+'sonos-playback.js': {
+  mode: 'reexport',
+  shared: 'shared/sonos-playback.js',
+  web: 'src/lib/sonos/playback.js',
+  why: '…',
+},
+```
+
+Entries with explicit `shared`/`web` paths are excluded from the
+same-basename census, so the cross-named paths are fine.
 
 `check:mobile-imports` verifies the named imports exist on the shared module.
 
