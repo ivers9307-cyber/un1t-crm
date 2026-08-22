@@ -28,10 +28,12 @@ export default function SonosScreen() {
   const [favorites, setFavorites] = useState([])
   const [favoritesFailed, setFavoritesFailed] = useState(false)
   const [error, setError] = useState(null)
-  // Tracks whether we've ever painted a real list, without putting
+  // The location the painted list was fetched for, without putting
   // `schedules` in load()'s deps (would defeat the [locationId]-only
-  // memoisation and re-subscribe the focus effect on every render).
-  const hasListRef = useRef(false)
+  // memoisation and re-subscribe the focus effect on every render). Keyed
+  // on the location, not a boolean: a blip while refetching for a NEW
+  // location must not keep the OLD location's cards painted.
+  const listLocationRef = useRef(null)
 
   // Schedules + favourites change rarely: fetched on focus, not polled.
   // The cards poll now-playing themselves.
@@ -50,13 +52,14 @@ export default function SonosScreen() {
       if (!isActive()) return
       if (!s.success) {
         // api() tags its own dropped-fetch envelopes transport:true — keep
-        // the last list through a blip, same as the card.
-        if (!(s.transport && hasListRef.current)) setError(s.error || 'Could not load studio music')
+        // the last list through a blip, same as the card, but only when that
+        // list was fetched for the location being refetched.
+        if (!(s.transport && listLocationRef.current === locationId)) setError(s.error || 'Could not load studio music')
         return
       }
       setError(null)
       setSchedules(s.schedules || [])
-      hasListRef.current = true
+      listLocationRef.current = locationId
       // A failed favourites read hides the row rather than showing an empty
       // one; the household route flags it separately from "not connected".
       const connected = h.success && h.connected
