@@ -597,7 +597,7 @@ function ScheduleCard({ schedule, players, favorites, onReload, editable }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [saved, setSaved] = useState(false)
-  const [runState, setRunState] = useState(null) // null | 'running' | 'done' | { warning, at } | { error }
+  const [runState, setRunState] = useState(null) // null | 'running' | 'done' | { warning, prevAt } | { error }
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState(null)
@@ -676,10 +676,12 @@ function ScheduleCard({ schedule, players, favorites, onReload, editable }) {
         // SONOSAPPLY.4 — success:true + warning is "the music IS playing, the
         // record did not save" (apply.js reason:'stamp'). Not the same as a
         // clean done: the cron will re-open it, restarting the playlist,
-        // until the write lands. `at` lets the render clear the warning once
-        // a later last_state write shows the cron has recorded the open —
-        // otherwise it would sit under a green health chip.
-        setRunState({ warning: j.warning, at: Date.now() })
+        // until the write lands. `prevAt` snapshots last_state.at as it was
+        // at this response; the render clears the warning as soon as ANY
+        // later server write moves it off that value — otherwise it would
+        // sit under a green health chip. No clocks are compared, so client
+        // skew can neither stick the warning nor hide it.
+        setRunState({ warning: j.warning, prevAt: schedule.last_state?.at ?? null })
       } else {
         setRunState('done')
         setTimeout(() => setRunState((s) => (s === 'done' ? null : s)), 5000)
@@ -874,7 +876,7 @@ function ScheduleCard({ schedule, players, favorites, onReload, editable }) {
       {editable && runState === 'done' && (
         <p className="mt-2 text-[11px] text-blue-700">Applied — the active window is playing now.</p>
       )}
-      {editable && runState?.warning && !(schedule.last_state?.at && Date.parse(schedule.last_state.at) >= runState.at) && (
+      {editable && runState?.warning && (schedule.last_state?.at ?? null) === runState.prevAt && (
         <p className="mt-2 text-[11px] text-amber-700">{runState.warning}. Sonos is playing; the schedule will re-apply and record it within a minute.</p>
       )}
       {editable && runState?.error && <p className="mt-2 text-[11px] text-red-700">{runState.error}</p>}
