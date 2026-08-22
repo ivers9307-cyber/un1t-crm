@@ -1,14 +1,15 @@
 // SONOSMOB.5 — Studio music: live control of the Sonos speakers.
 //
 // Control only. Schedules (windows, run-now, the pause override) are set up
-// on the web app under Automations → Sonos; this screen lists the location's
-// schedules and renders one SonosControlCard per schedule. Today that is one
-// card — the studio floor — but a second zone needs no change here.
+// on the web app under Marketing → Automations → Studio music; this screen
+// lists the location's schedules and renders one SonosControlCard per
+// schedule. Today that is one card — the studio floor — but a second zone
+// needs no change here.
 //
 // Gates on `device_control`, cross-platform since SONOSMOB.2: the routes the
 // cards call enforce that same key, so the gate and the server agree.
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import { View, Text, Pressable, ScrollView, ActivityIndicator } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter, useFocusEffect } from 'expo-router'
@@ -25,26 +26,52 @@ export default function SonosScreen() {
 
   const [schedules, setSchedules] = useState(null)
   const [favorites, setFavorites] = useState([])
+  const [favoritesFailed, setFavoritesFailed] = useState(false)
   const [error, setError] = useState(null)
+  // Tracks whether we've ever painted a real list, without putting
+  // `schedules` in load()'s deps (would defeat the [locationId]-only
+  // memoisation and re-subscribe the focus effect on every render).
+  const hasListRef = useRef(false)
 
   // Schedules + favourites change rarely: fetched on focus, not polled.
   // The cards poll now-playing themselves.
-  const load = useCallback(async () => {
+  //
+  // try/catch: authHeaders() → supabase.auth.getSession() runs OUTSIDE
+  // api()'s own try, so an uncaught rejection there would otherwise strand
+  // the screen on its loading spinner forever (mirrors the card's `send`).
+  //
+  // `isActive` guards every setState against a blur-before-resolve race —
+  // the effect below flips it false on cleanup, before it can paint stale
+  // data over whatever the next-focused screen renders.
+  const load = useCallback(async (isActive) => {
     if (!locationId) return
-    const [s, h] = await Promise.all([listSonosSchedules(locationId), getSonosHousehold(locationId)])
-    if (!s.success) {
-      setError(s.error || 'Could not load studio music')
-      return
+    try {
+      const [s, h] = await Promise.all([listSonosSchedules(locationId), getSonosHousehold(locationId)])
+      if (!isActive()) return
+      if (!s.success) {
+        // api() tags its own dropped-fetch envelopes transport:true — keep
+        // the last list through a blip, same as the card.
+        if (!(s.transport && hasListRef.current)) setError(s.error || 'Could not load studio music')
+        return
+      }
+      setError(null)
+      setSchedules(s.schedules || [])
+      hasListRef.current = true
+      // A failed favourites read hides the row rather than showing an empty
+      // one; the household route flags it separately from "not connected".
+      const connected = h.success && h.connected
+      setFavorites(connected && !h.favoritesFailed ? (h.favorites || []) : [])
+      setFavoritesFailed(Boolean(connected && h.favoritesFailed))
+    } catch (e) {
+      if (!isActive()) return
+      setError(e?.message || 'Could not load studio music')
     }
-    setError(null)
-    setSchedules(s.schedules || [])
-    // A failed favourites read hides the row rather than showing an empty
-    // one; the household route flags it separately from "not connected".
-    setFavorites(h.success && h.connected && !h.favoritesFailed ? (h.favorites || []) : [])
   }, [locationId])
 
   useFocusEffect(useCallback(() => {
-    if (allowed) load()
+    let active = true
+    if (allowed) load(() => active)
+    return () => { active = false }
   }, [allowed, load]))
 
   // Permission gate — defence in depth. The Studio tile hides the link
@@ -77,16 +104,23 @@ export default function SonosScreen() {
         <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 flex-row items-start">
           <Ionicons name="musical-notes-outline" size={14} color="#94A3B8" style={{ marginTop: 2 }} />
           <Text className="text-xs text-un1t-subtle ml-2 flex-1">
-            No studio music is set up for this location yet. An owner sets it up on the
-            web app under <Text className="text-un1t-text font-semibold">Automations → Sonos</Text>.
+            No studio music is set up for this location yet. Someone with Device control sets it up on the
+            web app under <Text className="text-un1t-text font-semibold">Marketing → Automations → Studio music</Text>.
           </Text>
         </View>
       ) : (
-        <View className="gap-3">
-          {schedules.map((s) => (
-            <SonosControlCard key={s.id} schedule={s} favorites={favorites} locationId={locationId} />
-          ))}
-        </View>
+        <>
+          {favoritesFailed && (
+            <Text className="text-xs text-un1t-subtle mb-2">
+              Favourites couldn&apos;t be loaded just now — leave and come back to retry.
+            </Text>
+          )}
+          <View className="gap-3">
+            {schedules.map((s) => (
+              <SonosControlCard key={s.id} schedule={s} favorites={favorites} locationId={locationId} />
+            ))}
+          </View>
+        </>
       )}
     </ScrollView>
   )
