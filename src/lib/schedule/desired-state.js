@@ -5,9 +5,16 @@
 //
 // ZONE-AWARE since SHELLY.2. Every entry point takes an optional IANA
 // `tz` as its LAST argument, defaulting to Europe/Dublin so the existing
-// Sonos callers are unchanged. A per-location caller passes
-// locations.timezone — through resolveTz first, because that column is
-// nullable free text and an invalid value must not throw inside a cron.
+// Sonos callers are unchanged.
+//
+// THE `tz` CONTRACT (SHELLY.2b): null, undefined and '' all mean "no zone
+// given" and resolve to Dublin — locations.timezone is a nullable column,
+// so an absent value is a normal value, not an error. A non-empty but
+// INVALID name THROWS, on purpose: a typo'd timezone must never quietly
+// run a studio on Dublin time. Callers that read locations.timezone go
+// through resolveTz() (and log the fallback); this engine is the pure
+// core and does not decide policy for a value it cannot interpret.
+//
 // The wall-clock maths itself lives in src/lib/tz-time.js, which is also
 // where the DST-edge contract is written down (a nonexistent wall-clock
 // resolves EARLIER; an ambiguous one resolves to one deterministic
@@ -44,6 +51,13 @@ import { wallMsInTz, dayStartMsInTz, DEFAULT_TZ } from '@/lib/tz-time'
 const DEFAULT_LEAD_MIN = 15
 const DEFAULT_LAG_MIN = 10
 
+// "No zone given" → Dublin. Deliberately NOT a validity check: anything else is
+// handed to Intl as-is, so an invalid name surfaces as a RangeError rather than
+// being silently swallowed into the default. `tz == null` covers undefined too,
+// which the parameter default alone does not — an explicit null argument (the
+// shape a nullable column arrives in) skips a default entirely.
+const zoneOf = (tz) => (tz == null || tz === '' ? DEFAULT_TZ : tz)
+
 // ISO day-of-week (1=Mon..7=Sun) for a calendar date string. Zone-independent:
 // a 'YYYY-MM-DD' names the same weekday everywhere, so this reads it as UTC.
 function isoDow(dateStr) {
@@ -54,6 +68,7 @@ function isoDow(dateStr) {
 
 // → [{ on_at, off_at }] (UTC ms), for the given LOCAL date in `tz`.
 export function resolveDayWindows(device, dateStr, occurrences = [], tz = DEFAULT_TZ) {
+  const zone = zoneOf(tz)
   if (!device || !device.enabled) return []
 
   if (device.schedule_mode === 'fixed') {
@@ -61,14 +76,14 @@ export function resolveDayWindows(device, dateStr, occurrences = [], tz = DEFAUL
     const out = []
     for (const w of Array.isArray(device.fixed_windows) ? device.fixed_windows : []) {
       if (!Array.isArray(w?.days) || !w.days.includes(dow)) continue
-      const onAt = wallMsInTz(dateStr, w.on, tz)
-      let offAt = wallMsInTz(dateStr, w.off, tz)
+      const onAt = wallMsInTz(dateStr, w.on, zone)
+      let offAt = wallMsInTz(dateStr, w.off, zone)
       if (onAt == null || offAt == null) continue
       // Overnight span: re-resolve the off boundary on the NEXT calendar day
       // against its own local wall-clock. A flat +24h is wrong across a DST
       // transition — Sat 22:00 → Sun 02:00 over spring-forward is 23 real
       // hours for the day, only 4 wall-clock hours but 3 real hours here.
-      if (offAt <= onAt) offAt = wallMsInTz(addDaysISO(dateStr, 1), w.off, tz)
+      if (offAt <= onAt) offAt = wallMsInTz(addDaysISO(dateStr, 1), w.off, zone)
       // `source` is the window this resolved pair came from. The engine
       // itself never reads it — it exists so a caller that needs the
       // window's payload (Sonos: volume + favourite) can get it without
@@ -111,16 +126,17 @@ export function resolveDayWindows(device, dateStr, occurrences = [], tz = DEFAUL
 // anyway. (A class STARTING today but ending after midnight still spills
 // forward correctly — off_at = ends+lag regardless of date.)
 export function resolveServeWindows(device, dateStr, occurrences = [], tz = DEFAULT_TZ) {
+  const zone = zoneOf(tz)
   if (!device || !device.enabled) return []
-  const today = resolveDayWindows(device, dateStr, occurrences, tz)
+  const today = resolveDayWindows(device, dateStr, occurrences, zone)
   if (device.schedule_mode !== 'fixed') return today
   // dayStartMsInTz, not wallMsInTz(dateStr, '00:00'): where DST starts at 00:00
   // local (Santiago, Havana, Beirut) that midnight does not exist, and the
   // general gap rule would put this boundary at 23:00 on the day BEFORE —
   // admitting a tail that has already finished. The day-start variant resolves
   // it to the first instant of the local day, which is what a boundary means.
-  const dayStartMs = dayStartMsInTz(dateStr, tz)
-  const tails = resolveDayWindows(device, addDaysISO(dateStr, -1), [], tz)
+  const dayStartMs = dayStartMsInTz(dateStr, zone)
+  const tails = resolveDayWindows(device, addDaysISO(dateStr, -1), [], zone)
     .filter(w => w.off_at > dayStartMs)
   if (!tails.length) return today
   return [...tails, ...today].sort((a, b) => a.on_at - b.on_at)
@@ -130,6 +146,7 @@ export function resolveServeWindows(device, dateStr, occurrences = [], tz = DEFA
 // Override is checked BEFORE the mode-none short-circuit so a manual
 // toggle works on an adopted device that has no schedule yet.
 export function desiredState(device, nowMs, dateStr, occurrences = [], tz = DEFAULT_TZ) {
+  const zone = zoneOf(tz)
   if (!device || !device.enabled) return null
 
   const ov = device.override
@@ -139,7 +156,7 @@ export function desiredState(device, nowMs, dateStr, occurrences = [], tz = DEFA
 
   if (device.schedule_mode === 'none') return null
 
-  const windows = resolveServeWindows(device, dateStr, occurrences, tz)
+  const windows = resolveServeWindows(device, dateStr, occurrences, zone)
   for (const w of windows) {
     if (nowMs >= w.on_at && nowMs < w.off_at) return 'on'
   }

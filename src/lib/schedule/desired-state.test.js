@@ -243,4 +243,19 @@ describe('tz parameter (SHELLY.2)', () => {
     const w = resolveDayWindows(classDevice, DAY, [occ('06:00', '06:45')], NY)
     expect(w[0].on_at).toBe(T('06:00') - 15 * 60 * 1000)
   })
+
+  // The two halves of the SHELLY.2b contract. locations.timezone is NULLABLE,
+  // so an absent value arrives as a literal null and must mean Dublin — a
+  // parameter default alone does not cover that, it only fires for undefined.
+  it('a null/empty tz means "no zone given" → the Dublin default', () => {
+    const dublin = resolveDayWindows(fixedDevice, DAY, [])
+    expect(resolveDayWindows(fixedDevice, DAY, [], null)).toEqual(dublin)
+    expect(resolveDayWindows(fixedDevice, DAY, [], '')).toEqual(dublin)
+  })
+  // The other half, and the reason the fallback is NOT a validity check: a
+  // typo'd timezone must never quietly run a studio on Dublin time.
+  it('a non-empty invalid zone throws rather than falling back', () => {
+    expect(() => resolveDayWindows(fixedDevice, DAY, [], 'Mars/Olympus')).toThrow(RangeError)
+    expect(() => desiredState(fixedDevice, T('12:00'), DAY, [], 'Mars/Olympus')).toThrow(RangeError)
+  })
 })
