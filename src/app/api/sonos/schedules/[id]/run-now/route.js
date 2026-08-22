@@ -13,19 +13,20 @@
 // and nothing wrote to the row for over 90 minutes while the music kept
 // playing.
 //
-// Now it applies the window through the same volume-then-favourite path the
-// reconcile uses and stamps last_applied as an open, exactly as a
-// cron-driven open would. No wait, and the close's precondition is written
-// rather than destroyed.
+// Now it applies the window through applyOpen (src/lib/sonos/apply.js) —
+// the SAME function the reconcile cron calls — and so stamps last_applied as
+// an open exactly as a cron-driven open would. No wait, and the close's
+// precondition is written rather than destroyed. SONOSAPPLY.3 collapsed the
+// two copies of that sequence into one; this file no longer carries its own.
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { uuidLike } from '@/lib/schemas'
-import { logWarn } from '@/lib/log'
-import { getSonosConfig, withFreshToken, sonosGetGroups, sonosSetGroupVolume, sonosLoadFavorite } from '@/lib/sonos/client'
+import { getSonosConfig, withFreshToken, sonosGetGroups } from '@/lib/sonos/client'
 import { mapGroups, resolveGroupIds, planAction } from '@/lib/sonos/groups'
+import { applyOpen } from '@/lib/sonos/apply'
 import { dublinDayStr } from '@/lib/dublin-time'
 
 export const runtime = 'nodejs'
@@ -94,42 +95,26 @@ export async function POST(request, { params }) {
     return NextResponse.json({ success: false, error: 'None of this schedule’s speakers are online' }, { status: 409 })
   }
 
-  let allOk = true
-  for (const groupId of groupIds) {
-    // Volume first: after loadFavorite the opening seconds would play at
-    // the previous window's level.
-    const v = await sonosSetGroupVolume(tok.token, groupId, plan.volume)
-    if (!v.ok) { allOk = false; logWarn('sonos-run-now', 'setVolume failed', { groupId, statusCode: v.statusCode }); continue }
-    const f = await sonosLoadFavorite(tok.token, groupId, plan.favoriteId)
-    if (!f.ok) { allOk = false; logWarn('sonos-run-now', 'loadFavorite failed', { groupId, statusCode: f.statusCode }) }
-  }
+  const out = await applyOpen(db, {
+    token: tok.token,
+    schedule,
+    plan,
+    groups,
+    groupIds,
+    nowMs,
+  })
 
-  if (!allOk) {
-    // Do NOT stamp last_applied on a failure — an unapplied window is
-    // retried by the next cron tick, which is what a transient failure
-    // deserves. Stamping would cost the whole window.
+  if (!out.ok && out.reason === 'sonos') {
+    // Nothing stamped — an unapplied window is retried by the next cron
+    // tick, which is what a transient failure deserves.
     return NextResponse.json({ success: false, error: 'That did not work' }, { status: 502 })
   }
-
-  const nowIso = new Date(nowMs).toISOString()
-  const primary = groupIds[0]
-  const group = groups.find((g) => g.id === primary)
-  // window_on_at MUST stay a raw number. A string makes planAction's
-  // equality never match, so every tick re-opens and loadFavorite restarts
-  // the playlist every 60 seconds.
-  const { error: upErr } = await db
-    .from('sonos_schedules')
-    .update({
-      last_applied: { window_on_at: plan.windowOnAt, action: 'open', at: nowIso },
-      last_state: { group_id: primary, playback_state: group?.playbackState || null, at: nowIso },
-      updated_at: nowIso,
-    })
-    .eq('id', schedule.id)
-    .eq('location_id', locationId)
-  if (upErr) {
-    logWarn('sonos-run-now', 'state write failed', { scheduleId: schedule.id, error: upErr.message })
-    // The music IS playing; only the bookkeeping failed. Report success
-    // with a warning rather than telling the operator it did not work.
+  if (!out.ok) {
+    // reason === 'stamp': the music IS playing; only the bookkeeping
+    // failed. Report success with a warning rather than telling the
+    // operator it did not work. Note what an unstamped open costs: the
+    // cron sees the window as unapplied and re-opens it on its next tick,
+    // restarting the playlist, until the write lands.
     return NextResponse.json({ success: true, warning: 'applied, but the record did not save' })
   }
 

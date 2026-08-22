@@ -4619,6 +4619,7 @@ registry.registerPath({
   description:
     'SONOSLIVE.6: no longer clears last_applied and waits for the next cron tick. It now runs the same '
     + 'volume-then-favourite path the sonos-reconcile cron (unregistered here — cron routes never are) uses '
+    + '(applyOpen in src/lib/sonos/apply.js) '
     + 'and stamps last_applied as an open, exactly as a cron-driven open would — immediate, and the close\'s '
     + 'precondition (a record of having opened) is written rather than destroyed. A no-op only when there is '
     + 'no active window right now, or the schedule is disabled — both now report distinctly as 409 rather '

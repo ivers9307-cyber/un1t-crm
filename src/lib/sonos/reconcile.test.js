@@ -12,7 +12,7 @@ const groupsBody = {
   players: [{ id: 'RINCON_1', name: 'Floor' }],
 }
 
-function makeDb(schedules) {
+function makeDb(schedules, { updateError = null } = {}) {
   const updates = []
   return {
     updates,
@@ -21,7 +21,7 @@ function makeDb(schedules) {
         return {
           select: () => ({ eq: () => ({ limit: async () => ({ data: schedules, error: null }) }) }),
           update(patch) {
-            return { eq: async (col, id) => { updates.push({ id, patch }); return { error: null } } }
+            return { eq: async (col, id) => { updates.push({ id, patch }); return { error: updateError } } }
           },
         }
       }
@@ -141,5 +141,23 @@ describe('runSonosReconcile', () => {
       expect.stringContaining('dropped'),
       { cap: 200 },
     )
+  })
+
+  it('counts a failed OPEN stamp as failed — the music is playing but the record did not save', async () => {
+    // apply.js returns reason:'stamp'. The window stays unapplied, so the
+    // next tick re-opens it (restarting the playlist) until the write lands.
+    const db = makeDb([baseSchedule], { updateError: { message: 'boom' } })
+    const out = await runSonosReconcile(db, deps())
+    expect(db.updates).toHaveLength(1) // the write was attempted
+    expect(out).toMatchObject({ applied: 0, failed: 1 })
+  })
+
+  it('counts a failed CLOSE stamp as failed', async () => {
+    const closing = { ...baseSchedule, last_applied: { window_on_at: OPEN_AT, action: 'open' } }
+    const db = makeDb([closing], { updateError: { message: 'boom' } })
+    const out = await runSonosReconcile(db, deps({ now: () => new Date('2026-08-24T20:30:00Z').getTime() }))
+    expect(db.updates).toHaveLength(1)
+    expect(db.updates[0].patch.last_applied.action).toBe('close')
+    expect(out).toMatchObject({ applied: 0, failed: 1 })
   })
 })
