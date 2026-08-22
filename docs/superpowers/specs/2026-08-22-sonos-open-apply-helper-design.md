@@ -52,9 +52,9 @@ differently and the helper must not decide for them:
   `warning: 'applied, but the record did not save'`, because the music IS
   playing (unchanged)
 
-Logging stays in the helper (`logWarn`, module `sonos-apply`), with the same
-`{ groupId, statusCode }` / `{ scheduleId, error }` payloads both callers
-emit today, so nothing an operator greps for disappears.
+Logging stays in the helper (`logWarn`, module `sonos-apply`), with a
+superset of the payloads both callers emit today (`scheduleId` is added to
+every line), so nothing an operator greps for disappears.
 
 The stamp UPDATE filters on `.eq('id', schedule.id)` only. Run-now today also
 adds `.eq('location_id', locationId)`; that guard is redundant — run-now

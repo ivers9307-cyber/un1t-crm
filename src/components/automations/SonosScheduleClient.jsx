@@ -597,7 +597,7 @@ function ScheduleCard({ schedule, players, favorites, onReload, editable }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [saved, setSaved] = useState(false)
-  const [runState, setRunState] = useState(null) // null | 'running' | 'done' | { warning } | { error }
+  const [runState, setRunState] = useState(null) // null | 'running' | 'done' | { warning, at } | { error }
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState(null)
@@ -676,8 +676,10 @@ function ScheduleCard({ schedule, players, favorites, onReload, editable }) {
         // SONOSAPPLY.4 — success:true + warning is "the music IS playing, the
         // record did not save" (apply.js reason:'stamp'). Not the same as a
         // clean done: the cron will re-open it, restarting the playlist,
-        // until the write lands. Stays up until the next run so it is read.
-        setRunState({ warning: j.warning })
+        // until the write lands. `at` lets the render clear the warning once
+        // a later last_state write shows the cron has recorded the open —
+        // otherwise it would sit under a green health chip.
+        setRunState({ warning: j.warning, at: Date.now() })
       } else {
         setRunState('done')
         setTimeout(() => setRunState((s) => (s === 'done' ? null : s)), 5000)
@@ -872,8 +874,8 @@ function ScheduleCard({ schedule, players, favorites, onReload, editable }) {
       {editable && runState === 'done' && (
         <p className="mt-2 text-[11px] text-blue-700">Applied — the active window is playing now.</p>
       )}
-      {editable && runState?.warning && (
-        <div className={`mt-2 rounded-lg border p-3 text-sm ${toneClasses('warning')}`}>{runState.warning}</div>
+      {editable && runState?.warning && !(schedule.last_state?.at && Date.parse(schedule.last_state.at) >= runState.at) && (
+        <p className="mt-2 text-[11px] text-amber-700">{runState.warning}. Sonos is playing; the schedule will re-apply and record it within a minute.</p>
       )}
       {editable && runState?.error && <p className="mt-2 text-[11px] text-red-700">{runState.error}</p>}
 
