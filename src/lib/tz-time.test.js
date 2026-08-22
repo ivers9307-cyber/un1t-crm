@@ -7,6 +7,48 @@ import { dublinDayStr } from './dublin-time'
 const NY = 'America/New_York'
 const BERLIN = 'Europe/Berlin'
 const LORD_HOWE = 'Australia/Lord_Howe'
+const SANTIAGO = 'America/Santiago'
+
+// ── Independent oracle ───────────────────────────────────────────────────────
+// Deliberately a DIFFERENT algorithm from the module's: it enumerates the
+// candidate offsets around an instant and filters by read-back, rather than
+// solving. A test that reimplemented the solver would assert nothing.
+const _f = new Map()
+function stampFmt(tz) {
+  if (!_f.has(tz)) _f.set(tz, new Intl.DateTimeFormat('en-GB', {
+    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }))
+  return _f.get(tz)
+}
+// Full local date-time of an instant, as 'YYYY-MM-DD HH:MM'.
+function localStamp(ms, tz) {
+  const p = {}
+  for (const { type, value } of stampFmt(tz).formatToParts(new Date(ms))) p[type] = value
+  return `${p.year}-${p.month}-${p.day} ${p.hour === '24' ? '00' : p.hour}:${p.minute}`
+}
+function naiveOf(ms, tz) {
+  const s = localStamp(ms, tz)
+  return Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10), +s.slice(11, 13), +s.slice(14, 16))
+}
+// Does this wall-clock exist in `tz` at all? False inside a spring-forward gap.
+function wallClockExists(dateStr, hhmm, tz) {
+  const want = Date.UTC(+dateStr.slice(0, 4), +dateStr.slice(5, 7) - 1, +dateStr.slice(8, 10),
+    +hhmm.slice(0, 2), +hhmm.slice(3, 5))
+  for (const probe of [want - 86400000, want, want + 86400000]) {
+    const off = naiveOf(probe, tz) - probe
+    if (naiveOf(want - off, tz) === want) return true
+  }
+  return false
+}
+function daysOf2026() {
+  const out = []
+  for (let t = Date.UTC(2026, 0, 1); t < Date.UTC(2027, 0, 1); t += 86400000) {
+    const d = new Date(t)
+    out.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`)
+  }
+  return out
+}
 
 describe('resolveTz', () => {
   it('falls back to Dublin for null, blank and garbage', () => {
@@ -103,6 +145,108 @@ describe('wallMsInTz — DST gap and overlap conventions', () => {
   it('resolves a nonexistent New York time to the earlier instant', () => {
     expect(wallMsInTz('2026-03-08', '02:30', NY)).toBe(Date.parse('2026-03-08T01:30:00-05:00'))
   })
+  // The overlap convention is deterministic but NOT uniform across zones, and
+  // that is deliberate — either instant is genuinely that wall-clock. Pinned so
+  // the asymmetry is a recorded decision rather than a surprise.
+  it('resolves an ambiguous New York time to the EARLIER instant', () => {
+    // 01:30 happens twice on 2026-11-01; a negative standard offset takes the
+    // first (EDT) one, where Dublin above takes the second.
+    expect(wallMsInTz('2026-11-01', '01:30', NY)).toBe(Date.parse('2026-11-01T05:30:00Z'))
+  })
+})
+
+// A day boundary that lands on the previous local day is not a day boundary.
+// In zones whose DST starts at 00:00 local, local midnight does not exist, and
+// the general gap rule (earlier) would put it at 23:00 the day before.
+describe('dayStartMsInTz — a skipped local midnight', () => {
+  it('resolves to the transition instant, not 23:00 the day before', () => {
+    // Chile 2025-09-07: local jumps 06-09 23:59 -> 07-09 01:00 at 04:00Z.
+    expect(dayStartMsInTz('2025-09-07', SANTIAGO)).toBe(Date.parse('2025-09-07T04:00:00Z'))
+    expect(dayStrInTz(dayStartMsInTz('2025-09-07', SANTIAGO), SANTIAGO)).toBe('2025-09-07')
+  })
+  it('keeps nextLocalMidnightMs strictly after its input across that gap', () => {
+    const at = Date.parse('2025-09-07T02:30:00Z')
+    const next = nextLocalMidnightMs(at, SANTIAGO)
+    expect(next).toBeGreaterThan(at)
+    // "Strictly after" alone is too weak to catch this: 23:00 on the PREVIOUS
+    // local day is also strictly after 02:30Z. The boundary must open the day.
+    expect(dayStrInTz(next, SANTIAGO)).toBe('2025-09-07')
+  })
+  it('always lands on its own local day, every day of 2026, in 4 zones', () => {
+    for (const tz of ['Europe/Dublin', NY, 'Pacific/Auckland', SANTIAGO]) {
+      for (const day of daysOf2026()) {
+        expect(dayStrInTz(dayStartMsInTz(day, tz), tz)).toBe(day)
+      }
+    }
+  })
+  it('never returns an instant at or before the previous local midnight', () => {
+    for (const tz of ['Europe/Dublin', NY, SANTIAGO]) {
+      for (const day of daysOf2026().slice(0, 300)) {
+        const prev = dayStartMsInTz(day, tz)
+        const next = nextLocalMidnightMs(prev, tz)
+        expect(next).toBeGreaterThan(prev)
+      }
+    }
+  })
+})
+
+describe('dayStrInTz — input contract', () => {
+  it('accepts a Date, epoch ms and an ISO string alike', () => {
+    const iso = '2026-07-06T22:30:00Z'
+    expect(dayStrInTz(iso)).toBe('2026-07-06')
+    expect(dayStrInTz(Date.parse(iso))).toBe('2026-07-06')
+    expect(dayStrInTz(new Date(iso))).toBe('2026-07-06')
+  })
+  it('throws a named RangeError rather than silently returning 1970-01-01', () => {
+    expect(() => dayStrInTz(null)).toThrow(RangeError)
+    expect(() => dayStrInTz(null)).toThrow(/invalid instant/)
+    expect(() => dayStrInTz('not a date')).toThrow(RangeError)
+    expect(() => dayStrInTz(NaN)).toThrow(RangeError)
+    // Every one of these coerces to 0 under Number(), i.e. '1970-01-01'.
+    for (const falsy of [null, '', '   ', false, []]) {
+      expect(() => dayStrInTz(falsy)).toThrow(RangeError)
+    }
+  })
+  it('still means "now" when omitted', () => {
+    expect(dayStrInTz()).toBe(dublinDayStr(Date.now()))
+    expect(dayStrInTz(undefined, NY)).toBe(dayStrInTz(Date.now(), NY))
+  })
+})
+
+// A fixed offset has no DST, so accepting one would be silently an hour wrong
+// for half the year — the exact bug this module exists to remove.
+describe('resolveTz — IANA names only', () => {
+  it('rejects fixed offsets and Etc/GMT pseudo-zones', () => {
+    for (const bad of ['+05:30', '-0800', 'Etc/GMT+5']) {
+      expect(isValidTz(bad)).toBe(false)
+      expect(resolveTz(bad)).toBe(DEFAULT_TZ)
+    }
+  })
+  it('canonicalises case', () => {
+    expect(resolveTz('europe/dublin')).toBe('Europe/Dublin')
+    expect(resolveTz('AMERICA/NEW_YORK')).toBe(NY)
+  })
+  it('accepts UTC, which is not in supportedValuesOf', () => {
+    expect(isValidTz('UTC')).toBe(true)
+    expect(resolveTz('UTC')).toBe('UTC')
+  })
+})
+
+describe('wallMsInTz — range and calendar checks', () => {
+  it('rejects out-of-range clock values', () => {
+    for (const bad of ['99:99', '25:00', '24:00', '07:60', '7:00', '0700']) {
+      expect(wallMsInTz('2026-07-06', bad)).toBe(null)
+    }
+  })
+  it('rejects malformed and impossible dates instead of rolling them over', () => {
+    for (const bad of ['2026-13-45', '26-07-06', '2026-7-6', '2026-02-30', '', null]) {
+      expect(wallMsInTz(bad, '07:00')).toBe(null)
+    }
+    expect(dayStartMsInTz('2026-02-30', NY)).toBe(null)
+  })
+  it('still accepts the real leap day', () => {
+    expect(wallMsInTz('2028-02-29', '07:00')).toBe(Date.parse('2028-02-29T07:00:00Z'))
+  })
 })
 
 // The engine's private dublinWallMs corrects by minute-of-day, so a read-back
@@ -113,14 +257,38 @@ describe('wallMsInTz — late-evening IST (the whole-day case for Dublin)', () =
     expect(wallMsInTz('2026-07-06', '23:00')).toBe(Date.parse('2026-07-06T23:00:00+01:00'))
     expect(wallMsInTz('2026-07-06', '23:30')).toBe(Date.parse('2026-07-06T23:30:00+01:00'))
   })
-  it('round-trips every quarter-hour of an IST day back to the same wall-clock', () => {
-    const fmt = new Intl.DateTimeFormat('en-GB', {
-      timeZone: DEFAULT_TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-    })
+  it('round-trips every quarter-hour of an IST day to the same DATE and time', () => {
+    // The date half is the point: an HH:MM-only comparison cannot see a
+    // whole-day-late result, which is exactly the bug this block is named for.
     for (let mins = 0; mins < 1440; mins += 15) {
       const hhmm = `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`
-      expect(fmt.format(new Date(wallMsInTz('2026-07-06', hhmm)))).toBe(hhmm)
+      expect(localStamp(wallMsInTz('2026-07-06', hhmm), DEFAULT_TZ)).toBe(`2026-07-06 ${hhmm}`)
     }
+  })
+})
+
+// The invariant every caller depends on, swept rather than sampled: resolving a
+// wall-clock and reading it back must return the same LOCAL DATE and the same
+// wall-clock. Four zones chosen to span the failure modes — UTC-anchored,
+// negative offset, far-east (guess crosses the dateline into the next local
+// day), and a zone whose DST starts at local midnight.
+describe('wallMsInTz — round-trip property over every day of 2026', () => {
+  it('holds for 4 zones x 366 days x 4 times, except in a DST gap', () => {
+    let checked = 0
+    let gaps = 0
+    for (const tz of ['Europe/Dublin', NY, 'Pacific/Auckland', SANTIAGO]) {
+      for (const day of daysOf2026()) {
+        for (const t of ['00:00', '07:00', '12:30', '23:30']) {
+          const ms = wallMsInTz(day, t, tz)
+          if (!wallClockExists(day, t, tz)) { gaps++; continue }
+          expect(localStamp(ms, tz)).toBe(`${day} ${t}`)
+          expect(dayStrInTz(ms, tz)).toBe(day)
+          checked++
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(5800)
+    expect(gaps).toBeGreaterThan(0) // the sweep really does cross spring-forward
   })
 })
 
