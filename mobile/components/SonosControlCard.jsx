@@ -33,13 +33,30 @@ const REASON_COPY = {
   no_group: "None of this schedule's speakers are online.",
 }
 
+// The two envelopes mobile/lib/api.js mints ITSELF, without a server
+// round-trip: a dropped fetch and a non-JSON body. Everything else in a
+// success:false envelope came from the server and means something.
+const isTransportFailure = (r) =>
+  r?.success === false
+  && typeof r.error === 'string'
+  && (r.error.startsWith('Network error') || r.error.startsWith('Non-JSON response'))
+
 // Polls now-playing every POLL_MS while the screen is focused; stops on
-// blur. A dropped poll is not worth surfacing — the next tick recovers.
+// blur. Unlike the web strip, a dropped poll does not THROW here — api()
+// returns a success:false envelope — so "not worth surfacing" has to be
+// done by hand: once a live state exists, a transport blip keeps it (the
+// next tick recovers) instead of unmounting the controls to show "Network
+// error" for ten seconds. A real server answer (401, 404, live:false)
+// still replaces it. A sequence number stops an older tick painting over
+// a newer answer, which matters right after an action's reload().
 function useNowPlaying(scheduleId, locationId) {
   const [state, setState] = useState(null)
+  const seq = useRef(0)
   const load = useCallback(async () => {
+    const n = ++seq.current
     const r = await getSonosNowPlaying(scheduleId, locationId)
-    setState(r)
+    if (n !== seq.current) return
+    setState((prev) => (isTransportFailure(r) && prev?.live ? prev : r))
   }, [scheduleId, locationId])
 
   useFocusEffect(useCallback(() => {
@@ -54,7 +71,8 @@ function useNowPlaying(scheduleId, locationId) {
 // Coalesces held +/- presses into one relative call. Math.abs is
 // deliberate — direction lives in the action name (volume_up/volume_down),
 // and the server reads a negative step as a size. Equal ups and downs
-// cancel to 0 and send nothing.
+// cancel to 0 and send nothing. The timer is deliberately NOT cleared on
+// unmount — a press should still send; React ignores the late setState.
 function useVolumeNudge(send) {
   const pending = useRef(0)
   const timer = useRef(null)
@@ -79,15 +97,14 @@ function IconButton({ icon, label, onPress, disabled }) {
       disabled={disabled}
       accessibilityRole="button"
       accessibilityLabel={label}
-      className="h-11 w-11 rounded-full border border-un1t-border items-center justify-center active:opacity-70"
-      style={disabled ? { opacity: 0.4 } : null}
+      className="h-11 w-11 rounded-full border border-un1t-border items-center justify-center active:opacity-70 disabled:opacity-40"
     >
       <Ionicons name={icon} size={20} color="#111827" />
     </Pressable>
   )
 }
 
-export default function SonosControlCard({ schedule, favorites, locationId }) {
+export default function SonosControlCard({ schedule, favorites = [], locationId }) {
   const [state, reload] = useNowPlaying(schedule.id, locationId)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
@@ -99,22 +116,33 @@ export default function SonosControlCard({ schedule, favorites, locationId }) {
   // Fresh server data replaces any stale optimistic value.
   useEffect(() => { setPendingVolume(null) }, [state?.volume])
 
+  // try/finally, not a bare await: authHeaders() → supabase.auth.getSession()
+  // runs OUTSIDE api()'s own try, so if it ever rejects the only thing
+  // standing between us and a forever-disabled card is the finally.
   const send = useCallback(async (action, value) => {
     setBusy(true); setError(null); setPartialFailure(false)
-    const r = await sendSonosAction(schedule.id, action, value, locationId)
-    if (!r.success) {
-      // volume_up/volume_down are relative — an `applied` list means some
-      // groups already moved, so retrying the whole action would
-      // double-apply it there. Say so instead of auto-retrying. On the
-      // common single-group setup a failure comes back with applied: [],
-      // so the plain error below is the accurate message.
-      if (r.applied?.length > 0) setPartialFailure(true)
+    try {
+      const r = await sendSonosAction(schedule.id, action, value, locationId)
+      if (!r.success) {
+        // volume_up/volume_down are relative — an `applied` list means some
+        // groups already moved, so retrying the whole action would
+        // double-apply it there. Say so instead of auto-retrying. On the
+        // common single-group setup a failure comes back with applied: [],
+        // so the plain error below is the accurate message.
+        if (r.applied?.length > 0) setPartialFailure(true)
+        setPendingVolume(null)
+        setError(r.error || 'That did not work')
+      } else {
+        await reload()
+        // reload() may return the SAME volume (clamped, or a lagging read), in which case the [state.volume] effect never fires — clear explicitly.
+        setPendingVolume(null)
+      }
+    } catch (e) {
       setPendingVolume(null)
-      setError(r.error || 'That did not work')
-    } else {
-      await reload()
+      setError(e?.message || 'That did not work')
+    } finally {
+      setBusy(false)
     }
-    setBusy(false)
   }, [schedule.id, locationId, reload])
 
   const nudgeVolume = useVolumeNudge((action, step) => {
@@ -214,7 +242,11 @@ function LiveControls({ state, favorites, busy, pendingVolume, onSend, onNudge }
         ) : (
           <View className="flex-row items-center gap-4">
             <IconButton icon="remove" label="Volume down" onPress={() => onNudge('down')} disabled={busy} />
-            <View className="flex-row items-center w-16 justify-center">
+            <View
+              className="flex-row items-center w-16 justify-center"
+              accessible
+              accessibilityLabel={`Volume ${shownVolume}`}
+            >
               <Ionicons name="volume-medium-outline" size={16} color="#94A3B8" />
               <Text className="text-base text-un1t-text ml-1.5 tabular-nums">{shownVolume}</Text>
             </View>
@@ -236,8 +268,7 @@ function LiveControls({ state, favorites, busy, pendingVolume, onSend, onNudge }
                 disabled={busy}
                 accessibilityRole="button"
                 accessibilityLabel={`Play ${f.name || f.id}`}
-                className="px-3 py-1.5 rounded-full border border-un1t-border bg-un1t-bg active:opacity-70"
-                style={busy ? { opacity: 0.4 } : null}
+                className="px-3 py-1.5 rounded-full border border-un1t-border bg-un1t-bg active:opacity-70 disabled:opacity-40"
               >
                 <Text className="text-sm text-un1t-text">{f.name || f.id}</Text>
               </Pressable>

@@ -115,6 +115,8 @@ export default function SonosLiveControl({ scheduleId, favorites, editable }) {
         throw new Error(j.error || 'That did not work')
       }
       await reload()
+      // reload() may return the SAME volume (clamped, or a lagging read), in which case the [state.volume] effect never fires — clear explicitly.
+      setPendingVolume(null)
     } catch (e) {
       setPendingVolume(null) // revert any optimistic value shown for this action
       setError(e.message)
