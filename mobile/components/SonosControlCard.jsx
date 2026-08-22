@@ -33,21 +33,14 @@ const REASON_COPY = {
   no_group: "None of this schedule's speakers are online.",
 }
 
-// The two envelopes mobile/lib/api.js mints ITSELF, without a server
-// round-trip: a dropped fetch and a non-JSON body. Everything else in a
-// success:false envelope came from the server and means something.
-const isTransportFailure = (r) =>
-  r?.success === false
-  && typeof r.error === 'string'
-  && (r.error.startsWith('Network error') || r.error.startsWith('Non-JSON response'))
-
 // Polls now-playing every POLL_MS while the screen is focused; stops on
 // blur. Unlike the web strip, a dropped poll does not THROW here — api()
-// returns a success:false envelope — so "not worth surfacing" has to be
-// done by hand: once a live state exists, a transport blip keeps it (the
-// next tick recovers) instead of unmounting the controls to show "Network
-// error" for ten seconds. A real server answer (401, 404, live:false)
-// still replaces it. A sequence number stops an older tick painting over
+// returns a success:false envelope, tagged transport: true when api() minted
+// it itself without a server answer (dropped fetch, non-JSON body) — so
+// "not worth surfacing" has to be done by hand: once a live state exists, a
+// tagged blip keeps it (the next tick recovers) instead of unmounting the
+// controls to show "Network error" for ten seconds. A real server answer
+// (401, 404, live:false) carries no tag and still replaces it. A sequence number stops an older tick painting over
 // a newer answer, which matters right after an action's reload().
 function useNowPlaying(scheduleId, locationId) {
   const [state, setState] = useState(null)
@@ -56,7 +49,7 @@ function useNowPlaying(scheduleId, locationId) {
     const n = ++seq.current
     const r = await getSonosNowPlaying(scheduleId, locationId)
     if (n !== seq.current) return
-    setState((prev) => (isTransportFailure(r) && prev?.live ? prev : r))
+    setState((prev) => (r?.transport && prev?.live ? prev : r))
   }, [scheduleId, locationId])
 
   useFocusEffect(useCallback(() => {

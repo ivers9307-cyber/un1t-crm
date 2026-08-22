@@ -81,7 +81,12 @@ export async function api(path, options = {}) {
       body: options.body ? JSON.stringify(options.body) : undefined,
     })
   } catch (err) {
-    return { success: false, error: `Network error: ${err.message || err}` }
+    // transport: true marks an envelope api() minted itself without a server
+    // answer (dropped fetch, non-JSON body). Consumers that poll use it to
+    // keep their last good state through a blip rather than painting the
+    // failure — see SonosControlCard. Additive; every other caller reads
+    // only success/error.
+    return { success: false, transport: true, error: `Network error: ${err.message || err}` }
   }
 
   // The CRM responds with the standard { success, data?, error?, issues? }
@@ -92,6 +97,7 @@ export async function api(path, options = {}) {
   } catch {
     return {
       success: false,
+      transport: true,
       error: `Non-JSON response (${response.status})`,
     }
   }
