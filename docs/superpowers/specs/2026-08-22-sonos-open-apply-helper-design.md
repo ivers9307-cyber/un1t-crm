@@ -1,6 +1,6 @@
 # Sonos open-apply helper — design
 
-**Date:** 2026-08-22 · **Status:** approved (Richard, 22 Aug) · **Ticket prefix:** SONOSAPPLY
+**Date:** 2026-08-22 · **Status:** implemented (SONOSAPPLY.1-4) · **Ticket prefix:** SONOSAPPLY
 
 ## Problem
 
@@ -105,3 +105,5 @@ delegates to.
 
 Per-group `last_applied` (the known multi-group partial-failure re-open) —
 needs a schema change, recorded in memory as accepted.
+
+- The close stamp in the reconcile still hand-rolls the `last_state`/`updated_at` shape; a `stampLastApplied` shared by open and close would pin the raw-number rule on both writers. One guarded writer and one unguarded one is accepted for now.
