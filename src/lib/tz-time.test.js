@@ -216,10 +216,19 @@ describe('dayStrInTz — input contract', () => {
 // A fixed offset has no DST, so accepting one would be silently an hour wrong
 // for half the year — the exact bug this module exists to remove.
 describe('resolveTz — IANA names only', () => {
-  it('rejects fixed offsets and Etc/GMT pseudo-zones', () => {
-    for (const bad of ['+05:30', '-0800', 'Etc/GMT+5']) {
+  it('rejects fixed offsets and the offset-bearing Etc/GMT+N pseudo-zones', () => {
+    for (const bad of ['+05:30', '-0800', 'Etc/GMT+5', 'Etc/GMT-5']) {
       expect(isValidTz(bad)).toBe(false)
       expect(resolveTz(bad)).toBe(DEFAULT_TZ)
+    }
+  })
+  // Bare 'Etc/GMT' and 'Etc/UTC' are NOT rejected, and should not be: Intl
+  // canonicalises both to plain 'UTC', which carries no DST hazard at all.
+  // Pinned so the boundary of the rule above is a decision, not an accident.
+  it('accepts the Etc names that canonicalise to UTC', () => {
+    for (const ok of ['Etc/GMT', 'Etc/UTC', 'GMT']) {
+      expect(isValidTz(ok)).toBe(true)
+      expect(resolveTz(ok)).toBe('UTC')
     }
   })
   it('canonicalises case', () => {
@@ -288,7 +297,12 @@ describe('wallMsInTz — round-trip property over every day of 2026', () => {
       }
     }
     expect(checked).toBeGreaterThan(5800)
-    expect(gaps).toBeGreaterThan(0) // the sweep really does cross spring-forward
+    // Exactly one of the 5,856 sampled slots is a gap — Santiago's skipped
+    // local midnight, the only zone here whose DST starts at a sampled time.
+    // The other three spring forward at 01:00/02:00, which this sweep does not
+    // sample. Kept as a guard so the `continue` branch can never go dead, NOT
+    // as a claim that the sweep exercises spring-forward broadly.
+    expect(gaps).toBeGreaterThan(0)
   })
 })
 

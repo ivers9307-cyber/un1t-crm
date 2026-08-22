@@ -73,6 +73,16 @@ function ianaZones() {
   return _ianaZones
 }
 
+// POSITIVE-only cache: raw input → canonical name. Constructing an
+// Intl.DateTimeFormat to canonicalise costs ~27 µs, and a cron resolving a
+// fleet asks the same handful of strings over and over. A FAILED lookup is
+// never stored — negative caching is what would let arbitrary garbage grow the
+// Map forever. Every key here therefore named a real zone, so the Map is
+// bounded by the IANA set (plus whatever case variants of those names the
+// callers actually pass; the caller is the locations.timezone column, which
+// holds a handful of distinct values). No eviction, so no thrash.
+const _canon = new Map()
+
 // Canonical IANA name for `tz`, or null if it is not one.
 //
 // Intl.DateTimeFormat also accepts FIXED OFFSETS ('+05:30', '-0800') and the
@@ -80,16 +90,21 @@ function ianaZones() {
 // DST, so accepting one would silently be an hour wrong for half the year —
 // the exact class of bug this module exists to remove. Membership of the IANA
 // set is the test; case is normalised for free ('europe/dublin' works).
+// ('Etc/GMT' and 'Etc/UTC' DO pass: Intl canonicalises them to plain 'UTC',
+// which has no DST hazard. Only the offset-bearing 'Etc/GMT±N' are rejected.)
 function canonicalTz(tz) {
   if (typeof tz !== 'string' || !tz.trim()) return null
+  const hit = _canon.get(tz)
+  if (hit !== undefined) return hit
   let canon
   try {
     canon = new Intl.DateTimeFormat('en-GB', { timeZone: tz }).resolvedOptions().timeZone
   } catch {
     return null
   }
-  if (canon === 'UTC') return canon
-  return ianaZones().has(canon) ? canon : null
+  if (canon !== 'UTC' && !ianaZones().has(canon)) return null
+  _canon.set(tz, canon)
+  return canon
 }
 
 export function isValidTz(tz) {
@@ -98,9 +113,9 @@ export function isValidTz(tz) {
 
 // locations.timezone is nullable free text; an invalid value must not throw
 // inside a cron. Returns the CANONICAL name, so a row saved as 'europe/dublin'
-// and one saved as 'Europe/Dublin' resolve to the same string. Deliberately
-// uncached: this is the untrusted entry point, and caching a negative would let
-// arbitrary input grow a Map forever. The Set lookup behind it is O(1).
+// and one saved as 'Europe/Dublin' resolve to the same string. A hit is served
+// from the positive cache above; a miss still pays the full Intl construction
+// every time, on purpose — see _canon.
 export function resolveTz(tz) {
   return canonicalTz(tz) ?? DEFAULT_TZ
 }
@@ -143,11 +158,29 @@ function solveWallMs(want, tz, gapPrefer) {
   return gapPrefer === 'later' ? Math.max(ms1, ms2) : Math.min(ms1, ms2)
 }
 
+// 'YYYY-MM-DD' → { y, mo, d }, or null for anything that is not a real
+// calendar date. Date.UTC ROLLS a nonexistent date over (Feb 30 → Mar 2) and a
+// 2-digit year into the 1900s, so the parse is re-derived and rejected rather
+// than left to schedule against a date the operator never wrote.
+function parseYmd(dateStr) {
+  const m = String(dateStr ?? '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) return null
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])]
+  const back = new Date(Date.UTC(y, mo - 1, d))
+  if (back.getUTCFullYear() !== y || back.getUTCMonth() + 1 !== mo || back.getUTCDate() !== d) return null
+  return { y, mo, d }
+}
+
 // 'YYYY-MM-DD' of the instant in `tz`. Intl parts, never toISOString().slice.
-// Accepts Date | epoch-ms | ISO string, matching dublinDayStr — house idiom is
-// to hand these a row value directly (`dublinDayStr(row.invoice_date)`).
+// Accepts Date | epoch-ms | ISO 8601 TIMESTAMP, matching dublinDayStr — house
+// idiom is to hand these a row value directly (`dublinDayStr(row.created_at)`).
 // Throws RangeError on anything unparseable: a silent '1970-01-01' for null is
 // how a whole day of schedule lands on the wrong date unnoticed.
+//
+// A date-ONLY string ('2026-07-06') is not a timestamp: Date.parse reads it as
+// UTC midnight, which in a negative-offset zone is still the PREVIOUS local
+// day, so it returns '2026-07-05'. That is dublinDayStr's behaviour too, and it
+// is why a calendar date must go through parseYmd/dayStartMsInTz, never here.
 export function dayStrInTz(instant = Date.now(), tz = DEFAULT_TZ) {
   // Note the type tests rather than a bare Number(): Number(null), Number(''),
   // Number(false) and Number([]) are all 0, so a coercing guard still lets a
@@ -169,14 +202,9 @@ export function dayStrInTz(instant = Date.now(), tz = DEFAULT_TZ) {
 export function wallMsInTz(dateStr, hhmm, tz = DEFAULT_TZ) {
   const t = String(hhmm ?? '').match(/^([01]\d|2[0-3]):([0-5]\d)$/)
   if (!t) return null
-  const dm = String(dateStr ?? '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
-  if (!dm) return null
-  const [y, mo, d] = [Number(dm[1]), Number(dm[2]), Number(dm[3])]
-  const want = Date.UTC(y, mo - 1, d, Number(t[1]), Number(t[2]))
-  // Date.UTC rolls a nonexistent date over (Feb 30 → Mar 2); re-derive and
-  // reject rather than schedule against a date the operator never wrote.
-  const back = new Date(want)
-  if (back.getUTCFullYear() !== y || back.getUTCMonth() + 1 !== mo || back.getUTCDate() !== d) return null
+  const ymd = parseYmd(dateStr)
+  if (!ymd) return null
+  const want = Date.UTC(ymd.y, ymd.mo - 1, ymd.d, Number(t[1]), Number(t[2]))
   return solveWallMs(want, tz, 'earlier')
 }
 
@@ -190,13 +218,9 @@ export function wallMsInTz(dateStr, hhmm, tz = DEFAULT_TZ) {
 // early. Resolving later yields the transition instant itself, i.e. the first
 // instant of the new local day, which is what a day boundary means.
 export function dayStartMsInTz(dateStr, tz = DEFAULT_TZ) {
-  const dm = String(dateStr ?? '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
-  if (!dm) return null
-  const [y, mo, d] = [Number(dm[1]), Number(dm[2]), Number(dm[3])]
-  const want = Date.UTC(y, mo - 1, d, 0, 0)
-  const back = new Date(want)
-  if (back.getUTCFullYear() !== y || back.getUTCMonth() + 1 !== mo || back.getUTCDate() !== d) return null
-  return solveWallMs(want, tz, 'later')
+  const ymd = parseYmd(dateStr)
+  if (!ymd) return null
+  return solveWallMs(Date.UTC(ymd.y, ymd.mo - 1, ymd.d, 0, 0), tz, 'later')
 }
 
 // Next local midnight strictly after `instant` — the default expiry of a manual override.
