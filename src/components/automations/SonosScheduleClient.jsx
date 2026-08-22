@@ -32,6 +32,7 @@ import SonosLiveControl from './SonosLiveControl'
 // here (not re-implemented) so the health indicator below can never compute a
 // different answer to "is a window active?" than the cron itself does.
 import { resolveServeWindows } from '@/lib/schedule/desired-state'
+import { playbackLabel } from '@/lib/sonos/playback'
 
 const DAY_LABELS = [
   { n: 1, label: 'Mon' },
@@ -114,8 +115,11 @@ function scheduleHealth(schedule, nowMs) {
   const lastAtIso = schedule.last_state?.at || null
   const lastAtMs = lastAtIso ? Date.parse(lastAtIso) : NaN
   const hasLastAt = Number.isFinite(lastAtMs)
+  // Through playbackLabel, not raw: last_state.playback_state holds Sonos's
+  // own enum (PLAYBACK_STATE_PLAYING), and interpolating it directly put
+  // that string in front of the operator.
   const playbackSuffix = schedule.last_state?.playback_state
-    ? ` (Sonos reports ${schedule.last_state.playback_state})` : ''
+    ? ` (Sonos reports ${playbackLabel(schedule.last_state.playback_state).toLowerCase()})` : ''
 
   const overridden = isOverrideLive(schedule.override, nowMs)
   const dateStr = dublinDayStr(nowMs)
