@@ -597,7 +597,7 @@ function ScheduleCard({ schedule, players, favorites, onReload, editable }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [saved, setSaved] = useState(false)
-  const [runState, setRunState] = useState(null) // null | 'running' | 'done' | { error }
+  const [runState, setRunState] = useState(null) // null | 'running' | 'done' | { warning } | { error }
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState(null)
@@ -672,8 +672,16 @@ function ScheduleCard({ schedule, players, favorites, onReload, editable }) {
       const res = await fetch(`/api/sonos/schedules/${schedule.id}/run-now`, { method: 'POST' })
       const j = await res.json()
       if (!res.ok || j.success === false) throw new Error(j.error || 'Run failed')
-      setRunState('done')
-      setTimeout(() => setRunState((s) => (s === 'done' ? null : s)), 5000)
+      if (j.warning) {
+        // SONOSAPPLY.4 — success:true + warning is "the music IS playing, the
+        // record did not save" (apply.js reason:'stamp'). Not the same as a
+        // clean done: the cron will re-open it, restarting the playlist,
+        // until the write lands. Stays up until the next run so it is read.
+        setRunState({ warning: j.warning })
+      } else {
+        setRunState('done')
+        setTimeout(() => setRunState((s) => (s === 'done' ? null : s)), 5000)
+      }
       onReload()
     } catch (e) {
       setRunState({ error: e.message })
@@ -863,6 +871,9 @@ function ScheduleCard({ schedule, players, favorites, onReload, editable }) {
       {editable && error && <p className="mt-2 text-[11px] text-red-700">{error}</p>}
       {editable && runState === 'done' && (
         <p className="mt-2 text-[11px] text-blue-700">Queued — the active window (if any) will be reapplied within a minute.</p>
+      )}
+      {editable && runState?.warning && (
+        <div className={`mt-2 rounded-lg border p-3 text-sm ${toneClasses('warning')}`}>{runState.warning}</div>
       )}
       {editable && runState?.error && <p className="mt-2 text-[11px] text-red-700">{runState.error}</p>}
 
