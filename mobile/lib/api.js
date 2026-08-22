@@ -68,7 +68,8 @@ export async function authHeaders({ locationId, json = false } = {}) {
  * @param {string} [options.method]    'GET' | 'POST' | 'PUT' | 'DELETE'
  * @param {object} [options.body]      JSON-serialisable
  * @param {string} [options.locationId] override the active location for this call
- * @returns {Promise<{success: boolean, data?: any, error?: string, issues?: any[]}>}
+ * @returns {Promise<{success: boolean, data?: any, error?: string, issues?: any[], transport?: true}>}
+ *   `transport: true` (api()-minted, no server answer)
  */
 export async function api(path, options = {}) {
   const headers = await authHeaders({ locationId: options.locationId, json: true })

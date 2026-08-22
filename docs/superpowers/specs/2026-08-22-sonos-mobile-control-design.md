@@ -92,8 +92,10 @@ Both are fetched once on mount and on focus; the card polls only
 `now-playing`.
 
 Empty state (no schedules at the location): "No studio music is set up for
-this location yet. An owner sets it up on the web app under Automations →
-Sonos." — the `AcDeviceList` empty-state shape.
+this location yet. Someone with Device control sets it up on the web app
+under Marketing → Automations → Studio music." — the `AcDeviceList`
+empty-state shape. (Not "An owner": managers hold `device_control` by
+default. And "Automations → Sonos" is not a label the web nav has.)
 
 ### 4. Volume — step buttons only, no slider
 
