@@ -128,17 +128,31 @@ function plugs(n) {
   return `${n} plug${n === 1 ? '' : 's'}`
 }
 
+// null when the assembler could not READ the devices (countsKnown: false) —
+// and the callers below drop the clause entirely rather than substituting a
+// zero. "no plugs adopted" printed under "Could not read Shelly state" is a
+// fact we do not have, sitting next to the admission that we could not get it.
+function plugSummary(r) {
+  if (!r.countsKnown || r.deviceCount == null) return null
+  if (r.deviceCount === 0) return 'no plugs adopted'
+  // "scheduled" is `enabled` — the per-device schedule switch. A plug can be
+  // online and unscheduled (it just sits where it was last set), which is
+  // exactly the state worth showing next to the online count.
+  return `${plugs(r.deviceCount)} (${r.onlineCount} online, ${r.enabledCount} scheduled)`
+}
+
 function shellyDetail(r, generatedAt) {
   // A never-connected location is the ordinary case; a DISCONNECTED one
   // that still has plugs adopted is not, and the count is the only thing
   // that tells them apart (the relays hold wherever they were left).
   if (r.status === 'not_connected') {
-    return r.deviceCount > 0 ? `Not connected — ${plugs(r.deviceCount)} still adopted` : 'Not connected'
+    return r.countsKnown && r.deviceCount > 0
+      ? `Not connected — ${plugs(r.deviceCount)} still adopted`
+      : 'Not connected'
   }
   if (r.status !== 'connected') return r.message || 'Needs attention'
   const ago = fmtAgo(r.lastOkAt, generatedAt)
-  const count = r.deviceCount === 0 ? 'no plugs adopted' : `${plugs(r.deviceCount)} (${r.onlineCount} online)`
-  return [r.host, count, ago ? `last OK ${ago}` : null].filter(Boolean).join(' · ')
+  return [r.host, plugSummary(r), ago ? `last OK ${ago}` : null].filter(Boolean).join(' · ')
 }
 
 // Secondary line for a row that IS connected in the DB but needs hands:
@@ -147,14 +161,16 @@ function shellyDetail(r, generatedAt) {
 // every reconcile tick, success or failure) — the answer to the only
 // question a red badge raises: is it still retrying, or has nothing
 // touched this in days? The hint is the last ≤4 characters of the key and
-// is non-secret by the shelly connections allowlist.
+// is non-secret by the shelly connections allowlist. There is no "no key
+// stored" case: key_hint is NOT NULL with a length CHECK (mig 562), so a
+// row that exists has one.
 function shellyContext(r, generatedAt) {
   if (r.status === 'connected' || r.status === 'not_connected' || !r.host) return null
   const checked = fmtAgo(r.lastAttemptAt, generatedAt)
   return [
     r.host,
-    r.hasAuthKey ? `key ••••${r.keyHint}` : 'no key stored',
-    r.deviceCount > 0 ? `${plugs(r.deviceCount)} (${r.onlineCount} online)` : 'no plugs adopted',
+    r.keyHint ? `key ••••${r.keyHint}` : null,
+    plugSummary(r),
     checked ? `last checked ${checked}` : null,
   ].filter(Boolean).join(' · ')
 }
@@ -719,28 +735,34 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
             <p className="text-xs text-un1t-subtle">Nothing to show for this location scope.</p>
           ) : (
             <div className="divide-y divide-un1t-border border-t border-un1t-border text-sm">
-              {shelly.map((r) => (
-                <div key={r.locationId} className="py-2 space-y-1">
-                  <div className="flex items-center gap-3">
-                    <span className="font-semibold min-w-[88px]">{nameById[r.locationId] || r.locationName}</span>
-                    <span className={`flex-1 text-xs truncate ${
-                      r.status === 'error'
-                        ? 'text-red-700'
-                        : r.status === 'action_needed' ? 'text-amber-700' : 'text-un1t-subtle'
-                    }`}>
-                      {shellyDetail(r, data.generatedAt)}
-                    </span>
-                    {/* Deep link, not a drawer: the plugs are managed on the
-                        active-location page (see the header note above). */}
-                    <Link href={r.href} className={linkBtn(r.status === 'not_connected')}>
-                      {r.status === 'not_connected' ? 'Connect' : 'Manage'}
-                    </Link>
+              {shelly.map((r) => {
+                const detail = shellyDetail(r, data.generatedAt)
+                const context = shellyContext(r, data.generatedAt)
+                return (
+                  <div key={r.locationId} className="py-2 space-y-1">
+                    <div className="flex items-center gap-3">
+                      <span className="font-semibold min-w-[88px]">{nameById[r.locationId] || r.locationName}</span>
+                      <span
+                        title={detail}
+                        className={`flex-1 text-xs truncate ${
+                          r.status === 'error'
+                            ? 'text-red-700'
+                            : r.status === 'action_needed' ? 'text-amber-700' : 'text-un1t-subtle'
+                        }`}
+                      >
+                        {detail}
+                      </span>
+                      {/* Deep link, not a drawer, and the label is "Open" for
+                          every row: the destination is the ACTIVE-location
+                          page, so "Connect" would over-promise on a row for
+                          some other studio — you land on the page for whichever
+                          location you are currently in. */}
+                      <Link href={r.href || '/automations/shelly'} className={linkBtn()}>Open</Link>
+                    </div>
+                    {context && <p title={context} className="text-[11px] text-un1t-muted truncate">{context}</p>}
                   </div>
-                  {shellyContext(r, data.generatedAt) && (
-                    <p className="text-[11px] text-un1t-muted truncate">{shellyContext(r, data.generatedAt)}</p>
-                  )}
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </HubCard>

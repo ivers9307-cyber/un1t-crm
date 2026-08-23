@@ -22,6 +22,10 @@ import {
   LAPSE_WARN_DAYS,
   assembleIntegrationsHub,
 } from './integrations-hub'
+// The tenants console counts hub attention rows THROUGH a.locationId; the
+// Shelly card's card-level row is pinned to a real id so that count works.
+// Imported here rather than mirrored, so a change to either side shows up.
+import { attentionCountByOrg } from './admin-tenants'
 
 const NOW = new Date('2026-07-19T12:00:00Z')
 
@@ -453,6 +457,7 @@ function emptyDb() {
     gte: () => builder,
     order: () => builder,
     limit: () => builder,
+    range: () => builder,
     maybeSingle: () => Promise.resolve({ data: null, error: null }),
     single: () => Promise.resolve({ data: null, error: null }),
     then: (res, rej) => Promise.resolve({ data: [], error: null }).then(res, rej),
@@ -508,23 +513,43 @@ describe('assembleIntegrationsHub — Phase-2 presence flags + secret non-leak',
 // or nothing independently of its neighbours. organization_id is null on
 // both fixtures, which keeps the email-delivery and billing queries out of
 // the way (they short-circuit on an empty org set / no plan pin).
+// It also RECORDS every .in() per table and HONOURS it — the fixture rows
+// are filtered by the ids the assembler actually passed, and .range() slices
+// the result. Both matter: without the filter a dropped .in('location_id',
+// ids) would still pass every assertion below (the tenant boundary this
+// payload inherits from the caller's scoped `locations` query would be gone
+// and no test would notice), and without the slice the pagination test could
+// not tell one page from five.
 function tableDb(byTable = {}) {
+  const inCalls = {}
   return {
+    inCalls,
     from: (table) => {
       const result = byTable[table] ?? { data: [], error: null }
+      const filters = (inCalls[table] ||= [])
+      let slice = null
+      const resolve = () => {
+        if (result.error) return { data: null, error: result.error }
+        let rows = result.data || []
+        for (const [col, values] of filters) {
+          if (Array.isArray(values)) rows = rows.filter((r) => values.includes(r[col]))
+        }
+        if (slice) rows = rows.slice(slice[0], slice[1] + 1)
+        return { data: rows, error: null }
+      }
       const builder = {
         select: () => builder,
-        in: () => builder,
+        in: (...args) => { filters.push(args); return builder },
         eq: () => builder,
         neq: () => builder,
         gte: () => builder,
         lte: () => builder,
         order: () => builder,
         limit: () => builder,
-        range: () => builder,
+        range: (from, to) => { slice = [from, to]; return builder },
         maybeSingle: () => Promise.resolve({ data: null, error: null }),
         single: () => Promise.resolve({ data: null, error: null }),
-        then: (res, rej) => Promise.resolve({ data: null, error: null, ...result }).then(res, rej),
+        then: (res, rej) => Promise.resolve(resolve()).then(res, rej),
       }
       return builder
     },
@@ -570,9 +595,15 @@ describe('assembleIntegrationsHub — Shelly plugs card', () => {
       // last ATTEMPT (updated_at) is carried separately from last SUCCESS:
       // the pair is what distinguishes "still retrying" from "abandoned".
       lastAttemptAt: '2026-07-19T11:59:30Z',
+      countsKnown: true,
       href: SHELLY_HREF,
     })
     expect(data.shelly[0].href).toBe('/automations/shelly')
+    // BOTH Shelly reads are scoped to the caller's locations — deleting
+    // either .in('location_id', ids) fails here, and with it the tenant
+    // boundary the whole payload inherits from the route's scoped query.
+    expect(db.inCalls.shelly_connections[0]).toEqual(['location_id', [LOC_A.id]])
+    expect(db.inCalls.shelly_devices[0]).toEqual(['location_id', [LOC_A.id]])
 
     const json = JSON.stringify(data)
     expect(json).not.toContain('SECRET_SHELLY')
@@ -595,6 +626,8 @@ describe('assembleIntegrationsHub — Shelly plugs card', () => {
       keyHint: null,
       lastOkAt: null,
       lastAttemptAt: null,
+      // Zero here is a READING, not an absence of one — countsKnown says so.
+      countsKnown: true,
       deviceCount: 0,
       enabledCount: 0,
       onlineCount: 0,
@@ -623,7 +656,19 @@ describe('assembleIntegrationsHub — Shelly plugs card', () => {
       label: 'Shelly plugs',
       locationName: 'Stillorgan',
       href: SHELLY_HREF,
+      // The copy has to say what the half-state COSTS, not just that it
+      // exists: the relays hold wherever they were left and no schedule
+      // will move them again until the account is reconnected.
+      message: '2 plugs still adopted — nothing schedules them while the Shelly account is disconnected',
     })
+  })
+
+  it('singularises the stranded-plug nag', async () => {
+    const db = tableDb({
+      shelly_devices: { data: [{ location_id: LOC_A.id, enabled: true, last_state: { online: true } }] },
+    })
+    const data = await assembleIntegrationsHub(db, [LOC_A], { now: NOW })
+    expect(data.attention.find((a) => a.cardKey === 'shelly').message).toMatch(/^1 plug still adopted/)
   })
 
   it('an unreadable read grades EVERY in-scope location error — never "not connected"', async () => {
@@ -635,15 +680,68 @@ describe('assembleIntegrationsHub — Shelly plugs card', () => {
       for (const row of data.shelly) {
         expect(row.status).toBe('error')
         expect(row.message).toBe('Could not read Shelly state')
-        // Counts are unknown rather than confidently zero — but they must not
-        // read as a populated studio either.
-        expect(row).toMatchObject({ deviceCount: 0, enabledCount: 0, onlineCount: 0 })
+        // UNKNOWN, not zero. A 0 here would render as "no plugs adopted"
+        // directly under "Could not read Shelly state" — a fact we do not
+        // have, printed beside the admission that we could not get it.
+        expect(row).toMatchObject({
+          countsKnown: false,
+          deviceCount: null,
+          enabledCount: null,
+          onlineCount: null,
+        })
       }
+      // ONE row for one blip, not one per location: the failure is a property
+      // of the card, so N locations would print the same sentence N times and
+      // crowd everything else out of the strip.
       const nag = data.attention.filter((a) => a.cardKey === 'shelly')
-      expect(nag.map((a) => a.severity)).toEqual(['error', 'error'])
-      expect(nag[0].message).toBe('Could not read Shelly state')
+      expect(nag).toHaveLength(1)
+      expect(nag[0]).toMatchObject({
+        severity: 'error',
+        label: 'Shelly plugs',
+        locationName: 'All locations',
+        message: 'Could not read Shelly state — retrying',
+        href: SHELLY_HREF,
+      })
+      // Pinned to a REAL location id, never null: attentionCountByOrg
+      // (admin-tenants.js) resolves the org through it and drops what it
+      // cannot map, so a null would be counted zero times.
+      expect(nag[0].locationId).toBe(LOC_A.id)
       // The db's own failure text is never echoed to the operator.
       expect(JSON.stringify(data)).not.toContain('db exploded')
+    }
+  })
+
+  it('the single read-blip attention row is counted exactly once per org', async () => {
+    const db = tableDb({ shelly_connections: { error: { message: 'db exploded' } } })
+    const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+    const shellyNag = data.attention.filter((a) => a.cardKey === 'shelly')
+    expect(attentionCountByOrg(shellyNag, { [LOC_A.id]: 'org-1', [LOC_B.id]: 'org-1' }))
+      .toEqual({ 'org-1': 1 })
+  })
+
+  it('paginates the device read past the 1,000-row PostgREST cap', async () => {
+    // 1,001 rows in location order — one more than a single page, so a
+    // .limit()-only read would silently lose the tail.
+    const rows = [
+      ...Array.from({ length: 600 }, (_, i) => ({
+        location_id: LOC_A.id, enabled: i % 2 === 0, last_state: { online: i % 3 === 0 },
+      })),
+      ...Array.from({ length: 401 }, () => ({
+        location_id: LOC_B.id, enabled: false, last_state: { online: true },
+      })),
+    ]
+    const db = tableDb({ shelly_devices: { data: rows } })
+    const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+
+    const a = data.shelly.find((r) => r.locationId === LOC_A.id)
+    const b = data.shelly.find((r) => r.locationId === LOC_B.id)
+    expect(a).toMatchObject({ countsKnown: true, deviceCount: 600, enabledCount: 300, onlineCount: 200 })
+    // The 401st row of B lands on page two — the whole point of the fixture.
+    expect(b).toMatchObject({ countsKnown: true, deviceCount: 401, enabledCount: 0, onlineCount: 401 })
+    // Two pages were read, and both were scoped to the caller's locations.
+    expect(db.inCalls.shelly_devices).toHaveLength(2)
+    for (const call of db.inCalls.shelly_devices) {
+      expect(call).toEqual(['location_id', [LOC_A.id, LOC_B.id]])
     }
   })
 
@@ -670,8 +768,8 @@ describe('assembleIntegrationsHub — Shelly plugs card', () => {
 
     const a = data.shelly.find((r) => r.locationId === LOC_A.id)
     const b = data.shelly.find((r) => r.locationId === LOC_B.id)
-    expect(a).toMatchObject({ status: 'connected', deviceCount: 3, enabledCount: 2, onlineCount: 1, keyHint: 'ab12' })
-    expect(b).toMatchObject({ status: 'action_needed', deviceCount: 1, enabledCount: 0, onlineCount: 1, keyHint: 'cd34' })
+    expect(a).toMatchObject({ status: 'connected', countsKnown: true, deviceCount: 3, enabledCount: 2, onlineCount: 1, keyHint: 'ab12' })
+    expect(b).toMatchObject({ status: 'action_needed', countsKnown: true, deviceCount: 1, enabledCount: 0, onlineCount: 1, keyHint: 'cd34' })
     expect(b.message).toMatch(/re-paste/i)
 
     // B's action_needed lands in the warning band with the re-paste prompt;
