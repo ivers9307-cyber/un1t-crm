@@ -23,7 +23,8 @@ const POLL_MS = 10_000
 const VOLUME_STEP = 5
 const DEBOUNCE_MS = 250
 
-// Same copy as the web strip's REASON_COPY — keep them in step.
+// Same copy as the web strip's REASON_COPY — keep them in step, except
+// refresh_failed: there is no "above" on mobile, so it points at the web app.
 const REASON_COPY = {
   not_configured: "Sonos isn't configured on this deploy.",
   not_connected: 'Sonos is not connected.',
@@ -47,9 +48,16 @@ function useNowPlaying(scheduleId, locationId) {
   const seq = useRef(0)
   const load = useCallback(async () => {
     const n = ++seq.current
-    const r = await getSonosNowPlaying(scheduleId, locationId)
-    if (n !== seq.current) return
-    setState((prev) => (r?.transport && prev?.live ? prev : r))
+    // try/catch: authHeaders() → getSession() runs OUTSIDE api()'s own try
+    // (same guard as `send` and the screen) — an uncaught rejection here
+    // would leave "Checking what's playing…" painted forever.
+    try {
+      const r = await getSonosNowPlaying(scheduleId, locationId)
+      if (n !== seq.current) return
+      setState((prev) => (r?.transport && prev?.live ? prev : r))
+    } catch {
+      // Treat as a transport blip: keep whatever is painted; the next tick recovers.
+    }
   }, [scheduleId, locationId])
 
   useFocusEffect(useCallback(() => {

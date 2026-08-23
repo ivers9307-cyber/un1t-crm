@@ -9,7 +9,7 @@
 // Gates on `device_control`, cross-platform since SONOSMOB.2: the routes the
 // cards call enforce that same key, so the gate and the server agree.
 
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { View, Text, Pressable, ScrollView, ActivityIndicator } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter, useFocusEffect } from 'expo-router'
@@ -34,6 +34,15 @@ export default function SonosScreen() {
   // on the location, not a boolean: a blip while refetching for a NEW
   // location must not keep the OLD location's cards painted.
   const listLocationRef = useRef(null)
+
+  // New location → spinner, not the old list (whose cards would poll
+  // now-playing against the new location and 404 until the new list lands).
+  useEffect(() => {
+    setSchedules(null)
+    setFavorites([])
+    setFavoritesFailed(false)
+    listLocationRef.current = null
+  }, [locationId])
 
   // Schedules + favourites change rarely: fetched on focus, not polled.
   // The cards poll now-playing themselves.
