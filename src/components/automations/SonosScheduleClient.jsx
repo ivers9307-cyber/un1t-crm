@@ -763,7 +763,7 @@ function ScheduleCard({ schedule, players, favorites, onReload, editable }) {
         onChange={(next) => { setWindows(next); setSaved(false) }}
         editable={editable}
         max={MAX_WINDOWS}
-        defaultWindow={() => ({ volume: DEFAULT_VOLUME, favorite_id: favorites[0]?.id || '' })}
+        defaultWindowExtra={() => ({ volume: DEFAULT_VOLUME, favorite_id: favorites[0]?.id || '' })}
         addDisabled={!hasFavorites}
         addDisabledTitle="Save a favourite in the Sonos app first"
         renderExtra={(win, i, setWindowField) => (

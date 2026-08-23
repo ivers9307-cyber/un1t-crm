@@ -1,17 +1,7 @@
 // SHELLY-UI.1 — the fixed-window vocabulary, lifted out of
 // src/app/api/sonos/schedules/route.js so Sonos and Shelly validate a
 // recurring on/off window with ONE implementation instead of two that
-// drift. Nothing here changed on the way over: the helpers and their
-// comments are the Sonos originals verbatim, and the Sonos route now
-// re-exports findWindowOverlap from here.
-//
-// Those moved comments still say "below" and name route.test.js, because
-// that is where they were written. Read them against this file as:
-//   • "the Window .refine below"     → NOT_SAME_BOUNDARY, applied by each
-//                                      caller AFTER its own .extend()
-//   • "the SchedulePayload refinement below" → windowsOverlapIssue
-//   • "unit-tested directly (route.test.js)" → windows.test.js, which is
-//                                      where that describe block now lives
+// drift.
 //
 // WHY WindowBase CARRIES NO REFINE: a refined Zod object is a ZodEffects,
 // and ZodEffects has no .extend(). Sonos extends the base with
@@ -23,10 +13,10 @@
 
 import { z } from 'zod'
 
-const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
+export const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
 const MINUTES_PER_DAY = 24 * 60
 
-function toMinutes(hhmm) {
+export function toMinutes(hhmm) {
   const s = String(hhmm || '')
   // HHMM has only one capture group (around the hour — its sole original
   // purpose was a boolean .regex() check), so pulling minutes out of a
@@ -37,16 +27,17 @@ function toMinutes(hhmm) {
 }
 
 // A same-day window (off after on) occupies one clock range. An overnight
-// window (off before on — the Window .refine below already refuses
-// on === off, so "not after" only ever means "before") is modelled as
-// wrapping the clock face: the late segment up to midnight AND the early
-// segment from midnight. That is deliberately what the window occupies on
-// every day it recurs on — the tail of yesterday's run lands in exactly
-// that early-morning slot (resolveServeWindows in
-// src/lib/schedule/desired-state.js serves it) — so a single, non-recurring
-// overnight window gets the same treatment as a recurring one. The cost is
-// a rare false positive on a genuinely isolated overnight window with no
-// neighbour; the alternative is a miss on the case this exists to catch.
+// window (off before on — NOT_SAME_BOUNDARY, applied by each caller after
+// its own .extend(), already refuses on === off, so "not after" only ever
+// means "before") is modelled as wrapping the clock face: the late segment
+// up to midnight AND the early segment from midnight. That is deliberately
+// what the window occupies on every day it recurs on — the tail of
+// yesterday's run lands in exactly that early-morning slot
+// (resolveServeWindows in src/lib/schedule/desired-state.js serves it) — so
+// a single, non-recurring overnight window gets the same treatment as a
+// recurring one. The cost is a rare false positive on a genuinely isolated
+// overnight window with no neighbour; the alternative is a miss on the case
+// this exists to catch.
 function occupiedSegments(on, off) {
   const onMin = toMinutes(on)
   const offMin = toMinutes(off)
@@ -67,8 +58,8 @@ function sharesDay(daysA, daysB) {
   return a.some((d) => b.includes(d))
 }
 
-// Pure — no zod, no I/O — so it is unit-tested directly (route.test.js)
-// and reused by the SchedulePayload refinement below.
+// Pure — no zod, no I/O — so it is unit-tested directly (windows.test.js)
+// and reused by windowsOverlapIssue below.
 //
 // Why this exists: planAction resolves an overlap earliest-wins (windows
 // is sorted ascending by on_at, then .find() returns the first match), so
@@ -104,6 +95,27 @@ export const WindowBase = z.object({
   off: z.string().regex(HHMM),
 })
 
+// 1..7 = Mon..Sun, matching WindowBase's days bound above and the engine's
+// own day numbering (src/lib/schedule/desired-state.js). It lives here, not
+// in the editor component, so a Server Component can import it: a constant
+// exported from a 'use client' module arrives as a client-reference proxy,
+// not the array.
+export const DAY_LABELS = [
+  { n: 1, label: 'Mon' },
+  { n: 2, label: 'Tue' },
+  { n: 3, label: 'Wed' },
+  { n: 4, label: 'Thu' },
+  { n: 5, label: 'Fri' },
+  { n: 6, label: 'Sat' },
+  { n: 7, label: 'Sun' },
+]
+
+// What "a new window" means before any device-specific fields are merged
+// on: weekdays, 09:00–17:00. Frozen because it is shared by every caller
+// and every Add click — one careless mutation would redefine the default
+// for the whole app, silently, for the rest of the session.
+export const BASE_WINDOW = Object.freeze({ days: [1, 2, 3, 4, 5], on: '09:00', off: '17:00' })
+
 // Equal boundaries make the engine treat the window as overnight and
 // resolve a 24-hour always-on span — the exact trap the Tapo build hit.
 export const NOT_SAME_BOUNDARY = {
@@ -125,5 +137,3 @@ export function windowsOverlapIssue(windows, ctx) {
     message: `Windows overlap on the same day: ${a.on}-${a.off} and ${b.on}-${b.off}`,
   })
 }
-
-export { HHMM }

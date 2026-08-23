@@ -6,22 +6,32 @@
 // (every edit leaves through onChange, nothing is held internally), the
 // extension seams (renderExtra/summaryExtra) get what they are documented
 // to get, and the cap and the disabled-Add precondition both hold.
+//
+// SHELLY-UI.1b — plus REFERENTIAL identity, not just deep equality. React
+// bails out of a re-render on Object.is, so a mutate-in-place edit
+// (`list[i].on = value; onChange(list)`) deep-equals the correct result and
+// would pass every value assertion here while leaving Sonos looking frozen
+// — the operator types a new time and the field snaps back.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useState } from 'react'
 import { render, cleanup, screen, fireEvent, within } from '@testing-library/react'
-import WindowsEditor, { DAY_LABELS } from './WindowsEditor.jsx'
+import { DAY_LABELS, BASE_WINDOW } from '@/lib/schedule/windows'
+import WindowsEditor from './WindowsEditor.jsx'
+
+const MAX = 16 // what Sonos passes; `max` is required, there is no default
 
 // A controlled harness, because that is how both real callers use it —
 // testing against a bare onChange spy would pass even if the component
 // secretly kept its own copy of the list.
-function Harness({ initial = [], onChangeSpy, ...props }) {
+function Harness({ initial = [], onChangeSpy, max = MAX, ...props }) {
   const [windows, setWindows] = useState(initial)
   return (
     <WindowsEditor
       windows={windows}
       onChange={(next) => { onChangeSpy?.(next); setWindows(next) }}
       editable
+      max={max}
       {...props}
     />
   )
@@ -56,30 +66,50 @@ describe('WindowsEditor — editing', () => {
     expect(onChange).toHaveBeenLastCalledWith([{ ...WEEKDAYS, days: [1, 2, 3, 4, 5] }])
   })
 
+  it('reports each day pill\'s state through aria-pressed', () => {
+    render(<Harness initial={[{ days: [1], on: '09:00', off: '17:00' }]} />)
+    expect(dayPill('Mon').getAttribute('aria-pressed')).toBe('true')
+    expect(dayPill('Tue').getAttribute('aria-pressed')).toBe('false')
+
+    fireEvent.click(dayPill('Tue'))
+    expect(dayPill('Tue').getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(dayPill('Mon'))
+    expect(dayPill('Mon').getAttribute('aria-pressed')).toBe('false')
+  })
+
   it('renders all seven days, Mon..Sun', () => {
     render(<Harness initial={[{ ...WEEKDAYS }]} />)
     expect(DAY_LABELS.map((d) => d.label)).toEqual(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'])
     for (const d of DAY_LABELS) expect(dayPill(d.label)).toBeTruthy()
   })
 
-  it('changes the on and off times independently', () => {
+  it('changes the on and off times independently, and replaces rather than mutates', () => {
     const onChange = vi.fn()
-    render(<Harness initial={[{ ...WEEKDAYS }]} onChangeSpy={onChange} />)
-    const [on, off] = timeInputs()
+    const before = [{ ...WEEKDAYS }, { days: [6], on: '10:00', off: '14:00' }]
+    const snapshot = structuredClone(before)
+    render(<Harness initial={before} onChangeSpy={onChange} />)
 
-    fireEvent.change(on, { target: { value: '06:30' } })
-    expect(onChange).toHaveBeenLastCalledWith([{ ...WEEKDAYS, on: '06:30' }])
+    fireEvent.change(timeInputs()[0], { target: { value: '06:30' } })
+    const next = onChange.mock.lastCall[0]
 
-    fireEvent.change(off, { target: { value: '21:30' } })
-    expect(onChange).toHaveBeenLastCalledWith([{ ...WEEKDAYS, on: '06:30', off: '21:30' }])
+    expect(next).not.toBe(before)          // a new array…
+    expect(next[0]).not.toBe(before[0])    // …a new object for the edited row…
+    expect(next[1]).toBe(before[1])        // …and the untouched row shared, not cloned
+    expect(before).toEqual(snapshot)       // nothing written in place
+    expect(next[0]).toEqual({ ...WEEKDAYS, on: '06:30' })
+
+    fireEvent.change(timeInputs()[1], { target: { value: '21:30' } })
+    expect(onChange).toHaveBeenLastCalledWith([
+      { ...WEEKDAYS, on: '06:30', off: '21:30' },
+      { days: [6], on: '10:00', off: '14:00' },
+    ])
   })
 
   it('edits the right row when several windows are open', () => {
     const onChange = vi.fn()
     render(<Harness initial={[{ ...WEEKDAYS }, { days: [6, 7], on: '10:00', off: '14:00' }]} onChangeSpy={onChange} />)
-    const [, , secondOn] = timeInputs()
 
-    fireEvent.change(secondOn, { target: { value: '11:00' } })
+    fireEvent.change(timeInputs()[2], { target: { value: '11:00' } })
     expect(onChange).toHaveBeenLastCalledWith([
       { ...WEEKDAYS },
       { days: [6, 7], on: '11:00', off: '14:00' },
@@ -97,32 +127,34 @@ describe('WindowsEditor — editing', () => {
     expect(timeInputs()).toHaveLength(2) // one window left
   })
 
-  it('appends the shared base merged with defaultWindow, calling it at click time', () => {
+  it('appends BASE_WINDOW merged with defaultWindowExtra, calling it at click time', () => {
     const onChange = vi.fn()
-    const defaultWindow = vi.fn(() => ({ volume: 30, favorite_id: 'fav-1' }))
-    render(<Harness initial={[]} onChangeSpy={onChange} defaultWindow={defaultWindow} />)
+    const defaultWindowExtra = vi.fn(() => ({ volume: 30, favorite_id: 'fav-1' }))
+    render(<Harness initial={[]} onChangeSpy={onChange} defaultWindowExtra={defaultWindowExtra} />)
 
     expect(screen.getByText(/No windows yet/)).toBeTruthy()
-    expect(defaultWindow).not.toHaveBeenCalled() // not at render — only on Add
+    expect(defaultWindowExtra).not.toHaveBeenCalled() // not at render — only on Add
 
     fireEvent.click(addButton())
-    expect(defaultWindow).toHaveBeenCalledTimes(1)
+    expect(defaultWindowExtra).toHaveBeenCalledTimes(1)
     expect(onChange).toHaveBeenLastCalledWith([
       { days: [1, 2, 3, 4, 5], on: '09:00', off: '17:00', volume: 30, favorite_id: 'fav-1' },
     ])
+    // A copy, never the frozen shared constant itself.
+    expect(onChange.mock.lastCall[0][0]).not.toBe(BASE_WINDOW)
   })
 
-  it('accepts a plain object defaultWindow too, and needs none at all', () => {
+  it('accepts a plain object defaultWindowExtra too, and needs none at all', () => {
     const onChange = vi.fn()
-    const { unmount } = render(<Harness initial={[]} onChangeSpy={onChange} defaultWindow={{ volume: 12 }} />)
+    const { unmount } = render(<Harness initial={[]} onChangeSpy={onChange} defaultWindowExtra={{ volume: 12 }} />)
     fireEvent.click(addButton())
-    expect(onChange).toHaveBeenLastCalledWith([{ days: [1, 2, 3, 4, 5], on: '09:00', off: '17:00', volume: 12 }])
+    expect(onChange).toHaveBeenLastCalledWith([{ ...BASE_WINDOW, volume: 12 }])
     unmount()
 
     const onChange2 = vi.fn()
     render(<Harness initial={[]} onChangeSpy={onChange2} />)
     fireEvent.click(addButton())
-    expect(onChange2).toHaveBeenLastCalledWith([{ days: [1, 2, 3, 4, 5], on: '09:00', off: '17:00' }])
+    expect(onChange2).toHaveBeenLastCalledWith([{ ...BASE_WINDOW }])
   })
 })
 
@@ -136,24 +168,16 @@ describe('WindowsEditor — the cap', () => {
     expect(addButton()).toBeTruthy()
   })
 
-  it('defaults the cap to 16 — the API\'s own windows.max(16)', () => {
-    const rows = Array.from({ length: 16 }, (_, i) => ({ days: [1], on: '09:00', off: `${String(i).padStart(2, '0')}:30` }))
-    const { unmount } = render(<Harness initial={rows} />)
-    expect(addButton()).toBeNull()
-    unmount()
-    render(<Harness initial={rows.slice(0, 15)} />)
+  it('takes the cap from the caller\'s `max`, with no built-in default', () => {
+    // `max` is required precisely so a caller states the number its own API
+    // enforces — the same six windows are under one caller's cap and at
+    // another's.
+    const rows = Array.from({ length: 6 }, (_, i) => ({ days: [1], on: '09:00', off: `0${i}:30` }))
+    const { unmount } = render(<Harness initial={rows} max={MAX} />)
     expect(addButton()).toBeTruthy()
-  })
-
-  it('does not append past the cap even if Add is somehow clicked', () => {
-    // Belt and braces: the guard lives in the handler, not only in the
-    // render condition, so a stale click can never overrun the API's max.
-    const onChange = vi.fn()
-    render(
-      <WindowsEditor windows={[{ ...WEEKDAYS }]} onChange={onChange} editable={false} max={1} />,
-    )
+    unmount()
+    render(<Harness initial={rows} max={6} />)
     expect(addButton()).toBeNull()
-    expect(onChange).not.toHaveBeenCalled()
   })
 })
 
@@ -184,12 +208,14 @@ describe('WindowsEditor — addDisabled', () => {
 })
 
 describe('WindowsEditor — renderExtra', () => {
-  it('receives (win, i, setField) and setField writes to that window only', () => {
+  it('receives (win, i, setField) and setField replaces that window only', () => {
     const onChange = vi.fn()
     const seen = []
+    const before = [{ ...WEEKDAYS, volume: 30 }, { days: [6], on: '10:00', off: '14:00', volume: 40 }]
+    const snapshot = structuredClone(before)
     render(
       <Harness
-        initial={[{ ...WEEKDAYS, volume: 30 }, { days: [6], on: '10:00', off: '14:00', volume: 40 }]}
+        initial={before}
         onChangeSpy={onChange}
         renderExtra={(win, i, setField) => {
           seen.push({ win, i, setFieldIsFn: typeof setField === 'function' })
@@ -203,12 +229,18 @@ describe('WindowsEditor — renderExtra', () => {
     )
 
     expect(seen.map((s) => s.i)).toEqual([0, 1])
-    expect(seen[0].win).toEqual({ ...WEEKDAYS, volume: 30 })
-    expect(seen[1].win).toEqual({ days: [6], on: '10:00', off: '14:00', volume: 40 })
+    expect(seen[0].win).toBe(before[0]) // the row object itself, not a copy
+    expect(seen[1].win).toBe(before[1])
     expect(seen.every((s) => s.setFieldIsFn)).toBe(true)
 
     fireEvent.click(screen.getByRole('button', { name: 'volume 1' }))
-    expect(onChange).toHaveBeenLastCalledWith([
+    const next = onChange.mock.lastCall[0]
+
+    expect(next).not.toBe(before)
+    expect(next[1]).not.toBe(before[1])
+    expect(next[0]).toBe(before[0])
+    expect(before).toEqual(snapshot)
+    expect(next).toEqual([
       { ...WEEKDAYS, volume: 30 },
       { days: [6], on: '10:00', off: '14:00', volume: 99 },
     ])
@@ -247,6 +279,7 @@ describe('WindowsEditor — read-only', () => {
         windows={[{ days: [1, 3, 5], on: '06:00', off: '21:30', volume: 30, favorite_id: 'fav-1' }]}
         onChange={() => {}}
         editable={false}
+        max={MAX}
         summaryExtra={(win) => <> · volume {win.volume} · favourite {win.favorite_id || '(none)'}</>}
       />,
     )
@@ -259,6 +292,7 @@ describe('WindowsEditor — read-only', () => {
         windows={[{ days: [], on: '06:00', off: '21:30', volume: 0, favorite_id: '' }]}
         onChange={() => {}}
         editable={false}
+        max={MAX}
         summaryExtra={(win) => <> · volume {win.volume} · favourite {win.favorite_id || '(none)'}</>}
       />,
     )
@@ -271,6 +305,7 @@ describe('WindowsEditor — read-only', () => {
         windows={[{ ...WEEKDAYS }]}
         onChange={() => {}}
         editable={false}
+        max={MAX}
         renderExtra={() => <span data-testid="extra">extra</span>}
       />,
     )
@@ -282,7 +317,7 @@ describe('WindowsEditor — read-only', () => {
   })
 
   it('drops the "add one below" half of the empty state when not editable', () => {
-    const { unmount } = render(<WindowsEditor windows={[]} onChange={() => {}} editable={false} />)
+    const { unmount } = render(<WindowsEditor windows={[]} onChange={() => {}} editable={false} max={MAX} />)
     expect(screen.getByText('No windows yet.')).toBeTruthy()
     unmount()
     render(<Harness initial={[]} />)
@@ -290,7 +325,22 @@ describe('WindowsEditor — read-only', () => {
   })
 
   it('survives a non-array windows prop rather than throwing mid-render', () => {
-    render(<WindowsEditor windows={null} onChange={() => {}} editable={false} />)
+    render(<WindowsEditor windows={null} onChange={() => {}} editable={false} max={MAX} />)
     expect(screen.getByText('No windows yet.')).toBeTruthy()
+  })
+
+  it('survives a window with no days array in either branch', () => {
+    // A hand-written or partially-migrated row: days missing entirely.
+    const { unmount } = render(
+      <WindowsEditor windows={[{ on: '06:00', off: '07:00' }]} onChange={() => {}} editable={false} max={MAX} />,
+    )
+    expect(screen.getByText('No days · 06:00–07:00')).toBeTruthy()
+    unmount()
+
+    const onChange = vi.fn()
+    render(<Harness initial={[{ on: '06:00', off: '07:00' }]} onChangeSpy={onChange} />)
+    expect(dayPill('Mon').getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(dayPill('Mon'))
+    expect(onChange).toHaveBeenLastCalledWith([{ on: '06:00', off: '07:00', days: [1] }])
   })
 })

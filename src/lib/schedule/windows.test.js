@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { z } from 'zod'
-import { findWindowOverlap, WindowBase, NOT_SAME_BOUNDARY, windowsOverlapIssue } from './windows'
+import {
+  findWindowOverlap, WindowBase, NOT_SAME_BOUNDARY, windowsOverlapIssue,
+  toMinutes, HHMM, DAY_LABELS, BASE_WINDOW,
+} from './windows'
 
 // SONOS.12 — planAction resolves an overlapping pair of windows
 // earliest-starting-wins (windows is sorted ascending by on_at, then
@@ -154,5 +157,54 @@ describe('windowsOverlapIssue', () => {
     const added = []
     windowsOverlapIssue([{ days: [1], on: '06:00', off: '09:00' }], { addIssue: (i) => added.push(i) })
     expect(added).toEqual([])
+  })
+})
+
+// SHELLY-UI.1b — the remaining exports. toMinutes and HHMM are exported
+// because Shelly's schemas and its energy/plan code read the same clock
+// vocabulary; DAY_LABELS and BASE_WINDOW live here rather than in the
+// 'use client' editor so a Server Component can import them as real values.
+describe('toMinutes', () => {
+  it('converts a valid HH:MM to minutes past midnight', () => {
+    expect(toMinutes('00:00')).toBe(0)
+    expect(toMinutes('09:30')).toBe(570)
+    expect(toMinutes('23:59')).toBe(1439)
+  })
+
+  it('returns null for anything HHMM refuses, rather than a wrong number', () => {
+    // The point of validating with .test() before splitting: '24:00' and
+    // '9:30' would both parse arithmetically and silently produce a time
+    // the engine would then act on.
+    for (const bad of ['24:00', '9:30', '06:60', '', null, undefined, '0930', 'nope', '06:00:00']) {
+      expect(toMinutes(bad)).toBeNull()
+    }
+  })
+
+  it('agrees with HHMM about what is valid', () => {
+    for (const s of ['00:00', '09:30', '23:59']) expect(HHMM.test(s)).toBe(true)
+    for (const s of ['24:00', '9:30', '06:60']) expect(HHMM.test(s)).toBe(false)
+  })
+})
+
+describe('DAY_LABELS', () => {
+  it('is Mon..Sun numbered 1..7, inside WindowBase\'s own days bound', () => {
+    expect(DAY_LABELS.map((d) => d.n)).toEqual([1, 2, 3, 4, 5, 6, 7])
+    expect(DAY_LABELS.map((d) => d.label)).toEqual(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'])
+    const allDays = WindowBase.safeParse({ days: DAY_LABELS.map((d) => d.n), on: '06:00', off: '07:00' })
+    expect(allDays.success).toBe(true)
+  })
+})
+
+describe('BASE_WINDOW', () => {
+  it('is a valid window on its own — weekdays, 09:00-17:00', () => {
+    expect(BASE_WINDOW).toEqual({ days: [1, 2, 3, 4, 5], on: '09:00', off: '17:00' })
+    expect(WindowBase.safeParse(BASE_WINDOW).success).toBe(true)
+    expect(NOT_SAME_BOUNDARY.check(BASE_WINDOW)).toBe(true)
+  })
+
+  it('is frozen, so a careless spread-target can never redefine the default', () => {
+    expect(Object.isFrozen(BASE_WINDOW)).toBe(true)
+    expect(() => { 'use strict'; BASE_WINDOW.on = '05:00' }).toThrow()
+    expect(BASE_WINDOW.on).toBe('09:00')
   })
 })

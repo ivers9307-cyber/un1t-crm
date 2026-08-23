@@ -3,9 +3,8 @@
 // SHELLY-UI.1 — the window vocabulary (HHMM, the overlap detector, the
 // same-boundary rule) moved to src/lib/schedule/windows.js so the Shelly
 // surface validates a fixed window with the same code, not a copy. This
-// file kept its exported names and their meanings: findWindowOverlap is
-// re-exported (route.test.js and any future caller import it from here as
-// before), and Window/SchedulePayload compose exactly what they used to.
+// file keeps Window and SchedulePayload — same names, same meanings —
+// composing exactly what they used to.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -20,8 +19,6 @@ export const dynamic = 'force-dynamic'
 
 // Named so the query's cap and the truncation check can never drift apart.
 const MAX_SCHEDULES_PER_LOCATION = 50
-
-export { findWindowOverlap } from '@/lib/schedule/windows'
 
 // The refine comes AFTER the extend, and it has to: .refine() returns a
 // ZodEffects, which has no .extend(), so attaching the same-boundary rule

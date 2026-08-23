@@ -26,6 +26,7 @@ import {
 } from './schemas.js'
 import { LeadSchema } from './leads.js'
 import { MAX_STORED_EXAMPLE_CHARS, MAX_STORED_EXAMPLES } from '@/lib/hyrox/constants'
+import { WindowBase } from '@/lib/schedule/windows'
 
 // Wire .openapi() onto Zod so we can decorate inline-defined schemas.
 extendZodWithOpenApi(z)
@@ -4331,15 +4332,15 @@ registry.registerPath({
 // auth: connection/reachability trouble is reported IN a 200 body, since
 // "Sonos is unreachable" is a normal state for the config page to render.
 //
-// SonosWindow/SonosSchedulePayload mirror — hand-duplicated, not imported —
-// the Window/SchedulePayload Zod schemas exported from
-// src/app/api/sonos/schedules/route.js. This file derives its schemas from
-// src/lib (see file header), never from src/app/api, so the shapes live
-// here too; keep the two definitions in sync by hand.
-const SonosWindow = z.object({
-  days: z.array(z.number().int().min(1).max(7)).min(1),
-  on: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
-  off: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+// SonosWindow's BASE is the shared one — WindowBase from
+// @/lib/schedule/windows, the same object the route extends (SHELLY-UI.1),
+// so days/on/off cannot drift between the spec and what the API accepts.
+// Only the Sonos-specific extension (volume + favorite_id) is written here.
+// SonosSchedulePayload is still a hand-kept mirror of the SchedulePayload
+// exported from src/app/api/sonos/schedules/route.js: this file derives its
+// schemas from src/lib (see file header), never from src/app/api, so keep
+// those two in sync by hand.
+const SonosWindow = WindowBase.extend({
   volume: z.number().int().min(0).max(100),
   favorite_id: z.string().min(1).max(128),
 }).openapi('SonosWindow', {
