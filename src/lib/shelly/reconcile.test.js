@@ -605,6 +605,33 @@ describe('energy roll', () => {
     expect(db.writes.energyUpserts[0].rows[0]).toMatchObject({ wh_start: 1900, wh_total: 100 })
   })
 
+  // supabase-js sets `columns=` to the UNION of every row's keys, and a key a
+  // row does not carry is then inserted as NULL. rollDailyEnergy builds a
+  // continuing day by SPREADING yesterday's row and a new day from a clean
+  // literal — so the two branches must agree on their column set, or the day
+  // rollover starts NULLing whatever the round-trip happened to carry. They
+  // agree today; this pins it, because the failure is a nightly one.
+  it('emits the same columns whichever rollDailyEnergy branch built the row', async () => {
+    const { factory } = makeClientFactory({ get: ({ ids }) => ({ ok: true, statusCode: 200, body: ids.map((id) => item(id, [{ channel: 0, total: 1500 }])) }) })
+    const db = makeDb({
+      connections: [conn()],
+      devices: [
+        dev({ id: 'continuing', device_id: 'mac1', schedule_mode: 'none' }),
+        dev({ id: 'fresh', device_id: 'mac2', schedule_mode: 'none' }),
+      ],
+      energy: [{ device_id: 'continuing', location_id: 'loc-A', day: '2026-07-06', wh_start: '1000.000', wh_last: '1400.000', wh_total: '400.000', samples: 5, resets: 0, first_sample_at: iso(NOW - HOUR), last_sample_at: iso(NOW - 60_000) }],
+    })
+
+    await runShellyReconcile(db, deps({ makeClient: factory }))
+
+    const [a, b] = db.writes.energyUpserts[0].rows
+    expect(Object.keys(a).sort()).toEqual(Object.keys(b).sort())
+    expect(Object.keys(a).sort()).toEqual([
+      'day', 'device_id', 'first_sample_at', 'last_sample_at', 'location_id',
+      'resets', 'samples', 'wh_last', 'wh_start', 'wh_total',
+    ])
+  })
+
   it('never samples an offline device', async () => {
     const { factory } = makeClientFactory({ get: ({ ids }) => ({ ok: true, statusCode: 200, body: ids.map((id) => item(id, [{ channel: 0, total: 1500 }], false)) }) })
     const db = makeDb({ connections: [conn()], devices: [dev({ device_id: 'mac1', schedule_mode: 'none' })] })
