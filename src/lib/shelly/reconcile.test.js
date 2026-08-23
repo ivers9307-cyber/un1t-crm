@@ -9,10 +9,14 @@ import {
   MAX_DEVICES,
   READ_BATCH,
   ACTION_NEEDED_RETRY_MS,
+  ERROR_RETRY_MS,
   ENERGY_LOOKBACK_DAYS,
+  ENERGY_ROW_CAP,
   AUTH_ERROR,
   HOST_ERROR,
+  RATE_LIMIT_ERROR,
 } from './reconcile'
+import { MIN_GAP_MS } from './client'
 import { logWarn, logError } from '@/lib/log'
 
 vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
@@ -91,7 +95,7 @@ const settledState = (at = iso(NOW - 60_000)) => ({
 function makeDb(state = {}) {
   const { connections = [], devices = [], energy = [], occurrences = [], fail = {} } = state
   const writes = { deviceUpdates: [], connectionUpdates: [], energyUpserts: [] }
-  const reads = { fromCalls: [], occurrenceBounds: null, energyBounds: null, deviceLimits: [] }
+  const reads = { fromCalls: [], occurrenceBounds: null, energyBounds: null, deviceLimits: [], connectionCalls: null, energyCalls: null }
 
   const chain = (op, args, run) => {
     const calls = [[op, args]]
@@ -111,7 +115,10 @@ function makeDb(state = {}) {
       reads.fromCalls.push(table)
       if (table === 'shelly_connections') {
         return {
-          select: (...a) => chain('select', a, () => (fail.connections ? err(fail.connections) : { data: connections, error: null })),
+          select: (...a) => chain('select', a, (calls) => {
+            reads.connectionCalls = calls
+            return fail.connections ? err(fail.connections) : { data: connections, error: null }
+          }),
           update: (patch) => chain('update', [patch], (calls) => {
             writes.connectionUpdates.push({ id: arg(calls, 'eq', 'id'), patch })
             return fail.connectionUpdate ? { error: { message: fail.connectionUpdate } } : { error: null }
@@ -138,8 +145,17 @@ function makeDb(state = {}) {
           select: (...a) => chain('select', a, (calls) => {
             const loc = arg(calls, 'eq', 'location_id')
             reads.energyBounds = [arg(calls, 'gte', 'day'), arg(calls, 'lte', 'day')]
+            reads.energyCalls = calls
             if (fail.energy) return err(fail.energy)
-            return { data: energy.filter((r) => r.location_id === loc), error: null }
+            const ids = arg(calls, 'in', 'device_id') || []
+            // Newest first, mirroring the .order() the reconcile now asks for —
+            // so a test that relies on the ordering is testing the real shape.
+            return {
+              data: energy
+                .filter((r) => r.location_id === loc && ids.includes(r.device_id))
+                .sort((a, b) => String(b.day).localeCompare(String(a.day))),
+              error: null,
+            }
           }),
           upsert: (rows, opts) => chain('upsert', [rows, opts], () => {
             writes.energyUpserts.push({ rows, opts })
@@ -162,6 +178,7 @@ function makeDb(state = {}) {
   return db
 }
 
+const callArgs = (calls, method) => calls.find((c) => c[0] === method)?.[1]
 const stateWritesOf = (db) => db.writes.deviceUpdates.filter((w) => 'last_state' in w.patch)
 const stampsOf = (db) => db.writes.deviceUpdates.filter((w) => 'last_applied' in w.patch)
 
@@ -344,12 +361,64 @@ describe('runShellyReconcile — the sweep', () => {
     expect(peak()).toBe(1)
   })
 
+  // Each location builds a FRESH client, and a fresh client believes it has
+  // never called — so without an explicit gap the next location's first request
+  // lands inside the previous one's second and buys a guaranteed 429 + retry, on
+  // every handoff, forever.
+  it('sleeps one gap when handing an account budget between two of its locations', async () => {
+    const sameKey = 'k'.repeat(64)
+    const sleep = vi.fn(async () => {})
+    const devices = [
+      dev({ id: 'dA', location_id: 'loc-A', device_id: 'aaa1', schedule_mode: 'none' }),
+      dev({ id: 'dB', location_id: 'loc-B', device_id: 'bbb1', schedule_mode: 'none' }),
+    ]
+    const shared = makeDb({
+      connections: [
+        conn({ id: 'c1', location_id: 'loc-A', auth_key_fingerprint: sameKey }),
+        conn({ id: 'c2', location_id: 'loc-B', auth_key_fingerprint: sameKey }),
+      ],
+      devices,
+    })
+    await runShellyReconcile(shared, deps({ makeClient: makeClientFactory().factory, sleep }))
+    expect(sleep.mock.calls.filter((c) => c[0] === MIN_GAP_MS)).toHaveLength(1)
+
+    // Different accounts are different budgets: no gap owed, and none paid.
+    sleep.mockClear()
+    const split = makeDb({
+      connections: [
+        conn({ id: 'c1', location_id: 'loc-A', auth_key_fingerprint: 'a'.repeat(64) }),
+        conn({ id: 'c2', location_id: 'loc-B', auth_key_fingerprint: 'b'.repeat(64) }),
+      ],
+      devices,
+    })
+    await runShellyReconcile(split, deps({ makeClient: makeClientFactory().factory, sleep }))
+    expect(sleep.mock.calls.filter((c) => c[0] === MIN_GAP_MS)).toHaveLength(0)
+  })
+
+  it('parks a failing connection for the shorter window, then sweeps it', async () => {
+    expect(ERROR_RETRY_MS).toBeLessThan(ACTION_NEEDED_RETRY_MS)
+    const recent = makeDb({ connections: [conn({ status: 'error', last_error_at: iso(NOW - 2 * 60_000) })], devices: [dev()] })
+    expect(await runShellyReconcile(recent, deps({ makeClient: makeClientFactory().factory }))).toMatchObject({ locations: 0, parked: 1 })
+
+    const stale = makeDb({ connections: [conn({ status: 'error', last_error_at: iso(NOW - 6 * 60_000) })], devices: [dev()] })
+    expect(await runShellyReconcile(stale, deps({ makeClient: makeClientFactory().factory }))).toMatchObject({ locations: 1, parked: 0 })
+  })
+
+  // A budget shortfall must rotate through the estate, not starve the same tail.
+  it('sweeps oldest-success-first, deterministically', async () => {
+    const db = makeDb({ connections: [conn()], devices: [] })
+    await runShellyReconcile(db, deps({ makeClient: makeClientFactory().factory }))
+    const orders = db.reads.connectionCalls.filter((c) => c[0] === 'order').map((c) => c[1])
+    expect(orders).toEqual([['last_ok_at', { ascending: true, nullsFirst: true }], ['created_at']])
+    expect(callArgs(db.reads.connectionCalls, 'select')[0]).toContain('last_ok_at')
+  })
+
   it('makes no call at all once the budget is spent, and says so once', async () => {
     const { factory } = makeClientFactory()
     const db = makeDb({ connections: [conn()], devices: [dev()] })
     const out = await runShellyReconcile(db, deps({ makeClient: factory, budgetMs: -1000 }))
     expect(factory).not.toHaveBeenCalled()
-    expect(out).toMatchObject({ ok: true, locations: 1, reads: 0, applied: 0, failed: 0 })
+    expect(out).toMatchObject({ ok: true, locations: 1, reads: 0, applied: 0, failed: 0, deadlineSkipped: 1 })
     expect(warned('time budget exhausted')).toHaveLength(1)
     expect(db.writes.connectionUpdates).toEqual([])
   })
@@ -421,19 +490,56 @@ describe('reads', () => {
     expect(byId).toEqual({ heard: true, silent: false })
   })
 
-  // A failed read is not evidence about anything. Batch 1 fails, batch 2 does not.
+  // A failed read is not evidence about anything. Batch 2 fails AFTER batch 1
+  // succeeded, which is the blip case: the loop carries on (only a failure with
+  // no success behind it is treated as a black hole) and batch 1's devices are
+  // still written.
   it('never writes a device whose batch FAILED, and still writes the batches that worked', async () => {
     const rows = Array.from({ length: 12 }, (_, i) =>
       dev({ id: `d${i}`, device_id: `mac${String(i).padStart(4, '0')}`, schedule_mode: 'none' }))
     const { factory } = makeClientFactory({
-      get: ({ ids, n }) => (n === 1 ? { ok: false, kind: 'network', statusCode: 0 } : okGet(ids)),
+      get: ({ ids, n }) => (n === 2 ? { ok: false, kind: 'network', statusCode: 0 } : okGet(ids)),
     })
     const db = makeDb({ connections: [conn()], devices: rows })
 
     const out = await runShellyReconcile(db, deps({ makeClient: factory }))
 
-    expect(stateWritesOf(db).map((w) => w.id)).toEqual(['d10', 'd11'])
-    expect(out).toMatchObject({ reads: 2, readFailures: 1, stateWrites: 2 })
+    expect(stateWritesOf(db).map((w) => w.id)).toEqual(rows.slice(0, 10).map((r) => r.id))
+    expect(out).toMatchObject({ reads: 2, readFailures: 1, stateWrites: 10 })
+  })
+
+  // The other half of that rule: with NO success behind it, one failure is the
+  // account not answering, and the remaining batches would each spend a slot of
+  // the shared budget learning the same thing.
+  it('stops at the first failed batch when nothing has succeeded, and sends no commands', async () => {
+    const rows = Array.from({ length: 45 }, (_, i) =>
+      dev({ id: `d${i}`, device_id: `mac${String(i).padStart(4, '0')}` }))
+    const { factory, calls } = makeClientFactory({ get: () => ({ ok: false, kind: 'network', statusCode: 0 }) })
+    const db = makeDb({ connections: [conn()], devices: rows })
+
+    const out = await runShellyReconcile(db, deps({ makeClient: factory }))
+
+    expect(calls.get).toHaveLength(1)
+    expect(calls.setGroups).toEqual([])
+    expect(out).toMatchObject({ reads: 1, readFailures: 1, planned: 0, applied: 0, stateWrites: 0 })
+    expect(warned('no read succeeded')).toHaveLength(1)
+    expect(db.writes.connectionUpdates[0].patch).toMatchObject({ status: 'error' })
+  })
+
+  it('reads one id for a device adopted at two channels, and commands both', async () => {
+    const { factory, calls } = makeClientFactory({
+      get: ({ ids }) => ({ ok: true, statusCode: 200, body: ids.map((id) => item(id, [{ channel: 0 }, { channel: 1 }])) }),
+    })
+    const db = makeDb({
+      connections: [conn()],
+      devices: [dev({ id: 'ch0', device_id: 'mac1', channel: 0 }), dev({ id: 'ch1', device_id: 'mac1', channel: 1 })],
+    })
+
+    const out = await runShellyReconcile(db, deps({ makeClient: factory }))
+
+    expect(calls.get).toEqual([{ loc: 'loc-A', ids: ['mac1'] }])
+    expect(calls.setGroups[0].gids).toEqual(['mac1_0', 'mac1_1'])
+    expect(out).toMatchObject({ applied: 2, reads: 1 })
   })
 
   it('counts a 429 and a retried success alike', async () => {
@@ -445,9 +551,35 @@ describe('reads', () => {
 
   it('shouts when a whole location reads offline (the unverified v2 online field)', async () => {
     const { factory } = makeClientFactory({ get: ({ ids }) => ({ ok: true, statusCode: 200, body: ids.map((id) => item(id, [{ channel: 0 }], false)) }) })
-    const db = makeDb({ connections: [conn()], devices: [dev({ schedule_mode: 'none' })] })
+    const db = makeDb({ connections: [conn()], devices: [dev({ schedule_mode: 'none', last_state: settledState() })] })
     await runShellyReconcile(db, deps({ makeClient: factory }))
     expect(warned('every device reads offline')).toHaveLength(1)
+  })
+
+  it('names the id echo when every covered id comes back unmentioned', async () => {
+    const { factory } = makeClientFactory({ get: () => ({ ok: true, statusCode: 200, body: [item('someoneelse')] }) })
+    const db = makeDb({ connections: [conn()], devices: [dev({ device_id: 'mac1', schedule_mode: 'none', last_state: settledState() })] })
+    await runShellyReconcile(db, deps({ makeClient: factory }))
+    expect(warned('check the v2 id echo')).toHaveLength(1)
+    expect(warned('check the v2 online field')).toHaveLength(0)
+  })
+
+  // Both diagnostics fire on the TRANSITION and then go quiet: a studio that is
+  // genuinely dark overnight must not log the same line 1,440 times, or the line
+  // that means "the integration is broken" is the one everybody filters out.
+  it('says nothing on the next tick, once every device is already known offline', async () => {
+    const dark = { ...settledState(), online: false }
+    for (const script of [
+      { get: ({ ids }) => ({ ok: true, statusCode: 200, body: ids.map((id) => item(id, [{ channel: 0 }], false)) }),
+        fragment: 'every device reads offline' },
+      { get: () => ({ ok: true, statusCode: 200, body: [item('someoneelse')] }), fragment: 'check the v2 id echo' },
+    ]) {
+      vi.clearAllMocks()
+      const { factory } = makeClientFactory({ get: script.get })
+      const db = makeDb({ connections: [conn()], devices: [dev({ device_id: 'mac1', schedule_mode: 'none', last_state: dark })] })
+      await runShellyReconcile(db, deps({ makeClient: factory }))
+      expect(warned(script.fragment)).toHaveLength(0)
+    }
   })
 
   it('warns and slices at the device cap', async () => {
@@ -632,6 +764,40 @@ describe('energy roll', () => {
     ])
   })
 
+  it('scopes the window to THESE devices, newest day first, with a decidable cap', async () => {
+    const { factory } = makeClientFactory()
+    const db = makeDb({
+      connections: [conn()],
+      devices: [dev({ id: 'd1', device_id: 'mac1', schedule_mode: 'none' }), dev({ id: 'd2', device_id: 'mac2', schedule_mode: 'none' })],
+    })
+    await runShellyReconcile(db, deps({ makeClient: factory }))
+
+    const calls = db.reads.energyCalls
+    expect(callArgs(calls, 'in')).toEqual(['device_id', ['d1', 'd2']])
+    expect(callArgs(calls, 'order')).toEqual(['day', { ascending: false }])
+    expect(callArgs(calls, 'limit')).toEqual([2 * (ENERGY_LOOKBACK_DAYS + 1) + 1])
+    // An explicit projection, never '*' — see ENERGY_COLUMNS: the round-trip row
+    // is spread straight back into the bulk upsert.
+    const projection = callArgs(calls, 'select')[0]
+    expect(projection).not.toBe('*')
+    expect(projection).toBe('device_id, location_id, day, wh_start, wh_last, wh_total, samples, resets, first_sample_at, last_sample_at')
+    // The worst case a full location can produce still clears PostgREST's 1k cap.
+    expect(ENERGY_ROW_CAP).toBe(MAX_DEVICES * (ENERGY_LOOKBACK_DAYS + 1))
+    expect(ENERGY_ROW_CAP).toBeLessThan(1000)
+  })
+
+  it('says so when the window returns more rows than the location can own', async () => {
+    const { factory } = makeClientFactory()
+    const rows = Array.from({ length: ENERGY_LOOKBACK_DAYS + 2 }, (_, i) => ({
+      device_id: 'd1', location_id: 'loc-A', day: `2026-06-${String(20 + i).padStart(2, '0')}`,
+      wh_start: '0', wh_last: '0', wh_total: '0', samples: 1, resets: 0,
+      first_sample_at: iso(NOW - HOUR), last_sample_at: iso(NOW - HOUR),
+    }))
+    const db = makeDb({ connections: [conn()], devices: [dev({ id: 'd1', device_id: 'mac1', schedule_mode: 'none' })], energy: rows })
+    await runShellyReconcile(db, deps({ makeClient: factory }))
+    expect(warned('more rows than this location can own')).toHaveLength(1)
+  })
+
   it('never samples an offline device', async () => {
     const { factory } = makeClientFactory({ get: ({ ids }) => ({ ok: true, statusCode: 200, body: ids.map((id) => item(id, [{ channel: 0, total: 1500 }], false)) }) })
     const db = makeDb({ connections: [conn()], devices: [dev({ device_id: 'mac1', schedule_mode: 'none' })] })
@@ -802,6 +968,35 @@ describe('connection status', () => {
     expect(out).toMatchObject({ authFailures: 1, failed: 1, applied: 0 })
   })
 
+  it('leaves a rate-limited batch unstamped and names the budget in the status', async () => {
+    const { factory } = makeClientFactory({ setGroups: () => ({ ok: false, kind: 'rate_limited', statusCode: 429 }) })
+    const db = makeDb({ connections: [conn()], devices: [dev({ id: 'a', device_id: 'mac1' }), dev({ id: 'b', device_id: 'mac2' })] })
+
+    const out = await runShellyReconcile(db, deps({ makeClient: factory }))
+
+    expect(stampsOf(db)).toEqual([])
+    expect(out).toMatchObject({ applied: 0, failed: 2, rateLimited: 1 })
+    // The read succeeded, so the account is REACHABLE — but our commands did not
+    // land, and a studio whose relays never moved must not show a green badge.
+    expect(db.writes.connectionUpdates[0].patch).toMatchObject({ status: 'error', last_error: RATE_LIMIT_ERROR })
+    expect(db.writes.connectionUpdates[0].patch).not.toHaveProperty('last_ok_at')
+  })
+
+  it('a bad host on the COMMAND path outranks a read that worked', async () => {
+    const { factory } = makeClientFactory({ setGroups: () => ({ ok: false, kind: 'config', statusCode: 0 }) })
+    const db = makeDb({ connections: [conn()], devices: [dev({ device_id: 'mac1' })] })
+    await runShellyReconcile(db, deps({ makeClient: factory }))
+    expect(db.writes.connectionUpdates[0].patch).toMatchObject({ status: 'action_needed', last_error: HOST_ERROR })
+  })
+
+  it('truncates a device error code rather than logging a body', async () => {
+    const long = 'X'.repeat(200)
+    const { factory } = makeClientFactory({ setGroups: () => ({ ok: true, statusCode: 200, failed: { mac1_0: long } }) })
+    const db = makeDb({ connections: [conn()], devices: [dev({ device_id: 'mac1' })] })
+    await runShellyReconcile(db, deps({ makeClient: factory }))
+    expect(warned('command failed')[0][2].code).toHaveLength(64)
+  })
+
   it('logs but survives a failed connection status write', async () => {
     const db = makeDb({ connections: [conn()], devices: [dev({ device_id: 'mac1', schedule_mode: 'none' })], fail: { connectionUpdate: 'pg down' } })
     const out = await runShellyReconcile(db, deps({ makeClient: makeClientFactory().factory }))
@@ -906,6 +1101,13 @@ describe('runNowForDevice', () => {
       now: () => NOW, makeClient: factory, loadOccurrences: async () => ({ ok: false, error: 'pg down' }),
     })
     expect(out).toEqual({ ok: false, kind: 'occurrences', error: 'pg down' })
+    expect(calls.setSwitch).toEqual([])
+  })
+
+  it('refuses a device row it could not address', async () => {
+    const { factory, calls } = makeClientFactory()
+    const out = await runNowForDevice(makeDb({}), conn(), dev({ channel: null }), { now: () => NOW, makeClient: factory })
+    expect(out).toEqual({ ok: false, kind: 'bad_device' })
     expect(calls.setSwitch).toEqual([])
   })
 

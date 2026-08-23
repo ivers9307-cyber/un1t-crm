@@ -2,16 +2,29 @@
 // modules (client, status, plan, energy) are wired to the database, so it is
 // also where every "who owns this decision" answer lives.
 //
-// SHAPE OF A TICK: load every connection → park the ones a human must fix →
-// group them BY ACCOUNT → run the groups with a small concurrency pool. Within
-// a group everything is serial, because Shelly's rate limit is 1 request per
-// second PER ACCOUNT and an owner with two studios has two connection rows on
-// ONE budget. The client paces itself but knows nothing about its siblings; if
-// two same-account locations ran side by side they would each sit inside the
-// limit and together breach it, and every second call would come back 429.
-// Grouping is what makes the client's pacing true.
+// SHAPE OF A TICK: load every connection, oldest success first → park the ones
+// a human must fix and the ones that just failed → group them BY ACCOUNT → run
+// the groups with a small concurrency pool. Within a group everything is
+// serial, because Shelly's rate limit is 1 request per second PER ACCOUNT and an
+// owner with two studios has two connection rows on ONE budget. The client paces
+// itself but knows nothing about its siblings; if two same-account locations ran
+// side by side they would each sit inside the limit and together breach it, and
+// every second call would come back 429.
 //
-// THE FIVE THINGS THIS FILE IS CAREFUL ABOUT
+// GROUPING ALONE IS NOT ENOUGH, and this is the part that is easy to get wrong.
+// Each location builds its OWN client, and a fresh client starts with
+// lastCallAt = -Infinity — it believes it has never called. So location B's
+// first request goes out milliseconds after location A's last one, inside the
+// same account's budget, and earns a 429 plus a 1.1 s retry at EVERY handoff, on
+// every tick, forever — with `rateLimited` never once reading zero. The group
+// loop therefore sleeps MIN_GAP_MS between consecutive locations itself. An idle
+// location still pays that gap; one second is the cheap side of the trade.
+//
+// ORDERING IS THE OTHER HALF. Connections are swept oldest-`last_ok_at` first,
+// so a budget shortfall rotates through the estate instead of starving the same
+// tail of the list every single minute.
+//
+// THE SIX THINGS THIS FILE IS CAREFUL ABOUT
 //
 //  1. BRANCH ON `kind`, NEVER ON `statusCode`. The client's statusCode 0 is
 //     overloaded — network, bad host, caller bugs and the empty-list
@@ -42,6 +55,19 @@
 //     'error' — a self-inflicted skip is not the Shelly cloud being unreachable,
 //     and a false 'error' badge is indistinguishable from a real outage.
 //
+//  6. A FAILING ACCOUNT IS BACKED OFF, NEVER HAMMERED. Three brakes, because
+//     one broken studio must not spend the budget its healthy siblings share.
+//     A host that black-holes stops the read loop at the FIRST failure — with
+//     no success behind it, the remaining batches fail identically — and skips
+//     that tick's commands too. An 'error' connection is then left alone for
+//     ERROR_RETRY_MS, and an 'action_needed' one for ACTION_NEEDED_RETRY_MS.
+//     The operability rule underneath all three: a repeated failure must get
+//     QUIETER, not louder. The same reasoning gates the two diagnostic warnings
+//     below on a device having actually CHANGED state — a genuinely dark studio
+//     would otherwise log the same line 1,440 times a night, which is how the
+//     line that means "the integration is broken" becomes the one everybody
+//     filters out.
+//
 // TESTABILITY: every dependency is injected (`now`, `sleep`, `makeClient`,
 // `loadOccurrences`), house pattern. reconcileLocation and refreshLocationState
 // are exported because PR 2's refresh route reads state through the same code
@@ -52,7 +78,7 @@ import { logWarn, logError } from '@/lib/log'
 import { mapWithConcurrency } from '@/lib/concurrency'
 import { addDaysISO } from '@/lib/dublin-time'
 import { resolveTz, isValidTz, dayStrInTz, dayStartMsInTz } from '@/lib/tz-time'
-import { createShellyClient, MAX_GET_IDS, redactSecret } from './client'
+import { createShellyClient, MAX_GET_IDS, MIN_GAP_MS, redactSecret } from './client'
 import { normaliseGetItems, stateFromReading, stateChanged, groupId } from './status'
 import { planDeviceAction, isLiveOverride } from './plan'
 import { rollDailyEnergy } from './energy'
@@ -76,6 +102,17 @@ export const READ_BATCH = MAX_GET_IDS
 // spends the account's whole 1 req/sec budget on a call that cannot succeed.
 export const ACTION_NEEDED_RETRY_MS = 15 * 60_000
 
+// The shorter brake, for a connection that is merely FAILING rather than
+// misconfigured: an outage nobody has to fix, so it is retried far sooner — but
+// not every 60 seconds, which for a black-holed host is 1,440 pointless
+// requests a day out of an account budget its siblings are sharing.
+export const ERROR_RETRY_MS = 5 * 60_000
+
+// Only used when `sleep` is not injected. The client keeps its own copy for its
+// own pacing; this one is for the gap BETWEEN two locations of one account,
+// which no single client can see.
+const realSleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
 // The energy carry window. rollDailyEnergy can only bank a gap into today while
 // the caller still hands it the last row, so THIS WINDOW IS THE REACH of that
 // promise (energy.js's fourth obligation spells it out). The row cap moves with
@@ -83,7 +120,22 @@ export const ACTION_NEEDED_RETRY_MS = 15 * 60_000
 // row the window can hold, and the product must stay under PostgREST's 1k
 // ceiling — widen the window and the cap widens with it, no second edit.
 export const ENERGY_LOOKBACK_DAYS = 7
-const ENERGY_ROW_CAP = MAX_DEVICES * (ENERGY_LOOKBACK_DAYS + 1)
+
+// The ceiling the per-location limit can ever reach — every device at a full
+// location, every day of the window. The select itself asks for the row count
+// THIS location can actually produce (devices × days, + 1 sentinel), so a
+// two-device studio reads two devices' rows rather than a fixed 400; this
+// constant exists to pin that the worst case still clears PostgREST's 1k cap by
+// a wide margin, and it moves with the window automatically.
+export const ENERGY_ROW_CAP = MAX_DEVICES * (ENERGY_LOOKBACK_DAYS + 1)
+
+// An explicit projection, never '*'. rollDailyEnergy's continuing-day branch
+// spreads the row it is handed straight back into the bulk upsert, and
+// supabase-js sends the UNION of every row's keys as `columns=` — so a column
+// added to this table later would ride the round-trip into the upsert on the
+// continuing rows and be written NULL on the new-day ones, silently, on the
+// nightly rollover only. The list is the write shape; keep the two together.
+const ENERGY_COLUMNS = 'device_id, location_id, day, wh_start, wh_last, wh_total, samples, resets, first_sample_at, last_sample_at'
 
 // The most occurrences one location can hold in a day, several times over.
 const MAX_OCCURRENCES = 500
@@ -93,10 +145,17 @@ const MAX_OCCURRENCES = 500
 // (which could carry the key) may reach them.
 export const AUTH_ERROR = 'Shelly rejected the stored auth key — paste a new one from the Shelly app'
 export const HOST_ERROR = 'Shelly host is invalid — re-enter it from the Shelly app'
+// Distinct from 'unreachable' on purpose: the account IS reachable, we are over
+// its budget. Told the wrong one, an owner goes looking at their wifi.
+export const RATE_LIMIT_ERROR = 'Shelly rate limit hit — over the 1 req/s account budget'
 
 const COUNTER_KEYS = [
   'devices', 'reads', 'readFailures', 'rateLimited', 'stateWrites', 'energyWrites',
   'planned', 'applied', 'failed', 'authFailures', 'skippedClass', 'crashed',
+  // A location the tick never got to. Counted separately from `crashed` because
+  // it is the sweep's own budget talking, not the location failing — and from
+  // `failed`, which means a command we owed and did not send.
+  'deadlineSkipped',
 ]
 const zeroCounters = () => Object.fromEntries(COUNTER_KEYS.map((k) => [k, 0]))
 const addCounters = (into, from) => {
@@ -210,6 +269,11 @@ export async function refreshLocationState(db, conn, devices, ctx = {}) {
   let config = false
   let anyOk = false
   let lastKind = null
+  let stalled = false
+  // A call that FAILED for budget, as opposed to one the client's retry
+  // absorbed. The counter above cannot answer this — it deliberately conflates
+  // the two — and the connection status needs the distinction.
+  let budgetHit = false
   let deadlineWarned = false
 
   for (let i = 0; i < ids.length; i += READ_BATCH) {
@@ -230,10 +294,18 @@ export async function refreshLocationState(db, conn, devices, ctx = {}) {
     if (!res.ok) {
       readFailures++
       lastKind = res.kind
+      if (res.kind === 'rate_limited') budgetHit = true
       // Both mean every remaining batch would fail identically: a wrong key is
       // wrong for all ten batches, and a bad host never reaches the network.
       if (res.kind === 'auth') { auth = true; break }
       if (res.kind === 'config') { config = true; break }
+      // NOTHING HAS SUCCEEDED YET, so this is not one batch being unlucky — it
+      // is the account not answering. Every remaining batch would spend a slot
+      // of the shared budget to learn the same thing, and so would the command
+      // call after them. Stop, and tell the caller to skip the commands.
+      // A failure AFTER a success is treated as the blip it probably is: the
+      // loop carries on and the batches that do work are still written.
+      if (!anyOk && res.kind !== 'device') { stalled = true; break }
       continue
     }
     anyOk = true
@@ -273,15 +345,26 @@ export async function refreshLocationState(db, conn, devices, ctx = {}) {
     }
   }
 
-  // The v2 `online` field is one of the shapes status.js was written against
-  // docs rather than a live account (see its header). A whole location reading
-  // offline while the API answers 200 is what a wrong field name looks like,
-  // and without this line it looks like a flat gym instead.
-  if (anyOk && items > 0 && ![...readings.values()].some((r) => r.online)) {
+  // TWO SHAPES status.js was written against docs rather than a live account
+  // (see its header): the v2 `online` field, and the id the response echoes
+  // back. Each failure mode looks EXACTLY like a quiet gym from the database
+  // side, so each gets its own line — but only on the tick the picture changes.
+  //
+  // The gate is "some affected device was online before this tick". Without it,
+  // a studio that really is dark overnight logs one of these every minute until
+  // morning, and the warning stops being read. Header rule 6.
+  const wasOnline = (match) => devices.some((d) => match(idKey(d?.device_id)) && d.last_state?.online === true)
+  const unanswered = [...covered].filter((id) => !readings.has(id))
+  if (anyOk && covered.size > 0 && unanswered.length === covered.size && wasOnline((k) => covered.has(k))) {
+    // Every id we asked about came back unmentioned. A location that had really
+    // gone dark would still be LISTED, saying `online: false` — so this is the
+    // response echoing ids we cannot match, not devices dropping off.
+    logWarn(MODULE, 'covered ids returned no readings — check the v2 id echo', { locationId, asked: covered.size, items })
+  } else if (anyOk && items > 0 && ![...readings.values()].some((r) => r.online) && wasOnline((k) => readings.has(k))) {
     logWarn(MODULE, 'every device reads offline — check the v2 online field', { locationId, items })
   }
 
-  return { readings, covered, client, nowIso, reads, readFailures, rateLimited, stateWrites, auth, config, anyOk, lastKind }
+  return { readings, covered, client, nowIso, reads, readFailures, rateLimited, stateWrites, auth, config, anyOk, lastKind, stalled, budgetHit }
 }
 
 /**
@@ -332,6 +415,7 @@ export async function reconcileLocation(db, conn, ctx = {}) {
   counters.devices = devices.length
 
   if (now() > deadlineAt) {
+    counters.deadlineSkipped = 1
     logWarn(MODULE, 'time budget exhausted — location skipped', { locationId })
     return counters
   }
@@ -340,7 +424,7 @@ export async function reconcileLocation(db, conn, ctx = {}) {
   const state = await refreshLocationState(db, conn, devices, {
     now, nowMs, sleep: ctx.sleep, makeClient: ctx.makeClient, deadlineAt,
   })
-  const { client, nowIso, readings } = state
+  const { client, nowIso, readings, stalled } = state
   counters.reads = state.reads
   counters.readFailures = state.readFailures
   counters.rateLimited = state.rateLimited
@@ -349,6 +433,16 @@ export async function reconcileLocation(db, conn, ctx = {}) {
   let anyOk = state.anyOk
   let lastKind = state.lastKind
   let auth = state.auth
+  // A bad host discovered on the COMMAND path. Kept separate from `anyOk` so a
+  // read that worked cannot mark a connection 'connected' on a tick whose
+  // command was refused for a host the client would not even dial.
+  let hostBad = false
+  // Likewise for a hard 429 anywhere this tick. A read succeeding proves the
+  // account is REACHABLE, which is not the same as our commands landing — and a
+  // studio whose relays did not move must not be showing a green badge. It also
+  // leaves last_ok_at unadvanced, which puts this connection at the front of the
+  // next sweep's rotation, exactly where a location losing commands belongs.
+  let budgetHit = state.budgetHit
   // Whether we made (or tried to make) an HTTP call at all. Header rule 5: with
   // no attempt there is no evidence, so the connection status is not touched.
   let attempted = state.reads > 0
@@ -367,13 +461,22 @@ export async function reconcileLocation(db, conn, ctx = {}) {
   }
 
   // ---- 4. energy ----------------------------------------------------------
+  // Scoped to THESE devices, projected to the write shape, newest day first.
+  // Each of those matters: `.in` keeps a location's read proportional to what it
+  // adopted instead of a flat 400-row scan, the projection is the upsert's
+  // column contract (see ENERGY_COLUMNS), and the ordering means that if the cap
+  // ever does truncate it drops the OLDEST rows — the per-device baseline this
+  // step actually needs survives.
+  const energyExpected = devices.length * (ENERGY_LOOKBACK_DAYS + 1)
   const { data: energyRows, error: energyErr } = await db
     .from('shelly_energy_daily')
-    .select('*')
+    .select(ENERGY_COLUMNS)
     .eq('location_id', locationId)
+    .in('device_id', devices.map((d) => d.id))
     .gte('day', addDaysISO(dateStr, -ENERGY_LOOKBACK_DAYS))
     .lte('day', dateStr)
-    .limit(ENERGY_ROW_CAP)
+    .order('day', { ascending: false })
+    .limit(energyExpected + 1)
   if (energyErr) {
     // The roll is SKIPPED, not run against an empty baseline. rollDailyEnergy
     // with no prevRow opens a fresh day (samples 1, wh_total 0), and the upsert
@@ -386,6 +489,12 @@ export async function reconcileLocation(db, conn, ctx = {}) {
     // shelly_energy_daily.device_id, which is the shelly_devices.id UUID (the
     // FK), while `readings` is keyed on shelly_devices.device_id, the Shelly
     // MAC. Same column name, different id space.
+    // The + 1 row is a sentinel: more rows than this location can possibly own
+    // means the window returned something we cannot account for, and the
+    // baseline might be the row that got dropped. Decidable, not guessed.
+    if ((energyRows || []).length > energyExpected) {
+      logWarn(MODULE, 'energy window returned more rows than this location can own', { locationId, expected: energyExpected })
+    }
     const latest = new Map()
     for (const r of energyRows || []) {
       const cur = latest.get(r.device_id)
@@ -435,8 +544,13 @@ export async function reconcileLocation(db, conn, ctx = {}) {
     }
   }
 
+  if (stalled) logWarn(MODULE, 'no read succeeded — commands skipped this tick', { locationId, kind: lastKind })
+
   const plans = []
-  for (const d of devices) {
+  // A black-holed account is planned for but not commanded (header rule 6):
+  // iterating nothing leaves `planned` at 0, so the counters never claim work
+  // that was never attempted, and no stamp is written for a command not sent.
+  for (const d of stalled ? [] : devices) {
     // With no timetable, a class device's windows resolve empty and rule 4
     // would CLOSE anything we had opened — a failed select would switch the
     // studio off. Skipping is the fail-open. A LIVE override is exempt: a
@@ -490,15 +604,18 @@ export async function reconcileLocation(db, conn, ctx = {}) {
 
     attempted = true
     const res = await client.setGroups(batch.map((x) => x.gid), on)
-    if (res.retried) counters.rateLimited++
+    // Symmetric with the read path: a retried success and an outright 429 are
+    // the same signal about the account's budget, counted once either way.
+    if (res.retried || (!res.ok && res.kind === 'rate_limited')) counters.rateLimited++
     if (!res.ok) {
+      if (res.kind === 'rate_limited') budgetHit = true
       // Includes kind 'device': a 2xx body carrying a top-level error means the
       // WHOLE batch failed (the client says so), not that some of it landed.
       counters.failed += batch.length
       lastKind = res.kind
       logWarn(MODULE, 'command batch failed', { locationId, kind: res.kind, count: batch.length, on })
       if (res.kind === 'auth') { auth = true; break }
-      if (res.kind === 'config') break
+      if (res.kind === 'config') { hostBad = true; break }
       continue
     }
     anyOk = true
@@ -506,7 +623,9 @@ export async function reconcileLocation(db, conn, ctx = {}) {
       const code = res.failed?.[x.gid]
       if (code !== undefined) {
         counters.failed++
-        logWarn(MODULE, 'command failed', { locationId, deviceId: x.device.id, code })
+        // Truncated: `code` comes out of a response body, and a body is never
+        // logged verbatim anywhere in this file.
+        logWarn(MODULE, 'command failed', { locationId, deviceId: x.device.id, code: String(code).slice(0, 64) })
         continue
       }
       const { error } = await db
@@ -529,12 +648,19 @@ export async function reconcileLocation(db, conn, ctx = {}) {
   if (auth) {
     counters.authFailures = 1
     await markConnection(db, conn, { status: 'action_needed', last_error: AUTH_ERROR, last_error_at: nowIso, updated_at: nowIso })
-  } else if (anyOk) {
+  } else if (hostBad) {
+    await markConnection(db, conn, { status: 'action_needed', last_error: HOST_ERROR, last_error_at: nowIso, updated_at: nowIso })
+  } else if (anyOk && !budgetHit) {
     await markConnection(db, conn, { status: 'connected', last_ok_at: nowIso, last_error: null, updated_at: nowIso })
   } else if (attempted) {
-    // `kind` only — never a body, never a statusCode dressed up as prose.
+    // `kind` only — never a body, never a statusCode dressed up as prose. Rate
+    // limiting gets its own sentence because "unreachable" would send an owner
+    // to look at their wifi for a problem that is ours.
     await markConnection(db, conn, {
-      status: 'error', last_error: `Shelly unreachable (${lastKind || 'unknown'})`, last_error_at: nowIso, updated_at: nowIso,
+      status: 'error',
+      last_error: budgetHit ? RATE_LIMIT_ERROR : `Shelly unreachable (${lastKind || 'unknown'})`,
+      last_error_at: nowIso,
+      updated_at: nowIso,
     })
   }
 
@@ -568,7 +694,12 @@ export async function runShellyReconcile(db, deps = {}) {
 
   const { data, error } = await db
     .from('shelly_connections')
-    .select('id, location_id, host, auth_key, auth_key_fingerprint, status, last_error_at, locations(timezone)')
+    .select('id, location_id, host, auth_key, auth_key_fingerprint, status, last_ok_at, last_error_at, locations(timezone)')
+    // ROTATION, not registration order: whoever has gone longest without a
+    // successful tick goes first, so when the budget runs short the shortfall
+    // moves around the estate instead of always landing on the same tail.
+    // created_at breaks ties so the order is still deterministic.
+    .order('last_ok_at', { ascending: true, nullsFirst: true })
     .order('created_at')
     .limit(MAX_CONNECTIONS + 1)
   if (error) {
@@ -587,13 +718,14 @@ export async function runShellyReconcile(db, deps = {}) {
   const active = []
   let parked = 0
   for (const c of rows) {
-    if (c.status === 'action_needed') {
-      const at = Date.parse(c.last_error_at ?? '')
-      // An unreadable (or absent) last_error_at is NOT parked — a row that
-      // cannot say when it broke gets retried, so a bad timestamp can never
-      // strand a connection forever.
-      if (Number.isFinite(at) && startedAt - at < ACTION_NEEDED_RETRY_MS) { parked++; continue }
-    }
+    const since = startedAt - Date.parse(c.last_error_at ?? '')
+    // NaN loses every comparison, which is exactly the answer wanted here: a row
+    // that cannot say when it broke is NOT parked, so an absent or unreadable
+    // last_error_at can never strand a connection forever.
+    // Two windows, because the two states mean different things — 'action_needed'
+    // waits on a human, 'error' waits on the world.
+    if (c.status === 'action_needed' && since < ACTION_NEEDED_RETRY_MS) { parked++; continue }
+    if (c.status === 'error' && since < ERROR_RETRY_MS) { parked++; continue }
     active.push(c)
   }
 
@@ -605,11 +737,18 @@ export async function runShellyReconcile(db, deps = {}) {
   const ctx = { now, sleep, makeClient, loadOccurrences, deadlineAt }
   const totals = zeroCounters()
 
+  const sleepFn = sleep || realSleep
   const results = await mapWithConcurrency(groups, concurrency, async (conns) => {
     const acc = zeroCounters()
     // SERIAL within the group — see the header. Do not turn this into a
     // Promise.all; the client's pacer is per-instance and cannot see siblings.
-    for (const c of conns) {
+    for (let i = 0; i < conns.length; i++) {
+      const c = conns[i]
+      // HAND THE BUDGET OVER PROPERLY. The client this location is about to
+      // build starts life believing it has never called, so without this gap its
+      // first request lands milliseconds behind the previous location's last
+      // one and buys a guaranteed 429 + retry, on every handoff, forever.
+      if (i > 0) await sleepFn(MIN_GAP_MS)
       try {
         addCounters(acc, await reconcileLocation(db, c, ctx))
       } catch (e) {
@@ -620,11 +759,14 @@ export async function runShellyReconcile(db, deps = {}) {
     return acc
   })
 
-  for (const r of results) {
+  // Indexed, because results are returned in input order and the group's own key
+  // is what a crash message has to be redacted against.
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i]
     if (r?.ok) addCounters(totals, r.value)
     // The worker body is fully guarded, so this is belt-and-braces — but a lost
     // group must still be visible rather than silently absent from the totals.
-    else { totals.crashed++; logError(MODULE, 'connection group crashed', { err: redactSecret(r?.error, null) }) }
+    else { totals.crashed++; logError(MODULE, 'connection group crashed', { err: redactSecret(r?.error, groups[i]?.[0]?.auth_key) }) }
   }
 
   const endedAt = now()
@@ -670,6 +812,11 @@ export async function runNowForDevice(db, conn, device, deps = {}) {
   // already applied — that is the entire point of the button.
   const plan = planDeviceAction(device, nowMs, dateStr, occurrences, tz, { force: true })
   if (!plan) return { ok: true, noop: true }
+
+  // The same guard the cron applies through groupId, for the same reason: a row
+  // with no id or a non-integer channel would be sent as a command no device can
+  // match, and the 2xx that came back would be stamped as applied.
+  if (!device.device_id || !Number.isInteger(device.channel)) return { ok: false, kind: 'bad_device' }
 
   const client = makeClient(conn, { sleep, now })
   const res = await client.setSwitch(device.device_id, device.channel, plan.action === 'on')
