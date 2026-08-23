@@ -305,7 +305,11 @@ export async function refreshLocationState(db, conn, devices, ctx = {}) {
       // call after them. Stop, and tell the caller to skip the commands.
       // A failure AFTER a success is treated as the blip it probably is: the
       // loop carries on and the batches that do work are still written.
-      if (!anyOk && res.kind !== 'device') { stalled = true; break }
+      // No kind is excluded: `get` never yields 'device' (that tag belongs to
+      // the set/ endpoints), and every kind it CAN yield here — network, http,
+      // rate_limited, and the two caller-bug tags — repeats identically on the
+      // next batch.
+      if (!anyOk) { stalled = true; break }
       continue
     }
     anyOk = true
@@ -350,17 +354,24 @@ export async function refreshLocationState(db, conn, devices, ctx = {}) {
   // back. Each failure mode looks EXACTLY like a quiet gym from the database
   // side, so each gets its own line — but only on the tick the picture changes.
   //
-  // The gate is "some affected device was online before this tick". Without it,
-  // a studio that really is dark overnight logs one of these every minute until
-  // morning, and the warning stops being read. Header rule 6.
-  const wasOnline = (match) => devices.some((d) => match(idKey(d?.device_id)) && d.last_state?.online === true)
+  // The gate is "some affected device could have CHANGED state this tick".
+  // Without it, a studio that really is dark overnight logs one of these every
+  // minute until morning and the warning stops being read (header rule 6).
+  //
+  // A NEVER-READ device counts. `last_state == null` is the shape a row has
+  // between adopt and its first successful read — and the first tick after
+  // adopt is precisely when a wrong id echo or a wrong `online` field shows
+  // up. Gating on `online === true` alone stayed silent through the one tick
+  // that could have named the bug, while writing every new device offline.
+  const couldHaveChanged = (match) => devices.some((d) => match(idKey(d?.device_id))
+    && (d.last_state?.online === true || d.last_state == null))
   const unanswered = [...covered].filter((id) => !readings.has(id))
-  if (anyOk && covered.size > 0 && unanswered.length === covered.size && wasOnline((k) => covered.has(k))) {
+  if (anyOk && covered.size > 0 && unanswered.length === covered.size && couldHaveChanged((k) => covered.has(k))) {
     // Every id we asked about came back unmentioned. A location that had really
     // gone dark would still be LISTED, saying `online: false` — so this is the
     // response echoing ids we cannot match, not devices dropping off.
     logWarn(MODULE, 'covered ids returned no readings — check the v2 id echo', { locationId, asked: covered.size, items })
-  } else if (anyOk && items > 0 && ![...readings.values()].some((r) => r.online) && wasOnline((k) => readings.has(k))) {
+  } else if (anyOk && items > 0 && ![...readings.values()].some((r) => r.online) && couldHaveChanged((k) => readings.has(k))) {
     logWarn(MODULE, 'every device reads offline — check the v2 online field', { locationId, items })
   }
 
@@ -748,7 +759,11 @@ export async function runShellyReconcile(db, deps = {}) {
       // build starts life believing it has never called, so without this gap its
       // first request lands milliseconds behind the previous location's last
       // one and buys a guaranteed 429 + retry, on every handoff, forever.
-      if (i > 0) await sleepFn(MIN_GAP_MS)
+      //
+      // Not past the deadline though: every remaining location is about to skip
+      // itself anyway, and sleeping a second each to hand over a budget nobody
+      // will spend just makes an overrunning tick overrun by longer.
+      if (i > 0 && now() <= deadlineAt) await sleepFn(MIN_GAP_MS)
       try {
         addCounters(acc, await reconcileLocation(db, c, ctx))
       } catch (e) {
@@ -799,6 +814,16 @@ export async function runNowForDevice(db, conn, device, deps = {}) {
   if (!Number.isFinite(nowMs)) return { ok: false, kind: 'bad_clock' }
   const dateStr = dayStrInTz(nowMs, tz)
 
+  // The same guard the cron applies through groupId, for the same reason: a row
+  // with no id or a non-integer channel would be sent as a command no device can
+  // match, and the 2xx that came back would be stamped as applied.
+  //
+  // FIRST, ahead of the planner: a malformed row must answer `bad_device`, not
+  // the `noop` it would get for schedule_mode 'none' — the operator needs to
+  // know the row is broken, not that there was nothing to do. It also spares
+  // the timetable read a device we could never command.
+  if (!device?.device_id || !Number.isInteger(device?.channel)) return { ok: false, kind: 'bad_device' }
+
   let occurrences = []
   if (device?.enabled && device?.schedule_mode === 'class') {
     const res = await loadOccurrences(db, conn?.location_id, tz, nowMs)
@@ -812,11 +837,6 @@ export async function runNowForDevice(db, conn, device, deps = {}) {
   // already applied — that is the entire point of the button.
   const plan = planDeviceAction(device, nowMs, dateStr, occurrences, tz, { force: true })
   if (!plan) return { ok: true, noop: true }
-
-  // The same guard the cron applies through groupId, for the same reason: a row
-  // with no id or a non-integer channel would be sent as a command no device can
-  // match, and the 2xx that came back would be stamped as applied.
-  if (!device.device_id || !Number.isInteger(device.channel)) return { ok: false, kind: 'bad_device' }
 
   const client = makeClient(conn, { sleep, now })
   const res = await client.setSwitch(device.device_id, device.channel, plan.action === 'on')

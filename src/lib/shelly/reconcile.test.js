@@ -393,6 +393,19 @@ describe('runShellyReconcile — the sweep', () => {
     })
     await runShellyReconcile(split, deps({ makeClient: makeClientFactory().factory, sleep }))
     expect(sleep.mock.calls.filter((c) => c[0] === MIN_GAP_MS)).toHaveLength(0)
+
+    // Past the deadline every remaining location skips itself, so handing over a
+    // budget nobody will spend only makes an overrunning tick overrun by longer.
+    sleep.mockClear()
+    const late = makeDb({
+      connections: [
+        conn({ id: 'c1', location_id: 'loc-A', auth_key_fingerprint: sameKey }),
+        conn({ id: 'c2', location_id: 'loc-B', auth_key_fingerprint: sameKey }),
+      ],
+      devices,
+    })
+    await runShellyReconcile(late, deps({ makeClient: makeClientFactory().factory, sleep, budgetMs: -1000 }))
+    expect(sleep.mock.calls.filter((c) => c[0] === MIN_GAP_MS)).toHaveLength(0)
   })
 
   it('parks a failing connection for the shorter window, then sweeps it', async () => {
@@ -562,6 +575,23 @@ describe('reads', () => {
     await runShellyReconcile(db, deps({ makeClient: factory }))
     expect(warned('check the v2 id echo')).toHaveLength(1)
     expect(warned('check the v2 online field')).toHaveLength(0)
+  })
+
+  // The tick after adopt is the one that can name a broken integration, and a
+  // device that has never been read has last_state null — so it must count as
+  // part of the transition, or both diagnostics stay silent through the single
+  // tick that mattered while every new device is written offline.
+  it('fires either diagnostic on a day-one device that has never been read', async () => {
+    for (const [get, fragment] of [
+      [({ ids }) => ({ ok: true, statusCode: 200, body: ids.map((id) => item(id, [{ channel: 0 }], false)) }), 'check the v2 online field'],
+      [() => ({ ok: true, statusCode: 200, body: [item('someoneelse')] }), 'check the v2 id echo'],
+    ]) {
+      vi.clearAllMocks()
+      const { factory } = makeClientFactory({ get })
+      const db = makeDb({ connections: [conn()], devices: [dev({ device_id: 'mac1', schedule_mode: 'none', last_state: null })] })
+      await runShellyReconcile(db, deps({ makeClient: factory }))
+      expect(warned(fragment)).toHaveLength(1)
+    }
   })
 
   // Both diagnostics fire on the TRANSITION and then go quiet: a studio that is
@@ -1109,6 +1139,25 @@ describe('runNowForDevice', () => {
     const out = await runNowForDevice(makeDb({}), conn(), dev({ channel: null }), { now: () => NOW, makeClient: factory })
     expect(out).toEqual({ ok: false, kind: 'bad_device' })
     expect(calls.setSwitch).toEqual([])
+  })
+
+  // `bad_device` outranks `noop`: an unmanaged mode is not the reason this row
+  // cannot be actioned, and answering `noop` would hide a broken row.
+  it('says bad_device, not noop, for a malformed row that is also unmanaged', async () => {
+    const { factory } = makeClientFactory()
+    const db = makeDb({})
+    const out = await runNowForDevice(db, conn(), dev({ channel: null, schedule_mode: 'none' }), { now: () => NOW, makeClient: factory })
+    expect(out).toEqual({ ok: false, kind: 'bad_device' })
+  })
+
+  // ...and it costs no timetable read, because the row could never be commanded.
+  it('does not read the timetable for a malformed class device', async () => {
+    const loadOccurrences = vi.fn(async () => ({ ok: true, occurrences: [] }))
+    const out = await runNowForDevice(makeDb({}), conn(), dev({ device_id: '', schedule_mode: 'class' }), {
+      now: () => NOW, makeClient: makeClientFactory().factory, loadOccurrences,
+    })
+    expect(out).toEqual({ ok: false, kind: 'bad_device' })
+    expect(loadOccurrences).not.toHaveBeenCalled()
   })
 
   it('refuses an unreadable clock', async () => {
