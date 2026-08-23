@@ -12,7 +12,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, cleanup, act } from '@testing-library/react'
-import ShellyDevicesClient, { refreshSummary } from './ShellyDevicesClient.jsx'
+import ShellyDevicesClient, { refreshSummary, syncNamesSummary } from './ShellyDevicesClient.jsx'
 
 const CONNECTION = {
   host: 'shelly-68-eu.shelly.cloud',
@@ -370,5 +370,159 @@ describe('ShellyDevicesClient — refresh', () => {
 
     await act(async () => { screen.getByRole('button', { name: /Refresh/ }).click() })
     await waitFor(() => expect(screen.getByText('Shelly is busy — try again in a few seconds')).toBeTruthy())
+  })
+})
+
+// ——— SHELLY-NAMES.1 — "Use Shelly names" ————————————————————————————
+
+describe('syncNamesSummary', () => {
+  it('leads with what the operator can see the effect of', () => {
+    expect(syncNamesSummary({ total: 6, updated: 6 })).toEqual({ tone: 'ok', text: 'Named 6 of 6' })
+  })
+
+  it('never folds "Shelly has no name for it" into "no changes" — they are different answers', () => {
+    // The live failure this button exists for. A warn tone, because it is the
+    // one outcome that needs someone to look.
+    expect(syncNamesSummary({ total: 6, updated: 0, unresolved: 6 }))
+      .toEqual({ tone: 'warn', text: 'No names found in Shelly for 6 plugs' })
+    expect(syncNamesSummary({ total: 1, unresolved: 1 }).text).toBe('No names found in Shelly for 1 plug')
+    // …and it is still said when some plugs DID resolve.
+    expect(syncNamesSummary({ total: 6, updated: 4, unresolved: 2 }))
+      .toEqual({ tone: 'warn', text: 'Named 4 of 6 — no name in Shelly for 2 plugs' })
+  })
+
+  it('a location whose names already match is a quiet, healthy answer', () => {
+    expect(syncNamesSummary({ total: 6, unchanged: 6 })).toEqual({ tone: 'ok', text: 'Names already match' })
+    expect(syncNamesSummary()).toEqual({ tone: 'ok', text: 'Names already match' })
+  })
+
+  it('says the two ways it can be incomplete', () => {
+    expect(syncNamesSummary({ total: 6, updated: 5, write_failures: 1 }))
+      .toEqual({ tone: 'warn', text: 'Named 5 of 6 — 1 couldn’t be saved' })
+    expect(syncNamesSummary({ total: 12, updated: 10, partial: true }))
+      .toEqual({ tone: 'warn', text: 'Named 10 of 12 — some plugs weren’t checked' })
+  })
+})
+
+describe('ShellyDevicesClient — Use Shelly names', () => {
+  const withSync = (reply) => {
+    global.fetch.mockImplementation(async (url) => {
+      const u = String(url)
+      if (u === '/api/shelly/sync-names') return reply
+      if (u === '/api/shelly/connection') return okConn()
+      return okDevices()
+    })
+  }
+
+  const openSync = async () => {
+    await act(async () => { screen.getByRole('button', { name: /Use Shelly names/ }).click() })
+  }
+
+  it('is hidden when the studio has no plugs — there is nothing to name', async () => {
+    script([[okConn(), okDevices({ devices: [] })]])
+    render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected canManageConnection />)
+    await waitFor(() => expect(screen.getByText(/No plugs adopted yet/)).toBeTruthy())
+    expect(screen.queryByRole('button', { name: /Use Shelly names/ })).toBeNull()
+  })
+
+  it('is hidden without a live connection — the route could only 409', async () => {
+    script([[okConn({ connection: { ...CONNECTION, status: 'action_needed' } }),
+      okDevices({ connected: false, connection_status: 'action_needed' })]])
+    render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected canManageConnection />)
+    await waitFor(() => expect(screen.getByText('Sauna plug')).toBeTruthy())
+    expect(screen.queryByRole('button', { name: /Use Shelly names/ })).toBeNull()
+    // Refresh is unaffected — it reads state we already hold rows for.
+    expect(screen.getByRole('button', { name: /Refresh/ })).toBeTruthy()
+  })
+
+  it('asks before it acts, and the safe choice posts overwrite:false', async () => {
+    script([[okConn(), okDevices()]])
+    render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected canManageConnection />)
+    await waitFor(() => expect(screen.getByText('Sauna plug')).toBeTruthy())
+
+    // Nothing is posted by opening the confirm.
+    withSync(json(200, { success: true, total: 6, updated: 4, unchanged: 2, unresolved: 0, write_failures: 0 }))
+    await openSync()
+    expect(global.fetch.mock.calls.map((c) => String(c[0]))).not.toContain('/api/shelly/sync-names')
+
+    await act(async () => { screen.getByRole('button', { name: /Only unnamed plugs/ }).click() })
+    await waitFor(() => expect(screen.getByText('Named 4 of 6')).toBeTruthy())
+
+    const call = global.fetch.mock.calls.find((c) => String(c[0]) === '/api/shelly/sync-names')
+    expect(call[1].method).toBe('POST')
+    expect(JSON.parse(call[1].body)).toEqual({ overwrite: false })
+    // The confirm closes once it has been acted on.
+    expect(screen.queryByRole('button', { name: /Only unnamed plugs/ })).toBeNull()
+  })
+
+  it('the destructive choice says what it replaces, and posts overwrite:true', async () => {
+    script([[okConn(), okDevices()]])
+    render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected canManageConnection />)
+    await waitFor(() => expect(screen.getByText('Sauna plug')).toBeTruthy())
+
+    withSync(json(200, { success: true, total: 6, updated: 6, unchanged: 0, unresolved: 0, write_failures: 0 }))
+    await openSync()
+    await act(async () => { screen.getByRole('button', { name: /All plugs — replaces names typed here/ }).click() })
+    await waitFor(() => expect(screen.getByText('Named 6 of 6')).toBeTruthy())
+
+    const call = global.fetch.mock.calls.find((c) => String(c[0]) === '/api/shelly/sync-names')
+    expect(JSON.parse(call[1].body)).toEqual({ overwrite: true })
+  })
+
+  it('renders the unresolved verdict — the answer this button was built to surface', async () => {
+    script([[okConn(), okDevices()]])
+    render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected canManageConnection />)
+    await waitFor(() => expect(screen.getByText('Sauna plug')).toBeTruthy())
+
+    withSync(json(200, { success: true, total: 6, updated: 0, unchanged: 0, unresolved: 6, write_failures: 0 }))
+    await openSync()
+    await act(async () => { screen.getByRole('button', { name: /Only unnamed plugs/ }).click() })
+    await waitFor(() => expect(screen.getByText('No names found in Shelly for 6 plugs')).toBeTruthy())
+  })
+
+  it('debounces afterwards, on its own clock rather than Refresh’s', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    script([[okConn(), okDevices()]])
+    render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected canManageConnection />)
+    await waitFor(() => expect(screen.getByText('Sauna plug')).toBeTruthy())
+
+    withSync(json(200, { success: true, total: 1, updated: 1 }))
+    await openSync()
+    await act(async () => { screen.getByRole('button', { name: /Only unnamed plugs/ }).click() })
+    await waitFor(() => expect(screen.getByRole('button', { name: /Use Shelly names/ }).disabled).toBe(true))
+    // Refresh is NOT disabled by a name sync — one shared flag would leave an
+    // operator staring at a dead button with no explanation.
+    expect(screen.getByRole('button', { name: /Refresh/ }).disabled).toBe(false)
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+    await waitFor(() => expect(screen.getByRole('button', { name: /Use Shelly names/ }).disabled).toBe(false))
+  })
+
+  it('a PARTIAL failure still reports the names that landed', async () => {
+    // The route writes what it resolved before reporting the failure, so a
+    // bare error line would tell an operator nothing happened when ten plugs
+    // were in fact renamed.
+    script([[okConn(), okDevices()]])
+    render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected canManageConnection />)
+    await waitFor(() => expect(screen.getByText('Sauna plug')).toBeTruthy())
+
+    withSync(json(502, {
+      success: false, error: 'Shelly stopped answering — some plugs were not checked',
+      code: 'network', partial: true, total: 12, updated: 10,
+    }))
+    await openSync()
+    await act(async () => { screen.getByRole('button', { name: /Only unnamed plugs/ }).click() })
+    await waitFor(() => expect(screen.getByText(/^Named 10 — Shelly stopped answering/)).toBeTruthy())
+  })
+
+  it('renders the route’s own error when nothing landed', async () => {
+    script([[okConn(), okDevices()]])
+    render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected canManageConnection />)
+    await waitFor(() => expect(screen.getByText('Sauna plug')).toBeTruthy())
+
+    withSync(json(409, { success: false, error: 'Shelly rejected the stored key — re-paste it from the Shelly app', code: 'key_rejected' }))
+    await openSync()
+    await act(async () => { screen.getByRole('button', { name: /Only unnamed plugs/ }).click() })
+    await waitFor(() => expect(screen.getByText('Shelly rejected the stored key — re-paste it from the Shelly app')).toBeTruthy())
   })
 })

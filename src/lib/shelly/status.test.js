@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { normaliseGetItems, normaliseAllStatus, stateFromReading, stateChanged, groupId } from './status'
+import {
+  normaliseGetItems, normaliseAllStatus, stateFromReading, stateChanged, groupId,
+  resolveDeviceName, nameShapeDiagnostic, rawItemsOf, rawItemId,
+} from './status'
 
 const plugS = {
   id: 'A8032ABE41FC', code: 'SNPL-00112EU', gen: 2, online: 1,
@@ -198,5 +201,180 @@ describe('parser deviations from the plan draft, pinned (SHELLY.4b)', () => {
   })
   it('a blank device name is null, not an empty string', () => {
     expect(normaliseGetItems([{ id: 'aa', settings: { sys: { device: { name: '  ' } } }, status: { 'switch:0': {} } }])[0].name).toBeNull()
+  })
+})
+
+// ——— SHELLY-NAMES.1 ————————————————————————————————————————————————
+//
+// Six Shelly 1 Mini Gen3 relays adopted at Stillorgan with every card showing
+// the `<model> · <last4>` placeholder, the devices plainly named in the Shelly
+// app, and no warning out of the adopt route — `settings` came back and the
+// label was not where nameFrom looks. These pin the wider net, and pin the
+// diagnostic that will tell us which arm the live account actually needs.
+
+describe('resolveDeviceName (SHELLY-NAMES.1)', () => {
+  const item = (over) => ({ id: 'aabbccddeeff', gen: 2, online: 1, status: {}, ...over })
+
+  it('reads the documented Gen2+ home first', () => {
+    expect(resolveDeviceName(item({ settings: { sys: { device: { name: 'Reception heater' } } } }))).toBe('Reception heater')
+  })
+
+  it('falls through settings.device.name, settings.name and the envelope name, in that order', () => {
+    expect(resolveDeviceName(item({ settings: { device: { name: 'Shallow' } } }))).toBe('Shallow')
+    expect(resolveDeviceName(item({ settings: { name: 'Flat' } }))).toBe('Flat')
+    expect(resolveDeviceName(item({ name: 'Envelope', settings: {} }))).toBe('Envelope')
+    // Precedence, not merely presence: the deepest source wins when several
+    // are populated at once.
+    expect(resolveDeviceName(item({
+      name: 'Envelope',
+      settings: { name: 'Flat', device: { name: 'Shallow' }, sys: { device: { name: 'Deep' } } },
+    }))).toBe('Deep')
+  })
+
+  it('a MULTI-relay device is labelled per OUTPUT — the box name loses', () => {
+    // A 4PM is one box and four outputs, and it is the outputs an operator
+    // names ("Sauna", "Ice bath"). Taking the box name for every channel would
+    // render four identical cards.
+    const pro = item({
+      settings: {
+        sys: { device: { name: 'Plant room 4PM' } },
+        'switch:0': { name: 'Sauna' }, 'switch:1': { name: 'Ice bath' },
+        'switch:2': {}, 'switch:3': { name: 'Fan' },
+      },
+      status: { 'switch:0': {}, 'switch:1': {}, 'switch:2': {}, 'switch:3': {} },
+    })
+    expect(resolveDeviceName(pro, 0)).toBe('Sauna')
+    expect(resolveDeviceName(pro, 1)).toBe('Ice bath')
+    expect(resolveDeviceName(pro, 3)).toBe('Fan')
+    // The channel with no label of its own falls back to the BOX, never to
+    // another channel's name.
+    expect(resolveDeviceName(pro, 2)).toBe('Plant room 4PM')
+  })
+
+  it('…but on a SINGLE-relay device the box name wins over switch:0', () => {
+    // There `switch:0.name` is usually absent or a factory label, so it is the
+    // last resort rather than the first.
+    const one = item({ settings: { sys: { device: { name: 'Sauna' } }, 'switch:0': { name: 'Switch 0' } }, status: { 'switch:0': {} } })
+    expect(resolveDeviceName(one, 0)).toBe('Sauna')
+    // Still better than the placeholder once every box-level source is empty.
+    const bare = item({ settings: { 'switch:0': { name: 'Treadmill' } }, status: { 'switch:0': {} } })
+    expect(resolveDeviceName(bare, 0)).toBe('Treadmill')
+  })
+
+  it('an OFFLINE multi-relay device is still per-output — settings names the channels when status does not', () => {
+    // status is empty for an offline device (rule 2), so counting switch keys
+    // there alone would demote a 4PM to the single-relay ordering.
+    const offlinePro = item({
+      online: 0, status: {},
+      settings: { sys: { device: { name: 'Plant room' } }, 'switch:0': { name: 'Sauna' }, 'switch:1': { name: 'Ice bath' } },
+    })
+    expect(resolveDeviceName(offlinePro, 1)).toBe('Ice bath')
+  })
+
+  it('is defensive about status.sys.device.name, and answers null when nothing carries a label', () => {
+    expect(resolveDeviceName(item({ status: { sys: { device: { name: 'Odd place' } } } }))).toBe('Odd place')
+    expect(resolveDeviceName(item({ settings: {} }))).toBeNull()
+    expect(resolveDeviceName(null)).toBeNull()
+    expect(resolveDeviceName(undefined, 3)).toBeNull()
+  })
+
+  it('never returns a blank name, and never one the operator could not re-save', () => {
+    // Blank/whitespace falls THROUGH rather than being stored as a chosen name.
+    expect(resolveDeviceName(item({ settings: { sys: { device: { name: '   ' } }, name: 'Real' } }))).toBe('Real')
+    expect(resolveDeviceName(item({ settings: { sys: { device: { name: '' } } } }))).toBeNull()
+    expect(resolveDeviceName(item({ settings: { name: '  Padded  ' } }))).toBe('Padded')
+    // 80 is ShellyAdoptBody/ShellyDevicePatch's cap: a longer name would be
+    // storable here and rejected by the PATCH that merely re-saved it.
+    expect(resolveDeviceName(item({ settings: { name: 'x'.repeat(200) } }))).toHaveLength(80)
+  })
+
+  it('tolerates a junk channel rather than minting a switch:undefined lookup', () => {
+    const one = item({ settings: { 'switch:0': { name: 'Treadmill' } }, status: { 'switch:0': {} } })
+    for (const bad of [null, undefined, -1, 1.5, 'x', {}]) {
+      expect(resolveDeviceName(one, bad)).toBe('Treadmill')
+    }
+  })
+})
+
+describe('nameShapeDiagnostic (SHELLY-NAMES.1) — keys only, never values', () => {
+  it('NEVER carries a payload VALUE — not the wifi password, not the name itself', () => {
+    // settings carries the device's wifi credentials and its MQTT broker
+    // password, which is why this is a shape report and not a payload log.
+    const item = {
+      id: 'aabbccddeeff', name: 'Envelope',
+      settings: {
+        wifi: { sta: { ssid: 'UN1T-GUEST', pass: 'SECRET_WIFI' } },
+        mqtt: { pass: 'SECRET_MQTT' },
+        sys: { device: { name: 'Reception', mac: 'AABBCCDDEEFF' } },
+        'switch:0': { name: 'Reception', initial_state: 'restore_last' },
+      },
+      status: { 'switch:0': { output: true } },
+    }
+    const json = JSON.stringify(nameShapeDiagnostic(item))
+    expect(json).not.toContain('SECRET_WIFI')
+    expect(json).not.toContain('SECRET_MQTT')
+    expect(json).not.toContain('Reception')
+    expect(json).not.toContain('UN1T-GUEST')
+    expect(json).not.toContain('AABBCCDDEEFF')
+    // …while still answering the question it exists to answer.
+    expect(nameShapeDiagnostic(item)).toMatchObject({
+      settingsType: 'object',
+      settingsKeys: ['mqtt', 'switch:0', 'sys', 'wifi'],
+      sysKeys: ['device'],
+      deviceKeys: ['mac', 'name'],
+      switchKeys: ['initial_state', 'name'],
+      hasSysDeviceName: 'string',
+      statusKeys: ['switch:0'],
+    })
+    expect(nameShapeDiagnostic(item).itemKeys).toEqual(['id', 'name', 'settings', 'status'])
+  })
+
+  it('separates "the key is absent" from "the key is there and is not a string"', () => {
+    expect(nameShapeDiagnostic({ settings: { sys: { device: { mac: 'x' } } } }).hasSysDeviceName).toBe('absent')
+    expect(nameShapeDiagnostic({ settings: { sys: { device: { name: null } } } }).hasSysDeviceName).toBe('null')
+    expect(nameShapeDiagnostic({ settings: { sys: { device: { name: 42 } } } }).hasSysDeviceName).toBe('null')
+    expect(nameShapeDiagnostic({ settings: {} }).hasSysDeviceName).toBe('absent')
+  })
+
+  it('reports the TYPE of a settings that is not an object at all — the drift we are hunting', () => {
+    expect(nameShapeDiagnostic({ settings: 'nope' })).toMatchObject({ settingsType: 'string', settingsKeys: [] })
+    expect(nameShapeDiagnostic({ settings: null })).toMatchObject({ settingsType: 'null' })
+    expect(nameShapeDiagnostic({ settings: [] })).toMatchObject({ settingsType: 'array' })
+    expect(nameShapeDiagnostic({})).toMatchObject({ settingsType: 'undefined' })
+    // An absent item is a real answer too: the account never mentioned it.
+    expect(nameShapeDiagnostic(undefined)).toMatchObject({ itemKeys: [], settingsType: 'undefined', statusKeys: [] })
+  })
+
+  it('falls back to settings.device when sys carries none, and caps a pathological body', () => {
+    expect(nameShapeDiagnostic({ settings: { device: { name: 'x', fw: 'y' } } })).toMatchObject({
+      sysKeys: [], deviceKeys: ['fw', 'name'], hasSysDeviceName: 'string',
+    })
+    const wide = Object.fromEntries(Array.from({ length: 200 }, (_, i) => [`k${String(i).padStart(3, '0')}`, i]))
+    const diag = nameShapeDiagnostic({ settings: wide })
+    expect(diag.settingsKeys).toHaveLength(40)
+    // Sorted, so two devices' shapes are comparable at a glance.
+    expect(diag.settingsKeys[0]).toBe('k000')
+  })
+})
+
+describe('rawItemsOf / rawItemId (SHELLY-NAMES.1)', () => {
+  it('detects the same three list shapes normaliseGetItems does', () => {
+    const a = { id: 'aa' }
+    expect(rawItemsOf([a])).toEqual([a])
+    expect(rawItemsOf({ devices: [a] })).toEqual([a])
+    expect(rawItemsOf({ data: [a] })).toEqual([a])
+    for (const junk of [null, undefined, {}, 'x', 3, { devices: {} }]) expect(rawItemsOf(junk)).toEqual([])
+  })
+
+  it('keys raw items exactly as normaliseGetItem keys the rows they become', () => {
+    expect(rawItemId({ id: ' AABBCC ' })).toBe('aabbcc')
+    expect(rawItemId({ id: 12 })).toBe('12')
+    for (const bad of [{ id: '' }, { id: '  ' }, { id: {} }, { id: [] }, { id: null }, {}, null]) {
+      expect(rawItemId(bad)).toBeNull()
+    }
+    // The pairing is the point — a raw item and its normalised row must key
+    // identically or the two can never be matched up.
+    const raw = { id: ' A8032ABE41FC ', gen: 2, status: {} }
+    expect(rawItemId(raw)).toBe(normaliseGetItems([raw])[0].device_id)
   })
 })

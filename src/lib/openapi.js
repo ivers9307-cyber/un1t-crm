@@ -36,6 +36,7 @@ import {
   ShellyDevicePatch as ShellyDevicePatchRaw,
   ShellyToggleBody as ShellyToggleBodyRaw,
   ShellyEnergyQuery as ShellyEnergyQueryRaw,
+  ShellySyncNamesBody as ShellySyncNamesBodyRaw,
   MAX_DEVICES_PER_LOCATION, MAX_FIXED_WINDOWS, MAX_OVERRIDE_HOURS, MIN_AUTH_KEY_LENGTH,
 } from '@/lib/shelly/schemas'
 
@@ -4822,6 +4823,16 @@ const ShellyEnergyQuery = ShellyEnergyQueryRaw.extend({}).openapi('ShellyEnergyQ
     + 'capped at 1,000 regardless of .limit(), so a location-wide read would silently lose a third of the history.',
 })
 
+const ShellySyncNamesBody = ShellySyncNamesBodyRaw.extend({}).openapi('ShellySyncNamesBody', {
+  description:
+    'overwrite DEFAULTS TO FALSE, and the default is the safe half on purpose: a name typed on the CRM side is a '
+    + 'human decision and nothing keeps the previous one, so there is no undo — a body that merely forgot the '
+    + 'field must land on "only unnamed plugs". Unknown keys are REJECTED rather than dropped, because here the '
+    + 'silently-dropped key is the destructive one: `overwrite` has a default, so a client posting `overwite: '
+    + 'true` would fall through to false and report a successful sync that replaced nothing it was asked to '
+    + 'replace, with nothing in the response to disagree.',
+})
+
 // The same window vocabulary the routes validate against — WindowBase from
 // @/lib/schedule/windows, the object ShellyWindow refines (SHELLY-UI.2), so
 // days/on/off cannot drift between the spec and what the API accepts. Sonos
@@ -5123,6 +5134,27 @@ const ShellyRefreshResponse = z.object({
     + 'devices we read", and 0 is the healthy answer for a studio whose readings have not moved. `rate_limited` '
     + 'counts a RETRIED SUCCESS as well as a 429, so neither counter is a verdict on its own. A location with '
     + 'nothing adopted answers all-zero and kind null without spending a slot of the shared account budget.',
+})
+
+const ShellySyncNamesResponse = z.object({
+  success: z.literal(true),
+  total: z.number().int(),
+  updated: z.number().int(),
+  unchanged: z.number().int(),
+  unresolved: z.number().int(),
+  write_failures: z.number().int(),
+  partial: z.literal(true).optional(),
+}).openapi('ShellySyncNamesResponse', {
+  description: 'This route writes ONE column (`name`) and reads; it commands nothing and moves no relay. `total` '
+    + 'is every adopted row at the location, and the four counters do NOT have to add up to it: a device in a '
+    + 'batch that failed, or one the time budget never reached, is counted in none of them — "we did not ask" is '
+    + 'not the same claim as "Shelly has no name for it", and `partial: true` is exactly the flag that says the '
+    + 'counters describe part of the location. `unresolved` is the diagnostic one: the account answered and '
+    + 'carried no label anywhere the resolver looks, which is the live failure this route was built for, and it '
+    + 'is accompanied by ONE server-side warning carrying the payload\'s KEY SHAPE (key names and typeof strings '
+    + 'only — settings carries the device\'s wifi and MQTT credentials, so no value from it is ever logged). '
+    + '`write_failures` counts a failed UPDATE *and* one that touched no row: a zero-row UPDATE is not an error '
+    + 'in PostgREST, and reading it as a success would report a name that never landed.',
 })
 
 registry.registerPath({
@@ -5533,6 +5565,40 @@ registry.registerPath({
     429: { description: 'code: "rate_limited" — NOT ONE batch succeeded and the time budget is why. Judged on the un-conflated engine signals (anyOk + budgetHit), never on the counters: `rate_limited` counts a retried SUCCESS too, and refreshed:0 is the healthy answer for a studio whose readings have not moved.', content: { 'application/json': { schema: ShellyErrorResponse } } },
     500: { description: 'The connection or the device list could not be read', content: { 'application/json': { schema: ShellyErrorResponse } } },
     502: { description: 'Nothing succeeded, having actually tried (code carries the last failure tag, or "unreachable"). The schedule is untouched by this route, and the copy says so rather than implying the studio is now adrift.', content: { 'application/json': { schema: ShellyErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/shelly/sync-names',
+  tags: ['Automations'],
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Copy the device labels from the Shelly account onto this location\'s adopted rows (device_control)',
+  description:
+    'Reads and writes ONE column (`name`); it commands nothing and moves no relay, which is what makes it safe '
+    + 'behind a repeatable button. `overwrite: false` (the default) touches only rows whose name is null — '
+    + 'replacing a name typed on the CRM side has no undo, so it is a separate, deliberate choice. A location '
+    + 'with nothing adopted answers all-zero WITHOUT spending a slot of the shared 1 request/second account '
+    + 'budget. Devices are read once each (a four-relay Pro 4PM is one read and up to four rows) in batches of '
+    + 'the client\'s own MAX_GET_IDS, under an 8-second budget, and only a batch that SUCCEEDED speaks for its '
+    + 'ids — a device we never asked about is never reported as one Shelly has no name for. Every device that '
+    + 'still resolves no name contributes to `unresolved`, and the request logs ONE warning carrying the '
+    + 'payload\'s KEY SHAPE — key names and typeof strings only, never a value, because `settings` carries the '
+    + 'device\'s wifi and MQTT credentials.',
+  request: { body: { content: { 'application/json': { schema: ShellySyncNamesBody } } } },
+  responses: {
+    200: { description: 'Synced (possibly partially — see ShellySyncNamesResponse for why the counters need not add up to `total`)', content: { 'application/json': { schema: ShellySyncNamesResponse } } },
+    400: { description: 'Caller has no active location, or the body carried an unknown key (rejected rather than dropped — see ShellySyncNamesBody)', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    409: { description: 'code: "not_connected" (link an account first) or "key_rejected" — Shelly refused the STORED key, which also parks the connection at action_needed with the same copy the cron writes. Nothing is written on either branch: the operator has to act and press again, and a name is re-derivable on that next press.', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    429: { description: 'code: "rate_limited" — the shared 1 request/second account budget; retry in a few seconds. Nothing is written, for the same reason as the 409s.', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    500: { description: 'The connection or the device list could not be read', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    502: { description: 'Shelly stopped answering mid-read (code carries the client\'s failure tag). The names already resolved ARE WRITTEN FIRST and the body carries the same counters as the 200 plus partial: true — a far end that may stay unreachable must not cost a completed batch its renames.', content: { 'application/json': { schema: ShellyErrorResponse.extend({ total: z.number().int().optional(), updated: z.number().int().optional(), unchanged: z.number().int().optional(), unresolved: z.number().int().optional(), write_failures: z.number().int().optional(), partial: z.literal(true).optional() }).openapi('ShellySyncNamesPartialError') } } },
   },
 })
 

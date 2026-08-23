@@ -104,36 +104,192 @@ function nameFrom(settings, fallback) {
   return str(settings?.sys?.device?.name) ?? str(settings?.name) ?? str(fallback) ?? null
 }
 
+// The column/schema bound: ShellyAdoptBody.name and ShellyDevicePatch.name are
+// both .max(80), so a longer label resolved here would be storable by this
+// path and un-editable by the operator afterwards — the PATCH that merely
+// re-saved it would 400 on a name nobody typed.
+const NAME_MAX = 80
+
+// SHELLY-NAMES.1 — the LIST inside a v2 `get` body, before normalisation.
+//
+// Extracted so the two callers that need the RAW item (adopt, sync-names)
+// detect the list exactly the way normaliseGetItems does. A second copy of
+// this three-way check is how one surface would start reading `{devices:[…]}`
+// and the other only a bare array, silently, on the same account.
+export function rawItemsOf(body) {
+  return Array.isArray(body) ? body
+    : Array.isArray(body?.devices) ? body.devices
+    : Array.isArray(body?.data) ? body.data : []
+}
+
+// The id normalisation that decides which raw item is which device. Same rule
+// as normaliseGetItem's (string or number only, trimmed, lowercased), and
+// exported for the same reason as rawItemsOf: a caller matching raw items to
+// database rows must key them identically, or a perfectly good item silently
+// belongs to nobody.
+export function rawItemId(item) {
+  const raw = typeof item?.id === 'string' || typeof item?.id === 'number' ? String(item.id).trim() : ''
+  return raw ? raw.toLowerCase() : null
+}
+
+// Every `switch:N` key the item mentions, in EITHER half of the payload.
+// `status` alone is not enough: an offline device reports no switch components
+// at all (rule 2) while its `settings` still names all four of a 4PM's
+// outputs — and it is exactly the multi-output case that decides whether the
+// per-output label wins below.
+function switchKeys(item) {
+  const out = new Set()
+  for (const bag of [item?.status, item?.settings]) {
+    for (const key of Object.keys(isObj(bag) ? bag : {})) {
+      if (SWITCH_KEY_RE.test(key)) out.add(key)
+    }
+  }
+  return [...out]
+}
+
+/**
+ * SHELLY-NAMES.1 — where a Shelly device's human label actually lives.
+ *
+ * Takes the RAW v2 `get` item (not a normalised row) and the channel being
+ * named; returns a trimmed, capped string or null. Pure.
+ *
+ * WHY IT IS WIDER THAN nameFrom. nameFrom reads two places
+ * (settings.sys.device.name, settings.name) and that matched the documented
+ * shape. It did NOT match the live account: six Shelly 1 Mini Gen3 relays at
+ * Stillorgan adopted with every card showing the `<model> · <last4>`
+ * placeholder, the devices plainly named in the Shelly app, and NOT ONE
+ * warning out of the adopt route — so `settings` came back and the label was
+ * somewhere neither of those two reads looks. nameShapeDiagnostic() below is
+ * how we find out where; this is the net that catches it in the meantime.
+ *
+ * The order is by how much each source is a claim about THIS CHANNEL rather
+ * than about the box:
+ *
+ *   (a) settings['switch:N'].name on a MULTI-RELAY device. A Pro 4PM is one
+ *       box and four outputs and the operator names the outputs ("Sauna",
+ *       "Ice bath"), so the per-output label beats the box's. Single-relay
+ *       devices drop it to (f) instead, because there the same field is
+ *       usually absent or a factory label.
+ *   (b) settings.sys.device.name — the documented Gen2+ home.
+ *   (c) settings.device.name     — the same field one level shallower.
+ *   (d) settings.name            — the flat form.
+ *   (e) item.name                — the cloud envelope's own.
+ *   (f) settings['switch:N'].name on a single-relay device: better than the
+ *       placeholder once every box-level source came back empty.
+ *   (g) status.sys.device.name   — defensive. Nothing observed puts it here,
+ *       and if this arm ever wins, the diagnostic is what says so.
+ *
+ * NEVER returns '' — str() drops blanks, so a factory-blank name falls through
+ * to the next source instead of being stored as a name a human chose.
+ */
+export function resolveDeviceName(item, channel = 0) {
+  const settings = isObj(item?.settings) ? item.settings : null
+  const status = isObj(item?.status) ? item.status : null
+  const ch = Number.isInteger(channel) && channel >= 0 ? channel : 0
+  const perChannel = str(settings?.[`switch:${ch}`]?.name)
+  const multiRelay = switchKeys(item).length >= 2
+
+  const picked =
+    (multiRelay ? perChannel : null)
+    ?? str(settings?.sys?.device?.name)
+    ?? str(settings?.device?.name)
+    ?? str(settings?.name)
+    ?? str(item?.name)
+    ?? perChannel
+    ?? str(status?.sys?.device?.name)
+  if (picked == null) return null
+  const trimmed = picked.trim().slice(0, NAME_MAX)
+  // A trimmed non-blank string cannot slice to blank at 80, but the cap is the
+  // one place a future NAME_MAX of 0 would silently mint the empty name the
+  // whole file exists to avoid.
+  return trimmed || null
+}
+
+// ——— keys-only diagnostic ————————————————————————————————————————————
+//
+// SECRET RULE, and it is the whole reason this is a function rather than a log
+// of the payload: `settings` carries the device's wifi credentials
+// (settings.wifi.sta.pass) and its MQTT broker password. NOTHING in here may
+// be a VALUE from the payload — every field is either an array of KEY NAMES or
+// a typeof-style string. status.test.js pins that with a fixture carrying a
+// planted secret and a planted name, and asserts neither survives
+// JSON.stringify of the result.
+const DIAG_KEY_CAP = 40
+
+// Sorted so two devices' shapes are comparable at a glance, and capped so a
+// pathological body cannot turn one warning into a log page.
+const keysOf = (v) => (isObj(v) ? Object.keys(v).sort().slice(0, DIAG_KEY_CAP) : [])
+
+// typeof, with the two cases typeof gets wrong for this purpose split out.
+const typeName = (v) => (Array.isArray(v) ? 'array' : v === null ? 'null' : typeof v)
+
+/**
+ * SHELLY-NAMES.1 — the SHAPE of a `get` item, for the one question we cannot
+ * answer from Dublin: where does this account put the device label?
+ *
+ * Nothing on this surface stores or logs raw Shelly payloads, by design, so a
+ * device that resolves no name is otherwise a dead end — the adopt route saw
+ * `settings`, found nothing, and said nothing. This is the minimum that turns
+ * one operator press into an answer: which keys exist, and whether
+ * settings.sys.device.name is a string, a non-string, or absent.
+ *
+ * `deviceKeys` descends settings.sys.device, falling back to settings.device
+ * when sys carries no device — `sysKeys` says which of the two you are
+ * looking at.
+ */
+export function nameShapeDiagnostic(item) {
+  const settings = isObj(item?.settings) ? item.settings : null
+  const status = isObj(item?.status) ? item.status : null
+  const sys = isObj(settings?.sys) ? settings.sys : null
+  const device = isObj(sys?.device) ? sys.device : (isObj(settings?.device) ? settings.device : null)
+  const firstSwitchKey = Object.keys(settings || {}).find((k) => SWITCH_KEY_RE.test(k))
+  const nameProp = device && Object.prototype.hasOwnProperty.call(device, 'name')
+    ? (typeof device.name === 'string' ? 'string' : 'null')
+    : 'absent'
+  return {
+    itemKeys: keysOf(item),
+    settingsType: typeName(item?.settings),
+    settingsKeys: keysOf(settings),
+    sysKeys: keysOf(sys),
+    deviceKeys: keysOf(device),
+    switchKeys: firstSwitchKey ? keysOf(settings[firstSwitchKey]) : [],
+    hasSysDeviceName: nameProp,
+    statusKeys: keysOf(status),
+  }
+}
+
 export function normaliseGetItem(item) {
   if (!isObj(item)) return null
   // MACs arrive as strings; a number id is tolerated, anything else (object,
   // array, blank) is not an id and the row is dropped rather than becoming
   // '[object object]' or ''.
-  const rawId = typeof item.id === 'string' || typeof item.id === 'number' ? String(item.id).trim() : ''
-  if (!rawId) return null
+  const deviceId = rawItemId(item)
+  if (!deviceId) return null
   const status = isObj(item.status) ? item.status : {}
   const online = item.online === 1 || item.online === true
   const gen = parseGen(item.gen)
   const channels = switchChannels(status)
   return {
-    device_id: rawId.toLowerCase(),
+    device_id: deviceId,
     online, gen,
     model: str(item.code) ?? str(item.type) ?? null,
     // The cron's `select` is ['status'] only, so `settings` — and with it the
     // device name — is absent on almost every read. Discovery asks for
     // ['status','settings']; everywhere else null here is the normal case,
     // not a failure.
-    name: nameFrom(item.settings, item.name),
+    // SHELLY-NAMES.1 — resolveDeviceName, not nameFrom: discovery and adopt
+    // both read through here, and the two-place lookup demonstrably missed the
+    // label on a live Gen3 account. Channel 0 is the single-channel default;
+    // the routes that know which channel is being named call
+    // resolveDeviceName themselves with the real one.
+    name: resolveDeviceName(item, 0),
     channels,
     ...supportFor({ gen, status, channels, statusKeys: Object.keys(status) }),
   }
 }
 
 export function normaliseGetItems(body) {
-  const list = Array.isArray(body) ? body
-    : Array.isArray(body?.devices) ? body.devices
-    : Array.isArray(body?.data) ? body.data : []
-  return list.map(normaliseGetItem).filter(Boolean)
+  return rawItemsOf(body).map(normaliseGetItem).filter(Boolean)
 }
 
 // v1 /device/all_status → one row per relay channel, for the adopt flow.

@@ -107,7 +107,7 @@ describe('getOpenApiSpec', () => {
   // toggle's 429 (a SUCCESS body — the override is saved and the cron will
   // apply it; the status only tells the client to stop re-pressing) and
   // run-now's 409 vocabulary.
-  it('documents all twelve Shelly routes under Automations', () => {
+  it('documents all thirteen Shelly routes under Automations', () => {
     const expected = {
       '/api/shelly/connection': ['get', 'put', 'delete'],
       '/api/shelly/discover': ['get'],
@@ -117,6 +117,7 @@ describe('getOpenApiSpec', () => {
       '/api/shelly/devices/{id}/run-now': ['post'],
       '/api/shelly/devices/{id}/energy': ['get'],
       '/api/shelly/refresh': ['post'],
+      '/api/shelly/sync-names': ['post'],
     }
     let registered = 0
     for (const [p, methods] of Object.entries(expected)) {
@@ -130,7 +131,15 @@ describe('getOpenApiSpec', () => {
         registered += 1
       }
     }
-    expect(registered).toBe(12)
+    expect(registered).toBe(13)
+
+    // SHELLY-NAMES.1 — the sync's 502 is a PARTIAL success in an error
+    // envelope: it writes the names it resolved before reporting the failure,
+    // so a client that renders only `error` hides work that actually landed.
+    const sync = spec.paths['/api/shelly/sync-names'].post
+    expect(sync.responses['502'].description).toMatch(/partial: true/)
+    expect(sync.responses['429'].description).toMatch(/rate_limited/)
+    expect(spec.components.schemas.ShellySyncNamesBody.properties.overwrite.default).toBe(false)
 
     // Adopt: 404 is the ownership gate, and it is documented as such.
     const adopt = spec.paths['/api/shelly/devices'].post

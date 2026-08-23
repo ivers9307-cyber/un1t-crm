@@ -36,9 +36,9 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertCircle, RefreshCw } from 'lucide-react'
+import { AlertCircle, RefreshCw, Tag } from 'lucide-react'
 import { Button, Card } from '@/components/ui'
-import { fetchJson, errorText } from './shelly-fetch'
+import { fetchJson, errorText, jsonBody } from './shelly-fetch'
 import ShellyConnectionPanel from './ShellyConnectionPanel'
 import ShellyDiscoverPanel from './ShellyDiscoverPanel'
 import ShellyDeviceCard from './ShellyDeviceCard'
@@ -74,6 +74,37 @@ export function refreshSummary({ refreshed = 0, read_failures: readFailures = 0,
   return { tone: readFailures > 0 ? 'warn' : 'ok', text: parts.join(' — ') }
 }
 
+/**
+ * SHELLY-NAMES.1 — what "Use Shelly names" actually did.
+ *
+ * `updated` is the only number an operator can see the effect of, so it leads.
+ * `unresolved` is the interesting one for us — it means the account answered
+ * and carried no label anywhere the resolver looks, which is exactly the live
+ * failure this button was built for — so it is never folded into "no changes":
+ * a plug that Shelly has no name for and a plug whose name already matches are
+ * different answers, and only one of them needs looking at.
+ */
+export function syncNamesSummary({
+  total = 0, updated = 0, unresolved = 0, write_failures: writeFailures = 0, partial = false,
+} = {}) {
+  const plugs = (n) => `${n} plug${n === 1 ? '' : 's'}`
+  const parts = [
+    updated > 0 ? `Named ${updated} of ${total}`
+      : unresolved > 0 ? `No names found in Shelly for ${plugs(unresolved)}`
+        : 'Names already match',
+  ]
+  // Only when it is not already the headline.
+  if (updated > 0 && unresolved > 0) parts.push(`no name in Shelly for ${plugs(unresolved)}`)
+  if (writeFailures > 0) parts.push(`${writeFailures} couldn’t be saved`)
+  // A read that stopped short. Said out loud, because the counters describe
+  // part of the location and would otherwise read as all of it.
+  if (partial) parts.push('some plugs weren’t checked')
+  return {
+    tone: writeFailures > 0 || unresolved > 0 || partial ? 'warn' : 'ok',
+    text: parts.join(' — '),
+  }
+}
+
 const MSG_TONE = { error: 'text-red-700', warn: 'text-amber-700', ok: 'text-un1t-subtle' }
 
 export default function ShellyDevicesClient({ locationName, locationTz, glofoxConnected, canManageConnection }) {
@@ -84,8 +115,19 @@ export default function ShellyDevicesClient({ locationName, locationTz, glofoxCo
   const [refreshError, setRefreshError] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
   const [cooling, setCooling] = useState(false)
+  // ONE verdict slot, shared by Refresh and Use Shelly names. Two lines side
+  // by side would leave a stale one standing next to a fresh one, and the two
+  // actions are mutually exclusive anyway (each debounces the other out).
   const [refreshMsg, setRefreshMsg] = useState(null)
+  // SHELLY-NAMES.1 — the name sync has its OWN in-flight and cooldown flags:
+  // it spends the same shared 1 req/sec account budget as Refresh, so it gets
+  // the same 10 s debounce, but sharing one flag would make either button
+  // silently disable the other for reasons the operator cannot see.
+  const [syncing, setSyncing] = useState(false)
+  const [syncCooling, setSyncCooling] = useState(false)
+  const [syncOpen, setSyncOpen] = useState(false)
   const coolTimer = useRef(null)
+  const syncCoolTimer = useRef(null)
   const msgTimer = useRef(null)
   // Monotonic load counter. Every load takes a ticket on the way in and
   // checks it is still the newest on the way out.
@@ -97,6 +139,7 @@ export default function ShellyDevicesClient({ locationName, locationTz, glofoxCo
     return () => {
       liveRef.current = false
       if (coolTimer.current) clearTimeout(coolTimer.current)
+      if (syncCoolTimer.current) clearTimeout(syncCoolTimer.current)
       if (msgTimer.current) clearTimeout(msgTimer.current)
     }
   }, [])
@@ -184,6 +227,38 @@ export default function ShellyDevicesClient({ locationName, locationTz, glofoxCo
     await load()
   }
 
+  /**
+   * SHELLY-NAMES.1 — copy the labels from the Shelly app onto these rows.
+   *
+   * `overwrite` is never implicit: the two-choice confirm above this makes
+   * "All plugs" a separate press, because it replaces names a human typed here
+   * and nothing keeps the old one.
+   */
+  async function doSyncNames(overwrite) {
+    if (syncing || syncCooling) return
+    setSyncOpen(false)
+    setSyncing(true)
+    setRefreshMsg(null)
+    const res = await fetchJson('/api/shelly/sync-names', jsonBody('POST', { overwrite }))
+    if (!liveRef.current) return
+    setSyncing(false)
+    setSyncCooling(true)
+    syncCoolTimer.current = setTimeout(() => { if (liveRef.current) setSyncCooling(false) }, REFRESH_DEBOUNCE_MS)
+    if (!res.ok || res.json?.success === false) {
+      // The route's 502 is PARTIAL by construction — it writes the names it
+      // resolved before reporting the failure — so a bare error line would tell
+      // an operator nothing happened when several plugs were in fact renamed.
+      const line = errorText(res.json, 'Could not read the names from Shelly')
+      const done = Number(res.json?.updated) || 0
+      showRefreshMsg({ tone: 'error', text: done > 0 ? `Named ${done} — ${line}` : line })
+      // Reload anyway: those names are on the rows now.
+      if (done > 0) await load()
+      return
+    }
+    showRefreshMsg(syncNamesSummary(res.json))
+    await load()
+  }
+
   // ——— what state is the connection in? ————————————————————————————
   // `undefined` = neither read has ever succeeded (still loading, or both
   // failed). It is NOT null: null is the confident "never connected" that
@@ -243,28 +318,73 @@ export default function ShellyDevicesClient({ locationName, locationTz, glofoxCo
 
       <section className="space-y-4">
         {devices.length > 0 && (
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold text-un1t-text">
-              Plugs{locationName ? ` · ${locationName}` : ''}
-            </h2>
-            <div className="flex items-center gap-2">
-              {refreshMsg && (
-                <span className={`text-xs ${MSG_TONE[refreshMsg.tone] || MSG_TONE.ok}`} role="status">
-                  {refreshMsg.text}
-                </span>
-              )}
-              <Button
-                size="sm"
-                variant="ghost"
-                icon={RefreshCw}
-                loading={refreshing}
-                disabled={cooling}
-                title={cooling ? 'Just refreshed — give it a few seconds' : undefined}
-                onClick={doRefresh}
-              >
-                Refresh
-              </Button>
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-un1t-text">
+                Plugs{locationName ? ` · ${locationName}` : ''}
+              </h2>
+              <div className="flex flex-wrap items-center gap-2">
+                {refreshMsg && (
+                  <span className={`text-xs ${MSG_TONE[refreshMsg.tone] || MSG_TONE.ok}`} role="status">
+                    {refreshMsg.text}
+                  </span>
+                )}
+                {/* Gated on a LIVE connection, exactly like Find devices above:
+                    this is an account-wide cloud read, and offering it against
+                    a connection we know is unusable buys a 409 the operator
+                    cannot act on from here. `connected` is null (not false)
+                    when it is our own read that failed, so an unreadable
+                    connection hides the button rather than claiming the
+                    account is broken. */}
+                {connected === true && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    icon={Tag}
+                    loading={syncing}
+                    disabled={syncCooling}
+                    aria-expanded={syncOpen}
+                    title={syncCooling ? 'Just synced — give it a few seconds' : undefined}
+                    onClick={() => setSyncOpen((v) => !v)}
+                  >
+                    Use Shelly names
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  icon={RefreshCw}
+                  loading={refreshing}
+                  disabled={cooling}
+                  title={cooling ? 'Just refreshed — give it a few seconds' : undefined}
+                  onClick={doRefresh}
+                >
+                  Refresh
+                </Button>
+              </div>
             </div>
+
+            {/* TWO CHOICES, both spelled out — the destructive one says what it
+                destroys in its own label. There is no undo: the replaced name
+                is not kept anywhere. */}
+            {syncOpen && connected === true && (
+              <div
+                className="flex flex-wrap items-center gap-2 rounded-md border border-un1t-border bg-un1t-surface p-2"
+                role="group"
+                aria-label="Use Shelly names"
+              >
+                <span className="text-xs text-un1t-subtle">Copy the names from your Shelly app to:</span>
+                <Button size="sm" variant="secondary" onClick={() => doSyncNames(false)}>
+                  Only unnamed plugs
+                </Button>
+                <Button size="sm" variant="danger" onClick={() => doSyncNames(true)}>
+                  All plugs — replaces names typed here
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setSyncOpen(false)}>
+                  Cancel
+                </Button>
+              </div>
+            )}
           </div>
         )}
 
