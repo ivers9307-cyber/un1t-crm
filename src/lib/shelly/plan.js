@@ -30,15 +30,65 @@
 //     maths. Swallowing it would be worse than the throw: with no windows
 //     resolved, every device would read as "outside every window" and the
 //     location would switch itself off.
-//   • `nowMs` — must be a finite epoch ms (Date.now()). A NaN clock resolves
-//     no active window, so the same location-wide off applies.
+//   • `nowMs` — must be a finite epoch ms (Date.now()). A NaN clock does NOT
+//     answer null: every comparison against it is false, so no override is
+//     live and no window is active, and every device we have stamped `on`
+//     gets a location-wide `off`. Compute it ONCE per tick and guard it with
+//     Number.isFinite before the sweep — not per device, or a location can
+//     straddle a boundary mid-loop.
 // All three are computed once per tick by the caller, never read from a row.
+//
+// FOUR EDGES, each with an obligation on the code around this file:
+//  a. `override.set_at` is LOAD-BEARING. It IS the key, and the fallback when
+//     it is missing is `until:state` — so two overrides with the same until
+//     and state mint the SAME key, and the second one is read as already
+//     applied and never fires. PR 2's zod must make `set_at` a required ISO
+//     datetime and `state` a strict enum of 'on'|'off'; this planner cannot
+//     tell a re-issued override from a repeat of the old one without it.
+//  b. OVERLAPPING windows: `.find()` over an on_at-sorted list means the
+//     EARLIEST-starting window wins, the same deliberate tie-break
+//     src/lib/sonos/groups.js documents. Nothing in validation forbids the
+//     overlap. Consequence: when the earlier window ends while the later is
+//     still open, the key changes and a redundant `on` is re-issued. Harmless
+//     for a relay (idempotent) and visible in the action log; it is exactly
+//     the re-issue that Sonos could not afford.
+//  c. TOUCHING windows (07:00-12:00, 12:00-21:30) do NOT produce a close at
+//     the seam: `on_at` is inclusive and `off_at` exclusive, so 12:00 belongs
+//     to the later window only. One `on`, no flicker.
+//  d. DISABLING a device mid-window leaves the relay exactly as it is — rule 2
+//     returns before rule 4 can close it, by design, since `enabled:false`
+//     means "this is not mine to touch" rather than "switch it off". PR 2's
+//     disable action must therefore either send an explicit off itself or say
+//     so in the UI; a plug silently left on all night is a support ticket.
 
 import { resolveServeWindows } from '@/lib/schedule/desired-state'
 import { DEFAULT_TZ } from '@/lib/tz-time'
 
 export const overrideKey = (ov) => 'ov:' + (ov?.set_at || `${ov?.until}:${ov?.state}`)
 export const windowKey = (w) => 'w:' + w.on_at
+
+// Rule 1's predicate, exported so it cannot drift from its callers: Task 8's
+// reconcile needs it to decide whether a class-mode device may be SKIPPED on an
+// occurrence load error (a live override must still be applied, because a
+// manual action does not depend on the timetable), and PR 2's toggle route
+// needs it to answer "is one in force?". Three copies of "is this live" is how
+// the cron and the UI end up disagreeing about a relay.
+//
+// The state must be EXACTLY 'on' or 'off'. The engine's desiredState reads this
+// field as `x === 'on' ? 'on' : 'off'`, which is safe for the question IT
+// answers, but here it would mean that 'ON', a stray trailing space, or a jsonb
+// boolean `true` — which plainly means ON — all send a physical OFF. An
+// unrecognised state is not a live override at all: the device follows its
+// schedule, which is defined behaviour, instead of being switched on a value we
+// failed to understand. Same for an `until` we cannot date (an unparseable
+// string, a number-as-string, an object): NaN > nowMs is false, so it is simply
+// not live — and a NaN `nowMs` makes every override read as expired, which is
+// the second reason callers must guard the clock (see the header).
+export function isLiveOverride(ov, nowMs) {
+  if (ov?.state !== 'on' && ov?.state !== 'off') return false
+  if (!ov.until) return false
+  return new Date(ov.until).getTime() > nowMs
+}
 
 // → null | { action:'on'|'off', reason, key }
 //
@@ -50,19 +100,10 @@ export function planDeviceAction(device, nowMs, dateStr, occurrences = [], tz = 
   const last = device?.last_applied && typeof device.last_applied === 'object' ? device.last_applied : null
   const same = (key, action) => last?.key === key && last?.action === action
 
-  // 1. Live override — every adopted device.
-  //
-  // The state must be EXACTLY 'on' or 'off'. The engine's desiredState reads
-  // this field as `x === 'on' ? 'on' : 'off'`, which is safe for the question
-  // IT answers, but here it would mean that 'ON', a stray trailing space, or a
-  // jsonb boolean `true` — which plainly means ON — all send a physical OFF.
-  // An unrecognised state is not a live override at all: the device follows
-  // its schedule, which is defined behaviour, instead of being switched on a
-  // value we failed to understand. Same for a `until` we cannot date (an
-  // unparseable string, a number-as-string, an object): NaN > nowMs is false,
-  // so it is simply not live.
+  // 1. Live override — every adopted device. See isLiveOverride for why an
+  // unrecognised state is not one.
   const ov = device?.override
-  if ((ov?.state === 'on' || ov?.state === 'off') && ov.until && new Date(ov.until).getTime() > nowMs) {
+  if (isLiveOverride(ov, nowMs)) {
     const action = ov.state
     const key = overrideKey(ov)
     if (!force && same(key, action)) return null
