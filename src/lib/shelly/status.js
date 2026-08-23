@@ -191,6 +191,14 @@ export function resolveDeviceName(item, channel = 0) {
 
   const picked =
     (multiRelay ? perChannel : null)
+    // The CLOUD's own label. Not part of Shelly.GetConfig — the cloud grafts a
+    // `DeviceInfo` envelope onto `settings` — and it is where the Smart
+    // Control app's name actually lives: the Stillorgan live gate
+    // (SHELLY-NAMES.2) showed six app-named Gen3 Minis whose
+    // `sys.device.name` was null while `settings.DeviceInfo` was present.
+    // The app labels the ACCOUNT record, not the device, so this outranks
+    // the on-device name.
+    ?? str(settings?.DeviceInfo?.name)
     ?? str(settings?.sys?.device?.name)
     ?? str(settings?.device?.name)
     ?? str(settings?.name)
@@ -252,6 +260,10 @@ export function nameShapeDiagnostic(item) {
     settingsKeys: keysOf(settings),
     sysKeys: keysOf(sys),
     deviceKeys: keysOf(device),
+    // The cloud grafts a `DeviceInfo` envelope onto `settings` (not part of
+    // Shelly.GetConfig) — SHELLY-NAMES.2 found the app's label there. Keys
+    // only, like everything else here.
+    deviceInfoKeys: keysOf(isObj(settings?.DeviceInfo) ? settings.DeviceInfo : null),
     switchKeys: firstSwitchKey ? keysOf(settings[firstSwitchKey]) : [],
     hasSysDeviceName: nameProp,
     statusKeys: keysOf(status),
