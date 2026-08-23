@@ -77,10 +77,9 @@ function ianaZones() {
 // Intl.DateTimeFormat to canonicalise costs ~27 µs, and a cron resolving a
 // fleet asks the same handful of strings over and over. A FAILED lookup is
 // never stored — negative caching is what would let arbitrary garbage grow the
-// Map forever. Every key here therefore named a real zone, so the Map is
-// bounded by the IANA set (plus whatever case variants of those names the
-// callers actually pass; the caller is the locations.timezone column, which
-// holds a handful of distinct values). No eviction, so no thrash.
+// Map forever. Keys are LOWERCASED (Intl canonicalises case anyway), so every
+// key names a real zone exactly once and the Map is bounded by the IANA set,
+// literally. No eviction, so no thrash.
 const _canon = new Map()
 
 // Canonical IANA name for `tz`, or null if it is not one.
@@ -94,7 +93,8 @@ const _canon = new Map()
 // which has no DST hazard. Only the offset-bearing 'Etc/GMT±N' are rejected.)
 function canonicalTz(tz) {
   if (typeof tz !== 'string' || !tz.trim()) return null
-  const hit = _canon.get(tz)
+  const key = tz.toLowerCase()
+  const hit = _canon.get(key)
   if (hit !== undefined) return hit
   let canon
   try {
@@ -103,7 +103,7 @@ function canonicalTz(tz) {
     return null
   }
   if (canon !== 'UTC' && !ianaZones().has(canon)) return null
-  _canon.set(tz, canon)
+  _canon.set(key, canon)
   return canon
 }
 

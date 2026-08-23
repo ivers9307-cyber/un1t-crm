@@ -7,30 +7,37 @@
 // `tz` as its LAST argument, defaulting to Europe/Dublin so the existing
 // Sonos callers are unchanged.
 //
-// THE `tz` CONTRACT (SHELLY.2b): null, undefined and '' all mean "no zone
-// given" and resolve to Dublin — locations.timezone is a nullable column,
-// so an absent value is a normal value, not an error. A non-empty but
-// INVALID name THROWS, on purpose: a typo'd timezone must never quietly
-// run a studio on Dublin time. Callers that read locations.timezone go
-// through resolveTz() (and log the fallback); this engine is the pure
-// core and does not decide policy for a value it cannot interpret.
+// THE `tz` CONTRACT — MECHANISM (what this file does):
+//   • null, undefined and '' mean "no zone given" and resolve to Dublin.
+//     locations.timezone is a NULLABLE column, so an absent value is a
+//     normal value, not an error.
+//   • Any other string goes to Intl unchanged, so a non-empty but INVALID
+//     name THROWS a RangeError. This engine is the pure core: it has no
+//     way to interpret 'Europe/Dubln' and does not invent one.
+//   • That throw can only reach a path that resolves a wall-clock, which
+//     means FIXED mode. A disabled device, schedule_mode 'none', a live
+//     override and CLASS mode never touch the zone at all — class windows
+//     come from occurrence INSTANTS, which are already absolute — so they
+//     answer normally even when handed a garbage zone. That is not
+//     tolerance, it is just that nothing asked.
+//
+// THE `tz` CONTRACT — POLICY (what the EDGE must do):
+//   Whoever reads locations.timezone — the reconcile in Task 8, the routes
+//   in PR 2 — must pass it through resolveTz() from src/lib/tz-time, which
+//   downgrades an unusable value to Dublin, AND must emit an
+//   operator-visible logWarn naming the location id and the rejected
+//   value. resolveTz is pure and does NOT log, so that warning is the
+//   caller's job, and it is the only thing standing between a typo'd zone
+//   and a studio silently running on Dublin time. A schedule quietly an
+//   hour out is a support ticket nobody knows how to open.
 //
 // The wall-clock maths itself lives in src/lib/tz-time.js, which is also
 // where the DST-edge contract is written down (a nonexistent wall-clock
 // resolves EARLIER; an ambiguous one resolves to one deterministic
-// instant).
-//
-// SHELLY.2 also FIXED a live bug by that move. The private dublinWallMs
-// this replaced corrected the naive guess by MINUTE-OF-DAY, which is a
-// whole DAY late whenever the read-back rolls onto the next calendar
-// date. For Dublin that is wall-clock 23:00-23:59 during IST, where a
-// fixed_window boundary resolved a whole day late. Measured: sweeping
-// every 30-minute boundary over all of 2026, old and new disagree on
-// exactly the 23:xx boundaries and exactly the 210 IST dates, and on
-// nothing else. No existing engine test covered a 23:xx boundary (they
-// all use 22:00), and no live sonos_schedules window has one — the
-// latest live boundary is 20:31 — so nothing in production moves. The
-// behaviour change is deliberate and pinned by its own test.
+// instant) and where the 23:xx-IST whole-day bug that SHELLY.2 fixed by
+// moving onto it is documented in full. One line here: dublinWallMs
+// corrected by minute-of-day, so any boundary whose read-back rolled onto
+// the next calendar date resolved a whole day late.
 //
 // The TAPO-T1 tag is where this was born, not where it lives. The Tapo
 // and Homey paths were deleted in SONOS.14; this engine was deliberately
@@ -58,6 +65,16 @@ const DEFAULT_LAG_MIN = 10
 // shape a nullable column arrives in) skips a default entirely.
 const zoneOf = (tz) => (tz == null || tz === '' ? DEFAULT_TZ : tz)
 
+// A '00:00' boundary means THE START OF THAT CALENDAR DAY, not "the wall-clock
+// 00:00": where DST starts at local midnight (Santiago, Havana, Beirut) that
+// wall-clock does not exist, and wallMsInTz's gap rule (earlier) would put the
+// boundary at 23:00 on the day BEFORE — starting a window an hour early or
+// ending it an hour early, on the wrong date. dayStartMsInTz resolves it to the
+// first instant of the day instead, which is what a day boundary means.
+const boundaryMs = (dateStr, hhmm, zone) => (
+  hhmm === '00:00' ? dayStartMsInTz(dateStr, zone) : wallMsInTz(dateStr, hhmm, zone)
+)
+
 // ISO day-of-week (1=Mon..7=Sun) for a calendar date string. Zone-independent:
 // a 'YYYY-MM-DD' names the same weekday everywhere, so this reads it as UTC.
 function isoDow(dateStr) {
@@ -76,14 +93,14 @@ export function resolveDayWindows(device, dateStr, occurrences = [], tz = DEFAUL
     const out = []
     for (const w of Array.isArray(device.fixed_windows) ? device.fixed_windows : []) {
       if (!Array.isArray(w?.days) || !w.days.includes(dow)) continue
-      const onAt = wallMsInTz(dateStr, w.on, zone)
-      let offAt = wallMsInTz(dateStr, w.off, zone)
+      const onAt = boundaryMs(dateStr, w.on, zone)
+      let offAt = boundaryMs(dateStr, w.off, zone)
       if (onAt == null || offAt == null) continue
       // Overnight span: re-resolve the off boundary on the NEXT calendar day
       // against its own local wall-clock. A flat +24h is wrong across a DST
       // transition — Sat 22:00 → Sun 02:00 over spring-forward is 23 real
       // hours for the day, only 4 wall-clock hours but 3 real hours here.
-      if (offAt <= onAt) offAt = wallMsInTz(addDaysISO(dateStr, 1), w.off, zone)
+      if (offAt <= onAt) offAt = boundaryMs(addDaysISO(dateStr, 1), w.off, zone)
       // `source` is the window this resolved pair came from. The engine
       // itself never reads it — it exists so a caller that needs the
       // window's payload (Sonos: volume + favourite) can get it without
