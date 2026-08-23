@@ -14,18 +14,20 @@
 // gate, which is per-location) and is NEVER written.
 // Dashboards live on the Dashboard tab since HOME-LOC.7.
 
-import { useState, useCallback, useRef } from 'react'
-import { View, Text, ScrollView, ActivityIndicator, Pressable, RefreshControl, Alert } from 'react-native'
+import { useState, useCallback, useRef, useEffect } from 'react'
+import { View, Text, ScrollView, ActivityIndicator, Pressable, RefreshControl } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { useAuth } from '../../../lib/auth-context'
 import { hasAnyMobileFeature } from '../../../lib/permissions'
 import { usePhysicalLocation } from '../../../lib/use-physical-location'
 import { pickerLocations } from '../../../lib/control-location'
+import { promptLocationPick } from '../../../lib/pick-location-alert'
 import { shiftWindow, shiftTimeLabel, groupShiftsByDay, homeTiles } from '../../../lib/home-logic'
 import { getMyShifts, getTeamShifts } from '../../../lib/schedule-api'
 import { isoDate } from '../../../lib/dates'
 import { pickLocationColor } from 'shared/location-colors'
+import { groupTeamShiftsByCoach, coachSpanLabel } from 'shared/team-today'
 import ChoiceCard from '../../../components/ChoiceCard'
 import LocationPill from '../../../components/LocationPill'
 
@@ -33,8 +35,10 @@ import LocationPill from '../../../components/LocationPill'
 // `locations` (src/lib/roster-read.js's API_SHIFT_SELECT embeds
 // shift_blocks + profiles only) — so the studio chip resolves its NAME from
 // the caller's own assignment list rather than from the row. The `?.locations`
-// read stays first so the chip keeps working if the route ever grows the
-// embed the personal-dashboard route already has.
+// read stays first so the chip keeps working if this route ever grows the
+// embed the personal dashboard already has (that one is NOT this route: it is
+// shared/dashboard-data.js's own direct select, which joins
+// `locations:location_id ( id, name )` onto the block).
 function shiftLocationId(shift) {
   return shift?.locations?.id || shift?.location_id || null
 }
@@ -48,18 +52,45 @@ function shiftLocationName(shift, locations) {
 export default function Home() {
   const { profile, activeLocation, locations } = useAuth()
   const router = useRouter()
-  const phys = usePhysicalLocation()
-  // Extracted rather than written inline in the dep arrays below:
-  // exhaustive-deps runs at ERROR here and rejects complex expressions.
-  const physLocationId = phys.location?.id || null
+  // Destructured, and the id extracted, rather than written inline in the
+  // dep arrays below: exhaustive-deps runs at ERROR here and demands the
+  // whole hook result as one dependency the moment a method is CALLED off
+  // it (refresh()), which would re-arm every effect on each render.
+  const {
+    status: physStatus,
+    location: physLocation,
+    refresh: refreshPhysical,
+  } = usePhysicalLocation()
+  const physLocationId = physLocation?.id || null
 
   const [myShifts, setMyShifts] = useState(null)   // null = loading
   const [shiftsError, setShiftsError] = useState(null)
-  const [roster, setRoster] = useState([])         // on-site: today's team at the detected studio
+  // On-site: today's team at the detected studio, KEYED to the location it
+  // was fetched for (the sonos listLocationRef class). Without the key,
+  // walking Stillorgan → Hatch paints Stillorgan's coaches under the header
+  // "Today at Hatch Street" for the whole of the next fetch.
+  const [roster, setRoster] = useState({ locationId: null, rows: [] })
   const [refreshing, setRefreshing] = useState(false)
   // Keep the last painted list through a transport blip (api() tags its
   // self-minted envelopes transport:true — the sonos screen's convention).
-  const paintedRef = useRef(false)
+  // Holds the profile id it was painted FOR, not a bare boolean: under
+  // View-as the identity changes without a remount, and a bare flag would
+  // let a blip on the new identity's first fetch keep the PREVIOUS user's
+  // shifts on screen.
+  const paintedRef = useRef(null)
+  // Screen liveness for loads that aren't owned by a focus effect (the
+  // pull-to-refresh below) — a resolve landing after a blur must not paint.
+  const focusedRef = useRef(false)
+
+  // Identity swap (View-as, or a sign-in on a shared studio device) — drop
+  // the previous user's shifts rather than showing them while the new
+  // user's load is in flight. The roster is location-keyed, not
+  // profile-keyed: it is the same list of coaches whoever is looking.
+  useEffect(() => {
+    setMyShifts(null)
+    setShiftsError(null)
+    paintedRef.current = null
+  }, [profile?.id])
 
   const loadShifts = useCallback(async (isActive) => {
     if (!profile?.id) return
@@ -69,12 +100,16 @@ export default function Home() {
       const res = await getMyShifts({ profileId: profile.id, startDate, endDate })
       if (!isActive()) return
       if (!res.success) {
-        if (!(res.transport && paintedRef.current)) setShiftsError(res.error || 'Could not load your shifts')
+        // Keep the painted list through a blip only when it belongs to the
+        // identity being refetched.
+        if (!(res.transport && paintedRef.current === profile.id)) {
+          setShiftsError(res.error || 'Could not load your shifts')
+        }
         return
       }
       setShiftsError(null)
       setMyShifts(res.data || [])
-      paintedRef.current = true
+      paintedRef.current = profile.id
     } catch (e) {
       // authHeaders() → supabase.auth.getSession() runs OUTSIDE api()'s own
       // try, so an uncaught rejection there would strand the spinner forever.
@@ -84,37 +119,49 @@ export default function Home() {
 
   const loadRoster = useCallback(async (isActive, locationId) => {
     if (!locationId) {
-      if (isActive()) setRoster([])
+      if (isActive()) setRoster({ locationId: null, rows: [] })
       return
     }
     const today = isoDate(new Date())
     try {
       const res = await getTeamShifts({ locationId, startDate: today, endDate: today })
-      if (isActive()) setRoster(res.success ? (res.data || []) : [])
+      // Stamped with the location it was fetched FOR, so the render can
+      // refuse to show it under a different studio's name.
+      if (isActive()) setRoster({ locationId, rows: res.success ? (res.data || []) : [] })
     } catch {
-      if (isActive()) setRoster([]) // roster is a garnish — never an error state
+      if (isActive()) setRoster({ locationId, rows: [] }) // a garnish — never an error state
     }
   }, [])
 
   useFocusEffect(useCallback(() => {
     let active = true
+    focusedRef.current = true
     loadShifts(() => active)
-    return () => { active = false }
+    return () => { active = false; focusedRef.current = false }
   }, [loadShifts]))
 
   // Roster follows the DETECTED location (re-runs when detection lands).
   useFocusEffect(useCallback(() => {
     let active = true
-    if (phys.status === 'at_studio') loadRoster(() => active, physLocationId)
+    if (physStatus === 'at_studio') loadRoster(() => active, physLocationId)
     return () => { active = false }
-  }, [phys.status, physLocationId, loadRoster]))
+  }, [physStatus, physLocationId, loadRoster]))
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true)
-    await loadShifts(() => true)
-    if (phys.status === 'at_studio') await loadRoster(() => true, physLocationId)
+    // Real liveness, not `() => true`: a pull-to-refresh the user walks away
+    // from must not repaint the screen they left. The spinner is stopped
+    // unconditionally, though — a stuck spinner is worse than a late one.
+    const isActive = () => focusedRef.current
+    // Detection is part of "refresh": the whole point of the gesture on this
+    // screen is usually "I've just walked in" / "I've just left".
+    await Promise.all([
+      refreshPhysical(),
+      loadShifts(isActive),
+      physStatus === 'at_studio' ? loadRoster(isActive, physLocationId) : Promise.resolve(),
+    ])
     setRefreshing(false)
-  }, [loadShifts, loadRoster, phys.status, physLocationId])
+  }, [loadShifts, loadRoster, refreshPhysical, physStatus, physLocationId])
 
   if (!profile) return null
   const firstName = profile.full_name?.split(' ')[0] || 'there'
@@ -123,7 +170,21 @@ export default function Home() {
   // onboarding nudge. It lives on Home, not the Dashboard tab, precisely
   // because a user with no mobile features has no dashboard permission
   // either and would never reach that tab.
-  if (!hasAnyMobileFeature(profile, activeLocation)) {
+  //
+  // Gated on EVERY location the user holds, not just activeLocation
+  // (HOME-LOC.8b). Features are per-location, and Home's own content is
+  // cross-location — a coach with Schedule at Hatch whose activeLocation is
+  // Stillorgan (features off there) would otherwise hit a wall telling them
+  // to ask an admin, on a screen that has their Hatch shifts to show them.
+  // Strictly a WIDENING of the old gate: with no locations at all the check
+  // falls back to the location-less form the old Home ran (activeLocation
+  // was null in exactly that case), so nobody who previously escaped the
+  // nudge now hits it.
+  const featureLocations = [activeLocation, ...(locations || [])].filter(Boolean)
+  const anyLocationHasFeatures = featureLocations.length > 0
+    ? featureLocations.some((l) => hasAnyMobileFeature(profile, l))
+    : hasAnyMobileFeature(profile, null)
+  if (!anyLocationHasFeatures) {
     return (
       <ScrollView className="flex-1 bg-un1t-bg" contentContainerClassName="p-6">
         <Text className="text-3xl font-bold text-un1t-text mb-1">Hi {firstName}</Text>
@@ -146,28 +207,27 @@ export default function Home() {
       router.push({ pathname: '/controls', params: { loc: controlsPickable[0].id } })
       return
     }
-    // Android's Alert.alert silently caps at 3 buttons total and appends the
-    // `cancel` one last — so a third pickable studio would push Cancel off
-    // and the picker would just lose it, no error. Fine at today's
-    // 2-location fleet; swap for an ActionSheet before a third goes live
-    // (same constraint LocationPill's picker carries).
-    Alert.alert('Control which studio?', 'Commands go to the studio you pick.', [
-      ...controlsPickable.map((l) => ({
-        text: l.name,
-        onPress: () => router.push({ pathname: '/controls', params: { loc: l.id } }),
-      })),
-      { text: 'Cancel', style: 'cancel' },
-    ])
+    // No currentId: nothing is "in force" from here — this row is the
+    // remote entry, so every studio is an equally cold pick.
+    promptLocationPick({
+      pickable: controlsPickable,
+      onPick: (id) => router.push({ pathname: '/controls', params: { loc: id } }),
+    })
   }
 
-  const onSite = phys.status === 'at_studio'
+  const onSite = physStatus === 'at_studio'
   const todayIso = isoDate(new Date())
-  const tiles = onSite ? homeTiles(profile, phys.location) : []
+  const tiles = onSite ? homeTiles(profile, physLocation) : []
   const groups = groupShiftsByDay(myShifts || [], todayIso)
-  // Reuses the agenda grouper for its (tested) within-day sort; a 1-day
-  // window over today's rows is exactly the roster list. Includes ME — the
-  // point is who else is in, and "who's on" reads wrong without myself.
-  const rosterToday = groupShiftsByDay(roster, todayIso, 1)[0]?.shifts || []
+  // ONE ROW PER COACH, via the same shared grouper the personal dashboard's
+  // "On with you today" strip uses — a coach working three blocks today is
+  // one person, and rendering them three times here while the Dashboard tab
+  // renders them once is the drift this module exists to prevent. Includes
+  // ME: the point is who is in, and "who's on" reads wrong without myself.
+  // Only paint a roster that was fetched for the studio now on screen.
+  const rosterToday = roster.locationId && roster.locationId === physLocationId
+    ? groupTeamShiftsByCoach(roster.rows)
+    : []
   const showChips = (locations || []).length > 1
 
   return (
@@ -178,7 +238,7 @@ export default function Home() {
     >
       <Text className="text-3xl font-bold text-un1t-text">Hi {firstName}</Text>
 
-      {phys.status === 'loading' ? (
+      {physStatus === 'loading' ? (
         <View className="py-10 items-center"><ActivityIndicator color="#94A3B8" /></View>
       ) : onSite ? (
         <>
@@ -186,8 +246,8 @@ export default function Home() {
               informational here (no picker): Home shows where you ARE, and
               commanding a different studio is the offsite "Studio controls"
               route, which is explicit about being remote. */}
-          <Text className="text-xl font-semibold text-un1t-text mt-1 mb-1">{phys.location.name}</Text>
-          <LocationPill location={phys.location} source="detected" />
+          <Text className="text-xl font-semibold text-un1t-text mt-1 mb-1">{physLocation.name}</Text>
+          <LocationPill location={physLocation} source="detected" />
 
           {tiles.length > 0 ? (
             <View className="gap-3">
@@ -209,16 +269,16 @@ export default function Home() {
           {rosterToday.length > 0 && (
             <>
               <Text className="text-base font-semibold text-un1t-text mt-6 mb-2">
-                Today at {phys.location.name}
+                Today at {physLocation.name}
               </Text>
               <View className="bg-un1t-surface border border-un1t-border rounded-2xl px-4 py-1">
-                {rosterToday.map((s, i) => (
+                {rosterToday.map((c, i) => (
                   <View
-                    key={s.id || i}
+                    key={c.profileId}
                     className={`flex-row items-center justify-between py-2.5 ${i > 0 ? 'border-t border-un1t-border' : ''}`}
                   >
-                    <Text className="text-sm text-un1t-text flex-1 mr-2">{s.profiles?.full_name || 'Coach'}</Text>
-                    <Text className="text-xs text-un1t-subtle">{shiftTimeLabel(s)}</Text>
+                    <Text className="text-sm text-un1t-text flex-1 mr-2">{c.name}</Text>
+                    <Text className="text-xs text-un1t-subtle">{coachSpanLabel(c)}</Text>
                   </View>
                 ))}
               </View>
@@ -230,13 +290,21 @@ export default function Home() {
           {/* OFFSITE / UNKNOWN — when you're next in, and where. */}
           <Text className="text-sm text-un1t-subtle mb-4">Your next 7 days</Text>
 
+          {/* The banner sits ABOVE the list rather than replacing it: once a
+              good list has been painted, a later failure means "this may be
+              stale", not "you have no shifts". Only a failure with nothing
+              painted yet (myShifts === null) owns the whole space. */}
           {shiftsError ? (
             <View className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 mb-4 flex-row items-start">
               <Ionicons name="alert-circle-outline" size={14} color="#DC2626" style={{ marginTop: 2 }} />
               <Text className="text-xs text-red-700 ml-2 flex-1">{shiftsError}</Text>
             </View>
-          ) : myShifts === null ? (
-            <View className="py-6 items-center"><ActivityIndicator color="#94A3B8" /></View>
+          ) : null}
+
+          {myShifts === null ? (
+            shiftsError ? null : (
+              <View className="py-6 items-center"><ActivityIndicator color="#94A3B8" /></View>
+            )
           ) : groups.length === 0 ? (
             <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mb-4">
               <Text className="text-sm text-un1t-subtle">No shifts this week.</Text>

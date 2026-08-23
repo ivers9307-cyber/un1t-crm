@@ -14,14 +14,12 @@
 // the Alert still flips the label to manual — they DID pick it manually,
 // even though the outcome matches what geofencing would have said anyway.
 //
-// Android's Alert.alert silently caps at 3 buttons total, and a `cancel`
-// button is appended last — so a third pickable studio would push Cancel
-// off and the picker would just lose it, no error. Fine at today's
-// 2-location fleet; swap this Alert for an ActionSheet before a third
-// studio goes live.
-import { View, Text, Pressable, Alert } from 'react-native'
+// The Alert itself is promptLocationPick (HOME-LOC.8b) — shared with Home's
+// remote "Studio controls" row, which carries the Android 3-button caveat.
+import { View, Text, Pressable } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { canPickLocation } from '../lib/control-location'
+import { promptLocationPick } from '../lib/pick-location-alert'
 
 export default function LocationPill({ location, source, pickable = [], onPick, className }) {
   const detected = source === 'detected'
@@ -30,13 +28,7 @@ export default function LocationPill({ location, source, pickable = [], onPick, 
 
   function openPicker() {
     if (!canPick) return
-    Alert.alert('Control which studio?', 'Commands go to the studio you pick.', [
-      ...pickable.map((l) => ({
-        text: l.name + (l.id === location?.id ? '  ✓' : ''),
-        onPress: () => onPick(l.id),
-      })),
-      { text: 'Cancel', style: 'cancel' },
-    ])
+    promptLocationPick({ pickable, currentId: location?.id, onPick })
   }
 
   const fg = detected ? '#047857' : '#B45309'

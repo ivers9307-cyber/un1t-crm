@@ -11,6 +11,9 @@
 // location at all).
 //
 // Status: 'loading' → exactly one of 'at_studio' | 'offsite' | 'unknown'.
+// Returns { status, location, refresh } — refresh() is the explicit
+// re-resolve a pull-to-refresh calls (HOME-LOC.8b); nothing else re-reads
+// within a visit, which is the freeze this hook exists for.
 
 import { useCallback, useRef, useState } from 'react'
 import * as Location from 'expo-location'
@@ -82,6 +85,50 @@ function withTimeout(promise, ms, label) {
   ]).finally(() => clearTimeout(timer))
 }
 
+// The whole IO path, hoisted out of the focus effect (HOME-LOC.8b) so the
+// explicit refresh() below runs the SAME resolution rather than a second
+// copy that could drift from it. Never throws — every failure lands on
+// 'unknown', which renders the offsite layout.
+async function resolveOnce(locations) {
+  let next = { status: 'unknown', location: null }
+  try {
+    const [perm, regions] = await Promise.all([
+      Location.getForegroundPermissionsAsync().catch(() => null),
+      // api() builds on a bare fetch with no AbortSignal, so a hung
+      // request would otherwise pin this hook at 'loading' until the
+      // platform socket timeout — re-armed on every focus. The
+      // abandoned fetch still populates regionsCache if it lands, so
+      // the next focus gets the answer.
+      withTimeout(fetchRegions(), CONFIG_TIMEOUT_MS, 'geofence-config timeout')
+        .catch(() => regionsCache.regions || []),
+    ])
+    if (perm?.status === 'granted' && regions.length > 0) {
+      let current = null
+      if (positionCache.position && Date.now() - positionCache.at <= POSITION_TTL_MS) {
+        current = positionCache.position
+      } else {
+        try {
+          current = await withTimeout(
+            Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+            POSITION_TIMEOUT_MS,
+            'position timeout'
+          )
+          // Only cache a fix pickPosition would actually accept — a
+          // stale/replayed read would otherwise pin every screen at
+          // 'unknown' for the full TTL instead of retrying next focus.
+          if (pickPosition({ current, nowMs: Date.now() })) {
+            positionCache = { at: Date.now(), position: current }
+          }
+        } catch { /* fall back to lastKnown below */ }
+      }
+      const lastKnown = current ? null : await Location.getLastKnownPositionAsync().catch(() => null)
+      const position = pickPosition({ current, lastKnown, nowMs: Date.now() })
+      next = resolvePhysicalLocation({ position, regions, locations })
+    }
+  } catch { /* stays unknown */ }
+  return next
+}
+
 export function usePhysicalLocation() {
   const { profile, locations } = useAuth()
   const [result, setResult] = useState({ status: 'loading', location: null })
@@ -116,42 +163,7 @@ export function usePhysicalLocation() {
       const fresh = () => active && visitRef.current === visit
 
       async function resolve() {
-        let next = { status: 'unknown', location: null }
-        try {
-          const [perm, regions] = await Promise.all([
-            Location.getForegroundPermissionsAsync().catch(() => null),
-            // api() builds on a bare fetch with no AbortSignal, so a hung
-            // request would otherwise pin this hook at 'loading' until the
-            // platform socket timeout — re-armed on every focus. The
-            // abandoned fetch still populates regionsCache if it lands, so
-            // the next focus gets the answer.
-            withTimeout(fetchRegions(), CONFIG_TIMEOUT_MS, 'geofence-config timeout')
-              .catch(() => regionsCache.regions || []),
-          ])
-          if (perm?.status === 'granted' && regions.length > 0) {
-            let current = null
-            if (positionCache.position && Date.now() - positionCache.at <= POSITION_TTL_MS) {
-              current = positionCache.position
-            } else {
-              try {
-                current = await withTimeout(
-                  Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
-                  POSITION_TIMEOUT_MS,
-                  'position timeout'
-                )
-                // Only cache a fix pickPosition would actually accept — a
-                // stale/replayed read would otherwise pin every screen at
-                // 'unknown' for the full TTL instead of retrying next focus.
-                if (pickPosition({ current, nowMs: Date.now() })) {
-                  positionCache = { at: Date.now(), position: current }
-                }
-              } catch { /* fall back to lastKnown below */ }
-            }
-            const lastKnown = current ? null : await Location.getLastKnownPositionAsync().catch(() => null)
-            const position = pickPosition({ current, lastKnown, nowMs: Date.now() })
-            next = resolvePhysicalLocation({ position, regions, locations: locationsRef.current })
-          }
-        } catch { /* stays unknown */ }
+        const next = await resolveOnce(locationsRef.current)
         if (fresh()) setResult(next)
       }
 
@@ -177,5 +189,28 @@ export function usePhysicalLocation() {
     }, [locationIds, profile?.id])  // eslint-disable-line react-hooks/exhaustive-deps
   )
 
-  return result
+  // HOME-LOC.8b — an EXPLICIT re-resolve, for a pull-to-refresh. The gesture
+  // means "I have moved", so it must actually re-read the radio: the
+  // position cache is dropped first (dropped, not bypassed — every other
+  // screen's ≤45s cached fix is equally stale once the user has told us so).
+  // The region cache is deliberately kept: its TTL answers "where are the
+  // studios", which a refresh gesture says nothing about.
+  //
+  // Bumping visitRef is what makes this safe against an in-flight focus
+  // resolve — that resolve's `fresh()` now fails, so an older answer landing
+  // late can never overwrite this one.
+  const refresh = useCallback(async () => {
+    // Keyed on the id, not the object: auth-context mints a new `profile`
+    // on every /me refresh, and an unstable refresh() would churn every
+    // caller's onRefresh deps.
+    if (!profile?.id) return
+    const visit = ++visitRef.current
+    positionCache = { at: 0, position: null }
+    setResult({ status: 'loading', location: null })
+    const next = await resolveOnce(locationsRef.current)
+    if (visitRef.current === visit) setResult(next)
+    // locationsRef is read through the ref for the reason documented above.
+  }, [profile?.id])
+
+  return { ...result, refresh }
 }
