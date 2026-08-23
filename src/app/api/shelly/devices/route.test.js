@@ -132,6 +132,12 @@ const cloudItem = ({
   return { id, online, gen, code, settings: { name }, status }
 }
 
+// The live-gate shape: a real device reading with NO label anywhere in it.
+const labelless = (over = {}) => ({
+  id: DEVICE_ID, online: true, gen: 2, code: 'SNPL-00112EU',
+  status: { 'switch:0': { output: true } }, ...over,
+})
+
 // ——— fake supabase ————————————————————————————————————————————————————
 function splitCols(cols) {
   const out = []
@@ -253,16 +259,23 @@ const postReq = (body) => new Request('http://localhost/api/shelly/devices', {
   body: JSON.stringify(body),
 })
 
+// SHELLY-NAMES.3 — the account layer's list (`/interface/device/list`). The
+// default answers and knows nobody, so every pre-existing expectation holds; a
+// test that wants it to name something, or to fail, says so.
+const listOk = (devices = []) => ({ ok: true, statusCode: 200, body: { isok: true, data: { devices } } })
+
 let db
 let getMock
+let deviceListMock
 function useDb(cfg) {
   db = makeDb(cfg)
   createServerClient.mockReturnValue(db)
   return db
 }
-function useCloud(result) {
+function useCloud(result, listResult = listOk()) {
   getMock = vi.fn().mockResolvedValue(result)
-  createShellyClient.mockReturnValue({ get: getMock })
+  deviceListMock = vi.fn().mockResolvedValue(listResult)
+  createShellyClient.mockReturnValue({ get: getMock, deviceList: deviceListMock })
 }
 /** Every shelly_devices select that pinned a device id — i.e. a holder query. */
 const holderLookups = () => db.calls.selects.filter((s) => s.table === 'shelly_devices' && s.filters.device_id !== undefined)
@@ -727,11 +740,59 @@ describe('POST /api/shelly/devices — the insert', () => {
   it("falls back to the cloud account's own name, then to null", async () => {
     await POST(postReq({ device_id: DEVICE_ID }))
     expect(db.calls.inserts[0].payload.name).toBe('Cloud plug name')
+    // The device payload had a label, so the account layer is never asked —
+    // one adopt, one slot of the shared 1 req/sec budget.
+    expect(deviceListMock).not.toHaveBeenCalled()
 
     useDb()
-    useCloud(getOk([{ id: DEVICE_ID, online: true, gen: 2, code: 'SNPL-00112EU', status: { 'switch:0': { output: true } } }]))
+    useCloud(getOk([labelless()]))
     await POST(postReq({ device_id: DEVICE_ID }))
     expect(db.calls.inserts[0].payload.name).toBeNull()
+  })
+
+  // ——— SHELLY-NAMES.3 ————————————————————————————————————————————————
+  // The v2 payload proved LABEL-FREE at the live gate — the Smart Control app
+  // labels the ACCOUNT record, which the v2 API never returns.
+  it('takes the name from the ACCOUNT layer when the device payload has none', async () => {
+    useCloud(getOk([labelless()]), listOk([{ id: DEVICE_ID.toUpperCase(), name: 'Reception heater' }]))
+    const res = await POST(postReq({ device_id: DEVICE_ID }))
+    expect(res.status).toBe(201)
+    expect(db.calls.inserts[0].payload.name).toBe('Reception heater')
+    expect(deviceListMock).toHaveBeenCalledTimes(1)
+    // ONE client for the whole handler, or the pacing between the two calls is
+    // a client that believes it has never called.
+    expect(createShellyClient).toHaveBeenCalledTimes(1)
+  })
+
+  it("the operator's own name still wins over both cloud sources", async () => {
+    useCloud(getOk([labelless()]), listOk([{ id: DEVICE_ID, name: 'Account label' }]))
+    await POST(postReq({ device_id: DEVICE_ID, name: 'Sauna' }))
+    expect(db.calls.inserts[0].payload.name).toBe('Sauna')
+  })
+
+  it('a FAILED account list still adopts — nameless, with the shape warning', async () => {
+    // A cosmetic gap must never cost the operator the device: the card renders
+    // its placeholder and "Use Shelly names" fixes it later.
+    useCloud(getOk([labelless()]), { ok: false, kind: 'rate_limited', statusCode: 429 })
+    const res = await POST(postReq({ device_id: DEVICE_ID }))
+    expect(res.status).toBe(201)
+    expect(db.calls.inserts[0].payload.name).toBeNull()
+    expect(logWarn.mock.calls.some((c) => /account name list failed during adopt/.test(c[1]))).toBe(true)
+    const warn = logWarn.mock.calls.find((c) => c[1] === 'no device name in the Shelly payload')
+    // Nothing came back, so there is no list shape to report — never a faked one.
+    expect(warn[2]).not.toHaveProperty('listShape')
+  })
+
+  it('an account list that named somebody ELSE logs BOTH shapes, keys only', async () => {
+    useCloud(getOk([labelless()]), listOk([{ id: 'ffeedd998877', name: 'Their plug', room: { name: 'Studio floor' } }]))
+    await POST(postReq({ device_id: DEVICE_ID }))
+    expect(db.calls.inserts[0].payload.name).toBeNull()
+    const warn = logWarn.mock.calls.find((c) => c[1] === 'no device name in the Shelly payload')
+    expect(warn[2].shape).toBeTruthy()
+    expect(warn[2].listShape).toMatchObject({ devicesType: 'array', entryCount: 1, nameProp: 'string' })
+    const json = JSON.stringify(warn[2])
+    expect(json).not.toContain('Their plug')
+    expect(json).not.toContain('Studio floor')
   })
 
   it('returns the created row on the allowlist, with no adopted_by', async () => {

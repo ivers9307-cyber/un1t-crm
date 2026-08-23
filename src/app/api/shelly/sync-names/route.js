@@ -23,6 +23,19 @@
 // false and the UI makes "All plugs" a separate, labelled choice: a request
 // that merely forgot the field lands on the safe branch.
 //
+// TWO SOURCES, IN ORDER (SHELLY-NAMES.3). The v2 `get` payload is asked first
+// — it is the device's own account record, and it is the only one that can
+// carry a PER-OUTPUT label. It also proved LABEL-FREE at the live gate: six
+// app-named Gen3 Minis came back with `sys.device.name` present-but-null and
+// the cloud-grafted `DeviceInfo.name` null too, because the Smart Control app
+// labels the ACCOUNT record and the official v2 API never returns it. So when
+// at least one plug is still nameless, ONE further call goes to the account
+// layer (`/interface/device/list`, undocumented but live — it is what Shelly's
+// own web UI reads). That call is an ENHANCEMENT, never a gate: a rate limit or
+// a 5xx on it is logged and the v2 names are written anyway. Failing the whole
+// sync because the undocumented half hiccupped would turn a working rename into
+// nothing at all.
+//
 // THE DIAGNOSTIC IS KEYS-ONLY, ALWAYS. `settings` carries the device's wifi
 // credentials (settings.wifi.sta.pass) and its MQTT broker password, so
 // nameShapeDiagnostic emits key NAMES and typeof strings and never a value out
@@ -40,7 +53,10 @@ import { logError, logWarn } from '@/lib/log'
 import { createShellyClient, MAX_GET_IDS } from '@/lib/shelly/client'
 import { loadConnectionWithKey, markKeyRejected } from '@/lib/shelly/connections'
 import { DEVICE_COLUMNS } from '@/lib/shelly/device-load'
-import { nameShapeDiagnostic, rawItemsOf, rawItemId, resolveDeviceName } from '@/lib/shelly/status'
+import {
+  nameShapeDiagnostic, rawItemsOf, rawItemId, resolveDeviceName,
+  normaliseDeviceListNames, deviceListShapeDiagnostic,
+} from '@/lib/shelly/status'
 import { ShellySyncNamesBody, MAX_DEVICES_PER_LOCATION } from '@/lib/shelly/schemas'
 
 export const runtime = 'nodejs'
@@ -165,6 +181,62 @@ export const POST = withAuth(
       }
     }
 
+    // The v2 pass, resolved per ROW rather than per device: a 4PM is one cloud
+    // read and four differently-labelled outputs. Nothing is written yet —
+    // whether the account layer needs asking is a question about the WHOLE
+    // location, and it must be answered before the first write so the merge
+    // below can apply the same write rules to both sources.
+    const pending = []
+    for (const row of devices) {
+      const key = idKey(row.device_id)
+      // Never asked. Not "unresolved" — see `covered` above.
+      if (!covered.has(key)) continue
+      const raw = rawById.get(key)
+      pending.push({ row, key, raw, name: resolveDeviceName(raw, row.channel) })
+    }
+
+    // ---- the ACCOUNT layer (SHELLY-NAMES.3) --------------------------------
+    // ONE call, and only when the device payload left something nameless. The
+    // labels the operator typed in the Smart Control app live on the account
+    // record, which the v2 API does not return — that is what made the live
+    // gate report "No names found for 6 plugs" against six plainly-named plugs.
+    //
+    // `listBody === undefined` means the call never happened or never answered;
+    // that is what keeps `listShape` out of the diagnostic when there is nothing
+    // to describe.
+    let listNames = new Map()
+    let listBody
+    if (pending.some((p) => !p.name)) {
+      if (Date.now() > deadlineAt) {
+        // The same budget as the batches above. Better a partial rename than a
+        // platform 504 that loses every name already resolved.
+        logWarn(MODULE, 'time budget exhausted — account name list skipped', { locationId })
+        partial = true
+      } else {
+        const listRes = await client.deviceList()
+        if (listRes.ok) {
+          listBody = listRes.body ?? null
+          listNames = normaliseDeviceListNames(listBody)
+        } else if (listRes.kind === 'auth') {
+          // Only `auth` is evidence about the CREDENTIAL, and the same rule as
+          // the read half applies: park the connection and stop. Nothing has
+          // been written, and nothing is lost — the operator has to re-paste
+          // the key and press again anyway, and every name is re-derivable on
+          // that press.
+          await markKeyRejected(db, locationId)
+          return bad('Shelly rejected the stored key — re-paste it from the Shelly app', 409, { code: 'key_rejected' })
+        } else {
+          // Deliberately NOT the 429/502 the v2 batches answer with. This half
+          // is an enhancement on top of a pass that already succeeded, so a
+          // rate limit or a blip on an undocumented endpoint must not cost the
+          // operator the names we did resolve — log it, and write them.
+          logWarn(MODULE, 'account name list failed — continuing with the device payload', {
+            locationId, kind: listRes.kind, statusCode: listRes.statusCode,
+          })
+        }
+      }
+    }
+
     const nowIso = new Date().toISOString()
     let updated = 0
     let unchanged = 0
@@ -176,12 +248,10 @@ export const POST = withAuth(
     // actually tell us where the label lives.
     let sampleRaw
 
-    for (const row of devices) {
-      const key = idKey(row.device_id)
-      // Never asked. Not "unresolved" — see `covered` above.
-      if (!covered.has(key)) continue
-      const raw = rawById.get(key)
-      const name = resolveDeviceName(raw, row.channel)
+    for (const { row, key, raw, name: deviceName } of pending) {
+      // The device's own label first, the account's second. `unresolved` now
+      // means "neither source had one".
+      const name = deviceName ?? listNames.get(key) ?? null
       if (!name) {
         unresolved += 1
         if (sampleRaw === undefined && raw !== undefined) sampleRaw = raw
@@ -220,12 +290,17 @@ export const POST = withAuth(
     }
 
     if (unresolved > 0) {
-      // ONE line, KEYS ONLY. This is the line the live gate is waiting on: it
-      // says which keys the account's items actually carry, so the resolver can
-      // be pointed at the right one. See nameShapeDiagnostic for why no value
-      // from the payload may appear here.
+      // ONE line, KEYS ONLY, and now BOTH shapes — a device that resolved
+      // nothing was missed by the v2 payload AND by the account layer, so a
+      // report of either half alone would send the next reader hunting in the
+      // wrong body. `listShape` is omitted rather than faked when the list call
+      // never answered. See nameShapeDiagnostic for why no value from the
+      // payload may appear here.
       logWarn(MODULE, 'no device name in the Shelly payload', {
-        locationId, unresolved, shape: nameShapeDiagnostic(sampleRaw),
+        locationId,
+        unresolved,
+        shape: nameShapeDiagnostic(sampleRaw),
+        ...(listBody === undefined ? {} : { listShape: deviceListShapeDiagnostic(listBody) }),
       })
     }
 
