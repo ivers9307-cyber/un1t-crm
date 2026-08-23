@@ -41,6 +41,7 @@ function mockDb({
 } = {}) {
   const inserts = []
   const upsertOpts = []
+  const updates = []
   const rpcCalls = []
   const contactsQueries = []
   // ENROLDEDUP.1 — every key list handed to `.in('contact_id', …)` by the
@@ -100,6 +101,17 @@ function mockDb({
                 : { data: survived.map((r, i) => ({ id: `enr-${i}-${r.contact_id}` })), error: null }),
             }
           }),
+          // DUNNING.2 — re-activation is an UPDATE guarded by id + the
+          // terminal status that was read. Records {payload, filters}.
+          update: vi.fn((payload) => {
+            const rec = { payload, filters: [] }
+            updates.push(rec)
+            const b = {
+              eq: vi.fn((col, val) => { rec.filters.push([col, val]); return b }),
+              select: vi.fn(async () => ({ data: [{ id: rec.filters.find((f) => f[0] === 'id')?.[1] }], error: null })),
+            }
+            return b
+          }),
         }
       }
       if (table === 'email_sequences') {
@@ -132,7 +144,7 @@ function mockDb({
       return { data: null, error: null }
     }),
   }
-  return { db, inserts, upsertOpts, rpcCalls, contactsQueries, activeInKeys }
+  return { db, inserts, upsertOpts, updates, rpcCalls, contactsQueries, activeInKeys }
 }
 
 beforeEach(() => {
@@ -143,13 +155,13 @@ describe('enrolContacts — short-circuits', () => {
   it('returns { enrolled: 0, skipped: 0 } when contactIds is empty', async () => {
     createServerClient.mockReturnValue({ from: vi.fn() })
     expect(await enrolContacts({ sequenceId: 's1', contactIds: [] }))
-      .toEqual({ enrolled: 0, skipped: 0 })
+      .toEqual({ enrolled: 0, skipped: 0, reactivated: 0 })
   })
 
   it('returns { enrolled: 0, skipped: 0 } when contactIds is not an array', async () => {
     createServerClient.mockReturnValue({ from: vi.fn() })
     expect(await enrolContacts({ sequenceId: 's1', contactIds: null }))
-      .toEqual({ enrolled: 0, skipped: 0 })
+      .toEqual({ enrolled: 0, skipped: 0, reactivated: 0 })
   })
 })
 
@@ -288,7 +300,7 @@ describe('enrolContacts — automations_exempt gate (HOST-MASTER.3)', () => {
     const out = await enrolContacts({
       sequenceId: 's1', contactIds: ['c1', 'c2'], sourceType: 'booking_created',
     })
-    expect(out).toEqual({ enrolled: 0, skipped: 2 })
+    expect(out).toEqual({ enrolled: 0, skipped: 2, reactivated: 0 })
     expect(inserts).toHaveLength(0)
     expect(rpcCalls).toHaveLength(0)
   })
@@ -364,7 +376,7 @@ describe('enrolContacts — short-circuit when nothing to insert', () => {
     const { db, inserts, rpcCalls } = mockDb({ activeContactIds: ['a', 'b'] })
     createServerClient.mockReturnValue(db)
     const out = await enrolContacts({ sequenceId: 's1', contactIds: ['a', 'b'] })
-    expect(out).toEqual({ enrolled: 0, skipped: 2 })
+    expect(out).toEqual({ enrolled: 0, skipped: 2, reactivated: 0 })
     expect(inserts).toHaveLength(0)
     expect(rpcCalls).toHaveLength(0) // no insert → no counter bump
   })
@@ -433,5 +445,102 @@ describe('ENROLDEDUP.1 — the write is idempotent, not all-or-nothing', () => {
     const { db } = mockDb({ insertError: { message: 'db down' } })
     createServerClient.mockReturnValue(db)
     await expect(enrolContacts({ sequenceId: 's1', contactIds: ['a'] })).rejects.toThrow('Enrol failed: db down')
+  })
+})
+
+describe('allowReenrol — re-activate a terminal enrolment (DUNNING.2)', () => {
+  const NOW_ISO = '2026-08-23T12:00:00.000Z'
+  const old = (over = {}) => ({
+    id: 'enr-a', contact_id: 'a', status: 'completed', source_type: 'invoice_past_due', source_ref: 'inv-old',
+    last_processed_at: '2026-07-01T00:00:00.000Z', created_at: '2026-06-24T00:00:00.000Z',
+    enrolled_at: '2026-06-24T00:00:00.000Z', completed_at: '2026-07-01T00:00:00.000Z', exited_at: null, exit_reason: null,
+    metadata: null, ...over,
+  })
+
+  it('default path is untouched: a terminal row outside the cooldown still only hits the index (skipped, no update)', async () => {
+    const m = mockDb({ history: [old()], cooldownDays: 14, conflictedContactIds: ['a'] })
+    createServerClient.mockReturnValue(m.db)
+    const res = await enrolContacts({ sequenceId: 's', contactIds: ['a'], sourceType: 'invoice_past_due', sourceRef: 'inv-new' })
+    expect(res).toMatchObject({ enrolled: 0, skipped: 1 })
+    expect(m.updates).toHaveLength(0)
+  })
+
+  it('re-activates the terminal row in place for a new source ref outside the cooldown', async () => {
+    const m = mockDb({ history: [old()], cooldownDays: 14 })
+    createServerClient.mockReturnValue(m.db)
+    const res = await enrolContacts({ sequenceId: 's', contactIds: ['a'], sourceType: 'invoice_past_due', sourceRef: 'inv-new', allowReenrol: true })
+    expect(res).toMatchObject({ enrolled: 1, reactivated: 1, skipped: 0 })
+    expect(m.inserts).toHaveLength(0)                     // never an insert for a re-run
+    expect(m.updates).toHaveLength(1)
+    const u = m.updates[0]
+    expect(u.filters).toEqual([['id', 'enr-a'], ['status', 'completed']])   // status guard
+    expect(u.payload).toMatchObject({
+      status: 'active', current_step_order: 0, exit_reason: null, completed_at: null, exited_at: null,
+      last_error: null, error_count: 0, last_processed_at: null,
+      source_type: 'invoice_past_due', source_ref: 'inv-new',
+    })
+    expect(typeof u.payload.next_step_at).toBe('string')
+    expect(typeof u.payload.enrolled_at).toBe('string')
+    expect(u.payload.metadata.previous_runs).toEqual([{
+      source_type: 'invoice_past_due', source_ref: 'inv-old', status: 'completed',
+      enrolled_at: '2026-06-24T00:00:00.000Z', ended_at: '2026-07-01T00:00:00.000Z', exit_reason: null,
+    }])
+    expect(m.rpcCalls).toEqual([{ name: 'increment_sequence_enrolled', args: { p_sequence_id: 's', p_delta: 1 } }])
+  })
+
+  it('appends to an existing previous_runs list and preserves other metadata', async () => {
+    const m = mockDb({ history: [old({ metadata: { previous_runs: [{ source_ref: 'inv-older' }], note: 'keep' } })], cooldownDays: 14 })
+    createServerClient.mockReturnValue(m.db)
+    await enrolContacts({ sequenceId: 's', contactIds: ['a'], sourceType: 'invoice_past_due', sourceRef: 'inv-new', allowReenrol: true })
+    expect(m.updates[0].payload.metadata).toMatchObject({ note: 'keep' })
+    expect(m.updates[0].payload.metadata.previous_runs.map((r) => r.source_ref)).toEqual(['inv-older', 'inv-old'])
+  })
+
+  it('does NOT re-activate for the same source ref (a Glofox retry of the same invoice)', async () => {
+    const m = mockDb({ history: [old({ source_ref: 'inv-same' })], cooldownDays: 14 })
+    createServerClient.mockReturnValue(m.db)
+    const res = await enrolContacts({ sequenceId: 's', contactIds: ['a'], sourceType: 'invoice_past_due', sourceRef: 'inv-same', allowReenrol: true })
+    expect(res).toMatchObject({ enrolled: 0, reactivated: 0, skipped: 1 })
+    expect(m.updates).toHaveLength(0)
+    expect(m.inserts).toHaveLength(0)
+  })
+
+  it('does NOT re-activate inside the cooldown', async () => {
+    const m = mockDb({ history: [old({ last_processed_at: NOW_ISO })], cooldownDays: 14 })
+    createServerClient.mockReturnValue(m.db)
+    const res = await enrolContacts({ sequenceId: 's', contactIds: ['a'], sourceType: 'invoice_past_due', sourceRef: 'inv-new', allowReenrol: true })
+    expect(res).toMatchObject({ enrolled: 0, reactivated: 0, skipped: 1 })
+    expect(m.updates).toHaveLength(0)
+  })
+
+  it('a contact with no history still INSERTS normally under allowReenrol', async () => {
+    const m = mockDb({ history: [], cooldownDays: 14 })
+    createServerClient.mockReturnValue(m.db)
+    const res = await enrolContacts({ sequenceId: 's', contactIds: ['b'], sourceType: 'invoice_past_due', sourceRef: 'inv-1', allowReenrol: true })
+    expect(res).toMatchObject({ enrolled: 1, reactivated: 0 })
+    expect(m.inserts[0].map((r) => r.contact_id)).toEqual(['b'])
+    expect(m.updates).toHaveLength(0)
+  })
+
+  it('a lost status-guard race (0 rows updated) is a skip, not an enrolment', async () => {
+    const m = mockDb({ history: [old()], cooldownDays: 14 })
+    // Simulate the guard losing: update().select() returns no rows.
+    const realFrom = m.db.from
+    m.db.from = vi.fn((table) => {
+      const b = realFrom(table)
+      if (table === 'sequence_enrollments' && b.update) {
+        const origUpdate = b.update
+        b.update = vi.fn((payload) => {
+          const chain = origUpdate(payload)
+          chain.select = vi.fn(async () => ({ data: [], error: null }))
+          return chain
+        })
+      }
+      return b
+    })
+    createServerClient.mockReturnValue(m.db)
+    const res = await enrolContacts({ sequenceId: 's', contactIds: ['a'], sourceType: 'invoice_past_due', sourceRef: 'inv-new', allowReenrol: true })
+    expect(res).toMatchObject({ enrolled: 0, reactivated: 0, skipped: 1 })
+    expect(m.rpcCalls).toHaveLength(0)
   })
 })

@@ -25,7 +25,7 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { selectAllByKeys } from '@/lib/select-all'
-import { findBlockedByCooldown } from './cooldown.js'
+import { findBlockedByCooldown, planReenrolments } from './cooldown.js'
 
 // Operator-initiated sourceTypes that bypass the automations_exempt gate.
 // 'manual' = the sequences enrol route/UI; 'churn_radar' = a staff member's
@@ -43,13 +43,21 @@ const MANUAL_LIKE_SOURCE_TYPES = new Set(['manual', 'churn_radar'])
  *   ('manual', 'trigger:status_change', 'trigger:race_finished', etc.)
  * @param {string} [args.sourceRef]            Free-form ref to whatever
  *   caused the enrolment (booking id, race-registration id, etc.)
- * @returns {Promise<{ enrolled: number, skipped: number }>}
+ * @param {boolean} [args.allowReenrol=false]  DUNNING.2 — re-activate a
+ *   contact's TERMINAL enrolment row (completed / exited) in place when the
+ *   sequence's cooldown has passed and the sourceRef differs from the last
+ *   run's. Only the dunning paths pass this: the full unique index on
+ *   (sequence_id, contact_id) otherwise means one enrolment per contact EVER
+ *   (ENROLDEDUP.1), and a member whose card fails again months later must be
+ *   reminded again. Every other caller keeps the one-enrolment semantics —
+ *   this is deliberately not a cohort-wide re-entry.
+ * @returns {Promise<{ enrolled: number, skipped: number, reactivated: number }>}
  */
 export async function enrolContacts({
-  sequenceId, contactIds, sourceType = 'manual', sourceRef = null,
+  sequenceId, contactIds, sourceType = 'manual', sourceRef = null, allowReenrol = false,
 }) {
   if (!Array.isArray(contactIds) || contactIds.length === 0) {
-    return { enrolled: 0, skipped: 0 }
+    return { enrolled: 0, skipped: 0, reactivated: 0 }
   }
   const db = createServerClient()
 
@@ -106,13 +114,17 @@ export async function enrolContacts({
 
   const candidatesNotActive = contactIds.filter(id => !alreadyActive.has(id))
   let blockedFromHistory = new Set()
+  let reenrolPlan = new Map()
   if (candidatesNotActive.length > 0) {
     // ENROLDEDUP.1 — same unchunked-plus-discarded-error shape as Tier 1.
+    // DUNNING.2 — the wider select carries what a re-activation needs to
+    // record the previous run; the cooldown maths reads the same four
+    // columns it always did.
     const history = await selectAllByKeys(
       candidatesNotActive,
       (keys, from, to) => db
         .from('sequence_enrollments')
-        .select('contact_id, status, last_processed_at, created_at')
+        .select('id, contact_id, status, last_processed_at, created_at, source_type, source_ref, enrolled_at, completed_at, exited_at, exit_reason, metadata')
         .eq('sequence_id', sequenceId)
         .in('contact_id', keys)
         .in('status', ['completed', 'exited'])
@@ -120,6 +132,14 @@ export async function enrolContacts({
         .range(from, to),
     )
     blockedFromHistory = findBlockedByCooldown(history, cooldownDays)
+    // DUNNING.2 — with allowReenrol, a contact whose latest terminal row is
+    // outside the cooldown AND carries a different source_ref is re-activated
+    // in place below. Everyone with history is removed from the INSERT path
+    // either way: an insert for them can only hit the index.
+    if (allowReenrol) {
+      reenrolPlan = planReenrolments(history, cooldownDays, sourceRef)
+      for (const cid of reenrolPlan.keys()) blockedFromHistory.add(cid)
+    }
   }
 
   let candidateIds = contactIds
@@ -164,8 +184,63 @@ export async function enrolContacts({
       source_ref: sourceRef,
     }))
 
+  // DUNNING.2 — re-activate in place. One UPDATE per contact (dunning is
+  // per-member, never a fan-out), guarded by id + the terminal status we
+  // read so a concurrent activation can never be clobbered. The previous
+  // run is kept on metadata.previous_runs so run history stays honest.
+  let reactivated = 0
+  let reenrolSkipped = 0
+  if (allowReenrol && reenrolPlan.size > 0) {
+    const nowIso = new Date().toISOString()
+    for (const [, plan] of reenrolPlan) {
+      if (plan.decision !== 'reactivate') { reenrolSkipped++; continue }
+      const row = plan.row
+      const prevMeta = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata : {}
+      const previousRuns = Array.isArray(prevMeta.previous_runs) ? prevMeta.previous_runs : []
+      const { data: updated, error: updErr } = await db
+        .from('sequence_enrollments')
+        .update({
+          status: 'active',
+          current_step_order: 0,
+          next_step_at: nowIso,
+          enrolled_at: nowIso,
+          exit_reason: null,
+          completed_at: null,
+          exited_at: null,
+          last_error: null,
+          error_count: 0,
+          last_processed_at: null,
+          source_type: sourceType,
+          source_ref: sourceRef,
+          metadata: {
+            ...prevMeta,
+            previous_runs: [
+              ...previousRuns,
+              {
+                source_type: row.source_type ?? null,
+                source_ref: row.source_ref ?? null,
+                status: row.status,
+                enrolled_at: row.enrolled_at ?? null,
+                ended_at: row.completed_at || row.exited_at || row.last_processed_at || null,
+                exit_reason: row.exit_reason ?? null,
+              },
+            ],
+          },
+        })
+        .eq('id', row.id)
+        .eq('status', row.status)
+        .select('id')
+      if (updErr) throw new Error(`Re-enrol failed: ${updErr.message}`)
+      if ((updated || []).length > 0) reactivated++
+      else reenrolSkipped++
+    }
+  }
+
   if (toInsert.length === 0) {
-    return { enrolled: 0, skipped: contactIds.length }
+    await bumpEnrolledCounter(db, sequenceId, reactivated)
+    // Pre-DUNNING.2 this path reported every contact as skipped; a
+    // re-activated contact is enrolled, everyone else still counts.
+    return { enrolled: reactivated, skipped: contactIds.length - reactivated, reactivated }
   }
 
   // ENROLDEDUP.1 — was a bare `.insert(toInsert)`. Against the FULL unique
@@ -187,24 +262,35 @@ export async function enrolContacts({
   if (error) throw new Error(`Enrol failed: ${error.message}`)
   const enrolledCount = (inserted || []).length
 
-  // Bump the cached counter on the parent sequence. Best-effort —
-  // the runner doesn't depend on this counter for correctness, it's
-  // just for the admin dashboard.
-  // NOTE: a supabase-js builder is a thenable, not a Promise — it has no
-  // `.catch`, so `db.rpc(...).catch(...)` throws a synchronous TypeError and
-  // the RPC never fires. Must be try/await/catch.
-  try {
-    await db.rpc('increment_sequence_enrolled', {
-      p_sequence_id: sequenceId,
-      p_delta: enrolledCount,
-    })
-  } catch { /* RPC not present / best-effort counter — no-op */ }
+  await bumpEnrolledCounter(db, sequenceId, enrolledCount + reactivated, { always: true })
 
   // `skipped` counts everything we declined to enrol, including rows the
   // index rejected on conflict (toInsert.length - enrolledCount), which the
-  // old return silently reported as enrolled.
+  // old return silently reported as enrolled, plus (DUNNING.2) the contacts
+  // considered for a re-run that were not re-activated. Cooldown-blocked
+  // contacts on the default path are NOT counted here — a long-standing
+  // quirk the tests pin; the split that introduced it must not change it.
   return {
-    enrolled: enrolledCount,
-    skipped: alreadyActive.size + exemptSkipped + (toInsert.length - enrolledCount),
+    enrolled: enrolledCount + reactivated,
+    skipped: alreadyActive.size + exemptSkipped + reenrolSkipped + (toInsert.length - enrolledCount),
+    reactivated,
   }
+}
+
+// Bump the cached counter on the parent sequence. Best-effort — the runner
+// doesn't depend on this counter for correctness, it's just for the admin
+// dashboard. `always` keeps the pre-DUNNING.2 behaviour on the insert path
+// (the RPC fired even for a zero delta); the re-activation-only path skips
+// a zero bump.
+// NOTE: a supabase-js builder is a thenable, not a Promise — it has no
+// `.catch`, so `db.rpc(...).catch(...)` throws a synchronous TypeError and
+// the RPC never fires. Must be try/await/catch.
+async function bumpEnrolledCounter(db, sequenceId, delta, { always = false } = {}) {
+  if (!delta && !always) return
+  try {
+    await db.rpc('increment_sequence_enrolled', {
+      p_sequence_id: sequenceId,
+      p_delta: delta,
+    })
+  } catch { /* RPC not present / best-effort counter — no-op */ }
 }
