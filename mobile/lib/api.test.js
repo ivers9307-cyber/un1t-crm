@@ -89,7 +89,45 @@ describe('api() transport tag', () => {
 
     const r = await api('/api/anything')
 
-    expect(r).toEqual({ success: false, error: 'HTTP 500' })
+    // SHELLY-MOB.1 — the status rides along here too, so a caller can tell one
+    // non-2xx from another by field rather than by matching the error string.
+    expect(r).toEqual({ success: false, status: 500, error: 'HTTP 500' })
     expect('transport' in r).toBe(false)
+  })
+
+  it('a non-2xx body that carries our envelope passes through INTACT — the 429 pending case', async () => {
+    // POST /api/shelly/devices/<id>/toggle answers HTTP 429 with
+    // `success:true, pending:true` when Shelly's shared 1 req/sec budget is
+    // spent: the override is written BEFORE the command is sent, so it is
+    // saved and the cron will apply it. An explicit `success` boolean means
+    // the body IS our envelope — replacing it would render "HTTP 429" for a
+    // switch that did not fail. The screen reads the real `pending`/`code`.
+    global.fetch = vi.fn(async () => ({
+      ok: false,
+      status: 429,
+      json: async () => ({ success: true, applied: false, pending: true, code: 'rate_limited' }),
+    }))
+
+    const r = await api('/api/anything')
+
+    expect(r).toEqual({ success: true, applied: false, pending: true, code: 'rate_limited' })
+    expect('transport' in r).toBe(false)
+  })
+
+  it('a non-2xx failure envelope also passes through unreplaced — the 409/429 error bodies', async () => {
+    // The toggle's `auto` path (and every 4xx with `{ success:false, error }`)
+    // must reach the caller with the route's own copy, not a synthesised
+    // "HTTP 409". This was already true before SHELLY-MOB.1 (`success:false`
+    // skipped the synthesis); pinned now that the condition is an explicit
+    // typeof check.
+    global.fetch = vi.fn(async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({ success: false, error: 'Connect your Shelly account first', code: 'not_connected' }),
+    }))
+
+    const r = await api('/api/anything')
+
+    expect(r).toEqual({ success: false, error: 'Connect your Shelly account first', code: 'not_connected' })
   })
 })

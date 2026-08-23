@@ -335,12 +335,20 @@ for (const m of MOBILE_PERMISSIONS) {
 // web-only is the AUTHORING half of both of its surfaces —
 // /automations/sonos (playback windows, run-now, pause override) and
 // /automations/shelly (power windows, class-linked rules, adopt/remove,
-// 30-day kWh history) — schedule editors that want the screen. Mobile
-// today offers live Sonos control only; a live on/off toggle for an
-// adopted Shelly plug is the first planned mobile counterpart (see
-// docs/BACKLOG.md, "Shelly smart plugs — deferred by decision"). When it
-// ships it rides the same top-level key, so nothing in this file has to
-// change for it.
+// the connection itself, 30-day kWh history) — schedule editors that want
+// the screen.
+//
+// SHELLY-MOB.1 — the mobile live on/off toggle now EXISTS
+// (mobile/app/(staff)/shelly/, Studio hub → Smart plugs), so both device
+// surfaces have a mobile counterpart: live Sonos control and live Shelly
+// on/off. As predicted above it needed NO change here — it rides the same
+// top-level `device_control` key its routes already enforce. The
+// web-only/mobile split for `device_control` is therefore not
+// surface-by-surface but HALF-by-half, in both directions: CONTROL is on
+// both platforms, AUTHORING is web-only on both. What stays deferred on
+// mobile, and why, is still docs/BACKLOG.md, "Shelly smart plugs —
+// deferred by decision" — that heading is load-bearing as the pointer
+// this comment carries, so do not reword it.
 // --------------------------------------------------------------------
 
 const navItemsSrc = readFileSync(resolve(repoRoot, 'src/lib/nav-items.js'), 'utf8')

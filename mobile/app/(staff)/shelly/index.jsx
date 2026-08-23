@@ -1,0 +1,406 @@
+// SHELLY-MOB.1 — Smart plugs: what each adopted relay is doing, and on/off.
+//
+// CONTROL ONLY, deliberately. Schedules (fixed windows, class-linked rules),
+// adopt/remove, the energy history and the Shelly account connection are the
+// AUTHORING half of the surface and stay on the web CRM under Marketing →
+// Automations → Smart plugs — they want a screen. Richard's scope for mobile
+// was the toggle and nothing else.
+//
+// Gates on `device_control`, the same top-level cross-platform key the
+// /api/shelly/* routes enforce (`withAuth({ permission: 'device_control' })`),
+// so the gate and the server agree and the UI never offers something the
+// server refuses. Same shape as the Sonos screen one directory over; no new
+// server code, no new permission key.
+//
+// FOUR RULES CARRIED OVER FROM THE WEB CARD (src/components/automations/
+// ShellyDeviceCard.jsx). Each was a backend review finding, and each is a lie
+// waiting to happen if this file paraphrases it:
+//
+//  1. `last_state.output === null` IS "UNKNOWN", NEVER "OFF" — plugStateLabel
+//     owns that, and it is tested.
+//
+//  2. BRANCH ON `pending` BEFORE PAINTING THE NEW STATE. A toggle answers
+//     `{ success: true, applied: false, pending: true }` when the override is
+//     saved and the relay has NOT moved. Painting the requested state there
+//     would show a plug as ON while it is physically off. The rate-limited
+//     shape of that body arrives with HTTP 429, which mobile's api() flattens
+//     — `isQueued` recovers it by status, see mobile/lib/shelly.js.
+//
+//  3. ONLY `connected === false` DISABLES THE BUTTONS. An OFFLINE plug is
+//     still settable: the toggle route writes the override BEFORE it sends
+//     anything and the cron applies a live override to every adopted device,
+//     enabled or not — so pressing On is a real instruction that lands when
+//     the plug wakes up, not a no-op. The third state, `connected: null`
+//     ('unknown'), is OUR read failing rather than the studio's, and disables
+//     nothing at all.
+//
+//  4. A FAILED POLL NEVER BLANKS THE ROWS. The list is the operator's view of
+//     live hardware; replacing it with "Network error" for a tick is worse
+//     than showing a slightly stale reading under a retry line. Same posture
+//     as SonosControlCard.
+
+import { useState, useCallback, useRef, useEffect } from 'react'
+import { View, Text, Pressable, ScrollView, ActivityIndicator, RefreshControl } from 'react-native'
+import { Ionicons } from '@expo/vector-icons'
+import { useRouter, useFocusEffect } from 'expo-router'
+import { useAuth } from '../../../lib/auth-context'
+import { canMobile } from '../../../lib/permissions'
+import { api } from '../../../lib/api'
+import {
+  plugTone, plugStateLabel, plugDisplayName, toggleResultText, errorText, isQueued,
+  PLUG_TONE_TEXT, PLUG_TONE_DOT,
+} from '../../../lib/shelly'
+
+const POLL_MS = 30_000
+// Long enough to read a queued sentence, short enough that it is gone before
+// the operator wonders whether it is about the press they just made.
+const NOTE_CLEAR_MS = 6_000
+
+const WEB_HINT = 'Schedules and setup live on the web CRM.'
+
+function NoticeCard({ icon, tone, children }) {
+  const isError = tone === 'error'
+  return (
+    <View
+      className={`rounded-2xl p-3 flex-row items-start mb-3 ${
+        isError ? 'bg-red-500/10 border border-red-500/30' : 'bg-un1t-surface border border-un1t-border'
+      }`}
+    >
+      <Ionicons name={icon} size={14} color={isError ? '#DC2626' : '#94A3B8'} style={{ marginTop: 2 }} />
+      <Text className={`text-xs ml-2 flex-1 ${isError ? 'text-red-700' : 'text-un1t-subtle'}`}>{children}</Text>
+    </View>
+  )
+}
+
+// The manual switch. Two halves of one pill so the CURRENT state is visible at
+// a glance — and neither half is highlighted when the relay is Unknown, which
+// is the honest render for a plug that has told us nothing (rule 1).
+function OnOff({ output, busy, disabled, onPress }) {
+  const half = (label, isOn) => {
+    const active = output === isOn
+    return (
+      <Pressable
+        onPress={() => onPress(isOn ? 'on' : 'off')}
+        disabled={disabled || busy}
+        accessibilityRole="button"
+        accessibilityState={{ selected: active, disabled: disabled || busy }}
+        accessibilityLabel={`Switch ${isOn ? 'on' : 'off'}`}
+        className={`px-5 py-2 active:opacity-70 ${active ? 'bg-un1t-bg' : ''}`}
+      >
+        <Text className={`text-sm ${active ? 'font-semibold text-un1t-text' : 'text-un1t-subtle'}`}>{label}</Text>
+      </Pressable>
+    )
+  }
+  return (
+    <View className="flex-row items-center">
+      <View className={`flex-row rounded-full border border-un1t-border overflow-hidden ${disabled || busy ? 'opacity-40' : ''}`}>
+        {half('On', true)}
+        <View className="w-px bg-un1t-border" />
+        {half('Off', false)}
+      </View>
+      {busy && <ActivityIndicator color="#94A3B8" style={{ marginLeft: 10 }} />}
+    </View>
+  )
+}
+
+function PlugRow({ device, connected, busy, note, onToggle }) {
+  const health = plugTone(device, connected)
+  // Rule 3 — only a missing CONNECTION kills the strip. `connected === false`,
+  // never `!== true`: an unknown connection is our read failing.
+  const controlsOff = connected === false
+  const noteClass = note?.tone === 'error'
+    ? 'text-red-700'
+    : note?.tone === 'warn' ? 'text-amber-700' : 'text-emerald-700'
+
+  return (
+    <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4">
+      <View className="flex-row items-start justify-between">
+        <View className="flex-1 pr-3">
+          <Text className="text-base font-semibold text-un1t-text" numberOfLines={1}>
+            {plugDisplayName(device)}
+          </Text>
+          <Text className="text-sm text-un1t-text mt-0.5">{plugStateLabel(device)}</Text>
+        </View>
+        <View className="flex-row items-center shrink-0">
+          <View
+            className="w-2 h-2 rounded-full mr-1.5"
+            style={{ backgroundColor: PLUG_TONE_DOT[health.tone] }}
+          />
+          <Text className={`text-[11px] ${PLUG_TONE_TEXT[health.tone]}`}>{health.label}</Text>
+        </View>
+      </View>
+
+      <View className="mt-3">
+        <OnOff
+          output={device.last_state?.output}
+          busy={busy}
+          disabled={controlsOff}
+          onPress={(state) => onToggle(device, state)}
+        />
+      </View>
+
+      {/* An offline plug is still settable — say so rather than looking broken. */}
+      {!controlsOff && health.reason === 'offline' && !note && (
+        <Text className="text-xs text-un1t-subtle mt-2">
+          Offline — your choice is queued and applied when the plug is back.
+        </Text>
+      )}
+      {controlsOff && !note && (
+        <Text className="text-xs text-un1t-subtle mt-2">Connect Shelly on the web CRM first.</Text>
+      )}
+      {note && (
+        <Text className={`text-xs mt-2 ${noteClass}`} accessibilityRole="text">{note.text}</Text>
+      )}
+    </View>
+  )
+}
+
+export default function ShellyScreen() {
+  const { profile, activeLocation } = useAuth()
+  const router = useRouter()
+  const locationId = activeLocation?.id
+  const allowed = canMobile(profile, 'device_control', activeLocation)
+
+  const [devices, setDevices] = useState(null)
+  // undefined = not answered yet. The route sends true / false / null, and all
+  // three mean something different (see rule 3 + plugTone).
+  const [connected, setConnected] = useState(undefined)
+  const [connectionStatus, setConnectionStatus] = useState(undefined)
+  const [error, setError] = useState(null)     // only ever shown when NOTHING is painted
+  const [retrying, setRetrying] = useState(false) // the subordinate line under painted rows
+  const [refreshing, setRefreshing] = useState(false)
+  const [busyId, setBusyId] = useState(null)
+  const [notes, setNotes] = useState({})
+
+  // The location the painted list was fetched for, without putting `devices` in
+  // load()'s deps (that would defeat the [locationId]-only memoisation and
+  // re-subscribe the focus effect on every render). Keyed on the location, not
+  // a boolean: a blip while refetching for a NEW location must not keep the OLD
+  // location's rows painted. Same shape as the Sonos screen.
+  const listLocationRef = useRef(null)
+  // Stops an older tick painting over a newer answer, which matters right after
+  // a toggle's reload.
+  const seq = useRef(0)
+  const noteTimers = useRef({})
+
+  // New location → spinner, not the old list.
+  useEffect(() => {
+    setDevices(null)
+    setConnected(undefined)
+    setConnectionStatus(undefined)
+    setError(null)
+    setRetrying(false)
+    setNotes({})
+    listLocationRef.current = null
+  }, [locationId])
+
+  useEffect(() => {
+    const timers = noteTimers.current
+    return () => { Object.values(timers).forEach((t) => clearTimeout(t)) }
+  }, [])
+
+  const setNote = useCallback((id, note) => {
+    setNotes((prev) => ({ ...prev, [id]: note }))
+    if (noteTimers.current[id]) clearTimeout(noteTimers.current[id])
+    if (!note) return
+    noteTimers.current[id] = setTimeout(() => {
+      delete noteTimers.current[id]
+      setNotes((prev) => ({ ...prev, [id]: null }))
+    }, NOTE_CLEAR_MS)
+  }, [])
+
+  // try/catch around the whole thing: authHeaders() → supabase.auth.getSession()
+  // runs OUTSIDE api()'s own try, so an uncaught rejection there would strand
+  // the screen on its loading spinner forever (same guard as the Sonos screen).
+  //
+  // `isActive` guards every setState against a blur-before-resolve race.
+  const load = useCallback(async (isActive) => {
+    if (!locationId) return
+    const n = ++seq.current
+    const painted = () => listLocationRef.current === locationId
+    try {
+      const r = await api('/api/shelly/devices', { locationId })
+      if (n !== seq.current || !isActive()) return
+      if (!r.success) {
+        // Rule 4. The keep-or-blank decision is made on WHETHER WE ALREADY
+        // HAVE ROWS FOR THIS LOCATION, not on api()'s `transport` tag: a 500
+        // from the route is exactly as recoverable on the next tick as a
+        // dropped fetch, and blanking a live studio's plug list for either is
+        // the same wrong answer.
+        if (painted()) setRetrying(true)
+        else setError(r.error || 'Could not load the smart plugs')
+        return
+      }
+      setError(null)
+      setRetrying(false)
+      setDevices(r.devices || [])
+      setConnected(r.connected)
+      setConnectionStatus(r.connection_status)
+      listLocationRef.current = locationId
+    } catch (e) {
+      if (n !== seq.current || !isActive()) return
+      if (painted()) setRetrying(true)
+      else setError(e?.message || 'Could not load the smart plugs')
+    }
+  }, [locationId])
+
+  useFocusEffect(useCallback(() => {
+    let active = true
+    const isActive = () => active
+    if (!allowed) return () => { active = false }
+    load(isActive)
+    const timer = setInterval(() => load(isActive), POLL_MS)
+    return () => { active = false; clearInterval(timer) }
+  }, [allowed, load]))
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true)
+    try {
+      await load(() => true)
+    } finally {
+      setRefreshing(false)
+    }
+  }, [load])
+
+  // try/finally, not a bare await: authHeaders() → getSession() runs outside
+  // api()'s own try, so if it ever rejects the only thing standing between us
+  // and a forever-disabled row is the finally.
+  const toggle = useCallback(async (device, state) => {
+    setBusyId(device.id)
+    setNote(device.id, null)
+    try {
+      const json = await api(`/api/shelly/devices/${device.id}/toggle`, {
+        method: 'POST',
+        locationId,
+        body: { state },
+      })
+      const extra = toggleResultText(json)
+
+      // RULE 2 — read the queued answer BEFORE anything that looks like the
+      // new state. The reload below repaints from the ROW, which still carries
+      // the old `last_state` because the relay has not moved; nothing here
+      // asserts the requested state.
+      if (isQueued(json)) {
+        setNote(device.id, { tone: 'warn', text: extra })
+        await load(() => true)
+        return
+      }
+      if (json?.success === false) {
+        // The routes fold their reassurance into `error` deliberately, so
+        // errorText is the whole sentence — do not prefix it with our own.
+        setNote(device.id, { tone: 'error', text: errorText(json, 'That did not work') })
+        await load(() => true)
+        return
+      }
+      const done = state === 'on' ? 'Switched on.' : 'Switched off.'
+      setNote(device.id, { tone: 'ok', text: extra ? `${done} ${extra}` : done })
+      await load(() => true)
+    } catch (e) {
+      setNote(device.id, { tone: 'error', text: e?.message || 'That did not work' })
+    } finally {
+      setBusyId(null)
+    }
+  }, [locationId, load, setNote])
+
+  // Permission gate — defence in depth. The Studio tile hides the link without
+  // access, but a hand-typed deep link would otherwise reach here.
+  if (!allowed) {
+    return (
+      <View className="flex-1 bg-un1t-bg items-center justify-center p-6">
+        <Text className="text-sm text-un1t-subtle text-center">
+          Device control isn&apos;t enabled for your role at this location.
+        </Text>
+        <Pressable onPress={() => router.back()} className="mt-4">
+          <Text className="text-sm text-blue-600">Back</Text>
+        </Pressable>
+      </View>
+    )
+  }
+
+  // Nothing painted yet and the first read failed — this is the one place a
+  // failure replaces the content, because there is no content to keep.
+  if (error && devices === null) {
+    return (
+      <ScrollView
+        className="flex-1 bg-un1t-bg"
+        contentContainerStyle={{ padding: 16 }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#111827" />}
+      >
+        <NoticeCard icon="alert-circle-outline" tone="error">{error}</NoticeCard>
+      </ScrollView>
+    )
+  }
+
+  if (devices === null) {
+    return (
+      <View className="flex-1 bg-un1t-bg items-center justify-center">
+        <ActivityIndicator color="#94A3B8" />
+      </View>
+    )
+  }
+
+  // `=== null` rather than falsy: the route sends the status STRING, and
+  // `undefined` (a body that carried none) must not be read as "not connected"
+  // and sent to a Connect form that does not exist on this surface.
+  const notConnected = connectionStatus === null
+  const unknownConnection = connectionStatus === 'unknown'
+  // 'action_needed' / 'error' — connected is false, so the controls are already
+  // off; the operator needs to be told where the fix lives, not what the code is.
+  const connectionNeedsAttention = connected === false && !notConnected
+
+  return (
+    <ScrollView
+      className="flex-1 bg-un1t-bg"
+      contentContainerStyle={{ padding: 16, paddingBottom: 32 }}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#111827" />}
+    >
+      {notConnected && (
+        <NoticeCard icon="flash-off-outline">
+          Not connected — set up on the web CRM under{' '}
+          <Text className="text-un1t-text font-semibold">Automations → Smart plugs</Text>.
+        </NoticeCard>
+      )}
+      {connectionNeedsAttention && (
+        <NoticeCard icon="alert-circle-outline">
+          Shelly needs attention — check the connection on the web CRM under{' '}
+          <Text className="text-un1t-text font-semibold">Automations → Smart plugs</Text>.
+        </NoticeCard>
+      )}
+      {unknownConnection && (
+        // The rows stay: the device list read fine and only the connection row
+        // did not, which is exactly what this third state exists for.
+        <NoticeCard icon="help-circle-outline">Couldn&apos;t read the connection — retrying.</NoticeCard>
+      )}
+
+      {devices.length === 0 ? (
+        !notConnected && (
+          <NoticeCard icon="flash-outline">
+            No plugs are adopted at this location yet. Someone with Device control adopts them on the web CRM under{' '}
+            <Text className="text-un1t-text font-semibold">Automations → Smart plugs</Text>.
+          </NoticeCard>
+        )
+      ) : (
+        <View className="gap-3">
+          {devices.map((d) => (
+            <PlugRow
+              key={d.id}
+              device={d}
+              connected={connected}
+              busy={busyId === d.id}
+              note={notes[d.id]}
+              onToggle={toggle}
+            />
+          ))}
+        </View>
+      )}
+
+      {/* Subordinate on purpose: the rows above are the last good reading and
+          still worth looking at. */}
+      {retrying && (
+        <Text className="text-xs text-un1t-subtle mt-3">Couldn&apos;t refresh just now — retrying.</Text>
+      )}
+
+      <Text className="text-xs text-un1t-subtle mt-4">{WEB_HINT}</Text>
+    </ScrollView>
+  )
+}

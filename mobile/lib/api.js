@@ -107,9 +107,25 @@ export async function api(path, options = {}) {
     }
   }
 
-  if (!response.ok && json?.success !== false) {
-    // Server returned non-2xx without our standard envelope.
-    return { success: false, error: json?.error || `HTTP ${response.status}` }
+  if (!response.ok && typeof json?.success !== 'boolean') {
+    // Server returned non-2xx without our standard envelope (an edge error
+    // page, a platform 504). Synthesise one, carrying `status` for the same
+    // reason the non-JSON branch above does: a caller that needs to tell one
+    // non-2xx from another must read a FIELD, not match this error string.
+    return { success: false, status: response.status, error: json?.error || `HTTP ${response.status}` }
   }
+  // SHELLY-MOB.1 — a non-2xx that DOES carry our envelope passes through
+  // UNCHANGED. The condition above used to be `success !== false`, which
+  // swallowed a body that explicitly said `success: true` — the one live
+  // case being POST /api/shelly/devices/<id>/toggle answering HTTP **429**
+  // with `success: true, pending: true`: the override IS saved and the cron
+  // will apply it; the 429 is a back-off signal so the client stops
+  // re-pressing, not a failure. Replacing that body rendered "HTTP 429" and
+  // told an operator their switch failed when it did not. Passing it through
+  // hands mobile/lib/shelly.js's isQueued/toggleResultText the real
+  // `pending`, `message` and `code` fields instead of a status-code
+  // inference — and existing callers see exactly what they always saw,
+  // because every pre-existing non-2xx either carries `success: false`
+  // (unchanged path) or no boolean `success` at all (still synthesised).
   return json
 }
