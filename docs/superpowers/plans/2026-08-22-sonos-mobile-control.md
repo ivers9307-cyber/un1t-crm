@@ -695,9 +695,10 @@ Create `mobile/app/(staff)/sonos/index.jsx`:
 // SONOSMOB.5 — Studio music: live control of the Sonos speakers.
 //
 // Control only. Schedules (windows, run-now, the pause override) are set up
-// on the web app under Automations → Sonos; this screen lists the location's
-// schedules and renders one SonosControlCard per schedule. Today that is one
-// card — the studio floor — but a second zone needs no change here.
+// on the web app under Marketing → Automations → Studio music; this screen
+// lists the location's schedules and renders one SonosControlCard per
+// schedule. Today that is one card — the studio floor — but a second zone
+// needs no change here.
 //
 // Gates on `device_control`, cross-platform since SONOSMOB.2: the routes the
 // cards call enforce that same key, so the gate and the server agree.
@@ -771,8 +772,8 @@ export default function SonosScreen() {
         <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 flex-row items-start">
           <Ionicons name="musical-notes-outline" size={14} color="#94A3B8" style={{ marginTop: 2 }} />
           <Text className="text-xs text-un1t-subtle ml-2 flex-1">
-            No studio music is set up for this location yet. An owner sets it up on the
-            web app under <Text className="text-un1t-text font-semibold">Automations → Sonos</Text>.
+            No studio music is set up for this location yet. Someone with Device control sets it up on the
+            web app under <Text className="text-un1t-text font-semibold">Marketing → Automations → Studio music</Text>.
           </Text>
         </View>
       ) : (
@@ -851,7 +852,7 @@ Expected: all exit 0. `sonos/` is a new directory under `mobile/app/`, which is 
 
 ```bash
 git add 'mobile/app/(staff)/sonos/_layout.jsx' 'mobile/app/(staff)/sonos/index.jsx' 'mobile/app/(staff)/(tabs)/studio.jsx'
-git commit -m "SONOSMOB.5 — /sonos screen + Studio-hub tile" -m "One SonosControlCard per schedule; favourites from the household route; empty state points at Automations → Sonos on web."
+git commit -m "SONOSMOB.5 — /sonos screen + Studio-hub tile" -m "One SonosControlCard per schedule; favourites from the household route; empty state points at Marketing → Automations → Studio music on web."
 ```
 
 ---

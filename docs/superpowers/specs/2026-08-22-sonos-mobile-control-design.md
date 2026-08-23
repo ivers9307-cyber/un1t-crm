@@ -1,6 +1,6 @@
 # Sonos live control on mobile — design
 
-**Date:** 2026-08-22 · **Status:** approved (Richard, 22 Aug) · **Ticket prefix:** SONOSMOB
+**Date:** 2026-08-22 · **Status:** implemented (SONOSMOB.1-6) · **Ticket prefix:** SONOSMOB
 **Depends on:** SONOSLIVE (#1493) + SONOSPLAY (#1494), both merged. Independent of SONOSAPPLY.
 
 ## What
@@ -92,8 +92,10 @@ Both are fetched once on mount and on focus; the card polls only
 `now-playing`.
 
 Empty state (no schedules at the location): "No studio music is set up for
-this location yet. An owner sets it up on the web app under Automations →
-Sonos." — the `AcDeviceList` empty-state shape.
+this location yet. Someone with Device control sets it up on the web app
+under Marketing → Automations → Studio music." — the `AcDeviceList`
+empty-state shape. (Not "An owner": managers hold `device_control` by
+default. And "Automations → Sonos" is not a label the web nav has.)
 
 ### 4. Volume — step buttons only, no slider
 
@@ -195,3 +197,5 @@ directory under `mobile/`, so `check:ota-paths` needs nothing.
 - Schedule editing, run-now, pause override on mobile (web-only by design;
   the parity hint says so).
 - Push/notification categories — nothing here notifies.
+- A pull-to-refresh on the screen (today the favourites-failed hint says leave and come back).
+- A "Schedule off" chip on a disabled schedule's card (web renders the same live card; consistent, but a chip would help).

@@ -114,11 +114,13 @@ export const WEB_PERMISSIONS = Object.freeze([
   // its old surface (Tapo plug/switch control, TAPO-T1.4) was deleted at
   // SONOS.14. Per-schedule playback windows (days/on/off/volume/
   // favourite), manual run-now, and a temporary pause override, live at
-  // /automations/sonos. Web-only — no mobile counterpart planned (see
-  // WEB_ONLY_OK in scripts/check-mobile-parity.mjs). Owner + manager by
-  // default; head_coach + staff off (on-site operations oversight).
+  // /automations/sonos (web). SONOSMOB.2 made the key cross-platform
+  // (CROSS_PLATFORM_KEYS): the mobile Studio hub's "Studio music" screen
+  // offers live control only — play/pause/skip, volume, favourites — over
+  // the same /api/sonos/* routes. Owner + manager by default; head_coach +
+  // staff off (on-site operations oversight).
   { key: 'device_control', label: 'Device control',
-    hint: 'Sonos speakers: playback schedules, run-now, temporary pause.' },
+    hint: 'Sonos speakers: playback schedules, run-now and temporary pause on web; live play/pause, volume and favourites on web and mobile.' },
   // STUDIO-GROUP.1 — sidebar regroup (May 2026): the four items
   // below used to be top-level sidebar entries gated to master/
   // owner via role-only checks (no per-user permission). They now
@@ -1091,6 +1093,14 @@ export const CROSS_PLATFORM_KEYS = Object.freeze([
   // decides which key it is. Per-account visibility is still the
   // email_mailbox_access grant, on both platforms.
   'email_inbox',
+  // SONOSMOB.2 — live control of the studio Sonos (now-playing, transport,
+  // volume, favourites) on mobile rides the SAME /api/sonos/* routes the
+  // web strip calls, and every one of those gates on the top-level
+  // `device_control` key. Same reasoning as `email_inbox` above: the
+  // platform that enforces the key decides which key it is, or the UI
+  // gate and the server gate can disagree. Scheduling (windows, run-now,
+  // the pause override) stays web-only; the mobile screen is control only.
+  'device_control',
 ])
 
 // ============================================================

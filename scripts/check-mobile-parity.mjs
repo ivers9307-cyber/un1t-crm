@@ -194,12 +194,6 @@ const WEB_ONLY_OK = {
   // bookkeeping surface, like bookkeeper/invoices analyse-and-send
   // flows; mobile counterpart deferred to RCOV.P2.
   accounting_hub: 'Desktop bookkeeping surface (coverage board); mobile counterpart deferred to RCOV.P2',
-  // SONOS.16 — Sonos studio-music scheduling (playback windows: days,
-  // times, volume, favourite; run-now; a temporary pause) at
-  // /automations/sonos, replacing the deleted Tapo plug/switch path
-  // (TAPO-T1.4). Desktop setup surface, same shape as
-  // glofox_import/landing_page; no mobile counterpart planned.
-  device_control: 'Sonos studio-music scheduling at /automations/sonos (replaces the deleted Tapo plug/switch path, TAPO-T1.4) — desktop setup surface, no mobile counterpart planned.',
   // APPROVALS-PERCAT.1 — six per-category approval grants (splitting the
   // former all-or-nothing approvals_inbox). Each gates a source
   // approve/decline route + the inbox tab for that category; the mobile

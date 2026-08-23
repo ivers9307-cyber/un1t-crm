@@ -25,7 +25,9 @@ export const MOBILE_NAV_FEATURES = Object.freeze([
   // `email_inbox` — the same key the /api/email/tickets* routes enforce — so
   // the gate that places the tab is the gate that lets its calls through.
   { key: 'email',    label: 'Email',     permKeys: ['email_inbox'],                barEligible: true },
-  { key: 'studio',   label: 'Studio',    permKeys: ['studio_management', 'class_timer', 'tv_displays'], barEligible: true },
+  // SONOSMOB.2 — device_control added: a user holding only live music
+  // control still needs the Studio hub to reach /sonos.
+  { key: 'studio',   label: 'Studio',    permKeys: ['studio_management', 'class_timer', 'tv_displays', 'device_control'], barEligible: true },
   { key: 'pipeline', label: 'Pipeline',  permKeys: ['pipeline'],                   barEligible: true },
   { key: 'bookings', label: 'Bookings',  permKeys: ['bookings'],                   barEligible: true },
   { key: 'invoices', label: 'Invoices',  permKeys: ['invoices'], employmentType: 'contractor', barEligible: true },

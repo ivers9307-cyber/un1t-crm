@@ -68,7 +68,8 @@ export async function authHeaders({ locationId, json = false } = {}) {
  * @param {string} [options.method]    'GET' | 'POST' | 'PUT' | 'DELETE'
  * @param {object} [options.body]      JSON-serialisable
  * @param {string} [options.locationId] override the active location for this call
- * @returns {Promise<{success: boolean, data?: any, error?: string, issues?: any[]}>}
+ * @returns {Promise<{success: boolean, data?: any, error?: string, issues?: any[], transport?: true}>}
+ *   `transport: true` (api()-minted, no server answer)
  */
 export async function api(path, options = {}) {
   const headers = await authHeaders({ locationId: options.locationId, json: true })
@@ -81,7 +82,12 @@ export async function api(path, options = {}) {
       body: options.body ? JSON.stringify(options.body) : undefined,
     })
   } catch (err) {
-    return { success: false, error: `Network error: ${err.message || err}` }
+    // transport: true marks an envelope api() minted itself without a server
+    // answer (dropped fetch, non-JSON body). Consumers that poll use it to
+    // keep their last good state through a blip rather than painting the
+    // failure — see SonosControlCard. Additive; every other caller reads
+    // only success/error.
+    return { success: false, transport: true, error: `Network error: ${err.message || err}` }
   }
 
   // The CRM responds with the standard { success, data?, error?, issues? }
@@ -92,6 +98,7 @@ export async function api(path, options = {}) {
   } catch {
     return {
       success: false,
+      transport: true,
       error: `Non-JSON response (${response.status})`,
     }
   }

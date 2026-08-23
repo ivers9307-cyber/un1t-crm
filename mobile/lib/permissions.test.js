@@ -143,6 +143,33 @@ describe('canMobile — cross-platform keys (studio_management)', () => {
   })
 })
 
+describe('canMobile — cross-platform keys (device_control, SONOSMOB.2)', () => {
+  // Regression: device_control is a CROSS_PLATFORM (top-level) key — same
+  // shape as studio_management above. If it were ever dropped from
+  // CROSS_PLATFORM_KEYS, canMobile would fall to the mobile defaults map,
+  // which has no entry for it, so every non-master role would silently
+  // get false and the Studio-music tile would just vanish.
+  it('grants Studio music control to a head_coach with top-level device_control on', () => {
+    const location = { features: {}, permissions: { device_control: true, mobile: {} } }
+    expect(canMobile({ role: 'head_coach' }, 'device_control', location)).toBe(true)
+  })
+
+  it('withholds it from a head_coach when the top-level key is off (role default)', () => {
+    const location = { features: {}, permissions: { device_control: false, mobile: {} } }
+    expect(canMobile({ role: 'head_coach' }, 'device_control', location)).toBe(false)
+  })
+
+  it('honours the location feature gate (tier 1) even if the user key is on', () => {
+    const location = { features: { device_control: false }, permissions: { device_control: true, mobile: {} } }
+    expect(canMobile({ role: 'head_coach' }, 'device_control', location)).toBe(false)
+  })
+
+  it('master sees it regardless (short-circuit)', () => {
+    const location = { features: {}, permissions: { mobile: {} } }
+    expect(canMobile({ role: 'master' }, 'device_control', location)).toBe(true)
+  })
+})
+
 describe('canMobile — staff_management default (STAFF-C3 parity inversion)', () => {
   // The mobile staff-management surface (directory + role/permission
   // editors) is gated by this key. Its role defaults MUST match the

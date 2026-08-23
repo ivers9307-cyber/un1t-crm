@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   isPlaying, playbackLabel,
   PLAYBACK_PLAYING, PLAYBACK_PAUSED, PLAYBACK_IDLE, PLAYBACK_BUFFERING,
-} from './playback'
+} from './sonos-playback'
 
 describe('the Sonos playbackState enum', () => {
   it('uses the values Sonos actually sends, not shortened ones', () => {
