@@ -82,6 +82,14 @@ export default function ShellyScheduleEditor({ device, glofoxConnected, onSave }
     setSaved(true)
   }
 
+  // Enter saves, Escape puts the field back to what is stored. A number field
+  // that swallows Enter reads as broken, and a typo needs an undo that is not
+  // "remember what it was".
+  function onRuleKeyDown(e, reset) {
+    if (e.key === 'Enter') { e.preventDefault(); if (dirty) save() }
+    if (e.key === 'Escape') { e.preventDefault(); reset() }
+  }
+
   function pickMode(next) {
     setMode(next)
     setSaved(false)
@@ -134,6 +142,7 @@ export default function ShellyScheduleEditor({ device, glofoxConnected, onSave }
               disabled={!glofoxConnected}
               title={!glofoxConnected ? GLOFOX_HINT : undefined}
               onChange={(e) => { setLead(e.target.value); setSaved(false) }}
+              onKeyDown={(e) => onRuleKeyDown(e, () => setLead(storedRule.lead_min))}
               className="w-16 rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-un1t-text disabled:opacity-40"
             />
             min before each class
@@ -148,6 +157,7 @@ export default function ShellyScheduleEditor({ device, glofoxConnected, onSave }
               disabled={!glofoxConnected}
               title={!glofoxConnected ? GLOFOX_HINT : undefined}
               onChange={(e) => { setLag(e.target.value); setSaved(false) }}
+              onKeyDown={(e) => onRuleKeyDown(e, () => setLag(storedRule.lag_min))}
               className="w-16 rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-un1t-text disabled:opacity-40"
             />
             min after it

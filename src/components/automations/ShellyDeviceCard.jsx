@@ -38,10 +38,12 @@
 
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AlertCircle, ChevronDown, ChevronRight, Play, Trash2 } from 'lucide-react'
 import { Button, Card } from '@/components/ui'
 import { formatRelative } from '@/lib/dates'
+import { addDaysISO } from '@/lib/dublin-time'
+import { dayStrInTz, DEFAULT_TZ } from '@/lib/tz-time'
 import { deviceHealth, HEALTH_TONE_CLASSES } from '@/lib/shelly/device-health'
 // The ENGINE's own answer to "is this override live", not a second copy of the
 // same comparison — a planner that stopped honouring an override and a card
@@ -73,6 +75,13 @@ const AUTO_REASON_COPY = {
 
 const UNMANAGED_HINT = 'No schedule runs this plug — it stays as you set it until you change it.'
 
+// An offline plug is still SETTABLE. The toggle route writes the override
+// BEFORE it sends anything, and the cron applies a live override to every
+// adopted device, enabled or not — so pressing On here is a real instruction
+// that lands when the plug wakes up, not a no-op. Disabling the buttons would
+// throw away the one path the backend built for exactly this case.
+const OFFLINE_TITLE = 'Offline — your choice is queued and applied when the plug is back'
+
 const DURATIONS = [
   { value: 'midnight', label: 'Until midnight' },
   { value: '1', label: '1 hour' },
@@ -91,16 +100,45 @@ function outputLabel(output) {
   return 'Unknown'
 }
 
-// Local time, and said so in the title: the override's real expiry is the
-// LOCATION's midnight (the route computes it in the location's zone), and an
-// operator abroad would otherwise read the browser's rendering as the studio's.
-function untilLabel(iso) {
+/**
+ * When an override ends, IN THE STUDIO'S OWN ZONE.
+ *
+ * The route computes the default expiry as the LOCATION's next local midnight
+ * (nextLocalMidnightMs against the location's timezone), so rendering it in
+ * the browser's zone would print a number that is simply not the one the
+ * engine will act on — "until 00:00" for a New York studio read from Dublin
+ * is 19:00 there, five hours early, and nothing on screen would say so.
+ *
+ * The DAY is carried too whenever it is not today's: "until midnight" is
+ * almost always tomorrow by the studio's clock, and a bare "00:00" reads as a
+ * time that has already passed.
+ *
+ * @param {string} iso    the override's `until`
+ * @param {number} nowMs  testable clock
+ * @param {string} tz     the LOCATION's IANA zone
+ */
+export function overrideUntilLabel(iso, nowMs, tz = DEFAULT_TZ) {
   const ms = Date.parse(iso ?? '')
   if (!Number.isFinite(ms)) return ''
-  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+  let time
+  try {
+    time = new Intl.DateTimeFormat(undefined, {
+      timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(ms)
+  } catch {
+    // An unusable zone must cost the DAY QUALIFIER, not the whole banner —
+    // the operator still needs to know an override is holding the relay.
+    return new Date(ms).toISOString().slice(11, 16)
+  }
+  const today = dayStrInTz(nowMs, tz)
+  const day = dayStrInTz(ms, tz)
+  if (day === today) return time
+  if (day === addDaysISO(today, 1)) return `${time} tomorrow`
+  const weekday = new Intl.DateTimeFormat(undefined, { timeZone: tz, weekday: 'short' }).format(ms)
+  return `${weekday} ${time}`
 }
 
-export default function ShellyDeviceCard({ device, connected, glofoxConnected, onChanged }) {
+export default function ShellyDeviceCard({ device, connected, locationTz = DEFAULT_TZ, glofoxConnected, onChanged }) {
   const [renaming, setRenaming] = useState(false)
   const [nameDraft, setNameDraft] = useState(device.name || '')
   // WHICH action is in flight, not merely "an action is". A boolean would put
@@ -111,15 +149,39 @@ export default function ShellyDeviceCard({ device, connected, glofoxConnected, o
   const [confirmingRemove, setConfirmingRemove] = useState(false)
   const [duration, setDuration] = useState('midnight')
   const [showEnergy, setShowEnergy] = useState(false)
+  // The toggle route's own verdict on whether this override will ever be
+  // closed. Authoritative for the window between the response and the reload
+  // that follows it (another tab may have changed `enabled` underneath us);
+  // cleared the moment a fresh row lands, because the row is then the answer.
+  const [respHolds, setRespHolds] = useState(null)
+
+  useEffect(() => { setRespHolds(null) }, [device.updated_at])
 
   const nowMs = Date.now()
   const health = deviceHealth(device, { connected, nowMs })
   const managed = Boolean(device.enabled) && device.schedule_mode !== 'none'
   const state = device.last_state || {}
-  const overrideLive = isLiveOverride(device.override, nowMs)
-  // The toggle strip is dead when there is no connection to send through, or
-  // when the device itself told us it is unreachable.
-  const controlsOff = connected === false || health.reason === 'offline'
+  // The route's answer when we have one, our own predicate otherwise. They
+  // agree by construction (both read `enabled` and `schedule_mode`), so this
+  // only matters in the window where the row on screen is older than the
+  // response that just came back.
+  const holdsUntilChanged = typeof respHolds === 'boolean' ? respHolds : !managed
+  // AN UNMANAGED OVERRIDE HAS NO EXPIRY, so it must not vanish at `until`.
+  // plan.js rule 2 returns before rule 4 can close anything, which means the
+  // relay is STILL being held long after the timestamp passes — a banner that
+  // disappeared then would leave a plug forced on with nothing on screen
+  // saying so. For a managed device `until` is real and isLiveOverride (the
+  // planner's own comparison) is exactly the right question.
+  const overrideLive = holdsUntilChanged
+    ? device.override?.state === 'on' || device.override?.state === 'off'
+    : isLiveOverride(device.override, nowMs)
+  // Only a missing CONNECTION kills the toggle strip. An offline plug is
+  // still settable — see OFFLINE_TITLE.
+  const controlsOff = connected === false
+  const offline = health.reason === 'offline'
+  const toggleTitle = controlsOff
+    ? 'Connect your Shelly account first'
+    : offline ? OFFLINE_TITLE : undefined
 
   async function patch(body) {
     const res = await fetchJson(`/api/shelly/devices/${device.id}`, jsonBody('PATCH', body))
@@ -130,10 +192,28 @@ export default function ShellyDeviceCard({ device, connected, glofoxConnected, o
     return { ok: true, json: res.json }
   }
 
+  function cancelRename() {
+    setRenaming(false)
+    setNameDraft(device.name || '')
+  }
+
   async function saveName() {
+    const trimmed = nameDraft.trim()
+    // ShellyDevicePatch requires a name of 1..80, so an empty one is a
+    // guaranteed 400 — answered here, in the same words, rather than spent as
+    // a round trip. (Clearing a name is not a thing the API offers.)
+    if (!trimmed) {
+      setResult({ tone: 'error', text: 'Give the device a name' })
+      return
+    }
+    // Nothing to write. A no-op PATCH would still bump updated_at and pull the
+    // whole list down again.
+    if (trimmed === (device.name || '')) {
+      setRenaming(false)
+      return
+    }
     setBusy('name')
     setResult(null)
-    const trimmed = nameDraft.trim()
     const out = await patch({ name: trimmed })
     setBusy(null)
     if (!out.ok) {
@@ -155,6 +235,9 @@ export default function ShellyDeviceCard({ device, connected, glofoxConnected, o
     }
     const res = await fetchJson(`/api/shelly/devices/${device.id}/toggle`, jsonBody('POST', body))
     setBusy(null)
+    // Always present on a toggle answer (success and pending alike), and
+    // absent on `auto` — hence the typeof guard rather than a truthiness one.
+    if (typeof res.json?.holds_until_changed === 'boolean') setRespHolds(res.json.holds_until_changed)
 
     // A failure body (including `auto`'s) folds its reassurance into `error`.
     if (res.json?.success === false || (!res.ok && !res.json?.pending)) {
@@ -165,7 +248,11 @@ export default function ShellyDeviceCard({ device, connected, glofoxConnected, o
     // Rule 2 — pending BEFORE anything that looks like the new state.
     if (res.json?.pending) {
       const code = res.json.code || 'pending'
-      setResult({ tone: 'warn', text: PENDING_COPY[code] || res.json.message || PENDING_COPY.pending })
+      // The ROUTE'S sentence first: it is written against the exact failure it
+      // saw, and preferring our copy over it would mean maintaining a second
+      // vocabulary for the same `kind` map. Ours is the fallback for a body
+      // that carried no message.
+      setResult({ tone: 'warn', text: res.json.message || PENDING_COPY[code] || PENDING_COPY.pending })
       await onChanged?.()
       return
     }
@@ -233,6 +320,11 @@ export default function ShellyDeviceCard({ device, connected, glofoxConnected, o
     (device.schedule_mode === 'fixed' && (device.fixed_windows?.length || 0) > 0)
     || (device.schedule_mode === 'class' && glofoxConnected)
 
+  const runNowTitle = connected === false
+    ? 'Connect your Shelly account first'
+    : device.schedule_mode === 'none' ? 'This plug has no schedule to apply'
+      : !device.enabled ? 'Turn the schedule on first' : undefined
+
   const resultClass = result?.tone === 'error'
     ? 'text-red-700'
     : result?.tone === 'warn' ? 'text-amber-700' : 'text-emerald-700'
@@ -249,14 +341,18 @@ export default function ShellyDeviceCard({ device, connected, glofoxConnected, o
                 value={nameDraft}
                 maxLength={80}
                 onChange={(e) => setNameDraft(e.target.value)}
+                // A one-field inline editor that ignores Enter reads as
+                // broken; Escape is the way out that does not need the mouse.
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') { e.preventDefault(); saveName() }
+                  if (e.key === 'Escape') { e.preventDefault(); cancelRename() }
+                }}
                 placeholder={placeholderName(device)}
                 aria-label="Device name"
                 className="rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-sm text-un1t-text"
               />
               <Button size="sm" variant="secondary" loading={busy === 'name'} onClick={saveName}>Save</Button>
-              <Button size="sm" variant="ghost" onClick={() => { setRenaming(false); setNameDraft(device.name || '') }}>
-                Cancel
-              </Button>
+              <Button size="sm" variant="ghost" onClick={cancelRename}>Cancel</Button>
             </div>
           ) : (
             <button
@@ -292,20 +388,26 @@ export default function ShellyDeviceCard({ device, connected, glofoxConnected, o
       </p>
 
       {overrideLive && (
-        <p className="text-xs text-amber-700">
+        <p
+          className="text-xs text-amber-700"
+          // Named, not implied: the number is the STUDIO's clock, which is
+          // only the reader's clock by coincidence.
+          title={holdsUntilChanged ? undefined : `Times shown in ${locationTz}`}
+        >
           {device.override.state === 'on' ? 'Forced ON' : 'Forced OFF'}
           {/* Rule 3: an unmanaged device's `until` bounds nothing the engine
               will act on, so no time is shown for one. */}
-          {managed
-            ? ` until ${untilLabel(device.override.until)} — set ${formatRelative(device.override.set_at)}`
-            : ' — stays until changed'}
+          {holdsUntilChanged
+            ? ' — stays until changed'
+            : ` until ${overrideUntilLabel(device.override.until, nowMs, locationTz)}`
+              + ` — set ${formatRelative(device.override.set_at)}`}
         </p>
       )}
 
       {/* ——— the manual switch ————————————————————————————————————— */}
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" variant="secondary" disabled={controlsOff} loading={busy === 'on'} onClick={() => toggle('on')}>On</Button>
-        <Button size="sm" variant="secondary" disabled={controlsOff} loading={busy === 'off'} onClick={() => toggle('off')}>Off</Button>
+        <Button size="sm" variant="secondary" title={toggleTitle} disabled={controlsOff} loading={busy === 'on'} onClick={() => toggle('on')}>On</Button>
+        <Button size="sm" variant="secondary" title={toggleTitle} disabled={controlsOff} loading={busy === 'off'} onClick={() => toggle('off')}>Off</Button>
         {managed && (
           <>
             <select
@@ -354,7 +456,13 @@ export default function ShellyDeviceCard({ device, connected, glofoxConnected, o
             variant="ghost"
             icon={Play}
             loading={busy === 'run'}
-            disabled={!device.enabled || device.schedule_mode === 'none' || connected !== true}
+            // `connected === false`, NOT `!== true`: an UNKNOWN connection is
+            // our read failing, not the studio's, and the whole point of that
+            // third state is that it disables nothing. If it turns out there
+            // really is no connection, run-now answers its own 409
+            // `not_connected` with copy the operator can act on.
+            disabled={!device.enabled || device.schedule_mode === 'none' || connected === false}
+            title={runNowTitle}
             onClick={runNow}
           >
             Run now

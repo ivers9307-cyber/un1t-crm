@@ -8,7 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, cleanup } from '@testing-library/react'
-import ShellyEnergyChart from './ShellyEnergyChart.jsx'
+import ShellyEnergyChart, { dayKind } from './ShellyEnergyChart.jsx'
 
 const day = (d, kwh, samples = 24) => ({ day: d, kwh, samples, resets: 0 })
 
@@ -80,6 +80,47 @@ describe('ShellyEnergyChart', () => {
     // browser's clock.
     expect(screen.getByTitle('2026-08-23: 1.0 kWh').className).toContain('bg-un1t-accent/30')
     expect(screen.getByTitle('2026-08-22: 4.0 kWh').className).toContain('bg-un1t-accent/70')
+  })
+
+  it('tells a GAP, a FLAT day, an UNREADABLE day and a real value apart', async () => {
+    mockEnergy({
+      success: true, device_id: 'dev-1', from: '2026-08-20', to: '2026-08-23',
+      days: [
+        { day: '2026-08-20', kwh: 0, samples: 0, resets: 0 },   // no reading at all
+        { day: '2026-08-21', kwh: 0, samples: 24, resets: 0 },  // measured, drew nothing
+        { day: '2026-08-22', kwh: null, samples: 6, resets: 0 },// row we could not read
+        { day: '2026-08-23', kwh: 2.5, samples: 12, resets: 0 },// a real value
+      ],
+    })
+    render(<ShellyEnergyChart deviceId="dev-1" />)
+    await waitFor(() => expect(screen.getByTitle('2026-08-23: 2.5 kWh')).toBeTruthy())
+
+    const gap = screen.getByTitle('2026-08-20: No reading')
+    const flat = screen.getByTitle('2026-08-21: 0.0 kWh')
+    const unreadable = screen.getByTitle('2026-08-22: reading unavailable')
+    const value = screen.getByTitle('2026-08-23: 2.5 kWh')
+
+    // Four distinct titles, and three visually distinct non-proportional kinds.
+    expect(new Set([gap, flat, unreadable, value]).size).toBe(4)
+    expect(gap.className).toContain('border-dotted')
+    expect(unreadable.className).toContain('border-dashed')
+    expect(unreadable.textContent).toBe('?')
+    // A measured zero is a SOLID bar — drawing it like the gap above would
+    // read a month of outage as a month of an idle plug.
+    expect(flat.className).toContain('bg-un1t-accent')
+    expect(flat.className).not.toContain('border-dotted')
+    expect(value.className).toContain('bg-un1t-accent')
+    // Only the null day contributes nothing to the total.
+    expect(screen.getByText('2.5 kWh over 4 days')).toBeTruthy()
+  })
+
+  it('dayKind classifies the four shapes the route can emit', () => {
+    expect(dayKind({ kwh: null, samples: 6 })).toBe('unreadable')
+    expect(dayKind({ kwh: 0, samples: 0 })).toBe('gap')
+    expect(dayKind({ kwh: 0, samples: 24 })).toBe('flat')
+    expect(dayKind({ kwh: 1.2, samples: 24 })).toBe('value')
+    // A zero-filled day the route wrote with no row at all.
+    expect(dayKind({ day: '2026-08-20', kwh: 0, samples: 0, resets: 0 })).toBe('gap')
   })
 
   it('surfaces a route failure instead of an empty chart', async () => {

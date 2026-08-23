@@ -105,6 +105,38 @@ describe('ShellyScheduleEditor — Glofox gating', () => {
   })
 })
 
+describe('ShellyScheduleEditor — keyboard', () => {
+  it('Enter in a lead field saves', async () => {
+    const onSave = vi.fn(async () => ok())
+    render(<ShellyScheduleEditor device={device({ schedule_mode: 'class' })} glofoxConnected onSave={onSave} />)
+    const lead = screen.getByDisplayValue(String(DEFAULT_LEAD_MIN))
+    fireEvent.change(lead, { target: { value: '30' } })
+    fireEvent.keyDown(lead, { key: 'Enter' })
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith({
+      class_rule: { lead_min: 30, lag_min: DEFAULT_LAG_MIN },
+    }))
+  })
+
+  it('Enter on an unchanged field sends nothing', () => {
+    const onSave = vi.fn(async () => ok())
+    render(<ShellyScheduleEditor device={device({ schedule_mode: 'class' })} glofoxConnected onSave={onSave} />)
+    fireEvent.keyDown(screen.getByDisplayValue(String(DEFAULT_LEAD_MIN)), { key: 'Enter' })
+    expect(onSave).not.toHaveBeenCalled()
+  })
+
+  it('Escape puts the field back to what is stored', () => {
+    const onSave = vi.fn(async () => ok())
+    render(<ShellyScheduleEditor device={device({ schedule_mode: 'class' })} glofoxConnected onSave={onSave} />)
+    const lag = screen.getByDisplayValue(String(DEFAULT_LAG_MIN))
+    fireEvent.change(lag, { target: { value: '99' } })
+    expect(screen.getByRole('button', { name: /Save schedule/ }).disabled).toBe(false)
+    fireEvent.keyDown(lag, { key: 'Escape' })
+    expect(screen.getByDisplayValue(String(DEFAULT_LAG_MIN))).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Save schedule/ }).disabled).toBe(true)
+    expect(onSave).not.toHaveBeenCalled()
+  })
+})
+
 describe('ShellyScheduleEditor — saving', () => {
   it('renders the server’s refusal and stays dirty', async () => {
     const onSave = vi.fn(async () => ({ ok: false, message: 'Windows must not overlap: 06:00–21:00 and 20:00–22:00' }))

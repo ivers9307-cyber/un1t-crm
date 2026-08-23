@@ -16,7 +16,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
-import ShellyDeviceCard from './ShellyDeviceCard.jsx'
+import ShellyDeviceCard, { overrideUntilLabel } from './ShellyDeviceCard.jsx'
 
 const NOW = Date.now()
 const iso = (offsetMs = 0) => new Date(NOW + offsetMs).toISOString()
@@ -156,9 +156,21 @@ describe('ShellyDeviceCard — managed vs unmanaged toggling', () => {
     expect(screen.getByRole('button', { name: 'Off' }).disabled).toBe(true)
   })
 
-  it('the toggle strip is dead for a device that reported itself offline', () => {
+  it('an OFFLINE plug can still be pre-set — the override is queued, not lost', () => {
+    // The toggle route writes the override BEFORE it sends anything and the
+    // cron applies a live override to every adopted device, so this is a real
+    // instruction that lands when the plug wakes up.
     render(<ShellyDeviceCard device={managed({ last_state: state({ online: false, output: null }) })} connected glofoxConnected />)
-    expect(screen.getByRole('button', { name: 'On' }).disabled).toBe(true)
+    const on = screen.getByRole('button', { name: 'On' })
+    expect(on.disabled).toBe(false)
+    expect(on.getAttribute('title')).toBe('Offline — your choice is queued and applied when the plug is back')
+  })
+
+  it('no connection is the ONLY thing that kills the toggle strip, and it says why', () => {
+    render(<ShellyDeviceCard device={managed()} connected={false} glofoxConnected />)
+    const on = screen.getByRole('button', { name: 'On' })
+    expect(on.disabled).toBe(true)
+    expect(on.getAttribute('title')).toBe('Connect your Shelly account first')
   })
 
   it('an uncertain connection leaves the controls ENABLED — it is our read that failed, not the plug', () => {
@@ -181,10 +193,21 @@ describe('ShellyDeviceCard — pending is not applied', () => {
     render(<ShellyDeviceCard device={managed({ last_state: state({ output: false }) })} connected glofoxConnected onChanged={vi.fn()} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'On' }))
-    await waitFor(() => expect(screen.getByText('Queued — the plug will follow when it is back online.')).toBeTruthy())
+    // The ROUTE's sentence wins — it was written against the failure it saw.
+    await waitFor(() => expect(screen.getByRole('status').textContent)
+      .toContain('Saved. The plug is not answering — it will follow as soon as it is back online.'))
     // The rendered relay state still comes from the ROW, which nobody moved.
     expect(screen.getByText('Off', { selector: 'span' })).toBeTruthy()
     expect(screen.queryByText('Switched on.')).toBeNull()
+  })
+
+  it('falls back to our own queued copy when the body carried no message', async () => {
+    routes((url) => url.endsWith('/toggle')
+      ? json(200, { success: true, device: managed(), applied: false, pending: true, code: 'pending' })
+      : json(200, { success: true }))
+    render(<ShellyDeviceCard device={managed()} connected glofoxConnected onChanged={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'On' }))
+    await waitFor(() => expect(screen.getByText('Queued — the plug will follow when it is back online.')).toBeTruthy())
   })
 
   it('key_rejected points at the key, rate_limited at the wait, bad_host at the settings', async () => {
@@ -203,7 +226,7 @@ describe('ShellyDeviceCard — pending is not applied', () => {
     }
   })
 
-  it('an unmapped pending code falls back to the route’s own sentence', async () => {
+  it('an unmapped pending code still says something true — the route’s own sentence', async () => {
     routes((url) => url.endsWith('/toggle')
       ? json(200, { success: true, device: managed(), applied: false, pending: true, code: 'something_new', message: 'Saved. Shelly cloud is not answering.' })
       : json(200, { success: true }))
@@ -229,16 +252,47 @@ describe('ShellyDeviceCard — the override banner', () => {
     expect(screen.queryByText(/Forced ON until/)).toBeNull()
   })
 
-  it('an expired override is not a banner', () => {
+  it('an UNMANAGED override outlives its `until` — nothing ever closes it', () => {
+    // plan.js rule 2 returns before rule 4, so the relay is STILL held long
+    // after the timestamp passes. A banner that vanished then would leave a
+    // plug forced on with nothing on screen saying so.
+    render(<ShellyDeviceCard connected glofoxConnected
+      device={unmanaged({ override: { state: 'on', until: iso(-6 * 3600_000), set_by: 'u1', set_at: iso(-8 * 3600_000) } })} />)
+    expect(screen.getByText('Forced ON — stays until changed')).toBeTruthy()
+  })
+
+  it('a managed override DOES expire at its `until`', () => {
     render(<ShellyDeviceCard connected glofoxConnected
       device={managed({ override: { state: 'on', until: iso(-60_000), set_by: 'u1', set_at: iso(-3600_000) } })} />)
     expect(screen.queryByText(/Forced/)).toBeNull()
   })
 
-  it('an override the planner cannot read is not live either', () => {
-    render(<ShellyDeviceCard connected glofoxConnected
+  it('an override the planner cannot read is not live either, managed or not', () => {
+    const { unmount } = render(<ShellyDeviceCard connected glofoxConnected
       device={managed({ override: { state: 'weird', until: iso(3600_000) } })} />)
     expect(screen.queryByText(/Forced/)).toBeNull()
+    unmount()
+    render(<ShellyDeviceCard connected glofoxConnected
+      device={unmanaged({ override: { state: 'weird', until: iso(3600_000) } })} />)
+    expect(screen.queryByText(/Forced/)).toBeNull()
+  })
+
+  it('takes holds_until_changed from the toggle RESPONSE for the render right after it', async () => {
+    // The row on screen still says managed; the route says this override will
+    // hold. The route saw the row as it was when it acted.
+    routes((url) => url.endsWith('/toggle')
+      ? json(200, {
+        success: true,
+        device: managed({ override: { state: 'on', until: iso(3600_000), set_by: 'u1', set_at: iso() } }),
+        applied: true, holds_until_changed: true,
+        notice: 'No schedule is running this plug, so it stays as you set it until you change it',
+      })
+      : json(200, { success: true }))
+    render(<ShellyDeviceCard connected glofoxConnected onChanged={vi.fn()}
+      device={managed({ override: { state: 'on', until: iso(3600_000), set_by: 'u1', set_at: iso() } })} />)
+    expect(screen.getByText(/Forced ON until/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'On' }))
+    await waitFor(() => expect(screen.getByText('Forced ON — stays until changed')).toBeTruthy())
   })
 })
 
@@ -319,17 +373,33 @@ describe('ShellyDeviceCard — the schedule switch and run now', () => {
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain(notice))
   })
 
-  it('Run now is dead without a live connection, and alive with one', () => {
-    const { unmount } = render(<ShellyDeviceCard device={managed()} connected={null} glofoxConnected />)
-    expect(screen.getByRole('button', { name: /Run now/ }).disabled).toBe(true)
+  it('Run now is dead only when there is definitely no connection', () => {
+    const { unmount } = render(<ShellyDeviceCard device={managed()} connected={false} glofoxConnected />)
+    const dead = screen.getByRole('button', { name: /Run now/ })
+    expect(dead.disabled).toBe(true)
+    expect(dead.getAttribute('title')).toBe('Connect your Shelly account first')
     unmount()
     render(<ShellyDeviceCard device={managed()} connected glofoxConnected />)
     expect(screen.getByRole('button', { name: /Run now/ }).disabled).toBe(false)
   })
 
-  it('Run now is dead for a device with no schedule', () => {
-    render(<ShellyDeviceCard device={unmanaged()} connected glofoxConnected />)
-    expect(screen.getByRole('button', { name: /Run now/ }).disabled).toBe(true)
+  it('an UNKNOWN connection leaves Run now alive — the route answers its own 409', () => {
+    // connected:null is our read failing, not the studio's. Disabling here
+    // would turn a database blip on our side into a dead control.
+    render(<ShellyDeviceCard device={managed()} connected={null} glofoxConnected />)
+    expect(screen.getByRole('button', { name: /Run now/ }).disabled).toBe(false)
+  })
+
+  it('Run now is dead for a device with no schedule, and names the reason', () => {
+    const { unmount } = render(<ShellyDeviceCard device={unmanaged()} connected glofoxConnected />)
+    const noSchedule = screen.getByRole('button', { name: /Run now/ })
+    expect(noSchedule.disabled).toBe(true)
+    expect(noSchedule.getAttribute('title')).toBe('This plug has no schedule to apply')
+    unmount()
+    render(<ShellyDeviceCard device={managed({ enabled: false })} connected glofoxConnected />)
+    const off = screen.getByRole('button', { name: /Run now/ })
+    expect(off.disabled).toBe(true)
+    expect(off.getAttribute('title')).toBe('Turn the schedule on first')
   })
 
   it('Run now renders applied and the already-correct noop', async () => {
@@ -371,15 +441,100 @@ describe('ShellyDeviceCard — rename', () => {
     await waitFor(() => expect(body).toEqual({ name: 'Sauna' }))
   })
 
-  it('surfaces the route’s validation message for an empty name', async () => {
-    routes((url, init) => (init.method === 'PATCH'
-      ? json(400, { success: false, error: 'Invalid request', issues: [{ message: 'Give the device a name' }] })
-      : json(200, { success: true })))
+  it('refuses an empty name locally — no PATCH is spent on a guaranteed 400', async () => {
+    routes(() => json(200, { success: true }))
     render(<ShellyDeviceCard device={managed()} connected glofoxConnected onChanged={vi.fn()} />)
     fireEvent.click(screen.getByRole('button', { name: /Sauna plug/ }))
     fireEvent.change(screen.getByLabelText('Device name'), { target: { value: '  ' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('Give the device a name'))
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+
+  it('an unchanged name just closes the editor — a no-op PATCH would still bump updated_at', async () => {
+    routes(() => json(200, { success: true }))
+    render(<ShellyDeviceCard device={managed()} connected glofoxConnected onChanged={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /Sauna plug/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(screen.queryByLabelText('Device name')).toBeNull())
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+
+  it('Enter saves and Escape cancels', async () => {
+    let body = null
+    routes((url, init) => {
+      if (init.method === 'PATCH') { body = JSON.parse(init.body); return json(200, { success: true, device: managed({ name: 'Sauna' }) }) }
+      return json(200, { success: true })
+    })
+    const { unmount } = render(<ShellyDeviceCard device={managed()} connected glofoxConnected onChanged={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /Sauna plug/ }))
+    fireEvent.change(screen.getByLabelText('Device name'), { target: { value: 'Sauna' } })
+    fireEvent.keyDown(screen.getByLabelText('Device name'), { key: 'Enter' })
+    await waitFor(() => expect(body).toEqual({ name: 'Sauna' }))
+    unmount()
+
+    routes(() => json(200, { success: true }))
+    render(<ShellyDeviceCard device={managed()} connected glofoxConnected onChanged={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /Sauna plug/ }))
+    fireEvent.change(screen.getByLabelText('Device name'), { target: { value: 'Something else' } })
+    fireEvent.keyDown(screen.getByLabelText('Device name'), { key: 'Escape' })
+    expect(screen.queryByLabelText('Device name')).toBeNull()
+    expect(screen.getByRole('button', { name: /Sauna plug/ })).toBeTruthy()
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+})
+
+describe('overrideUntilLabel — the STUDIO’s clock, not the reader’s', () => {
+  // A New York studio read from a Dublin laptop. The route computed `until`
+  // as NY's next local midnight; rendering it in the browser's zone would
+  // print 05:00 and be five hours wrong about what the engine will do.
+  const NY = 'America/New_York'
+  const nowNy = Date.parse('2026-08-23T18:00:00Z') // 14:00 Sun in NY
+
+  it('shows a bare time when it lands on the studio’s today', () => {
+    // 21:00 EDT the same NY day.
+    expect(overrideUntilLabel('2026-08-24T01:00:00Z', nowNy, NY)).toBe('21:00')
+  })
+
+  it('says "tomorrow" for the studio’s next day — which is what "until midnight" is', () => {
+    // 00:00 EDT Monday: midnight in NY, and the default preset's answer.
+    expect(overrideUntilLabel('2026-08-24T04:00:00Z', nowNy, NY)).toBe('00:00 tomorrow')
+  })
+
+  it('names the weekday when it is further out than tomorrow', () => {
+    // 02:00 EDT on Tuesday.
+    expect(overrideUntilLabel('2026-08-25T06:00:00Z', nowNy, NY)).toBe('Tue 02:00')
+  })
+
+  it('the same instant reads differently in the two zones — which is the point', () => {
+    const instant = '2026-08-24T04:00:00Z'
+    expect(overrideUntilLabel(instant, nowNy, NY)).toBe('00:00 tomorrow')
+    expect(overrideUntilLabel(instant, nowNy, 'Europe/Dublin')).toBe('05:00 tomorrow')
+  })
+
+  it('an unusable zone costs the day qualifier, never the banner', () => {
+    expect(overrideUntilLabel('2026-08-24T04:00:00Z', nowNy, 'Not/AZone')).toBe('04:00')
+  })
+
+  it('an unparseable until renders nothing rather than "Invalid Date"', () => {
+    expect(overrideUntilLabel('nonsense', nowNy, NY)).toBe('')
+    expect(overrideUntilLabel(null, nowNy, NY)).toBe('')
+  })
+})
+
+describe('ShellyDeviceCard — the override banner names its zone', () => {
+  it('renders the studio’s time and says which clock it is', () => {
+    const nowMs = Date.now()
+    render(<ShellyDeviceCard connected glofoxConnected locationTz="America/New_York"
+      device={managed({ override: { state: 'on', until: new Date(nowMs + 3 * 3600_000).toISOString(), set_by: 'u1', set_at: iso(-60_000) } })} />)
+    const banner = screen.getByText(/Forced ON until/)
+    expect(banner.getAttribute('title')).toBe('Times shown in America/New_York')
+  })
+
+  it('an unmanaged banner carries no zone title — it shows no time to qualify', () => {
+    render(<ShellyDeviceCard connected glofoxConnected locationTz="America/New_York"
+      device={unmanaged({ override: { state: 'on', until: iso(3600_000), set_by: 'u1', set_at: iso(-60_000) } })} />)
+    expect(screen.getByText('Forced ON — stays until changed').getAttribute('title')).toBeNull()
   })
 })
 

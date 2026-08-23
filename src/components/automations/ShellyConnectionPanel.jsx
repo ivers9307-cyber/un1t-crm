@@ -223,7 +223,11 @@ export default function ShellyConnectionPanel({ connection, canManage, deviceCou
                 type="password"
                 value={authKey}
                 onChange={(e) => setAuthKey(e.target.value)}
-                autoComplete="off"
+                // "new-password", not "off": Chrome ignores autocomplete="off"
+                // on password inputs and offers the saved site password, which
+                // here would silently paste the wrong secret into a field the
+                // UI never echoes back.
+                autoComplete="new-password"
                 className="w-full rounded border border-un1t-border bg-un1t-bg px-2 py-1.5 text-sm text-un1t-text"
               />
             )}

@@ -7,6 +7,11 @@
 // out for itself:
 //
 //   locationName          — whose plugs these are, in the header.
+//   locationTz            — the zone an override's expiry is rendered in. The
+//                           toggle route computes the default `until` as the
+//                           LOCATION's next local midnight, so a card that
+//                           formatted it in the browser's zone would print a
+//                           time the engine will not act on.
 //   glofoxConnected       — whether class-linked schedules are even offerable
 //                           (the timetable is the trigger source).
 //   canManageConnection   — whether to show the Connect form at all. This is
@@ -24,6 +29,7 @@ import { redirect } from 'next/navigation'
 import { getCurrentUser, guardMasterOrOwner } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { glofoxConnected } from '@/lib/automations/registry'
+import { DEFAULT_TZ } from '@/lib/tz-time'
 import ShellyDevicesClient from '@/components/automations/ShellyDevicesClient'
 
 export const dynamic = 'force-dynamic'
@@ -46,6 +52,7 @@ export default async function ShellyPage() {
       </div>
       <ShellyDevicesClient
         locationName={location.name || ''}
+        locationTz={location.timezone || DEFAULT_TZ}
         glofoxConnected={glofoxConnected(location)}
         // guardMasterOrOwner returns a 403 response or null; null is "allowed".
         canManageConnection={guardMasterOrOwner(user, location.id) === null}

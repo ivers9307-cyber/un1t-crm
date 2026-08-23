@@ -10,13 +10,21 @@
 // every day in the range, so `days.length` is the range and not the number of
 // rows on disk.
 //
-// THREE VALUES THAT LOOK ALIKE AND ARE NOT:
-//   kwh 0 + samples 0  — no reading that day (the plug was unreachable, or it
-//                        was not adopted yet). Rendered as an empty slot.
-//   kwh 0 + samples >0 — we read it and it drew nothing. A real, flat day.
-//   kwh null           — a row exists whose wh_total could not be read. Marked
-//                        with a "?" rather than drawn as zero, because zero is
-//                        a measurement and this is the absence of one.
+// FOUR KINDS OF DAY ARRIVE LOOKING ALIKE, AND THEY ARE NOT ALIKE. The route
+// zero-fills a missing day, so `kwh: 0` covers two completely different
+// facts and `samples` is the only thing that separates them:
+//
+//   kwh null            a row exists whose wh_total could not be read.
+//                       Marked "?", because zero is a measurement and this is
+//                       the absence of one.
+//   samples 0           NO READING that day — the plug was unreachable, or it
+//                       was not adopted yet. A gap, drawn as one.
+//   samples >0, kwh 0   we read it and it drew nothing. A real, flat day, and
+//                       it gets a real (minimum-height) bar.
+//   kwh >0              proportional.
+//
+// Drawing the second and third the same way is the bug this shape exists to
+// avoid: a month of outage would read as a month of a plug sitting idle.
 
 'use client'
 
@@ -25,13 +33,27 @@ import { AlertCircle } from 'lucide-react'
 import { fetchJson, errorText } from './shelly-fetch'
 
 const BAR_MAX_PX = 56
+// Enough to be visibly a bar rather than a hairline, for a day that really
+// did measure zero.
+const BAR_MIN_PX = 2
 
-// 'YYYY-MM-DD' → 'Mon 23'. Parsed as parts rather than through Date so the
+// 'YYYY-MM-DD' → '23/8'. Parsed as parts rather than through Date so the
 // browser's timezone cannot shift a date-only string onto the day before.
 function dayLabel(day) {
   const [y, m, d] = String(day || '').split('-').map(Number)
   if (!y || !m || !d) return String(day || '')
   return `${d}/${m}`
+}
+
+/**
+ * Which of the four kinds a day is. Pure, and exported so the render loop and
+ * a test ask the same question.
+ */
+export function dayKind(row) {
+  if (row?.kwh === null || row?.kwh === undefined) return 'unreadable'
+  if (!(row.samples > 0)) return 'gap'
+  if (row.kwh === 0) return 'flat'
+  return 'value'
 }
 
 export default function ShellyEnergyChart({ deviceId, days = 30 }) {
@@ -87,16 +109,13 @@ export default function ShellyEnergyChart({ deviceId, days = 30 }) {
       </p>
       <div className="flex items-end gap-[3px]" style={{ height: BAR_MAX_PX }}>
         {rows.map((r) => {
-          const unreadable = r.kwh === null || r.kwh === undefined
-          const value = unreadable ? 0 : r.kwh
-          const height = max > 0 ? Math.max(2, Math.round((value / max) * BAR_MAX_PX)) : 2
+          const kind = dayKind(r)
           const isToday = r.day === today
-          const title = unreadable
-            ? `${r.day}: reading unavailable`
-            : `${r.day}: ${value.toFixed(1)} kWh`
-          return (
-            <div key={r.day} className="flex flex-1 flex-col items-center justify-end" style={{ height: BAR_MAX_PX }}>
-              {unreadable ? (
+
+          if (kind === 'unreadable') {
+            const title = `${r.day}: reading unavailable`
+            return (
+              <div key={r.day} className="flex flex-1 flex-col items-center justify-end" style={{ height: BAR_MAX_PX }}>
                 <span
                   title={title}
                   aria-label={title}
@@ -105,16 +124,41 @@ export default function ShellyEnergyChart({ deviceId, days = 30 }) {
                 >
                   ?
                 </span>
-              ) : (
+              </div>
+            )
+          }
+
+          if (kind === 'gap') {
+            const title = `${r.day}: No reading`
+            return (
+              <div key={r.day} className="flex flex-1 flex-col items-center justify-end" style={{ height: BAR_MAX_PX }}>
+                {/* Dotted and empty — visibly NOT a measurement of zero. */}
                 <span
                   title={title}
                   aria-label={title}
-                  // Today is lighter: its bar is a part-day and will keep
-                  // growing, so it must not read as a completed comparison.
-                  className={`w-full rounded-sm ${isToday ? 'bg-un1t-accent/30' : 'bg-un1t-accent/70'}`}
-                  style={{ height }}
+                  className="w-full rounded-sm border border-dotted border-un1t-border"
+                  style={{ height: BAR_MIN_PX * 3 }}
                 />
-              )}
+              </div>
+            )
+          }
+
+          // 'flat' and 'value' are both real measurements, so both are solid;
+          // a measured zero simply gets the minimum height.
+          const height = kind === 'flat' || max <= 0
+            ? BAR_MIN_PX
+            : Math.max(BAR_MIN_PX, Math.round((r.kwh / max) * BAR_MAX_PX))
+          const title = `${r.day}: ${r.kwh.toFixed(1)} kWh`
+          return (
+            <div key={r.day} className="flex flex-1 flex-col items-center justify-end" style={{ height: BAR_MAX_PX }}>
+              <span
+                title={title}
+                aria-label={title}
+                // Today is lighter: its bar is a part-day and will keep
+                // growing, so it must not read as a completed comparison.
+                className={`w-full rounded-sm ${isToday ? 'bg-un1t-accent/30' : 'bg-un1t-accent/70'}`}
+                style={{ height }}
+              />
             </div>
           )
         })}

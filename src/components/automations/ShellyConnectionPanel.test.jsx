@@ -59,11 +59,13 @@ describe('ShellyConnectionPanel — who may manage it', () => {
     expect(screen.getByText(/password invalidates the key/)).toBeTruthy()
   })
 
-  it('the key field is a password input with autocomplete off', () => {
+  it('the key field is a password input that refuses the browser’s saved password', () => {
     const { container } = render(<ShellyConnectionPanel connection={null} canManage deviceCount={0} />)
     const key = container.querySelector('input[type="password"]')
     expect(key).toBeTruthy()
-    expect(key.getAttribute('autocomplete')).toBe('off')
+    // "new-password", not "off" — Chrome ignores `off` on password fields and
+    // would offer the saved site password for a field that takes a Shelly key.
+    expect(key.getAttribute('autocomplete')).toBe('new-password')
   })
 })
 

@@ -12,7 +12,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, cleanup, act } from '@testing-library/react'
-import ShellyDevicesClient from './ShellyDevicesClient.jsx'
+import ShellyDevicesClient, { refreshSummary } from './ShellyDevicesClient.jsx'
 
 const CONNECTION = {
   host: 'shelly-68-eu.shelly.cloud',
@@ -171,11 +171,60 @@ describe('ShellyDevicesClient — a failed poll keeps the last good render', () 
     await waitFor(() => expect(screen.queryByText('Couldn’t refresh — retrying')).toBeNull())
   })
 
-  it('a first load that fails entirely says so — it does NOT offer the Connect form', async () => {
+  it('a first load that fails entirely says so — no Connect form, and NO claim about the plugs', async () => {
     script([[json(500, { success: false }), json(500, { success: false })]])
     render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected canManageConnection />)
     await waitFor(() => expect(screen.getByText('Couldn’t read the Shelly connection — retrying')).toBeTruthy())
     expect(screen.queryByRole('button', { name: /^Connect$/ })).toBeNull()
+    // "No plugs adopted yet" is a statement about the STUDIO. We did not read
+    // the devices, so we are not entitled to make it.
+    expect(screen.queryByText(/No plugs adopted yet/)).toBeNull()
+  })
+
+  it('claims "no plugs" only once the devices read has actually succeeded', async () => {
+    script([[okConn(), okDevices({ devices: [] })]])
+    render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected canManageConnection />)
+    await waitFor(() => expect(screen.getByText(/No plugs adopted yet/)).toBeTruthy())
+  })
+
+  it('a devices read that fails while the connection reads fine makes no claim either', async () => {
+    script([[okConn(), json(500, { success: false, error: 'Could not load your Shelly devices' })]])
+    render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected canManageConnection />)
+    await waitFor(() => expect(screen.getByText('Couldn’t refresh — retrying')).toBeTruthy())
+    expect(screen.queryByText(/No plugs adopted yet/)).toBeNull()
+    // The connection panel is unaffected — that read worked.
+    expect(screen.getByText('Connected')).toBeTruthy()
+  })
+
+  it('LAST ISSUED wins, not last arrived: a slow earlier poll cannot repaint a newer load', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    // Round 1's devices leg is held open until after round 2 has landed.
+    let releaseFirst = null
+    const firstDevices = new Promise((resolve) => { releaseFirst = resolve })
+    let devicesCalls = 0
+    global.fetch = vi.fn(async (url) => {
+      const u = String(url)
+      if (u === '/api/shelly/connection') return okConn()
+      if (u === '/api/shelly/devices') {
+        devicesCalls += 1
+        if (devicesCalls === 1) return firstDevices
+        return okDevices({ devices: [{ ...DEVICE, name: 'NEW name' }] })
+      }
+      return json(200, { success: true })
+    })
+
+    render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected canManageConnection />)
+    // Round 2 (the poll tick) resolves first and paints.
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+    await waitFor(() => expect(screen.getByText('NEW name')).toBeTruthy())
+
+    // Round 1 finally answers with the STALE row. It must be dropped.
+    await act(async () => {
+      releaseFirst(okDevices({ devices: [{ ...DEVICE, name: 'STALE name' }] }))
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(screen.getByText('NEW name')).toBeTruthy())
+    expect(screen.queryByText('STALE name')).toBeNull()
   })
 
   it('polls on a 30 s tick and stops while the tab is hidden', async () => {
@@ -198,6 +247,89 @@ describe('ShellyDevicesClient — a failed poll keeps the last good render', () 
   })
 })
 
+describe('refreshSummary — worded off all three counters', () => {
+  it('zero changed rows is the HEALTHY answer for a studio nothing moved in', () => {
+    // `refreshed` counts rows whose state CHANGED, and the deadband swallows a
+    // wattmeter twitching in the third decimal — "Refreshed 0 devices" read as
+    // a failure.
+    expect(refreshSummary({ refreshed: 0, read_failures: 0, rate_limited: 0 }))
+      .toEqual({ tone: 'ok', text: 'No changes' })
+  })
+
+  it('counts and singularises what did change', () => {
+    expect(refreshSummary({ refreshed: 1 }).text).toBe('Updated 1 device')
+    expect(refreshSummary({ refreshed: 4 }).text).toBe('Updated 4 devices')
+  })
+
+  it('names unread plugs, in a warning tone', () => {
+    expect(refreshSummary({ refreshed: 2, read_failures: 1 }))
+      .toEqual({ tone: 'warn', text: 'Updated 2 devices — 1 couldn’t be read' })
+  })
+
+  it('explains a quiet result when Shelly was busy', () => {
+    expect(refreshSummary({ refreshed: 0, rate_limited: 3 }).text).toBe('No changes — Shelly was busy')
+  })
+
+  it('stays quiet about a rate limit that did not stop anything', () => {
+    // A 429 that was retried into a success is invisible to the operator by
+    // design — mentioning it would invite action on a non-problem.
+    expect(refreshSummary({ refreshed: 5, rate_limited: 2 }).text).toBe('Updated 5 devices')
+  })
+
+  it('says all of it at once when all of it happened', () => {
+    expect(refreshSummary({ refreshed: 0, read_failures: 2, rate_limited: 1 }))
+      .toEqual({ tone: 'warn', text: 'No changes — Shelly was busy — 2 couldn’t be read' })
+  })
+
+  it('an absent body is not a crash', () => {
+    expect(refreshSummary()).toEqual({ tone: 'ok', text: 'No changes' })
+  })
+})
+
+describe('ShellyDevicesClient — the status derivation under a later failure', () => {
+  it('a confident "never connected" SURVIVES a later 500 — the Connect form stays', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    script([
+      [json(200, { success: true, connection: null, can_manage: true, device_count: 0 }),
+        json(200, { success: true, devices: [], connected: false, connection_status: null })],
+      [json(500, { success: false }), json(500, { success: false })],
+    ])
+    render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected canManageConnection />)
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Connect$/ })).toBeTruthy())
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+
+    // The last GOOD read said "not connected", and that is still the last
+    // thing we actually know — so the form stays and the failure is
+    // subordinate.
+    await waitFor(() => expect(screen.getByText('Couldn’t refresh — retrying')).toBeTruthy())
+    expect(screen.getByRole('button', { name: /^Connect$/ })).toBeTruthy()
+    expect(screen.queryByText('Couldn’t read the Shelly connection — retrying')).toBeNull()
+  })
+
+  it('a live studio whose connection read then fails keeps its panel, not the unreadable card', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    script([
+      [okConn(), okDevices()],
+      [json(500, { success: false }),
+        json(200, { success: true, devices: [DEVICE], connected: null, connection_status: 'unknown' })],
+    ])
+    render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected canManageConnection />)
+    await waitFor(() => expect(screen.getByText('Connected')).toBeTruthy())
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+
+    await waitFor(() => expect(screen.getByText('Couldn’t refresh — retrying')).toBeTruthy())
+    // The last-good connection is authoritative over the devices payload's
+    // 'unknown', so this is the GENERIC retry line over a live panel — not the
+    // "couldn't read the connection" card, which is for having nothing at all.
+    expect(screen.getByText('Connected')).toBeTruthy()
+    expect(screen.queryByText('Couldn’t read the Shelly connection — retrying')).toBeNull()
+    expect(screen.getByText('Sauna plug')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'On' }).disabled).toBe(false)
+  })
+})
+
 describe('ShellyDevicesClient — refresh', () => {
   it('reports the refreshed count and then debounces the button', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
@@ -207,11 +339,24 @@ describe('ShellyDevicesClient — refresh', () => {
 
     const button = screen.getByRole('button', { name: /Refresh/ })
     await act(async () => { button.click() })
-    await waitFor(() => expect(screen.getByText('Refreshed 3 devices')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Updated 3 devices')).toBeTruthy())
     expect(screen.getByRole('button', { name: /Refresh/ }).disabled).toBe(true)
 
     await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
     await waitFor(() => expect(screen.getByRole('button', { name: /Refresh/ }).disabled).toBe(false))
+  })
+
+  it('the verdict clears itself rather than standing over whatever happens next', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    script([[okConn(), okDevices()]])
+    render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected canManageConnection />)
+    await waitFor(() => expect(screen.getByText('Sauna plug')).toBeTruthy())
+
+    await act(async () => { screen.getByRole('button', { name: /Refresh/ }).click() })
+    await waitFor(() => expect(screen.getByText('Updated 3 devices')).toBeTruthy())
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(8_000) })
+    await waitFor(() => expect(screen.queryByText('Updated 3 devices')).toBeNull())
   })
 
   it('renders the route’s own error for a failed refresh', async () => {
