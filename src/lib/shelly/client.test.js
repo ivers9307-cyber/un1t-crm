@@ -114,6 +114,37 @@ describe('createShellyClient', () => {
     expect(clk.slept).toHaveLength(1)
   })
 
+  it('serialises un-awaited calls, so concurrency cannot skip the gap', async () => {
+    const { fetchImpl, calls } = fetchStub([{ status: 200, body: '["a"]' }, { status: 200, body: '["b"]' }])
+    const clk = clockAndSleep()
+    const c = createShellyClient(conn, { fetchImpl, now: clk.now, sleep: clk.sleep })
+    // Fired together, never awaited individually — the read-then-write gap
+    // check alone would let both through with no sleep at all.
+    await Promise.all([c.get(['a']), c.get(['b'])])
+    expect(calls).toHaveLength(2)
+    expect(clk.slept).toHaveLength(1)
+    expect(clk.slept[0]).toBeGreaterThanOrEqual(MIN_GAP_MS - 1)
+    // …and they went out in the order they were queued.
+    expect(JSON.parse(calls[0].init.body).ids).toEqual(['a'])
+    expect(JSON.parse(calls[1].init.body).ids).toEqual(['b'])
+  })
+
+  it('get refuses more than ten ids instead of silently slicing, and never spends a request', async () => {
+    const { fetchImpl, calls } = fetchStub([])
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    const ids = Array.from({ length: 11 }, (_, i) => `d${i}`)
+    expect(await c.get(ids)).toEqual({ ok: false, kind: 'too_many_ids', statusCode: 0, count: 11 })
+    expect(calls).toHaveLength(0)
+  })
+
+  it('get short-circuits an empty or missing id list without spending a request', async () => {
+    const { fetchImpl, calls } = fetchStub([])
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    expect(await c.get([])).toEqual({ ok: true, statusCode: 0, body: [] })
+    expect(await c.get()).toEqual({ ok: true, statusCode: 0, body: [] })
+    expect(calls).toHaveLength(0)
+  })
+
   it('retries a 429 exactly once after RETRY_429_AFTER_MS, then gives up tagged', async () => {
     const { fetchImpl, calls } = fetchStub([{ status: 429, body: '' }, { status: 429, body: '' }])
     const clk = clockAndSleep()
@@ -145,6 +176,14 @@ describe('createShellyClient', () => {
     const res = await c.setGroups(['a_0', 'b_0'], false)
     expect(JSON.parse(calls[0].init.body)).toEqual({ switch: { ids: ['a_0', 'b_0'], command: { on: false } } })
     expect(res).toMatchObject({ ok: true, failed: { b_0: 'DEVICE_OFFLINE' } })
+  })
+
+  it('setGroups: a 2xx body carrying an error is a device failure, like setSwitch', async () => {
+    const { fetchImpl } = fetchStub([{ status: 200, body: JSON.stringify({ error: 'DEVICE_NOT_FOUND' }) }])
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    const res = await c.setGroups(['a_0'], true)
+    expect(res).toMatchObject({ ok: false, kind: 'device', code: 'DEVICE_NOT_FOUND', statusCode: 200 })
+    expect(res.failed).toBeUndefined()
   })
 
   it('allStatus is the v1 form-encoded call and classifies invalid_token as auth', async () => {

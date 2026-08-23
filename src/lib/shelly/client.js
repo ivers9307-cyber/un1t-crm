@@ -6,12 +6,19 @@
 // retry live in one place here so the cron and the staff routes cannot
 // disagree. Same-account studios share one budget — the reconcile
 // serialises them (see reconcile.js); this client only paces itself.
+//
+// Results pass `body` through verbatim, so callers must never log a result
+// body — put errors through redactSecret first. Shelly does not echo the key
+// today, but the key is in the query string and the rule costs nothing.
 
 import { createHash } from 'node:crypto'
 
 export const REQUEST_TIMEOUT_MS = 8000
 export const MIN_GAP_MS = 1000
 export const RETRY_429_AFTER_MS = 1100
+// Shelly's documented ceiling for one `get`. Exported so batching callers
+// size their chunks from the client rather than hardcoding a 10.
+export const MAX_GET_IDS = 10
 const USER_AGENT = 'un1t-crm/1.0 (+https://crm.repset.ie)'
 const HOST_RE = /^shelly-[a-z0-9-]+\.shelly\.cloud$/
 
@@ -106,21 +113,48 @@ export function createShellyClient(conn, { fetchImpl = fetch, sleep = realSleep,
     return { ok: false, kind, statusCode: res.status, body: parsed }
   }
 
-  async function call(path, body, opts) {
-    const wait = minGapMs - (now() - lastCallAt)
-    if (wait > 0) await sleep(wait)
-    let res = await once(path, body, opts)
-    if (!res.ok && res.kind === 'rate_limited') {
-      await sleep(RETRY_429_AFTER_MS)
-      res = { ...(await once(path, body, opts)), retried: true }
-    }
-    return res
+  // Every request goes through this queue, so the gap holds even when a
+  // caller fires several without awaiting (a Promise.all over devices).
+  // Without it the gap check is a read-then-write across an await:
+  // concurrent callers all read the same stale lastCallAt, all skip the
+  // sleep, and all breach the 1 req/sec budget this client exists to
+  // enforce — silently, since each one still returns ok. `then(fn, fn)`
+  // runs the next job whether the previous settled or threw, so one
+  // failure can never wedge the queue.
+  let tail = Promise.resolve()
+  const enqueue = (fn) => {
+    const p = tail.then(fn, fn)
+    tail = p.catch(() => {})
+    return p
+  }
+
+  function call(path, body, opts) {
+    return enqueue(async () => {
+      const wait = minGapMs - (now() - lastCallAt)
+      if (wait > 0) await sleep(wait)
+      let res = await once(path, body, opts)
+      if (!res.ok && res.kind === 'rate_limited') {
+        await sleep(RETRY_429_AFTER_MS)
+        res = { ...(await once(path, body, opts)), retried: true }
+      }
+      return res
+    })
   }
 
   return {
-    // ids ≤ 10 per Shelly's limit — callers batch, the client slices defensively.
-    get: (ids, { select = ['status', 'settings'] } = {}) =>
-      call('/v2/devices/api/get', { ids: (ids || []).slice(0, 10), select }),
+    // Shelly caps `get` at MAX_GET_IDS ids. Batching is the CALLER's job and
+    // an over-long list is refused, not sliced: a silent slice answers "ok"
+    // for a subset and drops the rest without a word, which is the exact
+    // shape of the truncation bugs the guardrails lint exists to catch.
+    get: async (ids, { select = ['status', 'settings'] } = {}) => {
+      const list = Array.isArray(ids) ? ids : []
+      if (list.length > MAX_GET_IDS) {
+        return { ok: false, kind: 'too_many_ids', statusCode: 0, count: list.length }
+      }
+      // Nothing to ask about — don't spend a slot in the 1 req/sec budget.
+      if (list.length === 0) return { ok: true, statusCode: 0, body: [] }
+      return call('/v2/devices/api/get', { ids: list, select })
+    },
     setSwitch: async (deviceId, channel, on) => {
       const res = await call('/v2/devices/api/set/switch', { id: deviceId, channel: Number(channel) || 0, on: !!on })
       if (res.ok && res.body && typeof res.body.error === 'string') {
@@ -131,6 +165,12 @@ export function createShellyClient(conn, { fetchImpl = fetch, sleep = realSleep,
     setGroups: async (groupIds, on) => {
       const res = await call('/v2/devices/api/set/groups', { switch: { ids: groupIds, command: { on: !!on } } })
       if (!res.ok) return res
+      // Mirror setSwitch: a 2xx carrying a top-level error is a device
+      // failure. Reporting it as { ok: true, failed: {} } would read as
+      // "every command landed" for a call where none of them did.
+      if (res.body && typeof res.body.error === 'string') {
+        return { ok: false, kind: 'device', code: res.body.error, statusCode: res.statusCode }
+      }
       return { ok: true, statusCode: res.statusCode, ...parseGroupsResult(res.body) }
     },
     allStatus: () => call('/device/all_status', { show_info: 'true', no_shared: 'true' }, { v1: true }),
