@@ -50,9 +50,10 @@ export function resolveControlLocation({ overrideId, physical, activeLocation, l
  * Locations this user may pick in a control screen's pill, by that screen's
  * perm key. `permKey` must be a known permission key (one of
  * MOBILE_PERMISSION_KEYS / CROSS_PLATFORM_KEYS in shared/permissions.js) —
- * an unmapped key silently resolves via canMobile's tier-3 fallback to true
- * for master (which bypasses every tier) and false for everyone else, which
- * reads as "no locations available" rather than as a broken key.
+ * an unmapped key silently resolves to true for master (which clears the
+ * tier-1 feature gate for an unmapped key, then short-circuits) and false
+ * for everyone else via the tier-3 role default — reading as "no locations
+ * available" rather than as a broken key.
  *
  * No `!profile` guard needed — canMobile already returns false for a falsy
  * profile at every location, so the filter naturally empties.
