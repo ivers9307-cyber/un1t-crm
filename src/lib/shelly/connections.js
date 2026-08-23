@@ -168,7 +168,7 @@ export function publicConnectionView(conn) {
  * STUDIO mid-reconcile on the same 1 req/sec budget. Refusing a good key, or
  * stamping status='error', on any of those is a false accusation.
  *
- * @returns {{ok: true, deviceCount: number} | {ok: false, kind: string, statusCode: number}}
+ * @returns {{ok: true, deviceCount: number|null} | {ok: false, kind: string, statusCode: number}}
  */
 export async function probeConnection(conn, { makeClient = createShellyClient } = {}) {
   const res = await makeClient(conn).allStatus()
@@ -176,9 +176,17 @@ export async function probeConnection(conn, { makeClient = createShellyClient } 
   // v1 devices_status is an OBJECT KEYED BY DEVICE ID, and the count is only
   // meaningful as "ids we could read". An array is not that shape, and
   // Object.keys would happily count its indices — reporting "2 devices found"
-  // off a body discovery can never get an id out of. Anything unrecognised
-  // counts 0; the probe's verdict is the key, not the inventory.
+  // off a body discovery can never get an id out of.
+  //
+  // Anything unrecognised counts null, NOT 0. Those two are different answers
+  // and the caller renders them differently: 0 is a real, actionable state
+  // ("connected, but this Shelly account has no devices on it" — the
+  // maintenance-page false positive SHELLY.7's review asked to surface),
+  // while null is "the account answered in a shape we cannot read", which is
+  // a fact about the body and not about the estate. Folding the second into
+  // the first would send an operator hunting for plugs that are plainly
+  // there. The probe's verdict is still the key, not the inventory.
   const devices = res.body?.data?.devices_status
   const countable = !!devices && typeof devices === 'object' && !Array.isArray(devices)
-  return { ok: true, deviceCount: countable ? Object.keys(devices).length : 0 }
+  return { ok: true, deviceCount: countable ? Object.keys(devices).length : null }
 }

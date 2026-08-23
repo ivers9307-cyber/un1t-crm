@@ -88,6 +88,12 @@ Zod + `@/lib/schedule/windows` only (imported by routes AND `openapi.js`): `SHEL
 - `/automations` page: second `<Link href="/automations/shelly">` card in the `canDevices` block — "Smart plugs" (lucide `Plug` — verify export; else `PlugZap`).
 - Tests: `device-health.test.js`; RTL for the connection panel (manager vs owner), device card (unknown output, pending override copy), energy chart empty state.
 
+**Carry-forward from Task 3 review** (each is a requirement of Task 6, not a suggestion):
+
+- **The 30 s poll must NEVER clear rendered state on a failed fetch.** Keep the last good render and add a subordinate "couldn't refresh" line; do not blank the panel, do not fall back to the Connect form, do not disable the controls. `GET /api/shelly/connection` now returns **500** on a transient db error (rather than `connection: null`) *precisely so* the client is never handed "not connected" for a live studio — a poll that wipes its own state on that 500 would re-create the failure the route was changed to avoid, one layer up.
+- **`device-health` must read the `connected` flag FIRST.** After a deliberate Disconnect the devices are still adopted and their `last_seen_at` simply stops advancing, so a health grader that starts from staleness paints every card red "Stale — check the Shelly connection" and points the operator at a connection they intentionally removed. No connection → the cards read as dormant, not broken.
+- **Omit the "N devices found" sentence entirely when `devices_seen === null`.** `probeConnection` now answers `null` for a body it could not count and `0` only for a genuinely empty account; rendering null as "0 devices found" would send an operator hunting for plugs that are plainly there.
+
 ## Task 7: Integrations-hub card
 
 `src/lib/integrations-hub.js`: batched `shelly_connections` read of `location_id, host, status, last_error, last_ok_at, updated_at, key_hint` (NO `auth_key`/fingerprint) + `shelly_devices (location_id, enabled, last_state)` `.in('location_id', ids).limit(1000)`; pure `gradeShellyConnection(row)`; card rows `{ locationId, status, message, host, hasAuthKey: !!key_hint, lastOkAt, lastError, deviceCount, enabledCount, onlineCount, href:'/automations/shelly' }` + `attentionInputs`; `CARD_LABELS.shelly = 'Shelly plugs'`; never-connected locations yield no row (UI renders "Not connected"). `IntegrationsHub.jsx`: Tier-1 `HubCard` after Meta Ads. Tests: grading; assembly fixture whose row carries `auth_key:'SECRET_SHELLY'` → payload JSON lacks it.

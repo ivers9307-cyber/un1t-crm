@@ -20,7 +20,7 @@ import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
 import { guardMasterOrOwner } from '@/lib/auth'
 import { logWarn, logError } from '@/lib/log'
-import { normaliseShellyHost, fingerprintAuthKey, keyHint, redactSecret } from '@/lib/shelly/client'
+import { normaliseShellyHost, fingerprintAuthKey, keyHint, redactSecret, SHELLY_HOST_HELP } from '@/lib/shelly/client'
 import {
   classifyFingerprintClash,
   findFingerprintRows,
@@ -29,24 +29,18 @@ import {
   probeConnection,
 } from '@/lib/shelly/connections'
 import { ShellyConnectionPut, MIN_AUTH_KEY_LENGTH } from '@/lib/shelly/schemas'
-import { mergeSecretSlice } from '@/lib/integration-secret-merge'
+import { mergeSecretSlice, isFreshSecret } from '@/lib/integration-secret-merge'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+
+const MODULE = 'shelly-connection'
 
 // EXACTLY the columns publicConnectionView projects — the upsert's returning
 // select is the same allowlist as connections.js's NON_SECRET, re-stated here
 // because this is a different query. Adding a column to the table cannot make
 // it appear in a response without an edit in both places.
 const NON_SECRET_RETURNING = 'host, key_hint, status, last_ok_at, last_error, last_error_at'
-
-// The one sentence that tells an operator what an account server looks like
-// lives inside normaliseShellyHost and is not exported, so it is ASKED FOR
-// with an input guaranteed to fail rather than re-typed here. A re-typed copy
-// is the kind that drifts the day someone improves one of the two, and this
-// route would then answer a bad host with different words depending on which
-// branch caught it.
-const HOST_HELP = normaliseShellyHost('').error
 
 const bad = (error, status, extra = {}) =>
   NextResponse.json({ success: false, error, ...extra }, { status })
@@ -58,12 +52,16 @@ const bad = (error, status, extra = {}) =>
  */
 export const GET = withAuth({ permission: 'device_control' }, async ({ user, db, locationId }) => {
   const loaded = await loadPublicConnection(db, locationId)
-  if (!loaded.ok && loaded.reason === 'db_error') {
-    // A read failure is NOT "not connected". Answering null here would show a
-    // live studio the first-connect form and invite an owner to re-paste a
-    // credential that is working fine — a wrong answer dressed as a normal
-    // one. Fail visibly instead; the panel retries on the next poll.
-    logError('shelly-connection', 'connection read failed', { locationId, reason: loaded.error })
+  // ONLY the one known-benign reason yields connection:null. Written as an
+  // allowlist rather than "if (reason === 'db_error') fail" so a reason added
+  // to loadPublicConnection later cannot fall through to the first-connect
+  // form: a read failure is NOT "not connected", and answering null would
+  // show a live studio the Connect form and invite an owner to re-paste a
+  // credential that is working fine — a wrong answer dressed as a normal one.
+  // Fail visibly instead; the panel keeps its last good render (Task 6) and
+  // retries on the next poll.
+  if (!loaded.ok && loaded.reason !== 'not_connected') {
+    logError(MODULE, 'connection read failed', { locationId, reason: loaded.reason, error: loaded.error })
     return bad('Could not read the Shelly connection', 500)
   }
 
@@ -77,7 +75,7 @@ export const GET = withAuth({ permission: 'device_control' }, async ({ user, db,
     // Best-effort: a missing count costs a line of copy, so it must never
     // cost the operator the connection panel itself. null reads as "unknown"
     // in the UI rather than as a confident zero.
-    logWarn('shelly-connection', 'device count failed', { locationId, reason: countError.message })
+    logWarn(MODULE, 'device count failed', { locationId, error: countError.message })
   }
 
   return NextResponse.json({
@@ -117,22 +115,38 @@ export const PUT = withAuth(
       .eq('location_id', locationId)
       .maybeSingle()
     if (storedError) {
-      // Treating an unreadable stored row as "no stored row" would send a
-      // blank re-paste down the no-key branch and tell an already-connected
-      // owner to paste a key they cannot see. Refuse instead.
-      logError('shelly-connection', 'stored connection read failed', {
+      // Always logged — the read failed either way, and that is worth seeing.
+      logError(MODULE, 'stored connection read failed', {
         locationId,
         error: redactSecret(storedError, input.auth_key),
       })
-      return bad('Could not read the current Shelly connection', 500)
+      // But it only REFUSES when the stored row was load-bearing. `host`
+      // always comes from normalised.host, so the row feeds exactly one
+      // thing: the key fallback. An owner who pasted a FRESH key needs
+      // nothing from it, and the upsert overwrites the unreadable row
+      // wholesale — so refusing them would be the louder failure this
+      // codebase keeps re-learning: it would lock the one person who can fix
+      // a broken connection out of fixing it, at the exact moment the
+      // database is already flaky. With a blank key there is nothing to
+      // proceed with, and treating the unreadable row as "no row" would tell
+      // an already-connected owner to paste a key the UI never shows them.
+      if (!isFreshSecret(input.auth_key)) {
+        return bad('Could not read the current Shelly connection', 500)
+      }
     }
+
+    // Explicit rather than relying on PostgREST setting data:null alongside an
+    // error: past this point the ONLY survivor of a failed read is a fresh
+    // key, so the fallback must be visibly empty rather than whatever the
+    // driver happened to hand back.
+    const storedRow = storedError ? null : stored
 
     // Write-only secret merge: the UI renders the key as "••••abcd" and posts
     // it back blank, so a blank or absent auth_key KEEPS the stored one and
     // only a fresh value overwrites it. Without this, "change only the
     // server" would wipe the credential.
     const merged = mergeSecretSlice({
-      stored: { host: stored?.host ?? null, auth_key: stored?.auth_key ?? null },
+      stored: { host: storedRow?.host ?? null, auth_key: storedRow?.auth_key ?? null },
       patch: { host: normalised.host, auth_key: input.auth_key },
       secretFields: ['auth_key'],
     })
@@ -156,8 +170,15 @@ export const PUT = withAuth(
           { code: 'key_rejected' },
         )
       }
-      if (probe.kind === 'config') return bad(HOST_HELP, 400)
-      return bad('Shelly cloud did not answer — try again in a minute', 502, { code: probe.kind })
+      if (probe.kind === 'config') return bad(SHELLY_HOST_HELP, 400)
+      // 429 for rate_limited, not 502: "we are over the shared 1 req/sec
+      // budget" is a retry-after condition the caller can act on, and a 502
+      // reads as "the far end is broken", which it is not.
+      return bad(
+        'Shelly cloud did not answer — try again in a minute',
+        probe.kind === 'rate_limited' ? 429 : 502,
+        { code: probe.kind },
+      )
     }
 
     const fp = fingerprintAuthKey(key)
@@ -166,12 +187,19 @@ export const PUT = withAuth(
       // EVERY doubtful case refuses (connections.js header): a truncated or
       // failed read is the one that might have contained the foreign holder.
       // The reason is logged, never returned — it describes our database, not
-      // the operator's account.
-      logWarn('shelly-connection', 'fingerprint check refused the link', {
+      // the operator's account. logError, not logWarn: this BLOCKS an owner
+      // from linking, so it needs a human, and the pg message is safe to
+      // carry because that query's only bound value is the fingerprint.
+      logError(MODULE, 'fingerprint lookup failed', {
         locationId,
         reason: holders.reason,
+        error: holders.error,
       })
-      return bad('Could not verify this Shelly account right now', 409)
+      // Coded, unlike the other_org refusal below: this one is transient, so
+      // the client can offer "try again" rather than a dead end.
+      return bad('Could not verify this Shelly account right now', 409, {
+        code: 'verification_unavailable',
+      })
     }
     const clash = classifyFingerprintClash(holders.rows, user.activeLocation?.organization_id, locationId)
     if (!clash.ok) {
@@ -198,6 +226,13 @@ export const PUT = withAuth(
           status: 'connected',
           last_error: null,
           last_error_at: null,
+          // Doubles as the cron's rotation key: reconcile.js sweeps locations
+          // `last_ok_at ASC NULLS FIRST`, so stamping now puts a freshly
+          // linked studio at the BACK of the next sweep. Zero impact at
+          // today's scale (one connection), and correct in kind — the
+          // connection genuinely was OK just now. Noted so it is not
+          // rediscovered as a bug when the estate has enough locations for
+          // the ordering to be visible.
           last_ok_at: nowIso,
           linked_by: user.id,
           updated_at: nowIso,
@@ -211,21 +246,25 @@ export const PUT = withAuth(
       // surfaced and never logged raw — redactSecret strips every form the
       // key can leave this module in.
       if (upsertError.code === '23514') {
-        logWarn('shelly-connection', 'connection upsert failed a CHECK', {
+        logWarn(MODULE, 'connection upsert failed a CHECK', {
           locationId,
           error: redactSecret(upsertError, key),
         })
         return bad('Shelly rejected the server or key format', 400)
       }
       if (upsertError.code === '23505') {
-        logWarn('shelly-connection', 'connection upsert hit a unique constraint', {
+        logWarn(MODULE, 'connection upsert hit a unique constraint', {
           locationId,
           error: redactSecret(upsertError, key),
         })
         return bad('Could not link this Shelly account', 409)
       }
-      logError('shelly-connection', 'connection upsert failed', {
+      logError(MODULE, 'connection upsert failed', {
         locationId,
+        // The pg code is the only machine-readable half of this — carried
+        // alongside the redacted message so an unmapped class shows up as a
+        // code to map rather than as prose to read.
+        code: upsertError.code,
         error: redactSecret(upsertError, key),
       })
       return bad('Could not save the Shelly connection', 500)
@@ -236,7 +275,7 @@ export const PUT = withAuth(
       // well-formed all-null connection with has_auth_key false, i.e. a
       // successful save would render as "not connected" and nothing would
       // look broken.
-      logError('shelly-connection', 'connection upsert returned no row', { locationId })
+      logError(MODULE, 'connection upsert returned no row', { locationId })
       return bad('Could not save the Shelly connection', 500)
     }
 
@@ -246,6 +285,10 @@ export const PUT = withAuth(
       // "Connected, 0 devices found" is a real and different state from
       // "connected" — it is what a Shelly account in maintenance looks like,
       // and without this number the operator would go hunting in discovery.
+      // NULL passes through unchanged and means something else again: the
+      // account answered in a shape probeConnection could not count. The UI
+      // omits the sentence entirely for null rather than printing a zero
+      // nobody can act on (Task 6).
       devices_seen: probe.deviceCount,
       // Same-org siblings only, for copy like "also linked at Hatch Street".
       shared_with: clash.shared_with,
@@ -270,7 +313,7 @@ export const DELETE = withAuth({ permission: 'device_control' }, async ({ user, 
   if (error) {
     // A delete that failed must not answer "Disconnected" — the operator
     // would walk away believing the key is gone while the cron keeps using it.
-    logError('shelly-connection', 'disconnect failed', { locationId, reason: error.message })
+    logError(MODULE, 'disconnect failed', { locationId, error: error.message })
     return bad('Could not disconnect the Shelly account', 500)
   }
 

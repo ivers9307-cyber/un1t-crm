@@ -112,11 +112,21 @@ describe('probeConnection', () => {
     expect(await probeConnection({}, mk({ ok: false, kind: 'rate_limited', statusCode: 429 }))).toEqual({ ok: false, kind: 'rate_limited', statusCode: 429 })
   })
 
-  it('counts 0 devices for any body that is not the keyed devices_status object', async () => {
-    expect(await probeConnection({}, mk({ ok: true, statusCode: 200, body: { isok: true, data: { devices_status: [{}, {}] } } }))).toEqual({ ok: true, deviceCount: 0 })
-    expect(await probeConnection({}, mk({ ok: true, statusCode: 200, body: { isok: true, data: { devices_status: null } } }))).toEqual({ ok: true, deviceCount: 0 })
-    expect(await probeConnection({}, mk({ ok: true, statusCode: 200, body: null }))).toEqual({ ok: true, deviceCount: 0 })
-    expect(await probeConnection({}, mk({ ok: true, statusCode: 200 }))).toEqual({ ok: true, deviceCount: 0 })
+  // 0 and null are DIFFERENT ANSWERS and the connection route renders them
+  // differently. 0 says "this Shelly account genuinely has no devices on it",
+  // which is a real state an operator must see (it is what a maintenance page
+  // looks like from here). null says "the account answered in a shape we
+  // cannot read", which is a fact about the body, not about their estate.
+  // Reporting the second as 0 sends someone hunting for plugs that are there.
+  it('counts a GENUINELY EMPTY keyed devices_status as 0', async () => {
+    expect(await probeConnection({}, mk({ ok: true, statusCode: 200, body: { isok: true, data: { devices_status: {} } } }))).toEqual({ ok: true, deviceCount: 0 })
+  })
+
+  it('counts null — never 0 — for any body that is not the keyed devices_status object', async () => {
+    expect(await probeConnection({}, mk({ ok: true, statusCode: 200, body: { isok: true, data: { devices_status: [{}, {}] } } }))).toEqual({ ok: true, deviceCount: null })
+    expect(await probeConnection({}, mk({ ok: true, statusCode: 200, body: { isok: true, data: { devices_status: null } } }))).toEqual({ ok: true, deviceCount: null })
+    expect(await probeConnection({}, mk({ ok: true, statusCode: 200, body: null }))).toEqual({ ok: true, deviceCount: null })
+    expect(await probeConnection({}, mk({ ok: true, statusCode: 200 }))).toEqual({ ok: true, deviceCount: null })
   })
 
   it('an ok probe carries nothing but the verdict and the count', async () => {

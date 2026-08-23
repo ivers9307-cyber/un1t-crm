@@ -98,12 +98,13 @@ function makeDb(cfg = {}) {
     deviceCountError: null,
     upsertError: null,
     upsertRow: undefined, // undefined => derive the returning row from the payload
+    upsertLenient: false, // true => a driver that answers .single() with { data: null, error: null }
     deleteError: null,
     ...cfg,
   }
   const calls = { upserts: [], deletes: [], selects: [] }
 
-  function resolveRow(st) {
+  function resolveRow(st, { strict }) {
     if (st.op === 'upsert') {
       if (conf.upsertError) return { data: null, error: conf.upsertError }
       const p = st.payload
@@ -115,9 +116,26 @@ function makeDb(cfg = {}) {
         last_error: p.last_error,
         last_error_at: p.last_error_at,
       }
+      // PostgREST: .single() on zero rows is an ERROR, not a null row.
+      // `upsertLenient` models a driver that does NOT do that, which is the
+      // only world in which the route's `!row` guard is reachable — and the
+      // reason that guard exists at all.
+      if (!data && strict && !conf.upsertLenient) {
+        return { data: null, error: { code: 'PGRST116', message: 'no rows returned' } }
+      }
       return { data, error: null }
     }
     if (conf.connectionError) return { data: null, error: conf.connectionError }
+    // The .single()/.maybeSingle() ASYMMETRY IS THE POINT of modelling this
+    // faithfully: PostgREST errors a .single() whenever the row count is
+    // anything but exactly one, and answers a .maybeSingle() with a plain
+    // null. A double that returns `{ data: null, error: null }` for both
+    // makes the route's .maybeSingle() choice invisible — a route that used
+    // .single() on the stored-row read would 500 every first connect in
+    // production and pass every test here.
+    if (!conf.connectionRow && strict) {
+      return { data: null, error: { code: 'PGRST116', message: 'no rows returned' } }
+    }
     return { data: conf.connectionRow, error: null }
   }
 
@@ -150,8 +168,8 @@ function makeDb(cfg = {}) {
           return b
         },
         delete: () => { st.op = 'delete'; calls.deletes.push(st); return b },
-        maybeSingle: () => Promise.resolve(resolveRow(st)),
-        single: () => Promise.resolve(resolveRow(st)),
+        maybeSingle: () => Promise.resolve(resolveRow(st, { strict: false })),
+        single: () => Promise.resolve(resolveRow(st, { strict: true })),
         then: (onOk, onErr) => Promise.resolve(resolveTerminal(st)).then(onOk, onErr),
       }
       return b
@@ -293,6 +311,32 @@ describe('PUT /api/shelly/connection — host + key handling', () => {
     expect(db.calls.upserts[0].payload.auth_key).toBe(STORED_KEY)
   })
 
+  it('a WHITESPACE-ONLY auth_key keeps the stored key — it is not a new credential', async () => {
+    useDb({ connectionRow: storedRow() })
+    await PUT(putReq({ server: HOST, auth_key: '   ' }))
+    expect(db.calls.upserts[0].payload.auth_key).toBe(STORED_KEY)
+  })
+
+  it('the MASKED ECHO the UI renders is kept, never stored as the key', async () => {
+    // isFreshSecret rejects anything starting with the bullet run, so a form
+    // that posts its own placeholder back cannot overwrite the credential
+    // with "••••6789" — which would be unrecoverable without the real key.
+    useDb({ connectionRow: storedRow() })
+    await PUT(putReq({ server: HOST, auth_key: '••••6789' }))
+    expect(db.calls.upserts[0].payload.auth_key).toBe(STORED_KEY)
+    expect(db.calls.upserts[0].payload.key_hint).toBe(STORED_KEY.slice(-4))
+  })
+
+  it('first connect — no stored row and no key asks for the key, it does not 500', async () => {
+    // The stored read is .maybeSingle() precisely so zero rows is a null row
+    // rather than a PGRST116 error. With a .single() there this would be a
+    // 500 on every studio's very first connect.
+    useDb({ connectionRow: null })
+    const res = await PUT(putReq({ server: HOST }))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('Paste the cloud auth key from the Shelly app')
+  })
+
   it('a fresh key overwrites the stored one', async () => {
     useDb({ connectionRow: storedRow() })
     await PUT(putReq({ server: HOST, auth_key: FRESH_KEY }))
@@ -316,11 +360,25 @@ describe('PUT /api/shelly/connection — host + key handling', () => {
     expect(db.calls.upserts).toEqual([])
   })
 
-  it('refuses an unreadable stored row rather than treating it as "no key stored"', async () => {
+  it('an unreadable stored row + a BLANK key refuses — there is nothing to proceed with', async () => {
+    // Treating the unreadable row as "no row" would tell an already-connected
+    // owner to paste a key the UI never shows them.
     useDb({ connectionError: { message: 'db down' } })
     const res = await PUT(putReq({ server: HOST, auth_key: '' }))
     expect(res.status).toBe(500)
     expect(db.calls.upserts).toEqual([])
+  })
+
+  it('an unreadable stored row + a FRESH key still LINKS — the row was not load-bearing', async () => {
+    // The stored row feeds exactly one thing, the key fallback. Refusing here
+    // would lock the only person who can fix a broken connection out of
+    // fixing it, at the moment the database is already flaky — the louder
+    // failure, not the safer one. host comes from normalised.host regardless.
+    useDb({ connectionError: { message: 'db down' } })
+    const res = await PUT(putReq({ server: HOST, auth_key: FRESH_KEY }))
+    expect(res.status).toBe(200)
+    expect(db.calls.upserts[0].payload.auth_key).toBe(FRESH_KEY)
+    expect(db.calls.upserts[0].payload.host).toBe(HOST)
   })
 })
 
@@ -352,10 +410,25 @@ describe('PUT /api/shelly/connection — what the cloud says', () => {
     expect(db.calls.upserts).toEqual([])
   })
 
+  it('a rate limit is a 429, not a 502 — the caller can retry, the far end is not broken', async () => {
+    probeConnection.mockResolvedValue({ ok: false, kind: 'rate_limited', statusCode: 429 })
+    const res = await PUT(putReq({ server: HOST, auth_key: FRESH_KEY }))
+    expect(res.status).toBe(429)
+    expect((await res.json()).code).toBe('rate_limited')
+    expect(db.calls.upserts).toEqual([])
+  })
+
   it('surfaces devices_seen so "connected, 0 devices" is a visible state', async () => {
     probeConnection.mockResolvedValue({ ok: true, deviceCount: 0 })
     const body = await (await PUT(putReq({ server: HOST, auth_key: FRESH_KEY }))).json()
     expect(body.devices_seen).toBe(0)
+  })
+
+  it('passes an UNCOUNTABLE body through as null — not as a zero nobody can act on', async () => {
+    probeConnection.mockResolvedValue({ ok: true, deviceCount: null })
+    const res = await PUT(putReq({ server: HOST, auth_key: FRESH_KEY }))
+    expect(res.status).toBe(200)
+    expect((await res.json()).devices_seen).toBeNull()
   })
 })
 
@@ -370,6 +443,10 @@ describe('PUT /api/shelly/connection — tenancy', () => {
 
     const body = await res.json()
     expect(body.error).toBe('This Shelly account is already linked to another business')
+    // Deliberately code-less, unlike the transient verification failure: this
+    // one is not retryable, and a code is one more thing that could grow into
+    // a hint about the other tenant.
+    expect(body.code).toBeUndefined()
     const json = JSON.stringify(body)
     expect(json).not.toContain('Rival Gym Ranelagh')
     expect(json).not.toContain(LOC_B)
@@ -396,6 +473,9 @@ describe('PUT /api/shelly/connection — tenancy', () => {
     expect(res.status).toBe(409)
     const body = await res.json()
     expect(body.error).toBe('Could not verify this Shelly account right now')
+    // Coded so the client can offer a retry — this refusal is transient,
+    // unlike the other_org one, which stays code-less and generic.
+    expect(body.code).toBe('verification_unavailable')
     // The reason describes OUR database; it is logged, never returned.
     expect(JSON.stringify(body)).not.toContain('fingerprint_rows_capped')
     expect(db.calls.upserts).toEqual([])
@@ -479,9 +559,35 @@ describe('PUT /api/shelly/connection — the write', () => {
   })
 
   it('a returning row that never arrived is a 500, not an all-null "connected"', async () => {
+    // PostgREST errors a zero-row .single(), so this lands on the error branch.
     useDb({ upsertRow: null })
     const res = await PUT(putReq({ server: HOST, auth_key: FRESH_KEY }))
     expect(res.status).toBe(500)
+  })
+
+  it('...and still a 500 if a driver answered {data:null,error:null} — the !row backstop', async () => {
+    // publicConnectionView(null) is a well-formed all-null connection with
+    // has_auth_key:false, so without the guard a failed save would render as
+    // "not connected" and nothing would look broken.
+    useDb({ upsertRow: null, upsertLenient: true })
+    const res = await PUT(putReq({ server: HOST, auth_key: FRESH_KEY }))
+    expect(res.status).toBe(500)
+    expect((await res.json()).success).toBe(false)
+  })
+
+  it('the stored read names exactly host+auth_key and the returning select is the non-secret list', async () => {
+    useDb({ connectionRow: storedRow() })
+    await PUT(putReq({ server: HOST, auth_key: FRESH_KEY }))
+
+    const storedRead = db.calls.selects.find((s) => s.table === 'shelly_connections' && s.cols === 'host, auth_key')
+    expect(storedRead).toBeDefined()
+    expect(storedRead.filters.location_id).toBe(LOC_A)
+
+    // Never '*': a column added to the table later must not start appearing
+    // in a response because nobody remembered to subtract it.
+    expect(db.calls.upserts[0].cols).toBe('host, key_hint, status, last_ok_at, last_error, last_error_at')
+    expect(db.calls.upserts[0].cols).not.toContain('*')
+    expect(db.calls.upserts[0].cols).not.toContain('auth_key')
   })
 })
 
