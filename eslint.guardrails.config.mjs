@@ -200,6 +200,12 @@ const config = [
       // leaves the music playing with no record, and the cron re-opens it
       // (restarting the playlist) every tick until the write lands.
       'src/lib/sonos/**',
+      // SHELLY.9 — new area, clean by construction. The reconcile's
+      // last_applied stamps and the (PR 2) toggle/connection writes are
+      // exactly the kind that would otherwise report success on a failed
+      // write. Armed from day one; PR 2 adds 'src/app/api/shelly/**'.
+      'src/lib/shelly/**',
+      'src/app/api/cron/shelly-reconcile/route.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },

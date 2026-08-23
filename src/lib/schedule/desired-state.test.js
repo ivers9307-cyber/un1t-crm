@@ -196,3 +196,121 @@ describe('resolveDayWindows source passthrough', () => {
     expect(windows[0].source.favorite_id).toBe('fv-late')
   })
 })
+
+// The whole-day-late bug the old private dublinWallMs had at 23:00-23:59 IST
+// is documented in full in src/lib/tz-time.js's header; this pins the fix.
+describe('late-evening IST boundaries stay on their own day (SHELLY.2)', () => {
+  it('a Dublin 23:00-23:30 window does not land a day late', () => {
+    const late = { ...fixedDevice, fixed_windows: [{ days: [1], on: '23:00', off: '23:30' }] }
+    const w = resolveDayWindows(late, DAY, [])
+    expect(w).toHaveLength(1)
+    expect(w[0].on_at).toBe(T('23:00'))
+    expect(w[0].off_at).toBe(T('23:30'))
+  })
+})
+
+describe('tz parameter (SHELLY.2)', () => {
+  const NY = 'America/New_York'
+  const nyDevice = {
+    enabled: true, schedule_mode: 'fixed',
+    fixed_windows: [{ days: [1, 2, 3, 4, 5], on: '07:00', off: '21:30' }],
+    class_rule: {}, override: null,
+  }
+  it('explicit Dublin equals the default', () => {
+    expect(resolveDayWindows(fixedDevice, DAY, [], 'Europe/Dublin')).toEqual(resolveDayWindows(fixedDevice, DAY, []))
+  })
+  it('resolves a New York window to -04:00 instants (day-wrap regression)', () => {
+    const w = resolveDayWindows(nyDevice, DAY, [], NY)
+    expect(w[0].on_at).toBe(Date.parse(`${DAY}T07:00:00-04:00`))
+    expect(w[0].off_at).toBe(Date.parse(`${DAY}T21:30:00-04:00`))
+  })
+  it('overnight Sat 22:00 → Sun 03:00 across NY spring-forward is 5 wall-hours but 4 real hours', () => {
+    const night = { ...nyDevice, fixed_windows: [{ days: [6], on: '22:00', off: '03:00' }] }
+    const w = resolveDayWindows(night, '2026-03-07', [], NY)
+    expect(w[0].on_at).toBe(Date.parse('2026-03-07T22:00:00-05:00'))
+    expect(w[0].off_at).toBe(Date.parse('2026-03-08T03:00:00-04:00')) // 03:00 EDT — the hour 02:00–03:00 never exists
+    expect(w[0].off_at - w[0].on_at).toBe(4 * 3600 * 1000)
+  })
+  it('serves yesterday\'s overnight tail after NY midnight', () => {
+    const night = { ...nyDevice, fixed_windows: [{ days: [6], on: '22:00', off: '02:00' }] }
+    const sunday0030 = Date.parse('2026-07-12T00:30:00-04:00')
+    expect(desiredState(night, sunday0030, '2026-07-12', [], NY)).toBe('on')
+  })
+  it('class mode is unaffected by tz (occurrences are UTC instants)', () => {
+    const w = resolveDayWindows(classDevice, DAY, [occ('06:00', '06:45')], NY)
+    expect(w[0].on_at).toBe(T('06:00') - 15 * 60 * 1000)
+  })
+
+  // The two halves of the SHELLY.2b contract. locations.timezone is NULLABLE,
+  // so an absent value arrives as a literal null and must mean Dublin — a
+  // parameter default alone does not cover that, it only fires for undefined.
+  it('a null/empty tz means "no zone given" → the Dublin default', () => {
+    const dublin = resolveDayWindows(fixedDevice, DAY, [])
+    expect(resolveDayWindows(fixedDevice, DAY, [], null)).toEqual(dublin)
+    expect(resolveDayWindows(fixedDevice, DAY, [], '')).toEqual(dublin)
+  })
+  // The other half, and the reason the fallback is NOT a validity check: a
+  // typo'd timezone must never quietly run a studio on Dublin time.
+  it('a non-empty invalid zone throws rather than falling back', () => {
+    expect(() => resolveDayWindows(fixedDevice, DAY, [], 'Mars/Olympus')).toThrow(RangeError)
+    // resolveServeWindows is the entry point BOTH real consumers call
+    // (src/lib/sonos/groups.js and SonosScheduleClient.jsx), so it carries the
+    // contract in production even though desiredState is the headline API.
+    expect(() => resolveServeWindows(fixedDevice, DAY, [], 'Mars/Olympus')).toThrow(RangeError)
+    expect(() => desiredState(fixedDevice, T('12:00'), DAY, [], 'Mars/Olympus')).toThrow(RangeError)
+  })
+
+  // ── The dayStartMsInTz deviation, pinned (SHELLY.2c) ───────────────────────
+  // Santiago starts DST at LOCAL MIDNIGHT: on 2025-09-07 the clock jumps from
+  // 2025-09-06 23:59 straight to 2025-09-07 01:00 at 04:00Z. 00:00 never
+  // happens, and the first instant of that local day is 2025-09-07T04:00Z.
+  //
+  // That makes the serve set's day boundary load-bearing. The plan specified
+  // wallMsInTz(dateStr, '00:00'), which hits the gap and resolves EARLIER — to
+  // 23:00 on the day BEFORE (03:00Z), an hour before the day it is meant to
+  // open — and so admits a tail that had already finished. dayStartMsInTz
+  // inverts the gap rule and returns 04:00Z. Both cases below are here so the
+  // deviation cannot be "simplified" back to the plan's version unnoticed.
+  const SCL = 'America/Santiago'
+  const SCL_SUN = '2025-09-07'                              // the skipped-midnight day
+  const SCL_DAY_START = Date.parse('2025-09-07T04:00:00Z')  // 01:00 local, first instant
+  const sclNight = (off) => ({
+    enabled: true, schedule_mode: 'fixed',
+    fixed_windows: [{ days: [6], on: '22:00', off }], class_rule: {}, override: null,
+  })
+
+  it('does NOT serve a Saturday tail that ended before the local day began', () => {
+    // Sat 22:00 -> 23:30 is 02:00Z -> 03:30Z, over before the 04:00Z boundary.
+    expect(resolveServeWindows(sclNight('23:30'), SCL_SUN, [], SCL)).toEqual([])
+  })
+  it('still serves a Saturday tail that is live at the local day boundary', () => {
+    // Sibling case: only 00:00-00:59 is skipped, so Sun 02:00 exists (05:00Z)
+    // and outlives the boundary. The rule drops stale tails, not all tails.
+    const w = resolveServeWindows(sclNight('02:00'), SCL_SUN, [], SCL)
+    expect(w).toHaveLength(1)
+    expect(w[0].on_at).toBe(Date.parse('2025-09-07T02:00:00Z'))
+    expect(w[0].off_at).toBe(Date.parse('2025-09-07T05:00:00Z'))
+    expect(w[0].off_at).toBeGreaterThan(SCL_DAY_START)
+  })
+
+  // A '00:00' boundary is the start of that calendar DAY, on either side.
+  it("an off:'00:00' ends at the first instant of the next day, not an hour early", () => {
+    const w = resolveDayWindows(sclNight('00:00'), '2025-09-06', [], SCL)
+    expect(w).toHaveLength(1)
+    expect(w[0].on_at).toBe(Date.parse('2025-09-07T02:00:00Z')) // 22:00 CLT (UTC-4)
+    expect(w[0].off_at).toBe(SCL_DAY_START)                     // 04:00Z, NOT 03:00Z
+    // 2 real hours, not 3: the window runs 22:00 up to the transition, and the
+    // 00:00-00:59 hour it would otherwise have covered does not exist at all.
+    expect(w[0].off_at - w[0].on_at).toBe(2 * 3600 * 1000)
+  })
+  it("an on:'00:00' opens the day rather than the evening before", () => {
+    const morning = {
+      enabled: true, schedule_mode: 'fixed',
+      fixed_windows: [{ days: [7], on: '00:00', off: '06:00' }], class_rule: {}, override: null,
+    }
+    const w = resolveDayWindows(morning, SCL_SUN, [], SCL)
+    expect(w).toHaveLength(1)
+    expect(w[0].on_at).toBe(SCL_DAY_START)                      // NOT 03:00Z = 23:00 Sat
+    expect(w[0].off_at).toBe(Date.parse('2025-09-07T09:00:00Z')) // 06:00 CLST (UTC-3)
+  })
+})
