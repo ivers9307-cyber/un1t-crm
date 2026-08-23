@@ -55,19 +55,24 @@ function isForgivenTxn(t) {
   )
 }
 
-// AWAITING-AUTH.2 — a transaction whose payment is IN PROGRESS / awaiting
-// authorization. Per the Glofox OpenAPI spec, invoice status PENDING means
-// "the payment is in progress but not yet confirmed" (e.g. a bank/card
-// authorization pending) — Glofox's UI shows this as "Awaiting authorization".
-// The TransactionsList `transaction_status` enum carries PENDING for these.
-// This is DISTINCT from a failed charge (ERROR / SUBSCRIPTION_CYCLE_PAYMENT_
-// FAILED), which is a genuine PAST_DUE debt. Used to tell a provisional,
-// expires-if-unpaid charge apart from a real arrears debt.
+// AWAITING-AUTH.2 / ARREARS-TYPE.2 — a transaction whose payment is IN PROGRESS
+// / awaiting authorization. Per the Glofox OpenAPI spec, invoice status PENDING
+// means "the payment is in progress but not yet confirmed"; Glofox's UI shows
+// this as "Awaiting authorization". What the TransactionsList report ACTUALLY
+// carries for such a charge (verified live 2026-08-23 on a "Client confirmation
+// required: Custom Charge"): transaction_status 'PENDING_INTENT' with status
+// 'pending authorization' and paid:false — the spec's PENDING never appears.
+// Recognising only PENDING made the June backfill write every awaiting-auth
+// custom charge as a PAST_DUE debt, and kept the reconcile from ever proposing
+// the PAST_DUE→PENDING correction. This is DISTINCT from a failed charge (ERROR
+// / SUBSCRIPTION_CYCLE_PAYMENT_FAILED), which is a genuine PAST_DUE debt.
 function isPendingTxn(t) {
   return (
     t?.transaction_status === 'PENDING' ||
+    t?.transaction_status === 'PENDING_INTENT' ||
     t?.status === 'PENDING' ||
-    t?.status === 'pending'
+    t?.status === 'pending' ||
+    t?.status === 'pending authorization'
   )
 }
 

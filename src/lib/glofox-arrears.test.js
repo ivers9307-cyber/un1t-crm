@@ -8,6 +8,7 @@ function mkStripe({
   invoice_id,
   paid,
   status,
+  transaction_status,
   amount = 0,
   failed_amount,
   event = 'subscription_payment_failed',
@@ -23,6 +24,7 @@ function mkStripe({
   if (already_paid !== undefined) metadata.already_paid = already_paid
   const inner = { invoice_id, paid, status, amount, currency: 'eur', created, metadata, description: event }
   if (failed_amount !== undefined) inner.failed_amount = failed_amount
+  if (transaction_status !== undefined) inner.transaction_status = transaction_status
   return { StripeCharge: inner }
 }
 
@@ -69,6 +71,29 @@ describe('computeArrears', () => {
     expect(c.status).toBe('PENDING')
     expect(c.amountCents).toBe(2500)
     expect(c.glofoxEvent).toBe('book_class')
+  })
+
+  it('ARREARS-TYPE.2 — Glofox "Awaiting authorization" is transaction_status PENDING_INTENT / status "pending authorization" → a PENDING candidate', () => {
+    // The €467 "Client confirmation required: Custom Charge" case (verified live
+    // 2026-08-23 via the report probe): paid:false, amount carried on `amount`,
+    // NOT the spec's PENDING. The June backfill wrote it as PAST_DUE and it sat
+    // on the Overdue chase-list for two months.
+    const rows = [
+      mkStripe({ invoice_id: 'AI', paid: false, status: 'pending authorization', transaction_status: 'PENDING_INTENT', amount: 467, event: 'custom_charge' }),
+    ]
+    const out = computeArrears(rows, { existingInvoiceIds: new Set() })
+    expect(out.totals.candidates).toBe(1)
+    expect(out.candidates[0]).toMatchObject({ invoiceId: 'AI', status: 'PENDING', amountCents: 46700, glofoxEvent: 'custom_charge' })
+  })
+
+  it('ARREARS-TYPE.2 — a PENDING_INTENT attempt alongside a failed one is still PAST_DUE (dunning reuses the invoice id)', () => {
+    const rows = [
+      mkStripe({ invoice_id: 'PI', paid: false, status: 'failed', failed_amount: 209 }),
+      mkStripe({ invoice_id: 'PI', paid: false, status: 'pending authorization', transaction_status: 'PENDING_INTENT', amount: 209 }),
+    ]
+    const out = computeArrears(rows, { existingInvoiceIds: new Set() })
+    expect(out.candidates).toHaveLength(1)
+    expect(out.candidates[0].status).toBe('PAST_DUE')
   })
 
   it('a genuinely failed charge stays a PAST_DUE candidate', () => {
