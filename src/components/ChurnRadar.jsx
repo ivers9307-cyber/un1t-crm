@@ -5,9 +5,11 @@
 // Tabs:
 //   At Risk       — scored active members + per-member win-back actions.
 //   Win-back      — former members (lapsed 45–365 days) worth re-winning.
-//   Overdue       — members owing ≥€50 on a past-due invoice; a chase-list.
-//   Unpaid charges— small confirmed past-due custom charges (<€50).
-//   Awaiting auth — PENDING fees Glofox hasn't collected yet (AWAITING-AUTH.1).
+//   Overdue       — members whose MEMBERSHIP payment failed (a past-due
+//                   subscription renewal / first payment); the chase-list.
+//   Unpaid charges— every other confirmed past-due charge (fees, custom
+//                   charges, class bookings, class packs, products), any amount.
+//   Awaiting auth — PENDING charges Glofox hasn't collected yet (AWAITING-AUTH.1).
 //   Quarantine    — zero-activity "ghost member" records for bulk triage.
 //
 // All data comes from /api/churn-radar/*; this component is pure UI +
@@ -849,10 +851,11 @@ function OverdueList({ data, busy, onAction, onRefresh }) {
     return (
       <div className="rounded-2xl border border-dashed border-un1t-border p-10 text-center">
         <Check size={28} className="mx-auto text-green-500" />
-        <p className="mt-3 font-medium text-un1t-text">Nobody owes €50 or more</p>
+        <p className="mt-3 font-medium text-un1t-text">No failed membership payments</p>
         <p className="mt-1 text-sm text-un1t-subtle">
-          No member has a past-due Glofox invoice of €50+. Smaller unpaid
-          charges (under €50) are under the <strong>Unpaid charges</strong> tab.
+          No member has a past-due membership renewal or first payment. Other
+          unpaid items (fees, class packs, bookings, products) are under the{' '}
+          <strong>Unpaid charges</strong> tab.
         </p>
       </div>
     )
@@ -860,19 +863,21 @@ function OverdueList({ data, busy, onAction, onRefresh }) {
   return (
     <div className="space-y-2">
       <p className="mb-1 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800">
-        Members with a past-due Glofox invoice of <strong>€50 or more</strong> — the
-        amount owed is the sum of their open past-due invoices. Highest owed
-        first; open a profile for their contact details. Smaller charges are
-        under <strong>Unpaid charges</strong>.
+        Members whose <strong>membership payment failed</strong> — a subscription
+        renewal or first payment Glofox could not collect. The amount owed is the
+        sum of their open past-due membership invoices, highest first; open a
+        profile for their contact details. Fees, class packs, bookings and
+        products are under <strong>Unpaid charges</strong>.
       </p>
       {rows.map((m) => <OverdueRow key={m.contactId} m={m} busy={busy} onAction={onAction} onRefresh={onRefresh} />)}
     </div>
   )
 }
 
-// RADAR-OVERDUE.1 — the small-charges tab: CONFIRMED past-due charges under €50.
-// Same row shape as Overdue, so it reuses OverdueRow; only the framing differs.
-// PENDING 'awaiting authorization' fees are NOT here — they have their own tab.
+// ARREARS-TYPE.1 — every confirmed past-due charge that is NOT a membership
+// payment: fees, custom charges, class bookings, class packs, products — any
+// amount. Same row shape as Overdue, so it reuses OverdueRow; only the framing
+// differs. PENDING 'awaiting authorization' charges are NOT here — own tab.
 function UnpaidChargesList({ data, busy, onAction, onRefresh }) {
   if (data === null) return <p className="text-sm text-un1t-subtle">Loading unpaid charges…</p>
   const rows = data.charges || []
@@ -880,11 +885,11 @@ function UnpaidChargesList({ data, busy, onAction, onRefresh }) {
     return (
       <div className="rounded-2xl border border-dashed border-un1t-border p-10 text-center">
         <Check size={28} className="mx-auto text-green-500" />
-        <p className="mt-3 font-medium text-un1t-text">No small unpaid charges</p>
+        <p className="mt-3 font-medium text-un1t-text">No unpaid charges</p>
         <p className="mt-1 text-sm text-un1t-subtle">
-          No member has a small past-due charge (under €50). Larger debts appear
-          under the <strong>Overdue</strong> tab; fees still awaiting payment are
-          under <strong>Awaiting authorization</strong>.
+          No member has a failed one-off charge. Failed membership payments are
+          under the <strong>Overdue</strong> tab; charges still awaiting payment
+          are under <strong>Awaiting authorization</strong>.
         </p>
       </div>
     )
@@ -892,9 +897,10 @@ function UnpaidChargesList({ data, busy, onAction, onRefresh }) {
   return (
     <div className="space-y-2">
       <p className="mb-1 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-        Small <strong>confirmed past-due charges under €50</strong> — usually one-off
-        custom charges or fees. Lower priority than the main Overdue chase-list, but
-        worth clearing. Fees not yet collected are under <strong>Awaiting
+        <strong>Failed one-off charges</strong> — late-cancel and no-show fees,
+        custom charges, class bookings, class packs and products, at any amount.
+        Not membership debts (those are under <strong>Overdue</strong>), but
+        worth clearing. Charges not yet collected are under <strong>Awaiting
         authorization</strong>. Highest owed first.
       </p>
       {rows.map((m) => <OverdueRow key={m.contactId} m={m} busy={busy} onAction={onAction} onRefresh={onRefresh} />)}
@@ -916,8 +922,8 @@ function AwaitingAuthList({ data, busy, onAction, onRefresh }) {
         <p className="mt-3 font-medium text-un1t-text">Nothing awaiting authorization</p>
         <p className="mt-1 text-sm text-un1t-subtle">
           No member has a pending charge waiting to be collected. Confirmed
-          past-due charges are under the <strong>Unpaid charges</strong> and{' '}
-          <strong>Overdue</strong> tabs.
+          past-due items are under the <strong>Overdue</strong> (membership
+          payments) and <strong>Unpaid charges</strong> (everything else) tabs.
         </p>
       </div>
     )

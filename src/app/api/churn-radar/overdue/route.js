@@ -1,9 +1,10 @@
 // GET /api/churn-radar/overdue
 //
-// OVERDUE.1 — live members whose payment has failed (Glofox
-// membership state = locked). They still hold a membership; the
-// billing has lapsed. A plain chase-list of customers who owe the
-// business money, highest monthly value first.
+// OVERDUE.1 / ARREARS-TYPE.1 — members whose MEMBERSHIP payment failed: an
+// open PAST_DUE glofox_invoices row for a subscription renewal or first
+// payment. A plain chase-list of customers who owe the business membership
+// money, highest owed first. Other failed charges live under
+// /api/churn-radar/unpaid-charges.
 //
 // Access: churn_radar permission (owner + head_coach by default).
 

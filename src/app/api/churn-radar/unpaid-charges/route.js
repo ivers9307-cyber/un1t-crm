@@ -1,9 +1,9 @@
 // GET /api/churn-radar/unpaid-charges
 //
-// RADAR-OVERDUE.1 — the small-charges tab: contacts with an open PAST_DUE
-// invoice whose total owed is below OVERDUE_MIN_CENTS (€50). These are the
-// little custom charges (a €5–€10 fee) that would otherwise clutter the
-// main Overdue chase-list. Same row shape as Overdue.
+// ARREARS-TYPE.1 — the "Unpaid charges" tab: contacts with an open CONFIRMED
+// past-due charge that is NOT a membership payment — late-cancel / no-show
+// fees, custom charges, class bookings, class packs, products — at any amount
+// (the old <€50 rule is gone). Same row shape as Overdue.
 //
 // Access: churn_radar permission (owner + head_coach by default).
 
