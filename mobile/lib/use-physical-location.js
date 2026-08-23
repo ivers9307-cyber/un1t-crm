@@ -139,7 +139,12 @@ export function usePhysicalLocation() {
                   POSITION_TIMEOUT_MS,
                   'position timeout'
                 )
-                positionCache = { at: Date.now(), position: current }
+                // Only cache a fix pickPosition would actually accept — a
+                // stale/replayed read would otherwise pin every screen at
+                // 'unknown' for the full TTL instead of retrying next focus.
+                if (pickPosition({ current, nowMs: Date.now() })) {
+                  positionCache = { at: Date.now(), position: current }
+                }
               } catch { /* fall back to lastKnown below */ }
             }
             const lastKnown = current ? null : await Location.getLastKnownPositionAsync().catch(() => null)

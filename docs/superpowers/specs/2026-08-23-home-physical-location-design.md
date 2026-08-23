@@ -70,9 +70,12 @@ then one of:
 
 Rules:
 
-- **Resolve on focus/foreground only, never live.** A fresh position read runs
-  when Home (or a device-control screen) gains focus or the app foregrounds. The
-  result is then FROZEN for that screen visit — a GPS wobble or a genuine
+- **Resolve on focus/foreground only, never live.** A position read runs when
+  Home (or a device-control screen) gains focus or the app foregrounds (a
+  45-second module-level position cache absorbs rapid screen-hopping — Home →
+  Sonos → Home fires one GPS acquisition, not three; well inside the 5-minute
+  staleness gate, so the morning-Stillorgan/afternoon-Hatch trap is
+  unaffected). The resolved verdict is then FROZEN for that screen visit — a GPS wobble or a genuine
   walk-out must not swap which studio a thumb is about to command mid-screen.
   The last geofence ENTER event may serve as a fast path to paint immediately,
   but a fresh read confirms it: a coach at Stillorgan in the morning and Hatch
