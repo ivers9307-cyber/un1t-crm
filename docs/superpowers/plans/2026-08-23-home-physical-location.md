@@ -721,7 +721,7 @@ export function usePhysicalLocation() {
 
 - [ ] **Step 2: Parse-check and run the mobile lib suite (no regressions)**
 
-Run: `node mobile/parse-check.mjs` (if the script errors on usage, read its header for invocation) and `npx vitest run mobile/lib`
+Run: `npm run check:mobile-lint && npm run check:mobile-imports` and `npx vitest run mobile/lib`
 Expected: parse clean; existing tests PASS.
 
 - [ ] **Step 3: Commit**
@@ -830,7 +830,7 @@ export default function LocationPill({ location, source, pickable = [], onPick }
 
 - [ ] **Step 3: Verify**
 
-Run: `node mobile/parse-check.mjs` and `npx vitest run mobile/lib`
+Run: `npm run check:mobile-lint && npm run check:mobile-imports` and `npx vitest run mobile/lib`
 Expected: clean; PASS (the studio.jsx refactor is behaviour-neutral).
 
 - [ ] **Step 4: Commit**
@@ -903,7 +903,7 @@ For each remaining hit, decide: does this notification target the *personal dash
 
 - [ ] **Step 4: Verify**
 
-Run: `npx vitest run mobile/lib` and `node mobile/parse-check.mjs`
+Run: `npx vitest run mobile/lib` and `npm run check:mobile-lint && npm run check:mobile-imports`
 Expected: PASS (including any updated notification-nav tests).
 
 - [ ] **Step 5: Commit**
@@ -1173,7 +1173,7 @@ Home owns the `hasAnyMobileFeature` nudge now. In `dashboard.jsx`, delete that e
 
 - [ ] **Step 4: Verify**
 
-Run: `node mobile/parse-check.mjs` and `npx vitest run mobile/lib`
+Run: `npm run check:mobile-lint && npm run check:mobile-imports` and `npx vitest run mobile/lib`
 Expected: clean; PASS.
 
 - [ ] **Step 5: Commit**
@@ -1280,7 +1280,7 @@ export default function ControlsLauncher() {
 
 - [ ] **Step 3: Verify + commit**
 
-Run: `node mobile/parse-check.mjs`
+Run: `npm run check:mobile-lint && npm run check:mobile-imports`
 Expected: clean.
 
 ```bash
@@ -1367,7 +1367,7 @@ In doors/ac, verify how `scopeKey` (doors) is derived and keep its remount-on-lo
 
 - [ ] **Step 4: Verify**
 
-Run: `node mobile/parse-check.mjs` and `npx vitest run mobile/lib`
+Run: `npm run check:mobile-lint && npm run check:mobile-imports` and `npx vitest run mobile/lib`
 Expected: clean; PASS.
 
 - [ ] **Step 5: Commit**
@@ -1400,7 +1400,7 @@ Expected: `next build` completes with no errors (works locally per repo memory; 
 
 - [ ] **Step 4: Mobile parse check**
 
-Run: `node mobile/parse-check.mjs`
+Run: `npm run check:mobile-lint && npm run check:mobile-imports`
 Expected: clean.
 
 - [ ] **Step 5: Commit**
