@@ -57,7 +57,8 @@ answers "run this studio."
 
 ### 2. `usePhysicalLocation()` — the resolver
 
-Returns `{ status, location, detectedAt }` where `status` is one of:
+Returns `{ status, location }` where `status` is `loading` during resolution,
+then one of:
 
 - `at_studio` — the phone's position falls inside exactly one configured geofence
   region belonging to a location in the user's `locations` list. `location` is
@@ -167,13 +168,34 @@ controlLocation = explicit override (this visit)
 
 ## Data flow summary
 
-- Geofence regions: `GET /api/attendance/geofence-config` (existing).
-- My shifts: `GET /api/schedule/shifts?profile_id&location_id&start_date&end_date`
-  (existing), called per location, merged client-side.
-- Today's roster: same route without `profile_id` (existing).
+- Geofence regions: `GET /api/attendance/geofence-config` — **amended during
+  planning**: the route filters `geofence_exempt` assignments out of `regions`
+  (correct for attendance), so an exempt staffer would get zero regions and the
+  on-site flip would never fire for them. The route gains one additive field,
+  `all_regions` — the same region shape for ALL the caller's assigned
+  locations, ignoring exemption. Attendance behaviour (`regions`, `required`,
+  `gate_copy`) is unchanged; the hook reads `all_regions ?? regions`.
+- My shifts: `GET /api/schedule/shifts?profile_id&start_date&end_date` —
+  **amended during planning**: the route already falls back to ALL the
+  caller's locations when `location_id` is omitted, and rows embed
+  `locations(name)`. Cross-studio shifts are ONE call; no client-side
+  per-location merge is needed.
+- Today's roster: same route with `location_id` + no `profile_id` (existing).
 - Controls: existing `/api/sonos/*`, `/api/shelly/*`, doors, AC routes — only
   the `locationId` the mobile screens pass changes provenance.
-- No new or changed server routes. No schema changes.
+- No schema changes. The only server change is the additive `all_regions`
+  field above.
+
+## Manual override mechanics (settled during planning)
+
+- The per-visit override rides an expo-router `loc` search param on the four
+  control screens; the pill's picker calls `router.setParams({ loc })`. Stack
+  params die on pop, which gives per-visit semantics for free.
+- Home's offsite "Studio controls" entry opens a picker over the caller's
+  `device_control` locations, then pushes a small launcher stack screen
+  (`(staff)/controls`) that renders the same tile list for the picked
+  location, labelled manual, forwarding `?loc=` to each control screen. The
+  Studio hub stays untouched, as scoped.
 
 ## Error handling
 
