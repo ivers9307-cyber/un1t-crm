@@ -186,9 +186,13 @@ export const HOLDS_TEXT = 'Stays as set — no schedule runs this plug'
  * @param {object|null} json  an api() result for POST /api/shelly/devices/<id>/toggle
  */
 export function isQueued(json) {
-  if (!json) return false
-  if (json.pending === true) return true
-  return json.success === false && json.status === 429 && json.transport !== true
+  // The route's own field, end to end: since SHELLY-MOB.1 api() passes a
+  // non-2xx body that carries our envelope through UNCHANGED, so the 429
+  // pending answer arrives with `pending: true` intact. An envelope-less 429
+  // (an edge page api() synthesised) is NOT queued — that answer never came
+  // from our route, so the override state is unknown and claiming "queued"
+  // would be a promise nothing keeps.
+  return json?.pending === true
 }
 
 /**

@@ -184,15 +184,17 @@ describe('isQueued', () => {
     expect(isQueued({ success: true, applied: false, pending: true, code: 'pending' })).toBe(true)
   })
 
-  it('is true for the 429 body api() flattens — a rate limit is a back-off, not a failure', () => {
-    // POST .../toggle answers HTTP 429 with success:true + pending:true; api()'s
-    // "non-2xx without our envelope" branch replaces that body with this shape.
-    expect(isQueued({ success: false, status: 429, error: 'HTTP 429' })).toBe(true)
+  it('is true for the 429 pending body, which api() now passes through intact', () => {
+    // POST .../toggle answers HTTP 429 with success:true + pending:true; since
+    // SHELLY-MOB.1 api() passes a body carrying our envelope through unchanged,
+    // so the judgement reads the route's own `pending` field.
+    expect(isQueued({ success: true, applied: false, pending: true, code: 'rate_limited' })).toBe(true)
   })
 
-  it('is FALSE for a 429 whose body api() could not even parse', () => {
-    // transport:true is api()'s tag for an envelope it minted itself. An
-    // unreadable answer is not a queued command.
+  it('is FALSE for any 429 WITHOUT our envelope — an edge page is not a queued command', () => {
+    // api() synthesises these (status rides along); the override state is
+    // unknown, so claiming "queued" would be a promise nothing keeps.
+    expect(isQueued({ success: false, status: 429, error: 'HTTP 429' })).toBe(false)
     expect(isQueued({ success: false, status: 429, transport: true, error: 'Non-JSON response (429)' })).toBe(false)
   })
 
@@ -230,8 +232,8 @@ describe('toggleResultText', () => {
       .toBe(toggleResultText({ pending: true, code: 'pending' }))
   })
 
-  it('the flattened 429 gets the rate-limited copy, not "HTTP 429"', () => {
-    expect(toggleResultText({ success: false, status: 429, error: 'HTTP 429' }))
+  it('the passed-through 429 pending body gets the rate-limited copy', () => {
+    expect(toggleResultText({ success: true, applied: false, pending: true, code: 'rate_limited' }))
       .toMatch(/Shelly is busy right now/)
   })
 
