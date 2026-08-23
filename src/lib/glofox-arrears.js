@@ -55,19 +55,24 @@ function isForgivenTxn(t) {
   )
 }
 
-// AWAITING-AUTH.2 — a transaction whose payment is IN PROGRESS / awaiting
-// authorization. Per the Glofox OpenAPI spec, invoice status PENDING means
-// "the payment is in progress but not yet confirmed" (e.g. a bank/card
-// authorization pending) — Glofox's UI shows this as "Awaiting authorization".
-// The TransactionsList `transaction_status` enum carries PENDING for these.
-// This is DISTINCT from a failed charge (ERROR / SUBSCRIPTION_CYCLE_PAYMENT_
-// FAILED), which is a genuine PAST_DUE debt. Used to tell a provisional,
-// expires-if-unpaid charge apart from a real arrears debt.
+// AWAITING-AUTH.2 / ARREARS-TYPE.2 — a transaction whose payment is IN PROGRESS
+// / awaiting authorization. Per the Glofox OpenAPI spec, invoice status PENDING
+// means "the payment is in progress but not yet confirmed"; Glofox's UI shows
+// this as "Awaiting authorization". What the TransactionsList report ACTUALLY
+// carries for such a charge (verified live 2026-08-23 on a "Client confirmation
+// required: Custom Charge"): transaction_status 'PENDING_INTENT' with status
+// 'pending authorization' and paid:false — the spec's PENDING never appears.
+// Recognising only PENDING made the June backfill write every awaiting-auth
+// custom charge as a PAST_DUE debt, and kept the reconcile from ever proposing
+// the PAST_DUE→PENDING correction. This is DISTINCT from a failed charge (ERROR
+// / SUBSCRIPTION_CYCLE_PAYMENT_FAILED), which is a genuine PAST_DUE debt.
 function isPendingTxn(t) {
   return (
     t?.transaction_status === 'PENDING' ||
+    t?.transaction_status === 'PENDING_INTENT' ||
     t?.status === 'PENDING' ||
-    t?.status === 'pending'
+    t?.status === 'pending' ||
+    t?.status === 'pending authorization'
   )
 }
 
@@ -410,6 +415,54 @@ export const OWED_STATUSES = Object.freeze(['PAST_DUE', 'PENDING'])
 
 export function isCustomChargeFee(row) {
   return String(row?.line_item_subtypes || '').toUpperCase().includes('CUSTOM_CHARGE')
+}
+
+// ── ARREARS-TYPE.1 — membership payment vs every other charge ──────────────
+// Richard's rule (2026-08-23): the radar's Overdue tab is for FAILED MEMBERSHIP
+// PAYMENTS only — a subscription's recurring renewal, its first payment at
+// signup, a plan-change prorate or a bounced direct-debit (NSF) charge. Every
+// other failing transaction (late-cancel / no-show fees, staff custom charges,
+// class bookings, class packs, products) is an "unpaid charge", whatever its
+// amount. This replaces the €50 line that used to stand in for that question.
+//
+// Two signals, either of which qualifies the row:
+//   1. line_item_subtypes — the INVOICE_UPDATED webhook's line_items[].sub_type
+//      roll-up (glofox-invoices.js). A signup invoice pairs a €0 UPFRONT_PAYMENT
+//      line with SUBSCRIPTION_PAYMENT — the latter is what qualifies it. A LONE
+//      UPFRONT_PAYMENT is a one-off purchase (class pack, credits, a trial) and
+//      is never a membership payment, even though Glofox files it under its
+//      MEMBERSHIPS line-item type.
+//   2. glofox_event — the TransactionsList report's metadata.glofox_event, which
+//      the June backfill kept at raw_payload.candidate.glofoxEvent (those rows
+//      have no line items). Only the subscription events count; invoice_payment
+//      covers signups AND trials and can't be told apart from what was kept.
+// A row with neither signal is not a membership payment — every webhook row
+// carries line items, so that is only ever a backfilled row of an unrecognised
+// event (none exist as of 2026-08-23).
+export const MEMBERSHIP_LINE_SUBTYPES = Object.freeze([
+  'SUBSCRIPTION_RENEWAL',
+  'SUBSCRIPTION_PAYMENT',
+  'PRORATE',
+  'NON_SUFFICIENT_FUNDS',
+])
+export const MEMBERSHIP_REPORT_EVENTS = Object.freeze([
+  'subscription_payment',
+  'subscription_payment_failed',
+])
+
+/**
+ * Is this glofox_invoices row a membership payment (vs any other charge)?
+ * @param {{ line_item_subtypes?: string|null, glofox_event?: string|null }} row
+ */
+export function isMembershipInvoice(row) {
+  const subtypes = String(row?.line_item_subtypes || '')
+    .toUpperCase()
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  if (subtypes.some((s) => MEMBERSHIP_LINE_SUBTYPES.includes(s))) return true
+  const ev = String(row?.glofox_event || '').trim().toLowerCase()
+  return MEMBERSHIP_REPORT_EVENTS.includes(ev)
 }
 
 /** Does this glofox_invoices row count toward what a member owes? */

@@ -16,7 +16,7 @@ import {
   classifyContact,
   MEMBER_STATUSES,
 } from '@/lib/churn-radar'
-import { nettedOutByRetry } from '@/lib/glofox-arrears'
+import { nettedOutByRetry, isMembershipInvoice } from '@/lib/glofox-arrears'
 import { combineGroupActivity, rollupByPerson } from '@/lib/person-rollup'
 import { selectAll } from '@/lib/select-all'
 
@@ -105,10 +105,21 @@ async function fetchInvoicesByStatus(db, locationId, status, columns) {
  *
  * Exported for reuse by the engagement→churn analytics (P2-7) — the at-risk
  * classification needs the same authoritative arrears context.
+ *
+ * ARREARS-TYPE.1 — also splits the PAST_DUE aggregate by CHARGE TYPE: a
+ * membership payment (a failed subscription renewal / first payment → the
+ * Overdue tab) vs every other charge (fees, custom charges, class bookings,
+ * class packs, products → the Unpaid-charges tab), via isMembershipInvoice on
+ * `line_item_subtypes` (webhook rows) or the report event the June backfill
+ * kept at raw_payload.candidate.glofoxEvent (backfilled rows have no line
+ * items; PostgREST aliases it to `glofox_event` in the select). `ids` / `byId`
+ * keep covering EVERY open PAST_DUE so the 'overdue' classification, the
+ * profile pill and the P2-7 analytics are unchanged.
+ * Returns `{ ids, byId, pendingById, membershipById, chargesById }`.
  */
 export async function fetchPastDue(db, locationId) {
   const [pastDueRows, pendingRows, paidRows] = await Promise.all([
-    fetchInvoicesByStatus(db, locationId, 'PAST_DUE', 'id, contact_id, glofox_user_id, amount_cents, invoice_date, status'),
+    fetchInvoicesByStatus(db, locationId, 'PAST_DUE', 'id, contact_id, glofox_user_id, amount_cents, invoice_date, status, line_item_subtypes, glofox_event:raw_payload->candidate->>glofoxEvent'),
     fetchInvoicesByStatus(db, locationId, 'PENDING', 'id, contact_id, glofox_user_id, amount_cents, invoice_date, status, line_item_subtypes'),
     fetchInvoicesByStatus(db, locationId, 'PAID', 'glofox_user_id, amount_cents, invoice_date'),
   ])
@@ -121,16 +132,15 @@ export async function fetchPastDue(db, locationId) {
   // Net cross-invoice-id payment retries out before aggregating.
   const { kept } = nettedOutByRetry(openRows, paidRows)
 
-  // OWED-PENDING.1 / AWAITING-AUTH.1 — bucket the netted rows by status. PAST_DUE
-  // drives the Overdue chase-list + 'overdue' classification; PENDING ('awaiting
-  // authorization') fees are kept SEPARATE so they only ever surface in the
-  // Awaiting-authorization tab, never on the Overdue list or in Unpaid charges.
-  const byId = new Map()        // PAST_DUE
-  const pendingById = new Map() // PENDING custom-charge fees
-  for (const r of kept) {
-    // A row with no contact_id can't be surfaced on a contact-keyed list.
-    if (r.contact_id == null) continue
-    const target = r.status === 'PENDING' ? pendingById : byId
+  // OWED-PENDING.1 / AWAITING-AUTH.1 / ARREARS-TYPE.1 — aggregate the netted
+  // rows per contact. PENDING stands alone (Awaiting authorization only).
+  // PAST_DUE feeds `byId` (every debt — drives the 'overdue' classification)
+  // AND one of the two tab maps by charge type.
+  const byId = new Map()           // every PAST_DUE
+  const membershipById = new Map() // PAST_DUE membership payments → Overdue
+  const chargesById = new Map()    // PAST_DUE everything else → Unpaid charges
+  const pendingById = new Map()    // PENDING → Awaiting authorization
+  const add = (target, r) => {
     const cur = target.get(r.contact_id) || { amountCents: 0, count: 0, oldestDueAt: null }
     cur.amountCents += Number(r.amount_cents) || 0
     cur.count += 1
@@ -139,9 +149,16 @@ export async function fetchPastDue(db, locationId) {
     }
     target.set(r.contact_id, cur)
   }
+  for (const r of kept) {
+    // A row with no contact_id can't be surfaced on a contact-keyed list.
+    if (r.contact_id == null) continue
+    if (r.status === 'PENDING') { add(pendingById, r); continue }
+    add(byId, r)
+    add(isMembershipInvoice(r) ? membershipById : chargesById, r)
+  }
   // ids = PAST_DUE contacts only — a pending fee never classifies a member as
   // 'overdue' (no pill, off the chase-list); it shows in Awaiting authorization instead.
-  return { ids: new Set(byId.keys()), byId, pendingById }
+  return { ids: new Set(byId.keys()), byId, pendingById, membershipById, chargesById }
 }
 
 /**
@@ -360,13 +377,13 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
   // how many came back to training afterwards.
   const recovery = computeRecoveryStats(members, actions, nowMs)
 
-  // RADAR-OVERDUE.1 / AWAITING-AUTH.1 — split the full arrears set so the
-  // headline badges match their tabs: Overdue (≥€50 PAST_DUE, real debts),
-  // Unpaid charges (<€50 PAST_DUE, small confirmed custom charges) and Awaiting
-  // authorization (PENDING fees not yet collected). Incl. ex-members who owe.
-  // Pending never counts as Overdue or Unpaid charges. (A contact can land in
-  // more than one bucket — a ≥€50 debt AND a pending fee, say.)
-  const { overdueById, unpaidById, awaitingAuthById } = bucketArrears(pastDue.byId, pastDue.pendingById)
+  // RADAR-OVERDUE.1 / AWAITING-AUTH.1 / ARREARS-TYPE.1 — split the full arrears
+  // set so the headline badges match their tabs: Overdue (PAST_DUE membership
+  // payments — failed renewals), Unpaid charges (every other PAST_DUE charge)
+  // and Awaiting authorization (PENDING, not yet collected). Incl. ex-members
+  // who owe. Pending never counts as Overdue or Unpaid charges. (A contact can
+  // land in more than one bucket — a failed renewal AND a failed fee, say.)
+  const { overdueById, unpaidById, awaitingAuthById } = bucketArrears(pastDue)
   let overdueCount = 0, overdueValueCents = 0
   let unpaidChargesCount = 0, unpaidChargesValueCents = 0
   let awaitingAuthCount = 0, awaitingAuthValueCents = 0
@@ -452,10 +469,10 @@ export async function loadQuarantine(db, locationId) {
  */
 /**
  * Build every open-arrears row at the location (minus dismissed), each with its
- * most recent contacting action, split into the three tabs: `overdue` (≥€50
- * PAST_DUE chase-list), `unpaidCharges` (<€50 confirmed PAST_DUE custom charges)
- * and `awaitingAuth` (PENDING fees not yet collected). Shared by loadOverdue +
- * loadUnpaidCharges + loadAwaitingAuth so they read identical data.
+ * most recent contacting action, split into the three tabs: `overdue` (PAST_DUE
+ * membership payments — the chase-list), `unpaidCharges` (every other PAST_DUE
+ * charge) and `awaitingAuth` (PENDING, not yet collected). Shared by
+ * loadOverdue + loadUnpaidCharges + loadAwaitingAuth so they read identical data.
  */
 async function loadArrearsRows(db, locationId, nowMs) {
   const [pastDue, actions, dismissed] = await Promise.all([
@@ -463,10 +480,10 @@ async function loadArrearsRows(db, locationId, nowMs) {
     fetchActions(db, locationId),
     fetchDismissed(db, locationId),
   ])
-  // OWED-PENDING.1 / AWAITING-AUTH.1 — PAST_DUE drives Overdue (≥€50) vs Unpaid
-  // charges (<€50); PENDING 'awaiting authorization' fees go to their own
-  // Awaiting-authorization tab only. A contact may appear in more than one tab.
-  const { overdueById, unpaidById, awaitingAuthById } = bucketArrears(pastDue.byId, pastDue.pendingById)
+  // ARREARS-TYPE.1 — by charge type: PAST_DUE membership payments → Overdue,
+  // every other PAST_DUE charge → Unpaid charges, PENDING → Awaiting
+  // authorization. A contact may appear in more than one tab.
+  const { overdueById, unpaidById, awaitingAuthById } = bucketArrears(pastDue)
   const ids = [...new Set([...overdueById.keys(), ...unpaidById.keys(), ...awaitingAuthById.keys()])].filter((id) => !dismissed.has(id))
   const contacts = await fetchContactsByIds(db, ids)
 
@@ -492,11 +509,12 @@ export async function loadOverdue(db, locationId, nowMs = Date.now()) {
 }
 
 /**
- * Load the "Unpaid charges" tab — contacts whose open CONFIRMED past-due total
- * is below OVERDUE_MIN_CENTS (€50): the small custom charges (€5–€10 fees) that
- * would otherwise clutter the main Overdue chase-list. PENDING 'awaiting
- * authorization' fees are NOT here — they live in their own tab (loadAwaitingAuth).
- * Same row shape as Overdue.
+ * Load the "Unpaid charges" tab — contacts with an open CONFIRMED past-due
+ * charge that is NOT a membership payment: late-cancel / no-show fees, staff
+ * custom charges, class bookings, class packs and products, at any amount
+ * (ARREARS-TYPE.1 — the old <€50 rule is gone). PENDING 'awaiting
+ * authorization' charges are NOT here — they live in their own tab
+ * (loadAwaitingAuth). Same row shape as Overdue.
  *
  * @returns {Promise<{ charges: object[], summary: object }>}
  */

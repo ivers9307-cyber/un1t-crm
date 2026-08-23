@@ -47,6 +47,14 @@ describe('indexReportByInvoice (GLOFOX-RECONCILE.1)', () => {
     expect(idx.get('F')).toMatchObject({ pending: false, failed: true })
     expect(idx.get('S')).toMatchObject({ pending: false, failed: true })
   })
+  it('ARREARS-TYPE.2 — flags PENDING_INTENT / "pending authorization" (what Glofox actually sends for Awaiting authorization) as pending', () => {
+    const idx = indexReportByInvoice([
+      txn({ invoice_id: 'PI', transaction_status: 'PENDING_INTENT', status: 'pending authorization', paid: false }),
+      txn({ invoice_id: 'PS', status: 'pending authorization', paid: false }), // status alone
+    ])
+    expect(idx.get('PI')).toMatchObject({ pending: true, failed: false, settled: false, forgiven: false })
+    expect(idx.get('PS')).toMatchObject({ pending: true, failed: false })
+  })
 })
 
 describe('reconcileOpenPastDue (GLOFOX-RECONCILE.1)', () => {
@@ -123,6 +131,14 @@ describe('reconcileOpenPastDue (GLOFOX-RECONCILE.1)', () => {
     const byId = Object.fromEntries(out.map((d) => [d.id, d]))
     expect(byId.await1).toMatchObject({ action: 'restatus', newStatus: 'PENDING', reason: 'awaiting_authorization' })
     expect(byId.fail1).toMatchObject({ action: 'keep', reason: 'report_unpaid' }) // genuinely failed → stays a debt
+  })
+
+  it('ARREARS-TYPE.2 — re-statuses a backfilled PAST_DUE row the report shows as PENDING_INTENT (the €467 custom-charge case)', () => {
+    const idx = indexReportByInvoice([
+      txn({ invoice_id: 'cc467', transaction_status: 'PENDING_INTENT', status: 'pending authorization', paid: false, amount: 467 }),
+    ])
+    const out = reconcileOpenPastDue([{ id: 'cc467', status: 'PAST_DUE', invoice_date: '2026-01-27' }], idx, NOW)
+    expect(out[0]).toMatchObject({ id: 'cc467', action: 'restatus', newStatus: 'PENDING', reason: 'awaiting_authorization' })
   })
 
   it('does not re-status a row that is already PENDING (only PAST_DUE flips)', () => {
@@ -295,6 +311,24 @@ describe('runArrearsReconcile — orchestration (GLOFOX-RECONCILE.1)', () => {
     for (const u of updates) for (const id of u.ids) written.set(id, u.payload)
     expect(written.get('await1')).toMatchObject({ status: 'PENDING', reconciled_reason: 'awaiting_authorization' })
     expect(written.get('await1').reconciled_at).toBeTruthy()
+  })
+
+  it('ARREARS-TYPE.2 — the PENDING_INTENT case round-trips: proposed on a dry-run, written with allowRestatus', async () => {
+    const rows = [{ id: 'cc467', status: 'PAST_DUE', invoice_date: '2026-01-27', amount_cents: 46700 }]
+    const rep = { ok: true, status: 200, body: { TransactionsList: { details: [
+      rtxn({ invoice_id: 'cc467', transaction_status: 'PENDING_INTENT', status: 'pending authorization', paid: false, amount: 467 }),
+    ] } } }
+    const { db: dryDb, updates: dryUpdates } = makeReconcileDb(rows)
+    const dry = await runArrearsReconcile(dryDb, creds, 'loc-1', { nowMs: NOW, reportFetcher: async () => rep })
+    expect(dry.restated).toBe(1)
+    expect(dry.byReason).toMatchObject({ awaiting_authorization: 1 })
+    expect(dryUpdates).toHaveLength(0)
+
+    const { db, updates } = makeReconcileDb(rows)
+    await runArrearsReconcile(db, creds, 'loc-1', { nowMs: NOW, reportFetcher: async () => rep, commit: true, allowRestatus: true })
+    const written = new Map()
+    for (const u of updates) for (const id of u.ids) written.set(id, u.payload)
+    expect(written.get('cc467')).toMatchObject({ status: 'PENDING', reconciled_reason: 'awaiting_authorization' })
   })
 
   it('OWED-PENDING.1 — scans PENDING custom-charge fees (kept when absent), drops pending subscriptions', async () => {

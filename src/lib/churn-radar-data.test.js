@@ -46,8 +46,8 @@ const LOC = 'loc-1'
 // Use a fixed "now" so daysOverdue etc. are deterministic.
 const NOW = Date.parse('2026-06-01T00:00:00Z')
 
-function gInvoice({ id, glofox_user_id, contact_id, amount_cents, status, invoice_date, line_item_subtypes = null }) {
-  return { id, glofox_user_id, contact_id, amount_cents, status, invoice_date, line_item_subtypes, location_id: LOC }
+function gInvoice({ id, glofox_user_id, contact_id, amount_cents, status, invoice_date, line_item_subtypes = null, glofox_event = null }) {
+  return { id, glofox_user_id, contact_id, amount_cents, status, invoice_date, line_item_subtypes, glofox_event, location_id: LOC }
 }
 function contact({ id, name = 'Member' }) {
   return {
@@ -65,7 +65,7 @@ describe('loadOverdue — retry netting (Fix B)', () => {
     const db = makeDb({
       glofox_invoices: (state) => {
         if (state.status === 'PAST_DUE') {
-          return [gInvoice({ id: 'pd1', glofox_user_id: 'fran', contact_id: 'c-fran', amount_cents: 9900, status: 'PAST_DUE', invoice_date: '2026-05-27T10:36:00Z' })]
+          return [gInvoice({ id: 'pd1', glofox_user_id: 'fran', contact_id: 'c-fran', amount_cents: 9900, status: 'PAST_DUE', invoice_date: '2026-05-27T10:36:00Z', line_item_subtypes: 'SUBSCRIPTION_RENEWAL' })]
         }
         if (state.status === 'PAID') {
           return [gInvoice({ id: 'p1', glofox_user_id: 'fran', contact_id: 'c-fran', amount_cents: 9900, status: 'PAID', invoice_date: '2026-05-27T10:40:00Z' })]
@@ -85,7 +85,7 @@ describe('loadOverdue — retry netting (Fix B)', () => {
     const db = makeDb({
       glofox_invoices: (state) => {
         if (state.status === 'PAST_DUE') {
-          return [gInvoice({ id: 'pd1', glofox_user_id: 'gus', contact_id: 'c-gus', amount_cents: 9900, status: 'PAST_DUE', invoice_date: '2026-05-01T10:00:00Z' })]
+          return [gInvoice({ id: 'pd1', glofox_user_id: 'gus', contact_id: 'c-gus', amount_cents: 9900, status: 'PAST_DUE', invoice_date: '2026-05-01T10:00:00Z', line_item_subtypes: 'SUBSCRIPTION_RENEWAL' })]
         }
         if (state.status === 'PAID') {
           return [gInvoice({ id: 'p1', glofox_user_id: 'gus', contact_id: 'c-gus', amount_cents: 9900, status: 'PAID', invoice_date: '2026-05-11T10:00:00Z' })]
@@ -105,7 +105,7 @@ describe('loadOverdue — retry netting (Fix B)', () => {
     const db = makeDb({
       glofox_invoices: (state) => {
         if (state.status === 'PAST_DUE') {
-          return [gInvoice({ id: 'pd1', glofox_user_id: 'hana', contact_id: 'c-hana', amount_cents: 9900, status: 'PAST_DUE', invoice_date: '2026-05-27T10:36:00Z' })]
+          return [gInvoice({ id: 'pd1', glofox_user_id: 'hana', contact_id: 'c-hana', amount_cents: 9900, status: 'PAST_DUE', invoice_date: '2026-05-27T10:36:00Z', line_item_subtypes: 'SUBSCRIPTION_RENEWAL' })]
         }
         if (state.status === 'PAID') {
           return [gInvoice({ id: 'p1', glofox_user_id: 'hana', contact_id: 'c-hana', amount_cents: 4000, status: 'PAID', invoice_date: '2026-05-27T10:40:00Z' })]
@@ -127,8 +127,8 @@ describe('loadOverdue — retry netting (Fix B)', () => {
       glofox_invoices: (state) => {
         if (state.status === 'PAST_DUE') {
           return [
-            gInvoice({ id: 'pd1', glofox_user_id: 'iris', contact_id: 'c-iris', amount_cents: 9900, status: 'PAST_DUE', invoice_date: '2026-05-27T10:36:00Z' }),
-            gInvoice({ id: 'pd2', glofox_user_id: 'iris', contact_id: 'c-iris', amount_cents: 9900, status: 'PAST_DUE', invoice_date: '2026-05-27T11:00:00Z' }),
+            gInvoice({ id: 'pd1', glofox_user_id: 'iris', contact_id: 'c-iris', amount_cents: 9900, status: 'PAST_DUE', invoice_date: '2026-05-27T10:36:00Z', line_item_subtypes: 'SUBSCRIPTION_RENEWAL' }),
+            gInvoice({ id: 'pd2', glofox_user_id: 'iris', contact_id: 'c-iris', amount_cents: 9900, status: 'PAST_DUE', invoice_date: '2026-05-27T11:00:00Z', line_item_subtypes: 'SUBSCRIPTION_RENEWAL' }),
           ]
         }
         if (state.status === 'PAID') {
@@ -238,7 +238,7 @@ describe('PENDING custom-charge fees — provisional, never counted as owed (OWE
   it('splits a small PAST_DUE (Unpaid charges) from a PENDING fee (Awaiting authorization)', async () => {
     const db = makeDb({
       glofox_invoices: (state) => {
-        if (state.status === 'PAST_DUE') return [gInvoice({ id: 'pd', glofox_user_id: 'cf', contact_id: 'c-claire', amount_cents: 1000, status: 'PAST_DUE', invoice_date: '2026-05-03T00:00:00Z' })]
+        if (state.status === 'PAST_DUE') return [gInvoice({ id: 'pd', glofox_user_id: 'cf', contact_id: 'c-claire', amount_cents: 1000, status: 'PAST_DUE', invoice_date: '2026-05-03T00:00:00Z', line_item_subtypes: 'CUSTOM_CHARGE' })]
         if (state.status === 'PENDING') return [gInvoice({ id: 'fee', glofox_user_id: 'cf', contact_id: 'c-claire', amount_cents: 1000, status: 'PENDING', invoice_date: '2026-05-26T00:00:00Z', line_item_subtypes: 'CUSTOM_CHARGE' })]
         return []
       },
@@ -246,7 +246,7 @@ describe('PENDING custom-charge fees — provisional, never counted as owed (OWE
       contacts: [contact({ id: 'c-claire', name: 'Claire' })],
     })
     const { overdue } = await loadOverdue(db, LOC, NOW)
-    expect(overdue).toHaveLength(0) // €10 past-due < €50 → not on the chase-list
+    expect(overdue).toHaveLength(0) // a €10 fee is not a membership payment → not on the chase-list
     // Unpaid charges = the €10 confirmed PAST_DUE only (pending no longer merged in).
     const { charges, summary } = await loadUnpaidCharges(db, LOC, NOW)
     expect(charges).toHaveLength(1)
@@ -310,10 +310,10 @@ describe('PENDING custom-charge fees — provisional, never counted as owed (OWE
     expect(unpaid).toHaveLength(0)
   })
 
-  it('keeps a ≥€50 PAST_DUE debt on Overdue and its PENDING fee under Awaiting authorization', async () => {
+  it('keeps a failed renewal on Overdue and its PENDING fee under Awaiting authorization', async () => {
     const db = makeDb({
       glofox_invoices: (state) => {
-        if (state.status === 'PAST_DUE') return [gInvoice({ id: 'pd', glofox_user_id: 'cf', contact_id: 'c-big', amount_cents: 20900, status: 'PAST_DUE', invoice_date: '2026-05-03T00:00:00Z' })]
+        if (state.status === 'PAST_DUE') return [gInvoice({ id: 'pd', glofox_user_id: 'cf', contact_id: 'c-big', amount_cents: 20900, status: 'PAST_DUE', invoice_date: '2026-05-03T00:00:00Z', line_item_subtypes: 'SUBSCRIPTION_RENEWAL' })]
         if (state.status === 'PENDING') return [gInvoice({ id: 'fee', glofox_user_id: 'cf', contact_id: 'c-big', amount_cents: 1000, status: 'PENDING', invoice_date: '2026-05-26T00:00:00Z', line_item_subtypes: 'CUSTOM_CHARGE' })]
         return []
       },
@@ -323,7 +323,7 @@ describe('PENDING custom-charge fees — provisional, never counted as owed (OWE
     const { overdue } = await loadOverdue(db, LOC, NOW)
     expect(overdue).toHaveLength(1)
     expect(overdue[0].amountOwedCents).toBe(20900) // PAST_DUE only — pending excluded from Overdue
-    // No small confirmed past-due charge → Unpaid charges is empty (pending moved out).
+    // No confirmed past-due non-membership charge → Unpaid charges is empty (pending moved out).
     const { charges } = await loadUnpaidCharges(db, LOC, NOW)
     expect(charges).toHaveLength(0)
     // The pending fee is under Awaiting authorization instead.
@@ -331,6 +331,129 @@ describe('PENDING custom-charge fees — provisional, never counted as owed (OWE
     expect(awaiting).toHaveLength(1)
     expect(awaiting[0].contactId).toBe('c-big')
     expect(awaiting[0].amountOwedCents).toBe(1000)
+  })
+})
+
+// ── ARREARS-TYPE.1: Overdue vs Unpaid charges by CHARGE TYPE ─────────────────
+// Richard's rule (2026-08-23): Overdue = failed MEMBERSHIP payments only;
+// Unpaid charges = every other failing transaction at ANY amount; pending stays
+// in Awaiting authorization. The €50 line is gone.
+describe('Overdue vs Unpaid charges — by charge type (ARREARS-TYPE.1)', () => {
+  const PD = (over) => gInvoice({ status: 'PAST_DUE', invoice_date: '2026-05-03T00:00:00Z', ...over })
+
+  it('a failed €380 class pack (lone UPFRONT_PAYMENT) is an Unpaid charge, not Overdue', async () => {
+    const db = makeDb({
+      glofox_invoices: (state) => state.status === 'PAST_DUE'
+        ? [PD({ id: 'pack', glofox_user_id: 'u1', contact_id: 'c-pack', amount_cents: 38000, line_item_subtypes: 'UPFRONT_PAYMENT' })]
+        : [],
+      churn_radar_actions: [],
+      contacts: [contact({ id: 'c-pack', name: 'Pack Buyer' })],
+    })
+    const { overdue } = await loadOverdue(db, LOC, NOW)
+    expect(overdue).toHaveLength(0)
+    const { charges, summary } = await loadUnpaidCharges(db, LOC, NOW)
+    expect(charges).toHaveLength(1)
+    expect(charges[0]).toMatchObject({ contactId: 'c-pack', amountOwedCents: 38000, invoiceCount: 1 })
+    expect(summary).toMatchObject({ total: 1, totalValueCents: 38000 })
+  })
+
+  it('a failed €25 renewal is Overdue, not an Unpaid charge', async () => {
+    const db = makeDb({
+      glofox_invoices: (state) => state.status === 'PAST_DUE'
+        ? [PD({ id: 'ren', glofox_user_id: 'u2', contact_id: 'c-ren', amount_cents: 2500, line_item_subtypes: 'SUBSCRIPTION_RENEWAL' })]
+        : [],
+      churn_radar_actions: [],
+      contacts: [contact({ id: 'c-ren', name: 'Small Renewal' })],
+    })
+    const { overdue, summary } = await loadOverdue(db, LOC, NOW)
+    expect(overdue).toHaveLength(1)
+    expect(overdue[0]).toMatchObject({ contactId: 'c-ren', amountOwedCents: 2500 })
+    expect(summary.totalValueCents).toBe(2500)
+    const { charges } = await loadUnpaidCharges(db, LOC, NOW)
+    expect(charges).toHaveLength(0)
+  })
+
+  it('a failed first payment at signup (SUBSCRIPTION_PAYMENT + €0 UPFRONT_PAYMENT) is Overdue', async () => {
+    const db = makeDb({
+      glofox_invoices: (state) => state.status === 'PAST_DUE'
+        ? [PD({ id: 'signup', glofox_user_id: 'u3', contact_id: 'c-new', amount_cents: 9900, line_item_subtypes: 'SUBSCRIPTION_PAYMENT,UPFRONT_PAYMENT' })]
+        : [],
+      churn_radar_actions: [],
+      contacts: [contact({ id: 'c-new', name: 'New Signup' })],
+    })
+    const { overdue } = await loadOverdue(db, LOC, NOW)
+    expect(overdue.map((r) => r.contactId)).toEqual(['c-new'])
+  })
+
+  it('a backfilled custom charge (no line items, raw_payload.candidate.glofoxEvent) is an Unpaid charge whatever its description or amount', async () => {
+    // The €467 "Membership"-described custom charge from the June backfill.
+    const db = makeDb({
+      glofox_invoices: (state) => state.status === 'PAST_DUE'
+        ? [PD({ id: '8e04230d', glofox_user_id: 'u4', contact_id: 'c-cc', amount_cents: 46700, line_item_subtypes: null, glofox_event: 'custom_charge', invoice_date: '2026-01-27T19:45:00Z' })]
+        : [],
+      churn_radar_actions: [],
+      contacts: [contact({ id: 'c-cc', name: 'Custom Charge' })],
+    })
+    const { overdue } = await loadOverdue(db, LOC, NOW)
+    expect(overdue).toHaveLength(0)
+    const { charges } = await loadUnpaidCharges(db, LOC, NOW)
+    expect(charges.map((r) => [r.contactId, r.amountOwedCents])).toEqual([['c-cc', 46700]])
+  })
+
+  it('a backfilled failed renewal (glofoxEvent subscription_payment_failed) is Overdue', async () => {
+    const db = makeDb({
+      glofox_invoices: (state) => state.status === 'PAST_DUE'
+        ? [PD({ id: 'bf-ren', glofox_user_id: 'u5', contact_id: 'c-bf', amount_cents: 19900, line_item_subtypes: null, glofox_event: 'subscription_payment_failed' })]
+        : [],
+      churn_radar_actions: [],
+      contacts: [contact({ id: 'c-bf', name: 'Backfilled Renewal' })],
+    })
+    const { overdue } = await loadOverdue(db, LOC, NOW)
+    expect(overdue.map((r) => r.contactId)).toEqual(['c-bf'])
+  })
+
+  it('the SAME contact with a failed renewal AND a failed fee appears in BOTH tabs with separate amounts', async () => {
+    const db = makeDb({
+      glofox_invoices: (state) => state.status === 'PAST_DUE'
+        ? [
+            PD({ id: 'ren', glofox_user_id: 'u6', contact_id: 'c-both', amount_cents: 19900, line_item_subtypes: 'SUBSCRIPTION_RENEWAL', invoice_date: '2026-05-01T00:00:00Z' }),
+            PD({ id: 'fee', glofox_user_id: 'u6', contact_id: 'c-both', amount_cents: 1000, line_item_subtypes: 'CUSTOM_CHARGE', invoice_date: '2026-05-20T00:00:00Z' }),
+          ]
+        : [],
+      churn_radar_actions: [],
+      contacts: [contact({ id: 'c-both', name: 'Both' })],
+    })
+    const { overdue } = await loadOverdue(db, LOC, NOW)
+    expect(overdue).toHaveLength(1)
+    expect(overdue[0]).toMatchObject({ contactId: 'c-both', amountOwedCents: 19900, invoiceCount: 1 })
+    const { charges } = await loadUnpaidCharges(db, LOC, NOW)
+    expect(charges).toHaveLength(1)
+    expect(charges[0]).toMatchObject({ contactId: 'c-both', amountOwedCents: 1000, invoiceCount: 1 })
+  })
+
+  it('loadRadar summary badges match the tabs, and a fee-only contact still classifies as overdue (pill) without being on the chase-list', async () => {
+    const db = makeDb({
+      glofox_invoices: (state) => state.status === 'PAST_DUE'
+        ? [
+            PD({ id: 'ren', glofox_user_id: 'u7', contact_id: 'c-r', amount_cents: 19900, line_item_subtypes: 'SUBSCRIPTION_RENEWAL' }),
+            PD({ id: 'pack', glofox_user_id: 'u8', contact_id: 'c-p', amount_cents: 38000, line_item_subtypes: 'UPFRONT_PAYMENT' }),
+            PD({ id: 'fee', glofox_user_id: 'u9', contact_id: 'c-f', amount_cents: 1000, line_item_subtypes: 'CUSTOM_CHARGE' }),
+          ]
+        : state.status === 'PENDING'
+          ? [gInvoice({ id: 'pend', glofox_user_id: 'u10', contact_id: 'c-a', amount_cents: 500, status: 'PENDING', invoice_date: '2026-05-26T00:00:00Z', line_item_subtypes: 'CUSTOM_CHARGE' })]
+          : [],
+      churn_radar_actions: [],
+      contacts: ['c-r', 'c-p', 'c-f', 'c-a'].map((id) => contact({ id })),
+      person_groups: [],
+    })
+    const { radar, summary } = await loadRadar(db, LOC, NOW)
+    expect(summary).toMatchObject({
+      overdue: 1, overdueValueCents: 19900,
+      unpaidCharges: 2, unpaidChargesValueCents: 39000,
+      awaitingAuth: 1, awaitingAuthValueCents: 500,
+    })
+    // Every contact with ANY open PAST_DUE is pulled off the at-risk list (ids/byId unchanged).
+    expect(radar.map((r) => r.contactId)).not.toContain('c-f')
   })
 })
 

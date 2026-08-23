@@ -10,6 +10,12 @@
 // Query params:
 //   location_id  optional  defaults to user.activeLocation
 //   commit       optional  'true' to write; anything else = dry run
+//   restatus     optional  'true' to ALSO apply the PAST_DUE→PENDING
+//                          awaiting-authorization re-status (AWAITING-AUTH.2 /
+//                          ARREARS-TYPE.2). Proposed on every run (see
+//                          `restated` / `byReason.awaiting_authorization` /
+//                          `sample`); written only with commit=true&restatus=true.
+//                          The daily cron never applies it on its own.
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
@@ -38,6 +44,7 @@ export async function GET(request) {
     )
   }
   const commit = url.searchParams.get('commit') === 'true'
+  const allowRestatus = url.searchParams.get('restatus') === 'true'
 
   const db = createServerClient()
   const creds = await glofoxCredentialsForLocation(db, locationId)
@@ -49,7 +56,7 @@ export async function GET(request) {
   }
 
   try {
-    const res = await runArrearsReconcile(db, creds, locationId, { commit })
+    const res = await runArrearsReconcile(db, creds, locationId, { commit, allowRestatus })
     return NextResponse.json(res)
   } catch (e) {
     return NextResponse.json({ ok: false, error: e.message }, { status: 502 })
