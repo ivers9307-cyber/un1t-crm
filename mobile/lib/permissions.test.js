@@ -5,15 +5,20 @@
 // admin" nudge instead of any dashboard. Subtle to get wrong:
 //
 //   • Mobile features live under permissions.mobile.<key>.
-//   • The three dashboard tiers (personal / studio / business) live
-//     at the TOP level of the same blob (cross-platform — same admin
-//     toggle controls web sidebar AND mobile Home).
+//   • Every CROSS_PLATFORM key (the three dashboard tiers, plus
+//     studio_management / class_timer / bookkeeper / email_inbox /
+//     device_control…) lives at the TOP level of the same blob — one
+//     admin toggle controls the web sidebar AND the mobile surface.
 //
 // Walking only one of the two key spaces produces a false negative:
-// a user with every .mobile.* key off but a dashboard_* still on
-// would see the empty state despite being entitled to the
-// dashboard. This file pins both branches so a future refactor
-// can't silently regress to the one-walk version.
+// a user with every .mobile.* key off but a top-level key still on
+// would see the empty state despite having a navigable tab. The first
+// version of this helper walked the mobile keys only; the dashboard
+// keys were added next; MOBILEFEAT.1 widened it to every
+// cross-platform key, because a head coach whose only entitlement was
+// Studio Management got the "ask an admin" nudge on Home while the
+// Studio tab sat right there in the bar. This file pins both walks so
+// a future refactor can't silently regress to a narrower version.
 //
 // Tests run in vitest's Node environment — permissions.js is pure
 // JS with no React-Native imports, so no RN runtime is required.
@@ -23,16 +28,27 @@ import { hasAnyMobileFeature, canMobile } from './permissions.js'
 import {
   MOBILE_PERMISSION_KEYS,
   CROSS_PLATFORM_DASHBOARD_KEYS,
+  CROSS_PLATFORM_KEYS,
 } from 'shared/permissions'
 
 // Construct a per-user permissions blob that explicitly denies every
-// mobile and every dashboard key — the most aggressive "off" baseline
-// possible at tier 2. Built from the canonical key lists so adding a
-// new feature in shared/permissions.js keeps the baseline complete.
+// mobile key and every cross-platform key — the most aggressive "off"
+// baseline possible at tier 2. Built from the canonical key lists so
+// adding a new feature in shared/permissions.js keeps the baseline
+// complete. It MUST cover every CROSS_PLATFORM key, not just the
+// dashboards: class_timer defaults ON for every role, so a baseline
+// that forgot it would make the "nothing on" case true by default.
 const allOffPermissions = () => ({
-  ...Object.fromEntries(CROSS_PLATFORM_DASHBOARD_KEYS.map(k => [k, false])),
+  ...Object.fromEntries(CROSS_PLATFORM_KEYS.map(k => [k, false])),
   mobile: Object.fromEntries(MOBILE_PERMISSION_KEYS.map(k => [k, false])),
 })
+
+// The cross-platform keys that are NOT dashboard tiers — the ones the
+// pre-MOBILEFEAT.1 walk missed. Derived, so the list grows on its own
+// (device_control joins it with SONOSMOB.2).
+const NON_DASHBOARD_CROSS_PLATFORM_KEYS = CROSS_PLATFORM_KEYS.filter(
+  k => !CROSS_PLATFORM_DASHBOARD_KEYS.includes(k),
+)
 
 // No tier-1 denials. features: {} means no key is explicitly disabled
 // at the location, so tier 1 never blocks.
@@ -115,6 +131,50 @@ describe('hasAnyMobileFeature', () => {
   })
 })
 
+describe('hasAnyMobileFeature — every cross-platform key counts (MOBILEFEAT.1)', () => {
+  // The gap: studio_management, class_timer, bookkeeper, email_inbox (and
+  // device_control once SONOSMOB.2 lands) are top-level keys that open a
+  // tab or sub-screen on mobile, but the walk only knew the dashboard
+  // tiers. A head coach with ONLY studio_management on had a Studio tab
+  // in the bar and the "ask an admin" nudge on Home at the same time.
+  it('a head_coach with only studio_management on is not shown the empty state', () => {
+    const perms = allOffPermissions()
+    perms.studio_management = true
+    expect(hasAnyMobileFeature({ role: 'head_coach' }, openLocation(perms))).toBe(true)
+  })
+
+  it('the derived list actually contains the keys the old walk missed', () => {
+    // Guards the table test below against passing vacuously if the key
+    // lists are ever reshaped.
+    expect(NON_DASHBOARD_CROSS_PLATFORM_KEYS).toEqual(expect.arrayContaining(['studio_management', 'class_timer']))
+  })
+
+  it.each(NON_DASHBOARD_CROSS_PLATFORM_KEYS)(
+    'a head_coach with only %s on is not shown the empty state',
+    (key) => {
+      const perms = allOffPermissions()
+      perms[key] = true
+      expect(hasAnyMobileFeature({ role: 'head_coach' }, openLocation(perms))).toBe(true)
+    },
+  )
+
+  it('a head_coach with every mobile AND every cross-platform key off IS shown the empty state', () => {
+    // Explicit-false on every key at tier 2, so no role default (class_timer
+    // is ON for every role) can leak through.
+    expect(hasAnyMobileFeature({ role: 'head_coach' }, openLocation(allOffPermissions()))).toBe(false)
+  })
+
+  it('honours the location feature gate on a cross-platform key (tier 1 wins)', () => {
+    const perms = allOffPermissions()
+    perms.studio_management = true
+    const location = { features: { studio_management: false }, permissions: perms }
+    expect(hasAnyMobileFeature({ role: 'head_coach' }, location)).toBe(false)
+  })
+
+  it('master is never shown the empty state', () => {
+    expect(hasAnyMobileFeature({ role: 'master' }, openLocation(allOffPermissions()))).toBe(true)
+  })
+})
 
 describe('canMobile — cross-platform keys (studio_management)', () => {
   // Regression: studio_management is a CROSS_PLATFORM (top-level) key.
