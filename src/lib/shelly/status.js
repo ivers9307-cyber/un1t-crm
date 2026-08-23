@@ -159,7 +159,13 @@ export function normaliseAllStatus(body) {
       model: str(info.code) ?? str(info.type) ?? null,
       gen,
       online,
-      name: nameFrom(e, null),
+      // SHELLY-UI.4b — `_dev_info.name` is the fallback, not null. The v1
+      // entry itself rarely carries the human name; the cloud envelope often
+      // does, and discovery is the ONE surface where the name is the whole
+      // point — a null here renders the adopt list as a wall of MACs and the
+      // operator cannot tell the sauna from the ice machine. Still a fallback,
+      // never an override: a name the DEVICE reported wins over the account's.
+      name: nameFrom(e, info.name),
       ...support,
     }
     // Still emit one row for a device with no channels: the adopt list has to

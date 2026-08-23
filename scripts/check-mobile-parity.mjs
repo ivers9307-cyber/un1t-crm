@@ -320,11 +320,27 @@ for (const m of MOBILE_PERMISSIONS) {
 // Re-deriving it here from the narrower nav-only data would either
 // duplicate that check with weaker data, or need to re-invent
 // WEB_ONLY_OK's exemption list a second time for hub-union keys that
-// were never meant to be mobile-navigable (e.g. `automations`,
-// `device_control` inside the Marketing hub's union) — the hub
-// collapse is exactly why "one web nav entry ↔ one mobile tab" no
-// longer holds, so this check only makes the claim that survives it:
-// mobile's own chosen nav surface should point at something real.
+// were never meant to be mobile-navigable (e.g. `automations` inside
+// the Marketing hub's union) — the hub collapse is exactly why "one web
+// nav entry ↔ one mobile tab" no longer holds, so this check only makes
+// the claim that survives it: mobile's own chosen nav surface should
+// point at something real.
+//
+// SHELLY-UI.8 — `device_control` used to be named above as a second
+// example of a never-mobile-navigable hub-union key. It is not one, and
+// hasn't been since SONOSMOB.2: shared/mobile-nav.js's Studio entry
+// lists it in permKeys, and it rides CROSS_PLATFORM_KEYS (the
+// `CROSS_PLATFORM_SET.has(w.key)` skip in webDrift above) rather than a
+// WEB_ONLY_OK entry, which is why it appears in neither map. What is
+// web-only is the AUTHORING half of both of its surfaces —
+// /automations/sonos (playback windows, run-now, pause override) and
+// /automations/shelly (power windows, class-linked rules, adopt/remove,
+// 30-day kWh history) — schedule editors that want the screen. Mobile
+// today offers live Sonos control only; a live on/off toggle for an
+// adopted Shelly plug is the first planned mobile counterpart (see
+// docs/BACKLOG.md, "Shelly smart plugs — deferred by decision"). When it
+// ships it rides the same top-level key, so nothing in this file has to
+// change for it.
 // --------------------------------------------------------------------
 
 const navItemsSrc = readFileSync(resolve(repoRoot, 'src/lib/nav-items.js'), 'utf8')

@@ -198,6 +198,24 @@ describe('bundlesDenyKey — OR semantics across multiple owning bundles', () =>
     expect(bundlesDenyKey({ bundle_members: false, bundle_operations: true }, 'studio_management')).toBe(false)
     expect(bundlesDenyKey({ bundle_members: false, bundle_operations: false }, 'studio_management')).toBe(true)
   })
+
+  // SHELLY-UI.8 — device_control widened from bundle_marketing-only to
+  // Marketing OR Operations (Richard, 2026-08-22: Sonos speakers and
+  // Shelly smart plugs are studio hardware, an operations concern as
+  // much as a marketing one). The Marketing-off/Operations-on row is
+  // the whole point of the change and is asserted first.
+  it('device_control is owned by both bundle_marketing and bundle_operations', () => {
+    expect(KEY_BUNDLES.device_control.sort()).toEqual(['bundle_marketing', 'bundle_operations'])
+    // Marketing OFF, Operations ON — an operations-only tenant keeps it.
+    expect(bundlesDenyKey({ bundle_marketing: false, bundle_operations: true }, 'device_control')).toBe(false)
+    // The mirror case, for symmetry: a marketing-only tenant keeps it too.
+    expect(bundlesDenyKey({ bundle_marketing: true, bundle_operations: false }, 'device_control')).toBe(false)
+    // Both OFF — and only then — the bundle layer denies it.
+    expect(bundlesDenyKey({ bundle_marketing: false, bundle_operations: false }, 'device_control')).toBe(true)
+    // Both ON, and the back-compat `{}`, deny nothing.
+    expect(bundlesDenyKey({ bundle_marketing: true, bundle_operations: true }, 'device_control')).toBe(false)
+    expect(bundlesDenyKey({}, 'device_control')).toBe(false)
+  })
 })
 
 describe('spot-check assignments the reviewer will verify against the pages they gate', () => {

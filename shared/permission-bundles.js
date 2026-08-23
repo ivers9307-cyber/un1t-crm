@@ -77,6 +77,10 @@ export const BUNDLE_LABELS = Object.freeze({
 //   - `studio_management`            → both bundle_members (the live
 //     HR floor view) AND bundle_operations (the door/TV/presentations
 //     panel).
+//   - `device_control`               → both bundle_marketing (the
+//     '/marketing' union, where its pages physically live) AND
+//     bundle_operations (studio hardware: Sonos speakers, Shelly smart
+//     plugs). SHELLY-UI.8 — see the pair's own comment below.
 // bundlesDenyKey() below applies OR semantics the other way: a key is
 // only bundle-denied when EVERY bundle that owns it is explicitly
 // off. Phase 4B's chrome split did NOT split these keys apart, so
@@ -190,8 +194,40 @@ export const KEY_BUNDLES = Object.freeze({
 
   // ---- bundle_marketing only — src/lib/nav-items.js '/marketing' anyPermission ----
   automations: ['bundle_marketing'],
-  device_control: ['bundle_marketing'],
   landing_page: ['bundle_marketing'],
+
+  // ---- bundle_marketing + bundle_operations (shared — SHELLY-UI.8) ----
+  // OR semantics, exactly as for `studio_management` and `email` above:
+  // a location KEEPS device control while EITHER bundle is on, and only
+  // loses it when Marketing AND Operations are both explicitly false.
+  //
+  // Richard's decision (2026-08-22): what this key gates is studio
+  // HARDWARE — Sonos speakers (/automations/sonos) and Shelly smart
+  // plugs (/automations/shelly, SHELLY-UI) — power and playback
+  // schedules for the building. That is an operations concern as much
+  // as a marketing one, and an Operations-only tenant that bought no
+  // Marketing bundle must still be able to switch its own plugs on.
+  //
+  // Behaviour-neutral for every location live today: widening an OR set
+  // can only ever ADD holders, never remove one, and the 2026-08-22 prod
+  // snapshot found no location with `bundle_marketing: false` at all (a
+  // re-run before merge is Obligation 17 of the SHELLY-UI plan).
+  //
+  // CONSEQUENCE, so nobody is surprised later: a location that used to
+  // hide the device-control surfaces by turning Marketing OFF no longer
+  // hides them by that alone — with Operations on, the bundle layer now
+  // allows the key, so hiding it takes a per-user/per-role
+  // `device_control: false` (or the location's own per-key feature
+  // toggle, which is an independent AND clause — see
+  // isFeatureEnabledAtLocation in shared/permissions.js).
+  //
+  // NAV UNIONS ARE UNCHANGED: `device_control` already sits in
+  // src/lib/nav-items.js's '/marketing' anyPermission union (and the
+  // Automations page's own gate), and this file does not touch nav. So
+  // an Operations-only tenant sees the MARKETING sidebar entry purely as
+  // the door to /automations — accepted rather than fixed here, because
+  // splitting the nav entry is a hub-IA change, not a bundle change.
+  device_control: ['bundle_marketing', 'bundle_operations'],
 
   // ---- bundle_team — src/lib/nav-items.js '/team' extraActivePaths ----
   // (the Team hub entry itself is openToAll — see the note above

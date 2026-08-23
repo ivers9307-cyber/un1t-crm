@@ -4,6 +4,8 @@ import {
   daysUntil,
   gradeWhatsappNumber,
   gradeXeroConnection,
+  gradeShellyConnection,
+  SHELLY_HREF,
   agentSignal,
   locationTabHref,
   gradeTenantEmail,
@@ -20,6 +22,10 @@ import {
   LAPSE_WARN_DAYS,
   assembleIntegrationsHub,
 } from './integrations-hub'
+// The tenants console counts hub attention rows THROUGH a.locationId; the
+// Shelly card's card-level row is pinned to a real id so that count works.
+// Imported here rather than mirrored, so a change to either side shows up.
+import { attentionCountByOrg } from './admin-tenants'
 
 const NOW = new Date('2026-07-19T12:00:00Z')
 
@@ -102,6 +108,46 @@ describe('gradeXeroConnection', () => {
     const g = gradeXeroConnection({ tenant_id: 't1', contacts_sync_error: 'invalid_grant: token revoked' })
     expect(g.status).toBe('error')
     expect(g.message).toContain('invalid_grant')
+  })
+})
+
+describe('gradeShellyConnection', () => {
+  it('no row → not_connected with no message', () => {
+    expect(gradeShellyConnection(null)).toEqual({ status: 'not_connected', message: null })
+    expect(gradeShellyConnection(undefined)).toEqual({ status: 'not_connected', message: null })
+  })
+
+  it('connected → connected, no message', () => {
+    expect(gradeShellyConnection({ status: 'connected' })).toEqual({ status: 'connected', message: null })
+  })
+
+  it('action_needed → the re-paste prompt (the key rotates with the Shelly password)', () => {
+    const g = gradeShellyConnection({ status: 'action_needed' })
+    expect(g.status).toBe('action_needed')
+    expect(g.message).toMatch(/re-paste/i)
+    expect(g.message).toMatch(/password/i)
+  })
+
+  it('error reads as RETRYING, carrying last_error (obligation 6 — a blip parks 5 min)', () => {
+    const g = gradeShellyConnection({ status: 'error', last_error: 'cloud timeout' })
+    expect(g.status).toBe('error')
+    expect(g.message).toBe('Retrying — cloud timeout')
+    expect(g.message).not.toMatch(/check the connection/i)
+  })
+
+  it('error with no last_error still reads as retrying', () => {
+    expect(gradeShellyConnection({ status: 'error', last_error: null }))
+      .toEqual({ status: 'error', message: 'Retrying — Shelly unreachable' })
+  })
+
+  it('caps a runaway last_error rather than pasting it whole into the strip', () => {
+    const g = gradeShellyConnection({ status: 'error', last_error: 'x'.repeat(900) })
+    expect(g.message.length).toBeLessThanOrEqual('Retrying — '.length + 300)
+  })
+
+  it('an unknown status grades error, never connected (a broken studio must not read green)', () => {
+    expect(gradeShellyConnection({ status: 'wat' })).toEqual({ status: 'error', message: 'Unknown connection state' })
+    expect(gradeShellyConnection({})).toEqual({ status: 'error', message: 'Unknown connection state' })
   })
 })
 
@@ -411,6 +457,7 @@ function emptyDb() {
     gte: () => builder,
     order: () => builder,
     limit: () => builder,
+    range: () => builder,
     maybeSingle: () => Promise.resolve({ data: null, error: null }),
     single: () => Promise.resolve({ data: null, error: null }),
     then: (res, rej) => Promise.resolve({ data: [], error: null }).then(res, rej),
@@ -457,5 +504,278 @@ describe('assembleIntegrationsHub — Phase-2 presence flags + secret non-leak',
     for (const secret of ['SECRET_KEY', 'SECRET_TOKEN', 'SECRET_HOOK', 'SECRET_UNIFI', 'SECRET_SENSIBO', 'SECRET_PAT']) {
       expect(json).not.toContain(secret)
     }
+  })
+})
+
+// ── Shelly plugs card (SHELLY-UI.7) ──
+//
+// A fake db that answers PER TABLE, so a read can be given rows, an error,
+// or nothing independently of its neighbours. organization_id is null on
+// both fixtures, which keeps the email-delivery and billing queries out of
+// the way (they short-circuit on an empty org set / no plan pin).
+// It also RECORDS every .in() per table and HONOURS it — the fixture rows
+// are filtered by the ids the assembler actually passed, and .range() slices
+// the result. Both matter: without the filter a dropped .in('location_id',
+// ids) would still pass every assertion below (the tenant boundary this
+// payload inherits from the caller's scoped `locations` query would be gone
+// and no test would notice), and without the slice the pagination test could
+// not tell one page from five.
+function tableDb(byTable = {}) {
+  const inCalls = {}
+  return {
+    inCalls,
+    from: (table) => {
+      const result = byTable[table] ?? { data: [], error: null }
+      const filters = (inCalls[table] ||= [])
+      let slice = null
+      const resolve = () => {
+        if (result.error) return { data: null, error: result.error }
+        let rows = result.data || []
+        for (const [col, values] of filters) {
+          if (Array.isArray(values)) rows = rows.filter((r) => values.includes(r[col]))
+        }
+        if (slice) rows = rows.slice(slice[0], slice[1] + 1)
+        return { data: rows, error: null }
+      }
+      const builder = {
+        select: () => builder,
+        in: (...args) => { filters.push(args); return builder },
+        eq: () => builder,
+        neq: () => builder,
+        gte: () => builder,
+        lte: () => builder,
+        order: () => builder,
+        limit: () => builder,
+        range: (from, to) => { slice = [from, to]; return builder },
+        maybeSingle: () => Promise.resolve({ data: null, error: null }),
+        single: () => Promise.resolve({ data: null, error: null }),
+        then: (res, rej) => Promise.resolve(resolve()).then(res, rej),
+      }
+      return builder
+    },
+  }
+}
+
+const LOC_A = { id: 'loc-a', name: 'Stillorgan', organization_id: null, settings: {} }
+const LOC_B = { id: 'loc-b', name: 'Hatch Street', organization_id: null, settings: {} }
+
+describe('assembleIntegrationsHub — Shelly plugs card', () => {
+  it('NEVER leaks the auth key or its fingerprint, even when the row carries them', async () => {
+    // The real select asks for neither column; this fixture hands them over
+    // anyway, which is the point — the assembler must project an allowlist,
+    // not spread the row it was given.
+    const db = tableDb({
+      shelly_connections: {
+        data: [{
+          location_id: LOC_A.id,
+          host: 'shelly-77-eu.shelly.cloud',
+          status: 'connected',
+          last_error: null,
+          last_ok_at: '2026-07-19T11:58:00Z',
+          updated_at: '2026-07-19T11:59:30Z',
+          key_hint: 'ab12',
+          auth_key: 'SECRET_SHELLY',
+          auth_key_fingerprint: 'FP_SECRET',
+        }],
+      },
+    })
+    const data = await assembleIntegrationsHub(db, [LOC_A], { now: NOW })
+
+    expect(data.shelly).toHaveLength(1)
+    expect(data.shelly[0]).toMatchObject({
+      cardKey: 'shelly',
+      locationId: LOC_A.id,
+      locationName: 'Stillorgan',
+      status: 'connected',
+      message: null,
+      host: 'shelly-77-eu.shelly.cloud',
+      hasAuthKey: true,
+      keyHint: 'ab12',
+      lastOkAt: '2026-07-19T11:58:00Z',
+      // last ATTEMPT (updated_at) is carried separately from last SUCCESS:
+      // the pair is what distinguishes "still retrying" from "abandoned".
+      lastAttemptAt: '2026-07-19T11:59:30Z',
+      countsKnown: true,
+      href: SHELLY_HREF,
+    })
+    expect(data.shelly[0].href).toBe('/automations/shelly')
+    // BOTH Shelly reads are scoped to the caller's locations — deleting
+    // either .in('location_id', ids) fails here, and with it the tenant
+    // boundary the whole payload inherits from the route's scoped query.
+    expect(db.inCalls.shelly_connections[0]).toEqual(['location_id', [LOC_A.id]])
+    expect(db.inCalls.shelly_devices[0]).toEqual(['location_id', [LOC_A.id]])
+
+    const json = JSON.stringify(data)
+    expect(json).not.toContain('SECRET_SHELLY')
+    expect(json).not.toContain('FP_SECRET')
+    // The hint IS non-secret (publicConnectionView returns it) — pinned so a
+    // future over-correction that strips it fails loudly rather than quietly.
+    expect(json).toContain('ab12')
+  })
+
+  it('a location that never connected yields a not_connected row with zero counts', async () => {
+    const data = await assembleIntegrationsHub(tableDb(), [LOC_A], { now: NOW })
+
+    expect(data.shelly).toHaveLength(1)
+    expect(data.shelly[0]).toMatchObject({
+      locationId: LOC_A.id,
+      status: 'not_connected',
+      message: null,
+      host: null,
+      hasAuthKey: false,
+      keyHint: null,
+      lastOkAt: null,
+      lastAttemptAt: null,
+      // Zero here is a READING, not an absence of one — countsKnown says so.
+      countsKnown: true,
+      deviceCount: 0,
+      enabledCount: 0,
+      onlineCount: 0,
+      href: SHELLY_HREF,
+    })
+    // Bare absence never nags.
+    expect(data.attention.filter((a) => a.cardKey === 'shelly')).toEqual([])
+  })
+
+  it('a DISCONNECTED location that still has plugs adopted nags as partial setup', async () => {
+    const db = tableDb({
+      shelly_devices: {
+        data: [
+          { location_id: LOC_A.id, enabled: true, last_state: { online: true } },
+          { location_id: LOC_A.id, enabled: false, last_state: { online: false } },
+        ],
+      },
+    })
+    const data = await assembleIntegrationsHub(db, [LOC_A], { now: NOW })
+
+    expect(data.shelly[0]).toMatchObject({ status: 'not_connected', deviceCount: 2 })
+    const nag = data.attention.filter((a) => a.cardKey === 'shelly')
+    expect(nag).toHaveLength(1)
+    expect(nag[0]).toMatchObject({
+      severity: 'info',
+      label: 'Shelly plugs',
+      locationName: 'Stillorgan',
+      href: SHELLY_HREF,
+      // The copy has to say what the half-state COSTS, not just that it
+      // exists: the relays hold wherever they were left and no schedule
+      // will move them again until the account is reconnected.
+      message: '2 plugs still adopted — nothing schedules them while the Shelly account is disconnected',
+    })
+  })
+
+  it('singularises the stranded-plug nag', async () => {
+    const db = tableDb({
+      shelly_devices: { data: [{ location_id: LOC_A.id, enabled: true, last_state: { online: true } }] },
+    })
+    const data = await assembleIntegrationsHub(db, [LOC_A], { now: NOW })
+    expect(data.attention.find((a) => a.cardKey === 'shelly').message).toMatch(/^1 plug still adopted/)
+  })
+
+  it('an unreadable read grades EVERY in-scope location error — never "not connected"', async () => {
+    for (const failing of ['shelly_connections', 'shelly_devices']) {
+      const db = tableDb({ [failing]: { error: { message: 'db exploded' } } })
+      const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+
+      expect(data.shelly).toHaveLength(2)
+      for (const row of data.shelly) {
+        expect(row.status).toBe('error')
+        expect(row.message).toBe('Could not read Shelly state')
+        // UNKNOWN, not zero. A 0 here would render as "no plugs adopted"
+        // directly under "Could not read Shelly state" — a fact we do not
+        // have, printed beside the admission that we could not get it.
+        expect(row).toMatchObject({
+          countsKnown: false,
+          deviceCount: null,
+          enabledCount: null,
+          onlineCount: null,
+        })
+      }
+      // ONE row for one blip, not one per location: the failure is a property
+      // of the card, so N locations would print the same sentence N times and
+      // crowd everything else out of the strip.
+      const nag = data.attention.filter((a) => a.cardKey === 'shelly')
+      expect(nag).toHaveLength(1)
+      expect(nag[0]).toMatchObject({
+        severity: 'error',
+        label: 'Shelly plugs',
+        locationName: 'All locations',
+        message: 'Could not read Shelly state — retrying',
+        href: SHELLY_HREF,
+      })
+      // Pinned to a REAL location id, never null: attentionCountByOrg
+      // (admin-tenants.js) resolves the org through it and drops what it
+      // cannot map, so a null would be counted zero times.
+      expect(nag[0].locationId).toBe(LOC_A.id)
+      // The db's own failure text is never echoed to the operator.
+      expect(JSON.stringify(data)).not.toContain('db exploded')
+    }
+  })
+
+  it('the single read-blip attention row is counted exactly once per org', async () => {
+    const db = tableDb({ shelly_connections: { error: { message: 'db exploded' } } })
+    const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+    const shellyNag = data.attention.filter((a) => a.cardKey === 'shelly')
+    expect(attentionCountByOrg(shellyNag, { [LOC_A.id]: 'org-1', [LOC_B.id]: 'org-1' }))
+      .toEqual({ 'org-1': 1 })
+  })
+
+  it('paginates the device read past the 1,000-row PostgREST cap', async () => {
+    // 1,001 rows in location order — one more than a single page, so a
+    // .limit()-only read would silently lose the tail.
+    const rows = [
+      ...Array.from({ length: 600 }, (_, i) => ({
+        location_id: LOC_A.id, enabled: i % 2 === 0, last_state: { online: i % 3 === 0 },
+      })),
+      ...Array.from({ length: 401 }, () => ({
+        location_id: LOC_B.id, enabled: false, last_state: { online: true },
+      })),
+    ]
+    const db = tableDb({ shelly_devices: { data: rows } })
+    const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+
+    const a = data.shelly.find((r) => r.locationId === LOC_A.id)
+    const b = data.shelly.find((r) => r.locationId === LOC_B.id)
+    expect(a).toMatchObject({ countsKnown: true, deviceCount: 600, enabledCount: 300, onlineCount: 200 })
+    // The 401st row of B lands on page two — the whole point of the fixture.
+    expect(b).toMatchObject({ countsKnown: true, deviceCount: 401, enabledCount: 0, onlineCount: 401 })
+    // Two pages were read, and both were scoped to the caller's locations.
+    expect(db.inCalls.shelly_devices).toHaveLength(2)
+    for (const call of db.inCalls.shelly_devices) {
+      expect(call).toEqual(['location_id', [LOC_A.id, LOC_B.id]])
+    }
+  })
+
+  it('counts are grouped per location and never cross locations', async () => {
+    const db = tableDb({
+      shelly_connections: {
+        data: [
+          { location_id: LOC_A.id, host: 'shelly-77-eu.shelly.cloud', status: 'connected', last_ok_at: '2026-07-19T11:00:00Z', key_hint: 'ab12' },
+          { location_id: LOC_B.id, host: 'shelly-99-eu.shelly.cloud', status: 'action_needed', last_error: null, key_hint: 'cd34' },
+        ],
+      },
+      shelly_devices: {
+        data: [
+          // A: 3 adopted, 2 enabled, 1 online (the third has never been read).
+          { location_id: LOC_A.id, enabled: true, last_state: { online: true } },
+          { location_id: LOC_A.id, enabled: true, last_state: { online: false } },
+          { location_id: LOC_A.id, enabled: false, last_state: null },
+          // B: 1 adopted, 0 enabled, 1 online.
+          { location_id: LOC_B.id, enabled: false, last_state: { online: true } },
+        ],
+      },
+    })
+    const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+
+    const a = data.shelly.find((r) => r.locationId === LOC_A.id)
+    const b = data.shelly.find((r) => r.locationId === LOC_B.id)
+    expect(a).toMatchObject({ status: 'connected', countsKnown: true, deviceCount: 3, enabledCount: 2, onlineCount: 1, keyHint: 'ab12' })
+    expect(b).toMatchObject({ status: 'action_needed', countsKnown: true, deviceCount: 1, enabledCount: 0, onlineCount: 1, keyHint: 'cd34' })
+    expect(b.message).toMatch(/re-paste/i)
+
+    // B's action_needed lands in the warning band with the re-paste prompt;
+    // A (healthy) contributes nothing.
+    const nag = data.attention.filter((n) => n.cardKey === 'shelly')
+    expect(nag).toHaveLength(1)
+    expect(nag[0]).toMatchObject({ severity: 'warning', locationId: LOC_B.id, label: 'Shelly plugs' })
   })
 })
