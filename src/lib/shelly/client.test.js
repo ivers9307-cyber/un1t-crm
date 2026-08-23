@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   normaliseShellyHost, fingerprintAuthKey, keyHint, redactSecret,
   classifyV2, classifyV1, parseGroupsResult, createShellyClient,
-  MIN_GAP_MS, RETRY_429_AFTER_MS,
+  MIN_GAP_MS, RETRY_429_AFTER_MS, MAX_GET_IDS,
 } from './client'
 
 const KEY = 'MTIzNDU2Nzg5MGFiY2RlZg-SECRET-KEY-VALUE'
@@ -35,6 +35,9 @@ describe('fingerprintAuthKey / keyHint / redactSecret', () => {
     expect(fingerprintAuthKey(KEY)).toBe(fingerprintAuthKey(KEY))
     expect(fingerprintAuthKey(KEY)).not.toBe(fingerprintAuthKey(KEY + 'x'))
   })
+  it('a blank key has no fingerprint — never a valid-looking digest', () => {
+    for (const blank of ['', null, undefined]) expect(fingerprintAuthKey(blank)).toBe('')
+  })
   it('hint is the last four characters', () => {
     expect(keyHint(KEY)).toBe('ALUE')
     expect(keyHint('ab')).toBe('')
@@ -45,6 +48,27 @@ describe('fingerprintAuthKey / keyHint / redactSecret', () => {
     expect(r.message).not.toContain(KEY)
     expect(r.message).toContain('[redacted]')
     expect(r.name).toBe('Error')
+  })
+  it('redacts the PERCENT-ENCODED key too — base64-ish keys carry + / =', () => {
+    // This key never appears raw in a URL: encodeURIComponent turns + / =
+    // into %2B %2F %3D, so raw-only redaction would leak it whole.
+    const secret = 'abc+def/ghi=='
+    const e = new Error(`fetch failed for https://h/v2/devices/api/get?auth_key=${encodeURIComponent(secret)}`)
+    const r = redactSecret(e, secret)
+    expect(r.message).not.toContain(encodeURIComponent(secret))
+    expect(r.message).not.toContain(secret)
+    expect(r.message).toContain('[redacted]')
+  })
+  it('also redacts the FORM-encoded form, which is not encodeURIComponent', () => {
+    // The v1 body is form-encoded: space becomes + and ~!'() get escaped,
+    // neither of which encodeURIComponent does. A key with those characters
+    // has three distinct on-the-wire forms.
+    const secret = "ab~c!d e"
+    const formEncoded = new URLSearchParams([['k', secret]]).toString().slice(2)
+    expect(formEncoded).not.toBe(encodeURIComponent(secret))
+    const r = redactSecret(new Error(`POST body auth_key=${formEncoded}&show_info=true`), secret)
+    expect(r.message).not.toContain(formEncoded)
+    expect(r.message).toBe('POST body auth_key=[redacted]&show_info=true')
   })
 })
 
@@ -132,9 +156,33 @@ describe('createShellyClient', () => {
   it('get refuses more than ten ids instead of silently slicing, and never spends a request', async () => {
     const { fetchImpl, calls } = fetchStub([])
     const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
-    const ids = Array.from({ length: 11 }, (_, i) => `d${i}`)
-    expect(await c.get(ids)).toEqual({ ok: false, kind: 'too_many_ids', statusCode: 0, count: 11 })
+    const ids = Array.from({ length: MAX_GET_IDS + 1 }, (_, i) => `d${i}`)
+    expect(await c.get(ids)).toEqual({ ok: false, kind: 'too_many_ids', statusCode: 0, count: MAX_GET_IDS + 1 })
     expect(calls).toHaveLength(0)
+  })
+
+  it('exactly MAX_GET_IDS ids is allowed — the boundary is inclusive', async () => {
+    const { fetchImpl, calls } = fetchStub([{ status: 200, body: '[]' }])
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    const ids = Array.from({ length: MAX_GET_IDS }, (_, i) => `d${i}`)
+    expect(await c.get(ids)).toMatchObject({ ok: true })
+    expect(JSON.parse(calls[0].init.body).ids).toHaveLength(MAX_GET_IDS)
+  })
+
+  it('get with a non-array id list is a caller bug, not an empty request', async () => {
+    const { fetchImpl, calls } = fetchStub([])
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    for (const bad of ['a8032abe41fc', 42, { ids: ['a'] }]) {
+      expect(await c.get(bad)).toEqual({ ok: false, kind: 'invalid_ids', statusCode: 0 })
+    }
+    expect(calls).toHaveLength(0)
+  })
+
+  it('defaults select to status only — the cron never reads settings', async () => {
+    const { fetchImpl, calls } = fetchStub([{ status: 200, body: '[]' }])
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    await c.get(['a'])
+    expect(JSON.parse(calls[0].init.body).select).toEqual(['status'])
   })
 
   it('get short-circuits an empty or missing id list without spending a request', async () => {
@@ -155,11 +203,100 @@ describe('createShellyClient', () => {
     expect(res).toMatchObject({ ok: false, kind: 'rate_limited', retried: true })
   })
 
+  it('a 429 that succeeds on the retry is ok, and still says it cost two requests', async () => {
+    const { fetchImpl, calls } = fetchStub([{ status: 429, body: '' }, { status: 200, body: JSON.stringify([{ id: 'a' }]) }])
+    const clk = clockAndSleep()
+    const c = createShellyClient(conn, { fetchImpl, now: clk.now, sleep: clk.sleep })
+    const res = await c.get(['a'])
+    expect(calls).toHaveLength(2)
+    expect(res).toMatchObject({ ok: true, retried: true, statusCode: 200 })
+    expect(res.body).toEqual([{ id: 'a' }])
+  })
+
+  it('honours an injected minGapMs for BOTH the pacing gap and the 429 retry sleep', async () => {
+    const { fetchImpl } = fetchStub([{ status: 200, body: '[]' }, { status: 429, body: '' }, { status: 200, body: '[]' }])
+    const clk = clockAndSleep()
+    const c = createShellyClient(conn, { fetchImpl, now: clk.now, sleep: clk.sleep, minGapMs: 2000 })
+    await c.get(['a'])
+    const res = await c.get(['b'])
+    // 2000 for the gap, then 2000 again for the retry — a fixed 1100 ms
+    // retry would have undercut the slower budget that was asked for.
+    expect(clk.slept).toEqual([2000, 2000])
+    expect(res).toMatchObject({ ok: true, retried: true })
+  })
+
+  it('carries retried through a result a method rewrites into another tag', async () => {
+    const offline = clockAndSleep()
+    const a = createShellyClient(conn, {
+      fetchImpl: fetchStub([{ status: 429, body: '' }, { status: 200, body: JSON.stringify({ error: 'DEVICE_OFFLINE' }) }]).fetchImpl,
+      now: offline.now, sleep: offline.sleep,
+    })
+    expect(await a.setSwitch('a', 0, true)).toMatchObject({ ok: false, kind: 'device', code: 'DEVICE_OFFLINE', retried: true })
+
+    const grouped = clockAndSleep()
+    const b = createShellyClient(conn, {
+      fetchImpl: fetchStub([{ status: 429, body: '' }, { status: 200, body: JSON.stringify({ failedCommands: { b_0: 'DEVICE_OFFLINE' } }) }]).fetchImpl,
+      now: grouped.now, sleep: grouped.sleep,
+    })
+    expect(await b.setGroups(['b_0'], true)).toMatchObject({ ok: true, retried: true, failed: { b_0: 'DEVICE_OFFLINE' } })
+  })
+
   it('maps 401 to auth and a network rejection to network without throwing', async () => {
     const a = createShellyClient(conn, { fetchImpl: fetchStub([{ status: 401, body: '' }]).fetchImpl, ...clockAndSleep() })
     expect(await a.get(['a'])).toMatchObject({ ok: false, kind: 'auth', statusCode: 401 })
     const b = createShellyClient(conn, { fetchImpl: fetchStub([{ reject: true }]).fetchImpl, ...clockAndSleep() })
     expect(await b.get(['a'])).toMatchObject({ ok: false, kind: 'network', statusCode: 0 })
+  })
+
+  it('a response object with no .text() is tagged, not thrown past the boundary', async () => {
+    // An un-awaited call that throws here would be an unhandled rejection,
+    // which is process-fatal on Node >= 15 — so response handling must be
+    // inside the try, not just the fetch.
+    const c = createShellyClient(conn, { fetchImpl: async () => ({ ok: true, status: 200 }), ...clockAndSleep() })
+    await expect(c.get(['a'])).resolves.toEqual({ ok: false, kind: 'http', statusCode: 200, body: null })
+  })
+
+  it('a fetch that resolves undefined is tagged, not thrown', async () => {
+    const c = createShellyClient(conn, { fetchImpl: async () => undefined, ...clockAndSleep() })
+    await expect(c.get(['a'])).resolves.toEqual({ ok: false, kind: 'http', statusCode: 0, body: null })
+  })
+
+  it('the recovery path is itself total — a throwing status getter does not escape', async () => {
+    // Reading res.status inside the catch would re-throw here, i.e. a
+    // recovery path failing louder than the thing it recovers from.
+    const c = createShellyClient(conn, {
+      fetchImpl: async () => ({ get status() { throw new Error('boom') }, text: async () => '' }),
+      ...clockAndSleep(),
+    })
+    await expect(c.get(['a'])).resolves.toEqual({ ok: false, kind: 'http', statusCode: 0, body: null })
+  })
+
+  it('a body read that fails is an http failure, not a successful empty response', async () => {
+    const c = createShellyClient(conn, {
+      fetchImpl: async () => ({ status: 200, text: async () => { throw new Error('stream died') } }),
+      ...clockAndSleep(),
+    })
+    await expect(c.get(['a'])).resolves.toEqual({ ok: false, kind: 'http', statusCode: 200, body: null })
+  })
+
+  it('a host that fails the SSRF guard makes every method a config failure, with no fetch', async () => {
+    // probeConnection tests a PASTED connection that the column CHECK has
+    // never seen, so the client cannot assume its host was validated.
+    const { fetchImpl, calls } = fetchStub([])
+    const c = createShellyClient({ host: 'evil.example/collect?x=', auth_key: KEY }, { fetchImpl, ...clockAndSleep() })
+    const results = [
+      await c.get(['a']), await c.get([]), await c.get(),
+      await c.setSwitch('a', 0, true), await c.setGroups(['a_0'], true), await c.allStatus(),
+    ]
+    for (const r of results) expect(r).toEqual({ ok: false, kind: 'config', statusCode: 0 })
+    expect(calls).toHaveLength(0)
+  })
+
+  it('a pasted-URL host is normalised before it ever reaches the request', async () => {
+    const { fetchImpl, calls } = fetchStub([{ status: 200, body: '[]' }])
+    const c = createShellyClient({ host: ' https://Shelly-7-EU.shelly.cloud/x?y=1 ', auth_key: KEY }, { fetchImpl, ...clockAndSleep() })
+    await c.get(['a'])
+    expect(calls[0].url).toBe(`https://shelly-7-eu.shelly.cloud/v2/devices/api/get?auth_key=${encodeURIComponent(KEY)}`)
   })
 
   it('setSwitch: a bare 200 with an empty body is success; a 2xx DEVICE_OFFLINE body is a device failure', async () => {
@@ -195,5 +332,17 @@ describe('createShellyClient', () => {
     expect(calls[0].init.body).toContain('show_info=true')
     expect(calls[0].init.body).toContain('no_shared=true')
     expect(res).toMatchObject({ ok: false, kind: 'auth' })
+  })
+
+  it('allStatus carries the key in the ENCODED body and never in the URL', async () => {
+    const secret = 'abc+def/ghi=='
+    const { fetchImpl, calls } = fetchStub([{ status: 200, body: JSON.stringify({ isok: true, data: {} }) }])
+    const c = createShellyClient({ host: 'shelly-103-eu.shelly.cloud', auth_key: secret }, { fetchImpl, ...clockAndSleep() })
+    await c.allStatus()
+    expect(calls[0].url).not.toContain('auth_key')
+    expect(calls[0].url).not.toContain('abc')
+    // Form-encoded, so + / = leave as %2B %2F %3D — never in raw form.
+    expect(calls[0].init.body).toContain(`auth_key=${encodeURIComponent(secret)}`)
+    expect(calls[0].init.body).not.toContain(secret)
   })
 })
