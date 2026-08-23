@@ -1,0 +1,106 @@
+# Shelly Device Control — Surface (PR 2) Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Give operators the Shelly surface: connect a studio's Shelly account, adopt devices, schedule them, toggle them live, see watts and a 30-day kWh history — on one page, gated by `device_control`, strictly per location — plus the Integrations-hub card and the `device_control` bundle widening.
+
+**Architecture:** Thin `withAuth` routes under `/api/shelly/*` over the PR-1 backend (`src/lib/shelly/*`, migs 562/563 applied, cron live). No route accepts a `location_id`; every query is scoped by `user.activeLocation.id`; detail routes 404 on foreign ids. One operator page at `/automations/shelly`. The bundle change ships with its SQL seed (mig 564) in the same PR because `check:bundle-sql` diffs them.
+
+**Tech Stack:** Next.js 16 App Router (JS), Supabase service-role in routes, Zod, Tailwind + `@/components/ui`, vitest + RTL.
+
+**Spec:** `docs/superpowers/specs/2026-08-22-shelly-device-control-design.md` · **Backend contracts:** `src/lib/shelly/{client,status,plan,energy,connections,reconcile}.js` headers (read them — several deviate from the spec draft on purpose) · **PR 1:** #1500.
+
+---
+
+## Conventions (house)
+
+- Tests colocated; `npx vitest run <path>`; `npm test` for everything. Run TZ-sensitive suites under `TZ=Europe/Dublin` and `TZ=America/New_York`.
+- **Routes:** `withAuth({ permission: 'device_control', schema })` from `src/lib/with-auth.js` (satisfies `check:route-guards`). Connection PUT/DELETE additionally `guardMasterOrOwner(user, locationId)` from `@/lib/auth` (returns a response or null). `locationId = user.activeLocation.id` — never from the request. Responses `{ success, … }`; 404 for malformed/foreign ids (`uuidLike` from `@/lib/schemas`); `validateBody` 400 shape is `{ error, issues }` — the client renders `j.issues?.[0]?.message || j.error`.
+- **Every Supabase write destructures `error`** — `no-unchecked-supabase-write` is armed for `src/app/api/shelly/**` in Task 9 (write as if already armed). `.maybeSingle()` where 0 rows is legitimate (comment it). `.limit()` on every list select. Never `select('*')` into a response from `shelly_connections`.
+- **Secrets:** never return/log `auth_key` or the fingerprint; `publicConnectionView` is the only connection shape a route returns; never log a URL or a result body (`redactSecret` for errors).
+- **Tenant rules (spec "Tenancy"):** one account per location; same-org sharing allowed (named), cross-org refused generically; adopt proves the device is on the caller's own account BEFORE the global `(device_id, channel)` check; discovery names come from the caller's own cloud account, our DB contributes only `adopted: 'here'|'elsewhere'|null` (+ holder name only when same org).
+- UI: `un1t-*` light-theme tokens; chips `bg-<c>-500/10 text-<c>-700`; `type="button"` on non-submit buttons inside `<form>`; copy is staff-facing.
+- Commits `SHELLY-UI.N — lowercase summary` + the `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>` trailer. Stage explicit files.
+
+## Obligations inherited from the PR-1 reviews (each is a requirement below)
+
+1. `override` written by the toggle route: `{ state: 'on'|'off' (strict enum), until: ISO, set_by: user.id, set_at: ISO }` — `set_at` is load-bearing (keys the exactly-once stamp). `isLiveOverride` is exported from `plan.js`.
+2. Reject auth keys shorter than 16 chars before insert (the `key_hint` CHECK needs ≥4; 16 is the realistic floor); map `23514` (CHECK) and `23505` (UNIQUE) to readable copy; never echo `error.message` for those.
+3. `findFingerprintRows` returns `{ok:false, reason:'fingerprint_rows_capped'|'blank_fingerprint'|'db_error'}` — refuse the link on ANY `!ok`. `loadConnectionWithKey` (renamed) is server-only.
+4. Surface `devices_seen` on connect ("connected, 0 devices found" exposes a maintenance-page false positive).
+5. `last_state.output === null` renders as **unknown**, never "off". Every `last_state` writer writes the FULL shape (`stateFromReading`) — the toggle's optimistic write goes through `stateFromReading(prev, reading, channel, at)` or spreads the full previous shape.
+6. Connection `error` status copy reads as "retrying" (a single blip parks 5 min); `action_needed` = re-paste prompt.
+7. Disabling a device mid-window leaves the relay as-is — the UI says so (or the disable action switches it off explicitly; choose: say so).
+8. Removing a device CASCADES its energy history; relocating a plug is remove-then-adopt — two-step confirm naming the loss.
+9. Energy is read per device (≤31 rows); `GET …/energy?days=` bounded 1..90.
+10. Discovery/adopt pass `select: ['status','settings']` explicitly when a name is needed (the client default is `['status']`).
+11. `lead_min`/`lag_min` bounded 0–180; `fixed_windows` ≤16 with the overlap refinement; `on !== off`.
+12. `override.state` outside `on|off` is not live (planner) — the schema makes it impossible to write.
+13. The toggle records intent first (override), fires `setSwitch` directly, stamps `last_applied` on success; on failure returns `{ applied:false, pending:true, code }` — the cron self-heals (overrides apply to every adopted device, enabled or not).
+14. `auto` = clear override then `runNowForDevice`; `schedule_mode:'none'` → `{ applied:null, reason:'no_schedule' }`.
+15. Run-now: 409 `disabled` / `no_schedule` / `not_connected`; never conflate "disabled" with "no window".
+16. The hub card reads only non-secret columns and deep-links to `/automations/shelly` (active-location page).
+17. Re-run the prod snapshot before merging the bundle change: no location may have `bundle_marketing:false` with `bundle_operations` on (verified 2026-08-22: none).
+
+---
+
+## Task 1: Lift the window validation and the window editor out of Sonos (behaviour-neutral)
+
+**Files:** Create `src/lib/schedule/windows.js` + `windows.test.js`; create `src/components/automations/WindowsEditor.jsx` + `WindowsEditor.test.jsx`; modify `src/app/api/sonos/schedules/route.js` (re-export), `src/app/api/sonos/schedules/route.test.js` (move the `findWindowOverlap` block), `src/components/automations/SonosScheduleClient.jsx` (consume the editor).
+
+- `windows.js`: move `HHMM`, `toMinutes`, `occupiedSegments`, `segmentsOverlap`, `sharesDay`, `findWindowOverlap` verbatim (with comments); export `WindowBase = z.object({ days: z.array(z.number().int().min(1).max(7)).min(1), on: z.string().regex(HHMM), off: z.string().regex(HHMM) })` (NO refine), `NOT_SAME_BOUNDARY = { check: (w) => w.on !== w.off, message: 'A window must not start and end at the same time' }`, `windowsOverlapIssue(windows, ctx)` (the superRefine body). Sonos route: `export { findWindowOverlap } from '@/lib/schedule/windows'`; `Window = WindowBase.extend({ volume, favorite_id }).refine(NOT_SAME_BOUNDARY.check, { message: NOT_SAME_BOUNDARY.message })` (refine AFTER extend); `windows: z.array(Window).max(16).superRefine(windowsOverlapIssue)`.
+- `WindowsEditor.jsx`: lift the day pills / `<input type="time">` on-off / remove / add / read-only summary block from `SonosScheduleClient.jsx` (~lines 774–846) with props `{ windows, onChange, editable, max = 16, defaultWindow, renderExtra, summaryExtra, addDisabled, addDisabledTitle }`; Sonos passes `renderExtra` (volume + favourite) and `addDisabled={!hasFavorites}`. RTL test: toggle a day, change a time, remove, cap reached, read-only summary.
+- Gates: `npx vitest run src/lib/schedule src/app/api/sonos src/components/automations`, `npm run lint`, `npm run check:guardrails`. Sonos behaviour byte-identical except the shared component.
+
+## Task 2: `src/lib/shelly/schemas.js` (+ test)
+
+Zod + `@/lib/schedule/windows` only (imported by routes AND `openapi.js`): `SHELLY_DEVICE_ID = /^[0-9a-f]{6,32}$/i`, `MAX_FIXED_WINDOWS = 16`, `MAX_DEVICES_PER_LOCATION = 100`, `MAX_OVERRIDE_HOURS = 48`, `MIN_AUTH_KEY_LENGTH = 16`; `ShellyWindow = WindowBase.refine(NOT_SAME_BOUNDARY…)`; `ShellyClassRule { lead_min 0..180 int, lag_min 0..180 int }`; `ShellyConnectionPut { server: trim 1..200, auth_key?: string max 512 }` (blank keeps stored); `ShellyAdoptBody { device_id (regex, lowercased), channel int 0..7 default 0, name? trim 1..80 }`; `ShellyDevicePatch { name?, enabled?, schedule_mode? enum, fixed_windows? array(ShellyWindow).max(16).superRefine(windowsOverlapIssue), class_rule? }` with `.refine` "at least one field"; `ShellyToggleBody { state: enum on|off|auto, until?: datetime }`; `ShellyEnergyQuery { days: coerce int 1..90 default 30 }`; `ShellyOverride { state: enum on|off, until: datetime, set_by: uuidLike, set_at: datetime }` (used by the toggle route to construct, never to parse input). Tests: every bound, lowercasing, overlap refinement, `set_at` required.
+
+## Task 3: `GET|PUT|DELETE /api/shelly/connection` (+ route test)
+
+- GET (`device_control`): `loadPublicConnection(db, locationId)` → `{ success, connection: view|null, can_manage: guardMasterOrOwner(user, locationId) === null, device_count }` (count via `select('id', { count:'exact', head:true }).eq('location_id', …)`).
+- PUT (`device_control` + `guardMasterOrOwner`): `normaliseShellyHost(input.server)` → 400 with its `error`; stored row `select('host, auth_key').eq('location_id', …).maybeSingle()`; `mergeSecretSlice({ stored: { host, auth_key }, patch: { host, auth_key: input.auth_key }, secretFields: ['auth_key'] })` (from `@/lib/integration-secret-merge`); no key → 400 'Paste the cloud auth key'; key shorter than `MIN_AUTH_KEY_LENGTH` → 400; `probeConnection({ host, auth_key })` → `kind:'auth'` → 400 `{ code:'key_rejected' }`, `config` → 400 host, other → 502 'Shelly cloud did not answer'; `fp = fingerprintAuthKey(key)`; `findFingerprintRows(db, fp)` → `!ok` → 409 generic; `classifyFingerprintClash(rows, user.activeLocation.organization_id, locationId)` → `other_org` → 409 'This Shelly account is already linked to another business'; upsert `{ location_id, host, auth_key, auth_key_fingerprint: fp, key_hint: keyHint(key), status:'connected', last_error:null, last_error_at:null, last_ok_at: now, linked_by: user.id, updated_at: now }` `onConflict:'location_id'` `.select('host, key_hint, status, last_ok_at, last_error, last_error_at').single()` with `error` destructured → `{ success, connection: publicConnectionView(row), devices_seen: probe.deviceCount, shared_with }`.
+- DELETE (`guardMasterOrOwner`): `.delete().eq('location_id', …)` idempotent → `{ success:true }`; devices stay (say so in the response copy).
+- Tests (fake db + mocked `@/lib/shelly/connections`/`client`): host normalisation, blank-key keeps stored, short key 400, key_rejected 400, cross-org 409 with no names, capped → 409, upsert payload never returned with `auth_key`, 403 for a manager on PUT.
+
+## Task 4: `GET /api/shelly/discover` and `GET|POST /api/shelly/devices` (+ tests)
+
+- discover: `loadConnectionWithKey` → 409 `not_connected`; `createShellyClient(conn).allStatus()` → `kind:'auth'` → write `{ status:'action_needed', last_error: AUTH_ERROR, last_error_at }` `.eq('location_id')` (error destructured) and 409 `key_rejected`; other → 502; `normaliseAllStatus(body)` → holder lookup `select('device_id, channel, location_id, locations!location_id(name, organization_id)').in('device_id', ids).limit(500)` (cross-tenant BY DESIGN — header comment) → mask: `adopted:'here'` / `'elsewhere'` (+ `elsewhere_location_name` only when `locations.organization_id === user.activeLocation.organization_id`) / `null`. Response rows: `{ device_id, channel, name, model, gen, online, supported, reason?, adopted, elsewhere_location_name? }`. Test: same-org name present, other-org flag only and `JSON.stringify(body)` lacks the foreign name.
+- devices GET: `.select('*').eq('location_id').order('name').order('created_at').limit(MAX_DEVICES_PER_LOCATION)` (+ cap logWarn) → `{ success, devices, connected }`.
+- devices POST (adopt): connection (409) → `createShellyClient(conn).get([device_id], { select:['status','settings'] })` must contain the id (else **404 'Not found on this Shelly account'**; `kind:'auth'` → 409 key_rejected; other → 502) → `normaliseGetItems` → unsupported → 400 `{ code:'unsupported', reason }`; channel must exist on the device (else 400) → holder pre-check (same select as discover for that id/channel: same org → 409 naming the location; other org → 409 generic) → insert `{ location_id, device_id, channel, name: input.name ?? item.name ?? `${model} ${device_id.slice(-4)}`, model, gen, enabled:false, schedule_mode:'none', last_state: stateFromReading(null, item, channel, now), last_seen_at: item.online ? now : null, adopted_by: user.id }` `.select().single()` with error destructured; 23505 → 409 generic; 23514 → 400 readable → `{ success, device }`.
+
+## Task 5: Device detail routes (+ tests)
+
+`src/app/api/shelly/devices/[id]/route.js` (PATCH/DELETE), `[id]/toggle/route.js`, `[id]/run-now/route.js`, `[id]/energy/route.js`, and `src/app/api/shelly/refresh/route.js`. Shared local `loadDevice(db, locationId, id)`: `uuidLike` else 404; `.select('*').eq('id', id).eq('location_id', locationId).maybeSingle()` → null → 404.
+- PATCH `ShellyDevicePatch` → `.update({ ...input, updated_at }).eq('id').eq('location_id').select().maybeSingle()` → null → 404. DELETE idempotent (energy cascades).
+- toggle: `loadDevice`; `loadConnectionWithKey` → 409; `tz = resolveTz(user.activeLocation.timezone)`; `on|off`: `until = input.until ?? new Date(nextLocalMidnightMs(Date.now(), tz)).toISOString()` (reject past or > 48 h → 400); `override = { state, until, set_by: user.id, set_at: now }`; write override FIRST (`error` destructured); `res = createShellyClient(conn).setSwitch(device.device_id, device.channel, on)`; success → update `last_applied: { key: overrideKey(override), action: state, reason:'override', at: now }` + `last_state: { ...fullPrevShape, output: on, source:'manual', at: now }` + `last_seen_at` → `{ success, device, applied:true }`; failure → `{ success:true, device, applied:false, pending:true, code, kind }` (the cron applies it; `kind:'rate_limited'` → HTTP 429 with the same body). `auto`: `update({ override:null })` then `runNowForDevice(db, conn, device, {})` → `{ success, device, applied: result.action ?? null, reason }`; mode none → `{ applied:null, reason:'no_schedule' }`.
+- run-now: 409 `disabled` ('This device's schedule is switched off — turn it on first'), 409 `no_schedule`, 409 `not_connected`; `runNowForDevice` → `{ success, applied, reason }`; `!ok` → 502 (429 → 429).
+- energy: `ShellyEnergyQuery`; `to = dayStrInTz(Date.now(), tz)`, `from = addDaysISO(to, -(days-1))`; `.select('day, wh_total, samples, resets').eq('location_id').eq('device_id', device.id).gte('day', from).lte('day', to).order('day').limit(days)` → zero-filled `{ success, device_id, from, to, days:[{ day, kwh, samples, resets }] }`.
+- refresh: connection (409); devices for location; `refreshLocationState(db, conn, devices, { now: Date.now })` (it builds its own client) → `{ success, refreshed: stateWrites, readFailures, kind? }`; `auth` → write action_needed + 409; `rate_limited` → 429.
+- Tests per route: 404 on malformed/foreign id with NO write; the toggle pending path; `auto` clears then runs; energy zero-fill + NY local day; refresh 429 mapping; every route 403 without `device_control`.
+
+## Task 6: Page + components
+
+- `src/app/(marketing)/automations/shelly/page.js` (server; `getCurrentUser` → `/login`; `!hasPermission(user,'device_control')` → `/automations`; props `locationName`, `glofoxConnected(user.activeLocation)` from `@/lib/automations/registry`).
+- `src/components/automations/ShellyDevicesClient.jsx` (root: loads connection + devices; 30 s visibility-aware poll — copy the pattern from `SonosLiveControl.useNowPlaying`; reload after every mutation; error helper renders `issues?.[0]?.message || error`), `ShellyConnectionPanel.jsx` (owner/master `<form>`: host + password-style key, "where to find these" copy, status chip, `host · key ••••abcd · last OK`, Re-paste, two-step Disconnect "your N plugs stay adopted"; `action_needed`/`error` banners — `error` copy "retrying"; non-managers read-only line), `ShellyDiscoverPanel.jsx` (Find devices; chips `Adopted here` / `In use at <name>` / `In use elsewhere` / `Not supported yet` / `Offline`; Adopt), `ShellyDeviceCard.jsx` (name edit, model/gen, health chip, output + watts — `output:null` = "unknown"; toggle strip On/Off with until-midnight / 1 h / 3 h presets + `Back to schedule`; override line "Forced ON until 23:59 — set by you" / "Queued until the plug is back online"; `ShellyScheduleEditor`; enable toggle with `canEnable` (fixed needs ≥1 window; class needs Glofox) and the "disabled leaves the relay as-is" note; Run now; collapsible `ShellyEnergyChart` (plain div bars, today lighter, kWh 1 dp); two-step Remove naming the energy-history loss), `ShellyScheduleEditor.jsx` (mode none/fixed/class; fixed → `WindowsEditor`; class → lead/lag inputs), `ShellyEnergyChart.jsx`, `src/lib/shelly/device-health.js` (+ test): no `last_seen_at` → "Waiting for first status"; `online:false` → Offline (toggle disabled); ≤3 min → green; 3–10 → amber; >10 → red "Stale — check the Shelly connection".
+- `/automations` page: second `<Link href="/automations/shelly">` card in the `canDevices` block — "Smart plugs" (lucide `Plug` — verify export; else `PlugZap`).
+- Tests: `device-health.test.js`; RTL for the connection panel (manager vs owner), device card (unknown output, pending override copy), energy chart empty state.
+
+## Task 7: Integrations-hub card
+
+`src/lib/integrations-hub.js`: batched `shelly_connections` read of `location_id, host, status, last_error, last_ok_at, updated_at, key_hint` (NO `auth_key`/fingerprint) + `shelly_devices (location_id, enabled, last_state)` `.in('location_id', ids).limit(1000)`; pure `gradeShellyConnection(row)`; card rows `{ locationId, status, message, host, hasAuthKey: !!key_hint, lastOkAt, lastError, deviceCount, enabledCount, onlineCount, href:'/automations/shelly' }` + `attentionInputs`; `CARD_LABELS.shelly = 'Shelly plugs'`; never-connected locations yield no row (UI renders "Not connected"). `IntegrationsHub.jsx`: Tier-1 `HubCard` after Meta Ads. Tests: grading; assembly fixture whose row carries `auth_key:'SECRET_SHELLY'` → payload JSON lacks it.
+
+## Task 8: `device_control` → Marketing OR Operations (+ mig 564)
+
+`shared/permission-bundles.js` `device_control: ['bundle_marketing', 'bundle_operations']` + header note; `shared/permission-bundles.test.js` OR case; regenerate the SQL seed: `node scripts/generate-bundle-sql.mjs` → `supabase/migrations/564_permission_key_bundles_reseed_device_control.sql` (`TRUNCATE private.permission_key_bundles;` + the generated INSERT as the sole statement, header explaining why); `npm run check:bundle-sql` + `tests/check-bundle-sql.test.js` green; `shared/permissions.js` hint → 'Sonos speakers and Shelly smart plugs: playback and power schedules, live toggle, run-now, temporary overrides.' (+ comment); `scripts/check-mobile-parity.mjs` `WEB_ONLY_OK.device_control` reason covers `/automations/shelly`. Note in the commit body: prod snapshot 2026-08-22 showed no location with Marketing off and Operations on — **re-run before merge**.
+
+## Task 9: openapi, guardrails arming, cross-tenant tests, docs
+
+- `src/lib/openapi.js`: import the bodies from `@/lib/shelly/schemas` (`.openapi('Name')`), response schemas (`ShellyConnectionPublic`, `ShellyDiscoveredDevice`, `ShellyDevice`, `ShellyEnergyDay`…), 12 `registerPath` entries tagged `Automations`, documenting the 409 vocabulary (`not_connected`, `key_rejected`, `adopted`, `disabled`, `no_schedule`) and "404 = not on your account" for adopt.
+- `eslint.guardrails.config.mjs`: add `'src/app/api/shelly/**'` to the `no-unchecked-supabase-write` files list (comment pinned to the SHELLY.9 entry).
+- `tests/cross-tenant/session-routes.test.js`: add `shelly_connections`/`shelly_devices` rows at A1 and B1 in `makeWorld()`; `managerA1` lists only A1; `ownerB1` PATCHing A1's device → 404 and the row byte-identical; `staffA1` → 403.
+- Docs: `docs/architecture/INTEGRATIONS.md` (operator steps: Shelly app → User settings → Authorization cloud key → paste on Automations → Smart plugs; password change invalidates the key; re-paste), `docs/BACKLOG.md` "Shelly smart plugs — deferred by decision" block (mobile toggle, Gen1, Integrator transport, on-device schedules/webhooks, drift mode, alerts, hub `?for=` hint), CHANGELOG row **570** (`SHELLY-UI.1→.9`; mig 564; note the bundle change is behaviour-neutral for existing locations).
+
+## Task 10: CI mirror, build, PR
+
+`npm test && npm run lint && npm run check:mobile-parity && npm run check:mobile-imports && npm run check:mobile-lint && npm run check:route-guards && npm run check:location-scoping && npm run check:rls-restrictive && npm run check:guardrails && npm run check:bundle-sql && npm run check:ota-paths` + `npm run build` + `TZ=America/New_York npx vitest run src/lib/shelly src/app/api/shelly`. Push, `gh pr create --base main`. **Do not apply mig 564 until the PR is approved for merge; do not merge without Richard.**
