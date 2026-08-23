@@ -20,10 +20,12 @@ export const dynamic = 'force-dynamic'
 // Named so the query's cap and the truncation check can never drift apart.
 const MAX_SCHEDULES_PER_LOCATION = 50
 
-// The refine comes AFTER the extend, and it has to: .refine() returns a
-// ZodEffects, which has no .extend(), so attaching the same-boundary rule
-// to the shared base would make these two fields unaddable. That is why
-// windows.js exports the rule as a predicate + message pair instead.
+// The refine comes AFTER the extend by design. On the installed zod (4.x)
+// a refined object is still a ZodObject and its refine SURVIVES .extend()
+// (measured in SHELLY-UI.2b — the zod-3 "ZodEffects has no .extend()" rule
+// no longer applies), so refining last is a readability choice, not a
+// necessity: each caller states its own boundary rule on its final shape,
+// which is why windows.js exports the rule as a predicate + message pair.
 export const Window = WindowBase.extend({
   volume: z.number().int().min(0).max(100),
   favorite_id: z.string().min(1).max(128),
