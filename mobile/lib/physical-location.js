@@ -33,7 +33,20 @@ export function haversineMeters(a, b) {
  *              guess here is the exact bug this feature exists to kill.
  */
 export function resolvePhysicalLocation({ position, regions, locations }) {
-  if (!position?.coords || !Array.isArray(regions) || regions.length === 0) {
+  // Absent is not zero — a non-finite position coord must not coerce to
+  // (0,0) and silently resolve against the Gulf of Guinea. `locations` not
+  // being an array (still loading, or the caller forgot to pass it) is
+  // ALSO unknown, not offsite — "not loaded yet" is not "assigned to
+  // nothing"; a genuinely loaded, empty array proceeds and can still land
+  // on 'offsite' below.
+  if (
+    !position?.coords ||
+    !Number.isFinite(position.coords.latitude) ||
+    !Number.isFinite(position.coords.longitude) ||
+    !Array.isArray(regions) ||
+    regions.length === 0 ||
+    !Array.isArray(locations)
+  ) {
     return { status: 'unknown', location: null }
   }
   const hitIds = new Set()
@@ -41,12 +54,15 @@ export function resolvePhysicalLocation({ position, regions, locations }) {
     // Absent is not zero — a null latitude must skip the region, not
     // coerce to the Gulf of Guinea.
     if (!Number.isFinite(r?.latitude) || !Number.isFinite(r?.longitude) || !Number.isFinite(r?.radius_m)) continue
+    // `<=` (not `<`) matches OS geofence semantics (iOS/Android both treat
+    // the boundary radius itself as inside the region).
     if (haversineMeters(position.coords, r) <= r.radius_m) hitIds.add(r.location_id)
   }
   if (hitIds.size === 0) return { status: 'offsite', location: null }
   if (hitIds.size > 1) return { status: 'unknown', location: null }
   const id = hitIds.values().next().value
-  const location = (locations || []).find((l) => l.id === id) || null
+  // `locations` is guaranteed an array by the guard above.
+  const location = locations.find((l) => l.id === id) || null
   if (!location) return { status: 'offsite', location: null }
   return { status: 'at_studio', location }
 }
@@ -57,13 +73,30 @@ const LAST_KNOWN_MAX_AGE_MS = 5 * 60 * 1000
  * Prefer a fresh read; fall back to lastKnown only when recent. A stale
  * lastKnown is worse than none: this morning's studio must not paint as
  * "detected" this afternoon.
+ *
+ * `current` gets the same staleness gate as `lastKnown` WHEN it carries a
+ * finite timestamp — a `current` read is not guaranteed fresh just because
+ * it is called "current" (a queued/replayed read, or a caller passing
+ * through an old sample under this name, would otherwise bypass the gate
+ * entirely). A `current` with no timestamp at all is accepted
+ * unconditionally: expo-location's live reads always carry one, so a
+ * missing timestamp means the caller is not asserting an age, not that the
+ * read is old — there is nothing to gate against.
+ *
+ * Both checks use `Math.abs(nowMs - timestamp)` so a backwards clock change
+ * (or a wall-clock's `timestamp` briefly ahead of `nowMs`, e.g. Date.now()
+ * jitter) can't make a stale or future-dated fix look fresh.
  */
 export function pickPosition({ current, lastKnown, nowMs, maxAgeMs = LAST_KNOWN_MAX_AGE_MS }) {
-  if (current?.coords) return current
+  if (current?.coords) {
+    if (!Number.isFinite(current.timestamp) || Math.abs(nowMs - current.timestamp) <= maxAgeMs) {
+      return current
+    }
+  }
   if (
     lastKnown?.coords &&
     Number.isFinite(lastKnown.timestamp) &&
-    nowMs - lastKnown.timestamp <= maxAgeMs
+    Math.abs(nowMs - lastKnown.timestamp) <= maxAgeMs
   ) {
     return lastKnown
   }
