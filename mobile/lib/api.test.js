@@ -61,6 +61,9 @@ describe('api() transport tag', () => {
 
     expect(r.success).toBe(false)
     expect(r.transport).toBe(true)
+    // GEOFENCE-TRANSPORT.1 — the status rides along so the retry queue can
+    // tell an edge 5xx page (retry) from an HTML 404 (don't) by field.
+    expect(r.status).toBe(502)
     expect(r.error).toBe('Non-JSON response (502)')
   })
 
