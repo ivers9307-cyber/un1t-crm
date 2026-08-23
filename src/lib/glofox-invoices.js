@@ -16,6 +16,7 @@
 // order delivery converges.
 
 import { selectAll } from '@/lib/select-all'
+import { isMembershipInvoice } from '@/lib/glofox-arrears'
 
 /**
  * Parse a Glofox InvoiceEvent.Payload into the row shape we want
@@ -202,6 +203,11 @@ export async function applyInvoiceWebhook(db, locationId, contactId, rawEvent) {
     invoice_id: parsed.id,
     invoice_status: parsed.status,
     amount_cents: parsed.amount_cents,
+    // DUNNING.1 — is this a membership payment (renewal / first payment), i.e.
+    // the churn radar's Overdue category? Drives reactive dunning: only a
+    // failed MEMBERSHIP invoice starts card-update reminders, and only a
+    // settled one stops them.
+    is_membership: isMembershipInvoice(parsed),
     aggregates: aggs,
   }
 }
