@@ -206,6 +206,13 @@ const config = [
       // write. Armed from day one; PR 2 adds 'src/app/api/shelly/**'.
       'src/lib/shelly/**',
       'src/app/api/cron/shelly-reconcile/route.js',
+      // SHELLY-UI.3 — the /api/shelly/* surface, armed with its FIRST route
+      // rather than at the end of the PR (Task 9 had scheduled it): a
+      // write-side rule that lands after the writes it governs can only ever
+      // audit them, and the connection route's upsert is precisely the shape
+      // it exists for — a failed link that answers `{ success: true }` and a
+      // green "Connected" chip over a studio whose cron has no credential.
+      'src/app/api/shelly/**',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },
