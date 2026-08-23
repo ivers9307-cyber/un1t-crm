@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolveDayWindows } from '@/lib/schedule/desired-state'
+import { MAX_DEVICES } from './reconcile'
+import { normaliseShellyHost } from './client'
 import {
   SHELLY_DEVICE_ID,
   MAX_FIXED_WINDOWS,
@@ -28,10 +30,19 @@ const messages = (r) => issuesOf(r).map((i) => i.message)
 describe('constants', () => {
   it('are the values every downstream route and page compiles against', () => {
     expect(MAX_FIXED_WINDOWS).toBe(16)
-    expect(MAX_DEVICES_PER_LOCATION).toBe(100)
+    expect(MAX_DEVICES_PER_LOCATION).toBe(50)
     expect(MAX_OVERRIDE_HOURS).toBe(48)
     expect(MIN_AUTH_KEY_LENGTH).toBe(16)
     expect(MAX_CLASS_LEAD_LAG_MIN).toBe(180)
+  })
+
+  // The adopt cap and the cron's per-tick cap are the SAME number or the gap
+  // between them is a set of devices that are adopted, schedulable and never
+  // reconciled — reconcile.js loads MAX_DEVICES + 1 ordered by created_at and
+  // slices the excess off the tick, silently. device-health would then grade
+  // those devices "Stale", pointing the operator at a healthy connection.
+  it('never lets a location adopt more devices than the cron reconciles', () => {
+    expect(MAX_DEVICES_PER_LOCATION).toBe(MAX_DEVICES)
   })
 
   it('SHELLY_DEVICE_ID accepts 6..32 hex either case and nothing else', () => {
@@ -56,6 +67,30 @@ describe('import surface', () => {
     const viaAlias = await import('@/lib/shelly/schemas')
     expect(viaAlias.ShellyDevicePatch).toBe(ShellyDevicePatch)
     expect(viaAlias.ShellyOverride).toBe(ShellyOverride)
+  })
+
+  // Task 9 re-derives these with .extend({}) to pick up the .openapi()
+  // decorator (attached per instance by extendZodWithOpenApi, which runs after
+  // this module is constructed — the same workaround LeadSchema uses). That is
+  // only safe because on zod 4 an extend preserves the refine, the .strict()
+  // and the nested .superRefine(). Pin it, so a zod bump that reverts to the
+  // zod-3 ZodEffects behaviour fails here rather than silently shipping an
+  // unvalidated route.
+  it('survives the .extend({}) that openapi.js needs, refinements intact', () => {
+    const win = ShellyWindow.extend({})
+    expect(win.safeParse({ days: [1], on: '09:00', off: '09:00' }).success).toBe(false)
+    expect(win.safeParse({ days: [1], on: '09:00', off: '17:00' }).success).toBe(true)
+
+    const patch = ShellyDevicePatch.extend({})
+    expect(patch.safeParse({}).success).toBe(false)
+    expect(patch.safeParse({ enabled: true, bogus: 1 }).success).toBe(false)
+    expect(patch.safeParse({
+      fixed_windows: [
+        { days: [1, 2], on: '09:00', off: '17:00' },
+        { days: [2], on: '16:00', off: '18:00' },
+      ],
+    }).success).toBe(false)
+    expect(patch.safeParse({ enabled: true }).success).toBe(true)
   })
 
   it('imports only zod, the shared window vocabulary and @/lib/schemas', () => {
@@ -160,10 +195,23 @@ describe('ShellyConnectionPut', () => {
     expect(ShellyConnectionPut.safeParse({ server: 'x' }).success).toBe(true)
     expect(ShellyConnectionPut.safeParse({ server: rep(200) }).success).toBe(true)
     expect(ShellyConnectionPut.safeParse({ server: rep(201) }).success).toBe(false)
-    expect(ShellyConnectionPut.safeParse({ server: '' }).success).toBe(false)
-    expect(ShellyConnectionPut.safeParse({ server: '   ' }).success).toBe(false)
     expect(ShellyConnectionPut.safeParse({ server: 'x', auth_key: rep(512) }).success).toBe(true)
     expect(ShellyConnectionPut.safeParse({ server: 'x', auth_key: rep(513) }).success).toBe(false)
+  })
+
+  // Deliberately NOT a schema failure: normaliseShellyHost owns the copy for
+  // every unusable host, blank included, and it is the copy that tells an
+  // operator what to paste. A .min(1) here would answer "Too small: expected
+  // string to have >=1 characters" for the likeliest mistake of all.
+  it('lets a blank server through so the host normaliser answers it', () => {
+    expect(ShellyConnectionPut.safeParse({ server: '' }).success).toBe(true)
+    const r = ShellyConnectionPut.safeParse({ server: '   ' })
+    expect(r.success).toBe(true)
+    expect(r.data.server).toBe('')
+    expect(normaliseShellyHost(r.data.server)).toEqual({
+      ok: false,
+      error: 'Enter your account server from the Shelly app, e.g. shelly-<region>.shelly.cloud',
+    })
   })
 
   it('requires a server', () => {
@@ -194,6 +242,15 @@ describe('ShellyAdoptBody', () => {
     expect(ShellyAdoptBody.safeParse({ device_id: 'a1b2c3d4e5g6' }).success).toBe(false)
     expect(ShellyAdoptBody.safeParse({ device_id: 'a1b2-c3d4' }).success).toBe(false)
     expect(ShellyAdoptBody.safeParse({ device_id: '' }).success).toBe(false)
+  })
+
+  // The client renders issues[0].message alone, with no field path — so these
+  // sentences are what a studio manager reads, not a regex dump.
+  it('says something an operator can act on', () => {
+    expect(messages(ShellyAdoptBody.safeParse({ device_id: 'shellyplug' })))
+      .toContain("That doesn't look like a Shelly device id")
+    expect(messages(ShellyAdoptBody.safeParse({ device_id: 'a1b2c3', name: '   ' })))
+      .toContain('Give the device a name')
   })
 
   it('bounds channel at both edges — 8 is rejected', () => {
@@ -234,21 +291,24 @@ describe('ShellyDevicePatch', () => {
     expect(ShellyDevicePatch.safeParse({ schedule_mode: 'auto' }).success).toBe(false)
   })
 
-  it('bounds name and zone at both edges', () => {
+  it('bounds name at both edges, with operator copy on the empty case', () => {
     expect(ShellyDevicePatch.safeParse({ name: 'x' }).success).toBe(true)
     expect(ShellyDevicePatch.safeParse({ name: rep(80) }).success).toBe(true)
     expect(ShellyDevicePatch.safeParse({ name: rep(81) }).success).toBe(false)
-    expect(ShellyDevicePatch.safeParse({ name: '  ' }).success).toBe(false)
-    expect(ShellyDevicePatch.safeParse({ zone: 'x' }).success).toBe(true)
-    expect(ShellyDevicePatch.safeParse({ zone: rep(40) }).success).toBe(true)
-    expect(ShellyDevicePatch.safeParse({ zone: rep(41) }).success).toBe(false)
-    expect(ShellyDevicePatch.safeParse({ zone: '  ' }).success).toBe(false)
+    expect(messages(ShellyDevicePatch.safeParse({ name: '  ' }))).toContain('Give the device a name')
   })
 
-  it('trims name and zone', () => {
-    const r = ShellyDevicePatch.safeParse({ name: '  Studio fan  ', zone: '  Main floor  ' })
+  it('trims name', () => {
+    const r = ShellyDevicePatch.safeParse({ name: '  Studio fan  ' })
     expect(r.success).toBe(true)
-    expect(r.data).toEqual({ name: 'Studio fan', zone: 'Main floor' })
+    expect(r.data).toEqual({ name: 'Studio fan' })
+  })
+
+  // The column exists and is cosmetic, but no v1 surface writes it — and
+  // .strict() would publish it as part of the contract the moment openapi.js
+  // rendered the schema.
+  it('does not accept a zone', () => {
+    expect(ShellyDevicePatch.safeParse({ zone: 'Main floor' }).success).toBe(false)
   })
 
   it('accepts an empty fixed_windows array (clearing the schedule is a real edit)', () => {
@@ -305,8 +365,10 @@ describe('ShellyDevicePatch', () => {
     expect(r.data.class_rule).toEqual({ lead_min: DEFAULT_LEAD_MIN, lag_min: DEFAULT_LAG_MIN })
   })
 
-  it('rejects an out-of-range class rule through the patch', () => {
-    expect(ShellyDevicePatch.safeParse({ class_rule: { lead_min: 181 } }).success).toBe(false)
+  it('rejects an out-of-range class rule through the patch, at the nested path', () => {
+    const r = ShellyDevicePatch.safeParse({ class_rule: { lead_min: 181 } })
+    expect(r.success).toBe(false)
+    expect(issuesOf(r)[0].path).toEqual(['class_rule', 'lead_min'])
   })
 })
 
@@ -320,6 +382,21 @@ describe('ShellyToggleBody', () => {
   it('accepts on and off with an ISO until', () => {
     expect(ShellyToggleBody.safeParse({ state: 'on', until: '2026-08-23T18:00:00.000Z' }).success).toBe(true)
     expect(ShellyToggleBody.safeParse({ state: 'off', until: '2026-08-23T18:00:00Z' }).success).toBe(true)
+  })
+
+  // n8n (Bearer) and mobile callers send offset forms. Accept them, but
+  // normalise here so the value the route pipes into ShellyOverride is already
+  // the strict-Z shape that schema demands.
+  it('accepts an offset form and normalises it to UTC Z', () => {
+    const r = ShellyToggleBody.safeParse({ state: 'on', until: '2026-08-23T18:00:00+01:00' })
+    expect(r.success).toBe(true)
+    expect(r.data.until).toBe('2026-08-23T17:00:00.000Z')
+    expect(ShellyOverride.safeParse({
+      state: 'on',
+      until: r.data.until,
+      set_by: '11111111-2222-3333-4444-555555555555',
+      set_at: '2026-08-23T09:00:00.000Z',
+    }).success).toBe(true)
   })
 
   it('rejects a non-ISO until', () => {
@@ -340,9 +417,14 @@ describe('ShellyEnergyQuery', () => {
     expect(ShellyEnergyQuery.parse({ days: '7' })).toEqual({ days: 7 })
   })
 
-  it('defaults to 30 when days is absent', () => {
+  // Both shapes a query string produces for "not given": .get() returns null
+  // for an absent param and '' for a bare `?days=`. Coercion turns both into
+  // 0, so without the preprocess the DEFAULT path would 400.
+  it('defaults to 30 for absent, null and blank', () => {
     expect(ShellyEnergyQuery.parse({})).toEqual({ days: 30 })
     expect(ShellyEnergyQuery.parse({ days: undefined })).toEqual({ days: 30 })
+    expect(ShellyEnergyQuery.parse({ days: null })).toEqual({ days: 30 })
+    expect(ShellyEnergyQuery.parse({ days: '' })).toEqual({ days: 30 })
   })
 
   it('bounds days at both edges', () => {
@@ -353,11 +435,9 @@ describe('ShellyEnergyQuery', () => {
     expect(ShellyEnergyQuery.safeParse({ days: '7.5' }).success).toBe(false)
   })
 
-  it('rejects junk rather than silently defaulting', () => {
+  it('rejects junk rather than silently defaulting — only absence is absorbed', () => {
     expect(ShellyEnergyQuery.safeParse({ days: 'all' }).success).toBe(false)
-    // The route must map an absent search param (null) to undefined — coercion
-    // turns null into 0, which is out of range. This pins that obligation.
-    expect(ShellyEnergyQuery.safeParse({ days: null }).success).toBe(false)
+    expect(ShellyEnergyQuery.safeParse({ days: '  ' }).success).toBe(false)
   })
 })
 
@@ -383,6 +463,14 @@ describe('ShellyOverride', () => {
   it('rejects a non-ISO set_at or until', () => {
     expect(ShellyOverride.safeParse({ ...valid, set_at: 'now' }).success).toBe(false)
     expect(ShellyOverride.safeParse({ ...valid, until: 'tomorrow' }).success).toBe(false)
+  })
+
+  // Strict UTC-Z on BOTH timestamps, unlike ShellyToggleBody.until: this
+  // schema is constructed, never posted, so one stored format is achievable
+  // here in a way it is not at the input edge.
+  it('rejects an offset form the toggle body would have normalised', () => {
+    expect(ShellyOverride.safeParse({ ...valid, until: '2026-08-23T18:00:00+01:00' }).success).toBe(false)
+    expect(ShellyOverride.safeParse({ ...valid, set_at: '2026-08-23T09:00:00+01:00' }).success).toBe(false)
   })
 
   it('rejects a state that is not exactly on or off', () => {

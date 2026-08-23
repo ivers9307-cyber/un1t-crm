@@ -48,14 +48,32 @@ import { uuidLike } from '@/lib/schemas'
 // upper-case MAC through to the .transform() below rather than 400-ing on it.
 export const SHELLY_DEVICE_ID = /^[0-9a-f]{6,32}$/i
 
+// EVERY message in this file is operator copy. The client renders
+// `j.issues?.[0]?.message || j.error` — one string, no field path — so a zod
+// default like "Invalid string: must match pattern /^[0-9a-f]{6,32}$/i" is
+// what a studio manager would be asked to act on. Where a downstream helper
+// already owns better copy for the same input (normaliseShellyHost), the
+// schema deliberately stays out of its way rather than pre-empting it with a
+// worse sentence.
+
 // Per-device schedule cap. Matches the Sonos schedules route's own 16, and the
 // whole array is re-validated on every PATCH, so this bounds the stored row.
 export const MAX_FIXED_WINDOWS = 16
 
 // Applied by the ADOPT route (count the location's rows before inserting), not
-// by a schema — nothing in a single request body can express it. It exists to
-// keep one location's reconcile tick inside its budget.
-export const MAX_DEVICES_PER_LOCATION = 100
+// by a schema — nothing in a single request body can express it.
+//
+// IT MUST EQUAL MAX_DEVICES IN src/lib/shelly/reconcile.js (50). That cron
+// loads `MAX_DEVICES + 1` rows ordered by created_at, logs a warning and
+// SLICES the rest off the tick — so a higher adopt cap does not degrade
+// gracefully, it produces devices that are adopted, schedulable, editable and
+// silently NEVER reconciled: their schedules never fire and device-health
+// grades them "Stale — check the Shelly connection", pointing the operator at
+// a connection that is perfectly fine. Re-typed rather than imported because
+// this module stays import-light (see the header) and reconcile.js is
+// server-only; schemas.test.js imports MAX_DEVICES and asserts the two are
+// equal, so raising one without the other fails the suite.
+export const MAX_DEVICES_PER_LOCATION = 50
 
 // Applied by the TOGGLE route to `until`: an override further out than this is
 // a schedule, not a manual nudge, and a year-long "off" is indistinguishable
@@ -87,9 +105,16 @@ export const MAX_CLASS_LEAD_LAG_MIN = 180
 export const DEFAULT_LEAD_MIN = 15
 export const DEFAULT_LAG_MIN = 10
 
-// One recurring on/off window. The refine is LAST and applies to the whole
-// object, so the result cannot be .extend()ed afterwards — Shelly never needs
-// to, which is exactly why WindowBase carries no refine of its own.
+// One recurring on/off window: WindowBase with the same-boundary rule applied
+// last (Shelly uses the bare shape, so there is nothing to .extend() first).
+//
+// TASK 9 (openapi.js) MUST RE-DERIVE THIS WITH `.extend({})`, and so must
+// ShellyDevicePatch. Not because a refined schema is un-extendable — on zod
+// 4.4.3 it is a plain ZodObject and the refine, the .strict() and the nested
+// .superRefine() all survive an extend (measured) — but because `.openapi()`
+// is attached PER INSTANCE when extendZodWithOpenApi(z) runs, and this module
+// is constructed before that call. `.extend({})` mints a fresh instance that
+// has the method. Same workaround LeadSchema already uses in openapi.js.
 export const ShellyWindow = WindowBase.refine(NOT_SAME_BOUNDARY.check, {
   message: NOT_SAME_BOUNDARY.message,
 })
@@ -116,8 +141,17 @@ export const ShellyClassRule = z.object({
 // key_hint). Absent or blank => the route keeps the stored key; supplied =>
 // the route applies MIN_AUTH_KEY_LENGTH. The 512 cap is a body-size guard, not
 // a format claim — the key is never parsed, only sent.
+//
+// `server` has NO .min(1) on purpose. normaliseShellyHost() in client.js
+// already owns the copy for every bad host — blank included — and it is the
+// copy that actually helps ("Enter your account server from the Shelly app,
+// e.g. shelly-<region>.shelly.cloud"). A .min(1) here would intercept the
+// blank case and answer "Too small: expected string to have >=1 characters"
+// instead, i.e. the schema would make the ONE input an operator is most
+// likely to submit the ONE they get no guidance on. `.max(200)` stays as a
+// body-size guard, well above any real host.
 export const ShellyConnectionPut = z.object({
-  server: z.string().trim().min(1).max(200),
+  server: z.string().trim().max(200),
   auth_key: z.string().max(512).optional(),
 })
 
@@ -128,9 +162,11 @@ export const ShellyConnectionPut = z.object({
 // can never match a real switch. `name` is optional because discovery supplies
 // the cloud account's own name when the operator doesn't override it.
 export const ShellyAdoptBody = z.object({
-  device_id: z.string().trim().regex(SHELLY_DEVICE_ID).transform((s) => s.toLowerCase()),
+  device_id: z.string().trim()
+    .regex(SHELLY_DEVICE_ID, { message: "That doesn't look like a Shelly device id" })
+    .transform((s) => s.toLowerCase()),
   channel: z.number().int().min(0).max(7).default(0),
-  name: z.string().trim().min(1).max(80).optional(),
+  name: z.string().trim().min(1, { message: 'Give the device a name' }).max(80).optional(),
 })
 
 // PATCH one adopted device. Every field optional, `.strict()` so a typo'd key
@@ -143,15 +179,23 @@ export const ShellyAdoptBody = z.object({
 // later window in a clashing pair is silently NEVER applied — no error, no log
 // line, no way for an operator to tell why a window does nothing. Refusing the
 // save is the only place that can surface.
+// NO `zone` KEY. The column exists (mig 562) and is cosmetic, but no v1
+// surface writes it, and `.strict()` would turn a speculative key into a
+// documented part of the contract the moment openapi.js renders it.
 export const ShellyDevicePatch = z.object({
-  name: z.string().trim().min(1).max(80).optional(),
+  name: z.string().trim().min(1, { message: 'Give the device a name' }).max(80).optional(),
   enabled: z.boolean().optional(),
   schedule_mode: z.enum(['none', 'fixed', 'class']).optional(),
+  // zod 4 runs an array-level .superRefine() EVEN WHEN an element failed its
+  // own schema, and hands it the RAW input — so windowsOverlapIssue can see a
+  // malformed window here. findWindowOverlap tolerates that by construction
+  // (an unparseable HH:MM yields no segments, so it cannot clash). One quirk:
+  // a same-boundary item is read as overnight and can emit a second, spurious
+  // overlap issue alongside its own — harmless, because zod orders element
+  // issues before the array-level one, so `issues[0]` is still the actionable
+  // sentence the client renders. Do not sort or re-order issues downstream.
   fixed_windows: z.array(ShellyWindow).max(MAX_FIXED_WINDOWS).superRefine(windowsOverlapIssue).optional(),
   class_rule: ShellyClassRule.optional(),
-  // Cosmetic room label in v1 — class mode follows the location-wide timetable
-  // (class_occurrences has no zone column).
-  zone: z.string().trim().min(1).max(40).optional(),
 })
   .strict()
   .refine((v) => Object.keys(v).length > 0, { message: 'Nothing to update' })
@@ -159,20 +203,35 @@ export const ShellyDevicePatch = z.object({
 // Manual toggle. 'auto' means "clear the override and re-run the schedule
 // now", which is why `until` is optional — it is meaningless without a state
 // to hold. The route bounds `until` by MAX_OVERRIDE_HOURS.
+//
+// `until` NORMALISES AT THE INPUT EDGE. /api routes take Bearer (n8n) and
+// mobile JWT callers as well as the web UI, and an offset form
+// ('…T18:00:00+01:00') is a perfectly ordinary ISO instant for them to send —
+// refusing it would be a 400 an operator cannot debug. The transform pins it
+// to UTC-Z immediately, which is what keeps ShellyOverride.until strict-Z by
+// CONSTRUCTION rather than by hope: the toggle route pipes this parsed value
+// straight into ShellyOverride, so the two are coupled — loosen the override
+// side to match and the DB gets mixed formats; loosen this side without the
+// transform and the route builds an override that fails its own parse.
 export const ShellyToggleBody = z.object({
   state: z.enum(['on', 'off', 'auto']),
-  until: z.string().datetime().optional(),
+  until: z.iso.datetime({ offset: true }).transform((s) => new Date(s).toISOString()).optional(),
 })
 
 // GET .../energy?days=N. Read PER DEVICE (<= 31 rows at 30 days) — a
 // location-wide 30-day read is ~1,500 rows and blows the PostgREST 1k cap.
 //
-// ROUTE OBLIGATION: URLSearchParams.get() returns null for an absent param and
-// z.coerce.number() turns null into 0, which fails min(1). Pass
-// `{ days: searchParams.get('days') ?? undefined }` so an absent param takes
-// the default instead of 400-ing.
+// The preprocess absorbs the two shapes a query string produces for "no value
+// given": URLSearchParams.get() returns null for an absent param, and '' for a
+// bare `?days=`. z.coerce.number() turns BOTH into 0, which fails min(1) — so
+// without this the default path 400s and the route has to remember to map null
+// to undefined at every call site. Junk ('all') and out-of-range values still
+// fail; only absence is absorbed.
 export const ShellyEnergyQuery = z.object({
-  days: z.coerce.number().int().min(1).max(90).default(30),
+  days: z.preprocess(
+    (v) => (v == null || v === '' ? undefined : v),
+    z.coerce.number().int().min(1).max(90).default(30),
+  ),
 })
 
 // The shape written to shelly_devices.override. CONSTRUCTED by the toggle route

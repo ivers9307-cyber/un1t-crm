@@ -3,13 +3,19 @@
 // recurring on/off window with ONE implementation instead of two that
 // drift.
 //
-// WHY WindowBase CARRIES NO REFINE: a refined Zod object is a ZodEffects,
-// and ZodEffects has no .extend(). Sonos extends the base with
-// volume/favorite_id and Shelly does not extend it at all, so the same-
-// boundary rule ships as a plain predicate + message pair that each caller
-// applies with .refine() as its LAST step. Attaching it here would make
-// the Sonos extend impossible; re-typing the predicate per caller is how
-// the two would eventually disagree about what an empty window is.
+// WHY WindowBase CARRIES NO REFINE — and NOT for the mechanical reason you
+// might expect. On the installed zod (4.4.3) a .refine()d object is STILL a
+// ZodObject: .extend() works on it and the refinement survives the extend
+// (measured — refine, .strict() and a nested .superRefine() all carry
+// through). The zod-3 rule that a refine yields an un-extendable ZodEffects
+// no longer applies, so do not repeat it.
+//
+// This is a READABILITY choice instead: the base is the three fields every
+// window has, and each caller states its own boundary rule explicitly where
+// it builds its schema — Sonos on top of its volume/favorite_id extend,
+// Shelly on the bare shape. Shipping the rule as a predicate + message pair
+// keeps ONE definition of what an empty window is; re-typing the predicate
+// per caller is how the two would eventually disagree.
 
 import { z } from 'zod'
 
@@ -90,7 +96,10 @@ export function findWindowOverlap(windows) {
 // refine — see the header. Callers extend (Sonos: volume + favorite_id) or
 // use as-is (Shelly), then apply NOT_SAME_BOUNDARY last.
 export const WindowBase = z.object({
-  days: z.array(z.number().int().min(1).max(7)).min(1),
+  // The message is operator copy, not developer copy: both surfaces render
+  // `issues[0].message` on its own with no field path, so zod's default
+  // ("Too small: expected array to have >=1 items") would reach a human.
+  days: z.array(z.number().int().min(1).max(7)).min(1, { message: 'Pick at least one day' }),
   on: z.string().regex(HHMM),
   off: z.string().regex(HHMM),
 })
