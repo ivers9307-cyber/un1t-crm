@@ -53,16 +53,23 @@
 //                 named value (a writer and a reader of the same table).
 //                 Asserted on the RUNTIME VALUE of the named constants.
 //
-// And the property that actually stops the rot: COMPLETENESS, in two sweeps.
+// And the property that actually stops the rot: COMPLETENESS, in three sweeps.
 // A same-NAME sweep (recursive) requires every module present in both trees to
 // be classified. A cross-NAMED sweep requires every shared/ ↔ src/lib/ pair
 // that shares an exported name to be classified too, or declared coincidental
-// with a reason. A new duplicated module cannot be added without someone
+// with a reason. A SHIM sweep (PAIRSYNC.2) reads every `export * from
+// '@shared/x'` under src/lib and requires the pair it names to be a
+// `reexport` entry. A new duplicated module cannot be added without someone
 // saying what it is — the same shape as the check:ota-paths allowlist.
 //
 // The cross-named sweep is not decorative: it is what found the
 // wearable-trends TREND_METRICS pair, which the filename sweep alone could
-// never see and which no comment anywhere claimed.
+// never see and which no comment anywhere claimed. The shim sweep exists
+// because the cross-named sweep has a hole the first cross-named shim fell
+// through: `collectExportNames` registers `export * from` as the single name
+// `*`, which overlaps nothing, so src/lib/sonos/playback.js →
+// shared/sonos-playback.js (SONOSMOB.1) passed both sweeps with no entry and
+// was covered only because one was added by hand.
 //
 // ─── Known limits, on purpose ────────────────────────────────────────────────
 //
@@ -78,8 +85,12 @@
 //     monthsHitInWindow / resolveTierMonths) under entirely different names,
 //     so they share nothing for the sweep to catch. Named here rather than
 //     omitted: it has to be added to PAIRS by hand, or the two reconciled.
-//   • Neither sweep looks outside shared/ and src/lib/. A module duplicated
+//   • No sweep looks outside shared/ and src/lib/. A module duplicated
 //     into mobile/lib/ is not covered.
+//   • (CLOSED by PAIRSYNC.2) A cross-named `export * from` shim used to be
+//     invisible to both sweeps. The shim sweep reads the specifier, so the
+//     only remaining way to hide a wholesale re-export is to spell it as a
+//     named list — and a named list IS visible to the export-name sweep.
 //   • `diverged` pins export names, not behaviour. It tells you a pair is
 //     known-unsynced and which exports; it does not tell you the divergence
 //     is harmless. Two of the three are recorded here as open questions with
@@ -356,6 +367,54 @@ function walkJs(dir, base = dir, out = []) {
   return out
 }
 
+// ── PAIRSYNC.2 — the shim sweep ──────────────────────────────────────────────
+// A wholesale re-export names its source in the specifier, so the pairing is
+// read straight off the file: no basename heuristic, no export-name overlap.
+
+const EXPORT_STAR_SHARED = /^\s*export\s*\*\s*from\s*['"](?:@shared|shared)\/([^'"]+)['"]/m
+
+/** The shared module an `export * from '@shared/x'` shim re-exports, or null.
+ *  Comments are stripped first so a comment that quotes the form is not a
+ *  shim. Named re-exports (`export { a } from`) are deliberately null — those
+ *  are already visible to the export-name sweep. */
+function shimTarget(src) {
+  const m = stripComments(src).match(EXPORT_STAR_SHARED)
+  return m ? m[1] : null
+}
+
+/** Every export-* shim under src/lib, keyed the same way the manifest is. */
+function exportStarShims() {
+  const root = join(repo, 'src', 'lib')
+  return walkJs(root)
+    .map((rel) => {
+      const target = shimTarget(readFileSync(join(root, rel), 'utf8'))
+      if (!target) return null
+      const file = `src/lib/${rel.split(sep).join('/')}`
+      const sharedFile = `shared/${target.endsWith('.js') ? target : `${target}.js`}`
+      return { key: `${sharedFile}::${file}`, file, target, sharedFile }
+    })
+    .filter(Boolean)
+}
+
+/** Shims with no `reexport` manifest entry for the pair they name. Pure, so
+ *  the test can prove it fires without planting a file. */
+function unclassifiedShims(shims, pairs) {
+  const byKey = new Map(
+    Object.entries(pairs).map(([k, c]) => [`${c.shared || `shared/${k}`}::${c.web || `src/lib/${k}`}`, c]),
+  )
+  const out = []
+  for (const s of shims) {
+    const cfg = byKey.get(s.key)
+    const sharedFile = s.sharedFile || s.key.split('::')[0]
+    if (!cfg) {
+      out.push(`${s.key}  (${s.file} re-exports ${sharedFile}; no PAIRS entry)`)
+    } else if (cfg.mode !== 'reexport') {
+      out.push(`${s.key}  (${s.file} re-exports ${sharedFile}; PAIRS entry is mode ${cfg.mode}, not reexport)`)
+    }
+  }
+  return out.sort()
+}
+
 describe('shared/ ↔ src/lib/ pair inventory is complete', () => {
   it('every module with the SAME NAME in both directories is classified', () => {
     const sameName = walkJs(join(repo, 'shared'))
@@ -437,6 +496,59 @@ describe('shared/ ↔ src/lib/ pair inventory is complete', () => {
       expect(typeof cfg.why, `${key} has no \`why\``).toBe('string')
       expect(cfg.why.length, `${key}'s \`why\` is too thin to be a reason`).toBeGreaterThan(60)
     }
+  })
+
+  // PAIRSYNC.2 — the third sweep. An `export * from '@shared/x'` shim is
+  // invisible to BOTH sweeps above: the same-name sweep needs matching
+  // basenames, and the export-name sweep sees only `*` on the shim side. So a
+  // cross-named shim (src/lib/sonos/playback.js → shared/sonos-playback.js,
+  // SONOSMOB.1) passed every check with no manifest entry, and was covered
+  // only because one was hand-added. Now the shim's own `from` specifier IS
+  // the pairing: it names the shared module directly, so there is nothing to
+  // infer and nothing a rename on either side can hide.
+  it('every `export * from` shim under src/lib names a classified reexport pair', () => {
+    const shims = exportStarShims()
+    // The scan itself must find something, or a broken regex passes
+    // vacuously. class-timer.js is the oldest shim on the tree.
+    expect(shims.map((s) => s.key)).toContain('shared/class-timer.js::src/lib/class-timer.js')
+    expect(
+      unclassifiedShims(shims, PAIRS),
+      'A src/lib module re-exports a shared/ module wholesale and PAIRS has no `reexport` entry for the pair. ' +
+        'Add one (with explicit `shared`/`web` paths if the names differ) — do not delete this check to go green.',
+    ).toEqual([])
+  })
+
+  it('the shim sweep fires on a shim with no entry, and on one classified as anything but reexport', () => {
+    // Fixture-free proof the check is live: feed the checker a shim the
+    // manifest has never heard of, and one whose entry exists in the wrong
+    // mode. Both must come back as unclassified.
+    const ghost = { key: 'shared/ghost.js::src/lib/ghost.js', file: 'src/lib/ghost.js', target: 'ghost' }
+    const wrongMode = { key: 'shared/wrong.js::src/lib/wrong.js', file: 'src/lib/wrong.js', target: 'wrong' }
+    const manifest = { 'wrong.js': { mode: 'identical', why: 'x' } }
+    expect(unclassifiedShims([ghost, wrongMode], manifest)).toEqual([
+      'shared/ghost.js::src/lib/ghost.js  (src/lib/ghost.js re-exports shared/ghost.js; no PAIRS entry)',
+      'shared/wrong.js::src/lib/wrong.js  (src/lib/wrong.js re-exports shared/wrong.js; PAIRS entry is mode identical, not reexport)',
+    ])
+    // And the two real shapes a classified shim can take: same-name defaults,
+    // and explicit cross-named paths.
+    const classified = {
+      'ghost.js': { mode: 'reexport', why: 'x' },
+      'wrong.js': { mode: 'reexport', shared: 'shared/wrong.js', web: 'src/lib/wrong.js', why: 'x' },
+    }
+    expect(unclassifiedShims([ghost, wrongMode], classified)).toEqual([])
+  })
+
+  it('shimTarget reads both specifier forms and ignores everything else', () => {
+    expect(shimTarget("export * from '@shared/sonos-playback'")).toBe('sonos-playback')
+    expect(shimTarget('export * from "shared/class-timer"')).toBe('class-timer')
+    expect(shimTarget("// a comment\nexport * from '@shared/x'\n")).toBe('x')
+    // A comment mentioning the form is not a shim.
+    expect(shimTarget("// export * from '@shared/nope'\nexport const a = 1")).toBeNull()
+    // Named re-exports are already visible to the export-name sweep.
+    expect(shimTarget("export { a, b } from '@shared/x'")).toBeNull()
+    // A relative or package re-export is not a shared/ pair.
+    expect(shimTarget("export * from './local'")).toBeNull()
+    expect(shimTarget("export * from 'zod'")).toBeNull()
   })
 })
 
