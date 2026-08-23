@@ -27,22 +27,16 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { Loader2, AlertCircle, Music2, ExternalLink, Play, Plus, X, Trash2 } from 'lucide-react'
 import { dublinDateKey, dublinDayStartMs, dublinAddDays, dublinDayStr } from '@/lib/dublin-time'
 import SonosLiveControl from './SonosLiveControl'
+// SHELLY-UI.1 — the day pills / on-off times / add / remove block, shared
+// with the Shelly plug surface. Sonos's volume + favourite controls stay
+// here and go in through renderExtra/summaryExtra.
+import WindowsEditor from './WindowsEditor'
 // Pure, no I/O — the exact function planAction (src/lib/sonos/groups.js) calls
 // via resolveServeWindows to decide whether a window is open right now. Reused
 // here (not re-implemented) so the health indicator below can never compute a
 // different answer to "is a window active?" than the cron itself does.
 import { resolveServeWindows } from '@/lib/schedule/desired-state'
 import { playbackLabel } from '@/lib/sonos/playback'
-
-const DAY_LABELS = [
-  { n: 1, label: 'Mon' },
-  { n: 2, label: 'Tue' },
-  { n: 3, label: 'Wed' },
-  { n: 4, label: 'Thu' },
-  { n: 5, label: 'Fri' },
-  { n: 6, label: 'Sat' },
-  { n: 7, label: 'Sun' },
-]
 
 const MAX_WINDOWS = 16 // mirrors SchedulePayload's windows.max(16) in the API
 const DEFAULT_VOLUME = 30
@@ -614,28 +608,6 @@ function ScheduleCard({ schedule, players, favorites, onReload, editable }) {
     setSaved(false)
   }
 
-  function addWindow() {
-    if (windows.length >= MAX_WINDOWS || !hasFavorites) return
-    setWindows((w) => [...w, { days: [1, 2, 3, 4, 5], on: '09:00', off: '17:00', volume: DEFAULT_VOLUME, favorite_id: favorites[0]?.id || '' }])
-    setSaved(false)
-  }
-  function removeWindow(i) {
-    setWindows((w) => w.filter((_, idx) => idx !== i))
-    setSaved(false)
-  }
-  function toggleDay(i, dayN) {
-    setWindows((w) => w.map((win, idx) => {
-      if (idx !== i) return win
-      const days = win.days.includes(dayN) ? win.days.filter((d) => d !== dayN) : [...win.days, dayN].sort((a, b) => a - b)
-      return { ...win, days }
-    }))
-    setSaved(false)
-  }
-  function setWindowField(i, field, value) {
-    setWindows((w) => w.map((win, idx) => (idx === i ? { ...win, [field]: value } : win)))
-    setSaved(false)
-  }
-
   async function save(nextEnabled) {
     setBusy(true); setError(null); setSaved(false)
     try {
@@ -783,79 +755,48 @@ function ScheduleCard({ schedule, players, favorites, onReload, editable }) {
         )}
       </div>
 
-      {/* Windows */}
-      <div className="mt-3 border-t border-un1t-border/60 pt-3 space-y-2">
-        <p className="text-xs font-semibold text-un1t-text">Windows</p>
-        {windows.length === 0 && (
-          <p className="text-[11px] text-un1t-subtle">No windows yet{editable ? ' — add one below.' : '.'}</p>
+      {/* Windows — days/times/add/remove live in the shared editor
+          (SHELLY-UI.1); the volume + favourite controls are the only part
+          that is Sonos's, so they go in through renderExtra/summaryExtra. */}
+      <WindowsEditor
+        windows={windows}
+        onChange={(next) => { setWindows(next); setSaved(false) }}
+        editable={editable}
+        max={MAX_WINDOWS}
+        defaultWindow={() => ({ volume: DEFAULT_VOLUME, favorite_id: favorites[0]?.id || '' })}
+        addDisabled={!hasFavorites}
+        addDisabledTitle="Save a favourite in the Sonos app first"
+        renderExtra={(win, i, setWindowField) => (
+          <>
+            <label className="text-[11px] text-un1t-subtle inline-flex items-center gap-1">
+              Volume
+              <input type="range" min="0" max="100" value={win.volume}
+                onChange={(e) => setWindowField(i, 'volume', Number(e.target.value))}
+                className="w-24 accent-un1t-text" />
+              <span className="tabular-nums w-7 text-right">{win.volume}</span>
+            </label>
+            <label className="text-[11px] text-un1t-subtle inline-flex items-center gap-1">
+              Favourite
+              <select value={win.favorite_id} onChange={(e) => setWindowField(i, 'favorite_id', e.target.value)}
+                className="rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-un1t-text">
+                {favorites.length === 0 && <option value="">No favourites available</option>}
+                {win.favorite_id && !favorites.some((f) => f.id === win.favorite_id) && (
+                  <option value={win.favorite_id}>{win.favorite_id} (not found)</option>
+                )}
+                {favorites.map((f) => (
+                  <option key={f.id} value={f.id}>{f.name || f.id}</option>
+                ))}
+              </select>
+            </label>
+          </>
         )}
-        {editable ? windows.map((win, i) => (
-          <div key={i} className="rounded border border-un1t-border/60 p-2 space-y-2">
-            <div className="flex flex-wrap gap-1.5">
-              {DAY_LABELS.map((d) => {
-                const on = win.days.includes(d.n)
-                return (
-                  <button key={d.n} type="button" onClick={() => toggleDay(i, d.n)}
-                    className={`text-[11px] px-2 py-0.5 rounded-full border transition ${on ? 'bg-blue-500/10 border-blue-500/40 text-blue-700' : 'border-un1t-border text-un1t-subtle hover:border-un1t-muted'}`}>
-                    {d.label}
-                  </button>
-                )
-              })}
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <label className="text-[11px] text-un1t-subtle inline-flex items-center gap-1">
-                On
-                <input type="time" value={win.on} onChange={(e) => setWindowField(i, 'on', e.target.value)}
-                  className="rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-un1t-text" />
-              </label>
-              <label className="text-[11px] text-un1t-subtle inline-flex items-center gap-1">
-                Off
-                <input type="time" value={win.off} onChange={(e) => setWindowField(i, 'off', e.target.value)}
-                  className="rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-un1t-text" />
-              </label>
-              <label className="text-[11px] text-un1t-subtle inline-flex items-center gap-1">
-                Volume
-                <input type="range" min="0" max="100" value={win.volume}
-                  onChange={(e) => setWindowField(i, 'volume', Number(e.target.value))}
-                  className="w-24 accent-un1t-text" />
-                <span className="tabular-nums w-7 text-right">{win.volume}</span>
-              </label>
-              <label className="text-[11px] text-un1t-subtle inline-flex items-center gap-1">
-                Favourite
-                <select value={win.favorite_id} onChange={(e) => setWindowField(i, 'favorite_id', e.target.value)}
-                  className="rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-un1t-text">
-                  {favorites.length === 0 && <option value="">No favourites available</option>}
-                  {win.favorite_id && !favorites.some((f) => f.id === win.favorite_id) && (
-                    <option value={win.favorite_id}>{win.favorite_id} (not found)</option>
-                  )}
-                  {favorites.map((f) => (
-                    <option key={f.id} value={f.id}>{f.name || f.id}</option>
-                  ))}
-                </select>
-              </label>
-              <button type="button" onClick={() => removeWindow(i)}
-                className="ml-auto text-[11px] text-un1t-subtle hover:text-red-700 inline-flex items-center gap-1">
-                <X size={12} /> Remove
-              </button>
-            </div>
-          </div>
-        )) : windows.map((win, i) => (
+        summaryExtra={(win) => (
           // Read-only: no live favourites to resolve a name from, so show
           // the raw id rather than a "(not found)" label this data can't
           // support while unreachable.
-          <div key={i} className="rounded border border-un1t-border/60 p-2 text-[11px] text-un1t-subtle">
-            {DAY_LABELS.filter((d) => win.days.includes(d.n)).map((d) => d.label).join(', ') || 'No days'}
-            {' · '}{win.on}–{win.off} · volume {win.volume} · favourite {win.favorite_id || '(none)'}
-          </div>
-        ))}
-        {editable && windows.length < MAX_WINDOWS && (
-          <button type="button" onClick={addWindow} disabled={!hasFavorites}
-            title={!hasFavorites ? 'Save a favourite in the Sonos app first' : undefined}
-            className="text-[11px] underline text-un1t-subtle inline-flex items-center gap-1 disabled:opacity-40 disabled:no-underline">
-            <Plus size={12} /> Add window
-          </button>
+          <> · volume {win.volume} · favourite {win.favorite_id || '(none)'}</>
         )}
-      </div>
+      />
 
       {editable && (
         <div className="mt-3 border-t border-un1t-border/60 pt-3 flex flex-wrap items-center gap-2">
