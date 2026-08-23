@@ -16,8 +16,8 @@
 
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
-import { logError } from '@/lib/log'
-import { loadConnectionWithKey, markKeyRejected } from '@/lib/shelly/connections'
+import { logError, logWarn } from '@/lib/log'
+import { HOST_ERROR, loadConnectionWithKey, markConnectionStatus, markKeyRejected } from '@/lib/shelly/connections'
 import { DEVICE_COLUMNS, withLocationTz } from '@/lib/shelly/device-load'
 import { refreshLocationState } from '@/lib/shelly/reconcile'
 import { MAX_DEVICES_PER_LOCATION } from '@/lib/shelly/schemas'
@@ -26,6 +26,14 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const MODULE = 'shelly-refresh'
+
+// A BUDGET, because this one runs on a request thread. Unbounded, 50 devices
+// is five batches plus the client's own retries — measured at roughly 14
+// seconds — and a platform 504 tells the operator nothing and writes nothing.
+// refreshLocationState checks this before each batch, logs 'time budget
+// exhausted' and returns the counters for the batches it DID complete, so a
+// slow account degrades to a partial refresh instead of an error page.
+const REFRESH_BUDGET_MS = 8_000
 
 const bad = (error, status, extra = {}) =>
   NextResponse.json({ success: false, error, ...extra }, { status })
@@ -59,21 +67,54 @@ export const POST = withAuth({ permission: 'device_control' }, async ({ user, db
     return NextResponse.json({ success: true, refreshed: 0, read_failures: 0, rate_limited: 0, kind: null })
   }
 
-  // The zone graft matters here too: refreshLocationState builds its own
-  // client from this object, and reconcile's helpers read conn.locations.
-  const out = await refreshLocationState(db, withLocationTz(conn.connection, user), devices, { now: Date.now })
+  // NOTHING ON THIS PATH RESOLVES A TIMEZONE — refreshLocationState reads and
+  // writes last_state, it does not plan anything, and the client it builds
+  // needs only host + auth_key. The graft is future-proofing and consistency
+  // with the two routes that DO need it (toggle, run-now): if a zone-dependent
+  // step is ever added to this helper, it will already be given the same
+  // answer the rest of the surface uses rather than silently falling back to
+  // Dublin.
+  const out = await refreshLocationState(db, withLocationTz(conn.connection, user), devices, {
+    now: Date.now,
+    deadlineAt: Date.now() + REFRESH_BUDGET_MS,
+  })
 
+  // The verdict is read off the UN-CONFLATED signals the engine already
+  // separates, never off the counters. `rateLimited` counts a RETRIED SUCCESS
+  // as well as a 429 (reconcile.js says so), and `stateWrites === 0` is the
+  // healthy answer for a studio whose readings have not moved — judging on
+  // that pair told a perfectly refreshed location to back off.
   if (out.auth) {
     // Only `auth` is evidence about the credential. It parks the connection
     // with the same three fields and the same copy the cron writes.
     await markKeyRejected(db, locationId)
     return bad('Shelly rejected the stored key — re-paste it from the Shelly app', 409, { code: 'key_rejected' })
   }
-  // A rate limit that cost us EVERY reading is a 429; one that merely slowed a
-  // batch down is not — the operator got their refresh, and telling them to
-  // back off would be false.
-  if (out.rateLimited > 0 && out.stateWrites === 0) {
+  if (out.config) {
+    // A bad host never reached the network, so no amount of retrying helps —
+    // it is the connection settings, and the badge says so with the same
+    // literal the cron writes.
+    await markConnectionStatus(db, locationId, {
+      status: 'action_needed', last_error: HOST_ERROR, last_error_at: new Date().toISOString(),
+    })
+    return bad(HOST_ERROR, 409, { code: 'bad_host' })
+  }
+  // NOT ONE batch succeeded, and the budget is why: a retry in a few seconds
+  // is the right advice, and 429 is how the client is told to wait rather than
+  // re-press.
+  if (!out.anyOk && out.budgetHit) {
     return bad('Shelly is busy — try again in a few seconds', 429, { code: 'rate_limited' })
+  }
+  // Nothing succeeded for some other reason, having actually tried. The
+  // schedule is untouched by this — the cron owns that, and this route only
+  // reads — so the copy says so rather than implying the studio is now adrift.
+  if (!out.anyOk && out.reads > 0) {
+    logWarn(MODULE, 'refresh read nothing', {
+      locationId, reads: out.reads, readFailures: out.readFailures, kind: out.lastKind, stalled: out.stalled,
+    })
+    return bad('Could not read your plugs just now — the schedule is unaffected', 502, {
+      code: out.lastKind ?? 'unreachable',
+    })
   }
 
   return NextResponse.json({

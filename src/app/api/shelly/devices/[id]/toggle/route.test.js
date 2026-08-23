@@ -39,7 +39,7 @@ vi.mock('@/lib/shelly/reconcile', async (importOriginal) => {
   return { ...actual, runNowForDevice: vi.fn() }
 })
 
-import { POST } from './route.js'
+import { POST, HOLDS_NOTICE } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { createShellyClient } from '@/lib/shelly/client'
@@ -307,6 +307,65 @@ describe('POST …/toggle — when the command does not land', () => {
   })
 })
 
+describe('POST …/toggle — managed vs unmanaged', () => {
+  it('an UNMANAGED device says the plug holds until someone changes it', async () => {
+    // plan.js rule 2 returns before rule 4, so nothing ever closes this
+    // override — `until` bounds the banner, not the relay.
+    useDb(world({ enabled: false }))
+    const body = await (await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))).json()
+    expect(body.applied).toBe(true)
+    expect(body.holds_until_changed).toBe(true)
+    expect(body.notice).toBe(HOLDS_NOTICE)
+  })
+
+  it('…and so does a device with no schedule at all', async () => {
+    useDb(world({ enabled: true, schedule_mode: 'none' }))
+    const body = await (await POST(toggleReq({ state: 'off' }), ctxFor(DEV_A))).json()
+    expect(body.holds_until_changed).toBe(true)
+    expect(body.notice).toBe(HOLDS_NOTICE)
+  })
+
+  it('a MANAGED device does not — its schedule resumes at `until`, in both directions', async () => {
+    useDb(world({ enabled: true, schedule_mode: 'fixed' }))
+    const body = await (await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))).json()
+    // Present and false, never absent: the client reads a boolean rather than
+    // inferring one from a missing key.
+    expect(body.holds_until_changed).toBe(false)
+    expect(body.notice).toBeUndefined()
+  })
+
+  it('the PENDING body carries it too — the cron applies the same override', async () => {
+    useDb(world({ enabled: false }))
+    useCloud({ ok: false, kind: 'device', code: 'DEVICE_OFFLINE', statusCode: 200 })
+    const body = await (await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))).json()
+    expect(body).toMatchObject({ pending: true, holds_until_changed: true, notice: HOLDS_NOTICE })
+  })
+
+  it('a bad HOST is pending with its own code, never "within a minute"', async () => {
+    useCloud({ ok: false, kind: 'config', statusCode: 0 })
+    const res = await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toMatchObject({ applied: false, pending: true, code: 'bad_host', kind: 'config' })
+    expect(body.message).toMatch(/connection settings/i)
+    expect(body.message).not.toMatch(/within a minute/i)
+  })
+})
+
+describe('POST …/toggle — the override schema is the write guard', () => {
+  it('refuses, writes nothing and sends nothing when the override cannot be built', async () => {
+    // A non-UUID user id fails ShellyOverride.set_by. The point is not the id
+    // — it is that an override this route cannot construct is one the planner
+    // could not key, so it must never reach the row OR the relay.
+    getCurrentUser.mockResolvedValue({ ...OWNER_A, id: 'not-a-uuid' })
+    const res = await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
+    expect(res.status).toBe(500)
+    expect(deviceWrites()).toEqual([])
+    expect(rowA().override).toBeNull()
+    expect(setSwitch).not.toHaveBeenCalled()
+  })
+})
+
 describe('POST …/toggle — back to auto', () => {
   it('clears the override, THEN runs the schedule with a zone-bearing connection', async () => {
     getCurrentUser.mockResolvedValue(OWNER_NY)
@@ -355,7 +414,10 @@ describe('POST …/toggle — back to auto', () => {
     expect(res.status).toBe(409)
     const body = await res.json()
     expect(body.code).toBe('key_rejected')
-    expect(body.message).toMatch(/back on its schedule/i)
+    // The reassurance is IN `error` — that is the string the client's default
+    // renderer shows on a failure body.
+    expect(body.error).toMatch(/back on its schedule/i)
+    expect(body.message).toBeUndefined()
     expect(db.rowsIn('shelly_connections')[0].status).toBe('action_needed')
     expect(rowA().override).toBeNull()
   })
@@ -380,5 +442,22 @@ describe('POST …/toggle — back to auto', () => {
     runNowForDevice.mockResolvedValue({ ok: false, kind: 'occurrences', error: 'db down' })
     const body = await (await POST(toggleReq({ state: 'auto' }), ctxFor(DEV_A))).json()
     expect(body.error).toMatch(/timetable/i)
+    expect(body.error).toMatch(/back on its schedule/i)
+  })
+
+  it('bad_device is the ONE failure with no reassurance — the next tick cannot apply it either', async () => {
+    runNowForDevice.mockResolvedValue({ ok: false, kind: 'bad_device' })
+    const body = await (await POST(toggleReq({ state: 'auto' }), ctxFor(DEV_A))).json()
+    expect(body.code).toBe('bad_device')
+    expect(body.error).not.toMatch(/back on its schedule/i)
+  })
+
+  it('a device whose schedule is switched OFF answers disabled, not nothing_to_do', async () => {
+    // Three answers, and this is the one a bare noop used to swallow: the
+    // operator has a schedule, it is simply not running.
+    useDb(world({ enabled: false, schedule_mode: 'fixed' }))
+    runNowForDevice.mockResolvedValue({ ok: true, noop: true })
+    const body = await (await POST(toggleReq({ state: 'auto' }), ctxFor(DEV_A))).json()
+    expect(body).toMatchObject({ applied: null, reason: 'disabled' })
   })
 })

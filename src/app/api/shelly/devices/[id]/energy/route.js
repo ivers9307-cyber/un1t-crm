@@ -50,6 +50,14 @@ function kwhFrom(wh) {
 
 const intOr0 = (v) => (Number.isFinite(Number(v)) ? Math.trunc(Number(v)) : 0)
 
+// The `day` column is a Postgres `date` and PostgREST serialises it as
+// 'YYYY-MM-DD' — but a driver that hydrates it into a Date, or a row that
+// comes back timestamp-shaped ('2026-08-20T00:00:00'), would key the map on a
+// string no zero-filled day can ever equal, and the chart would render a flat
+// zero month with no error anywhere. energy.js defends the same column the
+// same way; this is that defence on the read side.
+const dayKey = (v) => String(v ?? '').slice(0, 10)
+
 export const GET = withAuth({ permission: 'device_control' }, async ({ user, db, locationId, request, params }) => {
   // The schema absorbs both shapes a query string produces for "not given" —
   // null for an absent param, '' for a bare `?days=` — so this needs no
@@ -98,7 +106,7 @@ export const GET = withAuth({ permission: 'device_control' }, async ({ user, db,
     return bad('Could not load this device’s energy history', 500)
   }
 
-  const byDay = new Map((data || []).map((r) => [r.day, r]))
+  const byDay = new Map((data || []).map((r) => [dayKey(r.day), r]))
   const out = []
   for (let day = from; day <= to; day = addDaysISO(day, 1)) {
     const row = byDay.get(day)

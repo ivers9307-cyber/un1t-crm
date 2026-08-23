@@ -31,7 +31,7 @@ import { POST } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { refreshLocationState } from '@/lib/shelly/reconcile'
-import { AUTH_ERROR } from '@/lib/shelly/connections'
+import { AUTH_ERROR, HOST_ERROR } from '@/lib/shelly/connections'
 import { MAX_DEVICES_PER_LOCATION } from '@/lib/shelly/schemas'
 import {
   LOC_A, LOC_B, DEV_A, DEV_B, OWNER_A, OWNER_NY, STAFF_A, STORED_KEY,
@@ -123,10 +123,23 @@ describe('POST /api/shelly/refresh — what it hands the engine', () => {
     getCurrentUser.mockResolvedValue(OWNER_NY)
     await POST(refreshReq())
     const [, conn, , ctx] = refreshLocationState.mock.calls[0]
+    // Nothing on this path resolves a zone today — the graft is consistency
+    // with the two routes that do, so a zone-dependent step added later starts
+    // out correct instead of silently on Dublin time.
     expect(conn.locations).toEqual({ timezone: 'America/New_York' })
     // It builds its own client from this object, so the key has to be on it.
     expect(conn.auth_key).toBe(STORED_KEY)
     expect(typeof ctx.now).toBe('function')
+  })
+
+  it('a TIME BUDGET — 50 devices unbounded would outlive the request', async () => {
+    const before = Date.now()
+    await POST(refreshReq())
+    const [, , , ctx] = refreshLocationState.mock.calls[0]
+    // The engine checks this before each batch, logs, and returns the counters
+    // for the batches it did finish — a partial refresh beats a platform 504.
+    expect(ctx.deadlineAt).toBeGreaterThan(before)
+    expect(ctx.deadlineAt).toBeLessThanOrEqual(Date.now() + 8_000)
   })
 })
 
@@ -147,14 +160,50 @@ describe('POST /api/shelly/refresh — what it reports', () => {
     expect(conn.last_error).toBe(AUTH_ERROR)
   })
 
-  it('429s only when the rate limit cost us EVERY reading', async () => {
-    refreshLocationState.mockResolvedValue(zero({ rateLimited: 1, stateWrites: 0, readFailures: 1, lastKind: 'rate_limited' }))
+  it('a bad HOST parks the connection with the host copy and answers bad_host', async () => {
+    refreshLocationState.mockResolvedValue(zero({ config: true, anyOk: false, readFailures: 1, reads: 1, lastKind: 'config' }))
+    const res = await POST(refreshReq())
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.code).toBe('bad_host')
+    expect(body.error).toBe(HOST_ERROR)
+    const conn = db.rowsIn('shelly_connections')[0]
+    expect(conn.status).toBe('action_needed')
+    expect(conn.last_error).toBe(HOST_ERROR)
+  })
+
+  it('429s when NOTHING succeeded and the budget is why', async () => {
+    refreshLocationState.mockResolvedValue(zero({ anyOk: false, budgetHit: true, rateLimited: 1, readFailures: 1, lastKind: 'rate_limited' }))
     const res = await POST(refreshReq())
     expect(res.status).toBe(429)
     expect((await res.json()).code).toBe('rate_limited')
   })
 
-  it('…and NOT when the refresh still landed', async () => {
+  it('502s when nothing succeeded for any other reason, saying the schedule is untouched', async () => {
+    refreshLocationState.mockResolvedValue(zero({ anyOk: false, stalled: true, readFailures: 5, reads: 5, lastKind: 'network' }))
+    const res = await POST(refreshReq())
+    expect(res.status).toBe(502)
+    const body = await res.json()
+    expect(body.code).toBe('network')
+    expect(body.error).toMatch(/schedule is unaffected/i)
+  })
+
+  it('…falling back to `unreachable` when even the kind is unknown', async () => {
+    refreshLocationState.mockResolvedValue(zero({ anyOk: false, readFailures: 1, reads: 1, lastKind: null }))
+    expect((await (await POST(refreshReq())).json()).code).toBe('unreachable')
+  })
+
+  it('a RETRIED SUCCESS is not a rate-limit refusal — the operator got their refresh', async () => {
+    // `rateLimited` counts a retried success as well as a 429, and
+    // stateWrites:0 is the healthy answer for a studio whose readings have not
+    // moved. Judging on that pair told a perfectly refreshed location to back off.
+    refreshLocationState.mockResolvedValue(zero({ rateLimited: 1, stateWrites: 0, anyOk: true }))
+    const res = await POST(refreshReq())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ success: true, refreshed: 0, rate_limited: 1 })
+  })
+
+  it('…and neither is a slowed-down batch that still landed', async () => {
     refreshLocationState.mockResolvedValue(zero({ rateLimited: 1, stateWrites: 2 }))
     const res = await POST(refreshReq())
     expect(res.status).toBe(200)

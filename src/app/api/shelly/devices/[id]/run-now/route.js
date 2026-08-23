@@ -7,11 +7,16 @@
 // that is simply already right — three different things an operator must do
 // three different things about:
 //
-//   disabled     → turn the schedule on. (409, before any cloud call: a
-//                  device nobody is managing must not spend a slot of the
-//                  shared 1 req/sec account budget to be told so.)
 //   no_schedule  → build a schedule. (409.)
+//   disabled     → turn the schedule on. (409.)
 //   nothing_to_do→ nothing; it is already correct. (200, applied:null.)
+//
+// no_schedule IS CHECKED FIRST, and the order matters for a device that is
+// both: "turn the schedule on" is useless advice when there is no schedule to
+// turn on, so the refusal names the thing the operator has to build. Both
+// refusals come before the connection read and before anything reaches the
+// cloud — a device nobody is managing must not spend a slot of the shared
+// 1 req/sec account budget to be told so.
 //
 // The Sonos run-now route learned this the same way — collapsing "switched
 // off" and "no window is active right now" into one message points an operator
@@ -43,13 +48,12 @@ export const POST = withAuth({ permission: 'device_control' }, async ({ user, db
   }
   const device = loaded.device
 
-  // Both before the connection read, and both before anything reaches the
-  // cloud — see the header.
-  if (!device.enabled) {
-    return bad("This device's schedule is switched off — turn it on first", 409, { code: 'disabled' })
-  }
+  // Order is load-bearing — see the header.
   if (device.schedule_mode === 'none') {
     return bad('No schedule to apply', 409, { code: 'no_schedule' })
+  }
+  if (!device.enabled) {
+    return bad("This device's schedule is switched off — turn it on first", 409, { code: 'disabled' })
   }
 
   const conn = await loadConnectionWithKey(db, locationId)

@@ -171,6 +171,15 @@ describe('GET …/energy — the rows', () => {
     expect((await (await GET(getReq('?days=1'), ctxFor(DEV_A))).json()).days[0].kwh).toBeNull()
   })
 
+  it('matches a timestamp-shaped day — a driver quirk must not render a flat zero month', async () => {
+    // The column is a `date` and PostgREST sends 'YYYY-MM-DD', but a hydrated
+    // Date or a timestamp string would key the map on something no zero-filled
+    // day can equal, and the whole chart would silently read zero.
+    useDb(world([energyRow({ day: '2026-08-23T00:00:00', wh_total: 2000 })]))
+    const body = await (await GET(getReq('?days=1'), ctxFor(DEV_A))).json()
+    expect(body.days).toEqual([{ day: '2026-08-23', kwh: 2, samples: 1440, resets: 0 }])
+  })
+
   it('is read PER DEVICE and per location', async () => {
     useDb(world([
       energyRow({ day: '2026-08-23', wh_total: 1000 }),

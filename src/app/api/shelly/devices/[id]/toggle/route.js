@@ -29,6 +29,25 @@
 //      screen. Nothing has been sent at that point, so refusing costs a retry
 //      and nothing else.
 //
+// TWO REGIMES, AND `until` DOES NOT MEAN THE SAME THING IN BOTH. This is a
+// property of the ENGINE, not of this route, and the route's job is to say so
+// rather than to paper over it:
+//
+//   MANAGED (enabled AND a schedule): the override wins until `until`, and the
+//     schedule then resumes IN BOTH DIRECTIONS — plan.js rule 3 re-opens the
+//     relay if a window is live, rule 4 closes it with `override_expired` if
+//     none is. `until` is a real expiry.
+//   UNMANAGED (`enabled:false` OR `schedule_mode:'none'`): plan.js rule 2
+//     returns before rule 4 can close anything, so an EXPIRED override is
+//     never undone and the relay stays exactly as it was set. That is the
+//     approved design ("stays until changed", spec rule 2, pinned by
+//     plan.test.js case 15) and it must NOT be changed here — a cron that
+//     switched off a plug nobody had asked it to manage is the worse bug.
+//     For these devices `until` bounds the BANNER, not the relay, so the
+//     response carries `holds_until_changed: true` and the notice below, and
+//     Task 6 renders plain On/Off with no expiry time rather than a countdown
+//     that would be a lie.
+//
 // TIMEZONE. `until` defaults to the LOCATION's next local midnight, and the
 // engine that later expires it resolves the zone from `conn.locations`, which
 // loadConnectionWithKey does not select — see withLocationTz in
@@ -53,16 +72,24 @@ export const dynamic = 'force-dynamic'
 const MODULE = 'shelly-toggle'
 const HOUR_MS = 60 * 60 * 1000
 
+// The sentence an unmanaged device's toggle has to carry. Exported so Task 6
+// renders the same words the API returned rather than re-typing them.
+export const HOLDS_NOTICE = 'No schedule is running this plug, so it stays as you set it until you change it'
+
 // OUR vocabulary for a command that has not landed yet, keyed by the client's
 // own failure tag. `code` is what the page branches on across the whole Shelly
 // surface (`not_connected`, `key_rejected`, `disabled`…), so it stays ours;
 // `kind` carries the client's tag verbatim alongside it for the logs.
-const PENDING_CODE = { auth: 'key_rejected', rate_limited: 'rate_limited' }
+const PENDING_CODE = { auth: 'key_rejected', rate_limited: 'rate_limited', config: 'bad_host' }
 
 const PENDING_MESSAGE = {
   auth: 'Saved. Shelly rejected the stored key — re-paste it from the Shelly app and the plug will follow.',
   rate_limited: 'Saved. Shelly is busy right now — the plug will follow within a minute.',
   device: 'Saved. The plug is not answering — it will follow as soon as it is back online.',
+  // A bad host is not a wait: no request was even made, and no amount of time
+  // fixes it. Saying "within a minute" here would be the one pending message
+  // that is simply false.
+  config: 'Saved. The Shelly server on file is invalid; fix it in the connection settings and the plug will follow.',
 }
 const PENDING_FALLBACK = 'Saved. Shelly cloud is not answering — the plug will follow within a minute.'
 
@@ -160,7 +187,12 @@ export const POST = withAuth(
             success: true,
             device: cleanDevice,
             applied: null,
-            reason: device.schedule_mode === 'none' ? 'no_schedule' : 'nothing_to_do',
+            // THREE answers, kept apart for the same reason run-now keeps them
+            // apart one file over (obligation 15): "switched off", "there is no
+            // schedule" and "already correct" are three different things for
+            // the operator to do, and the planner answers all three with the
+            // same bare noop.
+            reason: !device.enabled ? 'disabled' : device.schedule_mode === 'none' ? 'no_schedule' : 'nothing_to_do',
           })
         }
         return NextResponse.json({
@@ -172,19 +204,25 @@ export const POST = withAuth(
       // already cleared — the operator's actual request landed. So the copy
       // says what did happen, and the cron picks the schedule up at the next
       // boundary either way.
-      const resumes = 'Back on its schedule — but we could not apply it right now. The next tick will.'
+      // THE REASSURANCE MUST BE IN `error`. The client's default renderer is
+      // `issues?.[0]?.message || message || error`, and on a failure body the
+      // operator sees the error string — a sentence parked in a `message` field
+      // beside it is one nobody reads. (`message` still rides on the SUCCESS
+      // pending bodies further down, where the card branches on `pending`
+      // before it renders anything.)
+      const resumes = ' The device is back on its schedule and will resume at the next boundary.'
       if (result.kind === 'auth') {
         // Same treatment as discover/adopt/run-now: only `auth` is evidence
         // about the credential, and it lights the badge that carries the one
         // instruction an operator can act on.
         await markKeyRejected(db, locationId)
-        return bad('Shelly rejected the stored key — re-paste it from the Shelly app', 409, {
-          code: 'key_rejected', device: cleanDevice, message: resumes,
+        return bad('Shelly rejected the stored key — re-paste it from the Shelly app.' + resumes, 409, {
+          code: 'key_rejected', device: cleanDevice,
         })
       }
       if (result.kind === 'rate_limited') {
-        return bad('Shelly is busy — try again in a few seconds', 429, {
-          code: 'rate_limited', device: cleanDevice, message: resumes,
+        return bad('Shelly is busy — try again in a few seconds.' + resumes, 429, {
+          code: 'rate_limited', device: cleanDevice,
         })
       }
       if (result.kind === 'occurrences') {
@@ -192,13 +230,16 @@ export const POST = withAuth(
         // on an empty day — the engine refuses rather than invent that, and so
         // does this copy.
         logWarn(MODULE, 'occurrence read failed', { locationId, deviceId: device.id, error: result.error })
-        return bad("Could not read today's timetable", 502, {
-          code: 'occurrences', device: cleanDevice, message: resumes,
+        return bad("Could not read today's timetable." + resumes, 502, {
+          code: 'occurrences', device: cleanDevice,
         })
       }
       if (result.kind === 'bad_device') {
         // The row cannot be commanded at all (no device id, or a non-integer
-        // channel) — a data fault, not a Shelly one.
+        // channel) — a data fault, not a Shelly one, and the ONE case that gets
+        // no reassurance: the next tick cannot apply this row either, so
+        // promising it would resume is the false comfort the rest of this
+        // block exists to avoid.
         logError(MODULE, 'device row cannot be commanded', { locationId, deviceId: device.id })
         return bad('This device row is incomplete — remove it and adopt it again', 500, {
           code: 'bad_device', device: cleanDevice,
@@ -207,13 +248,17 @@ export const POST = withAuth(
       logWarn(MODULE, 'run-now after clearing the override failed', {
         locationId, deviceId: device.id, kind: result.kind, statusCode: result.statusCode,
       })
-      return bad('Shelly cloud did not answer — try again in a minute', 502, {
-        code: result.kind, kind: result.kind, device: cleanDevice, message: resumes,
+      return bad('Shelly cloud did not answer — try again in a minute.' + resumes, 502, {
+        code: result.kind, kind: result.kind, device: cleanDevice,
       })
     }
 
     // ——— force on / off ——————————————————————————————————————————————
     const on = input.state === 'on'
+    // See "TWO REGIMES" in the header: on an unmanaged device the engine never
+    // closes an expired override (plan.js rule 2 returns before rule 4), so the
+    // relay holds until a human changes it and `until` bounds only the banner.
+    const unmanaged = !device.enabled || device.schedule_mode === 'none'
     const tz = requestTz(user)
     const untilMs = input.until ? Date.parse(input.until) : nextLocalMidnightMs(nowMs, tz)
     if (!Number.isFinite(untilMs)) {
@@ -284,6 +329,10 @@ export const POST = withAuth(
         code: PENDING_CODE[res.kind] ?? 'pending',
         kind: res.kind,
         message: PENDING_MESSAGE[res.kind] ?? PENDING_FALLBACK,
+        // Carried on the pending body too: what the cron eventually applies is
+        // the same override, so the same "it will hold" is true of it.
+        holds_until_changed: unmanaged,
+        ...(unmanaged ? { notice: HOLDS_NOTICE } : {}),
       }
       // 429 only for the shared 1 req/sec account budget, so the client backs
       // off instead of re-pressing. Everything else is a 200: the request did
@@ -319,6 +368,11 @@ export const POST = withAuth(
       // — those are exactly the fields whose write just failed.
       device: stamped || withOverride,
       applied: true,
+      // TRUE means `until` is a banner, not an expiry — nothing will put this
+      // relay back. Always present (never conditionally omitted) so the client
+      // reads a boolean rather than inferring one from an absent key.
+      holds_until_changed: unmanaged,
+      ...(unmanaged ? { notice: HOLDS_NOTICE } : {}),
     })
   },
 )

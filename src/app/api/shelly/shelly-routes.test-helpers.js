@@ -177,11 +177,23 @@ export function makeDb(cfg = {}) {
     return (typeof raw === 'function' ? raw(st) : raw) || null
   }
 
+  // Postgres compares a `date` column AS A DATE, not as text: a row whose
+  // value arrives timestamp-shaped ('2026-08-23T00:00:00') is still inside a
+  // `day <= '2026-08-23'` range, where a naive string compare would put it
+  // outside. Modelled here on purpose — the route's own day-key normalisation
+  // only matters in a world where such a row can come BACK from the query, so
+  // a fake that filtered it out would make that test vacuous.
+  const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
+  const rangeValue = (rowVal, filterVal) =>
+    typeof filterVal === 'string' && DATE_ONLY.test(filterVal) && typeof rowVal === 'string' && rowVal.length > 10
+      ? rowVal.slice(0, 10)
+      : rowVal
+
   const matches = (row, st) =>
     Object.entries(st.filters).every(([k, v]) => row[k] === v) &&
     Object.entries(st.ins).every(([k, v]) => (v || []).includes(row[k])) &&
-    Object.entries(st.gte).every(([k, v]) => row[k] >= v) &&
-    Object.entries(st.lte).every(([k, v]) => row[k] <= v)
+    Object.entries(st.gte).every(([k, v]) => rangeValue(row[k], v) >= v) &&
+    Object.entries(st.lte).every(([k, v]) => rangeValue(row[k], v) <= v)
 
   function hits(st) {
     let out = tableRows(st.table).filter((r) => matches(r, st))

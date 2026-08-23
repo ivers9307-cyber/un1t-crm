@@ -91,6 +91,14 @@ describe('POST …/run-now — the refusals, in order', () => {
     expect(runNowForDevice).not.toHaveBeenCalled()
   })
 
+  it('a device that is BOTH switched off and scheduleless answers no_schedule', async () => {
+    // The order is the advice: "turn the schedule on" is useless when there is
+    // no schedule to turn on.
+    useDb(world({ enabled: false, schedule_mode: 'none' }))
+    const body = await (await POST(runReq(), ctxFor(DEV_A))).json()
+    expect(body.code).toBe('no_schedule')
+  })
+
   it('409s not_connected', async () => {
     useDb(world({}, []))
     const res = await POST(runReq(), ctxFor(DEV_A))
