@@ -147,9 +147,9 @@ const config = [
     // and texted "You've been unsubscribed" on a write that had failed, and
     // survived two audits doing it.
     //
-    // Armed today = the paths this PR cleaned: the campaign send path and its
-    // cron, the event/race comms path, staff creation, the Instagram inbox, and
-    // the WhatsApp inbound webhook.
+    // Armed at BAREWRITE.1 = the campaign send path and its cron, the
+    // event/race comms path, staff creation, the Instagram inbox, and the
+    // WhatsApp inbound webhook; later entries carry their own comment.
     //
     // NOT ARMED, stated plainly rather than left as an omission:
     //
@@ -195,6 +195,11 @@ const config = [
       'src/app/api/staff/route.js',
       'src/app/api/instagram/**',
       'src/app/api/registrations/**',
+      // SONOSAPPLY.4 — apply.js is the single write site for the open stamp,
+      // exactly the class this rule exists for: a stamp that silently fails
+      // leaves the music playing with no record, and the cron re-opens it
+      // (restarting the playlist) every tick until the write lands.
+      'src/lib/sonos/**',
       // SHELLY.9 — new area, clean by construction. The reconcile's
       // last_applied stamps and the (PR 2) toggle/connection writes are
       // exactly the kind that would otherwise report success on a failed
