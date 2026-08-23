@@ -109,7 +109,18 @@ export async function api(path, options = {}) {
 
   if (!response.ok && json?.success !== false) {
     // Server returned non-2xx without our standard envelope.
-    return { success: false, error: json?.error || `HTTP ${response.status}` }
+    //
+    // SHELLY-MOB.1 — `status` rides along here too, for the same reason it
+    // does on the non-JSON branch above: a caller that needs to tell one
+    // non-2xx from another must read a FIELD, not match this error string.
+    // The live case is POST /api/shelly/devices/<id>/toggle, which answers
+    // HTTP **429** with `success: true, pending: true` — the override IS
+    // saved and the cron will apply it; the 429 is a back-off signal so the
+    // client stops re-pressing, not a failure. That body lands in this branch
+    // and is replaced wholesale, so without the status mobile would render
+    // "HTTP 429" and tell an operator their switch failed when it did not.
+    // `isQueued` in mobile/lib/shelly.js is the reader.
+    return { success: false, status: response.status, error: json?.error || `HTTP ${response.status}` }
   }
   return json
 }

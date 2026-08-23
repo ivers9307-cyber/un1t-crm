@@ -89,7 +89,28 @@ describe('api() transport tag', () => {
 
     const r = await api('/api/anything')
 
-    expect(r).toEqual({ success: false, error: 'HTTP 500' })
+    // SHELLY-MOB.1 — the status rides along here too, so a caller can tell one
+    // non-2xx from another by field rather than by matching the error string.
+    expect(r).toEqual({ success: false, status: 500, error: 'HTTP 500' })
+    expect('transport' in r).toBe(false)
+  })
+
+  it('a non-2xx body that still says success:true keeps its status — the 429 pending case', async () => {
+    // POST /api/shelly/devices/<id>/toggle answers HTTP 429 with
+    // `success:true, pending:true` when Shelly's shared 1 req/sec budget is
+    // spent: the override is written BEFORE the command is sent, so it is
+    // saved and the cron will apply it. The body is still replaced here (it is
+    // not our failure envelope), but the status survives so the Shelly screen
+    // can recognise it as queued instead of reporting "HTTP 429" as a failure.
+    global.fetch = vi.fn(async () => ({
+      ok: false,
+      status: 429,
+      json: async () => ({ success: true, applied: false, pending: true, code: 'rate_limited' }),
+    }))
+
+    const r = await api('/api/anything')
+
+    expect(r).toEqual({ success: false, status: 429, error: 'HTTP 429' })
     expect('transport' in r).toBe(false)
   })
 })
