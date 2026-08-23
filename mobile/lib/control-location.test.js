@@ -1,6 +1,6 @@
 // mobile/lib/control-location.test.js
 import { describe, it, expect } from 'vitest'
-import { resolveControlLocation, pickerLocations } from './control-location'
+import { resolveControlLocation, pickerLocations, canPickLocation } from './control-location'
 
 const STILL = { id: 'loc-still', name: 'Stillorgan' }
 const HATCH = { id: 'loc-hatch', name: 'Hatch Street' }
@@ -112,5 +112,20 @@ describe('pickerLocations', () => {
   it('locations undefined (profile present) → [] without throwing', () => {
     const master = { role: 'master' }
     expect(pickerLocations(master, undefined, 'device_control')).toEqual([])
+  })
+})
+
+describe('canPickLocation', () => {
+  it('more than one pickable location → true', () => {
+    expect(canPickLocation(LOCATIONS, 'loc-still')).toBe(true)
+  })
+  it('exactly one pickable location that differs from the resolved one → true (the stranded-coach case: holds device_control at one studio, resolved location is another)', () => {
+    expect(canPickLocation([HATCH], 'loc-still')).toBe(true)
+  })
+  it('exactly one pickable location that IS the resolved one → false (nothing to switch to)', () => {
+    expect(canPickLocation([STILL], 'loc-still')).toBe(false)
+  })
+  it('no pickable locations → false', () => {
+    expect(canPickLocation([], 'loc-still')).toBe(false)
   })
 })

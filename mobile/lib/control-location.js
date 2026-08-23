@@ -61,3 +61,17 @@ export function resolveControlLocation({ overrideId, physical, activeLocation, l
 export function pickerLocations(profile, locations, permKey) {
   return (locations || []).filter((l) => canMobile(profile, permKey, l))
 }
+
+/**
+ * Whether the pill's picker has anything worth offering. `pickable.length >
+ * 1` alone strands the exact user the pill exists for: a coach who holds
+ * the screen's perm key at exactly ONE studio, when the resolved location
+ * (detected or fallback) is a DIFFERENT one — `pickable` is length 1, the
+ * naive rule reads "nothing to pick", and the tap goes dead. The fix is to
+ * also open the picker when that single pickable location differs from the
+ * one currently in force, so the coach can still swap onto the studio
+ * they're actually permitted to control (HOME-LOC.6b).
+ */
+export function canPickLocation(pickable, currentId) {
+  return pickable.length > 1 || (pickable.length === 1 && pickable[0].id !== currentId)
+}
