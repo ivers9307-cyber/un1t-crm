@@ -19,15 +19,22 @@ const staff = { id: 'prof-1', role: 'staff', activeLocation: { id: 'loc1' }, loc
 
 const GEO = { enabled: true, latitude: 53.2905, longitude: -6.1988, radius_m: 200 }
 
-// profile_locations rows + locations rows behind one from() switch
+// profile_locations rows + locations rows behind one from() switch.
+// `in()` is faithful to the real query filter — it narrows `locs` to the
+// ids the route actually passed, so a route regression that narrows the
+// query back to eligible-only ids is caught by the tests below instead of
+// silently returning every fixture location regardless of what was asked for.
 function mockDb({ links, locs }) {
+  const inStub = (_col, ids) => ({
+    order: () => Promise.resolve({ data: (locs || []).filter(l => ids.includes(l.id)), error: null }),
+  })
   createServerClient.mockReturnValue({
     from: (table) => ({
       select: () => ({
         eq: () => table === 'profile_locations'
           ? Promise.resolve({ data: links, error: null })
-          : { in: () => ({ order: () => Promise.resolve({ data: locs, error: null }) }) },
-        in: () => ({ order: () => Promise.resolve({ data: locs, error: null }) }),
+          : { in: inStub },
+        in: inStub,
       }),
     }),
   })

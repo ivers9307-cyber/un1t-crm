@@ -27,7 +27,7 @@ export async function GET() {
   const allIds = (links || []).map(l => l.location_id)
   const eligible = new Set((links || []).filter(l => !l.geofence_exempt).map(l => l.location_id))
   let regions = []
-  let allRegions = []
+  const allRegions = []
   let gateCopy = null
   if (allIds.length > 0) {
     const { data: locs, error: locErr } = await db
@@ -47,9 +47,11 @@ export async function GET() {
       }
     }
   }
-  // iOS caps region monitoring at 20 per app — keep headroom.
+  // iOS caps region monitoring at 20 per app — keep headroom. Applies only
+  // to `regions`, which mobile registers as OS-level geofences.
   regions = regions.slice(0, 15)
-  allRegions = allRegions.slice(0, 15)
+  // all_regions has no OS resource to protect (the Home/on-site resolver
+  // just compares distances client-side) — left uncapped.
 
   return NextResponse.json({
     success: true,

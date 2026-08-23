@@ -3708,7 +3708,7 @@ registry.registerPath({
   tags: ['Attendance'],
   security: [{ CookieAuth: [] }],
   summary: 'Geofence regions + permission-gate flag for the current user',
-  description: 'Returns { required, gate_copy, regions:[{location_id,latitude,longitude,radius_m}] } for the caller\'s non-exempt assignments at geofence-enabled locations (locations.settings.geofence, mig 463). Mobile registers OS geofences from this and gates the app on background-location permission when required=true.',
+  description: 'Returns { required, gate_copy, regions:[{location_id,latitude,longitude,radius_m}], all_regions:[{location_id,latitude,longitude,radius_m}] } for the caller\'s assignments at geofence-enabled locations (locations.settings.geofence, mig 463). `regions` is scoped to the caller\'s non-exempt assignments — mobile registers OS geofences from it and gates the app on background-location permission when required=true. `all_regions` (HOME-LOC.1) is exemption-blind — every assigned, geofence-configured location regardless of geofence_exempt — and is consumed by the mobile Home/on-site resolver for physical-location detection, not for attendance registration.',
   responses: { 200: { description: 'Config for the current user' } },
 })
 
