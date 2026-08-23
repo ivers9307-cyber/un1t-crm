@@ -878,6 +878,8 @@ function OverdueList({ data, busy, onAction, onRefresh }) {
 // payment: fees, custom charges, class bookings, class packs, products — any
 // amount. Same row shape as Overdue, so it reuses OverdueRow; only the framing
 // differs. PENDING 'awaiting authorization' charges are NOT here — own tab.
+// DUNNING.4 — no card-update reminder button here: these aren't membership
+// payments, and the reminder copy says "membership payment".
 function UnpaidChargesList({ data, busy, onAction, onRefresh }) {
   if (data === null) return <p className="text-sm text-un1t-subtle">Loading unpaid charges…</p>
   const rows = data.charges || []
@@ -903,7 +905,7 @@ function UnpaidChargesList({ data, busy, onAction, onRefresh }) {
         worth clearing. Charges not yet collected are under <strong>Awaiting
         authorization</strong>. Highest owed first.
       </p>
-      {rows.map((m) => <OverdueRow key={m.contactId} m={m} busy={busy} onAction={onAction} onRefresh={onRefresh} />)}
+      {rows.map((m) => <OverdueRow key={m.contactId} m={m} busy={busy} onAction={onAction} onRefresh={onRefresh} canRemind={false} />)}
     </div>
   )
 }
@@ -935,12 +937,12 @@ function AwaitingAuthList({ data, busy, onAction, onRefresh }) {
         late-cancel fees Glofox has applied but not yet collected. Not confirmed
         debts yet; they clear once the member&apos;s payment goes through. Highest first.
       </p>
-      {rows.map((m) => <OverdueRow key={m.contactId} m={m} busy={busy} onAction={onAction} onRefresh={onRefresh} variant="awaiting" />)}
+      {rows.map((m) => <OverdueRow key={m.contactId} m={m} busy={busy} onAction={onAction} onRefresh={onRefresh} variant="awaiting" canRemind={false} />)}
     </div>
   )
 }
 
-function OverdueRow({ m, busy, onAction, onRefresh, variant = 'owed' }) {
+function OverdueRow({ m, busy, onAction, onRefresh, variant = 'owed', canRemind = true }) {
   const isBusy = busy === m.contactId
   const awaiting = variant === 'awaiting'
   const attendLine = m.daysSinceAttended == null
@@ -982,8 +984,12 @@ function OverdueRow({ m, busy, onAction, onRefresh, variant = 'owed' }) {
           onClick={() => onAction(m.contactId, 'contacted')} />
         <ActionBtn icon={ClipboardList} label="Assign task" disabled={isBusy}
           onClick={() => onAction(m.contactId, 'task_assigned')} />
-        <ActionBtn icon={CreditCard} label="Send payment reminder" disabled={isBusy} primary
-          onClick={() => onAction(m.contactId, 'payment_reminder')} />
+        {/* DUNNING.4 — the card-update reminder is for a failed MEMBERSHIP
+            payment; the Unpaid-charges / Awaiting tabs pass canRemind={false}. */}
+        {canRemind && (
+          <ActionBtn icon={CreditCard} label="Send payment reminder" disabled={isBusy} primary
+            onClick={() => onAction(m.contactId, 'payment_reminder')} />
+        )}
         <RadarOutreachButton contactName={m.name} disabled={isBusy} busy={isBusy}
           onSelect={(tpl) => onAction(m.contactId, 'outreach_sent', { template_name: tpl })} />
         {onRefresh && (
