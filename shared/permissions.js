@@ -1404,7 +1404,7 @@ export function sanitizePermissionsBlob(raw) {
 //
 // Stored under profiles.permissions.landing_preference. Honoured by
 // /dashboard/page.js (web) and the Home tab segmented control
-// (mobile/app/(tabs)/index.jsx). When unset OR set to 'auto' the
+// (mobile/app/(staff)/(tabs)/dashboard.jsx). When unset OR set to 'auto' the
 // existing role-based fallback applies (Business → Studio → Today
 // for whichever the user has permission to see).
 //

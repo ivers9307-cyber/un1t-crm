@@ -39,7 +39,7 @@ export default function CustomiseBar() {
       <Stack.Screen options={{ title: 'Customise bar', headerLeft: () => <BackHeaderLeft label="More" fallbackHref="/(tabs)/more" /> }} />
       <ScrollView contentContainerClassName="p-4">
         <Text className="text-sm text-un1t-subtle mb-4">
-          Choose up to 3 features for your bottom bar, in order. Home and More always stay.
+          Choose up to 3 features for your bottom bar, in order. Home, Dashboard and More always stay.
           {allowed.length === 0 ? '\n\nNothing to arrange here yet.' : ''}
         </Text>
         {[0, 1, 2].map(i => (

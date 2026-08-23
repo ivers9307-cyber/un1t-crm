@@ -15,7 +15,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { View } from 'react-native'
 import { useEffect, useRef, useState } from 'react'
 import { useAuth } from '../../../lib/auth-context'
-import { canMobile, canDashboard } from '../../../lib/permissions'
+import { canMobile, canDashboard, CROSS_PLATFORM_DASHBOARD_KEYS } from '../../../lib/permissions'
 import { registerForPushNotifications } from '../../../lib/push-register'
 import { resolveLayoutForUser } from '../../../lib/mobile-layout'
 import { getNeedsActionCount } from '../../../lib/whatsapp-api'
@@ -110,7 +110,7 @@ export default function TabsLayout() {
 
   // HOME-LOC.7 — the old Home (segmented dashboards) is now its own tab.
   // Same gate that used to decide whether Home rendered any segments.
-  const hasDashboard = ['dashboard_personal', 'dashboard_studio', 'dashboard_business']
+  const hasDashboard = CROSS_PLATFORM_DASHBOARD_KEYS
     .some((k) => canDashboard(profile, k, activeLocation))
 
   // Render config for every bar-capable (tabs) route.
