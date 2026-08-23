@@ -119,8 +119,18 @@ export const WEB_PERMISSIONS = Object.freeze([
   // offers live control only — play/pause/skip, volume, favourites — over
   // the same /api/sonos/* routes. Owner + manager by default; head_coach +
   // staff off (on-site operations oversight).
+  // SHELLY-UI.8 — the key now also gates Shelly smart plugs
+  // (/automations/shelly, web): adopt a plug from the location's own
+  // Shelly cloud account, power windows + class-linked rules, a live
+  // on/off toggle, run-now and a temporary timed override, plus 30 days
+  // of kWh history. Same key, no new permission — one "device control"
+  // grant covers every piece of studio hardware. Role defaults are
+  // UNCHANGED. The bundle layer widened with it: `device_control` is
+  // now owned by bundle_marketing OR bundle_operations
+  // (shared/permission-bundles.js + mig 564), because plugs and
+  // speakers are an operations concern as much as a marketing one.
   { key: 'device_control', label: 'Device control',
-    hint: 'Sonos speakers: playback schedules, run-now and temporary pause on web; live play/pause, volume and favourites on web and mobile.' },
+    hint: 'Sonos speakers and Shelly smart plugs: playback and power schedules, live toggle, run-now, temporary overrides.' },
   // STUDIO-GROUP.1 — sidebar regroup (May 2026): the four items
   // below used to be top-level sidebar entries gated to master/
   // owner via role-only checks (no per-user permission). They now
