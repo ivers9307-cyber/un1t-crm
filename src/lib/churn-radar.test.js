@@ -6,9 +6,7 @@ import {
   classifyContact,
   hasLiveMembership,
   isRealMembershipPlan,
-  splitArrears,
   bucketArrears,
-  OVERDUE_MIN_CENTS,
   scoreMember,
   buildRadar,
   radarSummary,
@@ -664,29 +662,6 @@ describe('RADAR-OVERDUE.1 — buildOverdue (invoice-driven)', () => {
   })
 })
 
-describe('RADAR-OVERDUE.1 — splitArrears (€50 boundary)', () => {
-  it('splits at OVERDUE_MIN_CENTS — €50, exclusive below', () => {
-    expect(OVERDUE_MIN_CENTS).toBe(5000)
-    const rows = [
-      { contactId: 'big', amountOwedCents: 17900 },
-      { contactId: 'exactly50', amountOwedCents: 5000 },
-      { contactId: 'small', amountOwedCents: 1000 },
-      { contactId: 'tiny', amountOwedCents: 500 },
-      { contactId: 'zero', amountOwedCents: 0 },
-    ]
-    const { overdue, unpaidCharges } = splitArrears(rows)
-    expect(overdue.map((r) => r.contactId)).toEqual(['big', 'exactly50'])  // ≥ €50
-    expect(unpaidCharges.map((r) => r.contactId)).toEqual(['small', 'tiny'])  // 0 < x < €50
-  })
-  it('honours a custom boundary + handles empty/null', () => {
-    const rows = [{ contactId: 'a', amountOwedCents: 3000 }]
-    expect(splitArrears(rows, 2000).overdue.map((r) => r.contactId)).toEqual(['a'])
-    expect(splitArrears(rows, 4000).unpaidCharges.map((r) => r.contactId)).toEqual(['a'])
-    expect(splitArrears([])).toEqual({ overdue: [], unpaidCharges: [] })
-    expect(splitArrears(null)).toEqual({ overdue: [], unpaidCharges: [] })
-  })
-})
-
 describe('WINBACK.1 — scoreWinbackContact', () => {
   it('scores a member who last trained inside the win-back window', () => {
     const r = scoreWinbackContact(
@@ -873,51 +848,51 @@ describe('RADAR-TREND.1 — computeTrend', () => {
   })
 })
 
-describe('bucketArrears (OWED-PENDING.1 / AWAITING-AUTH.1)', () => {
+// ARREARS-TYPE.1 — tabs route by CHARGE TYPE, not by amount. The split itself
+// (isMembershipInvoice) happens in fetchPastDue; bucketArrears maps its three
+// per-contact maps onto the tabs and drops empty aggregates.
+describe('bucketArrears — by charge type (ARREARS-TYPE.1)', () => {
   const M = (entries) => new Map(entries)
+  const agg = (amountCents, oldestDueAt = '2026-05-01') => ({ amountCents, count: 1, oldestDueAt })
 
-  it('routes PAST_DUE ≥ €50 → Overdue, < €50 → Unpaid charges', () => {
-    const { overdueById, unpaidById, awaitingAuthById } = bucketArrears(
-      M([
-        ['big', { amountCents: 6000, count: 1, oldestDueAt: '2026-05-01' }],
-        ['small', { amountCents: 1000, count: 1, oldestDueAt: '2026-05-01' }],
-      ]),
-      M(),
-    )
-    expect(overdueById.has('big')).toBe(true)
-    expect(overdueById.has('small')).toBe(false)
-    expect(unpaidById.get('small')?.amountCents).toBe(1000)
-    expect(unpaidById.has('big')).toBe(false)
+  it('routes PAST_DUE membership payments → Overdue at ANY amount (a €25 failed renewal)', () => {
+    const { overdueById, unpaidById, awaitingAuthById } = bucketArrears({ membershipById: M([['r', agg(2500)]]) })
+    expect(overdueById.get('r')?.amountCents).toBe(2500)
+    expect(unpaidById.size).toBe(0)
     expect(awaitingAuthById.size).toBe(0)
   })
 
-  it('routes PENDING fees to Awaiting authorization — never Overdue or Unpaid charges, even ≥ €50', () => {
-    const { overdueById, unpaidById, awaitingAuthById } = bucketArrears(
-      M(),
-      M([['p', { amountCents: 9000, count: 1, oldestDueAt: '2026-05-01' }]]),
-    )
+  it('routes every other PAST_DUE charge → Unpaid charges at ANY amount (a €380 failed class pack)', () => {
+    const { overdueById, unpaidById, awaitingAuthById } = bucketArrears({ chargesById: M([['p', agg(38000)]]) })
+    expect(overdueById.size).toBe(0)
+    expect(unpaidById.get('p')?.amountCents).toBe(38000)
+    expect(awaitingAuthById.size).toBe(0)
+  })
+
+  it('routes PENDING → Awaiting authorization only, even a €510 renewal in progress', () => {
+    const { overdueById, unpaidById, awaitingAuthById } = bucketArrears({ pendingById: M([['a', agg(51000)]]) })
     expect(overdueById.size).toBe(0)
     expect(unpaidById.size).toBe(0)
-    expect(awaitingAuthById.get('p')?.amountCents).toBe(9000)
+    expect(awaitingAuthById.get('a')?.amountCents).toBe(51000)
   })
 
-  it('puts a ≥€50 PAST_DUE debt in Overdue AND its PENDING fee in Awaiting authorization (both tabs)', () => {
-    const { overdueById, unpaidById, awaitingAuthById } = bucketArrears(
-      M([['c', { amountCents: 20900, count: 1, oldestDueAt: '2026-05-01' }]]),
-      M([['c', { amountCents: 1000, count: 1, oldestDueAt: '2026-05-26' }]]),
-    )
-    expect(overdueById.get('c')?.amountCents).toBe(20900)
-    expect(unpaidById.has('c')).toBe(false)
-    expect(awaitingAuthById.get('c')?.amountCents).toBe(1000)
+  it('puts the SAME contact in Overdue and Unpaid charges with separate amounts (failed renewal + failed fee)', () => {
+    const { overdueById, unpaidById, awaitingAuthById } = bucketArrears({
+      membershipById: M([['c', agg(19900, '2026-05-01')]]),
+      chargesById: M([['c', agg(1000, '2026-05-20')]]),
+      pendingById: M([['c', agg(500, '2026-05-26')]]),
+    })
+    expect(overdueById.get('c')).toMatchObject({ amountCents: 19900, oldestDueAt: '2026-05-01' })
+    expect(unpaidById.get('c')).toMatchObject({ amountCents: 1000, oldestDueAt: '2026-05-20' })
+    expect(awaitingAuthById.get('c')).toMatchObject({ amountCents: 500, oldestDueAt: '2026-05-26' })
   })
 
-  it('keeps a small PAST_DUE (Unpaid charges) and a PENDING fee (Awaiting authorization) in SEPARATE tabs', () => {
-    const { overdueById, unpaidById, awaitingAuthById } = bucketArrears(
-      M([['c', { amountCents: 1000, count: 1, oldestDueAt: '2026-05-03' }]]),
-      M([['c', { amountCents: 1000, count: 1, oldestDueAt: '2026-05-26' }]]),
-    )
+  it('drops zero-amount aggregates and tolerates missing maps / no argument', () => {
+    const { overdueById, unpaidById, awaitingAuthById } = bucketArrears({ membershipById: M([['z', agg(0)]]) })
     expect(overdueById.size).toBe(0)
-    expect(unpaidById.get('c')).toMatchObject({ amountCents: 1000, count: 1, oldestDueAt: '2026-05-03' })
-    expect(awaitingAuthById.get('c')).toMatchObject({ amountCents: 1000, count: 1, oldestDueAt: '2026-05-26' })
+    expect(unpaidById.size).toBe(0)
+    expect(awaitingAuthById.size).toBe(0)
+    expect(bucketArrears(undefined)).toEqual({ overdueById: new Map(), unpaidById: new Map(), awaitingAuthById: new Map() })
+    expect(bucketArrears({ membershipById: null, chargesById: 'nope' })).toEqual({ overdueById: new Map(), unpaidById: new Map(), awaitingAuthById: new Map() })
   })
 })
