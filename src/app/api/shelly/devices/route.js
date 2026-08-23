@@ -43,7 +43,9 @@ import { withAuth } from '@/lib/with-auth'
 import { logWarn, logError } from '@/lib/log'
 import { createShellyClient } from '@/lib/shelly/client'
 import { loadConnectionWithKey, loadPublicConnection, markKeyRejected } from '@/lib/shelly/connections'
-import { normaliseGetItems, stateFromReading } from '@/lib/shelly/status'
+import {
+  normaliseGetItems, stateFromReading, resolveDeviceName, nameShapeDiagnostic, rawItemsOf, rawItemId,
+} from '@/lib/shelly/status'
 import { ShellyAdoptBody, MAX_DEVICES_PER_LOCATION } from '@/lib/shelly/schemas'
 // SHELLY-UI.5 — the column allowlist moved to src/lib/shelly/device-load.js
 // when the detail routes appeared, so the list, the adopt response and every
@@ -298,6 +300,33 @@ export const POST = withAuth(
       return bad('This device is already in use elsewhere', 409, { code: 'adopted' })
     }
 
+    // SHELLY-NAMES.1 — the name is resolved off the RAW item and the channel
+    // being adopted, not off the normalised row. Two reasons, and both were
+    // live failures:
+    //
+    //   * normaliseGetItem resolves against channel 0, which is right for a
+    //     single-relay plug and wrong for a Pro 4PM — every one of its four
+    //     rows would take the same label.
+    //   * six Gen3 relays adopted at Stillorgan with no name at all and NOT
+    //     ONE warning, so `settings` came back and the label was somewhere the
+    //     old two-place lookup does not look. resolveDeviceName is the wider
+    //     net; nameShapeDiagnostic below is how we find out where it really
+    //     lives, since nothing on this surface stores a raw Shelly payload.
+    //
+    // `?? item.name` is belt-and-braces for the case where the raw item cannot
+    // be re-found in the body (it always can — `items` was derived from it) —
+    // a name we already resolved must never be lost to a defensive lookup.
+    const rawItem = rawItemsOf(res.body).find((x) => rawItemId(x) === input.device_id)
+    const resolvedName = resolveDeviceName(rawItem, input.channel) ?? item.name ?? null
+    if (!resolvedName) {
+      // KEYS ONLY. `settings` carries the device's wifi and MQTT credentials,
+      // so nothing here may be a value out of the payload — see
+      // nameShapeDiagnostic. This is the line the live gate is waiting on.
+      logWarn('shelly.adopt', 'no device name in the Shelly payload', {
+        locationId, deviceId: input.device_id, channel: input.channel, shape: nameShapeDiagnostic(rawItem),
+      })
+    }
+
     // ---- (f) insert --------------------------------------------------------
     const nowIso = new Date().toISOString()
     const { data: row, error: insertError } = await db
@@ -310,7 +339,7 @@ export const POST = withAuth(
         // Null rather than a synthesised "Plug 1a2b": the card renders its own
         // placeholder, and a stored fake name is indistinguishable from one a
         // human chose the moment anyone looks at the row.
-        name: input.name ?? item.name ?? null,
+        name: input.name ?? resolvedName,
         model: item.model,
         gen: item.gen,
         // Adopted is not armed. Nothing about a plug appearing in the list

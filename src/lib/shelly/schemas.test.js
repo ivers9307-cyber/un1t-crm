@@ -19,6 +19,7 @@ import {
   ShellyDevicePatch,
   ShellyToggleBody,
   ShellyEnergyQuery,
+  ShellySyncNamesBody,
   ShellyOverride,
 } from './schemas'
 
@@ -484,6 +485,30 @@ describe('ShellyEnergyQuery', () => {
   it('rejects junk rather than silently defaulting — only absence is absorbed', () => {
     expect(ShellyEnergyQuery.safeParse({ days: 'all' }).success).toBe(false)
     expect(ShellyEnergyQuery.safeParse({ days: '  ' }).success).toBe(false)
+  })
+})
+
+describe('ShellySyncNamesBody (SHELLY-NAMES.1)', () => {
+  it('defaults to the NON-destructive branch — an absent field never overwrites', () => {
+    // There is no undo: the previous name is not kept anywhere. A body that
+    // merely forgot the field must land on "only unnamed plugs".
+    expect(ShellySyncNamesBody.parse({})).toEqual({ overwrite: false })
+    expect(ShellySyncNamesBody.parse({ overwrite: undefined })).toEqual({ overwrite: false })
+    expect(ShellySyncNamesBody.parse({ overwrite: true })).toEqual({ overwrite: true })
+  })
+
+  it('refuses a typo rather than dropping it onto the safe default', () => {
+    // `overwite: true` would otherwise be dropped, default to false, and
+    // report a successful sync that changed none of the names the operator
+    // asked to replace — with nothing in the response to disagree.
+    expect(ShellySyncNamesBody.safeParse({ overwite: true }).success).toBe(false)
+    expect(ShellySyncNamesBody.safeParse({ overwrite: true, location_id: 'x' }).success).toBe(false)
+  })
+
+  it('is a strict boolean — no coercion, so "false" cannot read as true', () => {
+    for (const junk of ['true', 'false', 1, 0, null]) {
+      expect(ShellySyncNamesBody.safeParse({ overwrite: junk }).success, String(junk)).toBe(false)
+    }
   })
 })
 

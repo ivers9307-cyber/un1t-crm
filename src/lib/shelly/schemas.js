@@ -263,6 +263,25 @@ export const ShellyEnergyQuery = z.object({
   ),
 })
 
+// SHELLY-NAMES.1 — POST /api/shelly/sync-names: copy the labels the operator
+// typed in the Shelly app onto the adopted rows.
+//
+// `overwrite` DEFAULTS TO FALSE, and the default is the safe half on purpose:
+// a name typed on this surface is a human decision, and the destructive
+// version of this button ("All plugs") has to be chosen deliberately every
+// time. There is no undo — the previous name is not kept anywhere — so a body
+// that merely FORGOT the field must land on the non-destructive branch.
+//
+// `.strict()` for the same reason every other body here carries one, and here
+// the silently-dropped key is the destructive one: `overwrite` has a default,
+// so a client posting `overwite: true` would drop the unknown key, fall
+// through to false, and report a successful sync that left every
+// operator-typed name in place — the exact opposite of what was asked, with
+// nothing in the response to disagree.
+export const ShellySyncNamesBody = z.object({
+  overwrite: z.boolean().default(false),
+}).strict()
+
 // The shape written to shelly_devices.override. CONSTRUCTED by the toggle route
 // and parsed before the write — it never validates request input, so `state`
 // outside 'on'|'off' and a missing `set_at` are unwritable. See the header for
