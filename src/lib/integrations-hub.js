@@ -11,6 +11,9 @@
 //   xero_connections     per-location Xero OAuth binding (tenant + scopes).
 //   whatsapp_numbers     per-location WA Cloud API numbers (read-only here).
 //   ad_accounts          Meta/TikTok ad account presence (read-only here).
+//   shelly_connections / per-location smart-plug account + adopted device
+//   shelly_devices       counts (migs 562/563) — non-secret columns only,
+//                        deep-linking to /automations/shelly.
 //   locations.settings   customer_agent block → the AI-agent live signal.
 //   location_plans /     the plan & wallet strip (INTEG-C4) — pinned
 //   wallets / usage      tier + wallet balance + MTD meter usage vs
@@ -24,9 +27,12 @@
 // states — the UI applies them to static cards.)
 //
 // SECRETS NEVER LEAVE THIS MODULE. The assembler selects no token
-// columns from the registry / whatsapp_numbers, and maps
+// columns from the registry / whatsapp_numbers, maps
 // ad_accounts.access_token straight to a has_access_token boolean
-// (same posture as maskConnectionRow / maskAccountRow / publicShape).
+// (same posture as maskConnectionRow / maskAccountRow / publicShape),
+// and selects neither shelly_connections.auth_key nor its
+// auth_key_fingerprint — only key_hint, which publicConnectionView
+// already treats as non-secret.
 //
 // Pure helpers up top (unit-tested in integrations-hub.test.js); the
 // single async assembler at the bottom does batched reads only — one
@@ -34,6 +40,7 @@
 // every read here is bounded — locations are few, and each source
 // table holds at most a handful of rows per location).
 
+import { logWarn } from '@/lib/log'
 import { registryRowFromLegacy } from '@/lib/connection-registry'
 import { EXPIRY_SOON_DAYS } from '@/lib/connection-health'
 import { getSendBudget, tierDailyLimit } from '@/lib/whatsapp-budget'
@@ -113,6 +120,46 @@ export function gradeXeroConnection(row) {
 }
 
 /**
+ * Grade one shelly_connections row (SHELLY-UI.7). The column is
+ * CHECK-constrained to connected|action_needed|error (mig 562), so the
+ * three cases below are the whole domain — but an unknown string is
+ * graded 'error' rather than waved through as connected, because the
+ * one thing this card must never do is paint a broken studio green.
+ *
+ * The 'error' copy reads as RETRYING on purpose (PR-1 review obligation
+ * 6): reconcile.js parks a failing connection for 5 minutes, so a single
+ * blip from Shelly's cloud sets status='error' and clears itself on the
+ * next tick. "Error — check the connection" would send an operator to
+ * re-paste a key that is perfectly fine. 'action_needed' is the state
+ * that genuinely needs hands: the auth key rotates whenever the owner
+ * changes their Shelly password, and only a re-paste fixes it.
+ *
+ * `last_error` is a Shelly-side message written by reconcile.js
+ * (redactSecret'd there) — never a URL and never the key. Pure.
+ */
+export function gradeShellyConnection(row) {
+  if (!row) return { status: 'not_connected', message: null }
+  switch (row.status) {
+    case 'connected':
+      return { status: 'connected', message: null }
+    case 'action_needed':
+      return {
+        status: 'action_needed',
+        message: 'Re-paste the Shelly auth key (it changes when the Shelly password changes)',
+      }
+    case 'error':
+      return {
+        status: 'error',
+        message: row.last_error
+          ? `Retrying — ${String(row.last_error).slice(0, 300)}`
+          : 'Retrying — Shelly unreachable',
+      }
+    default:
+      return { status: 'error', message: 'Unknown connection state' }
+  }
+}
+
+/**
  * The AI-agent live signal from locations.settings.customer_agent.
  * INVARIANT (CLAUDE.md): enabled=true is LIVE FOR EVERYONE regardless
  * of test_mode — real test mode is enabled=false + test_mode=true. Pure.
@@ -172,6 +219,7 @@ const CARD_LABELS = {
   instagram: 'Instagram',
   xero: 'Xero',
   ads: 'Meta Ads',
+  shelly: 'Shelly plugs',
   unifi: 'UniFi Access',
   climate: 'Climate devices',
   bca: 'BCA Submit',
@@ -394,6 +442,63 @@ const REGISTRY_HUB_COLUMNS =
   'external_account_id, config, token_expires_at, last_error, last_ok_at'
 
 const REGISTRY_PLATFORMS = ['glofox', 'unifi', 'sensibo', 'thinq', 'twilio_sender', 'bca', 'instagram']
+
+// ── Shelly plugs (SHELLY-UI.7) ────────────────────────────────────────
+//
+// The hub card deep-links to /automations/shelly — the ACTIVE-LOCATION
+// page — rather than to a per-location tab, because by decision there is
+// no LocationIntegrations Shelly tab: managing another studio's plugs
+// means switching location first. So every row carries the same href;
+// the location name on the row is what tells the operator which studio
+// the numbers describe. (Obligation 16: the card reads only non-secret
+// columns and deep-links to that page.)
+export const SHELLY_HREF = '/automations/shelly'
+
+// The device read PAGINATES rather than capping at the PostgREST 1,000-row
+// limit, so the counts are exact for any in-scope set instead of exact only
+// up to 20 locations (MAX_DEVICES_PER_LOCATION = 50 × 20 = 1,000). A count
+// that silently becomes a floor once the estate grows is the kind of number
+// an operator trusts right up to the day it lies.
+//
+// The order is a TOTAL one — (device_id, channel) is globally UNIQUE (mig
+// 562), so location_id alone would leave ties free to shuffle between pages
+// and .range() would then duplicate and skip rows. That is the whole reason
+// the tiebreakers are here; do not trim them to the one column the counts
+// group by.
+const SHELLY_DEVICE_PAGE = 1000
+// A hard stop so a runaway read cannot walk the table forever. 5 pages is
+// 5,000 rows — 100 locations at the full 50-device cap, i.e. the entire
+// spec'd estate — and hitting it is logged, because past it the counts
+// become a floor and the log is the only thing that says so.
+const SHELLY_DEVICE_MAX_PAGES = 5
+
+/**
+ * Every adopted device row for the in-scope locations, .range()-paginated
+ * with an explicit total order (the pipeline-reclassify pattern, same shape
+ * as admin-tenants.js fetchAllPages — which throws, where this returns the
+ * error instead: a hub read failure grades ONE card unreadable rather than
+ * taking down the whole payload).
+ *
+ * @returns {{ rows: Array, error: object|null, capped: boolean }}
+ */
+async function fetchShellyDevices(db, ids) {
+  const rows = []
+  for (let page = 0; page < SHELLY_DEVICE_MAX_PAGES; page++) {
+    const from = page * SHELLY_DEVICE_PAGE
+    const { data, error } = await db
+      .from('shelly_devices')
+      .select('location_id, enabled, last_state')
+      .in('location_id', ids)
+      .order('location_id', { ascending: true })
+      .order('device_id', { ascending: true })
+      .order('channel', { ascending: true })
+      .range(from, from + SHELLY_DEVICE_PAGE - 1)
+    if (error) return { rows: [], error, capped: false }
+    rows.push(...(data || []))
+    if (!data || data.length < SHELLY_DEVICE_PAGE) return { rows, error: null, capped: false }
+  }
+  return { rows, error: null, capped: true }
+}
 
 function pickRegistry(rows, locationId, platform) {
   return (rows || []).find((r) => r.location_id === locationId && r.platform === platform) || null
@@ -623,7 +728,7 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
   const nameById = Object.fromEntries(locs.map((l) => [l.id, l.name]))
 
   // One batched query per table (never per location).
-  const [regRes, xeroRes, waRes, adsRes] = await Promise.all([
+  const [regRes, xeroRes, waRes, adsRes, shellyConnRes, shellyDevRes] = await Promise.all([
     db.from('channel_connections')
       .select(REGISTRY_HUB_COLUMNS)
       .in('location_id', ids)
@@ -640,6 +745,25 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
     db.from('ad_accounts')
       .select('id, location_id, provider, external_account_id, display_name, is_active, access_token')
       .in('location_id', ids),
+    // ── Shelly (SHELLY-UI.7) — see the card block below for the shape ──
+    // NEVER auth_key, and never auth_key_fingerprint either: the fingerprint
+    // is a sha256 OF the key, so publishing it turns "which account is this?"
+    // into an offline check anyone holding a candidate key can run (the same
+    // allowlist argument as NON_SECRET in src/lib/shelly/connections.js).
+    // key_hint is the last ≤4 characters and IS non-secret — publicConnectionView
+    // returns it, and the card renders it as ••••abcd.
+    // updated_at is the LAST ATTEMPT: markConnectionStatus stamps it on every
+    // reconcile tick that touches the status, success or failure, where
+    // last_ok_at only advances on success. Next to each other they separate
+    // "the cron is still retrying" from "nothing has touched this in days",
+    // which is the whole question an operator has about a red badge.
+    // location_id is UNIQUE on this table, so ids.length rows is the ceiling;
+    // asking for one MORE makes a truncated read distinguishable from a full one.
+    db.from('shelly_connections')
+      .select('location_id, host, status, last_error, last_ok_at, updated_at, key_hint')
+      .in('location_id', ids)
+      .limit(ids.length + 1),
+    fetchShellyDevices(db, ids),
   ])
 
   const regRows = regRes.data || []
@@ -791,6 +915,135 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
     })
   })
 
+  // ── Shelly plugs — per-location connection grade + device counts ──
+  //
+  // ONE ROW PER IN-SCOPE LOCATION, including locations that never
+  // connected (status 'not_connected', zero counts — the card renders
+  // "Not connected"). That differs from Xero/Instagram, which omit the
+  // absent case, and it is deliberate: the counts are what make a
+  // never-connected studio worth showing at all — a location that
+  // disconnected with plugs still adopted is a real, quiet half-state
+  // (the relays hold wherever they were left and nothing schedules
+  // them), and it can only be surfaced by a row that carries both the
+  // absent connection and the surviving device count. That is the one
+  // not_connected case that nags: partialSetup below.
+  //
+  // That choice COLLIDES with summariseHubForLocation in
+  // src/lib/admin-tenants.js, whose HUB_STATUS_SECTIONS contract is
+  // "sections with no row for the location are omitted, so a bare
+  // location renders an empty list rather than a wall of not_connected".
+  // A row per location defeats that omission, so `shelly` is deliberately
+  // NOT in that list today — and whoever adds it must filter the
+  // not_connected-with-no-devices rows out first, or every bare location
+  // in the tenants console grows a "Shelly: Not connected" line.
+  //
+  // AN UNREADABLE CARD IS 'error', NEVER 'not_connected'. Both reads
+  // destructure `error`, and a failure on EITHER grades every in-scope
+  // location as unreadable rather than reporting an absence: "not
+  // connected" for a live studio is the same lie as "0 plugs" for a
+  // studio with twelve, and it is the lie an operator acts on. The
+  // devices read counts toward this too — a status read alone would
+  // paint a connected card with a device count of zero.
+  //
+  // UNREADABLE IS ALSO NOT ZERO. The counts go null (countsKnown: false)
+  // rather than 0, and the UI drops the clause entirely: "no plugs
+  // adopted" under "Could not read Shelly state" is a fact we do not
+  // have, printed next to an admission that we could not read it.
+  const shellyReadError = shellyConnRes.error || shellyDevRes.error
+  if (shellyReadError) {
+    logWarn('integrations-hub', 'shelly read failed — card graded unreadable', {
+      error: shellyReadError.message,
+      locations: ids.length,
+    })
+  }
+  const shellyConnRows = shellyConnRes.data || []
+  const shellyDevRows = shellyDevRes.rows || []
+  if (shellyDevRes.capped) {
+    // Every page came back full: there may be devices past the hard stop,
+    // so the counts below are a floor, not a total. Decorative to the card
+    // (the STATUS comes from shelly_connections, which is one exactly-
+    // bounded row per location), which is why this logs instead of
+    // failing the card.
+    logWarn('integrations-hub', 'shelly device read hit the page cap — counts may undercount', {
+      maxRows: SHELLY_DEVICE_PAGE * SHELLY_DEVICE_MAX_PAGES,
+      locations: ids.length,
+    })
+  }
+
+  // ONE attention row for a read blip, not one per location. The failure is
+  // a property of the CARD — a single db error — so N locations would print
+  // the same sentence N times and push everything else out of the strip,
+  // while the per-location rows still each carry the error for the card
+  // itself. It is pinned to the first in-scope location rather than to no
+  // location because attentionCountByOrg (admin-tenants.js) resolves an org
+  // THROUGH a.locationId and skips a row it cannot map: a null there would
+  // count zero, which is the one outcome worse than counting once. The cost
+  // is that the strip hides it while the operator has scoped to some other
+  // single location — where the Shelly card itself is still red.
+  if (shellyReadError && ids.length) {
+    attentionInputs.push({
+      cardKey: 'shelly', locationId: ids[0], locationName: 'All locations',
+      status: 'error', message: 'Could not read Shelly state — retrying',
+      href: SHELLY_HREF,
+    })
+  }
+
+  const shelly = locs.map((loc) => {
+    const row = shellyConnRows.find((c) => c.location_id === loc.id) || null
+    const grade = shellyReadError
+      ? { status: 'error', message: 'Could not read Shelly state' }
+      : gradeShellyConnection(row)
+    const devices = shellyReadError ? null : shellyDevRows.filter((d) => d.location_id === loc.id)
+    const countsKnown = devices !== null
+    const deviceCount = countsKnown ? devices.length : null
+    const enabledCount = countsKnown ? devices.filter((d) => d.enabled === true).length : null
+    // last_state.online is written as a real boolean by stateFromReading;
+    // `=== true` keeps a null/absent state (a device adopted but never
+    // read) out of the online tally rather than counting it as up.
+    const onlineCount = countsKnown ? devices.filter((d) => d.last_state?.online === true).length : null
+    const status = grade.status
+    // A disconnect that left plugs behind is worth one quiet nag; a location
+    // that simply never had Shelly is not (buildAttention only reads
+    // partialSetup on not_connected rows). The unreadable case never gets
+    // here — it is graded 'error' and carries the single card-level row above.
+    const stranded = status === 'not_connected' && countsKnown && deviceCount > 0
+    if (!shellyReadError) {
+      attentionInputs.push({
+        cardKey: 'shelly', locationId: loc.id, locationName: nameById[loc.id],
+        status,
+        message: stranded
+          ? `${deviceCount} plug${deviceCount === 1 ? '' : 's'} still adopted — nothing schedules them while the Shelly account is disconnected`
+          : grade.message,
+        partialSetup: stranded,
+        href: SHELLY_HREF,
+      })
+    }
+    return {
+      cardKey: 'shelly',
+      locationId: loc.id,
+      locationName: nameById[loc.id] ?? null,
+      status,
+      message: grade.message,
+      host: row?.host ?? null,
+      // Presence derived from the hint, the same argument as
+      // publicConnectionView.has_auth_key: the hint is the only evidence of
+      // a key this projection HAS, so deriving it from anything else would
+      // make the field mean different things per caller.
+      hasAuthKey: !!row?.key_hint,
+      keyHint: row?.key_hint ?? null,
+      lastOkAt: row?.last_ok_at ?? null,
+      lastAttemptAt: row?.updated_at ?? null,
+      lastError: row?.last_error ?? null,
+      // null, not 0, when the read failed — countsKnown is the flag the UI
+      // branches on so a missing count can never render as an empty studio.
+      countsKnown,
+      deviceCount,
+      enabledCount,
+      onlineCount,
+      href: SHELLY_HREF,
+    }
+  })
+
   // ── SMS sender (platform-managed card's live signal) ──
   const sms = locs.map((loc) => {
     const reg = pickRegistry(regRows, loc.id, 'twilio_sender')
@@ -913,6 +1166,7 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
     instagram,
     xero,
     ads,
+    shelly,
     sms,
     agent,
     email,

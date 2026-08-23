@@ -82,6 +82,7 @@ import { createShellyClient, MAX_GET_IDS, MIN_GAP_MS, redactSecret } from './cli
 import { normaliseGetItems, stateFromReading, stateChanged, groupId } from './status'
 import { planDeviceAction, isLiveOverride } from './plan'
 import { rollDailyEnergy } from './energy'
+import { AUTH_ERROR, HOST_ERROR } from './connections'
 
 const MODULE = 'shelly-reconcile'
 
@@ -142,12 +143,16 @@ export const MAX_OCCURRENCES = 500
 
 // Operator-facing, and deliberately fixed literals: they are stored in
 // last_error and rendered in the UI, so nothing derived from a response body
-// (which could carry the key) may reach them.
-export const AUTH_ERROR = 'Shelly rejected the stored auth key — paste a new one from the Shelly app'
-export const HOST_ERROR = 'Shelly host is invalid — re-enter it from the Shelly app'
+// (which could carry the key) may reach them. DEFINED IN connections.js since
+// SHELLY-UI.4b — the cron is no longer the only writer of these strings (the
+// discover and adopt routes park the same dead key) — and re-exported here so
+// every existing importer and test of reconcile.js is unaffected.
+
 // Distinct from 'unreachable' on purpose: the account IS reachable, we are over
 // its budget. Told the wrong one, an owner goes looking at their wifi.
 export const RATE_LIMIT_ERROR = 'Shelly rate limit hit — over the 1 req/s account budget'
+
+export { AUTH_ERROR, HOST_ERROR }
 
 const COUNTER_KEYS = [
   'devices', 'reads', 'readFailures', 'rateLimited', 'stateWrites', 'energyWrites',

@@ -37,16 +37,25 @@ const HOST_RE = /^shelly-[a-z0-9-]+\.shelly\.cloud$/
 
 const realSleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+// The ONE sentence that tells an operator what an account server looks like.
+// EXPORTED because normaliseShellyHost is not the only place a bad host is
+// answered: createShellyClient re-validates and reports `kind:'config'`
+// without a message, so the connection route has to answer that branch too.
+// A second, re-typed copy there is the kind that drifts the day someone
+// improves one of the two, and the operator would then get different words
+// depending on which branch caught the same mistake.
+export const SHELLY_HOST_HELP =
+  'Enter your account server from the Shelly app, e.g. shelly-<region>.shelly.cloud'
+
 // Operator-supplied and server-fetched: an SSRF surface. Hostname only,
 // lowercased, and it must be an account server. Accepts a pasted URL.
 export function normaliseShellyHost(input) {
   let s = String(input ?? '').trim().toLowerCase()
-  const wanted = 'Enter your account server from the Shelly app, e.g. shelly-<region>.shelly.cloud'
-  if (!s) return { ok: false, error: wanted }
+  if (!s) return { ok: false, error: SHELLY_HOST_HELP }
   if (!/^[a-z]+:\/\//.test(s)) s = 'https://' + s
   let host
-  try { host = new URL(s).hostname } catch { return { ok: false, error: wanted } }
-  if (!HOST_RE.test(host)) return { ok: false, error: wanted }
+  try { host = new URL(s).hostname } catch { return { ok: false, error: SHELLY_HOST_HELP } }
+  if (!HOST_RE.test(host)) return { ok: false, error: SHELLY_HOST_HELP }
   return { ok: true, host }
 }
 

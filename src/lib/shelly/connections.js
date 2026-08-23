@@ -15,6 +15,7 @@
 // embed missing, a blank org id on either side — is treated as foreign, and
 // the refusal carries nothing but the reason.
 
+import { logWarn } from '@/lib/log'
 import { createShellyClient } from './client'
 
 // EXACTLY the columns publicConnectionView projects — the select and the view
@@ -168,7 +169,7 @@ export function publicConnectionView(conn) {
  * STUDIO mid-reconcile on the same 1 req/sec budget. Refusing a good key, or
  * stamping status='error', on any of those is a false accusation.
  *
- * @returns {{ok: true, deviceCount: number} | {ok: false, kind: string, statusCode: number}}
+ * @returns {{ok: true, deviceCount: number|null} | {ok: false, kind: string, statusCode: number}}
  */
 export async function probeConnection(conn, { makeClient = createShellyClient } = {}) {
   const res = await makeClient(conn).allStatus()
@@ -176,9 +177,72 @@ export async function probeConnection(conn, { makeClient = createShellyClient } 
   // v1 devices_status is an OBJECT KEYED BY DEVICE ID, and the count is only
   // meaningful as "ids we could read". An array is not that shape, and
   // Object.keys would happily count its indices — reporting "2 devices found"
-  // off a body discovery can never get an id out of. Anything unrecognised
-  // counts 0; the probe's verdict is the key, not the inventory.
+  // off a body discovery can never get an id out of.
+  //
+  // Anything unrecognised counts null, NOT 0. Those two are different answers
+  // and the caller renders them differently: 0 is a real, actionable state
+  // ("connected, but this Shelly account has no devices on it" — the
+  // maintenance-page false positive SHELLY.7's review asked to surface),
+  // while null is "the account answered in a shape we cannot read", which is
+  // a fact about the body and not about the estate. Folding the second into
+  // the first would send an operator hunting for plugs that are plainly
+  // there. The probe's verdict is still the key, not the inventory.
   const devices = res.body?.data?.devices_status
   const countable = !!devices && typeof devices === 'object' && !Array.isArray(devices)
-  return { ok: true, deviceCount: countable ? Object.keys(devices).length : 0 }
+  return { ok: true, deviceCount: countable ? Object.keys(devices).length : null }
+}
+
+// ——— connection status ————————————————————————————————————————————————
+//
+// SHELLY-UI.4b — the operator-facing failure strings and the one write that
+// sets them. They live HERE rather than in reconcile.js because the cron is no
+// longer the only writer: discovery and adopt hit the same dead key and must
+// light the same badge with the same words. reconcile.js re-exports both
+// constants, so its own call sites and tests are untouched.
+//
+// Deliberately FIXED LITERALS. They are stored in `last_error` and rendered in
+// the UI, so nothing derived from a response body — which can carry the auth
+// key — may reach them.
+export const AUTH_ERROR = 'Shelly rejected the stored auth key — paste a new one from the Shelly app'
+export const HOST_ERROR = 'Shelly host is invalid — re-enter it from the Shelly app'
+
+/**
+ * Patch one location's connection status.
+ *
+ * BEST EFFORT BY CONTRACT, and the return value says so rather than the caller
+ * having to know: a failed badge write costs a stale chip, while letting it
+ * refuse would replace the one answer an operator can act on ("re-paste your
+ * key") with one they cannot. It logs its own failure — the point of lifting
+ * this out of three routes is that the logging cannot drift between them.
+ *
+ * Keyed on location_id, which is UNIQUE (mig 562), so callers that hold a
+ * location — every route — need not carry the connection id. The row's
+ * existence is the caller's business: a zero-row update is not distinguished
+ * here, because every caller has just read the row by this same key.
+ *
+ * @returns {{ok: boolean}}
+ */
+export async function markConnectionStatus(db, locationId, patch) {
+  const { error } = await db
+    .from('shelly_connections')
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq('location_id', locationId)
+  if (error) {
+    logWarn('shelly-connections', 'connection status write failed', { locationId, error: error.message })
+    return { ok: false }
+  }
+  return { ok: true }
+}
+
+/**
+ * The cloud says the stored key is wrong. ONLY `kind:'auth'` may call this —
+ * a network blip or a 429 is not evidence about the credential, and parking a
+ * working connection on one sends an owner hunting for a new key.
+ */
+export async function markKeyRejected(db, locationId, nowIso = new Date().toISOString()) {
+  return markConnectionStatus(db, locationId, {
+    status: 'action_needed',
+    last_error: AUTH_ERROR,
+    last_error_at: nowIso,
+  })
 }

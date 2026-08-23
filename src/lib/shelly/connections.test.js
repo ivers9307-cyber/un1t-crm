@@ -1,4 +1,10 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// markConnectionStatus logs its OWN failure — that is the point of lifting it
+// out of three routes — so the logger is stubbed and asserted rather than left
+// to write to the terminal.
+vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
+
 import {
   classifyFingerprintClash,
   publicConnectionView,
@@ -6,8 +12,12 @@ import {
   findFingerprintRows,
   loadConnectionWithKey,
   loadPublicConnection,
+  markConnectionStatus,
+  markKeyRejected,
+  AUTH_ERROR,
   FINGERPRINT_ROW_CAP,
 } from './connections'
+import { logWarn } from '@/lib/log'
 
 const row = (location_id, organization_id, name) => ({ location_id, locations: { organization_id, name } })
 
@@ -112,11 +122,21 @@ describe('probeConnection', () => {
     expect(await probeConnection({}, mk({ ok: false, kind: 'rate_limited', statusCode: 429 }))).toEqual({ ok: false, kind: 'rate_limited', statusCode: 429 })
   })
 
-  it('counts 0 devices for any body that is not the keyed devices_status object', async () => {
-    expect(await probeConnection({}, mk({ ok: true, statusCode: 200, body: { isok: true, data: { devices_status: [{}, {}] } } }))).toEqual({ ok: true, deviceCount: 0 })
-    expect(await probeConnection({}, mk({ ok: true, statusCode: 200, body: { isok: true, data: { devices_status: null } } }))).toEqual({ ok: true, deviceCount: 0 })
-    expect(await probeConnection({}, mk({ ok: true, statusCode: 200, body: null }))).toEqual({ ok: true, deviceCount: 0 })
-    expect(await probeConnection({}, mk({ ok: true, statusCode: 200 }))).toEqual({ ok: true, deviceCount: 0 })
+  // 0 and null are DIFFERENT ANSWERS and the connection route renders them
+  // differently. 0 says "this Shelly account genuinely has no devices on it",
+  // which is a real state an operator must see (it is what a maintenance page
+  // looks like from here). null says "the account answered in a shape we
+  // cannot read", which is a fact about the body, not about their estate.
+  // Reporting the second as 0 sends someone hunting for plugs that are there.
+  it('counts a GENUINELY EMPTY keyed devices_status as 0', async () => {
+    expect(await probeConnection({}, mk({ ok: true, statusCode: 200, body: { isok: true, data: { devices_status: {} } } }))).toEqual({ ok: true, deviceCount: 0 })
+  })
+
+  it('counts null — never 0 — for any body that is not the keyed devices_status object', async () => {
+    expect(await probeConnection({}, mk({ ok: true, statusCode: 200, body: { isok: true, data: { devices_status: [{}, {}] } } }))).toEqual({ ok: true, deviceCount: null })
+    expect(await probeConnection({}, mk({ ok: true, statusCode: 200, body: { isok: true, data: { devices_status: null } } }))).toEqual({ ok: true, deviceCount: null })
+    expect(await probeConnection({}, mk({ ok: true, statusCode: 200, body: null }))).toEqual({ ok: true, deviceCount: null })
+    expect(await probeConnection({}, mk({ ok: true, statusCode: 200 }))).toEqual({ ok: true, deviceCount: null })
   })
 
   it('an ok probe carries nothing but the verdict and the count', async () => {
@@ -199,5 +219,73 @@ describe('db loaders', () => {
     expect(calls[0].cols.split(',').map((s) => s.trim()).sort()).toEqual(['host', 'key_hint', 'last_error', 'last_error_at', 'last_ok_at', 'status'])
     expect(await loadPublicConnection(db(null, null), 'loc-1')).toEqual({ ok: false, reason: 'not_connected' })
     expect(await loadPublicConnection(db(null, { message: 'boom' }), 'loc-1')).toEqual({ ok: false, reason: 'db_error', error: 'boom' })
+  })
+})
+
+describe('markConnectionStatus / markKeyRejected', () => {
+  // Records the update payload and every filter, so "scoped to this location"
+  // and "stamps updated_at" are assertions about the helper.
+  function makeDb(error = null) {
+    const calls = []
+    const db = {
+      from: (table) => {
+        const st = { table, payload: null, filters: {} }
+        const b = {
+          update: (payload) => { st.payload = payload; calls.push(st); return b },
+          eq: (col, val) => { st.filters[col] = val; return b },
+          then: (ok, err) => Promise.resolve({ data: null, error }).then(ok, err),
+        }
+        return b
+      },
+    }
+    return { db, calls }
+  }
+
+  beforeEach(() => vi.clearAllMocks())
+
+  it('patches the row for ONE location and stamps updated_at', async () => {
+    const { db, calls } = makeDb()
+    const res = await markConnectionStatus(db, 'loc-1', { status: 'error', last_error: 'nope' })
+    expect(res).toEqual({ ok: true })
+    expect(calls).toHaveLength(1)
+    expect(calls[0].table).toBe('shelly_connections')
+    expect(calls[0].filters).toEqual({ location_id: 'loc-1' })
+    expect(calls[0].payload).toMatchObject({ status: 'error', last_error: 'nope' })
+    expect(calls[0].payload.updated_at).toEqual(expect.any(String))
+    expect(logWarn).not.toHaveBeenCalled()
+  })
+
+  it('a failed write answers {ok:false} and logs it — never throws, never silently succeeds', async () => {
+    // Best effort BY CONTRACT: the caller's 409 still has to go out, so the
+    // failure has to be visible somewhere other than the response.
+    const { db } = makeDb({ message: 'db down' })
+    expect(await markConnectionStatus(db, 'loc-1', { status: 'error' })).toEqual({ ok: false })
+    expect(logWarn).toHaveBeenCalledWith(
+      'shelly-connections',
+      'connection status write failed',
+      expect.objectContaining({ locationId: 'loc-1', error: 'db down' }),
+    )
+  })
+
+  it('markKeyRejected writes action_needed with the shared AUTH_ERROR copy', async () => {
+    const { db, calls } = makeDb()
+    expect(await markKeyRejected(db, 'loc-1', '2026-08-23T12:00:00.000Z')).toEqual({ ok: true })
+    expect(calls[0].filters).toEqual({ location_id: 'loc-1' })
+    expect(calls[0].payload).toMatchObject({
+      status: 'action_needed',
+      last_error: AUTH_ERROR,
+      last_error_at: '2026-08-23T12:00:00.000Z',
+    })
+  })
+
+  it('markKeyRejected defaults its own timestamp', async () => {
+    const { db, calls } = makeDb()
+    await markKeyRejected(db, 'loc-1')
+    expect(Number.isFinite(Date.parse(calls[0].payload.last_error_at))).toBe(true)
+  })
+
+  it('markKeyRejected propagates a failed write as {ok:false}', async () => {
+    const { db } = makeDb({ message: 'db down' })
+    expect(await markKeyRejected(db, 'loc-1')).toEqual({ ok: false })
   })
 })
