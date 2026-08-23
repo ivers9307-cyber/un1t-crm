@@ -61,6 +61,24 @@ describe('rollDailyEnergy — unusable samples', () => {
     expect(rollDailyEnergy(null, { total_wh: 1000, at: 42 }, DAY)).toBe(null)
     expect(rollDailyEnergy(today(), { total_wh: 1001, at: null }, DAY)).toBe(null)
   })
+  it('rejects a total past the column ceiling, which is corruption rather than a reading', () => {
+    // numeric(14,3) holds 11 integer digits, and a uint32 Wh counter caps at
+    // 4.29e9 — so 1e11 is unstorable AND impossible. One unstorable row fails
+    // the bulk upsert for every device at the location.
+    for (const v of [1e11, 1e11 + 1, 1e12, 9.9e15, '1e11', '100000000000']) {
+      expect(rollDailyEnergy(null, { total_wh: v, at: at('06:00:00') }, DAY), String(v)).toBe(null)
+    }
+    // The boundary is exclusive: the largest storable reading still rolls.
+    expect(rollDailyEnergy(null, { total_wh: 1e11 - 1, at: at('06:00:00') }, DAY))
+      .toMatchObject({ wh_last: 99999999999, wh_total: 0 })
+  })
+  it('a ceiling-breaking sample does not disturb the day it was rejected from', () => {
+    const prev = today({ wh_total: 40, samples: 10 })
+    expect(rollDailyEnergy(prev, { total_wh: 1e12, at: at('06:01:00') }, DAY)).toBe(null)
+    // The next good sample carries on from the row as if nothing happened.
+    expect(rollDailyEnergy(prev, { total_wh: 1003, at: at('06:02:00') }, DAY))
+      .toMatchObject({ wh_total: 43, samples: 11 })
+  })
   it('accepts a numeric string total (a stringly-typed body is cheap to tolerate)', () => {
     expect(rollDailyEnergy(today(), { total_wh: '1007.500', at: at('06:01:00') }, DAY))
       .toMatchObject({ wh_last: 1007.5, wh_total: 7.5 })
@@ -106,6 +124,18 @@ describe('rollDailyEnergy — numerics arriving as strings from PostgREST', () =
     const row = rollDailyEnergy(prev, { total_wh: 1003, at: at('06:01:00') }, DAY)
     expect(row).toMatchObject({ wh_last: 1003, wh_total: 0, samples: 1, resets: 0 })
     for (const k of NUMERIC_COLS) expect(row[k] >= 0, k).toBe(true)
+  })
+  it('samples and resets stay whole numbers even when the stored count is fractional', () => {
+    // samples/resets are counts in an integer column: 1.5 + 1 = 2.5 would be
+    // rejected outright, so a fractional stored count is truncated first.
+    const row = rollDailyEnergy(today({ samples: '1.5', resets: '2.9', wh_last: 50000 }), { total_wh: 5, at: at('06:01:00') }, DAY)
+    expect(row).toMatchObject({ samples: 2, resets: 3 })
+    expect(Number.isInteger(row.samples)).toBe(true)
+    expect(Number.isInteger(row.resets)).toBe(true)
+  })
+  it('an unreadable count folds to zero rather than failing the location\'s write', () => {
+    const row = rollDailyEnergy(today({ samples: 'x', resets: -4 }), { total_wh: 1001, at: at('06:01:00') }, DAY)
+    expect(row).toMatchObject({ samples: 1, resets: 0 })
   })
   it('an absent first_sample_at is filled from this sample rather than upserting null', () => {
     const prev = today({ first_sample_at: null })
@@ -191,6 +221,7 @@ describe('rollDailyEnergy — the row invariant, swept', () => {
       today({ wh_start: 'x', wh_last: 'x', wh_total: 'x', samples: 'x', resets: 'x' }),
       today({ wh_start: -1, wh_last: -1, wh_total: -1, samples: -1, resets: -1 }),
       today({ wh_last: NaN, wh_total: NaN, samples: NaN, resets: NaN }),
+      today({ samples: '1.5', resets: '0.5' }),
       today({ wh_last: 50000, wh_total: 40 }),
       today({ first_sample_at: null, last_sample_at: undefined }),
     ]
@@ -210,6 +241,9 @@ describe('rollDailyEnergy — the row invariant, swept', () => {
           expect(String(row[k]).split('.')[1]?.length ?? 0, k).toBeLessThanOrEqual(3)
         }
         expect(row.samples).toBeGreaterThanOrEqual(1)
+        // Counts, not measurements: whole numbers, and inside the ceiling.
+        for (const k of ['samples', 'resets']) expect(Number.isInteger(row[k]), k).toBe(true)
+        for (const k of ['wh_start', 'wh_last', 'wh_total']) expect(row[k], k).toBeLessThan(1e11)
         for (const k of ['first_sample_at', 'last_sample_at']) {
           expect(typeof row[k], k).toBe('string')
           expect(row[k].trim(), k).not.toBe('')
