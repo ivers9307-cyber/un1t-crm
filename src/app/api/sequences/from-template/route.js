@@ -10,6 +10,7 @@
 // the operator's active location.
 
 import { NextResponse } from 'next/server'
+import { resolveWhatsappTemplateIds } from '@/lib/sequences/template-install'
 import { randomBytes } from 'node:crypto'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
@@ -81,7 +82,17 @@ export async function POST(request) {
   }
 
   // 2. Insert each step in order.
-  const stepRows = (tpl.steps || []).map((s, i) => ({
+  // DUNNING.6 — resolve WhatsApp steps named by template (gallery templates
+  // can't carry a location's uuid) against this location's approved templates.
+  let steps = tpl.steps || []
+  if (steps.some((st) => st?.step_type === 'whatsapp' && st.whatsapp_template_name)) {
+    const { data: waRows } = await db
+      .from('whatsapp_templates')
+      .select('id, name, status')
+      .eq('location_id', locationId)
+    steps = resolveWhatsappTemplateIds(steps, waRows || [])
+  }
+  const stepRows = steps.map((s, i) => ({
     sequence_id: seq.id,
     step_order: i + 1,
     delay_days: s.delay_days ?? 0,
