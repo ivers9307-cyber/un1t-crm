@@ -172,9 +172,12 @@ export default function TabsLayout() {
           name="dashboard"
           options={{
             title: 'Dashboard',
-            // href:null removes it from the bar AND makes it non-navigable
-            // for users with no dashboard permission (expo-router contract) —
-            // the hidden feature tabs below only add tabBarItemStyle because
+            // href:null hides the bar slot (expo-router auto-applies
+            // display:'none') but is a UI toggle, NOT an access gate — a
+            // router.push('/(tabs)/dashboard') (e.g. a notification tap)
+            // still lands; dashboard.jsx's own canDashboard re-filter is the
+            // real boundary and renders a harmless stub with no segments.
+            // The hidden feature tabs below add tabBarItemStyle only because
             // their href can be non-null (More-eligible but off the bar).
             href: hasDashboard ? '/(tabs)/dashboard' : null,
             tabBarIcon: ({ color, size }) => (<Ionicons name="stats-chart-outline" size={size} color={color} />),
