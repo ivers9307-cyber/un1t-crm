@@ -47,7 +47,10 @@ import { GET, POST } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { createShellyClient } from '@/lib/shelly/client'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
+// Imported from reconcile.js ON PURPOSE, not from connections.js where it now
+// lives: the re-export is what keeps the cron's importers working, so a test
+// that reaches through it proves the two modules still agree on the copy.
 import { AUTH_ERROR } from '@/lib/shelly/reconcile'
 import { MAX_DEVICES_PER_LOCATION } from '@/lib/shelly/schemas'
 
@@ -164,6 +167,7 @@ function makeDb(cfg = {}) {
     deviceRows: [],
     deviceError: null,
     deviceCountError: null,
+    nullCount: false, // a count PostgREST did not compute — null, not zero
     insertError: null,
     insertRow: undefined, // undefined => derive the returning row from the payload
     insertLenient: false, // true => a driver answering .single() with {data:null,error:null}
@@ -212,6 +216,7 @@ function makeDb(cfg = {}) {
     if (st.table === 'shelly_connections') return { data: null, error: null }
     if (st.selectOpts?.head) {
       if (conf.deviceCountError) return { data: null, count: null, error: conf.deviceCountError }
+      if (conf.nullCount) return { data: null, count: null, error: null }
       return { data: null, count: conf.deviceRows.filter((r) => matches(r, st)).length, error: null }
     }
     if (conf.deviceError) return { data: null, count: null, error: conf.deviceError }
@@ -353,11 +358,28 @@ describe('GET /api/shelly/devices — the connection flags', () => {
     expect(body.connection_status).toBeNull()
   })
 
-  it('a FAILED connection read is a 500 — never a false "not connected"', async () => {
-    // Answering connected:false here would show a live studio the Connect form
-    // and contradict GET /api/shelly/connection, which 500s on the same case.
+  it('a FAILED connection read keeps the list and says the status is UNKNOWN', async () => {
+    // Three answers, not two. connected:false would tell a live studio its
+    // plugs are unreachable and offer the Connect form; a 500 would throw away
+    // a device list we read successfully. null/'unknown' is the only honest
+    // one, and Task 6 renders it as "couldn't refresh" over the existing cards.
     useDb({ connectionError: { message: 'db down' }, deviceRows: [deviceRow()] })
-    expect((await GET(getReq())).status).toBe(500)
+    const res = await GET(getReq())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.devices).toHaveLength(1)
+    expect(body.connected).toBeNull()
+    expect(body.connection_status).toBe('unknown')
+    expect(logError).toHaveBeenCalledWith('shelly-devices', 'connection read failed', expect.objectContaining({ locationId: LOC_A }))
+  })
+
+  it("...and 'unknown' is never confused with a real status", async () => {
+    // A location that genuinely has no connection still answers null, not
+    // 'unknown' — the page must be able to tell "never connected" (show the
+    // Connect form) from "we could not read it" (show the cards and retry).
+    useDb({ connectionRow: null })
+    expect((await (await GET(getReq())).json()).connection_status).toBeNull()
   })
 })
 
@@ -375,6 +397,57 @@ describe('POST /api/shelly/devices — the order of the checks', () => {
     expect(holderLookups()).toEqual([])
     expect(db.calls.inserts).toEqual([])
     expect(JSON.stringify(body)).not.toContain(FOREIGN_NAME)
+  })
+
+  it('an item for a DIFFERENT id is not a match — .find(), never [0]', async () => {
+    // A body that echoed some other device would otherwise be adopted under
+    // the id the operator asked for: wrong model, wrong gen, wrong relay, and
+    // a row whose device_id no switch answers to.
+    useCloud(getOk([cloudItem({ id: 'ffeedd998877' })]))
+    const res = await POST(postReq({ device_id: DEVICE_ID }))
+    expect(res.status).toBe(404)
+    expect((await res.json()).code).toBe('not_on_account')
+    expect(holderLookups()).toEqual([])
+    expect(db.calls.inserts).toEqual([])
+  })
+
+  it('warns when the account answered but the normaliser recognised nothing', async () => {
+    // Shape drift would otherwise present as a 404 on every adopt in the
+    // estate, with copy blaming the operator for a device they can see in the
+    // Shelly app.
+    useCloud(getOk([{ unexpected: 'shape' }, { also: 'unexpected' }]))
+    const res = await POST(postReq({ device_id: DEVICE_ID }))
+    expect(res.status).toBe(404)
+    expect(logWarn).toHaveBeenCalledWith(
+      'shelly-devices',
+      expect.stringContaining('could not read'),
+      expect.objectContaining({ locationId: LOC_A, bodyType: 'array', entries: 2 }),
+    )
+  })
+
+  it('does NOT warn about shape drift when the account is simply empty', async () => {
+    useCloud(getOk([]))
+    expect((await POST(postReq({ device_id: DEVICE_ID }))).status).toBe(404)
+    expect(logWarn).not.toHaveBeenCalledWith('shelly-devices', expect.stringContaining('could not read'), expect.anything())
+  })
+
+  it('warns when the matched item carries an id and no device data at all', async () => {
+    // The shape a per-id "not found" marker would take — it would void the
+    // ownership gate, so it must never pass silently.
+    useCloud(getOk([{ id: DEVICE_ID }]))
+    const res = await POST(postReq({ device_id: DEVICE_ID }))
+    expect(res.status).toBe(201)
+    expect(logWarn).toHaveBeenCalledWith(
+      'shelly-devices',
+      expect.stringContaining('ownership gate may be void'),
+      expect.objectContaining({ locationId: LOC_A }),
+    )
+  })
+
+  it('does NOT warn for an ordinary offline plug — it has gen and model', async () => {
+    useCloud(getOk([{ id: DEVICE_ID, online: false, gen: 2, code: 'SNPL-00112EU', status: {} }]))
+    expect((await POST(postReq({ device_id: DEVICE_ID }))).status).toBe(201)
+    expect(logWarn).not.toHaveBeenCalledWith('shelly-devices', expect.stringContaining('ownership gate'), expect.anything())
   })
 
   it('not_connected is answered before any cloud call', async () => {
@@ -409,6 +482,15 @@ describe('POST /api/shelly/devices — the order of the checks', () => {
     // Past the cap a device is adopted, schedulable and never reconciled.
     useDb({ deviceCountError: { message: 'db down' } })
     expect((await POST(postReq({ device_id: DEVICE_ID }))).status).toBe(500)
+    expect(db.calls.inserts).toEqual([])
+  })
+
+  it('a NULL count is refused too — it is not a zero', async () => {
+    // PostgREST answers null for a count it did not compute; reading that as
+    // "no devices here" waves through every adopt at a location on the cap.
+    useDb({ nullCount: true })
+    expect((await POST(postReq({ device_id: DEVICE_ID }))).status).toBe(500)
+    expect(createShellyClient).not.toHaveBeenCalled()
     expect(db.calls.inserts).toEqual([])
   })
 
@@ -544,6 +626,32 @@ describe('POST /api/shelly/devices — who already holds it', () => {
     expect(json).not.toContain(FOREIGN_NAME)
     expect(json).not.toContain(LOC_C)
     expect(json).not.toContain(ORG_2)
+  })
+
+  it('a caller with NO organisation gets the generic refusal, not a name', async () => {
+    // undefined === undefined must not read as "same organisation" — that is
+    // the comparison which, written naively, names another business's studio.
+    getCurrentUser.mockResolvedValue({ ...OWNER_A, activeLocation: { id: LOC_A, features: {} } })
+    useDb({ deviceRows: [deviceRow({ id: 'dev-ghost', location_id: LOC_C, locations: { name: FOREIGN_NAME, organization_id: undefined } })] })
+    const res = await POST(postReq({ device_id: DEVICE_ID }))
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error).toBe('This device is already in use elsewhere')
+    expect(JSON.stringify(body)).not.toContain(FOREIGN_NAME)
+  })
+
+  it('a holder with a MISSING locations embed is foreign, not same-org', async () => {
+    useDb({ deviceRows: [deviceRow({ id: 'dev-noembed', location_id: LOC_C, locations: null })] })
+    const res = await POST(postReq({ device_id: DEVICE_ID }))
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe('This device is already in use elsewhere')
+  })
+
+  it('a caller with an org and a holder with NONE is still foreign', async () => {
+    useDb({ deviceRows: [deviceRow({ id: 'dev-ghost', location_id: LOC_C, locations: { name: FOREIGN_NAME, organization_id: null } })] })
+    const res = await POST(postReq({ device_id: DEVICE_ID }))
+    expect(res.status).toBe(409)
+    expect(JSON.stringify(await res.json())).not.toContain(FOREIGN_NAME)
   })
 
   it('checks the holder per CHANNEL, not per device', async () => {

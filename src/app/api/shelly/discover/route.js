@@ -22,22 +22,34 @@
 //
 // locationId ALWAYS comes from withAuth's ctx. Nothing in a query string can
 // move a caller to another location's Shelly account.
+//
+// NOTE FOR check:location-scoping — this file has no `.eq('location_id', …)`
+// on shelly_devices, by design. What the scan reads as its tenant evidence is
+// the `holder.location_id === locationId` comparison in the mask, which is
+// genuinely where this route decides what belongs to the caller (the
+// fetch-then-compare shape the script documents). If that comparison is ever
+// refactored away, the scan will fire — correctly: the masking IS the
+// boundary here, so losing it is not a lint problem to silence.
 
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
 import { logWarn, logError } from '@/lib/log'
 import { createShellyClient } from '@/lib/shelly/client'
-import { loadConnectionWithKey } from '@/lib/shelly/connections'
+import { loadConnectionWithKey, markKeyRejected } from '@/lib/shelly/connections'
 import { normaliseAllStatus } from '@/lib/shelly/status'
-import { AUTH_ERROR } from '@/lib/shelly/reconcile'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const MODULE = 'shelly-discover'
 
-// Estate-wide read, so it is bounded. A truncated page can only mislabel a row
-// as un-adopted (see the warn below); it can never invent a holder.
+// Estate-wide read, so it is bounded. The query asks for one MORE than this
+// (the findFingerprintRows pattern) so a full page and a truncated one are
+// distinguishable: exactly HOLDER_ROW_CAP rows is a complete answer, one over
+// means there may be holders we cannot see. Truncation here is NON-FATAL,
+// unlike in findFingerprintRows — a row we missed can only mislabel a chip as
+// un-adopted, and the adopt route's own holder check is the authoritative one,
+// so the cost is a named 409 at adopt rather than a cross-tenant mistake.
 const HOLDER_ROW_CAP = 500
 
 const bad = (error, status, extra = {}) =>
@@ -72,20 +84,13 @@ export const GET = withAuth({ permission: 'device_control' }, async ({ user, db,
   if (!res.ok) {
     if (res.kind === 'auth') {
       // Only `auth` means the stored key is wrong, so only `auth` parks the
-      // connection. The cron's markConnection writes the same three fields for
-      // the same reason (reconcile.js) — a staff-triggered discovery that hits
-      // a dead key should light the same badge the next tick would.
-      const nowIso = new Date().toISOString()
-      const { error: markError } = await db
-        .from('shelly_connections')
-        .update({ status: 'action_needed', last_error: AUTH_ERROR, last_error_at: nowIso, updated_at: nowIso })
-        .eq('location_id', locationId)
-      // Best effort, and deliberately NOT fatal: a failed badge write costs a
-      // stale chip, while turning it into a 500 would replace the one answer
-      // the operator can act on ("re-paste your key") with one they cannot.
-      // The row provably exists — it was read by this same key moments ago —
-      // so a zero-row update is not a case worth distinguishing here.
-      if (markError) logWarn(MODULE, 'connection status write failed', { locationId, error: markError.message })
+      // connection. markKeyRejected writes the same three fields the cron
+      // does, from the same module, so a staff-triggered discovery and the
+      // next tick cannot describe a dead key differently. It logs its own
+      // failure and is deliberately NOT fatal here: a failed badge write costs
+      // a stale chip, while turning it into a 500 would replace the one answer
+      // the operator can act on with one they cannot.
+      await markKeyRejected(db, locationId)
       return bad('Shelly rejected the stored key — re-paste it from the Shelly app', 409, { code: 'key_rejected' })
     }
     // 429 rather than 502 for a rate limit: the shared 1 req/sec budget is
@@ -109,9 +114,12 @@ export const GET = withAuth({ permission: 'device_control' }, async ({ user, db,
   if (uniqueIds.length) {
     const { data, error } = await db
       .from('shelly_devices')
-      .select('device_id, channel, location_id, locations!location_id(name, organization_id)')
+      // Unhinted embed: shelly_devices has exactly ONE foreign key to
+      // locations, so there is nothing to disambiguate, and this is the form
+      // connections.js and reconcile.js already run against the live database.
+      .select('device_id, channel, location_id, locations(name, organization_id)')
       .in('device_id', uniqueIds)
-      .limit(HOLDER_ROW_CAP)
+      .limit(HOLDER_ROW_CAP + 1)
     if (error) {
       // NEVER answer "not adopted" from a failed read. The absence of a holder
       // row is what tells the operator a device is free, so a read error that
@@ -121,15 +129,13 @@ export const GET = withAuth({ permission: 'device_control' }, async ({ user, db,
       return bad('Could not check device ownership', 500)
     }
     holders = data || []
-    if (holders.length >= HOLDER_ROW_CAP) {
-      // Warned, not refused — unlike findFingerprintRows, where a truncated
-      // read might hide the foreign holder that should have REFUSED a link.
-      // Here the authoritative check is the adopt route's own holder query;
-      // this one only decorates a list, and a mislabelled chip costs a named
-      // 409 at adopt, not a cross-tenant mistake.
+    if (holders.length > HOLDER_ROW_CAP) {
+      // Warned, not refused — see the constant. Sliced so the extra probe row
+      // never reaches the map.
       logWarn(MODULE, 'holder lookup hit the row cap — some chips may read as un-adopted', {
         locationId, cap: HOLDER_ROW_CAP,
       })
+      holders = holders.slice(0, HOLDER_ROW_CAP)
     }
   }
   const byChannel = new Map(holders.map((h) => [`${h.device_id}_${h.channel}`, h]))
@@ -171,5 +177,8 @@ export const GET = withAuth({ permission: 'device_control' }, async ({ user, db,
     return row
   })
 
-  return NextResponse.json({ success: true, devices, count: devices.length })
+  // `row_count`, not `count`: a four-relay Pro 4PM is ONE device and FOUR rows
+  // here, so a field called `count` next to Task 3's `devices_seen` (which
+  // counts devices) would read as the same number and quietly disagree.
+  return NextResponse.json({ success: true, devices, row_count: devices.length })
 })

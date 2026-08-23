@@ -217,6 +217,14 @@ describe('ShellyConnectionPut', () => {
   it('requires a server', () => {
     expect(ShellyConnectionPut.safeParse({ auth_key: rep(20) }).success).toBe(false)
   })
+
+  it('REFUSES an unknown key rather than dropping it', () => {
+    // A misspelled credential field would otherwise be dropped, read as "no key
+    // supplied", and — on re-paste, where that means "keep the stored one" —
+    // reported as a successful re-link that changed nothing.
+    expect(ShellyConnectionPut.safeParse({ server: 'x', authkey: rep(20) }).success).toBe(false)
+    expect(ShellyConnectionPut.safeParse({ server: 'x', auth_key: rep(20), host: 'x' }).success).toBe(false)
+  })
 })
 
 describe('ShellyAdoptBody', () => {
@@ -266,6 +274,16 @@ describe('ShellyAdoptBody', () => {
     expect(ShellyAdoptBody.safeParse({ device_id: 'a1b2c3', name: rep(80) }).success).toBe(true)
     expect(ShellyAdoptBody.safeParse({ device_id: 'a1b2c3', name: rep(81) }).success).toBe(false)
     expect(ShellyAdoptBody.safeParse({ device_id: 'a1b2c3', name: '   ' }).success).toBe(false)
+  })
+
+  it('REFUSES an unknown key — a typo\'d channel must not adopt channel 0', () => {
+    // `channel` has a default, so dropping `chanel: 3` would silently adopt a
+    // DIFFERENT RELAY and then schedule, toggle and report it as the one the
+    // operator asked for.
+    expect(ShellyAdoptBody.safeParse({ device_id: 'a1b2c3', chanel: 3 }).success).toBe(false)
+    expect(ShellyAdoptBody.safeParse({ device_id: 'a1b2c3', zone: 'studio' }).success).toBe(false)
+    // ...and the good body still parses, defaulting the channel it did not name.
+    expect(ShellyAdoptBody.parse({ device_id: 'a1b2c3', channel: 3 }).channel).toBe(3)
   })
 })
 

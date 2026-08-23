@@ -46,6 +46,10 @@ import { GET } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { createShellyClient } from '@/lib/shelly/client'
+import { logWarn } from '@/lib/log'
+// Imported from reconcile.js ON PURPOSE, not from connections.js where it now
+// lives: the re-export is what keeps the cron's importers working, so a test
+// that reaches through it proves the two modules still agree on the copy.
 import { AUTH_ERROR } from '@/lib/shelly/reconcile'
 
 const LOC_A = 'a0000000-0000-0000-0000-000000000001'
@@ -297,7 +301,9 @@ describe('GET /api/shelly/discover — the mask', () => {
     useDb({ deviceRows: [adoptedHere] })
     const body = await (await GET(req())).json()
     expect(body.success).toBe(true)
-    expect(body.count).toBe(1)
+    // row_count, not count: these are channel ROWS. A four-relay Pro 4PM is
+    // one device and four of them.
+    expect(body.row_count).toBe(1)
     expect(body.devices[0]).toMatchObject({ device_id: 'aabbcc112233', channel: 0, adopted: 'here' })
     expect(body.devices[0].elsewhere_location_name).toBeUndefined()
   })
@@ -372,14 +378,34 @@ describe('GET /api/shelly/discover — the mask', () => {
     // A location filter here would answer "free" for every foreign holder,
     // which is the answer that invites a doomed adopt.
     expect(lookup.filters.location_id).toBeUndefined()
-    expect(lookup.limit).toBe(500)
+    // One MORE than the cap, so a full page and a truncated one are
+    // distinguishable (the findFingerprintRows pattern).
+    expect(lookup.limit).toBe(501)
+  })
+
+  it('a TRUNCATED holder read warns and slices, it does not refuse', async () => {
+    // Non-fatal here, unlike findFingerprintRows: a holder we missed can only
+    // mislabel a chip as un-adopted, and the adopt route's own check is the
+    // authoritative one — so the cost is a named 409 at adopt, never a
+    // cross-tenant mistake. Refusing would block discovery outright.
+    const ids = Array.from({ length: 501 }, (_, i) => `aabbcc${String(i).padStart(6, '0')}`)
+    useDb({ deviceRows: ids.map((id) => ({ device_id: id, channel: 0, location_id: LOC_A, locations: { name: 'UN1T Stillorgan', organization_id: ORG_1 } })) })
+    useCloud(allStatus(Object.fromEntries(ids.map((id) => [id, plug()]))))
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(logWarn).toHaveBeenCalledWith('shelly-discover', expect.stringContaining('row cap'), expect.objectContaining({ locationId: LOC_A, cap: 500 }))
+    // The 501st row is sliced off, so it reads as un-adopted rather than
+    // carrying a half-read holder into the mask.
+    const body = await res.json()
+    expect(body.row_count).toBe(501)
+    expect(body.devices.filter((d) => d.adopted === 'here')).toHaveLength(500)
   })
 
   it('skips the holder lookup entirely when the account has no devices', async () => {
     useCloud(allStatus({}))
     const body = await (await GET(req())).json()
     expect(body.devices).toEqual([])
-    expect(body.count).toBe(0)
+    expect(body.row_count).toBe(0)
     expect(db.calls.selects.filter((s) => s.table === 'shelly_devices')).toEqual([])
   })
 })

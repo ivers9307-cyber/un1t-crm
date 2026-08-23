@@ -22,6 +22,19 @@
 //   (e) holder        — safe to ask now.
 //   (f) insert        — the UNIQUE index is the backstop for (e)'s race.
 //
+// WHAT GATE (c) ASSUMES, stated so it can be checked rather than inherited:
+// that `/v2/devices/api/get` returns an entry ONLY for a device the supplied
+// key can see, and simply omits every id it cannot. That is what makes "the id
+// came back" equal to "this account owns it". IF SHELLY EVER ECHOES A PER-ID
+// NOT-FOUND MARKER — an entry carrying the id and an error, or a bare id with
+// no device data — the gate is VOID as written: presence would no longer prove
+// ownership, and the check must be re-judged on the ITEM'S CONTENT (a real
+// reading: gen, model, or channels) instead of on `.find()` alone. The v2 body
+// shape in this repo was read from Shelly's docs, not from a live account (see
+// status.js's header), so the diagnostics below exist to make a drift in that
+// shape visible as a log line rather than as a wall of 404s blaming operators;
+// verifying it against the real Stillorgan account is a live-gate item.
+//
 // locationId ALWAYS comes from withAuth's ctx; no handler here reads a
 // location from the request.
 
@@ -29,9 +42,8 @@ import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
 import { logWarn, logError } from '@/lib/log'
 import { createShellyClient } from '@/lib/shelly/client'
-import { loadConnectionWithKey, loadPublicConnection } from '@/lib/shelly/connections'
+import { loadConnectionWithKey, loadPublicConnection, markKeyRejected } from '@/lib/shelly/connections'
 import { normaliseGetItems, stateFromReading } from '@/lib/shelly/status'
-import { AUTH_ERROR } from '@/lib/shelly/reconcile'
 import { ShellyAdoptBody, MAX_DEVICES_PER_LOCATION } from '@/lib/shelly/schemas'
 
 export const runtime = 'nodejs'
@@ -60,23 +72,11 @@ const UNSUPPORTED_COPY = {
 const bad = (error, status, extra = {}) =>
   NextResponse.json({ success: false, error, ...extra }, { status })
 
-/**
- * Park the connection when the CLOUD says the stored key is wrong.
- *
- * Best effort by design: a failed badge write costs a stale chip, while making
- * it fatal would replace the one answer the operator can act on ("re-paste
- * your key") with one they cannot. Writes the same three fields the cron's
- * markConnection does (reconcile.js) so a staff-triggered call and the next
- * tick cannot disagree about what a dead key looks like.
- */
-async function markKeyRejected(db, locationId) {
-  const nowIso = new Date().toISOString()
-  const { error } = await db
-    .from('shelly_connections')
-    .update({ status: 'action_needed', last_error: AUTH_ERROR, last_error_at: nowIso, updated_at: nowIso })
-    .eq('location_id', locationId)
-  if (error) logWarn(MODULE, 'connection status write failed', { locationId, error: error.message })
-}
+// Did the account answer with SOMETHING? Used only to tell "no devices matched"
+// apart from "the body was a shape we cannot read" in the diagnostics below.
+// Deliberately shape-only: the body itself is never logged (client.js header).
+const bodyLooksNonEmpty = (body) =>
+  Array.isArray(body) ? body.length > 0 : !!body && typeof body === 'object' && Object.keys(body).length > 0
 
 /**
  * GET — this location's adopted devices, plus enough connection state for the
@@ -108,15 +108,19 @@ export const GET = withAuth({ permission: 'device_control' }, async ({ db, locat
   }
 
   const loaded = await loadPublicConnection(db, locationId)
-  // 'not_connected' is a true and useful answer (connected:false, status
-  // null). A db_error is NOT: answering false there would tell a live studio
-  // its plugs are unreachable, offer the Connect form, and contradict
-  // GET /api/shelly/connection, which 500s on exactly this case rather than
-  // lie about it. The page keeps its last good render across a 500 (Task 6),
-  // so a transient blip costs a "couldn't refresh" line, not the device list.
+  // THREE answers, not two. 'not_connected' is true and useful
+  // (connected:false, status null). A db_error is neither — but it must not
+  // cost the operator the list we DID read, and it must not be answered
+  // `false` either: that would tell a live studio its plugs are unreachable
+  // and offer the Connect form. So the uncertainty is carried in the payload
+  // as connected:null / connection_status:'unknown', which Task 6 renders as
+  // "Couldn't read the Shelly connection — retrying" over the cards that are
+  // already on screen. (GET /api/shelly/connection still 500s on the same
+  // case, and correctly: there the connection IS the payload, so there is
+  // nothing left to return.)
   if (!loaded.ok && loaded.reason !== 'not_connected') {
     logError(MODULE, 'connection read failed', { locationId, reason: loaded.reason, error: loaded.error })
-    return bad('Could not read the Shelly connection', 500)
+    return NextResponse.json({ success: true, devices, connected: null, connection_status: 'unknown' })
   }
 
   const status = loaded.ok ? loaded.connection.status : null
@@ -163,7 +167,15 @@ export const POST = withAuth(
       logError(MODULE, 'device count failed', { locationId, error: countError.message })
       return bad('Could not check how many devices this location has', 500)
     }
-    if ((count ?? 0) >= MAX_DEVICES_PER_LOCATION) {
+    // NEVER `count ?? 0`. PostgREST answers null for a count it did not
+    // compute (a missing Prefer header, a driver quirk), and reading that as
+    // "zero devices" waves through every adopt at a location that may be
+    // sitting on the cap — the one thing this check exists to stop.
+    if (typeof count !== 'number') {
+      logError(MODULE, 'device count came back unusable', { locationId })
+      return bad('Could not check how many devices this location has', 500)
+    }
+    if (count >= MAX_DEVICES_PER_LOCATION) {
       return bad(`This location has reached the limit of ${MAX_DEVICES_PER_LOCATION} devices`, 409, {
         code: 'device_cap',
       })
@@ -186,13 +198,40 @@ export const POST = withAuth(
     }
     // Both sides are lowercase by construction — ShellyAdoptBody transforms the
     // input and normaliseGetItem lowercases the id — so this compare is exact
-    // rather than case-folded at the call site.
-    const item = normaliseGetItems(res.body).find((d) => d.device_id === input.device_id)
+    // rather than case-folded at the call site. `.find()`, never `[0]`: a body
+    // that echoed a different device would otherwise be adopted under the id
+    // the operator asked for.
+    const items = normaliseGetItems(res.body)
+    if (!items.length && bodyLooksNonEmpty(res.body)) {
+      // The account answered with SOMETHING and the normaliser recognised none
+      // of it — i.e. the documented shape has drifted. Without this line that
+      // failure presents as a 404 on every adopt in the estate, with copy that
+      // blames the operator for a device they can see in the Shelly app.
+      // Shape only, never the body itself.
+      logWarn(MODULE, 'cloud get returned items we could not read — check the v2 body shape', {
+        locationId,
+        bodyType: Array.isArray(res.body) ? 'array' : typeof res.body,
+        entries: Array.isArray(res.body) ? res.body.length : Object.keys(res.body || {}).length,
+      })
+    }
+    const item = items.find((d) => d.device_id === input.device_id)
     if (!item) {
       // 404, and the copy says whose account: this is the gate that keeps the
       // holder check below from being an existence oracle, so it must not leak
       // WHY the id is unknown to us.
       return bad('Not found on this Shelly account', 404, { code: 'not_on_account' })
+    }
+
+    // An entry carrying an id and nothing else is the shape that would void
+    // gate (c) — it is what a per-id "not found" marker would look like, and
+    // presence would then no longer prove ownership. Nothing observed does
+    // this today, so it is a warning rather than a refusal (refusing would
+    // block adopts on a body we have never seen); if this line ever fires,
+    // re-read the file header before touching anything else.
+    if (item.gen == null && item.model == null && !item.channels?.length) {
+      logWarn(MODULE, 'cloud get echoed an id with no device data — ownership gate may be void', {
+        locationId, online: item.online,
+      })
     }
 
     // ---- (d) supported, and the channel exists -----------------------------
@@ -218,7 +257,7 @@ export const POST = withAuth(
       // would be adopting a channel nobody has ever seen, and a row pinned to
       // a channel that does not exist can never match a real switch.
       return bad(
-        `We can't see this device's channels right now — adopt channel 0, or try again when it's online`,
+        `We can't see this device's channels while it's offline. Bring it online and adopt channel ${input.channel} then — only channel 0 can be adopted from here.`,
         400,
         { code: 'bad_channel' },
       )
@@ -233,7 +272,9 @@ export const POST = withAuth(
     // 0 rows is the ordinary "free" answer, hence .maybeSingle().
     const { data: holder, error: holderError } = await db
       .from('shelly_devices')
-      .select('location_id, locations!location_id(name, organization_id)')
+      // Unhinted embed — one FK to locations, and this is the form
+      // connections.js and reconcile.js already run against the live database.
+      .select('location_id, locations(name, organization_id)')
       .eq('device_id', input.device_id)
       .eq('channel', input.channel)
       .limit(1)

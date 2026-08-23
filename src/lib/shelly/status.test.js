@@ -62,6 +62,24 @@ describe('normaliseAllStatus (v1 discovery)', () => {
     const body = { isok: true, data: { devices_status: { cccccccccccc: { _dev_info: { code: 'SHPLG-S', gen: 'G1' }, relays: [{ ison: true }] } } } }
     expect(normaliseAllStatus(body)[0]).toMatchObject({ supported: false, reason: 'gen1' })
   })
+
+  // SHELLY-UI.4b — the name is the whole point of the adopt list: without the
+  // envelope fallback a v1 account that names its devices only in _dev_info
+  // renders as a wall of MACs.
+  it('takes the name from the entry first, then from the _dev_info envelope', () => {
+    const one = (entry) => normaliseAllStatus({ data: { devices_status: { a8032abe41fc: entry } } })[0]
+    // The device's own report wins.
+    expect(one({ _dev_info: { gen: 2, online: true, name: 'Envelope name' }, sys: { device: { name: 'Sauna' } }, 'switch:0': {} }).name).toBe('Sauna')
+    expect(one({ _dev_info: { gen: 2, online: true, name: 'Envelope name' }, name: 'Entry name', 'switch:0': {} }).name).toBe('Entry name')
+    // ...and the envelope is the fallback when it did not report one.
+    expect(one({ _dev_info: { gen: 2, online: true, name: 'Ice machine' }, 'switch:0': {} }).name).toBe('Ice machine')
+    // A blank envelope name is junk, not a value.
+    expect(one({ _dev_info: { gen: 2, online: true, name: '  ' }, 'switch:0': {} }).name).toBeNull()
+    // Neither: null, and the card renders its own placeholder.
+    expect(one({ _dev_info: { gen: 2, online: true }, 'switch:0': {} }).name).toBeNull()
+    // No envelope at all must not throw.
+    expect(one({ 'switch:0': {} }).name).toBeNull()
+  })
 })
 
 describe('stateFromReading / stateChanged', () => {

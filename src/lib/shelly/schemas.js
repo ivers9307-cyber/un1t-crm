@@ -150,24 +150,37 @@ export const ShellyClassRule = z.object({
 // instead, i.e. the schema would make the ONE input an operator is most
 // likely to submit the ONE they get no guidance on. `.max(200)` stays as a
 // body-size guard, well above any real host.
+//
+// `.strict()` for the same reason ShellyDevicePatch carries one: an unknown key
+// is a typo or a stale client, and zod's default is to DROP it silently. On a
+// two-field body where one field is a credential, a dropped `authkey` would be
+// read as "no key supplied" — which on re-paste means "keep the stored one",
+// so a client posting the wrong field name would report a successful re-link
+// having changed nothing.
 export const ShellyConnectionPut = z.object({
   server: z.string().trim().max(200),
   auth_key: z.string().max(512).optional(),
-})
+}).strict()
 
 // Adopt one relay CHANNEL (a Pro 4PM adopts as up to four rows sharing a
 // device_id). channel is bounded 0..7 — tighter than mig 562's CHECK (0..15)
 // on purpose: nothing Shelly ships today has more than eight relays, and the
-// narrower bound turns a fat-fingered channel into a 400 instead of a row that
-// can never match a real switch. `name` is optional because discovery supplies
-// the cloud account's own name when the operator doesn't override it.
+// narrower bound turns a fat-fingered channel VALUE into a 400 instead of a row
+// that can never match a real switch. `name` is optional because discovery
+// supplies the cloud account's own name when the operator doesn't override it.
+//
+// `.strict()` closes the other half of that sentence: a fat-fingered channel
+// KEY. `channel` has a default, so a body carrying `chanel: 3` would otherwise
+// drop the unknown key, default to 0, and silently adopt the WRONG RELAY —
+// which is then scheduled, toggled and reported as the device the operator
+// asked for. A 400 naming the unknown key is the only honest answer.
 export const ShellyAdoptBody = z.object({
   device_id: z.string().trim()
     .regex(SHELLY_DEVICE_ID, { message: "That doesn't look like a Shelly device id" })
     .transform((s) => s.toLowerCase()),
   channel: z.number().int().min(0).max(7).default(0),
   name: z.string().trim().min(1, { message: 'Give the device a name' }).max(80).optional(),
-})
+}).strict()
 
 // PATCH one adopted device. Every field optional, `.strict()` so a typo'd key
 // is a 400 rather than a silently-ignored setting, and the closing refine turns
