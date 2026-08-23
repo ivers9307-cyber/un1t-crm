@@ -223,6 +223,20 @@ Set via `TWILIO_FROM` env. Twilio infers the sender type from the value's shape 
 **E.164 normalisation.** `toE164Ireland(raw)` is a best-effort helper that handles the common Irish formats operators type (`087 1234567`, `0871234567`, `+353…`, bare `87…`). Falls back to passing the input through unchanged so Twilio gets a chance to reject explicitly with a helpful error code.
 
 
+## Shelly Cloud (smart plugs and relays)
+
+**No env vars.** Credentials are per location: an owner or master pastes the studio's Shelly *Authorization cloud key* and account server (Shelly Smart Control app → User settings → Authorization cloud key) on Automations → Smart plugs (PR 2). The `shelly_connections` row is the configuration; with zero rows the `shelly-reconcile` cron is dormant and still stamps its heartbeat.
+
+- **One Shelly account per location.** The same account may be linked at several locations of one organisation (an owner with two studios); a key already linked at a location in another organisation is refused, and the refusal never names it. A physical relay channel (`device_id`, `channel`) can be adopted at exactly one location — enforced by the database.
+- **Changing the Shelly account password invalidates the key.** The cron flips the connection to `action_needed` within a minute and retries every 15 minutes; the owner re-pastes the key. The account server host can also change (Shelly relocates tenants) — same repair.
+- **Rate limit is 1 request/second per account.** The client paces itself (end-to-start ≥1 s), batches reads (`MAX_GET_IDS` = 10) and writes (`set/groups`), retries a 429 once, and the cron serialises same-account locations while running different accounts in parallel.
+- **Gen2+ only** (Plus/Pro/Gen3/Gen4 `switch:N` shape). Gen1 and non-switch devices (Pro 3EM) are marked unsupported at discovery; an offline device is never judged ("ask again later").
+- **Schedules are boundary exactly-once** plus a two-way manual override: humans win between boundaries, a failed command is retried next tick, a class-timetable read failure skips class devices for that tick rather than switching them off.
+- **Energy** is rolled per channel per local day from the monotonic `aenergy.total` counter (resets and power-cut rollbacks handled); read it per device.
+- **Integrator API** (Shelly's consent-based multi-account model) is a parallel operator application — https://forms.office.com/e/KDxYr4K3vF or support@shelly.cloud, business email required. Swapping to it changes `src/lib/shelly/client.js` only.
+- **Secrets never leave the server**: routes expose `key_hint` (last four characters) and `has_auth_key`; the client never logs a URL or request body (the key rides in the query string / form body); `redactSecret` covers the raw and encoded forms.
+
+
 ## Revolut Merchant integration
 
 Used for car deposit payments. **All field names + enum values are verified against `merchant-2026-03-12.yaml`** in the [revolut-openapi](https://github.com/revolut-engineering/revolut-openapi) repo, NOT against my pre-existing knowledge — there are gotchas if you don't read the spec for the version you've pinned.
