@@ -317,6 +317,7 @@ describe('createShellyClient', () => {
     const results = [
       await c.get(['a']), await c.get([]), await c.get(),
       await c.setSwitch('a', 0, true), await c.setGroups(['a_0'], true), await c.allStatus(),
+      await c.deviceList(),
     ]
     for (const r of results) expect(r).toEqual({ ok: false, kind: 'config', statusCode: 0 })
     expect(calls).toHaveLength(0)
@@ -382,5 +383,33 @@ describe('createShellyClient', () => {
     // Form-encoded, so + / = leave as %2B %2F %3D — never in raw form.
     expect(calls[0].init.body).toContain(`auth_key=${encodeURIComponent(secret)}`)
     expect(calls[0].init.body).not.toContain(secret)
+  })
+
+  // SHELLY-NAMES.3 — the account layer. Undocumented but live: the only place
+  // the Smart Control app's device labels exist, since the v2 payload proved
+  // label-free at the live gate.
+  it('deviceList is the v1 form-encoded call, and carries the key in the BODY only', async () => {
+    const secret = 'abc+def/ghi=='
+    const { fetchImpl, calls } = fetchStub([{ status: 200, body: JSON.stringify({ isok: true, data: { devices: [] } }) }])
+    const c = createShellyClient({ host: 'shelly-103-eu.shelly.cloud', auth_key: secret }, { fetchImpl, ...clockAndSleep() })
+    const res = await c.deviceList()
+    expect(calls[0].url).toBe('https://shelly-103-eu.shelly.cloud/interface/device/list')
+    expect(calls[0].url).not.toContain('auth_key')
+    expect(calls[0].init.headers['content-type']).toBe('application/x-www-form-urlencoded')
+    expect(calls[0].init.body).toBe(`auth_key=${encodeURIComponent(secret)}`)
+    expect(calls[0].init.body).not.toContain(secret)
+    expect(res).toMatchObject({ ok: true, statusCode: 200 })
+  })
+
+  it('deviceList classifies a v1 invalid_token as auth, and a 429 retries once like everything else', async () => {
+    const { fetchImpl, calls } = fetchStub([{ status: 200, body: JSON.stringify({ isok: false, errors: { invalid_token: 'x' } }) }])
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    expect(await c.deviceList()).toMatchObject({ ok: false, kind: 'auth' })
+    expect(calls).toHaveLength(1)
+
+    const retry = fetchStub([{ status: 429, body: '' }, { status: 200, body: JSON.stringify({ isok: true, data: { devices: {} } }) }])
+    const c2 = createShellyClient(conn, { fetchImpl: retry.fetchImpl, ...clockAndSleep() })
+    expect(await c2.deviceList()).toMatchObject({ ok: true, retried: true })
+    expect(retry.calls).toHaveLength(2)
   })
 })

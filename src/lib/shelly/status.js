@@ -213,6 +213,68 @@ export function resolveDeviceName(item, channel = 0) {
   return trimmed || null
 }
 
+// ——— SHELLY-NAMES.3: the ACCOUNT layer's names ————————————————————————
+//
+// The v2 payload proved LABEL-FREE at the live gate — `sys.device.name`
+// present-but-null and the cloud-grafted `DeviceInfo.name` null too on six
+// app-named plugs — because the Smart Control app labels the ACCOUNT record,
+// which the official Cloud Control API never returns. `/interface/device/list`
+// (client.deviceList) is where that record lives.
+//
+// Its response shape is UNVERIFIED, so everything below probes rather than
+// asserts, and deviceListShapeDiagnostic is what makes the next press
+// self-locating if the probe still finds nothing.
+
+// The container the entries live in, probed ONCE for both readers below. A
+// second copy of this probe is how the normaliser and the diagnostic would end
+// up describing different halves of the same body — the one failure mode that
+// makes a diagnostic actively misleading. Returns the first usable container,
+// or (when none is usable) whatever was there, because its TYPE is the answer
+// the diagnostic exists to report.
+function deviceListSource(body) {
+  const candidates = [body?.data?.devices, body?.devices]
+  for (const c of candidates) {
+    if (Array.isArray(c) || isObj(c)) return c
+  }
+  return candidates.find((c) => c !== undefined)
+}
+
+// [key, entry] pairs. An ARRAY carries no key (an entry must name itself);
+// an OBJECT is keyed by device id, so the key is a usable last-resort id.
+function deviceListEntries(src) {
+  if (Array.isArray(src)) return src.map((entry) => [null, entry])
+  if (isObj(src)) return Object.entries(src)
+  return []
+}
+
+/**
+ * SHELLY-NAMES.3 — Map<lowercased device id, name> from a `/interface/device/list`
+ * body. Pure, and never throws on any shape.
+ *
+ * Ids are normalised exactly as rawItemId does, so a name found here can be
+ * matched against a database row and against a v2 item without a second rule.
+ * A missing name is SKIPPED rather than stored as null: absence is not an empty
+ * label, and an entry in the map is a claim that the account has a name for
+ * that device.
+ */
+export function normaliseDeviceListNames(body) {
+  const out = new Map()
+  for (const [key, entry] of deviceListEntries(deviceListSource(body))) {
+    if (!isObj(entry)) continue
+    const rawId = entry.id ?? entry._dev_info?.id ?? key
+    const id = typeof rawId === 'string' || typeof rawId === 'number' ? String(rawId).trim().toLowerCase() : ''
+    if (!id) continue
+    // Every plausible spelling of "the label", in the order a labelled field
+    // beats a generic one. str() drops blanks, so a factory-blank entry falls
+    // through instead of overwriting a real name with ''.
+    const name = str(entry.name) ?? str(entry.label) ?? str(entry.device_name) ?? str(entry.alias) ?? str(entry.title)
+    if (name == null) continue
+    const trimmed = name.trim().slice(0, NAME_MAX)
+    if (trimmed) out.set(id, trimmed)
+  }
+  return out
+}
+
 // ——— keys-only diagnostic ————————————————————————————————————————————
 //
 // SECRET RULE, and it is the whole reason this is a function rather than a log
@@ -267,6 +329,35 @@ export function nameShapeDiagnostic(item) {
     switchKeys: firstSwitchKey ? keysOf(settings[firstSwitchKey]) : [],
     hasSysDeviceName: nameProp,
     statusKeys: keysOf(status),
+  }
+}
+
+/**
+ * SHELLY-NAMES.3 — the SHAPE of a `/interface/device/list` body, for the same
+ * reason nameShapeDiagnostic exists: the endpoint is undocumented, so the
+ * FIRST press against a live account has to be able to say where the names are
+ * if the probe above found none.
+ *
+ * KEYS ONLY, like everything in this section. `entryCount` is a count, not a
+ * value, and `nameProp` reports whether the first entry's `name` is a string, a
+ * non-string, or absent — never what it says. The container's own keys are
+ * deliberately NOT reported: on the object-keyed shape they are device ids.
+ */
+export function deviceListShapeDiagnostic(body) {
+  const src = deviceListSource(body)
+  const entries = deviceListEntries(src)
+  const first = entries.length ? entries[0][1] : null
+  const firstObj = isObj(first) ? first : null
+  const nameProp = firstObj && Object.prototype.hasOwnProperty.call(firstObj, 'name')
+    ? (typeof firstObj.name === 'string' ? 'string' : 'null')
+    : 'absent'
+  return {
+    bodyKeys: keysOf(body),
+    dataKeys: keysOf(body?.data),
+    devicesType: typeName(src),
+    entryCount: entries.length,
+    entryKeys: keysOf(firstObj),
+    nameProp,
   }
 }
 

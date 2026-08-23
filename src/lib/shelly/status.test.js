@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   normaliseGetItems, normaliseAllStatus, stateFromReading, stateChanged, groupId,
   resolveDeviceName, nameShapeDiagnostic, rawItemsOf, rawItemId,
+  normaliseDeviceListNames, deviceListShapeDiagnostic,
 } from './status'
 
 const plugS = {
@@ -411,5 +412,119 @@ describe('rawItemsOf / rawItemId (SHELLY-NAMES.1)', () => {
     // identically or the two can never be matched up.
     const raw = { id: ' A8032ABE41FC ', gen: 2, status: {} }
     expect(rawItemId(raw)).toBe(normaliseGetItems([raw])[0].device_id)
+  })
+})
+
+// ——— SHELLY-NAMES.3 ————————————————————————————————————————————————
+//
+// The v2 payload proved LABEL-FREE at the live gate: `sys.device.name`
+// present-but-null and the cloud-grafted `DeviceInfo.name` null too on six
+// app-named plugs. The app labels the ACCOUNT record, which the v2 Cloud
+// Control API never returns — `/interface/device/list` is where it lives, and
+// its shape is UNVERIFIED, which is what every probe below is for.
+
+describe('normaliseDeviceListNames (SHELLY-NAMES.3)', () => {
+  it('reads the ARRAY shape, lowercasing ids exactly as rawItemId does', () => {
+    const map = normaliseDeviceListNames({ data: { devices: [
+      { id: ' AABBCC112233 ', name: 'Reception heater' },
+      { id: 'ddeeff445566', name: 'Ice bath' },
+    ] } })
+    expect(map.get('aabbcc112233')).toBe('Reception heater')
+    expect(map.get('ddeeff445566')).toBe('Ice bath')
+    expect(map.size).toBe(2)
+  })
+
+  it('reads the OBJECT-KEYED shape, taking the id from the key when the entry has none', () => {
+    const map = normaliseDeviceListNames({ data: { devices: {
+      AABBCC112233: { name: 'Reception heater' },
+      // An entry that names itself wins over its key — same rule as the v2
+      // side, where the item's own id is the identity.
+      ddeeff445566: { id: '998877FFEEDD', name: 'Ice bath' },
+    } } })
+    expect(map.get('aabbcc112233')).toBe('Reception heater')
+    expect(map.get('998877ffeedd')).toBe('Ice bath')
+    expect(map.has('ddeeff445566')).toBe(false)
+  })
+
+  it('falls back to body.devices, and to the v1 _dev_info id', () => {
+    expect(normaliseDeviceListNames({ devices: [{ id: 'aabbcc', name: 'Sauna' }] }).get('aabbcc')).toBe('Sauna')
+    expect(normaliseDeviceListNames({ data: { devices: [{ _dev_info: { id: 'AABBCC' }, name: 'Sauna' }] } }).get('aabbcc')).toBe('Sauna')
+  })
+
+  it('accepts the other plausible spellings of the label, in order', () => {
+    const one = (over) => normaliseDeviceListNames({ data: { devices: [{ id: 'aa', ...over }] } }).get('aa')
+    expect(one({ label: 'Label' })).toBe('Label')
+    expect(one({ device_name: 'Device name' })).toBe('Device name')
+    expect(one({ alias: 'Alias' })).toBe('Alias')
+    expect(one({ title: 'Title' })).toBe('Title')
+    expect(one({ name: 'Name', label: 'Label' })).toBe('Name')
+  })
+
+  it('SKIPS an entry with no name — absence is not an empty label', () => {
+    // An entry in the map is a claim that the account HAS a name for that
+    // device; a '' would overwrite a real one on the overwrite branch.
+    const map = normaliseDeviceListNames({ data: { devices: [
+      { id: 'aa' }, { id: 'bb', name: '   ' }, { id: 'cc', name: 42 }, { id: 'dd', name: 'Real' },
+    ] } })
+    expect([...map.keys()]).toEqual(['dd'])
+  })
+
+  it('drops entries that are not identifiable, and caps a long label at the schema bound', () => {
+    const map = normaliseDeviceListNames({ data: { devices: [
+      { id: '', name: 'x' }, { id: '   ', name: 'x' }, { id: {}, name: 'x' }, { id: [], name: 'x' },
+      'not an object', null, 7,
+      { id: 12, name: 'Numeric id' },
+      { id: 'long', name: 'N'.repeat(200) },
+    ] } })
+    expect(map.get('12')).toBe('Numeric id')
+    expect(map.get('long')).toHaveLength(80)
+    expect(map.size).toBe(2)
+  })
+
+  it('never throws on ANY shape — the endpoint is undocumented', () => {
+    for (const junk of [null, undefined, 'x', 7, [], {}, { data: 'x' }, { data: { devices: 'x' } },
+      { data: { devices: null } }, { devices: 7 }, { data: { devices: [undefined] } }]) {
+      expect(normaliseDeviceListNames(junk).size).toBe(0)
+    }
+  })
+})
+
+describe('deviceListShapeDiagnostic (SHELLY-NAMES.3) — keys only, never values', () => {
+  it('NEVER carries a payload VALUE — not the name, not a nested one', () => {
+    const body = { isok: true, data: { devices: [{ id: 'aabbcc', name: 'Reception', room: { name: 'Studio floor' } }] } }
+    const json = JSON.stringify(deviceListShapeDiagnostic(body))
+    expect(json).not.toContain('Reception')
+    expect(json).not.toContain('Studio floor')
+    // …while still answering the question it exists to answer.
+    expect(deviceListShapeDiagnostic(body)).toEqual({
+      bodyKeys: ['data', 'isok'],
+      dataKeys: ['devices'],
+      devicesType: 'array',
+      entryCount: 1,
+      entryKeys: ['id', 'name', 'room'],
+      nameProp: 'string',
+    })
+  })
+
+  it('reports the object-keyed shape without reporting the device ids that key it', () => {
+    const diag = deviceListShapeDiagnostic({ data: { devices: { aabbcc112233: { name: 'Reception' } } } })
+    expect(diag).toMatchObject({ devicesType: 'object', entryCount: 1, entryKeys: ['name'], nameProp: 'string' })
+    expect(JSON.stringify(diag)).not.toContain('aabbcc112233')
+  })
+
+  it('separates "no name key" from "a name key that is not a string"', () => {
+    const one = (entry) => deviceListShapeDiagnostic({ data: { devices: [entry] } }).nameProp
+    expect(one({ id: 'a' })).toBe('absent')
+    expect(one({ id: 'a', name: null })).toBe('null')
+    expect(one({ id: 'a', name: 42 })).toBe('null')
+    expect(one({ id: 'a', name: 'x' })).toBe('string')
+  })
+
+  it('reports the TYPE of a body that carries no list at all — the drift we are hunting', () => {
+    expect(deviceListShapeDiagnostic({ isok: true, data: { devices: 'nope' } }))
+      .toMatchObject({ bodyKeys: ['data', 'isok'], dataKeys: ['devices'], devicesType: 'string', entryCount: 0, entryKeys: [], nameProp: 'absent' })
+    expect(deviceListShapeDiagnostic({ isok: true, data: {} })).toMatchObject({ devicesType: 'undefined', entryCount: 0 })
+    expect(deviceListShapeDiagnostic(null)).toMatchObject({ bodyKeys: [], dataKeys: [], devicesType: 'undefined', entryCount: 0 })
+    expect(deviceListShapeDiagnostic({ data: { devices: [7] } })).toMatchObject({ devicesType: 'array', entryCount: 1, entryKeys: [] })
   })
 })

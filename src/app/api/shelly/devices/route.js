@@ -45,6 +45,7 @@ import { createShellyClient } from '@/lib/shelly/client'
 import { loadConnectionWithKey, loadPublicConnection, markKeyRejected } from '@/lib/shelly/connections'
 import {
   normaliseGetItems, stateFromReading, resolveDeviceName, nameShapeDiagnostic, rawItemsOf, rawItemId,
+  normaliseDeviceListNames, deviceListShapeDiagnostic,
 } from '@/lib/shelly/status'
 import { ShellyAdoptBody, MAX_DEVICES_PER_LOCATION } from '@/lib/shelly/schemas'
 // SHELLY-UI.5 — the column allowlist moved to src/lib/shelly/device-load.js
@@ -181,7 +182,11 @@ export const POST = withAuth(
     // ---- (c) prove the device is on the CALLER'S OWN account ---------------
     // ['status','settings'] rather than the client's default ['status']: the
     // name comes out of settings, and this is one of the two places that needs it.
-    const res = await createShellyClient(conn).get([input.device_id], { select: ['status', 'settings'] })
+    // ONE client for the whole handler: the name lookup below may need a
+    // second call, and a client per call is a client that believes it has
+    // never called — the 1 req/sec pacing only holds across a shared instance.
+    const client = createShellyClient(conn)
+    const res = await client.get([input.device_id], { select: ['status', 'settings'] })
     if (!res.ok) {
       if (res.kind === 'auth') {
         await markKeyRejected(db, locationId)
@@ -317,13 +322,47 @@ export const POST = withAuth(
     // be re-found in the body (it always can — `items` was derived from it) —
     // a name we already resolved must never be lost to a defensive lookup.
     const rawItem = rawItemsOf(res.body).find((x) => rawItemId(x) === input.device_id)
-    const resolvedName = resolveDeviceName(rawItem, input.channel) ?? item.name ?? null
+    let resolvedName = resolveDeviceName(rawItem, input.channel) ?? item.name ?? null
+    // Only set when the account layer actually answered, so the warning below
+    // never describes a body nobody received.
+    let listShape
+    if (!resolvedName) {
+      // SHELLY-NAMES.3 — the ACCOUNT layer. The v2 payload proved LABEL-FREE at
+      // the live gate (`sys.device.name` present-but-null, the cloud-grafted
+      // `DeviceInfo.name` null too), because the Smart Control app labels the
+      // account RECORD and the v2 API never returns it. ONE extra call, on the
+      // SAME client so the shared 1 req/sec pacing holds, and only on the path
+      // where the device payload gave us nothing to show on the card.
+      //
+      // NON-FATAL, in every failure mode including `auth`: the adopt itself has
+      // already succeeded against this key one call ago, so a blip here is
+      // evidence about an undocumented endpoint and nothing else. Refusing the
+      // adopt — or parking the connection — over a missing LABEL would trade a
+      // cosmetic gap for the operator losing the device entirely; the card
+      // renders its placeholder, and "Use Shelly names" fixes it in one press.
+      const listRes = await client.deviceList()
+      if (listRes.ok) {
+        listShape = deviceListShapeDiagnostic(listRes.body)
+        // input.device_id is lowercased by ShellyAdoptBody and the map is keyed
+        // the same way — the same pairing rawItemId gives the v2 side.
+        resolvedName = normaliseDeviceListNames(listRes.body).get(input.device_id) ?? null
+      } else {
+        logWarn(MODULE, 'account name list failed during adopt — adopting without a name', {
+          locationId, kind: listRes.kind, statusCode: listRes.statusCode,
+        })
+      }
+    }
     if (!resolvedName) {
       // KEYS ONLY. `settings` carries the device's wifi and MQTT credentials,
       // so nothing here may be a value out of the payload — see
-      // nameShapeDiagnostic. This is the line the live gate is waiting on.
+      // nameShapeDiagnostic. BOTH shapes when both were read: a device nobody
+      // could name was missed by the device payload AND by the account layer.
       logWarn('shelly.adopt', 'no device name in the Shelly payload', {
-        locationId, deviceId: input.device_id, channel: input.channel, shape: nameShapeDiagnostic(rawItem),
+        locationId,
+        deviceId: input.device_id,
+        channel: input.channel,
+        shape: nameShapeDiagnostic(rawItem),
+        ...(listShape ? { listShape } : {}),
       })
     }
 

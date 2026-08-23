@@ -76,8 +76,14 @@ const item = (id, over = {}) => ({
 // forms, and status.test.js pins that.
 const okGet = (items) => ({ ok: true, statusCode: 200, body: items })
 
+// SHELLY-NAMES.3 — the account layer's list. Default: it answers, and knows
+// nobody. Every pre-existing expectation therefore holds unchanged, and a suite
+// that wants the list to name something says so.
+const okList = (devices) => ({ ok: true, statusCode: 200, body: { isok: true, data: { devices } } })
+
 let db
 let get
+let deviceList
 function useDb(cfg) {
   db = makeDb(cfg)
   createServerClient.mockReturnValue(db)
@@ -99,7 +105,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   useDb(world())
   get = vi.fn(async () => okGet([item(SHELLY_ID)]))
-  createShellyClient.mockReturnValue({ get })
+  deviceList = vi.fn(async () => okList([]))
+  createShellyClient.mockReturnValue({ get, deviceList })
   getCurrentUser.mockResolvedValue(OWNER_A)
 })
 
@@ -363,5 +370,109 @@ describe('POST /api/shelly/sync-names — a lost write is counted, never swallow
     const res = await POST(syncReq())
     expect(await res.json()).toMatchObject({ updated: 0, write_failures: 1 })
     expect(logWarn.mock.calls.some((c) => /touched no row/.test(c[1]))).toBe(true)
+  })
+})
+
+// ——— SHELLY-NAMES.3 ————————————————————————————————————————————————
+//
+// The v2 payload proved LABEL-FREE at the live gate: six app-named Gen3 Minis
+// with `sys.device.name` present-but-null and the cloud-grafted
+// `DeviceInfo.name` null too. The Smart Control app labels the ACCOUNT record,
+// which the official v2 API never returns — so a second, undocumented-but-live
+// source is asked when, and only when, the device payload came back nameless.
+//
+// The rule this suite is really protecting: THE LIST IS AN ENHANCEMENT, NEVER A
+// GATE. A sync that worked on v2 names alone must not start failing because the
+// account layer hiccupped.
+
+describe('POST /api/shelly/sync-names — the account layer', () => {
+  const nameless = (id) => ({ id, gen: 2, online: 1, status: { 'switch:0': {} }, settings: { wifi: { sta: { pass: WIFI_SECRET } } } })
+
+  it('names a plug the DEVICE payload had no label for', async () => {
+    get.mockResolvedValue(okGet([nameless(SHELLY_ID)]))
+    deviceList.mockResolvedValue(okList([{ id: SHELLY_ID.toUpperCase(), name: 'Reception heater' }]))
+    const res = await POST(syncReq())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ total: 1, updated: 1, unresolved: 0 })
+    expect(db.rowsIn('shelly_devices').find((r) => r.id === DEV_A).name).toBe('Reception heater')
+    expect(deviceList).toHaveBeenCalledTimes(1)
+  })
+
+  it('reads the OBJECT-KEYED list shape too — the shape is undocumented', async () => {
+    get.mockResolvedValue(okGet([nameless(SHELLY_ID)]))
+    deviceList.mockResolvedValue(okList({ [SHELLY_ID]: { name: 'Ice bath' } }))
+    await POST(syncReq())
+    expect(db.rowsIn('shelly_devices').find((r) => r.id === DEV_A).name).toBe('Ice bath')
+  })
+
+  it('does NOT spend a slot of the shared budget when every plug already resolved', async () => {
+    const res = await POST(syncReq())
+    expect(await res.json()).toMatchObject({ updated: 1, unresolved: 0 })
+    expect(deviceList).not.toHaveBeenCalled()
+  })
+
+  it('the DEVICE label still wins — the account list only fills gaps', async () => {
+    // One named plug, one nameless: the list names both, and only the nameless
+    // one takes its answer from there.
+    useDb(world([deviceRow({ name: null }), deviceRow({ id: DEV_B, location_id: LOC_A, name: null, device_id: OTHER_ID })]))
+    get.mockResolvedValue(okGet([item(SHELLY_ID), nameless(OTHER_ID)]))
+    deviceList.mockResolvedValue(okList([
+      { id: SHELLY_ID, name: 'Account label' },
+      { id: OTHER_ID, name: 'Ice machine' },
+    ]))
+    const res = await POST(syncReq())
+    expect(await res.json()).toMatchObject({ total: 2, updated: 2, unresolved: 0 })
+    expect(db.rowsIn('shelly_devices').find((r) => r.id === DEV_A).name).toBe('Reception heater')
+    expect(db.rowsIn('shelly_devices').find((r) => r.id === DEV_B).name).toBe('Ice machine')
+  })
+
+  it('a FAILED list is logged and the v2 names are written anyway — never a failed sync', async () => {
+    // The whole point of the enhancement rule: main resolved this plug's name
+    // from the device payload, and an unrelated blip on an undocumented
+    // endpoint must not take it away.
+    useDb(world([deviceRow({ name: null }), deviceRow({ id: DEV_B, location_id: LOC_A, name: null, device_id: OTHER_ID })]))
+    get.mockResolvedValue(okGet([item(SHELLY_ID), nameless(OTHER_ID)]))
+    deviceList.mockResolvedValue({ ok: false, kind: 'rate_limited', statusCode: 429 })
+    const res = await POST(syncReq())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ success: true, total: 2, updated: 1, unresolved: 1 })
+    expect(db.rowsIn('shelly_devices').find((r) => r.id === DEV_A).name).toBe('Reception heater')
+    expect(logWarn.mock.calls.some((c) => /account name list failed/.test(c[1]))).toBe(true)
+    // The connection is a bystander: only the read half's `auth` is evidence
+    // about the credential.
+    expect(db.rowsIn('shelly_connections')[0].status).toBe('connected')
+  })
+
+  it('an AUTH failure on the list parks the connection and answers key_rejected', async () => {
+    get.mockResolvedValue(okGet([nameless(SHELLY_ID)]))
+    deviceList.mockResolvedValue({ ok: false, kind: 'auth', statusCode: 401 })
+    const res = await POST(syncReq())
+    expect(res.status).toBe(409)
+    expect((await res.json()).code).toBe('key_rejected')
+    expect(db.rowsIn('shelly_connections')[0].last_error).toBe(AUTH_ERROR)
+  })
+
+  it('when NEITHER source has a name, the one warning carries BOTH shapes — keys only', async () => {
+    get.mockResolvedValue(okGet([nameless(SHELLY_ID)]))
+    deviceList.mockResolvedValue(okList([{ id: 'ffffffffffff', name: 'Somebody else', room: { name: 'Studio floor' } }]))
+    const res = await POST(syncReq())
+    expect(await res.json()).toMatchObject({ unresolved: 1, updated: 0 })
+    const warn = logWarn.mock.calls.find((c) => c[1] === 'no device name in the Shelly payload')
+    expect(warn[2].shape).toMatchObject({ settingsKeys: ['wifi'], hasSysDeviceName: 'absent' })
+    expect(warn[2].listShape).toMatchObject({
+      bodyKeys: ['data', 'isok'], dataKeys: ['devices'], devicesType: 'array', entryCount: 1, nameProp: 'string',
+    })
+    const json = JSON.stringify(warn[2])
+    expect(json).not.toContain('Somebody else')
+    expect(json).not.toContain('Studio floor')
+    expect(json).not.toContain(WIFI_SECRET)
+  })
+
+  it('omits listShape entirely when the list never answered — never a faked shape', async () => {
+    get.mockResolvedValue(okGet([nameless(SHELLY_ID)]))
+    deviceList.mockResolvedValue({ ok: false, kind: 'network', statusCode: 0 })
+    await POST(syncReq())
+    const warn = logWarn.mock.calls.find((c) => c[1] === 'no device name in the Shelly payload')
+    expect(warn[2]).not.toHaveProperty('listShape')
   })
 })

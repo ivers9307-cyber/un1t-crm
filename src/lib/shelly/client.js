@@ -294,5 +294,24 @@ export function createShellyClient(conn, { fetchImpl = fetch, sleep = realSleep,
       return withRetried({ ok: true, statusCode: res.statusCode, ...parsed }, res)
     },
     allStatus: () => call('/device/all_status', { show_info: 'true', no_shared: 'true' }, { v1: true }),
+    // SHELLY-NAMES.3 — the ACCOUNT layer's device list. Undocumented but LIVE:
+    // it is the endpoint Shelly's own web UI reads its device list from, and it
+    // is the ONLY place the Smart Control app's labels exist.
+    //
+    // WHY IT IS HERE AT ALL. The v2 `get` payload proved LABEL-FREE at the
+    // Stillorgan live gate: on six app-named Gen3 Minis
+    // `settings.sys.device.name` was present-but-null and the cloud-grafted
+    // `settings.DeviceInfo.name` was null too (SHELLY-NAMES.2/3). The app names
+    // the account RECORD rather than the device, and the official v2 Cloud
+    // Control API never returns that record — so no widening of the v2 resolver
+    // could ever have found the label.
+    //
+    // Form-encoded auth like allStatus (that is the v1 API, not a choice), ONE
+    // call per request from every caller, and paced by the same queue as
+    // everything else — an undocumented endpoint gets no special treatment on
+    // the shared 1 req/sec budget. Its RESPONSE SHAPE is unverified, so the
+    // consumer probes it (normaliseDeviceListNames) and logs a keys-only shape
+    // diagnostic when no name resolves, exactly as the v2 side does.
+    deviceList: () => call('/interface/device/list', {}, { v1: true }),
   }
 }
