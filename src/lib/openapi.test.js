@@ -101,6 +101,67 @@ describe('getOpenApiSpec', () => {
     expect(spec.paths['/api/communications/audience-preview'].post.responses).toHaveProperty('404')
   })
 
+  // SHELLY-UI.9 — the whole /api/shelly surface, and the three status codes
+  // whose MEANING is not guessable from the verb: adopt's 404 (the anti-oracle
+  // answer, identical for "no such device" and "another tenant's"), the
+  // toggle's 429 (a SUCCESS body — the override is saved and the cron will
+  // apply it; the status only tells the client to stop re-pressing) and
+  // run-now's 409 vocabulary.
+  it('documents all twelve Shelly routes under Automations', () => {
+    const expected = {
+      '/api/shelly/connection': ['get', 'put', 'delete'],
+      '/api/shelly/discover': ['get'],
+      '/api/shelly/devices': ['get', 'post'],
+      '/api/shelly/devices/{id}': ['patch', 'delete'],
+      '/api/shelly/devices/{id}/toggle': ['post'],
+      '/api/shelly/devices/{id}/run-now': ['post'],
+      '/api/shelly/devices/{id}/energy': ['get'],
+      '/api/shelly/refresh': ['post'],
+    }
+    let registered = 0
+    for (const [p, methods] of Object.entries(expected)) {
+      expect(spec.paths, `missing ${p}`).toHaveProperty(p)
+      for (const m of methods) {
+        const op = spec.paths[p][m]
+        expect(op, `${p} is not registered as ${m.toUpperCase()}`).toBeTruthy()
+        expect(op.tags).toContain('Automations')
+        expect(op.security).toContainEqual({ CookieAuth: [] })
+        expect(op.responses, `${m} ${p} must document its 403`).toHaveProperty('403')
+        registered += 1
+      }
+    }
+    expect(registered).toBe(12)
+
+    // Adopt: 404 is the ownership gate, and it is documented as such.
+    const adopt = spec.paths['/api/shelly/devices'].post
+    expect(adopt.responses).toHaveProperty('404')
+    expect(adopt.responses['404'].description).toMatch(/not_on_account/)
+    expect(adopt.responses['429'].description).toMatch(/rate_limited/)
+    // The four 409 codes adopt can answer.
+    for (const code of ['not_connected', 'key_rejected', 'device_cap', 'adopted_here']) {
+      expect(adopt.responses['409'].description, `adopt 409 must name ${code}`).toContain(code)
+    }
+
+    // Toggle: the 429 carries success:true, which a client MUST NOT read as a
+    // failed request — pinned so the sentence cannot quietly disappear.
+    const toggle = spec.paths['/api/shelly/devices/{id}/toggle'].post
+    expect(toggle.responses['429'].description).toMatch(/success:true/)
+
+    // Run-now: no_schedule is checked BEFORE disabled, and the spec says so.
+    const runNow = spec.paths['/api/shelly/devices/{id}/run-now'].post
+    expect(runNow.responses['409'].description).toMatch(/no_schedule/)
+    expect(runNow.responses['409'].description).toMatch(/disabled/)
+
+    // Devices GET: the third connection state lives in the response schema.
+    expect(spec.components.schemas.ShellyDeviceListResponse.description).toMatch(/connected: NULL/)
+
+    // The connection view is the allowlist — no key, no fingerprint.
+    const conn = spec.components.schemas.ShellyConnectionPublic
+    expect(Object.keys(conn.properties).sort()).toEqual(
+      ['has_auth_key', 'host', 'key_hint', 'last_error', 'last_error_at', 'last_ok_at', 'status'],
+    )
+  })
+
   it('caches the spec object across calls (same reference)', async () => {
     expect(await getOpenApiSpec()).toBe(spec)
   })

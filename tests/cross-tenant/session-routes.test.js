@@ -70,6 +70,8 @@ import {
   STG_A1, STG_A2, STG_B1, STG_B2,
   TPL_A, TPL_B,
   ET_B1,
+  SHD_A1, SHD_B1,
+  SHELLY_KEY_A1, SHELLY_KEY_B1, SHELLY_FP_A1, SHELLY_FP_B1, SHELLY_HOST_A1, SHELLY_HOST_B1,
   P_STAFF_A1, P_MGR_A1, P_OWNER_A1, P_STAFF_A2, P_STAFF_B1, P_OWNER_B1, P_STAFF_B2,
 } from './fixture.js'
 
@@ -81,6 +83,24 @@ import * as contractTemplateDetailRoute from '@/app/api/contract-templates/[id]/
 import * as chooserSettingsRoute from '@/app/api/chooser-settings/route.js'
 import * as stagesRoute from '@/app/api/stages/route.js'
 import * as eventTypeDetailRoute from '@/app/api/bookings/event-types/[id]/route.js'
+// SHELLY-UI.9 — the three /api/shelly handlers that make NO cloud call at all
+// (verified against the route sources: the list, the PATCH and the connection
+// GET touch only the database), so the db double alone exercises them and
+// neither @/lib/shelly/client nor @/lib/shelly/connections needs stubbing.
+// The adopt/discover/toggle/run-now/refresh handlers DO call the cloud and are
+// pinned in their own colocated route tests; adding one here would be a test
+// of a mock rather than of the tenant boundary.
+import * as shellyConnectionRoute from '@/app/api/shelly/connection/route.js'
+import * as shellyDevicesRoute from '@/app/api/shelly/devices/route.js'
+import * as shellyDeviceDetailRoute from '@/app/api/shelly/devices/[id]/route.js'
+
+// A pristine second copy of the world, never handed to a route. The blocked
+// mutation cases below diff the live row against this to assert BYTE
+// identity — stronger than checking the one field the attacker sent, which
+// would pass a route that wrote `updated_at` (or anything else) before
+// noticing the row was not its own.
+const PRISTINE = makeWorld()
+const pristineJson = (table, id) => JSON.stringify(PRISTINE[table].find((r) => r.id === id))
 
 let world
 let db
@@ -279,7 +299,124 @@ const SESSION_SPECS = [
       },
     ],
   },
+  {
+    // SHELLY-UI.9 — the smart-plug surface. Every /api/shelly route scopes by
+    // the SESSION's active location (no route accepts a location_id at all),
+    // so the boundary here is entirely the WHERE clause: the double serves
+    // both tenants' shelly_devices rows, and a handler that dropped its
+    // .eq('location_id', …) would receive org B's plugs and fail.
+    name: 'GET /api/shelly/devices (session list)',
+    call: () => shellyDevicesRoute.GET(makeReq('/api/shelly/devices')),
+    ids: (json) => idsOf(json?.devices),
+    cases: [
+      {
+        title: 'manager at A1 sees only A1’s adopted plugs',
+        persona: 'managerA1', expectIds: [SHD_A1],
+        verify: ({ json }) => {
+          expect(JSON.stringify(json)).not.toContain('bb11cc22dd31') // B1's relay MAC
+          expectNoShellySecrets(json)
+        },
+      },
+      {
+        title: 'owner at B1 sees only B1’s adopted plugs (mirror)',
+        persona: 'ownerB1', expectIds: [SHD_B1],
+        verify: ({ json }) => {
+          expect(JSON.stringify(json)).not.toContain('aa11bb22cc31') // A1's relay MAC
+          expectNoShellySecrets(json)
+        },
+      },
+      // Not a tenant boundary but the gate that stands in front of it:
+      // device_control is false for staff by default (shared/permissions.js),
+      // so a front-desk session never reaches the query at all.
+      { title: 'staff at A1 holds no device_control and is refused (403)', persona: 'staffA1', expectStatus: 403 },
+    ],
+  },
+  {
+    name: 'PATCH /api/shelly/devices/[id] (session device update)',
+    call: (c) => shellyDeviceDetailRoute.PATCH(
+      makeReq(`/api/shelly/devices/${c.id}`, { method: 'PATCH', body: { name: 'Hacked Plug', enabled: false } }),
+      propsOf({ id: c.id }),
+    ),
+    cases: [
+      {
+        title: 'owner of B patching an A1 device gets 404, the row is byte-identical, and no write was issued',
+        persona: 'ownerB1', id: SHD_A1, expectStatus: 404,
+        verify: ({ world: w, db: d, json }) => {
+          expect(JSON.stringify(w.shelly_devices.find((r) => r.id === SHD_A1)))
+            .toBe(pristineJson('shelly_devices', SHD_A1))
+          // The tenant filter is on the WRITE as well as the read, so the
+          // route must not even have issued an UPDATE it then found matched
+          // nothing — a zero-row UPDATE is not an error in PostgREST.
+          expect(d._writesTo('shelly_devices')).toHaveLength(0)
+          // 404 for a foreign id and 404 for a malformed one carry the same
+          // body — the property that makes ids un-enumerable.
+          expect(json).toEqual({ success: false, error: 'Not found' })
+        },
+      },
+      {
+        title: 'owner of A1 patching their own device succeeds (positive control)',
+        persona: 'ownerA1', id: SHD_A1,
+        verify: ({ world: w }) => {
+          expect(w.shelly_devices.find((r) => r.id === SHD_A1).name).toBe('Hacked Plug')
+          expect(w.shelly_devices.find((r) => r.id === SHD_B1).name).toBe('B One Heater')
+        },
+      },
+    ],
+  },
+  {
+    name: 'GET /api/shelly/connection (session connection view)',
+    call: () => shellyConnectionRoute.GET(makeReq('/api/shelly/connection')),
+    cases: [
+      {
+        title: 'manager at A1 reads A1’s connection but may not manage it',
+        persona: 'managerA1',
+        verify: ({ json }) => {
+          expect(json.connection.host).toBe(SHELLY_HOST_A1)
+          expect(json.connection.has_auth_key).toBe(true)
+          // The affordance, not the enforcement: PUT/DELETE are additionally
+          // master-or-owner gated inside the handlers.
+          expect(json.can_manage).toBe(false)
+          expect(json.device_count).toBe(1)
+          expectNoShellySecrets(json)
+        },
+      },
+      {
+        title: 'owner at A1 may manage the same connection',
+        persona: 'ownerA1',
+        verify: ({ json }) => {
+          expect(json.can_manage).toBe(true)
+          expectNoShellySecrets(json)
+        },
+      },
+      {
+        title: 'owner of B sees only B1’s connection — never A1’s host, key or fingerprint',
+        persona: 'ownerB1',
+        verify: ({ json }) => {
+          expect(json.connection.host).toBe(SHELLY_HOST_B1)
+          expect(json.device_count).toBe(1)
+          const body = JSON.stringify(json)
+          expect(body).not.toContain(SHELLY_HOST_A1)
+          expect(body).not.toContain('aaa1') // A1's key_hint
+          expectNoShellySecrets(json)
+        },
+      },
+    ],
+  },
 ]
+
+// Neither the auth key NOR its fingerprint may appear in any Shelly response.
+// The fingerprint is a sha256 OF the key, so publishing it would turn "is this
+// the account?" into an offline check anyone holding a candidate key can run —
+// connections.js treats the two as equally secret. The double hands the route
+// the WHOLE row regardless of the columns it selects, so the only thing
+// standing between these strings and the response is publicConnectionView's
+// allowlist, which is exactly what this asserts.
+function expectNoShellySecrets(json) {
+  const body = JSON.stringify(json)
+  for (const secret of [SHELLY_KEY_A1, SHELLY_KEY_B1, SHELLY_FP_A1, SHELLY_FP_B1]) {
+    expect(body).not.toContain(secret)
+  }
+}
 
 // ─── shared assertion loop ───────────────────────────────────────────
 for (const spec of SESSION_SPECS) {

@@ -81,6 +81,28 @@ export const TPL_B = tid('7e0b')
 export const SHT_A1 = tid('5fa1') // shift template (assistant tools)
 export const SHT_B1 = tid('5fb1')
 
+// SHELLY-UI.9 — Shelly connection (one per location, location_id UNIQUE) and
+// one adopted relay each, so the /api/shelly surface can be exercised for
+// BOTH tenants against the same double.
+export const SHC_A1 = tid('5ca1')
+export const SHC_B1 = tid('5cb1')
+export const SHD_A1 = tid('5da1')
+export const SHD_B1 = tid('5db1')
+
+// The credential and its sha256 fingerprint, per location. Both are FAKE and
+// both are deliberately distinctive, so a response that carries either shows
+// up in a JSON.stringify() assertion rather than having to be spotted by eye.
+// The fingerprint is asserted alongside the key on purpose: it is a sha256 OF
+// the key, so publishing it turns "is this the account?" into an offline check
+// anyone holding a candidate key can run — connections.js treats the two as
+// equally secret and so does the harness.
+export const SHELLY_KEY_A1 = 'SHELLY-SECRET-KEY-MUST-NEVER-BE-RETURNED-aaa1'
+export const SHELLY_KEY_B1 = 'SHELLY-SECRET-KEY-MUST-NEVER-BE-RETURNED-bbb1'
+export const SHELLY_FP_A1 = 'a1'.repeat(32)
+export const SHELLY_FP_B1 = 'b1'.repeat(32)
+export const SHELLY_HOST_A1 = 'shelly-11-eu.shelly.cloud'
+export const SHELLY_HOST_B1 = 'shelly-22-eu.shelly.cloud'
+
 export const P_STAFF_A1 = tid('90a1')
 export const P_MGR_A1 = tid('91a1')
 export const P_OWNER_A1 = tid('92a1')
@@ -205,6 +227,51 @@ export function makeWorld() {
     shift_templates: [
       { id: SHT_A1, location_id: LOC_A1, name: 'Morning A1', start_time: '09:00:00', end_time: '17:00:00', max_coaches: 10, active: true },
       { id: SHT_B1, location_id: LOC_B1, name: 'Morning B1', start_time: '09:00:00', end_time: '17:00:00', max_coaches: 10, active: true },
+    ],
+    // SHELLY-UI.9 — one Shelly account per location (mig 562:
+    // shelly_connections.location_id UNIQUE), carrying the FULL row including
+    // auth_key and auth_key_fingerprint. The double returns whole rows
+    // regardless of the column list a route selects, which is the point: the
+    // only thing standing between the key and the response is
+    // publicConnectionView's allowlist, and that is what the assertions test.
+    shelly_connections: [
+      {
+        id: SHC_A1, location_id: LOC_A1, host: SHELLY_HOST_A1,
+        auth_key: SHELLY_KEY_A1, auth_key_fingerprint: SHELLY_FP_A1, key_hint: 'aaa1',
+        status: 'connected', last_ok_at: '2026-08-23T09:00:00Z', last_error: null, last_error_at: null,
+        linked_by: P_OWNER_A1, created_at: '2026-08-01T00:00:00Z', updated_at: '2026-08-23T09:00:00Z',
+      },
+      {
+        id: SHC_B1, location_id: LOC_B1, host: SHELLY_HOST_B1,
+        auth_key: SHELLY_KEY_B1, auth_key_fingerprint: SHELLY_FP_B1, key_hint: 'bbb1',
+        status: 'connected', last_ok_at: '2026-08-23T09:00:00Z', last_error: null, last_error_at: null,
+        linked_by: P_OWNER_B1, created_at: '2026-08-02T00:00:00Z', updated_at: '2026-08-23T09:00:00Z',
+      },
+    ],
+    // One adopted relay channel each. (device_id, channel) is UNIQUE across
+    // the WHOLE estate (mig 562), so the two device_ids differ — a fixture
+    // that reused one would not be a state the database can hold.
+    shelly_devices: [
+      {
+        id: SHD_A1, location_id: LOC_A1, device_id: 'aa11bb22cc31', channel: 0,
+        name: 'A One Heater', model: 'SNSW-001X16EU', gen: 2, zone: null,
+        enabled: true, schedule_mode: 'fixed',
+        fixed_windows: [{ days: [1, 2, 3, 4, 5], on: '06:30', off: '21:00' }], class_rule: {},
+        override: null, last_applied: null,
+        last_state: { online: true, output: false, apower: 0, aenergy_wh: 1200, temperature_c: 21, source: 'timer', at: '2026-08-23T09:00:00Z' },
+        last_seen_at: '2026-08-23T09:00:00Z', adopted_by: P_OWNER_A1,
+        created_at: '2026-08-01T00:00:00Z', updated_at: '2026-08-23T09:00:00Z',
+      },
+      {
+        id: SHD_B1, location_id: LOC_B1, device_id: 'bb11cc22dd31', channel: 0,
+        name: 'B One Heater', model: 'SNSW-001X16EU', gen: 2, zone: null,
+        enabled: true, schedule_mode: 'fixed',
+        fixed_windows: [{ days: [1, 2, 3, 4, 5], on: '07:00', off: '20:00' }], class_rule: {},
+        override: null, last_applied: null,
+        last_state: { online: true, output: false, apower: 0, aenergy_wh: 900, temperature_c: 20, source: 'timer', at: '2026-08-23T09:00:00Z' },
+        last_seen_at: '2026-08-23T09:00:00Z', adopted_by: P_OWNER_B1,
+        created_at: '2026-08-02T00:00:00Z', updated_at: '2026-08-23T09:00:00Z',
+      },
     ],
   }
 }
