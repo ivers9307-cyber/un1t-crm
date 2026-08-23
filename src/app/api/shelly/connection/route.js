@@ -76,13 +76,26 @@ export const GET = withAuth({ permission: 'device_control' }, async ({ user, db,
     // cost the operator the connection panel itself. null reads as "unknown"
     // in the UI rather than as a confident zero.
     logWarn(MODULE, 'device count failed', { locationId, error: countError.message })
+  } else if (typeof count !== 'number') {
+    // NEVER `count ?? 0`. PostgREST answers null for a count it did not
+    // compute — a missing Prefer header, a driver quirk — with NO error
+    // alongside it, so the old fallback turned "we did not count" into a
+    // confident zero. The panel spends that number on the Disconnect confirm
+    // ("your N plugs stay adopted"), so a fabricated 0 reads as "there is
+    // nothing to lose here" at the exact moment an operator is deciding
+    // whether to unlink a studio with twelve plugs on it. The adopt route
+    // already refuses on this shape (it is the cap check); here the honest
+    // answer is unknown, and the UI drops the clause. Logged, because a count
+    // that comes back unusable with no error is a driver-level surprise
+    // nobody would otherwise see. (SHELLY-UI.9b)
+    logWarn(MODULE, 'device count came back unusable', { locationId })
   }
 
   return NextResponse.json({
     success: true,
     connection: loaded.ok ? loaded.connection : null,
     can_manage: guardMasterOrOwner(user, locationId) === null,
-    device_count: countError ? null : (count ?? 0),
+    device_count: !countError && typeof count === 'number' ? count : null,
   })
 })
 

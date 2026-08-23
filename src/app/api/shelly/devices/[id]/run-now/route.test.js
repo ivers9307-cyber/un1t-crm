@@ -128,9 +128,26 @@ describe('POST …/run-now — what it applied', () => {
     expect(await res.json()).toEqual({ success: true, applied: 'on', reason: 'run_now' })
   })
 
-  it('a noop from the planner is applied:null — already correct', async () => {
+  // SHELLY-UI.9b — there is no "already correct" answer here, and the arm
+  // that claimed one was unreachable. runNowForDevice plans with force:true,
+  // and under force planDeviceAction's only null path is rule 2 (unmanaged),
+  // which the two 409 guards above already took. A noop reaching this point
+  // means the planner and this route disagree about what force means; a
+  // cheerful applied:null would bury that under a green tick while no relay
+  // moved, so it is a loud 500 instead.
+  it('a noop from the planner is a loud 500, not a false applied:null', async () => {
     runNowForDevice.mockResolvedValue({ ok: true, noop: true })
-    expect(await (await POST(runReq(), ctxFor(DEV_A))).json()).toEqual({ success: true, applied: null, reason: null })
+    const res = await POST(runReq(), ctxFor(DEV_A))
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: false, code: 'unexpected_noop' })
+    expect(body.error).toMatch(/nothing was sent/i)
+  })
+
+  it('a real action still answers applied + reason', async () => {
+    runNowForDevice.mockResolvedValue({ ok: true, action: 'on', reason: 'run_now' })
+    expect(await (await POST(runReq(), ctxFor(DEV_A))).json())
+      .toEqual({ success: true, applied: 'on', reason: 'run_now' })
   })
 
   it('hands the engine a connection carrying the LOCATION’s zone', async () => {

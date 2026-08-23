@@ -45,6 +45,13 @@ export default function ShellyScheduleEditor({ device, glofoxConnected, onSave }
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [saved, setSaved] = useState(false)
+  // SHELLY-UI.9b — the PATCH route's `notice`, surfaced here the same way the
+  // card's enable toggle surfaces it. Switching the mode to 'none' on an
+  // enabled device stops the schedule managing the relay just as completely as
+  // switching the schedule off does, and the relay STAYS where it was left
+  // (plan.js rule 2). Without this the one control that can do that silently
+  // said 'Saved' over a plug the operator now believes nothing is holding on.
+  const [notice, setNotice] = useState(null)
 
   const storedWindows = Array.isArray(device.fixed_windows) ? device.fixed_windows : []
   const storedRule = {
@@ -72,6 +79,7 @@ export default function ShellyScheduleEditor({ device, glofoxConnected, onSave }
   async function save() {
     setBusy(true)
     setError(null)
+    setNotice(null)
     setSaved(false)
     const res = await onSave(patch)
     setBusy(false)
@@ -80,6 +88,9 @@ export default function ShellyScheduleEditor({ device, glofoxConnected, onSave }
       return
     }
     setSaved(true)
+    // Only present when the save actually abandoned a relay that is currently
+    // on — see the route's DISABLE_NOTICE.
+    if (res.json?.notice) setNotice(res.json.notice)
   }
 
   // Enter saves, Escape puts the field back to what is stored. A number field
@@ -173,6 +184,12 @@ export default function ShellyScheduleEditor({ device, glofoxConnected, onSave }
         <Button size="sm" variant="secondary" loading={busy} disabled={!dirty} onClick={save}>Save schedule</Button>
         {saved && !dirty && <span className="text-xs text-emerald-700">Saved</span>}
       </div>
+
+      {notice && (
+        <p className="flex items-start gap-1 text-xs text-amber-700" role="status">
+          <AlertCircle size={12} className="mt-0.5 shrink-0" aria-hidden="true" /> {notice}
+        </p>
+      )}
 
       {error && (
         <p className="flex items-start gap-1 text-xs text-red-700" role="alert">

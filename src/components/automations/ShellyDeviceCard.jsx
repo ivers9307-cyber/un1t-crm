@@ -27,10 +27,12 @@
 //     carry `holds_until_changed: true`, and a countdown rendered next to one
 //     would be a promise the engine never intended to keep.
 //
-//  4. `auto` ANSWERS THREE REASONS, not two: 'disabled' (the schedule is off),
-//     'no_schedule' (there is nothing to go back to) and 'nothing_to_do'
-//     (already correct). They call for three different actions from the
-//     operator, so they get three different sentences.
+//  4. `auto` ANSWERS TWO REASONS: 'disabled' (the schedule is off) and
+//     'no_schedule' (there is nothing to go back to). They call for two
+//     different actions from the operator, so they get two different
+//     sentences. There is deliberately no "already correct" copy — run-now
+//     forces, so the planner cannot answer a no-op for a managed device, and
+//     SHELLY-UI.9b removed the string that claimed otherwise.
 //
 // Two destructive-ish actions are two-step: Remove (the energy history goes
 // with the row — ON DELETE CASCADE, mig 562) and, on the connection panel,
@@ -48,7 +50,7 @@ import { deviceHealth, HEALTH_TONE_CLASSES } from '@/lib/shelly/device-health'
 // The ENGINE's own answer to "is this override live", not a second copy of the
 // same comparison — a planner that stopped honouring an override and a card
 // that kept showing the banner would disagree silently.
-import { isLiveOverride } from '@/lib/shelly/plan'
+import { isLiveOverride, overrideKey } from '@/lib/shelly/plan'
 import { fetchJson, errorText, jsonBody } from './shelly-fetch'
 import ShellyScheduleEditor from './ShellyScheduleEditor'
 import ShellyEnergyChart from './ShellyEnergyChart'
@@ -66,11 +68,10 @@ const PENDING_COPY = {
   bad_host: 'Queued — fix the Shelly server in the connection settings and the plug will follow.',
 }
 
-// `auto`'s three noops. Run-now keeps the same three apart one route over.
+// `auto`'s two noops. Run-now keeps the same two apart one route over.
 const AUTO_REASON_COPY = {
   disabled: 'Schedule is switched off — turn it on first.',
   no_schedule: 'No schedule to return to.',
-  nothing_to_do: 'Already on schedule.',
 }
 
 const UNMANAGED_HINT = 'No schedule runs this plug — it stays as you set it until you change it.'
@@ -172,8 +173,23 @@ export default function ShellyDeviceCard({ device, connected, locationTz = DEFAU
   // disappeared then would leave a plug forced on with nothing on screen
   // saying so. For a managed device `until` is real and isLiveOverride (the
   // planner's own comparison) is exactly the right question.
+  // SHELLY-UI.9b — "unmanaged" is a fact about the device RIGHT NOW, but the
+  // override may have been written while it was MANAGED, expired there, and
+  // been closed by the engine (plan.js rule 4 stamps
+  // `{ key: overrideKey(ov), action:'off', reason:'override_expired' }`). The
+  // row still carries the spent override — nothing clears it — so a device
+  // that was later disabled, or had its schedule removed, would flip into the
+  // unmanaged branch below and resurrect a banner reading "Forced ON — stays
+  // until changed" for an override the engine had ALREADY released. The relay
+  // is off; the card would insist it is being held on, and no amount of
+  // waiting would clear it because an unmanaged override has no expiry to
+  // pass. The key comparison is what distinguishes "closed" from "a later
+  // override that happens to share a reason": the stamp carries the exact key
+  // of the override it closed.
+  const alreadyClosed = device.last_applied?.reason === 'override_expired'
+    && device.last_applied?.key === overrideKey(device.override)
   const overrideLive = holdsUntilChanged
-    ? device.override?.state === 'on' || device.override?.state === 'off'
+    ? !alreadyClosed && (device.override?.state === 'on' || device.override?.state === 'off')
     : isLiveOverride(device.override, nowMs)
   // Only a missing CONNECTION kills the toggle strip. An offline plug is
   // still settable — see OFFLINE_TITLE.
@@ -295,9 +311,14 @@ export default function ShellyDeviceCard({ device, connected, locationTz = DEFAU
       await onChanged?.()
       return
     }
+    // `applied` is always 'on' or 'off' on a 200 — run-now forces, so the
+    // planner never answers a no-op for a managed device and the route now
+    // treats one as a 500 rather than dressing it as "already correct"
+    // (SHELLY-UI.9b). The fallback below is therefore about a MALFORMED body,
+    // not about a real state, and it says nothing it cannot back up.
     setResult({
       tone: 'ok',
-      text: res.json?.applied ? `Applied — switched ${res.json.applied}.` : 'Already matching its schedule.',
+      text: res.json?.applied ? `Applied — switched ${res.json.applied}.` : 'Schedule applied.',
     })
     await onChanged?.()
   }

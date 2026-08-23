@@ -364,6 +364,38 @@ const SESSION_SPECS = [
     ],
   },
   {
+    name: 'DELETE /api/shelly/devices/[id] (session un-adopt)',
+    call: (c) => shellyDeviceDetailRoute.DELETE(
+      makeReq(`/api/shelly/devices/${c.id}`, { method: 'DELETE' }),
+      propsOf({ id: c.id }),
+    ),
+    cases: [
+      {
+        // DELETE is the destructive half of the same loader, and it CASCADES
+        // the device's energy history (mig 562) — so a cross-tenant delete
+        // that got through would not merely un-adopt another business's plug,
+        // it would destroy months of their kWh readings with no way back.
+        title: 'owner of B deleting an A1 device gets 404, the row survives byte-identical, and no delete was issued',
+        persona: 'ownerB1', id: SHD_A1, expectStatus: 404,
+        verify: ({ world: w, db: d, json }) => {
+          expect(w.shelly_devices.some((r) => r.id === SHD_A1)).toBe(true)
+          expect(JSON.stringify(w.shelly_devices.find((r) => r.id === SHD_A1)))
+            .toBe(pristineJson('shelly_devices', SHD_A1))
+          expect(d._writesTo('shelly_devices')).toHaveLength(0)
+          expect(json).toEqual({ success: false, error: 'Not found' })
+        },
+      },
+      {
+        title: 'owner of A1 removing their own device succeeds, and B1’s is untouched (positive control)',
+        persona: 'ownerA1', id: SHD_A1,
+        verify: ({ world: w }) => {
+          expect(w.shelly_devices.some((r) => r.id === SHD_A1)).toBe(false)
+          expect(w.shelly_devices.some((r) => r.id === SHD_B1)).toBe(true)
+        },
+      },
+    ],
+  },
+  {
     name: 'GET /api/shelly/connection (session connection view)',
     call: () => shellyConnectionRoute.GET(makeReq('/api/shelly/connection')),
     cases: [

@@ -162,6 +162,58 @@ describe('getOpenApiSpec', () => {
     )
   })
 
+  // SHELLY-UI.9b — three contract facts that are only visible in the
+  // GENERATED document. Asserting them on the zod schema instead would pass
+  // while the published JSON-Schema said something else, which is exactly how
+  // the `/i` bug below survived review.
+  it('publishes a device-id pattern a real MAC can actually match', () => {
+    const pattern = spec.components.schemas.ShellyAdoptBody.properties.device_id.pattern
+    // A JS regex with the `i` flag serialises as source + flags, so the old
+    // /^[0-9a-f]{6,32}$/i became the literal '^[0-9a-f]{6,32}$/i' — a pattern
+    // ending in a stray '/i' that NO device id can satisfy. Every generated
+    // client would have rejected a valid MAC before sending it.
+    expect(pattern).not.toMatch(/\/i$/)
+    expect(new RegExp(pattern).test('aa11bb22cc31')).toBe(true)
+    expect(new RegExp(pattern).test('AA11BB22CC31')).toBe(true)
+    expect(new RegExp(pattern).test('nothex!')).toBe(false)
+  })
+
+  it('documents the third connection state as a member of the enum', () => {
+    const listed = spec.components.schemas.ShellyDeviceListResponse
+    expect(listed.properties.connection_status.enum ?? listed.properties.connection_status.anyOf?.flatMap((a) => a.enum ?? []))
+      .toContain('unknown')
+  })
+
+  it('gives every Shelly error body the coded envelope, not the bare one', () => {
+    // `.extend()` on a NAMED schema renders as allOf[$ref(base), {own props}],
+    // the same shape SonosControlErrorResponse produces — so the codes live on
+    // the second member, not at the top level.
+    const envelope = spec.components.schemas.ShellyErrorResponse
+    expect(envelope.allOf[0].$ref).toBe('#/components/schemas/ErrorResponse')
+    const codes = envelope.allOf[1].properties.code.enum
+    // The four an operator's UI actually branches on, plus the one added when
+    // the dead "already correct" arm was replaced by a loud failure.
+    for (const c of ['not_connected', 'key_rejected', 'device_cap', 'not_on_account', 'unexpected_noop']) {
+      expect(codes, `ShellyErrorResponse must document ${c}`).toContain(c)
+    }
+    // Every Shelly error response references it — a bare ErrorResponse here
+    // would document "there will be a string" and nothing a client can switch on.
+    const shellyOps = Object.entries(spec.paths)
+      .filter(([p]) => p.startsWith('/api/shelly'))
+      .flatMap(([, ops]) => Object.values(ops))
+    let checked = 0
+    for (const op of shellyOps) {
+      for (const [status, res] of Object.entries(op.responses)) {
+        if (Number(status) < 400) continue
+        const schema = res.content?.['application/json']?.schema
+        const ref = JSON.stringify(schema ?? {})
+        expect(ref, `${status} must not use the bare ErrorResponse`).not.toContain('"#/components/schemas/ErrorResponse"')
+        checked += 1
+      }
+    }
+    expect(checked).toBeGreaterThan(40)
+  })
+
   it('caches the spec object across calls (same reference)', async () => {
     expect(await getOpenApiSpec()).toBe(spec)
   })

@@ -4894,6 +4894,49 @@ const ShellyDevice = z.object({
     + 'last_applied null and last_seen_at null until it is first seen.',
 })
 
+// EVERY Shelly error body, coded. The Sonos block one screen up established
+// the shape (SonosControlErrorResponse) and the reason is the same: the page
+// branches on `code`, not on the sentence, so a `code` that exists in the
+// handlers but not in the spec is a contract that documents nothing a client
+// can actually switch on. Bare ErrorResponse said only "there will be a
+// string" — SHELLY-UI.9b replaced it everywhere in this block.
+//
+// TWO POPULATIONS, deliberately in one enum because they arrive in one field:
+//
+//   OURS — minted by the handlers, stable, and what the UI switches on.
+//   PASS-THROUGH — the Shelly client's own failure tag, carried verbatim as
+//     `code` (and, on the toggle/run-now catch-alls, also as `kind`) on the
+//     502s. They are the vocabulary of client.js and reconcile.js, not of the
+//     routes, so a client should treat any of them as "the cloud did not
+//     answer" rather than branching per tag.
+//
+// `code` stays `.optional()` because the guards that run BEFORE a handler —
+// withAuth's 401/403, the "no active location" 400, validateBody's 400 — mint
+// an uncoded ErrorResponse, exactly as on the Sonos control route.
+const ShellyErrorResponse = ErrorResponse.extend({
+  code: z.enum([
+    // ours
+    'not_connected', 'key_rejected', 'verification_unavailable',
+    'device_cap', 'adopted_here', 'adopted', 'not_on_account',
+    'unsupported', 'bad_channel', 'bad_host', 'bad_device',
+    'no_schedule', 'disabled', 'occurrences', 'rate_limited',
+    'unexpected_noop',
+    // pass-through client/engine failure tags (502s)
+    'config', 'network', 'http', 'device',
+    'invalid_ids', 'too_many_ids', 'bad_clock', 'unreachable',
+  ]).optional(),
+  // Present only alongside code "unsupported" (adopt). Null is a real answer:
+  // the normaliser judged the device unadoptable without recognising which of
+  // the two reasons applied, and a client must not read a missing reason as
+  // one of them.
+  reason: z.enum(['gen1', 'no_switch']).nullable().optional(),
+  // The raw client tag, carried beside `code` on the toggle and run-now
+  // catch-alls so a log has the un-mapped value. Deliberately a free string:
+  // it is whatever client.js tagged, and pinning it here would make a new tag
+  // a spec violation rather than a log line.
+  kind: z.string().optional(),
+}).openapi('ShellyErrorResponse')
+
 const ShellyConnectionPublic = z.object({
   host: z.string().nullable(),
   key_hint: z.string().nullable(),
@@ -4977,11 +5020,12 @@ const ShellyDeviceListResponse = z.object({
   success: z.literal(true),
   devices: z.array(ShellyDevice),
   connected: z.boolean().nullable(),
-  connection_status: z.enum(['connected', 'action_needed', 'error']).nullable(),
+  connection_status: z.enum(['connected', 'action_needed', 'error', 'unknown']).nullable(),
 }).openapi('ShellyDeviceListResponse', {
   description: 'THREE connection answers on a 200, not two. connected true/false with a connection_status string '
     + '(or null for a location that genuinely never connected) is the ordinary pair. connected: NULL with '
-    + 'connection_status "unknown" is the third: the device list read fine and the connection row did not. It is '
+    + 'connection_status "unknown" is the third, and "unknown" is a member of the enum rather than an undocumented '
+    + 'string: the device list read fine and the connection row did not. It is '
     + 'deliberately not `false` — that would tell a live studio its plugs are unreachable and offer it the '
     + 'Connect form — and it must not cost the operator the cards that are already on screen. Clients render a '
     + 'subordinate "couldn\'t read the Shelly connection — retrying" line over the existing cards; only '
@@ -4989,6 +5033,18 @@ const ShellyDeviceListResponse = z.object({
     + '"action_needed" (re-paste your key) and "error" (retrying) are both "not connected" to the flag and need '
     + 'different copy.',
 })
+
+// The reason vocabulary BOTH forced paths answer, closed and shared so the
+// toggle and run-now can never describe the same engine outcome differently.
+// Only three values are reachable, and the absence of the other four planner
+// reasons is the point: `runNowForDevice` plans with force:true, and under
+// force planDeviceAction stamps every action it takes as 'run_now'
+// (`reason: force ? 'run_now' : …` on rules 1 and 3, and rule 4's forced arm).
+// 'override', 'window_open', 'window_close' and 'override_expired' are what
+// the UNFORCED cron writes to last_applied — they reach a device row, never
+// one of these responses. 'disabled' and 'no_schedule' are this surface's own
+// two names for the single null path force leaves open (planner rule 2).
+const ShellyActionReason = z.enum(['run_now', 'disabled', 'no_schedule'])
 
 const ShellyToggleResponse = z.object({
   success: z.literal(true),
@@ -4998,7 +5054,7 @@ const ShellyToggleResponse = z.object({
   code: z.enum(['key_rejected', 'rate_limited', 'bad_host', 'pending']).optional(),
   kind: z.string().optional(),
   message: z.string().optional(),
-  reason: z.enum(['disabled', 'no_schedule', 'nothing_to_do', 'override', 'run_now', 'window_open', 'window_close', 'override_expired']).optional(),
+  reason: ShellyActionReason.optional(),
   holds_until_changed: z.boolean().optional(),
   notice: z.string().optional(),
 }).openapi('ShellyToggleResponse', {
@@ -5008,9 +5064,12 @@ const ShellyToggleResponse = z.object({
     + 'enabled or not, so this is a delay, not a loss. `code` says what to tell the operator (key_rejected → '
     + 're-paste, rate_limited → busy, bad_host → fix the connection settings, pending → offline) and `message` '
     + 'carries the copy. Painting the new state optimistically here would show a plug as ON while it is '
-    + 'physically off. (c) state "auto" — applied is the action taken ("on"/"off") or null with a `reason`: '
-    + 'disabled ("the schedule is switched off"), no_schedule ("there is nothing to go back to") or '
-    + 'nothing_to_do ("already correct"). holds_until_changed rides on both force bodies and is ALWAYS present '
+    + 'physically off. (c) state "auto" — applied is the action taken ("on"/"off", reason "run_now") or null with a '
+    + '`reason` of exactly TWO values: disabled ("the schedule is switched off") or no_schedule ("there is '
+    + 'nothing to go back to"). There is deliberately no "already correct" third value — the re-run forces, so '
+    + 'a managed device always commands the relay, and a no-op reaching that branch is a 500 (code '
+    + '"unexpected_noop") rather than a green tick over a relay nothing touched. holds_until_changed rides on '
+    + 'both force bodies and is ALWAYS present '
     + 'there (never conditionally omitted, so a client reads a boolean rather than inferring one): true means '
     + 'the device is UNMANAGED (enabled false, or schedule_mode "none"), the engine never closes an expired '
     + 'override for it, and `until` therefore bounds the BANNER and not the relay — render plain On/Off with no '
@@ -5020,13 +5079,15 @@ const ShellyToggleResponse = z.object({
 
 const ShellyRunNowResponse = z.object({
   success: z.literal(true),
-  applied: z.enum(['on', 'off']).nullable(),
-  reason: z.string().nullable(),
+  applied: z.enum(['on', 'off']),
+  reason: ShellyActionReason.nullable(),
 }).openapi('ShellyRunNowResponse', {
-  description: 'applied null here means "already correct" and nothing else — the other two no-op cases '
-    + '(no schedule, schedule switched off) are 409s with their own codes, because they are three different '
-    + 'things for an operator to do. reason is the planner\'s tag for what it did (window_open, window_close, '
-    + 'override, override_expired, run_now).',
+  description: 'A 200 here ALWAYS moved the relay: applied is "on" or "off", never null. There is no '
+    + '"already correct" answer, and SHELLY-UI.9b removed the arm that pretended there was — run-now forces, so '
+    + 'the planner re-sends regardless of its own exactly-once stamp, and the only state it can decline to act '
+    + 'on (an unmanaged device) is already refused as a 409 before anything reaches the cloud. reason is '
+    + '"run_now" on every success; the field is kept, rather than dropped, because it is the same field the '
+    + 'toggle answers and collapsing one of them would make the two responses describe the engine differently.',
 })
 
 const ShellyEnergyResponse = z.object({
@@ -5068,7 +5129,11 @@ registry.registerPath({
   method: 'get',
   path: '/api/shelly/connection',
   tags: ['Automations'],
-  security: [{ CookieAuth: [] }],
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
   summary: 'The active location\'s Shelly account, as the connection panel renders it (device_control)',
   description:
     'Never returns auth_key, and never the key fingerprint either. A transient database failure is a 500, NOT '
@@ -5076,10 +5141,10 @@ registry.registerPath({
     + 'answering "not connected" for a live studio would invite an owner to re-paste a working credential.',
   responses: {
     200: { description: 'Connection view (or null when the location has never connected)', content: { 'application/json': { schema: ShellyConnectionGetResponse } } },
-    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ErrorResponse } } },
-    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
-    500: { description: 'The connection row could not be read. Deliberately not a 200 with connection:null — see the summary.', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    500: { description: 'The connection row could not be read. Deliberately not a 200 with connection:null — see the summary.', content: { 'application/json': { schema: ShellyErrorResponse } } },
   },
 })
 
@@ -5087,7 +5152,11 @@ registry.registerPath({
   method: 'put',
   path: '/api/shelly/connection',
   tags: ['Automations'],
-  security: [{ CookieAuth: [] }],
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
   summary: 'Link a Shelly account, or re-paste an existing one (device_control + master/owner)',
   description:
     'Order is deliberate: normalise the host, merge the key (a blank key keeps the stored one), PROVE the pair '
@@ -5100,33 +5169,37 @@ registry.registerPath({
   responses: {
     200: { description: 'Linked', content: { 'application/json': { schema: ShellyConnectionPutResponse } } },
     400: {
-      description: 'Four distinct 400s, each with its own copy: an unusable server host; no key at all (nothing '
-        + 'stored and nothing pasted); a pasted key shorter than ' + MIN_AUTH_KEY_LENGTH + ' characters; and '
+      description: 'Five distinct 400s, each with its own copy: an unusable server host; no key at all (nothing '
+        + 'stored and nothing pasted); a pasted key shorter than ' + MIN_AUTH_KEY_LENGTH + ' characters; a '
+        + 'database CHECK on the server or key format ("Shelly rejected the server or key format" — the '
+        + 'constraint message echoes the value, so it is mapped rather than surfaced); and '
         + 'code: "key_rejected" — Shelly itself refused the key, the ONE failure that is evidence about the '
         + 'credential. A network blip, a 5xx or a rate limit are never reported as a bad key: blaming the key for '
         + 'those sends an owner hunting for a new credential. Validation failures and "no active location" also '
         + 'land here.',
-      content: { 'application/json': { schema: ErrorResponse } },
+      content: { 'application/json': { schema: ShellyErrorResponse } },
     },
-    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Missing device_control, or the caller is not a master/owner of the active location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control, or the caller is not a master/owner of the active location', content: { 'application/json': { schema: ShellyErrorResponse } } },
     409: {
       description: 'Two shapes. code: "verification_unavailable" — the fingerprint lookup itself failed or was '
         + 'truncated, so we cannot prove this key is not another tenant\'s; TRANSIENT and coded so the client can '
         + 'offer "try again" rather than a dead end (every doubtful case refuses: a wrong "ok" hands one tenant '
         + 'another tenant\'s relays). And an UNCODED refusal, "This Shelly account is already linked to another '
         + 'business" — deliberately generic, naming no organisation, no location and no count, the same rule as '
-        + 'chooseTenantToBind. A unique-constraint collision on write answers the same generic sentence.',
-      content: { 'application/json': { schema: ErrorResponse } },
+        + 'chooseTenantToBind. A unique-constraint collision on the write is a THIRD, also uncoded shape with a '
+        + 'DIFFERENT sentence ("Could not link this Shelly account"): it is a race, not a tenancy verdict, and '
+        + 'claiming another business holds the key would be an accusation we did not check.',
+      content: { 'application/json': { schema: ShellyErrorResponse } },
     },
     429: {
       description: 'code: "rate_limited" — the SHARED 1 request/second Shelly account budget, most often the same '
         + 'owner\'s other studio mid-reconcile. A retry-after condition, not a broken far end, which is why it is '
         + 'not a 502.',
-      content: { 'application/json': { schema: ErrorResponse } },
+      content: { 'application/json': { schema: ShellyErrorResponse } },
     },
-    500: { description: 'The stored row could not be read while re-pasting a blank key, or the write failed', content: { 'application/json': { schema: ErrorResponse } } },
-    502: { description: 'Shelly cloud did not answer (code carries the client\'s failure tag)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The stored row could not be read while re-pasting a blank key, or the write failed', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    502: { description: 'Shelly cloud did not answer (code carries the client\'s failure tag)', content: { 'application/json': { schema: ShellyErrorResponse } } },
   },
 })
 
@@ -5134,7 +5207,11 @@ registry.registerPath({
   method: 'delete',
   path: '/api/shelly/connection',
   tags: ['Automations'],
-  security: [{ CookieAuth: [] }],
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
   summary: 'Unlink the Shelly account (device_control + master/owner)',
   description:
     'Idempotent: disconnecting a location that has no connection is a success, not a 404. The adopted devices '
@@ -5143,10 +5220,10 @@ registry.registerPath({
     + 'control of every device that is still there, and the response message says so.',
   responses: {
     200: { description: 'Disconnected (or already disconnected)', content: { 'application/json': { schema: z.object({ success: z.literal(true), message: z.string() }) } } },
-    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ErrorResponse } } },
-    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Missing device_control, or the caller is not a master/owner of the active location', content: { 'application/json': { schema: ErrorResponse } } },
-    500: { description: 'The delete failed — deliberately not reported as "Disconnected", or the operator would walk away believing the key is gone while the cron keeps using it', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control, or the caller is not a master/owner of the active location', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    500: { description: 'The delete failed — deliberately not reported as "Disconnected", or the operator would walk away believing the key is gone while the cron keeps using it', content: { 'application/json': { schema: ShellyErrorResponse } } },
   },
 })
 
@@ -5154,7 +5231,11 @@ registry.registerPath({
   method: 'get',
   path: '/api/shelly/discover',
   tags: ['Automations'],
-  security: [{ CookieAuth: [] }],
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
   summary: 'Every relay channel the connected Shelly account can see, masked (device_control)',
   description:
     'The device list comes from the CALLER\'S OWN cloud account, so names, models and online flags are already '
@@ -5165,18 +5246,18 @@ registry.registerPath({
     + 'tenant boundary while the RESPONSE does not.',
   responses: {
     200: { description: 'Masked device rows', content: { 'application/json': { schema: ShellyDiscoverResponse } } },
-    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ErrorResponse } } },
-    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
     409: {
       description: 'code: "not_connected" (link an account first) or code: "key_rejected" — Shelly refused the '
         + 'STORED key, which also parks the connection at action_needed with the same copy the cron writes. Only '
         + 'an auth failure does that; a blip or a 429 is never treated as evidence about the credential.',
-      content: { 'application/json': { schema: ErrorResponse } },
+      content: { 'application/json': { schema: ShellyErrorResponse } },
     },
-    429: { description: 'code: "rate_limited" — the shared 1 request/second account budget; retry in a few seconds', content: { 'application/json': { schema: ErrorResponse } } },
-    500: { description: 'The connection read failed (deliberately NOT reported as not_connected), or the holder lookup failed — a failed holder read is never degraded to "not adopted", because absence is what tells the operator a device is free', content: { 'application/json': { schema: ErrorResponse } } },
-    502: { description: 'Shelly cloud did not answer (code carries the client\'s failure tag)', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'code: "rate_limited" — the shared 1 request/second account budget; retry in a few seconds', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    500: { description: 'The connection read failed (deliberately NOT reported as not_connected), or the holder lookup failed — a failed holder read is never degraded to "not adopted", because absence is what tells the operator a device is free', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    502: { description: 'Shelly cloud did not answer (code carries the client\'s failure tag)', content: { 'application/json': { schema: ShellyErrorResponse } } },
   },
 })
 
@@ -5184,7 +5265,11 @@ registry.registerPath({
   method: 'get',
   path: '/api/shelly/devices',
   tags: ['Automations'],
-  security: [{ CookieAuth: [] }],
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
   summary: 'The active location\'s adopted relays, plus enough connection state to explain the page (device_control)',
   description:
     'Ordered by name then created_at (name is nullable and PostgREST orders NULLs last, so the tie-break keeps '
@@ -5194,10 +5279,10 @@ registry.registerPath({
     + 'answer 200 with connected: null and connection_status: "unknown" — see ShellyDeviceListResponse.',
   responses: {
     200: { description: 'Devices + connection state', content: { 'application/json': { schema: ShellyDeviceListResponse } } },
-    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ErrorResponse } } },
-    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
-    500: { description: 'The device list itself could not be read (a failed CONNECTION read is a 200 with connected:null instead — see the summary)', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    500: { description: 'The device list itself could not be read (a failed CONNECTION read is a 200 with connected:null instead — see the summary)', content: { 'application/json': { schema: ShellyErrorResponse } } },
   },
 })
 
@@ -5205,7 +5290,11 @@ registry.registerPath({
   method: 'post',
   path: '/api/shelly/devices',
   tags: ['Automations'],
-  security: [{ CookieAuth: [] }],
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
   summary: 'Adopt one relay channel at the active location (device_control)',
   description:
     'THE ORDER OF THE CHECKS IS A SECURITY PROPERTY. The device is proved to be on the CALLER\'S OWN Shelly '
@@ -5225,30 +5314,30 @@ registry.registerPath({
         + 'whenever it happened to be asleep. Or code: "bad_channel" — the device has no such channel, or it is '
         + 'offline and only channel 0 (the one every relay has) can be adopted on faith. Also: validation '
         + 'failures, a database CHECK the schema should have caught first, and "no active location".',
-      content: { 'application/json': { schema: ErrorResponse } },
+      content: { 'application/json': { schema: ShellyErrorResponse } },
     },
-    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
     404: {
       description: 'code: "not_on_account" — "Not found on this Shelly account". THE SAME ANSWER, deliberately, '
         + 'for "no such device anywhere" and "a device on another tenant\'s account": this is the gate that stops '
         + 'the holder check below it being an existence oracle, so it must not leak WHY the id is unknown to us. '
         + 'Every id a caller can get past it is one their own cloud account already told them about.',
-      content: { 'application/json': { schema: ErrorResponse } },
+      content: { 'application/json': { schema: ShellyErrorResponse } },
     },
     409: {
       description: 'code: "not_connected" (link an account first); "key_rejected" (Shelly refused the stored key '
         + '— the connection is parked at action_needed); "device_cap" (this location already holds the maximum of '
-        + ' ' + MAX_DEVICES_PER_LOCATION + ' devices, and adopting past it would create a row the cron slices off '
+        + MAX_DEVICES_PER_LOCATION + ' devices, and adopting past it would create a row the cron slices off '
         + 'every tick); "adopted_here" (already adopted at this location); "adopted" (held elsewhere — the '
         + 'holder\'s location is NAMED only when it is in the caller\'s own organisation, and the cross-org form '
         + 'names nobody). The UNIQUE index is the backstop for the race between the holder check and the insert, '
         + 'and it answers the generic "adopted" too.',
-      content: { 'application/json': { schema: ErrorResponse } },
+      content: { 'application/json': { schema: ShellyErrorResponse } },
     },
-    429: { description: 'code: "rate_limited" — the shared 1 request/second account budget; retry in a few seconds', content: { 'application/json': { schema: ErrorResponse } } },
-    500: { description: 'The connection, the device count or the holder check could not be read, or the insert failed. The count failing REFUSES rather than waving the adopt through — an over-cap device is adopted, schedulable and silently never controlled.', content: { 'application/json': { schema: ErrorResponse } } },
-    502: { description: 'Shelly cloud did not answer (code carries the client\'s failure tag)', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'code: "rate_limited" — the shared 1 request/second account budget; retry in a few seconds', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    500: { description: 'The connection, the device count or the holder check could not be read, or the insert failed. The count failing REFUSES rather than waving the adopt through — an over-cap device is adopted, schedulable and silently never controlled.', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    502: { description: 'Shelly cloud did not answer (code carries the client\'s failure tag)', content: { 'application/json': { schema: ShellyErrorResponse } } },
   },
 })
 
@@ -5256,7 +5345,11 @@ registry.registerPath({
   method: 'patch',
   path: '/api/shelly/devices/{id}',
   tags: ['Automations'],
-  security: [{ CookieAuth: [] }],
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
   summary: 'Edit one adopted device — name, enable, schedule mode, windows, class rule (device_control)',
   description:
     'THIS TOUCHES NO RELAY. In particular, DISABLING a device mid-window leaves it ON: enabled:false means "this '
@@ -5272,11 +5365,11 @@ registry.registerPath({
   },
   responses: {
     200: { description: 'Updated device row, plus `notice` when the patch disabled a schedule that is currently holding the relay on', content: { 'application/json': { schema: z.object({ success: z.literal(true), device: ShellyDevice, notice: z.string().optional() }).openapi('ShellyDeviceResponse') } } },
-    400: { description: 'Validation failed — a bad window shape, on === off, two windows overlapping on a shared day, an unknown key, or an empty body ("Nothing to update"). Also "no active location", and a database CHECK the schema should have caught first.', content: { 'application/json': { schema: ErrorResponse } } },
-    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Malformed id, an id at another location, or a row that was deleted between the read and the write — ALL THREE answer the identical body, which is what makes ids un-enumerable', content: { 'application/json': { schema: ErrorResponse } } },
-    500: { description: 'Database error', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Validation failed — a bad window shape, on === off, two windows overlapping on a shared day, an unknown key, or an empty body ("Nothing to update"). Also "no active location", and a database CHECK the schema should have caught first.', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    404: { description: 'Malformed id, an id at another location, or a row that was deleted between the read and the write — ALL THREE answer the identical body, which is what makes ids un-enumerable', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    500: { description: 'Database error', content: { 'application/json': { schema: ShellyErrorResponse } } },
   },
 })
 
@@ -5284,7 +5377,11 @@ registry.registerPath({
   method: 'delete',
   path: '/api/shelly/devices/{id}',
   tags: ['Automations'],
-  security: [{ CookieAuth: [] }],
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
   summary: 'Un-adopt one device (device_control)',
   description:
     'REMOVING A DEVICE DESTROYS ITS ENERGY HISTORY — shelly_energy_daily is ON DELETE CASCADE from '
@@ -5297,11 +5394,11 @@ registry.registerPath({
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: 'Removed (the message names the energy history that went with it)', content: { 'application/json': { schema: z.object({ success: z.literal(true), message: z.string() }) } } },
-    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ErrorResponse } } },
-    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Malformed id, an id at another location, or already gone — one identical body', content: { 'application/json': { schema: ErrorResponse } } },
-    500: { description: 'Database error', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    404: { description: 'Malformed id, an id at another location, or already gone — one identical body', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    500: { description: 'Database error', content: { 'application/json': { schema: ShellyErrorResponse } } },
   },
 })
 
@@ -5309,7 +5406,11 @@ registry.registerPath({
   method: 'post',
   path: '/api/shelly/devices/{id}/toggle',
   tags: ['Automations'],
-  security: [{ CookieAuth: [] }],
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
   summary: 'Force one relay on or off for a while, or hand it back to its schedule (device_control)',
   description:
     'THE WRITE ORDER IS THE CONTRACT. The override (the operator\'s INTENT) is written FIRST, then the command is '
@@ -5328,21 +5429,21 @@ registry.registerPath({
   },
   responses: {
     200: { description: 'Applied, PENDING, or handed back to the schedule — branch on `pending` before rendering any new state. See ShellyToggleResponse.', content: { 'application/json': { schema: ShellyToggleResponse } } },
-    400: { description: 'Validation failed, `until` is already in the past, or `until` is more than ' + MAX_OVERRIDE_HOURS + ' hours out (further than that is a schedule, not a manual nudge). Also "no active location".', content: { 'application/json': { schema: ErrorResponse } } },
-    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Malformed id, an id at another location, or a row deleted mid-request — one identical body', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'code: "not_connected" (link an account first). On the "auto" path only, also code: "key_rejected" — the run-now that follows the cleared override hit a rejected key; the body still carries `device` with the override already gone, and the copy says the device is back on its schedule.', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Validation failed, `until` is already in the past, or `until` is more than ' + MAX_OVERRIDE_HOURS + ' hours out (further than that is a schedule, not a manual nudge). Also "no active location".', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    404: { description: 'Malformed id, an id at another location, or a row deleted mid-request — one identical body', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    409: { description: 'code: "not_connected" (link an account first). On the "auto" path only, also code: "key_rejected" — the run-now that follows the cleared override hit a rejected key; the body still carries `device` with the override already gone, and the copy says the device is back on its schedule.', content: { 'application/json': { schema: ShellyErrorResponse } } },
     429: {
       description: 'TWO DIFFERENT BODIES AT THIS STATUS. On the on/off path it is the pending SUCCESS body — '
         + 'success:true, pending:true, code:"rate_limited" — because the override is saved and the cron will '
         + 'apply it; the 429 only tells the client to stop re-pressing. On the "auto" path it is an ordinary '
         + 'failure envelope (success:false, code:"rate_limited"), because the override has been cleared and the '
         + 'immediate re-run is what did not happen.',
-      content: { 'application/json': { schema: z.union([ShellyToggleResponse, ErrorResponse]).openapi('ShellyToggleRateLimited') } },
+      content: { 'application/json': { schema: z.union([ShellyToggleResponse, ShellyErrorResponse]).openapi('ShellyToggleRateLimited') } },
     },
-    500: { description: 'The device or connection read failed; the override write failed ("nothing was switched" — this is the one path that fails closed); the expiry could not be resolved; or, on the "auto" path, code: "bad_device" — the row cannot be commanded at all and gets no "it will resume" reassurance, because the next tick cannot apply it either', content: { 'application/json': { schema: ErrorResponse } } },
-    502: { description: '"auto" path only: code "occurrences" (today\'s timetable could not be read, so a class-mode device is NOT forced off on the strength of an empty day) or the client\'s failure tag for an unreachable cloud', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The device or connection read failed; the override write failed ("nothing was switched" — this is the one path that fails closed); the expiry could not be resolved; or, on the "auto" path, code: "bad_device" (the row cannot be commanded at all, and gets no "it will resume" reassurance because the next tick cannot apply it either) or code: "unexpected_noop" (the override IS cleared, but the forced re-run declined to act on a managed device — kept as a failure rather than dressed as "already on schedule")', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    502: { description: '"auto" path only: code "occurrences" (today\'s timetable could not be read, so a class-mode device is NOT forced off on the strength of an empty day) or the client\'s failure tag for an unreachable cloud', content: { 'application/json': { schema: ShellyErrorResponse } } },
   },
 })
 
@@ -5350,7 +5451,11 @@ registry.registerPath({
   method: 'post',
   path: '/api/shelly/devices/{id}/run-now',
   tags: ['Automations'],
-  security: [{ CookieAuth: [] }],
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
   summary: 'Stop waiting for the next tick — make this relay agree with its schedule now (device_control)',
   description:
     'The planner answers a bare no-op for three different situations, and this route keeps them apart because '
@@ -5362,14 +5467,14 @@ registry.registerPath({
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: 'Applied, or applied:null meaning "already correct"', content: { 'application/json': { schema: ShellyRunNowResponse } } },
-    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ErrorResponse } } },
-    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Malformed id or an id at another location — one identical body', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'code: "no_schedule" (checked FIRST — there is nothing to apply); "disabled" (the schedule is switched off; turn it on first); "not_connected"; or "key_rejected" (Shelly refused the stored key, which also parks the connection at action_needed)', content: { 'application/json': { schema: ErrorResponse } } },
-    429: { description: 'code: "rate_limited" — the shared 1 request/second account budget; retry in a few seconds', content: { 'application/json': { schema: ErrorResponse } } },
-    500: { description: 'The device or connection read failed, or code: "bad_device" (the row has no usable device id/channel — remove it and adopt it again)', content: { 'application/json': { schema: ErrorResponse } } },
-    502: { description: 'code "occurrences" (today\'s timetable could not be read — a class-mode device is refused rather than switched off on the strength of an empty day) or the client\'s failure tag for an unreachable cloud', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    404: { description: 'Malformed id or an id at another location — one identical body', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    409: { description: 'code: "no_schedule" (checked FIRST — there is nothing to apply); "disabled" (the schedule is switched off; turn it on first); "not_connected"; or "key_rejected" (Shelly refused the stored key, which also parks the connection at action_needed)', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    429: { description: 'code: "rate_limited" — the shared 1 request/second account budget; retry in a few seconds', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    500: { description: 'The device or connection read failed; code: "bad_device" (the row has no usable device id/channel — remove it and adopt it again); or code: "unexpected_noop", the unreachable case kept LOUD on purpose — the two 409s above take every state the forced planner can decline, so a no-op arriving here means the planner and this route disagree about what force means, and a cheerful applied:null would bury that under a green tick', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    502: { description: 'code "occurrences" (today\'s timetable could not be read — a class-mode device is refused rather than switched off on the strength of an empty day) or the client\'s failure tag for an unreachable cloud', content: { 'application/json': { schema: ShellyErrorResponse } } },
   },
 })
 
@@ -5377,7 +5482,11 @@ registry.registerPath({
   method: 'get',
   path: '/api/shelly/devices/{id}/energy',
   tags: ['Automations'],
-  security: [{ CookieAuth: [] }],
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
   summary: 'One device\'s daily kWh, zero-filled, in the location\'s calendar days (device_control)',
   description:
     'Read PER DEVICE, never per location: 50 devices x 30 days is 1,500 rows and PostgREST caps every select at '
@@ -5390,11 +5499,11 @@ registry.registerPath({
   },
   responses: {
     200: { description: 'A contiguous, zero-filled day series — read `samples` to tell a quiet day from a gap', content: { 'application/json': { schema: ShellyEnergyResponse } } },
-    400: { description: '`days` was junk or out of the 1-90 range (an absent parameter and a bare `?days=` are both absorbed as the default 30). Also "no active location".', content: { 'application/json': { schema: ErrorResponse } } },
-    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Malformed id or an id at another location — one identical body', content: { 'application/json': { schema: ErrorResponse } } },
-    500: { description: 'Database error', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: '`days` was junk or out of the 1-90 range (an absent parameter and a bare `?days=` are both absorbed as the default 30). Also "no active location".', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    404: { description: 'Malformed id or an id at another location — one identical body', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    500: { description: 'Database error', content: { 'application/json': { schema: ShellyErrorResponse } } },
   },
 })
 
@@ -5402,7 +5511,11 @@ registry.registerPath({
   method: 'post',
   path: '/api/shelly/refresh',
   tags: ['Automations'],
-  security: [{ CookieAuth: [] }],
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
   summary: 'One batched read of this location\'s plugs, so the page need not wait for the cron (device_control)',
   description:
     'This is the CRON\'S OWN read step (refreshLocationState), lifted out so this route could call it — same '
@@ -5413,13 +5526,13 @@ registry.registerPath({
     + 'a PARTIAL refresh rather than a platform timeout.',
   responses: {
     200: { description: 'Refreshed (possibly partially — see ShellyRefreshResponse for why the counters are not verdicts)', content: { 'application/json': { schema: ShellyRefreshResponse } } },
-    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ErrorResponse } } },
-    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'code: "not_connected"; "key_rejected" (Shelly refused the stored key — the connection is parked at action_needed with the same copy the cron writes); or "bad_host" (the stored server never reached the network, so no amount of retrying helps — it is the connection settings, and the connection is parked with the same literal the cron writes)', content: { 'application/json': { schema: ErrorResponse } } },
-    429: { description: 'code: "rate_limited" — NOT ONE batch succeeded and the time budget is why. Judged on the un-conflated engine signals (anyOk + budgetHit), never on the counters: `rate_limited` counts a retried SUCCESS too, and refreshed:0 is the healthy answer for a studio whose readings have not moved.', content: { 'application/json': { schema: ErrorResponse } } },
-    500: { description: 'The connection or the device list could not be read', content: { 'application/json': { schema: ErrorResponse } } },
-    502: { description: 'Nothing succeeded, having actually tried (code carries the last failure tag, or "unreachable"). The schedule is untouched by this route, and the copy says so rather than implying the studio is now adrift.', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    409: { description: 'code: "not_connected"; "key_rejected" (Shelly refused the stored key — the connection is parked at action_needed with the same copy the cron writes); or "bad_host" (the stored server never reached the network, so no amount of retrying helps — it is the connection settings, and the connection is parked with the same literal the cron writes)', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    429: { description: 'code: "rate_limited" — NOT ONE batch succeeded and the time budget is why. Judged on the un-conflated engine signals (anyOk + budgetHit), never on the counters: `rate_limited` counts a retried SUCCESS too, and refreshed:0 is the healthy answer for a studio whose readings have not moved.', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    500: { description: 'The connection or the device list could not be read', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    502: { description: 'Nothing succeeded, having actually tried (code carries the last failure tag, or "unreachable"). The schedule is untouched by this route, and the copy says so rather than implying the studio is now adrift.', content: { 'application/json': { schema: ShellyErrorResponse } } },
   },
 })
 

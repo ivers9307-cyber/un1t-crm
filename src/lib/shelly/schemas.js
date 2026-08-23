@@ -44,9 +44,18 @@ import { uuidLike } from '@/lib/schemas'
 // A Shelly Cloud device id is the device's MAC as lowercase hex. Deliberately
 // NARROWER than mig 562's column CHECK (`^[0-9a-z_-]{4,64}$`): the DB shape is
 // permissive enough to survive a future Shelly id format, while everything the
-// cloud API has ever handed us is hex. The `i` flag is what lets a pasted
-// upper-case MAC through to the .transform() below rather than 400-ing on it.
-export const SHELLY_DEVICE_ID = /^[0-9a-f]{6,32}$/i
+// cloud API has ever handed us is hex. A pasted upper-case MAC is accepted and
+// lowercased by the .transform() below rather than 400-ing.
+//
+// THE CASE CLASS IS SPELLED OUT INSTEAD OF USING THE `i` FLAG, and that is a
+// contract fix rather than a style choice (SHELLY-UI.9b). zod-to-openapi
+// publishes a regex by its `.source` plus its flags, so `/^[0-9a-f]{6,32}$/i`
+// rendered into the JSON-Schema `pattern` as the literal `^[0-9a-f]{6,32}$/i`
+// — a pattern with a stray `/i` inside it, which no real device id can ever
+// match. Every generated client and every spec-driven validator would have
+// rejected a perfectly good MAC before the request was sent. The character
+// class carries the same meaning with no flag to leak.
+export const SHELLY_DEVICE_ID = /^[0-9a-fA-F]{6,32}$/
 
 // EVERY message in this file is operator copy. The client renders
 // `j.issues?.[0]?.message || j.error` — one string, no field path — so a zod
@@ -226,10 +235,17 @@ export const ShellyDevicePatch = z.object({
 // straight into ShellyOverride, so the two are coupled — loosen the override
 // side to match and the DB gets mixed formats; loosen this side without the
 // transform and the route builds an override that fails its own parse.
+// `.strict()` for the same reason the other bodies carry one, and here the
+// silently-dropped key is a DURATION: `until` is optional, so a body carrying
+// `untill` would drop the unknown key, fall through to the default (the
+// location's next local midnight) and report a successful toggle that holds
+// for a completely different length of time than the caller asked for. On the
+// on/off path that is a relay left on all night; nothing in the response would
+// disagree. A 400 naming the unknown key is the only honest answer.
 export const ShellyToggleBody = z.object({
   state: z.enum(['on', 'off', 'auto']),
   until: z.iso.datetime({ offset: true }).transform((s) => new Date(s).toISOString()).optional(),
-})
+}).strict()
 
 // GET .../energy?days=N. Read PER DEVICE (<= 31 rows at 30 days) — a
 // location-wide 30-day read is ~1,500 rows and blows the PostgREST 1k cap.

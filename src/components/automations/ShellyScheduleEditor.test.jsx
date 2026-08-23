@@ -27,6 +27,49 @@ const ok = () => ({ ok: true, json: { success: true } })
 beforeEach(() => { vi.clearAllMocks() })
 afterEach(cleanup)
 
+// SHELLY-UI.9b — the editor is the OTHER control that can stop a schedule
+// managing a relay: setting the mode to 'none' on an enabled device hits the
+// same planner rule 2 that `enabled:false` does, and the relay stays exactly
+// where it was left. The route answers a `notice` for both arms now; this is
+// the half that surfaces it. Without it the one control that can abandon a
+// plug said "Saved" and nothing else.
+describe('ShellyScheduleEditor — the relay-stays notice', () => {
+  it('surfaces the route’s notice after a save that stopped managing the relay', async () => {
+    const notice = 'Schedule switched off — the plug stays as it is until you toggle it'
+    const onSave = vi.fn(async () => ({ ok: true, json: { success: true, notice } }))
+    render(<ShellyScheduleEditor device={device()} glofoxConnected onSave={onSave} />)
+    fireEvent.click(screen.getByLabelText('No schedule'))
+    fireEvent.click(screen.getByRole('button', { name: /Save schedule/ }))
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain(notice))
+  })
+
+  it('says nothing when the route sent no notice', async () => {
+    const onSave = vi.fn(async () => ok())
+    render(<ShellyScheduleEditor device={device()} glofoxConnected onSave={onSave} />)
+    fireEvent.click(screen.getByLabelText('No schedule'))
+    fireEvent.click(screen.getByRole('button', { name: /Save schedule/ }))
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('clears a stale notice when the next save carries none', async () => {
+    const notice = 'Schedule switched off — the plug stays as it is until you toggle it'
+    let next = { ok: true, json: { success: true, notice } }
+    const onSave = vi.fn(async () => next)
+    render(<ShellyScheduleEditor device={device()} glofoxConnected onSave={onSave} />)
+    fireEvent.click(screen.getByLabelText('No schedule'))
+    fireEvent.click(screen.getByRole('button', { name: /Save schedule/ }))
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain(notice))
+    // A second, still-dirty save that abandons nothing must not leave the
+    // previous warning standing over it.
+    next = ok()
+    fireEvent.click(screen.getByLabelText('Class timetable'))
+    fireEvent.click(screen.getByRole('button', { name: /Save schedule/ }))
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2))
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+})
+
 describe('ShellyScheduleEditor — the diff', () => {
   it('Save is dead until something changes', () => {
     render(<ShellyScheduleEditor device={device()} glofoxConnected onSave={vi.fn()} />)

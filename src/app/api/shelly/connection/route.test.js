@@ -263,6 +263,23 @@ describe('GET /api/shelly/connection', () => {
     expect(body.device_count).toBeNull()
   })
 
+  // SHELLY-UI.9b — the OTHER half of that class, and the one `count ?? 0`
+  // used to swallow: PostgREST answers a null count with NO error alongside it
+  // (a missing Prefer header, a driver quirk). The panel spends this number on
+  // the Disconnect confirm — "your N plugs stay adopted" — so a fabricated 0
+  // reads as "there is nothing to lose here" at the exact moment an operator
+  // is deciding whether to unlink a studio with twelve plugs on it.
+  it('an UNCOMPUTED count with no error is also null, never 0', async () => {
+    useDb({ connectionRow: storedRow(), deviceCount: null })
+    const body = await (await GET(getReq())).json()
+    expect(body.success).toBe(true)
+    expect(body.device_count).toBeNull()
+    // A genuine zero still reads as zero — the fix must not blind the panel to
+    // a real empty account.
+    useDb({ connectionRow: storedRow(), deviceCount: 0 })
+    expect((await (await GET(getReq())).json()).device_count).toBe(0)
+  })
+
   it('a failed connection read is a 500, never a silent "not connected"', async () => {
     useDb({ connectionError: { message: 'db down' } })
     const res = await GET(getReq())

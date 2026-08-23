@@ -1,15 +1,13 @@
 // SHELLY-UI.5 — "run now": stop waiting for the next tick and make this relay
 // agree with its schedule.
 //
-// THE THREE REFUSALS ARE DELIBERATELY DISTINCT, and this is the whole reason
-// the checks sit in this order (obligation 15). runNowForDevice answers a bare
-// `noop` for a device that is disabled, for one with no schedule, and for one
-// that is simply already right — three different things an operator must do
-// three different things about:
+// THE TWO REFUSALS ARE DELIBERATELY DISTINCT, and this is the whole reason the
+// checks sit in this order (obligation 15). runNowForDevice answers a bare
+// `noop` for a device that is disabled and for one with no schedule — two
+// different things an operator must do two different things about:
 //
 //   no_schedule  → build a schedule. (409.)
 //   disabled     → turn the schedule on. (409.)
-//   nothing_to_do→ nothing; it is already correct. (200, applied:null.)
 //
 // no_schedule IS CHECKED FIRST, and the order matters for a device that is
 // both: "turn the schedule on" is useless advice when there is no schedule to
@@ -18,9 +16,20 @@
 // cloud — a device nobody is managing must not spend a slot of the shared
 // 1 req/sec account budget to be told so.
 //
-// The Sonos run-now route learned this the same way — collapsing "switched
-// off" and "no window is active right now" into one message points an operator
-// debugging "run now does nothing" at the wrong fix.
+// THERE IS NO "ALREADY CORRECT" ANSWER, and SHELLY-UI.9b removed the arm that
+// pretended there was. runNowForDevice plans with force:true, and under force
+// planDeviceAction has exactly ONE null path: rule 2, the unmanaged device.
+// Rule 1 answers for any live override, rule 3 for an active window, and rule
+// 4's `if (force) return {action:'off'}` catches everything else — the whole
+// point of the button is that it re-sends regardless of the exactly-once
+// stamp. So a run-now on a managed device ALWAYS commands the relay, and the
+// old `noop → applied:null` arm was unreachable code whose only possible
+// effect was to report "already correct" for a state we had not checked.
+//
+// The Sonos run-now route learned the distinctness rule the same way —
+// collapsing "switched off" and "no window is active right now" into one
+// message points an operator debugging "run now does nothing" at the wrong
+// fix.
 
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
@@ -71,11 +80,22 @@ export const POST = withAuth({ permission: 'device_control' }, async ({ user, db
   const result = await runNowForDevice(db, withLocationTz(conn.connection, user), device, {})
 
   if (result.ok) {
+    if (result.noop) {
+      // Unreachable — see the header. Kept as a LOUD failure rather than
+      // deleted: the two guards above already took every case the planner can
+      // answer null for under force, so reaching here means the planner and
+      // this route disagree about what force means. Reporting a cheerful
+      // applied:null would bury that disagreement under a green tick, and an
+      // operator pressing Run now would be told it worked while no relay
+      // moved.
+      logError(MODULE, 'run-now answered an unexpected no-op for a managed device', {
+        locationId, deviceId: device.id, enabled: device.enabled, scheduleMode: device.schedule_mode,
+      })
+      return bad('Could not apply the schedule — nothing was sent', 500, { code: 'unexpected_noop' })
+    }
     return NextResponse.json({
       success: true,
-      // A noop that reached the planner is "already correct", not "nothing
-      // works" — the two refusals above already took the other two cases.
-      applied: result.noop ? null : result.action,
+      applied: result.action,
       reason: result.reason ?? null,
     })
   }

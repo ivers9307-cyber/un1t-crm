@@ -66,9 +66,19 @@ export const GET = withAuth({ permission: 'device_control' }, async ({ user, db,
   const parsed = ShellyEnergyQuery.safeParse({ days: url.searchParams.get('days') })
   if (!parsed.success) {
     // Same 400 shape validateBody uses, so the client's
-    // `issues?.[0]?.message || error` render works here too.
+    // `issues?.[0]?.message || error` render works here too — and `path` is
+    // JOINED to a dotted string exactly as validateBody emits it. zod hands
+    // back an ARRAY (['days']); shipping the raw array made this the one 400
+    // in the surface whose `issues[].path` was a different TYPE from every
+    // other route's, which the OpenAPI ErrorResponse (path: z.string())
+    // documented as a string and would have mis-typed for every generated
+    // client. (SHELLY-UI.9b)
     return NextResponse.json(
-      { success: false, error: 'Invalid request', issues: parsed.error.issues.map((i) => ({ path: i.path, message: i.message })) },
+      {
+        success: false,
+        error: 'Invalid request',
+        issues: parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+      },
       { status: 400 },
     )
   }

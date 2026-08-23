@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { deviceHealth, HEALTH_FRESH_MS, HEALTH_STALE_MS, HEALTH_TONE_CLASSES } from './device-health.js'
+import { STATE_REFRESH_MS } from './status.js'
 
 const NOW = Date.parse('2026-08-23T12:00:00.000Z')
 const ago = (ms) => new Date(NOW - ms).toISOString()
@@ -52,7 +53,7 @@ describe('deviceHealth — connection first', () => {
 
   it('still grades green/amber normally while the connection is unknown', () => {
     expect(deviceHealth(dev(), { connected: null, nowMs: NOW }).tone).toBe('green')
-    expect(deviceHealth(dev({ last_seen_at: ago(5 * MIN) }), { connected: null, nowMs: NOW }).reason).toBe('lagging')
+    expect(deviceHealth(dev({ last_seen_at: ago(HEALTH_FRESH_MS + MIN) }), { connected: null, nowMs: NOW }).reason).toBe('lagging')
   })
 })
 
@@ -77,6 +78,21 @@ describe('deviceHealth — freshness', () => {
     expect(deviceHealth(d, { connected: true, nowMs: NOW }).tone).toBe('green')
   })
 
+  // SHELLY-UI.9b — the fresh window is sized to the engine's WRITE floor, not
+  // its read cadence: reconcile.js reads every minute but only rewrites a row
+  // when stateChanged says something moved, so a deadband-stable idle plug
+  // advances last_seen_at only every STATE_REFRESH_MS. A window at or below
+  // that floor grades a perfectly healthy idle plug amber for part of every
+  // cycle. Pinned as a RELATION, not as a number, so raising the floor cannot
+  // silently bring the flicker back.
+  it('the fresh window is strictly longer than the engine refresh floor', () => {
+    expect(HEALTH_FRESH_MS).toBeGreaterThan(STATE_REFRESH_MS)
+    expect(HEALTH_STALE_MS).toBeGreaterThan(HEALTH_FRESH_MS)
+    // An idle plug rewritten exactly on the floor must still read green.
+    expect(deviceHealth(dev({ last_seen_at: ago(STATE_REFRESH_MS) }), { connected: true, nowMs: NOW }).reason)
+      .toBe('fresh')
+  })
+
   it('green up to and including the fresh window', () => {
     expect(deviceHealth(dev({ last_seen_at: ago(0) }), { connected: true, nowMs: NOW }).reason).toBe('fresh')
     expect(deviceHealth(dev({ last_seen_at: ago(HEALTH_FRESH_MS) }), { connected: true, nowMs: NOW }).reason).toBe('fresh')
@@ -85,13 +101,13 @@ describe('deviceHealth — freshness', () => {
   it('amber just past the fresh window, with the age in minutes', () => {
     const h = deviceHealth(dev({ last_seen_at: ago(HEALTH_FRESH_MS + 1000) }), { connected: true, nowMs: NOW })
     expect(h.tone).toBe('amber')
-    expect(h.label).toBe('Last seen 3 min ago')
+    expect(h.label).toBe('Last seen 6 min ago')
   })
 
   it('amber up to and including the stale window', () => {
     const h = deviceHealth(dev({ last_seen_at: ago(HEALTH_STALE_MS) }), { connected: true, nowMs: NOW })
     expect(h.tone).toBe('amber')
-    expect(h.label).toBe('Last seen 10 min ago')
+    expect(h.label).toBe('Last seen 15 min ago')
   })
 
   it('red past the stale window', () => {
@@ -117,7 +133,7 @@ describe('deviceHealth — tones', () => {
       deviceHealth({ last_seen_at: null }, { connected: null }).tone,
       deviceHealth({ last_seen_at: null }, { connected: true }).tone,
       deviceHealth(dev(), { connected: true, nowMs: NOW }).tone,
-      deviceHealth(dev({ last_seen_at: ago(5 * MIN) }), { connected: true, nowMs: NOW }).tone,
+      deviceHealth(dev({ last_seen_at: ago(HEALTH_FRESH_MS + MIN) }), { connected: true, nowMs: NOW }).tone,
       deviceHealth(dev({ last_seen_at: ago(60 * MIN) }), { connected: true, nowMs: NOW }).tone,
     ])
     expect([...tones].sort()).toEqual(['amber', 'green', 'grey', 'red'])

@@ -5,12 +5,15 @@
 // physical switch stays exactly where the operator (or the last window) left
 // it. Two consequences the UI has to carry rather than the code:
 //
-//   * DISABLING A DEVICE MID-WINDOW LEAVES IT ON. planDeviceAction's rule 2
-//     returns before rule 4 can close anything — `enabled:false` means "this
-//     is not mine to touch", not "switch it off" (plan.js edge d). Silently
-//     leaving a plug on all night is a support ticket, so the response says
-//     so in `notice` and the card repeats it. The alternative — sending an
-//     explicit off on disable — was rejected: an operator turning a schedule
+//   * UN-MANAGING A DEVICE MID-WINDOW LEAVES IT ON. planDeviceAction's rule 2
+//     returns before rule 4 can close anything — `enabled:false` OR
+//     `schedule_mode:'none'` means "this is not mine to touch", not "switch it
+//     off" (plan.js edge d). BOTH arms of that rule get the notice: clearing
+//     the schedule on an enabled device abandons the relay just as completely
+//     as switching the schedule off. Silently leaving a plug on all night is a
+//     support ticket, so the response says so in `notice` and both the card's
+//     enable toggle and the schedule editor repeat it. The alternative —
+//     sending an explicit off — was rejected: an operator turning a schedule
 //     off at 06:00 to stop it firing at 07:00 would have the room go dark
 //     under them.
 //   * REMOVING A DEVICE DESTROYS ITS ENERGY HISTORY. shelly_energy_daily is
@@ -62,9 +65,18 @@ export const PATCH = withAuth(
 
     // Read from the row as it was BEFORE this patch: `last_applied.action` is
     // the record of what WE last did to the relay, so an `on` there means the
-    // schedule (or an override) is holding it on right now and switching the
-    // schedule off will not release it.
-    const leavesRelayOn = input.enabled === false && device.last_applied?.action === 'on'
+    // schedule (or an override) is holding it on right now and whatever stops
+    // this device being managed will not release it.
+    //
+    // BOTH WAYS OUT OF "MANAGED" COUNT (SHELLY-UI.9b). planDeviceAction's rule
+    // 2 is `!enabled || schedule_mode === 'none'` — one condition with two
+    // arms — so setting the mode to 'none' on an ENABLED device abandons the
+    // relay exactly as thoroughly as switching the schedule off does, and the
+    // notice used to fire for only one of them. An operator clearing a
+    // schedule in the editor got no warning at all that the plug they were
+    // about to stop managing was on and would stay on.
+    const stopsManaging = input.enabled === false || input.schedule_mode === 'none'
+    const leavesRelayOn = stopsManaging && device.last_applied?.action === 'on'
 
     const { data: row, error } = await db
       .from('shelly_devices')

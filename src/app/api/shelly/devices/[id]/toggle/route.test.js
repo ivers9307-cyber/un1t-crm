@@ -240,13 +240,25 @@ describe('POST …/toggle — the stamp', () => {
     expect(row.last_seen_at).toBe(NOW_ISO)
   })
 
-  it('keeps measurements it did not take, rather than inventing zeros', async () => {
+  // SHELLY-UI.9b — a set/switch MEASURES NOTHING. It used to carry the
+  // previous watts/energy/temperature forward, which looked conservative and
+  // was not: `at` is re-stamped to now, and `at` is what the card reads as
+  // "how current is this number", so the reading the plug took while it was
+  // OFF would be re-dated to this instant and rendered as a live measurement
+  // of a relay we just switched ON. Null renders as "—" and the next cron read
+  // fills it within the minute — absent is not zero, and it is not a stale
+  // number wearing a new date either.
+  it('nulls the measurements it did not take, rather than re-dating stale ones', async () => {
     useDb(world({ last_state: fullState({ output: false, apower: 12.5, aenergy_wh: 900, temperature_c: 31.5 }) }))
     await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
     expect(rowA().last_state).toMatchObject({
-      output: true, source: 'manual', at: NOW_ISO,
-      apower: 12.5, aenergy_wh: 900, temperature_c: 31.5,
+      online: true, output: true, source: 'manual', at: NOW_ISO,
+      apower: null, aenergy_wh: null, temperature_c: null,
     })
+    // Still the FULL seven-key shape — a partial last_state is what makes
+    // `output` read as "off" when it is really unknown (mig 562's comment).
+    expect(Object.keys(rowA().last_state).sort())
+      .toEqual(['aenergy_wh', 'apower', 'at', 'online', 'output', 'source', 'temperature_c'])
   })
 
   it('an OFF toggle lands output:false, never a null that renders as unknown', async () => {
@@ -394,10 +406,37 @@ describe('POST …/toggle — back to auto', () => {
     expect(body).toMatchObject({ applied: null, reason: 'no_schedule' })
   })
 
-  it('a scheduled device that is already right answers nothing_to_do', async () => {
+  // SHELLY-UI.9b — the third answer was UNREACHABLE and has been removed.
+  // runNowForDevice plans with force:true, and under force planDeviceAction
+  // has exactly one null path: rule 2, the unmanaged device. Rule 1 answers
+  // for any live override, rule 3 for an active window, and rule 4's forced
+  // arm catches the rest — so "already right" cannot produce a noop here. A
+  // noop for a MANAGED device therefore means the planner and this route
+  // disagree, and it is now a loud 500 rather than a cheerful "already on
+  // schedule" over a relay nothing touched.
+  it('a noop for a MANAGED device is a loud 500, never a false "already correct"', async () => {
     runNowForDevice.mockResolvedValue({ ok: true, noop: true })
-    const body = await (await POST(toggleReq({ state: 'auto' }), ctxFor(DEV_A))).json()
-    expect(body).toMatchObject({ applied: null, reason: 'nothing_to_do' })
+    const res = await POST(toggleReq({ state: 'auto' }), ctxFor(DEV_A))
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    expect(body.code).toBe('unexpected_noop')
+    // The override IS cleared — that write landed before the re-run — so the
+    // copy must not imply the operator's request was lost.
+    expect(body.device.override).toBeNull()
+    expect(body.error).toMatch(/cleared/i)
+  })
+
+  it('never answers nothing_to_do — the reason is gone from the vocabulary', async () => {
+    runNowForDevice.mockResolvedValue({ ok: true, noop: true })
+
+    useDb(world({ enabled: false, schedule_mode: 'fixed' }))
+    const off = await (await POST(toggleReq({ state: 'auto' }), ctxFor(DEV_A))).json()
+    expect(off.reason).toBe('disabled')
+
+    useDb(world({ schedule_mode: 'none' }))
+    const none = await (await POST(toggleReq({ state: 'auto' }), ctxFor(DEV_A))).json()
+    expect(none.reason).toBe('no_schedule')
   })
 
   it('500s a failed clear and never runs the schedule', async () => {
@@ -452,8 +491,8 @@ describe('POST …/toggle — back to auto', () => {
     expect(body.error).not.toMatch(/back on its schedule/i)
   })
 
-  it('a device whose schedule is switched OFF answers disabled, not nothing_to_do', async () => {
-    // Three answers, and this is the one a bare noop used to swallow: the
+  it('a device whose schedule is switched OFF answers disabled, not a bare noop', async () => {
+    // Two answers, and this is the one a bare noop used to swallow: the
     // operator has a schedule, it is simply not running.
     useDb(world({ enabled: false, schedule_mode: 'fixed' }))
     runNowForDevice.mockResolvedValue({ ok: true, noop: true })

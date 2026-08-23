@@ -17,6 +17,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
 import ShellyDeviceCard, { overrideUntilLabel } from './ShellyDeviceCard.jsx'
+// The ENGINE's own key function, not a re-typed copy: the card compares
+// last_applied.key against it, so a test that minted the key itself could
+// pass while the two drifted.
+import { overrideKey } from '@/lib/shelly/plan'
 
 const NOW = Date.now()
 const iso = (offsetMs = 0) => new Date(NOW + offsetMs).toISOString()
@@ -261,6 +265,39 @@ describe('ShellyDeviceCard — the override banner', () => {
     expect(screen.getByText('Forced ON — stays until changed')).toBeTruthy()
   })
 
+  // SHELLY-UI.9b — the ONE case where an unmanaged expired override must NOT
+  // show. "Unmanaged" is a fact about the device right now, but the override
+  // may have been written while it was MANAGED, expired there, and been closed
+  // by the engine (plan.js rule 4 stamps
+  // { key: overrideKey(ov), action:'off', reason:'override_expired' }). The
+  // spent override stays on the row — nothing clears it — so a device later
+  // disabled, or whose schedule was removed, would fall into the unmanaged
+  // branch and resurrect a banner for an override the engine had ALREADY
+  // released. The relay is off; the card would insist it is being held on, and
+  // no amount of waiting clears it because an unmanaged override has no expiry
+  // to pass.
+  it('an unmanaged override the ENGINE already closed does not come back', () => {
+    const override = { state: 'on', until: iso(-6 * 3600_000), set_by: 'u1', set_at: iso(-8 * 3600_000) }
+    render(<ShellyDeviceCard connected glofoxConnected device={unmanaged({
+      override,
+      last_applied: { key: overrideKey(override), action: 'off', reason: 'override_expired', at: iso(-6 * 3600_000) },
+    })} />)
+    expect(screen.queryByText(/Forced/)).toBeNull()
+  })
+
+  it('a DIFFERENT override that merely shares the reason still shows', () => {
+    // The key comparison is what separates "this one was closed" from "an
+    // older one was, and this is a new instruction" — without it the guard
+    // would swallow a live override the operator just set.
+    const closed = { state: 'on', until: iso(-6 * 3600_000), set_by: 'u1', set_at: iso(-8 * 3600_000) }
+    const fresh = { state: 'on', until: iso(3600_000), set_by: 'u1', set_at: iso(-60_000) }
+    render(<ShellyDeviceCard connected glofoxConnected device={unmanaged({
+      override: fresh,
+      last_applied: { key: overrideKey(closed), action: 'off', reason: 'override_expired', at: iso(-6 * 3600_000) },
+    })} />)
+    expect(screen.getByText('Forced ON — stays until changed')).toBeTruthy()
+  })
+
   it('a managed override DOES expire at its `until`', () => {
     render(<ShellyDeviceCard connected glofoxConnected
       device={managed({ override: { state: 'on', until: iso(-60_000), set_by: 'u1', set_at: iso(-3600_000) } })} />)
@@ -299,11 +336,13 @@ describe('ShellyDeviceCard — the override banner', () => {
 describe('ShellyDeviceCard — back to schedule', () => {
   const autoReply = (reason) => json(200, { success: true, device: managed({ override: null }), applied: null, reason })
 
-  it('renders all three noop reasons distinctly', async () => {
+  // SHELLY-UI.9b — TWO reasons, not three. 'nothing_to_do' was unreachable
+  // (run-now forces, so the planner cannot answer a no-op for a managed
+  // device) and its copy claimed a state nobody had checked.
+  it('renders both noop reasons distinctly', async () => {
     for (const [reason, copy] of [
       ['disabled', 'Schedule is switched off — turn it on first.'],
       ['no_schedule', 'No schedule to return to.'],
-      ['nothing_to_do', 'Already on schedule.'],
     ]) {
       routes((url) => (url.endsWith('/toggle') ? autoReply(reason) : json(200, { success: true })))
       render(<ShellyDeviceCard device={managed()} connected glofoxConnected onChanged={vi.fn()} />)
@@ -402,19 +441,25 @@ describe('ShellyDeviceCard — the schedule switch and run now', () => {
     expect(off.getAttribute('title')).toBe('Turn the schedule on first')
   })
 
-  it('Run now renders applied and the already-correct noop', async () => {
+  it('Run now reports the action it took', async () => {
     routes((url) => (url.endsWith('/run-now')
-      ? json(200, { success: true, applied: 'on', reason: 'window_open' })
+      ? json(200, { success: true, applied: 'on', reason: 'run_now' })
       : json(200, { success: true })))
-    const { unmount } = render(<ShellyDeviceCard device={managed()} connected glofoxConnected onChanged={vi.fn()} />)
-    fireEvent.click(screen.getByRole('button', { name: /Run now/ }))
-    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('Applied — switched on.'))
-    unmount()
-
-    routes((url) => (url.endsWith('/run-now') ? json(200, { success: true, applied: null, reason: null }) : json(200, { success: true })))
     render(<ShellyDeviceCard device={managed()} connected glofoxConnected onChanged={vi.fn()} />)
     fireEvent.click(screen.getByRole('button', { name: /Run now/ }))
-    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('Already matching its schedule.'))
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('Applied — switched on.'))
+  })
+
+  // SHELLY-UI.9b — the route no longer answers a 200 with applied:null (a
+  // no-op is a 500 now), so the fallback copy is about a MALFORMED body, not
+  // about a real state. It must not claim the relay was already correct — a
+  // thing we would not have checked.
+  it('never claims the relay was already correct', async () => {
+    routes((url) => (url.endsWith('/run-now') ? json(200, { success: true }) : json(200, { success: true })))
+    render(<ShellyDeviceCard device={managed()} connected glofoxConnected onChanged={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /Run now/ }))
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('Schedule applied.'))
+    expect(screen.getByRole('status').textContent).not.toMatch(/already/i)
   })
 
   it('Run now surfaces the 409 refusals as the route worded them', async () => {

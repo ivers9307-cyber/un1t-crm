@@ -180,6 +180,34 @@ describe('PATCH /api/shelly/devices/[id] — disabling leaves the relay alone', 
     expect(body.notice).toBeUndefined()
   })
 
+  // SHELLY-UI.9b — BOTH arms of the planner's rule 2 abandon the relay.
+  // `!enabled || schedule_mode === 'none'` is ONE condition with two ways in,
+  // so clearing the schedule on an ENABLED device stops it being managed just
+  // as completely as switching the schedule off does. The notice used to fire
+  // for only one of them, which meant an operator clearing a schedule in the
+  // editor got no warning that the plug they had just stopped managing was on
+  // and would stay on all night.
+  it('says so when the schedule mode is cleared on an ENABLED device', async () => {
+    useDb(bothLocations({
+      enabled: true,
+      schedule_mode: 'fixed',
+      last_applied: { key: 'w:1', action: 'on', reason: 'window_open', at: '2026-08-23T07:00:00.000Z' },
+    }))
+    const body = await (await PATCH(patchReq({ schedule_mode: 'none' }), ctxFor(DEV_A))).json()
+    expect(body.notice).toBe(DISABLE_NOTICE)
+    expect(body.device.schedule_mode).toBe('none')
+  })
+
+  it('stays quiet when the mode changes between two MANAGED modes', async () => {
+    useDb(bothLocations({
+      enabled: true,
+      schedule_mode: 'fixed',
+      last_applied: { key: 'w:1', action: 'on', reason: 'window_open', at: '2026-08-23T07:00:00.000Z' },
+    }))
+    const body = await (await PATCH(patchReq({ schedule_mode: 'class' }), ctxFor(DEV_A))).json()
+    expect(body.notice).toBeUndefined()
+  })
+
   it('stays quiet when the patch is not a disable', async () => {
     useDb(bothLocations({ enabled: false, last_applied: { key: 'w:1', action: 'on', reason: 'window_open', at: 'x' } }))
     const body = await (await PATCH(patchReq({ enabled: true }), ctxFor(DEV_A))).json()

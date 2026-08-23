@@ -116,15 +116,32 @@ const notFound = () => bad('Not found', 404)
  * `kind:'device'`, so an ok result means the plug spoke. If that ever proves
  * wrong, this line and the last_seen_at stamp must change together.
  *
- * Everything else (watts, energy, temperature) is carried over untouched: we
- * did not measure it, and inventing a 0 W reading is a claim about the world
- * (status.js rule 1). The next cron read replaces the lot within a minute.
+ * THE MEASUREMENTS GO TO NULL (SHELLY-UI.9b). A set/switch measures nothing:
+ * it returns no watts, no energy counter and no temperature. Carrying the
+ * PREVIOUS readings forward under a FRESH `at` is not a neutral act — `at` is
+ * what the card reads as "how current is this number", so the old wattage
+ * would be re-dated to this instant and rendered as a live measurement of a
+ * relay whose state we just changed. Switching a heater ON and then showing
+ * the 0 W it drew while off, timestamped "just now", is precisely the silent
+ * wrong value this file's write order exists to avoid. Null renders as "—"
+ * and the next cron read fills it within the minute. (status.js rule 1:
+ * absent is not zero — and it is not a stale number wearing a new date
+ * either.)
  */
 function optimisticState(prev, channel, on, nowIso) {
   const base = hasFullState(prev)
     ? { ...prev }
     : stateFromReading(null, { online: true, channels: [] }, channel, nowIso)
-  return { ...base, online: true, output: on, source: 'manual', at: nowIso }
+  return {
+    ...base,
+    online: true,
+    output: on,
+    apower: null,
+    aenergy_wh: null,
+    temperature_c: null,
+    source: 'manual',
+    at: nowIso,
+  }
 }
 
 export const POST = withAuth(
@@ -180,20 +197,37 @@ export const POST = withAuth(
 
       if (result.ok) {
         if (result.noop) {
-          // Two very different noops, and the operator needs them apart: a
-          // device with no schedule has nothing to go back TO, while one whose
-          // relay already agrees with its schedule is simply already right.
-          return NextResponse.json({
-            success: true,
-            device: cleanDevice,
-            applied: null,
-            // THREE answers, kept apart for the same reason run-now keeps them
-            // apart one file over (obligation 15): "switched off", "there is no
-            // schedule" and "already correct" are three different things for
-            // the operator to do, and the planner answers all three with the
-            // same bare noop.
-            reason: !device.enabled ? 'disabled' : device.schedule_mode === 'none' ? 'no_schedule' : 'nothing_to_do',
+          // TWO answers, not three. `runNowForDevice` plans with force:true,
+          // and under force the planner has exactly ONE null path: rule 2,
+          // the unmanaged device (`!enabled` or `schedule_mode:'none'`). Rule
+          // 1 answers for any live override, rule 3 for an active window, and
+          // rule 4's `if (force) return {action:'off'}` catches everything
+          // else — so "the relay already agrees with its schedule" NEVER
+          // reaches here under force, and the `nothing_to_do` arm this used to
+          // carry was dead code that could only ever have lied. SHELLY-UI.9b
+          // removed it: telling an operator "already on schedule" about a
+          // device we in fact declined to touch is the false-reassurance shape
+          // this file exists to avoid.
+          if (!device.enabled) {
+            return NextResponse.json({ success: true, device: cleanDevice, applied: null, reason: 'disabled' })
+          }
+          if (device.schedule_mode === 'none') {
+            return NextResponse.json({ success: true, device: cleanDevice, applied: null, reason: 'no_schedule' })
+          }
+          // Unreachable by the argument above, and therefore the one case
+          // that must NOT be dressed as a success: a managed device answering
+          // a bare noop under force means the planner and this route disagree
+          // about what force means, and inventing "already correct" would hide
+          // that behind a green tick forever. The override IS cleared either
+          // way (that write already landed), so the copy says so.
+          logError(MODULE, 'run-now answered an unexpected no-op for a managed device', {
+            locationId, deviceId: device.id, enabled: device.enabled, scheduleMode: device.schedule_mode,
           })
+          return bad(
+            'The override was cleared, but the schedule could not be applied — try Run now',
+            500,
+            { code: 'unexpected_noop', device: cleanDevice },
+          )
         }
         return NextResponse.json({
           success: true, device: cleanDevice, applied: result.action, reason: result.reason,

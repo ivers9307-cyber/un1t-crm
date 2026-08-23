@@ -53,6 +53,18 @@ describe('constants', () => {
     expect(SHELLY_DEVICE_ID.test(rep(33, 'f'))).toBe(false)
     expect(SHELLY_DEVICE_ID.test('shelly-plug-s')).toBe(false)
   })
+
+  // SHELLY-UI.9b — the case-insensitivity must live in the CHARACTER CLASS,
+  // never in an `i` flag. zod-to-openapi publishes a regex as source + flags,
+  // so a flagged pattern reached the JSON-Schema `pattern` as
+  // '^[0-9a-f]{6,32}$/i' — a stray '/i' inside the pattern that no real device
+  // id can match, which every generated client would have enforced. Pinned
+  // here as well as in the openapi suite, because this is where the fix has to
+  // hold: a future edit adding `/i` back would look harmless in this file.
+  it('SHELLY_DEVICE_ID carries no regex flags — they leak into the published pattern', () => {
+    expect(SHELLY_DEVICE_ID.flags).toBe('')
+    expect(SHELLY_DEVICE_ID.source).toBe('^[0-9a-fA-F]{6,32}$')
+  })
 })
 
 // The header promises this module never reaches Supabase, next/server or an
@@ -427,6 +439,22 @@ describe('ShellyToggleBody', () => {
     expect(ShellyToggleBody.safeParse({ state: 'ON' }).success).toBe(false)
     expect(ShellyToggleBody.safeParse({ state: true }).success).toBe(false)
     expect(ShellyToggleBody.safeParse({}).success).toBe(false)
+  })
+
+  // SHELLY-UI.9b — the silently-dropped key here is a DURATION. `until` is
+  // optional, so without .strict() a body carrying `untill` drops the unknown
+  // key, falls through to the default (the location's next local midnight)
+  // and reports a successful toggle holding for a completely different length
+  // of time than the caller asked for. On the on/off path that is a relay left
+  // on all night with nothing in the response disagreeing.
+  it('refuses an unknown key rather than defaulting the duration under it', () => {
+    const r = ShellyToggleBody.safeParse({ state: 'on', untill: '2026-08-23T18:00:00.000Z' })
+    expect(r.success).toBe(false)
+    // The good shape still parses, and still defaults `until` to absent so the
+    // ROUTE (which owns the clock) can pick the local midnight.
+    const ok = ShellyToggleBody.safeParse({ state: 'on' })
+    expect(ok.success).toBe(true)
+    expect(ok.data.until).toBeUndefined()
   })
 })
 

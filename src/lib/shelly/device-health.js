@@ -12,8 +12,9 @@
 //      alone on purpose — deleting them would cascade the energy history), so
 //      `last_seen_at` simply stops advancing. A grader that started from
 //      staleness would paint every card red "Stale — check the Shelly
-//      connection" within ten minutes and point the operator at a connection
-//      they removed on purpose. No connection means DORMANT, not broken.
+//      connection" within a quarter of an hour and point the operator at a
+//      connection they removed on purpose. No connection means DORMANT, not
+//      broken.
 //
 //   2. `connected === null` NEVER REACHES RED. That is the third state
 //      GET /api/shelly/devices answers with (`connection_status: 'unknown'`)
@@ -25,15 +26,29 @@
 //      amber. `undefined` is treated the same as null: a caller that has not
 //      resolved the flag yet must not get a confident answer either.
 //
-// Everything below those is ordinary freshness. The thresholds are the cron's:
-// reconcile.js reads every adopted device once a minute, so three minutes is
-// two missed ticks (a redeploy, a slow sweep) and ten minutes is past any
-// explanation that does not need a human.
+// Everything below those is ordinary freshness — and the window is sized to
+// the engine's WRITE floor, not to its READ cadence. SHELLY-UI.9b corrected
+// this: reconcile.js reads every adopted device once a minute, but it only
+// writes a row (and only then does `last_seen_at` advance) when stateChanged
+// says something moved. A plug sitting idle is deadband-stable by design —
+// same output, watts twitching in the third decimal — so its row is rewritten
+// only on the STATE_REFRESH_MS floor, once every five minutes. A three-minute
+// green window therefore went amber on every healthy idle plug for two
+// minutes out of every five: a flicker with no fault behind it, and the exact
+// noise that teaches an operator to ignore the chip.
+//
+// So the fresh window is the write floor PLUS one sweep of slack — a plug that
+// has missed its own refresh deadline by a whole tick is the first moment
+// there is anything to say. Imported rather than re-typed, because the two
+// numbers are one fact: raise STATE_REFRESH_MS and this window has to move
+// with it or the flicker comes straight back.
+import { STATE_REFRESH_MS } from '@/lib/shelly/status'
 
-// One missed sweep is noise; ~3 is not yet a story.
-export const HEALTH_FRESH_MS = 3 * 60_000
-// Past this, "the cron just hasn't ticked" stops being plausible.
-export const HEALTH_STALE_MS = 10 * 60_000
+// The engine's own refresh floor, plus one missed sweep.
+export const HEALTH_FRESH_MS = STATE_REFRESH_MS + 60_000
+// Past this, "the cron just hasn't ticked" stops being plausible — three
+// missed refresh floors, not three missed reads.
+export const HEALTH_STALE_MS = 15 * 60_000
 
 const GREY = (label, reason) => ({ tone: 'grey', label, reason })
 
@@ -75,7 +90,7 @@ export function deviceHealth(device, { connected, nowMs } = {}) {
   const ageMs = now - seenMs
   if (ageMs <= HEALTH_FRESH_MS) return { tone: 'green', label: 'Online', reason: 'fresh' }
 
-  // Never 0: an age of just over the fresh window rounds to 3, and anything
+  // Never 0: an age of just over the fresh window rounds to 6, and anything
   // that rounded to "Last seen 0 min ago" would read as a bug.
   const mins = Math.max(1, Math.round(ageMs / 60_000))
   if (ageMs <= HEALTH_STALE_MS) {
