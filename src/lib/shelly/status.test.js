@@ -231,6 +231,38 @@ describe('resolveDeviceName (SHELLY-NAMES.1)', () => {
     }))).toBe('Deep')
   })
 
+  it("SHELLY-NAMES.2: the cloud's DeviceInfo label wins over the on-device name", () => {
+    // The Stillorgan live gate: six app-named Gen3 Minis, `sys.device.name`
+    // present-but-NULL, and the app's label under the cloud-grafted
+    // `settings.DeviceInfo`. The app names the ACCOUNT record, not the
+    // device, so DeviceInfo outranks sys.device.name…
+    expect(resolveDeviceName(item({
+      settings: {
+        DeviceInfo: { name: 'Reception lights' },
+        sys: { device: { name: null } },
+      },
+    }))).toBe('Reception lights')
+    expect(resolveDeviceName(item({
+      settings: {
+        DeviceInfo: { name: 'Cloud label' },
+        sys: { device: { name: 'On-device name' } },
+      },
+    }))).toBe('Cloud label')
+    // …but a MULTI-relay output name still beats it: DeviceInfo names the
+    // box, and a 2PM's operator labelled the outputs.
+    expect(resolveDeviceName(item({
+      settings: {
+        DeviceInfo: { name: 'The box' },
+        'switch:0': { name: 'Left lamp' },
+        'switch:1': { name: 'Right lamp' },
+      },
+    }), 1)).toBe('Right lamp')
+    // A blank or absent DeviceInfo name falls through like every other arm.
+    expect(resolveDeviceName(item({
+      settings: { DeviceInfo: { name: '  ' }, sys: { device: { name: 'Deep' } } },
+    }))).toBe('Deep')
+  })
+
   it('a MULTI-relay device is labelled per OUTPUT — the box name loses', () => {
     // A 4PM is one box and four outputs, and it is the outputs an operator
     // names ("Sauna", "Ice bath"). Taking the box name for every channel would
@@ -306,6 +338,7 @@ describe('nameShapeDiagnostic (SHELLY-NAMES.1) — keys only, never values', () 
         wifi: { sta: { ssid: 'UN1T-GUEST', pass: 'SECRET_WIFI' } },
         mqtt: { pass: 'SECRET_MQTT' },
         sys: { device: { name: 'Reception', mac: 'AABBCCDDEEFF' } },
+        DeviceInfo: { name: 'Reception', code: 'S3SW-001X8EU' },
         'switch:0': { name: 'Reception', initial_state: 'restore_last' },
       },
       status: { 'switch:0': { output: true } },
@@ -316,10 +349,12 @@ describe('nameShapeDiagnostic (SHELLY-NAMES.1) — keys only, never values', () 
     expect(json).not.toContain('Reception')
     expect(json).not.toContain('UN1T-GUEST')
     expect(json).not.toContain('AABBCCDDEEFF')
+    // The cloud-grafted envelope is descended keys-only like everything else.
+    expect(nameShapeDiagnostic(item).deviceInfoKeys).toEqual(['code', 'name'])
     // …while still answering the question it exists to answer.
     expect(nameShapeDiagnostic(item)).toMatchObject({
       settingsType: 'object',
-      settingsKeys: ['mqtt', 'switch:0', 'sys', 'wifi'],
+      settingsKeys: ['DeviceInfo', 'mqtt', 'switch:0', 'sys', 'wifi'],
       sysKeys: ['device'],
       deviceKeys: ['mac', 'name'],
       switchKeys: ['initial_state', 'name'],
