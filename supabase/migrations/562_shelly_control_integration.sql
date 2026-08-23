@@ -111,7 +111,7 @@ COMMENT ON COLUMN public.shelly_devices.fixed_windows IS
 COMMENT ON COLUMN public.shelly_devices.class_rule IS
   '{lead_min, lag_min} for schedule_mode=class; defaults 15/10. Class mode follows the LOCATION-WIDE timetable (class_occurrences has no zone) — zone is a label.';
 COMMENT ON COLUMN public.shelly_devices.override IS
-  '{state:"on"|"off", until:iso, set_by:uuid, set_at:iso}. set_at is LOAD-BEARING (it keys the exactly-once stamp); state must be exactly on|off. Wins over the schedule while until > now. Applied by the cron EXACTLY ONCE (keyed "ov:<set_at>") so a failed direct toggle self-heals; the toggle route also fires set/switch directly. Default until = next local midnight. On expiry the schedule resumes: outside a window that means one "off", inside it one "on". mode none: never touched after expiry. NOT auto-cleared on expiry; only the toggle route''s auto action clears it.';
+  '{state:"on"|"off", until:iso, set_by:uuid, set_at:iso}. set_at is LOAD-BEARING (it keys the exactly-once stamp); state must be exactly on|off. Wins over the schedule while until > now. Applied by the cron EXACTLY ONCE (keyed "ov:<set_at>") so a failed direct toggle self-heals; the toggle route also fires set/switch directly. Default until = next local midnight. On expiry the schedule resumes: inside a window that means one "on"; outside every window it means one "off" only if the expired override was "on" (the cron closes only what it opened — an expired "off" issues nothing). mode none: never touched after expiry. NOT auto-cleared on expiry; only the toggle route''s auto action clears it.';
 COMMENT ON COLUMN public.shelly_devices.last_applied IS
   '{key, action:"on"|"off", reason, at}. Boundary exactly-once (Sonos planAction model): key "w:<on_at ms>" for windows, "ov:<set_at>" for overrides, "run:<ms>" for run-now. Keys are STRINGS by design — no number/string jsonb round-trip ambiguity (the Sonos toMs class). Humans win between boundaries: a physical press is never stamped and never undone. Not stamped on a failed command so the next tick retries (a late on/off is correct for a relay).';
 COMMENT ON COLUMN public.shelly_devices.last_state IS
@@ -145,7 +145,7 @@ CREATE INDEX shelly_energy_daily_location_day_idx
 COMMENT ON TABLE public.shelly_energy_daily IS
   'SHELLY.10 — per-channel daily consumption rolled from the monotonic aenergy.total (Wh) counter by the per-minute cron. READ PER DEVICE (<= 31 rows for 30 days). A location-wide 30-day read is 50 x 30 = 1,500 rows — over the 1k PostgREST cap — so it must .range()-paginate or aggregate in SQL.';
 COMMENT ON COLUMN public.shelly_energy_daily.device_id IS
-  'FK to shelly_devices.id (the ROW, one per channel) — not the Shelly hex device_id.';
+  'FK to shelly_devices.id (the ROW, one per channel) — not the Shelly hex device_id. ON DELETE CASCADE: removing a device row destroys its energy history, and because (device_id, channel) is UNIQUE across locations, moving a plug to another location is necessarily a remove-then-adopt — the UI must say so before a remove.';
 COMMENT ON COLUMN public.shelly_energy_daily.day IS
   'Calendar day in locations.timezone at sample time (dayStrInTz), so a 23:30 sample under BST lands on the right day.';
 COMMENT ON COLUMN public.shelly_energy_daily.wh_total IS
