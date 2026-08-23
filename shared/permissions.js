@@ -129,8 +129,12 @@ export const WEB_PERMISSIONS = Object.freeze([
   // now owned by bundle_marketing OR bundle_operations
   // (shared/permission-bundles.js + mig 564), because plugs and
   // speakers are an operations concern as much as a marketing one.
+  // The hint keeps SONOSMOB.2's Web:/Mobile: split — this string renders
+  // in LocationFeatures, AdminFeatureMatrix and StaffForm, so an admin
+  // revoking the key has to be able to see that they are also taking the
+  // phone's Studio music screen away, not just the web schedulers.
   { key: 'device_control', label: 'Device control',
-    hint: 'Sonos speakers and Shelly smart plugs: playback and power schedules, live toggle, run-now, temporary overrides.' },
+    hint: 'Sonos speakers and Shelly smart plugs. Web: playback and power schedules, adopt/remove, run-now, temporary overrides. Mobile: live Sonos play/pause, volume and favourites.' },
   // STUDIO-GROUP.1 — sidebar regroup (May 2026): the four items
   // below used to be top-level sidebar entries gated to master/
   // owner via role-only checks (no per-user permission). They now

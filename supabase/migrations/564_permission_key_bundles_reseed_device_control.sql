@@ -26,7 +26,23 @@
 -- the generator and diff it against the block below, failing the moment
 -- the two drift.
 --
+-- ONE TRANSACTION — and this is where 564 differs from 550, which needed
+-- no wrapper. Mig 550 CREATEd the table in the same file, so at the
+-- moment it truncated, no reader existed. 564 truncates a table that
+-- private.auth_mobile_can already reads on EVERY mobile RLS check (mig
+-- 219 gates deals/notes/activities/bookings/whatsapp_* through it).
+-- Applied statement-by-statement, the gap between TRUNCATE and INSERT is
+-- a sub-second window in which the table is empty — and an empty table
+-- does not read as "everything denied", it reads as "this key is not
+-- bundle-gated at all" (the function's `NOT EXISTS (... pkb.key =
+-- perm_key)` arm), i.e. it fails OPEN for every key at once. Wrapping
+-- the pair keeps the reseed atomic: no reader ever observes the
+-- intermediate empty state, and a failed INSERT rolls the TRUNCATE back
+-- instead of leaving the mirror wiped.
+--
 -- Seed content generated verbatim by: node scripts/generate-bundle-sql.mjs
+
+BEGIN;
 
 TRUNCATE private.permission_key_bundles;
 
@@ -84,3 +100,5 @@ INSERT INTO private.permission_key_bundles (key, bundle) VALUES
   ('whatsapp', 'bundle_marketing'),
   ('whatsapp', 'bundle_messaging');
 -- END GENERATED
+
+COMMIT;
