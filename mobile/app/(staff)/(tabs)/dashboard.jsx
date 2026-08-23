@@ -15,7 +15,7 @@ import {
   View, Text, ScrollView, Pressable, RefreshControl,
 } from 'react-native'
 import { useAuth } from '../../../lib/auth-context'
-import { canDashboard, hasAnyMobileFeature } from '../../../lib/permissions'
+import { canDashboard } from '../../../lib/permissions'
 import { resolveLandingPreference } from 'shared/permissions'
 import PersonalDashboard from '../../../components/dashboard/PersonalDashboard'
 import StudioDashboard from '../../../components/dashboard/StudioDashboard'
@@ -52,7 +52,7 @@ function SegmentedControl({ segments, selected, onSelect }) {
   )
 }
 
-export default function Home() {
+export default function Dashboard() {
   const { profile, activeLocation } = useAuth()
   const [refreshKey, setRefreshKey] = useState(0)
   const [refreshing, setRefreshing] = useState(false)
@@ -94,27 +94,10 @@ export default function Home() {
 
   const firstName = profile.full_name?.split(' ')[0] || 'there'
 
-  // No mobile features at all — show the existing onboarding nudge.
-  // Honours the location gate so a user whose features are all
-  // disabled at this studio sees the same nudge.
-  if (!hasAnyMobileFeature(profile, activeLocation)) {
-    return (
-      <ScrollView className="flex-1 bg-un1t-bg" contentContainerClassName="p-6">
-        <Text className="text-3xl font-bold text-un1t-text mb-1">Hi {firstName}</Text>
-        <Text className="text-base text-un1t-subtle mb-6">{roleLabel(profile.role)}</Text>
-        <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-5">
-          <Text className="text-base font-semibold text-un1t-text mb-1">
-            Mobile features off
-          </Text>
-          <Text className="text-sm text-un1t-subtle">
-            An admin hasn&apos;t enabled any mobile features for your account
-            yet. Ask the gym manager to turn on Schedule, Pipeline, or
-            WhatsApp from your profile in the web app.
-          </Text>
-        </View>
-      </ScrollView>
-    )
-  }
+  // The all-mobile-features-off onboarding nudge lives on HOME since
+  // HOME-LOC.8 — a user in that state has no dashboard permission either,
+  // so this tab is hidden for them and the nudge had to move to a surface
+  // they can actually reach.
 
   // No dashboard permissions at all — fall through to a tiny stub
   // pointing them at the bottom-tab features they can use.
