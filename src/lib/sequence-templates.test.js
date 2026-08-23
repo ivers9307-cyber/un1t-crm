@@ -394,9 +394,11 @@ describe('GAPS-P3.4 — new gym recipes', () => {
   })
 })
 
-// RADAR-DUNNING.1 — the overdue-payment dunning template. Locks down
-// the segment_added trigger + multi-channel shape so a refactor can't
-// silently break the automated arrears chase.
+// RADAR-DUNNING.1 → DUNNING.6 — the overdue-payment dunning template. The
+// segment_added "Membership State = locked" shape is retired (locked was a
+// 56%-false-positive signal); the template is now the manual-trigger
+// automation the radar's auto-enrol and one-click reminder enrol directly
+// into — see the DUNNING.6 suite below for its exact shape.
 describe('RADAR-DUNNING.1 overdue dunning template', () => {
   const tpl = getTemplate('overdue_payment_dunning')
 
@@ -405,20 +407,41 @@ describe('RADAR-DUNNING.1 overdue dunning template', () => {
     expect(tpl.category).toBe('Recovery')
   })
 
-  it('fires on a segment_added trigger with an operator-configured segment', () => {
-    // Config ships empty — the operator points it at their
-    // "Membership State = locked" segment after cloning.
-    expect(tpl.trigger_type).toBe('segment_added')
-    expect(tpl.trigger_config).toEqual({})
-  })
-
-  it('is a multi-touch drip across email and SMS', () => {
+  it('is a multi-touch drip across WhatsApp and email (no SMS)', () => {
     expect(tpl.steps.length).toBeGreaterThanOrEqual(3)
     expect(tpl.steps.some((s) => s.step_type === 'email')).toBe(true)
-    expect(tpl.steps.some((s) => s.step_type === 'sms')).toBe(true)
+    expect(tpl.steps.some((s) => s.step_type === 'whatsapp')).toBe(true)
+    expect(tpl.steps.some((s) => s.step_type === 'sms')).toBe(false)
   })
 
   it('has a re-enrolment cooldown so a member is not re-chased every cron tick', () => {
     expect(tpl.re_enrolment_cooldown_days).toBeGreaterThan(0)
+  })
+})
+
+describe('DUNNING.6 — overdue membership payment → card update reminders', () => {
+  const tpl = getTemplate('overdue_payment_dunning')
+  it('is a manual-trigger automation (the dunning picker + auto-enrol enrol directly), 14-day cooldown, daytime window', () => {
+    expect(tpl.trigger_type).toBe('manual')
+    expect(tpl.re_enrolment_cooldown_days).toBe(14)
+    expect(tpl.send_window).toEqual({ start_hour: 9, end_hour: 19, skip_days: [] })
+  })
+  it('is wait → WhatsApp + email (1h) → email (day 3) → WhatsApp + email (day 7)', () => {
+    expect(tpl.steps.map((s) => s.step_type)).toEqual(['wait', 'whatsapp', 'email', 'email', 'whatsapp', 'email'])
+    expect(tpl.steps.map((s) => [s.delay_days ?? 0, s.delay_hours ?? 0])).toEqual([[0, 0], [0, 1], [0, 0], [3, 0], [4, 0], [0, 0]])
+  })
+  it('both WhatsApp steps use the approved utility template by NAME with the first name as {{1}}', () => {
+    for (const s of tpl.steps.filter((s) => s.step_type === 'whatsapp')) {
+      expect(s.whatsapp_template_name).toBe('outstanding_payment_')
+      expect(s.whatsapp_variables).toEqual({ '1': 'first_name' })
+    }
+  })
+  it('email copy is low-key: no em-dashes, no emoji, mentions updating the card', () => {
+    for (const s of tpl.steps.filter((s) => s.step_type === 'email')) {
+      expect(s.subject).not.toMatch(/\u2014/)
+      expect(s.html_content).not.toMatch(/\u2014/)
+      expect(s.html_content).not.toMatch(/[\u{1F300}-\u{1FAFF}]/u)
+      expect(s.html_content.toLowerCase()).toMatch(/card/)
+    }
   })
 })

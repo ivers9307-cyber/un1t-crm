@@ -68,3 +68,44 @@ export function findBlockedByCooldown(history, cooldownDays, nowMs = Date.now())
   }
   return blocked
 }
+
+/**
+ * DUNNING.2 — decide, per contact, whether a TERMINAL enrolment row may be
+ * re-activated for a fresh run. Used only by callers that pass
+ * `allowReenrol` to enrolContacts (the dunning paths); every other caller
+ * keeps the one-enrolment-ever semantics the full unique index enforces.
+ *
+ *   'blocked'      — inside the cooldown, or no cooldown configured
+ *   'same_source'  — the new sourceRef equals the latest run's source_ref
+ *                    (Glofox re-sends PAST_DUE on every retry of ONE invoice;
+ *                    subscription dunning reuses the invoice id — that is not
+ *                    a new failure). A null sourceRef always qualifies.
+ *   'reactivate'   — outside the cooldown, different source → run again
+ *
+ * @param {Array<{ id:string, contact_id:string, status:string, last_processed_at?:string|null, created_at?:string, source_ref?:string|null }>} history
+ *   terminal rows (completed / exited) for the candidate contacts
+ * @param {number|null|undefined} cooldownDays
+ * @param {string|null} sourceRef   the new run's source ref
+ * @param {number} [nowMs]
+ * @returns {Map<string, { decision: 'blocked'|'same_source'|'reactivate', row: object }>}
+ */
+export function planReenrolments(history, cooldownDays, sourceRef, nowMs = Date.now()) {
+  const out = new Map()
+  if (!Array.isArray(history) || history.length === 0) return out
+  // Latest terminal row per contact (the one a re-run would revive).
+  const latest = new Map()
+  for (const h of history) {
+    if (!h?.contact_id) continue
+    const end = h.last_processed_at || h.created_at || ''
+    const prior = latest.get(h.contact_id)
+    if (!prior || end > (prior.last_processed_at || prior.created_at || '')) latest.set(h.contact_id, h)
+  }
+  const blocked = findBlockedByCooldown(history, cooldownDays, nowMs)
+  for (const [cid, row] of latest) {
+    let decision = 'reactivate'
+    if (blocked.has(cid)) decision = 'blocked'
+    else if (sourceRef != null && row.source_ref != null && String(row.source_ref) === String(sourceRef)) decision = 'same_source'
+    out.set(cid, { decision, row })
+  }
+  return out
+}

@@ -34,7 +34,7 @@ vi.mock('@/lib/twilio', () => ({
   sendLocationSms: vi.fn(), TwilioError: class TwilioError extends Error {},
 }))
 
-import { sendEmailStep, sendWhatsappStep } from './steps.js'
+import { sendEmailStep, sendWhatsappStep, isTransactionalEnrolment, TRANSACTIONAL_SOURCE_TYPES } from './steps.js'
 import { sendMarketingEmail } from '@/lib/postmark'
 import { sendTemplateMessage } from '@/lib/whatsapp'
 
@@ -150,5 +150,92 @@ describe('LOCCOMMS.5 — sequence steps gate on the sequence location', () => {
       frequencyCap: { enabled: false },
     })
     expect(sendTemplateMessage).toHaveBeenCalled()
+  })
+})
+
+// DUNNING.3 — transactional lane. A dunning enrolment (source_type
+// invoice_past_due / churn_radar) is a service message about the member's
+// own account: it skips the MARKETING consent gate and the frequency cap but
+// keeps every hard block (on the list, bounced/complained/suppressed, wa
+// opted_out/blocked/undeliverable). WhatsApp rides the lane only with a
+// UTILITY-category template.
+describe('DUNNING.3 — transactional enrolments skip the marketing gate, keep the hard blocks', () => {
+  const txn = { id: 'e-dun', source_type: 'invoice_past_due' }
+  const CAPPED = { enabled: true, minHoursBetween: 24 }
+  const recentlyTouched = (c) => ({ ...c, last_marketing_touch_at: new Date(Date.now() - 60 * 60 * 1000).toISOString() })
+  const utilityRoute = (state) => {
+    if (state.table === 'whatsapp_templates') {
+      return { data: { id: 'tpl-1', name: 'outstanding_payment_', category: 'UTILITY', language: 'en', status: 'APPROVED', location_id: 'loc-hatch', components: [] } }
+    }
+    if (state.table === 'whatsapp_messages') return { data: { id: 'msg-row-1' } }
+    return {}
+  }
+  const marketingRoute = (state) => {
+    if (state.table === 'whatsapp_templates') {
+      return { data: { id: 'tpl-1', name: 'promo', category: 'MARKETING', language: 'en', status: 'APPROVED', location_id: 'loc-hatch', components: [] } }
+    }
+    if (state.table === 'whatsapp_messages') return { data: { id: 'msg-row-1' } }
+    return {}
+  }
+
+  it('EMAIL: sends to a member who opted OUT of marketing at this location, even when frequency-capped', async () => {
+    const { db } = makeDb(route)
+    await sendEmailStep(db, { enrollment: txn, step: emailStep, sequence, contact: recentlyTouched(contact({ global: false, atHatch: false })), frequencyCap: CAPPED })
+    expect(sendMarketingEmail).toHaveBeenCalled()
+  })
+
+  it("EMAIL: still skips someone NOT on this location's list", async () => {
+    const { db } = makeDb(route)
+    await sendEmailStep(db, { enrollment: txn, step: emailStep, sequence, contact: contact({ global: true, atOther: true }), frequencyCap: { enabled: false } })
+    expect(sendMarketingEmail).not.toHaveBeenCalled()
+  })
+
+  it('EMAIL: still skips bounced / complained / suppressed', async () => {
+    for (const patch of [{ email_status: 'bounced' }, { email_status: 'complained' }, { email_suppressed_at: '2026-08-01T00:00:00Z' }]) {
+      vi.clearAllMocks()
+      const { db } = makeDb(route)
+      await sendEmailStep(db, { enrollment: txn, step: emailStep, sequence, contact: { ...contact({ global: false, atHatch: false }), ...patch }, frequencyCap: { enabled: false } })
+      expect(sendMarketingEmail).not.toHaveBeenCalled()
+    }
+  })
+
+  it('EMAIL: a marketing enrolment to the same opted-out member is still skipped (the lane is per enrolment)', async () => {
+    const { db } = makeDb(route)
+    await sendEmailStep(db, { enrollment: { id: 'e1', source_type: 'trigger:tag_added' }, step: emailStep, sequence, contact: contact({ global: false, atHatch: false }), frequencyCap: { enabled: false } })
+    expect(sendMarketingEmail).not.toHaveBeenCalled()
+  })
+
+  it('WHATSAPP: sends a UTILITY template to a member who opted OUT of WhatsApp marketing, even when capped', async () => {
+    const { db } = makeDb(utilityRoute)
+    await sendWhatsappStep(db, { enrollment: txn, step: waStep, sequence, contact: recentlyTouched(contact({ global: false, atHatch: false })), frequencyCap: CAPPED })
+    expect(sendTemplateMessage).toHaveBeenCalled()
+  })
+
+  it('WHATSAPP: a MARKETING template keeps the marketing gate even in a transactional enrolment', async () => {
+    const { db } = makeDb(marketingRoute)
+    await sendWhatsappStep(db, { enrollment: txn, step: waStep, sequence, contact: contact({ global: false, atHatch: false }), frequencyCap: { enabled: false } })
+    expect(sendTemplateMessage).not.toHaveBeenCalled()
+  })
+
+  it('WHATSAPP: still skips opted_out / blocked / undeliverable and off-list', async () => {
+    for (const c of [
+      { ...contact({ global: false, atHatch: false }), wa_status: 'opted_out' },
+      { ...contact({ global: false, atHatch: false }), wa_status: 'blocked' },
+      { ...contact({ global: false, atHatch: false }), wa_status: 'undeliverable' },
+      contact({ global: true, atOther: true }),
+    ]) {
+      vi.clearAllMocks()
+      const { db } = makeDb(utilityRoute)
+      await sendWhatsappStep(db, { enrollment: txn, step: waStep, sequence, contact: c, frequencyCap: { enabled: false } })
+      expect(sendTemplateMessage).not.toHaveBeenCalled()
+    }
+  })
+
+  it('the manual radar reminder (churn_radar) is transactional too', () => {
+    expect(isTransactionalEnrolment({ source_type: 'churn_radar' })).toBe(true)
+    expect(isTransactionalEnrolment({ source_type: 'invoice_past_due' })).toBe(true)
+    expect(isTransactionalEnrolment({ source_type: 'manual' })).toBe(false)
+    expect(isTransactionalEnrolment(null)).toBe(false)
+    expect(TRANSACTIONAL_SOURCE_TYPES).toEqual(['invoice_past_due', 'churn_radar'])
   })
 })

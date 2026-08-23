@@ -715,49 +715,72 @@ export const SEQUENCE_TEMPLATES = [
     ],
   },
 
-  // RADAR-DUNNING.1 — automates the churn radar's Overdue chase-list.
-  // Build a segment with filter "Membership State = locked" on the
-  // Contacts page, clone this template, point its segment trigger at
-  // that segment, and the moment a member's payment fails they enter
-  // the segment and this dunning drip fires — no manual chasing.
+  // DUNNING.6 — the ready-made automation behind the churn radar's Overdue
+  // tab: a member's MEMBERSHIP payment fails → WhatsApp + email asking them
+  // to update their card, three touches over a week. Manual trigger: the
+  // radar's auto-enrol (locations.dunning_auto_enroll) and the one-click
+  // "Send payment reminder" enrol directly; fees, class packs and custom
+  // charges never do. The run exits the moment the membership invoice is
+  // paid / written off or the membership pauses. Enrolments from those
+  // paths are TRANSACTIONAL (steps.js): they reach members who opted out of
+  // marketing, and still respect every hard block. The WhatsApp copy is the
+  // approved Meta template's (outstanding_payment_) and can't change without
+  // re-approval; the emails are editable in /automations. The first wait
+  // gives Glofox's own quick retry an hour to succeed first.
   {
     id: 'overdue_payment_dunning',
     category: 'Recovery',
-    name: 'Overdue payment → dunning chase',
-    description: 'Automates the chase for members whose Glofox payment has failed. Build a segment of "Membership State = locked" on the Contacts page, then point this template\'s segment trigger at it — the moment a member falls into arrears they enter the segment and a 3-touch dunning drip fires: a gentle same-day heads-up email, a firmer SMS on day 3, a final email on day 7. SHIPS INACTIVE — clone, pick your overdue segment in the editor, review the copy, then activate. 30-day cooldown so a member who lapses, fixes it, then lapses again months later still gets chased.',
-    trigger_type: 'segment_added',
-    // Empty config — the operator picks their "overdue" segment in the
-    // sequence editor after cloning (same pattern as the webhook
-    // starter template).
+    name: 'Overdue membership payment → card update reminders',
+    description: 'When a membership payment fails, reminds the member to update their card: a WhatsApp and an email about an hour after the failure, an email on day 3, and a WhatsApp plus a final email on day 7. Stops as soon as the payment goes through. Install, review the copy, activate, then pick it under Churn radar → Payment reminders and turn on automatic starts. Fees and class packs never trigger it.',
+    trigger_type: 'manual',
     trigger_config: {},
     goal_config: null,
-    re_enrolment_cooldown_days: 30,
+    re_enrolment_cooldown_days: 14,
     send_window: { start_hour: 9, end_hour: 19, skip_days: [] },
     steps: [
+      { step_type: 'wait', delay_days: 0, delay_hours: 0 },
+      {
+        step_type: 'whatsapp',
+        delay_days: 0,
+        delay_hours: 1,
+        whatsapp_template_name: 'outstanding_payment_',
+        whatsapp_variables: { '1': 'first_name' },
+      },
       {
         step_type: 'email',
         delay_days: 0,
-        delay_hours: 1,
+        delay_hours: 0,
         subject: 'A quick heads-up about your payment, {{first_name}}',
         html_content: `<p>Hi {{first_name}},</p>
-<p>We tried to process your membership payment and it didn't go through. It happens, usually just a card that's expired or been replaced.</p>
-<p>Your membership is still active. To keep it that way, update your payment details in the Glofox app, or simply reply to this email and a coach will sort it out with you.</p>
+<p>We tried to take your membership payment and it didn't go through. It happens, usually a card that has expired or been replaced.</p>
+<p>Your membership is still active. To keep it that way, update your card in the Glofox app, or reply to this email and we'll sort it with you.</p>
 <p>UN1T {{location_name}}</p>`,
       },
       {
-        step_type: 'sms',
+        step_type: 'email',
         delay_days: 3,
         delay_hours: 0,
-        sms_body: 'UN1T: Hi {{first_name}}, your membership payment is still outstanding. Update your card in the Glofox app, or reply here and we\'ll help you sort it.',
+        subject: 'Still no luck with your membership payment',
+        html_content: `<p>Hi {{first_name}},</p>
+<p>Your membership payment is still outstanding. Updating your card in the Glofox app takes about a minute, and we'll take the payment from there.</p>
+<p>If something else is going on, reply here and we'll figure it out together.</p>
+<p>UN1T {{location_name}}</p>`,
+      },
+      {
+        step_type: 'whatsapp',
+        delay_days: 4,
+        delay_hours: 0,
+        whatsapp_template_name: 'outstanding_payment_',
+        whatsapp_variables: { '1': 'first_name' },
       },
       {
         step_type: 'email',
-        delay_days: 4,
+        delay_days: 0,
         delay_hours: 0,
         subject: 'Action needed to keep your UN1T membership',
         html_content: `<p>Hi {{first_name}},</p>
 <p>Your membership payment is now a week overdue and we don't want you to lose your spot.</p>
-<p>Two minutes fixes it: update your payment details in the Glofox app, or reply to this email and we'll take it from there. No awkwardness, we just want to keep you training.</p>
+<p>Two minutes fixes it: update your card in the Glofox app, or reply to this email and we'll take it from there. No awkwardness, we just want to keep you training.</p>
 <p>UN1T {{location_name}}</p>`,
       },
     ],

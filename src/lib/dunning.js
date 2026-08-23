@@ -6,11 +6,16 @@
 // INVOICE_UPDATED / SERVICE_* webhooks:
 //
 //   PAST_DUE  → maybeEnrolDunning(): opt-in per location
-//               (dunning_auto_enroll, default off), never dun a paused
-//               member, re-derive trouble server-side (same guard as
-//               the manual path), then enrolContacts (idempotent).
+//               (dunning_auto_enroll, default off), MEMBERSHIP invoices
+//               only (DUNNING.1 — the radar's Overdue category; a failed
+//               fee / class pack / custom charge never starts "update your
+//               card" reminders), never dun a paused member, re-derive
+//               trouble server-side (same guard as the manual path), then
+//               enrolContacts (idempotent, allowReenrol so a later failure
+//               re-runs the reminders — see enrol.js).
 //   PAID /    → exitDunningForContact(): stop any in-flight dunning —
-//   FORGIVEN    the gap the manual flow never closed.
+//   FORGIVEN    the gap the manual flow never closed. MEMBERSHIP invoices
+//               only (a paid €5 fee must not cancel the run).
 //   paused    → exitDunningForContact(reason 'membership_paused').
 //
 // enrolContacts + setEnrollmentStatus each open their own service
@@ -29,6 +34,25 @@ const TROUBLE_COLUMNS =
   'glofox_membership_status, glofox_membership_type, glofox_membership_state, ' +
   'glofox_billing_interval, last_payment_at, last_attended_at, last_booked_at, ' +
   'trial_credits_remaining, glofox_membership_expiry'
+
+/**
+ * DUNNING.1 — what the Glofox INVOICE_UPDATED webhook should do about
+ * dunning for this invoice. Pure.
+ *   PAST_DUE + membership         → 'enrol'
+ *   PAID / FORGIVEN + membership  → 'exit'
+ *   anything else                 → null (fees, class packs, custom charges,
+ *                                   pending, cancelled — never touch the run)
+ * @param {string|null|undefined} invoiceStatus
+ * @param {boolean|undefined} isMembership  applyInvoiceWebhook().is_membership
+ * @returns {'enrol'|'exit'|null}
+ */
+export function dunningActionFor(invoiceStatus, isMembership) {
+  if (isMembership !== true) return null
+  const st = String(invoiceStatus || '').toUpperCase()
+  if (st === 'PAST_DUE') return 'enrol'
+  if (st === 'PAID' || st === 'FORGIVEN') return 'exit'
+  return null
+}
 
 async function resolveActiveDunningSequence(db, locationId) {
   const { data: loc } = await db
@@ -56,11 +80,16 @@ async function resolveActiveDunningSequence(db, locationId) {
  * @param {string} locationId
  * @param {string} contactId
  * @param {object} [opts]
- * @param {string} [opts.invoiceId]  the PAST_DUE invoice id (sourceRef)
+ * @param {string} [opts.invoiceId]     the PAST_DUE invoice id (sourceRef)
+ * @param {boolean} [opts.isMembership] DUNNING.1 — applyInvoiceWebhook().is_membership;
+ *                                      anything but `true` never enrols
  */
-export async function maybeEnrolDunning(db, locationId, contactId, { invoiceId } = {}) {
+export async function maybeEnrolDunning(db, locationId, contactId, { invoiceId, isMembership } = {}) {
   try {
     if (!contactId) return { enrolled: 0, reason: 'no_contact' }
+    // DUNNING.1 — fail closed: only a MEMBERSHIP invoice (the Overdue
+    // category) starts reminders; an absent flag is treated as "not".
+    if (isMembership !== true) return { enrolled: 0, reason: 'not_membership_invoice' }
     const { seqId, autoEnroll, seq } = await resolveActiveDunningSequence(db, locationId)
     if (!autoEnroll) return { enrolled: 0, reason: 'auto_enroll_off' }
     if (!seqId) return { enrolled: 0, reason: 'no_dunning_sequence' }
@@ -88,6 +117,10 @@ export async function maybeEnrolDunning(db, locationId, contactId, { invoiceId }
       contactIds: [contactId],
       sourceType: 'invoice_past_due',
       sourceRef: invoiceId || null,
+      // DUNNING.2 — a member whose card fails again months later must be
+      // reminded again; the full unique index would otherwise block them
+      // forever. Dunning is the only automatic caller allowed to re-run.
+      allowReenrol: true,
     })
     return { enrolled: res?.enrolled || 0, kind, sequence_id: seqId }
   } catch (e) {
