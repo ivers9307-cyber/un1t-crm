@@ -87,3 +87,98 @@ describe('stateFromReading / stateChanged', () => {
     expect(groupId({ device_id: 'a8032abe41fc', channel: 2 })).toBe('a8032abe41fc_2')
   })
 })
+
+// ---------------------------------------------------------------------------
+// SHELLY.4b — regression pins. Everything above is the plan's original 13 and
+// is untouched. These pin the review fixes and the deliberate deviations from
+// the plan's draft module, so a later edit cannot quietly undo them.
+// ---------------------------------------------------------------------------
+
+describe('supported is judged on positive component evidence (SHELLY.4b)', () => {
+  const v1row = (entry) => normaliseAllStatus({ isok: true, data: { devices_status: { aaaaaaaaaaaa: entry } } })[0]
+
+  it('an offline v1 Plug S carrying only envelope keys stays adoptable (supported:null)', () => {
+    const r = v1row({ _dev_info: { code: 'SNPL-00112EU', gen: 'G2', online: false }, cloud: { connected: false } })
+    expect(r).toMatchObject({ online: false, supported: null })
+    expect(r.reason).toBeUndefined()
+  })
+  it('an online v2 device reporting only singleton components is unknown, not unsupported', () => {
+    const [d] = normaliseGetItems([{ id: 'aaaaaaaaaaaa', code: 'SNPL-00112EU', gen: 2, online: 1, status: { cloud: {}, sys: {}, wifi: {} } }])
+    expect(d).toMatchObject({ supported: null, channels: [] })
+    expect(d.reason).toBeUndefined()
+  })
+  it('a Pro 3EM (em:0) is a real verdict on both paths', () => {
+    expect(normaliseGetItems([em3])[0]).toMatchObject({ supported: false, reason: 'no_switch' })
+    expect(v1row({ _dev_info: { gen: 'G2' }, 'em:0': {}, cloud: {} })).toMatchObject({ supported: false, reason: 'no_switch' })
+  })
+  it('a Gen3 H&T (temperature:0 / humidity:0) is a real verdict', () => {
+    const [d] = normaliseGetItems([{ id: 'ffffffffffff', code: 'S3SN-0U12A', gen: 3, online: 1, status: { 'temperature:0': { tC: 21 }, 'humidity:0': { rh: 50 }, sys: {}, cloud: {} } }])
+    expect(d).toMatchObject({ supported: false, reason: 'no_switch' })
+  })
+})
+
+describe('stateChanged is null-aware (SHELLY.4b)', () => {
+  const base = { online: true, output: true, apower: 100, aenergy_wh: 10, temperature_c: 40, source: 'x', at: '2026-07-06T10:00:00.000Z' }
+
+  it('a null -> number transition is a change, not sub-threshold jitter', () => {
+    expect(stateChanged({ ...base, apower: null }, { ...base, apower: 0.2 })).toBe(true)
+  })
+  it('a number -> null transition is a change', () => {
+    expect(stateChanged({ ...base, apower: 0.3 }, { ...base, apower: null })).toBe(true)
+  })
+  it('an unusable stored reading counts as changed, never as "no change"', () => {
+    expect(stateChanged({ ...base, apower: 'abc' }, base)).toBe(true)
+  })
+  it('a 4-minute-old row with nothing moving is still left alone', () => {
+    expect(stateChanged(base, { ...base, at: '2026-07-06T10:04:00.000Z' })).toBe(false)
+  })
+  it('a missing next never silently means "no change"', () => {
+    expect(stateChanged(base, null)).toBe(true)
+  })
+})
+
+describe('groupId refuses anything that is not a device row (SHELLY.4b)', () => {
+  it('formats a row', () => {
+    expect(groupId({ device_id: 'a8032abe41fc', channel: 0 })).toBe('a8032abe41fc_0')
+  })
+  it('throws rather than minting a group id that no command could ever match', () => {
+    const reading = normaliseGetItems([plugS])[0] // carries `channels`, not `channel`
+    for (const bad of [undefined, null, {}, reading, { device_id: 'aa' }, { device_id: 'aa', channel: '0' },
+      { device_id: 'aa', channel: 1.5 }, { device_id: 'aa', channel: null }, { device_id: '', channel: 0 }]) {
+      expect(() => groupId(bad)).toThrow(TypeError)
+    }
+  })
+})
+
+describe('parser deviations from the plan draft, pinned (SHELLY.4b)', () => {
+  const chan0 = (sw) => normaliseGetItems([{ id: 'aaaaaaaaaaaa', gen: 2, online: 1, status: { 'switch:0': sw } }])[0].channels[0]
+
+  it('absent is not zero: null, blank, [], false never become a 0 W reading', () => {
+    for (const junk of [null, undefined, '', '   ', [], false, true, {}, NaN, Infinity]) {
+      expect(chan0({ output: true, apower: junk })).toMatchObject({ apower: null })
+    }
+  })
+  it('a stringly-typed body still parses', () => {
+    expect(chan0({ aenergy: { total: '1234.5' } })).toMatchObject({ aenergy_wh: 1234.5 })
+  })
+  it("output is boolean-only — 'on' is not true", () => {
+    expect(chan0({ output: 'on' })).toMatchObject({ output: null })
+  })
+  it('switch:00 cannot duplicate channel 0', () => {
+    const [d] = normaliseGetItems([{ id: 'aaaaaaaaaaaa', gen: 2, online: 1, status: { 'switch:0': { output: true }, 'switch:00': { output: false }, 'switch:01': { output: false } } }])
+    expect(d.channels.map((c) => c.channel)).toEqual([0])
+  })
+  it('a v1 Gen3 (_dev_info.gen "G3") is supported', () => {
+    const rows = normaliseAllStatus({ data: { devices_status: { dddddddddddd: { _dev_info: { code: 'S3PL-00112EU', gen: 'G3', online: true }, 'switch:0': { output: true } } } } })
+    expect(rows[0]).toMatchObject({ gen: 3, supported: true, online: true })
+  })
+  it('drops blank, whitespace and non-string ids on both paths', () => {
+    expect(normaliseGetItems([{ id: '', status: {} }, { id: '   ', status: {} }, { id: {}, status: {} }, { id: [], status: {} }])).toEqual([])
+    expect(normaliseGetItems([{ id: 12, status: {} }])[0].device_id).toBe('12')
+    const rows = normaliseAllStatus({ data: { devices_status: { '   ': { 'switch:0': {} }, ' AA8B ': { 'switch:0': {} } } } })
+    expect(rows.map((r) => r.device_id)).toEqual(['aa8b'])
+  })
+  it('a blank device name is null, not an empty string', () => {
+    expect(normaliseGetItems([{ id: 'aa', settings: { sys: { device: { name: '  ' } } }, status: { 'switch:0': {} } }])[0].name).toBeNull()
+  })
+})

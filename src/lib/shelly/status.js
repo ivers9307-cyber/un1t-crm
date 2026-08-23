@@ -13,10 +13,11 @@
 //
 //  2. NO EVIDENCE IS NOT A VERDICT. `supported:false` is a dead end for the
 //     operator: an unsupported device cannot be adopted. So we only say it
-//     when the body actually showed us a status to judge. An empty or absent
-//     status (normal for an offline device, and possible for an online one
-//     given the shapes above are unverified) is `supported:null` = "ask
-//     again later", not "this is a 3EM".
+//     when the device NAMED its components and no relay was among them —
+//     never merely because the body had some keys in it. A status that is
+//     empty, absent, or nothing but envelope (normal for an offline device,
+//     and possible for an online one given the shapes above are unverified)
+//     is `supported:null` = "ask again later", not "this is a 3EM".
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v)
 
@@ -59,27 +60,43 @@ function channelFromSwitch(n, sw) {
   }
 }
 
+// Canonical `switch:N` only. `\d+` would also take `switch:00`, which parses
+// to a second channel 0 — a duplicate row, and two rows racing for one
+// group_id.
+const SWITCH_KEY_RE = /^switch:(0|[1-9]\d*)$/
+
+// A Gen2+ COMPONENT INSTANCE: a lowercase type followed by an index —
+// `switch:0`, `em:0`, `em1:0`, `temperature:0`, `humidity:0`. The singleton
+// components (`sys`, `wifi`, `cloud`, `mqtt`, `ble`, `ws`, `eth`) carry no
+// index and deliberately do NOT match: they are the envelope every device
+// sends, so they say nothing about what this one can do.
+const COMPONENT_INSTANCE_RE = /^[a-z][a-z0-9_]*:\d+$/
+
 function switchChannels(status) {
   const out = []
   for (const key of Object.keys(isObj(status) ? status : {})) {
-    const m = key.match(/^switch:(\d+)$/)
+    const m = key.match(SWITCH_KEY_RE)
     if (m) out.push(channelFromSwitch(Number(m[1]), status[key]))
   }
   return out.sort((a, b) => a.channel - b.channel)
 }
 
-// `statusKeys` is the caller's answer to "did the body show us a status at
-// all", NOT `Object.keys(status)` — the v1 entry always carries at least the
-// `_dev_info` wrapper Shelly Cloud injects, so counting raw keys there would
-// quietly defeat rule 2 for every offline v1 device.
+// `no_switch` is judged on POSITIVE evidence — some component instance is
+// present and none of them is a switch — never on "the body had keys in it".
+// Key-counting looks equivalent and is not: an ordinary offline Plug S comes
+// back as `{_dev_info, cloud:{connected:false}}` (v1) or `{cloud:{}, sys:{}}`
+// (v2), which is one key past empty and would have been sentenced to
+// `supported:false` — permanently unadoptable, for the single most common
+// device in the estate. `statusKeys` still arrives pre-filtered of the v1
+// `_dev_info` envelope; that is now belt-and-braces rather than the guard.
 function supportFor({ gen, status, channels, statusKeys }) {
   if ((gen != null && gen < 2) || Array.isArray(status?.relays) || Array.isArray(status?.meters)) {
     return { supported: false, reason: 'gen1' }
   }
   if (channels.length) return { supported: true }
-  // A real component list with no `switch:*` in it — a Pro 3EM (`em:0`), an
-  // H&T. That is evidence, so it is a verdict.
-  if (statusKeys.length) return { supported: false, reason: 'no_switch' }
+  // Components, but no relay among them: a Pro 3EM (`em:0`), an H&T
+  // (`temperature:0`). The device told us what it is, so this is a verdict.
+  if (statusKeys.some((k) => COMPONENT_INSTANCE_RE.test(k))) return { supported: false, reason: 'no_switch' }
   return { supported: null } // nothing to judge; see rule 2
 }
 
@@ -157,6 +174,12 @@ export function normaliseAllStatus(body) {
 // about output/power, flip online, do NOT advance last_seen_at (caller).
 // A missing reading counts as offline — same conservative treatment, since
 // "we did not hear from it" is all either case actually tells us.
+//
+// CONSUMER TRAP: across an offline span the measurements are FROZEN at their
+// last-known values while `at` keeps advancing. So an (aenergy_wh, at) pair
+// diffed across that span reads as "0 Wh consumed over N minutes", which is a
+// measurement we never made. Anything differencing energy over time must gate
+// on `online` first (the daily roll does, and is safe).
 export function stateFromReading(prev, reading, channel, atIso) {
   const p = isObj(prev) ? prev : {}
   if (!reading?.online) {
@@ -181,12 +204,20 @@ const APOWER_DEADBAND_W = 0.5
 const ENERGY_STEP_WH = 1
 const TEMP_STEP_C = 1
 
+// Null is a state, not a zero: gaining or losing a measurement is a change
+// even when the number that appeared is tiny (`?? 0` would have read
+// null -> 0.2 W as 0.2 W of jitter and swallowed it). Phrased as
+// `!(|a-b| < step)` rather than `>=` so a NaN comparison — an unusable stored
+// reading — comes out CHANGED; the deadbands must never be the reason a row
+// silently stops being written.
+const numChanged = (a, b, step) => (a == null) !== (b == null) || (a != null && !(Math.abs(a - b) < step))
+
 export function stateChanged(prev, next) {
   if (!isObj(prev) || !isObj(next)) return true
   if (prev.online !== next.online || prev.output !== next.output || prev.source !== next.source) return true
-  if (Math.abs((next.apower ?? 0) - (prev.apower ?? 0)) >= APOWER_DEADBAND_W) return true
-  if (Math.abs((next.aenergy_wh ?? 0) - (prev.aenergy_wh ?? 0)) >= ENERGY_STEP_WH) return true
-  if (Math.abs((next.temperature_c ?? 0) - (prev.temperature_c ?? 0)) >= TEMP_STEP_C) return true
+  if (numChanged(prev.apower, next.apower, APOWER_DEADBAND_W)) return true
+  if (numChanged(prev.aenergy_wh, next.aenergy_wh, ENERGY_STEP_WH)) return true
+  if (numChanged(prev.temperature_c, next.temperature_c, TEMP_STEP_C)) return true
   // Either timestamp being unreadable means we cannot show the row is fresh,
   // so we write. Fail towards the extra write, never towards a row that
   // claims to be current and is not.
@@ -196,5 +227,14 @@ export function stateChanged(prev, next) {
   return nextAt - prevAt >= STATE_REFRESH_MS
 }
 
-// Takes one of our own normalised rows, not an API body.
-export const groupId = (d) => `${d.device_id}_${d.channel}`
+// Takes one of our own normalised rows, not an API body — so this one DOES
+// throw, and that is the point. Handed a reading (which carries `channels`,
+// not `channel`) it would otherwise mint 'abc_undefined': a well-formed id
+// that no device answers to, that never appears in the `failed` map the
+// client returns, and that therefore gets recorded as a command successfully
+// applied. A loud TypeError at the call site beats a switch that silently
+// never moved.
+export const groupId = (d) => {
+  if (!d || !Number.isInteger(d.channel) || !d.device_id) throw new TypeError('groupId: expected a device row')
+  return `${d.device_id}_${d.channel}`
+}
