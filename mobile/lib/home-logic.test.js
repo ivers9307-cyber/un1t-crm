@@ -1,7 +1,7 @@
 // mobile/lib/home-logic.test.js
 import { describe, it, expect } from 'vitest'
 import { shiftWindow, shiftTimeLabel, groupShiftsByDay, homeTiles } from './home-logic'
-import { addDays, shortDate } from './dates'
+import { addDays, shortDate, isoDate } from './dates'
 
 const shift = (date, start, name = 'Open') => ({
   shift_date: date,
@@ -16,14 +16,27 @@ describe('shiftWindow', () => {
 })
 
 describe('shiftTimeLabel', () => {
+  // HOME-LOC.4b — built from the same effShiftStart/effShiftEnd resolver as
+  // schedule-team.js/schedule.jsx (not a re-implementation), rendered through
+  // dates.js's timeRange() so Home matches PersonalDashboard/schedule.jsx's
+  // spaced-en-dash convention ('06:00 – 14:00'), deliberately NOT the
+  // unspaced '06:00–14:00' the original plan draft pinned.
   it('prefers overrides over template times and trims seconds', () => {
-    expect(shiftTimeLabel({ start_time_override: '10:30:00', shift_templates: { start_time: '06:00:00', end_time: '14:00:00' } })).toBe('10:30–14:00')
+    expect(shiftTimeLabel({ start_time_override: '10:30:00', shift_templates: { start_time: '06:00:00', end_time: '14:00:00' } })).toBe('10:30 – 14:00')
   })
   it('falls back to template times when no override is set', () => {
-    expect(shiftTimeLabel({ shift_templates: { start_time: '06:00:00', end_time: '14:00:00' } })).toBe('06:00–14:00')
+    expect(shiftTimeLabel({ shift_templates: { start_time: '06:00:00', end_time: '14:00:00' } })).toBe('06:00 – 14:00')
   })
-  it('empty when nothing is set', () => {
+  it('honours the middle effShiftStart rung — a legacy row with a top-level start_time and no override', () => {
+    // Only effShiftStart/effShiftEnd know about this rung; a hand-rolled
+    // override-or-template resolver would miss it entirely.
+    expect(shiftTimeLabel({ start_time: '07:15:00', end_time: '15:00:00', shift_templates: { start_time: '06:00:00', end_time: '14:00:00' } })).toBe('07:15 – 15:00')
+  })
+  it('empty when nothing is set (timeRange would otherwise render " – ")', () => {
     expect(shiftTimeLabel({})).toBe('')
+  })
+  it('a start-only shift (no end anywhere) renders just the start, not "10:30 – "', () => {
+    expect(shiftTimeLabel({ start_time_override: '10:30:00' })).toBe('10:30')
   })
 })
 
@@ -84,6 +97,42 @@ describe('groupShiftsByDay', () => {
   it('handles no shifts / null shifts gracefully', () => {
     expect(groupShiftsByDay([], '2026-08-23')).toEqual([])
     expect(groupShiftsByDay(null, '2026-08-23')).toEqual([])
+  })
+
+  it('a malformed todayIso (parseIsoDate returns null) returns [] rather than throwing on epoch arithmetic', () => {
+    expect(groupShiftsByDay([shift('2026-08-23', '09:00:00')], 'not-a-date')).toEqual([])
+    expect(groupShiftsByDay([shift('2026-08-23', '09:00:00')], '2026-02-31')).toEqual([]) // impossible calendar date
+    expect(groupShiftsByDay([shift('2026-08-23', '09:00:00')], null)).toEqual([])
+  })
+
+  it('a malformed todayIso does not silently fall through to epoch-anchored dates (kills a dropped guard, not just a no-op guard)', () => {
+    // Without the explicit `if (!start) return []` guard, addDays(null, i)
+    // coerces to `new Date(null)` = the Unix epoch, so a shift dated on
+    // whatever the epoch's LOCAL date is would wrongly appear. Compute that
+    // real local date with the same isoDate() the implementation uses, so
+    // this test can't drift from the epoch/timezone maths it's guarding.
+    const epochIso = isoDate(new Date(null))
+    const groups = groupShiftsByDay([shift(epochIso, '09:00:00', 'EpochLeak')], 'not-a-date')
+    expect(groups).toEqual([])
+  })
+
+  it('sorts on the raw effShiftStart value, not the rendered label — two same-start shifts keep insertion order (stable sort), not end-time order', () => {
+    // A label-based sort ('09:00 – 18:00' vs '09:00 – 12:00') would tie-break
+    // on the end time and reorder these; sorting on effShiftStart alone ties
+    // exactly, so JS's stable sort must leave insertion order untouched.
+    const laterEnd = { shift_date: '2026-08-23', shift_templates: { name: 'B-later-end', start_time: '09:00:00', end_time: '18:00:00' } }
+    const earlierEnd = { shift_date: '2026-08-23', shift_templates: { name: 'A-earlier-end', start_time: '09:00:00', end_time: '12:00:00' } }
+    const groups = groupShiftsByDay([laterEnd, earlierEnd], '2026-08-23')
+    expect(groups[0].shifts.map(s => s.shift_templates.name)).toEqual(['B-later-end', 'A-earlier-end'])
+  })
+
+  it('an untimed shift (no start anywhere) sorts FIRST within its day, ahead of every timed shift', () => {
+    const untimed = { shift_date: '2026-08-23', shift_templates: { name: 'Untimed' } }
+    const groups = groupShiftsByDay(
+      [shift('2026-08-23', '06:00:00', 'Morning'), untimed, shift('2026-08-23', '18:00:00', 'Evening')],
+      '2026-08-23'
+    )
+    expect(groups[0].shifts.map(s => s.shift_templates.name)).toEqual(['Untimed', 'Morning', 'Evening'])
   })
 })
 
