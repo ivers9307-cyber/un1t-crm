@@ -21,3 +21,11 @@ ON CONFLICT (name) DO UPDATE
       expected_interval_seconds = EXCLUDED.expected_interval_seconds,
       grace_seconds = EXCLUDED.grace_seconds,
       notes = EXCLUDED.notes;
+
+-- The status comment lives HERE and not in 562 because 562 is already applied
+-- to prod: an applied migration is history, so a comment it got wrong can only
+-- be corrected forward. 562 said 'error' is "retried every tick"; the shipped
+-- cron parks it for ERROR_RETRY_MS (5 min), and 'connected' additionally
+-- requires that no hard 429 was seen that tick.
+COMMENT ON COLUMN public.shelly_connections.status IS
+  'connected = at least one 2xx this tick and no hard 429; action_needed = auth failure or an invalid host (owner must re-paste; retried every 15 min); error = every call failed for a non-auth reason or the account was rate-limited — parked 5 min then retried.';

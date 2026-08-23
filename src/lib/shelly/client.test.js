@@ -91,6 +91,19 @@ describe('classifiers', () => {
     expect(parseGroupsResult({})).toEqual({ failed: {} })
     expect(parseGroupsResult(null)).toEqual({ failed: {} })
   })
+
+  // The distinction the reconcile stamps on: {} is "nothing failed", null is
+  // "unreadable". A shape that folds to {} claims every command landed.
+  it('parseGroupsResult reports an unreadable failedCommands as null, never as all-ok', () => {
+    expect(parseGroupsResult({ failedCommands: 'none' })).toEqual({ failed: null })
+    expect(parseGroupsResult({ failedCommands: 0 })).toEqual({ failed: null })
+    expect(parseGroupsResult({ failedCommands: true })).toEqual({ failed: null })
+    // An array spreads to { 0: 'a_0' } — index keys match no group id, so it
+    // would read as all-ok while naming a failure.
+    expect(parseGroupsResult({ failedCommands: ['a_0'] })).toEqual({ failed: null })
+    // Absent and explicit-null stay all-ok: that IS the documented success body.
+    expect(parseGroupsResult({ failedCommands: null })).toEqual({ failed: {} })
+  })
 })
 
 function fetchStub(responses) {
@@ -191,6 +204,23 @@ describe('createShellyClient', () => {
     expect(await c.get([])).toEqual({ ok: true, statusCode: 0, body: [] })
     expect(await c.get()).toEqual({ ok: true, statusCode: 0, body: [] })
     expect(calls).toHaveLength(0)
+  })
+
+  // A 2xx whose body is an error object, not the documented array. Left as ok
+  // it reaches the reconcile as an empty item list — "the account answered and
+  // mentioned nobody" — which writes every device offline and still stamps the
+  // connection connected.
+  it('get: a 2xx error body is a failure, not an empty reading list', async () => {
+    const { fetchImpl } = fetchStub([
+      { status: 200, body: JSON.stringify({ error: 'DEVICE_NOT_FOUND' }) },
+      { status: 200, body: JSON.stringify([{ id: 'a8032abe41fc', online: 1 }]) },
+    ])
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    // 'http', not 'device': the read path's black-hole stop and the
+    // "Shelly unreachable (kind)" copy are written against the kinds get yields.
+    expect(await c.get(['a8032abe41fc'])).toMatchObject({ ok: false, kind: 'http', code: 'DEVICE_NOT_FOUND' })
+    // The normal array body is untouched.
+    expect(await c.get(['a8032abe41fc'])).toMatchObject({ ok: true, statusCode: 200, body: [{ id: 'a8032abe41fc', online: 1 }] })
   })
 
   it('retries a 429 exactly once after RETRY_429_AFTER_MS, then gives up tagged', async () => {
@@ -313,6 +343,14 @@ describe('createShellyClient', () => {
     const res = await c.setGroups(['a_0', 'b_0'], false)
     expect(JSON.parse(calls[0].init.body)).toEqual({ switch: { ids: ['a_0', 'b_0'], command: { on: false } } })
     expect(res).toMatchObject({ ok: true, failed: { b_0: 'DEVICE_OFFLINE' } })
+  })
+
+  it('setGroups: an unreadable failedCommands fails the batch instead of reporting all-ok', async () => {
+    const { fetchImpl } = fetchStub([{ status: 200, body: JSON.stringify({ failedCommands: 'nope' }) }])
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    const res = await c.setGroups(['a_0', 'b_0'], true)
+    expect(res).toMatchObject({ ok: false, kind: 'http', code: 'FAILED_COMMANDS_UNPARSEABLE', statusCode: 200 })
+    expect(res.failed).toBeUndefined()
   })
 
   it('setGroups: a 2xx body carrying an error is a device failure, like setSwitch', async () => {

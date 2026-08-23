@@ -138,7 +138,7 @@ export const ENERGY_ROW_CAP = MAX_DEVICES * (ENERGY_LOOKBACK_DAYS + 1)
 const ENERGY_COLUMNS = 'device_id, location_id, day, wh_start, wh_last, wh_total, samples, resets, first_sample_at, last_sample_at'
 
 // The most occurrences one location can hold in a day, several times over.
-const MAX_OCCURRENCES = 500
+export const MAX_OCCURRENCES = 500
 
 // Operator-facing, and deliberately fixed literals: they are stored in
 // last_error and rendered in the UI, so nothing derived from a response body
@@ -221,9 +221,18 @@ export async function loadTodayOccurrences(db, locationId, tz, nowMs) {
     .gte('starts_at', start)
     .lt('starts_at', end)
     .is('cancelled_at', null)
-    .limit(MAX_OCCURRENCES)
+    // cap + 1, like every other select in this file: "exactly at the cap" and
+    // "the limit dropped the rest" are different facts, and only the sentinel
+    // row makes them decidable. Without it a truncated timetable is silent, and
+    // a missing occurrence is a class whose window never opens.
+    .limit(MAX_OCCURRENCES + 1)
   if (error) return { ok: false, error: error.message }
-  return { ok: true, occurrences: data || [] }
+  const rows = data || []
+  if (rows.length > MAX_OCCURRENCES) {
+    logWarn(MODULE, 'occurrence cap exceeded, excess occurrences skipped this tick', { locationId, cap: MAX_OCCURRENCES })
+    return { ok: true, occurrences: rows.slice(0, MAX_OCCURRENCES) }
+  }
+  return { ok: true, occurrences: rows }
 }
 
 /**
@@ -630,6 +639,26 @@ export async function reconcileLocation(db, conn, ctx = {}) {
       continue
     }
     anyOk = true
+    // THE STAMP IS NEVER WRITTEN BY ABSENCE. Everything below reads "this gid
+    // is not in res.failed" as "this relay moved" — which is only true while
+    // res.failed is keyed the way we key our own gids. A response that keys it
+    // any other way (ids without the channel suffix, an id space we do not
+    // recognise) would mark the WHOLE batch applied precisely when the whole
+    // batch may have failed, and the stamp costs the window: the planner sees
+    // its own key already applied and never retries. One unrecognised key is
+    // enough to distrust the map, so the batch is counted failed and stamped
+    // nothing — the same command is idempotent and re-issued next tick.
+    const gids = new Set(batch.map((x) => x.gid))
+    const stray = Object.keys(res.failed || {}).find((k) => !gids.has(k))
+    if (stray !== undefined) {
+      counters.failed += batch.length
+      // Truncated, and ONE key rather than the map: this comes out of a
+      // response body, and a body is never logged verbatim in this file.
+      logWarn(MODULE, 'failedCommands keyed in an unrecognised shape — batch not stamped', {
+        locationId, sample: String(stray).slice(0, 64),
+      })
+      continue
+    }
     for (const x of batch) {
       const code = res.failed?.[x.gid]
       if (code !== undefined) {
@@ -662,7 +691,12 @@ export async function reconcileLocation(db, conn, ctx = {}) {
   } else if (hostBad) {
     await markConnection(db, conn, { status: 'action_needed', last_error: HOST_ERROR, last_error_at: nowIso, updated_at: nowIso })
   } else if (anyOk && !budgetHit) {
-    await markConnection(db, conn, { status: 'connected', last_ok_at: nowIso, last_error: null, updated_at: nowIso })
+    // last_error_at is cleared WITH last_error, never left behind. The two are
+    // one fact, and the sweep's park windows are computed from the timestamp
+    // (`startedAt - Date.parse(last_error_at)`): a recovered connection that
+    // keeps its old stamp shows an error time next to a green badge, and the
+    // first tick it fails again is measured from a failure that already healed.
+    await markConnection(db, conn, { status: 'connected', last_ok_at: nowIso, last_error: null, last_error_at: null, updated_at: nowIso })
   } else if (attempted) {
     // `kind` only — never a body, never a statusCode dressed up as prose. Rate
     // limiting gets its own sentence because "unreachable" would send an owner

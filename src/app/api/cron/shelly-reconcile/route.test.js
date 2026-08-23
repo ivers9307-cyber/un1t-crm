@@ -2,9 +2,9 @@
 //
 // The sweep itself is tested in src/lib/shelly/reconcile.test.js; the only
 // things that live in the route are the CRON_SECRET gate, the heartbeat stamp
-// (which must carry the counters, not just the timestamp), and the
-// `out.ok !== false` mapping onto `success`. Sonos ships no route test, so
-// these three are new rather than mirrored.
+// (which must carry the counters, not just the timestamp, and only on a tick
+// that COMPLETED), and the `out.ok !== false` mapping onto `success`. Sonos
+// ships no route test, so these three are new rather than mirrored.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -61,7 +61,12 @@ describe('GET /api/cron/shelly-reconcile', () => {
     runShellyReconcile.mockResolvedValue({ skipped: 'dormant' })
     expect(await (await GET(req())).json()).toMatchObject({ success: true, skipped: 'dormant' })
 
-    // The heartbeat stamps on every one of those, failures included.
-    expect(stampHeartbeat).toHaveBeenCalledTimes(3)
+    // ONLY THE COMPLETED TICK STAMPS. The two ok:false runs are exactly the
+    // ticks the heartbeat is watching for: keeping the row fresh through a
+    // connection-load failure or a bad clock hides them from the health check,
+    // which is the only thing that pages. One skipped stamp is absorbed by the
+    // 900 s grace; a sustained one is not, and that is the alert.
+    expect(stampHeartbeat).toHaveBeenCalledTimes(1)
+    expect(stampHeartbeat).toHaveBeenCalledWith('shelly-reconcile', { skipped: 'dormant' })
   })
 })

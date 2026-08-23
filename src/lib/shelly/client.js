@@ -108,9 +108,19 @@ export function classifyV1(statusCode, body) {
   return 'http'
 }
 
+// `{ failed: {} }` means "the account answered and named no failures";
+// `{ failed: null }` means "it answered in a shape we cannot read". They must
+// stay distinct: folding an unreadable shape into an empty map reports every
+// command in the batch as landed, and the reconcile then stamps last_applied
+// for relays that may never have moved — an optimistic stamp costs the whole
+// window (reconcile.js header rule 3). An ARRAY is unparseable too, not just a
+// scalar: spreading ['a_0'] yields { 0: 'a_0' }, which matches no group id and
+// so reads as all-ok. An absent or null failedCommands stays all-ok — that is
+// the documented success body.
 export function parseGroupsResult(body) {
-  const fc = body && typeof body === 'object' && body.failedCommands && typeof body.failedCommands === 'object'
-    ? body.failedCommands : {}
+  const fc = body && typeof body === 'object' ? body.failedCommands : undefined
+  if (fc === undefined || fc === null) return { failed: {} }
+  if (typeof fc !== 'object' || Array.isArray(fc)) return { failed: null }
   return { failed: { ...fc } }
 }
 
@@ -234,7 +244,20 @@ export function createShellyClient(conn, { fetchImpl = fetch, sleep = realSleep,
       }
       // Nothing to ask about — don't spend a slot in the 1 req/sec budget.
       if (list.length === 0) return { ok: true, statusCode: 0, body: [] }
-      return call('/v2/devices/api/get', { ids: list, select })
+      const res = await call('/v2/devices/api/get', { ids: list, select })
+      // Mirror setSwitch/setGroups: a 2xx carrying a top-level `error` is a
+      // FAILED read. Left as ok it arrives at the reconcile as an empty item
+      // list, which is the shape of "the account answered and mentioned
+      // nobody" — every device at the location written offline and the
+      // connection stamped connected on the strength of the same reply.
+      // Tagged 'http' rather than 'device' on purpose: the read path's
+      // black-hole stop and the "Shelly unreachable (kind)" copy both key off
+      // the kinds `get` can yield, and 'device' belongs to the set/ endpoints.
+      if (res.ok && res.body && typeof res.body === 'object' && !Array.isArray(res.body)
+        && typeof res.body.error === 'string') {
+        return withRetried({ ok: false, kind: 'http', code: res.body.error, statusCode: res.statusCode }, res)
+      }
+      return res
     },
     setSwitch: async (deviceId, channel, on) => {
       const res = await call('/v2/devices/api/set/switch', { id: deviceId, channel: Number(channel) || 0, on: !!on })
@@ -252,7 +275,14 @@ export function createShellyClient(conn, { fetchImpl = fetch, sleep = realSleep,
       if (res.body && typeof res.body.error === 'string') {
         return withRetried({ ok: false, kind: 'device', code: res.body.error, statusCode: res.statusCode }, res)
       }
-      return withRetried({ ok: true, statusCode: res.statusCode, ...parseGroupsResult(res.body) }, res)
+      const parsed = parseGroupsResult(res.body)
+      // An unreadable failedCommands is a failed batch, not an empty one — the
+      // caller must retry rather than stamp. 'http' keeps it inside the kinds
+      // the reconcile already treats as "the call did not land".
+      if (parsed.failed === null) {
+        return withRetried({ ok: false, kind: 'http', code: 'FAILED_COMMANDS_UNPARSEABLE', statusCode: res.statusCode }, res)
+      }
+      return withRetried({ ok: true, statusCode: res.statusCode, ...parsed }, res)
     },
     allStatus: () => call('/device/all_status', { show_info: 'true', no_shared: 'true' }, { v1: true }),
   }

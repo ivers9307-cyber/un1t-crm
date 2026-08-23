@@ -7,6 +7,7 @@ import {
   loadTodayOccurrences,
   MAX_CONNECTIONS,
   MAX_DEVICES,
+  MAX_OCCURRENCES,
   READ_BATCH,
   ACTION_NEEDED_RETRY_MS,
   ERROR_RETRY_MS,
@@ -95,7 +96,7 @@ const settledState = (at = iso(NOW - 60_000)) => ({
 function makeDb(state = {}) {
   const { connections = [], devices = [], energy = [], occurrences = [], fail = {} } = state
   const writes = { deviceUpdates: [], connectionUpdates: [], energyUpserts: [] }
-  const reads = { fromCalls: [], occurrenceBounds: null, energyBounds: null, deviceLimits: [], connectionCalls: null, energyCalls: null }
+  const reads = { fromCalls: [], occurrenceBounds: null, occurrenceCalls: null, energyBounds: null, deviceLimits: [], connectionCalls: null, energyCalls: null }
 
   const chain = (op, args, run) => {
     const calls = [[op, args]]
@@ -167,6 +168,7 @@ function makeDb(state = {}) {
         return {
           select: (...a) => chain('select', a, (calls) => {
             reads.occurrenceBounds = [arg(calls, 'gte', 'starts_at'), arg(calls, 'lt', 'starts_at')]
+            reads.occurrenceCalls = calls
             if (fail.occurrences) return err(fail.occurrences)
             return { data: occurrences, error: null }
           }),
@@ -681,6 +683,25 @@ describe('commands', () => {
     expect(warned('command failed')).toHaveLength(1)
   })
 
+  // Absence is only evidence while the map is keyed the way we key our gids.
+  // A key from any other id space means "this response is not the shape the
+  // stamp reads", and stamping the batch anyway is the optimistic stamp that
+  // costs the whole window.
+  it('stamps nothing when failedCommands carries a key from this batch it cannot be about', async () => {
+    const { factory } = makeClientFactory({ setGroups: () => ({ ok: true, statusCode: 200, failed: { 'weird-key': 'X' } }) })
+    const db = makeDb({
+      connections: [conn()],
+      devices: [dev({ id: 'a', device_id: 'mac1' }), dev({ id: 'b', device_id: 'mac2' })],
+    })
+    const out = await runShellyReconcile(db, deps({ makeClient: factory }))
+
+    expect(stampsOf(db)).toEqual([])
+    expect(out).toMatchObject({ applied: 0, failed: 2 })
+    expect(warned('failedCommands keyed in an unrecognised shape')).toHaveLength(1)
+    // One key, truncated — never the map, which came out of a response body.
+    expect(logWarn.mock.calls.at(-1)[2]).toMatchObject({ locationId: 'loc-A', sample: 'weird-key' })
+  })
+
   // The client turns a 2xx body carrying a top-level error into kind 'device' —
   // the whole batch failed, not part of it.
   it('treats a device-kind batch failure as the whole batch failing', async () => {
@@ -940,7 +961,19 @@ describe('connection status', () => {
   it('marks connected after a successful read', async () => {
     const db = makeDb({ connections: [conn()], devices: [dev({ device_id: 'mac1', schedule_mode: 'none' })] })
     await runShellyReconcile(db, deps({ makeClient: makeClientFactory().factory }))
-    expect(db.writes.connectionUpdates).toEqual([{ id: 'c1', patch: { status: 'connected', last_ok_at: iso(NOW), last_error: null, updated_at: iso(NOW) } }])
+    expect(db.writes.connectionUpdates).toEqual([{ id: 'c1', patch: { status: 'connected', last_ok_at: iso(NOW), last_error: null, last_error_at: null, updated_at: iso(NOW) } }])
+  })
+
+  // last_error and last_error_at are ONE fact. A recovery that clears only the
+  // text leaves a timestamp the sweep's park windows are computed from, so the
+  // next real failure is measured against a failure that already healed.
+  it('clears last_error_at as well as last_error when a failed connection recovers', async () => {
+    const db = makeDb({
+      connections: [conn({ status: 'error', last_error_at: iso(NOW - ERROR_RETRY_MS - 1) })],
+      devices: [dev({ device_id: 'mac1', schedule_mode: 'none' })],
+    })
+    await runShellyReconcile(db, deps({ makeClient: makeClientFactory().factory }))
+    expect(db.writes.connectionUpdates[0].patch).toMatchObject({ status: 'connected', last_error: null, last_error_at: null })
   })
 
   it('marks error with the KIND and nothing else after an unreachable read', async () => {
@@ -1086,6 +1119,31 @@ describe('loadTodayOccurrences', () => {
     const db = makeDb({})
     expect(await loadTodayOccurrences(db, 'loc-A', 'Europe/Dublin', NaN)).toEqual({ ok: false, error: 'unusable clock' })
     expect(db.reads.fromCalls).toEqual([])
+  })
+
+  // Same sentinel treatment as the connection, device and energy selects: ask
+  // for cap + 1 so a truncated timetable is decidable rather than silent. A
+  // dropped occurrence is a class whose window never opens.
+  it('asks for one row past the cap and says so when the timetable is truncated', async () => {
+    const many = Array.from({ length: MAX_OCCURRENCES + 1 }, (_, i) => ({
+      starts_at: iso(NOW + i * 60_000), ends_at: iso(NOW + i * 60_000 + HOUR), cancelled_at: null,
+    }))
+    const db = makeDb({ occurrences: many })
+    const out = await loadTodayOccurrences(db, 'loc-A', 'Europe/Dublin', NOW)
+
+    expect(callArgs(db.reads.occurrenceCalls, 'limit')).toEqual([MAX_OCCURRENCES + 1])
+    // The sentinel row never reaches the planner.
+    expect(out.occurrences).toHaveLength(MAX_OCCURRENCES)
+    expect(warned('occurrence cap exceeded')).toHaveLength(1)
+  })
+
+  it('says nothing at exactly the cap — the boundary is not a truncation', async () => {
+    const many = Array.from({ length: MAX_OCCURRENCES }, (_, i) => ({
+      starts_at: iso(NOW + i * 60_000), ends_at: iso(NOW + i * 60_000 + HOUR), cancelled_at: null,
+    }))
+    const out = await loadTodayOccurrences(makeDb({ occurrences: many }), 'loc-A', 'Europe/Dublin', NOW)
+    expect(out.occurrences).toHaveLength(MAX_OCCURRENCES)
+    expect(warned('occurrence cap exceeded')).toHaveLength(0)
   })
 })
 
