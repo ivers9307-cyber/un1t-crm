@@ -4,7 +4,7 @@ import {
   publicConnectionView,
   probeConnection,
   findFingerprintRows,
-  loadConnection,
+  loadConnectionWithKey,
   loadPublicConnection,
   FINGERPRINT_ROW_CAP,
 } from './connections'
@@ -13,6 +13,7 @@ const row = (location_id, organization_id, name) => ({ location_id, locations: {
 
 describe('classifyFingerprintClash', () => {
   it('no rows → ok', () => expect(classifyFingerprintClash([], 'org-A', 'loc-1')).toEqual({ ok: true, shared_with: [] }))
+  it('no list at all → ok (nothing holds the key)', () => expect(classifyFingerprintClash(undefined, 'org-A', 'loc-1')).toEqual({ ok: true, shared_with: [] }))
   it('own location (re-paste) → ok', () => expect(classifyFingerprintClash([row('loc-1', 'org-A', 'Mine')], 'org-A', 'loc-1')).toEqual({ ok: true, shared_with: [] }))
   it('same org, other location → ok and named', () => {
     expect(classifyFingerprintClash([row('loc-2', 'org-A', 'Hatch Street')], 'org-A', 'loc-1')).toEqual({ ok: true, shared_with: ['Hatch Street'] })
@@ -126,12 +127,18 @@ describe('probeConnection', () => {
 })
 
 describe('db loaders', () => {
+  // The plan pinned n: 50; the query now asks for CAP + 1 so that a full page
+  // and a truncated read are distinguishable (SHELLY.7b). Everything else in
+  // this assertion is the plan's, unchanged.
   it('findFingerprintRows selects only location + org/name and filters on the fingerprint', async () => {
     const calls = []
     const db = { from: (t) => ({ select: (cols) => ({ eq: (c, v) => ({ limit: async (n) => { calls.push({ t, cols, c, v, n }); return { data: [], error: null } } }) }) }) }
     expect(await findFingerprintRows(db, 'abc')).toEqual({ ok: true, rows: [] })
-    expect(calls[0]).toMatchObject({ t: 'shelly_connections', c: 'auth_key_fingerprint', v: 'abc', n: 50 })
+    expect(calls[0]).toMatchObject({ t: 'shelly_connections', c: 'auth_key_fingerprint', v: 'abc', n: 51 })
     expect(calls[0].cols).not.toContain('auth_key,')
+    // The embed is what classifyFingerprintClash judges on — without it every
+    // holder reads as an unknown org and every link is refused.
+    expect(calls[0].cols).toContain('locations(organization_id, name)')
   })
 
   it('findFingerprintRows never selects the key or its fingerprint', async () => {
@@ -144,40 +151,52 @@ describe('db loaders', () => {
 
   it('findFingerprintRows reports a db error rather than an empty holder list', async () => {
     const db = { from: () => ({ select: () => ({ eq: () => ({ limit: async () => ({ data: null, error: { message: 'boom' } }) }) }) }) }
-    expect(await findFingerprintRows(db, 'abc')).toEqual({ ok: false, error: 'boom' })
+    expect(await findFingerprintRows(db, 'abc')).toEqual({ ok: false, reason: 'db_error', error: 'boom' })
   })
 
-  // Hitting the cap means a holder may be unseen, so the answer is flagged
-  // rather than quietly passed off as the whole picture.
-  it('findFingerprintRows flags a capped read', async () => {
-    const full = Array.from({ length: FINGERPRINT_ROW_CAP }, (_, i) => row(`loc-${i}`, 'org-A', `L${i}`))
-    const db = (rows) => ({ from: () => ({ select: () => ({ eq: () => ({ limit: async () => ({ data: rows, error: null }) }) }) }) })
-    expect(await findFingerprintRows(db(full), 'abc')).toMatchObject({ ok: true, capped: true })
-    expect(await findFingerprintRows(db(full.slice(0, 3)), 'abc')).toEqual({ ok: true, rows: full.slice(0, 3) })
+  // A blank fingerprint would filter on '' — no rows, which is the answer that
+  // ALLOWS the link. It must be refused before the query, not after it.
+  it('findFingerprintRows refuses a blank or non-string fingerprint without querying', async () => {
+    const db = { from: () => { throw new Error('must not query') } }
+    for (const bad of ['', null, undefined, 123, {}]) {
+      expect(await findFingerprintRows(db, bad)).toEqual({ ok: false, reason: 'blank_fingerprint' })
+    }
   })
 
-  it('loadConnection returns not_connected on no row and db_error on error', async () => {
+  // A holder we could not read may be the foreign one, so a truncated read is
+  // a refusal the caller's !ok branch handles — never a flag on an ok result.
+  it('findFingerprintRows refuses a truncated read, and accepts a full page', async () => {
+    const rows = (n) => Array.from({ length: n }, (_, i) => row(`loc-${i}`, 'org-A', `L${i}`))
+    const db = (data) => ({ from: () => ({ select: () => ({ eq: () => ({ limit: async () => ({ data, error: null }) }) }) }) })
+    expect(await findFingerprintRows(db(rows(FINGERPRINT_ROW_CAP + 1)), 'abc')).toEqual({ ok: false, reason: 'fingerprint_rows_capped' })
+    expect(await findFingerprintRows(db(rows(FINGERPRINT_ROW_CAP)), 'abc')).toEqual({ ok: true, rows: rows(FINGERPRINT_ROW_CAP) })
+    expect(await findFingerprintRows(db(rows(3)), 'abc')).toEqual({ ok: true, rows: rows(3) })
+  })
+
+  it('loadConnectionWithKey returns not_connected on no row and db_error on error', async () => {
     const mk = (data, error) => ({ from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data, error }) }) }) }) })
-    expect(await loadConnection(mk(null, null), 'loc')).toEqual({ ok: false, reason: 'not_connected' })
-    expect(await loadConnection(mk(null, { message: 'boom' }), 'loc')).toEqual({ ok: false, reason: 'db_error', error: 'boom' })
-    expect(await loadConnection(mk({ id: 'c1' }, null), 'loc')).toEqual({ ok: true, connection: { id: 'c1' } })
+    expect(await loadConnectionWithKey(mk(null, null), 'loc')).toEqual({ ok: false, reason: 'not_connected' })
+    expect(await loadConnectionWithKey(mk(null, { message: 'boom' }), 'loc')).toEqual({ ok: false, reason: 'db_error', error: 'boom' })
+    expect(await loadConnectionWithKey(mk({ id: 'c1' }, null), 'loc')).toEqual({ ok: true, connection: { id: 'c1' } })
   })
 
-  it('loadConnection filters on location_id and hands back the whole row, key included', async () => {
+  it('loadConnectionWithKey filters on location_id and hands back the whole row, key included', async () => {
     const calls = []
     const db = { from: (t) => ({ select: (cols) => ({ eq: (c, v) => { calls.push({ t, cols, c, v }); return { maybeSingle: async () => ({ data: { id: 'c1', auth_key: 'SECRET' }, error: null }) } } }) }) }
-    expect(await loadConnection(db, 'loc-1')).toEqual({ ok: true, connection: { id: 'c1', auth_key: 'SECRET' } })
+    expect(await loadConnectionWithKey(db, 'loc-1')).toEqual({ ok: true, connection: { id: 'c1', auth_key: 'SECRET' } })
     expect(calls[0]).toEqual({ t: 'shelly_connections', cols: '*', c: 'location_id', v: 'loc-1' })
   })
 
-  it('loadPublicConnection selects no secret column and returns the public view', async () => {
-    let cols = null
-    const db = (data, error) => ({ from: () => ({ select: (c) => { cols = c; return { eq: () => ({ maybeSingle: async () => ({ data, error }) }) } } }) })
+  it('loadPublicConnection filters on location_id, selects no secret column, and returns the public view', async () => {
+    const calls = []
+    const db = (data, error) => ({ from: (t) => ({ select: (cols) => ({ eq: (c, v) => { calls.push({ t, cols, c, v }); return { maybeSingle: async () => ({ data, error }) } } }) }) })
     const stored = { id: 'c1', location_id: 'loc-1', host: 'shelly-1-eu.shelly.cloud', key_hint: 'CRET', status: 'connected', last_ok_at: 'T', last_error: null, last_error_at: null, linked_by: 'user-1' }
     const res = await loadPublicConnection(db(stored, null), 'loc-1')
     expect(res).toEqual({ ok: true, connection: { host: 'shelly-1-eu.shelly.cloud', key_hint: 'CRET', has_auth_key: true, status: 'connected', last_ok_at: 'T', last_error: null, last_error_at: null } })
-    expect(cols).not.toContain('auth_key')
-    expect(cols).not.toContain('*')
+    expect(calls[0]).toMatchObject({ t: 'shelly_connections', c: 'location_id', v: 'loc-1' })
+    // The select and the view are ONE allowlist: exactly the columns
+    // publicConnectionView projects, so nothing is fetched to be discarded.
+    expect(calls[0].cols.split(',').map((s) => s.trim()).sort()).toEqual(['host', 'key_hint', 'last_error', 'last_error_at', 'last_ok_at', 'status'])
     expect(await loadPublicConnection(db(null, null), 'loc-1')).toEqual({ ok: false, reason: 'not_connected' })
     expect(await loadPublicConnection(db(null, { message: 'boom' }), 'loc-1')).toEqual({ ok: false, reason: 'db_error', error: 'boom' })
   })
