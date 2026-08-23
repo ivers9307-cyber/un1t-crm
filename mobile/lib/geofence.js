@@ -56,19 +56,27 @@ export async function flushQueue() {
       })
       // Server-rejected (4xx → success:false with a real error) is
       // terminal — retrying an exempt/disabled ping forever is noise.
-      // Transient failures stay queued, via two channels:
-      //   1. api()-synthesised strings for network/edge failures
-      //      ("Network error: …"; "Non-JSON response (5xx)" for HTML
-      //      error pages; "HTTP 5xx" for bare non-2xx JSON) — see
-      //      mobile/lib/api.js.
-      //   2. The checkin route's own 503s carry transient:true in the
+      // Transient failures stay queued, via three channels:
+      //   1. api()'s own envelopes, tagged transport:true (SONOSMOB.4c):
+      //      a dropped fetch (no status) or a non-JSON body (status
+      //      carried). Only a non-JSON 5xx is transient — an edge error
+      //      page; a non-JSON 4xx is an HTML 404 off a wrong base URL and
+      //      retrying it forever is the noise this guard exists to stop.
+      //      GEOFENCE-TRANSPORT.1 — this used to regex the error STRING
+      //      ("^Network error", "^Non-JSON response \(5\d\d\)"), which
+      //      silently stops matching if api() ever rewords its message.
+      //   2. "HTTP 5xx" for a bare non-2xx JSON without our envelope —
+      //      that one reached the server, so api() deliberately leaves it
+      //      untagged and the status lives only in the string.
+      //   3. The checkin route's own 503s carry transient:true in the
       //      envelope (their error string is a raw DB message, so it
       //      can't be sniffed) — api() passes the flag through verbatim.
+      const transportBlip =
+        res.transport === true && !(res.status >= 400 && res.status < 500)
       if (
         !res.success &&
         (res.transient === true ||
-          /^Network error/.test(res.error || '') ||
-          /^Non-JSON response \(5\d\d\)/.test(res.error || '') ||
+          transportBlip ||
           /^HTTP 5\d\d/.test(res.error || ''))
       ) remaining.push(item)
     } catch { remaining.push(item) }

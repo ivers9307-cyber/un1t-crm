@@ -68,7 +68,7 @@ export async function authHeaders({ locationId, json = false } = {}) {
  * @param {string} [options.method]    'GET' | 'POST' | 'PUT' | 'DELETE'
  * @param {object} [options.body]      JSON-serialisable
  * @param {string} [options.locationId] override the active location for this call
- * @returns {Promise<{success: boolean, data?: any, error?: string, issues?: any[], transport?: true}>}
+ * @returns {Promise<{success: boolean, data?: any, error?: string, issues?: any[], transport?: true, status?: number}>}
  *   `transport: true` (api()-minted, no server answer)
  */
 export async function api(path, options = {}) {
@@ -96,9 +96,13 @@ export async function api(path, options = {}) {
   try {
     json = await response.json()
   } catch {
+    // `status` rides along so a consumer can tell an edge 5xx error page
+    // (retry) from an HTML 404 off a wrong base URL (don't) without
+    // parsing the message — geofence.js's retry queue is the reader.
     return {
       success: false,
       transport: true,
+      status: response.status,
       error: `Non-JSON response (${response.status})`,
     }
   }
