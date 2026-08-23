@@ -45,21 +45,16 @@ import { createShellyClient } from '@/lib/shelly/client'
 import { loadConnectionWithKey, loadPublicConnection, markKeyRejected } from '@/lib/shelly/connections'
 import { normaliseGetItems, stateFromReading } from '@/lib/shelly/status'
 import { ShellyAdoptBody, MAX_DEVICES_PER_LOCATION } from '@/lib/shelly/schemas'
+// SHELLY-UI.5 — the column allowlist moved to src/lib/shelly/device-load.js
+// when the detail routes appeared, so the list, the adopt response and every
+// per-device answer project the SAME shape. Two copies is how a field ends up
+// present on one route and absent on another.
+import { DEVICE_COLUMNS } from '@/lib/shelly/device-load'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const MODULE = 'shelly-devices'
-
-// An ALLOWLIST, and the same one for the list and the adopt response so the
-// two can never describe a device differently. `adopted_by` is deliberately
-// absent: it is a staff user id the UI never shows, and a column added to the
-// table later must not start appearing in a response because nobody
-// remembered to subtract it. (No secrets live on this table — the allowlist
-// is about contract stability, not about the key.)
-const DEVICE_COLUMNS =
-  'id, location_id, device_id, channel, name, model, gen, zone, enabled, schedule_mode, ' +
-  'fixed_windows, class_rule, override, last_applied, last_state, last_seen_at, created_at, updated_at'
 
 // Operator copy for the two verdicts normaliseGetItem can reach. Keyed by the
 // normaliser's `reason` so a new reason there shows up here as a missing key
