@@ -195,6 +195,12 @@ const config = [
       'src/app/api/staff/route.js',
       'src/app/api/instagram/**',
       'src/app/api/registrations/**',
+      // SHELLY.9 — new area, clean by construction. The reconcile's
+      // last_applied stamps and the (PR 2) toggle/connection writes are
+      // exactly the kind that would otherwise report success on a failed
+      // write. Armed from day one; PR 2 adds 'src/app/api/shelly/**'.
+      'src/lib/shelly/**',
+      'src/app/api/cron/shelly-reconcile/route.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },
