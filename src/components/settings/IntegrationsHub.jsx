@@ -24,6 +24,13 @@
 // deep-links into the B3 wizard (/settings/email-domain). TikTok stays
 // a static coming-soon card.
 //
+// SHELLY-UI.7 adds the Shelly plugs card (tier 1, after Meta Ads): the
+// per-location connection grade plus adopted/online plug counts, read
+// from shelly_connections + shelly_devices by the assembler. It is a
+// pure DEEP LINK to /automations/shelly — no drawer, because the auth
+// key is pasted on that page and a second connect form for it would be
+// a second place to get the key wrong.
+//
 // Every action is a DEEP LINK into an existing surface — the per-location
 // integrations tab (/settings/locations/<id>?tab=<key>), the email-domain
 // wizard, or the billing page — no new mutation surface here, and the old
@@ -32,7 +39,7 @@
 import { useCallback, useState } from 'react'
 import Link from 'next/link'
 import {
-  Zap, MessageCircle, Landmark, Megaphone,
+  Zap, MessageCircle, Landmark, Megaphone, Plug,
   Music2, Bot, Mail, MessageSquare, Bell, DoorOpen, Snowflake,
   CreditCard, FileCheck, Activity,
 } from 'lucide-react'
@@ -88,6 +95,68 @@ function fmtDate(iso) {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return null
   return d.toLocaleDateString('en-IE', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+// ── Shelly plugs (SHELLY-UI.7) — per-location connection + device counts ──
+//
+// Every row deep-links to /automations/shelly, the ACTIVE-LOCATION page:
+// by decision there is no per-location Shelly tab, so managing another
+// studio's plugs means switching location first. The href is therefore
+// identical on every row, and the location NAME on the row is what says
+// which studio the numbers describe.
+
+// "last OK" is measured against the payload's own generatedAt, never
+// Date.now(). Two reasons, and both matter: both timestamps are then
+// server-minted, so a skewed browser clock cannot invent a gap (the Sonos
+// lesson — never compare a client clock to a server time); and the string
+// is identical on the server render and on hydration, so it cannot trip a
+// mismatch. Anything unmeasurable or older than a day falls back to the date.
+function fmtAgo(iso, sinceIso) {
+  if (!iso) return null
+  const t = new Date(iso).getTime()
+  const since = new Date(sinceIso || '').getTime()
+  if (Number.isNaN(t) || Number.isNaN(since)) return fmtDate(iso)
+  const mins = Math.floor((since - t) / 60000)
+  if (mins < 1) return 'just now' // includes a future stamp (clock skew)
+  if (mins < 60) return `${mins} min ago`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours} h ago`
+  return fmtDate(iso)
+}
+
+function plugs(n) {
+  return `${n} plug${n === 1 ? '' : 's'}`
+}
+
+function shellyDetail(r, generatedAt) {
+  // A never-connected location is the ordinary case; a DISCONNECTED one
+  // that still has plugs adopted is not, and the count is the only thing
+  // that tells them apart (the relays hold wherever they were left).
+  if (r.status === 'not_connected') {
+    return r.deviceCount > 0 ? `Not connected — ${plugs(r.deviceCount)} still adopted` : 'Not connected'
+  }
+  if (r.status !== 'connected') return r.message || 'Needs attention'
+  const ago = fmtAgo(r.lastOkAt, generatedAt)
+  const count = r.deviceCount === 0 ? 'no plugs adopted' : `${plugs(r.deviceCount)} (${r.onlineCount} online)`
+  return [r.host, count, ago ? `last OK ${ago}` : null].filter(Boolean).join(' · ')
+}
+
+// Secondary line for a row that IS connected in the DB but needs hands:
+// which account and which key, so a re-paste replaces the right one, plus
+// when the cron last TRIED. "last checked" is lastAttemptAt (stamped on
+// every reconcile tick, success or failure) — the answer to the only
+// question a red badge raises: is it still retrying, or has nothing
+// touched this in days? The hint is the last ≤4 characters of the key and
+// is non-secret by the shelly connections allowlist.
+function shellyContext(r, generatedAt) {
+  if (r.status === 'connected' || r.status === 'not_connected' || !r.host) return null
+  const checked = fmtAgo(r.lastAttemptAt, generatedAt)
+  return [
+    r.host,
+    r.hasAuthKey ? `key ••••${r.keyHint}` : 'no key stored',
+    r.deviceCount > 0 ? `${plugs(r.deviceCount)} (${r.onlineCount} online)` : 'no plugs adopted',
+    checked ? `last checked ${checked}` : null,
+  ].filter(Boolean).join(' · ')
 }
 
 // ── Email delivery (INTEG-B3) — per-org tenant sending-domain state ──
@@ -313,6 +382,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
   const instagram = (data.instagram || []).filter((r) => inScope(r.locationId))
   const xero = (data.xero || []).filter((r) => inScope(r.locationId))
   const ads = (data.ads || []).filter((r) => inScope(r.locationId))
+  const shelly = (data.shelly || []).filter((r) => inScope(r.locationId))
   const sms = (data.sms || []).filter((r) => inScope(r.locationId))
   const agent = (data.agent || []).filter((r) => inScope(r.locationId))
   // Email delivery is per-ORG; keep an org row when any of its (scoped)
@@ -635,6 +705,44 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
               </button>
             ))}
           </div>
+        </HubCard>
+
+        {/* Shelly plugs — per-location connection grade + adopted device counts */}
+        <HubCard
+          icon={Plug}
+          title="Shelly plugs"
+          locTag={scopeTag(shelly)}
+          provider="Smart plugs — power schedules, live toggle & energy"
+          chip={<StatusChip status={worstOf(shelly.map((r) => r.status))} />}
+        >
+          {shelly.length === 0 ? (
+            <p className="text-xs text-un1t-subtle">Nothing to show for this location scope.</p>
+          ) : (
+            <div className="divide-y divide-un1t-border border-t border-un1t-border text-sm">
+              {shelly.map((r) => (
+                <div key={r.locationId} className="py-2 space-y-1">
+                  <div className="flex items-center gap-3">
+                    <span className="font-semibold min-w-[88px]">{nameById[r.locationId] || r.locationName}</span>
+                    <span className={`flex-1 text-xs truncate ${
+                      r.status === 'error'
+                        ? 'text-red-700'
+                        : r.status === 'action_needed' ? 'text-amber-700' : 'text-un1t-subtle'
+                    }`}>
+                      {shellyDetail(r, data.generatedAt)}
+                    </span>
+                    {/* Deep link, not a drawer: the plugs are managed on the
+                        active-location page (see the header note above). */}
+                    <Link href={r.href} className={linkBtn(r.status === 'not_connected')}>
+                      {r.status === 'not_connected' ? 'Connect' : 'Manage'}
+                    </Link>
+                  </div>
+                  {shellyContext(r, data.generatedAt) && (
+                    <p className="text-[11px] text-un1t-muted truncate">{shellyContext(r, data.generatedAt)}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </HubCard>
 
         {/* TikTok Ads — static coming soon */}
