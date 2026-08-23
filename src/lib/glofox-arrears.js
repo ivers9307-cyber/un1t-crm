@@ -412,6 +412,54 @@ export function isCustomChargeFee(row) {
   return String(row?.line_item_subtypes || '').toUpperCase().includes('CUSTOM_CHARGE')
 }
 
+// ── ARREARS-TYPE.1 — membership payment vs every other charge ──────────────
+// Richard's rule (2026-08-23): the radar's Overdue tab is for FAILED MEMBERSHIP
+// PAYMENTS only — a subscription's recurring renewal, its first payment at
+// signup, a plan-change prorate or a bounced direct-debit (NSF) charge. Every
+// other failing transaction (late-cancel / no-show fees, staff custom charges,
+// class bookings, class packs, products) is an "unpaid charge", whatever its
+// amount. This replaces the €50 line that used to stand in for that question.
+//
+// Two signals, either of which qualifies the row:
+//   1. line_item_subtypes — the INVOICE_UPDATED webhook's line_items[].sub_type
+//      roll-up (glofox-invoices.js). A signup invoice pairs a €0 UPFRONT_PAYMENT
+//      line with SUBSCRIPTION_PAYMENT — the latter is what qualifies it. A LONE
+//      UPFRONT_PAYMENT is a one-off purchase (class pack, credits, a trial) and
+//      is never a membership payment, even though Glofox files it under its
+//      MEMBERSHIPS line-item type.
+//   2. glofox_event — the TransactionsList report's metadata.glofox_event, which
+//      the June backfill kept at raw_payload.candidate.glofoxEvent (those rows
+//      have no line items). Only the subscription events count; invoice_payment
+//      covers signups AND trials and can't be told apart from what was kept.
+// A row with neither signal is not a membership payment — every webhook row
+// carries line items, so that is only ever a backfilled row of an unrecognised
+// event (none exist as of 2026-08-23).
+export const MEMBERSHIP_LINE_SUBTYPES = Object.freeze([
+  'SUBSCRIPTION_RENEWAL',
+  'SUBSCRIPTION_PAYMENT',
+  'PRORATE',
+  'NON_SUFFICIENT_FUNDS',
+])
+export const MEMBERSHIP_REPORT_EVENTS = Object.freeze([
+  'subscription_payment',
+  'subscription_payment_failed',
+])
+
+/**
+ * Is this glofox_invoices row a membership payment (vs any other charge)?
+ * @param {{ line_item_subtypes?: string|null, glofox_event?: string|null }} row
+ */
+export function isMembershipInvoice(row) {
+  const subtypes = String(row?.line_item_subtypes || '')
+    .toUpperCase()
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  if (subtypes.some((s) => MEMBERSHIP_LINE_SUBTYPES.includes(s))) return true
+  const ev = String(row?.glofox_event || '').trim().toLowerCase()
+  return MEMBERSHIP_REPORT_EVENTS.includes(ev)
+}
+
 /** Does this glofox_invoices row count toward what a member owes? */
 export function isCountedOwedRow(row) {
   if (row?.status === 'PAST_DUE') return true
