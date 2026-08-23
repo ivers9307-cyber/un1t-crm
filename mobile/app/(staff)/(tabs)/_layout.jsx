@@ -15,7 +15,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { View } from 'react-native'
 import { useEffect, useRef, useState } from 'react'
 import { useAuth } from '../../../lib/auth-context'
-import { canMobile } from '../../../lib/permissions'
+import { canMobile, canDashboard } from '../../../lib/permissions'
 import { registerForPushNotifications } from '../../../lib/push-register'
 import { resolveLayoutForUser } from '../../../lib/mobile-layout'
 import { getNeedsActionCount } from '../../../lib/whatsapp-api'
@@ -108,6 +108,11 @@ export default function TabsLayout() {
   const barSet = new Set(bar)
   const moreEligible = new Set(more)
 
+  // HOME-LOC.7 — the old Home (segmented dashboards) is now its own tab.
+  // Same gate that used to decide whether Home rendered any segments.
+  const hasDashboard = ['dashboard_personal', 'dashboard_studio', 'dashboard_business']
+    .some((k) => canDashboard(profile, k, activeLocation))
+
   // Render config for every bar-capable (tabs) route.
   const TAB_META = {
     schedule: { title: 'Schedule', icon: 'calendar-outline' },
@@ -161,6 +166,18 @@ export default function TabsLayout() {
           options={{
             title: 'Home',
             tabBarIcon: ({ color, size }) => (<Ionicons name="home-outline" size={size} color={color} />),
+          }}
+        />
+        <Tabs.Screen
+          name="dashboard"
+          options={{
+            title: 'Dashboard',
+            // href:null removes it from the bar AND makes it non-navigable
+            // for users with no dashboard permission (expo-router contract) —
+            // the hidden feature tabs below only add tabBarItemStyle because
+            // their href can be non-null (More-eligible but off the bar).
+            href: hasDashboard ? '/(tabs)/dashboard' : null,
+            tabBarIcon: ({ color, size }) => (<Ionicons name="stats-chart-outline" size={size} color={color} />),
           }}
         />
         {bar.map(key => (

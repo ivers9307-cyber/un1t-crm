@@ -1,4 +1,4 @@
-// Home tab — segmented control hosting up to three dashboards:
+// Dashboard tab — segmented control hosting up to three dashboards (was the Home tab until HOME-LOC.7):
 //   - "Today"     → personal view (everyone w/ dashboard_personal)
 //   - "Studio"    → operational view (head_coach+ w/ dashboard_studio)
 //   - "Business"  → owner view (owner w/ dashboard_business)

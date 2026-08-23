@@ -12,7 +12,8 @@
 //
 // Routing choices that aren't obvious:
 //   swaps (staff-recipient types) — the accept/decline + "my posted swaps"
-//     cards live on the personal dashboard (home tab), not /schedule.
+//     cards live on the personal dashboard, not /schedule. That dashboard
+//     moved off Home onto its own Dashboard tab in HOME-LOC.7.
 //   swap_open / swap_awaiting / time_off_inbound / expense_submitted — sent
 //     to managers/owners; their decision queue is the /approvals inbox.
 //     The payload id (swap_id / request_id / claim_id) equals the pending-
@@ -28,8 +29,8 @@
 //     admin/health alerts; mobile has no WA-settings surface, so land on
 //     the WhatsApp tab (the closest WA context that exists).
 //   checklist_compliance — manager-side alert about a coach's checklist;
-//     there is no manager checklist surface on mobile, so land on home
-//     (the studio dashboard for managers).
+//     there is no manager checklist surface on mobile, so land on the
+//     Dashboard tab (the studio dashboard for managers).
 
 // Param guards — server payload fields become URL search params, so only
 // well-formed values are appended; anything else falls back to the bare
@@ -52,7 +53,7 @@ export function routeForNotification(data) {
     case 'swap_accepted':  // my targeted swap was accepted
     case 'swap_withdrawn': // taker withdrew — my shift is open again
     case 'swap_declined':  // my targeted swap was declined
-      return '/(tabs)'
+      return '/(tabs)/dashboard'
     case 'swap_open':      // manager: open swap posted
     case 'swap_awaiting':  // manager: swap awaiting approval
       return isSafeId(data.swap_id) ? `/approvals?tab=team&focus=${data.swap_id}` : '/approvals?tab=team'
@@ -132,7 +133,7 @@ export function routeForNotification(data) {
     case 'checklist_overdue': // coach: their own unfinished checklist
       return '/checklists/today'
     case 'checklist_compliance': // manager: a coach's missed checklist
-      return '/(tabs)'
+      return '/(tabs)/dashboard'
 
     // ── Issues (issues create/resolve) ──────────────────────────────
     case 'issue_submitted': // owner/master: handler triage detail
