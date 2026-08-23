@@ -522,61 +522,44 @@ export function radarSummary(contacts, nowMs = Date.now(), ctx = {}) {
 // Driven by `glofox_invoices` (status='PAST_DUE'), supplied via
 // ctx.pastDueById — see classifyContact + docs/CHURN_OVERDUE_AUDIT_2026-06.md.
 
-// RADAR-OVERDUE.1 — the boundary between the main Overdue chase-list and
-// the "Unpaid charges" tab. A contact whose total open past-due is ≥ this
-// is a real debt worth chasing (a failed subscription renewal); below it
-// is a small custom charge (a €5–€10 fee) that gets its own lower-priority
-// tab so it doesn't clutter the chase-list. €50.
-export const OVERDUE_MIN_CENTS = 5000
+// ARREARS-TYPE.1 — the tabs route by CHARGE TYPE (Richard's rule, 2026-08-23),
+// not by the old €50 amount line (RADAR-OVERDUE.1). The amount was only ever a
+// proxy for "is this a failed renewal or a small fee?", and it misrouted both
+// ways: a €380 failed class pack landed on the chase-list, a €25 failed renewal
+// would have been filed as a small charge. The split itself happens in
+// fetchPastDue (churn-radar-data.js, via isMembershipInvoice); this maps its
+// per-contact aggregates onto the tabs and drops empty ones.
 
 /**
- * Split overdue rows (from buildOverdue) by the OVERDUE_MIN_CENTS boundary:
- *   overdue        — amount owed ≥ minCents (the real chase-list)
- *   unpaidCharges  — amount owed > 0 and < minCents (small custom charges)
- */
-export function splitArrears(rows, minCents = OVERDUE_MIN_CENTS) {
-  const overdue = []
-  const unpaidCharges = []
-  for (const r of rows || []) {
-    const amt = r?.amountOwedCents || 0
-    if (amt >= minCents) overdue.push(r)
-    else if (amt > 0) unpaidCharges.push(r)
-  }
-  return { overdue, unpaidCharges }
-}
-
-/**
- * OWED-PENDING.1 / AWAITING-AUTH.1 — bucket per-contact arrears into the three
- * radar tabs. PAST_DUE drives the split: ≥ minCents → Overdue (the chase-list),
- * > 0 and < minCents → Unpaid charges (small CONFIRMED custom charges). PENDING
- * fees ("awaiting authorization" in Glofox — a no-show / late-cancel fee applied
- * but not yet collected) are NOT confirmed debts, so they stand alone in their
- * own Awaiting-authorization bucket: never on the Overdue chase-list, and no
- * longer merged into Unpaid charges. A contact can appear in more than one tab —
- * a real ≥€50 past-due debt in Overdue, a small past-due charge in Unpaid
- * charges, and/or a pending fee in Awaiting authorization.
+ * Bucket per-contact arrears into the three radar tabs:
+ *   overdueById      — PAST_DUE membership payments (a failed subscription
+ *                      renewal or first payment): the chase-list. Any amount.
+ *   unpaidById       — every other PAST_DUE charge (late-cancel / no-show fees,
+ *                      custom charges, class bookings, class packs, products).
+ *                      Any amount.
+ *   awaitingAuthById — PENDING ("awaiting authorization" in Glofox): a payment
+ *                      in progress, not a confirmed debt. Never in the other two.
+ * A contact can appear in more than one tab — a failed renewal in Overdue AND a
+ * failed fee in Unpaid charges, each with its own amount.
  *
- * @param {Map<string,{amountCents:number,count:number,oldestDueAt:string|null}>} pastDueById
- * @param {Map<string,{amountCents:number,count:number,oldestDueAt:string|null}>} pendingById
- * @returns {{ overdueById: Map, unpaidById: Map, awaitingAuthById: Map }} per-contact aggregates per tab
+ * @param {{ membershipById?: Map, chargesById?: Map, pendingById?: Map }} arrears
+ *   per-contact `{ amountCents, count, oldestDueAt }` aggregates from fetchPastDue
+ * @returns {{ overdueById: Map, unpaidById: Map, awaitingAuthById: Map }}
  */
-export function bucketArrears(pastDueById, pendingById, minCents = OVERDUE_MIN_CENTS) {
-  const overdueById = new Map()
-  const unpaidById = new Map()
-  const awaitingAuthById = new Map()
-  const pd = pastDueById instanceof Map ? pastDueById : new Map()
-  const pe = pendingById instanceof Map ? pendingById : new Map()
-  for (const [id, agg] of pd) {
-    const amt = agg?.amountCents || 0
-    if (amt >= minCents) overdueById.set(id, agg)
-    else if (amt > 0) unpaidById.set(id, agg)
+export function bucketArrears(arrears) {
+  const nonEmpty = (m) => {
+    const out = new Map()
+    if (!(m instanceof Map)) return out
+    for (const [id, agg] of m) {
+      if ((agg?.amountCents || 0) > 0) out.set(id, agg)
+    }
+    return out
   }
-  // PENDING fees stand alone in the Awaiting-authorization tab — no cross-status
-  // merging with the confirmed PAST_DUE charges in Unpaid charges.
-  for (const [id, agg] of pe) {
-    if ((agg?.amountCents || 0) > 0) awaitingAuthById.set(id, agg)
+  return {
+    overdueById: nonEmpty(arrears?.membershipById),
+    unpaidById: nonEmpty(arrears?.chargesById),
+    awaitingAuthById: nonEmpty(arrears?.pendingById),
   }
-  return { overdueById, unpaidById, awaitingAuthById }
 }
 
 /**

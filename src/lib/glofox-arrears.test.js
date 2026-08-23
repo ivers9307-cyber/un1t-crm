@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeArrears } from './glofox-arrears'
+import { computeArrears, isMembershipInvoice, MEMBERSHIP_LINE_SUBTYPES, MEMBERSHIP_REPORT_EVENTS } from './glofox-arrears'
 
 // Build a StripeCharge envelope row matching the live Glofox /Analytics/report
 // (TransactionsList) shape. Failed charges carry amount:0 + failed_amount=<owed>;
@@ -8,6 +8,7 @@ function mkStripe({
   invoice_id,
   paid,
   status,
+  transaction_status,
   amount = 0,
   failed_amount,
   event = 'subscription_payment_failed',
@@ -23,6 +24,7 @@ function mkStripe({
   if (already_paid !== undefined) metadata.already_paid = already_paid
   const inner = { invoice_id, paid, status, amount, currency: 'eur', created, metadata, description: event }
   if (failed_amount !== undefined) inner.failed_amount = failed_amount
+  if (transaction_status !== undefined) inner.transaction_status = transaction_status
   return { StripeCharge: inner }
 }
 
@@ -69,6 +71,29 @@ describe('computeArrears', () => {
     expect(c.status).toBe('PENDING')
     expect(c.amountCents).toBe(2500)
     expect(c.glofoxEvent).toBe('book_class')
+  })
+
+  it('ARREARS-TYPE.2 — Glofox "Awaiting authorization" is transaction_status PENDING_INTENT / status "pending authorization" → a PENDING candidate', () => {
+    // The €467 "Client confirmation required: Custom Charge" case (verified live
+    // 2026-08-23 via the report probe): paid:false, amount carried on `amount`,
+    // NOT the spec's PENDING. The June backfill wrote it as PAST_DUE and it sat
+    // on the Overdue chase-list for two months.
+    const rows = [
+      mkStripe({ invoice_id: 'AI', paid: false, status: 'pending authorization', transaction_status: 'PENDING_INTENT', amount: 467, event: 'custom_charge' }),
+    ]
+    const out = computeArrears(rows, { existingInvoiceIds: new Set() })
+    expect(out.totals.candidates).toBe(1)
+    expect(out.candidates[0]).toMatchObject({ invoiceId: 'AI', status: 'PENDING', amountCents: 46700, glofoxEvent: 'custom_charge' })
+  })
+
+  it('ARREARS-TYPE.2 — a PENDING_INTENT attempt alongside a failed one is still PAST_DUE (dunning reuses the invoice id)', () => {
+    const rows = [
+      mkStripe({ invoice_id: 'PI', paid: false, status: 'failed', failed_amount: 209 }),
+      mkStripe({ invoice_id: 'PI', paid: false, status: 'pending authorization', transaction_status: 'PENDING_INTENT', amount: 209 }),
+    ]
+    const out = computeArrears(rows, { existingInvoiceIds: new Set() })
+    expect(out.candidates).toHaveLength(1)
+    expect(out.candidates[0].status).toBe('PAST_DUE')
   })
 
   it('a genuinely failed charge stays a PAST_DUE candidate', () => {
@@ -205,5 +230,60 @@ describe('computeArrears', () => {
     expect(out.totals.candidates).toBe(1)
     expect(out.candidates[0].invoiceId).toBe('fail-iris')
     expect(out.totals.skippedSettledRetry).toBe(0)
+  })
+})
+
+// ── ARREARS-TYPE.1 — membership payment vs every other charge ──────────────
+// Richard's rule (2026-08-23): the Overdue tab is for FAILED MEMBERSHIP
+// PAYMENTS only; every other failing transaction is an "unpaid charge",
+// whatever its amount. Verified live how Glofox labels each kind:
+//   MEMBERSHIPS/SUBSCRIPTION_RENEWAL      recurring renewal           → membership
+//   MEMBERSHIPS/SUBSCRIPTION_PAYMENT      first payment at signup     → membership
+//     (paired with a €0 MEMBERSHIPS/UPFRONT_PAYMENT line on the same invoice)
+//   MEMBERSHIPS/UPFRONT_PAYMENT alone     class packs, credits, trial → NOT
+//   CUSTOM_CHARGES/CUSTOM_CHARGE          fees, staff custom charges  → NOT
+//   CLASSES/BOOK_CLASS, PRODUCTS/BUY_PRODUCT, WALLET_TOP_UP            → NOT
+// Backfilled rows (June 2026) have no line items; they carry the report's
+// metadata.glofox_event instead (subscription_payment[_failed] = membership).
+describe('isMembershipInvoice (ARREARS-TYPE.1)', () => {
+  it('a subscription renewal / first payment / prorate / NSF line is a membership payment', () => {
+    expect(isMembershipInvoice({ line_item_subtypes: 'SUBSCRIPTION_RENEWAL' })).toBe(true)
+    expect(isMembershipInvoice({ line_item_subtypes: 'SUBSCRIPTION_PAYMENT,UPFRONT_PAYMENT' })).toBe(true)
+    expect(isMembershipInvoice({ line_item_subtypes: 'PRORATE' })).toBe(true)
+    expect(isMembershipInvoice({ line_item_subtypes: 'NON_SUFFICIENT_FUNDS' })).toBe(true)
+    expect(isMembershipInvoice({ line_item_subtypes: 'subscription_renewal' })).toBe(true) // case-insensitive
+    expect(MEMBERSHIP_LINE_SUBTYPES).toEqual(['SUBSCRIPTION_RENEWAL', 'SUBSCRIPTION_PAYMENT', 'PRORATE', 'NON_SUFFICIENT_FUNDS'])
+  })
+
+  it('a lone UPFRONT_PAYMENT (class pack / credits / trial), a fee, a booking, a product or a top-up is NOT', () => {
+    expect(isMembershipInvoice({ line_item_subtypes: 'UPFRONT_PAYMENT' })).toBe(false)
+    expect(isMembershipInvoice({ line_item_subtypes: 'CUSTOM_CHARGE' })).toBe(false)
+    expect(isMembershipInvoice({ line_item_subtypes: 'BOOK_CLASS' })).toBe(false)
+    expect(isMembershipInvoice({ line_item_subtypes: 'BUY_PRODUCT' })).toBe(false)
+    expect(isMembershipInvoice({ line_item_subtypes: 'WALLET_TOP_UP' })).toBe(false)
+  })
+
+  it('matches whole tokens only — a sub_type that merely CONTAINS a membership token does not count', () => {
+    expect(isMembershipInvoice({ line_item_subtypes: 'NOT_A_SUBSCRIPTION_RENEWAL_X' })).toBe(false)
+  })
+
+  it('falls back to the report event for backfilled rows (no line items)', () => {
+    expect(isMembershipInvoice({ line_item_subtypes: null, glofox_event: 'subscription_payment_failed' })).toBe(true)
+    expect(isMembershipInvoice({ line_item_subtypes: null, glofox_event: 'subscription_payment' })).toBe(true)
+    expect(isMembershipInvoice({ line_item_subtypes: null, glofox_event: 'custom_charge' })).toBe(false)
+    expect(isMembershipInvoice({ line_item_subtypes: null, glofox_event: 'book_class' })).toBe(false)
+    expect(isMembershipInvoice({ line_item_subtypes: null, glofox_event: 'buy_product' })).toBe(false)
+    // A signup invoice and a free trial both arrive as invoice_payment; the
+    // backfill kept nothing that tells them apart, so neither is a membership.
+    expect(isMembershipInvoice({ line_item_subtypes: null, glofox_event: 'invoice_payment' })).toBe(false)
+    expect(MEMBERSHIP_REPORT_EVENTS).toEqual(['subscription_payment', 'subscription_payment_failed'])
+  })
+
+  it('no signal at all → not a membership payment', () => {
+    expect(isMembershipInvoice({})).toBe(false)
+    expect(isMembershipInvoice({ line_item_subtypes: null, glofox_event: null })).toBe(false)
+    expect(isMembershipInvoice({ line_item_subtypes: '', glofox_event: '' })).toBe(false)
+    expect(isMembershipInvoice(null)).toBe(false)
+    expect(isMembershipInvoice(undefined)).toBe(false)
   })
 })
