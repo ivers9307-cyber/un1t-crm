@@ -25,6 +25,15 @@ describe('resolveControlLocation', () => {
     })
     expect(r).toEqual({ location: HATCH, source: 'detected' })
   })
+  it('a non-string overrideId (e.g. useLocalSearchParams string[]) is ignored, falls through to detected', () => {
+    const r = resolveControlLocation({
+      overrideId: ['loc-still'],
+      physical: { status: 'at_studio', location: HATCH },
+      activeLocation: STILL,
+      locations: LOCATIONS,
+    })
+    expect(r).toEqual({ location: HATCH, source: 'detected' })
+  })
   it('detected physical location beats activeLocation', () => {
     const r = resolveControlLocation({
       overrideId: null,
@@ -45,6 +54,15 @@ describe('resolveControlLocation', () => {
       expect(r).toEqual({ location: STILL, source: 'manual' })
     }
   })
+  it('a non-at_studio status is never treated as detected, even carrying a location', () => {
+    const r = resolveControlLocation({
+      overrideId: null,
+      physical: { status: 'offsite', location: HATCH },
+      activeLocation: STILL,
+      locations: LOCATIONS,
+    })
+    expect(r).toEqual({ location: STILL, source: 'manual' })
+  })
   it('at_studio with no physical.location falls back to activeLocation, labelled manual', () => {
     const r = resolveControlLocation({
       overrideId: null,
@@ -54,8 +72,8 @@ describe('resolveControlLocation', () => {
     })
     expect(r).toEqual({ location: STILL, source: 'manual' })
   })
-  it('nothing at all → null location, manual', () => {
-    const r = resolveControlLocation({ overrideId: null, physical: { status: 'unknown', location: null }, activeLocation: null, locations: [] })
+  it('nothing at all → null location, manual (exercises the activeLocation undefined → null normalisation)', () => {
+    const r = resolveControlLocation({ overrideId: null, physical: { status: 'unknown', location: null }, activeLocation: undefined, locations: [] })
     expect(r).toEqual({ location: null, source: 'manual' })
   })
 })
@@ -74,5 +92,25 @@ describe('pickerLocations', () => {
     // on either location, so tier 3 (role default) decides.
     const staff = { role: 'staff', permissions: {} }
     expect(pickerLocations(staff, LOCATIONS, 'device_control')).toEqual([])
+  })
+  it('resolves PER-LOCATION on a tier-2 per-user override (proves the filter actually consults each location, not just role)', () => {
+    const staff = { role: 'staff' }
+    const locs = [
+      { id: 'loc-still', features: {}, permissions: { device_control: true }, roleTemplate: {} },
+      { id: 'loc-hatch', features: {}, permissions: {}, roleTemplate: {} },
+    ]
+    expect(pickerLocations(staff, locs, 'device_control').map(l => l.id)).toEqual(['loc-still'])
+  })
+  it('resolves PER-LOCATION on the tier-1 location feature gate — the one tier even master does not bypass', () => {
+    const master = { role: 'master' }
+    const gated = [
+      { id: 'loc-still', features: { device_control: false }, permissions: {}, roleTemplate: {} },
+      { id: 'loc-hatch', features: {}, permissions: {}, roleTemplate: {} },
+    ]
+    expect(pickerLocations(master, gated, 'device_control').map(l => l.id)).toEqual(['loc-hatch'])
+  })
+  it('locations undefined (profile present) → [] without throwing', () => {
+    const master = { role: 'master' }
+    expect(pickerLocations(master, undefined, 'device_control')).toEqual([])
   })
 })
