@@ -37,7 +37,28 @@ export const REGIONS_MAX_AGE_MS = 24 * 60 * 60 * 1000
 export const VERDICT_MAX_AGE_MS = 30 * 60 * 1000
 export const SHIFTS_MAX_AGE_MS = 24 * 60 * 60 * 1000
 
-const EMPTY_SNAPSHOT = { at: null, regions: null, position: null, verdict: null }
+/**
+ * The budget for the SHIFTS value, in JSON string length.
+ *
+ * expo-secure-store's documented per-value limit is 2048 bytes (Android), and
+ * a write over it fails SILENTLY — which is the trap: a 7-day week of the
+ * busiest coach is ~290 slimmed bytes a row (two UUIDs + a template), so
+ * ~2100 bytes for seven rows, and the people who most need Home to paint
+ * instantly were the only ones getting nothing at all. Trimming to a budget
+ * gives them the first few days instead of nothing.
+ *
+ * 1800 rather than 2048 for headroom: this counts UTF-16 code units, and a
+ * studio or template name outside ASCII costs more BYTES than length.
+ */
+export const SHIFTS_CACHE_MAX_BYTES = 1800
+
+/**
+ * The shape parsePhysicalSnapshot returns when there is nothing usable.
+ * Exported (and frozen) so the hook's own "nothing" value is this one and not
+ * a second literal that could drift from it. Callers get a COPY from parse;
+ * this object itself must never be mutated.
+ */
+export const EMPTY_SNAPSHOT = Object.freeze({ at: null, regions: null, position: null, verdict: null })
 
 /** JSON.parse that never throws; passes an already-parsed object through. */
 function safeParse(raw) {
@@ -138,14 +159,12 @@ export function parsePhysicalSnapshot(raw, nowMs) {
 }
 
 /**
- * The verdict a resolve result earns: an at_studio result stamps one, and
- * EVERY other status (offsite, unknown, loading) earns null — deliberately
- * clearing whatever stood before. A confirmed offsite is exactly the evidence
- * that the optimistic paint would now be wrong; leaving the old verdict
- * standing would resurrect it on the next launch.
+ * The verdict a resolve result earns IN MEMORY: at_studio stamps one, every
+ * other status earns null. This is what the hook shows — the live answer, and
+ * "I cannot tell where you are" is not something to paint studio tiles from.
  *
- * ONE definition, used by both the hook's live verdict and the persisted one,
- * so the thing on screen and the thing on disk cannot drift apart.
+ * The PERSISTED verdict follows a different rule (nextPersistedVerdict): the
+ * two are deliberately not the same question.
  */
 export function verdictFromResult(result, nowMs) {
   const id = result?.status === 'at_studio' ? result?.location?.id : null
@@ -154,22 +173,50 @@ export function verdictFromResult(result, nowMs) {
 }
 
 /**
- * The snapshot to persist after a resolve. Written on EVERY resolve that
- * reached an answer, verdict included (see verdictFromResult for why an
- * offsite write must clear it).
+ * What a resolve does to the STORED verdict — a three-way decision, not the
+ * two-way one above:
+ *
+ *   at_studio → write it. We know where we are.
+ *   offsite   → CLEAR it. A confirmed offsite is real evidence that the
+ *               optimistic paint would be wrong, and leaving the verdict on
+ *               disk would resurrect it on the next launch.
+ *   anything else (unknown/loading/absent) → LEAVE IT AS IT WAS.
+ *
+ * That last line is the one worth stating: 'unknown' means "could not tell"
+ * — no permission, no regions, no fix, offline — and it is not evidence that
+ * the phone has moved. Treating it as a clear meant that one offline launch,
+ * or one GPS timeout in a basement gym, threw away the NEXT launch's head
+ * start for nothing. The stored verdict expires on its own 30-minute clock
+ * (parsePhysicalSnapshot), which is the bound that actually protects it.
+ */
+export function nextPersistedVerdict({ result, previousVerdict, nowMs }) {
+  if (result?.status === 'at_studio') return verdictFromResult(result, nowMs)
+  if (result?.status === 'offsite') return null
+  return normaliseVerdict(previousVerdict)
+}
+
+/**
+ * The snapshot to persist after a resolve.
  *
  * `regionsAt` is WHEN THE REGIONS WERE OBTAINED, not when this snapshot is
  * written — the caller passes its region cache's own stamp. Defaulting it to
  * `nowMs` would re-stamp week-old regions as fresh on every launch, so an
  * offline device (which re-persists what it just read from disk) would keep
  * a stale map of the studios alive for ever instead of ageing it out at 24h.
+ *
+ * `previous` is what is currently on disk ({ verdict, position }), so an
+ * inconclusive resolve can carry it forward instead of erasing it. The
+ * position follows the same principle as the verdict, one rung simpler:
+ * NEVER overwrite a fix with nothing. A resolve that produced no position
+ * produced no information about where the phone is, and the stored fix is
+ * still gated by pickPosition's 5-minute rule wherever it is used.
  */
-export function buildPhysicalSnapshot({ regions, regionsAt, position, result, nowMs }) {
+export function buildPhysicalSnapshot({ regions, regionsAt, position, result, previous, nowMs }) {
   return {
     at: Number.isFinite(regionsAt) ? regionsAt : nowMs,
     regions: Array.isArray(regions) ? regions.map(normaliseRegion).filter(Boolean) : [],
-    position: normalisePosition(position),
-    verdict: verdictFromResult(result, nowMs),
+    position: normalisePosition(position) || normalisePosition(previous?.position),
+    verdict: nextPersistedVerdict({ result, previousVerdict: previous?.verdict, nowMs }),
   }
 }
 
@@ -217,9 +264,31 @@ export function slimShiftsForCache(shifts) {
   return out
 }
 
-/** The shifts blob to persist, stamped with WHOSE it is and when. */
+/**
+ * The shifts blob to persist, stamped with WHOSE it is and when, sorted by
+ * date and TRIMMED to SHIFTS_CACHE_MAX_BYTES.
+ *
+ * The trim is by budget rather than by a fixed row count because the row size
+ * is not fixed (a `locations` embed would widen it by ~80 bytes), and the
+ * failure it prevents is silent: SecureStore drops an oversize value without
+ * an error, so a busy coach's cache simply never existed. Rows are added
+ * soonest-date-first, so what survives is the part of the week the user is
+ * about to look at.
+ */
 export function buildShiftsSnapshot({ profileId, shifts, nowMs }) {
-  return { profileId: profileId || null, at: nowMs, shifts: slimShiftsForCache(shifts) }
+  const slim = slimShiftsForCache(shifts)
+    // Ascending by date. The API already sorts this way; doing it here is
+    // what makes "trim the tail" mean "drop the furthest-out days".
+    .sort((a, b) => (a.shift_date < b.shift_date ? -1 : a.shift_date > b.shift_date ? 1 : 0))
+  const snapshot = { profileId: profileId || null, at: nowMs, shifts: [] }
+  for (const row of slim) {
+    snapshot.shifts.push(row)
+    if (JSON.stringify(snapshot).length > SHIFTS_CACHE_MAX_BYTES) {
+      snapshot.shifts.pop()
+      break
+    }
+  }
+  return snapshot
 }
 
 /**

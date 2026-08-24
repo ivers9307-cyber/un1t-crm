@@ -5,18 +5,31 @@ import {
   buildPhysicalSnapshot,
   freshVerdict,
   verdictFromResult,
+  nextPersistedVerdict,
   slimShiftsForCache,
   buildShiftsSnapshot,
   parseShiftsSnapshot,
+  EMPTY_SNAPSHOT,
   REGIONS_MAX_AGE_MS,
   VERDICT_MAX_AGE_MS,
   SHIFTS_MAX_AGE_MS,
+  SHIFTS_CACHE_MAX_BYTES,
 } from './physical-snapshot'
 
 const NOW = 1_700_000_000_000
 const REGION = { location_id: 'loc-still', latitude: 53.2887, longitude: -6.197, radius_m: 150 }
 const POSITION = { coords: { latitude: 53.2887, longitude: -6.197 }, timestamp: NOW - 1000 }
 const EMPTY = { at: null, regions: null, position: null, verdict: null }
+
+describe('EMPTY_SNAPSHOT', () => {
+  it('is the shape parse returns for nothing, and is frozen (one definition, shared with the hook)', () => {
+    expect(EMPTY_SNAPSHOT).toEqual(EMPTY)
+    expect(Object.isFrozen(EMPTY_SNAPSHOT)).toBe(true)
+  })
+  it('parse returns a COPY, never the shared object', () => {
+    expect(parsePhysicalSnapshot(null, NOW)).not.toBe(EMPTY_SNAPSHOT)
+  })
+})
 
 const snapshotJson = (over = {}) => JSON.stringify({
   at: NOW - 1000,
@@ -233,6 +246,58 @@ describe('verdictFromResult', () => {
   })
 })
 
+describe('nextPersistedVerdict — what a resolve does to the STORED verdict', () => {
+  const previous = { locationId: 'loc-prev', at: NOW - 60_000 }
+
+  it('at_studio WRITES the new verdict, replacing whatever stood', () => {
+    const r = nextPersistedVerdict({ result: { status: 'at_studio', location: { id: 'loc-still' } }, previousVerdict: previous, nowMs: NOW })
+    expect(r).toEqual({ locationId: 'loc-still', at: NOW })
+  })
+  it('a confirmed OFFSITE clears it — that is real evidence the paint would be wrong', () => {
+    expect(nextPersistedVerdict({ result: { status: 'offsite', location: null }, previousVerdict: previous, nowMs: NOW })).toBe(null)
+  })
+  it("UNKNOWN leaves it alone — \"couldn't tell\" is not \"you left\"", () => {
+    // The offline/permission-denied/GPS-timeout launch. Throwing the verdict
+    // away here would cost the NEXT launch its head start for no evidence.
+    for (const result of [{ status: 'unknown', location: null }, { status: 'loading', location: null }, null, undefined]) {
+      expect(nextPersistedVerdict({ result, previousVerdict: previous, nowMs: NOW })).toEqual(previous)
+    }
+  })
+  it('unknown with nothing stored stays null', () => {
+    expect(nextPersistedVerdict({ result: { status: 'unknown' }, previousVerdict: null, nowMs: NOW })).toBe(null)
+    expect(nextPersistedVerdict({ result: { status: 'unknown' }, previousVerdict: { locationId: '' }, nowMs: NOW })).toBe(null)
+  })
+  it('normalises the carried verdict rather than trusting it', () => {
+    const dirty = { locationId: 'loc-prev', at: NOW - 60_000, stray: 'x' }
+    expect(nextPersistedVerdict({ result: { status: 'unknown' }, previousVerdict: dirty, nowMs: NOW })).toEqual(previous)
+  })
+})
+
+describe('buildPhysicalSnapshot — carry-forward on an inconclusive resolve', () => {
+  const previous = { verdict: { locationId: 'loc-prev', at: NOW - 60_000 }, position: { coords: { latitude: 1, longitude: 2 }, timestamp: NOW - 60_000 } }
+
+  it('an UNKNOWN resolve keeps the stored verdict AND the stored position', () => {
+    const r = buildPhysicalSnapshot({ regions: [REGION], position: null, result: { status: 'unknown', location: null }, previous, nowMs: NOW })
+    expect(r.verdict).toEqual(previous.verdict)
+    expect(r.position).toEqual(previous.position)
+  })
+  it('an OFFSITE resolve clears the verdict and installs its own position', () => {
+    const fresh = { coords: { latitude: 9, longitude: 9 }, timestamp: NOW }
+    const r = buildPhysicalSnapshot({ regions: [REGION], position: fresh, result: { status: 'offsite', location: null }, previous, nowMs: NOW })
+    expect(r.verdict).toBe(null)
+    expect(r.position).toEqual(fresh)
+  })
+  it('a fresh position always wins over the carried one', () => {
+    const fresh = { coords: { latitude: 9, longitude: 9 }, timestamp: NOW }
+    const r = buildPhysicalSnapshot({ regions: [], position: fresh, result: { status: 'at_studio', location: { id: 'l' } }, previous, nowMs: NOW })
+    expect(r.position).toEqual(fresh)
+  })
+  it('works with no `previous` at all (first ever write)', () => {
+    const r = buildPhysicalSnapshot({ regions: [], position: null, result: { status: 'unknown' }, nowMs: NOW })
+    expect(r).toEqual({ at: NOW, regions: [], position: null, verdict: null })
+  })
+})
+
 describe('freshVerdict', () => {
   it('passes a verdict inside the window and rejects one outside it', () => {
     const v = { locationId: 'loc-still', at: NOW - VERDICT_MAX_AGE_MS }
@@ -286,6 +351,60 @@ describe('slimShiftsForCache', () => {
   })
   it('is much smaller than the raw row (that is the whole point)', () => {
     expect(JSON.stringify(slimShiftsForCache([fat])).length).toBeLessThan(JSON.stringify([fat]).length / 2)
+  })
+})
+
+describe('buildShiftsSnapshot — the SecureStore byte budget', () => {
+  // The real shape GET /api/schedule/shifts returns, at its widest: two UUIDs
+  // and a template. ~290 bytes slimmed, so a 7-day week of a busy coach does
+  // NOT fit in SecureStore's 2048-byte value limit — which is the whole point
+  // of the cap: the busiest coaches are exactly who the head start is for,
+  // and a silent oversize write gave it to nobody who needed it.
+  const fatRow = (i) => ({
+    id: `550e8400-e29b-41d4-a716-4466554400${String(i).padStart(2, '0')}`,
+    shift_date: `2026-08-${String(10 + i).padStart(2, '0')}`,
+    start_time_override: '06:00:00',
+    end_time_override: '14:00:00',
+    location_id: '550e8400-e29b-41d4-a716-446655440099',
+    shift_templates: { name: 'Coach AM / Reception cover', start_time: '06:00:00', end_time: '14:00:00' },
+  })
+
+  it('keeps the whole list when it fits', () => {
+    const rows = [fatRow(1), fatRow(2)]
+    expect(buildShiftsSnapshot({ profileId: 'p1', shifts: rows, nowMs: NOW }).shifts).toHaveLength(2)
+  })
+  it('trims to the budget instead of writing an oversize value', () => {
+    const rows = Array.from({ length: 30 }, (_, i) => fatRow(i))
+    const snap = buildShiftsSnapshot({ profileId: 'p1', shifts: rows, nowMs: NOW })
+    expect(JSON.stringify(snap).length).toBeLessThanOrEqual(SHIFTS_CACHE_MAX_BYTES)
+    // Not trimmed to nothing — a real number of days survives.
+    expect(snap.shifts.length).toBeGreaterThanOrEqual(4)
+    expect(snap.shifts.length).toBeLessThan(30)
+  })
+  it('keeps the budget with the widest row shape (a locations embed, if the route grows one)', () => {
+    const withEmbed = Array.from({ length: 30 }, (_, i) => ({
+      ...fatRow(i),
+      locations: { id: '550e8400-e29b-41d4-a716-446655440099', name: 'UN1T Stillorgan' },
+    }))
+    const snap = buildShiftsSnapshot({ profileId: 'p1', shifts: withEmbed, nowMs: NOW })
+    expect(JSON.stringify(snap).length).toBeLessThanOrEqual(SHIFTS_CACHE_MAX_BYTES)
+    expect(snap.shifts.length).toBeGreaterThanOrEqual(3)
+  })
+  it('trims the FURTHEST-OUT days, keeping the soonest — and sorts by date to do it', () => {
+    const rows = Array.from({ length: 30 }, (_, i) => fatRow(29 - i)) // reverse order in
+    const snap = buildShiftsSnapshot({ profileId: 'p1', shifts: rows, nowMs: NOW })
+    const dates = snap.shifts.map((s) => s.shift_date)
+    expect(dates).toEqual([...dates].sort())
+    expect(dates[0]).toBe('2026-08-10') // the soonest day survives
+  })
+  it('stays under budget even for one absurdly large row (writes nothing rather than oversize)', () => {
+    const huge = { id: 'a', shift_date: '2026-08-24', shift_templates: { name: 'x'.repeat(4000), start_time: '06:00', end_time: '07:00' } }
+    const snap = buildShiftsSnapshot({ profileId: 'p1', shifts: [huge], nowMs: NOW })
+    expect(snap.shifts).toEqual([])
+    expect(JSON.stringify(snap).length).toBeLessThanOrEqual(SHIFTS_CACHE_MAX_BYTES)
+  })
+  it('the budget leaves headroom under the 2048-byte SecureStore limit', () => {
+    expect(SHIFTS_CACHE_MAX_BYTES).toBeLessThanOrEqual(1900)
   })
 })
 

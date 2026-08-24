@@ -54,13 +54,30 @@ export async function readPhysicalSnapshot(nowMs = Date.now()) {
 }
 
 /**
- * Best-effort persist after a resolve. Never throws. `regionsAt` carries the
- * regions' own provenance (see buildPhysicalSnapshot) — omit it only when the
- * regions were genuinely just fetched.
+ * Best-effort persist after a resolve. Never throws.
+ *
+ * `regionsAt` carries the regions' own provenance (see buildPhysicalSnapshot)
+ * — omit it only when the regions were genuinely just fetched.
+ *
+ * `isStale()` is the caller's generation guard, checked as late as possible:
+ * AFTER the read-modify and immediately before the write, so a sign-out that
+ * lands mid-write cannot be undone by a resolve that started before it.
+ * Without it, an in-flight resolve re-creates the file the teardown just
+ * deleted — with the previous user's fix and verdict in it.
+ *
+ * This is a READ-MODIFY-WRITE, not a blind write, because an inconclusive
+ * resolve must carry the stored verdict and position forward rather than
+ * erase them (buildPhysicalSnapshot). The read costs one keychain hit off
+ * the critical path — the resolve has already returned by then.
  */
-export async function writePhysicalSnapshot({ regions, regionsAt, position, result, nowMs = Date.now() }) {
+export async function writePhysicalSnapshot({ regions, regionsAt, position, result, isStale, nowMs = Date.now() }) {
   try {
-    const snapshot = buildPhysicalSnapshot({ regions, regionsAt, position, result, nowMs })
+    if (typeof isStale === 'function' && isStale()) return
+    // Already parsed and freshness-gated, so a verdict that has aged out is
+    // not carried forward by the read-modify-write.
+    const previous = await readPhysicalSnapshot(nowMs)
+    if (typeof isStale === 'function' && isStale()) return
+    const snapshot = buildPhysicalSnapshot({ regions, regionsAt, position, result, previous, nowMs })
     await SecureStore.setItemAsync(SNAPSHOT_KEY, JSON.stringify(snapshot))
   } catch {
     // best-effort — a failed write only costs the next launch its head start.
@@ -83,16 +100,26 @@ export async function readShiftsCache(profileId, nowMs = Date.now()) {
   }
 }
 
-/** Best-effort persist of the slimmed shifts for `profileId`. Never throws. */
+/**
+ * Best-effort persist of the slimmed, budget-trimmed shifts for `profileId`.
+ * Never throws.
+ *
+ * INDEX FIRST, then the value — the order matters on a shared studio device.
+ * The index is how the sign-out teardown finds per-user keys to delete, so a
+ * process killed between the two writes must leave an index entry pointing at
+ * nothing (which the teardown deletes harmlessly) rather than a value nothing
+ * knows about (which survives the sign-out that was meant to wipe it, and
+ * waits there for the next user).
+ */
 export async function writeShiftsCache(profileId, shifts, nowMs = Date.now()) {
   if (!profileId) return
   try {
     const snapshot = buildShiftsSnapshot({ profileId, shifts, nowMs })
-    await SecureStore.setItemAsync(`${SHIFTS_PREFIX}${profileId}`, JSON.stringify(snapshot))
     await addToShiftsIndex(profileId)
+    await SecureStore.setItemAsync(`${SHIFTS_PREFIX}${profileId}`, JSON.stringify(snapshot))
   } catch {
-    // best-effort — a week of shifts can exceed SecureStore's ~2 KB value
-    // limit for a heavily-booked coach, exactly like the menu cache.
+    // best-effort — buildShiftsSnapshot trims to SHIFTS_CACHE_MAX_BYTES, but
+    // an unwritable keychain is still possible, exactly like the menu cache.
   }
 }
 
