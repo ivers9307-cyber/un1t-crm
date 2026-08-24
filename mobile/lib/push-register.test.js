@@ -4,6 +4,11 @@
 // user's notifications until the token rotated). Expo modules are
 // factory-mocked so the suite stays node-runnable alongside the rest
 // of mobile/lib's pure tests.
+//
+// ANDROID-VIS.1 (mig 565) — plus the token-less reporting path. Several
+// cases below used to assert `api` was NOT called when a push token could
+// not be derived; that assertion WAS the bug (13 iOS rows, zero Android
+// rows ever), so they now assert the opposite and pin what gets sent.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -14,6 +19,7 @@ const state = vi.hoisted(() => ({
   tokenThrows: false,
   pairing: null,
   impersonate: null,
+  deviceKey: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
 }))
 
 vi.mock('expo-device', () => ({
@@ -42,11 +48,16 @@ vi.mock('./studio-device', () => ({
 vi.mock('./impersonate', () => ({
   readImpersonate: vi.fn(async () => state.impersonate),
 }))
+vi.mock('./device-key', () => ({
+  getDeviceKey: vi.fn(async () => state.deviceKey),
+  peekDeviceKey: vi.fn(async () => state.deviceKey),
+}))
 
 import { registerForPushNotifications, reportDeviceState, unregisterCurrentDevicePush, unregisterPushNotifications } from './push-register'
 import { api } from './api'
 import { readImpersonate } from './impersonate'
 import * as Notifications from 'expo-notifications'
+import { isGenuinePushSuccess } from 'shared/push-registration'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -56,7 +67,10 @@ beforeEach(() => {
   state.tokenThrows = false
   state.pairing = null
   state.impersonate = null
+  state.deviceKey = 'a1b2c3d4e5f60718293a4b5c6d7e8f90'
 })
+
+const DEVICE_KEY = 'a1b2c3d4e5f60718293a4b5c6d7e8f90'
 
 describe('registerForPushNotifications — studio-device guard', () => {
   it('skips entirely on a paired studio device — no permission prompt, no token upload', async () => {
@@ -73,8 +87,40 @@ describe('registerForPushNotifications — studio-device guard', () => {
     expect(res.token).toBe('ExponentPushToken[abc]')
     expect(api).toHaveBeenCalledWith('/api/mobile/device-tokens', expect.objectContaining({
       method: 'POST',
-      body: expect.objectContaining({ expo_push_token: 'ExponentPushToken[abc]' }),
+      body: expect.objectContaining({
+        expo_push_token: 'ExponentPushToken[abc]',
+        // ANDROID-VIS.1 — sent alongside the token so the server can adopt
+        // this device's existing token-keyed row into a stable identity.
+        device_key: DEVICE_KEY,
+      }),
     }))
+  })
+
+  it('ANDROID-VIS.1 — registers the device even when no token can be obtained', async () => {
+    state.tokenThrows = true
+    const res = await registerForPushNotifications({ geofencePermission: 'when_in_use' })
+    expect(res).toMatchObject({ skipped: true, reported: true })
+    expect(res.reason).toMatch(/^token_error:/)
+    expect(api).toHaveBeenCalledWith('/api/mobile/device-tokens', expect.objectContaining({
+      method: 'POST',
+      body: expect.objectContaining({ device_key: DEVICE_KEY, app_version: '1.3.0' }),
+    }))
+  })
+
+  it('still counts as NOT a genuine success, so the launch latch keeps retrying', async () => {
+    state.tokenThrows = true
+    const res = await registerForPushNotifications()
+    expect(isGenuinePushSuccess(res)).toBe(false)
+  })
+
+  it('never registers when the notification prompt is declined', async () => {
+    // Unchanged: reportDeviceState is the path that covers this user, and
+    // it does not prompt. Registration must not create a row off the back
+    // of a refusal.
+    state.permission = 'denied'
+    const res = await registerForPushNotifications()
+    expect(res).toEqual({ skipped: true, reason: 'permission_denied' })
+    expect(api).not.toHaveBeenCalled()
   })
 })
 
@@ -128,18 +174,58 @@ describe('reportDeviceState — STAFF-DEV.7 permission + version reporting', () 
     expect(api).toHaveBeenCalled()
   })
 
-  it('skips on simulators and when the token lookup throws, without throwing', async () => {
+  it('skips on a simulator — no real device, nothing to report', async () => {
     state.isDevice = false
-    expect((await reportDeviceState({ geofencePermission: 'denied' })).skipped).toBe(true)
-    state.isDevice = true
-    state.tokenThrows = true
     expect((await reportDeviceState({ geofencePermission: 'denied' })).skipped).toBe(true)
     expect(api).not.toHaveBeenCalled()
   })
 
-  it('skips when the device returns an empty token', async () => {
+  it('ANDROID-VIS.1 — STILL REPORTS when the token lookup throws', async () => {
+    // This is the Android case verbatim: getExpoPushTokenAsync throws for
+    // want of FCM credentials. It used to return here, which is why
+    // device_tokens held 13 iOS rows and zero Android rows ever. The
+    // geofence permission and the app version are exactly what the fleet
+    // report reads, and they now land.
+    state.tokenThrows = true
+    const res = await reportDeviceState({ geofencePermission: 'denied' })
+    expect(res.skipped).toBe(true)
+    expect(res.reason).toMatch(/^token_error:/)
+    expect(res.reported).toBe(true)
+    expect(api).toHaveBeenCalledWith('/api/mobile/device-tokens', expect.objectContaining({
+      method: 'POST',
+      body: expect.objectContaining({
+        device_key: DEVICE_KEY,
+        app_version: '1.3.0',
+        geofence_permission: 'denied',
+      }),
+    }))
+    // Never sent as an explicit null: the server would then have to decide
+    // whether to wipe a token it already holds.
+    expect(Object.keys(api.mock.calls[0][1].body)).not.toContain('expo_push_token')
+  })
+
+  it('ANDROID-VIS.1 — still reports when the device returns an empty token', async () => {
     state.token = null
-    expect((await reportDeviceState({ geofencePermission: 'always' })).skipped).toBe(true)
+    const res = await reportDeviceState({ geofencePermission: 'always' })
+    expect(res).toMatchObject({ skipped: true, reason: 'no_token', reported: true })
+    expect(api).toHaveBeenCalled()
+  })
+
+  it('carries `result` on a token-less report so LocationGate can latch it', async () => {
+    // Without this the gate never records the permission as reported and
+    // re-POSTs on every single foreground.
+    state.tokenThrows = true
+    const res = await reportDeviceState({ geofencePermission: 'always' })
+    expect(res.result).toEqual({ success: true })
+  })
+
+  it('reports nothing at all when there is neither a token nor a device key', async () => {
+    // SecureStore unreadable AND unwritable. No identity ⇒ no row we could
+    // address; reporting anyway would mint a duplicate on every launch.
+    state.tokenThrows = true
+    state.deviceKey = null
+    const res = await reportDeviceState({ geofencePermission: 'always' })
+    expect(res).toMatchObject({ skipped: true, reported: false })
     expect(api).not.toHaveBeenCalled()
   })
 })
@@ -149,7 +235,7 @@ describe('unregisterCurrentDevicePush — signOut token cleanup', () => {
     const res = await unregisterCurrentDevicePush()
     expect(api).toHaveBeenCalledWith('/api/mobile/device-tokens', {
       method: 'DELETE',
-      body: { expo_push_token: 'ExponentPushToken[abc]' },
+      body: { expo_push_token: 'ExponentPushToken[abc]', device_key: DEVICE_KEY },
     })
     expect(res).toEqual({ success: true })
   })
@@ -161,22 +247,51 @@ describe('unregisterCurrentDevicePush — signOut token cleanup', () => {
     expect(api).not.toHaveBeenCalled()
   })
 
-  it('skips when notification permission was never granted', async () => {
+  it('ANDROID-VIS.1 — deletes by device_key when permission was never granted', async () => {
+    // Pre-565 there was no row in this case, so skipping was right. Now a
+    // token-less row DOES exist, and leaving it would keep naming the
+    // person signing out as its owner in the fleet report.
     state.permission = 'denied'
     const res = await unregisterCurrentDevicePush()
-    expect(res.skipped).toBe(true)
-    expect(api).not.toHaveBeenCalled()
+    expect(api).toHaveBeenCalledWith('/api/mobile/device-tokens', {
+      method: 'DELETE',
+      body: { device_key: DEVICE_KEY },
+    })
+    expect(res).toEqual({ success: true })
   })
 
-  it('skips quietly when the token lookup throws — never blocks sign-out', async () => {
-    state.tokenThrows = true
+  it('still skips when permission was never granted AND there is no device key', async () => {
+    state.permission = 'denied'
+    state.deviceKey = null
     const res = await unregisterCurrentDevicePush()
     expect(res.skipped).toBe(true)
     expect(api).not.toHaveBeenCalled()
   })
 
-  it('skips when the device returns an empty token', async () => {
+  it('ANDROID-VIS.1 — deletes by device_key when the token lookup throws', async () => {
+    state.tokenThrows = true
+    const res = await unregisterCurrentDevicePush()
+    expect(api).toHaveBeenCalledWith('/api/mobile/device-tokens', {
+      method: 'DELETE',
+      body: { device_key: DEVICE_KEY },
+    })
+    expect(res).toEqual({ success: true })
+  })
+
+  it('deletes by device_key when the device returns an empty token', async () => {
     state.token = null
+    await unregisterCurrentDevicePush()
+    expect(api).toHaveBeenCalledWith('/api/mobile/device-tokens', {
+      method: 'DELETE',
+      body: { device_key: DEVICE_KEY },
+    })
+  })
+
+  it('never mints a device key on the way out', async () => {
+    // peekDeviceKey, not getDeviceKey: creating an identity for a device we
+    // are about to deregister would be backwards.
+    state.deviceKey = null
+    state.tokenThrows = true
     const res = await unregisterCurrentDevicePush()
     expect(res.skipped).toBe(true)
     expect(api).not.toHaveBeenCalled()
@@ -184,9 +299,17 @@ describe('unregisterCurrentDevicePush — signOut token cleanup', () => {
 })
 
 describe('unregisterPushNotifications (existing behavior pin)', () => {
-  it('no-ops without a token', async () => {
+  it('no-ops with neither identity', async () => {
     const res = await unregisterPushNotifications(null)
     expect(res).toEqual({ skipped: true })
     expect(api).not.toHaveBeenCalled()
+  })
+
+  it('sends only the identities it was given', async () => {
+    await unregisterPushNotifications(null, DEVICE_KEY)
+    expect(api).toHaveBeenCalledWith('/api/mobile/device-tokens', {
+      method: 'DELETE',
+      body: { device_key: DEVICE_KEY },
+    })
   })
 })

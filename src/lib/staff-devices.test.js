@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   compareVersions, parseVersion, currentDevice, isStale, deriveTargetVersion,
-  deviceVerdict, STALE_AFTER_DAYS,
+  deviceVerdict, pushHealthStatus, PUSH_HEALTHY_DAYS, STALE_AFTER_DAYS,
 } from './staff-devices.js'
 
 const T0 = Date.parse('2026-07-31T12:00:00Z')
@@ -126,5 +126,60 @@ describe('deviceVerdict', () => {
   })
   it('never reports outdated when there is no target to compare against', () => {
     expect(deviceVerdict([dev({ app_version: '2.1.0' })], null, T0).kind).toBe('current')
+  })
+})
+
+describe('pushHealthStatus — ANDROID-VIS.1b', () => {
+  const tok = (over = {}) => dev({ expo_push_token: 'ExponentPushToken[x]', ...over })
+
+  it('is red with no devices at all', () => {
+    expect(pushHealthStatus([], T0)).toMatchObject({ kind: 'red', label: 'No app' })
+  })
+
+  it('is green for a recently-seen device WITH a push token', () => {
+    expect(pushHealthStatus([tok()], T0)).toMatchObject({ kind: 'green', label: 'Healthy' })
+  })
+
+  it('is amber/Stale for a token-holding device not seen in a fortnight', () => {
+    const s = pushHealthStatus([tok({ last_seen_at: daysAgo(PUSH_HEALTHY_DAYS + 1) })], T0)
+    expect(s).toMatchObject({ kind: 'amber', label: 'Stale' })
+  })
+
+  it('is "Visible, no push" when the device reports but holds NO token', () => {
+    // The confident lie this fixes: a token-less Android row rendered
+    // 🟢 Healthy on the ONE page that answers "did push reach this phone",
+    // next to a live Send-test-push button that could never work.
+    const s = pushHealthStatus([tok({ expo_push_token: null })], T0)
+    expect(s.kind).toBe('nopush')
+    expect(s.label).toBe('Visible, no push')
+    expect(s.canPush).toBe(false)
+  })
+
+  it('treats a MISSING expo_push_token key the same as an explicit null', () => {
+    // Callers that forgot to select the column must not read as healthy.
+    const s = pushHealthStatus([dev()], T0)
+    expect(s.kind).toBe('nopush')
+  })
+
+  it('is healthy when ANY device has a token, even beside a token-less one', () => {
+    const s = pushHealthStatus([tok({ expo_push_token: null }), tok()], T0)
+    expect(s).toMatchObject({ kind: 'green', canPush: true })
+  })
+
+  it('ranks no-push ABOVE staleness — unreachable is the more useful fact', () => {
+    const s = pushHealthStatus(
+      [tok({ expo_push_token: null, last_seen_at: daysAgo(PUSH_HEALTHY_DAYS + 5) })], T0)
+    expect(s.kind).toBe('nopush')
+  })
+
+  it('marks canPush on every reachable state and nowhere else', () => {
+    expect(pushHealthStatus([tok()], T0).canPush).toBe(true)
+    expect(pushHealthStatus([tok({ last_seen_at: daysAgo(99) })], T0).canPush).toBe(true)
+    expect(pushHealthStatus([], T0).canPush).toBe(false)
+    expect(pushHealthStatus([tok({ expo_push_token: null })], T0).canPush).toBe(false)
+  })
+
+  it('is red when devices exist but none ever reported a last_seen_at', () => {
+    expect(pushHealthStatus([tok({ last_seen_at: null })], T0).kind).toBe('red')
   })
 })
