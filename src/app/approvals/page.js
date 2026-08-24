@@ -31,7 +31,7 @@ export default async function ApprovalsPage() {
       <header className="mb-6">
         <h1 className="text-2xl font-semibold text-un1t-text">Approvals</h1>
         <p className="text-sm text-un1t-subtle mt-1">
-          Everything waiting on your review. Click an item to open the source page and approve or decline.
+          Everything waiting on your review. Agent requests can be approved or declined right here; other items open their source page.
         </p>
       </header>
       <ApprovalsInbox />
