@@ -144,7 +144,8 @@ function ProviderList({ provider, loading, onItemDecided }) {
       </div>
     )
   }
-  if (provider.items.length === 0) {
+  const failedItems = provider.failedItems || []
+  if (provider.items.length === 0 && failedItems.length === 0) {
     return (
       <div className="border border-un1t-border rounded-lg p-8 text-center text-sm text-un1t-subtle">
         Nothing pending in {provider.label.toLowerCase()}. <Link href={provider.reviewBase} className="underline">Open {provider.label}</Link>
@@ -152,9 +153,24 @@ function ProviderList({ provider, loading, onItemDecided }) {
     )
   }
   // AGENT-REQ-UX.1 — agent requests decide in place; a customer is waiting.
+  // AGENT-RETRY.2 — failed executions render first (that customer has been
+  // waiting longest and was told nothing), as fix-&-retry cards.
   if (provider.key === 'agent_requests') {
     return (
       <div className="space-y-3">
+        {failedItems.length > 0 && (
+          <p className="text-xs font-semibold text-red-700 uppercase tracking-wider">Failed — fix &amp; retry</p>
+        )}
+        {failedItems.map((it) => (
+          <AgentRequestDecideCard
+            key={it.id}
+            item={it}
+            onDecided={() => onItemDecided?.(provider.key)}
+          />
+        ))}
+        {failedItems.length > 0 && provider.items.length > 0 && (
+          <p className="text-xs font-semibold text-un1t-subtle uppercase tracking-wider pt-2">Waiting for review</p>
+        )}
         {provider.items.map((it) => (
           <AgentRequestDecideCard
             key={it.id}

@@ -21,6 +21,11 @@ export default function CustomerApprovalCard({ item, busy, onApprove, onDecline,
   const chip = urgencyChip(item)
   const tone = CHIP_TONES[chip.tone] || CHIP_TONES.muted
   const kindLabel = APPROVAL_KIND_LABELS[item.kind] || 'Customer request'
+  // AGENT-RETRY.2 — a failed execution renders in fix-&-retry mode: the
+  // operator fixes the problem in Glofox first, then the button re-runs the
+  // action through the same PATCH (decline on a failed row would 409, so
+  // retry is the only decision offered).
+  const isFailed = !!item.failed
   const summary = item.details?.summary || item.subtitle || null
   const threadHref = item.conversationId && item.channel === 'whatsapp'
     ? `/whatsapp/${item.conversationId}`
@@ -41,6 +46,9 @@ export default function CustomerApprovalCard({ item, busy, onApprove, onDecline,
         ) : null}
       </View>
       {summary ? <Text className="text-[12px] text-un1t-subtle mt-1" numberOfLines={3}>{summary}</Text> : null}
+      {isFailed && item.failedWhy ? (
+        <Text className="text-[12px] text-red-700 mt-1" numberOfLines={4}>{item.failedWhy}</Text>
+      ) : null}
       {item.customerNote ? (
         <Text className="text-[12px] italic text-un1t-subtle mt-1" numberOfLines={2}>“{item.customerNote}”</Text>
       ) : null}
@@ -48,6 +56,11 @@ export default function CustomerApprovalCard({ item, busy, onApprove, onDecline,
         <View className="bg-blue-500/10 rounded-full px-2 py-0.5">
           <Text className="text-[10px] font-semibold text-blue-700">{kindLabel}</Text>
         </View>
+        {isFailed ? (
+          <View className="bg-red-500/10 rounded-full px-2 py-0.5">
+            <Text className="text-[10px] font-semibold text-red-700">Failed</Text>
+          </View>
+        ) : null}
         {threadHref ? (
           <Pressable onPress={() => router.push(threadHref)} className="flex-row items-center active:opacity-60">
             <Ionicons name="chatbubble-outline" size={11} color="#64748B" />
@@ -60,13 +73,15 @@ export default function CustomerApprovalCard({ item, busy, onApprove, onDecline,
           className="flex-1 flex-row items-center justify-center py-2 rounded-xl bg-emerald-600 active:opacity-80 disabled:opacity-50">
           {busy
             ? <ActivityIndicator color="#FFFFFF" />
-            : <><Ionicons name="checkmark" size={15} color="#FFFFFF" /><Text className="text-sm font-semibold text-white ml-1">Approve</Text></>}
+            : <><Ionicons name={isFailed ? 'refresh' : 'checkmark'} size={15} color="#FFFFFF" /><Text className="text-sm font-semibold text-white ml-1">{isFailed ? 'Fixed it — retry' : 'Approve'}</Text></>}
         </Pressable>
-        <Pressable onPress={onDecline} disabled={busy}
-          className="flex-1 flex-row items-center justify-center py-2 rounded-xl border border-un1t-border active:opacity-60 disabled:opacity-50">
-          <Ionicons name="close" size={15} color="#DC2626" />
-          <Text className="text-sm font-semibold text-red-600 ml-1">Decline</Text>
-        </Pressable>
+        {!isFailed ? (
+          <Pressable onPress={onDecline} disabled={busy}
+            className="flex-1 flex-row items-center justify-center py-2 rounded-xl border border-un1t-border active:opacity-60 disabled:opacity-50">
+            <Ionicons name="close" size={15} color="#DC2626" />
+            <Text className="text-sm font-semibold text-red-600 ml-1">Decline</Text>
+          </Pressable>
+        ) : null}
       </View>
     </View>
   )
