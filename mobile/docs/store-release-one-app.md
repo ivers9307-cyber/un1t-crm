@@ -320,6 +320,19 @@ reviews data-safety changes asynchronously; do this EARLY, it can lag the
 binary review.
 
 ### 5.2 FCM prerequisite (push on Android — currently missing)
+
+> **📄 Full runbook: [`android-fcm-setup.md`](./android-fcm-setup.md)** — the
+> authoritative version, with the two-credentials table, the public-repo
+> handling of `google-services.json`, the runtimeVersion decision (it does
+> **not** bump — same precedent as 1.3.2 and ANDROID-R8) and verification
+> SQL. The summary below stays for continuity; if the two disagree, that
+> page wins.
+>
+> Separately: since ANDROID-VIS.1 (mig 565) an Android device is **already
+> visible** on `/settings/notifications/health` without any of this — it
+> registers with `expo_push_token` NULL. FCM turns it from *visible* into
+> *reachable*, and needs no backfill when it lands.
+
 Android push does NOT work until FCM credentials exist for
 `com.un1tdublin.crm` on EAS project `6256a4d8-03ff-4898-9d47-b4de6c9c20e1`.
 This is a Richard task (Firebase console access):

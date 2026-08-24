@@ -1914,10 +1914,18 @@ registry.registerPath({
   path: '/api/mobile/device-tokens',
   tags: ['Mobile'],
   security: [{ CookieAuth: [] }],
-  summary: 'Register a push token',
-  request: { body: { content: { 'application/json': { schema: z.object({ token: z.string(), platform: z.string().optional() }).openapi('DeviceTokenRegisterBody') } } } },
+  summary: 'Register a device (push token optional)',
+  description: 'ANDROID-VIS.1 (mig 565) — the row is keyed by `device_key`, an app-generated per-install id; `expo_push_token` is an optional CAPABILITY. A device that cannot obtain one (Android without FCM credentials, iOS with notifications declined) still registers and still reports platform / app_version / last_seen_at / geofence_permission. At least one of the two identities is required. The field names below are the real ones — this entry said `token` until 565 and never matched the route.',
+  request: { body: { content: { 'application/json': { schema: z.object({
+    expo_push_token: z.string().nullable().optional(),
+    device_key: z.string().optional(),
+    platform: z.enum(['ios', 'android', 'web']).optional(),
+    device_name: z.string().optional(),
+    app_version: z.string().optional(),
+    geofence_permission: z.string().optional(),
+  }).openapi('DeviceTokenRegisterBody') } } } },
   responses: {
-    200: { description: 'Token registered' },
+    200: { description: 'Device registered' },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -1927,10 +1935,14 @@ registry.registerPath({
   path: '/api/mobile/device-tokens',
   tags: ['Mobile'],
   security: [{ CookieAuth: [] }],
-  summary: 'Remove a push token',
-  request: { body: { content: { 'application/json': { schema: z.object({ token: z.string() }).openapi('DeviceTokenRemoveBody') } } } },
+  summary: 'Deregister a device',
+  description: 'Accepts either identity; `device_key` wins when both are sent (the token may have rotated since sign-in). Always scoped to the calling user.',
+  request: { body: { content: { 'application/json': { schema: z.object({
+    expo_push_token: z.string().nullable().optional(),
+    device_key: z.string().optional(),
+  }).openapi('DeviceTokenRemoveBody') } } } },
   responses: {
-    200: { description: 'Token removed' },
+    200: { description: 'Device deregistered' },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -2980,7 +2992,7 @@ registry.registerPath({
     },
   },
   responses: {
-    200: { description: 'Counts — { sent, skipped_throttled, skipped_no_token }' },
+    200: { description: 'Counts — { sent, skipped_throttled, skipped_no_app, skipped_no_token }. `skipped_no_app` = no device row at all; `skipped_no_token` = has the app but no push token (ANDROID-VIS.1b — Android until FCM credentials exist).' },
     400: { description: 'Invalid body', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — settings permission required', content: { 'application/json': { schema: ErrorResponse } } },
