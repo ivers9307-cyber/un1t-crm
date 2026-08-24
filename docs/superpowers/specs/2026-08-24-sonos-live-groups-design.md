@@ -1,6 +1,6 @@
 # Sonos "Live now" — controls per group, schedule optional
 
-**Date:** 2026-08-24 · **Status:** approved (Richard, 24 Aug) · **Ticket prefix:** SONOSGRP
+**Date:** 2026-08-24 · **Status:** implemented (SONOSGRP.1-4) · **Ticket prefix:** SONOSGRP
 **Context:** Hatch Street connected its Sonos household (24 Aug) but has no schedules and no favourites. Both surfaces hang the live strip off a schedule row, so Hatch gets no live status or controls at all — even though `GET /api/sonos/household` already returns every current group with its `playbackState`.
 
 ## What
@@ -12,7 +12,7 @@ Live status + transport + volume for every speaker **group** in the connected ho
 `GET /api/sonos/now-playing` and `POST /api/sonos/control` accept **exactly one** of `schedule_id` | `group_id`.
 
 - `schedule_id`: unchanged — uuid-validated, row loaded scoped to the active location, groups resolved via `player_ids`.
-- `group_id`: a Sonos group id (`RINCON_…:N` — an opaque string, NOT a uuid; validate non-empty string ≤ 128 chars). No DB row is read. After the fresh `getGroups` fetch, the target is `[group_id]` if that id is present in the household's current groups; otherwise the existing **`regrouped`** outcome ("The speakers regrouped — try that again"). `regrouped` is the honest code — group ids are ephemeral by design — and NOT `no_group`, whose copy talks about a schedule's speakers.
+- `group_id`: a Sonos group id (`RINCON_…:N` — an opaque string, NOT a uuid; validate non-empty string ≤ 128 chars). No DB row is read. After the fresh `getGroups` fetch, the target is `[group_id]` if that id is present in the household's current groups; otherwise the existing **`regrouped`** outcome ("The speakers regrouped — refresh and try again" — reworded from this spec's draft at review, deliberately). `regrouped` is the honest code — group ids are ephemeral by design — and NOT `no_group`, whose copy talks about a schedule's speakers.
 - Neither or both ids → 400 `Invalid request` (control: Zod refine; now-playing: explicit check).
 - Location safety is structural: the token comes from the active location's own connection (`withFreshToken`), so another household's group id is simply absent from the groups fetch → `regrouped`. No cross-location read or write exists.
 
