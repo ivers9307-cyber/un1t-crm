@@ -68,8 +68,8 @@ export const agentRequestsProvider = {
       .from('agent_membership_requests')
       .select(`
         id, kind, details, customer_note, created_at, location_id,
-        channel, conversation_id,
-        contact:contacts!contact_id ( id, name )
+        channel, conversation_id, retention_flagged,
+        contact:contacts!contact_id ( id, name, email, phone )
       `)
       .eq('location_id', activeId)
       .eq('status', 'pending')
@@ -88,11 +88,17 @@ export const agentRequestsProvider = {
       currency: r.details?.paid ? (r.details.currency || 'EUR') : null,
       reviewUrl: `/settings/customer-agent/requests?focus=${r.id}`,
       // APPROVALS-STUDIO.1 — the mobile Customers tab renders + actions
-      // these directly, so it needs the raw request fields (web ignores).
+      // these directly, so it needs the raw request fields. AGENT-REQ-UX.1
+      // — the web tab now renders + actions them inline too.
       kind: r.kind,
       details: r.details || {},
       customerNote: r.customer_note || null,
+      contactId: r.contact?.id || null,
       contactName: r.contact?.name || null,
+      // For the operator's Glofox lookup — shown on the decide card.
+      contactEmail: r.contact?.email || null,
+      contactPhone: r.contact?.phone || null,
+      retentionFlagged: !!r.retention_flagged,
       channel: r.channel || null,
       conversationId: r.conversation_id || null,
     }))
