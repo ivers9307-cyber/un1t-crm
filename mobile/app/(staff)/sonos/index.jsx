@@ -1,10 +1,12 @@
-// SONOSMOB.5 — Studio music: live control of the Sonos speakers.
+// SONOSMOB.5 / SONOSGRP.4 — Studio music: live control of the Sonos speakers.
 //
 // Control only. Schedules (windows, run-now, the pause override) are set up
 // on the web app under Marketing → Automations → Studio music; this screen
-// lists the location's schedules and renders one SonosControlCard per
-// schedule. Today that is one card — the studio floor — but a second zone
-// needs no change here.
+// renders a "Live now" card per current speaker GROUP (from the household
+// response — no schedule needed, which is all Hatch has) above one
+// SonosControlCard per schedule. A group card's `onStale` (its ephemeral
+// group id answered `regrouped`) re-runs load() so the cards heal to the
+// new grouping.
 //
 // Gates on `device_control`, cross-platform since SONOSMOB.2: the routes the
 // cards call enforce that same key, so the gate and the server agree.
@@ -45,6 +47,7 @@ export default function SonosScreen() {
   const detecting = phys.status === 'loading' && !overrideId
 
   const [schedules, setSchedules] = useState(null)
+  const [groups, setGroups] = useState([])
   const [favorites, setFavorites] = useState([])
   const [favoritesFailed, setFavoritesFailed] = useState(false)
   const [error, setError] = useState(null)
@@ -59,6 +62,7 @@ export default function SonosScreen() {
   // now-playing against the new location and 404 until the new list lands).
   useEffect(() => {
     setSchedules(null)
+    setGroups([])
     setFavorites([])
     setFavoritesFailed(false)
     listLocationRef.current = null
@@ -94,17 +98,30 @@ export default function SonosScreen() {
       const connected = h.success && h.connected
       setFavorites(connected && !h.favoritesFailed ? (h.favorites || []) : [])
       setFavoritesFailed(Boolean(connected && h.favoritesFailed))
+      // Live now cards — one per current speaker group. `reachable: false`
+      // is only present when the household's groups fetch failed (the route
+      // omits `groups` then); connected + reachable always carries them.
+      setGroups(connected && h.reachable !== false ? (h.groups || []) : [])
     } catch (e) {
       if (!isActive()) return
       setError(e?.message || 'Could not load studio music')
     }
   }, [locationId])
 
+  // A group card's onStale re-runs load() through this ref so the reload
+  // shares the CURRENT focus session's `active` flag (blur still cancels it)
+  // and `handleStale` itself stays identity-stable — a fresh callback per
+  // render would re-render every card for nothing.
+  const staleReloadRef = useRef(() => {})
+
   useFocusEffect(useCallback(() => {
     let active = true
+    staleReloadRef.current = () => { if (allowed) load(() => active) }
     if (allowed) load(() => active)
-    return () => { active = false }
+    return () => { active = false; staleReloadRef.current = () => {} }
   }, [allowed, load]))
+
+  const handleStale = useCallback(() => { staleReloadRef.current() }, [])
 
   // Permission gate — defence in depth. The Studio tile hides the link
   // without access, but a hand-typed deep link would otherwise reach here.
@@ -149,7 +166,7 @@ export default function SonosScreen() {
         <View className="py-8 items-center">
           <ActivityIndicator color="#94A3B8" />
         </View>
-      ) : schedules.length === 0 ? (
+      ) : schedules.length === 0 && groups.length === 0 ? (
         <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 flex-row items-start">
           <Ionicons name="musical-notes-outline" size={14} color="#94A3B8" style={{ marginTop: 2 }} />
           <Text className="text-xs text-un1t-subtle ml-2 flex-1">
@@ -168,10 +185,41 @@ export default function SonosScreen() {
               reusing them: a card's own now-playing poll is state about the
               studio it mounted for, and must not outlive it. */}
           <View key={locationId} className="gap-3">
-            {schedules.map((s) => (
-              <SonosControlCard key={s.id} schedule={s} favorites={favorites} locationId={locationId} />
-            ))}
+            {/* SONOSGRP.4 — one live card per current speaker group, no
+                schedule needed. The heading only earns its place when there
+                are groups; the matching Schedules label only when BOTH
+                sections render, so a schedules-only screen looks as before. */}
+            {groups.length > 0 && (
+              <>
+                <Text className="text-[11px] uppercase tracking-wider text-un1t-subtle">Live now</Text>
+                {groups.map((g) => (
+                  <SonosControlCard
+                    key={g.id}
+                    group={g}
+                    favorites={favorites}
+                    locationId={locationId}
+                    onStale={handleStale}
+                  />
+                ))}
+              </>
+            )}
+            {schedules.length > 0 && (
+              <>
+                {groups.length > 0 && (
+                  <Text className="text-[11px] uppercase tracking-wider text-un1t-subtle">Schedules</Text>
+                )}
+                {schedules.map((s) => (
+                  <SonosControlCard key={s.id} schedule={s} favorites={favorites} locationId={locationId} />
+                ))}
+              </>
+            )}
           </View>
+          {schedules.length === 0 && (
+            <Text className="text-xs text-un1t-subtle mt-3">
+              No studio music is set up for this location yet. Someone with Device control sets it up on the
+              web app under <Text className="text-un1t-text font-semibold">Marketing → Automations → Studio music</Text>.
+            </Text>
+          )}
         </>
       )}
     </ScrollView>

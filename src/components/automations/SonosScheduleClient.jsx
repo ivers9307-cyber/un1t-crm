@@ -403,6 +403,7 @@ function SonosScheduleInner({ locationName }) {
       {!loading && !loadError && connected && household?.reachable && (household.groups?.length > 0) && (
         <LiveNowSection
           groups={household.groups}
+          players={household.players || []}
           favorites={household.favorites || []}
           onRegrouped={loadHousehold}
         />
@@ -511,8 +512,9 @@ function HouseholdPicker({ ids, locationName }) {
 // strips are always editable — there is no read-only fallback to design for:
 // with the Sonos cloud not answering there are no groups to list at all.
 // Never touches sonos_schedules; a group's name falls back to its first
-// player id because Sonos allows unnamed groups.
-function LiveNowSection({ groups, favorites, onRegrouped }) {
+// player's NAME (Sonos allows unnamed groups, and a raw RINCON_… id tells
+// an operator nothing), then the raw ids as a last resort.
+function LiveNowSection({ groups, players, favorites, onRegrouped }) {
   return (
     <div className="space-y-3">
       <div>
@@ -521,10 +523,11 @@ function LiveNowSection({ groups, favorites, onRegrouped }) {
       </div>
       {groups.map((g) => {
         const count = Array.isArray(g.playerIds) ? g.playerIds.length : 0
+        const fallbackName = players.find((p) => p.id === g.playerIds?.[0])?.name
         return (
           <div key={g.id} className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
             <div className="flex items-center justify-between gap-3">
-              <p className="text-sm font-medium text-un1t-text">{g.name || g.playerIds?.[0] || g.id}</p>
+              <p className="text-sm font-medium text-un1t-text">{g.name || fallbackName || g.playerIds?.[0] || g.id}</p>
               <p className="text-[11px] text-un1t-subtle shrink-0">
                 {count} speaker{count === 1 ? '' : 's'}
               </p>
