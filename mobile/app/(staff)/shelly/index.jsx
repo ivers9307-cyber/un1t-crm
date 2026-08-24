@@ -163,11 +163,12 @@ export default function ShellyScreen() {
   const router = useRouter()
   const params = useLocalSearchParams()
   const phys = usePhysicalLocation()
+  const overrideId = typeof params.loc === 'string' ? params.loc : null
   // HOME-LOC.10 — override (this visit's ?loc=) ?? detected ?? activeLocation.
   // The pill below always names what the calls command; both derive from the
   // SAME resolved value, so what you see is what you send.
   const { location: controlLocation, source } = resolveControlLocation({
-    overrideId: typeof params.loc === 'string' ? params.loc : null,
+    overrideId,
     physical: phys,
     activeLocation,
     locations,
@@ -175,6 +176,10 @@ export default function ShellyScreen() {
   const locationId = controlLocation?.id
   const allowed = canMobile(profile, 'device_control', controlLocation)
   const pickable = pickerLocations(profile, locations, 'device_control')
+  // HOME-LOC.10b — the screen is usable before the geofence answer lands, on
+  // the activeLocation fallback; say so rather than letting an amber "manual"
+  // pill flip green mid-reach. An explicit override needs no detection.
+  const detecting = phys.status === 'loading' && !overrideId
 
   const [devices, setDevices] = useState(null)
   // undefined = not answered yet. The route sends true / false / null, and all
@@ -193,6 +198,16 @@ export default function ShellyScreen() {
   // a boolean: a blip while refetching for a NEW location must not keep the OLD
   // location's rows painted. Same shape as the Sonos screen.
   const listLocationRef = useRef(null)
+  // HOME-LOC.10b — the location the SCREEN is on NOW, readable from inside an
+  // in-flight load(). `seq` alone does not cover this: it only invalidates a
+  // load once a LATER one has started, and the toggle/refresh paths call
+  // load(() => true) with the locationId their closure captured. Flip studios
+  // mid-toggle and that resolve would repaint the PREVIOUS studio's plug rows
+  // — and stamp listLocationRef with them — under a pill naming the new one,
+  // for up to a full poll interval (spec §5: the list and the pill must never
+  // disagree). Seeded from the first render's id so there is no window before
+  // the effect below runs.
+  const currentLocationRef = useRef(locationId)
   // Stops an older tick painting over a newer answer, which matters right after
   // a toggle's reload.
   const seq = useRef(0)
@@ -200,6 +215,7 @@ export default function ShellyScreen() {
 
   // New location → spinner, not the old list.
   useEffect(() => {
+    currentLocationRef.current = locationId
     setDevices(null)
     setConnected(undefined)
     setConnectionStatus(undefined)
@@ -229,13 +245,19 @@ export default function ShellyScreen() {
   // the screen on its loading spinner forever (same guard as the Sonos screen).
   //
   // `isActive` guards every setState against a blur-before-resolve race.
+  // `stale()` is an INTERNAL guard on purpose — every exit below checks it,
+  // so no call site can regress it by passing a permissive isActive (the
+  // toggle and pull-to-refresh paths both pass `() => true`, which is right
+  // for BLUR — they want their own reload to land — but says nothing about a
+  // location flip). isActive stays for the blur race it was written for.
   const load = useCallback(async (isActive) => {
     if (!locationId) return
     const n = ++seq.current
     const painted = () => listLocationRef.current === locationId
+    const stale = () => locationId !== currentLocationRef.current
     try {
       const r = await api('/api/shelly/devices', { locationId })
-      if (n !== seq.current || !isActive()) return
+      if (stale() || n !== seq.current || !isActive()) return
       if (!r.success) {
         // Rule 4. The keep-or-blank decision is made on WHETHER WE ALREADY
         // HAVE ROWS FOR THIS LOCATION, not on api()'s `transport` tag: a 500
@@ -253,7 +275,7 @@ export default function ShellyScreen() {
       setConnectionStatus(r.connection_status)
       listLocationRef.current = locationId
     } catch (e) {
-      if (n !== seq.current || !isActive()) return
+      if (stale() || n !== seq.current || !isActive()) return
       if (painted()) setRetrying(true)
       else setError(e?.message || 'Could not load the smart plugs')
     }
@@ -329,6 +351,7 @@ export default function ShellyScreen() {
           source={source}
           pickable={pickable}
           onPick={(id) => router.setParams({ loc: id })}
+          detecting={detecting}
           className="self-center mb-4"
         />
         <Text className="text-sm text-un1t-subtle text-center">
@@ -357,6 +380,7 @@ export default function ShellyScreen() {
           source={source}
           pickable={pickable}
           onPick={(id) => router.setParams({ loc: id })}
+          detecting={detecting}
         />
         <NoticeCard icon="alert-circle-outline" tone="error">{error}</NoticeCard>
       </ScrollView>
@@ -391,6 +415,7 @@ export default function ShellyScreen() {
         source={source}
         pickable={pickable}
         onPick={(id) => router.setParams({ loc: id })}
+        detecting={detecting}
       />
       {notConnected && (
         <NoticeCard icon="flash-off-outline">
@@ -418,7 +443,9 @@ export default function ShellyScreen() {
           </NoticeCard>
         )
       ) : (
-        <View className="gap-3">
+        // Keyed on the location so a flip REMOUNTS the rows rather than
+        // reusing them under the new pill.
+        <View key={locationId} className="gap-3">
           {devices.map((d) => (
             <PlugRow
               key={d.id}

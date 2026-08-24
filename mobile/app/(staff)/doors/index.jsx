@@ -27,8 +27,9 @@ export default function DoorsScreen() {
   // HOME-LOC.10 — override (this visit's ?loc=) ?? detected ?? activeLocation.
   // The pill below always names what the calls command; both derive from the
   // SAME resolved value, so what you see is what you send.
+  const overrideId = typeof params.loc === 'string' ? params.loc : null
   const { location: controlLocation, source } = resolveControlLocation({
-    overrideId: typeof params.loc === 'string' ? params.loc : null,
+    overrideId,
     physical: phys,
     activeLocation,
     locations,
@@ -36,6 +37,10 @@ export default function DoorsScreen() {
   const locationId = controlLocation?.id
   const allowed = canMobile(profile, 'studio_management', controlLocation)
   const pickable = pickerLocations(profile, locations, 'studio_management')
+  // HOME-LOC.10b — the screen is usable before the geofence answer lands, on
+  // the activeLocation fallback; say so rather than letting an amber "manual"
+  // pill flip green mid-reach. An explicit override needs no detection.
+  const detecting = phys.status === 'loading' && !overrideId
 
   const [refreshing, setRefreshing] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
@@ -60,6 +65,7 @@ export default function DoorsScreen() {
           source={source}
           pickable={pickable}
           onPick={(id) => router.setParams({ loc: id })}
+          detecting={detecting}
           className="self-center mb-4"
         />
         <Text className="text-sm text-un1t-subtle text-center">
@@ -83,6 +89,7 @@ export default function DoorsScreen() {
         source={source}
         pickable={pickable}
         onPick={(id) => router.setParams({ loc: id })}
+        detecting={detecting}
       />
       <Text className="text-sm text-un1t-subtle mb-4">
         Unlock doors at {controlLocation?.name || 'your studio'}.

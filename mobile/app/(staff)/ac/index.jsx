@@ -22,14 +22,19 @@ export default function AcScreen() {
   // HOME-LOC.10 — override (this visit's ?loc=) ?? detected ?? activeLocation.
   // The pill below always names what the calls command; both derive from the
   // SAME resolved value, so what you see is what you send.
+  const overrideId = typeof params.loc === 'string' ? params.loc : null
   const { location: controlLocation, source } = resolveControlLocation({
-    overrideId: typeof params.loc === 'string' ? params.loc : null,
+    overrideId,
     physical: phys,
     activeLocation,
     locations,
   })
   const locationId = controlLocation?.id
   const pickable = pickerLocations(profile, locations, 'studio_management')
+  // HOME-LOC.10b — the screen is usable before the geofence answer lands, on
+  // the activeLocation fallback; say so rather than letting an amber "manual"
+  // pill flip green mid-reach. An explicit override needs no detection.
+  const detecting = phys.status === 'loading' && !overrideId
 
   // Permission gate — defence in depth. The link won't show unless permitted,
   // but a hand-typed deep-link bypass would otherwise reach the page. The pill
@@ -43,6 +48,7 @@ export default function AcScreen() {
           source={source}
           pickable={pickable}
           onPick={(id) => router.setParams({ loc: id })}
+          detecting={detecting}
           className="self-center mb-4"
         />
         <Text className="text-sm text-un1t-subtle text-center">
@@ -62,6 +68,7 @@ export default function AcScreen() {
         source={source}
         pickable={pickable}
         onPick={(id) => router.setParams({ loc: id })}
+        detecting={detecting}
       />
       {/* AcDeviceList DOES refetch on a locationId change (its load() is keyed
           on the prop and the effect spinners while it re-reads), so the key is

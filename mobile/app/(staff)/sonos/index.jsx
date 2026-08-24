@@ -26,11 +26,12 @@ export default function SonosScreen() {
   const router = useRouter()
   const params = useLocalSearchParams()
   const phys = usePhysicalLocation()
+  const overrideId = typeof params.loc === 'string' ? params.loc : null
   // HOME-LOC.10 — override (this visit's ?loc=) ?? detected ?? activeLocation.
   // The pill below always names what the calls command; both derive from the
   // SAME resolved value, so what you see is what you send.
   const { location: controlLocation, source } = resolveControlLocation({
-    overrideId: typeof params.loc === 'string' ? params.loc : null,
+    overrideId,
     physical: phys,
     activeLocation,
     locations,
@@ -38,6 +39,10 @@ export default function SonosScreen() {
   const locationId = controlLocation?.id
   const allowed = canMobile(profile, 'device_control', controlLocation)
   const pickable = pickerLocations(profile, locations, 'device_control')
+  // HOME-LOC.10b — the screen is usable before the geofence answer lands, on
+  // the activeLocation fallback; say so rather than letting an amber "manual"
+  // pill flip green mid-reach. An explicit override needs no detection.
+  const detecting = phys.status === 'loading' && !overrideId
 
   const [schedules, setSchedules] = useState(null)
   const [favorites, setFavorites] = useState([])
@@ -113,6 +118,7 @@ export default function SonosScreen() {
           source={source}
           pickable={pickable}
           onPick={(id) => router.setParams({ loc: id })}
+          detecting={detecting}
           className="self-center mb-4"
         />
         <Text className="text-sm text-un1t-subtle text-center">
@@ -132,6 +138,7 @@ export default function SonosScreen() {
         source={source}
         pickable={pickable}
         onPick={(id) => router.setParams({ loc: id })}
+        detecting={detecting}
       />
       {error ? (
         <View className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 flex-row items-start">
@@ -157,7 +164,10 @@ export default function SonosScreen() {
               Favourites couldn&apos;t be loaded just now — leave and come back to retry.
             </Text>
           )}
-          <View className="gap-3">
+          {/* Keyed on the location so a flip REMOUNTS the cards rather than
+              reusing them: a card's own now-playing poll is state about the
+              studio it mounted for, and must not outlive it. */}
+          <View key={locationId} className="gap-3">
             {schedules.map((s) => (
               <SonosControlCard key={s.id} schedule={s} favorites={favorites} locationId={locationId} />
             ))}
