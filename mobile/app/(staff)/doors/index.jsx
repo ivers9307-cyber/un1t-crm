@@ -10,20 +10,44 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   View, Text, ScrollView, Pressable, ActivityIndicator, RefreshControl, Alert,
 } from 'react-native'
-import { useRouter, useFocusEffect } from 'expo-router'
+import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../../lib/auth-context'
 import { canMobile } from '../../../lib/permissions'
+import { usePhysicalLocation } from '../../../lib/use-physical-location'
+import { resolveControlLocation, pickerLocations } from '../../../lib/control-location'
 import { listDoors, unlockDoor } from '../../../lib/studio-mgmt-api'
+import LocationPill from '../../../components/LocationPill'
 
 export default function DoorsScreen() {
-  const { profile, activeLocation } = useAuth()
+  const { profile, activeLocation, locations } = useAuth()
   const router = useRouter()
-  const allowed = canMobile(profile, 'studio_management', activeLocation)
+  const params = useLocalSearchParams()
+  const phys = usePhysicalLocation()
+  // HOME-LOC.10 — override (this visit's ?loc=) ?? detected ?? activeLocation.
+  // The pill below always names what the calls command; both derive from the
+  // SAME resolved value, so what you see is what you send.
+  const overrideId = typeof params.loc === 'string' ? params.loc : null
+  const { location: controlLocation, source } = resolveControlLocation({
+    overrideId,
+    physical: phys,
+    activeLocation,
+    locations,
+  })
+  const locationId = controlLocation?.id
+  const allowed = canMobile(profile, 'studio_management', controlLocation)
+  const pickable = pickerLocations(profile, locations, 'studio_management')
+  // HOME-LOC.10b — the screen is usable before the geofence answer lands, on
+  // the activeLocation fallback; say so rather than letting an amber "manual"
+  // pill flip green mid-reach. An explicit override needs no detection.
+  const detecting = phys.status === 'loading' && !overrideId
 
   const [refreshing, setRefreshing] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
-  const scopeKey = `${profile?.id || 'anon'}:${activeLocation?.id || 'none'}:${refreshKey}`
+  // Remount key — now keyed on the RESOLVED location, so a pill pick (or a
+  // detection flip) throws away the previous studio's door list rather than
+  // leaving it painted under the new name.
+  const scopeKey = `${profile?.id || 'anon'}:${locationId || 'none'}:${refreshKey}`
 
   function onRefresh() {
     setRefreshing(true)
@@ -31,9 +55,19 @@ export default function DoorsScreen() {
     setTimeout(() => setRefreshing(false), 600)
   }
 
+  // The pill renders here too: denied at the RESOLVED studio is not denied
+  // everywhere, so this is the escape hatch onto one the user does hold.
   if (!allowed) {
     return (
       <View className="flex-1 bg-un1t-bg items-center justify-center p-6">
+        <LocationPill
+          location={controlLocation}
+          source={source}
+          pickable={pickable}
+          onPick={(id) => router.setParams({ loc: id })}
+          detecting={detecting}
+          className="self-center mb-4"
+        />
         <Text className="text-sm text-un1t-subtle text-center">
           Studio Management isn&apos;t enabled for your role at this location.
         </Text>
@@ -50,10 +84,17 @@ export default function DoorsScreen() {
       contentContainerStyle={{ padding: 16, paddingBottom: 32 }}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#94A3B8" />}
     >
+      <LocationPill
+        location={controlLocation}
+        source={source}
+        pickable={pickable}
+        onPick={(id) => router.setParams({ loc: id })}
+        detecting={detecting}
+      />
       <Text className="text-sm text-un1t-subtle mb-4">
-        Unlock doors at {activeLocation?.name || 'your active location'}.
+        Unlock doors at {controlLocation?.name || 'your studio'}.
       </Text>
-      <DoorsCard key={`doors-${scopeKey}`} locationId={activeLocation?.id} />
+      <DoorsCard key={`doors-${scopeKey}`} locationId={locationId} />
     </ScrollView>
   )
 }

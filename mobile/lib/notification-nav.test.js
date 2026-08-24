@@ -67,9 +67,9 @@ describe('routeForNotification', () => {
     expect(routeForNotification({ type: 'time_off_inbound', request_id: 42 })).toBe('/approvals?tab=team')
   })
 
-  it('routes staff swap-response types to the dashboard (swap cards live there)', () => {
+  it('routes staff swap-response types to the Dashboard tab (swap cards live there)', () => {
     for (const type of ['swap_inbound', 'swap_claimed', 'swap_accepted', 'swap_withdrawn', 'swap_declined']) {
-      expect(routeForNotification({ type, swap_id: 's1' })).toBe('/(tabs)')
+      expect(routeForNotification({ type, swap_id: 's1' })).toBe('/(tabs)/dashboard')
     }
   })
 
@@ -107,8 +107,9 @@ describe('routeForNotification', () => {
 
   it('routes checklist types', () => {
     expect(routeForNotification({ type: 'checklist_overdue', instance_id: 'x' })).toBe('/checklists/today')
-    // No manager checklist surface on mobile — home shows the studio dashboard.
-    expect(routeForNotification({ type: 'checklist_compliance', instance_id: 'x' })).toBe('/(tabs)')
+    // No manager checklist surface on mobile — the Dashboard tab shows the
+    // studio dashboard (HOME-LOC.7 moved it off Home).
+    expect(routeForNotification({ type: 'checklist_compliance', instance_id: 'x' })).toBe('/(tabs)/dashboard')
   })
 
   it('deliberately does not navigate for the admin delivery test', () => {

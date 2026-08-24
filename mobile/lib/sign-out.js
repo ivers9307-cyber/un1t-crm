@@ -81,7 +81,20 @@ export async function performFullSignOut() {
   try { await clearHasEverBeenStaff() } catch { /* best-effort */ }
   try { await clearLastSide() } catch { /* best-effort */ }
 
-  // 6. scope:'local' — revoke THIS device's session only. supabase-js
+  // 6. Physical-location caches (HOME-LOC.5b) — the geofence regions AND
+  //    the last position fix live at module level, so on a shared studio
+  //    device the next user would resolve "which studio am I in" against
+  //    the previous user's config and their last GPS fix. Lazily imported
+  //    on purpose: use-physical-location.js reaches auth-context, which
+  //    imports THIS module, and a static import would close that cycle at
+  //    module-init time. Same `await import()` idiom geofence.js and
+  //    auth-context use for studio-device.
+  try {
+    const { clearPhysicalLocationCaches } = await import('./use-physical-location')
+    clearPhysicalLocationCaches()
+  } catch { /* best-effort */ }
+
+  // 7. scope:'local' — revoke THIS device's session only. supabase-js
   //    defaults to scope:'global', which revokes every refresh token the
   //    user holds — a studio kiosk's 5-minute idle lock would sign the
   //    staffer out of their own phone and the web CRM.

@@ -51,7 +51,7 @@ export default function AccountForm({ initialPreference, allowed }) {
       <div className="px-5 pt-5 pb-3">
         <h2 className="text-base font-semibold text-un1t-text">Default landing page</h2>
         <p className="text-xs text-un1t-subtle mt-1">
-          The page you see first when you open the CRM on web or mobile. Mobile reads the same setting — change it once, applies everywhere.
+          The page you see first when you open the CRM on web. On mobile this picks which dashboard the Dashboard tab opens on.
         </p>
       </div>
 
