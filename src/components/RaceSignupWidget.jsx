@@ -31,22 +31,28 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Calendar, Clock, MapPin, AlertCircle, Loader2, Check, BadgeCheck, Info } from 'lucide-react'
+import { Calendar, Clock, MapPin, AlertCircle, Loader2, Check, BadgeCheck, BadgeEuro, Info } from 'lucide-react'
 import { windowedWaves } from '@/lib/wave-window'
 
 // Kind-keyed copy. Adding a new kind = one entry. The 'race' entry
 // holds the original strings so the operator-visible UX for races
 // is byte-identical to before the multi-kind extension.
+// TEAMMATE-COPY.1 — teammate inputs are numbered ordinally ("2nd name",
+// "3rd name") rather than "Member N": on a page that verifies UN1T
+// membership for pricing, "Member" read as a membership claim, and
+// teammates may well be non-members. n is the person's position on the
+// team (captain = 1), so this only ever sees 2..8.
+const ordinal = (n) => `${n}${n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'}`
+
 const KIND_COPY = {
   race: {
     sidebarTimeOne: (t) => `Wave at ${t}`,
-    sidebarTimeMany: (n, list) => `${n} waves: ${list}`,
     showWavePicker: true,
     showTeamName: true,
     headingTitle: 'Register your team',
-    headingSubtitle: "You're registering as the team captain. Add your team members below.",
+    headingSubtitle: "You're registering as the team captain. Add your teammates below.",
     captainSectionLabel: 'You (team captain)',
-    membersSectionLabel: 'Other team members',
+    membersSectionLabel: 'Your teammates',
     sizeLabel: 'Team size *',
     sizeButtonSuffix: 'person',
     submitFreeLabel: 'Register team',
@@ -60,7 +66,6 @@ const KIND_COPY = {
   },
   workshop: {
     sidebarTimeOne: (t) => `Starts at ${t}`,
-    sidebarTimeMany: (n, list) => `Sessions at ${list}`,
     showWavePicker: false,
     showTeamName: false,
     headingTitle: 'Book your spot',
@@ -80,7 +85,6 @@ const KIND_COPY = {
   },
   seminar: {
     sidebarTimeOne: (t) => `Starts at ${t}`,
-    sidebarTimeMany: (n, list) => `Sessions at ${list}`,
     showWavePicker: false,
     showTeamName: false,
     headingTitle: 'Book your spot',
@@ -100,7 +104,6 @@ const KIND_COPY = {
   },
   open_day: {
     sidebarTimeOne: (t) => `Starts at ${t}`,
-    sidebarTimeMany: (n, list) => `Sessions at ${list}`,
     showWavePicker: false,
     showTeamName: false,
     headingTitle: 'Reserve your spot',
@@ -120,7 +123,6 @@ const KIND_COPY = {
   },
   masterclass: {
     sidebarTimeOne: (t) => `Starts at ${t}`,
-    sidebarTimeMany: (n, list) => `Sessions at ${list}`,
     showWavePicker: false,
     showTeamName: false,
     headingTitle: 'Book your spot',
@@ -144,7 +146,6 @@ const KIND_COPY = {
   // handler to skip the wave requirement.
   lead_gen: {
     sidebarTimeOne: () => '',
-    sidebarTimeMany: () => '',
     showWavePicker: false,
     showTeamName: false,
     isLeadGen: true,
@@ -705,19 +706,28 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                   </span>
                 </div>
               )}
-              {wavesArr.length > 0 && (
+              {/* Multi-wave events don't list every start time here (26
+                  generated waves made this a wall of numbers) — the wave
+                  picker in the form is the time surface. A single-wave
+                  event (workshops etc.) still shows its start time. */}
+              {wavesArr.length === 1 && (
                 <div className="flex items-start gap-3">
                   <Clock size={16} className="text-white/40 mt-0.5 shrink-0" />
-                  <span>
-                    {wavesArr.length === 1
-                      ? copy.sidebarTimeOne((wavesArr[0].start_time || '').slice(0, 5))
-                      : copy.sidebarTimeMany(
-                          wavesArr.length,
-                          wavesArr.map(w => (w.start_time || '').slice(0, 5)).join(', ')
-                        )}
-                  </span>
+                  <span>{copy.sidebarTimeOne((wavesArr[0].start_time || '').slice(0, 5))}</span>
                 </div>
               )}
+              {/* Per-person price at a glance; the Total card below still
+                  carries the live, membership-confirmed sum. */}
+              {(memberPricing && memberFeeCents != null) || nonMemberFeeCents != null ? (
+                <div className="flex items-start gap-3">
+                  <BadgeEuro size={16} className="text-white/40 mt-0.5 shrink-0" />
+                  <span>
+                    {memberPricing && memberFeeCents != null && nonMemberFeeCents != null
+                      ? `${fmtMoney(memberFeeCents)} members · ${fmtMoney(nonMemberFeeCents)} non-members`
+                      : `${fmtMoney(nonMemberFeeCents ?? memberFeeCents)} per person`}
+                  </span>
+                </div>
+              ) : null}
               {venueAddress && (
                 <div className="flex items-start gap-3">
                   <MapPin size={16} className="text-white/40 mt-0.5 shrink-0" />
@@ -933,7 +943,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                             <input
                               type="text"
                               required
-                              placeholder={`${kind === 'race' ? 'Member' : 'Attendee'} ${i + 2} name *`}
+                              placeholder={kind === 'race' ? `${ordinal(i + 2)} name *` : `Attendee ${i + 2} name *`}
                               value={m.name}
                               onChange={e => setMembers(prev => prev.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}
                               className={inputCls(!!fieldErrors[`member_${i}_name`])}
@@ -943,7 +953,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                           <div>
                             <input
                               type="email"
-                              placeholder={`${kind === 'race' ? 'Member' : 'Attendee'} ${i + 2} email`}
+                              placeholder={kind === 'race' ? `${ordinal(i + 2)} email` : `Attendee ${i + 2} email`}
                               value={m.email}
                               onChange={e => {
                                 const next = e.target.value

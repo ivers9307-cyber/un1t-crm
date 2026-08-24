@@ -71,13 +71,18 @@ async function renderLoaded() {
 }
 
 const bodyText = () => document.body.textContent
+// SIDEBAR-TRIM.1 put a static fee line ("€10.00 members · €25.00
+// non-members") in the details card, so held-total assertions must scope
+// to the Total card rather than the whole page.
+const totalCard = () => screen.getByText('Total').parentElement.textContent
 
 describe('RaceSignupWidget — price holds until the rate is confirmed', () => {
   it('shows no concrete total before an email is entered and checked', async () => {
     await renderLoaded()
     // The old behaviour asserted €25.00 as the total immediately.
-    expect(bodyText()).not.toContain('€25.00')
-    expect(bodyText()).not.toContain('non-member')
+    expect(totalCard()).not.toContain('€25.00')
+    expect(totalCard()).not.toContain('non-member')
+    expect(totalCard()).toContain('—')
   })
 
   it('shows the non-member total only after the check confirms non-member', async () => {
@@ -85,8 +90,8 @@ describe('RaceSignupWidget — price holds until the rate is confirmed', () => {
     fireEvent.change(screen.getByPlaceholderText('Your email *'), {
       target: { value: 'stranger@example.com' },
     })
-    await waitFor(() => expect(bodyText()).toContain('€25.00'), { timeout: 2500 })
-    expect(bodyText()).toContain('1 × non-member')
+    await waitFor(() => expect(totalCard()).toContain('€25.00'), { timeout: 2500 })
+    expect(totalCard()).toContain('1 × non-member')
   })
 
   it('shows the member total after the check verifies a member', async () => {
@@ -98,8 +103,8 @@ describe('RaceSignupWidget — price holds until the rate is confirmed', () => {
       target: { value: 'annemarie@sourceitpromotions.ie' },
     })
     await waitFor(() => expect(bodyText()).toContain('1 × member'), { timeout: 2500 })
-    expect(bodyText()).toContain('€10.00')
-    expect(bodyText()).not.toContain('non-member')
+    expect(totalCard()).toContain('€10.00')
+    expect(totalCard()).not.toContain('non-member')
   })
 })
 
@@ -114,7 +119,7 @@ describe('RaceSignupWidget — a failed check is retryable, never cached as non-
     // The old bug: the catch path stored not_member, so the page showed
     // "Non-member rate · €25.00" for a real member after one blip.
     expect(bodyText()).not.toContain('Non-member rate')
-    expect(bodyText()).not.toContain('€25.00')
+    expect(totalCard()).not.toContain('€25.00')
   })
 
   it('re-runs the check on retry and applies the member rate', async () => {
@@ -130,7 +135,7 @@ describe('RaceSignupWidget — a failed check is retryable, never cached as non-
 
     fireEvent.click(screen.getByRole('button', { name: /try again/i }))
     await waitFor(() => expect(bodyText()).toContain('1 × member'), { timeout: 2500 })
-    expect(bodyText()).toContain('€10.00')
+    expect(totalCard()).toContain('€10.00')
     expect(checkMember).toHaveBeenCalledTimes(2)
   })
 

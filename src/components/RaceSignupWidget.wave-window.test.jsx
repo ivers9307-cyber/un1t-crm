@@ -73,7 +73,10 @@ describe('RaceSignupWidget — 90-minute wave window', () => {
     // The hold-back is explained.
     expect(screen.getByText(/released as these waves fill/i)).toBeTruthy()
 
-    // The sidebar summary still describes the whole day (5 waves).
-    expect(document.body.textContent).toContain('5 waves')
+    // SIDEBAR-TRIM.1 — the details card no longer lists every start
+    // time (26 generated waves made it a wall of numbers); the picker
+    // is the time surface. It shows the per-person price instead.
+    expect(document.body.textContent).not.toContain('5 waves')
+    expect(document.body.textContent).toContain('€25.00 per person')
   })
 })
