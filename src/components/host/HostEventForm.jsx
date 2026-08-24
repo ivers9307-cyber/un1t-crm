@@ -12,6 +12,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ImagePlus, Loader2, X } from 'lucide-react'
 import { HOST_EVENT_KINDS } from '@/lib/host-events'
+import { compressImageForUpload, parseUploadResponse } from '@/lib/landing-media-upload'
 
 const KIND_LABELS = {
   workshop: 'Workshop',
@@ -108,15 +109,19 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
     setHeroError(null)
     setHeroBusy(true)
     try {
+      // Downscale in the browser first — a photo straight off a phone is
+      // often over Vercel's ~4.5MB body cap, which rejects with a
+      // plain-text 413 before the route (and its 5MB check) ever runs.
+      const toSend = await compressImageForUpload(file)
       const fd = new FormData()
-      fd.append('file', file)
+      fd.append('file', toSend, toSend.name || file.name || 'hero')
       const res = await fetch(`/api/host/events/${eventId}/hero`, { method: 'POST', body: fd })
-      const json = await res.json().catch(() => ({}))
-      if (!res.ok || json.success === false) {
-        setHeroError(json.error || `Upload failed (${res.status})`)
+      const out = await parseUploadResponse(res)
+      if (!out.success) {
+        setHeroError(out.error)
         return
       }
-      setHeroImageUrl(json.url)
+      setHeroImageUrl(out.url)
     } catch (err) {
       setHeroError(err?.message || 'Network error — please try again.')
     } finally {

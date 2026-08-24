@@ -65,17 +65,7 @@ export async function uploadLandingMedia({ file, locationId, kind = 'image', onP
   // render the clip as tap-to-play (testimonials) pass `autoplay: false`.
   if (kind === 'video') return uploadVideoDirect({ file, locationId, onProgress, autoplay })
 
-  let toSend = file
-  if (kind !== 'video' && (file.type || '').startsWith('image/')) {
-    try {
-      toSend = await compressImageFile(file)
-    } catch {
-      // Canvas decode/encode failed (unusual format) — send the
-      // original; the safe parse still gives a clean message if the
-      // platform rejects it for size.
-      toSend = file
-    }
-  }
+  const toSend = kind !== 'video' ? await compressImageForUpload(file) : file
 
   const fd = new FormData()
   fd.append('file', toSend, toSend.name || file.name || 'upload')
@@ -223,6 +213,27 @@ export async function captureVideoPoster(file) {
       video.src = url
     } catch { finish(null) }
   })
+}
+
+/**
+ * Downscale + re-encode an image File so it fits under Vercel's ~4.5MB
+ * function body cap, failing open to the original file when the canvas
+ * pipeline can't run (non-image input, unusual format, no DOM). Every
+ * uploader that POSTs multipart to an /api route should send this
+ * function's output, not the raw file — the route's own size cap is
+ * unreachable above the platform cap, which rejects with a plain-text
+ * 413 (pair with parseUploadResponse for that reason).
+ *
+ * @param {File|null} file
+ * @returns {Promise<File|null>}
+ */
+export async function compressImageForUpload(file) {
+  if (!file || !(file.type || '').startsWith('image/')) return file
+  try {
+    return await compressImageFile(file)
+  } catch {
+    return file
+  }
 }
 
 /**

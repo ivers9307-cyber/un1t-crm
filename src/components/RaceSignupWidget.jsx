@@ -31,21 +31,28 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Calendar, Clock, MapPin, AlertCircle, Loader2, Check, BadgeCheck, Info } from 'lucide-react'
+import { Calendar, Clock, MapPin, AlertCircle, Loader2, Check, BadgeCheck, BadgeEuro, Info } from 'lucide-react'
+import { windowedWaves } from '@/lib/wave-window'
 
 // Kind-keyed copy. Adding a new kind = one entry. The 'race' entry
 // holds the original strings so the operator-visible UX for races
 // is byte-identical to before the multi-kind extension.
+// TEAMMATE-COPY.1 — teammate inputs are numbered ordinally ("2nd name",
+// "3rd name") rather than "Member N": on a page that verifies UN1T
+// membership for pricing, "Member" read as a membership claim, and
+// teammates may well be non-members. n is the person's position on the
+// team (captain = 1), so this only ever sees 2..8.
+const ordinal = (n) => `${n}${n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'}`
+
 const KIND_COPY = {
   race: {
     sidebarTimeOne: (t) => `Wave at ${t}`,
-    sidebarTimeMany: (n, list) => `${n} waves: ${list}`,
     showWavePicker: true,
     showTeamName: true,
     headingTitle: 'Register your team',
-    headingSubtitle: "You're registering as the team captain. Add your team members below.",
+    headingSubtitle: "You're registering as the team captain. Add your teammates below.",
     captainSectionLabel: 'You (team captain)',
-    membersSectionLabel: 'Other team members',
+    membersSectionLabel: 'Your teammates',
     sizeLabel: 'Team size *',
     sizeButtonSuffix: 'person',
     submitFreeLabel: 'Register team',
@@ -59,7 +66,6 @@ const KIND_COPY = {
   },
   workshop: {
     sidebarTimeOne: (t) => `Starts at ${t}`,
-    sidebarTimeMany: (n, list) => `Sessions at ${list}`,
     showWavePicker: false,
     showTeamName: false,
     headingTitle: 'Book your spot',
@@ -79,7 +85,6 @@ const KIND_COPY = {
   },
   seminar: {
     sidebarTimeOne: (t) => `Starts at ${t}`,
-    sidebarTimeMany: (n, list) => `Sessions at ${list}`,
     showWavePicker: false,
     showTeamName: false,
     headingTitle: 'Book your spot',
@@ -99,7 +104,6 @@ const KIND_COPY = {
   },
   open_day: {
     sidebarTimeOne: (t) => `Starts at ${t}`,
-    sidebarTimeMany: (n, list) => `Sessions at ${list}`,
     showWavePicker: false,
     showTeamName: false,
     headingTitle: 'Reserve your spot',
@@ -119,7 +123,6 @@ const KIND_COPY = {
   },
   masterclass: {
     sidebarTimeOne: (t) => `Starts at ${t}`,
-    sidebarTimeMany: (n, list) => `Sessions at ${list}`,
     showWavePicker: false,
     showTeamName: false,
     headingTitle: 'Book your spot',
@@ -143,7 +146,6 @@ const KIND_COPY = {
   // handler to skip the wave requirement.
   lead_gen: {
     sidebarTimeOne: () => '',
-    sidebarTimeMany: () => '',
     showWavePicker: false,
     showTeamName: false,
     isLeadGen: true,
@@ -199,7 +201,9 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   const [marketingConsent, setMarketingConsent] = useState(true)
 
   // Member-validation cache. Key = lower email; value =
-  //   { state: 'idle'|'checking'|'verified'|'not_member', first_name?, applicable }
+  //   { state: 'idle'|'checking'|'verified'|'not_member'|'error', first_name?, applicable }
+  // 'error' = the check itself failed (blip / rate limit) — retryable,
+  // never a rate verdict.
   const [memberChecks, setMemberChecks] = useState({})
   const checkTimers = useRef({})
 
@@ -267,7 +271,11 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
     const email = (rawEmail || '').trim().toLowerCase()
     if (!email || !validateEmail(email)) return
     if (!race?.member_pricing_enabled && !race?.members_only) return
-    if (memberChecks[email] && memberChecks[email].state !== 'idle') return
+    // 'error' stays retryable (MEMRATE.1): a transient failure — network
+    // blip, rate limit — is not a verdict, and caching it as one froze
+    // "Non-member rate" on a verified member for the page's lifetime.
+    const existing = memberChecks[email]
+    if (existing && existing.state !== 'idle' && existing.state !== 'error') return
     if (checkTimers.current[email]) clearTimeout(checkTimers.current[email])
     checkTimers.current[email] = setTimeout(async () => {
       setMemberChecks((prev) => ({ ...prev, [email]: { state: 'checking', applicable: true } }))
@@ -289,16 +297,23 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
               applicable: true,
             },
           }))
-        } else {
+        } else if (j?.success && j.data && j.data.applicable === false) {
+          // A real server answer: member pricing doesn't apply here.
           setMemberChecks((prev) => ({
             ...prev,
             [email]: { state: 'not_member', applicable: false },
+          }))
+        } else {
+          // Rate-limited or malformed — retryable, not a verdict.
+          setMemberChecks((prev) => ({
+            ...prev,
+            [email]: { state: 'error', applicable: true },
           }))
         }
       } catch {
         setMemberChecks((prev) => ({
           ...prev,
-          [email]: { state: 'not_member', applicable: true },
+          [email]: { state: 'error', applicable: true },
         }))
       }
     }, 500)
@@ -328,6 +343,21 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   const memberSubtotal = memberPricing && memberFeeCents != null ? memberFeeCents * memberCount : 0
   const nonMemberSubtotal = nonMemberFeeCents != null ? nonMemberFeeCents * nonMemberCount : 0
   const totalCents = memberSubtotal + nonMemberSubtotal
+
+  // MEMRATE.1 — the preview must not state a rate the server hasn't
+  // confirmed. An email's rate is confirmed once its check has answered
+  // ('verified' or 'not_member'); while the captain's email is empty,
+  // mid-typing, mid-check, or errored, the total shows a placeholder
+  // instead of silently assuming non-member. Teammate emails are
+  // optional, so only a TYPED teammate email holds the total — a blank
+  // one prices as non-member exactly like the server will.
+  const rateConfirmed = (email) =>
+    ['verified', 'not_member'].includes(memberChecks[email]?.state)
+  const ratePending = memberPricing && (
+    !(validateEmail(liveRoster[0].email) && rateConfirmed(liveRoster[0].email)) ||
+    liveRoster.slice(1).some((m) => m.email && !(validateEmail(m.email) && rateConfirmed(m.email)))
+  )
+  const anyCheckInFlight = Object.values(memberChecks).some((c) => c?.state === 'checking')
 
   const fmtMoney = (cents) => {
     if (!Number.isFinite(cents)) return ''
@@ -471,6 +501,11 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   const showMemberNotice = !!(race.member_pricing_enabled || race.members_only)
   const showPricingCard = !!(memberPricing || nonMemberFeeCents != null)
   const wavesArr = Array.isArray(race.waves) ? race.waves : []
+  // WAVEWIN.1 — the picker only offers the immediately-available
+  // 90-minute window (earlier sold-out waves stay, greyed; later waves
+  // release as the window slides). The sidebar summary and every
+  // operator surface still see the full schedule.
+  const pickerWaves = windowedWaves(wavesArr)
 
   // ── Render-only derived values (no behaviour change) ──────────────
   // Human label for the event kind, used in the hero eyebrow.
@@ -544,11 +579,11 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   // shared by the desktop submit and the mobile sticky action bar.
   const submitLabel = submitting
     ? 'Submitting…'
-    : totalCents > 0
+    : totalCents > 0 && !ratePending
       ? copy.submitPaidLabel(fmtMoney(totalCents))
       : copy.submitFreeLabel
 
-  const liveTotalLabel = totalCents > 0 ? fmtMoney(totalCents) : 'Free'
+  const liveTotalLabel = ratePending ? '—' : totalCents > 0 ? fmtMoney(totalCents) : 'Free'
 
   // Dark input / label / error class recipes (design-system tokens).
   const inputCls = (invalid) =>
@@ -671,19 +706,28 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                   </span>
                 </div>
               )}
-              {wavesArr.length > 0 && (
+              {/* Multi-wave events don't list every start time here (26
+                  generated waves made this a wall of numbers) — the wave
+                  picker in the form is the time surface. A single-wave
+                  event (workshops etc.) still shows its start time. */}
+              {wavesArr.length === 1 && (
                 <div className="flex items-start gap-3">
                   <Clock size={16} className="text-white/40 mt-0.5 shrink-0" />
-                  <span>
-                    {wavesArr.length === 1
-                      ? copy.sidebarTimeOne((wavesArr[0].start_time || '').slice(0, 5))
-                      : copy.sidebarTimeMany(
-                          wavesArr.length,
-                          wavesArr.map(w => (w.start_time || '').slice(0, 5)).join(', ')
-                        )}
-                  </span>
+                  <span>{copy.sidebarTimeOne((wavesArr[0].start_time || '').slice(0, 5))}</span>
                 </div>
               )}
+              {/* Per-person price at a glance; the Total card below still
+                  carries the live, membership-confirmed sum. */}
+              {(memberPricing && memberFeeCents != null) || nonMemberFeeCents != null ? (
+                <div className="flex items-start gap-3">
+                  <BadgeEuro size={16} className="text-white/40 mt-0.5 shrink-0" />
+                  <span>
+                    {memberPricing && memberFeeCents != null && nonMemberFeeCents != null
+                      ? `${fmtMoney(memberFeeCents)} members · ${fmtMoney(nonMemberFeeCents)} non-members`
+                      : `${fmtMoney(nonMemberFeeCents ?? memberFeeCents)} per person`}
+                  </span>
+                </div>
+              ) : null}
               {venueAddress && (
                 <div className="flex items-start gap-3">
                   <MapPin size={16} className="text-white/40 mt-0.5 shrink-0" />
@@ -700,7 +744,14 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
               <div className="text-3xl font-bold text-white">
                 {liveTotalLabel}
               </div>
-              {memberPricing && (memberCount > 0 || nonMemberCount > 0) && (
+              {ratePending && (
+                <div className="text-[12px] text-white/55 mt-3">
+                  {anyCheckInFlight
+                    ? 'Checking member rate…'
+                    : 'Add your email to confirm your rate.'}
+                </div>
+              )}
+              {!ratePending && memberPricing && (memberCount > 0 || nonMemberCount > 0) && (
                 <div className="text-[12px] text-white/55 mt-3 space-y-1">
                   {memberCount > 0 && (
                     <div>{memberCount} × member {memberFeeCents != null ? fmtMoney(memberFeeCents) : 'free'}</div>
@@ -744,11 +795,11 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
               {/* Wave picker — race-only. Non-race kinds have a single
                   auto-selected wave; the time is shown in the details
                   block so the operator UX still surfaces it. */}
-              {copy.showWavePicker && wavesArr.length > 0 && (
+              {copy.showWavePicker && pickerWaves.length > 0 && (
                 <div>
                   <label className={labelCls}>Pick your wave *</label>
                   <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-3 gap-2">
-                    {wavesArr.map((w) => {
+                    {pickerWaves.map((w) => {
                       const full = !!w.is_full
                       const selected = waveId === w.id
                       const time = (w.start_time || '').slice(0, 5)
@@ -781,6 +832,11 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                       )
                     })}
                   </div>
+                  {pickerWaves.length < wavesArr.length && (
+                    <p className="text-[11px] text-white/45 mt-1.5">
+                      More start times are released as these waves fill.
+                    </p>
+                  )}
                   {fieldErrors.wave_id && <p className={errCls}>{fieldErrors.wave_id}</p>}
                 </div>
               )}
@@ -858,6 +914,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                       nonMemberFeeCents={nonMemberFeeCents}
                       memberPricing={memberPricing}
                       fmt={fmtMoney}
+                      onRetry={() => scheduleMemberCheck(captainEmail)}
                     />
                     {fieldErrors.captain_email && <p className={errCls}>{fieldErrors.captain_email}</p>}
                   </div>
@@ -886,7 +943,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                             <input
                               type="text"
                               required
-                              placeholder={`${kind === 'race' ? 'Member' : 'Attendee'} ${i + 2} name *`}
+                              placeholder={kind === 'race' ? `${ordinal(i + 2)} name *` : `Attendee ${i + 2} name *`}
                               value={m.name}
                               onChange={e => setMembers(prev => prev.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}
                               className={inputCls(!!fieldErrors[`member_${i}_name`])}
@@ -896,7 +953,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                           <div>
                             <input
                               type="email"
-                              placeholder={`${kind === 'race' ? 'Member' : 'Attendee'} ${i + 2} email`}
+                              placeholder={kind === 'race' ? `${ordinal(i + 2)} email` : `Attendee ${i + 2} email`}
                               value={m.email}
                               onChange={e => {
                                 const next = e.target.value
@@ -916,6 +973,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                           nonMemberFeeCents={nonMemberFeeCents}
                           memberPricing={memberPricing}
                           fmt={fmtMoney}
+                          onRetry={() => scheduleMemberCheck(m.email)}
                         />
                       </div>
                     ))}
@@ -1007,7 +1065,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
 // Per-email status pill rendered under each email input. Quiet when
 // member pricing is off (no signal to give); renders the verified
 // badge or a muted "non-member rate" line otherwise.
-function MemberStatusBadge({ email, checks, memberFeeCents, nonMemberFeeCents, memberPricing, fmt }) {
+function MemberStatusBadge({ email, checks, memberFeeCents, nonMemberFeeCents, memberPricing, fmt, onRetry }) {
   if (!memberPricing) return null
   const e = (email || '').trim().toLowerCase()
   if (!e) return null
@@ -1056,6 +1114,23 @@ function MemberStatusBadge({ email, checks, memberFeeCents, nonMemberFeeCents, m
     return (
       <p className="text-[11px] text-white/50 inline-flex items-center gap-1.5 mt-1.5">
         <Check size={11} /> Non-member rate · {fee}
+      </p>
+    )
+  }
+  if (c.state === 'error') {
+    // Retryable (MEMRATE.1) — a failed check is not a verdict, so it
+    // never claims a rate; blur retries too, this button is the
+    // explicit path.
+    return (
+      <p className="text-[11px] text-white/50 inline-flex items-center gap-1.5 mt-1.5">
+        <AlertCircle size={11} /> Couldn&apos;t check membership.
+        <button
+          type="button"
+          onClick={onRetry}
+          className="underline underline-offset-2 text-white/70 hover:text-white"
+        >
+          Try again
+        </button>
       </p>
     )
   }
