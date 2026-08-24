@@ -75,10 +75,16 @@ export async function notifyUsers(userIds, payload) {
   // Find which of `ids` ended up with 0 deliverable tokens. We can't
   // tell from push.js's aggregate response which specific users had
   // tokens. Re-query device_tokens for the truth.
+  // ANDROID-VIS.1 (mig 565) — mirror push.js's filter EXACTLY. A device row
+  // with a NULL expo_push_token cannot receive push, so counting it here as
+  // "has a token" would suppress the email fallback and the person would
+  // get nothing at all. An Android staffer having a visible device row must
+  // never cost them the notification.
   const db = createServerClient()
   const { data: tokens } = await db
     .from('device_tokens')
     .select('user_id')
+    .not('expo_push_token', 'is', null)
     .in('user_id', ids)
   const usersWithTokens = new Set((tokens || []).map(t => t.user_id))
   const noTokenIds = ids.filter(id => !usersWithTokens.has(id))

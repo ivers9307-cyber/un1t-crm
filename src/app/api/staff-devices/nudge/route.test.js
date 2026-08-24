@@ -126,18 +126,25 @@ const FLEET = {
     { id: ID.noDevice, full_name: 'No App', email: 'n@x.ie', role: 'staff', active: true },
     { id: ID.throttled, full_name: 'Just Nudged', email: 'j@x.ie', role: 'staff', active: true },
   ],
+  // ANDROID-VIS.1 (mig 565) — expo_push_token is on every fixture row
+  // because a nudge IS a push: since a device row no longer implies a
+  // token, "outdated" and "reachable" became different questions. The
+  // token-less case has its own describe block at the bottom.
   device_tokens: [
     {
       id: 'd-outdated', user_id: ID.outdated, app_version: '2.1.0',
       last_seen_at: daysAgo(1), last_update_nudge_at: null,
+      expo_push_token: 'ExponentPushToken[outdated]',
     },
     {
       id: 'd-current', user_id: ID.current, app_version: '2.2.0',
       last_seen_at: daysAgo(0), last_update_nudge_at: null,
+      expo_push_token: 'ExponentPushToken[current]',
     },
     {
       id: 'd-throttled', user_id: ID.throttled, app_version: '2.1.0',
       last_seen_at: daysAgo(2), last_update_nudge_at: hoursAgo(1),
+      expo_push_token: 'ExponentPushToken[throttled]',
     },
   ],
 }
@@ -375,5 +382,63 @@ describe('POST /api/staff-devices/nudge', () => {
     })
     const res = await POST(req({ profile_ids: allIds }))
     expect(res.status).toBe(500)
+  })
+})
+
+describe('POST /api/staff-devices/nudge — ANDROID-VIS.1 token-less devices (mig 565)', () => {
+  it('counts an outdated staffer with no push token as skipped_no_token, and claims nothing', async () => {
+    // An Android device is visible in the fleet report now but still
+    // unreachable until FCM credentials exist. Nudging it would burn the
+    // 24h throttle on a push that can never land.
+    createServerClient.mockReturnValue(makeDb(fleet({
+      device_tokens: [
+        { ...FLEET.device_tokens[0], expo_push_token: null },
+        // Establishes the target build, so the row above really is behind.
+        FLEET.device_tokens[1],
+      ],
+    })))
+    const json = await (await POST(req({ profile_ids: [ID.outdated] }))).json()
+    expect(sendPush).not.toHaveBeenCalled()
+    expect(json.data).toEqual({ sent: 0, skipped_throttled: 0, skipped_no_token: 1 })
+  })
+
+  it('STILL nudges someone whose newest device is token-less but who has another that is not', async () => {
+    // sendPush fans out across ALL of a person's tokens, so reachability
+    // is a property of the person, not of their most recently seen row.
+    // Judging it on currentDevice() would silently stop nudging an iPhone
+    // user the moment they also signed in on Android.
+    createServerClient.mockReturnValue(makeDb(fleet({
+      device_tokens: [
+        FLEET.device_tokens[0],
+        // Someone else on the target build, so 2.1.0 really is behind.
+        FLEET.device_tokens[1],
+        {
+          id: 'd-outdated-android', user_id: ID.outdated, app_version: '2.1.0',
+          last_seen_at: daysAgo(0), last_update_nudge_at: null,
+          expo_push_token: null,
+        },
+      ],
+    })))
+    const json = await (await POST(req({ profile_ids: [ID.outdated] }))).json()
+    expect(sendPush.mock.calls[0][0]).toEqual([ID.outdated])
+    expect(json.data.sent).toBe(1)
+  })
+
+  it('a token-less device still counts towards the fleet target version', async () => {
+    // The point of making it visible: an Android staffer on the newest
+    // build should be able to show everyone else up as outdated.
+    createServerClient.mockReturnValue(makeDb(fleet({
+      device_tokens: [
+        FLEET.device_tokens[0],
+        {
+          id: 'd-android-newest', user_id: ID.current, app_version: '2.9.0',
+          last_seen_at: daysAgo(0), last_update_nudge_at: null,
+          expo_push_token: null,
+        },
+      ],
+    })))
+    const json = await (await POST(req({ profile_ids: [ID.outdated] }))).json()
+    // 2.1.0 is behind the 2.9.0 the Android device reported.
+    expect(json.data.sent).toBe(1)
   })
 })

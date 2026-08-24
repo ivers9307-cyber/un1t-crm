@@ -73,7 +73,12 @@ export async function POST(request) {
       db.from('profiles').select('id, active').eq('active', true).range(0, PAGE_MAX - 1),
       db
         .from('device_tokens')
-        .select('id, user_id, app_version, last_seen_at, last_update_nudge_at')
+        // ANDROID-VIS.1 — expo_push_token is selected but NOT filtered on:
+        // a token-less row still counts towards the version verdict (that
+        // is the whole point of it being visible) and still carries the
+        // throttle stamp. It just cannot be the reason we decide someone
+        // is reachable — see the candidate loop.
+        .select('id, user_id, app_version, last_seen_at, last_update_nudge_at, expo_push_token')
         .order('last_seen_at', { ascending: false })
         .order('id', { ascending: true })
         .range(0, PAGE_MAX - 1),
@@ -130,6 +135,19 @@ export async function POST(request) {
     // 'current' and 'unknown_version' are not nudge-able: we only ever
     // tell someone to update when we can see they are behind.
     if (verdict.kind !== 'outdated') continue
+
+    // ANDROID-VIS.1 — a device row no longer implies a push token (mig
+    // 565), so "outdated" and "reachable" are now different questions.
+    // Judged AFTER the verdict so skipped_no_token still counts only
+    // people we actually wanted to reach. sendPush fans out across ALL of
+    // a person's tokens, so the test is whether ANY of their devices has
+    // one — not whether their most recently seen one does. Getting that
+    // backwards would silently stop nudging an iPhone user the moment they
+    // also signed in on Android.
+    if (!own.some((d) => d.expo_push_token)) {
+      skippedNoToken++
+      continue
+    }
 
     const device = currentDevice(own)
     if (!device?.id) continue
