@@ -1,8 +1,14 @@
-// SONOSLIVE.7 — the operator control strip. Talks to
-// GET  /api/sonos/now-playing?schedule_id=<id>  (read their doc comment
-//      before touching this file — the response shape here is matched
-//      exactly, not guessed)
-// POST /api/sonos/control  { schedule_id, action, value? }
+// SONOSLIVE.7 / SONOSGRP.3 — the operator control strip. Talks to
+// GET  /api/sonos/now-playing?schedule_id=<id> | ?group_id=<id>  (read their
+//      doc comment before touching this file — the response shape here is
+//      matched exactly, not guessed)
+// POST /api/sonos/control  { schedule_id | group_id, action, value? }
+//
+// Dual addressing: callers pass exactly ONE of `scheduleId` (a sonos_schedules
+// row — the per-schedule strips) or `groupId` (a raw Sonos group id — the
+// Live now section, no schedule needed). Whichever is present names the
+// target in the query/body; group ids are ephemeral, so a stale one answers
+// `regrouped` and `onRegrouped` lets the page refetch the household.
 //
 // This is for one-off "nudge it right now" actions. It never writes to
 // sonos_schedules — that stays ScheduleCard/ScheduleOverride's job — so a
@@ -26,18 +32,22 @@ const REASON_COPY = {
   db_error: 'Something went wrong reading the connection.',
   unreachable: 'Sonos is not answering right now.',
   no_group: "None of this schedule's speakers are online.",
+  regrouped: 'The speakers regrouped — refreshing the groups…',
 }
 
-function useNowPlaying(scheduleId) {
+function useNowPlaying(scheduleId, groupId) {
   const [state, setState] = useState(null)
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`/api/sonos/now-playing?schedule_id=${encodeURIComponent(scheduleId)}`)
+      const query = scheduleId
+        ? `schedule_id=${encodeURIComponent(scheduleId)}`
+        : `group_id=${encodeURIComponent(groupId)}`
+      const res = await fetch(`/api/sonos/now-playing?${query}`)
       setState(await res.json())
     } catch {
       // A dropped poll is not worth surfacing — the next tick recovers.
     }
-  }, [scheduleId])
+  }, [scheduleId, groupId])
 
   useEffect(() => {
     let timer = null
@@ -79,8 +89,8 @@ function useVolumeNudge(send) {
   }, [send])
 }
 
-export default function SonosLiveControl({ scheduleId, favorites, editable }) {
-  const [state, reload] = useNowPlaying(scheduleId)
+export default function SonosLiveControl({ scheduleId, groupId, favorites, editable, onRegrouped }) {
+  const [state, reload] = useNowPlaying(scheduleId, groupId)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [partialFailure, setPartialFailure] = useState(false)
@@ -91,16 +101,44 @@ export default function SonosLiveControl({ scheduleId, favorites, editable }) {
   // Fresh server data replaces any stale optimistic value.
   useEffect(() => { setPendingVolume(null) }, [state?.volume])
 
+  // Debounce for onRegrouped: the poll keeps ticking every 10s while the
+  // group id stays stale, and each tick answers `regrouped` again — without
+  // this flag the page would refetch the household on every tick. Fire at
+  // most once per stale episode; a later LIVE poll (the strip found its
+  // target again, e.g. after a re-render with a fresh id) re-arms it.
+  const regroupedFired = useRef(false)
+
+  const notifyRegrouped = useCallback(() => {
+    if (regroupedFired.current) return
+    regroupedFired.current = true
+    onRegrouped?.()
+  }, [onRegrouped])
+
+  useEffect(() => {
+    if (!state) return
+    if (state.success === true && state.live === false && state.reason === 'regrouped') {
+      notifyRegrouped()
+    } else if (state.success === true && state.live) {
+      regroupedFired.current = false
+    }
+  }, [state, notifyRegrouped])
+
   const send = useCallback(async (action, value) => {
     setBusy(true); setError(null); setPartialFailure(false)
     try {
       const res = await fetch('/api/sonos/control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ schedule_id: scheduleId, action, ...(value !== undefined ? { value } : {}) }),
+        body: JSON.stringify({
+          ...(scheduleId ? { schedule_id: scheduleId } : { group_id: groupId }),
+          action,
+          ...(value !== undefined ? { value } : {}),
+        }),
       })
       const j = await res.json()
       if (!res.ok || j.success === false) {
+        // A stale group id: same episode-scoped notify as the poll path.
+        if (j.code === 'regrouped') notifyRegrouped()
         // volume_up/volume_down are relative — a failedGroups response
         // means some groups already moved, so retrying the whole action
         // would double-apply it there. Surface a partial failure instead
@@ -123,7 +161,7 @@ export default function SonosLiveControl({ scheduleId, favorites, editable }) {
     } finally {
       setBusy(false)
     }
-  }, [scheduleId, reload])
+  }, [scheduleId, groupId, reload, notifyRegrouped])
 
   const nudgeVolume = useVolumeNudge((action, step) => {
     const base = pendingVolume ?? state?.volume ?? 0
