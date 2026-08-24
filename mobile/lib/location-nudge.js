@@ -21,6 +21,9 @@ import { homeTiles } from './home-logic'
  * @param {boolean} args.dismissed   sticky per-device "Not now"
  * @param {boolean} args.onSiteFeatures  from hasOnSiteFeatures()
  * @param {boolean} args.isKiosk
+ * @param {boolean} args.hasRegions  at least one studio has a configured
+ *   geofence — without one, granting could not deliver the on-site Home,
+ *   so permission is NOT the actual blocker and the card must not promise it
  */
 export function shouldShowLocationNudge({
   physStatus,
@@ -28,10 +31,11 @@ export function shouldShowLocationNudge({
   dismissed,
   onSiteFeatures,
   isKiosk,
+  hasRegions,
 }) {
   if (physStatus !== 'offsite' && physStatus !== 'unknown') return false
   if (foregroundPermission !== 'ask' && foregroundPermission !== 'settings') return false
-  if (dismissed || isKiosk || !onSiteFeatures) return false
+  if (dismissed || isKiosk || !onSiteFeatures || !hasRegions) return false
   return true
 }
 

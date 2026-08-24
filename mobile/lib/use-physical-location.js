@@ -15,7 +15,7 @@
 // location at all).
 //
 // Status: 'loading' → exactly one of 'at_studio' | 'offsite' | 'unknown'.
-// Returns { status, location, foregroundPermission, refresh } —
+// Returns { status, location, foregroundPermission, hasRegions, refresh } —
 // foregroundPermission ('granted'|'ask'|'settings'|'unknown') feeds Home's
 // enable-location nudge (LOC-NUDGE.1); refresh() is the explicit
 // re-resolve a pull-to-refresh calls (HOME-LOC.8b). Nothing else re-reads
@@ -101,7 +101,7 @@ async function resolveOnce(locations) {
   // foregroundPermission rides along for Home's enable-location nudge
   // (LOC-NUDGE.1): 'unknown' until the read lands, so the nudge can never
   // fire off an unread or unreadable permission.
-  let next = { status: 'unknown', location: null, foregroundPermission: 'unknown' }
+  let next = { status: 'unknown', location: null, foregroundPermission: 'unknown', hasRegions: false }
   try {
     const [perm, regions] = await Promise.all([
       Location.getForegroundPermissionsAsync().catch(() => null),
@@ -114,6 +114,11 @@ async function resolveOnce(locations) {
         .catch(() => regionsCache.regions || []),
     ])
     next.foregroundPermission = mapForegroundPermission(perm)
+    // hasRegions rides along for the nudge too: with no configured geofence
+    // anywhere, granting permission could not deliver the on-site Home, so
+    // the card must not promise it. A failed/timed-out config fetch reads as
+    // false — the safe direction for a promise.
+    next.hasRegions = regions.length > 0
     if (perm?.status === 'granted' && regions.length > 0) {
       let current = null
       if (positionCache.position && Date.now() - positionCache.at <= POSITION_TTL_MS) {
@@ -135,7 +140,7 @@ async function resolveOnce(locations) {
       }
       const lastKnown = current ? null : await Location.getLastKnownPositionAsync().catch(() => null)
       const position = pickPosition({ current, lastKnown, nowMs: Date.now() })
-      next = { ...resolvePhysicalLocation({ position, regions, locations }), foregroundPermission: 'granted' }
+      next = { ...resolvePhysicalLocation({ position, regions, locations }), foregroundPermission: 'granted', hasRegions: true }
     }
   } catch { /* stays unknown */ }
   return next
@@ -143,7 +148,7 @@ async function resolveOnce(locations) {
 
 export function usePhysicalLocation() {
   const { profile, locations } = useAuth()
-  const [result, setResult] = useState({ status: 'loading', location: null, foregroundPermission: 'unknown' })
+  const [result, setResult] = useState({ status: 'loading', location: null, foregroundPermission: 'unknown', hasRegions: false })
   const visitRef = useRef(0)
 
   // Read through a ref, not the closure. The effect below is keyed on the
@@ -184,7 +189,7 @@ export function usePhysicalLocation() {
       // about where the phone was THEN, and re-showing it is how a coach
       // ends up commanding the studio they left. Spec §3 State C paints a
       // skeleton for this; only the SHIFT lists paint stale-while-revalidate.
-      setResult({ status: 'loading', location: null, foregroundPermission: 'unknown' })
+      setResult({ status: 'loading', location: null, foregroundPermission: 'unknown', hasRegions: false })
 
       // Stay at 'loading' until the profile lands. auth-context seeds
       // `locations` to [] and clears its own `loading` as soon as the
@@ -250,7 +255,7 @@ export function usePhysicalLocation() {
         if (!wasAway || Date.now() - leftAt <= POSITION_TTL_MS) return
         const fgVisit = ++visitRef.current
         positionCache = { at: 0, position: null }
-        setResult({ status: 'loading', location: null, foregroundPermission: 'unknown' })
+        setResult({ status: 'loading', location: null, foregroundPermission: 'unknown', hasRegions: false })
         resolveOnce(locationsRef.current).then((next) => {
           if (active && visitRef.current === fgVisit) setResult(next)
         })
@@ -277,7 +282,7 @@ export function usePhysicalLocation() {
     if (!profile?.id) return
     const visit = ++visitRef.current
     positionCache = { at: 0, position: null }
-    setResult({ status: 'loading', location: null, foregroundPermission: 'unknown' })
+    setResult({ status: 'loading', location: null, foregroundPermission: 'unknown', hasRegions: false })
     const next = await resolveOnce(locationsRef.current)
     if (visitRef.current === visit) setResult(next)
     // locationsRef is read through the ref for the reason documented above.

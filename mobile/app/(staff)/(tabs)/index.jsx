@@ -66,6 +66,7 @@ export default function Home() {
   const {
     status: physStatus,
     foregroundPermission,
+    hasRegions,
     location: physLocation,
     refresh: refreshPhysical,
   } = usePhysicalLocation()
@@ -263,6 +264,7 @@ export default function Home() {
     dismissed: nudgeDismissed !== false,
     onSiteFeatures: hasOnSiteFeatures(profile, locations),
     isKiosk: isKiosk !== false,
+    hasRegions,
   })
   const todayIso = isoDate(new Date())
   // HOME-LOC.12 — safeHomeTiles, not homeTiles: the tiles are for the DETECTED

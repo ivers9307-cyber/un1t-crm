@@ -7,6 +7,7 @@ const BASE = {
   dismissed: false,
   onSiteFeatures: true,
   isKiosk: false,
+  hasRegions: true,
 }
 
 describe('shouldShowLocationNudge', () => {
@@ -27,6 +28,10 @@ describe('shouldShowLocationNudge', () => {
   })
   it('respects the sticky dismissal', () => {
     expect(shouldShowLocationNudge({ ...BASE, dismissed: true })).toBe(false)
+  })
+  it('hidden when no studio has a configured geofence — granting could not deliver the on-site Home', () => {
+    expect(shouldShowLocationNudge({ ...BASE, hasRegions: false })).toBe(false)
+    expect(shouldShowLocationNudge({ ...BASE, hasRegions: undefined })).toBe(false)
   })
   it('hidden on kiosks and for users with nothing to unlock', () => {
     expect(shouldShowLocationNudge({ ...BASE, isKiosk: true })).toBe(false)
