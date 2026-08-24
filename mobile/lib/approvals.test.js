@@ -95,3 +95,29 @@ describe('badges', () => {
     expect(approvalsBadgeCount(null)).toBe(0)
   })
 })
+
+// AGENT-RETRY.2 — the failed-execution queue (provider ships failedItems).
+import { failedQueue } from './approvals'
+
+describe('failedQueue', () => {
+  const NOW = Date.UTC(2026, 6, 28, 12, 0, 0)
+  const iso = (h) => new Date(NOW + h * 3600000).toISOString()
+
+  it('reads failedItems (never items) and urgency-sorts them', () => {
+    const provider = {
+      key: 'agent_requests', label: 'Agent requests', count: 3,
+      items: [{ id: 'pending-1' }],
+      failedItems: [
+        { id: 'f-later', failed: true, submittedAt: iso(-2), details: { starts_at: iso(20) } },
+        { id: 'f-soon', failed: true, submittedAt: iso(-1), details: { starts_at: iso(1) } },
+      ],
+    }
+    expect(failedQueue([provider], NOW).map((i) => i.id)).toEqual(['f-soon', 'f-later'])
+  })
+
+  it('empty when the provider has no failedItems (older API) or is absent', () => {
+    expect(failedQueue([{ key: 'agent_requests', count: 1, items: [{ id: 'p' }] }], NOW)).toEqual([])
+    expect(failedQueue([], NOW)).toEqual([])
+    expect(failedQueue(null, NOW)).toEqual([])
+  })
+})

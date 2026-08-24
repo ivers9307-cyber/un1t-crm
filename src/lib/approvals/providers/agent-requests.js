@@ -29,6 +29,7 @@
 import { viewerActiveLocationId } from '../registry'
 import { formatMoneyMinor } from '@/lib/money-format'
 import { EXECUTING_KINDS, retryOffered } from '@/lib/agent/request-recovery'
+import { failureExplanation } from '@/lib/approvals/agent-request-why'
 
 const KIND_LABELS = {
   pause: 'Pause membership',
@@ -140,6 +141,9 @@ export const agentRequestsProvider = {
       ...toItem(r),
       failed: true,
       failedAt: r.decided_at || null,
+      // Pre-computed what-went-wrong copy so mobile renders it without
+      // needing the (web-side) explainer lib.
+      failedWhy: failureExplanation(r),
     }))
     return { count: items.length + failedItems.length, items, failedItems }
   },

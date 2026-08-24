@@ -17,7 +17,7 @@ import { useAuth } from '../../lib/auth-context'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
 import { getPendingApprovals, reviewHostEvent } from '../../lib/approvals-api'
 import {
-  mobileApprovalSections, customerQueue, teamNavTiles,
+  mobileApprovalSections, customerQueue, failedQueue, teamNavTiles,
   customerBadgeCount, teamBadgeCount,
 } from '../../lib/approvals'
 import { respondToTimeOff, respondToSwap } from '../../lib/schedule-api'
@@ -74,6 +74,8 @@ export default function ApprovalsInbox() {
   async function onRefresh() { setRefreshing(true); await load(); setRefreshing(false) }
 
   const customers = customerQueue(providers)
+  // AGENT-RETRY.2 — failed executions the server offers for retry.
+  const failed = failedQueue(providers)
   const teamSections = mobileApprovalSections(providers)
   const navTiles = teamNavTiles(providers)
 
@@ -155,21 +157,44 @@ export default function ApprovalsInbox() {
         {loading ? (
           <View className="py-12 items-center"><ActivityIndicator /></View>
         ) : tab === 'customers' ? (
-          customers.length === 0 ? (
+          customers.length === 0 && failed.length === 0 ? (
             <View className="py-16 items-center">
               <Ionicons name="checkmark-done-outline" size={30} color="#94A3B8" />
               <Text className="text-sm text-un1t-subtle mt-2">No customers waiting.</Text>
             </View>
-          ) : customers.map((item) => (
-            <CustomerApprovalCard
-              key={item.id}
-              item={item}
-              highlight={typeof focus === 'string' && focus === item.id}
-              busy={busyId === item.id}
-              onApprove={() => onApproveCustomer(item)}
-              onDecline={() => setDeclineFor({ key: 'agent_requests', id: item.id })}
-            />
-          ))
+          ) : (
+            <>
+              {/* AGENT-RETRY.2 — failed executions first: that customer has
+                  been waiting longest and was told nothing. The card offers
+                  only retry (fix in Glofox first); onApproveCustomer already
+                  surfaces a repeat failure honestly via its Alert. */}
+              {failed.length > 0 ? (
+                <Text className="text-xs uppercase tracking-wider text-red-700 mb-2 px-1">Failed — fix &amp; retry</Text>
+              ) : null}
+              {failed.map((item) => (
+                <CustomerApprovalCard
+                  key={item.id}
+                  item={item}
+                  highlight={typeof focus === 'string' && focus === item.id}
+                  busy={busyId === item.id}
+                  onApprove={() => onApproveCustomer(item)}
+                />
+              ))}
+              {failed.length > 0 && customers.length > 0 ? (
+                <Text className="text-xs uppercase tracking-wider text-un1t-subtle mb-2 mt-2 px-1">Waiting for review</Text>
+              ) : null}
+              {customers.map((item) => (
+                <CustomerApprovalCard
+                  key={item.id}
+                  item={item}
+                  highlight={typeof focus === 'string' && focus === item.id}
+                  busy={busyId === item.id}
+                  onApprove={() => onApproveCustomer(item)}
+                  onDecline={() => setDeclineFor({ key: 'agent_requests', id: item.id })}
+                />
+              ))}
+            </>
+          )
         ) : (
           teamSections.length === 0 && navTiles.length === 0 ? (
             <View className="py-16 items-center">
