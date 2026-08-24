@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseUploadResponse, captureVideoPoster, videoOutputCap } from './landing-media-upload'
+import { parseUploadResponse, captureVideoPoster, videoOutputCap, compressImageForUpload } from './landing-media-upload'
 
 // Fake Response factory — just the bits parseUploadResponse touches.
 function res({ status = 200, contentType = 'application/json', body = null, text = '' }) {
@@ -73,5 +73,19 @@ describe('captureVideoPoster', () => {
   })
   it('resolves null for a missing file', async () => {
     await expect(captureVideoPoster(null)).resolves.toBeNull()
+  })
+})
+
+describe('compressImageForUpload', () => {
+  it('fails open to the original file when the canvas pipeline is unavailable (node env)', async () => {
+    const file = { type: 'image/jpeg', name: 'hero.jpg', size: 6 * 1024 * 1024 }
+    await expect(compressImageForUpload(file)).resolves.toBe(file)
+  })
+  it('passes a non-image file through untouched', async () => {
+    const file = { type: 'application/pdf', name: 'doc.pdf' }
+    await expect(compressImageForUpload(file)).resolves.toBe(file)
+  })
+  it('passes a missing file through untouched', async () => {
+    await expect(compressImageForUpload(null)).resolves.toBeNull()
   })
 })
