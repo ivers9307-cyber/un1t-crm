@@ -42,14 +42,17 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { View, Text, Pressable, ScrollView, ActivityIndicator, RefreshControl } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { useRouter, useFocusEffect } from 'expo-router'
+import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { useAuth } from '../../../lib/auth-context'
 import { canMobile } from '../../../lib/permissions'
+import { usePhysicalLocation } from '../../../lib/use-physical-location'
+import { resolveControlLocation, pickerLocations } from '../../../lib/control-location'
 import { api } from '../../../lib/api'
 import {
   plugTone, plugStateLabel, plugDisplayName, toggleResultText, errorText, isQueued,
   PLUG_TONE_TEXT, PLUG_TONE_DOT,
 } from '../../../lib/shelly'
+import LocationPill from '../../../components/LocationPill'
 
 const POLL_MS = 30_000
 // Long enough to read a queued sentence, short enough that it is gone before
@@ -156,10 +159,22 @@ function PlugRow({ device, connected, busy, note, onToggle }) {
 }
 
 export default function ShellyScreen() {
-  const { profile, activeLocation } = useAuth()
+  const { profile, activeLocation, locations } = useAuth()
   const router = useRouter()
-  const locationId = activeLocation?.id
-  const allowed = canMobile(profile, 'device_control', activeLocation)
+  const params = useLocalSearchParams()
+  const phys = usePhysicalLocation()
+  // HOME-LOC.10 — override (this visit's ?loc=) ?? detected ?? activeLocation.
+  // The pill below always names what the calls command; both derive from the
+  // SAME resolved value, so what you see is what you send.
+  const { location: controlLocation, source } = resolveControlLocation({
+    overrideId: typeof params.loc === 'string' ? params.loc : null,
+    physical: phys,
+    activeLocation,
+    locations,
+  })
+  const locationId = controlLocation?.id
+  const allowed = canMobile(profile, 'device_control', controlLocation)
+  const pickable = pickerLocations(profile, locations, 'device_control')
 
   const [devices, setDevices] = useState(null)
   // undefined = not answered yet. The route sends true / false / null, and all
@@ -303,10 +318,19 @@ export default function ShellyScreen() {
   }, [locationId, load, setNote])
 
   // Permission gate — defence in depth. The Studio tile hides the link without
-  // access, but a hand-typed deep link would otherwise reach here.
+  // access, but a hand-typed deep link would otherwise reach here. The pill
+  // renders here too: denied at the RESOLVED studio is not denied everywhere,
+  // so this is the escape hatch onto one the user does hold.
   if (!allowed) {
     return (
       <View className="flex-1 bg-un1t-bg items-center justify-center p-6">
+        <LocationPill
+          location={controlLocation}
+          source={source}
+          pickable={pickable}
+          onPick={(id) => router.setParams({ loc: id })}
+          className="self-center mb-4"
+        />
         <Text className="text-sm text-un1t-subtle text-center">
           Device control isn&apos;t enabled for your role at this location.
         </Text>
@@ -326,6 +350,14 @@ export default function ShellyScreen() {
         contentContainerStyle={{ padding: 16 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#111827" />}
       >
+        {/* The pill stays even here — a studio whose first read failed is
+            still a studio the operator may want to swap away from. */}
+        <LocationPill
+          location={controlLocation}
+          source={source}
+          pickable={pickable}
+          onPick={(id) => router.setParams({ loc: id })}
+        />
         <NoticeCard icon="alert-circle-outline" tone="error">{error}</NoticeCard>
       </ScrollView>
     )
@@ -354,6 +386,12 @@ export default function ShellyScreen() {
       contentContainerStyle={{ padding: 16, paddingBottom: 32 }}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#111827" />}
     >
+      <LocationPill
+        location={controlLocation}
+        source={source}
+        pickable={pickable}
+        onPick={(id) => router.setParams({ loc: id })}
+      />
       {notConnected && (
         <NoticeCard icon="flash-off-outline">
           Not connected — set up on the web CRM under{' '}
