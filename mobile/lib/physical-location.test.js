@@ -1,6 +1,6 @@
 // mobile/lib/physical-location.test.js
 import { describe, it, expect } from 'vitest'
-import { haversineMeters, resolvePhysicalLocation, pickPosition, mapForegroundPermission } from './physical-location'
+import { haversineMeters, resolvePhysicalLocation, pickPosition, pickFresherLastKnown, mapForegroundPermission } from './physical-location'
 
 const STILLORGAN = { latitude: 53.2887, longitude: -6.1970 }
 const HATCH = { latitude: 53.3331, longitude: -6.2542 }
@@ -144,6 +144,53 @@ describe('pickPosition', () => {
     const nowMs = 1000
     const futureCurrent = { coords: HATCH, timestamp: nowMs + 10 * 60 * 1000 }
     expect(pickPosition({ current: futureCurrent, lastKnown: null, nowMs })).toBe(null)
+  })
+})
+
+describe('pickFresherLastKnown', () => {
+  const NOW = 10 * 60 * 1000
+  const os = (ts) => ({ coords: HATCH, timestamp: ts })
+  const disk = (ts) => ({ coords: STILLORGAN, timestamp: ts })
+
+  it('prefers the fresher of two acceptable fixes, in both directions', () => {
+    const newer = os(NOW - 1000)
+    const older = disk(NOW - 60_000)
+    expect(pickFresherLastKnown({ osLastKnown: newer, persisted: older, nowMs: NOW })).toBe(newer)
+    expect(pickFresherLastKnown({ osLastKnown: older, persisted: newer, nowMs: NOW })).toBe(newer)
+  })
+  it('returns whichever single candidate is present', () => {
+    const only = os(NOW - 1000)
+    expect(pickFresherLastKnown({ osLastKnown: only, persisted: null, nowMs: NOW })).toBe(only)
+    expect(pickFresherLastKnown({ osLastKnown: null, persisted: only, nowMs: NOW })).toBe(only)
+  })
+  it('returns null when neither is present', () => {
+    expect(pickFresherLastKnown({ osLastKnown: null, persisted: null, nowMs: NOW })).toBe(null)
+    expect(pickFresherLastKnown({ nowMs: NOW })).toBe(null)
+  })
+  it('gates each candidate INDEPENDENTLY — a stale one never shadows a good one', () => {
+    const good = disk(NOW - 1000)
+    const stale = os(0)
+    expect(pickFresherLastKnown({ osLastKnown: stale, persisted: good, nowMs: NOW })).toBe(good)
+    expect(pickFresherLastKnown({ osLastKnown: good, persisted: stale, nowMs: NOW })).toBe(good)
+  })
+  it('a FUTURE-dated fix does not win on its bigger timestamp — it is rejected first', () => {
+    const good = disk(NOW - 1000)
+    const future = os(NOW + 10 * 60 * 1000)
+    expect(pickFresherLastKnown({ osLastKnown: future, persisted: good, nowMs: NOW })).toBe(good)
+    expect(pickFresherLastKnown({ osLastKnown: future, persisted: null, nowMs: NOW })).toBe(null)
+  })
+  it('rejects both when both are stale (a cold start away from every studio)', () => {
+    expect(pickFresherLastKnown({ osLastKnown: os(0), persisted: disk(1), nowMs: NOW })).toBe(null)
+  })
+  it('rejects a fix with no finite timestamp, and malformed candidates', () => {
+    expect(pickFresherLastKnown({ osLastKnown: { coords: HATCH }, persisted: null, nowMs: NOW })).toBe(null)
+    expect(pickFresherLastKnown({ osLastKnown: { timestamp: NOW }, persisted: null, nowMs: NOW })).toBe(null)
+    expect(pickFresherLastKnown({ osLastKnown: 'nope', persisted: undefined, nowMs: NOW })).toBe(null)
+  })
+  it('honours a caller-supplied maxAgeMs', () => {
+    const fix = os(NOW - 2000)
+    expect(pickFresherLastKnown({ osLastKnown: fix, persisted: null, nowMs: NOW, maxAgeMs: 3000 })).toBe(fix)
+    expect(pickFresherLastKnown({ osLastKnown: fix, persisted: null, nowMs: NOW, maxAgeMs: 1000 })).toBe(null)
   })
 })
 

@@ -104,6 +104,31 @@ export function pickPosition({ current, lastKnown, nowMs, maxAgeMs = LAST_KNOWN_
 }
 
 /**
+ * HOME-FAST.1 — choose between the OS's own last-known fix and the one this
+ * app persisted at the end of its previous launch (physical-cache.js). Both
+ * are "last known"; neither is authoritative, and on a cold start at the
+ * studio either can be the more recent one — the OS list is evicted on
+ * reboot and can be older than our own copy, while ours is only as new as
+ * the last resolve.
+ *
+ * Each candidate is gated INDEPENDENTLY by pickPosition before they are
+ * compared, rather than picking the larger timestamp and gating once: a
+ * future-dated fix (a clock change, a replayed sample) carries the bigger
+ * timestamp precisely BECAUSE it is wrong, and would otherwise shadow a
+ * perfectly good one and force a full acquisition.
+ *
+ * @returns the fresher acceptable fix, or null when neither passes.
+ */
+export function pickFresherLastKnown({ osLastKnown, persisted, nowMs, maxAgeMs = LAST_KNOWN_MAX_AGE_MS }) {
+  const a = pickPosition({ current: null, lastKnown: osLastKnown, nowMs, maxAgeMs })
+  const b = pickPosition({ current: null, lastKnown: persisted, nowMs, maxAgeMs })
+  if (!a) return b
+  if (!b) return a
+  // Both survived the gate, so both carry a finite timestamp.
+  return b.timestamp > a.timestamp ? b : a
+}
+
+/**
  * Collapse expo-location's foreground permission object into what the
  * enable-location nudge needs to decide:
  *   'granted'  — nothing to nudge about.
