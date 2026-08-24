@@ -74,6 +74,27 @@ export function whyFlagged(row) {
   return null
 }
 
+// AGENT-RETRY.1 — what a FAILED execution's Glofox code means and what to
+// fix before retrying. Keyed on details.result.message_code.
+const FAILURE_EXPLANATIONS = {
+  YOU_HAVE_NO_CREDITS_LEFT:
+    'Glofox refused the booking — no class credits on their account. Grant a credit in Glofox, then retry.',
+  NOT_EXECUTABLE:
+    'The request could not be executed — the contact has no linked Glofox account (or Glofox is not configured here). Link the account, then retry.',
+}
+
+/**
+ * Operator-readable line for a failed execution, or null when the row is
+ * not a failed execution. Pure.
+ */
+export function failureExplanation(row) {
+  if (!row || row.status !== 'failed') return null
+  const code = row.details?.result?.message_code || row.details?.result?.reason || null
+  if (!code) return 'The execution failed. Check the account in Glofox, fix what is wrong, then retry.'
+  return FAILURE_EXPLANATIONS[code]
+    || `Glofox rejected the action (${code}). Fix the issue in Glofox, then retry.`
+}
+
 /**
  * The customer's own words, when captured. Prefer the explicit note; for
  * pause/cancellation the tools also write details.reason in the

@@ -52,6 +52,47 @@ export function isStuckExecuting(row, nowMs = Date.now()) {
   return stuckExecutionStartedAt(row, nowMs) !== null
 }
 
+// AGENT-RETRY.1 — a FAILED execution is retryable, not terminal.
+//
+// Before this, a failed Glofox execution dead-ended: the row landed on
+// 'failed', every re-decision 409'd ('Already decided'), and the operator
+// who fixed the underlying problem (granted a credit, linked the account)
+// had no way to re-run the booking — live 2026-08-24: Kate Byrne's
+// YOU_HAVE_NO_CREDITS_LEFT booking had to be recovered by hand. The route
+// now allows a failed EXECUTING-kind row to be re-APPROVED (fresh atomic
+// claim on status='failed'), re-running the side effect. The operator
+// fixes in Glofox first; the button only retries — it never fixes.
+// Approve-only: decline stays pending-only (the customer was never
+// confirmed, but a decline notice on a days-old failure is noise).
+
+/** Can this row's failed execution be re-approved at all? Pure — the ROUTE's gate. */
+export function isRetryableFailure(row) {
+  return !!row && row.status === 'failed' && EXECUTING_KINDS.has(row.kind)
+}
+
+// How long after the decision a failed row keeps being OFFERED for retry in
+// the UI when it carries no usable start time (kinds without starts_at).
+export const RETRY_OFFER_WINDOW_MS = 48 * 3_600_000
+
+/**
+ * Should the UI surface a Fix-&-retry affordance for this row? Pure —
+ * stricter than isRetryableFailure: retrying a class that has already
+ * started helps nobody, so rows with a parseable details.starts_at are
+ * only offered while the start is still in the future; rows without one
+ * (event/class cancellations, older bookings) fall back to a decided-at
+ * recency window so the section can't accumulate stale history forever.
+ * The route deliberately stays permissive (isRetryableFailure) — an
+ * operator retrying an edge case on purpose shouldn't be refused.
+ */
+export function retryOffered(row, nowMs = Date.now()) {
+  if (!isRetryableFailure(row)) return false
+  const starts = Date.parse(row.details?.starts_at || '')
+  if (Number.isFinite(starts)) return starts > nowMs
+  const decided = Date.parse(row.decided_at || '')
+  if (!Number.isFinite(decided)) return false
+  return nowMs - decided <= RETRY_OFFER_WINDOW_MS
+}
+
 /** The details patch stamped by the claim, before the side effect runs. Pure. */
 export function executingMarker(details, { startedAt, by = null }) {
   return { ...(details || {}), execution: { stage: 'executing', started_at: startedAt, by } }

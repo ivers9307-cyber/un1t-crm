@@ -8,6 +8,7 @@ import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 import {
   EXECUTING_KINDS,
   stuckExecutionStartedAt,
+  isRetryableFailure,
   executingMarker,
   finishedMarker,
 } from '@/lib/agent/request-recovery'
@@ -66,7 +67,14 @@ export async function PATCH(request, { params }) {
   // strict once-only rule.
   const retryStartedAt = stuckExecutionStartedAt(row, Date.now())
   const isRetry = !!retryStartedAt && v.data.status === 'approved'
-  if (row.status !== 'pending' && !isRetry) {
+  // AGENT-RETRY.1 — a FAILED execution may be re-approved: the operator
+  // fixes the underlying problem in Glofox (credits, account link), then
+  // retries the side effect. Approve-only; decline on a failed row still
+  // 409s. Deliberately no staleness gate here — the UI decides what to
+  // OFFER (retryOffered), the route trusts a deliberate operator action
+  // (Glofox arbitrates a pointless retry the same way it always has).
+  const isFailedRetry = isRetryableFailure(row) && v.data.status === 'approved'
+  if (row.status !== 'pending' && !isRetry && !isFailedRetry) {
     return NextResponse.json({ success: false, error: 'Already decided' }, { status: 409 })
   }
 
@@ -91,15 +99,23 @@ export async function PATCH(request, { params }) {
   if (executing) claimPatch.details = executingMarker(row.details, { startedAt: nowIso, by: user.id })
 
   let claimQuery = db.from('agent_membership_requests').update(claimPatch).eq('id', id)
+  // AGENT-RETRY.1 — a failed-retry claims on status='failed': two concurrent
+  // retries race the predicate, the loser matches zero rows and 409s, so the
+  // execution still can't double-run (same shape as the pending claim).
   claimQuery = isRetry
     ? claimQuery.eq('status', 'approved').eq('details->execution->>started_at', retryStartedAt)
-    : claimQuery.eq('status', 'pending')
+    : isFailedRetry
+      ? claimQuery.eq('status', 'failed')
+      : claimQuery.eq('status', 'pending')
   const { data: claimed } = await claimQuery.select('id').maybeSingle()
   if (!claimed) {
     return NextResponse.json({ success: false, error: 'Already decided' }, { status: 409 })
   }
   if (isRetry) {
     console.warn(`[agent-requests] retrying crashed execution ${id} (${row.kind}), stalled since ${retryStartedAt}`)
+  }
+  if (isFailedRetry) {
+    console.warn(`[agent-requests] retrying failed execution ${id} (${row.kind}), previous result ${row.details?.result?.message_code || 'unknown'}`)
   }
 
   let finalStatus = v.data.status

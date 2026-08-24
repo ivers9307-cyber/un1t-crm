@@ -16,7 +16,8 @@ import Link from 'next/link'
 import { Sparkles, Copy, Check } from 'lucide-react'
 import { DECLINE_REASONS, BOOKING_KINDS } from '@shared/approvals-next-steps'
 import { APPROVAL_KIND_LABELS } from '@shared/approval-cards'
-import { whyFlagged, customerWords } from '@/lib/approvals/agent-request-why'
+import { whyFlagged, customerWords, failureExplanation } from '@/lib/approvals/agent-request-why'
+import { EXECUTING_KINDS } from '@/lib/agent/request-recovery'
 
 const KIND_CHIP = {
   cancellation: 'bg-red-500/10 text-red-700',
@@ -62,8 +63,9 @@ function outcomeLine(status, item, executed) {
     return { tone: 'ok', text: hasThread ? 'Done — executed in Glofox and the customer was told in-thread.' : 'Done — executed in Glofox and the customer was notified.' }
   }
   if (status === 'failed') {
-    const code = executed?.message_code || executed?.reason || 'unknown error'
-    return { tone: 'bad', text: `Approved, but the Glofox action failed (${code}). Open the full queue to follow up — the customer has NOT been confirmed.` }
+    // AGENT-RETRY.1 — a failure is a fix-then-retry, not a dead end.
+    const explain = failureExplanation({ status: 'failed', details: { result: executed || {} } })
+    return { tone: 'bad', failed: true, text: `${explain} The customer has NOT been confirmed.` }
   }
   if (status === 'approved') {
     return { tone: 'ok', text: 'Approved — now make the change in Glofox (this kind is not automated).' }
@@ -83,7 +85,8 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
   const [reason, setReason] = useState(BOOKING_KINDS.has(item.kind) ? 'class_full' : 'other')
   const [note, setNote] = useState('')
   const [error, setError] = useState(null)
-  const [outcome, setOutcome] = useState(null) // { tone, text } after a decision
+  const [outcome, setOutcome] = useState(null) // { tone, text, failed? } after a decision
+  const [countedDecided, setCountedDecided] = useState(false)
 
   const kindLabel = APPROVAL_KIND_LABELS[item.kind] || 'Agent request'
   const why = whyFlagged(item)
@@ -92,8 +95,11 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
     ? DECLINE_REASONS
     : DECLINE_REASONS.filter(([k]) => k === 'not_eligible' || k === 'other')
 
-  async function decide(status) {
-    if (busy || outcome) return
+  // AGENT-RETRY.1 — `retry` re-approves a just-failed execution (the route
+  // accepts approve on status='failed' for executing kinds); everything
+  // else decides at most once per card.
+  async function decide(status, { retry = false } = {}) {
+    if (busy || (outcome && !retry)) return
     setBusy(status)
     setError(null)
     try {
@@ -113,7 +119,12 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
       }
       setDeclineOpen(false)
       setOutcome(outcomeLine(data.request?.status || status, item, data.executed))
-      onDecided?.(item.id, data.request)
+      // Only the FIRST decision moves the item out of the pending count —
+      // a retry re-decides the same (already-counted) item.
+      if (!countedDecided) {
+        setCountedDecided(true)
+        onDecided?.(item.id, data.request)
+      }
     } catch {
       setError('Network error — try again')
     } finally {
@@ -167,6 +178,20 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
         <p className={`text-sm mt-3 ${outcome.tone === 'ok' ? 'text-green-700' : outcome.tone === 'bad' ? 'text-red-700' : 'text-un1t-muted'}`}>
           {outcome.text}
         </p>
+      )}
+
+      {/* AGENT-RETRY.1 — a failed execution offers a retry in place: the
+          operator fixes the problem in Glofox, then re-runs the action. */}
+      {outcome?.failed && EXECUTING_KINDS.has(item.kind) && (
+        <div className="flex items-center gap-2 flex-wrap mt-2">
+          <button type="button" disabled={!!busy} onClick={() => decide('approved', { retry: true })}
+            className="text-sm bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md font-medium disabled:opacity-50">
+            {busy === 'approved' ? 'Retrying…' : 'Fixed it — retry'}
+          </button>
+          <Link href={item.reviewUrl} className="text-xs text-un1t-muted underline hover:text-un1t-text">
+            Full history
+          </Link>
+        </div>
       )}
 
       {!outcome && !declineOpen && (
