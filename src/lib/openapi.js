@@ -4429,14 +4429,18 @@ const SonosFavorite = z.object({
 // imports from src/app/api or src/lib/sonos, so the shapes are kept here
 // and updated by hand when those files change.
 const SonosControlBody = z.object({
-  schedule_id: z.string(),
+  schedule_id: z.string().optional(),
+  group_id: z.string().min(1).max(128).optional(),
   action: z.enum([
     'volume_up', 'volume_down', 'set_volume',
     'play', 'pause', 'skip_next', 'skip_previous', 'load_favorite',
   ]),
   value: z.union([z.number(), z.string()]).optional(),
 }).openapi('SonosControlBody', {
-  description: 'value is read per action: volume_up/volume_down take an optional step size (default 5, '
+  description: 'Exactly one of schedule_id or group_id (neither or both is a 400). schedule_id is a uuid; '
+    + 'group_id is an opaque Sonos group id (RINCON_…:N, ≤128 chars — NOT a uuid) from GET /api/sonos/household, '
+    + 'and group ids are ephemeral — a stale one answers code: regrouped, so refetch the household and retry. '
+    + 'value is read per action: volume_up/volume_down take an optional step size (default 5, '
     + 'range 1-100, sign ignored — direction lives in the action name); set_volume takes a required integer '
     + '0-100; load_favorite takes a required non-empty favorite id. play/pause/skip_next/skip_previous '
     + 'ignore value.',
@@ -4473,12 +4477,14 @@ const SonosNowPlayingResponse = z.union([
   z.object({
     success: z.literal(true),
     live: z.literal(false),
-    reason: z.enum(['not_configured', 'not_connected', 'refresh_failed', 'db_error', 'unreachable', 'no_group']),
+    reason: z.enum(['not_configured', 'not_connected', 'refresh_failed', 'db_error', 'unreachable', 'no_group', 'regrouped']),
     statusCode: z.number().int().optional(),
   }).openapi('SonosNowPlayingOffline', {
     description: 'Deliberately a 200, not an error status — not-connected and unreachable are normal states '
       + 'the control strip renders a specific panel for, polled every 10s. statusCode is present only when '
-      + 'reason is unreachable (the failed Sonos groups call\'s HTTP status).',
+      + 'reason is unreachable (the failed Sonos groups call\'s HTTP status). regrouped appears only on the '
+      + 'group_id path: the id is no longer in the household (group ids are ephemeral) — refetch the '
+      + 'household for fresh ones.',
   }),
   z.object({
     success: z.literal(true),
@@ -4672,9 +4678,13 @@ registry.registerPath({
   path: '/api/sonos/control',
   tags: ['Automations'],
   security: [{ CookieAuth: [] }],
-  summary: 'Immediate live control of a schedule\'s speakers — volume, transport, favourite (device_control)',
+  summary: 'Immediate live control of a schedule\'s or group\'s speakers — volume, transport, favourite (device_control)',
   description:
-    'SONOSLIVE.3/4: writes nothing to sonos_schedules, deliberately — the schedule only acts at window '
+    'SONOSGRP.2: the body addresses exactly one of schedule_id (uuid, resolved to groups via the '
+    + 'location-scoped schedule row) or group_id (an opaque Sonos group id from GET /api/sonos/household — '
+    + 'no DB row is read). Group ids are ephemeral: a stale one answers code: regrouped, so refetch the '
+    + 'household and retry. '
+    + 'SONOSLIVE.3/4: writes nothing to sonos_schedules, deliberately — the schedule only acts at window '
     + 'boundaries, so a live change simply persists until the next one; there is no suppression or '
     + 'reconciliation to invent here. Works even while the schedule is disabled or overridden, on purpose: '
     + 'both of those govern whether the CRON acts, not whether a human may act right now. On failure the '
@@ -4689,16 +4699,16 @@ registry.registerPath({
       description: 'Applied to every resolved group',
       content: { 'application/json': { schema: z.object({ success: z.literal(true), groups: z.array(z.string()) }).openapi('SonosControlResponse') } },
     },
-    400: { description: 'Two distinct shapes. An unknown action or an unusable value for a known action comes back from dispatch and carries code: invalid. A malformed body or a caller with no active location is rejected by the guards that run BEFORE dispatch and carries no code at all — which is why code is optional on this schema.', content: { 'application/json': { schema: SonosControlErrorResponse } } },
+    400: { description: 'Two distinct shapes. An unknown action or an unusable value for a known action comes back from dispatch and carries code: invalid. A malformed body (including neither or both of schedule_id/group_id) or a caller with no active location is rejected by the guards that run BEFORE dispatch and carries no code at all — which is why code is optional on this schema.', content: { 'application/json': { schema: SonosControlErrorResponse } } },
     401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Schedule not found, or not at your active location (code: not_found)', content: { 'application/json': { schema: SonosControlErrorResponse } } },
+    404: { description: 'schedule_id only: malformed (no code), not found, or not at your active location (code: not_found). group_id never 404s — a stale one is a 409 code: regrouped', content: { 'application/json': { schema: SonosControlErrorResponse } } },
     409: {
       description: 'The current state blocks this action — code distinguishes which: not_connected (Sonos '
         + 'is not connected), no_group (none of this schedule\'s speakers are online), fixed_volume (these '
-        + 'speakers are set to a fixed volume), regrouped (the group changed between resolve and act — retry '
-        + 'is safe), no_content (nothing is loaded on these speakers, so play/pause/skip have nothing to '
-        + 'act on).',
+        + 'speakers are set to a fixed volume), regrouped (a stale group_id, or the group changed between '
+        + 'resolve and act — refetch the household and retry), no_content (nothing is loaded on these '
+        + 'speakers, so play/pause/skip have nothing to act on).',
       content: { 'application/json': { schema: SonosControlErrorResponse } },
     },
     429: { description: 'Rate limited by Sonos — try again shortly (code: rate_limited)', content: { 'application/json': { schema: SonosControlErrorResponse } } },
@@ -4713,22 +4723,29 @@ registry.registerPath({
   path: '/api/sonos/now-playing',
   tags: ['Automations'],
   security: [{ CookieAuth: [] }],
-  summary: 'Live now-playing readout for a schedule\'s resolved speaker group (device_control)',
+  summary: 'Live now-playing readout for a schedule\'s or group\'s speakers (device_control)',
   description:
-    'SONOSLIVE.5: not-connected and unreachable states return HTTP 200, not an error status — they are '
+    'SONOSGRP.2: the query addresses exactly one of schedule_id (uuid, resolved via the location-scoped '
+    + 'schedule row) or group_id (an opaque Sonos group id from GET /api/sonos/household — no DB row is '
+    + 'read). Group ids are ephemeral: a stale one soft-fails as live:false reason:regrouped (a 200, like '
+    + 'the other offline states) — refetch the household for fresh ids. '
+    + 'SONOSLIVE.5: not-connected and unreachable states return HTTP 200, not an error status — they are '
     + 'normal expected states the control strip renders a specific panel for (polled every 10s while a strip '
     + 'is open). Genuine auth/scoping failures (missing session, missing permission, no active location, '
-    + 'unknown or cross-location schedule id) still return 401/403/400/404 as normal. See '
+    + 'neither/both ids, unknown or cross-location schedule id) still return 401/403/400/404 as normal. See '
     + 'SonosNowPlayingLive\'s description for the volumeFailed trap.',
   request: {
-    query: z.object({ schedule_id: uuidLike }),
+    query: z.object({
+      schedule_id: uuidLike.optional(),
+      group_id: z.string().min(1).max(128).optional(),
+    }),
   },
   responses: {
     200: { description: 'Offline-state or live-state readout, see SonosNowPlayingResponse', content: { 'application/json': { schema: SonosNowPlayingResponse } } },
-    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Caller has no active location, neither or both of schedule_id/group_id supplied, or group_id over 128 chars', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Malformed schedule_id, not found, or not at your active location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'schedule_id only: malformed, not found, or not at your active location. A stale group_id is a 200 with reason: regrouped, never a 404', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'Database error reading the schedule row', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })

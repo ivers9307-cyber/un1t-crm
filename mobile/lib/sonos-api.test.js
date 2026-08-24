@@ -34,7 +34,7 @@ describe('getSonosHousehold', () => {
 
 describe('getSonosNowPlaying', () => {
   it('GETs now-playing with the schedule id as a query param', async () => {
-    await getSonosNowPlaying('11111111-1111-1111-1111-111111111111', 'loc-1')
+    await getSonosNowPlaying({ scheduleId: '11111111-1111-1111-1111-111111111111' }, 'loc-1')
     expect(api).toHaveBeenCalledWith(
       '/api/sonos/now-playing?schedule_id=11111111-1111-1111-1111-111111111111',
       { locationId: 'loc-1' },
@@ -42,14 +42,22 @@ describe('getSonosNowPlaying', () => {
   })
 
   it('URL-encodes the schedule id rather than trusting it', async () => {
-    await getSonosNowPlaying('a b&c', 'loc-1')
+    await getSonosNowPlaying({ scheduleId: 'a b&c' }, 'loc-1')
     expect(api.mock.calls[0][0]).toBe('/api/sonos/now-playing?schedule_id=a%20b%26c')
+  })
+
+  it('a { groupId } target uses group_id= and URL-encodes the (opaque) id', async () => {
+    await getSonosNowPlaying({ groupId: 'RINCON_ABC123:2&x' }, 'loc-1')
+    expect(api).toHaveBeenCalledWith(
+      '/api/sonos/now-playing?group_id=RINCON_ABC123%3A2%26x',
+      { locationId: 'loc-1' },
+    )
   })
 })
 
 describe('sendSonosAction', () => {
   it('POSTs the action with a value', async () => {
-    await sendSonosAction('s1', 'set_volume', 40, 'loc-1')
+    await sendSonosAction({ scheduleId: 's1' }, 'set_volume', 40, 'loc-1')
     expect(api).toHaveBeenCalledWith('/api/sonos/control', {
       method: 'POST',
       locationId: 'loc-1',
@@ -59,22 +67,29 @@ describe('sendSonosAction', () => {
 
   it('sends a value of 0 — volume-to-zero is a real request, not an absent one', async () => {
     // A future tidy to `if (value)` would drop 0 and turn it into a 400.
-    await sendSonosAction('s1', 'set_volume', 0, 'loc-1')
+    await sendSonosAction({ scheduleId: 's1' }, 'set_volume', 0, 'loc-1')
     expect(api.mock.calls[0][1].body.value).toBe(0)
   })
 
   it('omits `value` entirely when there is none — not null, not undefined', async () => {
     // The route's Zod schema has value optional; a null would fail
     // z.union([number, string]) and turn every play/pause into a 400.
-    await sendSonosAction('s1', 'pause', undefined, 'loc-1')
+    await sendSonosAction({ scheduleId: 's1' }, 'pause', undefined, 'loc-1')
     const body = api.mock.calls[0][1].body
     expect(body).toEqual({ schedule_id: 's1', action: 'pause' })
     expect('value' in body).toBe(false)
   })
 
+  it('a { groupId } target carries group_id and NO schedule_id', async () => {
+    await sendSonosAction({ groupId: 'RINCON_ABC123:2' }, 'pause', undefined, 'loc-1')
+    const body = api.mock.calls[0][1].body
+    expect(body).toEqual({ group_id: 'RINCON_ABC123:2', action: 'pause' })
+    expect('schedule_id' in body).toBe(false)
+  })
+
   it('returns the server envelope as-is so the card can read code/applied/failedGroups', async () => {
     api.mockResolvedValue({ success: false, error: 'nope', code: 'failed', applied: ['G1'], failedGroups: ['G2'] })
-    const r = await sendSonosAction('s1', 'volume_up', 5, 'loc-1')
+    const r = await sendSonosAction({ scheduleId: 's1' }, 'volume_up', 5, 'loc-1')
     expect(r).toEqual({ success: false, error: 'nope', code: 'failed', applied: ['G1'], failedGroups: ['G2'] })
   })
 })

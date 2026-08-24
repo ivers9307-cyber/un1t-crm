@@ -40,6 +40,20 @@ const defaultCall = (name, token, groupId, ...args) => CLIENT[name](token, group
 // → { ok: true, groups }
 // | { ok: false, code, reason?, statusCode?, applied?, failedGroups? }
 //
+// `target` is { scheduleId } XOR { groupId } — exactly one, truthy. The
+// routes enforce exactly-one before calling; this function re-checks as
+// defence in depth and answers { ok: false, code: 'invalid' } for anything
+// else (including the old positional string signature).
+//
+// The schedule path loads the row scoped to the location and resolves
+// group ids from player_ids. The group path reads NO db row at all — the
+// db is used only by getToken. Nothing needs authorising beyond the
+// location's own token: it scopes the household, so a foreign group id is
+// simply absent from the groups fetch and answers `regrouped` (group ids
+// are ephemeral by design, so "the speakers regrouped — refresh and try
+// again"
+// is the honest copy, not no_group's schedule-speaker wording).
+//
 // `code` is a stable tag the route maps to an HTTP status and copy.
 //
 // `applied` and `failedGroups` appear only on a dispatch-loop failure, and
@@ -50,7 +64,7 @@ const defaultCall = (name, token, groupId, ...args) => CLIENT[name](token, group
 // there is currently no way to scope a retry to failedGroups; the fields
 // are informational, so a UI should surface a partial failure rather than
 // auto-retry a volume action.
-export async function runLiveAction(db, locationId, scheduleId, action, value, deps = {}) {
+export async function runLiveAction(db, locationId, target, action, value, deps = {}) {
   const {
     getConfig = () => getSonosConfig(),
     getToken = withFreshToken,
@@ -59,6 +73,16 @@ export async function runLiveAction(db, locationId, scheduleId, action, value, d
     call = defaultCall,
   } = deps
 
+  // Exactly-one target, checked before any I/O. The routes also enforce
+  // this; here it is the backstop.
+  const isTargetObject = target !== null && typeof target === 'object'
+  const scheduleId = isTargetObject ? target.scheduleId : undefined
+  const groupId = isTargetObject ? target.groupId : undefined
+  if (!isTargetObject || (!scheduleId && !groupId) || (scheduleId && groupId)) {
+    return { ok: false, code: 'invalid' }
+  }
+  const targetMeta = scheduleId ? { scheduleId } : { groupId }
+
   const plan = planLiveAction(action, value)
   if (!plan) return { ok: false, code: 'invalid' }
 
@@ -66,17 +90,21 @@ export async function runLiveAction(db, locationId, scheduleId, action, value, d
   if (!cfg) return { ok: false, code: 'not_configured' }
   if (cfg.error) return { ok: false, code: 'not_configured', reason: cfg.error }
 
-  // Location scoping lives on the query, not a read-then-check: a schedule
-  // id from another location must be indistinguishable from one that does
-  // not exist.
-  const { data: schedule, error } = await db
-    .from('sonos_schedules')
-    .select('id, player_ids')
-    .eq('id', scheduleId)
-    .eq('location_id', locationId)
-    .maybeSingle()
-  if (error) return { ok: false, code: 'db_error', reason: error.message }
-  if (!schedule) return { ok: false, code: 'not_found' }
+  let schedule = null
+  if (scheduleId) {
+    // Location scoping lives on the query, not a read-then-check: a schedule
+    // id from another location must be indistinguishable from one that does
+    // not exist.
+    const { data, error } = await db
+      .from('sonos_schedules')
+      .select('id, player_ids')
+      .eq('id', scheduleId)
+      .eq('location_id', locationId)
+      .maybeSingle()
+    if (error) return { ok: false, code: 'db_error', reason: error.message }
+    if (!data) return { ok: false, code: 'not_found' }
+    schedule = data
+  }
 
   const tok = await getToken(db, locationId, cfg)
   if (!tok.ok) return { ok: false, code: 'not_connected', reason: tok.reason }
@@ -85,8 +113,14 @@ export async function runLiveAction(db, locationId, scheduleId, action, value, d
   if (!groupsRes.ok) return { ok: false, code: 'unreachable', statusCode: groupsRes.statusCode }
 
   const { groups } = mapGroups(groupsRes.body)
-  const groupIds = resolveGroupIds(groups, schedule.player_ids)
-  if (!groupIds.length) return { ok: false, code: 'no_group' }
+  let groupIds
+  if (scheduleId) {
+    groupIds = resolveGroupIds(groups, schedule.player_ids)
+    if (!groupIds.length) return { ok: false, code: 'no_group' }
+  } else {
+    groupIds = groups.some((g) => g.id === groupId) ? [groupId] : []
+    if (!groupIds.length) return { ok: false, code: 'regrouped' }
+  }
 
   // A fixed-level group ignores volume commands. Refuse rather than firing
   // something that silently does nothing. Only checked when it matters —
@@ -106,13 +140,13 @@ export async function runLiveAction(db, locationId, scheduleId, action, value, d
   }
 
   const results = []
-  for (const groupId of groupIds) {
-    results.push({ groupId, ...(await call(plan.call, tok.token, groupId, ...plan.args)) })
+  for (const gid of groupIds) {
+    results.push({ groupId: gid, ...(await call(plan.call, tok.token, gid, ...plan.args)) })
   }
 
   const failed = results.find((r) => !r.ok)
   if (failed) {
-    logWarn(MODULE, 'action failed', { scheduleId, action, statusCode: failed.statusCode })
+    logWarn(MODULE, 'action failed', { ...targetMeta, action, statusCode: failed.statusCode })
 
     // Groups already called before the failure are NOT undone — report
     // both sides rather than letting `ok: false` read as "nothing
