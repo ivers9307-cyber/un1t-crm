@@ -30,8 +30,13 @@ import { getMyShifts, getTeamShifts } from '../../../lib/schedule-api'
 import { isoDate } from '../../../lib/dates'
 import { pickLocationColor } from 'shared/location-colors'
 import { groupTeamShiftsByCoach, coachSpanLabel } from 'shared/team-today'
+import * as SecureStore from 'expo-secure-store'
+import { shouldShowLocationNudge, hasOnSiteFeatures } from '../../../lib/location-nudge'
+import EnableLocationCard from '../../../components/EnableLocationCard'
 import ChoiceCard from '../../../components/ChoiceCard'
 import LocationPill from '../../../components/LocationPill'
+
+const NUDGE_DISMISSED_KEY = 'home_location_nudge_dismissed_v1'
 
 // GET /api/schedule/shifts returns `location_id` and does NOT embed
 // `locations` (src/lib/roster-read.js's API_SHIFT_SELECT embeds
@@ -60,6 +65,7 @@ export default function Home() {
   // it (refresh()), which would re-arm every effect on each render.
   const {
     status: physStatus,
+    foregroundPermission,
     location: physLocation,
     refresh: refreshPhysical,
   } = usePhysicalLocation()
@@ -73,6 +79,13 @@ export default function Home() {
   // "Today at Hatch Street" for the whole of the next fetch.
   const [roster, setRoster] = useState({ locationId: null, rows: [] })
   const [refreshing, setRefreshing] = useState(false)
+  // LOC-NUDGE.1 — the enable-location card's inputs that live outside the
+  // hook: the sticky per-device dismissal and the kiosk carve-out (a shared
+  // studio iPad can't meaningfully grant location — same rule as
+  // LocationGate). null = not read yet, which shouldShowLocationNudge's
+  // truthiness treats as "don't show" until both reads land.
+  const [nudgeDismissed, setNudgeDismissed] = useState(null)
+  const [isKiosk, setIsKiosk] = useState(null)
   // Keep the last painted list through a transport blip (api() tags its
   // self-minted envelopes transport:true — the sonos screen's convention).
   // Holds the profile id it was painted FOR, not a bare boolean: under
@@ -83,6 +96,29 @@ export default function Home() {
   // Screen liveness for loads that aren't owned by a focus effect (the
   // pull-to-refresh below) — a resolve landing after a blur must not paint.
   const focusedRef = useRef(false)
+
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        const v = await SecureStore.getItemAsync(NUDGE_DISMISSED_KEY)
+        if (alive) setNudgeDismissed(v === '1')
+      } catch { if (alive) setNudgeDismissed(false) }
+      try {
+        const { getPairing } = await import('../../../lib/studio-device')
+        const paired = await getPairing()
+        if (alive) setIsKiosk(!!paired)
+      } catch { if (alive) setIsKiosk(false) }
+    })()
+    return () => { alive = false }
+  }, [])
+
+  const dismissNudge = useCallback(() => {
+    setNudgeDismissed(true)
+    // Best-effort persistence — a failed write only means the card returns
+    // next launch, which is the safe direction for a nudge.
+    SecureStore.setItemAsync(NUDGE_DISMISSED_KEY, '1').catch(() => {})
+  }, [])
 
   // Identity swap (View-as, or a sign-in on a shared studio device) — drop
   // the previous user's shifts rather than showing them while the new
@@ -218,6 +254,16 @@ export default function Home() {
   }
 
   const onSite = physStatus === 'at_studio'
+  // Location permission is the one thing between this user and the on-site
+  // Home — and only then. Both async reads must have landed (non-null) so a
+  // slow SecureStore can only delay the card, never flash it.
+  const showNudge = shouldShowLocationNudge({
+    physStatus,
+    foregroundPermission,
+    dismissed: nudgeDismissed !== false,
+    onSiteFeatures: hasOnSiteFeatures(profile, locations),
+    isKiosk: isKiosk !== false,
+  })
   const todayIso = isoDate(new Date())
   // HOME-LOC.12 — safeHomeTiles, not homeTiles: the tiles are for the DETECTED
   // studio, which is routinely not activeLocation, and timer/TV read
@@ -296,6 +342,13 @@ export default function Home() {
       ) : (
         <>
           {/* OFFSITE / UNKNOWN — when you're next in, and where. */}
+          {showNudge && (
+            <EnableLocationCard
+              mode={foregroundPermission}
+              onChanged={refreshPhysical}
+              onDismiss={dismissNudge}
+            />
+          )}
           <Text className="text-sm text-un1t-subtle mb-4">Your next 7 days</Text>
 
           {/* The banner sits ABOVE the list rather than replacing it: once a
