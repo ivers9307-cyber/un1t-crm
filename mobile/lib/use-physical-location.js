@@ -209,13 +209,15 @@ export function usePhysicalLocation() {
       // screens' hooks must not all re-resolve on every foreground.
       //
       // Subscription idiom (previous-state ref + remove() on cleanup) follows
-      // foreground-ota.jsx, but the GATE is deliberately looser than that
-      // file's `prev === 'background'`: ANY non-active → 'active' counts.
-      // iOS emits 'inactive' between 'background' and 'active' on the way in,
-      // so on the versions that do not coalesce it, `prev` at the 'active'
-      // event is 'inactive' and a background-only gate would NEVER fire —
-      // silently making this whole recovery dead code, which is the exact
-      // failure it exists to fix. The looser gate can only OVER-resolve (a
+      // foreground-ota.jsx. The GATE is deliberately looser than a
+      // `prev === 'background'` check: ANY non-active → 'active' counts.
+      // RN's iOS willEnterForeground mapping has differed across versions —
+      // 0.86 hardcodes it to "background" (real foregrounds report
+      // background→active directly; verified in RCTAppState.mm), but older
+      // RNs read the live applicationState there and emitted
+      // background→INACTIVE→active, under which a background-only gate is
+      // dead code. Gating on a state NAME ties correctness to that upstream
+      // mapping; this gate does not. It can only OVER-resolve (a
       // control-centre pull-down costs one GPS read and a spinner); it cannot
       // under-resolve, and a stale green "detected" pill asserting the wrong
       // studio is far worse than a spare acquisition. LocationGate.jsx uses

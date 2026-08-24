@@ -50,6 +50,31 @@ describe('createUpdateGate', () => {
       expect(gate.onAppStateChange('background', 'active', 500)).toBe('none')
       expect(gate.onAppStateChange('background', 'active', 1000)).toBe('check')
     })
+
+    // RN's iOS willEnterForeground mapping has differed across versions:
+    // 0.86 hardcodes it to "background" (so a real foreground reports
+    // background→active directly), but older RNs read the live
+    // applicationState and emitted background→INACTIVE→active. The gate
+    // must fire under BOTH mappings — it keys on "did we pass through
+    // 'background' since the last real foreground", never on the previous
+    // state's name.
+    it('fires on the older-RN sequence background→inactive→active', () => {
+      const gate = createUpdateGate()
+      expect(gate.onAppStateChange('background', 'inactive', 900)).toBe('none')
+      expect(gate.onAppStateChange('inactive', 'active', 1000)).toBe('check')
+    })
+
+    it('a full round trip observed from active still fires exactly once', () => {
+      const gate = createUpdateGate({ throttleMs: 1000 })
+      expect(gate.onAppStateChange('active', 'inactive', 0)).toBe('none')
+      expect(gate.onAppStateChange('inactive', 'background', 10)).toBe('none')
+      expect(gate.onAppStateChange('background', 'inactive', 5000)).toBe('none')
+      expect(gate.onAppStateChange('inactive', 'active', 5010)).toBe('check')
+      // The background evidence is consumed by the fire — a flicker straight
+      // after must not re-fire even with the throttle elapsed.
+      expect(gate.onAppStateChange('active', 'inactive', 9000)).toBe('none')
+      expect(gate.onAppStateChange('inactive', 'active', 9010)).toBe('none')
+    })
   })
 
   describe('onUpdateFetched', () => {
@@ -107,6 +132,14 @@ describe('createUpdateGate', () => {
       gate.onAppStateChange('background', 'active', 0)
       gate.onUpdateFetched(RELOAD_GRACE_MS + 1, { inputFocused: false })
       expect(gate.onAppStateChange('inactive', 'active', 5 * MIN)).toBe('none')
+    })
+
+    it('applies a deferred reload on the older-RN sequence background→inactive→active', () => {
+      const gate = createUpdateGate()
+      gate.onAppStateChange('background', 'active', 0)
+      gate.onUpdateFetched(RELOAD_GRACE_MS + 1, { inputFocused: false })
+      expect(gate.onAppStateChange('background', 'inactive', 5 * MIN)).toBe('none')
+      expect(gate.onAppStateChange('inactive', 'active', 5 * MIN + 10)).toBe('reload')
     })
   })
 })
