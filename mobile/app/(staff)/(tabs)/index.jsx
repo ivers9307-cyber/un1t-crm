@@ -27,6 +27,7 @@ import { pickerLocations } from '../../../lib/control-location'
 import { promptLocationPick } from '../../../lib/pick-location-alert'
 import { shiftWindow, shiftTimeLabel, groupShiftsByDay, safeHomeTiles } from '../../../lib/home-logic'
 import { getMyShifts, getTeamShifts } from '../../../lib/schedule-api'
+import { readShiftsCache, writeShiftsCache } from '../../../lib/physical-cache'
 import { isoDate } from '../../../lib/dates'
 import { pickLocationColor } from 'shared/location-colors'
 import { groupTeamShiftsByCoach, coachSpanLabel } from 'shared/team-today'
@@ -68,6 +69,7 @@ export default function Home() {
     foregroundPermission,
     hasRegions,
     location: physLocation,
+    lastVerdict,
     refresh: refreshPhysical,
   } = usePhysicalLocation()
   const physLocationId = physLocation?.id || null
@@ -131,6 +133,29 @@ export default function Home() {
     paintedRef.current = null
   }, [profile?.id])
 
+  // HOME-FAST.1 — paint the LAST list from disk while the fetch runs: the
+  // same stale-while-revalidate posture this screen already has within a
+  // session, extended across launches. Declared AFTER the identity reset
+  // above so it runs after it on a profile change, and it only ever fills an
+  // EMPTY slot — a landed fetch, or another identity's reset, always wins
+  // over disk. The cache is keyed by profile id AND re-checks it on read
+  // (physical-cache.js), so a shared studio device cannot paint the previous
+  // staffer's roster for the new one.
+  useEffect(() => {
+    const pid = profile?.id
+    if (!pid) return
+    let alive = true
+    readShiftsCache(pid).then((rows) => {
+      if (!alive || !rows) return
+      setMyShifts((prev) => (prev === null ? rows : prev))
+      // Painted FOR this identity, so a transport blip on the in-flight
+      // fetch keeps it on screen instead of replacing it with an error —
+      // the same judgement the fetch path makes about its own list.
+      paintedRef.current = pid
+    })
+    return () => { alive = false }
+  }, [profile?.id])
+
   const loadShifts = useCallback(async (isActive) => {
     if (!profile?.id) return
     try {
@@ -149,6 +174,10 @@ export default function Home() {
       setShiftsError(null)
       setMyShifts(res.data || [])
       paintedRef.current = profile.id
+      // Fire-and-forget: slims the rows and swallows its own failures (a
+      // week of shifts can exceed SecureStore's ~2 KB value limit, which
+      // costs the next launch its head start and nothing else).
+      writeShiftsCache(profile.id, res.data || [])
     } catch (e) {
       // authHeaders() → supabase.auth.getSession() runs OUTSIDE api()'s own
       // try, so an uncaught rejection there would strand the spinner forever.
@@ -274,6 +303,20 @@ export default function Home() {
   // a timer at the OTHER gym — the same reason the /controls launcher filters to
   // loc-aware tiles (HOME-LOC.9b). Follow-up: make timer/TV loc-aware.
   const tiles = onSite ? safeHomeTiles(profile, physLocation, activeLocation?.id) : []
+  // HOME-FAST.1 — the OPTIMISTIC paint for the detection window. `lastVerdict`
+  // is the last CONFIRMED at_studio answer (persisted across launches, already
+  // 30-minute-gated by the hook), resolved here against the assignments this
+  // profile can actually see — so a verdict left on a shared studio device by
+  // someone else can only paint a studio the current user is assigned to, and
+  // the tiles are gated by THEIR permissions like every other tile list.
+  // Rendered ONLY while physStatus === 'loading', and never as 'detected':
+  // the pill stays grey ("detecting…"), which is the honest claim.
+  const optimisticLocation = physStatus === 'loading' && lastVerdict?.locationId
+    ? (locations || []).find((l) => l?.id === lastVerdict.locationId) || null
+    : null
+  const optimisticTiles = optimisticLocation
+    ? safeHomeTiles(profile, optimisticLocation, activeLocation?.id)
+    : []
   const groups = groupShiftsByDay(myShifts || [], todayIso)
   // ONE ROW PER COACH, via the same shared grouper the personal dashboard's
   // "On with you today" strip uses — a coach working three blocks today is
@@ -295,7 +338,51 @@ export default function Home() {
       <Text className="text-3xl font-bold text-un1t-text">Hi {firstName}</Text>
 
       {physStatus === 'loading' ? (
-        <View className="py-10 items-center"><ActivityIndicator color="#94A3B8" /></View>
+        optimisticLocation ? (
+          <>
+            {/* DETECTING, with something to work with. The studio we were
+                last confirmed to be standing in, painted while the real
+                resolution runs, so a reopen at the studio is usable in the
+                first frame instead of after auth → regions → GPS have
+                serialised behind a spinner.
+
+                Tapping a tile mid-detection is safe BY CONSTRUCTION, which is
+                why these are bare router.push(t.href) rather than anything
+                gated: each destination re-resolves the physical location for
+                itself and wears its own pill (grey while it detects, green
+                only once it has), and the server rejects a command carrying a
+                location id the caller has no access to. The worst case is a
+                screen that corrects itself a beat later, in front of the user
+                — the same window every control screen already has.
+
+                When the real verdict lands the normal states take over. If it
+                comes back offsite, the tiles VANISH: the persisted verdict was
+                simply wrong, and the offsite layout is the right answer. */}
+            <LocationPill location={optimisticLocation} source="manual" detecting />
+            {optimisticTiles.length > 0 && (
+              <View className="gap-3">
+                {optimisticTiles.map((t) => (
+                  <ChoiceCard
+                    key={t.key}
+                    icon={t.icon}
+                    tint={t.tint}
+                    title={t.title}
+                    subtitle={t.subtitle}
+                    onPress={() => router.push(t.href)}
+                  />
+                ))}
+              </View>
+            )}
+            {/* Inline, not full-screen: the point is that the screen is
+                already usable while this spins. */}
+            <View className="flex-row items-center justify-center py-4">
+              <ActivityIndicator color="#94A3B8" size="small" />
+              <Text className="text-xs text-un1t-subtle ml-2">Checking where you are</Text>
+            </View>
+          </>
+        ) : (
+          <View className="py-10 items-center"><ActivityIndicator color="#94A3B8" /></View>
+        )
       ) : onSite ? (
         <>
           {/* ON-SITE — the studio you are standing in, unmissable. The pill is
