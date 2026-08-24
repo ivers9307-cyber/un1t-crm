@@ -54,17 +54,38 @@ export function generateDeviceKey(random = Math.random, now = Date.now) {
 }
 
 /**
+ * ANDROID-VIS.1b — the in-flight resolution, memoized at module scope.
+ *
+ * getDeviceKey() is a read-then-mint, and TWO call sites fire it
+ * fire-and-forget on the same cold start: (staff)/(tabs)/_layout.jsx via
+ * registerForPushNotifications(), and LocationGate via reportDeviceState().
+ * Both would read "nothing stored", both would mint, and the device would
+ * end up with TWO rows — one of them an orphan under a key no client holds
+ * any more, which nothing can ever update and only the 90-day sweep
+ * removes. Memoizing the PROMISE (not the value) closes the window: the
+ * second caller awaits the first caller's resolution instead of starting
+ * its own.
+ *
+ * Never reset. A device key is meant to outlive everything in the process,
+ * and resolveDeviceKey() cannot reject — the failure paths all return a
+ * usable key — so there is no failed state worth retrying.
+ */
+let inFlight = null
+
+/**
  * Read this install's key, minting and persisting one on first call.
  *
- * Returns null rather than throwing when SecureStore is unreadable AND
- * unwritable — the caller then falls back to the pre-565 token identity.
- * A key we could generate but not persist is still returned: this report
+ * A key we could generate but not persist is still returned: the report
  * lands under a one-off key rather than not landing at all, which is the
- * better failure (an extra row beats an invisible device). It cannot
- * duplicate silently forever either — the same store failure that loses
- * the key is the one that made the device unreportable before.
+ * better failure (an extra row beats an invisible device). Within a single
+ * process the memo above keeps even that key stable.
  */
 export async function getDeviceKey() {
+  inFlight ??= resolveDeviceKey()
+  return inFlight
+}
+
+async function resolveDeviceKey() {
   try {
     const existing = await SecureStore.getItemAsync(STORAGE_KEY)
     if (isValidDeviceKey(existing)) return existing
@@ -76,7 +97,7 @@ export async function getDeviceKey() {
   try {
     await SecureStore.setItemAsync(STORAGE_KEY, minted)
   } catch {
-    // Not persisted; still usable for this one report. See the doc above.
+    // Not persisted; still usable for this run. See the doc above.
   }
   return minted
 }

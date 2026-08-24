@@ -190,14 +190,14 @@ describe('POST /api/staff-devices/nudge', () => {
     expect(sendPush.mock.calls[0][0]).toEqual([ID.outdated])
 
     expect(json.success).toBe(true)
-    expect(json.data).toEqual({ sent: 1, skipped_throttled: 1, skipped_no_token: 1 })
+    expect(json.data).toEqual({ sent: 1, skipped_throttled: 1, skipped_no_app: 1, skipped_no_token: 0 })
   })
 
   it('skips (and counts) a profile nudged inside the last 24h', async () => {
     createServerClient.mockReturnValue(makeDb(fleet()))
     const json = await (await POST(req({ profile_ids: [ID.throttled] }))).json()
     expect(sendPush).not.toHaveBeenCalled()
-    expect(json.data).toEqual({ sent: 0, skipped_throttled: 1, skipped_no_token: 0 })
+    expect(json.data).toEqual({ sent: 0, skipped_throttled: 1, skipped_no_app: 0, skipped_no_token: 0 })
   })
 
   it('nudges again once the throttle window has passed', async () => {
@@ -367,7 +367,7 @@ describe('POST /api/staff-devices/nudge', () => {
       profile_ids: ['99999999-9999-9999-9999-999999999999'],
     }))).json()
     expect(sendPush).not.toHaveBeenCalled()
-    expect(json.data).toEqual({ sent: 0, skipped_throttled: 0, skipped_no_token: 0 })
+    expect(json.data).toEqual({ sent: 0, skipped_throttled: 0, skipped_no_app: 0, skipped_no_token: 0 })
   })
 
   it('500s when the fleet read errors', async () => {
@@ -399,7 +399,7 @@ describe('POST /api/staff-devices/nudge — ANDROID-VIS.1 token-less devices (mi
     })))
     const json = await (await POST(req({ profile_ids: [ID.outdated] }))).json()
     expect(sendPush).not.toHaveBeenCalled()
-    expect(json.data).toEqual({ sent: 0, skipped_throttled: 0, skipped_no_token: 1 })
+    expect(json.data).toEqual({ sent: 0, skipped_throttled: 0, skipped_no_app: 0, skipped_no_token: 1 })
   })
 
   it('STILL nudges someone whose newest device is token-less but who has another that is not', async () => {
@@ -440,5 +440,25 @@ describe('POST /api/staff-devices/nudge — ANDROID-VIS.1 token-less devices (mi
     const json = await (await POST(req({ profile_ids: [ID.outdated] }))).json()
     // 2.1.0 is behind the 2.9.0 the Android device reported.
     expect(json.data.sent).toBe(1)
+  })
+})
+
+describe('POST /api/staff-devices/nudge — no_app vs no_token are different facts', () => {
+  it('separates the person with no app from the person whose app cannot receive push', async () => {
+    // Folding both into skipped_no_token told the operator to send an
+    // install link to someone who had already installed it.
+    createServerClient.mockReturnValue(makeDb(fleet({
+      device_tokens: [
+        { ...FLEET.device_tokens[0], expo_push_token: null }, // outdated, has app, no token
+        FLEET.device_tokens[1],                               // establishes the target build
+      ],
+    })))
+    const json = await (await POST(req({
+      profile_ids: [ID.outdated, ID.noDevice],
+    }))).json()
+
+    expect(json.data.skipped_no_app).toBe(1)    // ID.noDevice — never installed
+    expect(json.data.skipped_no_token).toBe(1)  // ID.outdated — installed, unreachable
+    expect(json.data.sent).toBe(0)
   })
 })

@@ -2992,7 +2992,7 @@ registry.registerPath({
     },
   },
   responses: {
-    200: { description: 'Counts — { sent, skipped_throttled, skipped_no_token }' },
+    200: { description: 'Counts — { sent, skipped_throttled, skipped_no_app, skipped_no_token }. `skipped_no_app` = no device row at all; `skipped_no_token` = has the app but no push token (ANDROID-VIS.1b — Android until FCM credentials exist).' },
     400: { description: 'Invalid body', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — settings permission required', content: { 'application/json': { schema: ErrorResponse } } },

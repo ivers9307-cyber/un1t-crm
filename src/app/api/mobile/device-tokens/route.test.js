@@ -23,19 +23,25 @@ const DEVICE_KEY = 'a1b2c3d4e5f60718293a4b5c6d7e8f90'
 
 // Captures the upserted row (and the pre-upsert identity statements) so
 // assertions can read what was written and with what conflict target.
-function makeDb(captured) {
+//
+// ANDROID-VIS.1b — `plan` injects DB ERRORS. The original fake always
+// answered success, which is exactly why a 42P10 on every device_key upsert
+// (mig 565's partial index, unfixable by ON CONFLICT inference) was
+// invisible to a green suite. A fake that cannot fail cannot prove a
+// failure is handled.
+function makeDb(captured, plan = {}) {
   captured.updates = []
   captured.deletes = []
+  captured.onConflict = undefined
 
-  const chain = (record) => {
+  const chain = (record, result) => {
     const self = {
       eq(col, val) { record.filters.push(['eq', col, val]); return self },
       is(col, val) { record.filters.push(['is', col, val]); return self },
+      not(col, op, val) { record.filters.push(['not', col, op, val]); return self },
       neq(col, val) { record.filters.push(['neq', col, val]); return self },
       // supabase-js builders are thenables, not Promises.
-      then(resolve, reject) {
-        return Promise.resolve({ data: null, error: null }).then(resolve, reject)
-      },
+      then(resolve, reject) { return Promise.resolve(result()).then(resolve, reject) },
     }
     return self
   }
@@ -47,23 +53,33 @@ function makeDb(captured) {
         captured.onConflict = opts?.onConflict
         return {
           select: () => ({
-            single: () => Promise.resolve({ data: { id: 'dt-1' }, error: null }),
+            single: () => Promise.resolve(
+              plan.upsertError
+                ? { data: null, error: plan.upsertError }
+                : { data: { id: 'dt-1' }, error: null }
+            ),
           }),
         }
       },
       update(patch) {
         const record = { patch, filters: [] }
         captured.updates.push(record)
-        return chain(record)
+        // Discriminated by PATCH, not call order — the two statements do
+        // different things and a test that swapped them should fail loudly.
+        const error = 'device_key' in patch ? plan.adoptError : plan.releaseError
+        return chain(record, () => ({ data: null, error: error ?? null }))
       },
       delete() {
         const record = { filters: [] }
         captured.deletes.push(record)
-        return chain(record)
+        return chain(record, () => ({ data: null, error: plan.pruneError ?? null }))
       },
     }),
   }
 }
+
+/** Postgres unique_violation — what an ADOPT collides with. */
+const UNIQUE_VIOLATION = { code: '23505', message: 'duplicate key value violates unique constraint' }
 
 const del = (body) =>
   new Request('http://localhost/api/mobile/device-tokens', {
@@ -248,12 +264,14 @@ describe('POST /api/mobile/device-tokens — device_key identity', () => {
       ['is', 'device_key', null],
     ])
 
-    // And the token is released from any row holding it under a DIFFERENT
-    // key, so the surviving unique index on expo_push_token cannot turn a
-    // routine report into a 500.
+    // And the token is released from any row holding it under a DIFFERENT,
+    // NON-NULL key, so the surviving unique index on expo_push_token cannot
+    // turn a routine report into a 500 — without nulling the token on a
+    // key-less row, which would leave no identity and trip mig 565's CHECK.
     expect(release.patch).toEqual({ expo_push_token: null })
     expect(release.filters).toEqual([
       ['eq', 'expo_push_token', TOKEN],
+      ['not', 'device_key', 'is', null],
       ['neq', 'device_key', DEVICE_KEY],
     ])
 
@@ -332,5 +350,116 @@ describe('DELETE /api/mobile/device-tokens — deregistering by either identity'
     const res = await DELETE(del({}))
     expect(res.status).toBe(400)
     expect(captured.deletes).toHaveLength(0)
+  })
+})
+
+// --- ANDROID-VIS.1b — review fixes ---------------------------------------
+
+describe('POST /api/mobile/device-tokens — DB failures actually surface', () => {
+  beforeEach(() => getCurrentUser.mockResolvedValue({ id: 'u1' }))
+
+  it('500s when the upsert itself fails', async () => {
+    // Regression guard for the mig 565 ship-stopper: ON CONFLICT (device_key)
+    // could not infer a PARTIAL unique index, so every device_key upsert
+    // returned 42P10. The suite stayed green because the fake could not
+    // fail. Mig 566 makes the index full; this test makes the failure mode
+    // visible if anything ever re-partials it.
+    const captured = {}
+    createServerClient.mockReturnValue(makeDb(captured, {
+      upsertError: { code: '42P10', message: 'there is no unique or exclusion constraint matching the ON CONFLICT specification' },
+    }))
+
+    const res = await POST(req({ device_key: DEVICE_KEY, platform: 'android' }))
+    expect(res.status).toBe(500)
+    expect((await res.json()).success).toBe(false)
+  })
+
+  it('500s rather than upserting when ADOPT fails for an unexpected reason', async () => {
+    // The discarded-error class: the first cut logged the adopt error and
+    // walked into an upsert that was already doomed, so the 500 named the
+    // wrong stage and the real cause only existed in a log line.
+    const captured = {}
+    createServerClient.mockReturnValue(makeDb(captured, {
+      adoptError: { code: '08006', message: 'connection failure' },
+    }))
+
+    const res = await POST(req({ expo_push_token: TOKEN, device_key: DEVICE_KEY }))
+    expect(res.status).toBe(500)
+    expect(captured.row).toBeUndefined()
+  })
+
+  it('500s rather than upserting when RELEASE fails', async () => {
+    const captured = {}
+    createServerClient.mockReturnValue(makeDb(captured, {
+      releaseError: { code: '08006', message: 'connection failure' },
+    }))
+
+    const res = await POST(req({ expo_push_token: TOKEN, device_key: DEVICE_KEY }))
+    expect(res.status).toBe(500)
+    expect(captured.row).toBeUndefined()
+  })
+})
+
+describe('POST /api/mobile/device-tokens — the permanent-500 interleaving', () => {
+  beforeEach(() => getCurrentUser.mockResolvedValue({ id: 'u1' }))
+
+  it('prunes the superseded token row when ADOPT hits a unique violation', async () => {
+    // The interleaving, in full:
+    //   1. Device reports token-less (permission declined / no FCM) →
+    //      INSERT R2(device_key=K, expo_push_token=NULL).
+    //   2. Its pre-565 row R1(expo_push_token=T, device_key=NULL) is still
+    //      there from before the migration.
+    //   3. Token arrives. ADOPT tries to stamp K onto R1 → unique violation
+    //      against R2's key. The first cut swallowed it, RELEASE could not
+    //      see R1 (`<>` is not-true for NULL), and the upsert then violated
+    //      the surviving token index — 500 on EVERY report, forever.
+    // R1 is the same install as R2, superseded. Delete it.
+    const captured = {}
+    createServerClient.mockReturnValue(makeDb(captured, { adoptError: UNIQUE_VIOLATION }))
+
+    const res = await POST(req({ expo_push_token: TOKEN, device_key: DEVICE_KEY }))
+    expect(res.status).toBe(200)
+
+    expect(captured.deletes).toHaveLength(1)
+    expect(captured.deletes[0].filters).toEqual([
+      ['eq', 'expo_push_token', TOKEN],
+      ['is', 'device_key', null],
+    ])
+    // And the report still lands, on the device_key identity.
+    expect(captured.onConflict).toBe('device_key')
+    expect(captured.row.expo_push_token).toBe(TOKEN)
+  })
+
+  it('500s when the prune fails, rather than walking into the doomed upsert', async () => {
+    const captured = {}
+    createServerClient.mockReturnValue(makeDb(captured, {
+      adoptError: UNIQUE_VIOLATION,
+      pruneError: { code: '08006', message: 'connection failure' },
+    }))
+
+    const res = await POST(req({ expo_push_token: TOKEN, device_key: DEVICE_KEY }))
+    expect(res.status).toBe(500)
+    expect(captured.row).toBeUndefined()
+  })
+
+  it('RELEASE never touches a NULL-device_key row — that would trip the CHECK', async () => {
+    // mig 565's device_tokens_identity_present CHECK (verified VALIDATED in
+    // prod) refuses a row with neither identity. Nulling the token on a
+    // key-less row would leave exactly that, so the review's suggested
+    // `device_key IS DISTINCT FROM` release would have traded a 500 for a
+    // CHECK violation. RELEASE is scoped to rows that KEEP an identity;
+    // key-less ones are handled by ADOPT (or the prune above).
+    const captured = {}
+    createServerClient.mockReturnValue(makeDb(captured))
+
+    await POST(req({ expo_push_token: TOKEN, device_key: DEVICE_KEY }))
+
+    const release = captured.updates.find(u => 'expo_push_token' in u.patch)
+    expect(release.patch).toEqual({ expo_push_token: null })
+    expect(release.filters).toEqual([
+      ['eq', 'expo_push_token', TOKEN],
+      ['not', 'device_key', 'is', null],
+      ['neq', 'device_key', DEVICE_KEY],
+    ])
   })
 })

@@ -11,10 +11,11 @@
 // 'ExponentPushToken[xxx...]'. We store it in device_tokens (migration
 // 023) and let src/lib/push.js fan out to it.
 //
-// Idempotency: Expo tokens are stable per (device, app install). We use
-// ON CONFLICT (expo_push_token) DO UPDATE so re-registering bumps
-// last_seen_at and re-points the token at the current user — the same
-// device used by two different staff (shared kiosk) is supported.
+// Idempotency: re-registering from the same device bumps last_seen_at and
+// re-points the row at the current user, rather than making a duplicate —
+// the same device used by two different staff (a shared kiosk) is
+// supported. The conflict target is `device_key` for any client that sends
+// one and `expo_push_token` only for pre-2.3.x clients that cannot.
 //
 // ANDROID-VIS.1 (mig 565) — DUAL IDENTITY. The push token is no longer the
 // identity, only a capability: a device that cannot obtain one (every
@@ -28,6 +29,26 @@
 // The transition is the delicate part, and it is handled in
 // resolveDeviceIdentity() below — read that comment before changing
 // anything here.
+//
+// ⚠️ TOKEN PING-PONG, the one shape RELEASE cannot settle. If two LIVE
+// installs ever hold the same Expo push token, each report releases it from
+// the other and the token oscillates between their rows — every write
+// succeeds, no error is logged, and the pair silently take turns being
+// push-reachable. Expo issues a token per (device, project, install), so
+// this should not happen; a device-restore that clones the token is the
+// only plausible route. It is bounded (a report is fire-and-forget and the
+// row still reports everything else) and self-heals as soon as one install
+// re-registers with a fresh token, so it is ACCEPTED rather than defended
+// against — a "last writer wins" tiebreak would need a clock the client
+// controls. If push starts flapping for two staff at once, look here first.
+//
+// ⚠️ `device_tokens_device_key_key` MUST STAY A FULL (non-partial) UNIQUE
+// INDEX. Postgres cannot infer a partial index from `ON CONFLICT
+// (device_key)` — there is no WHERE clause on an INSERT to imply the
+// predicate — so a partial one makes EVERY upsert here fail with 42P10.
+// Mig 565 created it partial and mig 566 had to undo that; do not
+// re-add a WHERE clause to it. NULLS DISTINCT already keeps the pre-565
+// NULL-device_key rows legal, which is all the predicate was for.
 
 import { z } from 'zod'
 import { GEOFENCE_PERMISSION_VALUES } from '@/lib/geofence-permission-chips'
@@ -37,6 +58,9 @@ import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
+
+/** Postgres unique_violation. An ADOPT collision is expected, not exceptional. */
+const PG_UNIQUE_VIOLATION = '23505'
 
 const RegisterSchema = z.object({
   // ANDROID-VIS.1 — OPTIONAL since mig 565. A device with no push token
@@ -96,7 +120,10 @@ const RegisterSchema = z.object({
  * device_key: nothing matches the key, PostgREST attempts an INSERT, and
  * the surviving token index rejects it — the device would 500 forever.
  *
- * Two statements, in this order, make the transition safe:
+ * Three statements make the transition safe. Every token-holding row ends
+ * up either OURS or token-less, and every row keeps at least one identity
+ * (mig 565's device_tokens_identity_present CHECK is VALIDATED in prod, so
+ * a row with neither is a hard error, not a tidy-up):
  *
  *   1. ADOPT. Stamp our device_key onto the row that already holds this
  *      token and has no key yet. Runs at most once per device in its
@@ -104,17 +131,33 @@ const RegisterSchema = z.object({
  *      13 iOS rows — their id, created_at and geofence_permission history
  *      all survive, they simply gain a key.
  *
- *   2. RELEASE. Clear the token off any row holding it under a DIFFERENT
- *      key (an app restored onto a new install that was handed the same
- *      token). `.neq` is SQL `<>`, which is false for NULL, so this can
- *      never touch a row step 1 just adopted. Losing push on a row whose
- *      install no longer exists is correct — Expo would only ever deliver
- *      that token to one install anyway — and the alternative is a hard
- *      unique-violation on a report that should not be able to fail.
+ *   1b. PRUNE, when ADOPT hits a unique violation. That means a row under
+ *      OUR key already exists, so the token-holding row is a SUPERSEDED
+ *      DUPLICATE of this same install — the exact interleaving that used to
+ *      500 forever: a device reports token-less first (INSERT under the
+ *      key), its pre-565 token row is still there, and when the token
+ *      finally arrives ADOPT collides, RELEASE cannot see a NULL-key row,
+ *      and the upsert violates the token index on every report from then
+ *      on. Deleting the superseded row is right — it is this device's own
+ *      older identity, and device_tokens has NO foreign-key dependents
+ *      (checked against prod), so nothing else references it.
  *
- * Both are best-effort by design: a failure is logged and the upsert still
- * runs. Worst case the upsert then hits the token index and returns 500,
- * which is exactly where we were before — never worse.
+ *   2. RELEASE. Clear the token off any row holding it under a DIFFERENT,
+ *      NON-NULL key (an app restored onto a new install handed the same
+ *      token). Scoped to non-NULL keys ON PURPOSE: those rows keep an
+ *      identity after the token goes, so the CHECK holds. Nulling the token
+ *      on a KEY-LESS row would leave a row with neither identity and fail —
+ *      trading a 500 for a different 500. Key-less rows are step 1's job.
+ *      Losing push on a row whose install no longer exists is correct;
+ *      Expo would only ever deliver that token to one install anyway.
+ *
+ * NOTHING HERE IS BEST-EFFORT ANY MORE. The first cut logged each failure
+ * and proceeded into an upsert that was already doomed — the repo's
+ * discarded-error class, and it made the 500 name the wrong stage while the
+ * real cause lived only in a log line. An unresolved identity means we
+ * cannot know which row we are about to write, so we stop and say so. The
+ * caller is fire-and-forget and retries on the next foreground, so this
+ * costs a report, not a device: strictly better than a wrong write.
  *
  * NEITHER statement is scoped to user_id, and that is deliberate: the row
  * being adopted may legitimately belong to a DIFFERENT staffer (a shared
@@ -125,21 +168,46 @@ const RegisterSchema = z.object({
  * new class of claim; it only makes the claim durable.
  */
 async function resolveDeviceIdentity(db, { deviceKey, token }) {
-  if (!deviceKey || !token) return
+  if (!deviceKey || !token) return { ok: true }
 
+  // 1. ADOPT
   const { error: adoptError } = await db
     .from('device_tokens')
     .update({ device_key: deviceKey })
     .eq('expo_push_token', token)
     .is('device_key', null)
-  if (adoptError) console.error('[device-tokens] legacy-row adoption failed', adoptError)
 
+  if (adoptError) {
+    if (adoptError.code !== PG_UNIQUE_VIOLATION) {
+      console.error('[device-tokens] legacy-row adoption failed', adoptError)
+      return { ok: false, stage: 'adopt' }
+    }
+    // 1b. PRUNE — a row under our key already exists, so the token-holding
+    // row is this same install's superseded pre-565 identity.
+    const { error: pruneError } = await db
+      .from('device_tokens')
+      .delete()
+      .eq('expo_push_token', token)
+      .is('device_key', null)
+    if (pruneError) {
+      console.error('[device-tokens] superseded-row prune failed', pruneError)
+      return { ok: false, stage: 'prune' }
+    }
+  }
+
+  // 2. RELEASE — non-NULL keys only, so every touched row keeps an identity.
   const { error: releaseError } = await db
     .from('device_tokens')
     .update({ expo_push_token: null })
     .eq('expo_push_token', token)
+    .not('device_key', 'is', null)
     .neq('device_key', deviceKey)
-  if (releaseError) console.error('[device-tokens] stale-token release failed', releaseError)
+  if (releaseError) {
+    console.error('[device-tokens] stale-token release failed', releaseError)
+    return { ok: false, stage: 'release' }
+  }
+
+  return { ok: true }
 }
 
 export async function POST(request) {
@@ -158,10 +226,18 @@ export async function POST(request) {
   // the client can identify itself with. A client on 2.3.x+ always sends
   // device_key, so it takes the first branch; anything older still lands
   // on the original token path, unchanged.
-  await resolveDeviceIdentity(db, {
+  const identity = await resolveDeviceIdentity(db, {
     deviceKey: body.device_key,
     token: body.expo_push_token,
   })
+  if (!identity.ok) {
+    // Named stage in the log above; the body stays generic — this is a
+    // device-facing endpoint, not an operator surface.
+    return NextResponse.json(
+      { success: false, error: 'Failed to register device' },
+      { status: 500 }
+    )
+  }
   const onConflict = body.device_key ? 'device_key' : 'expo_push_token'
 
   // Upsert by the identity above — re-registers from the same device

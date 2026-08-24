@@ -215,3 +215,48 @@ export function deviceVerdict(devices, targetVersion, now) {
   const kind = compareVersions(device.app_version, targetVersion) < 0 ? 'outdated' : 'current'
   return { kind, ...base }
 }
+
+/** A device is "recently seen" for push-health purposes within this window. */
+export const PUSH_HEALTHY_DAYS = 14
+
+/**
+ * ANDROID-VIS.1b — the per-staff verdict on /settings/notifications/health.
+ *
+ * Lifted out of the page so it can be tested, because it acquired a state
+ * that MATTERS: since mig 565 a device row no longer implies a push token,
+ * and the previous logic called a token-less device 🟢 Healthy. That is a
+ * confident lie on the one surface whose entire job is answering "would a
+ * push reach this phone" — and it sat next to a live "Send test push"
+ * button that could never do anything. Every Android device in the fleet
+ * would have rendered that way.
+ *
+ * Order matters: unreachable outranks stale. "We cannot push to this phone
+ * at all" is a more useful and more actionable fact than "we could, but its
+ * token may have aged out".
+ *
+ * `canPush` is the single source of truth for whether the test-push button
+ * is offered — never re-derive it from `kind` at a call site.
+ *
+ * @param {Array<{last_seen_at?: string|null, expo_push_token?: string|null}>} devices
+ * @param {number} now  injected clock; the lib stays pure
+ */
+export function pushHealthStatus(devices, now = Date.now()) {
+  const list = Array.isArray(devices) ? devices : []
+  if (!list.length) return { kind: 'red', label: 'No app', canPush: false }
+
+  const newest = list.reduce(
+    (max, d) => (!max || (d?.last_seen_at && d.last_seen_at > max) ? d?.last_seen_at : max),
+    null,
+  )
+  if (!newest) return { kind: 'red', label: 'No app', canPush: false }
+
+  // A missing key reads the same as an explicit null: a caller that forgot
+  // to select the column must not be told everyone is reachable.
+  if (!list.some((d) => d?.expo_push_token)) {
+    return { kind: 'nopush', label: 'Visible, no push', canPush: false }
+  }
+
+  const daysSince = (now - new Date(newest).getTime()) / DAY_MS
+  if (daysSince > PUSH_HEALTHY_DAYS) return { kind: 'amber', label: 'Stale', canPush: true }
+  return { kind: 'green', label: 'Healthy', canPush: true }
+}

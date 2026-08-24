@@ -20,20 +20,21 @@ vi.mock('expo-secure-store', () => ({
   }),
 }))
 
-import {
-  generateDeviceKey,
-  isValidDeviceKey,
-  getDeviceKey,
-  peekDeviceKey,
-  DEVICE_KEY_PATTERN,
-} from './device-key'
 import * as SecureStore from 'expo-secure-store'
 
-beforeEach(() => {
+// ANDROID-VIS.1b — getDeviceKey() memoizes its in-flight promise at MODULE
+// scope (that is the race fix), so every test needs a fresh module or it
+// inherits the previous test's key.
+let generateDeviceKey, isValidDeviceKey, getDeviceKey, peekDeviceKey, DEVICE_KEY_PATTERN
+
+beforeEach(async () => {
   vi.clearAllMocks()
   store.value = null
   store.readThrows = false
   store.writeThrows = false
+  vi.resetModules()
+  ;({ generateDeviceKey, isValidDeviceKey, getDeviceKey, peekDeviceKey, DEVICE_KEY_PATTERN } =
+    await import('./device-key'))
 })
 
 describe('generateDeviceKey', () => {
@@ -126,5 +127,49 @@ describe('peekDeviceKey', () => {
   it('returns null on an unreadable keychain', async () => {
     store.readThrows = true
     expect(await peekDeviceKey()).toBeNull()
+  })
+})
+
+describe('getDeviceKey — concurrent callers (ANDROID-VIS.1b)', () => {
+  it('returns ONE key and writes ONCE when called concurrently', async () => {
+    // The real race: (staff)/(tabs)/_layout.jsx fires
+    // registerForPushNotifications() and LocationGate fires
+    // reportDeviceState() on the same cold start, both fire-and-forget.
+    // A plain read-then-mint gives each its own key — two rows for one
+    // device, one of them an orphan nothing will ever update again.
+    const results = await Promise.all([
+      getDeviceKey(), getDeviceKey(), getDeviceKey(), getDeviceKey(), getDeviceKey(),
+    ])
+    expect(new Set(results).size).toBe(1)
+    expect(results[0]).toMatch(DEVICE_KEY_PATTERN)
+    expect(SecureStore.setItemAsync).toHaveBeenCalledTimes(1)
+  })
+
+  it('serialises even when the keychain read is slow', async () => {
+    // Widen the window the race actually lives in: the mint must not start
+    // until the read has answered, and only one mint may ever run.
+    let release
+    const gate = new Promise((r) => { release = r })
+    SecureStore.getItemAsync.mockImplementationOnce(async () => { await gate; return null })
+
+    const pending = [getDeviceKey(), getDeviceKey(), getDeviceKey()]
+    release()
+    const results = await Promise.all(pending)
+
+    expect(new Set(results).size).toBe(1)
+    expect(SecureStore.getItemAsync).toHaveBeenCalledTimes(1)
+    expect(SecureStore.setItemAsync).toHaveBeenCalledTimes(1)
+  })
+
+  it('a later call still gets the memoized key without re-reading the keychain', async () => {
+    const first = await getDeviceKey()
+    SecureStore.getItemAsync.mockClear()
+    expect(await getDeviceKey()).toBe(first)
+    expect(SecureStore.getItemAsync).not.toHaveBeenCalled()
+  })
+
+  it('peekDeviceKey sees the key a concurrent getDeviceKey persisted', async () => {
+    const [key] = await Promise.all([getDeviceKey(), getDeviceKey()])
+    expect(await peekDeviceKey()).toBe(key)
   })
 })
