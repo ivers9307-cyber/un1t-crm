@@ -220,11 +220,26 @@ export function usePhysicalLocation() {
       // under-resolve, and a stale green "detected" pill asserting the wrong
       // studio is far worse than a spare acquisition. LocationGate.jsx uses
       // the same `s === 'active'` shape.
+      //
+      // The gate discriminates on TIME AWAY, not the state name: a Control
+      // Centre / notification-shade glance round-trips inactive → active in
+      // seconds, and re-resolving on that would drop the position cache and
+      // put the screen through 'loading' — during which the resolution falls
+      // back to activeLocation, a mid-visit retarget the per-visit freeze
+      // exists to prevent. Under POSITION_TTL_MS the cached fix is still
+      // good and the frozen verdict still true; over it, the phone may
+      // genuinely have been to the other gym.
       let prev = AppState.currentState
+      let leftAt = 0
       const sub = AppState.addEventListener('change', (nextState) => {
-        const wasBackground = prev !== 'active'
+        const wasAway = prev !== 'active'
+        if (nextState !== 'active') {
+          if (!wasAway) leftAt = Date.now()
+          prev = nextState
+          return
+        }
         prev = nextState
-        if (nextState !== 'active' || !wasBackground) return
+        if (!wasAway || Date.now() - leftAt <= POSITION_TTL_MS) return
         const fgVisit = ++visitRef.current
         positionCache = { at: 0, position: null }
         setResult({ status: 'loading', location: null })
