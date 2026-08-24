@@ -32,6 +32,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Calendar, Clock, MapPin, AlertCircle, Loader2, Check, BadgeCheck, Info } from 'lucide-react'
+import { windowedWaves } from '@/lib/wave-window'
 
 // Kind-keyed copy. Adding a new kind = one entry. The 'race' entry
 // holds the original strings so the operator-visible UX for races
@@ -499,6 +500,11 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   const showMemberNotice = !!(race.member_pricing_enabled || race.members_only)
   const showPricingCard = !!(memberPricing || nonMemberFeeCents != null)
   const wavesArr = Array.isArray(race.waves) ? race.waves : []
+  // WAVEWIN.1 — the picker only offers the immediately-available
+  // 90-minute window (earlier sold-out waves stay, greyed; later waves
+  // release as the window slides). The sidebar summary and every
+  // operator surface still see the full schedule.
+  const pickerWaves = windowedWaves(wavesArr)
 
   // ── Render-only derived values (no behaviour change) ──────────────
   // Human label for the event kind, used in the hero eyebrow.
@@ -779,11 +785,11 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
               {/* Wave picker — race-only. Non-race kinds have a single
                   auto-selected wave; the time is shown in the details
                   block so the operator UX still surfaces it. */}
-              {copy.showWavePicker && wavesArr.length > 0 && (
+              {copy.showWavePicker && pickerWaves.length > 0 && (
                 <div>
                   <label className={labelCls}>Pick your wave *</label>
                   <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-3 gap-2">
-                    {wavesArr.map((w) => {
+                    {pickerWaves.map((w) => {
                       const full = !!w.is_full
                       const selected = waveId === w.id
                       const time = (w.start_time || '').slice(0, 5)
@@ -816,6 +822,11 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                       )
                     })}
                   </div>
+                  {pickerWaves.length < wavesArr.length && (
+                    <p className="text-[11px] text-white/45 mt-1.5">
+                      More start times are released as these waves fill.
+                    </p>
+                  )}
                   {fieldErrors.wave_id && <p className={errCls}>{fieldErrors.wave_id}</p>}
                 </div>
               )}
