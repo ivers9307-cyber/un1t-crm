@@ -61,3 +61,28 @@ describe('customerWords', () => {
     expect(customerWords({ kind: 'pause', details: {} })).toBeNull()
   })
 })
+
+// AGENT-RETRY.1 — failed-execution copy for the Fix & retry surfaces.
+import { failureExplanation } from './agent-request-why'
+
+describe('failureExplanation', () => {
+  it('explains the no-credits Glofox rejection with a fix instruction', () => {
+    const out = failureExplanation({ status: 'failed', details: { result: { ok: false, message_code: 'YOU_HAVE_NO_CREDITS_LEFT' } } })
+    expect(out).toMatch(/grant a credit/i)
+  })
+  it('explains NOT_EXECUTABLE (no linked account / no config)', () => {
+    expect(failureExplanation({ status: 'failed', details: { result: { message_code: 'NOT_EXECUTABLE' } } }))
+      .toMatch(/linked/i)
+  })
+  it('keeps an unknown code visible', () => {
+    expect(failureExplanation({ status: 'failed', details: { result: { message_code: 'CLASS_IS_FULL' } } }))
+      .toContain('CLASS_IS_FULL')
+  })
+  it('handles a failed row with no result payload', () => {
+    expect(failureExplanation({ status: 'failed', details: {} })).toMatch(/retry/i)
+  })
+  it('returns null for anything not failed', () => {
+    expect(failureExplanation({ status: 'actioned', details: { result: { ok: true } } })).toBeNull()
+    expect(failureExplanation(null)).toBeNull()
+  })
+})

@@ -74,3 +74,42 @@ describe('execution markers', () => {
     expect(finishedMarker({ a: 1 }, { finishedAt: 'x' })).toEqual({ a: 1 })
   })
 })
+
+// AGENT-RETRY.1 — a failed execution is retryable, not terminal.
+import { isRetryableFailure, retryOffered, RETRY_OFFER_WINDOW_MS } from './request-recovery'
+
+describe('isRetryableFailure', () => {
+  it('accepts a failed executing-kind row', () => {
+    expect(isRetryableFailure({ status: 'failed', kind: 'class_booking' })).toBe(true)
+    expect(isRetryableFailure({ status: 'failed', kind: 'event_booking' })).toBe(true)
+  })
+  it('refuses non-failed statuses and non-executing kinds', () => {
+    expect(isRetryableFailure({ status: 'actioned', kind: 'class_booking' })).toBe(false)
+    expect(isRetryableFailure({ status: 'pending', kind: 'class_booking' })).toBe(false)
+    expect(isRetryableFailure({ status: 'failed', kind: 'pause' })).toBe(false)
+    expect(isRetryableFailure({ status: 'failed', kind: 'cancellation' })).toBe(false)
+    expect(isRetryableFailure(null)).toBe(false)
+  })
+})
+
+describe('retryOffered — the UI gate is stricter than the route gate', () => {
+  const failed = (overrides = {}) => ({ status: 'failed', kind: 'class_booking', details: {}, ...overrides })
+
+  it('offers a failed booking whose class has not started', () => {
+    expect(retryOffered(failed({ details: { starts_at: new Date(NOW + 3_600_000).toISOString() } }), NOW)).toBe(true)
+  })
+  it('withholds a failed booking whose class already started', () => {
+    expect(retryOffered(failed({ details: { starts_at: ago(60_000) } }), NOW)).toBe(false)
+  })
+  it('without a start time, falls back to the decided-at recency window', () => {
+    expect(retryOffered(failed({ kind: 'class_cancellation', decided_at: ago(3_600_000) }), NOW)).toBe(true)
+    expect(retryOffered(failed({ kind: 'class_cancellation', decided_at: ago(RETRY_OFFER_WINDOW_MS + 1000) }), NOW)).toBe(false)
+  })
+  it('without a start time OR decided_at, offers nothing (no unbounded backlog)', () => {
+    expect(retryOffered(failed({ kind: 'event_cancellation' }), NOW)).toBe(false)
+  })
+  it('never offers what isRetryableFailure refuses', () => {
+    expect(retryOffered(failed({ kind: 'pause', decided_at: ago(1000) }), NOW)).toBe(false)
+    expect(retryOffered(failed({ status: 'actioned', decided_at: ago(1000) }), NOW)).toBe(false)
+  })
+})

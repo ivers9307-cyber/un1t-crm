@@ -140,3 +140,90 @@ describe('PATCH decline — customer notice', () => {
     expect(sent.text.length).toBeGreaterThan(10)
   })
 })
+
+// AGENT-RETRY.1 — a FAILED execution may be re-approved after the operator
+// fixes the underlying problem in Glofox. The re-claim races on
+// status='failed' (loser 409s); decline and non-executing kinds stay shut.
+describe('PATCH failed-execution retry', () => {
+  const FAILED_ROW = {
+    ...ROW,
+    status: 'failed',
+    details: { ...ROW.details, reason: 'prior_attendance', result: { ok: false, message_code: 'YOU_HAVE_NO_CREDITS_LEFT' } },
+  }
+
+  // Same double as makeDb, but with an overridable row and eq capture on
+  // update chains so the claim predicate is assertable.
+  function makeRetryDb(updates, row, claimEqs) {
+    return {
+      from(table) {
+        let patch = null
+        const eqs = []
+        const b = {
+          select: () => b,
+          eq(col, val) { eqs.push([col, val]); return b },
+          update(p) { patch = p; updates.push({ table, patch: p, eqs }); return b },
+          async maybeSingle() {
+            if (patch) { claimEqs.push(...eqs); return { data: { id: row.id }, error: null } }
+            if (table === 'contacts') return { data: { glofox_member_id: 'gm1' }, error: null }
+            return { data: row, error: null }
+          },
+          async single() {
+            return { data: { id: row.id, status: patch?.status, decided_at: null, decision_note: null, details: patch?.details }, error: null }
+          },
+        }
+        return b
+      },
+    }
+  }
+
+  it('approve on a failed class_booking re-claims on status=failed and re-runs the booking', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const claimEqs = []
+    db = makeRetryDb(updates, FAILED_ROW, claimEqs)
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { _id: 'gfb-retry' } })
+
+    const res = await approve()
+    const json = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(json.executed).toMatchObject({ ok: true, glofox_booking_id: 'gfb-retry' })
+    // The claim raced on the failed status, not pending.
+    expect(claimEqs).toContainEqual(['status', 'failed'])
+    expect(updates.at(-1).patch.status).toBe('actioned')
+    expect(sendAgentThreadMessage).toHaveBeenCalledOnce()
+    warn.mockRestore()
+  })
+
+  it('a second failure overwrites result and lands failed again — still no confirmation', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    db = makeRetryDb(updates, FAILED_ROW, [])
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { message_code: 'YOU_HAVE_NO_CREDITS_LEFT' } })
+
+    await approve()
+
+    expect(updates.at(-1).patch.status).toBe('failed')
+    expect(sendAgentThreadMessage).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('decline on a failed row still 409s', async () => {
+    db = makeRetryDb(updates, FAILED_ROW, [])
+    const res = await PATCH(
+      new Request('http://localhost/api/agent/membership-requests/r1', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ status: 'declined' }),
+      }),
+      { params: Promise.resolve({ id: 'r1' }) },
+    )
+    expect(res.status).toBe(409)
+    expect(updates).toHaveLength(0)
+  })
+
+  it('approve on a failed NON-executing kind (pause) 409s', async () => {
+    db = makeRetryDb(updates, { ...FAILED_ROW, kind: 'pause' }, [])
+    const res = await approve()
+    expect(res.status).toBe(409)
+    expect(updates).toHaveLength(0)
+  })
+})
