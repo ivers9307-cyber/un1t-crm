@@ -394,6 +394,20 @@ function SonosScheduleInner({ locationName }) {
         <UnreachableNotice statusCode={household.statusCode} />
       )}
 
+      {/* SONOSGRP.3 — live controls per current Sonos GROUP, no schedule
+          required (Hatch has a connected household but zero schedules).
+          Rendered whenever the household answered with groups — always, not
+          only when the schedule list is empty. onRegrouped is the household
+          refetch: group ids are ephemeral, so when a strip learns its id is
+          stale the section heals itself to the new grouping. */}
+      {!loading && !loadError && connected && household?.reachable && (household.groups?.length > 0) && (
+        <LiveNowSection
+          groups={household.groups}
+          favorites={household.favorites || []}
+          onRegrouped={loadHousehold}
+        />
+      )}
+
       {!loading && !loadError && connected && (
         <SchedulesSection
           canEdit={canEditSchedules}
@@ -488,6 +502,37 @@ function HouseholdPicker({ ids, locationName }) {
           </a>
         ))}
       </div>
+    </div>
+  )
+}
+
+// SONOSGRP.3 — one live-control strip per current Sonos group, keyed by the
+// (ephemeral) group id. Only rendered while connected AND reachable, so the
+// strips are always editable — there is no read-only fallback to design for:
+// with the Sonos cloud not answering there are no groups to list at all.
+// Never touches sonos_schedules; a group's name falls back to its first
+// player id because Sonos allows unnamed groups.
+function LiveNowSection({ groups, favorites, onRegrouped }) {
+  return (
+    <div className="space-y-3">
+      <div>
+        <h2 className="font-semibold text-un1t-text">Live now</h2>
+        <p className="text-sm text-un1t-subtle">What&apos;s playing on each speaker group right now.</p>
+      </div>
+      {groups.map((g) => {
+        const count = Array.isArray(g.playerIds) ? g.playerIds.length : 0
+        return (
+          <div key={g.id} className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-medium text-un1t-text">{g.name || g.playerIds?.[0] || g.id}</p>
+              <p className="text-[11px] text-un1t-subtle shrink-0">
+                {count} speaker{count === 1 ? '' : 's'}
+              </p>
+            </div>
+            <SonosLiveControl groupId={g.id} favorites={favorites} editable={true} onRegrouped={onRegrouped} />
+          </div>
+        )
+      })}
     </div>
   )
 }

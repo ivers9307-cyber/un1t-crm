@@ -50,7 +50,8 @@ const defaultCall = (name, token, groupId, ...args) => CLIENT[name](token, group
 // db is used only by getToken. Nothing needs authorising beyond the
 // location's own token: it scopes the household, so a foreign group id is
 // simply absent from the groups fetch and answers `regrouped` (group ids
-// are ephemeral by design, so "the speakers regrouped — try that again"
+// are ephemeral by design, so "the speakers regrouped — refresh and try
+// again"
 // is the honest copy, not no_group's schedule-speaker wording).
 //
 // `code` is a stable tag the route maps to an HTTP status and copy.
