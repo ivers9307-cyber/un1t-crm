@@ -31,6 +31,7 @@ import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Tr
 import Link from 'next/link'
 import { toSlug } from '@/lib/slug'
 import { compressImageForUpload, parseUploadResponse } from '@/lib/landing-media-upload'
+import { generateWaveTimes } from '@/lib/wave-generate'
 
 const ALL_SIZES = [1, 2, 3, 4, 5, 6, 8]
 
@@ -225,6 +226,15 @@ export default function RaceEventForm({ race, locationId }) {
         label: w.label || '',
       }))
   })
+  // WAVEGEN.1 — bulk wave generator inputs. Generate replaces the
+  // wave list with start→end at the cadence; rows stay editable after.
+  const [genStart, setGenStart] = useState('')
+  const [genEnd, setGenEnd] = useState('')
+  const [genEvery, setGenEvery] = useState('')
+  const [genCapacity, setGenCapacity] = useState('')
+  // Live preview of what Generate would produce; [] disables the button.
+  const generatedTimes = generateWaveTimes(genStart, genEnd, genEvery)
+
   const [active, setActive] = useState(race?.active ?? true)
   // Member pricing (mig 084). Stored as cents on the wire; the form
   // shows whole-euro inputs and converts on submit. Same pricing path
@@ -764,7 +774,72 @@ export default function RaceEventForm({ race, locationId }) {
             Multiple start times throughout the race day. Each wave has its own capacity. Teams pick a
             wave at signup. Per-wave capacity is soft-enforced at signup time (a fast-fingered team
             can in theory squeeze in over the cap during a near-simultaneous signup; acceptable for v1).
+            Signup only offers the next 90 minutes of available waves — later times release as earlier
+            waves fill.
           </p>
+
+          {/* WAVEGEN.1 — generate the whole day in one go. Generated
+              rows land in the editable list below, so one-off tweaks
+              (a lunch gap, a different cap on the last wave) are still
+              a normal edit. */}
+          <div className="border border-un1t-border rounded-md p-3 bg-un1t-bg space-y-2">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-un1t-subtle">
+              Generate waves
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-[110px_110px_120px_120px_auto] gap-2 items-center">
+              <input
+                type="time"
+                value={genStart}
+                onChange={e => setGenStart(e.target.value)}
+                title="First wave start time"
+                className="bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+              />
+              <input
+                type="time"
+                value={genEnd}
+                onChange={e => setGenEnd(e.target.value)}
+                title="Last wave start time"
+                className="bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+              />
+              <input
+                type="number"
+                min={1}
+                placeholder="Every (min)"
+                value={genEvery}
+                onChange={e => setGenEvery(e.target.value)}
+                title="Minutes between wave starts"
+                className="bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+              />
+              <input
+                type="number"
+                min={1}
+                placeholder="Teams/wave"
+                value={genCapacity}
+                onChange={e => setGenCapacity(e.target.value)}
+                title="Capacity per wave (empty = unlimited)"
+                className="bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+              />
+              <button
+                type="button"
+                disabled={generatedTimes.length === 0}
+                onClick={() => {
+                  setWaves(generatedTimes.map((t) => ({
+                    start_time: t,
+                    capacity: genCapacity || '',
+                    label: '',
+                  })))
+                }}
+                className="text-xs font-semibold bg-un1t-text text-un1t-surface rounded-md px-3 py-2 disabled:opacity-40"
+              >
+                Generate{generatedTimes.length > 0 ? ` ${generatedTimes.length} waves` : ''}
+              </button>
+            </div>
+            <p className="text-[11px] text-un1t-muted">
+              First start, last start, minutes between waves, capacity per wave. Generating replaces the
+              current wave list.
+            </p>
+          </div>
+
           <div className="space-y-2">
             {waves.map((w, i) => (
               <div key={i} className="grid grid-cols-[110px_120px_1fr_auto] gap-2 items-center">
