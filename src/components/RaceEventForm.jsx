@@ -30,6 +30,7 @@ import { useRouter } from 'next/navigation'
 import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro, ImagePlus, X as XIcon, Tv, Flag, GraduationCap, Mic, Star, DoorOpen, UserPlus, Image as ImageIcon, Mail, MessageSquare } from 'lucide-react'
 import Link from 'next/link'
 import { toSlug } from '@/lib/slug'
+import { compressImageForUpload, parseUploadResponse } from '@/lib/landing-media-upload'
 
 const ALL_SIZES = [1, 2, 3, 4, 5, 6, 8]
 
@@ -364,13 +365,15 @@ export default function RaceEventForm({ race, locationId }) {
       fd.append('file', file)
       fd.append('slot', String(slot))
       const r = await fetch(`/api/events/${race.id}/logo`, { method: 'POST', body: fd })
-      const j = await r.json()
-      if (!r.ok || j.success === false) {
-        setLogoError(j.error || `Upload failed (${r.status})`)
+      // Safe parse — a >4.5MB file is rejected by the platform with a
+      // plain-text 413, which a bare r.json() turns into a parse crash.
+      const out = await parseUploadResponse(r)
+      if (!out.success) {
+        setLogoError(out.error)
         return
       }
       const next = [...logos]
-      next[slot] = j.url
+      next[slot] = out.url
       setLogos(next)
     } catch (e) {
       setLogoError(e.message || 'Network error')
@@ -403,15 +406,19 @@ export default function RaceEventForm({ race, locationId }) {
     setHeroError(null)
     setHeroBusy(true)
     try {
+      // Downscale in the browser first — a photo straight off a phone is
+      // often over Vercel's ~4.5MB body cap, which rejects with a
+      // plain-text 413 before the route (and its 5MB check) ever runs.
+      const toSend = await compressImageForUpload(file)
       const fd = new FormData()
-      fd.append('file', file)
+      fd.append('file', toSend, toSend.name || file.name || 'hero')
       const r = await fetch(`/api/events/${race.id}/hero`, { method: 'POST', body: fd })
-      const j = await r.json()
-      if (!r.ok || j.success === false) {
-        setHeroError(j.error || `Upload failed (${r.status})`)
+      const out = await parseUploadResponse(r)
+      if (!out.success) {
+        setHeroError(out.error)
         return
       }
-      setHeroUrl(j.url)
+      setHeroUrl(out.url)
     } catch (e) {
       setHeroError(e.message || 'Network error')
     } finally {
