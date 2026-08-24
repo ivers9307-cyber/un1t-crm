@@ -84,14 +84,20 @@ export async function performFullSignOut() {
   // 6. Physical-location caches (HOME-LOC.5b) — the geofence regions AND
   //    the last position fix live at module level, so on a shared studio
   //    device the next user would resolve "which studio am I in" against
-  //    the previous user's config and their last GPS fix. Lazily imported
-  //    on purpose: use-physical-location.js reaches auth-context, which
-  //    imports THIS module, and a static import would close that cycle at
-  //    module-init time. Same `await import()` idiom geofence.js and
-  //    auth-context use for studio-device.
+  //    the previous user's config and their last GPS fix. Since HOME-FAST.1
+  //    the same call also deletes what SecureStore holds: the persisted
+  //    snapshot (regions + last fix + last at_studio verdict) and every
+  //    cached user's Home shifts — those OUTLIVE the process, so leaving
+  //    them would hand the next user the previous one's roster on a shared
+  //    device. It is async for exactly that reason and is AWAITED here;
+  //    it swallows its own failures, so this can only be slow, never fatal.
+  //    Lazily imported on purpose: use-physical-location.js reaches
+  //    auth-context, which imports THIS module, and a static import would
+  //    close that cycle at module-init time. Same `await import()` idiom
+  //    geofence.js and auth-context use for studio-device.
   try {
     const { clearPhysicalLocationCaches } = await import('./use-physical-location')
-    clearPhysicalLocationCaches()
+    await clearPhysicalLocationCaches()
   } catch { /* best-effort */ }
 
   // 7. scope:'local' — revoke THIS device's session only. supabase-js
