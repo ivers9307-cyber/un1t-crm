@@ -216,7 +216,9 @@ export default function SonosScreen() {
           </View>
           {schedules.length === 0 && (
             <Text className="text-xs text-un1t-subtle mt-3">
-              No studio music is set up for this location yet. Someone with Device control sets it up on the
+              {/* "No schedules", not "no studio music" — this footnote can sit
+                  directly under a live card with music playing. */}
+              No schedules are set up for this location yet. Someone with Device control sets them up on the
               web app under <Text className="text-un1t-text font-semibold">Marketing → Automations → Studio music</Text>.
             </Text>
           )}

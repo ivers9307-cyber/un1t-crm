@@ -40,7 +40,7 @@ const REASON_COPY = {
   db_error: 'Something went wrong reading the connection.',
   unreachable: 'Sonos is not answering right now.',
   no_group: "None of this schedule's speakers are online.",
-  regrouped: 'The speakers regrouped — pulling the new groups…',
+  regrouped: 'The speakers regrouped — refreshing the groups…',
 }
 
 // Polls now-playing every POLL_MS while the screen is focused; stops on
