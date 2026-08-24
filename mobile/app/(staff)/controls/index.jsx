@@ -24,8 +24,20 @@ export default function ControlsLauncher() {
   const params = useLocalSearchParams()
   const locId = typeof params.loc === 'string' ? params.loc : null
   const location = (locations || []).find((l) => l.id === locId) || null
+  // Home's entry point gates on device_control specifically (this launcher
+  // IS the "remote" continuation of that row) — deliberately not the union
+  // of every tile's own perm key. A deep-linked user who holds only
+  // studio_management but not device_control sees the plain denial below;
+  // accepted (HOME-LOC.9b).
   const pickable = pickerLocations(profile, locations, 'device_control')
-  const tiles = homeTiles(profile, location)
+  // Only screens that actually READ ?loc= may launch from here — a tile
+  // whose screen still binds to activeLocation would silently command a
+  // DIFFERENT studio than this header names (timer/TV loc-awareness is a
+  // follow-up; see home-logic.js). Home's on-site branch is untouched by
+  // this filter on purpose: standing in the building, the destination
+  // re-detects on its own focus, so activeLocation-bound timer/TV are
+  // shown deliberately there.
+  const tiles = homeTiles(profile, location).filter((t) => t.locAware)
 
   if (!location || tiles.length === 0) {
     return (
@@ -40,7 +52,9 @@ export default function ControlsLauncher() {
           />
         )}
         <Text className="text-sm text-un1t-subtle text-center">
-          Studio controls aren&apos;t available{location ? ` for you at ${location.name}` : ' here'}.
+          {!location && pickable.length > 0
+            ? 'Pick a studio to see its controls.'
+            : `Studio controls aren't available${location ? ` for you at ${location.name}` : ' here'}.`}
         </Text>
         <Pressable onPress={() => router.back()} className="mt-4">
           <Text className="text-sm text-blue-600">Back</Text>

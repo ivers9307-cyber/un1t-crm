@@ -185,4 +185,15 @@ describe('homeTiles', () => {
     const loc = { id: 'loc-still', features: {}, permissions: {}, roleTemplate: {} }
     expect(homeTiles(staff, loc).map(t => t.key)).toEqual(['timer'])
   })
+
+  // HOME-LOC.9b — pins which tiles the manual controls launcher may offer:
+  // only screens that actually read ?loc= (control-location.js's override
+  // tier). Timer/TV bind to activeLocation and would silently command the
+  // wrong studio if launched with a forwarded ?loc= — this flag is the
+  // guard against that drifting back in unnoticed.
+  it('exactly sonos/shelly/ac/doors are locAware — timer/tv are not', () => {
+    const master = { role: 'master', permissions: {} }
+    const loc = { id: 'loc-hatch', name: 'Hatch Street' }
+    expect(homeTiles(master, loc).filter(t => t.locAware).map(t => t.key)).toEqual(['sonos', 'shelly', 'ac', 'doors'])
+  })
 })

@@ -64,11 +64,17 @@ export function groupShiftsByDay(shifts, todayIso, days = 7) {
 // four tiles that already exist there — Home is a second entry point onto
 // the same features, not a re-imagining of them. The ORDER here follows
 // plan §3 (music first), not the hub's AC-first order.
+// `locAware: true` marks a tile whose destination screen actually READS the
+// ?loc= route param (control-location.js's override tier) rather than
+// binding straight to activeLocation. The manual controls launcher
+// (HOME-LOC.9b) filters to these — forwarding ?loc= to a screen that
+// ignores it is a false affordance: the header names one studio, the
+// screen commands another. Timer/TV are not yet loc-aware (follow-up).
 const TILES = [
-  { key: 'sonos',  href: '/sonos',  perm: 'device_control',    icon: 'musical-notes-outline', tint: '#F59E0B', title: 'Studio music',     subtitle: 'Play, pause, volume, favourites' },
-  { key: 'shelly', href: '/shelly', perm: 'device_control',    icon: 'flash-outline',         tint: '#EC4899', title: 'Smart plugs',      subtitle: 'Switch an adopted Shelly relay on or off' },
-  { key: 'ac',     href: '/ac',     perm: 'studio_management', icon: 'snow-outline',          tint: '#2563EB', title: 'Air conditioning', subtitle: 'Sensibo gym floor + LG ThinQ units' },
-  { key: 'doors',  href: '/doors',  perm: 'studio_management', icon: 'key-outline',           tint: '#A855F7', title: 'Door unlock',      subtitle: 'UniFi Access doors' },
+  { key: 'sonos',  href: '/sonos',  perm: 'device_control',    icon: 'musical-notes-outline', tint: '#F59E0B', title: 'Studio music',     subtitle: 'Play, pause, volume, favourites', locAware: true },
+  { key: 'shelly', href: '/shelly', perm: 'device_control',    icon: 'flash-outline',         tint: '#EC4899', title: 'Smart plugs',      subtitle: 'Switch an adopted Shelly relay on or off', locAware: true },
+  { key: 'ac',     href: '/ac',     perm: 'studio_management', icon: 'snow-outline',          tint: '#2563EB', title: 'Air conditioning', subtitle: 'Sensibo gym floor + LG ThinQ units', locAware: true },
+  { key: 'doors',  href: '/doors',  perm: 'studio_management', icon: 'key-outline',           tint: '#A855F7', title: 'Door unlock',      subtitle: 'UniFi Access doors', locAware: true },
   { key: 'timer',  href: '/timer',  perm: 'class_timer',       icon: 'stopwatch-outline',     tint: '#10B981', title: 'Class timer',      subtitle: 'Run a Myzone-style interval timer on the TV' },
   { key: 'tv',     href: '/tv',     perm: 'tv_displays',       icon: 'tv-outline',            tint: '#0EA5E9', title: 'TV displays',      subtitle: "What's on the studio TVs — view & clear" },
 ]
