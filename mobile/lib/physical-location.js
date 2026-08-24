@@ -102,3 +102,21 @@ export function pickPosition({ current, lastKnown, nowMs, maxAgeMs = LAST_KNOWN_
   }
   return null
 }
+
+/**
+ * Collapse expo-location's foreground permission object into what the
+ * enable-location nudge needs to decide:
+ *   'granted'  — nothing to nudge about.
+ *   'ask'      — the in-app prompt can still be shown (undetermined, or
+ *                denied with canAskAgain).
+ *   'settings' — permanently denied; only the Settings app can change it.
+ *   'unknown'  — unreadable. Never nudge over a permission API fault
+ *                (the geofence-permission.js rule).
+ */
+export function mapForegroundPermission(perm) {
+  if (!perm?.status) return 'unknown'
+  if (perm.status === 'granted') return 'granted'
+  if (perm.status === 'denied' && perm.canAskAgain === false) return 'settings'
+  if (perm.status === 'denied' || perm.status === 'undetermined') return 'ask'
+  return 'unknown'
+}

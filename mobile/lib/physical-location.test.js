@@ -1,6 +1,6 @@
 // mobile/lib/physical-location.test.js
 import { describe, it, expect } from 'vitest'
-import { haversineMeters, resolvePhysicalLocation, pickPosition } from './physical-location'
+import { haversineMeters, resolvePhysicalLocation, pickPosition, mapForegroundPermission } from './physical-location'
 
 const STILLORGAN = { latitude: 53.2887, longitude: -6.1970 }
 const HATCH = { latitude: 53.3331, longitude: -6.2542 }
@@ -144,5 +144,24 @@ describe('pickPosition', () => {
     const nowMs = 1000
     const futureCurrent = { coords: HATCH, timestamp: nowMs + 10 * 60 * 1000 }
     expect(pickPosition({ current: futureCurrent, lastKnown: null, nowMs })).toBe(null)
+  })
+})
+
+describe('mapForegroundPermission', () => {
+  it("granted → 'granted'", () => {
+    expect(mapForegroundPermission({ status: 'granted' })).toBe('granted')
+  })
+  it("undetermined or denied-but-askable → 'ask'", () => {
+    expect(mapForegroundPermission({ status: 'undetermined' })).toBe('ask')
+    expect(mapForegroundPermission({ status: 'undetermined', canAskAgain: true })).toBe('ask')
+    expect(mapForegroundPermission({ status: 'denied', canAskAgain: true })).toBe('ask')
+  })
+  it("permanently denied → 'settings'", () => {
+    expect(mapForegroundPermission({ status: 'denied', canAskAgain: false })).toBe('settings')
+  })
+  it("unreadable → 'unknown' (never a nudge over a permission API fault)", () => {
+    expect(mapForegroundPermission(null)).toBe('unknown')
+    expect(mapForegroundPermission(undefined)).toBe('unknown')
+    expect(mapForegroundPermission({})).toBe('unknown')
   })
 })
