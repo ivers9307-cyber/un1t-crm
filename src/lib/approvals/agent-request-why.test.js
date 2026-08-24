@@ -1,0 +1,63 @@
+import { describe, it, expect } from 'vitest'
+import { whyFlagged, customerWords } from './agent-request-why'
+
+describe('whyFlagged', () => {
+  it('translates every routeToReview machine code for class bookings', () => {
+    for (const code of ['prior_attendance', 'needs_credit_grant', 'account_ambiguous', 'account_failed', 'attendance_check_failed', 'booking_rejected', 'superseded_duplicate']) {
+      const out = whyFlagged({ kind: 'class_booking', details: { reason: code } })
+      expect(out, code).toBeTruthy()
+      // Operator copy, never the raw snake_case code on its own.
+      expect(out).not.toBe(code)
+    }
+  })
+
+  it('explains booking_failed:<code> with the Glofox code kept visible', () => {
+    expect(whyFlagged({ kind: 'class_booking', details: { reason: 'booking_failed:CLASS_IS_FULL' } }))
+      .toContain('CLASS_IS_FULL')
+  })
+
+  it('has plain-English copy for the no-credits Glofox code', () => {
+    const out = whyFlagged({ kind: 'class_booking', details: { reason: 'booking_failed:YOU_HAVE_NO_CREDITS_LEFT' } })
+    expect(out).toMatch(/no class credits/i)
+  })
+
+  it('covers the account_<status> family via the prefix fallback', () => {
+    expect(whyFlagged({ kind: 'class_booking', details: { reason: 'account_skipped' } }))
+      .toContain('account_skipped')
+  })
+
+  it('surfaces an unknown machine code raw rather than hiding it', () => {
+    expect(whyFlagged({ kind: 'class_booking', details: { reason: 'brand_new_code' } }))
+      .toContain('brand_new_code')
+  })
+
+  it('explains draft-mode bookings that carry no reason', () => {
+    expect(whyFlagged({ kind: 'class_booking', details: { mode: 'draft' } })).toMatch(/draft/i)
+  })
+
+  it('returns null for pause/cancellation — their reason is the customer talking', () => {
+    expect(whyFlagged({ kind: 'pause', details: { reason: 'travelling for work' } })).toBeNull()
+    expect(whyFlagged({ kind: 'cancellation', details: { reason: 'moving away' } })).toBeNull()
+    expect(whyFlagged(null)).toBeNull()
+  })
+})
+
+describe('customerWords', () => {
+  it('prefers the explicit customer note (both spellings)', () => {
+    expect(customerWords({ kind: 'pause', customer_note: 'back in March', details: { reason: 'x' } })).toBe('back in March')
+    expect(customerWords({ kind: 'pause', customerNote: 'back in March' })).toBe('back in March')
+  })
+
+  it('falls back to details.reason for pause/cancellation', () => {
+    expect(customerWords({ kind: 'cancellation', details: { reason: 'moving away' } })).toBe('moving away')
+  })
+
+  it('never surfaces a class_booking machine code as customer words', () => {
+    expect(customerWords({ kind: 'class_booking', details: { reason: 'prior_attendance' } })).toBeNull()
+  })
+
+  it('handles empty rows', () => {
+    expect(customerWords(null)).toBeNull()
+    expect(customerWords({ kind: 'pause', details: {} })).toBeNull()
+  })
+})

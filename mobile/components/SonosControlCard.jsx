@@ -1,8 +1,16 @@
 // mobile/components/SonosControlCard.jsx
-// SONOSMOB.4 — live control for ONE Sonos schedule: the mobile twin of
-// src/components/automations/SonosLiveControl.jsx. Read that file's header
-// before changing this one — the now-playing response shape is matched
-// exactly, not guessed.
+// SONOSMOB.4 / SONOSGRP.4 — live control for ONE Sonos target: the mobile
+// twin of src/components/automations/SonosLiveControl.jsx. Read that file's
+// header before changing this one — the now-playing response shape is
+// matched exactly, not guessed.
+//
+// Dual target: callers pass exactly ONE of `schedule` (a sonos_schedules
+// row — the per-schedule cards) or `group` (a raw household group from
+// /api/sonos/household — the Live now cards, no schedule needed). Whichever
+// is present names the wire target. Group ids are ephemeral, so a stale one
+// answers reason/code `regrouped`; `onStale` fires at most ONCE per stale
+// episode (re-armed by the next live poll) and the screen responds by
+// re-running its load() so the cards heal to the new grouping.
 //
 // This is for one-off "nudge it right now" actions. It never writes to
 // sonos_schedules and exposes no schedule editing — a change made here
@@ -12,7 +20,7 @@
 // Volume is step buttons, not a slider: the app has no slider package and
 // adding one is a native module (new binary through the stores, not an OTA).
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { View, Text, Pressable, ActivityIndicator } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useFocusEffect } from 'expo-router'
@@ -32,6 +40,7 @@ const REASON_COPY = {
   db_error: 'Something went wrong reading the connection.',
   unreachable: 'Sonos is not answering right now.',
   no_group: "None of this schedule's speakers are online.",
+  regrouped: 'The speakers regrouped — refreshing the groups…',
 }
 
 // Polls now-playing every POLL_MS while the screen is focused; stops on
@@ -41,9 +50,11 @@ const REASON_COPY = {
 // "not worth surfacing" has to be done by hand: once a live state exists, a
 // tagged blip keeps it (the next tick recovers) instead of unmounting the
 // controls to show "Network error" for ten seconds. A real server answer
-// (401, 404, live:false) carries no tag and still replaces it. A sequence number stops an older tick painting over
+// (401, 404, live:false — including a `regrouped` answer, which must replace
+// a live state so the card shows the stale copy) carries no tag and still
+// replaces it. A sequence number stops an older tick painting over
 // a newer answer, which matters right after an action's reload().
-function useNowPlaying(scheduleId, locationId) {
+function useNowPlaying(target, locationId) {
   const [state, setState] = useState(null)
   const seq = useRef(0)
   const load = useCallback(async () => {
@@ -52,13 +63,13 @@ function useNowPlaying(scheduleId, locationId) {
     // (same guard as `send` and the screen) — an uncaught rejection here
     // would leave "Checking what's playing…" painted forever.
     try {
-      const r = await getSonosNowPlaying(scheduleId, locationId)
+      const r = await getSonosNowPlaying(target, locationId)
       if (n !== seq.current) return
       setState((prev) => (r?.transport && prev?.live ? prev : r))
     } catch {
       // Treat as a transport blip: keep whatever is painted; the next tick recovers.
     }
-  }, [scheduleId, locationId])
+  }, [target, locationId])
 
   useFocusEffect(useCallback(() => {
     load()
@@ -105,8 +116,17 @@ function IconButton({ icon, label, onPress, disabled }) {
   )
 }
 
-export default function SonosControlCard({ schedule, favorites = [], locationId }) {
-  const [state, reload] = useNowPlaying(schedule.id, locationId)
+export default function SonosControlCard({ schedule, group, favorites = [], locationId, onStale }) {
+  // Exactly one of schedule/group. Memoised on the ids so `load`/`send`
+  // keep their identity across renders (a fresh object every render would
+  // re-subscribe the focus-effect poll each time).
+  const scheduleId = schedule?.id
+  const groupId = group?.id
+  const target = useMemo(
+    () => (scheduleId ? { scheduleId } : { groupId }),
+    [scheduleId, groupId],
+  )
+  const [state, reload] = useNowPlaying(target, locationId)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [partialFailure, setPartialFailure] = useState(false)
@@ -117,14 +137,39 @@ export default function SonosControlCard({ schedule, favorites = [], locationId 
   // Fresh server data replaces any stale optimistic value.
   useEffect(() => { setPendingVolume(null) }, [state?.volume])
 
+  // Debounce for onStale — same shape as the web strip's onRegrouped: the
+  // poll keeps ticking every POLL_MS while the group id stays stale, and
+  // each tick answers `regrouped` again — without this ref the screen would
+  // reload on every tick. Fire at most once per stale episode; a later LIVE
+  // poll (the card found its target again, e.g. after a remount with a
+  // fresh id) re-arms it.
+  const staleFired = useRef(false)
+
+  const notifyStale = useCallback(() => {
+    if (staleFired.current) return
+    staleFired.current = true
+    onStale?.()
+  }, [onStale])
+
+  useEffect(() => {
+    if (!state) return
+    if (state.success === true && state.live === false && state.reason === 'regrouped') {
+      notifyStale()
+    } else if (state.success === true && state.live) {
+      staleFired.current = false
+    }
+  }, [state, notifyStale])
+
   // try/finally, not a bare await: authHeaders() → supabase.auth.getSession()
   // runs OUTSIDE api()'s own try, so if it ever rejects the only thing
   // standing between us and a forever-disabled card is the finally.
   const send = useCallback(async (action, value) => {
     setBusy(true); setError(null); setPartialFailure(false)
     try {
-      const r = await sendSonosAction(schedule.id, action, value, locationId)
+      const r = await sendSonosAction(target, action, value, locationId)
       if (!r.success) {
+        // A stale group id: same episode-scoped notify as the poll path.
+        if (r.code === 'regrouped') notifyStale()
         // volume_up/volume_down are relative — an `applied` list means some
         // groups already moved, so retrying the whole action would
         // double-apply it there. Say so instead of auto-retrying. On the
@@ -144,7 +189,7 @@ export default function SonosControlCard({ schedule, favorites = [], locationId 
     } finally {
       setBusy(false)
     }
-  }, [schedule.id, locationId, reload])
+  }, [target, locationId, reload, notifyStale])
 
   const nudgeVolume = useVolumeNudge((action, step) => {
     const base = pendingVolume ?? state?.volume ?? 0
@@ -155,7 +200,14 @@ export default function SonosControlCard({ schedule, favorites = [], locationId 
 
   return (
     <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4">
-      <Text className="text-base font-semibold text-un1t-text">{schedule.name || 'Studio music'}</Text>
+      <Text className="text-base font-semibold text-un1t-text">
+        {schedule?.name || group?.name || 'Studio music'}
+      </Text>
+      {group ? (
+        <Text className="text-xs text-un1t-subtle">
+          {group.playerIds?.length ?? 0} speaker{(group.playerIds?.length ?? 0) === 1 ? '' : 's'}
+        </Text>
+      ) : null}
 
       {!state ? (
         <View className="flex-row items-center mt-2">
