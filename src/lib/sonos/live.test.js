@@ -1,4 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
+
+vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn() }))
+
+import { logWarn } from '@/lib/log'
 import { runLiveAction } from './live'
 
 const groupsBody = {
@@ -198,11 +202,29 @@ describe('group-target live actions (SONOSGRP.1)', () => {
     expect(d.call).not.toHaveBeenCalled()
   })
 
+  it('rejects an empty-string group id (falsy = no target)', async () => {
+    const d = deps()
+    const out = await runLiveAction(makeDb(schedule), 'loc-1', { groupId: '' }, 'play', undefined, d)
+    expect(out).toMatchObject({ ok: false, code: 'invalid' })
+    expect(d.call).not.toHaveBeenCalled()
+  })
+
   it('rejects a target with both ids', async () => {
     const d = deps()
     const out = await runLiveAction(makeDb(schedule), 'loc-1', { scheduleId: 's1', groupId: 'GRP_A' }, 'play', undefined, d)
     expect(out).toMatchObject({ ok: false, code: 'invalid' })
     expect(d.call).not.toHaveBeenCalled()
+  })
+
+  it('reports regrouped on a mid-dispatch 404 and logs the group flavour', async () => {
+    // The group vanished between resolve and act. Also pins that the
+    // warn line carries { groupId } — not { scheduleId } — so a log reader
+    // can tell which addressing flavour failed.
+    const d = deps({ call: vi.fn(async () => ({ ok: false, statusCode: 404 })) })
+    const out = await runLiveAction(makeDb(null), 'loc-1', { groupId: 'GRP_A' }, 'play', undefined, d)
+    expect(out).toMatchObject({ ok: false, code: 'regrouped', applied: [], failedGroups: ['GRP_A'] })
+    expect(logWarn).toHaveBeenCalledWith('sonos-live', 'action failed',
+      expect.objectContaining({ groupId: 'GRP_A', action: expect.any(String) }))
   })
 
   it('rejects the OLD positional signature (a bare string target)', async () => {

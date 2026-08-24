@@ -139,8 +139,8 @@ export async function runLiveAction(db, locationId, target, action, value, deps 
   }
 
   const results = []
-  for (const groupId of groupIds) {
-    results.push({ groupId, ...(await call(plan.call, tok.token, groupId, ...plan.args)) })
+  for (const gid of groupIds) {
+    results.push({ groupId: gid, ...(await call(plan.call, tok.token, gid, ...plan.args)) })
   }
 
   const failed = results.find((r) => !r.ok)

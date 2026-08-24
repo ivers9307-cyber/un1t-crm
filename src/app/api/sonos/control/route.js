@@ -2,6 +2,12 @@
 // than six sub-routes (six auth checks, six OpenAPI entries, no benefit) or
 // a pass-through proxy (an unbounded action set cannot be permission-gated).
 //
+// SONOSGRP.2 — dual addressing: the body carries exactly one of schedule_id
+// (uuid, resolved to groups via the location-scoped schedule row) or
+// group_id (an opaque Sonos group id straight from GET /api/sonos/household
+// — NOT a uuid, so no uuid check). Group ids are ephemeral by design: a
+// stale one answers `regrouped`, and the caller refetches the household.
+//
 // Thin by design: runLiveAction (src/lib/sonos/live.js) is the tested body,
 // including the assertion that it writes nothing to sonos_schedules. This
 // file only authorises, validates the request, and maps result codes to
@@ -20,9 +26,12 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const Body = z.object({
-  schedule_id: z.string(),
+  schedule_id: z.string().optional(),
+  group_id: z.string().min(1).max(128).optional(),
   action: z.enum(ACTIONS),
   value: z.union([z.number(), z.string()]).optional(),
+}).refine((b) => Boolean(b.schedule_id) !== Boolean(b.group_id), {
+  message: 'Exactly one of schedule_id or group_id',
 })
 
 // Result code → HTTP status + what the operator reads.
@@ -33,7 +42,7 @@ const OUTCOME = {
   not_connected:  [409, 'Sonos is not connected'],
   no_group:       [409, 'None of this schedule’s speakers are online'],
   fixed_volume:   [409, 'These speakers are set to a fixed volume, so it cannot be changed from here'],
-  regrouped:      [409, 'The speakers regrouped — try that again'],
+  regrouped:      [409, 'The speakers regrouped — refresh and try again'],
   no_content:     [409, 'Nothing is loaded on these speakers — pick a favourite first'],
   rate_limited:   [429, 'Too many changes at once — give it a moment'],
   unreachable:    [502, 'Sonos is not answering right now'],
@@ -54,13 +63,15 @@ export async function POST(request) {
   if (!parsed.success) {
     return NextResponse.json({ success: false, error: 'Invalid request' }, { status: 400 })
   }
-  const { schedule_id: scheduleId, action, value } = parsed.data
-  if (!uuidLike.safeParse(scheduleId).success) {
+  const { schedule_id: scheduleId, group_id: groupId, action, value } = parsed.data
+  // Only schedule ids are uuids — group ids are opaque Sonos strings
+  // (RINCON_…:N), bounded by the schema above.
+  if (scheduleId && !uuidLike.safeParse(scheduleId).success) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
 
   const db = createServerClient()
-  const out = await runLiveAction(db, locationId, scheduleId, action, value)
+  const out = await runLiveAction(db, locationId, scheduleId ? { scheduleId } : { groupId }, action, value)
   if (out.ok) return NextResponse.json({ success: true, groups: out.groups })
 
   const [status, message] = OUTCOME[out.code] || [502, 'That did not work']
