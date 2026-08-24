@@ -91,6 +91,11 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
   const kindLabel = APPROVAL_KIND_LABELS[item.kind] || 'Agent request'
   const why = whyFlagged(item)
   const said = customerWords(item)
+  // AGENT-RETRY.2 — the provider ships failed-retryable rows as their own
+  // queue: the card opens in fix-&-retry mode (retry is the only decision;
+  // decline on a failed row would 409 server-side).
+  const isFailedItem = !!item.failed
+  const failWhy = isFailedItem ? failureExplanation({ status: 'failed', details: item.details }) : null
   const reasonOptions = BOOKING_KINDS.has(item.kind)
     ? DECLINE_REASONS
     : DECLINE_REASONS.filter(([k]) => k === 'not_eligible' || k === 'other')
@@ -147,6 +152,9 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
           <span className={`text-xs px-2 py-0.5 rounded-full ${KIND_CHIP[item.kind] || DEFAULT_KIND_CHIP}`}>
             {kindLabel}
           </span>
+          {isFailedItem && !outcome && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/10 text-red-700 font-semibold">Failed</span>
+          )}
           <span className="text-sm font-medium text-un1t-text">{item.contactName || 'Customer'}</span>
           {item.channel && <span className="text-xs text-un1t-muted">via {item.channel}</span>}
         </div>
@@ -155,6 +163,11 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
 
       <p className="text-sm text-un1t-text mt-2">{item.subtitle}</p>
 
+      {failWhy && !outcome && (
+        <p className="text-xs text-red-700 mt-1.5">
+          <span className="font-semibold">What went wrong:</span> {failWhy}
+        </p>
+      )}
       {why && (
         <p className="text-xs text-un1t-muted mt-1.5">
           <span className="font-semibold text-un1t-text">Why it needs review:</span> {why}
@@ -180,21 +193,28 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
         </p>
       )}
 
-      {/* AGENT-RETRY.1 — a failed execution offers a retry in place: the
-          operator fixes the problem in Glofox, then re-runs the action. */}
-      {outcome?.failed && EXECUTING_KINDS.has(item.kind) && (
+      {/* AGENT-RETRY.1/.2 — a failed execution offers a retry in place:
+          the operator fixes the problem in Glofox, then re-runs the
+          action. Reached from a just-failed approve (outcome.failed) OR
+          from a provider-shipped failed item (isFailedItem). */}
+      {(outcome?.failed || (isFailedItem && !outcome)) && EXECUTING_KINDS.has(item.kind) && (
         <div className="flex items-center gap-2 flex-wrap mt-2">
           <button type="button" disabled={!!busy} onClick={() => decide('approved', { retry: true })}
             className="text-sm bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md font-medium disabled:opacity-50">
             {busy === 'approved' ? 'Retrying…' : 'Fixed it — retry'}
           </button>
+          {conversationHref && (
+            <Link href={conversationHref} className="text-xs text-un1t-muted underline hover:text-un1t-text">
+              Open conversation
+            </Link>
+          )}
           <Link href={item.reviewUrl} className="text-xs text-un1t-muted underline hover:text-un1t-text">
             Full history
           </Link>
         </div>
       )}
 
-      {!outcome && !declineOpen && (
+      {!outcome && !declineOpen && !isFailedItem && (
         <div className="flex items-center gap-2 flex-wrap mt-3">
           <button type="button" disabled={!!busy} onClick={() => decide('approved')}
             className="text-sm bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md font-medium disabled:opacity-50">

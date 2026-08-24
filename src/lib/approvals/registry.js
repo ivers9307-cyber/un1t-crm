@@ -178,13 +178,18 @@ export async function getPendingApprovals(db, user) {
 
   const settled = await Promise.allSettled(
     visible.map(async (p) => {
-      const { count, items } = await p.fetchPending(db, user)
+      // AGENT-RETRY.2 — failedItems is an optional second queue (decided
+      // rows whose execution failed and can be retried). It rides count,
+      // stays out of items (mobile renders items verbatim), and defaults
+      // to [] for the providers that don't have the concept.
+      const { count, items, failedItems } = await p.fetchPending(db, user)
       return {
         key: p.key,
         label: p.label,
         reviewBase: p.reviewBase,
         count,
         items,
+        failedItems: failedItems || [],
       }
     })
   )
@@ -195,7 +200,7 @@ export async function getPendingApprovals(db, user) {
     // One bad provider shouldn't blank the whole inbox. Log + return
     // an empty bucket so the UI still renders the other tabs.
     console.warn(`[approvals] provider '${p.key}' failed: ${s.reason?.message || s.reason}`)
-    return { key: p.key, label: p.label, reviewBase: p.reviewBase, count: 0, items: [] }
+    return { key: p.key, label: p.label, reviewBase: p.reviewBase, count: 0, items: [], failedItems: [] }
   })
 
   const total = providers.reduce((sum, p) => sum + p.count, 0)
