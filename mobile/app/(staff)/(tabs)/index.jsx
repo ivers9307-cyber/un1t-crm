@@ -10,8 +10,10 @@
 //
 // The offsite layout needs NO location permission — a denied user gets a
 // fully useful Home, and the on-site flip simply never fires for them.
-// activeLocation is never read for CONTENT here (only for the all-features-off
-// gate, which is per-location) and is NEVER written.
+// activeLocation is never the SOURCE of content here and is NEVER written; it
+// is read only as a gate — the all-features-off nudge (per-location), and
+// HOME-LOC.12's tile safety filter, which withholds the tiles whose screens
+// still bind to it.
 // Dashboards live on the Dashboard tab since HOME-LOC.7.
 
 import { useState, useCallback, useRef, useEffect } from 'react'
@@ -23,7 +25,7 @@ import { hasAnyMobileFeature } from '../../../lib/permissions'
 import { usePhysicalLocation } from '../../../lib/use-physical-location'
 import { pickerLocations } from '../../../lib/control-location'
 import { promptLocationPick } from '../../../lib/pick-location-alert'
-import { shiftWindow, shiftTimeLabel, groupShiftsByDay, homeTiles } from '../../../lib/home-logic'
+import { shiftWindow, shiftTimeLabel, groupShiftsByDay, safeHomeTiles } from '../../../lib/home-logic'
 import { getMyShifts, getTeamShifts } from '../../../lib/schedule-api'
 import { isoDate } from '../../../lib/dates'
 import { pickLocationColor } from 'shared/location-colors'
@@ -217,7 +219,13 @@ export default function Home() {
 
   const onSite = physStatus === 'at_studio'
   const todayIso = isoDate(new Date())
-  const tiles = onSite ? homeTiles(profile, physLocation) : []
+  // HOME-LOC.12 — safeHomeTiles, not homeTiles: the tiles are for the DETECTED
+  // studio, which is routinely not activeLocation, and timer/TV read
+  // activeLocation rather than the ?loc= override the other four honour. Tapping
+  // Class timer at a studio that isn't your activeLocation would silently start
+  // a timer at the OTHER gym — the same reason the /controls launcher filters to
+  // loc-aware tiles (HOME-LOC.9b). Follow-up: make timer/TV loc-aware.
+  const tiles = onSite ? safeHomeTiles(profile, physLocation, activeLocation?.id) : []
   const groups = groupShiftsByDay(myShifts || [], todayIso)
   // ONE ROW PER COACH, via the same shared grouper the personal dashboard's
   // "On with you today" strip uses — a coach working three blocks today is

@@ -105,7 +105,9 @@ export function canMobile(profile, key, activeLocation = null) {
  *   2. EVERY cross-platform key (top-level on the assignment blob —
  *      no .mobile namespace) via canDashboard. That is the three
  *      dashboard tiers (personal / studio / business) that render on
- *      the Home tab itself, AND the top-level keys that open a tab or
+ *      the DASHBOARD tab since HOME-LOC.7 (they were on the Home tab
+ *      when this walk was written; the nudge below stayed on Home),
+ *      AND the top-level keys that open a tab or
  *      sub-screen: studio_management, class_timer, bookkeeper,
  *      email_inbox, device_control. A master at a partial-features
  *      location can have every .mobile.* key off but still be

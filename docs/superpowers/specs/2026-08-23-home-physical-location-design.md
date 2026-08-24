@@ -111,9 +111,10 @@ Rules:
 **State B: offsite (`offsite`, and also `unknown`)**
 
 - **Your assigned shifts across ALL your studios for the next 7 days.** Data:
-  one `getMyShifts({ locationId, profileId, startDate, endDate })` call per
-  location in the auth context's `locations` array, merged and sorted
-  client-side. Each shift row is badged with its studio using
+  ONE `getMyShifts({ profileId, startDate, endDate })` call with no
+  `location_id` — the route fans out to every location the caller is assigned
+  to (see Data flow), so there is no per-location call and no client-side
+  merge. Each shift row is badged with its studio using
   `shared/location-colors.js`. Effective times follow the existing
   override-aware resolution in `mobile/lib/schedule-team.js`.
 - Empty state (no shifts in the window — owners, un-rostered staff): "No shifts
@@ -202,8 +203,11 @@ controlLocation = explicit override (this visit)
 
 ## Error handling
 
-- Shift fetches are per-location and independent: one studio's fetch failing
-  renders the other's shifts plus a per-studio error line, not a dead screen.
+- The shift fetch is ONE cross-studio call, so there is no per-studio failure
+  to report: a failure raises a single banner rendered ABOVE the list rather
+  than replacing it — once a good list has been painted, a later failure means
+  "this may be stale", not "you have no shifts". Only a failure with nothing
+  painted yet owns the whole space.
 - All fetches ride `api()`; `transport: true` envelopes keep last painted state
   (existing convention).
 - Geofence-config or position failures degrade to `unknown` → offsite layout.
@@ -218,7 +222,8 @@ device dependency):
   stale-ENTER-vs-fresh-read precedence) as a pure module with the position and
   config injected; the hook is a thin wrapper.
 - Home state machine: at_studio/offsite/unknown/loading rendering decisions,
-  shift merge+sort across locations, empty states, per-studio fetch failure.
+  the 7-day window + per-day grouping/sort of the one fan-out call's rows,
+  empty states, fetch failure (one banner, list retained).
 - Control-location resolution order (override ?? physical ?? active) and
   per-visit override reset.
 - Tab gating: Dashboard tab visibility per permission combinations.

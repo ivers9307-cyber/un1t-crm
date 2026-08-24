@@ -83,3 +83,15 @@ export function homeTiles(profile, location) {
   if (!profile || !location) return []
   return TILES.filter((t) => canMobile(profile, t.perm, location))
 }
+
+// HOME-LOC.12 — the same false-affordance guard the /controls launcher applies
+// (HOME-LOC.9b), for Home's ON-SITE tiles. Home renders the DETECTED studio,
+// which is routinely not the app's activeLocation; timer/TV read
+// activeLocation rather than a ?loc= override, so under a different studio's
+// header they would command the other gym silently. When you are standing at
+// your activeLocation they are correctly targeted and stay.
+// Follow-up: make timer/TV loc-aware and this filter becomes a no-op.
+/** Tiles safe to offer for `location` when the app's activeLocation is `activeLocationId`. */
+export function safeHomeTiles(profile, location, activeLocationId) {
+  return homeTiles(profile, location).filter((t) => t.locAware || location?.id === activeLocationId)
+}

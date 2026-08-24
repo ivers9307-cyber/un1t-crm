@@ -1,9 +1,13 @@
 // mobile/lib/use-physical-location.js
 //
-// HOME-LOC.5 — "which studio is this phone standing in", resolved ONCE per
-// screen focus and then FROZEN for the visit (a GPS wobble must never swap
-// which studio a thumb is about to command mid-screen). All decisions live
-// in physical-location.js (pure, tested); this file only does IO.
+// HOME-LOC.5 — "which studio is this phone standing in", resolved on screen
+// focus and then FROZEN for the visit (a GPS wobble must never swap which
+// studio a thumb is about to command mid-screen). All decisions live in
+// physical-location.js (pure, tested); this file only does IO.
+//
+// HOME-LOC.12 — the freeze breaks on two explicit events, both of which mean
+// "the phone may have MOVED", which is not what the freeze guards against:
+// an app FOREGROUND while the screen is focused (spec §2), and refresh().
 //
 // Never REQUESTS location permission — it reads the existing grant. The
 // attendance gate owns the permission ask; a denied user simply never gets
@@ -12,10 +16,12 @@
 //
 // Status: 'loading' → exactly one of 'at_studio' | 'offsite' | 'unknown'.
 // Returns { status, location, refresh } — refresh() is the explicit
-// re-resolve a pull-to-refresh calls (HOME-LOC.8b); nothing else re-reads
-// within a visit, which is the freeze this hook exists for.
+// re-resolve a pull-to-refresh calls (HOME-LOC.8b). Nothing else re-reads
+// within a visit except an app foreground (HOME-LOC.12), which is the freeze
+// this hook exists for.
 
 import { useCallback, useRef, useState } from 'react'
+import { AppState } from 'react-native'
 import * as Location from 'expo-location'
 import { useFocusEffect } from 'expo-router'
 import { api } from './api'
@@ -185,7 +191,49 @@ export function usePhysicalLocation() {
       if (!profile) return () => { active = false }
 
       resolve()
-      return () => { active = false }
+
+      // HOME-LOC.12 — spec §2 promises resolution on focus OR app foreground,
+      // and focus alone is not enough: a coach can leave a control screen open,
+      // drive to the other gym, and RESUME the app, at which point the screen
+      // never re-focuses and the frozen green "detected" pill keeps asserting
+      // the studio they left — with no recovery route on the control screens.
+      // The per-visit freeze protects against GPS wobble MID-VISIT; it was
+      // never meant to survive the phone having been to another gym while
+      // backgrounded. Same treatment as refresh(): bump the visit (so an
+      // in-flight resolve's fresh() fails and cannot land late over this one),
+      // drop the position cache (a resume after time away is exactly when a
+      // cached fix is suspect), and re-run the SAME resolveOnce path.
+      //
+      // Subscribed INSIDE the focus effect, so it exists only while this
+      // screen is focused and comes off in the cleanup below — the blurred
+      // screens' hooks must not all re-resolve on every foreground.
+      //
+      // Subscription idiom (previous-state ref + remove() on cleanup) follows
+      // foreground-ota.jsx, but the GATE is deliberately looser than that
+      // file's `prev === 'background'`: ANY non-active → 'active' counts.
+      // iOS emits 'inactive' between 'background' and 'active' on the way in,
+      // so on the versions that do not coalesce it, `prev` at the 'active'
+      // event is 'inactive' and a background-only gate would NEVER fire —
+      // silently making this whole recovery dead code, which is the exact
+      // failure it exists to fix. The looser gate can only OVER-resolve (a
+      // control-centre pull-down costs one GPS read and a spinner); it cannot
+      // under-resolve, and a stale green "detected" pill asserting the wrong
+      // studio is far worse than a spare acquisition. LocationGate.jsx uses
+      // the same `s === 'active'` shape.
+      let prev = AppState.currentState
+      const sub = AppState.addEventListener('change', (nextState) => {
+        const wasBackground = prev !== 'active'
+        prev = nextState
+        if (nextState !== 'active' || !wasBackground) return
+        const fgVisit = ++visitRef.current
+        positionCache = { at: 0, position: null }
+        setResult({ status: 'loading', location: null })
+        resolveOnce(locationsRef.current).then((next) => {
+          if (active && visitRef.current === fgVisit) setResult(next)
+        })
+      })
+
+      return () => { active = false; sub.remove() }
     }, [locationIds, profile?.id])  // eslint-disable-line react-hooks/exhaustive-deps
   )
 

@@ -1,6 +1,6 @@
 // mobile/lib/home-logic.test.js
 import { describe, it, expect } from 'vitest'
-import { shiftWindow, shiftTimeLabel, groupShiftsByDay, homeTiles } from './home-logic'
+import { shiftWindow, shiftTimeLabel, groupShiftsByDay, homeTiles, safeHomeTiles } from './home-logic'
 import { addDays, shortDate, isoDate } from './dates'
 
 const shift = (date, start, name = 'Open') => ({
@@ -195,5 +195,43 @@ describe('homeTiles', () => {
     const master = { role: 'master', permissions: {} }
     const loc = { id: 'loc-hatch', name: 'Hatch Street' }
     expect(homeTiles(master, loc).filter(t => t.locAware).map(t => t.key)).toEqual(['sonos', 'shelly', 'ac', 'doors'])
+  })
+})
+
+// HOME-LOC.12 — Home renders its on-site tiles for the DETECTED studio, which
+// is routinely not the app's activeLocation. Timer and TV read activeLocation
+// (they are not loc-aware yet), so offering them under a different studio's
+// header is the same false affordance the /controls launcher already filters
+// out — except here the tap silently starts a timer at the OTHER gym. This is
+// the logic Home's JSX calls; the component itself has no test harness.
+describe('safeHomeTiles', () => {
+  const master = { role: 'master', permissions: {} }
+  const hatch = { id: 'loc-hatch', name: 'Hatch Street' }
+
+  it('offers everything when the detected studio IS the active location', () => {
+    expect(safeHomeTiles(master, hatch, 'loc-hatch').map(t => t.key))
+      .toEqual(['sonos', 'shelly', 'ac', 'doors', 'timer', 'tv'])
+  })
+
+  it('drops timer + tv when the detected studio is NOT the active location', () => {
+    expect(safeHomeTiles(master, hatch, 'loc-still').map(t => t.key))
+      .toEqual(['sonos', 'shelly', 'ac', 'doors'])
+  })
+
+  it('a null activeLocationId is not a match — still only the loc-aware four', () => {
+    expect(safeHomeTiles(master, hatch, null).map(t => t.key))
+      .toEqual(['sonos', 'shelly', 'ac', 'doors'])
+  })
+
+  it('the per-location feature gate still applies on top of the safety filter', () => {
+    const gated = { id: 'loc-still', features: { device_control: false }, permissions: {}, roleTemplate: {} }
+    // Same location as active → timer/tv survive; device_control off → sonos/shelly do not.
+    expect(safeHomeTiles(master, gated, 'loc-still').map(t => t.key)).toEqual(['ac', 'doors', 'timer', 'tv'])
+    // Different location → the two survivors are the loc-aware ones only.
+    expect(safeHomeTiles(master, gated, 'loc-hatch').map(t => t.key)).toEqual(['ac', 'doors'])
+  })
+
+  it('no location at all is still nothing, whatever the active location is', () => {
+    expect(safeHomeTiles(master, null, 'loc-hatch')).toEqual([])
   })
 })
