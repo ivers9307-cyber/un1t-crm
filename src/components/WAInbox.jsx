@@ -82,26 +82,6 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   // INBOX-APPROVALS.7 — pending/decided agent approval requests for the
   // open conversation, merged into the message timeline below.
   const [approvals, setApprovals] = useState([])
-  // AGENT-QA.1 — local rating state (id → 'up'|'down'); persisted via
-  // /api/agent/feedback (upsert per rater, server re-checks the message).
-  const [agentFeedback, setAgentFeedback] = useState({})
-  async function rateAgentMessage(msg, rating) {
-    let note = null
-    if (rating === 'down') {
-      note = window.prompt("What was wrong with this reply? (optional — helps improve the agent)") || null
-    }
-    setAgentFeedback(f => ({ ...f, [msg.id]: rating }))
-    try {
-      const r = await fetch('/api/agent/feedback', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channel: 'whatsapp', message_id: msg.id, rating, note }),
-      })
-      if (!r.ok) setAgentFeedback(f => ({ ...f, [msg.id]: undefined }))
-    } catch {
-      setAgentFeedback(f => ({ ...f, [msg.id]: undefined }))
-    }
-  }
   // C6 — emoji reactions on inbound messages. The route sends via Meta and
   // logs a thread row; no optimistic rendering (the row shows on refresh).
   const [reactingId, setReactingId] = useState(null)
@@ -1134,23 +1114,11 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                             ))}
                           </span>
                         )}
-                        {/* AGENT-QA.1 — rate Mia's replies; feeds the analytics quality list — hover/focus reveal only, INBOX-REDESIGN.3.1 */}
-                        {isAgentMsg && (
-                          <span className="flex items-center gap-1 mr-auto opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-                            <button
-                              type="button"
-                              onClick={() => rateAgentMessage(msg, 'up')}
-                              className={`text-[11px] leading-none ${agentFeedback[msg.id] === 'up' ? 'opacity-100' : 'opacity-40 hover:opacity-90'}`}
-                              title="Good reply"
-                            >👍</button>
-                            <button
-                              type="button"
-                              onClick={() => rateAgentMessage(msg, 'down')}
-                              className={`text-[11px] leading-none ${agentFeedback[msg.id] === 'down' ? 'opacity-100' : 'opacity-40 hover:opacity-90'}`}
-                              title="Bad reply — add a note"
-                            >👎</button>
-                          </span>
-                        )}
+                        {/* MIA-BOARD.4 — the AGENT-QA.1 rating thumbs lived here and
+                            collected ZERO ratings in ten weeks; removed (Richard,
+                            20 Aug). Quality signal now comes from the nightly
+                            reviewer on the analytics page. The /api/agent/feedback
+                            route + table stay (cheap, future-proof). */}
                         <span className="text-[10px] text-un1t-text/50">
                           {new Date(msg.sent_at || msg.created_at).toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' })}
                         </span>
