@@ -144,12 +144,32 @@ describe('proxy Bearer gate', () => {
     })
 
     it('does NOT open the rest of the mobile surface', async () => {
-      // The entry is a bare prefix match, so a loosened one (e.g. dropping
-      // back to '/api/mobile') would make every staff mobile route public.
       for (const path of ['/api/mobile/me', '/api/mobile/impersonate', '/api/mobile/today-feed']) {
         const res = await proxy(makeReq({ path }))
         expect(admitted(res), `${path} must stay session-gated`).toBe(false)
       }
+    })
+
+    it('matches EXACT-or-slash — a future sibling route is not silently public', async () => {
+      // REPSET-PUB.3A-b — the rest of publicPaths is bare-prefix matched, so
+      // this entry would also have admitted /api/mobile/review-login-debug,
+      // /api/mobile/review-login-status and anything else someone later names
+      // with that stem. Nobody adding such a route would think to check the
+      // proxy allowlist, which is exactly how an unauthenticated endpoint
+      // ships by accident.
+      for (const path of [
+        '/api/mobile/review-login-debug',
+        '/api/mobile/review-loginx',
+        '/api/mobile/review-login-status',
+      ]) {
+        const res = await proxy(makeReq({ path, method: 'POST' }))
+        expect(admitted(res), `${path} must NOT be public`).toBe(false)
+      }
+    })
+
+    it('still admits a child path under the gate itself', async () => {
+      const res = await proxy(makeReq({ path: '/api/mobile/review-login/', method: 'POST' }))
+      expect(admitted(res)).toBe(true)
     })
   })
 })

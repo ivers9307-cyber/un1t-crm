@@ -12,7 +12,6 @@ import {
   REVIEW_DEMO_EMAIL,
   constantTimeEquals,
   readReviewCode,
-  clientIpFromForwardedFor,
   credentialsMatch,
 } from './review-login.js'
 
@@ -74,25 +73,6 @@ describe('readReviewCode', () => {
 
   it('ignores non-string env values', () => {
     expect(readReviewCode({ REVIEW_LOGIN_CODE: 12345678 })).toBe(null)
-  })
-})
-
-describe('clientIpFromForwardedFor', () => {
-  it('takes the FIRST hop, not the last', () => {
-    // The last hop is our own edge; the first is the client as it arrived.
-    expect(clientIpFromForwardedFor('203.0.113.9, 10.0.0.1, 10.0.0.2')).toBe('203.0.113.9')
-  })
-
-  it('trims surrounding whitespace', () => {
-    expect(clientIpFromForwardedFor('  203.0.113.9  , 10.0.0.1')).toBe('203.0.113.9')
-  })
-
-  it('falls back to the shared "unknown" bucket, never an empty one', () => {
-    expect(clientIpFromForwardedFor(null)).toBe('unknown')
-    expect(clientIpFromForwardedFor(undefined)).toBe('unknown')
-    expect(clientIpFromForwardedFor('')).toBe('unknown')
-    expect(clientIpFromForwardedFor('   ')).toBe('unknown')
-    expect(clientIpFromForwardedFor(', 10.0.0.1')).toBe('unknown')
   })
 })
 

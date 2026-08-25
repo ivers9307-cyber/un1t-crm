@@ -83,19 +83,12 @@ export function readReviewCode(env = process.env) {
   return trimmed.length > 0 ? trimmed : null
 }
 
-/**
- * First hop of x-forwarded-for — the client as the edge saw it. Falls back to
- * the literal 'unknown', which is a real limiter bucket rather than a bypass:
- * every un-attributable attempt shares one throttle.
- *
- * @param {string|null|undefined} header
- * @returns {string}
- */
-export function clientIpFromForwardedFor(header) {
-  if (typeof header !== 'string') return 'unknown'
-  const first = header.split(',')[0].trim()
-  return first || 'unknown'
-}
+// NOTE (REPSET-PUB.3A-b): there is deliberately no IP reader here. The route
+// uses getClientIp() from src/lib/rate-limit.js — the house reader every other
+// rate-limited endpoint already shares. A local reimplementation existed
+// briefly and silently dropped the x-real-ip fallback, which would have put
+// any request arriving without x-forwarded-for into the shared 'unknown'
+// bucket instead of its own.
 
 /**
  * Do the supplied credentials open the gate?
