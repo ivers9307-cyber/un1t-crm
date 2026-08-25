@@ -133,6 +133,10 @@
       "schedule": "*/15 * * * *"
     },
     {
+      "path": "/api/cron/agent-review",
+      "schedule": "0 3 * * *"
+    },
+    {
       "path": "/api/cron/sync-class-occurrences",
       "schedule": "*/15 * * * *"
     },

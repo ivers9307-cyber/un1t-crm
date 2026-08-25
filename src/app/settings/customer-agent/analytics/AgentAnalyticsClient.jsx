@@ -101,6 +101,75 @@ export default function AgentAnalyticsClient() {
             </>
           )}
 
+          {/* MIA-BOARD.4 — the nightly reviewer's flagged conversations:
+              the threads a manager should actually read, worst first. */}
+          {data.flagged_reviews && data.flagged_reviews.length > 0 && (
+            <section className="mb-8">
+              <h3 className="text-sm font-semibold text-un1t-text mb-2">Flagged conversations</h3>
+              <div className="space-y-1.5">
+                {data.flagged_reviews.map((r, i) => {
+                  const href = r.channel === 'instagram'
+                    ? `/communications/inbox?c=${r.conversation_id}&ch=ig`
+                    : `/communications/inbox?c=${r.conversation_id}`
+                  return (
+                    <Link
+                      key={`${r.channel}-${r.conversation_id}-${i}`}
+                      href={href}
+                      className="block bg-un1t-surface border border-un1t-border rounded-lg px-3 py-2 text-sm hover:border-un1t-subtle transition-colors"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-un1t-text">
+                          {r.score != null ? `${r.score}/5` : 'flagged'}
+                          {(r.flags || []).length > 0 && (
+                            <span className="ml-2 text-xs text-amber-700">{r.flags.join(' · ')}</span>
+                          )}
+                        </span>
+                        <span className="flex items-center gap-1 text-xs text-un1t-subtle">
+                          {r.channel} · {r.review_date}
+                          <ArrowUpRight size={12} />
+                        </span>
+                      </div>
+                      {r.summary && <p className="text-xs text-un1t-muted mt-0.5">{r.summary}</p>}
+                      {r.worst_quote && <p className="text-xs text-un1t-subtle italic mt-0.5">&ldquo;{r.worst_quote}&rdquo;</p>}
+                    </Link>
+                  )
+                })}
+              </div>
+              <p className="text-xs text-un1t-subtle mt-2">
+                Reviewed nightly against the agent rubric. Recurring flags usually mean a missing Knowledge entry or Extra rule.
+              </p>
+            </section>
+          )}
+
+          {/* MIA-BOARD.4 — handoff reasons in the agent's own words: the
+              knowledge-gap detector. */}
+          {data.handoff_reasons && data.handoff_reasons.length > 0 && (
+            <section className="mb-8">
+              <h3 className="text-sm font-semibold text-un1t-text mb-2">Why Mia handed off</h3>
+              <ul className="space-y-1.5">
+                {data.handoff_reasons.map((h, i) => {
+                  const href = h.channel === 'instagram'
+                    ? `/communications/inbox?c=${h.conversation_id}&ch=ig`
+                    : `/communications/inbox?c=${h.conversation_id}`
+                  return (
+                    <li key={i} className="text-sm text-un1t-text flex items-start gap-2">
+                      <span className="shrink-0 text-un1t-subtle">→</span>
+                      <span className="flex-1">
+                        {h.reason}
+                        <Link href={href} className="text-xs text-un1t-subtle ml-2 hover:text-un1t-text">
+                          {new Date(h.created_at).toLocaleDateString('en-IE', { month: 'short', day: 'numeric' })} ↗
+                        </Link>
+                      </span>
+                    </li>
+                  )
+                })}
+              </ul>
+              <p className="text-xs text-un1t-subtle mt-2">
+                A reason that keeps recurring is a Knowledge entry waiting to be written.
+              </p>
+            </section>
+          )}
+
           {/* AGENT-QA.1 — inbox thumbs feedback */}
           {data.feedback && (data.feedback.up + data.feedback.down > 0) && (
             <section className="mb-8">
