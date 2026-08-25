@@ -67,6 +67,7 @@ export const BOOKING_TOOLS = [
         event_id: { type: 'string', description: 'The 24-hex Glofox event id from list_upcoming_classes.' },
         class_name: { type: 'string', description: 'The class name you confirmed with the customer.' },
         class_time: { type: 'string', description: 'The class date/time you confirmed, as shown in the list.' },
+        starts_at: { type: 'string', description: 'The starts_at value for the chosen class, copied EXACTLY from list_upcoming_classes. Never invent or reformat it.' },
       },
       required: ['event_id'],
     },
@@ -223,6 +224,10 @@ export function shapeClassListForAgent(events, nowMs, limit = MAX_CLASS_LIST) {
       name: e.name || 'Class',
       start_sec: startSec,
       time: formatDublinClassTime(startSec),
+      // MIA-BOARD.2 — machine-readable instant, relayed back via book_class so
+      // the approval row is guardable against past-start execution. The
+      // display `time` stays what the customer sees.
+      starts_at: new Date(startSec * 1000).toISOString(),
       full,
       ...(!full && size > 0 && spotsLeft <= LIMITED_SPOTS_THRESHOLD ? { limited: true } : {}),
     })
@@ -474,22 +479,85 @@ export async function executeBookingTool(toolName, input, ctx) {
     // Re-read the verified contact's Glofox link server-side — never
     // trust the model for identity-adjacent state.
     let glofoxMemberId = null
+    let membershipStatus = null
     if (verifiedContactId) {
       const { data } = await db.from('contacts')
-        .select('glofox_member_id')
+        .select('glofox_member_id, glofox_membership_status')
         .eq('id', verifiedContactId)
         .maybeSingle()
       glofoxMemberId = data?.glofox_member_id || null
+      membershipStatus = data?.glofox_membership_status || null
     }
     const guard = classBookingGuard({ verifiedContactId, glofoxMemberId, eventId: input?.event_id })
     if (!guard.ok) return guard
 
     const mode = bookingMode(settings)
+    // MIA-BOARD.2 — normalise the relayed instant; stamp only when it parses.
+    // The list emits it and the schema says copy-exactly, so a missing or
+    // junk value degrades to the legacy unguarded shape, never to a wrong
+    // expiry.
+    const relayedStartMs = Date.parse(input?.starts_at || '')
     const baseDetails = {
       event_id: input.event_id,
       class_name: input.class_name || null,
       class_time: input.class_time || null,
+      ...(Number.isFinite(relayedStartMs) ? { starts_at: new Date(relayedStartMs).toISOString() } : {}),
       mode,
+    }
+
+    // MIA-CREDITS.1 — pre-flight the balance BEFORE drafting or executing.
+    // Every historical agent booking failure was Glofox's
+    // YOU_HAVE_NO_CREDITS_LEFT discovered at execute time; check first and,
+    // when the account has nothing to book with, escalate to a human while
+    // the customer is still in the conversation (Richard 2026-08-25: "I
+    // want to avoid an opportunity of a potential customer being dropped").
+    // Same gate as the funnel pipeline (AGENT-FUNNEL-CREDITS.1): credits > 0
+    // or a CRM-synced active membership proceeds; an UNREADABLE balance also
+    // proceeds — a broken pre-check must never block a booking that would
+    // have worked (Glofox still arbitrates at execute time).
+    {
+      let credits = null
+      let readFailed = false
+      try {
+        const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, fetchUserCreditsResult } = await import('@/lib/glofox')
+        const { computeCreditsRemaining } = await import('@/lib/glofox-sync')
+        const creds = await glofoxCredentialsForLocation(db, locationId)
+        if (!creds || missingGlofoxCredentialsForLocation(creds).length) {
+          readFailed = true // no Glofox here — the execute path answers no_booking_system
+        } else {
+          // ok-aware read: a Glofox blip must NOT escalate every booking to
+          // a human — only a confirmed-empty balance does.
+          const { ok, credits: rows } = await fetchUserCreditsResult(creds, glofoxMemberId)
+          if (!ok) readFailed = true
+          else credits = computeCreditsRemaining(rows)
+        }
+      } catch { readFailed = true }
+      const activeMembership = membershipStatus === 'active'
+      if (!readFailed && !(credits > 0) && !activeMembership) {
+        // File the booking intent as a pending approval (deduped per
+        // contact+event) so staff keep the one-tap grant-then-book flow the
+        // approvals queue provides; the auto-reply loop sees no_credits on
+        // this result and hands the THREAD off deterministically (script +
+        // park + manager push) — the customer is never left with silence.
+        let approvalId = await pendingBookingApprovalId(db, ctx, input.event_id, null)
+        if (!approvalId) {
+          approvalId = await logBookingRequest(db, ctx, {
+            kind: 'class_booking', status: 'pending',
+            details: { ...baseDetails, reason: 'no_credits' },
+          })
+          if (approvalId) {
+            await notifyAgentApprovalRequest(db, {
+              requestId: approvalId, locationId, kind: 'class_booking', customerName: ctx.nameHint,
+              summary: [input.class_name, input.class_time, 'no credits — Mia escalated'].filter(Boolean).join(' · '),
+            })
+          }
+        }
+        return {
+          booked: false,
+          no_credits: true,
+          message: 'The customer has no class credits and no active membership, so this booking cannot proceed. The team has been alerted and is taking over this conversation now — your reply will not be sent, so do not compose one.',
+        }
+      }
     }
 
     if (mode === 'draft') {

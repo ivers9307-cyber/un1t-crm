@@ -21,6 +21,7 @@ vi.mock('@/lib/agent/notify', () => ({
   buildBookingConfirmationText: vi.fn(() => 'Booked!'),
   buildCancellationConfirmationText: vi.fn(() => 'Cancelled.'),
   buildDeclineNoticeText: vi.fn(() => "Sorry, we couldn't complete that request this time."),
+  buildBookingExpiredText: vi.fn(() => 'Sorry, we missed it.'),
   agentConfirmationTemplates: vi.fn(async () => ({})),
 }))
 
@@ -41,7 +42,9 @@ const ROW = {
 
 // Minimal chainable double: read row → atomic claim → contact read →
 // final outcome update. Every update patch is recorded for assertions.
-function makeDb(updates) {
+// MIA-BOARD.2 — parameterised so the past-start guard tests can vary
+// details.starts_at without mutating the shared ROW.
+function makeDbFor(row, updates) {
   return {
     from(table) {
       let patch = null
@@ -50,18 +53,19 @@ function makeDb(updates) {
         eq: () => b,
         update(p) { patch = p; updates.push({ table, patch: p }); return b },
         async maybeSingle() {
-          if (patch) return { data: { id: ROW.id }, error: null } // claim succeeded
+          if (patch) return { data: { id: row.id }, error: null } // claim succeeded
           if (table === 'contacts') return { data: { glofox_member_id: 'gm1' }, error: null }
-          return { data: ROW, error: null }
+          return { data: row, error: null }
         },
         async single() {
-          return { data: { id: ROW.id, status: patch?.status, decided_at: null, decision_note: null, details: patch?.details }, error: null }
+          return { data: { id: row.id, status: patch?.status, decided_at: null, decision_note: null, details: patch?.details }, error: null }
         },
       }
       return b
     },
   }
 }
+function makeDb(updates) { return makeDbFor(ROW, updates) }
 
 const approve = () => PATCH(
   new Request('http://localhost/api/agent/membership-requests/r1', {
@@ -225,5 +229,50 @@ describe('PATCH failed-execution retry', () => {
     const res = await approve()
     expect(res.status).toBe(409)
     expect(updates).toHaveLength(0)
+  })
+})
+
+// MIA-BOARD.2 — the past-start guard. On 23 Aug two funnel bookings were
+// approved at 8:26pm for classes that ran that morning; the executor booked
+// them into Glofox anyway and CONFIRMED them to the customer. An approval
+// whose class has already started must expire, never execute.
+describe('PATCH class_booking approval — past-start guard', () => {
+  const pastRow = () => ({
+    ...ROW,
+    details: { ...ROW.details, starts_at: new Date(Date.now() - 3_600_000).toISOString() },
+  })
+  const futureRow = () => ({
+    ...ROW,
+    details: { ...ROW.details, starts_at: new Date(Date.now() + 3_600_000).toISOString() },
+  })
+
+  it('a booking whose class already started expires instead of executing', async () => {
+    db = makeDbFor(pastRow(), updates)
+    const res = await approve()
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(createBooking).not.toHaveBeenCalled()
+    const final = updates.at(-1)
+    expect(final.patch.status).toBe('expired')
+    expect(final.patch.details.result).toMatchObject({ ok: false, reason: 'CLASS_ALREADY_STARTED' })
+    // The customer hears the apology, not a confirmation.
+    expect(sendAgentThreadMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('a booking with a future start executes normally', async () => {
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { data: { _id: 'bk1' } } })
+    db = makeDbFor(futureRow(), updates)
+    const res = await approve()
+    expect((await res.json()).success).toBe(true)
+    expect(createBooking).toHaveBeenCalledTimes(1)
+    expect(updates.at(-1).patch.status).toBe('actioned')
+  })
+
+  it('a row with no starts_at is not guarded (legacy shape) and executes', async () => {
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { data: { _id: 'bk1' } } })
+    db = makeDbFor({ ...ROW }, updates)
+    const res = await approve()
+    expect((await res.json()).success).toBe(true)
+    expect(createBooking).toHaveBeenCalledTimes(1)
   })
 })

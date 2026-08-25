@@ -34,6 +34,13 @@ export const DEFAULTS = {
   // booking (e.g. no credits) and the attempt becomes a pending approval.
   // Null → the code default in lib/agent/notify.js.
   booking_issue_handoff_text: null,
+  // MIA-CREDITS.1 — sent verbatim when the booking pre-flight finds no
+  // usable balance and the thread hands off to a human. Null → the code
+  // default in lib/agent/core.js (DEFAULT_NO_CREDITS_HANDOFF_TEXT).
+  no_credits_handoff_text: null,
+  // MIA-BOARD.2 — apology when a pending booking outlives its class. Null →
+  // DEFAULT_BOOKING_EXPIRED_TEXT in lib/agent/notify.js.
+  booking_expired_text: null,
   // APPROVALS-STUDIO.1 — sent in-thread when staff decline a customer
   // request. Null → the code default in lib/agent/notify.js.
   approval_decline_text: null,
@@ -63,6 +70,12 @@ export const DEFAULTS = {
   // explicit `enabled === false` as off); default true here matches that.
   inline_suggestion: { enabled: true },
   handoff_cooldown_hours: 12,
+  // MIA-BOARD.1 — handoff auto-resolve windows (hours). (a) human replied
+  // then quiet, (b) fully stale. 0 disables a case. Defaults are Richard's
+  // 2026-08-20 decision (8h/48h); the sweep clamps again at read time
+  // (resolveAutoResolveHours, handoff-sla.js).
+  auto_resolve_after_reply_hours: 8,
+  auto_resolve_stale_hours: 48,
   consultation_event_type_id: null,
   // MIA-HYGIENE.1 — null means "use the code default". The live defaults are
   // owned by lib/agent/core.js (DEFAULT_AGENT_EFFORT = 'medium',
@@ -83,6 +96,8 @@ export const SettingsSchema = z.object({
   booking_confirmation_text: z.string().max(500).nullable().optional(),
   cancellation_confirmation_text: z.string().max(500).nullable().optional(),
   booking_issue_handoff_text: z.string().max(500).nullable().optional(),
+  no_credits_handoff_text: z.string().max(500).nullable().optional(),
+  booking_expired_text: z.string().max(500).nullable().optional(),
   approval_decline_text: z.string().max(500).nullable().optional(),
   welcome_greeting: z.string().max(500).nullable().optional(),
   link_button_text: z.string().max(25).nullable().optional(),
@@ -117,6 +132,8 @@ export const SettingsSchema = z.object({
     enabled: z.boolean().optional().default(true),
   }).nullable().optional(),
   handoff_cooldown_hours: z.number().min(0).max(168).nullable().optional(),
+  auto_resolve_after_reply_hours: z.number().min(0).max(720).nullable().optional(),
+  auto_resolve_stale_hours: z.number().min(0).max(720).nullable().optional(),
   consultation_event_type_id: z.string().max(64).nullable().optional(),
   monthly_points_target: z.number().int().min(0).nullable().optional(),
   // MIA-HYGIENE.1 — reasoning effort for the inbound reply. Clamped again at
@@ -153,6 +170,8 @@ export function buildCustomerAgentSettings(data = {}) {
     booking_confirmation_text: data.booking_confirmation_text?.trim() || null,
     cancellation_confirmation_text: data.cancellation_confirmation_text?.trim() || null,
     booking_issue_handoff_text: data.booking_issue_handoff_text?.trim() || null,
+    no_credits_handoff_text: data.no_credits_handoff_text?.trim() || null,
+    booking_expired_text: data.booking_expired_text?.trim() || null,
     approval_decline_text: data.approval_decline_text?.trim() || null,
     welcome_greeting: data.welcome_greeting?.trim() || null,
     link_button_text: data.link_button_text?.trim() || null,
@@ -163,6 +182,8 @@ export function buildCustomerAgentSettings(data = {}) {
     membership_signup_url: data.membership_signup_url || null,
     membership_cta_label: data.membership_cta_label?.trim() || null,
     handoff_cooldown_hours: data.handoff_cooldown_hours ?? DEFAULTS.handoff_cooldown_hours,
+    auto_resolve_after_reply_hours: data.auto_resolve_after_reply_hours ?? DEFAULTS.auto_resolve_after_reply_hours,
+    auto_resolve_stale_hours: data.auto_resolve_stale_hours ?? DEFAULTS.auto_resolve_stale_hours,
     followups: { ...DEFAULTS.followups, ...(data.followups || {}) },
     first_class_checkin: { ...DEFAULTS.first_class_checkin, ...(data.first_class_checkin || {}) },
     inline_suggestion: { ...DEFAULTS.inline_suggestion, ...(data.inline_suggestion || {}) },

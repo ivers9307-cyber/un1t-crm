@@ -3,7 +3,7 @@ import { whyFlagged, customerWords } from './agent-request-why'
 
 describe('whyFlagged', () => {
   it('translates every routeToReview machine code for class bookings', () => {
-    for (const code of ['prior_attendance', 'needs_credit_grant', 'account_ambiguous', 'account_failed', 'attendance_check_failed', 'booking_rejected', 'superseded_duplicate']) {
+    for (const code of ['prior_attendance', 'needs_credit_grant', 'no_credits', 'account_ambiguous', 'account_failed', 'attendance_check_failed', 'booking_rejected', 'superseded_duplicate']) {
       const out = whyFlagged({ kind: 'class_booking', details: { reason: code } })
       expect(out, code).toBeTruthy()
       // Operator copy, never the raw snake_case code on its own.

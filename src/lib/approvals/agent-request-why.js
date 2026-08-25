@@ -26,6 +26,10 @@ const MACHINE_REASONS = {
     'They have attended before and no usable balance was found (no class credits, no active membership) — the free intro does not apply. Grant a credit or set up a membership in Glofox, then approve to book.',
   needs_credit_grant:
     'Their Glofox account has no class credits left. Approving grants the trial credit and completes the booking automatically.',
+  // MIA-CREDITS.1 — Mia's pre-flight found nothing to book with and handed
+  // the thread to a human; this card carries the booking intent.
+  no_credits:
+    'Mia escalated: they asked to book but have no class credits or active membership. Talk to them in the conversation, grant a credit or set them up in Glofox, then approve to book.',
   account_ambiguous:
     'More than one Glofox account matched this customer. Pick the right account in Glofox before approving.',
   account_failed:

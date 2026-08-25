@@ -113,6 +113,39 @@ export async function GET(request) {
     ...ig.conversations.filter(c => c.agent_handed_off_at).map(c => ({ id: c.id, channel: 'instagram', handed_off_at: c.agent_handed_off_at })),
   ].sort((a, b) => new Date(b.handed_off_at) - new Date(a.handed_off_at)).slice(0, 50)
 
+  // MIA-BOARD.4 — the nightly reviewer's output (mig 569): conversations a
+  // manager should actually read, worst first. Best-effort: before the first
+  // cron run the table is empty and this is simply [].
+  const { data: reviewRows } = await db.from('agent_conversation_reviews')
+    .select('conversation_id, channel, review_date, score, flags, summary, worst_quote')
+    .eq('location_id', locationId)
+    .gte('created_at', since)
+    .order('score', { ascending: true })
+    .order('created_at', { ascending: false })
+    .limit(100)
+  const flaggedReviews = (reviewRows || [])
+    .filter(r => (r.score || 5) <= 2 || (Array.isArray(r.flags) && r.flags.length))
+    .slice(0, 20)
+
+  // MIA-BOARD.4 — handoff reasons, straight from the decision log. The model
+  // writes a one-line summary whenever Mia hands off; mechanical silences
+  // (handed_off, agent_paused, …) are filtered out. This is the
+  // knowledge-gap detector: recurring reasons are entries the knowledge base
+  // is missing.
+  const { isHandoffSummaryReason } = await import('@/lib/agent/review')
+  const { data: decisionRows } = await db.from('agent_decisions')
+    .select('reason, channel, conversation_id, created_at')
+    .eq('location_id', locationId)
+    .eq('decision', 'silent')
+    .not('reason', 'is', null)
+    .gte('created_at', since)
+    .order('created_at', { ascending: false })
+    .limit(500)
+  const handoffReasons = (decisionRows || [])
+    .filter(d => isHandoffSummaryReason(d.reason))
+    .slice(0, 20)
+    .map(d => ({ reason: d.reason, channel: d.channel, conversation_id: d.conversation_id, created_at: d.created_at }))
+
   return NextResponse.json({
     success: true,
     window_days: days,
@@ -123,5 +156,7 @@ export async function GET(request) {
     feedback,
     topics: rankTopics(combined.topics),
     escalations,
+    flagged_reviews: flaggedReviews,
+    handoff_reasons: handoffReasons,
   })
 }

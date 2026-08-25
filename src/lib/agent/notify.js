@@ -36,6 +36,21 @@ export const DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT =
 export const DEFAULT_APPROVAL_DECLINE_TEXT =
   "Sorry, we couldn't complete that request this time. The team will be in touch to help."
 
+// MIA-BOARD.2 — sent when a pending booking outlives its class (the sweep
+// expires it, or the execution guard refuses a past-start approval). Copy
+// approved by Richard 2026-08-20; operator-editable
+// (settings.customer_agent.booking_expired_text).
+export const DEFAULT_BOOKING_EXPIRED_TEXT =
+  "Sorry, we didn't get to confirm your booking for {class} in time. That one's on us. The team will be in touch to make it right."
+
+/** In-thread apology once a pending booking expires past its class start. */
+export function buildBookingExpiredText({ className, classTime, template } = {}) {
+  return renderConfirmation(
+    String(template || '').trim() || DEFAULT_BOOKING_EXPIRED_TEXT,
+    className, classTime,
+  )
+}
+
 /** In-thread text once staff decline a customer approval request. */
 export function buildDeclineNoticeText({ template } = {}) {
   return stripEmDashes(String(template || '').trim() || DEFAULT_APPROVAL_DECLINE_TEXT).trim()
@@ -76,7 +91,7 @@ export function buildCancellationConfirmationText({ className, classTime, templa
  * @returns {Promise<{booking: string|null, cancellation: string|null}>}
  */
 export async function agentConfirmationTemplates(db, locationId) {
-  if (!locationId) return { booking: null, cancellation: null, decline: null }
+  if (!locationId) return { booking: null, cancellation: null, decline: null, expired: null }
   try {
     const { data } = await db.from('locations').select('settings').eq('id', locationId).maybeSingle()
     const s = data?.settings?.customer_agent || {}
@@ -84,9 +99,10 @@ export async function agentConfirmationTemplates(db, locationId) {
       booking: String(s.booking_confirmation_text || '').trim() || null,
       cancellation: String(s.cancellation_confirmation_text || '').trim() || null,
       decline: String(s.approval_decline_text || '').trim() || null,
+      expired: String(s.booking_expired_text || '').trim() || null,
     }
   } catch {
-    return { booking: null, cancellation: null, decline: null }
+    return { booking: null, cancellation: null, decline: null, expired: null }
   }
 }
 
