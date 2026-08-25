@@ -171,7 +171,24 @@ export default ({ config }) => ({
     // reused. Switched to com.un1tdublin.crm — registered fresh in
     // Apple Developer → Identifiers and paired with a new App Store
     // Connect app record.
-    bundleIdentifier: 'com.un1tdublin.crm',
+    //
+    // REPSET-PUB (2026-08-25) — second reset, different reason: Apple's
+    // UNLISTED distribution is one-way, so the com.un1tdublin.crm record
+    // (ascAppId 6770890839) can never become publicly listed. The public
+    // app "Repset Fitness" is a NEW record under ie.repset.app (ascAppId
+    // 6805082306). The old record's installed base keeps receiving OTAs on
+    // the shared 2.3.0 lane until sunset — but its binary can never be
+    // rebuilt from main after this change (by design; see
+    // docs/superpowers/specs/2026-08-25-repset-public-ios-design.md).
+    // The old record stays REBUILDABLE via the `production-legacy` EAS
+    // profile (env LEGACY_APP=1 flips this back to com.un1tdublin.crm;
+    // submit profile carries the old ascAppId) — unlisted apps still take
+    // binary updates through review, only their LISTING status is one-way.
+    // 🔴 The rule this creates: every future NATIVE change (runtimeVersion
+    // bump) must build + submit BOTH profiles until the old app is
+    // sunset, or its installs silently stop receiving OTAs. Two builds,
+    // same shared channel/runtimeVersion — never fork the lane.
+    bundleIdentifier: process.env.LEGACY_APP === '1' ? 'com.un1tdublin.crm' : 'ie.repset.app',
     // buildNumber omitted — eas.json sets appVersionSource: 'remote',
     // so build numbers are managed by EAS, not the local config.
     infoPlist: {
@@ -191,9 +208,11 @@ export default ({ config }) => ({
     },
   },
   android: {
-    // BUNDLE-ID-RESET — kept in lockstep with the iOS bundle ID for
-    // consistency, even though Android doesn't have Apple's reuse
-    // restriction. One namespace, one app, both stores.
+    // BUNDLE-ID-RESET kept this in lockstep with iOS; REPSET-PUB
+    // DELIBERATELY breaks that: the package is Play's permanent app
+    // identity, so following iOS's forced rename would create a brand-new
+    // Play app (new listing, new reviews, manual reinstall for every
+    // Android user) for purely cosmetic symmetry. Android stays put.
     package: 'com.un1tdublin.crm',
     // FCM-SETUP.1 — Android push (mobile/docs/android-fcm-setup.md). On EAS
     // the GOOGLE_SERVICES_JSON file secret materialises as a path in this
