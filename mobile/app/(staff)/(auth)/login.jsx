@@ -5,9 +5,18 @@
 //   - The code is EMAIL_OTP_LENGTH digits, from mobile/lib/otp.js — it mirrors
 //     the Supabase project's "Email OTP Length" setting, which is NOT the
 //     supabase default of 6. Never re-hard-code a digit count here.
-//   - On success, AuthProvider's onAuthStateChange picks up the session and the
-//     root index redirects to (tabs).
+//   - On success we replace to "/" so app/index.jsx — THE identity resolver —
+//     decides which shell owns the launch. It used to jump straight to
+//     /(tabs); that predates the merge and hard-codes the staff answer, which
+//     is wrong for any member-only session (the reviewer's included).
 //   - Errors are shown inline; never raw Supabase error codes.
+//
+// REPSET-PUB.3A — App Store reviewer gate. Typing the demo email
+// (lib/review-login.js) swaps the emailed-OTP step for a gate-code step; the
+// code is exchanged server-side for a real one-time token. Champ's trigger,
+// copied: the email IS the trigger, there is no hidden gesture, and Apple
+// receives that email in the App Store Connect demo-account fields. The gate
+// code lives ONLY in the server's environment and is 404 while unset.
 
 import { useState } from 'react'
 import { useRouter } from 'expo-router'
@@ -20,6 +29,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useAuth } from '../../../lib/auth-context'
 import { EMAIL_OTP_LENGTH, OTP_PLACEHOLDER, normalizeOtpInput, isCompleteOtp } from '../../../lib/otp'
+import { normalizeGateCode, isCompleteGateCode } from '../../../lib/review-login'
 
 export default function Login() {
   const { signIn, requestCode, verifyCode } = useAuth()
@@ -27,6 +37,9 @@ export default function Login() {
   const { refreshPairing } = useStudioPin()
   const [mode, setMode] = useState('code') // 'code' | 'password' | 'pair'
   const [codeStep, setCodeStep] = useState('email') // 'email' | 'code'
+  // REPSET-PUB.3A — set by requestCode when the typed email is the reviewer
+  // demo account; swaps the OTP field for the gate-code field below.
+  const [reviewMode, setReviewMode] = useState(false)
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -39,7 +52,7 @@ export default function Login() {
   const [pairError, setPairError] = useState(null)
 
   function switchMode(next) {
-    setMode(next); setError(null); setCodeStep('email')
+    setMode(next); setError(null); setCodeStep('email'); setReviewMode(false)
   }
 
   async function handleRequestCode() {
@@ -53,8 +66,18 @@ export default function Login() {
       else setError('Could not send the code. Try again, or use a password.')
       return
     }
+    // `review` is set only for the App Store demo account — no email was sent
+    // and the next step takes the gate code instead.
+    setReviewMode(Boolean(result.review))
     setOtp(''); setCodeStep('code')
   }
+
+  // Both code paths submit through verifyCode; auth-context branches on the
+  // email and exchanges a gate code for a real one-time token when it is the
+  // reviewer account. The button gate differs because the two values do:
+  // an emailed OTP is exactly EMAIL_OTP_LENGTH digits, a gate code is free
+  // text of unknown length.
+  const codeReady = reviewMode ? isCompleteGateCode(otp) : isCompleteOtp(otp)
 
   async function handleVerifyCode() {
     setError(null); setSubmitting(true)
@@ -64,7 +87,10 @@ export default function Login() {
       setError("That code didn't work — check it and try again.")
       return
     }
-    router.replace('/(tabs)')
+    // "/" hands the launch to the identity resolver (app/index.jsx), which
+    // routes staff to the staff tabs and a member-only session — the App
+    // Review demo account is one — to the member home.
+    router.replace('/')
   }
 
   async function handleSignIn() {
@@ -78,7 +104,7 @@ export default function Login() {
       setError(msg)
       return
     }
-    router.replace('/(tabs)')
+    router.replace('/')
   }
 
   async function handlePair() {
@@ -145,37 +171,64 @@ export default function Login() {
 
           {mode === 'code' && codeStep === 'code' && (
             <>
-              <Text className="text-sm text-un1t-subtle mb-4">Enter the {EMAIL_OTP_LENGTH}-digit code we emailed to {email}.</Text>
+              <Text className="text-sm text-un1t-subtle mb-4">
+                {reviewMode
+                  ? 'Enter the access code supplied with this review submission.'
+                  : `Enter the ${EMAIL_OTP_LENGTH}-digit code we emailed to ${email}.`}
+              </Text>
               <View className="bg-un1t-surface rounded-2xl border border-un1t-border overflow-hidden mb-4">
                 <View className="px-4 py-3">
-                  <Text className="text-xs text-un1t-subtle mb-1">Login code</Text>
-                  <TextInput
-                    value={otp}
-                    onChangeText={(v) => setOtp(normalizeOtpInput(v))}
-                    placeholder={OTP_PLACEHOLDER}
-                    placeholderTextColor="#94A3B8"
-                    keyboardType="number-pad"
-                    autoComplete="one-time-code"
-                    textContentType="oneTimeCode"
-                    maxLength={EMAIL_OTP_LENGTH}
-                    className="text-base text-un1t-text tracking-[8px]"
-                  />
+                  <Text className="text-xs text-un1t-subtle mb-1">{reviewMode ? 'Access code' : 'Login code'}</Text>
+                  {/* REPSET-PUB.3A — the gate code is FREE TEXT, deliberately
+                      not the digits-only OTP input. Routing it through
+                      normalizeOtpInput (as champ does) would strip every
+                      non-digit and leave the submit button dead on an
+                      alphanumeric code — at submission time, with a code
+                      nobody had typed before. */}
+                  {reviewMode ? (
+                    <TextInput
+                      value={otp}
+                      onChangeText={(v) => setOtp(normalizeGateCode(v))}
+                      placeholder="Access code"
+                      placeholderTextColor="#94A3B8"
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      autoComplete="off"
+                      className="text-base text-un1t-text"
+                    />
+                  ) : (
+                    <TextInput
+                      value={otp}
+                      onChangeText={(v) => setOtp(normalizeOtpInput(v))}
+                      placeholder={OTP_PLACEHOLDER}
+                      placeholderTextColor="#94A3B8"
+                      keyboardType="number-pad"
+                      autoComplete="one-time-code"
+                      textContentType="oneTimeCode"
+                      maxLength={EMAIL_OTP_LENGTH}
+                      className="text-base text-un1t-text tracking-[8px]"
+                    />
+                  )}
                 </View>
               </View>
               <Pressable
                 onPress={handleVerifyCode}
-                disabled={submitting || !isCompleteOtp(otp)}
-                className={`rounded-2xl py-4 items-center ${submitting || !isCompleteOtp(otp) ? 'bg-un1t-border' : 'bg-un1t-text'}`}
+                disabled={submitting || !codeReady}
+                className={`rounded-2xl py-4 items-center ${submitting || !codeReady ? 'bg-un1t-border' : 'bg-un1t-text'}`}
               >
                 {submitting ? <ActivityIndicator color="#FFFFFF" /> : <Text className="text-un1t-bg font-semibold text-base">Verify &amp; sign in</Text>}
               </Pressable>
               <View className="flex-row justify-between mt-3">
-                <Pressable onPress={() => { setCodeStep('email'); setError(null) }} className="py-2 active:opacity-70">
+                <Pressable onPress={() => { setCodeStep('email'); setReviewMode(false); setError(null) }} className="py-2 active:opacity-70">
                   <Text className="text-sm text-un1t-subtle">Change email</Text>
                 </Pressable>
-                <Pressable onPress={handleRequestCode} disabled={submitting} className="py-2 active:opacity-70">
-                  <Text className="text-sm text-un1t-subtle">Resend code</Text>
-                </Pressable>
+                {/* Nothing was emailed in review mode — a "Resend code" that
+                    resends nothing is worse than no button at all. */}
+                {!reviewMode && (
+                  <Pressable onPress={handleRequestCode} disabled={submitting} className="py-2 active:opacity-70">
+                    <Text className="text-sm text-un1t-subtle">Resend code</Text>
+                  </Pressable>
+                )}
               </View>
             </>
           )}

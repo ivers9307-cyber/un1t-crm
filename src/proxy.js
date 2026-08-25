@@ -215,7 +215,35 @@ export async function proxy(request) {
   // verify" while every anonymous hit 307'd to /login. Nothing personal is
   // behind it — it is static copy naming an email address.
   const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/event/', '/event-pay/', '/race/', '/race-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/api/fleet/', '/deposit/', '/welcome', '/free-class', '/start', '/offers', '/.well-known/', '/privacy', '/terms', '/legal/', '/technical', '/account-deletion', '/ccf', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/', '/use-the-app']
-  const isPublic = publicPaths.some(p => request.nextUrl.pathname.startsWith(p))
+
+  // Public paths matched EXACTLY (or as a parent segment), not as a bare
+  // prefix — for entries where a same-stem sibling route must NOT inherit the
+  // exemption. The list above is bare-prefix matched on purpose (`/welcome`
+  // has to cover `/welcome/<location>`), but that shape is wrong for a single
+  // named endpoint: it would quietly hand the exemption to whatever someone
+  // names next with the same stem.
+  //
+  // /api/mobile/review-login — REPSET-PUB.3A, the App Store reviewer login
+  // gate (ported from champ-app's July hardening). It is called BEFORE the
+  // reviewer has a session — minting one is its entire job — so behind the
+  // gate every attempt 401s and Apple can never sign in (Guideline 2.1).
+  // Exactly the /api/bridge/ + /api/fleet/ shape: the route self-guards, with
+  // the env-only gate code as the credential, a DB-backed per-IP limiter
+  // consulted BEFORE the credential check, a runtime not-staff assertion on
+  // the demo account, and a 404 when REVIEW_LOGIN_CODE is unset — which is its
+  // DEFAULT state, so this entry normally admits requests to a route that
+  // answers 404. Exact-matched (REPSET-PUB.3A-b) so a future
+  // /api/mobile/review-login-debug or -status is NOT public by inheritance:
+  // nobody adding such a route would think to check this allowlist. Not a
+  // public PAGE, so the other three allowlists (AppShell, brands,
+  // tenant-domains) don't apply — nothing renders a shell, and the mobile app
+  // calls the canonical CRM host, never a brand hostname.
+  const publicExactPaths = ['/api/mobile/review-login']
+
+  const pathname = request.nextUrl.pathname
+  const isPublic =
+    publicPaths.some(p => pathname.startsWith(p)) ||
+    publicExactPaths.some(p => pathname === p || pathname.startsWith(p + '/'))
   if (isPublic) return NextResponse.next()
 
   // Allow API requests authenticated with a valid Bearer token. Three paths:

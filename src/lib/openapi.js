@@ -1885,6 +1885,30 @@ registry.registerPath({
   },
 })
 
+// REPSET-PUB.3A — the ONE mobile route with `security: []`. It is called
+// before the reviewer has a session (minting one is its job), so it carries no
+// scheme; the credential is the REVIEW_LOGIN_CODE env var. Normally 404 —
+// the code is unset except in the window around an App Review submission.
+registry.registerPath({
+  method: 'post',
+  path: '/api/mobile/review-login',
+  tags: ['Mobile'],
+  security: [],
+  summary: 'App Store reviewer login gate',
+  description: 'Exchanges the demo email + the configured gate code for a one-time email OTP the client verifies into a session, so an App Review reviewer can get past the passwordless (emailed-code) login. DORMANT unless REVIEW_LOGIN_CODE is set — unset returns 404, and there is no source fallback. Throttled per IP before the credential check (mig 449); the limiter fails closed with 503. Signs in exactly one member-only demo account and provisions nothing.',
+  request: { body: { content: { 'application/json': { schema: z.object({
+    email: z.string(),
+    code: z.string(),
+  }).openapi('ReviewLoginBody') } } } },
+  responses: {
+    200: { description: 'One-time token minted', content: { 'application/json': { schema: SuccessResponse(z.object({ otp: z.string() })).openapi('ReviewLoginResponse') } } },
+    403: { description: 'Wrong email or code', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Gate not configured — route off', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Too many attempts from this IP', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Rate limiter unavailable — fails closed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'get',
   path: '/api/mobile/me',
