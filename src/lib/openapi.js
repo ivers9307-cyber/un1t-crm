@@ -1915,7 +1915,7 @@ registry.registerPath({
   tags: ['Mobile'],
   security: [{ CookieAuth: [] }],
   summary: 'Register a device (push token optional)',
-  description: 'ANDROID-VIS.1 (mig 565) — the row is keyed by `device_key`, an app-generated per-install id; `expo_push_token` is an optional CAPABILITY. A device that cannot obtain one (Android without FCM credentials, iOS with notifications declined) still registers and still reports platform / app_version / last_seen_at / geofence_permission. At least one of the two identities is required. The field names below are the real ones — this entry said `token` until 565 and never matched the route.',
+  description: 'ANDROID-VIS.1 (mig 565) — the row is keyed by `device_key`, an app-generated per-install id; `expo_push_token` is an optional CAPABILITY. A device that cannot obtain one (Android without FCM credentials, iOS with notifications declined) still registers and still reports platform / app_version / last_seen_at / geofence_permission. At least one of the two identities is required. The field names below are the real ones — this entry said `token` until 565 and never matched the route. REPSET-PUB.1A (mig 567) adds `native_build`: the binary\'s Info.plist build number, OTA-immune, which is what distinguishes the old unlisted iOS app from the new public one.',
   request: { body: { content: { 'application/json': { schema: z.object({
     expo_push_token: z.string().nullable().optional(),
     device_key: z.string().optional(),
@@ -1923,6 +1923,7 @@ registry.registerPath({
     device_name: z.string().optional(),
     app_version: z.string().optional(),
     geofence_permission: z.string().optional(),
+    native_build: z.string().optional(),
   }).openapi('DeviceTokenRegisterBody') } } } },
   responses: {
     200: { description: 'Device registered' },
