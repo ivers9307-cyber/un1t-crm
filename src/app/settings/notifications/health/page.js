@@ -83,7 +83,11 @@ export default async function PushHealthPage() {
     db.from('locations').select('id, name, active').eq('active', true).eq('is_host_anchor', false).order('name'),
     // ANDROID-VIS.1b — expo_push_token is SELECTED (never rendered) purely
     // so pushHealthStatus can tell "reports but unreachable" from "healthy".
-    db.from('device_tokens').select('id, user_id, platform, device_name, app_version, created_at, last_seen_at, geofence_permission, geofence_permission_at, expo_push_token'),
+    // REPSET-PUB.1A — native_build is SELECTED so the Build column can show
+    // which BINARY each device is running (mig 567). Display only for now:
+    // the old-vs-new classification (classifyBinary) needs the old app's
+    // final build number, which is not known until Phase 2.
+    db.from('device_tokens').select('id, user_id, platform, device_name, app_version, created_at, last_seen_at, geofence_permission, geofence_permission_at, expo_push_token, native_build'),
     db.from('push_reminder_sends')
       .select('recipient_id, sent_at')
       .gte('sent_at', new Date(Date.now() - 30 * 86400 * 1000).toISOString()),
@@ -135,6 +139,9 @@ export default async function PushHealthPage() {
           // Permission reads off the CURRENT device only — an old iPad
           // that once granted "always" says nothing about today's phone.
           permission: currentDevice(ownTokens)?.geofence_permission ?? null,
+          // REPSET-PUB.1A — same rule for the binary's build number: the
+          // question is which app THIS person is using today.
+          nativeBuild: currentDevice(ownTokens)?.native_build ?? null,
         }
       })
       .sort((a, b) => a.full_name.localeCompare(b.full_name || '')),
@@ -225,6 +232,10 @@ export default async function PushHealthPage() {
                   <th className="text-left px-4 py-2 font-medium">Status</th>
                   <th className="text-left px-4 py-2 font-medium">Devices</th>
                   <th className="text-left px-4 py-2 font-medium">App version</th>
+                  {/* REPSET-PUB.1A — the BINARY's build number, which the JS
+                      version cannot tell you: an OTA changes App version on
+                      every phone and leaves this untouched. */}
+                  <th className="text-left px-4 py-2 font-medium">Build</th>
                   <th className="text-left px-4 py-2 font-medium">Location permission</th>
                   <th className="text-left px-4 py-2 font-medium">Last seen</th>
                   <th className="text-left px-4 py-2 font-medium">Pushes 30d</th>
@@ -258,6 +269,9 @@ export default async function PushHealthPage() {
                       </td>
                       <td className="px-4 py-2.5 text-xs text-un1t-subtle">
                         <VersionCell verdict={p.verdict} />
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-un1t-subtle">
+                        <BuildCell value={p.nativeBuild} />
                       </td>
                       <td className="px-4 py-2.5 text-xs">
                         <PermissionChip value={p.permission} />
@@ -342,6 +356,17 @@ function VersionCell({ verdict }) {
       {verdict.kind === 'outdated' && <span className={`${CHIP} ${CHIP_TONE.amber}`}>Outdated</span>}
     </span>
   )
+}
+
+// REPSET-PUB.1A — the CURRENT device's binary build number (mig 567). A
+// null renders "—" and means "never reported": every row written before
+// this shipped, plus any device whose host cannot read its own Info.plist
+// (a simulator). It is NOT build zero, and nothing here infers a binary
+// from it — classifyBinary needs the old app's final build number, which
+// arrives at Phase 2.
+function BuildCell({ value }) {
+  if (!value) return <span className="text-un1t-muted">—</span>
+  return <span className="text-un1t-text">{value}</span>
 }
 
 // Background-location state for the CURRENT device. A null value means

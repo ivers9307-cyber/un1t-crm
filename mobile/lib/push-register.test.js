@@ -20,6 +20,9 @@ const state = vi.hoisted(() => ({
   pairing: null,
   impersonate: null,
   deviceKey: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+  // REPSET-PUB.1A — Constants.nativeBuildVersion. Null on a simulator or
+  // any host that cannot read the binary's Info.plist.
+  nativeBuild: '42',
 }))
 
 vi.mock('expo-device', () => ({
@@ -38,7 +41,10 @@ vi.mock('expo-notifications', () => ({
   AndroidImportance: { DEFAULT: 3 },
 }))
 vi.mock('expo-constants', () => ({
-  default: { expoConfig: { version: '1.3.0', extra: { eas: { projectId: 'proj-1' } } } },
+  default: {
+    expoConfig: { version: '1.3.0', extra: { eas: { projectId: 'proj-1' } } },
+    get nativeBuildVersion() { return state.nativeBuild },
+  },
 }))
 vi.mock('react-native', () => ({ Platform: { OS: 'ios' } }))
 vi.mock('./api', () => ({ api: vi.fn(async () => ({ success: true })) }))
@@ -68,6 +74,7 @@ beforeEach(() => {
   state.pairing = null
   state.impersonate = null
   state.deviceKey = 'a1b2c3d4e5f60718293a4b5c6d7e8f90'
+  state.nativeBuild = '42'
 })
 
 const DEVICE_KEY = 'a1b2c3d4e5f60718293a4b5c6d7e8f90'
@@ -310,6 +317,67 @@ describe('unregisterPushNotifications (existing behavior pin)', () => {
     expect(api).toHaveBeenCalledWith('/api/mobile/device-tokens', {
       method: 'DELETE',
       body: { device_key: DEVICE_KEY },
+    })
+  })
+})
+
+describe('native_build reporting — REPSET-PUB.1A', () => {
+  // The binary's Info.plist build number is the ONLY OTA-immune signal that
+  // separates the OLD unlisted iOS app from the NEW public `ie.repset.app`
+  // one: app_version ships over the air and is identical on both, and
+  // Constants.expoConfig reflects the OTA-delivered config, so an old binary
+  // would report the NEW bundle id once the config PR publishes. Both entry
+  // points must send it or the migration report cannot be built.
+
+  it('registerForPushNotifications sends the native build', async () => {
+    await registerForPushNotifications()
+    expect(api.mock.calls[0][1].body.native_build).toBe('42')
+  })
+
+  it('reportDeviceState sends the native build', async () => {
+    // This is the path LocationGate calls on every foreground, so it is the
+    // one that actually populates the fleet.
+    await reportDeviceState({ geofencePermission: 'always' })
+    expect(api.mock.calls[0][1].body.native_build).toBe('42')
+  })
+
+  it('reports it even when no push token can be obtained', async () => {
+    // Every Android device, and every iOS user who declined notifications.
+    state.tokenThrows = true
+    await reportDeviceState()
+    expect(api.mock.calls[0][1].body.native_build).toBe('42')
+  })
+
+  it('OMITS the key when the host reports null (simulator)', async () => {
+    // Sending null would make the server choose between wiping a build
+    // number it already holds and ignoring the field; absence says
+    // "nothing to report" and leaves the stored value alone.
+    state.nativeBuild = null
+    await reportDeviceState({ geofencePermission: 'always' })
+    expect(Object.keys(api.mock.calls[0][1].body)).not.toContain('native_build')
+  })
+
+  it('OMITS the key when the host reports undefined or an empty string', async () => {
+    for (const absent of [undefined, '']) {
+      vi.clearAllMocks()
+      state.nativeBuild = absent
+      await reportDeviceState()
+      expect(Object.keys(api.mock.calls[0][1].body)).not.toContain('native_build')
+    }
+  })
+
+  it('coerces a numeric build to text — the column is text', async () => {
+    // Android reports versionCode as a number.
+    state.nativeBuild = 231
+    await reportDeviceState()
+    expect(api.mock.calls[0][1].body.native_build).toBe('231')
+  })
+
+  it('never blocks the report — a null build still sends everything else', async () => {
+    state.nativeBuild = null
+    await reportDeviceState({ geofencePermission: 'always' })
+    expect(api.mock.calls[0][1].body).toMatchObject({
+      device_key: DEVICE_KEY, app_version: '1.3.0', geofence_permission: 'always',
     })
   })
 })

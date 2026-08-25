@@ -99,6 +99,24 @@ const RegisterSchema = z.object({
   // running on it. Distinct from omitting the field (nothing to say) and from
   // NULL in the column (never reported at all).
   geofence_permission: z.enum(GEOFENCE_PERMISSION_VALUES).optional(),
+  // REPSET-PUB.1A (mig 567) — the BINARY's Info.plist build number
+  // (Constants.nativeBuildVersion; CFBundleVersion on iOS, versionCode on
+  // Android). OTA-immune, which is the whole point: it is what tells the
+  // OLD unlisted iOS app apart from the NEW public `ie.repset.app` one for
+  // the migration report, where app_version (OTA-delivered) and the bundle
+  // id (read from the OTA-delivered config) both lie.
+  //
+  // Optional: every client below this change omits it, and a simulator or
+  // an unreadable host returns null. Trimmed and shape-pinned rather than
+  // merely length-capped, for the same reason device_key is — the value is
+  // client-reported and lands on an operator surface, so it must not be
+  // able to smuggle arbitrary text into the report. 32 chars is far above
+  // any real build string (EAS's remote counter is a small integer) and
+  // keeps the column bounded.
+  native_build: z.string().trim().min(1).max(32).regex(
+    /^[A-Za-z0-9._-]+$/,
+    'Must be a build identifier (letters, digits, dot, dash, underscore)'
+  ).optional(),
 }).refine(
   (body) => Boolean(body.expo_push_token || body.device_key),
   {
@@ -279,6 +297,13 @@ export async function POST(request) {
             geofence_permission_at: new Date().toISOString(),
           }
           : {}),
+        // REPSET-PUB.1A — spread in ONLY when reported, the same idiom and
+        // the same reason as the two above: an UPSERT writes the whole row,
+        // so an omitted key would null the build number on every report
+        // from a client that cannot read it (a simulator, or the old binary
+        // until it takes this OTA). "Never reported" and "reported nothing"
+        // must stay distinguishable, and a NULL is never build zero.
+        ...(body.native_build ? { native_build: body.native_build } : {}),
       },
       { onConflict }
     )

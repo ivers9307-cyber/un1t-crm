@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   compareVersions, parseVersion, currentDevice, isStale, deriveTargetVersion,
-  deviceVerdict, pushHealthStatus, PUSH_HEALTHY_DAYS, STALE_AFTER_DAYS,
+  deviceVerdict, pushHealthStatus, classifyBinary, PUSH_HEALTHY_DAYS, STALE_AFTER_DAYS,
 } from './staff-devices.js'
 
 const T0 = Date.parse('2026-07-31T12:00:00Z')
@@ -181,5 +181,84 @@ describe('pushHealthStatus — ANDROID-VIS.1b', () => {
 
   it('is red when devices exist but none ever reported a last_seen_at', () => {
     expect(pushHealthStatus([tok({ last_seen_at: null })], T0).kind).toBe('red')
+  })
+})
+
+describe('classifyBinary — REPSET-PUB.1A', () => {
+  // N = the OLD unlisted iOS app's FINAL build number. Every iOS binary at
+  // or below it is the old app; anything above it can only have come from
+  // the new `ie.repset.app` record (EAS's remote build counter is
+  // monotonic across the shared project).
+  const N = 42
+
+  it('is n/a for every non-iOS platform — the split is an iOS-only problem', () => {
+    // Android keeps ONE app record and one package name, so there is no
+    // old-vs-new question to answer there. Calling it "new-app" would put
+    // Android devices into a migration rollup they can never leave.
+    expect(classifyBinary('android', '99', N)).toBe('n/a')
+    expect(classifyBinary('web', '99', N)).toBe('n/a')
+    expect(classifyBinary(null, '99', N)).toBe('n/a')
+    expect(classifyBinary(undefined, '99', N)).toBe('n/a')
+  })
+
+  it('calls the threshold build itself the OLD app', () => {
+    // N is the old app's LAST build, so == N is old. Getting this boundary
+    // wrong marks the whole un-migrated fleet as already migrated, which is
+    // the one error this report exists to avoid.
+    expect(classifyBinary('ios', String(N), N)).toBe('old-app')
+    expect(classifyBinary('ios', String(N - 1), N)).toBe('old-app')
+    expect(classifyBinary('ios', '1', N)).toBe('old-app')
+  })
+
+  it('calls N+1 and above the NEW app', () => {
+    expect(classifyBinary('ios', String(N + 1), N)).toBe('new-app')
+    expect(classifyBinary('ios', '9999', N)).toBe('new-app')
+  })
+
+  it('compares NUMERICALLY, not as strings', () => {
+    // '9' > '42' lexicographically and the report would be silently wrong.
+    expect(classifyBinary('ios', '9', N)).toBe('old-app')
+    expect(classifyBinary('ios', '100', N)).toBe('new-app')
+  })
+
+  it('is unknown when the device never reported a build', () => {
+    // ABSENT IS NOT ZERO. Number(null) is 0 and Number('') is 0, either of
+    // which would classify every pre-1A row as the old app on no evidence.
+    expect(classifyBinary('ios', null, N)).toBe('unknown')
+    expect(classifyBinary('ios', undefined, N)).toBe('unknown')
+    expect(classifyBinary('ios', '', N)).toBe('unknown')
+    expect(classifyBinary('ios', '   ', N)).toBe('unknown')
+  })
+
+  it('is unknown for an unparseable build string', () => {
+    expect(classifyBinary('ios', 'abc', N)).toBe('unknown')
+    expect(classifyBinary('ios', '2.3.0', N)).toBe('unknown')
+    expect(classifyBinary('ios', '-1', N)).toBe('unknown')
+    expect(classifyBinary('ios', '1e3', N)).toBe('unknown')
+    expect(classifyBinary('ios', {}, N)).toBe('unknown')
+    expect(classifyBinary('ios', NaN, N)).toBe('unknown')
+  })
+
+  it('is unknown when the threshold is not yet known (Phase 4 wires N)', () => {
+    // Until the old app's final build number is read off EAS/ASC there is
+    // nothing to compare against, and guessing a side is worse than
+    // admitting we do not know.
+    expect(classifyBinary('ios', '42', null)).toBe('unknown')
+    expect(classifyBinary('ios', '42', undefined)).toBe('unknown')
+    expect(classifyBinary('ios', '42', 'not-a-number')).toBe('unknown')
+    expect(classifyBinary('ios', '42', NaN)).toBe('unknown')
+  })
+
+  it('accepts a numeric build as well as the stored text', () => {
+    // The column is text, but a caller holding Constants.nativeBuildVersion
+    // straight off an Android device has a number.
+    expect(classifyBinary('ios', N, N)).toBe('old-app')
+    expect(classifyBinary('ios', N + 1, N)).toBe('new-app')
+    expect(classifyBinary('ios', 1.5, N)).toBe('unknown')
+  })
+
+  it('tolerates surrounding whitespace and platform casing', () => {
+    expect(classifyBinary('iOS', ' 43 ', N)).toBe('new-app')
+    expect(classifyBinary('ios', ' 41 ', ' 42 ')).toBe('old-app')
   })
 })
