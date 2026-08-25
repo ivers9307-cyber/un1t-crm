@@ -38,6 +38,10 @@
         "appleId": "richard@richardivers.com",
         "appleTeamId": "535XMCT5PY",
         "ascAppId": "6770890839"
+      },
+      "android": {
+        "track": "internal",
+        "changesNotSentForReview": false
       }
     }
   }
