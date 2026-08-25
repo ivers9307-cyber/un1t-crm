@@ -110,7 +110,7 @@ export function isHandoffSummaryReason(reason) {
   return !MECHANICAL_SILENCE_REASONS.has(r)
 }
 
-function buildReviewRequest(transcript) {
+function buildReviewRequest(transcript, reviewDate) {
   const system = [
     'You are a strict quality reviewer for Mia, a gym\'s WhatsApp customer agent. Review the conversation below against this rubric:',
     ...REVIEW_RUBRIC.map((r, i) => `${i + 1}. ${r}`),
@@ -125,7 +125,7 @@ function buildReviewRequest(transcript) {
     thinking: AGENT_THINKING,
     output_config: { effort: 'low' },
     system,
-    messages: [{ role: 'user', content: `TRANSCRIPT (${new Date().toISOString().slice(0, 10)}):\n${transcript}` }],
+    messages: [{ role: 'user', content: `TRANSCRIPT (${reviewDate}):\n${transcript}` }],
   }
 }
 
@@ -190,7 +190,7 @@ export async function runAgentReview(db, { nowMs = Date.now() } = {}) {
         if (!transcript) { results.skipped++; continue }
 
         const { res, data } = await anthropicMessages(
-          buildReviewRequest(transcript),
+          buildReviewRequest(transcript, reviewDate),
           { apiKey, locationId, source: 'agent_review' },
         )
         if (!res.ok) { results.skipped++; continue }
