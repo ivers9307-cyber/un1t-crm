@@ -183,6 +183,70 @@ describe('POST /api/mobile/device-tokens', () => {
   })
 })
 
+// --- REPSET-PUB.1A (mig 567) — native_build ------------------------------
+//
+// The binary's Info.plist build number, which is what tells the OLD unlisted
+// iOS app apart from the NEW public one for the migration report. It is
+// client-reported and rendered on an operator surface, so it is shape-pinned
+// like device_key and app_version rather than merely length-capped.
+
+describe('POST /api/mobile/device-tokens — native_build', () => {
+  beforeEach(() => getCurrentUser.mockResolvedValue({ id: 'u1' }))
+
+  it('persists native_build when the client reports one', async () => {
+    const captured = {}
+    createServerClient.mockReturnValue(makeDb(captured))
+
+    const res = await POST(req({
+      expo_push_token: TOKEN, device_key: DEVICE_KEY, native_build: '42',
+    }))
+    expect(res.status).toBe(200)
+    expect(captured.row.native_build).toBe('42')
+  })
+
+  it('OMITS the key entirely when the client sends none', async () => {
+    // Same load-bearing reason as geofence_permission: the upsert writes the
+    // WHOLE row, so a present-but-undefined key would wipe the build number
+    // we already learned every time a pre-1A client (or the old binary
+    // before it takes the OTA) reports.
+    const captured = {}
+    createServerClient.mockReturnValue(makeDb(captured))
+
+    const res = await POST(req({ expo_push_token: TOKEN, app_version: '2.3.0' }))
+    expect(res.status).toBe(200)
+    expect(Object.keys(captured.row)).not.toContain('native_build')
+  })
+
+  it('trims surrounding whitespace rather than storing it', async () => {
+    const captured = {}
+    createServerClient.mockReturnValue(makeDb(captured))
+
+    const res = await POST(req({ expo_push_token: TOKEN, native_build: '  42  ' }))
+    expect(res.status).toBe(200)
+    expect(captured.row.native_build).toBe('42')
+  })
+
+  it('400s on an oversized or malformed native_build instead of storing it', async () => {
+    const captured = {}
+    createServerClient.mockReturnValue(makeDb(captured))
+
+    for (const bad of ['9'.repeat(33), 'x'.repeat(40), '', '   ', '42; DROP', '<b>42</b>', 42]) {
+      const res = await POST(req({ expo_push_token: TOKEN, native_build: bad }))
+      expect(res.status, `expected 400 for ${JSON.stringify(bad)}`).toBe(400)
+    }
+    expect(captured.row).toBeUndefined()
+  })
+
+  it('accepts a build at the length limit', async () => {
+    const captured = {}
+    createServerClient.mockReturnValue(makeDb(captured))
+
+    const res = await POST(req({ expo_push_token: TOKEN, native_build: '9'.repeat(32) }))
+    expect(res.status).toBe(200)
+    expect(captured.row.native_build).toBe('9'.repeat(32))
+  })
+})
+
 // --- ANDROID-VIS.1 (mig 565) — dual identity -----------------------------
 
 describe('POST /api/mobile/device-tokens — device_key identity', () => {

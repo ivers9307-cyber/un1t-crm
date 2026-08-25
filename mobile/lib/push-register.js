@@ -44,6 +44,26 @@ import { ANDROID_CHANNELS } from 'shared/push-channels'
  */
 async function postDeviceState({ token, deviceKey, geofencePermission }) {
   if (!token && !deviceKey) return null
+
+  // REPSET-PUB.1A — the BINARY's Info.plist build number (CFBundleVersion on
+  // iOS, versionCode on Android). Read from expo-constants, which is already
+  // a dependency, so nothing native is added during the runtimeVersion
+  // freeze the whole Repset-public programme depends on.
+  //
+  // It is the ONE honest signal for "which iOS binary is this?": app_version
+  // above ships over the air and is identical on the old unlisted app and
+  // the new public `ie.repset.app` one, and Constants.expoConfig reflects
+  // the OTA-DELIVERED config, so an old binary would report the NEW bundle
+  // id the moment the config PR publishes. nativeBuildVersion is baked into
+  // the binary and an OTA cannot touch it.
+  //
+  // Null-safe by design: a simulator (and any host that cannot read the
+  // Info.plist) returns null. Spread only when present — the geofence idiom
+  // below — because the server upserts the whole row, so sending null would
+  // wipe a build number it already holds. Coerced to a string because
+  // Android reports versionCode numerically and the column is text.
+  const nativeBuild = Constants.nativeBuildVersion
+
   return api('/api/mobile/device-tokens', {
     method: 'POST',
     body: {
@@ -52,6 +72,9 @@ async function postDeviceState({ token, deviceKey, geofencePermission }) {
       platform: Platform.OS,
       device_name: Device.deviceName || undefined,
       app_version: Constants.expoConfig?.version,
+      ...(nativeBuild == null || nativeBuild === ''
+        ? {}
+        : { native_build: String(nativeBuild) }),
       // Only sent when the caller actually knows it — see reportDeviceState.
       ...(geofencePermission ? { geofence_permission: geofencePermission } : {}),
     },
