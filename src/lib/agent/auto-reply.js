@@ -34,6 +34,7 @@ import {
   resolveAgentEffort,
   AGENT_MESSAGE_SOURCE,
   DEFAULT_HOLDING_MESSAGE,
+  DEFAULT_NO_CREDITS_HANDOFF_TEXT,
   resolveAutoVerify,
   resolveActingContactId,
   distinctPersonCount,
@@ -764,6 +765,9 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     trace.actingContactId = toolCtx.verifiedContactId || null
 
     let verifyFails = conv?.agent_verify_attempts ?? 0
+    // MIA-CREDITS.1 — set when book_class pre-flights to no_credits; the
+    // turn ends in a deterministic handoff (script + park + manager push).
+    let noCreditsHandoff = false
     let modelText = ''
     // A stop_reason / tool outcome that must NOT become a customer reply.
     // Set inside the loop, actioned as a soft handoff just after it.
@@ -839,6 +843,8 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
           messages.push({ role: 'assistant', content })
           const toolResults = []
           let toolFailed = null
+          // MIA-CREDITS.1 — a book_class pre-flight that found no balance;
+          // checked after the loop so the thread hands off deterministically.
           for (const block of content) {
             if (block.type !== 'tool_use') continue
             // Mig 444 — record the call before executing so even a thrown
@@ -873,6 +879,9 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
                 is_error: true,
               })
               continue
+            }
+            if (block.name === 'book_class' && result?.no_credits === true) {
+              noCreditsHandoff = true
             }
             if (block.name === 'verify_identity') {
               // AGENT-VERIFY-HANDOFF.1 — track consecutive failures so a stuck
@@ -1011,6 +1020,20 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // that would keep re-asking can't loop the customer; the model's retry text
     // for this turn is discarded in favour of the handoff holding message. The
     // SLA sweep re-alerts if nobody picks it up.
+    // MIA-CREDITS.1 — the booking pre-flight found nothing to book with. The
+    // model's composed text is DISCARDED in favour of the operator-editable
+    // script (same posture as the verify-fail handoff below): what the
+    // customer reads is deterministic, and a human steps into the thread
+    // while they are still warm. The pending approval card (created by the
+    // tool) carries the booking intent for the one-tap grant-then-book.
+    if (noCreditsHandoff) {
+      await handoff(db, adapter, {
+        ...common, reason: 'no_credits', settings,
+        holdingOverride: (settings?.no_credits_handoff_text || '').trim() || DEFAULT_NO_CREDITS_HANDOFF_TEXT,
+      })
+      return { handled: true, action: 'handoff', reason: 'no_credits' }
+    }
+
     if (shouldHandoffAfterVerifyFail(verifyFails, verifyFailThreshold)) {
       try {
         await db.from(adapter.conversationsTable)
@@ -1138,8 +1161,11 @@ async function recordAgentMessage(db, adapter, row) {
 }
 
 // Escalate: holding message, stop the agent on this thread, notify staff.
-async function handoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, reason, settings }) {
-  const holding = (settings?.holding_message || '').trim() || DEFAULT_HOLDING_MESSAGE
+async function handoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, reason, settings, holdingOverride }) {
+  // holdingOverride: a reason-specific script (e.g. the no_credits
+  // escalation wording) replaces the generic holding message for this
+  // handoff only.
+  const holding = (holdingOverride || '').trim() || (settings?.holding_message || '').trim() || DEFAULT_HOLDING_MESSAGE
   const now = new Date().toISOString()
 
   await db.from(adapter.conversationsTable).update({

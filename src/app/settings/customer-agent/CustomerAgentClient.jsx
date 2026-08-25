@@ -66,6 +66,7 @@ export default function CustomerAgentClient() {
         booking_confirmation_text: settings.booking_confirmation_text || null,
         cancellation_confirmation_text: settings.cancellation_confirmation_text || null,
         booking_issue_handoff_text: settings.booking_issue_handoff_text || null,
+        no_credits_handoff_text: settings.no_credits_handoff_text || null,
         approval_decline_text: settings.approval_decline_text || null,
         welcome_greeting: settings.welcome_greeting || null,
         link_button_text: (settings.link_button_text || '').trim() || null,
@@ -406,6 +407,17 @@ export default function CustomerAgentClient() {
             onChange={e => setField('booking_issue_handoff_text', e.target.value)}
             placeholder="There seems to be an issue with your account, so I'm handing this over to the team to sort it out. You'll hear from them shortly once it's resolved." />
           <p className="text-xs text-un1t-muted mt-1">What the agent tells the customer when the booking system rejects a booking (for example no credits left) and the request is sent to the team to fix. Leave blank to use the default shown.</p>
+        </div>
+
+        {/* MIA-CREDITS.1 — sent verbatim when the booking pre-flight finds no
+            credits/membership and the thread hands off to a human. Default
+            mirrors DEFAULT_NO_CREDITS_HANDOFF_TEXT in core.js. */}
+        <div>
+          <label className="block text-sm font-medium text-un1t-text mb-1">No-credits escalation message</label>
+          <input className={inputCls} maxLength={500} value={settings.no_credits_handoff_text || ''}
+            onChange={e => setField('no_credits_handoff_text', e.target.value)}
+            placeholder="You're out of class credits at the moment so I can't book that one straight away. I'll escalate this to a team member to help you out now." />
+          <p className="text-xs text-un1t-muted mt-1">Sent word-for-word when a customer asks to book but has no credits or active membership. The conversation is handed to the team immediately and the booking request appears in Approvals. Leave blank to use the default shown.</p>
         </div>
 
         {/* APPROVALS-STUDIO.1 — sent in-thread when staff decline a customer

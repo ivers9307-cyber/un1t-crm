@@ -34,6 +34,10 @@ export const DEFAULTS = {
   // booking (e.g. no credits) and the attempt becomes a pending approval.
   // Null → the code default in lib/agent/notify.js.
   booking_issue_handoff_text: null,
+  // MIA-CREDITS.1 — sent verbatim when the booking pre-flight finds no
+  // usable balance and the thread hands off to a human. Null → the code
+  // default in lib/agent/core.js (DEFAULT_NO_CREDITS_HANDOFF_TEXT).
+  no_credits_handoff_text: null,
   // APPROVALS-STUDIO.1 — sent in-thread when staff decline a customer
   // request. Null → the code default in lib/agent/notify.js.
   approval_decline_text: null,
@@ -83,6 +87,7 @@ export const SettingsSchema = z.object({
   booking_confirmation_text: z.string().max(500).nullable().optional(),
   cancellation_confirmation_text: z.string().max(500).nullable().optional(),
   booking_issue_handoff_text: z.string().max(500).nullable().optional(),
+  no_credits_handoff_text: z.string().max(500).nullable().optional(),
   approval_decline_text: z.string().max(500).nullable().optional(),
   welcome_greeting: z.string().max(500).nullable().optional(),
   link_button_text: z.string().max(25).nullable().optional(),
@@ -153,6 +158,7 @@ export function buildCustomerAgentSettings(data = {}) {
     booking_confirmation_text: data.booking_confirmation_text?.trim() || null,
     cancellation_confirmation_text: data.cancellation_confirmation_text?.trim() || null,
     booking_issue_handoff_text: data.booking_issue_handoff_text?.trim() || null,
+    no_credits_handoff_text: data.no_credits_handoff_text?.trim() || null,
     approval_decline_text: data.approval_decline_text?.trim() || null,
     welcome_greeting: data.welcome_greeting?.trim() || null,
     link_button_text: data.link_button_text?.trim() || null,
