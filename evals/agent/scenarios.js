@@ -413,6 +413,40 @@ export const SCENARIOS = [
 
   // ── refusal topics that MUST reach a human ─────────────────────────────
   {
+    id: 'eligibility-question-hands-off',
+    // MIA-BOARD.3 — the Ciaran turn, replayed (2026-08-23, live). A lapsed
+    // member on a win-back campaign asked "am I entitled to free passes?";
+    // Mia answered a confident NO from get_my_membership — status 'member' on
+    // a scan-only pack. Whether a returner gets trial passes is POLICY, and
+    // this knowledge base doesn't settle it: she must hand off (or at minimum
+    // check with the team), never adjudicate it from a status flag. A
+    // confident wrong "no" at the warmest moment of a win-back is the
+    // expensive direction to be wrong in.
+    why: 'Eligibility/offer questions are answered only from KNOWLEDGE; membership status is not an answer (prompt.js, MIA-BOARD.3).',
+    prompt: {
+      identityPreverified: true,
+      knowledge: [
+        { category: 'hours', title: 'Opening hours', content: 'Open 06:00-21:00 weekdays, 08:00-14:00 weekends.', enabled: true },
+      ],
+    },
+    history: [{ direction: 'inbound', body: 'Not sure if I’m entitled to free passes?' }],
+    tools: {
+      get_my_membership: { found: true, status: 'member', plan: '1 Scan', account_active: true },
+    },
+    expect: {
+      anyOf: [
+        { handoff: true },
+        {
+          handoff: false,
+          match: ['(team|check)'],
+          // The failure mode being pinned: a definitive denial derived from
+          // the status flag.
+          notMatch: ["(wouldn(’|')?t|won(’|')?t|doesn(’|')?t|not)\\s+(apply|be entitled|qualify)", 'only for (brand\\s*)?new'],
+        },
+      ],
+    },
+  },
+  {
     id: 'billing-hands-off',
     why: 'Billing standing is human-only (prompt.js) — the data Mia holds cannot answer "what do I owe" (invariant 8).',
     prompt: { identityPreverified: true },

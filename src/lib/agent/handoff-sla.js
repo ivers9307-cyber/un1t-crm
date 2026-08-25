@@ -28,6 +28,7 @@
 
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { resolveRearmPatch } from './core'
 
 export const HANDOFF_SLA_DEFAULT_MINUTES = 60
 const MIN_MS = 60_000
@@ -96,6 +97,151 @@ export function waitingLabel(handedOffAtMs, nowMs) {
   const h = Math.floor(mins / 60)
   const m = mins % 60
   return h ? `${h}h${m ? ` ${m}m` : ''}` : `${m}m`
+}
+
+// ── MIA-BOARD.1 — handoff AUTO-RESOLVE ──────────────────────────────────────
+//
+// The workflow this file escalates for was never completed by anyone: 121
+// handed-off threads, ZERO inbox resolves ever (re-audit 2026-08-25). Pushing
+// harder at a step nobody takes is noise, so the queue now cleans itself:
+//   (a) a human replied since the handoff and the thread has been quiet for
+//       auto_resolve_after_reply_hours (default 8 — Richard, 2026-08-20): the
+//       human engagement ran its course; hand the thread back to Mia.
+//   (b) NOTHING has happened for auto_resolve_stale_hours (default 48): the
+//       conversation is over; a parked thread only means the customer's NEXT
+//       message lands in silence.
+// Either case applies exactly the patch the inbox Resolve button applies
+// (resolved_at + resolveRearmPatch), so the SLA escalation stamp clears and
+// re-arm semantics are identical to the manual workflow. Operator-paused
+// threads (agent_paused_at) are never touched — a sticky pause is an explicit
+// "Mia stays out of this one".
+
+export const AUTO_RESOLVE_AFTER_REPLY_HOURS_DEFAULT = 8
+export const AUTO_RESOLVE_STALE_HOURS_DEFAULT = 48
+const HOUR_MS = 3_600_000
+
+/**
+ * Per-location auto-resolve windows, clamped. 0 disables a case; junk falls
+ * back to the default (matching resolveHandoffSlaMinutes' posture). Pure.
+ */
+export function resolveAutoResolveHours(settings) {
+  const read = (raw, fallback) => {
+    const n = Number(raw)
+    if (!Number.isFinite(n)) return fallback
+    return n > 0 ? Math.round(n) : 0
+  }
+  return {
+    afterReplyHours: read(settings?.auto_resolve_after_reply_hours, AUTO_RESOLVE_AFTER_REPLY_HOURS_DEFAULT),
+    staleHours: read(settings?.auto_resolve_stale_hours, AUTO_RESOLVE_STALE_HOURS_DEFAULT),
+  }
+}
+
+/**
+ * Should this handed-off conversation auto-resolve? Pure.
+ * @returns {{ resolve: boolean, reason: string }}
+ */
+export function classifyAutoResolve({
+  handedOffAtMs,
+  pausedAt,
+  agentActive,
+  resolvedAtMs,
+  lastMessageAtMs,
+  humanRepliedAtMs,
+  nowMs,
+  afterReplyHours = AUTO_RESOLVE_AFTER_REPLY_HOURS_DEFAULT,
+  staleHours = AUTO_RESOLVE_STALE_HOURS_DEFAULT,
+} = {}) {
+  if (!handedOffAtMs) return { resolve: false, reason: 'not_handed_off' }
+  if (pausedAt) return { resolve: false, reason: 'paused' }
+  if (agentActive) return { resolve: false, reason: 'already_armed' }
+  if (resolvedAtMs && resolvedAtMs >= handedOffAtMs) return { resolve: false, reason: 'already_resolved' }
+
+  // "Quiet" is measured from the last activity of ANY kind; a thread with no
+  // messages at all measures from the handoff itself.
+  const quietSinceMs = lastMessageAtMs || handedOffAtMs
+  const humanReplied = humanRepliedAtMs && humanRepliedAtMs >= handedOffAtMs - TAKEOVER_SKEW_MS
+
+  if (afterReplyHours > 0 && humanReplied && nowMs - quietSinceMs >= afterReplyHours * HOUR_MS) {
+    return { resolve: true, reason: 'human_replied_quiet' }
+  }
+  if (staleHours > 0 && nowMs - quietSinceMs >= staleHours * HOUR_MS) {
+    return { resolve: true, reason: 'stale' }
+  }
+  return { resolve: false, reason: 'waiting' }
+}
+
+/**
+ * One cron tick: hand parked threads back to Mia. Silent by design — no push,
+ * no customer message; the thread simply becomes answerable again. Never
+ * throws. First real run drains the accumulated backlog; that is the point.
+ */
+export async function runHandoffAutoResolve(db, { nowMs = Date.now() } = {}) {
+  const results = { resolved: 0, skipped: 0 }
+  const nowIso = new Date(nowMs).toISOString()
+
+  const { data: locations } = await db.from('locations')
+    .select('id, name, settings')
+    .eq('active', true)
+
+  for (const location of locations || []) {
+    const settings = location?.settings?.customer_agent || null
+    if (!settings) continue
+    const { afterReplyHours, staleHours } = resolveAutoResolveHours(settings)
+    if (!afterReplyHours && !staleHours) continue
+
+    for (const channel of CHANNELS) {
+      // agent_paused_at is WhatsApp-only (mig 435) — same conditional select
+      // as humanTookOverDuringTurn.
+      const cols = channel.name === 'whatsapp'
+        ? 'id, agent_active, agent_handed_off_at, agent_paused_at, resolved_at, last_message_at'
+        : 'id, agent_active, agent_handed_off_at, resolved_at, last_message_at'
+      const { data: convs, error } = await db.from(channel.conversationsTable)
+        .select(cols)
+        .eq('location_id', location.id)
+        .eq('agent_active', false)
+        .not('agent_handed_off_at', 'is', null)
+        .order('agent_handed_off_at', { ascending: true })
+        .limit(200)
+      if (error) {
+        console.error(`[radar-agent] auto-resolve candidate query failed (${channel.name}):`, error.message)
+        continue
+      }
+
+      for (const c of convs || []) {
+        try {
+          const handedOffAtMs = new Date(c.agent_handed_off_at).getTime()
+          const decision = classifyAutoResolve({
+            handedOffAtMs,
+            pausedAt: c.agent_paused_at || null,
+            agentActive: c.agent_active === true,
+            resolvedAtMs: c.resolved_at ? new Date(c.resolved_at).getTime() : null,
+            lastMessageAtMs: c.last_message_at ? new Date(c.last_message_at).getTime() : null,
+            humanRepliedAtMs: await humanRepliedAtMs(db, channel, c.id, handedOffAtMs),
+            nowMs,
+            afterReplyHours,
+            staleHours,
+          })
+          if (!decision.resolve) { results.skipped++; continue }
+
+          await db.from(channel.conversationsTable)
+            .update({
+              resolved_at: nowIso,
+              ...resolveRearmPatch({ resolved: true, agent_handed_off_at: c.agent_handed_off_at }),
+            })
+            .eq('id', c.id)
+
+          console.warn('[radar-agent] handoff auto-resolved', JSON.stringify({
+            channel: channel.name, conversationId: c.id, reason: decision.reason,
+          }))
+          results.resolved++
+        } catch (e) {
+          results.skipped++
+          console.error(`[radar-agent] auto-resolve error (${channel.name}):`, e?.message || e)
+        }
+      }
+    }
+  }
+  return results
 }
 
 const CHANNELS = [
