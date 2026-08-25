@@ -25,6 +25,7 @@
 // does the IO and never throws (mirrors executeAccountTool).
 
 import { GLOFOX_BOOKING_MODEL } from '@/lib/glofox'
+import { linkedAccountsForContact, corroborated, findBookingAcrossAccounts } from '@/lib/person-accounts'
 import { DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT } from './notify'
 import { notifyAgentApprovalRequest } from './approval-notify'
 import { formatDublinClassTime } from './dublin-format'
@@ -648,23 +649,112 @@ export async function executeBookingTool(toolName, input, ctx) {
     if (!verifiedContactId) {
       return { error: 'not_verified', message: 'Identity not verified yet. Call verify_identity first.' }
     }
-    const { data: contact } = await db.from('contacts')
-      .select('glofox_member_id')
-      .eq('id', verifiedContactId)
-      .maybeSingle()
-    if (!contact?.glofox_member_id) {
-      return { error: 'not_linked', message: 'This member is not linked to the studio booking system — hand off to the team.' }
-    }
+    // PERSON-ACCT.2 — one person routinely holds 2-3 `contacts` rows, each
+    // linked to a DIFFERENT Glofox account, and the conversation is attached
+    // to whichever one the inbound number matched. Reading that one account
+    // is how Mia told a real member "you have no upcoming bookings" while the
+    // booking sat on a sibling account. Read the whole person instead.
+    const linked = await linkedAccountsForContact(db, verifiedContactId)
     const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, fetchUserBookingsResult } =
       await import('@/lib/glofox')
+
+    let accounts
+    if (linked.readFailed) {
+      // Could not resolve the person at all — fall back to the one account
+      // this conversation is attached to. Behaviourally identical to the
+      // pre-PERSON-ACCT.2 lane (same row shape, same sort, same cap); it
+      // just runs through the shared merge below. readFailed is never
+      // "this person has no accounts".
+      const { data: contact } = await db.from('contacts')
+        .select('glofox_member_id')
+        .eq('id', verifiedContactId)
+        .maybeSingle()
+      if (!contact?.glofox_member_id) {
+        return { error: 'not_linked', message: 'This member is not linked to the studio booking system — hand off to the team.' }
+      }
+      accounts = [{ id: verifiedContactId, glofox_member_id: contact.glofox_member_id }]
+    } else if (linked.accounts.length) {
+      accounts = linked.accounts
+    } else if (linked.contacts.length) {
+      // Rows read fine and not one of them carries a Glofox link: the
+      // existing not_linked lane is the honest answer.
+      return { error: 'not_linked', message: 'This member is not linked to the studio booking system — hand off to the team.' }
+    } else {
+      // No error, but no rows either — nothing here justifies telling the
+      // customer they are not linked, so answer with the honest uncertainty.
+      return { error: 'list_failed', message: 'Could not load their bookings just now — offer to hand off.' }
+    }
+
     const creds = await glofoxCredentialsForLocation(db, locationId)
     if (!creds || missingGlofoxCredentialsForLocation(creds).length) {
       return { error: 'no_booking_system', message: 'Class booking is not connected at this studio — hand off to the team.' }
     }
     // windowDays:0 → time_start cutoff = now → upcoming bookings only.
-    const res = await fetchUserBookingsResult(creds, contact.glofox_member_id, { windowDays: 0, limit: 100 })
-    if (!res.ok) return { error: 'list_failed', message: 'Could not load their bookings just now — offer to hand off.' }
-    const bookings = shapeMemberBookingsForAgent(res.bookings, Date.now())
+    // allSettled, not all: one dead account must not lose the others' rows.
+    const settled = await Promise.allSettled(accounts.map((account) =>
+      fetchUserBookingsResult(creds, account.glofox_member_id, { windowDays: 0, limit: 100 })))
+
+    const nowMs = Date.now()
+    // Shape ONE raw row at a time: same helper, same filtering (still-BOOKED,
+    // still in the future, same Dublin labels), but each shaped row keeps the
+    // numeric start it came from — the shaper drops it, since it is not part
+    // of the model's view, and the Dublin label does not sort.
+    //
+    // The rows handed back carry NOTHING about which account they came from.
+    // The whole tool result is JSON-stringified into the model's context, so
+    // a per-row glofox_member_id would put internal account ids in front of
+    // the model on every list turn for no gain: cancel_class_booking
+    // re-locates ownership server-side (findBookingAcrossAccounts) and never
+    // trusts the model for it.
+    const merged = []
+    let failedReads = 0
+    settled.forEach((res) => {
+      if (res.status !== 'fulfilled' || !res.value || res.value.ok !== true) {
+        failedReads += 1
+        return
+      }
+      for (const raw of Array.isArray(res.value.bookings) ? res.value.bookings : []) {
+        const [shaped] = shapeMemberBookingsForAgent([raw], nowMs)
+        if (!shaped) continue
+        // No `|| 0` fallback: the shaper only emits a row whose time_start is
+        // finite and in the future, so an unparseable start cannot reach here
+        // — and a NaN sort key surfacing loudly beats one silently sorting a
+        // junk row to the top of the customer's list.
+        merged.push({ row: shaped, start: Number(raw.time_start) })
+      }
+    })
+
+    // Stable sort on equal starts keeps account order, so the copy kept for a
+    // booking visible on two accounts is the first one reported.
+    merged.sort((a, b) => a.start - b.start)
+    const seen = new Set()
+    const bookings = []
+    for (const { row } of merged) {
+      if (row.booking_id) {
+        if (seen.has(row.booking_id)) continue
+        seen.add(row.booking_id)
+      }
+      bookings.push(row)
+      if (bookings.length >= MAX_MEMBER_BOOKINGS) break
+    }
+
+    // An unreadable account must NEVER surface as "you have nothing booked" —
+    // that false negative is the whole reason this task exists. With nothing
+    // to show and a read we could not complete, answer the honest
+    // could-not-load instead (byte-for-byte the pre-existing lane). This one
+    // clause covers the all-failed case too: `accounts` is never empty here
+    // (the zero-account lanes returned above), so every read failing implies
+    // no rows.
+    if (failedReads > 0 && bookings.length === 0) {
+      return { error: 'list_failed', message: 'Could not load their bookings just now — offer to hand off.' }
+    }
+    if (failedReads > 0) {
+      return {
+        bookings,
+        incomplete: true,
+        message: 'One of this member\'s linked accounts could not be read, so this list may be missing bookings. Relay the ones shown, say you may not be seeing everything, and offer to check with the team.',
+      }
+    }
     return bookings.length
       ? { bookings }
       : { bookings: [], message: 'No upcoming bookings found for this member.' }
@@ -690,6 +780,72 @@ export async function executeBookingTool(toolName, input, ctx) {
       mode,
     }
 
+    const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, cancelBooking, fetchUserBookingsResult } =
+      await import('@/lib/glofox')
+    const creds = await glofoxCredentialsForLocation(db, locationId)
+    // Resolved here rather than returned on, because draft mode has never
+    // needed Glofox credentials and must keep drafting without them.
+    const credsUsable = !!creds && missingGlofoxCredentialsForLocation(creds).length === 0
+
+    // PERSON-ACCT.2 — the booking the customer is talking about often lives
+    // on a SIBLING contact's Glofox account (list_my_upcoming_bookings now
+    // shows all of them), and cancelling it against the acting contact's
+    // account simply fails. Find the account that actually holds it, BEFORE
+    // the draft branch: the class_cancellation approval executor cancels
+    // against row.contact_id's account, so until it honours an
+    // executing_contact_id override (PR2) a sibling-owned draft would
+    // execute against the wrong account just as surely as an auto cancel.
+    let executingMemberId = glofoxMemberId
+    let ownerDetails = {}
+    const linked = credsUsable ? await linkedAccountsForContact(db, verifiedContactId) : { readFailed: true, contacts: [], accounts: [] }
+    if (!linked.readFailed && linked.accounts.length) {
+      const { owner, unreadable } = await findBookingAcrossAccounts(
+        creds, linked.accounts, input.booking_id, fetchUserBookingsResult,
+      )
+      if (!owner && unreadable.length) {
+        // An account we could not read is not evidence of absence. Never let
+        // it become "that booking does not exist".
+        return {
+          cancelled: false,
+          reason: 'CANCELLATION_UNCERTAIN',
+          message: 'The system could not check all of this member\'s linked accounts just now, so nothing was cancelled. Do NOT say the booking does not exist — say you cannot check it right now and offer to hand off to the team.',
+        }
+      }
+      if (owner && owner.glofox_member_id !== glofoxMemberId) {
+        // Acting on another contact's account is only safe when this really
+        // is the same person (shared phone or email) AND that account is one
+        // we control — a ClassPass PAYG booking is managed by ClassPass, so
+        // staff handle it out of band. In DRAFT mode no sibling qualifies at
+        // all, corroborated or not: the executor would run it against the
+        // wrong account (see above), so staff take it by hand.
+        //
+        // None of these lanes file an approval row on purpose: an
+        // approvals-queue class_cancellation re-runs the cancel against the
+        // ACTING contact's account, which is precisely the wrong account
+        // here. The handoff the message asks for is the right escalation
+        // (it pages managers and parks the thread).
+        const anchorRow = linked.contacts.find((c) => c && c.id === verifiedContactId) || null
+        const classpass = owner.glofox_membership_status === 'classpass_payg'
+        if (mode === 'draft' || classpass || !corroborated(anchorRow, owner)) {
+          return {
+            cancelled: false,
+            needs_staff: true,
+            message: 'This booking is managed outside the direct account (or on a linked account we could not confirm). Tell the customer the team will sort the cancellation now, and hand off.',
+          }
+        }
+        executingMemberId = owner.glofox_member_id
+        ownerDetails = { executing_contact_id: owner.id, executing_glofox_member_id: owner.glofox_member_id }
+      }
+      // owner === null with every account readable falls through on purpose:
+      // Glofox arbitrates, exactly as it did before this task. The lookup
+      // window is upcoming-only, so "not in the list" is not proof of
+      // absence (a class that started minutes ago is already out of it) and
+      // Glofox's own reason — usually a late-cancellation rule — is the
+      // honest answer.
+    }
+
+    // The booking is on the acting contact's own account (or ownership could
+    // not be resolved at all) — draft exactly as before.
     if (mode === 'draft') {
       const draftId = await logBookingRequest(db, ctx, {
         kind: 'class_cancellation', status: 'pending', details: baseDetails,
@@ -704,22 +860,21 @@ export async function executeBookingTool(toolName, input, ctx) {
       }
     }
 
-    const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, cancelBooking } =
-      await import('@/lib/glofox')
-    const creds = await glofoxCredentialsForLocation(db, locationId)
-    if (!creds || missingGlofoxCredentialsForLocation(creds).length) {
+    if (!credsUsable) {
       return { error: 'no_booking_system', message: 'Class booking is not connected at this studio — hand off to the team.' }
     }
+
+    const details = { ...baseDetails, ...ownerDetails }
     // Intent BEFORE the side effect (see logBookingRequest).
     const auditId = await logBookingRequest(db, ctx, {
-      kind: 'class_cancellation', status: 'pending', details: { ...baseDetails, stage: 'executing' },
+      kind: 'class_cancellation', status: 'pending', details: { ...details, stage: 'executing' },
     })
-    const result = await cancelBooking(creds, input.booking_id, glofoxMemberId)
+    const result = await cancelBooking(creds, input.booking_id, executingMemberId)
     const messageCode = result?.body?.message_code || result?.body?.message || null
     await finalizeBookingRequest(db, ctx, auditId, {
       kind: 'class_cancellation',
       status: result.ok ? 'actioned' : 'failed',
-      details: { ...baseDetails, result: { ok: result.ok, status: result.status, message_code: messageCode } },
+      details: { ...details, result: { ok: result.ok, status: result.status, message_code: messageCode } },
     })
     if (!result.ok) {
       return {
