@@ -163,6 +163,14 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
 
       <p className="text-sm text-un1t-text mt-2">{item.subtitle}</p>
 
+      {/* AGENT-FUNNEL-CREDITS.1 — what the account can book with, so the
+          decision is one glance, not a Glofox lookup. */}
+      {item.accountLine && (
+        <p className="text-xs text-un1t-muted mt-1">
+          <span className="font-semibold text-un1t-text">Account:</span> {item.accountLine}
+        </p>
+      )}
+
       {failWhy && !outcome && (
         <p className="text-xs text-red-700 mt-1.5">
           <span className="font-semibold">What went wrong:</span> {failWhy}

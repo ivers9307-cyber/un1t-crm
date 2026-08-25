@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { Copy, Check } from 'lucide-react'
 import { formatMoneyMinor } from '@/lib/money-format'
 import { isStuckExecuting, retryOffered } from '@/lib/agent/request-recovery'
-import { whyFlagged, customerWords, failureExplanation } from '@/lib/approvals/agent-request-why'
+import { whyFlagged, customerWords, failureExplanation, accountSummaryLine } from '@/lib/approvals/agent-request-why'
 
 // RADAR-AGENT Phase 2 — operator approval queue. Manager+ reviews the
 // pause / cancellation requests the customer agent captured, and decides:
@@ -201,6 +201,8 @@ function RequestCard({ r, busy, onDecide, focused = false, retryMode = false }) 
   const said = customerWords(r)
   // AGENT-RETRY.1 — what Glofox rejected and what to fix before retrying.
   const failWhy = retryMode ? failureExplanation(r) : null
+  // AGENT-FUNNEL-CREDITS.1 — what the account can book with.
+  const account = accountSummaryLine(r.contacts)
   return (
     <div id={`agent-req-${r.id}`} className={`border rounded-lg p-4 ${focused ? 'border-un1t-text ring-2 ring-un1t-text/30' : 'border-un1t-border'}`}>
       <div className="flex items-center justify-between mb-2">
@@ -227,6 +229,11 @@ function RequestCard({ r, busy, onDecide, focused = false, retryMode = false }) 
         {isCancel && d.desired_date && <p>Requested date: {fmtDate(d.desired_date)}</p>}
         {(r.kind === 'class_booking' || r.kind === 'consultation') && (d.class_name || d.class_time) && (
           <p>{d.class_name || (r.kind === 'consultation' ? 'Consultation' : 'Class')}{d.class_time ? ` · ${d.class_time}` : ''}</p>
+        )}
+        {account && (
+          <p className="text-un1t-muted">
+            <span className="font-semibold text-un1t-text">Account:</span> {account}
+          </p>
         )}
         {failWhy && (
           <p className="text-red-700">

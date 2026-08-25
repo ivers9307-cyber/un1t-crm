@@ -137,3 +137,21 @@ describe('agentRequestsProvider — failed-retryable queue (AGENT-RETRY.2)', () 
     expect(n).toBe(4)
   })
 })
+
+// AGENT-FUNNEL-CREDITS.1 — every item carries the account summary + why line.
+describe('agentRequestsProvider — account summary enrichment', () => {
+  it('items carry accountLine and why, precomputed from the contact embed', async () => {
+    const db = stubDb([{
+      id: 'p1', kind: 'class_booking', details: { reason: 'prior_attendance' },
+      created_at: '2026-08-25T08:30:00Z', location_id: 'loc1',
+      contact: {
+        id: 'ct1', name: 'Vanessa Schmid', email: 'v@x.com', phone: '1',
+        glofox_membership_plan: 'The UN1T Trial', glofox_membership_status: 'trial',
+        glofox_membership_state: 'future', trial_credits_remaining: 3,
+      },
+    }])
+    const { items } = await agentRequestsProvider.fetchPending(db, { activeLocation: { id: 'loc1' } })
+    expect(items[0].accountLine).toBe('The UN1T Trial (trial, not started) · 3 credits left')
+    expect(items[0].why).toMatch(/attended before/i)
+  })
+})

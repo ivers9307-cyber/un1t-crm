@@ -29,7 +29,12 @@
 import { viewerActiveLocationId } from '../registry'
 import { formatMoneyMinor } from '@/lib/money-format'
 import { EXECUTING_KINDS, retryOffered } from '@/lib/agent/request-recovery'
-import { failureExplanation } from '@/lib/approvals/agent-request-why'
+import { failureExplanation, accountSummaryLine, whyFlagged } from '@/lib/approvals/agent-request-why'
+
+// AGENT-FUNNEL-CREDITS.1 — the membership/credit fields the Glofox sync
+// denormalises onto contacts, surfaced on every approval card so staff see
+// what the account can book with before deciding.
+const CONTACT_EMBED = 'contact:contacts!contact_id ( id, name, email, phone, glofox_membership_plan, glofox_membership_status, glofox_membership_state, trial_credits_remaining )'
 
 const KIND_LABELS = {
   pause: 'Pause membership',
@@ -81,6 +86,9 @@ function toItem(r) {
     retentionFlagged: !!r.retention_flagged,
     channel: r.channel || null,
     conversationId: r.conversation_id || null,
+    // Pre-computed (like failedWhy) so mobile renders them without a lib.
+    accountLine: accountSummaryLine(r.contact),
+    why: whyFlagged(r),
   }
 }
 
@@ -94,7 +102,7 @@ const RETRY_LOOKBACK_DAYS = 30
 
 async function fetchRetryableFailed(db, activeId, { withContact = true } = {}) {
   const cutoff = new Date(Date.now() - RETRY_LOOKBACK_DAYS * 86_400_000).toISOString()
-  const contactEmbed = withContact ? ', contact:contacts!contact_id ( id, name, email, phone )' : ''
+  const contactEmbed = withContact ? `, ${CONTACT_EMBED}` : ''
   const { data, error } = await db
     .from('agent_membership_requests')
     .select(`id, kind, status, details, customer_note, created_at, decided_at, location_id, channel, conversation_id, retention_flagged${contactEmbed}`)
@@ -123,7 +131,7 @@ export const agentRequestsProvider = {
       .select(`
         id, kind, details, customer_note, created_at, location_id,
         channel, conversation_id, retention_flagged,
-        contact:contacts!contact_id ( id, name, email, phone )
+        ${CONTACT_EMBED}
       `)
       .eq('location_id', activeId)
       .eq('status', 'pending')

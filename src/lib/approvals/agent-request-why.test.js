@@ -86,3 +86,28 @@ describe('failureExplanation', () => {
     expect(failureExplanation(null)).toBeNull()
   })
 })
+
+// AGENT-FUNNEL-CREDITS.1 — the account summary line on approval cards.
+import { accountSummaryLine } from './agent-request-why'
+
+describe('accountSummaryLine', () => {
+  it('renders plan + credits (the approve-with-confidence case)', () => {
+    expect(accountSummaryLine({ glofox_membership_plan: 'The UN1T Trial', glofox_membership_status: 'trial', glofox_membership_state: 'future', trial_credits_remaining: 3 }))
+      .toBe('The UN1T Trial (trial, not started) · 3 credits left')
+  })
+  it('active membership renders without a qualifier', () => {
+    expect(accountSummaryLine({ glofox_membership_plan: 'UN1T Unlimited', glofox_membership_status: 'active', glofox_membership_state: 'active', trial_credits_remaining: null }))
+      .toBe('UN1T Unlimited · credits unknown')
+  })
+  it('no membership + zero credits (the grant-first case)', () => {
+    expect(accountSummaryLine({ glofox_membership_plan: null, trial_credits_remaining: 0 }))
+      .toBe('No membership on file · 0 credits left')
+  })
+  it('singular credit', () => {
+    expect(accountSummaryLine({ glofox_membership_plan: 'Pack', glofox_membership_status: 'active', trial_credits_remaining: 1 }))
+      .toBe('Pack · 1 credit left')
+  })
+  it('null contact → null', () => {
+    expect(accountSummaryLine(null)).toBeNull()
+  })
+})
