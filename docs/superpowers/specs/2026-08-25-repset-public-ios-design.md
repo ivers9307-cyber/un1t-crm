@@ -27,14 +27,14 @@ to its record, so the public app needs a new bundle ID.
 
 - **The old unlisted app keeps working.** Its installed base keeps receiving
   OTAs on the shared lane. No user is broken on day one.
-- **No new binaries ever ship for the old app** — its last binary is final.
-  Consequence, stated plainly: **the old app's world ends at the NEXT
-  `runtimeVersion` bump.** Any future native change bumps the lane and the
-  old app stops receiving updates (its binary can never be rebuilt). That is
-  the natural sunset forcing-function — but it means **migration comms must
-  complete before the next native upgrade** (e.g. an Expo SDK bump). Until
-  then, native changes are frozen unless Richard accepts stranding
-  unmigrated users on the last 2.3.0-lane JS.
+- **The old app stays rebuildable** (amended 25 Aug, Richard's question):
+  unlisted status is one-way for LISTING only — the old record still takes
+  binary updates through review. The `production-legacy` EAS profile
+  (env-switched bundleIdentifier, old ascAppId) keeps that door open, so
+  there is NO migration deadline. The cost: every future native change
+  (runtimeVersion bump) must build + submit BOTH apps until sunset — two
+  builds, two reviews, one shared lane. Sunset becomes an operational
+  choice (stop paying the double-build tax), not a forcing function.
 - **Migration is marketing, not engineering:** same backend, same accounts —
   a user moves by installing the new app and signing in. Per-app device
   state does NOT carry and each affected user redoes it:
@@ -114,6 +114,6 @@ plan's telemetry note.)
 - **Full App Review on the merged app** — the unlisted review was lighter.
   Mitigations: review-login demo flow, thorough notes, screenshots current.
   A rejection costs time, not architecture.
-- **The runtimeVersion freeze window** (native changes strand old-app users)
-  — accepted, with the Tailwind4/TS7 and Expo-SDK upgrades already
-  deliberately deferred; revisit only after sunset.
+- **The double-build tax** (every native change = two builds + two review
+  submissions until sunset) — accepted 25 Aug in exchange for removing the
+  migration deadline entirely; native changes here are rare.

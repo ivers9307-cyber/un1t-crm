@@ -180,9 +180,15 @@ export default ({ config }) => ({
     // the shared 2.3.0 lane until sunset — but its binary can never be
     // rebuilt from main after this change (by design; see
     // docs/superpowers/specs/2026-08-25-repset-public-ios-design.md).
-    // 🔴 Native changes are FROZEN until the migration completes: a
-    // runtimeVersion bump strands every old-app install permanently.
-    bundleIdentifier: 'ie.repset.app',
+    // The old record stays REBUILDABLE via the `production-legacy` EAS
+    // profile (env LEGACY_APP=1 flips this back to com.un1tdublin.crm;
+    // submit profile carries the old ascAppId) — unlisted apps still take
+    // binary updates through review, only their LISTING status is one-way.
+    // 🔴 The rule this creates: every future NATIVE change (runtimeVersion
+    // bump) must build + submit BOTH profiles until the old app is
+    // sunset, or its installs silently stop receiving OTAs. Two builds,
+    // same shared channel/runtimeVersion — never fork the lane.
+    bundleIdentifier: process.env.LEGACY_APP === '1' ? 'com.un1tdublin.crm' : 'ie.repset.app',
     // buildNumber omitted — eas.json sets appVersionSource: 'remote',
     // so build numbers are managed by EAS, not the local config.
     infoPlist: {

@@ -30,6 +30,12 @@
       "ios": {
         "resourceClass": "m-medium"
       }
+    },
+    "production-legacy": {
+      "extends": "production",
+      "env": {
+        "LEGACY_APP": "1"
+      }
     }
   },
   "submit": {
@@ -42,6 +48,13 @@
       "android": {
         "track": "internal",
         "changesNotSentForReview": false
+      }
+    },
+    "production-legacy": {
+      "ios": {
+        "appleId": "richard@richardivers.com",
+        "appleTeamId": "535XMCT5PY",
+        "ascAppId": "6770890839"
       }
     }
   }
