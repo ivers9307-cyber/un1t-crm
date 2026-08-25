@@ -927,7 +927,13 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
             </div>
 
             {editorMode === 'visual' ? (
-              <div id="unlayer-editor" ref={editorRef} className="flex-1" style={{ minHeight: '600px' }} />
+              // UNLAYER-H.1 — the mount div MUST have a DEFINITE height (not
+              // just min-height): Unlayer's embed sizes its iframe
+              // `height: 100%`, and a percentage against a min-height-only
+              // parent resolves to auto, collapsing the editor to the 150px
+              // iframe default under a dead dark block. Upstream embed.js is
+              // unversioned, so this arrived with no code change on our side.
+              <div id="unlayer-editor" ref={editorRef} className="flex-1" style={{ height: '75vh', minHeight: '600px' }} />
             ) : (
               <textarea
                 value={htmlContent}
