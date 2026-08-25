@@ -19,6 +19,7 @@ import { supabase } from './supabase'
 import { api } from './api'
 import { readImpersonate, writeImpersonate, clearImpersonate } from './impersonate'
 import { performFullSignOut } from './sign-out'
+import { isReviewDemoEmail, reviewLoginOtp } from './review-login'
 
 const AuthContext = createContext(null)
 
@@ -139,7 +140,20 @@ export function AuthProvider({ children }) {
   // champ-app/mobile). No deep-link / native release needed. Password sign-in
   // above stays as break-glass. shouldCreateUser:false + project signups OFF
   // means an unknown email can never provision an account.
+  //
+  // REPSET-PUB.3A — the App Store reviewer gate rides these two callbacks,
+  // exactly as it does in champ-app: the demo EMAIL is the trigger (no hidden
+  // gesture), requestCode short-circuits the email send, and verifyCode
+  // exchanges the typed gate code for a real one-time token via
+  // POST /api/mobile/review-login. Scoped to that one address; every other
+  // email takes the ordinary emailed-OTP path untouched. The route is 404
+  // unless REVIEW_LOGIN_CODE is set on the server, so on a normal build this
+  // branch simply fails with the same neutral message a wrong code gets.
   const requestCode = useCallback(async (email) => {
+    // The reviewer's mailbox isn't reachable by Apple, so sending a code there
+    // would strand them. Advance straight to the code step; `review: true`
+    // tells the login screen to ask for the gate code instead of an OTP.
+    if (isReviewDemoEmail(email)) return { success: true, review: true }
     const { error } = await supabase.auth.signInWithOtp({
       email: email.trim().toLowerCase(),
       options: { shouldCreateUser: false },
@@ -149,9 +163,21 @@ export function AuthProvider({ children }) {
   }, [])
 
   const verifyCode = useCallback(async (email, token) => {
+    const e = email.trim().toLowerCase()
+    let otp = token.trim()
+    if (isReviewDemoEmail(e)) {
+      // Exchange the fixed gate code for a real one-time token. Every refusal
+      // the route can produce (404 gate off, 403 wrong code, 429 throttled,
+      // 503 limiter down) collapses to one neutral message — the reviewer must
+      // not be able to tell them apart, and neither should anyone probing.
+      const res = await api('/api/mobile/review-login', { method: 'POST', body: { email: e, code: otp } })
+      const minted = reviewLoginOtp(res)
+      if (!minted) return { success: false, error: 'That code didn’t work.' }
+      otp = minted
+    }
     const { data, error } = await supabase.auth.verifyOtp({
-      email: email.trim().toLowerCase(),
-      token: token.trim(),
+      email: e,
+      token: otp,
       type: 'email',
     })
     if (error) return { success: false, error: error.message }

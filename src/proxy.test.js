@@ -27,14 +27,15 @@ vi.mock('@/lib/tenant-domains-edge', () => ({ resolveTenantDomainBrand: async ()
 
 import { proxy } from './proxy.js'
 
-function makeReq({ path = '/api/bookings', token = null } = {}) {
+function makeReq({ path = '/api/bookings', token = null, method } = {}) {
   const headers = new Headers({ host: 'crm.un1tdublin.com' })
   if (token) headers.set('authorization', `Bearer ${token}`)
   return {
     headers,
+    method,
     url: `http://localhost${path}`,
     nextUrl: { pathname: path, clone: () => new URL(`http://localhost${path}`) },
-    cookies: { getAll: () => [], set: () => {} },
+    cookies: { getAll: () => [], get: () => undefined, set: () => {} },
   }
 }
 
@@ -124,6 +125,31 @@ describe('proxy Bearer gate', () => {
     it('keeps the bridge prefix working (regression)', async () => {
       const res = await proxy(makeReq({ path: '/api/bridge/heartbeat' }))
       expect(admitted(res)).toBe(true)
+    })
+  })
+
+  // REPSET-PUB.3A — the App Store reviewer login gate.
+  //
+  // Same class as the fleet block above, with a harder consequence: this route
+  // is called with NO session (minting one is its job), so a missing
+  // publicPaths entry 401s every attempt and Apple can never sign in. That is
+  // a rejection under Guideline 2.1 discovered days into a review queue, not a
+  // crash-loop someone can watch — nothing else in CI would surface it.
+  describe('App Store reviewer login gate', () => {
+    it('admits the unauthenticated POST to its handler', async () => {
+      const res = await proxy(makeReq({ path: '/api/mobile/review-login', method: 'POST' }))
+      expect(admitted(res)).toBe(true)
+      // Admitted on the path alone — no session lookup, no Bearer.
+      expect(ssrClient.auth.getUser).not.toHaveBeenCalled()
+    })
+
+    it('does NOT open the rest of the mobile surface', async () => {
+      // The entry is a bare prefix match, so a loosened one (e.g. dropping
+      // back to '/api/mobile') would make every staff mobile route public.
+      for (const path of ['/api/mobile/me', '/api/mobile/impersonate', '/api/mobile/today-feed']) {
+        const res = await proxy(makeReq({ path }))
+        expect(admitted(res), `${path} must stay session-gated`).toBe(false)
+      }
     })
   })
 })

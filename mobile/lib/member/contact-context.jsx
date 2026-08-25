@@ -16,7 +16,11 @@
 //     member probe CONFIRMED empty. Any 'unknown' leg ⇒ no self-link.
 //   - review-login / requestCode / verifyCode: NOT here — the staff login
 //     is the merged app's only auth entry (champ's (auth) group is not
-//     ported; the resolver owns entry).
+//     ported; the resolver owns entry). REPSET-PUB.3A ported champ's App
+//     Store reviewer gate onto THAT one entry instead of re-adding a member
+//     login: lib/auth-context.jsx's requestCode/verifyCode branch on the demo
+//     email, and the resolver then lands the (member-only) reviewer session
+//     here exactly as it lands any other member.
 //   - signOut: the ONE teardown union (lib/sign-out.js) — both shells'
 //     sign-outs are identical in the one-session model.
 

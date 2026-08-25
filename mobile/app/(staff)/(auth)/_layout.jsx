@@ -14,6 +14,15 @@
 // and re-pairing does nothing (the pad won't re-show while a session
 // exists). Redirecting here on `session` closes that gap for every auth
 // screen at once.
+//
+// REPSET-PUB.3A — the target is "/" (app/index.jsx, THE identity resolver),
+// not "/(tabs)". This guard RACES the login screen's own router.replace and
+// usually wins, so a hard-coded staff destination here overrode whatever the
+// screen decided: a member-only session — the App Store reviewer's demo
+// account is one, and it must land on the member shell for review to pass —
+// was shunted into the staff tabs regardless. The resolver answers STAFF_HOME
+// for every case this guard was written for (a paired kiosk resolves to the
+// staff shell with no probes at all), so staff behaviour is unchanged.
 
 import { Stack, Redirect } from 'expo-router'
 import { useAuth } from '../../../lib/auth-context'
@@ -21,6 +30,6 @@ import { useAuth } from '../../../lib/auth-context'
 export default function AuthLayout() {
   const { session, loading } = useAuth()
   if (loading) return null
-  if (session) return <Redirect href="/(tabs)" />
+  if (session) return <Redirect href="/" />
   return <Stack screenOptions={{ headerShown: false }} />
 }
