@@ -9,8 +9,9 @@ to its record, so the public app needs a new bundle ID.
 
 ## Decisions (locked)
 
-1. **New iOS bundle ID: `ie.repset.app`.** Public App Store name: **Repset**
-   (availability must be confirmed/claimed in App Store Connect — operator).
+1. **New iOS bundle ID: `ie.repset.app`.** Public App Store name:
+   **Repset Fitness** ("Repset" was taken — fallback exercised 25 Aug). New
+   record ascAppId **6805082306**; old-app final iOS build number **N = 24**.
 2. **Same Apple developer account** (team 535XMCT5PY). No entity change.
 3. **Android is untouched.** The iOS/Android bundle-lockstep convention
    (BUNDLE-ID-RESET comment) is DELIBERATELY broken here: changing the
