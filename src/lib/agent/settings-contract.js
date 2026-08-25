@@ -67,6 +67,12 @@ export const DEFAULTS = {
   // explicit `enabled === false` as off); default true here matches that.
   inline_suggestion: { enabled: true },
   handoff_cooldown_hours: 12,
+  // MIA-BOARD.1 — handoff auto-resolve windows (hours). (a) human replied
+  // then quiet, (b) fully stale. 0 disables a case. Defaults are Richard's
+  // 2026-08-20 decision (8h/48h); the sweep clamps again at read time
+  // (resolveAutoResolveHours, handoff-sla.js).
+  auto_resolve_after_reply_hours: 8,
+  auto_resolve_stale_hours: 48,
   consultation_event_type_id: null,
   // MIA-HYGIENE.1 — null means "use the code default". The live defaults are
   // owned by lib/agent/core.js (DEFAULT_AGENT_EFFORT = 'medium',
@@ -122,6 +128,8 @@ export const SettingsSchema = z.object({
     enabled: z.boolean().optional().default(true),
   }).nullable().optional(),
   handoff_cooldown_hours: z.number().min(0).max(168).nullable().optional(),
+  auto_resolve_after_reply_hours: z.number().min(0).max(720).nullable().optional(),
+  auto_resolve_stale_hours: z.number().min(0).max(720).nullable().optional(),
   consultation_event_type_id: z.string().max(64).nullable().optional(),
   monthly_points_target: z.number().int().min(0).nullable().optional(),
   // MIA-HYGIENE.1 — reasoning effort for the inbound reply. Clamped again at
@@ -169,6 +177,8 @@ export function buildCustomerAgentSettings(data = {}) {
     membership_signup_url: data.membership_signup_url || null,
     membership_cta_label: data.membership_cta_label?.trim() || null,
     handoff_cooldown_hours: data.handoff_cooldown_hours ?? DEFAULTS.handoff_cooldown_hours,
+    auto_resolve_after_reply_hours: data.auto_resolve_after_reply_hours ?? DEFAULTS.auto_resolve_after_reply_hours,
+    auto_resolve_stale_hours: data.auto_resolve_stale_hours ?? DEFAULTS.auto_resolve_stale_hours,
     followups: { ...DEFAULTS.followups, ...(data.followups || {}) },
     first_class_checkin: { ...DEFAULTS.first_class_checkin, ...(data.first_class_checkin || {}) },
     inline_suggestion: { ...DEFAULTS.inline_suggestion, ...(data.inline_suggestion || {}) },

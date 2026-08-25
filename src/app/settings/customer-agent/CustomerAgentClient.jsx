@@ -78,6 +78,9 @@ export default function CustomerAgentClient() {
         membership_signup_url: (settings.membership_signup_url || '').trim() || null,
         membership_cta_label: (settings.membership_cta_label || '').trim() || null,
         handoff_cooldown_hours: settings.handoff_cooldown_hours ?? 12,
+        // MIA-BOARD.1 — handoff auto-resolve windows (0 disables a case).
+        auto_resolve_after_reply_hours: settings.auto_resolve_after_reply_hours ?? 8,
+        auto_resolve_stale_hours: settings.auto_resolve_stale_hours ?? 48,
         // MIA-HYGIENE.1 — both were read live by the agent but had no editor,
         // so they sat permanently on their code defaults. Null = "use default".
         effort: settings.effort || null,
@@ -272,6 +275,32 @@ export default function CustomerAgentClient() {
             resolves it in the inbox (which hands it straight back) — or until this many hours pass. 0 = only a
             resolve brings the agent back.
           </p>
+        </div>
+
+        {/* MIA-BOARD.1 — auto-resolve. The manual Resolve was used exactly
+            zero times in the feature's lifetime (121 parked threads at the
+            25 Aug re-audit), so the queue now cleans itself. */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-sm font-medium text-un1t-text mb-1">Auto-resolve after a reply + quiet (hours)</label>
+            <input type="number" min={0} max={720} className={inputCls}
+              value={settings.auto_resolve_after_reply_hours ?? 8}
+              onChange={e => setField('auto_resolve_after_reply_hours', e.target.value === '' ? null : Number(e.target.value))} />
+            <p className="text-xs text-un1t-subtle mt-1">
+              Once a team member has replied to a handed-off conversation and it then goes quiet for this long,
+              the handoff is marked resolved and the agent is back on duty for the next message. 0 = off.
+            </p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-un1t-text mb-1">Auto-resolve when fully stale (hours)</label>
+            <input type="number" min={0} max={720} className={inputCls}
+              value={settings.auto_resolve_stale_hours ?? 48}
+              onChange={e => setField('auto_resolve_stale_hours', e.target.value === '' ? null : Number(e.target.value))} />
+            <p className="text-xs text-un1t-subtle mt-1">
+              If nothing at all happens in a handed-off conversation for this long, it resolves on its own so
+              the customer&apos;s next message doesn&apos;t land in silence. 0 = off.
+            </p>
+          </div>
         </div>
 
         {/* MIA-HYGIENE.1 — reasoning effort. The agent has always read this

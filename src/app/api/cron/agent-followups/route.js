@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { runAgentFollowups, runFirstClassCheckins } from '@/lib/agent/followups'
-import { runHandoffSlaSweep } from '@/lib/agent/handoff-sla'
+import { runHandoffSlaSweep, runHandoffAutoResolve } from '@/lib/agent/handoff-sla'
 
 // AGENT-FOLLOWUP.1 — every 15 min (vercel.json): run Mia's proactive
 // follow-up ladder for every location that enabled it. Stage 1 =
@@ -41,10 +41,20 @@ export async function GET(request) {
   } catch (e) {
     console.error('[radar-agent] handoff-sla tick failed:', e?.message || e)
   }
+  // MIA-BOARD.1 — same tick, independent failure domain: hand parked
+  // handed-off threads back to Mia once the human engagement is over
+  // (replied + quiet) or the thread is simply stale. The manual Resolve
+  // this replaces was used exactly zero times in the feature's lifetime.
+  let autoResolve = null
+  try {
+    autoResolve = await runHandoffAutoResolve(db)
+  } catch (e) {
+    console.error('[radar-agent] auto-resolve tick failed:', e?.message || e)
+  }
 
   // Persist the tick summary on the heartbeat (last_outcome jsonb) — the
   // customer-agent settings card reads it to show WHY check-ins were
   // skipped, so a silent tick is diagnosable without server logs.
-  await stampHeartbeat('agent-followups', { followups: results, checkins, handoffSla })
-  return NextResponse.json({ success: true, results, checkins, handoffSla })
+  await stampHeartbeat('agent-followups', { followups: results, checkins, handoffSla, autoResolve })
+  return NextResponse.json({ success: true, results, checkins, handoffSla, autoResolve })
 }
