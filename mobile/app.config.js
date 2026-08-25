@@ -107,7 +107,11 @@ export default ({ config }) => ({
   // react-native-nitro-modules + react-native-svg (all NATIVE modules) →
   // new EAS Build + store release, NOT an OTA; runtimeVersion bumps to
   // 2.3.0 in lockstep (native lane bump — see the runtimeVersion log).
-  version: '2.3.0',
+  // 2.3.1 (FCM-SETUP) — Android binary with googleServicesFile baked in so
+  // FCM push registration works. Build-config only: no new native module,
+  // no JS↔native change, so runtimeVersion STAYS 2.3.0 (the 1.3.2 /
+  // ANDROID-R8 precedent) and every existing install keeps receiving OTAs.
+  version: '2.3.1',
   // We ship iOS + Android only. Without this, Expo defaults to
   // ['ios','android','web'] and `eas update` exports for web too —
   // which crashes the publish because react-native-web isn't installed.
