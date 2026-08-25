@@ -66,6 +66,8 @@ export default function CustomerAgentClient() {
         booking_confirmation_text: settings.booking_confirmation_text || null,
         cancellation_confirmation_text: settings.cancellation_confirmation_text || null,
         booking_issue_handoff_text: settings.booking_issue_handoff_text || null,
+        no_credits_handoff_text: settings.no_credits_handoff_text || null,
+        booking_expired_text: settings.booking_expired_text || null,
         approval_decline_text: settings.approval_decline_text || null,
         welcome_greeting: settings.welcome_greeting || null,
         link_button_text: (settings.link_button_text || '').trim() || null,
@@ -77,6 +79,13 @@ export default function CustomerAgentClient() {
         membership_signup_url: (settings.membership_signup_url || '').trim() || null,
         membership_cta_label: (settings.membership_cta_label || '').trim() || null,
         handoff_cooldown_hours: settings.handoff_cooldown_hours ?? 12,
+        // MIA-BOARD.1 — handoff auto-resolve windows (0 disables a case).
+        auto_resolve_after_reply_hours: settings.auto_resolve_after_reply_hours ?? 8,
+        auto_resolve_stale_hours: settings.auto_resolve_stale_hours ?? 48,
+        // MIA-HYGIENE.1 — both were read live by the agent but had no editor,
+        // so they sat permanently on their code defaults. Null = "use default".
+        effort: settings.effort || null,
+        handoff_after_verify_failures: settings.handoff_after_verify_failures ?? null,
         consultation_event_type_id: settings.consultation_event_type_id || null,
         monthly_points_target: settings.monthly_points_target ?? null,
         social_enabled: !!settings.social_enabled,
@@ -269,6 +278,65 @@ export default function CustomerAgentClient() {
           </p>
         </div>
 
+        {/* MIA-BOARD.1 — auto-resolve. The manual Resolve was used exactly
+            zero times in the feature's lifetime (121 parked threads at the
+            25 Aug re-audit), so the queue now cleans itself. */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-sm font-medium text-un1t-text mb-1">Auto-resolve after a reply + quiet (hours)</label>
+            <input type="number" min={0} max={720} className={inputCls}
+              value={settings.auto_resolve_after_reply_hours ?? 8}
+              onChange={e => setField('auto_resolve_after_reply_hours', e.target.value === '' ? null : Number(e.target.value))} />
+            <p className="text-xs text-un1t-subtle mt-1">
+              Once a team member has replied to a handed-off conversation and it then goes quiet for this long,
+              the handoff is marked resolved and the agent is back on duty for the next message. 0 = off.
+            </p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-un1t-text mb-1">Auto-resolve when fully stale (hours)</label>
+            <input type="number" min={0} max={720} className={inputCls}
+              value={settings.auto_resolve_stale_hours ?? 48}
+              onChange={e => setField('auto_resolve_stale_hours', e.target.value === '' ? null : Number(e.target.value))} />
+            <p className="text-xs text-un1t-subtle mt-1">
+              If nothing at all happens in a handed-off conversation for this long, it resolves on its own so
+              the customer&apos;s next message doesn&apos;t land in silence. 0 = off.
+            </p>
+          </div>
+        </div>
+
+        {/* MIA-HYGIENE.1 — reasoning effort. The agent has always read this
+            per turn (resolveAgentEffort), but it had no editor, so every
+            location ran on the 'medium' code default. */}
+        <div>
+          <label className="block text-sm font-medium text-un1t-text mb-1">Reasoning effort</label>
+          <select className={inputCls} value={settings.effort || ''}
+            onChange={e => setField('effort', e.target.value || null)}>
+            <option value="">Default (medium)</option>
+            <option value="low">Low — fastest and cheapest, for simple chat</option>
+            <option value="medium">Medium — balanced</option>
+            <option value="high">High — more thorough, slower</option>
+            <option value="max">Max — most thorough, slowest</option>
+          </select>
+          <p className="text-xs text-un1t-subtle mt-1">
+            How much the agent thinks before replying. Medium suits most studios. Raise it if you see
+            shallow answers on booking or identity questions; lower it for faster, cheaper replies.
+          </p>
+        </div>
+
+        {/* MIA-HYGIENE.1 — same story: read live by the verify-fail handoff,
+            never editable. Bounded 1-5 so a typo can't disable the net. */}
+        <div>
+          <label className="block text-sm font-medium text-un1t-text mb-1">Hand off after failed ID checks</label>
+          <input type="number" min={1} max={5} className={inputCls}
+            value={settings.handoff_after_verify_failures ?? ''}
+            placeholder="2"
+            onChange={e => setField('handoff_after_verify_failures', e.target.value === '' ? null : Number(e.target.value))} />
+          <p className="text-xs text-un1t-subtle mt-1">
+            After this many failed identity checks in a row, the agent stops asking and hands the
+            conversation to a human instead of looping the customer. Blank = the default (2).
+          </p>
+        </div>
+
         <div>
           <label className="block text-sm font-medium text-un1t-text mb-1">Agent name</label>
           <input className={inputCls} maxLength={40} value={settings.agent_name || ''}
@@ -369,6 +437,27 @@ export default function CustomerAgentClient() {
             onChange={e => setField('booking_issue_handoff_text', e.target.value)}
             placeholder="There seems to be an issue with your account, so I'm handing this over to the team to sort it out. You'll hear from them shortly once it's resolved." />
           <p className="text-xs text-un1t-muted mt-1">What the agent tells the customer when the booking system rejects a booking (for example no credits left) and the request is sent to the team to fix. Leave blank to use the default shown.</p>
+        </div>
+
+        {/* MIA-CREDITS.1 — sent verbatim when the booking pre-flight finds no
+            credits/membership and the thread hands off to a human. Default
+            mirrors DEFAULT_NO_CREDITS_HANDOFF_TEXT in core.js. */}
+        <div>
+          <label className="block text-sm font-medium text-un1t-text mb-1">No-credits escalation message</label>
+          <input className={inputCls} maxLength={500} value={settings.no_credits_handoff_text || ''}
+            onChange={e => setField('no_credits_handoff_text', e.target.value)}
+            placeholder="You're out of class credits at the moment so I can't book that one straight away. I'll escalate this to a team member to help you out now." />
+          <p className="text-xs text-un1t-muted mt-1">Sent word-for-word when a customer asks to book but has no credits or active membership. The conversation is handed to the team immediately and the booking request appears in Approvals. Leave blank to use the default shown.</p>
+        </div>
+
+        {/* MIA-BOARD.2 — sent when a pending booking outlives its class.
+            Default mirrors DEFAULT_BOOKING_EXPIRED_TEXT in notify.js. */}
+        <div>
+          <label className="block text-sm font-medium text-un1t-text mb-1">Missed-booking apology</label>
+          <input className={inputCls} maxLength={500} value={settings.booking_expired_text || ''}
+            onChange={e => setField('booking_expired_text', e.target.value)}
+            placeholder="Sorry, we didn't get to confirm your booking for {class} in time. That one's on us. The team will be in touch to make it right." />
+          <p className="text-xs text-un1t-muted mt-1">Sent if a booking request was still waiting for approval when the class started. {'{class}'} renders the class name and time. Leave blank to use the default shown.</p>
         </div>
 
         {/* APPROVALS-STUDIO.1 — sent in-thread when staff decline a customer

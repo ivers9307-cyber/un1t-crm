@@ -22,6 +22,7 @@ import {
   outboundAttachmentsField,
 } from '@/lib/email-outbound-attachments-server'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
+import { withSendMarker } from '@/lib/postmark-send-marker'
 import {
   loadTicketForUser, loadOwnAddresses, statusTimestamps,
   loadParticipantMessages, resolveReplyAudience, ticketMergedAway,
@@ -394,7 +395,11 @@ export async function POST(request, props) {
     htmlBody: textToHtml(outboundText),
     textBody: outboundText,
     tag: 'ticket-reply',
-    metadata: { ticket_id: ticket.id, contact_id: ticket.contact_id || '' },
+    // POSTMARK-RACE.1 — marked iff `sendLogRow` will be built (same
+    // `ticket.contact_id` condition); an unattributed reply stays unmarked.
+    metadata: ticket.contact_id
+      ? withSendMarker({ ticket_id: ticket.id, contact_id: ticket.contact_id })
+      : { ticket_id: ticket.id, contact_id: '' },
     headers,
     // undefined when there are none, so the Postmark payload is byte-identical
     // to every reply this route has ever sent.

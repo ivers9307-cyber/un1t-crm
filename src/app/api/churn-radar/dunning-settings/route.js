@@ -6,10 +6,13 @@
 // locations.dunning_sequence_id (mig 243); NULL = the dunning action
 // is disabled.
 //
-// GET  → { dunning_sequence_id, sequences: [{ id, name, active }] }
+// GET  → { dunning_sequence_id, dunning_auto_enroll, sequences: [{ id, name, status }] }
 //        (sequences = the location's manual sequences, the only ones a
 //        member can be hand-enrolled into, so the only valid picks).
-// PUT  { dunning_sequence_id: uuid | null } → set or clear it.
+// PUT  { dunning_sequence_id?: uuid | null, dunning_auto_enroll?: boolean }
+//        → set or clear the sequence; DUNNING.5 — turn automatic reminders
+//        (locations.dunning_auto_enroll, mig 428 — had no UI until now) on or
+//        off. Auto-enrol needs a sequence; clearing the sequence turns it off.
 //
 // Access: churn_radar permission (owner + head_coach by default).
 
@@ -25,6 +28,9 @@ import { uuidLike } from '@/lib/schemas'
 // Empty string is also valid and treated as null by the route.
 const DunningSettingsSchema = z.object({
   dunning_sequence_id: z.union([uuidLike, z.literal(''), z.null()]).optional(),
+  // DUNNING.5 — start reminders automatically when a membership payment
+  // fails (locations.dunning_auto_enroll, mig 428 — had no UI until now).
+  dunning_auto_enroll: z.boolean().optional(),
 })
 
 export const runtime = 'nodejs'
@@ -52,7 +58,7 @@ export async function GET() {
 
   const { data: loc, error: locErr } = await db
     .from('locations')
-    .select('dunning_sequence_id')
+    .select('dunning_sequence_id, dunning_auto_enroll')
     .eq('id', g.locationId)
     .single()
   if (locErr) {
@@ -75,6 +81,7 @@ export async function GET() {
     success: true,
     data: {
       dunning_sequence_id: loc?.dunning_sequence_id || null,
+      dunning_auto_enroll: !!loc?.dunning_auto_enroll,
       sequences: sequences || [],
     },
   })
@@ -109,13 +116,43 @@ export async function PUT(request) {
     }
   }
 
+  // DUNNING.5 — automatic reminders need a sequence to enrol into. A PUT
+  // that only flips the switch validates against the STORED pointer; one
+  // that also sets/clears the pointer validates against the new value.
+  const autoEnroll = typeof body?.dunning_auto_enroll === 'boolean' ? body.dunning_auto_enroll : undefined
+  let currentSeqId = null
+  if (raw === undefined) {
+    const { data: cur } = await db
+      .from('locations')
+      .select('dunning_sequence_id')
+      .eq('id', g.locationId)
+      .maybeSingle()
+    currentSeqId = cur?.dunning_sequence_id || null
+  }
+  const effectiveSeqId = raw === undefined ? currentSeqId : seqId
+  if (autoEnroll === true && !effectiveSeqId) {
+    return NextResponse.json({ success: false, error: 'Pick a reminder sequence before turning on automatic reminders.' }, { status: 400 })
+  }
+
+  const patch = {}
+  if (raw !== undefined) patch.dunning_sequence_id = seqId
+  if (autoEnroll !== undefined) patch.dunning_auto_enroll = autoEnroll
+  // Clearing the sequence also turns automatic reminders off — nothing could fire.
+  if (raw !== undefined && seqId === null) patch.dunning_auto_enroll = false
+  if (Object.keys(patch).length === 0) {
+    return NextResponse.json({ success: true, data: { dunning_sequence_id: effectiveSeqId } })
+  }
+
   const { error } = await db
     .from('locations')
-    .update({ dunning_sequence_id: seqId })
+    .update(patch)
     .eq('id', g.locationId)
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   }
 
-  return NextResponse.json({ success: true, data: { dunning_sequence_id: seqId } })
+  return NextResponse.json({
+    success: true,
+    data: { dunning_sequence_id: effectiveSeqId, dunning_auto_enroll: patch.dunning_auto_enroll ?? null },
+  })
 }

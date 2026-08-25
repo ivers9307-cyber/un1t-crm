@@ -12,8 +12,15 @@ describe('getOpenApiSpec', () => {
 
   it('produces a 3.1 spec with the expected info block', () => {
     expect(spec.openapi).toBe('3.1.0')
-    expect(spec.info.title).toBe('UN1T CRM API')
+    expect(spec.info.title).toBe('Repset CRM API')
     expect(spec.info.version).toMatch(/^\d+\.\d+\.\d+$/)
+  })
+
+  // REPSET-P6.S2 — canonical host leads the server list; the legacy host
+  // stays listed second so existing integrations keep a documented base.
+  it('lists the canonical repset host first and the legacy host second', () => {
+    expect(spec.servers[0].url).toBe('https://crm.repset.ie')
+    expect(spec.servers.map((s) => s.url)).toContain('https://crm.un1tdublin.com')
   })
 
   it('declares the pre-existing browser/integration auth schemes', () => {
@@ -92,6 +99,128 @@ describe('getOpenApiSpec', () => {
     // 403s (ids must not be enumerable) — that is a documented response, not
     // an implementation detail.
     expect(spec.paths['/api/communications/audience-preview'].post.responses).toHaveProperty('404')
+  })
+
+  // SHELLY-UI.9 — the whole /api/shelly surface, and the three status codes
+  // whose MEANING is not guessable from the verb: adopt's 404 (the anti-oracle
+  // answer, identical for "no such device" and "another tenant's"), the
+  // toggle's 429 (a SUCCESS body — the override is saved and the cron will
+  // apply it; the status only tells the client to stop re-pressing) and
+  // run-now's 409 vocabulary.
+  it('documents all thirteen Shelly routes under Automations', () => {
+    const expected = {
+      '/api/shelly/connection': ['get', 'put', 'delete'],
+      '/api/shelly/discover': ['get'],
+      '/api/shelly/devices': ['get', 'post'],
+      '/api/shelly/devices/{id}': ['patch', 'delete'],
+      '/api/shelly/devices/{id}/toggle': ['post'],
+      '/api/shelly/devices/{id}/run-now': ['post'],
+      '/api/shelly/devices/{id}/energy': ['get'],
+      '/api/shelly/refresh': ['post'],
+      '/api/shelly/sync-names': ['post'],
+    }
+    let registered = 0
+    for (const [p, methods] of Object.entries(expected)) {
+      expect(spec.paths, `missing ${p}`).toHaveProperty(p)
+      for (const m of methods) {
+        const op = spec.paths[p][m]
+        expect(op, `${p} is not registered as ${m.toUpperCase()}`).toBeTruthy()
+        expect(op.tags).toContain('Automations')
+        expect(op.security).toContainEqual({ CookieAuth: [] })
+        expect(op.responses, `${m} ${p} must document its 403`).toHaveProperty('403')
+        registered += 1
+      }
+    }
+    expect(registered).toBe(13)
+
+    // SHELLY-NAMES.1 — the sync's 502 is a PARTIAL success in an error
+    // envelope: it writes the names it resolved before reporting the failure,
+    // so a client that renders only `error` hides work that actually landed.
+    const sync = spec.paths['/api/shelly/sync-names'].post
+    expect(sync.responses['502'].description).toMatch(/partial: true/)
+    expect(sync.responses['429'].description).toMatch(/rate_limited/)
+    expect(spec.components.schemas.ShellySyncNamesBody.properties.overwrite.default).toBe(false)
+
+    // Adopt: 404 is the ownership gate, and it is documented as such.
+    const adopt = spec.paths['/api/shelly/devices'].post
+    expect(adopt.responses).toHaveProperty('404')
+    expect(adopt.responses['404'].description).toMatch(/not_on_account/)
+    expect(adopt.responses['429'].description).toMatch(/rate_limited/)
+    // The four 409 codes adopt can answer.
+    for (const code of ['not_connected', 'key_rejected', 'device_cap', 'adopted_here']) {
+      expect(adopt.responses['409'].description, `adopt 409 must name ${code}`).toContain(code)
+    }
+
+    // Toggle: the 429 carries success:true, which a client MUST NOT read as a
+    // failed request — pinned so the sentence cannot quietly disappear.
+    const toggle = spec.paths['/api/shelly/devices/{id}/toggle'].post
+    expect(toggle.responses['429'].description).toMatch(/success:true/)
+
+    // Run-now: no_schedule is checked BEFORE disabled, and the spec says so.
+    const runNow = spec.paths['/api/shelly/devices/{id}/run-now'].post
+    expect(runNow.responses['409'].description).toMatch(/no_schedule/)
+    expect(runNow.responses['409'].description).toMatch(/disabled/)
+
+    // Devices GET: the third connection state lives in the response schema.
+    expect(spec.components.schemas.ShellyDeviceListResponse.description).toMatch(/connected: NULL/)
+
+    // The connection view is the allowlist — no key, no fingerprint.
+    const conn = spec.components.schemas.ShellyConnectionPublic
+    expect(Object.keys(conn.properties).sort()).toEqual(
+      ['has_auth_key', 'host', 'key_hint', 'last_error', 'last_error_at', 'last_ok_at', 'status'],
+    )
+  })
+
+  // SHELLY-UI.9b — three contract facts that are only visible in the
+  // GENERATED document. Asserting them on the zod schema instead would pass
+  // while the published JSON-Schema said something else, which is exactly how
+  // the `/i` bug below survived review.
+  it('publishes a device-id pattern a real MAC can actually match', () => {
+    const pattern = spec.components.schemas.ShellyAdoptBody.properties.device_id.pattern
+    // A JS regex with the `i` flag serialises as source + flags, so the old
+    // /^[0-9a-f]{6,32}$/i became the literal '^[0-9a-f]{6,32}$/i' — a pattern
+    // ending in a stray '/i' that NO device id can satisfy. Every generated
+    // client would have rejected a valid MAC before sending it.
+    expect(pattern).not.toMatch(/\/i$/)
+    expect(new RegExp(pattern).test('aa11bb22cc31')).toBe(true)
+    expect(new RegExp(pattern).test('AA11BB22CC31')).toBe(true)
+    expect(new RegExp(pattern).test('nothex!')).toBe(false)
+  })
+
+  it('documents the third connection state as a member of the enum', () => {
+    const listed = spec.components.schemas.ShellyDeviceListResponse
+    expect(listed.properties.connection_status.enum ?? listed.properties.connection_status.anyOf?.flatMap((a) => a.enum ?? []))
+      .toContain('unknown')
+  })
+
+  it('gives every Shelly error body the coded envelope, not the bare one', () => {
+    // `.extend()` on a NAMED schema renders as allOf[$ref(base), {own props}],
+    // the same shape SonosControlErrorResponse produces — so the codes live on
+    // the second member, not at the top level.
+    const envelope = spec.components.schemas.ShellyErrorResponse
+    expect(envelope.allOf[0].$ref).toBe('#/components/schemas/ErrorResponse')
+    const codes = envelope.allOf[1].properties.code.enum
+    // The four an operator's UI actually branches on, plus the one added when
+    // the dead "already correct" arm was replaced by a loud failure.
+    for (const c of ['not_connected', 'key_rejected', 'device_cap', 'not_on_account', 'unexpected_noop']) {
+      expect(codes, `ShellyErrorResponse must document ${c}`).toContain(c)
+    }
+    // Every Shelly error response references it — a bare ErrorResponse here
+    // would document "there will be a string" and nothing a client can switch on.
+    const shellyOps = Object.entries(spec.paths)
+      .filter(([p]) => p.startsWith('/api/shelly'))
+      .flatMap(([, ops]) => Object.values(ops))
+    let checked = 0
+    for (const op of shellyOps) {
+      for (const [status, res] of Object.entries(op.responses)) {
+        if (Number(status) < 400) continue
+        const schema = res.content?.['application/json']?.schema
+        const ref = JSON.stringify(schema ?? {})
+        expect(ref, `${status} must not use the bare ErrorResponse`).not.toContain('"#/components/schemas/ErrorResponse"')
+        checked += 1
+      }
+    }
+    expect(checked).toBeGreaterThan(40)
   })
 
   it('caches the spec object across calls (same reference)', async () => {

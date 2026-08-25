@@ -576,9 +576,10 @@ const noDiscardedSingleError = {
 // to police the rest of that tree with a bespoke file-scanning vitest instead of
 // a lint rule. This rule subsumes that scan.
 //
-// The palette is a LIGHT theme with INVERTED token names (`un1t-black` is white),
-// so the dark-theme instinct of "accent at -300/-400" lands washed-out grey on
-// white. CLAUDE.md settles it: status/accent text on light cards uses the -700
+// The palette is a LIGHT theme (its token names were inverted — `un1t-black`
+// held white — until UI-FOUND.1 renamed them to intent names; see
+// no-dead-un1t-token below), so the dark-theme instinct of "accent at
+// -300/-400" lands washed-out grey on white. CLAUDE.md settles it: status/accent text on light cards uses the -700
 // ramp. -500 is included because it is the same mistake one stop up and the
 // bright hues (yellow/lime/green/cyan) fail AA badly there.
 //
@@ -663,14 +664,353 @@ const noLowContrastAccentText = {
   },
 }
 
+// A un1t-* colour token that was RENAMED AWAY by UI-FOUND.1 (and mirrored in
+// mobile by MOB-UI.1): black→bg, dark→surface, gray→border, mid→muted,
+// light→subtle, white→text. The old names are not aliases — they were deleted
+// from both tailwind configs.
+//
+// This is a different failure from the two contrast rules above. Those flag a
+// colour that is WRONG; this one flags a colour that does not EXIST. Tailwind
+// does not error on an unknown token, it simply emits no css, so the utility is
+// inert and the element silently inherits from its parent. Nothing warns: not
+// the build, not the type system, not a test. 142 sites in src/ and 3 in
+// mobile/ survived the rename that way for weeks, and the way it finally
+// surfaced was an operator asking what was meant to be inside the black box on
+// /offer-sales (2026-08-19) — the "Mark fulfilled" label carried
+// `text-un1t-black`, which after the rename set no colour at all, so white-on-
+// dark became near-black-on-dark.
+//
+// Fixable: unlike the contrast rules (where the right ramp is a judgement call)
+// the mapping here is exact, so `--fix` is the migration.
+//
+// The trailing `(?![\w-])` boundary is what lets this run at ERROR repo-wide —
+// `un1t-dark-logo.png` and `un1t-lightbox` merely start with a dead name and
+// are not tokens. A trailing `/40` opacity modifier IS matched: the modifier is
+// not part of the token name. Only string literals and template chunks are
+// inspected, never comments — the configs and this file legitimately name the
+// old tokens while documenting the rename.
+const DEAD_UN1T_TOKENS = {
+  black: 'bg',
+  dark: 'surface',
+  gray: 'border',
+  mid: 'muted',
+  light: 'subtle',
+  white: 'text',
+}
+const DEAD_UN1T_TOKEN = /un1t-(black|dark|gray|mid|light|white)(?![\w-])/g
+
+const noDeadUn1tToken = {
+  meta: {
+    type: 'problem',
+    fixable: 'code',
+    docs: {
+      description:
+        'Disallow un1t-* colour tokens that UI-FOUND.1 renamed away (black/dark/gray/mid/light/white). They are absent from both tailwind configs, so Tailwind emits no css and the element silently inherits — an invisible failure, not a wrong colour.',
+    },
+    schema: [],
+    messages: {
+      deadToken:
+        '`un1t-{{old}}` no longer exists — UI-FOUND.1 renamed it to `un1t-{{replacement}}` (mobile followed in MOB-UI.1). Tailwind emits NO css for an unknown token, so this class is inert and the element inherits instead: that is how the /offer-sales "Mark fulfilled" button shipped as an unreadable black box. Use `un1t-{{replacement}}`, or run `npm run check:guardrails -- --fix`.',
+    },
+  },
+  create(context) {
+    const source = context.sourceCode || context.getSourceCode()
+    function check(node) {
+      const text = source.getText(node)
+      for (const match of text.matchAll(DEAD_UN1T_TOKEN)) {
+        const old = match[1]
+        const replacement = DEAD_UN1T_TOKENS[old]
+        const start = node.range[0] + match.index
+        const range = [start, start + match[0].length]
+        context.report({
+          node,
+          messageId: 'deadToken',
+          data: { old, replacement },
+          fix: (fixer) => fixer.replaceTextRange(range, `un1t-${replacement}`),
+        })
+      }
+    }
+    return {
+      Literal(node) {
+        if (typeof node.value === 'string') check(node)
+      },
+      // Per CHUNK, not per template: fixing the whole literal would have to
+      // reproduce the ${…} expressions, and the chunk ranges are exact.
+      TemplateElement(node) {
+        check(node)
+      },
+    }
+  },
+}
+
+// ── BAREWRITE.1 — the other half of the discarded-error class ────────────────
+//
+// no-discarded-single-error (above) closed the half where a result IS
+// destructured but `error` is left out. The half it structurally cannot see is
+// the BARE AWAITED WRITE:
+//
+//     await db.from('contacts').update({ instagram_igsid: null }).eq('id', id)
+//
+// There is no `.single()` and nothing is destructured, so there is no discarded
+// binding to flag — and because supabase-js RESOLVES with `{ data, error }`
+// instead of throwing, a failed write produces a resolved promise and the
+// caller proceeds exactly as if it had succeeded. The live sites this rule was
+// written for ended with the route returning `{ success: true }` on a write
+// that had not happened (IG unlink, staff role/permission assignment) or with a
+// send-once stamp lost so the next webhook retry sent the customer a duplicate
+// message (race confirmations, campaign recipients).
+//
+// WHAT IT FLAGS: an `await`ed supabase chain containing a MUTATION —
+// .insert/.update/.upsert/.delete, or a .rpc() call — whose result is
+// completely unbound, i.e. the AwaitExpression's direct parent is an
+// ExpressionStatement. That is the one shape in which the error is
+// unobservable by construction.
+//
+// It ALSO flags the near-miss shape `const { data } = await <mutation>` — a
+// mutation destructured without `error`. That was originally waved through as
+// "no-discarded-single-error's territory", and that was simply WRONG: the
+// sibling rule only fires on a `.single()` chain, so a write destructured as
+// `{ data }` with no `.single()` is seen by NEITHER rule — the postmark
+// queue-marking write CLAUDE.md's POSTMARK-RACE invariant is about is one of
+// them. Discarded-error READS keep the sibling's carve-out; this is writes only.
+//
+// DELIBERATE NON-FLAGS (each is a real way the error IS reachable):
+//   - a destructured result that BINDS `error` — `const { error } = await …`,
+//     `const { data, error } = await …`, and a rest element (`const { ...r }`)
+//     which keeps it reachable.
+//   - a plain assignment / variable binding — `const res = await …` — the
+//     whole result object is in hand.
+//   - a member access on the awaited value — `(await db.from(t).insert(r))
+//     ?.error`, the idiom campaign-sender used for its retryable insert.
+//   - `.then(cb)` ONLY when `cb`'s first parameter can reach the error: an
+//     ObjectPattern containing `error` (or a rest element), a plain identifier
+//     parameter (the callback can read `.error` off it), or a callback this
+//     rule cannot see inside (an identifier reference, not an inline
+//     function). A literal `.then(() => {})` is NOT a non-flag — it binds
+//     nothing, and skipping it unconditionally made `.then(() => {})` a
+//     one-token silencer on an ERROR-level armed path, which is exactly the
+//     disable comment the rule message forbids.
+//   - `db.storage.*` — those return REAL Promises with their own error shape,
+//     the same carve-out no-catch-on-supabase-builder makes.
+//   - a `return`ed or otherwise consumed chain: the caller owns the error.
+//
+// KNOWN LIMITS, same species as its siblings': one expression only. A builder
+// assembled across statements and awaited through a variable is invisible, and
+// so is a chain handed to a helper that awaits it internally
+// (`await writeOrLog(db.from(t).update(u), …)` — the idiom campaign-sender.js
+// now uses; `grep -c 'await writeOrLog(' src/lib/campaign-sender.js` says how
+// many sites it hides). That laundering is only acceptable because the helper
+// genuinely reads the error in ONE auditable place; it is not a way to quiet
+// the rule.
+//
+// It also cannot see a ZERO-ROW UPDATE: PostgREST returns NO error when an
+// UPDATE matches nothing, so `{ error }` alone still misses "the row vanished".
+// Where the row MUST exist, judge the rows the write actually touched —
+// `.update(patch).eq('id', id).select('id')` then `data.length` (the
+// staff-create and IG-agent sites), or make the write itself the mutex with a
+// CAS + `.select()` (`claimDripRecipient` in whatsapp.js). No AST rule can tell
+// those apart from the many legitimate zero-row-is-fine writes (every CAS
+// `.is(col, null)` guard in campaign-sender.js is one), so this stays a
+// documented human obligation.
+//
+// And it cannot see a bare write sitting inside a `try { … } catch { … }` as
+// anything other than a bare write — which is the subtlest member of the class,
+// because the reader sees error handling that cannot fire for a supabase
+// result. That is how whatsapp-consent.js survived two audits.
+//
+// SCOPE: armed PER-PATH in eslint.guardrails.config.mjs, not repo-wide, because
+// the repo-wide baseline is not clean. See that file's comment for the arming
+// rationale and for the command that measures any path you are thinking of
+// arming — no census figure is quoted here or there, because the only figure
+// worth trusting is the one the reader's own run prints.
+const MUTATION_METHODS = new Set(['insert', 'update', 'upsert', 'delete'])
+
+// Walk DOWN a chain; return the mutation method name if any link is one, or
+// 'rpc' when the chain roots at .rpc(). Null when the chain only reads.
+function chainMutationMethod(node) {
+  let cur = node
+  let found = null
+  while (cur) {
+    if (cur.type === 'CallExpression') {
+      const c = cur.callee
+      if (c && c.type === 'MemberExpression' && c.property) {
+        if (MUTATION_METHODS.has(c.property.name)) found = c.property.name
+        else if (c.property.name === 'rpc' && !found) found = 'rpc'
+      }
+      cur = c && c.type === 'MemberExpression' ? c.object : null
+    } else if (cur.type === 'MemberExpression') {
+      cur = cur.object
+    } else {
+      cur = null
+    }
+  }
+  return found
+}
+
+const noUncheckedSupabaseWrite = {
+  meta: {
+    type: 'problem',
+    docs: {
+      description:
+        'Disallow an awaited supabase write (insert/update/upsert/delete/rpc) whose result is completely unbound. supabase-js resolves with { data, error } rather than throwing, so a bare awaited write reports success to the caller whatever happened.',
+    },
+    schema: [],
+    messages: {
+      unchecked:
+        'This {{method}} is awaited but its result is discarded entirely — supabase-js RESOLVES with `{ data, error }` instead of throwing, so a failed write is indistinguishable from a successful one here and the code below proceeds as if it had happened. Destructure the error and handle it as the call site deserves: surface it where the caller reports success, log it where the write is genuinely best-effort (say so in a comment). If the row MUST exist, judge the rows it touched too — `.select(\'id\')` and check `data.length` — because PostgREST reports NO error for an UPDATE that matches nothing. Do not answer this with a disable comment, and do not answer it with `.then(() => {})` either.',
+      destructuredWithoutError:
+        'This {{method}} is awaited and destructured, but the pattern does not bind `error` — so the failure is discarded just as completely as a bare await, and no-discarded-single-error does NOT cover it (that rule only fires on a `.single()` chain). A failed write lands here as `data: null`, which reads exactly like "no rows". Add `error` to the pattern and handle it.',
+    },
+  },
+  create(context) {
+    // Can the error still be reached through this binding pattern?
+    function patternBindsError(pattern) {
+      if (!pattern) return true
+      // `const res = await …` / a callback param `r` — the object is in hand.
+      if (pattern.type !== 'ObjectPattern') return true
+      for (const prop of pattern.properties || []) {
+        // `{ ...rest }` keeps everything reachable.
+        if (prop.type === 'RestElement' || prop.type === 'ExperimentalRestProperty') return true
+        const key = prop.key
+        if (!key) continue
+        const name = key.type === 'Identifier' ? key.name : (key.type === 'Literal' ? key.value : null)
+        if (name === 'error') return true
+        // A computed key could be anything — don't guess.
+        if (prop.computed) return true
+      }
+      return false
+    }
+
+    // `.then(cb)`: only a callback whose first parameter can reach the error
+    // counts as handling. `.then(() => {})` binds nothing and is flagged.
+    function thenCallbackBindsError(call) {
+      const cb = call.arguments?.[0]
+      if (!cb) return false
+      // Not an inline function (an identifier, a member expression) — we cannot
+      // see inside it, so we assume it handles the result.
+      if (cb.type !== 'ArrowFunctionExpression' && cb.type !== 'FunctionExpression') return true
+      const param = cb.params?.[0]
+      if (!param) return false
+      return patternBindsError(param)
+    }
+
+    function isSupabaseMutation(call) {
+      if (!call || call.type !== 'CallExpression') return null
+      const callee = call.callee
+      if (!callee || callee.type !== 'MemberExpression' || !callee.property) return null
+      const method = chainMutationMethod(call)
+      if (!method) return null
+      if (!chainRootIsSupabase(call)) return null
+      // storage.* returns real Promises with their own shape.
+      if (chainContainsStorage(call)) return null
+      return method
+    }
+
+    return {
+      'ExpressionStatement > AwaitExpression'(node) {
+        const call = node.argument
+        if (!call || call.type !== 'CallExpression') return
+        const callee = call.callee
+        if (!callee || callee.type !== 'MemberExpression' || !callee.property) return
+        if (callee.property.name === 'then') {
+          if (thenCallbackBindsError(call)) return
+          // A `.then` whose callback cannot see the error: report against the
+          // mutation chain it was called on.
+          const inner = callee.object
+          const method = isSupabaseMutation(inner)
+          if (!method) return
+          context.report({ node: call, messageId: 'unchecked', data: { method: `.${method}()` } })
+          return
+        }
+        const method = isSupabaseMutation(call)
+        if (!method) return
+        context.report({ node: call, messageId: 'unchecked', data: { method: `.${method}()` } })
+      },
+      // `const { data } = await db.from(t).update(u).eq(…)` — destructured, but
+      // not in a way that can see the failure. Seen by neither this rule's
+      // original shape nor no-discarded-single-error.
+      'VariableDeclarator > AwaitExpression'(node) {
+        const declarator = node.parent
+        if (!declarator || declarator.init !== node) return
+        if (patternBindsError(declarator.id)) return
+        const method = isSupabaseMutation(node.argument)
+        if (!method) return
+        context.report({ node: node.argument, messageId: 'destructuredWithoutError', data: { method: `.${method}()` } })
+      },
+    }
+  },
+}
+
+// HUBDOOR.3 — `expect(page()).rejects.toThrow('NEXT_REDIRECT:/x')` is a
+// SUBSTRING match, and every redirect target in this app is a path that
+// begins with '/'. So `toThrow('NEXT_REDIRECT:/')` — the natural way to
+// assert "bounced to home" — passes against EVERY redirect the page could
+// possibly throw, and the longer ones are prefixes of each other
+// ('/schedule' passes on '/schedule/expenses', '/settings' on
+// '/settings/scoring', '/events' on '/events/[id]/checkin'). The assertion
+// still goes green after the behaviour it pins has changed, which is worse
+// than having no assertion at all: it reads as coverage.
+//
+// It was not hypothetical. Every hub-index suite asserted its fallback this
+// way, and the Operations one had been passing on a redirect to
+// '/admin/fleet' — `fleet_restart` defaults ON for every role and the
+// fixture never denied it, so the suite that existed to prove "a user with
+// no Operations permission lands on '/'" was in fact proving nothing. All
+// 83 sites are now anchored regexes; this rule is what stops the 84th.
+//
+// Deliberately narrow: only literals beginning with NEXT_REDIRECT. A plain
+// `toThrow('Not found')` is a normal, useful substring assertion — it is the
+// prefix-shaped path namespace that makes THIS one vacuous.
+const REDIRECT_THROW_MATCHERS = new Set(['toThrow', 'toThrowError'])
+
+const noSubstringRedirectAssertion = {
+  meta: {
+    type: 'problem',
+    docs: {
+      description:
+        "Disallow toThrow('NEXT_REDIRECT:…') with a string argument — toThrow(string) is a substring match, so the assertion passes against any redirect target that has the asserted one as a prefix.",
+    },
+    schema: [],
+    messages: {
+      substring:
+        "toThrow(string) is a SUBSTRING match, so this passes against any redirect whose target starts with '{{target}}' — including '/' matching every redirect there is. Anchor it: toThrow(/^NEXT_REDIRECT:{{escaped}}$/).",
+    },
+  },
+  create(context) {
+    return {
+      CallExpression(node) {
+        const callee = node.callee
+        if (callee?.type !== 'MemberExpression' || callee.computed) return
+        if (!REDIRECT_THROW_MATCHERS.has(callee.property?.name)) return
+        const arg = node.arguments?.[0]
+        let value = null
+        if (arg?.type === 'Literal' && typeof arg.value === 'string') value = arg.value
+        else if (arg?.type === 'TemplateLiteral' && arg.expressions.length === 0) {
+          value = arg.quasis[0]?.value?.cooked ?? null
+        }
+        if (value == null || !value.startsWith('NEXT_REDIRECT')) return
+        const target = value.slice('NEXT_REDIRECT:'.length)
+        context.report({
+          node: arg,
+          messageId: 'substring',
+          data: { target, escaped: target.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&') },
+        })
+      },
+    }
+  },
+}
+
 export default {
   rules: {
     'no-catch-on-supabase-builder': noCatchOnSupabaseBuilder,
+    'no-unchecked-supabase-write': noUncheckedSupabaseWrite,
+    'no-substring-redirect-assertion': noSubstringRedirectAssertion,
     'no-uncapped-supabase-limit': noUncappedSupabaseLimit,
     'no-zulu-template-date': noZuluTemplateDate,
     'no-utc-today': noUtcToday,
     'no-low-contrast-chip': noLowContrastChip,
     'no-low-contrast-accent-text': noLowContrastAccentText,
+    'no-dead-un1t-token': noDeadUn1tToken,
     'no-unescaped-ilike-pattern': noUnescapedIlikePattern,
     'no-untyped-button-in-form': noUntypedButtonInForm,
     'no-discarded-single-error': noDiscardedSingleError,

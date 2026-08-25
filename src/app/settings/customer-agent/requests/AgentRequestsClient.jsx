@@ -2,8 +2,10 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
+import { Copy, Check } from 'lucide-react'
 import { formatMoneyMinor } from '@/lib/money-format'
-import { isStuckExecuting } from '@/lib/agent/request-recovery'
+import { isStuckExecuting, retryOffered } from '@/lib/agent/request-recovery'
+import { whyFlagged, customerWords, failureExplanation, accountSummaryLine } from '@/lib/approvals/agent-request-why'
 
 // RADAR-AGENT Phase 2 — operator approval queue. Manager+ reviews the
 // pause / cancellation requests the customer agent captured, and decides:
@@ -77,8 +79,12 @@ export default function AgentRequestsClient() {
   // unrecoverable: the customer was told the team would confirm and nothing
   // was ever booked. Approving again retries the execution.
   const stuck = requests.filter(r => isStuckExecuting(r, Date.now()))
-  const stuckIds = new Set(stuck.map(r => r.id))
-  const decided = requests.filter(r => r.status !== 'pending' && !stuckIds.has(r.id))
+  // AGENT-RETRY.1 — failed executions whose retry still makes sense (class
+  // not started yet, or failed recently) get their own actionable section
+  // instead of dying silently in the Decided list.
+  const failedRetryable = requests.filter(r => retryOffered(r, Date.now()))
+  const liftedIds = new Set([...stuck, ...failedRetryable].map(r => r.id))
+  const decided = requests.filter(r => r.status !== 'pending' && !liftedIds.has(r.id))
 
   return (
     <div className="max-w-3xl">
@@ -107,6 +113,21 @@ export default function AgentRequestsClient() {
           <div className="space-y-3">
             {stuck.map(r => (
               <RequestCard key={r.id} r={r} busy={busyId === r.id} onDecide={decide} focused={r.id === focusId} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {failedRetryable.length > 0 && (
+        <div className="mb-6">
+          <h2 className="text-sm font-semibold text-red-700 uppercase tracking-wider mb-2">Failed — fix &amp; retry</h2>
+          <p className="text-xs text-un1t-muted mb-3">
+            These were approved but Glofox rejected the action, so the customer has NOT been
+            confirmed. Fix the problem in Glofox (the card says what went wrong), then retry.
+          </p>
+          <div className="space-y-3">
+            {failedRetryable.map(r => (
+              <RequestCard key={r.id} r={r} busy={busyId === r.id} onDecide={decide} focused={r.id === focusId} retryMode />
             ))}
           </div>
         </div>
@@ -147,10 +168,41 @@ export default function AgentRequestsClient() {
   )
 }
 
-function RequestCard({ r, busy, onDecide, focused = false }) {
+// AGENT-REQ-UX.1 — click-to-copy contact detail for the Glofox lookup.
+function CopyValue({ value }) {
+  const [copied, setCopied] = useState(false)
+  if (!value) return null
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(value)
+          setCopied(true)
+          setTimeout(() => setCopied(false), 1500)
+        } catch { /* clipboard unavailable — the value is still visible to select */ }
+      }}
+      title="Copy"
+      className="inline-flex items-center gap-1 text-xs text-un1t-text bg-un1t-bg border border-un1t-border rounded-md px-2 py-0.5 hover:bg-un1t-border/30"
+    >
+      <span className="select-all">{value}</span>
+      {copied ? <Check size={12} className="text-green-700" /> : <Copy size={12} className="text-un1t-subtle" />}
+    </button>
+  )
+}
+
+function RequestCard({ r, busy, onDecide, focused = false, retryMode = false }) {
   const name = r.contacts?.name || r.contacts?.first_name || 'Unknown member'
   const d = r.details || {}
   const isCancel = r.kind === 'cancellation'
+  // AGENT-REQ-UX.1 — machine flag codes (class bookings) become operator
+  // copy; the customer's own words render as a quote, never as a code.
+  const why = whyFlagged(r)
+  const said = customerWords(r)
+  // AGENT-RETRY.1 — what Glofox rejected and what to fix before retrying.
+  const failWhy = retryMode ? failureExplanation(r) : null
+  // AGENT-FUNNEL-CREDITS.1 — what the account can book with.
+  const account = accountSummaryLine(r.contacts)
   return (
     <div id={`agent-req-${r.id}`} className={`border rounded-lg p-4 ${focused ? 'border-un1t-text ring-2 ring-un1t-text/30' : 'border-un1t-border'}`}>
       <div className="flex items-center justify-between mb-2">
@@ -178,27 +230,57 @@ function RequestCard({ r, busy, onDecide, focused = false }) {
         {(r.kind === 'class_booking' || r.kind === 'consultation') && (d.class_name || d.class_time) && (
           <p>{d.class_name || (r.kind === 'consultation' ? 'Consultation' : 'Class')}{d.class_time ? ` · ${d.class_time}` : ''}</p>
         )}
-        {d.reason && <p className="text-un1t-muted">Reason: “{d.reason}”</p>}
-        {!d.reason && !d.start_date && !d.end_date && !d.desired_date && !d.class_name && !d.class_time && (
+        {account && (
+          <p className="text-un1t-muted">
+            <span className="font-semibold text-un1t-text">Account:</span> {account}
+          </p>
+        )}
+        {failWhy && (
+          <p className="text-red-700">
+            <span className="font-semibold">What went wrong:</span> {failWhy}
+          </p>
+        )}
+        {why && (
+          <p className="text-un1t-muted">
+            <span className="font-semibold text-un1t-text">Why it needs review:</span> {why}
+          </p>
+        )}
+        {said && (
+          <p className="text-un1t-muted border-l-2 border-un1t-border pl-2">
+            <span className="font-semibold text-un1t-text">Customer said:</span> “{said}”
+          </p>
+        )}
+        {!why && !said && !d.start_date && !d.end_date && !d.desired_date && !d.class_name && !d.class_time && (
           <p className="text-un1t-muted">No further detail captured.</p>
+        )}
+        {(r.contacts?.email || r.contacts?.phone) && (
+          <div className="flex items-center gap-2 flex-wrap pt-1">
+            <span className="text-[10px] uppercase tracking-wide text-un1t-subtle">Glofox lookup</span>
+            <CopyValue value={r.contacts?.email} />
+            <CopyValue value={r.contacts?.phone} />
+          </div>
         )}
       </div>
 
       <div className="flex items-center gap-2">
         <button onClick={() => onDecide(r.id, 'approved')} disabled={busy}
           className="text-sm bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md font-medium disabled:opacity-50">
-          Approve
+          {retryMode ? 'Fixed it — retry' : 'Approve'}
         </button>
-        {isCancel && (
+        {!retryMode && isCancel && (
           <button onClick={() => onDecide(r.id, 'saved')} disabled={busy}
             className="text-sm border border-blue-300 text-blue-700 px-3 py-1.5 rounded-md disabled:opacity-50">
             Saved (kept)
           </button>
         )}
-        <button onClick={() => onDecide(r.id, 'declined')} disabled={busy}
-          className="text-sm border border-un1t-border text-un1t-muted px-3 py-1.5 rounded-md disabled:opacity-50">
-          Decline
-        </button>
+        {/* Decline on a failed row would 409 (the claim is pending-only) —
+            retry mode offers only the retry. */}
+        {!retryMode && (
+          <button onClick={() => onDecide(r.id, 'declined')} disabled={busy}
+            className="text-sm border border-un1t-border text-un1t-muted px-3 py-1.5 rounded-md disabled:opacity-50">
+            Decline
+          </button>
+        )}
         {r.conversation_id && (
           <Link
             href={`/communications/inbox?c=${r.conversation_id}&ch=${r.channel === 'instagram' ? 'ig' : 'wa'}`}

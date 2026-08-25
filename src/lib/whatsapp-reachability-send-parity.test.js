@@ -21,8 +21,34 @@
 // SAME QUERY. The real applyAudienceFilterAsync runs (deliberately not mocked)
 // so the operator's filter predicates are part of the comparison.
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { computeWhatsAppReachabilitySummary, buildWhatsAppAudienceAsync } from './whatsapp.js'
+
+// CONSENTLOC-FLAKE.1 (class sweep) — FREEZE THE CLOCK. This file deep-equals
+// the call log of TWO SEPARATE EXECUTIONS of the audience query builders, and
+// applyAudienceFilter mints its own wall clock INSIDE the predicate for the
+// `days_since_gt` / `days_since_lt` operators (audience-filter.js:381/387/584/594
+// each do `const cutoff = new Date()` and embed `cutoff.toISOString()` at
+// MILLISECOND precision). Two sequential builds therefore straddle a millisecond
+// boundary every so often and emit cutoffs 1ms apart. The diff is one digit
+// inside a predicate string, so vitest's truncated output prints two
+// near-identical sides and reads as a mystery — the same signature as the
+// marketing-consent flake that shipped a red build to production main.
+//
+// MEASURED on THIS path, replaying the assertion below with real timers:
+// 37/3,000 and 46/3,000 (1.2-1.5%), i.e. roughly 1 CI run in 70 — an order of
+// magnitude worse than the 0.055-0.095% the bare builder shows, because the
+// summary side runs six queries between the two builds and widens the window.
+// A matched-N control with the clock frozen was 0/3,000, and 0/20,000 on replay.
+//
+// This file's FILTER deliberately includes a `days_since_gt` predicate: a
+// re-engagement audience ("hasn't attended in N days") is exactly the shape this
+// parity test exists to cover, and pinning the clock is what keeps it exact.
+// Do NOT delete this freeze to "simplify" — it is load-bearing for the one test
+// that proves preview and send resolve a single query path.
+const FROZEN_NOW = new Date('2026-08-19T10:00:00.000Z')
+beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'], now: FROZEN_NOW }) })
+afterEach(() => { vi.useRealTimers() })
 
 // Records every builder method call, in order, per query. Terminal await
 // resolves to a configured count so the summary's arithmetic still runs.
@@ -57,6 +83,12 @@ const FILTER = {
     // predicate ORDER is most visible between two hand-built query paths.
     { field: 'glofox_membership_type', op: 'neq', value: 'time' },
     { field: 'total_attended_30d', op: 'gte', value: '2' },
+    // A wall-clock predicate. `days_since_gt` compiles to a cutoff computed
+    // from `new Date()` at call time, so it only compares equal across the two
+    // builds because the clock is frozen above — which is the point: the
+    // re-engagement filter an operator is most likely to add here is also the
+    // one that would silently make this test flaky.
+    { field: 'last_attended_at', op: 'days_since_gt', value: 30 },
   ],
 }
 

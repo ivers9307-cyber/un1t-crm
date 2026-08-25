@@ -492,7 +492,10 @@ export function buildReportEmailHtml(report, { appUrl } = {}) {
       </table>
       ${cta}
     </div>
-    <p style="text-align:center;font-size:11px;color:#94A3B8;margin-top:16px;">UN1T CRM · automated report delivery</p>
+    <!-- CHROME.1 — scheduled reports go to STAFF addresses
+         (schedule.email_recipients, never CRM contacts), so the footer
+         names the platform, not the gym. -->
+    <p style="text-align:center;font-size:11px;color:#94A3B8;margin-top:16px;">Repset · automated report delivery</p>
   </div>
 </body>
 </html>`

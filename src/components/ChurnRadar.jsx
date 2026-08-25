@@ -5,9 +5,11 @@
 // Tabs:
 //   At Risk       — scored active members + per-member win-back actions.
 //   Win-back      — former members (lapsed 45–365 days) worth re-winning.
-//   Overdue       — members owing ≥€50 on a past-due invoice; a chase-list.
-//   Unpaid charges— small confirmed past-due custom charges (<€50).
-//   Awaiting auth — PENDING fees Glofox hasn't collected yet (AWAITING-AUTH.1).
+//   Overdue       — members whose MEMBERSHIP payment failed (a past-due
+//                   subscription renewal / first payment); the chase-list.
+//   Unpaid charges— every other confirmed past-due charge (fees, custom
+//                   charges, class bookings, class packs, products), any amount.
+//   Awaiting auth — PENDING charges Glofox hasn't collected yet (AWAITING-AUTH.1).
 //   Quarantine    — zero-activity "ghost member" records for bulk triage.
 //
 // All data comes from /api/churn-radar/*; this component is pure UI +
@@ -430,12 +432,14 @@ function DigestSettings() {
   )
 }
 
-// RADAR-PAY.1 — designate the dunning sequence the one-click "Send
-// payment reminder" action enrols slipping + locked members into.
-// Reads / writes locations.dunning_sequence_id via dunning-settings.
+// RADAR-PAY.1 / DUNNING.5 — the payment-reminders automation: which
+// sequence the one-click "Send payment reminder" (and, when switched on,
+// a failed membership payment) enrols members into. Reads / writes
+// locations.dunning_sequence_id + dunning_auto_enroll via dunning-settings.
 function DunningSettings() {
   const [state, setState] = useState(null)   // null = loading
   const [sel, setSel] = useState('')
+  const [auto, setAuto] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [err, setErr] = useState(null)
@@ -450,6 +454,7 @@ function DunningSettings() {
         if (!cancelled) {
           setState(j.data)
           setSel(j.data.dunning_sequence_id || '')
+          setAuto(!!j.data.dunning_auto_enroll)
         }
       } catch (e) {
         if (!cancelled) { setErr(e.message); setState({ sequences: [] }) }
@@ -464,7 +469,7 @@ function DunningSettings() {
       const r = await fetch('/api/churn-radar/dunning-settings', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ dunning_sequence_id: sel || null }),
+        body: JSON.stringify({ dunning_sequence_id: sel || null, dunning_auto_enroll: sel ? auto : false }),
       })
       const j = await r.json()
       if (!r.ok || !j.success) throw new Error(j.error || 'Save failed')
@@ -484,19 +489,24 @@ function DunningSettings() {
     <div className="mt-4 rounded-xl border border-un1t-border bg-un1t-surface p-4">
       <div className="flex items-center gap-2">
         <CreditCard size={15} className="text-un1t-subtle" />
-        <h3 className="text-sm font-medium text-un1t-text">Dunning sequence</h3>
+        <h3 className="text-sm font-medium text-un1t-text">Payment reminders</h3>
       </div>
       <p className="mt-1 text-xs text-un1t-subtle">
-        Which sequence the one-click <span className="font-medium">Send payment reminder</span> enrols
-        payment-slipping and overdue members into. Build a manual email/SMS
-        sequence first, then pick it here. Leave unset to hide the button.
+        The automation that reminds a member to update their card when a{' '}
+        <span className="font-medium">membership payment fails</span>. Install
+        &ldquo;Overdue membership payment &rarr; card update reminders&rdquo; from the
+        automations templates (or build a manual one), pick it here, and choose
+        whether it starts by itself. The one-click{' '}
+        <span className="font-medium">Send payment reminder</span> on the Overdue tab
+        uses the same automation. Leave unset to hide the button.
       </p>
       {state === null ? (
         <p className="mt-3 text-sm text-un1t-subtle">Loading…</p>
       ) : sequences.length === 0 ? (
         <p className="mt-3 text-xs text-amber-600">
-          No manual sequences yet — create one under Sequences (trigger: manual),
-          add your payment-reminder steps, then come back to pick it here.
+          No manual automations yet. Install the card-update reminders template under
+          Automations &rarr; Templates (or build one with a manual trigger), then come
+          back to pick it here.
         </p>
       ) : (
         <>
@@ -517,10 +527,19 @@ function DunningSettings() {
               This sequence is paused — activate it under Sequences or reminders won&apos;t send.
             </p>
           )}
+          <label className={`mt-3 flex items-start gap-2 text-xs ${sel ? 'text-un1t-text' : 'text-un1t-subtle'}`}>
+            <input type="checkbox" className="mt-0.5" checked={!!sel && auto} disabled={!sel}
+              onChange={(e) => setAuto(e.target.checked)} />
+            <span>
+              <span className="font-medium">Start reminders automatically</span> when a membership
+              payment fails. Fees, class packs and custom charges never trigger it; the run stops
+              the moment the membership payment is paid or written off, or the membership pauses.
+            </span>
+          </label>
           <div className="mt-2 flex items-center gap-3">
             <button type="button" onClick={save} disabled={saving}
               className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50">
-              {saving ? 'Saving…' : 'Save dunning sequence'}
+              {saving ? 'Saving…' : 'Save payment reminders'}
             </button>
             {saved && <span className="text-xs text-green-600">Saved.</span>}
             {err && <span className="text-xs text-red-600">{err}</span>}
@@ -849,10 +868,11 @@ function OverdueList({ data, busy, onAction, onRefresh }) {
     return (
       <div className="rounded-2xl border border-dashed border-un1t-border p-10 text-center">
         <Check size={28} className="mx-auto text-green-500" />
-        <p className="mt-3 font-medium text-un1t-text">Nobody owes €50 or more</p>
+        <p className="mt-3 font-medium text-un1t-text">No failed membership payments</p>
         <p className="mt-1 text-sm text-un1t-subtle">
-          No member has a past-due Glofox invoice of €50+. Smaller unpaid
-          charges (under €50) are under the <strong>Unpaid charges</strong> tab.
+          No member has a past-due membership renewal or first payment. Other
+          unpaid items (fees, class packs, bookings, products) are under the{' '}
+          <strong>Unpaid charges</strong> tab.
         </p>
       </div>
     )
@@ -860,19 +880,23 @@ function OverdueList({ data, busy, onAction, onRefresh }) {
   return (
     <div className="space-y-2">
       <p className="mb-1 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800">
-        Members with a past-due Glofox invoice of <strong>€50 or more</strong> — the
-        amount owed is the sum of their open past-due invoices. Highest owed
-        first; open a profile for their contact details. Smaller charges are
-        under <strong>Unpaid charges</strong>.
+        Members whose <strong>membership payment failed</strong> — a subscription
+        renewal or first payment Glofox could not collect. The amount owed is the
+        sum of their open past-due membership invoices, highest first; open a
+        profile for their contact details. Fees, class packs, bookings and
+        products are under <strong>Unpaid charges</strong>.
       </p>
       {rows.map((m) => <OverdueRow key={m.contactId} m={m} busy={busy} onAction={onAction} onRefresh={onRefresh} />)}
     </div>
   )
 }
 
-// RADAR-OVERDUE.1 — the small-charges tab: CONFIRMED past-due charges under €50.
-// Same row shape as Overdue, so it reuses OverdueRow; only the framing differs.
-// PENDING 'awaiting authorization' fees are NOT here — they have their own tab.
+// ARREARS-TYPE.1 — every confirmed past-due charge that is NOT a membership
+// payment: fees, custom charges, class bookings, class packs, products — any
+// amount. Same row shape as Overdue, so it reuses OverdueRow; only the framing
+// differs. PENDING 'awaiting authorization' charges are NOT here — own tab.
+// DUNNING.4 — no card-update reminder button here: these aren't membership
+// payments, and the reminder copy says "membership payment".
 function UnpaidChargesList({ data, busy, onAction, onRefresh }) {
   if (data === null) return <p className="text-sm text-un1t-subtle">Loading unpaid charges…</p>
   const rows = data.charges || []
@@ -880,11 +904,11 @@ function UnpaidChargesList({ data, busy, onAction, onRefresh }) {
     return (
       <div className="rounded-2xl border border-dashed border-un1t-border p-10 text-center">
         <Check size={28} className="mx-auto text-green-500" />
-        <p className="mt-3 font-medium text-un1t-text">No small unpaid charges</p>
+        <p className="mt-3 font-medium text-un1t-text">No unpaid charges</p>
         <p className="mt-1 text-sm text-un1t-subtle">
-          No member has a small past-due charge (under €50). Larger debts appear
-          under the <strong>Overdue</strong> tab; fees still awaiting payment are
-          under <strong>Awaiting authorization</strong>.
+          No member has a failed one-off charge. Failed membership payments are
+          under the <strong>Overdue</strong> tab; charges still awaiting payment
+          are under <strong>Awaiting authorization</strong>.
         </p>
       </div>
     )
@@ -892,12 +916,13 @@ function UnpaidChargesList({ data, busy, onAction, onRefresh }) {
   return (
     <div className="space-y-2">
       <p className="mb-1 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-        Small <strong>confirmed past-due charges under €50</strong> — usually one-off
-        custom charges or fees. Lower priority than the main Overdue chase-list, but
-        worth clearing. Fees not yet collected are under <strong>Awaiting
+        <strong>Failed one-off charges</strong> — late-cancel and no-show fees,
+        custom charges, class bookings, class packs and products, at any amount.
+        Not membership debts (those are under <strong>Overdue</strong>), but
+        worth clearing. Charges not yet collected are under <strong>Awaiting
         authorization</strong>. Highest owed first.
       </p>
-      {rows.map((m) => <OverdueRow key={m.contactId} m={m} busy={busy} onAction={onAction} onRefresh={onRefresh} />)}
+      {rows.map((m) => <OverdueRow key={m.contactId} m={m} busy={busy} onAction={onAction} onRefresh={onRefresh} canRemind={false} />)}
     </div>
   )
 }
@@ -916,8 +941,8 @@ function AwaitingAuthList({ data, busy, onAction, onRefresh }) {
         <p className="mt-3 font-medium text-un1t-text">Nothing awaiting authorization</p>
         <p className="mt-1 text-sm text-un1t-subtle">
           No member has a pending charge waiting to be collected. Confirmed
-          past-due charges are under the <strong>Unpaid charges</strong> and{' '}
-          <strong>Overdue</strong> tabs.
+          past-due items are under the <strong>Overdue</strong> (membership
+          payments) and <strong>Unpaid charges</strong> (everything else) tabs.
         </p>
       </div>
     )
@@ -929,12 +954,12 @@ function AwaitingAuthList({ data, busy, onAction, onRefresh }) {
         late-cancel fees Glofox has applied but not yet collected. Not confirmed
         debts yet; they clear once the member&apos;s payment goes through. Highest first.
       </p>
-      {rows.map((m) => <OverdueRow key={m.contactId} m={m} busy={busy} onAction={onAction} onRefresh={onRefresh} variant="awaiting" />)}
+      {rows.map((m) => <OverdueRow key={m.contactId} m={m} busy={busy} onAction={onAction} onRefresh={onRefresh} variant="awaiting" canRemind={false} />)}
     </div>
   )
 }
 
-function OverdueRow({ m, busy, onAction, onRefresh, variant = 'owed' }) {
+function OverdueRow({ m, busy, onAction, onRefresh, variant = 'owed', canRemind = true }) {
   const isBusy = busy === m.contactId
   const awaiting = variant === 'awaiting'
   const attendLine = m.daysSinceAttended == null
@@ -976,8 +1001,12 @@ function OverdueRow({ m, busy, onAction, onRefresh, variant = 'owed' }) {
           onClick={() => onAction(m.contactId, 'contacted')} />
         <ActionBtn icon={ClipboardList} label="Assign task" disabled={isBusy}
           onClick={() => onAction(m.contactId, 'task_assigned')} />
-        <ActionBtn icon={CreditCard} label="Send payment reminder" disabled={isBusy} primary
-          onClick={() => onAction(m.contactId, 'payment_reminder')} />
+        {/* DUNNING.4 — the card-update reminder is for a failed MEMBERSHIP
+            payment; the Unpaid-charges / Awaiting tabs pass canRemind={false}. */}
+        {canRemind && (
+          <ActionBtn icon={CreditCard} label="Send payment reminder" disabled={isBusy} primary
+            onClick={() => onAction(m.contactId, 'payment_reminder')} />
+        )}
         <RadarOutreachButton contactName={m.name} disabled={isBusy} busy={isBusy}
           onSelect={(tpl) => onAction(m.contactId, 'outreach_sent', { template_name: tpl })} />
         {onRefresh && (

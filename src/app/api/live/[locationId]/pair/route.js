@@ -10,12 +10,14 @@
 //   - inserts a strap_assignments row (the override layer)
 //   - subsequent bridge samples for this device_key route to that session
 //
-// Auth: master / owner / manager / head_coach / coach at the
-// location. Lower roles can't pair.
+// Auth (SEC-LIVE-API.1): master / owner / manager / head_coach at the
+// location, who ALSO hold `studio_management` there (the permission the /live
+// page requires). Lower roles can't pair.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
+import { guardLiveLocation, LIVE_MUTATION_ROLES } from '@/lib/live-access'
 import { createServerClient } from '@/lib/supabase'
 import { pairOverride } from '@/lib/live-class'
 import { canonicaliseDeviceKey } from '@/lib/bridge-samples'
@@ -35,21 +37,12 @@ const PairSchema = z.object({
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const ALLOWED_ROLES = ['owner', 'manager', 'head_coach', 'coach']
-
 export async function POST(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
-  if (!user) {
-    return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })
-  }
   const locationId = params.locationId
-  if (!user.isMaster && !ALLOWED_ROLES.includes(user.role)) {
-    return NextResponse.json({ ok: false, error: 'Coach only' }, { status: 403 })
-  }
-  if (!user.isMaster && !getUserLocationIds(user).includes(locationId)) {
-    return NextResponse.json({ ok: false, error: 'Location not in your scope' }, { status: 403 })
-  }
+  const denied = guardLiveLocation(user, locationId, { roles: LIVE_MUTATION_ROLES })
+  if (denied) return denied
 
   const validation = await validateBody(request, PairSchema, { allowEmpty: true })
   if (!validation.ok) return validation.response

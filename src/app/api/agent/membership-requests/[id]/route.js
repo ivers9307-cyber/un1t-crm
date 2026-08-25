@@ -8,6 +8,7 @@ import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 import {
   EXECUTING_KINDS,
   stuckExecutionStartedAt,
+  isRetryableFailure,
   executingMarker,
   finishedMarker,
 } from '@/lib/agent/request-recovery'
@@ -66,7 +67,14 @@ export async function PATCH(request, { params }) {
   // strict once-only rule.
   const retryStartedAt = stuckExecutionStartedAt(row, Date.now())
   const isRetry = !!retryStartedAt && v.data.status === 'approved'
-  if (row.status !== 'pending' && !isRetry) {
+  // AGENT-RETRY.1 — a FAILED execution may be re-approved: the operator
+  // fixes the underlying problem in Glofox (credits, account link), then
+  // retries the side effect. Approve-only; decline on a failed row still
+  // 409s. Deliberately no staleness gate here — the UI decides what to
+  // OFFER (retryOffered), the route trusts a deliberate operator action
+  // (Glofox arbitrates a pointless retry the same way it always has).
+  const isFailedRetry = isRetryableFailure(row) && v.data.status === 'approved'
+  if (row.status !== 'pending' && !isRetry && !isFailedRetry) {
     return NextResponse.json({ success: false, error: 'Already decided' }, { status: 409 })
   }
 
@@ -91,15 +99,23 @@ export async function PATCH(request, { params }) {
   if (executing) claimPatch.details = executingMarker(row.details, { startedAt: nowIso, by: user.id })
 
   let claimQuery = db.from('agent_membership_requests').update(claimPatch).eq('id', id)
+  // AGENT-RETRY.1 — a failed-retry claims on status='failed': two concurrent
+  // retries race the predicate, the loser matches zero rows and 409s, so the
+  // execution still can't double-run (same shape as the pending claim).
   claimQuery = isRetry
     ? claimQuery.eq('status', 'approved').eq('details->execution->>started_at', retryStartedAt)
-    : claimQuery.eq('status', 'pending')
+    : isFailedRetry
+      ? claimQuery.eq('status', 'failed')
+      : claimQuery.eq('status', 'pending')
   const { data: claimed } = await claimQuery.select('id').maybeSingle()
   if (!claimed) {
     return NextResponse.json({ success: false, error: 'Already decided' }, { status: 409 })
   }
   if (isRetry) {
     console.warn(`[agent-requests] retrying crashed execution ${id} (${row.kind}), stalled since ${retryStartedAt}`)
+  }
+  if (isFailedRetry) {
+    console.warn(`[agent-requests] retrying failed execution ${id} (${row.kind}), previous result ${row.details?.result?.message_code || 'unknown'}`)
   }
 
   let finalStatus = v.data.status
@@ -220,8 +236,53 @@ export async function PATCH(request, { params }) {
     }
   }
 
-  // AGENT-HANDS.1 — approving a drafted class booking executes it.
+  // MIA-BOARD.2 — past-start guard. On 23 Aug two funnel bookings were
+  // approved at 8:26pm for classes that had run that MORNING; Glofox accepted
+  // the post-hoc bookings and the customer got confirmations for finished
+  // classes (the Ciaran incident). An approval whose class has started
+  // expires instead of executing — regardless of how it dodged the sweep
+  // (approved into the 15-minute gap, or a retry on an old failed row).
+  // Only rows carrying a machine-readable details.starts_at are guardable;
+  // funnel rows always have one, legacy Mia-thread rows may not.
+  let expiredBeforeExecution = false
   if (executing && row.kind === 'class_booking') {
+    const startsAtMs = Date.parse(row.details?.starts_at || '')
+    if (Number.isFinite(startsAtMs) && startsAtMs < Date.now()) {
+      expiredBeforeExecution = true
+      finalStatus = 'expired'
+      details = { ...details, result: { ok: false, reason: 'CLASS_ALREADY_STARTED' } }
+      executed = { ok: false, reason: 'CLASS_ALREADY_STARTED' }
+      // The customer hears the apology, not silence — best-effort, threaded
+      // requests only (funnel rows without a conversation have no window).
+      if (row.conversation_id) {
+        try {
+          const { sendAgentThreadMessage, buildBookingExpiredText } = await import('@/lib/agent/notify')
+          await sendAgentThreadMessage(db, {
+            channel: row.channel,
+            conversationId: row.conversation_id,
+            text: buildBookingExpiredText({
+              className: details.class_name,
+              classTime: details.class_time,
+              template: await confirmationTemplate('expired'),
+            }),
+          })
+        } catch (e) {
+          console.warn(`[agent-requests] expiry notice send error: ${e?.message || e}`)
+        }
+      }
+      if (details?.source === 'start_funnel') {
+        try {
+          await db.from('class_booking_requests')
+            .update({ status: 'failed', last_error: 'class_already_started' })
+            .eq('approval_request_id', id)
+        } catch (e) { console.warn(`[agent-requests] cbr sync error: ${e?.message || e}`) }
+      }
+      console.warn(`[agent-requests] refused past-start execution ${id} (starts_at ${row.details?.starts_at})`)
+    }
+  }
+
+  // AGENT-HANDS.1 — approving a drafted class booking executes it.
+  if (executing && row.kind === 'class_booking' && !expiredBeforeExecution) {
     const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, interpretBookingResult, GLOFOX_BOOKING_MODEL } =
       await import('@/lib/glofox')
     const { data: contact } = await db.from('contacts')

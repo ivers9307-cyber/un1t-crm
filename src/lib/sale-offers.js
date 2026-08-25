@@ -16,7 +16,17 @@ export const OFFER_SALE_TAG = 'offer-sale-aug-2026'
 export function offerIsOpen(offer, now = new Date()) {
   if (!offer?.active) return false
   const t = now.getTime()
-  return t >= new Date(offer.starts_at).getTime() && t <= new Date(offer.ends_at).getTime()
+  if (t < new Date(offer.starts_at).getTime()) return false
+  // GIFTCARD.1 — ends_at NULL means evergreen (a gift card has no deadline).
+  // Guard explicitly: new Date(null) is the epoch, not "no end", so the old
+  // unconditional comparison would have closed every gift card instantly.
+  if (offer.ends_at == null) return true
+  return t <= new Date(offer.ends_at).getTime()
+}
+
+/** True when this offer is a timed sale (drives countdown + deadline copy). */
+export function offerHasDeadline(offer) {
+  return Boolean(offer?.ends_at)
 }
 
 export function formatEuro(cents) {
@@ -45,7 +55,7 @@ export function formatSaleDeadline(endsAt, { uppercase = true } = {}) {
 export async function resolveOfferPurchaseByOrderId(db, orderId) {
   const { data } = await db
     .from('offer_purchases')
-    .select('*, offer:offer_id ( id, slug, name, bonus_headline, price_cents )')
+    .select('*, offer:offer_id ( id, slug, name, bonus_headline, price_cents, category )')
     .eq('revolut_order_id', orderId)
     .maybeSingle()
   return data || null

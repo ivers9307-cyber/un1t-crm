@@ -88,9 +88,39 @@ export const BRANDS = [
       '/terms',         // Terms of Service (Meta App Review + site footer)
       '/legal/',        // SAAS4-C4: /legal/subprocessors (public subprocessor register)
       '/technical',     // Tech-provider service page (Meta Access Verification URL)
+      // PUBPATH.1 — /account-deletion is the Google Play "Account Deletion URL"
+      // + Apple 5.1.1(v) page, and BOTH public privacy pages link to it with a
+      // host-relative href (/privacy → src/app/privacy/page.js, /privacy/members
+      // → .../members/page.js — both allowlisted above). Without this entry that
+      // link, followed on un1tdublin.com, fallback-rewrote to /welcome: the
+      // policy promised a deletion page and delivered the studio chooser.
+      '/account-deletion',
+      // PUBPATH.1 — the paste-anywhere event-signup iframe. Its own header
+      // documents the snippet as <iframe src="https://un1tdublin.com/embed/
+      // event/<slug>"> — i.e. THIS host — and it was allowlisted in proxy.js
+      // but not here, so on the marketing host every third-party embed
+      // rewrote to /welcome. Trailing slash: the brand matcher is a raw
+      // startsWith, and only /embed/* is meant to resolve.
+      '/embed/',
       '/book/',         // public Calendly-style booking pages
       '/event/',        // public race / workshop / etc. signup pages
-      '/race/',         // race kiosk + signup
+      // PUBPATH.1 — the checkout leg of the two above. RaceSignupWidget
+      // sends every PAID signup to a HOST-RELATIVE /event-pay/<id>
+      // (src/components/RaceSignupWidget.jsx:428), and in the embed it does
+      // so via window.open(url, '_top') — resolved against the iframe
+      // document's origin, i.e. THIS host. So without this entry a paid
+      // signup on un1tdublin.com creates the registration and then rewrites
+      // the payer to /welcome: money not taken, registration stranded
+      // unpaid. un1t-hosts has carried '/event/' + '/event-pay/' as a pair
+      // since HOST-PORTAL.1 (below) for exactly this reason — the marketing
+      // host only ever had half of it. Live paid events exist today.
+      '/event-pay/',
+      // AUDIT-13.B — the legacy alias PAIR. '/race/' had been here alone
+      // since the E3 rename; '/race-pay/' is its checkout leg, the same
+      // gap PUBPATH.1 closed for '/event/' + '/event-pay/' directly
+      // above. next.config.js rewrites both to their /event* twins.
+      '/race/',         // race kiosk + signup (legacy alias for /event/)
+      '/race-pay/',     // + its checkout (legacy alias for /event-pay/)
       '/api/public/',   // backing API for all of the above
       '/api/webhooks/', // future-proof if a payment redirect lands here
     ],
@@ -216,14 +246,63 @@ export function isFrameworkAsset(path) {
 // ─────────────────────────────────────────────────────────────────
 // Legacy (in-code) hostnames — read-only display descriptors
 //
-// The CRM's OWN hostname is deliberately NOT a BRANDS entry
-// (resolveBrand returns null for it → the CRM auth gate). It's named
-// here only so the /admin/tenant-domains "managed in code" view can
-// show the FULL domain picture. Sourced from NEXT_PUBLIC_APP_URL when
-// set, else this constant.
+// The CRM's OWN hostnames are deliberately NOT BRANDS entries
+// (resolveBrand returns null for them → the CRM auth gate). They're
+// named here only so the /admin/tenant-domains "managed in code" view
+// can show the FULL domain picture. See getCrmHostnames() below for
+// the full set; this constant is the canonical (first) host.
 // ─────────────────────────────────────────────────────────────────
 
-export const CRM_DEFAULT_HOSTNAME = 'crm.un1tdublin.com'
+// AUDIT-13.F — these two are named for what they ARE, because the
+// previous single constant was called "default" while its comment claimed
+// "canonical" and its value was the legacy host. crm.repset.ie is the
+// canonical CRM host (it is what legacy-host-redirect.js sends traffic TO,
+// as CANONICAL_CRM_ORIGIN); crm.un1tdublin.com serves forever alongside it.
+export const CANONICAL_CRM_HOSTNAME = 'crm.repset.ie'
+export const LEGACY_CRM_HOSTNAME = 'crm.un1tdublin.com'
+
+/**
+ * @deprecated Ambiguous name — it holds the LEGACY host, not the
+ * canonical one. Kept as an alias so nothing outside this module breaks;
+ * prefer CANONICAL_CRM_HOSTNAME / LEGACY_CRM_HOSTNAME.
+ */
+export const CRM_DEFAULT_HOSTNAME = LEGACY_CRM_HOSTNAME
+
+// ─────────────────────────────────────────────────────────────────
+// REPSET-P6 — the CRM hostname concept is SET-valued.
+//
+// The platform gains crm.repset.ie; the un1tdublin hostnames keep
+// serving forever (dual-domain). Everything that used to compare
+// against ONE host derived from NEXT_PUBLIC_APP_URL must consult
+// this set instead: the edge tenant-domains skip, the admin
+// tenant-domains write guard, and the "managed in code" rows below.
+//
+// Env-overridable comma-list (same pattern as MARKETING_HOSTNAMES);
+// ordering is canonical-first — index 0 is the canonical CRM host.
+// AUDIT-13.F: it says that because it is now TRUE. The default list used
+// to put the LEGACY host at index 0 while this comment, getLegacyBrandRows
+// below and a test all asserted "canonical first" — display-only then, but
+// a landmine the day anything consumed hosts[0] as the canonical host. The
+// order was the wrong half: crm.repset.ie is what legacy-host-redirect.js
+// redirects TO. Every other consumer uses .includes(), so order-independent.
+// A function, not a module const, so the env is read at call time
+// (tests/previews can stub it without a module reload). The
+// NEXT_PUBLIC_APP_URL hostname is always part of the set (appended
+// when not already listed): preview deployments point it at their
+// own URL and that host must keep behaving as the CRM host.
+// ─────────────────────────────────────────────────────────────────
+
+export function getCrmHostnames() {
+  const hosts = (process.env.CRM_HOSTNAMES || `${CANONICAL_CRM_HOSTNAME},${LEGACY_CRM_HOSTNAME}`)
+    .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
+  try {
+    const appHost = new URL(process.env.NEXT_PUBLIC_APP_URL).hostname.toLowerCase()
+    if (!hosts.includes(appHost)) hosts.push(appHost)
+  } catch {
+    // Env unset/malformed (dev/tests) — the static list stands.
+  }
+  return hosts
+}
 
 /**
  * Read-only descriptors of the in-code hostnames (the CRM default +
@@ -237,19 +316,20 @@ export const CRM_DEFAULT_HOSTNAME = 'crm.un1tdublin.com'
  * @returns {{ key:string, hostname:string, extraHostnames:string[], label:string, description:string }[]}
  */
 export function getLegacyBrandRows() {
-  let crmHost = CRM_DEFAULT_HOSTNAME
-  try {
-    crmHost = new URL(process.env.NEXT_PUBLIC_APP_URL).hostname.toLowerCase()
-  } catch {
-    // Env unset/malformed (dev/tests) — fall back to the constant.
-  }
+  // REPSET-P6: the CRM row carries the WHOLE host set — canonical
+  // first, the rest (the legacy host, any preview APP_URL host) as
+  // extras — so an admin never mistakes a CRM host for an unclaimed
+  // hostname and tries to add it as a tenant row. AUDIT-13.F: this
+  // comment named crm.repset.ie among "the rest" while calling index 0
+  // canonical, which is how the reversed order stayed invisible.
+  const [crmPrimary, ...crmExtras] = getCrmHostnames()
 
   const rows = [{
     key: 'crm-default',
-    hostname: crmHost,
-    extraHostnames: [],
+    hostname: crmPrimary || CANONICAL_CRM_HOSTNAME,
+    extraHostnames: crmExtras,
     label: 'CRM (default)',
-    description: 'Staff CRM — the default hostname (auth-gated)',
+    description: 'Staff CRM — the default hostnames (auth-gated)',
   }]
 
   for (const brand of BRANDS) {

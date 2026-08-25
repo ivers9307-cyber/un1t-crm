@@ -20,11 +20,13 @@
 // TTL window per isolate. Failures are cached too — a down DB costs
 // one attempt per window, not one per request.
 //
-// Runtime: imported by src/proxy.js (Edge). Only @supabase/ssr may
-// be imported here — its client is fetch-based and Edge-safe (same
-// shape as the proxy's SAAS-3 api_keys lookup). No node: imports,
-// no zod (write-time validation lives in the admin routes; this
-// read side re-normalises defensively instead).
+// Runtime: imported by src/proxy.js (Edge). Only @supabase/ssr and
+// the pure in-code ./brands.js module may be imported here — the
+// ssr client is fetch-based and Edge-safe (same shape as the
+// proxy's SAAS-3 api_keys lookup); brands.js is plain JS the proxy
+// already runs on Edge. No node: imports, no zod (write-time
+// validation lives in the admin routes; this read side
+// re-normalises defensively instead).
 //
 // SAAS-6/7 HANDOFF SEAM: welcome-front-page.js (org chooser) and
 // default-favicon.js resolve "whose front page / whose favicon" —
@@ -34,6 +36,7 @@
 // byte-identical (un1tdublin.com has no row here by design).
 
 import { createServerClient } from '@supabase/ssr'
+import { getCrmHostnames } from './brands.js'
 
 export const TENANT_DOMAINS_CACHE_TTL_MS = 5 * 60 * 1000 // domain churn is rare
 
@@ -51,7 +54,33 @@ export const DB_BRAND_DEFAULTS = Object.freeze({
   // tenant's own legal entity once configured (tenant-privacy.js).
   // '/legal/' (SAAS4-C4): the public subprocessor register — tenant
   // privacy notices reference it.
-  allowedPaths: Object.freeze(['/welcome', '/book/', '/event/', '/privacy', '/legal/', '/api/public/', '/api/webhooks/']),
+  // '/account-deletion' (PUBPATH.1): this is the FOURTH public-path
+  // allowlist, and it is the one the recurring "public page isn't public"
+  // defect hides in — it sits one file away from brands.js and reads like
+  // documentation rather than routing. '/privacy' above is startsWith-
+  // matched and therefore already serves /privacy AND /privacy/members on a
+  // tenant domain; BOTH of those pages link to /account-deletion with a
+  // host-relative href (src/app/privacy/page.js, .../members/page.js), so
+  // without this entry the tenant's own privacy notice promises a deletion
+  // page and the fallback hands the reader the studio chooser instead.
+  // Nothing tenant-specific is behind it (static copy naming an email
+  // address), so it exposes nothing new — same argument as /privacy.
+  // '/event-pay/' (AUDIT-13.B): the PAID LEG of the '/event/' flow already
+  // allowed above — the exact gap PUBPATH.1 closed on the un1t-marketing
+  // brand, still open here. RaceSignupWidget sends every paid signup to a
+  // HOST-RELATIVE /event-pay/<id>, so on a tenant domain the registration
+  // was taken and the payer was rewritten to /welcome, unpaid. Allowlist
+  // the FLOW, not the entry page. LATENT (zero rows), which is precisely
+  // why it needs a test rather than an operator noticing.
+  //
+  // Deliberately NOT here: '/race/' + '/race-pay/', next.config.js's
+  // legacy aliases for the pair above. Those exist to keep externally
+  // shared UN1T links alive, and they are on the CRM + marketing hosts
+  // for that reason; a tenant domain is newer than the E3 rename, so no
+  // legacy /race link for one can exist. Least privilege — add them to a
+  // tenant's own brand override if that ever stops being true.
+  // LATENT, not live: tenant_domains has zero rows today.
+  allowedPaths: Object.freeze(['/welcome', '/book/', '/event/', '/event-pay/', '/privacy', '/legal/', '/account-deletion', '/api/public/', '/api/webhooks/']),
   rootHandler: 'rewrite',
   rootRewriteTo: '/welcome',
   fallbackHandler: 'rewrite',
@@ -65,17 +94,15 @@ export function _resetTenantDomainsCache() {
   cache = { rows: null, at: 0 }
 }
 
-// The CRM's own hostname (from NEXT_PUBLIC_APP_URL) never has a row
-// by design — skip even the cache consult for it so the primary
-// hostname provably never pays this tier, and a mistakenly-created
-// row for it can never brand-gate the staff CRM. Resilient to an
-// unset/malformed env (dev, tests): we just don't skip.
+// The CRM's own hostnames never have rows by design — skip even the
+// cache consult for them so NO CRM host ever pays this tier, and a
+// mistakenly-created row can never brand-gate the staff CRM on any
+// of its domains. REPSET-P6: SET-valued — {crm.un1tdublin.com,
+// crm.repset.ie} plus the NEXT_PUBLIC_APP_URL host (previews); see
+// getCrmHostnames() in brands.js. Resilient to an unset/malformed
+// env — the static set still guards.
 function isCrmHostname(hostKey) {
-  try {
-    return new URL(process.env.NEXT_PUBLIC_APP_URL).hostname.toLowerCase() === hostKey
-  } catch {
-    return false
-  }
+  return getCrmHostnames().includes(hostKey)
 }
 
 function makeEdgeClient() {

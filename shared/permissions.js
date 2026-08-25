@@ -110,14 +110,31 @@ export const WEB_PERMISSIONS = Object.freeze([
   // the mobile timer screen and every /api/timer/* route). ON for
   // every role by default — revoke per user/role via the Roles tab.
   { key: 'class_timer',       label: 'Class timer',             hint: 'Start, pause and stop the class interval timer on the studio TV, including quick-add presets and timer templates.' },
-  // TAPO-T1.4 — Tapo plug/switch control. Registry, per-device
-  // schedules (fixed windows + class-linked power), and manual
-  // overrides live at /automations/devices. Web-only until the
-  // mobile toggle ships in Tapo Wave T3 (see WEB_ONLY_OK in
-  // scripts/check-mobile-parity.mjs). Owner + manager by default;
-  // head_coach + staff off (on-site operations oversight).
+  // SONOS.16 — device_control now gates Sonos studio-music scheduling;
+  // its old surface (Tapo plug/switch control, TAPO-T1.4) was deleted at
+  // SONOS.14. Per-schedule playback windows (days/on/off/volume/
+  // favourite), manual run-now, and a temporary pause override, live at
+  // /automations/sonos (web). SONOSMOB.2 made the key cross-platform
+  // (CROSS_PLATFORM_KEYS): the mobile Studio hub's "Studio music" screen
+  // offers live control only — play/pause/skip, volume, favourites — over
+  // the same /api/sonos/* routes. Owner + manager by default; head_coach +
+  // staff off (on-site operations oversight).
+  // SHELLY-UI.8 — the key now also gates Shelly smart plugs
+  // (/automations/shelly, web): adopt a plug from the location's own
+  // Shelly cloud account, power windows + class-linked rules, a live
+  // on/off toggle, run-now and a temporary timed override, plus 30 days
+  // of kWh history. Same key, no new permission — one "device control"
+  // grant covers every piece of studio hardware. Role defaults are
+  // UNCHANGED. The bundle layer widened with it: `device_control` is
+  // now owned by bundle_marketing OR bundle_operations
+  // (shared/permission-bundles.js + mig 564), because plugs and
+  // speakers are an operations concern as much as a marketing one.
+  // The hint keeps SONOSMOB.2's Web:/Mobile: split — this string renders
+  // in LocationFeatures, AdminFeatureMatrix and StaffForm, so an admin
+  // revoking the key has to be able to see that they are also taking the
+  // phone's Studio music screen away, not just the web schedulers.
   { key: 'device_control', label: 'Device control',
-    hint: 'Tapo plugs/switches: schedules, class-linked power, manual toggles.' },
+    hint: 'Sonos speakers and Shelly smart plugs. Web: playback and power schedules, adopt/remove, run-now, temporary overrides. Mobile: live Sonos play/pause, volume and favourites.' },
   // STUDIO-GROUP.1 — sidebar regroup (May 2026): the four items
   // below used to be top-level sidebar entries gated to master/
   // owner via role-only checks (no per-user permission). They now
@@ -145,7 +162,7 @@ export const WEB_PERMISSIONS = Object.freeze([
   // Master + owner only by default. Finance surface; doesn't fit
   // under Studio Management because it's about supplier bills not
   // on-site operations.
-  { key: 'invoices_inbox', label: 'Invoices',                   hint: 'Operator inbox for supplier invoices emailed in to <slug>-invoices@un1tdublin.com. Quality + data approval before forwarding to Xero. Master + owner only by default.' },
+  { key: 'invoices_inbox', label: 'Invoices',                   hint: 'Operator inbox for supplier invoices emailed in to <slug>-invoices@mail.un1tdublin.com. Quality + data approval before forwarding to Xero. Master + owner only by default.' },
   // RCOV.P0 — receipt-coverage board. Cross-references Xero bank
   // lines against collected receipts (contractor invoices, FTE
   // expenses, card receipts) to find bank activity with no matching
@@ -1090,6 +1107,14 @@ export const CROSS_PLATFORM_KEYS = Object.freeze([
   // decides which key it is. Per-account visibility is still the
   // email_mailbox_access grant, on both platforms.
   'email_inbox',
+  // SONOSMOB.2 — live control of the studio Sonos (now-playing, transport,
+  // volume, favourites) on mobile rides the SAME /api/sonos/* routes the
+  // web strip calls, and every one of those gates on the top-level
+  // `device_control` key. Same reasoning as `email_inbox` above: the
+  // platform that enforces the key decides which key it is, or the UI
+  // gate and the server gate can disagree. Scheduling (windows, run-now,
+  // the pause override) stays web-only; the mobile screen is control only.
+  'device_control',
 ])
 
 // ============================================================
@@ -1379,7 +1404,7 @@ export function sanitizePermissionsBlob(raw) {
 //
 // Stored under profiles.permissions.landing_preference. Honoured by
 // /dashboard/page.js (web) and the Home tab segmented control
-// (mobile/app/(tabs)/index.jsx). When unset OR set to 'auto' the
+// (mobile/app/(staff)/(tabs)/dashboard.jsx). When unset OR set to 'auto' the
 // existing role-based fallback applies (Business → Studio → Today
 // for whichever the user has permission to see).
 //

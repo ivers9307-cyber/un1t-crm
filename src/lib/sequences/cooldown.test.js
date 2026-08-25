@@ -13,7 +13,7 @@
 // silently (campaign goal misses). Pin both directions.
 
 import { describe, it, expect } from 'vitest'
-import { findBlockedByCooldown } from './cooldown.js'
+import { findBlockedByCooldown, planReenrolments } from './cooldown.js'
 
 const DAY = 86_400_000
 
@@ -146,5 +146,61 @@ describe('findBlockedByCooldown — input shape edge cases', () => {
     expect(findBlockedByCooldown(null, 7)).toEqual(new Set())
     expect(findBlockedByCooldown(undefined, 7)).toEqual(new Set())
     expect(findBlockedByCooldown('nope', 7)).toEqual(new Set())
+  })
+})
+
+// DUNNING.2 — re-activation planning. The full unique index on
+// (sequence_id, contact_id) means a contact with a terminal row can never be
+// INSERTED again; dunning callers re-activate that row instead. This decides,
+// per contact, whether that is allowed right now.
+describe('planReenrolments (DUNNING.2)', () => {
+  const NOW = Date.parse('2026-08-23T12:00:00Z')
+  const term = (contactId, endIso, over = {}) => ({
+    id: `enr-${contactId}`, contact_id: contactId, status: 'completed',
+    last_processed_at: endIso, created_at: endIso, source_ref: 'inv-old', ...over,
+  })
+
+  it('re-activates a terminal row outside the cooldown for a NEW source ref', () => {
+    const plan = planReenrolments([term('a', new Date(NOW - 20 * DAY).toISOString())], 14, 'inv-new', NOW)
+    expect(plan.get('a')).toEqual({ decision: 'reactivate', row: expect.objectContaining({ id: 'enr-a' }) })
+  })
+
+  it('blocks a terminal row inside the cooldown', () => {
+    const plan = planReenrolments([term('a', new Date(NOW - 3 * DAY).toISOString())], 14, 'inv-new', NOW)
+    expect(plan.get('a').decision).toBe('blocked')
+  })
+
+  it('never re-runs for the SAME source ref (Glofox re-sends PAST_DUE on every retry of one invoice)', () => {
+    const plan = planReenrolments([term('a', new Date(NOW - 20 * DAY).toISOString(), { source_ref: 'inv-same' })], 14, 'inv-same', NOW)
+    expect(plan.get('a').decision).toBe('same_source')
+  })
+
+  it('a null source ref (operator click) always qualifies once the cooldown has passed', () => {
+    const plan = planReenrolments([term('a', new Date(NOW - 20 * DAY).toISOString())], 14, null, NOW)
+    expect(plan.get('a').decision).toBe('reactivate')
+  })
+
+  it('no cooldown configured → blocked (legacy single-enrolment semantics are preserved)', () => {
+    expect(planReenrolments([term('a', new Date(NOW - 400 * DAY).toISOString())], null, 'inv-new', NOW).get('a').decision).toBe('blocked')
+    expect(planReenrolments([term('a', new Date(NOW - 400 * DAY).toISOString())], 0, 'inv-new', NOW).get('a').decision).toBe('blocked')
+  })
+
+  it('uses the most recent terminal row per contact', () => {
+    const rows = [
+      term('a', new Date(NOW - 40 * DAY).toISOString(), { id: 'enr-old' }),
+      term('a', new Date(NOW - 2 * DAY).toISOString(), { id: 'enr-new' }),
+    ]
+    expect(planReenrolments(rows, 14, 'inv-new', NOW).get('a').decision).toBe('blocked')
+    const rows2 = [
+      term('a', new Date(NOW - 40 * DAY).toISOString(), { id: 'enr-old' }),
+      term('a', new Date(NOW - 20 * DAY).toISOString(), { id: 'enr-new' }),
+    ]
+    expect(planReenrolments(rows2, 14, 'inv-new', NOW).get('a')).toMatchObject({ decision: 'reactivate', row: { id: 'enr-new' } })
+  })
+
+  it('tolerates empty / malformed input', () => {
+    expect(planReenrolments([], 14, 'x', NOW).size).toBe(0)
+    expect(planReenrolments(null, 14, 'x', NOW).size).toBe(0)
+    expect(planReenrolments([{ contact_id: null }], 14, 'x', NOW).size).toBe(0)
   })
 })

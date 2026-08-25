@@ -58,6 +58,7 @@ import {
   Settings, Car,
   Megaphone, Building2,
   Wrench, Handshake, HeartPulse, Wallet, UsersRound,
+  ClipboardCheck,
 } from 'lucide-react'
 
 // The sidebar Dashboard link is visible if ANY of these are true. The
@@ -92,6 +93,14 @@ export const ALL_NAV = [
   // so the org portfolio lives at /portfolio.
   { href: '/portfolio',  label: 'Account home', icon: Building2,       masterOrOwnerOnly: true },
   { href: '/dashboard',  label: 'Dashboard',   icon: LayoutDashboard, dashboardGroup: true },
+
+  // HOME.3 retired this row in favour of the needs-attention queue;
+  // RESTORED by operator request (Richard, 19 Aug 2026) — the queue
+  // surfaces approval items, but he wants the dedicated dashboard one
+  // click away as a pinned row too. Issues stays retired. Pinned
+  // (sectionless) rather than reviving the old 'queues' section, so
+  // the hub programme's section groups stay as HUBS.2 left them.
+  { href: '/approvals',  label: 'Approvals',   icon: ClipboardCheck,  permission: 'approvals_inbox' },
 
   // ── Messages hub ──────────────────────────────────────────────
   // HUBS.2f Task 1 — sixth application of the hub-collapse pattern
@@ -294,12 +303,11 @@ export const ALL_NAV = [
   // default tab rather than rendering content itself).
   //
   // Review fix — `device_control` joined the union: the Automations
-  // page also gates its Tapo devices section on device_control alone
-  // (canDevices in src/app/(marketing)/automations/page.js), a
+  // page also gates its Studio music (Sonos) section on device_control
+  // alone (canDevices in src/app/(marketing)/automations/page.js), a
   // population the original union missed entirely. Without it a
   // device_control-only holder saw no Marketing sidebar entry at all,
-  // even though /automations/devices was reachable and useful to
-  // them.
+  // even though /automations was reachable and useful to them.
   //
   // `/welcome` is deliberately ABSENT from extraActivePaths: it's the
   // PUBLIC marketing site (outside auth entirely, per the public-path
@@ -314,9 +322,9 @@ export const ALL_NAV = [
   //
   // Folded-forward context from the old standalone entries:
   //  - Automations (curated toggles + custom email/WhatsApp flows +
-  //    Tapo device control) — visible to anyone holding `automations`
+  //    device control) — visible to anyone holding `automations`
   //    (the curated cards), `email`/`whatsapp` (custom flows), or
-  //    `device_control` (the Tapo devices section); the page itself
+  //    `device_control` (the device-control section); the page itself
   //    (src/app/(marketing)/automations/page.js) gates which sections
   //    render for which permission, matching this union exactly.
   //  - Landing page (HUBS.2a — promoted from a Studio Management child
@@ -473,9 +481,21 @@ export const ALL_NAV = [
   //    and Presentations (PRESENT — run a slide deck across multiple
   //    screens from a laptop for workshops/events) before this PR
   //    folded those two, plus Studio itself, into this single entry.
+  //
+  // HUBDOOR.1 — the review fix above added the two fleet keys to the union
+  // but nothing else: /operations' own index chain had no fleet branch, so
+  // the persona it was written for clicked the entry and bounced to '/'.
+  // The chain (now src/lib/hub-index-chains.js) grew a
+  // fleet_restart|fleet_admin → /admin/fleet step, and '/admin/fleet' joins
+  // extraActivePaths below so the entry they clicked stays lit on arrival.
+  // Claiming it is uncontested — no other nav entry owns any /admin path
+  // (the Platform Console is a separate tier, platform-nav.js) — so this is
+  // not the longest-match race that kept Money out of /schedule/*; there is
+  // simply no other candidate, and without the claim the sidebar goes dark
+  // on a page the Operations hub deliberately links to.
   { href: '/operations', label: 'Operations', icon: Wrench,
     anyPermission: ['equipment_admin', 'equipment_inspect', 'studio_management', 'tv_displays', 'presentations', 'fleet_restart', 'fleet_admin'],
-    extraActivePaths: ['/maintenance', '/studio-management', '/tv-displays', '/presentations', '/checklists'],
+    extraActivePaths: ['/maintenance', '/studio-management', '/tv-displays', '/presentations', '/checklists', '/admin/fleet'],
     section: 'operations' },
 
   // ── modules — vertical modules zone (header-less) ────────────────

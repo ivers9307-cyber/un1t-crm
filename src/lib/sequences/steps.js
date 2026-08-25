@@ -38,10 +38,31 @@ import {
 } from '@/lib/whatsapp'
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
 import { logWarn } from '@/lib/log'
+import { signStartPrefillToken } from '@/lib/start-prefill-token'
 import { getLocationBranding } from '@/lib/location-branding'
 import { isFrequencyCapped, frequencyCapDeferUntil, FrequencyCapDeferral, stampMarketingTouch } from '@/lib/frequency-cap'
 import { overlayConnections } from '@/lib/connection-registry'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
+
+// ── DUNNING.3 — transactional lane ───────────────────────────────
+// A dunning enrolment is a SERVICE message about the member's own account
+// (their membership payment failed; update the card), not marketing — so
+// it must reach members who have opted out of promos, who are exactly the
+// ones most likely to lapse quietly. The lane is a property of HOW the
+// contact was enrolled, never of the sequence: an operator cannot flag a
+// promo sequence "transactional", and the same sequence enrolled by hand
+// stays marketing. What the lane changes: the marketing-consent gate and
+// the frequency cap are skipped. What it never changes: the location
+// feature gate, "must be on this location's list" (row absent = may never
+// send), bounced / complained / suppressed email, wa opted_out / blocked /
+// undeliverable, and — for WhatsApp — only a UTILITY-category template
+// rides the lane (a MARKETING template keeps the marketing gate).
+export const TRANSACTIONAL_SOURCE_TYPES = Object.freeze(['invoice_past_due', 'churn_radar'])
+
+/** @param {{ source_type?: string|null }|null|undefined} enrollment */
+export function isTransactionalEnrolment(enrollment) {
+  return TRANSACTIONAL_SOURCE_TYPES.includes(String(enrollment?.source_type || ''))
+}
 
 // ── FREQ-CAP.1 — cross-channel marketing frequency cap ──────────
 //
@@ -155,7 +176,7 @@ async function channelEnabledOrSkip(db, { location, sequence, step, contact, cha
 
 // ── email ───────────────────────────────────────────────────────
 
-export async function sendEmailStep(db, { enrollment: _enrollment, step, sequence, contact, frequencyCap }) {
+export async function sendEmailStep(db, { enrollment, step, sequence, contact, frequencyCap }) {
   if (!contact?.email) {
     throw new Error('Contact has no email address — cannot send email step.')
   }
@@ -187,14 +208,16 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
   // mid-sequence unsubscribes are normal contact behaviour, and the
   // error path pauses the whole enrolment after MAX_ERRORS (see
   // recordStepSkip).
+  // DUNNING.3 — a transactional enrolment (a dunning run) skips only the
+  // MARKETING half of this gate; "not on this location's list" still skips.
+  const transactional = isTransactionalEnrolment(enrollment)
   const emailConsent = locationConsent(contact, sequence)
-  if (emailConsent?.email_marketing !== true) {
-    await recordStepSkip(db, {
-      contact, sequence, step, channel: 'email',
-      reason: emailConsent
-        ? 'no email marketing consent for this location'
-        : 'not on this location\u2019s list',
-    })
+  if (!emailConsent) {
+    await recordStepSkip(db, { contact, sequence, step, channel: 'email', reason: 'not on this location\u2019s list' })
+    return null
+  }
+  if (!transactional && emailConsent.email_marketing !== true) {
+    await recordStepSkip(db, { contact, sequence, step, channel: 'email', reason: 'no email marketing consent for this location' })
     return null
   }
   // LOCCOMMS.5 / mig 492 — 'unsubscribed' deliberately absent: the value is
@@ -215,7 +238,8 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
   }
   // FREQ-CAP.1 — after every consent/hygiene gate, before any send work.
   // Throws FrequencyCapDeferral (deferred, not skipped — see module header).
-  assertNotFrequencyCapped(contact, frequencyCap)
+  // DUNNING.3 — a marketing-pressure cap; a service message is never deferred by it.
+  if (!transactional) assertNotFrequencyCapped(contact, frequencyCap)
 
   // Resolve content: inline OR via template_id reference.
   let subject = step.subject
@@ -269,9 +293,21 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
     })
     return null
   }
+  // STARTPREFILL.1 — minted per send, so every email carries a fresh token and
+  // the TTL is measured from when THAT email went out rather than from an
+  // enrolment weeks earlier. Best-effort: a signing failure (an unset secret in
+  // some environment) must lose the prefill, never the email.
+  let bookingToken = ''
+  try {
+    bookingToken = signStartPrefillToken({ contactId: contact.id })
+  } catch (e) {
+    logWarn('sequences', `booking token not minted for ${contact.id}: ${e.message || e}`, { contactId: contact.id })
+  }
+
   const mergedSubject = applyMergeTags(subject, contact, { location_name: locationName })
   const merged = applyMergeTags(html, contact, {
     location_name: locationName,
+    booking_token: bookingToken,
     unsubscribe_url: unsubscribeUrl,
     // Derived from the unsubscribe URL because both endpoints resolve the same
     // token column. Safe to split now that the null case returned above.
@@ -290,6 +326,15 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
   // sendTransactionalEmail → 'outbound', which never attached the RFC
   // 8058 List-Unsubscribe one-click headers). unsubscribeUrl is passed
   // through so sendEmail adds those headers alongside the visible footer.
+  // SEQSENDER.1 (mig 555) — a sequence may name its own sender. Built here the
+  // same way campaign-sender.js builds a campaign's, because the application
+  // owns the display name: Postmark does not stamp a signature's name onto a
+  // bare address. from_email NULL (every pre-existing sequence) → undefined →
+  // the global POSTMARK_FROM_EMAIL default, unchanged.
+  const sequenceFrom = sequence.from_email
+    ? (sequence.from_name ? `${sequence.from_name} <${sequence.from_email}>` : sequence.from_email)
+    : undefined
+
   const result = await sendMarketingEmail({
     to: contact.email,
     subject: mergedSubject,
@@ -298,6 +343,9 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
     locationId: sequence.location_id,
     tag: `seq-${sequence.id}`,
     unsubscribeUrl,
+    from: sequenceFrom,
+    // NULL keeps EMAIL-INBOX.1's default (the location's unified-inbox address).
+    replyTo: sequence.reply_to || undefined,
     sourceType: 'sequence',
     sequenceId: sequence.id,
     sequenceStepId: step.id,
@@ -316,7 +364,26 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
 
 // ── whatsapp ────────────────────────────────────────────────────
 
-export async function sendWhatsappStep(db, { step, sequence, contact, frequencyCap }) {
+// The step's template row, or a thrown sequence-CONFIG fault (missing /
+// unapproved / another location's template) — those need an operator fix
+// and surface through the error-then-pause path, never as a skip.
+async function resolveApprovedWhatsappTemplate(db, step, sequence) {
+  const { data: template } = await db
+    .from('whatsapp_templates')
+    .select('*')
+    .eq('id', step.whatsapp_template_id)
+    .single()
+  if (!template) throw new Error('WhatsApp template not found.')
+  if (template.status !== 'APPROVED') {
+    throw new Error(`WhatsApp template "${template.name}" is ${template.status}, not APPROVED — cannot send.`)
+  }
+  if (template.location_id !== sequence.location_id) {
+    throw new Error('WhatsApp template belongs to a different location than the sequence.')
+  }
+  return template
+}
+
+export async function sendWhatsappStep(db, { enrollment, step, sequence, contact, frequencyCap }) {
   if (!step.whatsapp_template_id) {
     throw new Error('WhatsApp step has no template_id.')
   }
@@ -346,6 +413,13 @@ export async function sendWhatsappStep(db, { step, sequence, contact, frequencyC
     await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: 'contact has no WhatsApp phone number' })
     return null
   }
+  // DUNNING.3 — a transactional enrolment needs the template's CATEGORY
+  // before the consent gate (only UTILITY rides the lane), so it pays the
+  // template read early. A marketing enrolment keeps the original order —
+  // consent, then cap, then template — so a capped contact never fetches it.
+  const txnEnrolment = isTransactionalEnrolment(enrollment)
+  let template = txnEnrolment ? await resolveApprovedWhatsappTemplate(db, step, sequence) : null
+
   // Send-time consent gate — mirrors the SMS step and the broadcast
   // reachability predicate (applyWhatsAppReachability in
   // src/lib/whatsapp.js, post mig 422: whatsapp_marketing is
@@ -354,14 +428,17 @@ export async function sendWhatsappStep(db, { step, sequence, contact, frequencyC
   // audience layer; a sequence contact can text STOP mid-flow, so the
   // gate must run at SEND time — that contact must never receive
   // another WA step.
+  // DUNNING.3 — a transactional enrolment sending a UTILITY template skips
+  // only the marketing half; off-list and the hard statuses still skip.
+  const transactional = txnEnrolment
+    && String(template?.category || '').toUpperCase() === 'UTILITY'
   const waConsent = locationConsent(contact, sequence)
-  if (waConsent?.whatsapp_marketing !== true) {
-    await recordStepSkip(db, {
-      contact, sequence, step, channel: 'WhatsApp',
-      reason: waConsent
-        ? 'no WhatsApp marketing consent for this location'
-        : 'not on this location\u2019s list',
-    })
+  if (!waConsent) {
+    await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: 'not on this location\u2019s list' })
+    return null
+  }
+  if (!transactional && waConsent.whatsapp_marketing !== true) {
+    await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: 'no WhatsApp marketing consent for this location' })
     return null
   }
   if (['opted_out', 'blocked', 'undeliverable'].includes(contact.wa_status)) {
@@ -370,21 +447,11 @@ export async function sendWhatsappStep(db, { step, sequence, contact, frequencyC
   }
   // FREQ-CAP.1 — after every consent gate, before any send work. Throws
   // FrequencyCapDeferral (deferred, not skipped — see module header).
-  assertNotFrequencyCapped(contact, frequencyCap)
+  // DUNNING.3 — a marketing-pressure cap; a service message is never deferred by it.
+  if (!transactional) assertNotFrequencyCapped(contact, frequencyCap)
 
   // Resolve the template; must be APPROVED to send.
-  const { data: template } = await db
-    .from('whatsapp_templates')
-    .select('*')
-    .eq('id', step.whatsapp_template_id)
-    .single()
-  if (!template) throw new Error('WhatsApp template not found.')
-  if (template.status !== 'APPROVED') {
-    throw new Error(`WhatsApp template "${template.name}" is ${template.status}, not APPROVED — cannot send.`)
-  }
-  if (template.location_id !== sequence.location_id) {
-    throw new Error('WhatsApp template belongs to a different location than the sequence.')
-  }
+  if (!template) template = await resolveApprovedWhatsappTemplate(db, step, sequence)
 
   // Variable mapping resolution mirrors the broadcasts flow exactly.
   // locationId matters beyond branding: buildTemplateComponents needs it to

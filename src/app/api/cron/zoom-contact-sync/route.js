@@ -1,7 +1,7 @@
 // ZOOMSYNC.1 — nightly Vercel cron. Reconciles Zoom Phone's external-contacts
 // directory against the CRM so inbound member calls show a name. Thin
 // CRON_SECRET-guarded wrapper; runZoomContactSync (src/lib/zoom/reconcile.js)
-// is the tested body — same skeleton as homey-reconcile.
+// is the tested body — same thin-wrapper skeleton as the other reconcile crons.
 //
 // Operator query params (the scheduled run passes none of them):
 //   ?dry=1   — compute and return the diff, enqueue nothing. First thing to
@@ -48,12 +48,16 @@ export async function GET(request) {
     counts: out.counts ?? null,
     enqueued: out.enqueued ?? 0,
     guardTripped: out.guardTripped ?? false,
+    // ZOOMSYNC.4 — a run that enqueues nothing because everything left is
+    // unusable must not read as "ran and idle", which is the exact distinction
+    // last_outcome exists to draw.
+    ...(out.withheld ? { withheld: out.withheld } : {}),
     ...(out.skipped ? { skipped: out.skipped } : {}),
     ...(out.failures?.length ? { failureCount: out.failures.length } : {}),
   }).catch((err) => logWarn('cron-zoom-contact-sync', 'heartbeat failed', { err }))
 
-  // `out.ok !== false` deliberately, matching homey-reconcile: the unconfigured
-  // skip carries no `ok` key and is not a dead cron. A tripped deletion guard
-  // DOES set ok:false and should show red — that is the point of the guard.
+  // `out.ok !== false` deliberately: the unconfigured skip carries no `ok`
+  // key and is not a dead cron. A tripped deletion guard DOES set ok:false
+  // and should show red — that is the point of the guard.
   return NextResponse.json({ success: out.ok !== false, ...out })
 }

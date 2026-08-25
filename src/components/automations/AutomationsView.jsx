@@ -17,7 +17,7 @@ export default function AutomationsView({ locationId, _locationName, cards }) {
         <AutomationCard key={card.key} card={card} locationId={locationId} />
       ))}
 
-      <div className="text-xs text-un1t-light border-t border-un1t-gray pt-3">
+      <div className="text-xs text-un1t-subtle border-t border-un1t-border pt-3">
         See also:{' '}
         <Link href="/settings/customer-agent" className="underline">Mia agent</Link>
       </div>
@@ -97,17 +97,17 @@ function AutomationCard({ card, locationId }) {
   }
 
   return (
-    <div className="bg-un1t-dark border border-un1t-gray rounded-lg p-4">
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <Zap size={16} className="text-un1t-light" />
-            <h2 className="font-semibold text-un1t-white">{card.label}</h2>
+            <Zap size={16} className="text-un1t-subtle" />
+            <h2 className="font-semibold text-un1t-text">{card.label}</h2>
           </div>
-          <p className="text-sm text-un1t-light mt-1">{card.description}</p>
+          <p className="text-sm text-un1t-subtle mt-1">{card.description}</p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <span className={`text-xs font-semibold ${enabled ? 'text-emerald-700' : 'text-un1t-light'}`}>
+          <span className={`text-xs font-semibold ${enabled ? 'text-emerald-700' : 'text-un1t-subtle'}`}>
             {enabled ? 'On' : 'Off'}
           </span>
           <button
@@ -117,7 +117,7 @@ function AutomationCard({ card, locationId }) {
             aria-pressed={enabled}
             aria-label={enabled ? 'Turn automation off' : 'Turn automation on'}
             title={disabled ? 'Connect Glofox at this location to enable' : (enabled ? 'Turn off' : 'Turn on')}
-            className={`inline-flex h-6 w-11 items-center rounded-full border transition disabled:opacity-50 disabled:cursor-not-allowed ${enabled ? 'bg-emerald-500 border-emerald-600' : 'bg-un1t-mid border-un1t-mid'}`}
+            className={`inline-flex h-6 w-11 items-center rounded-full border transition disabled:opacity-50 disabled:cursor-not-allowed ${enabled ? 'bg-emerald-500 border-emerald-600' : 'bg-un1t-muted border-un1t-muted'}`}
           >
             <span className={`h-5 w-5 rounded-full bg-white shadow-sm transition ${enabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
           </button>
@@ -139,36 +139,36 @@ function AutomationCard({ card, locationId }) {
         )}
       </div>
 
-      {busy && <p className="mt-2 text-[11px] text-un1t-light inline-flex items-center gap-1"><Loader2 size={11} className="animate-spin" /> Saving…</p>}
+      {busy && <p className="mt-2 text-[11px] text-un1t-subtle inline-flex items-center gap-1"><Loader2 size={11} className="animate-spin" /> Saving…</p>}
       {error && <p className="mt-2 text-[11px] text-red-700">{error}</p>}
 
-      <div className="mt-3 border-t border-un1t-gray/60 pt-2">
-        <Link href={card.reviewBase} className="text-[11px] text-un1t-light underline inline-flex items-center gap-1">
+      <div className="mt-3 border-t border-un1t-border/60 pt-2">
+        <Link href={card.reviewBase} className="text-[11px] text-un1t-subtle underline inline-flex items-center gap-1">
           Recent failures <ExternalLink size={11} />
         </Link>
         {card.supportsBackfill && card.status.available && (
           <div className="mt-2">
             {bf.phase === 'idle' && (
               <button type="button" onClick={openBackfill} disabled={!locationId}
-                className="text-xs underline text-un1t-light hover:text-un1t-white">
+                className="text-xs underline text-un1t-subtle hover:text-un1t-text">
                 Push existing un-linked leads…
               </button>
             )}
-            {bf.phase === 'counting' && <p className="text-[11px] text-un1t-light">Counting eligible leads…</p>}
+            {bf.phase === 'counting' && <p className="text-[11px] text-un1t-subtle">Counting eligible leads…</p>}
             {bf.phase === 'confirm' && (
-              <div className="text-xs text-un1t-white bg-amber-500/10 border border-amber-500/30 rounded p-2">
+              <div className="text-xs text-un1t-text bg-amber-500/10 border border-amber-500/30 rounded p-2">
                 This will create <b>{bf.eligible}</b> Glofox account{bf.eligible === 1 ? '' : 's'} + trial{bf.eligible === 1 ? '' : 's'} for existing un-linked leads.
                 <div className="mt-2 flex gap-2">
                   <button type="button" onClick={runBackfill} disabled={!bf.eligible}
                     className="px-2 py-1 rounded bg-un1t-text text-un1t-bg font-semibold disabled:opacity-40">
                     {bf.eligible ? 'Run now' : 'Nothing to do'}
                   </button>
-                  <button type="button" onClick={() => setBf((s) => ({ ...s, phase: 'idle' }))} className="px-2 py-1 underline text-un1t-light">Cancel</button>
+                  <button type="button" onClick={() => setBf((s) => ({ ...s, phase: 'idle' }))} className="px-2 py-1 underline text-un1t-subtle">Cancel</button>
                 </div>
               </div>
             )}
             {bf.phase === 'running' && (
-              <p className="text-[11px] text-un1t-light inline-flex items-center gap-1">
+              <p className="text-[11px] text-un1t-subtle inline-flex items-center gap-1">
                 <Loader2 size={11} className="animate-spin" /> Pushing… {bf.done} done{bf.eligible != null ? ` / ${bf.eligible}` : ''} (created {bf.created}, linked {bf.linked}, review {bf.needs_review})
               </p>
             )}

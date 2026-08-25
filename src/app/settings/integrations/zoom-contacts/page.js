@@ -17,6 +17,7 @@ import { createServerClient } from '@/lib/supabase'
 import { listRuns } from '@/lib/zoom/sync-runs'
 import { zoomSyncStatus } from '@/lib/integration-health'
 import { buildDesiredContacts } from '@/lib/zoom/desired-contacts'
+import { E164_REJECTION_LABELS } from '@/lib/zoom/publishable-e164'
 import { Card, Table, EmptyState } from '@/components/ui'
 import Controls from './Controls.jsx'
 
@@ -31,10 +32,13 @@ const STATUS = {
   unknown: { label: 'Unknown', chip: 'bg-slate-500/10 text-slate-700' },
 }
 
-// unparseable first — it's the actionable group (~89 rows); no_phone (~219)
-// and no_name follow so they don't bury it.
-const REASON_ORDER = ['unparseable', 'no_phone', 'no_name']
+// invalid_e164 first: it is the newest and the most actionable group (~12 rows,
+// ZOOMSYNC.4) — every one of them is a real member whose number is wrong in the
+// CRM and who therefore has no name on the handsets. unparseable (~89) follows;
+// no_phone (~219) and no_name come last so they don't bury either.
+const REASON_ORDER = ['invalid_e164', 'unparseable', 'no_phone', 'no_name']
 const REASON_LABEL = {
+  invalid_e164: 'Phone number Zoom will not accept',
   unparseable: 'Unparseable phone number',
   no_phone: 'No phone number',
   no_name: 'No usable name',
@@ -190,6 +194,14 @@ export default async function ZoomContactsPage() {
                         ),
                       },
                       { key: 'phone', header: 'Stored phone', render: (row) => row.phone || '—' },
+                      // Only invalid_e164 rows carry a detail, and "what is
+                      // wrong with it" is the difference between a fixable row
+                      // and a shrug — the other groups say it in their heading.
+                      ...(reason === 'invalid_e164' ? [{
+                        key: 'detail',
+                        header: 'Problem',
+                        render: (row) => E164_REJECTION_LABELS[row.detail] || '—',
+                      }] : []),
                     ]}
                     rows={shown}
                     rowKey={(row) => row.id}

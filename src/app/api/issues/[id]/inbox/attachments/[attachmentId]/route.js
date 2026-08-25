@@ -5,23 +5,19 @@
 
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
+import { isIssueHandler } from '@/lib/issues-access'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const SIGNED_URL_TTL_SECONDS = 600
 
-function isHandler(user) {
-  if (user?.role === 'master' || user?.profileRole === 'master' || user?.isMaster) return true
-  return user?.role === 'owner'
-}
-
 export const GET = withAuth(
   {},
   async ({ user, db, locationId, params }) => {
-    if (!isHandler(user)) {
+    if (!isIssueHandler(user)) {
       return NextResponse.json(
-        { success: false, error: 'Only owner + master can read inbox attachments.' },
+        { success: false, error: 'Only issue handlers can read inbox attachments.' },
         { status: 403 }
       )
     }

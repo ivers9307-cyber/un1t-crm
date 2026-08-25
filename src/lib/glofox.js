@@ -505,14 +505,24 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
  * credit_member detection is skipped, next sync gets it right).
  */
 export async function fetchUserCredits(creds, userId) {
-  if (!creds || !userId) return []
+  const { credits } = await fetchUserCreditsResult(creds, userId)
+  return credits
+}
+
+// MIA-CREDITS.1 — ok-aware variant (the fetchUserBookingsResult pattern):
+// fetchUserCredits collapses "the read failed" and "genuinely no credit
+// records" into the same [], which is fine for callers that fail toward
+// staff review, but a caller that ESCALATES on empty (Mia's booking
+// pre-flight) must not escalate every booking during a Glofox blip.
+export async function fetchUserCreditsResult(creds, userId) {
+  if (!creds || !userId) return { ok: false, credits: [] }
   try {
     const r = await glofoxFetch(creds, `/2.0/credits?user_id=${encodeURIComponent(userId)}`)
-    if (!r.ok) return []
+    if (!r.ok) return { ok: false, credits: [] }
     const body = await r.json()
-    return Array.isArray(body?.data) ? body.data : []
+    return { ok: true, credits: Array.isArray(body?.data) ? body.data : [] }
   } catch {
-    return []
+    return { ok: false, credits: [] }
   }
 }
 

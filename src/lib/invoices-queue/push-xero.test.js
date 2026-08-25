@@ -246,6 +246,52 @@ describe('pushQueueRowToXero — guard rails', () => {
     }
     await expect(pushQueueRowToXero('q1')).rejects.toThrow(/No Xero supplier picked/)
   })
+
+  // RECEIPT-NULLS.1 — invoice_date is nullable at extraction now (a till
+  // receipt often has no readable date), so this is the backstop: a bill
+  // must NOT reach Xero without one. Blocking beats defaulting to the
+  // received date — an invented date lands the VAT in the wrong period,
+  // and a silent fallback is exactly what CLAUDE.md forbids. The operator
+  // fills the date in during the review they already do.
+  it('throws when invoice_date is missing — never invents one for Xero', async () => {
+    nextRow = {
+      id: 'q1', location_id: 'loc1', status: 'data_approved',
+      source_type: 'fte_expense_item',
+      extracted_fields: {
+        supplier_name: 'Tesco Ireland', invoice_number: null, invoice_date: null,
+        total: 13.5, xero_account_id: 'A1', account_code: '400',
+        xero_contact_ref: { kind: 'existing', xero_contact_id: 'C1', name: 'Tesco' },
+      },
+    }
+    await expect(pushQueueRowToXero('q1')).rejects.toThrow(/no invoice date/i)
+  })
+})
+
+// RECEIPT-NULLS.1 — Xero's InvoiceNumber/Reference are optional on an
+// ACCPAY bill, so a numberless receipt should omit them rather than post
+// an explicit null (which Xero stores as the literal string "null" on
+// some endpoints). Same conditional-spread idiom the payload already uses
+// for DueDate.
+describe('buildBillPayload — receipts with no invoice number', () => {
+  const base = { supplier_name: 'Tesco Ireland', invoice_date: '2026-07-15', total: 13.5, currency: 'EUR' }
+
+  it('omits InvoiceNumber and Reference entirely when the number is null', () => {
+    const payload = buildBillPayload({ ...base, invoice_number: null }, { supplierContactId: 'C1' })
+    expect('InvoiceNumber' in payload).toBe(false)
+    expect('Reference' in payload).toBe(false)
+    expect(payload.Date).toBe('2026-07-15')
+  })
+
+  it('still stamps both when the number IS present', () => {
+    const payload = buildBillPayload({ ...base, invoice_number: 'INV-9' }, { supplierContactId: 'C1' })
+    expect(payload.InvoiceNumber).toBe('INV-9')
+    expect(payload.Reference).toBe('INV-9')
+  })
+
+  it('describes the line without a dangling "Invoice" when the number is null', () => {
+    const payload = buildBillPayload({ ...base, invoice_number: null }, { supplierContactId: 'C1' })
+    expect(payload.LineItems[0].Description).toBe('Tesco Ireland')
+  })
 })
 
 describe('pushQueueRowToXero — happy path (existing contact)', () => {
@@ -276,6 +322,36 @@ describe('pushQueueRowToXero — happy path (existing contact)', () => {
     expect(xfetchMock.mock.calls[0][0]).toContain('/Invoices?where=')
     const postCall = xfetchMock.mock.calls.find((c) => c[0] === '/Invoices')
     expect(postCall[1].body.Invoices[0].Contact.ContactID).toBe('C-EXISTING')
+  })
+})
+
+// ZERO-TOTAL.1 — a zero total is deliberately NOT blocked on the send. The
+// unreadable-total fix lives in the extraction schema (requiredMoney), so no
+// new row can carry a phantom zero, and the only €0 rows that have ever been
+// pushed are CCF Autos customs SADs — deferred VAT on imported vehicles,
+// booked to the "VRT/VAT for Cars" contact, each reviewed by a human hours
+// after extraction and forwarded on purpose. This test pins that decision so
+// the guard is not "tightened" back in without first establishing that those
+// pushes were mistakes.
+describe('pushQueueRowToXero — a deliberate zero-total bill still sends', () => {
+  it('sends a deferred-VAT customs SAD whose payable total is zero', async () => {
+    nextRow = {
+      id: 'q1', location_id: 'loc1', status: 'data_approved',
+      source_type: 'supplier_email',
+      extracted_fields: {
+        supplier_name: 'British Car Auctions Ltd', invoice_number: '26IEDUB105BF6K3AR4',
+        invoice_date: '2026-04-17', currency: 'EUR',
+        subtotal: 13507.33, tax_amount: 0, total: 0,
+        xero_account_id: 'A1', account_code: '315',
+        xero_contact_ref: { kind: 'existing', xero_contact_id: 'C-VRT', name: 'VRT/VAT for Cars' },
+      },
+    }
+    xfetchMock
+      .mockResolvedValueOnce({ Invoices: [] })
+      .mockResolvedValueOnce({ Invoices: [{ InvoiceID: 'INV-SAD', InvoiceNumber: '26IEDUB105BF6K3AR4' }] })
+
+    const r = await pushQueueRowToXero('q1')
+    expect(r.billId).toBe('INV-SAD')
   })
 })
 

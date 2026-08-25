@@ -20,6 +20,7 @@ import { sendLocationSms, TwilioError } from './twilio'
 import { logTransactionalWalletState } from './wallet-enforcement'
 import { logWarn } from './log'
 import { overlayConnections } from '@/lib/connection-registry'
+import { transactionalEmailSuppression, transactionalSmsSuppression } from '@/lib/transactional-consent'
 
 // BOOKING.2 — booking_date (YYYY-MM-DD) and start_time (HH:MM:SS) are
 // stored as Dublin-local wall-clock values without timezone semantics.
@@ -151,20 +152,16 @@ async function sendEmailConfirmation(db, booking, ctx) {
   }
 
   const c = booking.contacts
-  // LOCCOMMS.5 — 'unsubscribed' removed deliberately. This is a TRANSACTIONAL
-  // send: someone who booked a class must get the confirmation regardless of
-  // whether they left a marketing list. Blocking it was always wrong; the
-  // email_administrative gate below is the correct control.
-  if (c?.email_status && ['bounced', 'complained'].includes(c.email_status)) {
-    return { status: 'skipped', reason: `email_status=${c.email_status}` }
-  }
-  const prefs = c?.contact_preferences
-  const adminConsent = Array.isArray(prefs)
-    ? prefs[0]?.email_administrative
-    : prefs?.email_administrative
-  if (adminConsent === false) {
-    return { status: 'skipped', reason: 'opted_out_administrative_email' }
-  }
+  // LOCCOMMS.5 — 'unsubscribed' is deliberately NOT a suppressor here. This is
+  // a TRANSACTIONAL send: someone who booked a class must get the confirmation
+  // regardless of whether they left a marketing list. The email_administrative
+  // flag is the correct control.
+  //
+  // EVENT-CONSENT.1 moved the rule into transactional-consent.js — this path
+  // was one of three copies, and a fourth sender (race-confirmations) had no
+  // copy at all. Behaviour here is unchanged, byte for byte in its reasons.
+  const suppression = transactionalEmailSuppression(c)
+  if (suppression) return { status: 'skipped', reason: suppression }
 
   const { data: tpl } = await db
     .from('email_templates')
@@ -210,16 +207,9 @@ async function sendSmsConfirmation(db, booking, ctx) {
   }
 
   const c = booking.contacts
-  if (c?.sms_status && c.sms_status !== 'active') {
-    return { status: 'skipped', reason: `sms_status=${c.sms_status}` }
-  }
-  const prefs = c?.contact_preferences
-  const adminConsent = Array.isArray(prefs)
-    ? prefs[0]?.sms_administrative
-    : prefs?.sms_administrative
-  if (adminConsent === false) {
-    return { status: 'skipped', reason: 'opted_out_administrative_sms' }
-  }
+  // EVENT-CONSENT.1 — shared definition (sms_status + sms_administrative).
+  const suppression = transactionalSmsSuppression(c)
+  if (suppression) return { status: 'skipped', reason: suppression }
 
   const phone = booking.contacts?.phone || booking.customer_phone
   if (!phone) return { status: 'skipped', reason: 'no_phone_number' }

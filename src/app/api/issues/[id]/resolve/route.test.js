@@ -6,6 +6,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+const OWNER = { id: 'prof-owner', full_name: 'Olive Owner', email: 'olive@un1t.ie', role: 'owner' }
+
 const h = vi.hoisted(() => ({
   user: { id: 'prof-owner', full_name: 'Olive Owner', email: 'olive@un1t.ie', role: 'owner' },
   locationId: 'loc-1',
@@ -49,6 +51,7 @@ function req(body) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  h.user = OWNER // the granted-handler cases below swap this; don't leak it
   getInboxIssue.mockResolvedValue(ISSUE)
   resolveIssue.mockResolvedValue({
     ok: true,
@@ -98,5 +101,48 @@ describe('POST /api/issues/[id]/resolve', () => {
     getInboxIssue.mockResolvedValue({ ...ISSUE, equipment_id: null })
     await POST(req({ notes: 'done' }), { params: { id: 'issue-1' } })
     expect(updateEquipment).not.toHaveBeenCalled()
+  })
+
+  // HUBDOOR.2 — the return-to-service side effect carries its OWN
+  // equipment_admin check, because HUBDOOR.1 widened the resolve gate to
+  // honour `issues_inbox` and equipment_admin defaults FALSE for manager
+  // and head_coach. Without this, granting the issues key would silently
+  // also grant a register mutation that PATCH /api/equipment/[id] refuses.
+  // Permissions are not mocked: the real resolver runs off the fixture.
+  describe('equipment return-to-service is gated on equipment_admin, not on being a handler', () => {
+    const grantedHandler = (perms) => ({
+      id: 'prof-hc',
+      full_name: 'Hank Coach',
+      email: 'hank@un1t.ie',
+      role: 'head_coach',
+      activeLocation: { id: 'loc-1', features: {} },
+      activeAssignment: { permissions: perms },
+    })
+
+    beforeEach(() => {
+      getInboxIssue.mockResolvedValue({ ...ISSUE, equipment_id: 'eq-1' })
+      getEquipment.mockResolvedValue({
+        id: 'eq-1', status: 'out_of_service', out_of_service_issue_id: 'issue-1',
+      })
+    })
+
+    it('a head_coach granted only issues_inbox resolves the issue but leaves the asset off the floor', async () => {
+      h.user = grantedHandler({ issues_inbox: true }) // equipment_admin: false by role default
+      const res = await POST(req({ notes: 'Looks fine to me' }), { params: { id: 'issue-1' } })
+      const body = await res.json()
+
+      expect(res.status).toBe(200)
+      expect(body).toMatchObject({ success: true })
+      expect(resolveIssue).toHaveBeenCalled()
+      expect(updateEquipment).not.toHaveBeenCalled()
+    })
+
+    it('the same handler ALSO holding equipment_admin does return it to service', async () => {
+      h.user = grantedHandler({ issues_inbox: true, equipment_admin: true })
+      await POST(req({ notes: 'Belt replaced' }), { params: { id: 'issue-1' } })
+      expect(updateEquipment).toHaveBeenCalledWith(expect.anything(), 'eq-1', {
+        status: 'in_service', out_of_service_issue_id: null,
+      })
+    })
   })
 })

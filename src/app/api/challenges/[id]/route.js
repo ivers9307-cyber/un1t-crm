@@ -4,7 +4,9 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
-import { MANAGER_ROLES } from '@/lib/schemas'
+// HUBDOOR.2 — same role floor as /api/challenges, from the one module the
+// page gate and the redirect chain also read (src/lib/challenges-access).
+import { CHALLENGE_ADMIN_ROLES } from '@/lib/challenges-access'
 import { challengePhase } from '@/lib/challenges'
 
 export const runtime = 'nodejs'
@@ -25,7 +27,7 @@ export const PatchSchema = z.object({
 
 function authz(user) {
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  if (!CHALLENGE_ADMIN_ROLES.includes(user.role)) return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   if (!hasPermission(user, 'challenges')) return NextResponse.json({ success: false, error: 'Disabled' }, { status: 403 })
   return null
 }

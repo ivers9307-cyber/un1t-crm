@@ -1,7 +1,7 @@
 [package]
 name = "repset"
 version = "1.0.0"
-description = "Repset Mac shell — Tauri wrapper for crm.un1tdublin.com"
+description = "Repset Mac shell — Tauri wrapper for crm.repset.ie"
 authors = ["UN1T Dublin"]
 edition = "2021"
 rust-version = "1.77"

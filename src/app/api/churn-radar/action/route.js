@@ -48,6 +48,7 @@ import { createServerClient } from '@/lib/supabase'
 import { sendTextMessage } from '@/lib/whatsapp'
 import { sendRadarOutreach } from '@/lib/radar-outreach'
 import { enrolContacts } from '@/lib/sequences'
+import { isMembershipInvoice } from '@/lib/glofox-arrears'
 import { paymentTroubleKind } from '@/lib/churn-radar'
 import { invalidateRadar } from '@/lib/radar-cache'
 import { logWarn, logInfo } from '@/lib/log'
@@ -209,13 +210,18 @@ export async function POST(request) {
       .select(TROUBLE_COLUMNS)
       .eq('id', contactId)
       .maybeSingle()
+    // DUNNING.1 — "overdue" for a card-update reminder means a PAST_DUE
+    // MEMBERSHIP invoice (the radar's Overdue category), not any past-due
+    // row: a failed €5 fee is an unpaid charge, and the reminder copy says
+    // "membership payment". Same classifier as fetchPastDue.
     const { data: pastDueInv } = await db
       .from('glofox_invoices')
-      .select('id')
+      .select('id, line_item_subtypes, glofox_event:raw_payload->candidate->>glofoxEvent')
       .eq('contact_id', contactId)
       .eq('status', 'PAST_DUE')
-      .limit(1)
-    const pastDueIds = pastDueInv && pastDueInv.length ? new Set([contactId]) : new Set()
+      .limit(50)
+    const hasMembershipDebt = (pastDueInv || []).some(isMembershipInvoice)
+    const pastDueIds = hasMembershipDebt ? new Set([contactId]) : new Set()
     const kind = paymentTroubleKind({ ...(full || {}), id: contactId }, Date.now(), { pastDueIds })
     if (!kind) {
       return NextResponse.json({
@@ -251,6 +257,9 @@ export async function POST(request) {
         contactIds: [contactId],
         sourceType: 'churn_radar',
         sourceRef: `payment_${kind}`,
+        // DUNNING.2 — an operator re-sending to a member who completed an
+        // earlier run (outside the cooldown) re-activates it.
+        allowReenrol: true,
       })
       enrolled = res?.enrolled || 0
     } catch (e) {

@@ -111,6 +111,39 @@ export default function XeroLocationCard({ location, connection }) {
     }
   }
 
+  // XERO-ONE-ORG.1 — one location, one Xero organisation. The OAuth callback
+  // has to store SOME org before anyone can see what it picked, so this is how
+  // a wrong binding gets corrected: the stored token already grants every org
+  // the login authorised, so switching needs no new consent.
+  const [orgs, setOrgs] = useState(null)
+  const [orgBusy, setOrgBusy] = useState(false)
+  const [orgError, setOrgError] = useState(null)
+
+  const loadOrgs = async () => {
+    setOrgBusy(true); setOrgError(null)
+    try {
+      const res = await fetch(`/api/xero/select-tenant?location_id=${location.id}`)
+      const j = await res.json()
+      if (!j.success) throw new Error(j.error || 'Could not list organisations')
+      setOrgs(j.data)
+    } catch (e) { setOrgError(e.message) } finally { setOrgBusy(false) }
+  }
+
+  const switchOrg = async (tenantId, tenantName) => {
+    if (!confirm(`Point ${location.name} at "${tenantName}"?\n\nFuture bills will be filed there. Cached accounts, tax rates and contacts are cleared and re-synced from the new organisation. Bills already sent are NOT moved.`)) return
+    setOrgBusy(true); setOrgError(null)
+    try {
+      const res = await fetch('/api/xero/select-tenant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location_id: location.id, tenant_id: tenantId }),
+      })
+      const j = await res.json()
+      if (!j.success) throw new Error(j.error || 'Switch failed')
+      window.location.reload()
+    } catch (e) { setOrgError(e.message); setOrgBusy(false) }
+  }
+
   return (
     <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-4">
       <div className="flex items-start justify-between gap-3">
@@ -124,6 +157,41 @@ export default function XeroLocationCard({ location, connection }) {
               <div className="text-un1t-muted">
                 Linked {fmt(connection.connected_at)}
                 {connection.last_refreshed_at && <> · refreshed {fmt(connection.last_refreshed_at)}</>}
+              </div>
+              <div className="pt-1">
+                {orgs === null ? (
+                  <button
+                    type="button"
+                    onClick={loadOrgs}
+                    disabled={orgBusy}
+                    className="text-un1t-subtle underline hover:text-un1t-text disabled:opacity-50"
+                  >
+                    {orgBusy ? 'Checking…' : 'Change organisation'}
+                  </button>
+                ) : (
+                  <div className="mt-1 space-y-1">
+                    {orgs.available.filter((o) => o.tenant_id !== orgs.current_tenant_id).map((o) => (
+                      <button
+                        type="button"
+                        key={o.tenant_id}
+                        onClick={() => switchOrg(o.tenant_id, o.tenant_name)}
+                        disabled={orgBusy}
+                        className="block text-un1t-text underline hover:no-underline disabled:opacity-50"
+                      >
+                        Use “{o.tenant_name || o.tenant_id}”
+                      </button>
+                    ))}
+                    {orgs.unavailable.map((o) => (
+                      <div key={o.tenant_id} className="text-un1t-muted">
+                        “{o.tenant_name || o.tenant_id}” — already used by {o.claimed_by}
+                      </div>
+                    ))}
+                    {!orgs.available.filter((o) => o.tenant_id !== orgs.current_tenant_id).length && (
+                      <div className="text-un1t-muted">No other organisation is free for this location.</div>
+                    )}
+                  </div>
+                )}
+                {orgError && <div className="text-red-700 mt-1">{orgError}</div>}
               </div>
             </div>
           ) : (

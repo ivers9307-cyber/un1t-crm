@@ -182,7 +182,9 @@ export default function BridgesAdmin({ locations }) {
 
 function TokenReveal({ reveal, onDone }) {
   const { token, bridge, kind, previousExpiresAt } = reveal
-  const envSnippet = `CHAMP_BRIDGE_TOKEN=${token}\nCHAMP_API_URL=https://crm.un1tdublin.com`
+  // REPSET-P6.S2 — operator snippet points new bridges at the canonical
+  // repset CRM host (the legacy host keeps serving existing bridges).
+  const envSnippet = `CHAMP_BRIDGE_TOKEN=${token}\nCHAMP_API_URL=https://crm.repset.ie`
 
   return (
     <div className="mb-6 rounded-xl border border-amber-300 bg-amber-50 p-4">

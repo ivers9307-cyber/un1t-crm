@@ -16,7 +16,7 @@
 export const runtime = 'nodejs'
 
 export const metadata = {
-  title: 'Government & public authority data requests · UN1T Dublin',
+  title: 'Government & public authority data requests · Repset',
   description:
     'How Champ Fitness Ltd (trading as UN1T Dublin) handles requests from police, courts, regulators, and other public authorities for the personal data it holds — legality review, challenging unlawful requests, data minimisation, and documentation.',
 }

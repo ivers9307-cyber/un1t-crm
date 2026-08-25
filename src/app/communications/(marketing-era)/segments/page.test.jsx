@@ -56,7 +56,7 @@ describe('/communications/segments — non-manager landing', () => {
 
   it('ejects to /communications, not the dashboard', async () => {
     getCurrentUser.mockResolvedValue({ id: 'u2', role: 'staff', activeLocation: { id: 'loc-1' } })
-    await expect(SegmentsTabPage()).rejects.toThrow('NEXT_REDIRECT:/communications')
+    await expect(SegmentsTabPage()).rejects.toThrow(/^NEXT_REDIRECT:\/communications$/)
   })
 
   it('still lets a manager through', async () => {

@@ -76,7 +76,16 @@ const nextConfig = {
       // E3 back-compat: race operator URLs forever-aliased
       { source: '/races',                 destination: '/events' },
       { source: '/races/new',             destination: '/events/new' },
-      { source: '/races/:id',             destination: '/events/:id' },
+      // AUDIT-13.C — was '/events/:id', which is a hard 404: no
+      // events/[id]/page.js exists under ANY route group, only the
+      // checkin / control / edit / teams sub-routes. The Calendly-era
+      // detail page lived there 2026-04-28 → 05-09 and nothing replaced
+      // it, so this rule mapped a 404 to a 404. '/teams' is the entrants
+      // view and the first link the Events list offers per event — the
+      // same target src/lib/command-palette.js entityResult() picked for
+      // exactly this reason (its K5 note). Every sibling above and below
+      // was re-checked and resolves to a real page.
+      { source: '/races/:id',             destination: '/events/:id/teams' },
       { source: '/races/:id/edit',        destination: '/events/:id/edit' },
       { source: '/races/:id/control',     destination: '/events/:id/control' },
       { source: '/races/:id/teams',       destination: '/events/:id/teams' },

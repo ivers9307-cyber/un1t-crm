@@ -416,7 +416,10 @@ describe('buildCachedSystem (Anthropic system blocks)', () => {
   it('returns an ephemeral-cached stable block followed by an uncached volatile block', () => {
     const blocks = buildCachedSystem(opts)
     expect(Array.isArray(blocks)).toBe(true)
-    expect(blocks[0]).toMatchObject({ type: 'text', cache_control: { type: 'ephemeral' } })
+    // MIA-HYGIENE.5 — 1h TTL, not the 5-minute default: WhatsApp reply gaps
+    // routinely outlive 5 minutes, so the prefix was being re-written rather
+    // than read (51% of live calls cold-wrote ~10k tokens, measured 2026-08).
+    expect(blocks[0]).toMatchObject({ type: 'text', cache_control: { type: 'ephemeral', ttl: '1h' } })
     expect(blocks[0].text).toContain(CUSTOMER_AGENT_BASE_PROMPT)
     const last = blocks[blocks.length - 1]
     expect(last.type).toBe('text')
@@ -428,7 +431,7 @@ describe('buildCachedSystem (Anthropic system blocks)', () => {
     // no today, no preverified, no business/studio → nothing volatile
     const blocks = buildCachedSystem({ knowledge: [{ category: 'sales', content: 'x' }] })
     expect(blocks).toHaveLength(1)
-    expect(blocks[0].cache_control).toEqual({ type: 'ephemeral' })
+    expect(blocks[0].cache_control).toEqual({ type: 'ephemeral', ttl: '1h' })
   })
 
   it('concatenated block text matches the joined-string builder (no content drift)', () => {

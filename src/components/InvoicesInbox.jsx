@@ -30,6 +30,7 @@ import XeroAccountPicker from '@/components/invoices/XeroAccountPicker'
 import XeroTaxRatePicker from '@/components/invoices/XeroTaxRatePicker'
 import XeroContactPicker from '@/components/invoices/XeroContactPicker'
 import BulkUploadPanel from '@/components/invoices/BulkUploadPanel'
+import { describeApiError } from '@/lib/api-error'
 
 // INVOICES.3 — friendly labels for the category dropdown. Keys
 // match the enum in INVOICE_CATEGORIES exactly; the underscore →
@@ -170,7 +171,7 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
       if (locationFilter !== 'all') params.set('location_id', locationFilter)
       const res = await fetch(`/api/invoices-inbox?${params.toString()}`)
       const j = await res.json()
-      if (!j.success) throw new Error(j.error || 'Failed to load')
+      if (!j.success) throw new Error(describeApiError(j, 'Failed to load'))
       setRows(j.data || [])
       setSelectedId((prev) => {
         // Prefer the URL-supplied focus on first load if it's in
@@ -258,7 +259,7 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
         body: JSON.stringify(body),
       })
       const j = await res.json()
-      if (!j.success) throw new Error(j.error || `Bulk ${action} failed`)
+      if (!j.success) throw new Error(describeApiError(j, `Bulk ${action} failed`))
       setBulkSummary({ action, ...j.data })
       await loadRows()
     } catch (e) {
@@ -292,11 +293,11 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
       const post = (path, body) =>
         fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => r.json())
       const syncJson = await post('/api/invoices-inbox/bulk-analyse', { ids: syncIds })
-      if (!syncJson.success) throw new Error(syncJson.error || 'Extract failed')
+      if (!syncJson.success) throw new Error(describeApiError(syncJson, 'Extract failed'))
       let queueJson = null
       if (queueIds.length) {
         queueJson = await post('/api/invoices-inbox/bulk-queue-analysis', { ids: queueIds })
-        if (!queueJson.success) throw new Error(queueJson.error || 'Queue failed')
+        if (!queueJson.success) throw new Error(describeApiError(queueJson, 'Queue failed'))
       }
       const counts = {}
       const add = (k, n) => { if (n) counts[k] = (counts[k] || 0) + n }
@@ -740,7 +741,7 @@ function InboxDetail({ row, onChanged }) {
         body: body ? JSON.stringify(body) : undefined,
       })
       const j = await res.json()
-      if (!j.success) throw new Error(j.error || 'Action failed')
+      if (!j.success) throw new Error(describeApiError(j, 'Action failed'))
       onChanged()
     } catch (e) {
       setActionError(e.message)
@@ -759,7 +760,13 @@ function InboxDetail({ row, onChanged }) {
         body: JSON.stringify({ extracted_fields }),
       })
       const j = await res.json()
-      if (!j.success) throw new Error(j.error || 'Save failed')
+      // EMPTY-STRING-FIELDS.1 — validateBody answers a schema failure with a
+      // generic `error` ("Invalid request body") plus an `issues` array naming
+      // the field. Showing only the generic half told the operator nothing —
+      // the real message ("invoice_date must be YYYY-MM-DD") was in the
+      // response the whole time, and the receipt looked broken rather than
+      // one box wrong.
+      if (!j.success) throw new Error(describeApiError(j, 'Save failed'))
       onChanged()
       // Return the server's canonical stored fields so the editor can
       // resync — keeps the dirty check accurate after any normalisation.
@@ -779,7 +786,7 @@ function InboxDetail({ row, onChanged }) {
     try {
       const res = await fetch(`/api/invoices-inbox/${row.id}`, { method: 'DELETE' })
       const j = await res.json()
-      if (!j.success) throw new Error(j.error || 'Delete failed')
+      if (!j.success) throw new Error(describeApiError(j, 'Delete failed'))
       onChanged()
     } catch (e) {
       setActionError(e.message)

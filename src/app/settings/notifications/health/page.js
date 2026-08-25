@@ -4,11 +4,23 @@
 // no device_tokens registered, so even when the cron fires the
 // pushes land nowhere. Per-staff row shows a traffic-light status:
 //
-//   🟢 ≥1 token AND last_seen within 14 days
-//   🟡 ≥1 token BUT last seen >14 days ago (app installed,
+//   🟢 ≥1 PUSH TOKEN AND last_seen within 14 days
+//   🟡 ≥1 push token BUT last seen >14 days ago (app installed,
 //       phone not opened recently — token may be silently stale)
-//   🔴 0 tokens (app not installed, or push permission denied,
-//       or the user is fully web-only)
+//   🟡 "Visible, no push" — the device REPORTS (platform, version,
+//       geofence permission) but holds NO push token, so nothing can
+//       reach it. Every Android device is here until FCM credentials
+//       exist (mobile/docs/android-fcm-setup.md), plus anyone who
+//       declined the iOS notification prompt.
+//   🔴 0 devices (app not installed, or the user is fully web-only)
+//
+// ANDROID-VIS.1b — that fourth state is not cosmetic. Since mig 565 a
+// device row no longer implies a push token, and this page called such a
+// device 🟢 Healthy and offered a live "Send test push" beside it: a
+// confident lie on the one surface whose whole job is answering "would a
+// push reach this phone". The verdict now lives in @/lib/staff-devices
+// (pure + tested) and carries `canPush`, which is the ONLY thing that
+// gates the test-push button.
 //
 // "Send test push" button per ≥1-token user posts to
 // /api/admin/push/test, which fires a CATEGORYLESS push via the shared
@@ -38,12 +50,10 @@ import Link from 'next/link'
 import { ArrowLeft, ShieldCheck, Smartphone, Mail } from 'lucide-react'
 import TestPushButton from '@/components/settings/TestPushButton'
 import NudgeUpdateButton from '@/components/settings/NudgeUpdateButton'
-import { deriveTargetVersion, deviceVerdict, currentDevice } from '@/lib/staff-devices'
+import { deriveTargetVersion, deviceVerdict, currentDevice, pushHealthStatus, PUSH_HEALTHY_DAYS } from '@/lib/staff-devices'
 import { geofencePermissionChip } from '@/lib/geofence-permission-chips'
 
 export const dynamic = 'force-dynamic'
-
-const HEALTHY_DAYS = 14
 
 function fmtRelative(iso) {
   if (!iso) return 'never'
@@ -59,16 +69,6 @@ function fmtRelative(iso) {
   return `${mo}mo ago`
 }
 
-function statusForUser(tokens, _pushesLast30d) {
-  if (!tokens.length) return { kind: 'red', label: 'No app' }
-  const newest = tokens.reduce((max, t) =>
-    !max || (t.last_seen_at && t.last_seen_at > max) ? t.last_seen_at : max, null)
-  if (!newest) return { kind: 'red', label: 'No app' }
-  const daysSince = (Date.now() - new Date(newest).getTime()) / (1000 * 60 * 60 * 24)
-  if (daysSince > HEALTHY_DAYS) return { kind: 'amber', label: 'Stale' }
-  return { kind: 'green', label: 'Healthy' }
-}
-
 export default async function PushHealthPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
@@ -81,7 +81,13 @@ export default async function PushHealthPage() {
   const [profilesRes, locationsRes, tokensRes, sendsRes, plRes] = await Promise.all([
     db.from('profiles').select('id, full_name, email, role, active').eq('active', true),
     db.from('locations').select('id, name, active').eq('active', true).eq('is_host_anchor', false).order('name'),
-    db.from('device_tokens').select('id, user_id, platform, device_name, app_version, created_at, last_seen_at, geofence_permission, geofence_permission_at'),
+    // ANDROID-VIS.1b — expo_push_token is SELECTED (never rendered) purely
+    // so pushHealthStatus can tell "reports but unreachable" from "healthy".
+    // REPSET-PUB.1A — native_build is SELECTED so the Build column can show
+    // which BINARY each device is running (mig 567). Display only for now:
+    // the old-vs-new classification (classifyBinary) needs the old app's
+    // final build number, which is not known until Phase 2.
+    db.from('device_tokens').select('id, user_id, platform, device_name, app_version, created_at, last_seen_at, geofence_permission, geofence_permission_at, expo_push_token, native_build'),
     db.from('push_reminder_sends')
       .select('recipient_id, sent_at')
       .gte('sent_at', new Date(Date.now() - 30 * 86400 * 1000).toISOString()),
@@ -133,6 +139,9 @@ export default async function PushHealthPage() {
           // Permission reads off the CURRENT device only — an old iPad
           // that once granted "always" says nothing about today's phone.
           permission: currentDevice(ownTokens)?.geofence_permission ?? null,
+          // REPSET-PUB.1A — same rule for the binary's build number: the
+          // question is which app THIS person is using today.
+          nativeBuild: currentDevice(ownTokens)?.native_build ?? null,
         }
       })
       .sort((a, b) => a.full_name.localeCompare(b.full_name || '')),
@@ -141,14 +150,15 @@ export default async function PushHealthPage() {
   // Rollup counts for the header
   const totals = {
     profiles: profiles.length,
-    healthy: 0, stale: 0, no_app: 0,
+    healthy: 0, stale: 0, no_app: 0, no_push: 0,
     on_latest: 0,
     total_tokens: tokens.length,
   }
   for (const p of profiles) {
-    const s = statusForUser(tokensByUser.get(p.id) || [], sendsByUser.get(p.id) || 0)
+    const s = pushHealthStatus(tokensByUser.get(p.id) || [], now)
     if (s.kind === 'green') totals.healthy++
     else if (s.kind === 'amber') totals.stale++
+    else if (s.kind === 'nopush') totals.no_push++
     else totals.no_app++
     if (deviceVerdict(tokensByUser.get(p.id) || [], targetVersion, now).kind === 'current') {
       totals.on_latest++
@@ -172,10 +182,11 @@ export default async function PushHealthPage() {
       </p>
 
       {/* Rollup */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 mb-6">
         <SummaryCard label="Total staff" value={totals.profiles} kind="neutral" />
         <SummaryCard label="Healthy" value={totals.healthy} kind="green" />
         <SummaryCard label="Stale" value={totals.stale} kind="amber" />
+        <SummaryCard label="Visible, no push" value={totals.no_push} kind="amber" sub="reports, unreachable" />
         <SummaryCard label="No app installed" value={totals.no_app} kind="red" />
         <SummaryCard
           label="On latest"
@@ -221,6 +232,10 @@ export default async function PushHealthPage() {
                   <th className="text-left px-4 py-2 font-medium">Status</th>
                   <th className="text-left px-4 py-2 font-medium">Devices</th>
                   <th className="text-left px-4 py-2 font-medium">App version</th>
+                  {/* REPSET-PUB.1A — the BINARY's build number, which the JS
+                      version cannot tell you: an OTA changes App version on
+                      every phone and leaves this untouched. */}
+                  <th className="text-left px-4 py-2 font-medium">Build</th>
                   <th className="text-left px-4 py-2 font-medium">Location permission</th>
                   <th className="text-left px-4 py-2 font-medium">Last seen</th>
                   <th className="text-left px-4 py-2 font-medium">Pushes 30d</th>
@@ -229,7 +244,7 @@ export default async function PushHealthPage() {
               </thead>
               <tbody>
                 {profiles.map(p => {
-                  const s = statusForUser(p.tokens, p.pushesLast30d)
+                  const s = pushHealthStatus(p.tokens, now)
                   const newestSeen = p.tokens.reduce((max, t) =>
                     !max || (t.last_seen_at && t.last_seen_at > max) ? t.last_seen_at : max, null)
                   return (
@@ -255,17 +270,23 @@ export default async function PushHealthPage() {
                       <td className="px-4 py-2.5 text-xs text-un1t-subtle">
                         <VersionCell verdict={p.verdict} />
                       </td>
+                      <td className="px-4 py-2.5 text-xs text-un1t-subtle">
+                        <BuildCell value={p.nativeBuild} />
+                      </td>
                       <td className="px-4 py-2.5 text-xs">
                         <PermissionChip value={p.permission} />
                       </td>
                       <td className="px-4 py-2.5 text-xs text-un1t-subtle">{fmtRelative(newestSeen)}</td>
                       <td className="px-4 py-2.5 text-xs text-un1t-subtle">{p.pushesLast30d}</td>
                       <td className="px-4 py-2.5 text-right">
-                        {p.tokens.length > 0 ? (
+                        {/* ANDROID-VIS.1b — gated on canPush, NOT on having
+                            a device row: a token-less device has a row and
+                            no way to receive anything. */}
+                        {s.canPush ? (
                           <TestPushButton recipientId={p.id} recipientName={p.full_name} />
                         ) : (
                           <a
-                            href={`mailto:${p.email}?subject=${encodeURIComponent('Install the UN1T CRM mobile app')}&body=${encodeURIComponent('Hi ' + (p.full_name?.split(' ')[0] || '') + ',\n\nPlease install the UN1T CRM mobile app from TestFlight and grant push notification permission so you can receive task and booking reminders.\n\nThanks')}`}
+                            href={`mailto:${p.email}?subject=${encodeURIComponent('Install the Repset mobile app')}&body=${encodeURIComponent('Hi ' + (p.full_name?.split(' ')[0] || '') + ',\n\nPlease install the Repset mobile app from TestFlight and grant push notification permission so you can receive task and booking reminders.\n\nThanks')}`}
                             className="inline-flex items-center gap-1 text-[11px] text-un1t-subtle hover:text-un1t-text border border-un1t-border rounded px-2 py-1"
                           >
                             <Mail size={11} /> Nudge
@@ -282,7 +303,8 @@ export default async function PushHealthPage() {
       ))}
 
       <p className="text-xs text-un1t-muted mt-2">
-        Stale = the device hasn&apos;t opened the app in {HEALTHY_DAYS}+ days. Token may still be valid; a test push tells you for sure.
+        Stale = the device hasn&apos;t opened the app in {PUSH_HEALTHY_DAYS}+ days. Token may still be valid; a test push tells you for sure.
+        Visible, no push = the device reports its version and permissions but holds no push token, so nothing can reach it — Android until FCM credentials are set up (mobile/docs/android-fcm-setup.md), or a declined iOS notification prompt. There is no test push to send.
         Tokens that come back DeviceNotRegistered from Expo are auto-pruned by src/lib/push.js.
       </p>
     </div>
@@ -313,6 +335,9 @@ const CHIP_TONE = {
   green:   'bg-emerald-500/10 text-emerald-700',
   amber:   'bg-amber-500/10 text-amber-700',
   red:     'bg-red-500/10 text-red-700',
+  // ANDROID-VIS.1b — "Visible, no push". Amber-toned: the device is not
+  // missing, it is unreachable. Same -700 ramp the house chip recipe wants.
+  nopush:  'bg-amber-500/10 text-amber-700',
   neutral: 'bg-un1t-border/40 text-un1t-subtle',
 }
 
@@ -331,6 +356,17 @@ function VersionCell({ verdict }) {
       {verdict.kind === 'outdated' && <span className={`${CHIP} ${CHIP_TONE.amber}`}>Outdated</span>}
     </span>
   )
+}
+
+// REPSET-PUB.1A — the CURRENT device's binary build number (mig 567). A
+// null renders "—" and means "never reported": every row written before
+// this shipped, plus any device whose host cannot read its own Info.plist
+// (a simulator). It is NOT build zero, and nothing here infers a binary
+// from it — classifyBinary needs the old app's final build number, which
+// arrives at Phase 2.
+function BuildCell({ value }) {
+  if (!value) return <span className="text-un1t-muted">—</span>
+  return <span className="text-un1t-text">{value}</span>
 }
 
 // Background-location state for the CURRENT device. A null value means

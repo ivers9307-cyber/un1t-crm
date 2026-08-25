@@ -1,6 +1,6 @@
 // STUDIO-MAC.1 — Repset Mac shell entry point.
 //
-// Wraps crm.un1tdublin.com in a native macOS window via Tauri 2. The
+// Wraps crm.repset.ie in a native macOS window via Tauri 2. The
 // shell does three things:
 //
 //   1. Loads the web CRM in a WKWebView window sized for desk use.

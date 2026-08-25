@@ -62,6 +62,37 @@ describe('defaultCopy', () => {
   })
 })
 
+describe('gift card copy (GIFTCARD.1)', () => {
+  const gift = { first_name: 'Sam', offer_name: '€100 Gift Card', bonus: '', amount: '€100', studio: 'UN1T Stillorgan', category: 'gift_card' }
+
+  it('never tells a gift buyer to book classes — they are usually not the one training', () => {
+    for (const kind of ['paid', 'ready']) {
+      const { htmlBody } = defaultCopy(kind, gift)
+      expect(htmlBody).not.toMatch(/book classes/i)
+      expect(htmlBody).not.toMatch(/on your account/i)
+    }
+  })
+
+  it('the ready email states the 5-year validity and how to redeem', () => {
+    const { subject, htmlBody } = defaultCopy('ready', gift)
+    expect(subject).toContain('€100 Gift Card')
+    expect(htmlBody).toMatch(/5 years/)
+    expect(htmlBody).toMatch(/hand over|reception/i)
+  })
+
+  it('the paid email still does not claim it is usable yet', () => {
+    const { htmlBody } = defaultCopy('paid', gift)
+    expect(htmlBody).toContain('within 24 hours')
+    expect(htmlBody).not.toMatch(/ready to hand over/i)
+  })
+
+  it('a membership keeps the original copy — the branch is category-scoped', () => {
+    const { htmlBody } = defaultCopy('ready', { ...gift, category: 'membership', offer_name: '3 Month Membership', bonus: '2 extra weeks' })
+    expect(htmlBody).toMatch(/on your account/i)
+    expect(htmlBody).toMatch(/book classes/i)
+  })
+})
+
 const purchase = {
   id: 'p1', location_id: 'loc1', contact_id: 'c1',
   buyer_name: 'Sam Harley', buyer_email: 'harleys@tcd.ie', amount_cents: 38000,

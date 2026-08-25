@@ -1,6 +1,17 @@
-// /technical — public B2B service page for the UN1T communications
-// platform (the software UN1T Dublin Ltd builds and provides to UN1T
-// gym franchises).
+// /technical — public B2B service page for Repset, the communications
+// platform (the software Champ Fitness Ltd builds and provides to UN1T
+// gym franchises). Repset is the software brand; UN1T is the gym brand
+// the software is operated for — keep the two distinct in all copy.
+//
+// LEGALENT.1 — the LEGAL ENTITY named here is Champ Fitness Ltd
+// (trading as UN1T Dublin), the entity settled in SAAS4-W0.2 and the
+// one /terms, /privacy, /privacy/members and
+// /legal/subprocessors already name. This page used to name a
+// different (and likely non-existent) company formed from the gym
+// brand — on the very page Meta cross-checks against the Tech
+// Provider Access Verification form. "UN1T Dublin" as a gym BRAND is
+// correct and stays; only the registered-company claims changed.
+// tests/legal-entity-consistency.test.js pins it.
 //
 // This page is the website URL cited in Meta's Tech Provider Access
 // Verification: Meta requires a live page showing the service the
@@ -31,10 +42,14 @@ import { RevealArmScript } from '@/components/landing-page/reveal-arm'
 export const runtime = 'nodejs'
 
 export const metadata = {
-  title: 'Technology · UN1T Dublin',
+  title: 'Repset · Technology',
   description:
-    'The UN1T communications platform — a gym CRM with WhatsApp and Instagram messaging in one shared inbox, built and provided by UN1T Dublin Ltd to UN1T gym franchises.',
+    'Repset — a gym CRM with WhatsApp and Instagram messaging in one shared inbox, built and provided by Champ Fitness Ltd (trading as UN1T Dublin) to UN1T gym franchises.',
 }
+
+// Repset brand volt — the accent that closes the wordmark's full stop
+// (see public/repset-mark.svg and the TV challenge board, which share it).
+const VOLT = '#D6FF3D'
 
 const CONTACT = { href: 'mailto:hello@un1tdublin.com', label: 'Talk to us' }
 
@@ -81,24 +96,27 @@ export default function TechnicalPage() {
     >
       <RevealArmScript />
       <RevealManager />
-      <SiteHeader logoUrl={null} logoAlt="UN1T Dublin" sticky ctaHref={CONTACT.href} ctaLabel={CONTACT.label} />
+      <SiteHeader logoUrl="/repset-mark.svg" logoAlt="Repset" logoWidthPx={44} sticky ctaHref={CONTACT.href} ctaLabel={CONTACT.label} />
 
       {/* ── Hero ────────────────────────────────────────────────── */}
       <section className="relative pt-36 pb-20 md:pt-48 md:pb-28 border-b border-white/10">
         <div className="max-w-6xl mx-auto px-6">
           <p className="lp-reveal text-[11px] uppercase tracking-[0.3em] text-white/45 font-semibold mb-6">
-            UN1T Dublin Ltd · Technology
+            Champ Fitness Ltd · Technology
           </p>
+          <div className="lp-reveal lp-d1 font-display font-extrabold lowercase text-3xl md:text-4xl tracking-tight mb-5">
+            repset<span style={{ color: VOLT }} aria-hidden="true">.</span>
+          </div>
           <h1 className="lp-reveal lp-d1 font-display font-extrabold uppercase text-[clamp(2.4rem,7vw,5.5rem)] leading-[1.02] tracking-tight max-w-4xl">
             The platform
             <br />
             that runs UN1T.
           </h1>
           <p className="lp-reveal lp-d2 mt-8 text-lg md:text-xl text-white/70 leading-relaxed max-w-2xl">
-            A CRM for the whole gym — with every WhatsApp and Instagram
-            conversation in a single shared inbox. Built by UN1T Dublin to run
-            our own studios, and offered to UN1T gym franchises in Ireland,
-            the UK, Australia and Cyprus.
+            Repset is a CRM for the whole gym — with every WhatsApp and
+            Instagram conversation in a single shared inbox. Built by UN1T
+            Dublin to run our own studios, and offered to UN1T gym franchises
+            in Ireland, the UK, Australia and Cyprus.
           </p>
           <div className="lp-reveal lp-d3 mt-10 flex flex-wrap items-center gap-4">
             <a href={CONTACT.href} className="lp-btn">
@@ -140,7 +158,7 @@ export default function TechnicalPage() {
               stays yours.
             </h2>
             <p className="lp-reveal lp-d1 mt-6 text-white/60 leading-relaxed">
-              The platform connects to WhatsApp and Instagram through
+              Repset connects to WhatsApp and Instagram through
               Meta&rsquo;s official APIs. We act as the technology provider —
               nothing more.
             </p>
@@ -174,13 +192,13 @@ export default function TechnicalPage() {
             not just developers.
           </h2>
           <p className="lp-reveal lp-d1 mt-8 text-white/70 leading-relaxed max-w-2xl">
-            UN1T Dublin Ltd is registered in Ireland. We operate the UN1T
-            studios in Dublin — Stillorgan and Hatch Street — and we build and
-            run the software platform behind them. Every feature exists
-            because a real gym needed it.
+            Champ Fitness Ltd, trading as UN1T Dublin, is registered in
+            Ireland. We operate the UN1T studios in Dublin — Stillorgan and
+            Hatch Street — and we build and run Repset, the software platform
+            behind them. Every feature exists because a real gym needed it.
           </p>
           <p className="lp-reveal lp-d2 mt-4 text-white/70 leading-relaxed max-w-2xl">
-            Interested in the platform for your UN1T franchise? Email{' '}
+            Interested in Repset for your UN1T franchise? Email{' '}
             <a href={CONTACT.href} className="underline text-white hover:text-white/80 transition-colors">
               hello@un1tdublin.com
             </a>

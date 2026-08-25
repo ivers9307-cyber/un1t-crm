@@ -7,7 +7,7 @@
 
   "build": {
     "frontendDist": "../src",
-    "devUrl": "https://crm.un1tdublin.com/studio-login",
+    "devUrl": "https://crm.repset.ie/studio-login",
     "beforeDevCommand": "",
     "beforeBuildCommand": ""
   },
@@ -18,7 +18,7 @@
       {
         "label": "main",
         "title": "Repset",
-        "url": "https://crm.un1tdublin.com/studio-login",
+        "url": "https://crm.repset.ie/studio-login",
         "width": 1400,
         "height": 900,
         "minWidth": 1024,
@@ -56,7 +56,7 @@
       "minimumSystemVersion": "11.0",
       "exceptionDomain": "",
       "signingIdentity": null,
-      "//": "STUDIO-MAC.8 — entitlements.plist enables App Sandbox + outbound network. App Store submissions are rejected without sandbox. The network.client entitlement lets WKWebView talk to crm.un1tdublin.com; no other capabilities are requested.",
+      "//": "STUDIO-MAC.8 — entitlements.plist enables App Sandbox + outbound network. App Store submissions are rejected without sandbox. The network.client entitlement lets WKWebView talk to crm.repset.ie; no other capabilities are requested.",
       "entitlements": "entitlements.plist",
       "providerShortName": null
     }

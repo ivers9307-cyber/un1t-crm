@@ -53,6 +53,13 @@ function summarise(out) {
   if (Number.isFinite(out.enqueued)) bits.push(`${out.enqueued} enqueued`)
   if (out.limited) bits.push('limit reached — more remain for the next run')
   if (out.guardTripped) bits.push(`guard tripped — ${out.guard?.attempted ?? '?'} deletions refused`)
+  // ZOOMSYNC.4 — say it out loud on every run. These are members with no name
+  // on the handsets, and the whole point of the change is that the sync stops
+  // retrying them silently; a suppression nobody can see is the bug it replaced.
+  const w = out.withheld || {}
+  if (w.invalid) bits.push(`${w.invalid} number${w.invalid === 1 ? '' : 's'} Zoom will not accept — see below`)
+  if (w.parked) bits.push(`${w.parked} parked after a permanent Zoom error`)
+  if (w.deletes) bits.push(`${w.deletes} deletion${w.deletes === 1 ? '' : 's'} withheld (unusable number still in Zoom)`)
   return bits.join(' · ')
 }
 

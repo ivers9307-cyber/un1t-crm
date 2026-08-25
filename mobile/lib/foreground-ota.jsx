@@ -3,7 +3,9 @@
 // bundles for days (EAS channel insights, 2026-07: the most-run bundle
 // predated fixes shipped 3+ days earlier; the PR #908 deep link was live
 // server-side while phones ran pre-#908 JS). This component supplements
-// ON_LOAD: on every real foreground (background→active) it checks for an
+// ON_LOAD: on every real foreground (the app passed through 'background'
+// since it was last active — see the gate's header for why that is keyed on
+// evidence, not the previous state's name) it checks for an
 // update, throttled to once per 15 minutes, and applies it via reloadAsync()
 // only when that can't yank the UI mid-task — just-foregrounded and no
 // focused text input — otherwise the downloaded update is applied on the

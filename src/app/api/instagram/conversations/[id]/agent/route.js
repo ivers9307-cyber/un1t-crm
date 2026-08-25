@@ -39,6 +39,23 @@ export async function PATCH(request, props) {
   // Stamp the first hand-off only; re-enabling keeps history.
   if (!active && !conversation.agent_handed_off_at) update.agent_handed_off_at = now
 
-  await db.from('instagram_conversations').update(update).eq('id', params.id)
+  // BAREWRITE.1 — the response echoes the new agent state, so a silently
+  // failed write left the operator believing Mia had been paused (or resumed)
+  // on this thread when she had not. The row must exist (it was just selected
+  // above), so zero rows matched is itself a failure — and PostgREST reports no
+  // error for a zero-row UPDATE. `.select('id')` is how the row count is
+  // obtained; see the note at src/app/api/staff/route.js for why it is
+  // preferred over `{ count: 'exact' }` on a bodyless PATCH.
+  const { error: updateError, data: updated } = await db
+    .from('instagram_conversations')
+    .update(update)
+    .eq('id', params.id)
+    .select('id')
+  if (updateError || !updated?.length) {
+    return NextResponse.json({
+      success: false,
+      error: `Could not change the agent state on this conversation: ${updateError?.message || 'conversation not found'}`,
+    }, { status: 500 })
+  }
   return NextResponse.json({ success: true, agent_active: active })
 }

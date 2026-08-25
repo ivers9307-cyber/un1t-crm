@@ -130,13 +130,13 @@ export const MIN_CONTACT_SEARCH_LEN = 2
 // detail route to land on. Per-entity cap keeps the palette scannable.
 export const LAUNCHER_RESULT_CAP = 5
 
-// Which permission gates each entity in the search endpoint. Staff live under
-// the settings-gated admin area; events use the same 'races' key as the page.
-export const LAUNCHER_ENTITIES = [
-  { type: 'contact', permission: 'contacts' },
-  { type: 'staff', permission: 'settings' },
-  { type: 'event', permission: 'races' },
-]
+// AUDIT-13.G — a LAUNCHER_ENTITIES constant used to sit here, listing the
+// entity/permission pairs "the search endpoint" gates on. Nothing ever
+// imported it: src/app/api/launcher/search/route.js writes the three
+// hasPermission() calls inline. It was born unused and was therefore a
+// drift hazard rather than documentation — adding an entity to the list
+// did nothing, while reading it told you the wiring was data-driven when
+// it is not. Deleted; the route is the single source of truth.
 
 /**
  * Shape one DB row into a launcher result. Pure — the route selects the

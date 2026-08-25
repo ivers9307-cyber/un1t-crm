@@ -1,16 +1,57 @@
-# Web CI — runs vitest + ESLint on every push to main that touches
-# web code. Catches the class of bug where an import gets removed
+# Web CI — vitest + ESLint + the check:* gates, plus `next build` as a
+# parallel job. Catches the class of bug where an import gets removed
 # but a reference to it stays in the file (the 'estimatedProfit is
 # not defined' runtime error that took out /cars/[id]).
 #
-# Mirror of eas-update.yml on the mobile side: same mtime trigger,
-# same fail-fast philosophy. (Next 16 removed `next lint` — plain
-# `eslint .` here is the only lint gate.) Failing in GitHub Actions
-# surfaces breakage early, before a broken bundle reaches the queue.
+# Mirror of eas-update.yml on the mobile side: same fail-fast philosophy.
+# (Next 16 removed `next lint` — plain `eslint .` here is the only lint
+# gate.) Failing in GitHub Actions surfaces breakage early, before a
+# broken bundle reaches the queue.
+#
+# The two triggers are deliberately ASYMMETRIC, in TWO ways, and both
+# asymmetries exist for the same reason — a PR run is a gate, a main run
+# is a record:
+#   - paths:       filtered on push, UNFILTERED on pull_request. An absent
+#                  required check is a permanent block.
+#   - concurrency: PR runs are grouped per PR and supersede each other; push
+#                  runs are grouped per COMMIT and always complete. On a PR
+#                  the superseded SHA is one nobody is merging; on main it is
+#                  one somebody already merged and Vercel already shipped.
+# Long form on `pull_request:` and `concurrency:` below. The exact branch-
+# protection settings this file assumes are written out in the ENABLING
+# BRANCH PROTECTION block between them — read that before turning
+# protection on, and before removing anything here.
 
 name: Web CI
 
 on:
+  # ─── push: main ──────────────────────────────────────────────────
+  # The post-merge run. Nothing WAITS on this one — it is the "is main
+  # still sound" RECORD, and the only test of the actually-merged tree
+  # when a PR was behind main at merge time. It is a detector, never a
+  # gate: by the time it reports, Vercel has already deployed the merge
+  # commit to production. Do not reason about it as if it prevented
+  # anything. Because nothing blocks on it, a path filter here has no
+  # deadlock failure mode, so it stays (a docs-only merge need not burn
+  # 5 runner-minutes).
+  #
+  # Two ways the record can come up EMPTY, both now closed:
+  #
+  #   1. MISS — an edited path is not watched. Fired on commit a1e57a8:
+  #      a check-mobile-parity rule change landed with no CI because
+  #      scripts/** was not watched. CI-GATE.1 audited the whole repo
+  #      root for that class and closed nine paths plus two widenings;
+  #      CI-GATE.2 closed the one it missed (.audit-allowlist.json).
+  #      Each entry below carries the reason it can independently turn a
+  #      check red. The test for adding a path is: "can a change to this,
+  #      on its own, fail `npm test`, `npm run lint`, a `check:*` script,
+  #      `next build`, or the Vercel deploy?"
+  #
+  #   2. CANCELLATION — a closely-following merge superseded the run.
+  #      This was eating 19% of them; see the concurrency: block below,
+  #      where it is fixed. CI-GATE.1's comment claimed the push trigger
+  #      had "no deadlock mode, only a miss mode", which was two thirds
+  #      of the truth, and the missing third was the larger hole.
   push:
     branches: [main]
     paths:
@@ -22,57 +63,285 @@ on:
       # them via vitest.config.js; watching the dir makes a tests-only
       # change re-run CI too (SAAS-10).
       - 'tests/**'
+      # CI-GATE.1 — `npm run lint` is `eslint .` over the WHOLE repo. The
+      # root config ignores only .next/, node_modules/, public/, mobile/,
+      # supabase/, out|dist|build/ and .claude/ — so e2e/ and evals/ ARE
+      # linted (probe-verified), and a syntax error in either turns the
+      # Test & lint job red with nothing here to have caught it. They run
+      # under their own configs (playwright / vitest.evals), which is why
+      # they were assumed out of scope; lint does not care.
+      - 'e2e/**'
+      - 'evals/**'
       - 'package.json'
       - 'package-lock.json'
-      - '.eslintrc.json'
+      # CI-GATE.2 — tests/dependency-audit.test.js pins this file's
+      # accepted[] to EMPTY and validates every entry's reason length and
+      # expiry date, so a lone commit adding an accept (the normal reason
+      # anyone edits it) fails `npm test` with nothing else watching. The
+      # mobile twin is covered incidentally by mobile/**; this one was in
+      # no trigger at all — dependency-audit.yml filters its own
+      # pull_request to package.json/package-lock.json/mobile/package*.json,
+      # so that workflow does not cover it either.
+      - '.audit-allowlist.json'
       - 'eslint.config.mjs'
       - 'eslint.mobile-imports.config.mjs'
       - 'eslint.mobile.config.mjs'
       - 'eslint.guardrails.config.mjs'
       - 'eslint-rules/**'
       - 'vitest.config.js'
+      # Same `eslint .` reasoning as e2e/evals above — these two config
+      # files are linted like any other source file even though the
+      # suites they configure do not run in this workflow.
+      - 'vitest.evals.config.mjs'
+      - 'playwright.config.mjs'
       - 'jsconfig.json'
-      # scripts/** added because scripts/check-mobile-parity.mjs is
-      # one of the CI steps — editing that script needs to re-run CI
-      # to verify the change. Otherwise a parity-rule fix lands silently
-      # without CI confirming it works (which happened on commit
-      # a1e57a8 — the attendance_reports allow-list addition didn't
-      # trigger CI because scripts/** wasn't watched).
+      # CI-GATE.1 — BUILD-CRITICAL, and unwatched until now. next.config.js
+      # wires the back-compat rewrites, the redirect table and the security
+      # headers, and `require`s ./legacy-redirects at build time; a bad
+      # export or a thrown config fails `next build` outright. It is also
+      # linted by `eslint .`.
+      - 'next.config.js'
+      # legacy-redirects.js is doubly load-bearing: next.config.js requires
+      # it (build), AND src/lib/legacy-redirects.test.js imports it directly
+      # (`../../legacy-redirects.js`) and asserts the 1:1 contract with the
+      # 27 stub routes PRUNE.1b deleted. Editing it can fail `npm test` on
+      # its own.
+      - 'legacy-redirects.js'
+      # Build inputs for the CSS pipeline. A malformed postcss.config.js or
+      # tailwind.config.js fails `next build`; a wrong `content` glob in the
+      # Tailwind config builds fine and ships a styleless app, which is
+      # worse. Both are also linted.
+      - 'postcss.config.js'
+      - 'tailwind.config.js'
+      # DEPLOY-CRITICAL. vercel.json is where the cron schedules and function
+      # config live; a change here alters production behaviour and NO check
+      # in this workflow validates it (there is no vercel.json test today).
+      # It is watched anyway so the post-merge run on main matches the run
+      # that gated the PR — a cron edit must not be the one merge of the day
+      # with no CI result attached to it.
+      - 'vercel.json'
+      # scripts/** — scripts/check-*.mjs ARE the CI steps, so editing one
+      # must re-run CI to verify the change. This is the entry commit
+      # a1e57a8 was missing (its attendance_reports allow-list addition
+      # landed with no CI at all).
       - 'scripts/**'
-      # check-location-scoping derives its tenant-table set from the
-      # migrations — a migration adding location_id to a table must re-run
-      # CI so newly-tenanted tables get their routes checked.
-      - 'supabase/migrations/**'
-      - '.github/workflows/web-ci.yml'
-  # Also run on every PR targeting main — without this, branches
-  # were never CI-checked and we only found out about failures after
-  # a merge. Discovered May 2026 after every Web CI run on main had
-  # been failing for 8 consecutive merges (a missing `typescript`
-  # devDep that eslint-config-next transitively required).
+      # supabase/** — widened from supabase/migrations/** by CI-GATE.1.
+      # Migrations: check-location-scoping and check-rls-restrictive derive
+      # their tenant-table set and net policy state by replaying them, so a
+      # migration adding location_id to a table must re-run CI for that
+      # table's routes to get checked.
+      # Functions: src/lib/email-attachment-staging.contract.test.js READS
+      # supabase/functions/postmark-inbound-shim/index.ts off disk and pins
+      # its constants — editing that Deno shim can fail `npm test`, and
+      # supabase/functions/** was invisible here (and is eslint-ignored, so
+      # nothing else looked at it either). Whole directory rather than two
+      # entries: nothing under supabase/ is inert to CI, and a future
+      # subdirectory should not have to be remembered.
+      - 'supabase/**'
+      # .github/workflows/** — widened from the two named files by CI-GATE.1.
+      # web-ci.yml: this workflow must re-run when its own definition changes.
+      # eas-update.yml: check:ota-paths is the only thing that inspects its
+      # publish allowlist (OTA-PATHS.1).
+      # mobile-export.yml: tests/ota-trigger-paths.test.js reads it off disk
+      # and asserts its push paths parse — an unwatched third file that can
+      # fail `npm test`.
+      # Watching the directory costs a handful of runs on the desktop-*.yml
+      # files and can never miss the next workflow a test decides to read.
+      - '.github/workflows/**'
+
+  # ─── pull_request: base main ─────────────────────────────────────
+  # DELIBERATELY UNFILTERED. Do not add a `paths:` key here.
+  #
+  # Why the trigger exists at all: without it, branches were never
+  # CI-checked and failures only surfaced after a merge — found May 2026
+  # after every Web CI run on main had been failing for 8 consecutive
+  # merges (a missing `typescript` devDep that eslint-config-next
+  # transitively required).
+  #
+  # Why it carries no path filter (CI-GATE.1): "Test & lint" and
+  # "Next build" are the required status checks on main. A workflow
+  # skipped by a path filter reports NOTHING — it does not report
+  # success — so a required check that never fires leaves the PR
+  # blocked forever with no way to satisfy it. Every path filter on
+  # this trigger is therefore a list of PRs that cannot be merged.
+  # A docs-only PR would have been exactly that.
+  #
+  # Alternatives considered and rejected:
+  #   (b) a separate always-on "gate" workflow reporting a synthetic
+  #       success when Web CI was legitimately skipped. Rejected: it is
+  #       a mechanism whose entire job is to mark PRs green without
+  #       having tested them, and a bug in its skip-detection is
+  #       indistinguishable from a real pass. In a single-maintainer
+  #       repo a machine that can silently fake green is a worse
+  #       failure than a slow one.
+  #   (c) keep the filters and require nothing. Rejected: that is the
+  #       status quo that let a red CI run ship to production on #1454,
+  #       since Vercel auto-deploys main.
+  # Cost of (a), the option taken: ~5 runner-minutes on docs-only and
+  # config-only PRs. That is the price of "the checks always report",
+  # and it is the right trade here — predictability over runner-minutes.
+  #
+  # Trigger-semantics notes, so this is not re-derived:
+  #   - Default activity types (opened/synchronize/reopened) are correct.
+  #     DRAFT PRs do run — draft-ness gates `ready_for_review`, not the
+  #     defaults — so a draft's checks are already green when it is
+  #     marked ready.
+  #   - `branches: [main]` matches the BASE branch, so stacked PRs onto a
+  #     feature branch stay unwatched, as intended. Retargeting an
+  #     existing PR onto main fires `edited`, which is NOT a default type
+  #     and so does not start a run: close/reopen it (fires `reopened`)
+  #     or push a commit. `edited` is not added here because it also
+  #     fires on every title and description edit.
+  #   - No duplicate runs: the push trigger is `branches: [main]`, so a
+  #     same-repo PR branch push fires only `pull_request`.
+  #   - FORK PRs — read this before believing a green check. This repo is
+  #     PUBLIC (`gh api repos/… → visibility: public`). For a
+  #     `pull_request` event GitHub runs the workflow definition FROM THE
+  #     MERGE REF, i.e. the contributor's copy of this file. A fork PR
+  #     that keeps `name: Test & lint` / `name: Next build` and replaces
+  #     the steps with `run: true` produces two GREEN required checks
+  #     having tested nothing. (Renaming the jobs is the safe direction —
+  #     the checks then go absent, which blocks.) The jobs need no secrets
+  #     and `default_workflow_permissions` is `read`, so this is not a
+  #     token-exfiltration hole; it is a "the gate can be handed a forged
+  #     pass" hole. Actions' fork approval policy is currently
+  #     `first_time_contributors`, so a contributor with one merged PR
+  #     runs unapproved. CI-GATE.1's note here said the opposite ("blocked,
+  #     not falsely green") and was wrong.
+  #     ⇒ The required checks protect main from OUR OWN mistakes. They do
+  #       NOT make an untrusted contributor's PR safe. Reading the diff —
+  #       or "Require a pull request before merging" with an approving
+  #       review — is what covers that. See the enabling note below.
+  #     ⇒ Exposure today is theoretical: `gh api …/contributors` returns
+  #       ivers9307-cyber, dependabot[bot], vercel[bot] and nobody else.
+  #       It is written down because it stops being theoretical the first
+  #       time somebody outside opens a PR, and a green check is exactly
+  #       the thing nobody re-audits.
   pull_request:
     branches: [main]
-    paths:
-      - 'src/**'
-      - 'shared/**'
-      - 'mobile/**'
-      - 'tests/**' # see push paths note (SAAS-10)
-      - 'package.json'
-      - 'package-lock.json'
-      - '.eslintrc.json'
-      - 'eslint.config.mjs'
-      - 'eslint.mobile-imports.config.mjs'
-      - 'eslint.mobile.config.mjs'
-      - 'eslint.guardrails.config.mjs'
-      - 'eslint-rules/**'
-      - 'vitest.config.js'
-      - 'jsconfig.json'
-      - 'scripts/**'
-      - 'supabase/migrations/**'
-      - '.github/workflows/web-ci.yml'
 
+# ═══ ENABLING BRANCH PROTECTION — the settings this file assumes ═══════
+# CI-GATE.2. No repo settings are touched by this workflow; this is the
+# spec for the manual step, written down so the reasoning survives it.
+# Settings → Branches → add a rule on `main`:
+#
+#   ✅ Require status checks to pass before merging
+#        required checks, EXACTLY these two (the `name:` values below,
+#        not the job ids `check` / `build`):
+#          • Test & lint
+#          • Next build
+#        Nothing else may be listed. Dependency audit, eas-update and
+#        mobile-export are all path-filtered on their own triggers, so
+#        requiring any of them re-creates the never-reports deadlock
+#        that dropping the PR path filter above exists to avoid.
+#
+#   ✅ Require branches to be up to date before merging
+#        NOT optional, and the one setting most likely to be argued away
+#        as thrash. Without it two PRs that are each green against an
+#        OLDER main can both merge — PR A adds a caller, PR B renames the
+#        callee — and main goes red from a semantic conflict neither run
+#        could see. Vercel auto-deploys main, so that red build is IN
+#        PRODUCTION before the post-merge run reports. The push run is a
+#        detector, not a gate (see the push trigger note); it cannot
+#        substitute for this, and #1454 is what "detector only" looks
+#        like. Cost is real but small and bounded: every merge re-runs
+#        ~5.5min against fresh main, and a burst serialises (the four
+#        merges of 2026-08-16T08:14 would have taken ~22min instead of
+#        8s). Pay it. If it is ever turned OFF, say so out loud rather
+#        than quietly — the residual hole is exactly the paragraph above.
+#
+#   ✅ Do not allow bypassing the above settings  (admin enforcement ON)
+#        This is a single-maintainer repo: every merge is performed by
+#        the admin, so leaving the bypass armed hands the ONLY merger a
+#        one-click "merge anyway" on a red or missing check — the same
+#        click that shipped a red build to prod on #1454, now with a
+#        confirmation dialog in front of it. The argument against a
+#        machine that can fake green (option (b) above) is the same
+#        argument against a human who can wave one through. The escape
+#        hatch is not a permanently-armed bypass: it is Settings →
+#        uncheck → merge → re-check, which takes seconds and leaves a
+#        trail.
+#
+#   ✅ Require a pull request before merging, REQUIRED APPROVALS: 0
+#        Works fine solo — it is the approvals count, not the PR itself,
+#        that a single maintainer cannot satisfy. Set it so "no direct
+#        pushes to main" is stated by a setting instead of resting on
+#        the side effect that required checks also reject a bare push.
+#        The ship loop already opens a PR for everything, so this costs
+#        nothing and closes the "just this once" push.
+#
+#   ⬜ Required approvals: 1 — NOT enableable solo (you cannot approve
+#        your own PR), so it is deliberately out of this gate. State the
+#        consequence rather than leaving it implied: the two required
+#        checks are a guard against OUR OWN mistakes and nothing more.
+#        A review is what would cover an untrusted contributor, and a
+#        fork can hand the checks a forged pass — see the FORK PRs note
+#        above. Turn this on the day a second human gets write access,
+#        and set Actions → General → Fork pull request workflows to
+#        "Require approval for all outside collaborators" at the same
+#        time.
+#
+# KNOWN RESIDUAL — `Next build` is not hermetic. Two files still pull
+# fonts from Google's CDN at build time: src/app/offers/layout.js
+# (Archivo, Archivo_Black) and src/app/ccf/page.js (Barlow,
+# Barlow_Condensed), both `next/font/google`, both compiled by
+# `npm run build`. src/fonts/repset.js and src/fonts/poppins.js already
+# moved to next/font/local for exactly this reason ("keeps the build
+# hermetic — no build-time fetch to fonts.googleapis.com, so a Google
+# outage can't fail `next build`"); those two never got the treatment,
+# and offers/layout.js still carries a header comment claiming it is
+# self-hosted, which it is not. On 2026-08-12 a fonts.gstatic.com hash
+# rotation made `next build` fail locally for about a day with 9
+# unresolvable archivo_* module errors. Making Next build a REQUIRED
+# check converts that from a nuisance into a merge freeze.
+# Measured counterweight, and the reason this is a note rather than a
+# blocker: CI's build job stayed GREEN on main throughout that outage —
+# the failure was only ever reproduced locally. So the exposure is
+# structural, not observed, and the fix (commit the woff2 files and
+# convert both to next/font/local) changes rendered type on two LIVE
+# public marketing surfaces — its own PR, with eyes on both pages, not
+# a rider on a CI-config change. If it does recur before then, uncheck
+# admin enforcement for the one merge rather than reverting this.
+# ══════════════════════════════════════════════════════════════════════
+
+# CI-GATE.2 — the concurrency GROUP is asymmetric, and that is the fix; the
+# cancel-in-progress flag alone is not enough (see "why not just false").
+#
+#   pull_request → group per PR (github.ref is refs/pull/<n>/merge), cancel
+#   in progress. A new push to the PR supersedes the old head SHA, branch
+#   protection evaluates the checks on the CURRENT head, and the cancelled
+#   run belongs to a SHA nobody is merging. Superseding is free here.
+#
+#   push: main → group per COMMIT (github.sha), never cancelled. On main the
+#   superseded SHA IS a SHA somebody merged, and Vercel has already deployed
+#   it. A per-commit group means a merge's run cannot be cancelled OR
+#   displaced by a later merge; bursts simply run in parallel. Actions
+#   minutes are free on a public repo, so parallel costs nothing real.
+#
+# What this fixes, measured rather than assumed: over 200 Web CI runs
+# (2026-08-12..19) the push event was 65 success / 16 cancelled / 2 failure —
+# 19% of merges to main left NO CI result on their merge commit, because
+# every push shared the single group web-ci-refs/heads/main. Worst observed
+# case 2026-08-16T08:14:44..52Z: four merges (#1418/#1419/#1420/#1421) inside
+# eight seconds, three runs cancelled, one survivor. Run 32263362220 (#1457,
+# 2026-08-19) is the same shape — cancelled 29s in by the next merge.
+# That silently defeated the reason CI-GATE.1 added vercel.json,
+# next.config.js, postcss/tailwind.config.js and supabase/** to the push
+# trigger: "a cron edit must not be the one merge of the day with no CI
+# result attached to it" is not true if the next merge cancels it.
+#
+# Why not just `cancel-in-progress: false` (the obvious one-line fix): it
+# under-fixes, and the way it under-fixes is invisible. With a shared group
+# GitHub makes the newcomer PENDING and then "any previously pending job or
+# workflow in the concurrency group will be canceled" — so a burst of four
+# yields run 1 (in progress) plus run 4 (pending) and cancels 2 and 3. It
+# would have repaired the two-merge case and left the actual worst observed
+# case behaving exactly as before. The flag is kept below anyway: it is
+# correct on its own terms and it keeps the intent readable if someone later
+# collapses the group expression.
 concurrency:
-  group: web-ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: web-ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
@@ -167,6 +436,17 @@ jobs:
       # scripts/check-bundle-sql.mjs.
       - name: Bundle SQL drift
         run: npm run check:bundle-sql
+
+      # OTA-PATHS.1 — eas-update.yml's trigger is an ALLOWLIST of paths
+      # that genuinely enter the Metro bundle, so a new non-bundle file
+      # under mobile/ is inert instead of publishing a no-op OTA to
+      # production phones. This is the other half of that bargain: it
+      # fails the moment a new top-level entry under mobile/ is neither
+      # in the trigger nor declared non-bundle, so an allowlist miss is
+      # caught on the PR that creates the directory rather than as a
+      # silently-missing update days later.
+      - name: OTA trigger paths
+        run: npm run check:ota-paths
 
   # SAAS4-W0.3 (INFRA_BACKLOG #7) — `next build` as a first-class CI gate.
   # Vitest runs on mocked imports, so a missing/renamed export or an

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { applyAudienceFilter, AUDIENCE_FIELDS, InvalidAudienceFilterError, resolveTagFilters, resolveEventFilters, applyAudienceFilterAsync, mergeRegistrationContactIds, LIVE_REGISTRATION_STATUSES, validateAudienceFilter, isUnsetFilterRow, stripUnsetFilterRows } from './audience-filter.js'
 
 // Mock Supabase query builder — every method returns `this` and records the call.
@@ -13,6 +13,25 @@ function makeMockQuery() {
   const root = new Proxy({}, handler)
   return { query: root, calls }
 }
+
+// CONSENTLOC-FLAKE.1 (class sweep) — FREEZE THE CLOCK for the whole file.
+// The `days_since_gt` / `days_since_lt` operators compute their cutoff from
+// `new Date()` INSIDE the builder (audience-filter.js:381/387/584/594) and embed
+// it at MILLISECOND precision, so any test that runs the builder twice and
+// compares the two call logs disagrees by exactly 1ms whenever the two runs
+// straddle a millisecond boundary. Measured here: 11/20,000 (0.055%) on the AND
+// branch and 19/20,000 (0.095%) on the OR branch. The failure prints as two
+// near-identical truncated arrays, which is what made the sibling
+// marketing-consent flake so hard to read when it shipped a red build to main.
+//
+// Today's two-execution comparison in this file ("contains / not_contains are
+// aliases", below) uses `tags`, so it is not affected yet — this freeze is the
+// guard that keeps it that way when someone adds a date operator to a fixture.
+// Existing days_since tests assert by regex SHAPE, never by exact timestamp, so
+// they are unaffected either way; a fixed clock only makes them reproducible.
+const FROZEN_NOW = new Date('2026-08-19T10:00:00.000Z')
+beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'], now: FROZEN_NOW }) })
+afterEach(() => { vi.useRealTimers() })
 
 describe('applyAudienceFilter', () => {
   let q
@@ -538,6 +557,26 @@ describe('applyAudienceFilter — array field (contacts.tags)', () => {
     applyAudienceFilter(a.query, { filters: [{ field: 'tags', op: 'eq', value: 'PTC' }] })
     applyAudienceFilter(b.query, { filters: [{ field: 'tags', op: 'contains', value: 'PTC' }] })
     expect(b.calls).toEqual(a.calls)
+  })
+
+  // CONSENTLOC-FLAKE.1 (class sweep) — the hazard the file-scope clock freeze
+  // exists for, pinned where the builder lives rather than left as a comment.
+  // Both branches of days_since compile a wall-clock cutoff, so two builds are
+  // call-for-call identical ONLY under a fixed clock. With real timers this
+  // same comparison diverges ~0.1% of the time (and ~1.2-1.5% in the
+  // whatsapp-reachability-send-parity path, where more work separates the two
+  // builds). If this test ever goes flaky, the freeze above was removed.
+  it('compiles a byte-identical days_since predicate across two builds (clock is frozen)', () => {
+    for (const op of ['days_since_gt', 'days_since_lt']) {
+      const a = makeMockQuery(); const b = makeMockQuery()
+      const filter = { filters: [{ field: 'last_attended_at', op, value: 30 }] }
+      applyAudienceFilter(a.query, filter)
+      applyAudienceFilter(b.query, filter)
+      expect(a.calls, `${op} must not embed a moving clock`).toEqual(b.calls)
+      // ...and it really is the timestamp-bearing predicate being compared,
+      // not an empty call log that would deep-equal trivially.
+      expect(JSON.stringify(a.calls)).toContain(FROZEN_NOW.toISOString().slice(0, 4))
+    }
   })
 })
 

@@ -27,9 +27,11 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro, ImagePlus, X as XIcon, Tv, Flag, GraduationCap, Mic, Star, DoorOpen, UserPlus, Image as ImageIcon, Mail } from 'lucide-react'
+import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro, ImagePlus, X as XIcon, Tv, Flag, GraduationCap, Mic, Star, DoorOpen, UserPlus, Image as ImageIcon, Mail, MessageSquare } from 'lucide-react'
 import Link from 'next/link'
 import { toSlug } from '@/lib/slug'
+import { compressImageForUpload, parseUploadResponse } from '@/lib/landing-media-upload'
+import { generateWaveTimes } from '@/lib/wave-generate'
 
 const ALL_SIZES = [1, 2, 3, 4, 5, 6, 8]
 
@@ -224,6 +226,15 @@ export default function RaceEventForm({ race, locationId }) {
         label: w.label || '',
       }))
   })
+  // WAVEGEN.1 — bulk wave generator inputs. Generate replaces the
+  // wave list with start→end at the cadence; rows stay editable after.
+  const [genStart, setGenStart] = useState('')
+  const [genEnd, setGenEnd] = useState('')
+  const [genEvery, setGenEvery] = useState('')
+  const [genCapacity, setGenCapacity] = useState('')
+  // Live preview of what Generate would produce; [] disables the button.
+  const generatedTimes = generateWaveTimes(genStart, genEnd, genEvery)
+
   const [active, setActive] = useState(race?.active ?? true)
   // Member pricing (mig 084). Stored as cents on the wire; the form
   // shows whole-euro inputs and converts on submit. Same pricing path
@@ -264,6 +275,9 @@ export default function RaceEventForm({ race, locationId }) {
   const [confirmationSubject, setConfirmationSubject] = useState(race?.confirmation_email_subject || '')
   const [confirmationIntro, setConfirmationIntro] = useState(race?.confirmation_email_intro || '')
   const [confirmationTemplateId, setConfirmationTemplateId] = useState(race?.confirmation_email_template_id || '')
+  // EVENTS-SMS-TOGGLE (mig 552) — per-event opt-in for the registration SMS
+  // confirmation. Off by default for new events; existing events reflect the DB.
+  const [confirmationSmsEnabled, setConfirmationSmsEnabled] = useState(!!race?.confirmation_sms_enabled)
   const [reminderSubject, setReminderSubject] = useState(race?.reminder_email_subject || '')
   const [reminderIntro, setReminderIntro] = useState(race?.reminder_email_intro || '')
   const [reminderTemplateId, setReminderTemplateId] = useState(race?.reminder_email_template_id || '')
@@ -310,6 +324,35 @@ export default function RaceEventForm({ race, locationId }) {
   // payees; a Revolut/UN1T host is the implicit default (host_id '').
   const stripeHosts = hosts.filter((h) => h.payment_provider === 'stripe_connect')
   const selectedHost = stripeHosts.find((h) => h.id === hostId) || null
+  // EVENT-COMMS-LOC (mig 553) — for host events, which real UN1T location's
+  // Twilio sender + email identity this event's confirmation/reminder texts
+  // and emails use. Host events sit on a sender-less per-host anchor
+  // location, so this override is only surfaced when hostId is set. Options
+  // are the org's real (non-anchor) locations, fetched per event location —
+  // mirrors the emailTemplates fetch above. A fetch failure just leaves the
+  // list empty (operator keeps whatever was already saved).
+  const [sendingLocationId, setSendingLocationId] = useState(race?.sending_location_id || '')
+  const [locationOptions, setLocationOptions] = useState([]) // {id,name,is_master}
+  useEffect(() => {
+    if (!locationId) return
+    let cancelled = false
+    fetch(`/api/locations/sendable?event_location_id=${encodeURIComponent(locationId)}`)
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return
+        const opts = Array.isArray(j?.data) ? j.data : []
+        setLocationOptions(opts)
+        // Only HOST events carry a sending-location override; a normal event
+        // must keep NULL so its comms resolve to its own location_id (spec
+        // non-goal). Default the picker to the org master for host events only.
+        if (hostId && !sendingLocationId) {
+          const master = opts.find((o) => o.is_master)
+          if (master) setSendingLocationId(master.id)
+        }
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [locationId, hostId]) // eslint-disable-line react-hooks/exhaustive-deps
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
@@ -332,13 +375,15 @@ export default function RaceEventForm({ race, locationId }) {
       fd.append('file', file)
       fd.append('slot', String(slot))
       const r = await fetch(`/api/events/${race.id}/logo`, { method: 'POST', body: fd })
-      const j = await r.json()
-      if (!r.ok || j.success === false) {
-        setLogoError(j.error || `Upload failed (${r.status})`)
+      // Safe parse — a >4.5MB file is rejected by the platform with a
+      // plain-text 413, which a bare r.json() turns into a parse crash.
+      const out = await parseUploadResponse(r)
+      if (!out.success) {
+        setLogoError(out.error)
         return
       }
       const next = [...logos]
-      next[slot] = j.url
+      next[slot] = out.url
       setLogos(next)
     } catch (e) {
       setLogoError(e.message || 'Network error')
@@ -371,15 +416,19 @@ export default function RaceEventForm({ race, locationId }) {
     setHeroError(null)
     setHeroBusy(true)
     try {
+      // Downscale in the browser first — a photo straight off a phone is
+      // often over Vercel's ~4.5MB body cap, which rejects with a
+      // plain-text 413 before the route (and its 5MB check) ever runs.
+      const toSend = await compressImageForUpload(file)
       const fd = new FormData()
-      fd.append('file', file)
+      fd.append('file', toSend, toSend.name || file.name || 'hero')
       const r = await fetch(`/api/events/${race.id}/hero`, { method: 'POST', body: fd })
-      const j = await r.json()
-      if (!r.ok || j.success === false) {
-        setHeroError(j.error || `Upload failed (${r.status})`)
+      const out = await parseUploadResponse(r)
+      if (!out.success) {
+        setHeroError(out.error)
         return
       }
-      setHeroUrl(j.url)
+      setHeroUrl(out.url)
     } catch (e) {
       setHeroError(e.message || 'Network error')
     } finally {
@@ -488,6 +537,11 @@ export default function RaceEventForm({ race, locationId }) {
       shared,
       // EVENTS-HOST.4 — payout routing. '' → null = internal UN1T (Revolut).
       host_id: hostId || null,
+      // EVENT-COMMS-LOC (mig 553) — '' → null = resolved at send time
+      // (host event → org master location; normal event → its own location).
+      // EVENT-COMMS-LOC — host events only; a normal event keeps NULL so its
+      // comms resolve to its own location_id (never stamped with the master).
+      sending_location_id: hostId ? (sendingLocationId || null) : null,
       member_fee_cents: memberPricingEnabled ? memberFeeCents : null,
       non_member_fee_cents: nonMemberFeeCents,
       // TV logos: race-only. For non-race kinds we send an empty
@@ -509,6 +563,8 @@ export default function RaceEventForm({ race, locationId }) {
       confirmation_email_subject: confirmationSubject.trim() || null,
       confirmation_email_intro: confirmationIntro.trim() || null,
       confirmation_email_template_id: confirmationTemplateId || null,
+      // EVENTS-SMS-TOGGLE (mig 552) — always sent so toggling it off persists.
+      confirmation_sms_enabled: confirmationSmsEnabled,
       reminder_email_subject: reminderSubject.trim() || null,
       reminder_email_intro: reminderIntro.trim() || null,
       reminder_email_template_id: reminderTemplateId || null,
@@ -718,7 +774,72 @@ export default function RaceEventForm({ race, locationId }) {
             Multiple start times throughout the race day. Each wave has its own capacity. Teams pick a
             wave at signup. Per-wave capacity is soft-enforced at signup time (a fast-fingered team
             can in theory squeeze in over the cap during a near-simultaneous signup; acceptable for v1).
+            Signup only offers the next 90 minutes of available waves — later times release as earlier
+            waves fill.
           </p>
+
+          {/* WAVEGEN.1 — generate the whole day in one go. Generated
+              rows land in the editable list below, so one-off tweaks
+              (a lunch gap, a different cap on the last wave) are still
+              a normal edit. */}
+          <div className="border border-un1t-border rounded-md p-3 bg-un1t-bg space-y-2">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-un1t-subtle">
+              Generate waves
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-[110px_110px_120px_120px_auto] gap-2 items-center">
+              <input
+                type="time"
+                value={genStart}
+                onChange={e => setGenStart(e.target.value)}
+                title="First wave start time"
+                className="bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+              />
+              <input
+                type="time"
+                value={genEnd}
+                onChange={e => setGenEnd(e.target.value)}
+                title="Last wave start time"
+                className="bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+              />
+              <input
+                type="number"
+                min={1}
+                placeholder="Every (min)"
+                value={genEvery}
+                onChange={e => setGenEvery(e.target.value)}
+                title="Minutes between wave starts"
+                className="bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+              />
+              <input
+                type="number"
+                min={1}
+                placeholder="Teams/wave"
+                value={genCapacity}
+                onChange={e => setGenCapacity(e.target.value)}
+                title="Capacity per wave (empty = unlimited)"
+                className="bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+              />
+              <button
+                type="button"
+                disabled={generatedTimes.length === 0}
+                onClick={() => {
+                  setWaves(generatedTimes.map((t) => ({
+                    start_time: t,
+                    capacity: genCapacity || '',
+                    label: '',
+                  })))
+                }}
+                className="text-xs font-semibold bg-un1t-text text-un1t-surface rounded-md px-3 py-2 disabled:opacity-40"
+              >
+                Generate{generatedTimes.length > 0 ? ` ${generatedTimes.length} waves` : ''}
+              </button>
+            </div>
+            <p className="text-[11px] text-un1t-muted">
+              First start, last start, minutes between waves, capacity per wave. Generating replaces the
+              current wave list.
+            </p>
+          </div>
+
           <div className="space-y-2">
             {waves.map((w, i) => (
               <div key={i} className="grid grid-cols-[110px_120px_1fr_auto] gap-2 items-center">
@@ -1194,6 +1315,29 @@ export default function RaceEventForm({ race, locationId }) {
             </div>
           </div>
 
+          {/* EVENT-COMMS-LOC (mig 553) — host events sit on a sender-less
+              per-host anchor location, so their texts/emails need a real
+              UN1T location's identity to send from. Hidden for internal
+              UN1T events (hostId empty) — those already send from their
+              own location. */}
+          {hostId && (
+            <div className="pb-1">
+              <label className="block text-sm text-un1t-subtle mb-1">Send comms from</label>
+              <select
+                value={sendingLocationId}
+                onChange={(e) => setSendingLocationId(e.target.value)}
+                className="w-full max-w-md bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+              >
+                {locationOptions.map((o) => (
+                  <option key={o.id} value={o.id}>{o.name}{o.is_master ? ' (default)' : ''}</option>
+                ))}
+              </select>
+              <p className="text-[11px] text-un1t-muted mt-1">
+                Which UN1T location&apos;s Twilio sender + email identity this event&apos;s texts and emails use.
+              </p>
+            </div>
+          )}
+
           <EventEmailFields
             title="Signup confirmation"
             description="Sent as soon as a signup is confirmed."
@@ -1207,6 +1351,27 @@ export default function RaceEventForm({ race, locationId }) {
             onTemplateId={setConfirmationTemplateId}
             templates={emailTemplates}
           />
+
+          {/* EVENTS-SMS-TOGGLE (mig 552) — the signup confirmation can ALSO go
+              out as a text message. OFF by default; the email above always
+              sends. The pre-event reminder below is email + push only (no SMS). */}
+          <label className="flex items-start gap-3 pt-4 border-t border-un1t-border cursor-pointer">
+            <input
+              type="checkbox"
+              checked={confirmationSmsEnabled}
+              onChange={e => setConfirmationSmsEnabled(e.target.checked)}
+              className="mt-0.5 cursor-pointer"
+            />
+            <span>
+              <span className="flex items-center gap-1.5 text-sm font-medium text-un1t-text">
+                <MessageSquare size={14} className="text-un1t-subtle" /> Send a text message (SMS) confirmation
+              </span>
+              <span className="block text-[11px] text-un1t-subtle mt-1">
+                Off by default. Texts the registrant a short confirmation on signup, on top of the email above.
+                Sender ID is set per location in Settings → Locations → SMS.
+              </span>
+            </span>
+          </label>
 
           <div className="pt-4 border-t border-un1t-border">
             <EventEmailFields

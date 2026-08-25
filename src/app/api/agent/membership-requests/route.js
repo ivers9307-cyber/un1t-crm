@@ -65,7 +65,11 @@ export async function GET(request) {
   let data
   try {
     data = await selectAll((from, to) => db.from('agent_membership_requests')
-      .select('id, kind, channel, conversation_id, status, details, customer_note, retention_flagged, decided_at, decision_note, created_at, contacts(id, name, first_name, glofox_member_id)')
+      // AGENT-REQ-UX.1 — email/phone ride along for the operator's Glofox
+      // lookup on the review page (manager+ surface, same fields the
+      // /approvals provider exposes). AGENT-FUNNEL-CREDITS.1 adds the synced
+      // membership/credit fields for the account summary line.
+      .select('id, kind, channel, conversation_id, status, details, customer_note, retention_flagged, decided_at, decision_note, created_at, contacts(id, name, first_name, email, phone, glofox_member_id, glofox_membership_plan, glofox_membership_status, glofox_membership_state, trial_credits_remaining)')
       .eq('location_id', locationId)
       .order('status', { ascending: true })   // pending sorts first alphabetically
       .order('created_at', { ascending: false })

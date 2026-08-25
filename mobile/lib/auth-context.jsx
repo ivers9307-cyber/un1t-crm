@@ -18,7 +18,8 @@ import { createContext, useContext, useEffect, useState, useCallback } from 'rea
 import { supabase } from './supabase'
 import { api } from './api'
 import { readImpersonate, writeImpersonate, clearImpersonate } from './impersonate'
-import { unregisterCurrentDevicePush } from './push-register'
+import { performFullSignOut } from './sign-out'
+import { isReviewDemoEmail, reviewLoginOtp } from './review-login'
 
 const AuthContext = createContext(null)
 
@@ -139,7 +140,20 @@ export function AuthProvider({ children }) {
   // champ-app/mobile). No deep-link / native release needed. Password sign-in
   // above stays as break-glass. shouldCreateUser:false + project signups OFF
   // means an unknown email can never provision an account.
+  //
+  // REPSET-PUB.3A — the App Store reviewer gate rides these two callbacks,
+  // exactly as it does in champ-app: the demo EMAIL is the trigger (no hidden
+  // gesture), requestCode short-circuits the email send, and verifyCode
+  // exchanges the typed gate code for a real one-time token via
+  // POST /api/mobile/review-login. Scoped to that one address; every other
+  // email takes the ordinary emailed-OTP path untouched. The route is 404
+  // unless REVIEW_LOGIN_CODE is set on the server, so on a normal build this
+  // branch simply fails with the same neutral message a wrong code gets.
   const requestCode = useCallback(async (email) => {
+    // The reviewer's mailbox isn't reachable by Apple, so sending a code there
+    // would strand them. Advance straight to the code step; `review: true`
+    // tells the login screen to ask for the gate code instead of an OTP.
+    if (isReviewDemoEmail(email)) return { success: true, review: true }
     const { error } = await supabase.auth.signInWithOtp({
       email: email.trim().toLowerCase(),
       options: { shouldCreateUser: false },
@@ -149,52 +163,36 @@ export function AuthProvider({ children }) {
   }, [])
 
   const verifyCode = useCallback(async (email, token) => {
+    const e = email.trim().toLowerCase()
+    let otp = token.trim()
+    if (isReviewDemoEmail(e)) {
+      // Exchange the fixed gate code for a real one-time token. Every refusal
+      // the route can produce (404 gate off, 403 wrong code, 429 throttled,
+      // 503 limiter down) collapses to one neutral message — the reviewer must
+      // not be able to tell them apart, and neither should anyone probing.
+      const res = await api('/api/mobile/review-login', { method: 'POST', body: { email: e, code: otp } })
+      const minted = reviewLoginOtp(res)
+      if (!minted) return { success: false, error: 'That code didn’t work.' }
+      otp = minted
+    }
     const { data, error } = await supabase.auth.verifyOtp({
-      email: email.trim().toLowerCase(),
-      token: token.trim(),
+      email: e,
+      token: otp,
       type: 'email',
     })
     if (error) return { success: false, error: error.message }
     return { success: true, data }
   }, [])
 
+  // PHASE2 stage C — the sign-out body moved to lib/sign-out.js as THE
+  // teardown union for the one-session model: impersonation stop → staff
+  // push unregister → member push unregister (if a member identity was
+  // active) → per-contact Apple-Health key cleanup → identity-history
+  // clears (has_ever_been_staff, last-side) → supabase.auth.signOut
+  // scope:'local'. The kiosk idle-lock (StudioPinProvider) and the member
+  // shell's sign-out call the same function.
   const signOut = useCallback(async () => {
-    // If a "view as user" session is active, close it first so its audit
-    // row gets a precise ended_at + the local target is cleared, rather
-    // than dangling open until the close-stale-impersonations cron reaps
-    // it. Best-effort — never block logout on it.
-    try {
-      const imp = await readImpersonate()
-      if (imp?.targetId) {
-        await api('/api/mobile/impersonate/stop', { method: 'POST' })
-        await clearImpersonate()
-      }
-    } catch {
-      // ignore — the reaper cron is the backstop
-    }
-    // Delete this device's push-token registration while the JWT is
-    // still valid (the authed DELETE is scoped to user_id server-side,
-    // so it must run BEFORE supabase.auth.signOut clears the session).
-    // Runs AFTER the impersonation-stop above so the delete executes
-    // as the real signed-in user, not a View-as target. Best-effort: a
-    // network blip must never block sign-out — worst case the token
-    // stays registered until the next sign-in re-upserts it. Without
-    // this, a shared/studio device kept receiving the PREVIOUS user's
-    // notifications (lead alerts, WhatsApp — customer PII) after
-    // sign-out, because a still-valid token never triggers the
-    // server's DeviceNotRegistered pruning.
-    try {
-      await unregisterCurrentDevicePush()
-    } catch {
-      // ignore — next sign-in re-registers for the new user
-    }
-    // scope:'local' — revoke THIS device's session only. supabase-js
-    // defaults to scope:'global', which revokes every refresh token the
-    // user holds — so a studio kiosk's 5-minute idle lock (StudioPinProvider
-    // calls this signOut) was signing the staffer out of their own phone
-    // and the web CRM. Local scope still kills the kiosk-minted session
-    // server-side; personal sign-out likewise stays per-device.
-    await supabase.auth.signOut({ scope: 'local' })
+    await performFullSignOut()
   }, [])
 
   const setActiveLocationId = useCallback(async (locationId) => {

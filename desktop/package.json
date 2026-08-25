@@ -2,7 +2,7 @@
   "name": "repset-desktop",
   "version": "1.0.0",
   "private": true,
-  "description": "Repset Mac shell — Tauri wrapper for crm.un1tdublin.com",
+  "description": "Repset Mac shell — Tauri wrapper for crm.repset.ie",
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",

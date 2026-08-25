@@ -7,10 +7,16 @@
 // focus + on a manual refresh button. Clicking an item navigates
 // to the existing source page where the actual approve/decline
 // happens — this view is master/detail-by-link, not inline review.
+//
+// AGENT-REQ-UX.1 exception: the agent_requests tab decides INLINE
+// (AgentRequestDecideCard, same PATCH as everywhere else) — a customer
+// is waiting on those, so the extra hop to the settings page was pure
+// friction. Other categories keep the link-out model.
 
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { RefreshCw, ChevronRight } from 'lucide-react'
+import AgentRequestDecideCard from '@/components/AgentRequestDecideCard'
 
 function formatDateTime(s) {
   if (!s) return '—'
@@ -66,6 +72,14 @@ export default function ApprovalsInbox() {
 
   const active = providers.find((p) => p.key === activeKey) || null
 
+  // AGENT-REQ-UX.1 — an inline decision resolved one pending item. Drop the
+  // badge counts immediately; the card itself keeps rendering its outcome
+  // (the item stays in the list until the next load()/refocus refresh).
+  const onItemDecided = useCallback((providerKey) => {
+    setProviders((ps) => ps.map((p) => p.key === providerKey ? { ...p, count: Math.max(0, p.count - 1) } : p))
+    setTotal((t) => Math.max(0, t - 1))
+  }, [])
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -117,12 +131,12 @@ export default function ApprovalsInbox() {
         </div>
       )}
 
-      <ProviderList provider={active} loading={loading} />
+      <ProviderList provider={active} loading={loading} onItemDecided={onItemDecided} />
     </div>
   )
 }
 
-function ProviderList({ provider, loading }) {
+function ProviderList({ provider, loading, onItemDecided }) {
   if (!provider) {
     return (
       <div className="border border-un1t-border rounded-lg p-8 text-center text-sm text-un1t-subtle">
@@ -130,10 +144,40 @@ function ProviderList({ provider, loading }) {
       </div>
     )
   }
-  if (provider.items.length === 0) {
+  const failedItems = provider.failedItems || []
+  if (provider.items.length === 0 && failedItems.length === 0) {
     return (
       <div className="border border-un1t-border rounded-lg p-8 text-center text-sm text-un1t-subtle">
         Nothing pending in {provider.label.toLowerCase()}. <Link href={provider.reviewBase} className="underline">Open {provider.label}</Link>
+      </div>
+    )
+  }
+  // AGENT-REQ-UX.1 — agent requests decide in place; a customer is waiting.
+  // AGENT-RETRY.2 — failed executions render first (that customer has been
+  // waiting longest and was told nothing), as fix-&-retry cards.
+  if (provider.key === 'agent_requests') {
+    return (
+      <div className="space-y-3">
+        {failedItems.length > 0 && (
+          <p className="text-xs font-semibold text-red-700 uppercase tracking-wider">Failed — fix &amp; retry</p>
+        )}
+        {failedItems.map((it) => (
+          <AgentRequestDecideCard
+            key={it.id}
+            item={it}
+            onDecided={() => onItemDecided?.(provider.key)}
+          />
+        ))}
+        {failedItems.length > 0 && provider.items.length > 0 && (
+          <p className="text-xs font-semibold text-un1t-subtle uppercase tracking-wider pt-2">Waiting for review</p>
+        )}
+        {provider.items.map((it) => (
+          <AgentRequestDecideCard
+            key={it.id}
+            item={it}
+            onDecided={() => onItemDecided?.(provider.key)}
+          />
+        ))}
       </div>
     )
   }

@@ -10,6 +10,14 @@ export const AGENT_MESSAGE_SOURCE = 'agent'
 export const DEFAULT_HOLDING_MESSAGE =
   "Thanks for your message! One of the UN1T team will get back to you shortly."
 
+// MIA-CREDITS.1 — sent (verbatim, operator-editable via
+// settings.no_credits_handoff_text) when a booking pre-flight finds no
+// usable balance and the thread hands off to a human. Wording is Richard's
+// (2026-08-25): state the situation honestly, promise a person, no options
+// menu a warm customer could bounce off.
+export const DEFAULT_NO_CREDITS_HANDOFF_TEXT =
+  "You're out of class credits at the moment so I can't book that one straight away. I'll escalate this to a team member to help you out now."
+
 /** Normalise a phone to digits only (drops +, spaces, dashes). */
 export function normalisePhone(p) {
   return String(p || '').replace(/[^\d]/g, '')

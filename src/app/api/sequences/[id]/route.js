@@ -13,7 +13,7 @@ const SequenceUpdateSchema = z.object({
   // editor offers (SequenceEditor.jsx TRIGGER_TYPES). FLOW2 (mig
   // 131): added 'webhook' for inbound webhook-fired sequences.
   trigger_type: z.enum([
-    'manual', 'booking_created', 'first_booking', 'status_change',
+    'manual', 'audience_match', 'booking_created', 'first_booking', 'status_change',
     'event_reminder', 'tag_added',
     'race_registered', 'race_finished',
     'order_completed', 'order_failed', 'order_abandoned',
@@ -107,6 +107,26 @@ export async function PUT(request, props) {
       }
       throw e
     }
+  }
+
+  // AUDIENCEMATCH.1 — editing the audience REVOKES the enrolment confirmation.
+  //
+  // audience_seeded_at records that a human saw a specific headcount and said
+  // "enrol those people". Widen the filter afterwards and that consent no
+  // longer covers who it would now sweep in — the number they agreed to is not
+  // the number that would be enrolled. Clearing the stamp makes them re-confirm
+  // against the new figure; it does NOT un-enrol anyone already in, which is
+  // impossible anyway (full unique index on sequence_enrollments).
+  //
+  // Deliberately fires on ANY audience_filter write, including a narrowing or a
+  // no-op re-save. Deciding whether an edit widened the set means comparing two
+  // filters against live data, which is exactly the judgement the operator is
+  // being asked to make. Re-confirming a narrowed audience costs one click;
+  // getting the comparison wrong costs an unintended mass-enrol.
+  if (Object.hasOwn(updates, 'audience_filter')) {
+    updates.audience_seeded_at = null
+    updates.audience_seeded_by = null
+    updates.audience_seed_count = null
   }
 
   // COMMSFIX.E.5 — refuse to ACTIVATE a sequence that can never fire.

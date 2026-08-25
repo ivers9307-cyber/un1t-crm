@@ -37,12 +37,12 @@ beforeEach(() => vi.clearAllMocks())
 describe('/schedule/swaps gate', () => {
   it('redirects to /login without a session', async () => {
     getCurrentUser.mockResolvedValue(null)
-    await expect(SwapRequestsPage()).rejects.toThrow('NEXT_REDIRECT:/login')
+    await expect(SwapRequestsPage()).rejects.toThrow(/^NEXT_REDIRECT:\/login$/)
   })
 
   it('redirects to / for a user without the schedule permission', async () => {
     getCurrentUser.mockResolvedValue(user({ role: 'staff', perms: { schedule: false } }))
-    await expect(SwapRequestsPage()).rejects.toThrow('NEXT_REDIRECT:/')
+    await expect(SwapRequestsPage()).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
   })
 
   it('renders for a user with the schedule permission', async () => {

@@ -30,7 +30,7 @@
   <key>com.apple.security.app-sandbox</key>
   <true/>
 
-  <!-- Outbound network: WKWebView fetches crm.un1tdublin.com and
+  <!-- Outbound network: WKWebView fetches crm.repset.ie and
        the resources that page references (Supabase API, CDN assets,
        Postmark click trackers, etc.). -->
   <key>com.apple.security.network.client</key>

@@ -54,10 +54,17 @@ function makeFakeDb() {
   })[table] || []
 
   function from(table) {
-    const rows = rowsFor(table)
+    let rows = rowsFor(table)
     const builder = {
       select: () => builder,
       delete: () => builder,
+      // ANDROID-VIS.1 (mig 565) — push.js filters out device rows with a
+      // NULL expo_push_token. Modelled, not ignored, so a regression in
+      // that filter shows up here too.
+      not: (col, op, val) => {
+        if (op === 'is' && val === null) rows = rows.filter(r => r[col] != null)
+        return builder
+      },
       eq: (col, val) => {
         const matched = rows.filter(r => r[col] === val)
         return {

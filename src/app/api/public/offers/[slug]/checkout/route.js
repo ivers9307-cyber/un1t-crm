@@ -45,12 +45,17 @@ export async function POST(request, props) {
   // suppresses Revolut Pay on phones entirely (desktop uses QR/popup and
   // doesn't care). Return to the product page with the purchase id; the page
   // resumes in a confirming state and the status poll settles it. Origin is
-  // allowlisted to the marketing domain so a forged Origin header can't
-  // point Revolut's redirect anywhere else.
+  // allowlisted to the brand domains so a forged Origin header can't point
+  // Revolut's redirect anywhere else. REPSET-P6 dual-domain: repset.ie +
+  // subdomains are accepted alongside un1tdublin.com; the no-Origin
+  // default stays the un1tdublin marketing host (unchanged).
   const origin = (() => {
     try {
       const h = new URL(request.headers.get('origin') || '').hostname
-      if (h === 'un1tdublin.com' || h.endsWith('.un1tdublin.com')) {
+      if (
+        h === 'un1tdublin.com' || h.endsWith('.un1tdublin.com') ||
+        h === 'repset.ie' || h.endsWith('.repset.ie')
+      ) {
         return request.headers.get('origin')
       }
     } catch { /* fall through to default */ }

@@ -80,6 +80,47 @@ const SUPPORTED_MIME = new Set([
   'image/webp',
 ])
 
+/**
+ * MIME-SNIFF.1 — identify a document from its own first bytes.
+ *
+ * The stored mime is not trustworthy. `invoices_queue.attachment_mime_type`
+ * is set by whichever enqueue path created the row, and one of them
+ * (contractor invoices) hard-coded 'application/pdf' for years because its
+ * source column is named `pdf_path`. A contractor's phone photo therefore
+ * arrived labelled PDF, went into the `document` branch below, and Anthropic
+ * rejected it: "The PDF specified was not valid" (400) — an error that says
+ * nothing about the real cause.
+ *
+ * Sniffing closes the class at the only place that holds the actual bytes,
+ * so a wrong label anywhere upstream — any source, past or future — can no
+ * longer pick the wrong content block.
+ *
+ * Returns null when the bytes match nothing known: the caller then falls
+ * back to the declared mime and the SUPPORTED_MIME gate reports a clear
+ * unsupported-type error. Deliberately narrow — these five are exactly what
+ * Anthropic accepts, and guessing beyond the signature would reintroduce
+ * the "confident but wrong" failure this removes.
+ *
+ * @param {Buffer|Uint8Array|null} bytes
+ * @returns {string|null} one of SUPPORTED_MIME, or null if unrecognised
+ */
+export function sniffMimeFromBytes(bytes) {
+  if (!bytes || bytes.length < 4) return null
+  const b = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)
+  const starts = (...sig) => sig.every((byte, i) => b[i] === byte)
+
+  if (starts(0x25, 0x50, 0x44, 0x46)) return 'application/pdf'          // %PDF
+  if (starts(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) return 'image/png'
+  if (starts(0xff, 0xd8, 0xff)) return 'image/jpeg'
+  if (starts(0x47, 0x49, 0x46, 0x38)) return 'image/gif'                // GIF8
+  // WebP is a RIFF container: 'RIFF' ....(size).... 'WEBP'. Both halves
+  // must match — a .wav is also RIFF and must not be called an image.
+  if (starts(0x52, 0x49, 0x46, 0x46) && b.length >= 12 && b.toString('ascii', 8, 12) === 'WEBP') {
+    return 'image/webp'
+  }
+  return null
+}
+
 // Zod schema for the JSON Claude returns. Loose on number parsing
 // (Claude sometimes returns "€1,234.56" as a string) — coerce.
 // INVOICES — default the due date to 30 days after the issue date when
@@ -103,6 +144,45 @@ export function applyDueDateDefault(fields) {
   return due ? { ...fields, due_date: due } : fields
 }
 
+// ZERO-TOTAL.1 — "the document says zero" and "we could not read it" are
+// different answers, and a bare z.coerce.number() collapses them: zod coerces
+// BOTH null and '' to 0 (only undefined is rejected). So a blurry receipt
+// whose amount Claude could not make out was recorded as a €0 bill — and
+// scored HIGH confidence, since 0 is finite and 0+0-0 reconciles exactly. The
+// operator's review is the control on this pipeline, and it was being handed a
+// confident number nobody had read.
+//
+// The sibling extractor already models this correctly: recon/hunt-scoring.js
+// keeps `total` nullable (`.nullable()` short-circuits before coercion, so
+// null survives as null) and its caller refuses to auto-match a null total.
+// Here the document is the only source of truth, so an unreadable total is a
+// failed extraction — say so, rather than inventing zero.
+//
+// A money value the document MUST state. Rejects null, '', whitespace and
+// unparseable text; accepts a real number, a numeric string, and a genuine 0.
+const requiredMoney = z.union([z.number(), z.string().trim().min(1)]).pipe(z.coerce.number())
+
+// A money value that may legitimately be absent: a till receipt states a
+// total and frequently no VAT breakdown at all, so "missing" really does mean
+// zero here. Lenient about absent, still strict about junk ('abc' rejected).
+const optionalMoney = z.coerce.number().optional().transform((v) => v ?? 0)
+
+// EMPTY-STRING-FIELDS.1 — "" and null are the same answer: no value.
+//
+// RECEIPT-NULLS.1 taught this schema that a receipt may carry no date, by
+// accepting null. But the inbox editor's version of "no date" is an EMPTY
+// STRING — `strField` renders a null as '' so the box is blank, and saving
+// posts that '' straight back. '' is a string, so it met the YYYY-MM-DD regex
+// and failed, and the operator got "Invalid request body" on the very receipt
+// the previous fix had just rescued.
+//
+// Normalising here rather than in the form is deliberate: the schema is the
+// contract every client shares (the inbox, a future mobile editor, a direct
+// API call), and it keeps extracted_fields canonical — one spelling of empty
+// in the database, not '' from the editor and null from the extractor.
+const blankToNull = (schema) =>
+  z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? null : v), schema)
+
 const lineItem = z.object({
   description: z.string().min(1).max(500),
   quantity: z.coerce.number().nonnegative(),
@@ -120,31 +200,51 @@ const lineItem = z.object({
 // includes the category as a hint to the bookkeeper finishing the
 // draft in Xero.
 const invoiceFields = z.object({
-  supplier_name: z.string().min(1).max(300),
-  supplier_address: z.string().max(1000).nullable().optional(),
-  invoice_number: z.string().min(1).max(100),
-  invoice_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'invoice_date must be YYYY-MM-DD'),
-  due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'due_date must be YYYY-MM-DD').nullable().optional(),
+  // EMPTY-STRING-FIELDS.1 — trim() before min(1): a box holding only spaces
+  // is empty, and this field is the one that genuinely may not be.
+  supplier_name: z.string().trim().min(1).max(300),
+  supplier_address: blankToNull(z.string().max(1000).nullable().optional()),
+  // RECEIPT-NULLS.1 — nullable, because a till receipt is not an invoice:
+  // it routinely carries no invoice number, and often no date the model can
+  // read off a crumpled thermal print. Both were required, so Claude
+  // correctly answering `null` failed validation and the WHOLE extraction
+  // was binned — supplier, total and line items included. That killed a
+  // Tesco receipt (invoice_date, row ee83a2f6) and a card receipt
+  // (invoice_number, e216cb1b) outright, with the operator shown only a
+  // schema error.
+  //
+  // The pipeline was always built for a partial read:
+  // scoreExtractionConfidence() scores a payload missing either field as
+  // 'medium', and the /extract route notes "Operator always reviews
+  // regardless". The schema was just stricter than the pipeline it feeds.
+  // The regex still applies when a value IS present, so nullable does not
+  // mean "anything goes", and push-xero blocks the Xero send if the
+  // operator never fills the date in.
+  invoice_number: blankToNull(z.string().trim().min(1).max(100).nullable()),
+  invoice_date: blankToNull(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'invoice_date must be YYYY-MM-DD').nullable()),
+  due_date: blankToNull(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'due_date must be YYYY-MM-DD').nullable().optional()),
   currency: z.string().length(3).default('EUR'),
-  subtotal: z.coerce.number(),
-  tax_amount: z.coerce.number(),
-  total: z.coerce.number(),
+  // ZERO-TOTAL.1 — see requiredMoney/optionalMoney above. The total is the
+  // one number the document must actually state; the breakdown may be absent.
+  subtotal: optionalMoney,
+  tax_amount: optionalMoney,
+  total: requiredMoney,
   // INVOICES.3 — top-level category. Optional because the existing
   // car_documents invoice flow doesn't ask for one (we only added
   // the prompt instruction for the inbound_invoices path). Validated
   // against the enum so the inbox UI can rely on the value if set.
-  category: z.enum(INVOICE_CATEGORIES).nullable().optional(),
+  category: blankToNull(z.enum(INVOICE_CATEGORIES).nullable().optional()),
   // INVOICES.3 — operator-editable account code free-text field.
   // Claude can suggest one if the supplier maps obviously to a
   // standard chart-of-accounts entry; otherwise this stays null and
   // the operator fills it in (or leaves it for Xero's own OCR to
   // assign during the draft-bill flow).
-  account_code: z.string().max(50).nullable().optional(),
+  account_code: blankToNull(z.string().max(50).nullable().optional()),
   // XERO-API.2 — Xero AccountID for the picked chart-of-accounts
   // line (uuid-shaped string from /Accounts). Mirrored alongside
   // account_code (the human-visible code, e.g. "400") so the
   // existing audit / hint surfaces still read it.
-  xero_account_id: z.string().max(100).nullable().optional(),
+  xero_account_id: blankToNull(z.string().max(100).nullable().optional()),
   // XERO-API.2 — structured ref for the picked supplier. Two shapes:
   //   { kind: 'existing', xero_contact_id, name, email? }
   //   { kind: 'new', name }
@@ -295,6 +395,20 @@ export async function extractInvoiceFieldsFromBytes(bytes, mime, meta = {}) {
       return { ok: false, error: 'This looks like a HEIC image (iPhone default) we could not convert. Please re-upload the receipt as JPEG or PDF.' }
     }
   }
+  // MIME-SNIFF.1 — the bytes outrank the label. Done AFTER the HEIC branch
+  // (which rewrites both) and BEFORE the support gate, so a row whose stored
+  // mime is wrong is corrected rather than rejected, and a row whose mime is
+  // missing entirely can still be processed. Only overrides when the sniff
+  // recognises the signature; an unknown one leaves the declared mime to be
+  // judged by the gate below.
+  const sniffed = sniffMimeFromBytes(bytes)
+  if (sniffed && sniffed !== mime) {
+    // Not an error: the queue row simply disagreed with the file. Worth a
+    // line because a mislabelled row means an upstream enqueue path is
+    // guessing (that is how contractor invoices shipped as fake PDFs).
+    console.warn(`[invoice-extraction] declared mime ${mime || '(missing)'} but bytes are ${sniffed} — trusting the bytes`)
+    mime = sniffed
+  }
   if (!SUPPORTED_MIME.has(mime || '')) {
     return {
       ok: false,
@@ -426,6 +540,12 @@ export function scoreExtractionConfidence(f) {
     Boolean(fields.supplier_name) &&
     Boolean(fields.invoice_number) &&
     Boolean(fields.invoice_date) &&
-    Number.isFinite(Number(fields.total))
+    // ZERO-TOTAL.1 — `> 0`, not merely finite. A zero total used to sail
+    // through here: 0 is finite, and the reconciliation check above passes
+    // trivially when subtotal+tax_amount-total is 0-0-0, so a row whose
+    // amount was never read presented as HIGH confidence. A genuine €0
+    // document scoring 'medium' is harmless — medium only means the
+    // operator looks at it, which is right for a zero-value bill anyway.
+    Number(fields.total) > 0
   return allRequired && reconciles ? 'high' : 'medium'
 }

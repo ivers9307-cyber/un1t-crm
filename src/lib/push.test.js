@@ -55,12 +55,28 @@ function makeFakeDb() {
     }
     if (table === 'device_tokens') {
       return {
-        select: () => ({
-          in: (_col, ids) => Promise.resolve({
-            data: fakeTokens.filter(t => ids.includes(t.user_id)),
-            error: null,
-          }),
-        }),
+        // ANDROID-VIS.1 (mig 565) — expo_push_token is nullable now, so
+        // the mock models `.not('expo_push_token','is',null)` faithfully
+        // rather than accepting and ignoring it: a filter the fake honours
+        // by accident is a filter the suite cannot prove.
+        select: () => {
+          let rows = () => fakeTokens
+          const builder = {
+            not: (col, op, val) => {
+              if (col !== 'expo_push_token' || op !== 'is' || val !== null) {
+                throw new Error(`unmodelled .not(${col}, ${op}, ${val})`)
+              }
+              const prev = rows
+              rows = () => prev().filter(t => t.expo_push_token != null)
+              return builder
+            },
+            in: (_col, ids) => Promise.resolve({
+              data: rows().filter(t => ids.includes(t.user_id)),
+              error: null,
+            }),
+          }
+          return builder
+        },
         delete: () => ({
           in: (_col, ids) => {
             deletedTokenIds.push(...ids)
@@ -89,6 +105,37 @@ beforeEach(() => {
 })
 
 import { sendPush, resolvePushAllowedIds, resolveRoleRecipientIds } from './push.js'
+
+describe('sendPush — ANDROID-VIS.1 token-less device rows (mig 565)', () => {
+  it('never sends to a device row whose expo_push_token is NULL', async () => {
+    // Since mig 565 a row can exist purely so the fleet report can see the
+    // device (every Android device, until FCM credentials exist). Sending
+    // `to: null` would come back as a per-ticket error and be counted as
+    // `failed` — a lie about a send that was never possible.
+    fakeProfiles = [{ id: 'a', active: true }]
+    fakeLinks = [{ profile_id: 'a', permissions: { mobile: { push_notifications: true } } }]
+    fakeTokens = [{ id: 't1', user_id: 'a', expo_push_token: null }]
+
+    const result = await sendPush(['a'], { title: 't', body: 'b' })
+    expect(result).toEqual({ sent: 0, skipped: 0, invalidated: 0, failed: 0 })
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+
+  it('still reaches the SAME user\'s other device that does have a token', async () => {
+    fakeProfiles = [{ id: 'a', active: true }]
+    fakeLinks = [{ profile_id: 'a', permissions: { mobile: { push_notifications: true } } }]
+    fakeTokens = [
+      { id: 't1', user_id: 'a', expo_push_token: null },
+      { id: 't2', user_id: 'a', expo_push_token: 'ExponentPushToken[x]' },
+    ]
+
+    const result = await sendPush(['a'], { title: 't', body: 'b' })
+    expect(result.sent).toBe(1)
+    const body = JSON.parse(global.fetch.mock.calls[0][1].body)
+    expect(body).toHaveLength(1)
+    expect(body[0].to).toBe('ExponentPushToken[x]')
+  })
+})
 
 describe('sendPush — permission filtering (reads profile_locations, mig 058)', () => {
   it('returns zero counts when no userIds are passed', async () => {

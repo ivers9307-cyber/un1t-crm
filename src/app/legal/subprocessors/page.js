@@ -19,7 +19,7 @@ export const runtime = 'nodejs'
 export const metadata = {
   title: 'Subprocessors · Champ Fitness Ltd',
   description:
-    'The subprocessors Champ Fitness Ltd uses to operate its gym management platform, with the data each processes and the safeguards in place.',
+    'The subprocessors Champ Fitness Ltd uses to operate Repset, its gym management platform, with the data each processes and the safeguards in place.',
 }
 
 const SUBPROCESSORS = [
@@ -84,7 +84,7 @@ export default function SubprocessorsPage() {
 
         <section className="prose prose-gray max-w-none">
           <p>
-            <strong>Champ Fitness Ltd</strong> operates a gym management platform. Where we act as a
+            <strong>Champ Fitness Ltd</strong> operates <strong>Repset</strong>, a gym management platform. Where we act as a
             data processor for the gyms using the platform (each the data controller for its own
             members), we engage the subprocessors below under written agreements. Transfers outside
             the EEA rely on the European Commission&rsquo;s Standard Contractual Clauses or, where

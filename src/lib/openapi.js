@@ -26,6 +26,19 @@ import {
 } from './schemas.js'
 import { LeadSchema } from './leads.js'
 import { MAX_STORED_EXAMPLE_CHARS, MAX_STORED_EXAMPLES } from '@/lib/hyrox/constants'
+import { WindowBase } from '@/lib/schedule/windows'
+// SHELLY-UI.9 — the /api/shelly/* request vocabulary. Aliased on import so
+// the .openapi()-decorated re-derivations below can carry the canonical
+// names; see the Shelly block for why .extend({}) is required.
+import {
+  ShellyConnectionPut as ShellyConnectionPutRaw,
+  ShellyAdoptBody as ShellyAdoptBodyRaw,
+  ShellyDevicePatch as ShellyDevicePatchRaw,
+  ShellyToggleBody as ShellyToggleBodyRaw,
+  ShellyEnergyQuery as ShellyEnergyQueryRaw,
+  ShellySyncNamesBody as ShellySyncNamesBodyRaw,
+  MAX_DEVICES_PER_LOCATION, MAX_FIXED_WINDOWS, MAX_OVERRIDE_HOURS, MIN_AUTH_KEY_LENGTH,
+} from '@/lib/shelly/schemas'
 
 // Wire .openapi() onto Zod so we can decorate inline-defined schemas.
 extendZodWithOpenApi(z)
@@ -1872,6 +1885,30 @@ registry.registerPath({
   },
 })
 
+// REPSET-PUB.3A — the ONE mobile route with `security: []`. It is called
+// before the reviewer has a session (minting one is its job), so it carries no
+// scheme; the credential is the REVIEW_LOGIN_CODE env var. Normally 404 —
+// the code is unset except in the window around an App Review submission.
+registry.registerPath({
+  method: 'post',
+  path: '/api/mobile/review-login',
+  tags: ['Mobile'],
+  security: [],
+  summary: 'App Store reviewer login gate',
+  description: 'Exchanges the demo email + the configured gate code for a one-time email OTP the client verifies into a session, so an App Review reviewer can get past the passwordless (emailed-code) login. DORMANT unless REVIEW_LOGIN_CODE is set — unset returns 404, and there is no source fallback. Throttled per IP before the credential check (mig 449); the limiter fails closed with 503. Signs in exactly one member-only demo account and provisions nothing.',
+  request: { body: { content: { 'application/json': { schema: z.object({
+    email: z.string(),
+    code: z.string(),
+  }).openapi('ReviewLoginBody') } } } },
+  responses: {
+    200: { description: 'One-time token minted', content: { 'application/json': { schema: SuccessResponse(z.object({ otp: z.string() })).openapi('ReviewLoginResponse') } } },
+    403: { description: 'Wrong email or code', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Gate not configured — route off', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Too many attempts from this IP', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Rate limiter unavailable — fails closed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'get',
   path: '/api/mobile/me',
@@ -1901,10 +1938,19 @@ registry.registerPath({
   path: '/api/mobile/device-tokens',
   tags: ['Mobile'],
   security: [{ CookieAuth: [] }],
-  summary: 'Register a push token',
-  request: { body: { content: { 'application/json': { schema: z.object({ token: z.string(), platform: z.string().optional() }).openapi('DeviceTokenRegisterBody') } } } },
+  summary: 'Register a device (push token optional)',
+  description: 'ANDROID-VIS.1 (mig 565) — the row is keyed by `device_key`, an app-generated per-install id; `expo_push_token` is an optional CAPABILITY. A device that cannot obtain one (Android without FCM credentials, iOS with notifications declined) still registers and still reports platform / app_version / last_seen_at / geofence_permission. At least one of the two identities is required. The field names below are the real ones — this entry said `token` until 565 and never matched the route. REPSET-PUB.1A (mig 567) adds `native_build`: the binary\'s Info.plist build number, OTA-immune, which is what distinguishes the old unlisted iOS app from the new public one.',
+  request: { body: { content: { 'application/json': { schema: z.object({
+    expo_push_token: z.string().nullable().optional(),
+    device_key: z.string().optional(),
+    platform: z.enum(['ios', 'android', 'web']).optional(),
+    device_name: z.string().optional(),
+    app_version: z.string().optional(),
+    geofence_permission: z.string().optional(),
+    native_build: z.string().optional(),
+  }).openapi('DeviceTokenRegisterBody') } } } },
   responses: {
-    200: { description: 'Token registered' },
+    200: { description: 'Device registered' },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -1914,10 +1960,14 @@ registry.registerPath({
   path: '/api/mobile/device-tokens',
   tags: ['Mobile'],
   security: [{ CookieAuth: [] }],
-  summary: 'Remove a push token',
-  request: { body: { content: { 'application/json': { schema: z.object({ token: z.string() }).openapi('DeviceTokenRemoveBody') } } } },
+  summary: 'Deregister a device',
+  description: 'Accepts either identity; `device_key` wins when both are sent (the token may have rotated since sign-in). Always scoped to the calling user.',
+  request: { body: { content: { 'application/json': { schema: z.object({
+    expo_push_token: z.string().nullable().optional(),
+    device_key: z.string().optional(),
+  }).openapi('DeviceTokenRemoveBody') } } } },
   responses: {
-    200: { description: 'Token removed' },
+    200: { description: 'Device deregistered' },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -2148,6 +2198,92 @@ registry.registerPath({
     400: { description: 'Contact not linked', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — contact_linking permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// REPSET-P5 — admin app-account linking (contacts.user_id ↔ auth user).
+// Master/owner only; staff never self-link their member contact.
+registry.registerPath({
+  method: 'get',
+  path: '/api/contacts/{id}/link-account',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'App-account link state, with optional exact-email auth-user search (master/owner)',
+  request: {
+    params: z.object({ id: uuidLike }),
+    query: z.object({ email: z.string().email().optional() }),
+  },
+  responses: {
+    200: {
+      description: 'Link state (masked email only) + optional search result',
+      content: {
+        'application/json': {
+          schema: z.object({
+            success: z.literal(true),
+            data: z.object({
+              linked: z.boolean(),
+              account: z.object({ userId: uuidLike, maskedEmail: z.string().nullable(), staff: z.object({ fullName: z.string().nullable(), role: z.string() }).nullable() }).nullable(),
+              search: z.object({ found: z.boolean() }).passthrough().optional(),
+            }),
+          }),
+        },
+      },
+    },
+    400: { description: 'Malformed email search term', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — master/owner only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/contacts/{id}/link-account',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Link contacts.user_id to an EXISTING auth user (master/owner; never creates auth users)',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({ userId: uuidLike, confirm: z.literal(true) }).openapi('ContactLinkAccountBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Linked', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({}).passthrough() }) } } },
+    400: { description: 'Validation error (confirm is required)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — master/owner only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact or target auth user not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Contact already linked (unlink first) or auth user linked to another contact', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/contacts/{id}/link-account',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Unlink a contact from its app account (master/owner)',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({ confirm: z.literal(true) }).openapi('ContactUnlinkAccountBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Unlinked', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({}).passthrough() }) } } },
+    400: { description: 'Not linked / confirm missing', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — master/owner only', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -2881,7 +3017,7 @@ registry.registerPath({
     },
   },
   responses: {
-    200: { description: 'Counts — { sent, skipped_throttled, skipped_no_token }' },
+    200: { description: 'Counts — { sent, skipped_throttled, skipped_no_app, skipped_no_token }. `skipped_no_app` = no device row at all; `skipped_no_token` = has the app but no push token (ANDROID-VIS.1b — Android until FCM credentials exist).' },
     400: { description: 'Invalid body', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — settings permission required', content: { 'application/json': { schema: ErrorResponse } } },
@@ -2979,6 +3115,27 @@ registry.registerPath({
     400: { description: 'Invalid target status', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'No such row', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Row already resolved/discarded', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/admin/webhook-dead-letter/bulk-resolve',
+  tags: ['Admin'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Acknowledge every open dead-letter row of one provider (master/owner only)',
+  description: 'Bulk form of {id}/resolve, for a provider that can park a whole population behind a single cause (ZOOMSYNC.4): zoom_contact_sync parks a row per phone number, so an account-level Zoom refusal — a dropped scope, a lapsed plan, a quota — would otherwise take one click per number to clear after the credential is fixed. Updates pending/failed rows only and stamps resolved_at, exactly like the single-row route. `provider` is REQUIRED and there is no all-providers mode: a blanket clear would let a Zoom cleanup silently acknowledge an unread inbound email.',
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      provider: z.string().openapi({ description: 'webhook_dead_letter.provider key, e.g. zoom_contact_sync' }),
+      status: z.enum(['resolved', 'discarded']).optional().openapi({ description: 'Default resolved' }),
+    }).openapi('DeadLetterBulkResolve') } } },
+  },
+  responses: {
+    200: { description: '{ success, data: { provider, status, updated } }' },
+    400: { description: 'Missing provider or invalid target status', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not master or owner', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -3588,7 +3745,7 @@ registry.registerPath({
   tags: ['Attendance'],
   security: [{ CookieAuth: [] }],
   summary: 'Geofence regions + permission-gate flag for the current user',
-  description: 'Returns { required, gate_copy, regions:[{location_id,latitude,longitude,radius_m}] } for the caller\'s non-exempt assignments at geofence-enabled locations (locations.settings.geofence, mig 463). Mobile registers OS geofences from this and gates the app on background-location permission when required=true.',
+  description: 'Returns { required, gate_copy, regions:[{location_id,latitude,longitude,radius_m}], all_regions:[{location_id,latitude,longitude,radius_m}] } for the caller\'s assignments at geofence-enabled locations (locations.settings.geofence, mig 463). `regions` is scoped to the caller\'s non-exempt assignments — mobile registers OS geofences from it and gates the app on background-location permission when required=true. `all_regions` (HOME-LOC.1) is exemption-blind — every assigned, geofence-configured location regardless of geofence_exempt — and is consumed by the mobile Home/on-site resolver for physical-location detection, not for attendance registration.',
   responses: { 200: { description: 'Config for the current user' } },
 })
 
@@ -4215,129 +4372,1287 @@ registry.registerPath({
   },
 })
 
-// Tapo devices (TAPO-T1) — staff registry/config/toggle, gated by the
-// device_control permission. Lives under the Automations tag: the UI
-// surface is /automations/devices. Note: these routes return
-// { success, devices } / { success, device } (not the data envelope).
-const TapoDevice = z.object({
+// Sonos studio-music schedules (SONOS.6-16) — replaces the TapoDevice block
+// that used to live here (deleted SONOS.14; mig 561 dropped tapo_devices).
+// Same device_control permission, same Automations tag; the UI surface is
+// now /automations/sonos. Response envelopes are { success, schedules } /
+// { success, schedule } — matching the old Tapo routes' convention, not the
+// { success, data } standard envelope. GET /household never errors past
+// auth: connection/reachability trouble is reported IN a 200 body, since
+// "Sonos is unreachable" is a normal state for the config page to render.
+//
+// SonosWindow's BASE is the shared one — WindowBase from
+// @/lib/schedule/windows, the same object the route extends (SHELLY-UI.1),
+// so days/on/off cannot drift between the spec and what the API accepts.
+// Only the Sonos-specific extension (volume + favorite_id) is written here.
+// SonosSchedulePayload is still a hand-kept mirror of the SchedulePayload
+// exported from src/app/api/sonos/schedules/route.js: this file derives its
+// schemas from src/lib (see file header), never from src/app/api, so keep
+// those two in sync by hand.
+const SonosWindow = WindowBase.extend({
+  volume: z.number().int().min(0).max(100),
+  favorite_id: z.string().min(1).max(128),
+}).openapi('SonosWindow', {
+  description: 'A recurring playback window. Enforced server-side, not representable here: on must differ '
+    + 'from off, and no two windows on a schedule may overlap on a shared day — an overlapping save is '
+    + 'rejected with 400 rather than silently letting the earlier window always win.',
+})
+
+const SonosSchedulePayload = z.object({
+  name: z.string().min(1).max(80).optional(),
+  player_ids: z.array(z.string().min(1)).max(32).optional(),
+  enabled: z.boolean().optional(),
+  windows: z.array(SonosWindow).max(16).optional(),
+}).openapi('SonosSchedulePayload')
+
+const SonosSchedulePatch = SonosSchedulePayload.extend({
+  // Suppression only — deliberately no {state:"on"}: that would have to
+  // invent a volume and a favourite, and the honest source for both is a
+  // window (mig 560 column comment on sonos_schedules.override).
+  override: z.object({
+    state: z.literal('off'),
+    until: z.string().datetime(),
+  }).nullable().optional(),
+}).openapi('SonosSchedulePatch')
+
+const SonosSchedule = z.object({
   id: uuidLike,
   location_id: uuidLike,
-  sidecar_device_id: z.string(),
+  name: z.string(),
+  player_ids: z.array(z.string()),
+  enabled: z.boolean(),
+  windows: z.array(SonosWindow),
+  override: z.object({ state: z.literal('off'), until: z.string().datetime() }).nullable(),
+  last_applied: z.object({
+    window_on_at: z.number(),
+    action: z.enum(['open', 'close']),
+    at: z.string().datetime(),
+  }).nullable(),
+  last_state: z.object({
+    group_id: z.string(),
+    playback_state: z.string().nullable(),
+    at: z.string().datetime(),
+  }).nullable(),
+  created_at: z.string().datetime(),
+  updated_at: z.string().datetime(),
+}).openapi('SonosSchedule', {
+  description: 'last_applied/last_state are written by the sonos-reconcile cron (unregistered here — '
+    + 'cron routes never are), so a freshly created schedule has both null.',
+})
+
+const SonosScheduleResponse = z.object({ success: z.literal(true), schedule: SonosSchedule }).openapi('SonosScheduleResponse')
+
+const SonosGroup = z.object({
+  id: z.string(),
+  name: z.string(),
+  coordinatorId: z.string().nullable(),
+  playbackState: z.string().nullable(),
+  playerIds: z.array(z.string()),
+}).openapi('SonosGroup')
+
+const SonosPlayer = z.object({
+  id: z.string(),
+  name: z.string(),
+}).openapi('SonosPlayer')
+
+const SonosFavorite = z.object({
+  id: z.string(),
+  name: z.string(),
+}).openapi('SonosFavorite')
+
+// SONOSLIVE.4/5 — live control + now-playing. Hand-duplicated from
+// src/lib/sonos/actions.js (ACTIONS) and src/lib/sonos/live.js (the `code`
+// tag union), same rule as the schedule schemas above: this file never
+// imports from src/app/api or src/lib/sonos, so the shapes are kept here
+// and updated by hand when those files change.
+const SonosControlBody = z.object({
+  schedule_id: z.string().optional(),
+  group_id: z.string().min(1).max(128).optional(),
+  action: z.enum([
+    'volume_up', 'volume_down', 'set_volume',
+    'play', 'pause', 'skip_next', 'skip_previous', 'load_favorite',
+  ]),
+  value: z.union([z.number(), z.string()]).optional(),
+}).openapi('SonosControlBody', {
+  description: 'Exactly one of schedule_id or group_id (neither or both is a 400). schedule_id is a uuid; '
+    + 'group_id is an opaque Sonos group id (RINCON_…:N, ≤128 chars — NOT a uuid) from GET /api/sonos/household, '
+    + 'and group ids are ephemeral — a stale one answers code: regrouped, so refetch the household and retry. '
+    + 'value is read per action: volume_up/volume_down take an optional step size (default 5, '
+    + 'range 1-100, sign ignored — direction lives in the action name); set_volume takes a required integer '
+    + '0-100; load_favorite takes a required non-empty favorite id. play/pause/skip_next/skip_previous '
+    + 'ignore value.',
+})
+
+// The `code` tag is a stable machine-readable union runLiveAction '
+// (src/lib/sonos/live.js) returns; the route maps each to the HTTP status
+// below. `applied`/`failedGroups` appear only on a multi-group dispatch-
+// loop failure: volume_up/volume_down are RELATIVE, not idempotent, so a
+// caller must not blindly retry the whole action when `applied` already
+// lists groups that changed before `failedGroups` failed — a blind retry
+// would move an already-changed group a second time.
+const SonosControlErrorResponse = ErrorResponse.extend({
+  code: z.enum([
+    'invalid', 'not_found', 'not_configured', 'not_connected', 'no_group',
+    'fixed_volume', 'regrouped', 'no_content', 'rate_limited', 'unreachable',
+    'db_error', 'failed',
+  ]).optional()
+    .describe('Present only on failures returned by the control dispatch (runLiveAction). The auth/validation '
+      + 'guards that run before dispatch — no active location, a malformed body, an unusable schedule_id — '
+      + 'return a 400/404 with no code at all.'),
+  applied: z.array(z.string()).optional(),
+  failedGroups: z.array(z.string()).optional(),
+}).openapi('SonosControlErrorResponse')
+
+const SonosTrack = z.object({
   name: z.string().nullable(),
-  kind: z.enum(['plug', 'switch']),
+  artist: z.string().nullable(),
+  album: z.string().nullable(),
+  imageUrl: z.string().nullable(),
+}).openapi('SonosTrack')
+
+const SonosNowPlayingResponse = z.union([
+  z.object({
+    success: z.literal(true),
+    live: z.literal(false),
+    reason: z.enum(['not_configured', 'not_connected', 'refresh_failed', 'db_error', 'unreachable', 'no_group', 'regrouped']),
+    statusCode: z.number().int().optional(),
+  }).openapi('SonosNowPlayingOffline', {
+    description: 'Deliberately a 200, not an error status — not-connected and unreachable are normal states '
+      + 'the control strip renders a specific panel for, polled every 10s. statusCode is present only when '
+      + 'reason is unreachable (the failed Sonos groups call\'s HTTP status). regrouped appears only on the '
+      + 'group_id path: the id is no longer in the household (group ids are ephemeral) — refetch the '
+      + 'household for fresh ones.',
+  }),
+  z.object({
+    success: z.literal(true),
+    live: z.literal(true),
+    groupId: z.string(),
+    playbackState: z.string().nullable(),
+    volume: z.number().int().nullable(),
+    muted: z.boolean().nullable(),
+    fixedVolume: z.boolean(),
+    volumeFailed: z.boolean(),
+    metadataFailed: z.boolean(),
+    track: SonosTrack.nullable(),
+    source: z.string().nullable(),
+  }).openapi('SonosNowPlayingLive', {
+    description: 'TRAP: fixedVolume:false does NOT mean "not fixed" when volumeFailed is true — the volume '
+      + 'GET failed and fixedVolume just defaults to false in that case. A client must check volumeFailed '
+      + 'before trusting fixedVolume (or volume/muted, which are null on the same failure). Likewise track/source '
+      + 'fall back to null both when Sonos legitimately has no metadata AND when the metadata GET failed — check '
+      + 'metadataFailed before reading them as "nothing playing".',
+  }),
+]).openapi('SonosNowPlayingResponse')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/sonos/household',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Live Sonos household snapshot for the config UI (device_control)',
+  description:
+    'connected:false carries a reason (not_configured | not_connected | db_error | refresh_failed) and no '
+    + 'groups/players/favorites. connected:true with reachable:false carries a statusCode from the failed '
+    + 'Sonos groups call. connected:true with reachable:true carries groups, players and favorites — '
+    + 'favorites is read off the Sonos API\'s `items` key (not `favorites`) and capped at 70 by Sonos itself.',
+  responses: {
+    200: {
+      description: 'Household snapshot — shape varies with connected/reachable, see description',
+      content: {
+        'application/json': {
+          schema: z.object({
+            success: z.literal(true),
+            connected: z.boolean(),
+            reason: z.enum(['not_configured', 'not_connected', 'db_error', 'refresh_failed']).optional(),
+            reachable: z.boolean().optional(),
+            statusCode: z.number().int().optional(),
+            groups: z.array(SonosGroup).optional(),
+            players: z.array(SonosPlayer).optional(),
+            favorites: z.array(SonosFavorite).optional(),
+          }).openapi('SonosHouseholdResponse'),
+        },
+      },
+    },
+    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/sonos/schedules',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List Sonos schedules at the active location (device_control)',
+  description: 'Ordered oldest-first, capped at 50 rows. A location that hits the cap is logged '
+    + 'server-side (logWarn) but the cap is not surfaced in the response.',
+  responses: {
+    200: {
+      description: "Schedules for the caller's active location",
+      content: { 'application/json': { schema: z.object({ success: z.literal(true), schedules: z.array(SonosSchedule) }).openapi('SonosScheduleListResponse') } },
+    },
+    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Database error', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/sonos/schedules',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Create a Sonos schedule at the active location (device_control)',
+  description: 'Every field is optional (the row falls back to its column defaults — name "Studio music", '
+    + 'enabled false, empty player_ids/windows) — the config UI sends a full shape in practice, but nothing '
+    + 'here requires it.',
+  request: {
+    body: { content: { 'application/json': { schema: SonosSchedulePayload } } },
+  },
+  responses: {
+    200: { description: 'Created schedule row', content: { 'application/json': { schema: SonosScheduleResponse } } },
+    400: { description: 'Validation failed (bad window shape, on === off, or two windows overlap on a shared day), or the caller has no active location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Database error', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/sonos/schedules/{id}',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Update a Sonos schedule (device_control)',
+  description:
+    'All body fields optional — send only what changed; an empty patch is a 400. `override` additionally '
+    + 'accepts {state:"off", until} to suppress playback until a set time, or null to clear a suppression. '
+    + 'Missing OR cross-location ids return 404 (no ID enumeration); the WHERE clause is scoped by '
+    + 'location_id, not just the read-back, so a guessed id from another location cannot be written.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: SonosSchedulePatch } } },
+  },
+  responses: {
+    200: { description: 'Updated schedule row', content: { 'application/json': { schema: SonosScheduleResponse } } },
+    400: { description: 'Validation failed, no editable fields supplied, or the caller has no active location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Schedule not found (or not at your active location)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Database error', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/sonos/schedules/{id}',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Delete a Sonos schedule (device_control)',
+  description:
+    'Location-scoped in the WHERE clause. Only a malformed id 404s (anti-enumeration); a well-formed id '
+    + 'for a nonexistent or cross-location row still deletes zero rows and returns 200 — PostgREST does not '
+    + 'error on a no-op DELETE, so this route is idempotent rather than 404-on-already-gone.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Deleted (or already gone)', content: { 'application/json': { schema: z.object({ success: z.literal(true) }) } } },
+    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Malformed id', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Database error', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/sonos/schedules/{id}/run-now',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Apply the schedule\'s currently-active window immediately (device_control)',
+  description:
+    'SONOSLIVE.6: no longer clears last_applied and waits for the next cron tick. It now runs the same '
+    + 'volume-then-favourite path the sonos-reconcile cron (unregistered here — cron routes never are) uses '
+    + '(applyOpen in src/lib/sonos/apply.js) '
+    + 'and stamps last_applied as an open, exactly as a cron-driven open would — immediate, and the close\'s '
+    + 'precondition (a record of having opened) is written rather than destroyed. A no-op only when there is '
+    + 'no active window right now, or the schedule is disabled — both now report distinctly as 409 rather '
+    + 'than a silent no-op 200. On a partial dispatch failure, last_applied is deliberately NOT stamped, so '
+    + 'the next cron tick retries. Missing OR cross-location ids return 404 (no ID enumeration).',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: {
+      description: 'Applied. A bookkeeping failure after a successful apply still reports success, with a '
+        + 'warning field, rather than telling the operator the music did not start when it did.',
+      content: {
+        'application/json': {
+          schema: z.union([
+            z.object({ success: z.literal(true), groups: z.array(z.string()) }),
+            z.object({ success: z.literal(true), warning: z.string() }),
+          ]).openapi('SonosRunNowResponse'),
+        },
+      },
+    },
+    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Schedule not found (or not at your active location)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: {
+      description: 'The current state blocks an immediate apply: the schedule is switched off, no window is '
+        + 'active right now, Sonos is not connected, or none of this schedule\'s speakers are online.',
+      content: { 'application/json': { schema: ErrorResponse } },
+    },
+    500: { description: 'Database error', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Sonos did not answer, or the dispatch loop failed partway through', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Sonos is not configured', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/sonos/control',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Immediate live control of a schedule\'s or group\'s speakers — volume, transport, favourite (device_control)',
+  description:
+    'SONOSGRP.2: the body addresses exactly one of schedule_id (uuid, resolved to groups via the '
+    + 'location-scoped schedule row) or group_id (an opaque Sonos group id from GET /api/sonos/household — '
+    + 'no DB row is read). Group ids are ephemeral: a stale one answers code: regrouped, so refetch the '
+    + 'household and retry. '
+    + 'SONOSLIVE.3/4: writes nothing to sonos_schedules, deliberately — the schedule only acts at window '
+    + 'boundaries, so a live change simply persists until the next one; there is no suppression or '
+    + 'reconciliation to invent here. Works even while the schedule is disabled or overridden, on purpose: '
+    + 'both of those govern whether the CRON acts, not whether a human may act right now. On failure the '
+    + 'body may carry `applied`/`failedGroups` (see SonosControlErrorResponse) — check those before retrying '
+    + 'a multi-group volume_up/volume_down, since retrying blind can double-apply the step to a group that '
+    + 'already changed.',
+  request: {
+    body: { content: { 'application/json': { schema: SonosControlBody } } },
+  },
+  responses: {
+    200: {
+      description: 'Applied to every resolved group',
+      content: { 'application/json': { schema: z.object({ success: z.literal(true), groups: z.array(z.string()) }).openapi('SonosControlResponse') } },
+    },
+    400: { description: 'Two distinct shapes. An unknown action or an unusable value for a known action comes back from dispatch and carries code: invalid. A malformed body (including neither or both of schedule_id/group_id) or a caller with no active location is rejected by the guards that run BEFORE dispatch and carries no code at all — which is why code is optional on this schema.', content: { 'application/json': { schema: SonosControlErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'schedule_id only: malformed (no code), not found, or not at your active location (code: not_found). group_id never 404s — a stale one is a 409 code: regrouped', content: { 'application/json': { schema: SonosControlErrorResponse } } },
+    409: {
+      description: 'The current state blocks this action — code distinguishes which: not_connected (Sonos '
+        + 'is not connected), no_group (none of this schedule\'s speakers are online), fixed_volume (these '
+        + 'speakers are set to a fixed volume), regrouped (a stale group_id, or the group changed between '
+        + 'resolve and act — refetch the household and retry), no_content (nothing is loaded on these '
+        + 'speakers, so play/pause/skip have nothing to act on).',
+      content: { 'application/json': { schema: SonosControlErrorResponse } },
+    },
+    429: { description: 'Rate limited by Sonos — try again shortly (code: rate_limited)', content: { 'application/json': { schema: SonosControlErrorResponse } } },
+    500: { description: 'Database error (code: db_error)', content: { 'application/json': { schema: SonosControlErrorResponse } } },
+    502: { description: 'Sonos is unreachable, or a call in the dispatch loop failed (code: unreachable or failed)', content: { 'application/json': { schema: SonosControlErrorResponse } } },
+    503: { description: 'Sonos is not configured (code: not_configured)', content: { 'application/json': { schema: SonosControlErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/sonos/now-playing',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Live now-playing readout for a schedule\'s or group\'s speakers (device_control)',
+  description:
+    'SONOSGRP.2: the query addresses exactly one of schedule_id (uuid, resolved via the location-scoped '
+    + 'schedule row) or group_id (an opaque Sonos group id from GET /api/sonos/household — no DB row is '
+    + 'read). Group ids are ephemeral: a stale one soft-fails as live:false reason:regrouped (a 200, like '
+    + 'the other offline states) — refetch the household for fresh ids. '
+    + 'SONOSLIVE.5: not-connected and unreachable states return HTTP 200, not an error status — they are '
+    + 'normal expected states the control strip renders a specific panel for (polled every 10s while a strip '
+    + 'is open). Genuine auth/scoping failures (missing session, missing permission, no active location, '
+    + 'neither/both ids, unknown or cross-location schedule id) still return 401/403/400/404 as normal. See '
+    + 'SonosNowPlayingLive\'s description for the volumeFailed trap.',
+  request: {
+    query: z.object({
+      schedule_id: uuidLike.optional(),
+      group_id: z.string().min(1).max(128).optional(),
+    }),
+  },
+  responses: {
+    200: { description: 'Offline-state or live-state readout, see SonosNowPlayingResponse', content: { 'application/json': { schema: SonosNowPlayingResponse } } },
+    400: { description: 'Caller has no active location, neither or both of schedule_id/group_id supplied, or group_id over 128 chars', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'schedule_id only: malformed, not found, or not at your active location. A stale group_id is a 200 with reason: regrouped, never a 404', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Database error reading the schedule row', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
+// Shelly smart plugs (SHELLY-UI.1→.9) — the per-location power surface behind
+// /automations/shelly. Same `device_control` permission and `Automations` tag
+// as the Sonos block above. Envelopes are `{ success, … }` with a
+// route-specific key (connection / devices / device / days), NOT the
+// `{ success, data }` standard one — same convention the Sonos routes use.
+//
+// NO ROUTE ACCEPTS A location_id. Every handler scopes by the session's active
+// location (withAuth's ctx, spec "Tenancy": one Shelly account per location),
+// and every detail route answers 404 — never 403, and never a 400 for a
+// malformed id — so ids cannot be enumerated: a 400 for "that is not a uuid"
+// beside a 404 for "not yours" is itself an oracle.
+//
+// REQUEST BODIES ARE THE ROUTES' OWN SCHEMAS, re-derived with `.extend({})`.
+// That is NOT a workaround for a refined schema being un-extendable: on zod
+// 4.4.3 a `.refine()`d object is still a plain ZodObject, and the refine, the
+// `.strict()` and the nested `.superRefine()` all survive an extend — measured
+// and recorded in the comment above ShellyWindow in src/lib/shelly/schemas.js.
+// The reason is `.openapi()`: extendZodWithOpenApi(z) attaches it PER INSTANCE
+// at the top of this file, and src/lib/shelly/schemas.js constructs its exports
+// BEFORE that call runs, so the raw exports have no `.openapi` method at all.
+// `.extend({})` mints a fresh instance under the extended `z`. Exactly the
+// LeadSchema trick above; schemas.js stays untouched.
+//
+// RESPONSE shapes are written here by hand (this file derives from src/lib,
+// never from src/app/api — see the file header), so they are kept in sync with
+// the handlers by hand. They document what SHIPPED, including the three-valued
+// fields the page depends on.
+// ============================================================================
+
+const ShellyConnectionPut = ShellyConnectionPutRaw.extend({}).openapi('ShellyConnectionPut', {
+  description:
+    'server is the account API host from the Shelly app (e.g. shelly-103-eu.shelly.cloud); a pasted URL is '
+    + 'normalised to its hostname server-side and a bad one comes back as the helper\'s own copy, not a zod '
+    + 'message. auth_key is WRITE-ONLY and optional: the UI never renders the stored key (only key_hint), so an '
+    + 'absent or blank auth_key KEEPS the stored one and only a fresh value overwrites it — which is what makes '
+    + '"change only the server" possible. A supplied key shorter than ' + MIN_AUTH_KEY_LENGTH + ' characters is a '
+    + '400. Unknown keys are REJECTED rather than dropped: on a two-field body where one field is a credential, '
+    + 'a mistyped `authkey` would otherwise read as "no key supplied" — i.e. "keep the stored one" — and report a '
+    + 'successful re-link that changed nothing.',
+})
+
+const ShellyAdoptBody = ShellyAdoptBodyRaw.extend({}).openapi('ShellyAdoptBody', {
+  description:
+    'Adopt ONE relay channel. device_id is the Shelly Cloud device id (the MAC as hex), matched '
+    + 'case-insensitively and lowercased server-side: mig 562 stores it lowercase, and (device_id, channel) is '
+    + 'UNIQUE across the WHOLE estate, so an upper-case id would dodge the uniqueness check that stops one relay '
+    + 'being adopted at two locations. channel defaults to 0 and is bounded 0-7 — a four-relay Pro 4PM adopts as '
+    + 'up to four rows sharing one device_id. name is optional: the Shelly account\'s own name is used when it is '
+    + 'omitted, and a device with neither is stored with name null (the card composes a placeholder at render '
+    + 'time — a synthesised name is indistinguishable from a human\'s the moment anyone looks at the row). '
+    + 'Unknown keys are REJECTED: `channel` has a default, so a body carrying `chanel: 3` would otherwise drop '
+    + 'the unknown key, default to 0 and silently adopt the WRONG RELAY.',
+})
+
+const ShellyDevicePatch = ShellyDevicePatchRaw.extend({}).openapi('ShellyDevicePatch', {
+  description:
+    'Every field is optional, but an EMPTY body is a 400 ("Nothing to update") rather than a no-op UPDATE that '
+    + 'reports success. fixed_windows is capped at ' + MAX_FIXED_WINDOWS + ' and carries two rules this schema '
+    + 'cannot express: `on` must differ from `off`, and no two windows may overlap on a shared day — the planner '
+    + 'resolves an overlap earliest-wins, so the later window of a clashing pair would silently never fire, with '
+    + 'no error and no way for an operator to tell why. Refusing the save is the only place that can surface. '
+    + 'class_rule defaults to the ENGINE\'s 15/10 lead/lag, not 0: mig 562 defaults the column to {}, so a device '
+    + 'switched to class mode without anyone opening the rule already runs 15/10, and a PATCH that merely touched '
+    + 'class_rule must not silently delete the pre-heat. Unknown keys are rejected — a typo\'d setting is a 400, '
+    + 'not a silently ignored one.',
+})
+
+const ShellyToggleBody = ShellyToggleBodyRaw.extend({}).openapi('ShellyToggleBody', {
+  description:
+    '"on"/"off" force the relay and write an override; "auto" clears the override and re-runs the schedule '
+    + 'immediately — which is why until is optional, since it is meaningless without a state to hold. until '
+    + 'accepts any ISO instant INCLUDING an offset form (Bearer/n8n and mobile JWT callers send those) and is '
+    + 'normalised to UTC-Z at the input edge. It defaults to the LOCATION\'s next local midnight, and is bounded '
+    + 'by the request\'s own clock rather than by this schema: an instant already past is a 400, and so is '
+    + 'anything more than ' + MAX_OVERRIDE_HOURS + ' hours out (further than that is a schedule, not a manual '
+    + 'nudge). What until MEANS depends on the device — see holds_until_changed on the toggle operation.',
+})
+
+// Used as `request.query`, so the generator EXPANDS it into `parameters` and
+// emits no `ShellyEnergyQuery` component — the name below is carried for
+// consistency with the four bodies, not because a $ref appears anywhere.
+const ShellyEnergyQuery = ShellyEnergyQueryRaw.extend({}).openapi('ShellyEnergyQuery', {
+  description:
+    'days is 1-90 and defaults to 30. Both "the parameter is absent" and a bare `?days=` are absorbed as the '
+    + 'default (which is why it renders as a nullable integer); junk ("all") and out-of-range values are still a '
+    + '400. The read is deliberately PER DEVICE: 50 devices x 30 days is 1,500 rows and every PostgREST select is '
+    + 'capped at 1,000 regardless of .limit(), so a location-wide read would silently lose a third of the history.',
+})
+
+const ShellySyncNamesBody = ShellySyncNamesBodyRaw.extend({}).openapi('ShellySyncNamesBody', {
+  description:
+    'overwrite DEFAULTS TO FALSE, and the default is the safe half on purpose: a name typed on the CRM side is a '
+    + 'human decision and nothing keeps the previous one, so there is no undo — a body that merely forgot the '
+    + 'field must land on "only unnamed plugs". Unknown keys are REJECTED rather than dropped, because here the '
+    + 'silently-dropped key is the destructive one: `overwrite` has a default, so a client posting `overwite: '
+    + 'true` would fall through to false and report a successful sync that replaced nothing it was asked to '
+    + 'replace, with nothing in the response to disagree.',
+})
+
+// The same window vocabulary the routes validate against — WindowBase from
+// @/lib/schedule/windows, the object ShellyWindow refines (SHELLY-UI.2), so
+// days/on/off cannot drift between the spec and what the API accepts. Sonos
+// extends the same base one block up.
+const ShellyWindow = WindowBase.extend({}).openapi('ShellyWindow', {
+  description: 'One recurring on/off window in local (location) wall-clock time; days are ISO 1=Mon..7=Sun. An '
+    + 'overnight window is expressed by off < on. Enforced server-side and not representable here: on must differ '
+    + 'from off (an on === off window is read by the engine as a 24-hour always-on span), and no two windows on a '
+    + 'device may overlap on a shared day.',
+})
+
+const ShellyDeviceState = z.object({
+  online: z.boolean(),
+  output: z.boolean().nullable(),
+  apower: z.number().nullable(),
+  aenergy_wh: z.number().nullable(),
+  temperature_c: z.number().nullable(),
+  source: z.string().nullable(),
+  at: z.string().datetime(),
+}).openapi('ShellyDeviceState', {
+  description: 'The last reading, written in FULL by every writer (mig 562\'s column comment) — a partial shape '
+    + 'is what makes output read as "off" when it is really unknown. output: null means UNKNOWN, never off: an '
+    + 'offline plug, or an online device that stopped reporting the adopted channel, both land there and the UI '
+    + 'renders "unknown". A measurement we did not take is null, never 0 — a fabricated 0 W is a claim about the '
+    + 'world. after a manual toggle, source is "manual" and apower/aenergy_wh/temperature_c are carried over '
+    + 'untouched from the previous reading until the next cron read replaces them.',
+})
+
+const ShellyDevice = z.object({
+  id: uuidLike,
+  location_id: uuidLike,
+  device_id: z.string(),
+  channel: z.number().int(),
+  name: z.string().nullable(),
+  model: z.string().nullable(),
+  gen: z.number().int().nullable(),
   zone: z.string().nullable(),
   enabled: z.boolean(),
   schedule_mode: z.enum(['none', 'fixed', 'class']),
-  fixed_windows: z.array(z.object({
-    days: z.array(z.number().int().min(1).max(7)),
-    on: z.string(),
-    off: z.string(),
-  })),
+  fixed_windows: z.array(ShellyWindow),
   class_rule: z.object({
     lead_min: z.number().int().optional(),
     lag_min: z.number().int().optional(),
   }),
   override: z.object({
     state: z.enum(['on', 'off']),
-    until: z.string(),
+    until: z.string().datetime(),
     set_by: uuidLike,
+    set_at: z.string().datetime(),
   }).nullable(),
-  last_state: z.enum(['on', 'off']).nullable(),
-  last_seen_at: z.string().nullable(),
-  created_at: z.string(),
-  updated_at: z.string(),
-}).openapi('TapoDevice')
+  last_applied: z.object({
+    key: z.string(),
+    action: z.enum(['on', 'off']),
+    reason: z.enum(['override', 'run_now', 'window_open', 'window_close', 'override_expired']),
+    at: z.string().datetime(),
+  }).nullable(),
+  last_state: ShellyDeviceState.nullable(),
+  last_seen_at: z.string().datetime().nullable(),
+  created_at: z.string().datetime(),
+  updated_at: z.string().datetime(),
+}).openapi('ShellyDevice', {
+  description: 'One adopted relay channel — the DEVICE_COLUMNS allowlist (src/lib/shelly/device-load.js), the '
+    + 'SAME projection the list, the adopt response and every per-device answer use, so the surface can never '
+    + 'describe a device differently depending on which route answered. adopted_by is deliberately absent (a '
+    + 'staff user id the UI never shows). name is nullable and a null is a real answer, not a missing field — the '
+    + 'card renders "<model> · <last 4 of device_id>" rather than the API inventing a name. override.set_at is '
+    + 'load-bearing: it is the exactly-once key the planner mints, so two overrides with the same until and state '
+    + 'are still distinguishable. last_applied/last_state/last_seen_at are written by the shelly-reconcile cron '
+    + '(unregistered here — cron routes never are) and by the toggle route, so a freshly adopted device has '
+    + 'last_applied null and last_seen_at null until it is first seen.',
+})
+
+// EVERY Shelly error body, coded. The Sonos block one screen up established
+// the shape (SonosControlErrorResponse) and the reason is the same: the page
+// branches on `code`, not on the sentence, so a `code` that exists in the
+// handlers but not in the spec is a contract that documents nothing a client
+// can actually switch on. Bare ErrorResponse said only "there will be a
+// string" — SHELLY-UI.9b replaced it everywhere in this block.
+//
+// TWO POPULATIONS, deliberately in one enum because they arrive in one field:
+//
+//   OURS — minted by the handlers, stable, and what the UI switches on.
+//   PASS-THROUGH — the Shelly client's own failure tag, carried verbatim as
+//     `code` (and, on the toggle/run-now catch-alls, also as `kind`) on the
+//     502s. They are the vocabulary of client.js and reconcile.js, not of the
+//     routes, so a client should treat any of them as "the cloud did not
+//     answer" rather than branching per tag.
+//
+// `code` stays `.optional()` because the guards that run BEFORE a handler —
+// withAuth's 401/403, the "no active location" 400, validateBody's 400 — mint
+// an uncoded ErrorResponse, exactly as on the Sonos control route.
+const ShellyErrorResponse = ErrorResponse.extend({
+  code: z.enum([
+    // ours
+    'not_connected', 'key_rejected', 'verification_unavailable',
+    'device_cap', 'adopted_here', 'adopted', 'not_on_account',
+    'unsupported', 'bad_channel', 'bad_host', 'bad_device',
+    'no_schedule', 'disabled', 'occurrences', 'rate_limited',
+    'unexpected_noop',
+    // pass-through client/engine failure tags (502s)
+    'config', 'network', 'http', 'device',
+    'invalid_ids', 'too_many_ids', 'bad_clock', 'unreachable',
+  ]).optional(),
+  // Present only alongside code "unsupported" (adopt). Null is a real answer:
+  // the normaliser judged the device unadoptable without recognising which of
+  // the two reasons applied, and a client must not read a missing reason as
+  // one of them.
+  reason: z.enum(['gen1', 'no_switch']).nullable().optional(),
+  // The raw client tag, carried beside `code` on the toggle and run-now
+  // catch-alls so a log has the un-mapped value. Deliberately a free string:
+  // it is whatever client.js tagged, and pinning it here would make a new tag
+  // a spec violation rather than a log line.
+  kind: z.string().optional(),
+}).openapi('ShellyErrorResponse')
+
+const ShellyConnectionPublic = z.object({
+  host: z.string().nullable(),
+  key_hint: z.string().nullable(),
+  has_auth_key: z.boolean(),
+  status: z.enum(['connected', 'action_needed', 'error']).nullable(),
+  last_ok_at: z.string().datetime().nullable(),
+  last_error: z.string().nullable(),
+  last_error_at: z.string().datetime().nullable(),
+}).openapi('ShellyConnectionPublic', {
+  description: 'The ONLY connection shape any route returns (publicConnectionView, src/lib/shelly/connections.js), '
+    + 'and an allowlist rather than the row minus a few fields. auth_key never appears — and neither does '
+    + 'auth_key_fingerprint, which is as sensitive for this purpose: it is a sha256 OF the key, so publishing it '
+    + 'would turn "is this the account?" into an offline check anyone holding a candidate key could run. key_hint '
+    + 'is the last four characters, for rendering "••••abcd", and has_auth_key is DERIVED from it so the field can '
+    + 'never claim a key this projection has no evidence of. status: "connected" = the last tick had at least one '
+    + '2xx; "action_needed" = the key was rejected or the host is invalid, and an owner must re-paste; "error" = '
+    + 'every call failed for a NON-auth reason (network/429/5xx), which the UI phrases as retrying rather than as '
+    + 'broken — a single blip parks the connection for five minutes and nothing needs fixing.',
+})
+
+const ShellyConnectionGetResponse = z.object({
+  success: z.literal(true),
+  connection: ShellyConnectionPublic.nullable(),
+  can_manage: z.boolean(),
+  device_count: z.number().int().nullable(),
+}).openapi('ShellyConnectionGetResponse', {
+  description: 'connection: null means NOT CONNECTED and nothing else — a read that FAILED is a 500 (see the '
+    + 'operation), deliberately, so a live studio is never handed "not connected" and invited to re-paste a '
+    + 'credential that is working fine. can_manage is the affordance only (may this caller see the form): the '
+    + 'PUT/DELETE master-or-owner gate is the enforcement. device_count is "how many plugs would survive a '
+    + 'disconnect"; null means the count itself could not be read and renders as unknown rather than as a '
+    + 'confident zero.',
+})
+
+const ShellyConnectionPutResponse = z.object({
+  success: z.literal(true),
+  connection: ShellyConnectionPublic,
+  devices_seen: z.number().int().nullable(),
+  shared_with: z.array(z.string()),
+}).openapi('ShellyConnectionPutResponse', {
+  description: 'devices_seen is what the probe counted on the account: 0 is a real and different state from '
+    + '"connected" — it is what a Shelly account in maintenance looks like, and without the number the operator '
+    + 'goes hunting in discovery. NULL means something else again: the account answered in a shape the probe '
+    + 'could not count, and the UI omits the sentence entirely rather than printing a zero nobody can act on. '
+    + 'shared_with names SAME-ORGANISATION siblings already on this key ("also linked at Hatch Street"); a key '
+    + 'held in another organisation is refused with a 409 that names nobody.',
+})
+
+const ShellyDiscoveredRow = z.object({
+  device_id: z.string(),
+  channel: z.number().int(),
+  name: z.string().nullable(),
+  model: z.string().nullable(),
+  gen: z.number().int().nullable(),
+  online: z.boolean(),
+  supported: z.boolean().nullable(),
+  reason: z.enum(['gen1', 'no_switch']).optional(),
+  adopted: z.enum(['here', 'elsewhere']).nullable(),
+  elsewhere_location_name: z.string().optional(),
+}).openapi('ShellyDiscoveredRow', {
+  description: 'supported is TRI-STATE: true = adoptable, false = a verdict (reason gen1 | no_switch, a dead end '
+    + 'for the operator), null = the device reported nothing to judge — usually an offline plug — which must not '
+    + 'render as a dead end. adopted is the only field our database contributes: "here" (this location), '
+    + '"elsewhere" (another location, anywhere in the estate, because (device_id, channel) is UNIQUE globally) or '
+    + 'null (free). elsewhere_location_name is present ONLY when the holder is in the CALLER\'S OWN organisation; '
+    + 'a foreign holder yields the single word "elsewhere" and nothing else — no name, no location id, no '
+    + 'organisation id, no host.',
+})
+
+const ShellyDiscoverResponse = z.object({
+  success: z.literal(true),
+  devices: z.array(ShellyDiscoveredRow),
+  row_count: z.number().int(),
+}).openapi('ShellyDiscoverResponse', {
+  description: 'row_count counts CHANNEL ROWS, not devices: a four-relay Pro 4PM is one device and four rows. It '
+    + 'is deliberately not called `count`, because PUT /api/shelly/connection\'s devices_seen counts DEVICES and '
+    + 'two same-named numbers next to each other would read as a contradiction.',
+})
+
+const ShellyDeviceListResponse = z.object({
+  success: z.literal(true),
+  devices: z.array(ShellyDevice),
+  connected: z.boolean().nullable(),
+  connection_status: z.enum(['connected', 'action_needed', 'error', 'unknown']).nullable(),
+}).openapi('ShellyDeviceListResponse', {
+  description: 'THREE connection answers on a 200, not two. connected true/false with a connection_status string '
+    + '(or null for a location that genuinely never connected) is the ordinary pair. connected: NULL with '
+    + 'connection_status "unknown" is the third, and "unknown" is a member of the enum rather than an undocumented '
+    + 'string: the device list read fine and the connection row did not. It is '
+    + 'deliberately not `false` — that would tell a live studio its plugs are unreachable and offer it the '
+    + 'Connect form — and it must not cost the operator the cards that are already on screen. Clients render a '
+    + 'subordinate "couldn\'t read the Shelly connection — retrying" line over the existing cards; only '
+    + 'connection_status: null shows the Connect form. The status STRING rides alongside the boolean because '
+    + '"action_needed" (re-paste your key) and "error" (retrying) are both "not connected" to the flag and need '
+    + 'different copy.',
+})
+
+// The reason vocabulary BOTH forced paths answer, closed and shared so the
+// toggle and run-now can never describe the same engine outcome differently.
+// Only three values are reachable, and the absence of the other four planner
+// reasons is the point: `runNowForDevice` plans with force:true, and under
+// force planDeviceAction stamps every action it takes as 'run_now'
+// (`reason: force ? 'run_now' : …` on rules 1 and 3, and rule 4's forced arm).
+// 'override', 'window_open', 'window_close' and 'override_expired' are what
+// the UNFORCED cron writes to last_applied — they reach a device row, never
+// one of these responses. 'disabled' and 'no_schedule' are this surface's own
+// two names for the single null path force leaves open (planner rule 2).
+const ShellyActionReason = z.enum(['run_now', 'disabled', 'no_schedule'])
+
+const ShellyToggleResponse = z.object({
+  success: z.literal(true),
+  device: ShellyDevice,
+  applied: z.union([z.literal(true), z.literal(false), z.enum(['on', 'off']), z.null()]),
+  pending: z.literal(true).optional(),
+  code: z.enum(['key_rejected', 'rate_limited', 'bad_host', 'pending']).optional(),
+  kind: z.string().optional(),
+  message: z.string().optional(),
+  reason: ShellyActionReason.optional(),
+  holds_until_changed: z.boolean().optional(),
+  notice: z.string().optional(),
+}).openapi('ShellyToggleResponse', {
+  description: 'THREE bodies share this schema, and a client must branch on `pending` BEFORE it renders any new '
+    + 'state. (a) applied: true — the relay physically moved. (b) applied: false with pending: true — the '
+    + 'override IS SAVED and the relay has not moved; the cron applies a live override to every adopted device, '
+    + 'enabled or not, so this is a delay, not a loss. `code` says what to tell the operator (key_rejected → '
+    + 're-paste, rate_limited → busy, bad_host → fix the connection settings, pending → offline) and `message` '
+    + 'carries the copy. Painting the new state optimistically here would show a plug as ON while it is '
+    + 'physically off. (c) state "auto" — applied is the action taken ("on"/"off", reason "run_now") or null with a '
+    + '`reason` of exactly TWO values: disabled ("the schedule is switched off") or no_schedule ("there is '
+    + 'nothing to go back to"). There is deliberately no "already correct" third value — the re-run forces, so '
+    + 'a managed device always commands the relay, and a no-op reaching that branch is a 500 (code '
+    + '"unexpected_noop") rather than a green tick over a relay nothing touched. holds_until_changed rides on '
+    + 'both force bodies and is ALWAYS present '
+    + 'there (never conditionally omitted, so a client reads a boolean rather than inferring one): true means '
+    + 'the device is UNMANAGED (enabled false, or schedule_mode "none"), the engine never closes an expired '
+    + 'override for it, and `until` therefore bounds the BANNER and not the relay — render plain On/Off with no '
+    + 'countdown, plus the `notice`. On a MANAGED device until is a real expiry and the schedule resumes in both '
+    + 'directions at it.',
+})
+
+const ShellyRunNowResponse = z.object({
+  success: z.literal(true),
+  applied: z.enum(['on', 'off']),
+  reason: ShellyActionReason.nullable(),
+}).openapi('ShellyRunNowResponse', {
+  description: 'A 200 here ALWAYS moved the relay: applied is "on" or "off", never null. There is no '
+    + '"already correct" answer, and SHELLY-UI.9b removed the arm that pretended there was — run-now forces, so '
+    + 'the planner re-sends regardless of its own exactly-once stamp, and the only state it can decline to act '
+    + 'on (an unmanaged device) is already refused as a 409 before anything reaches the cloud. reason is '
+    + '"run_now" on every success; the field is kept, rather than dropped, because it is the same field the '
+    + 'toggle answers and collapsing one of them would make the two responses describe the engine differently.',
+})
+
+const ShellyEnergyResponse = z.object({
+  success: z.literal(true),
+  device_id: uuidLike,
+  from: z.string(),
+  to: z.string(),
+  days: z.array(z.object({
+    day: z.string(),
+    kwh: z.number().nullable(),
+    samples: z.number().int(),
+    resets: z.number().int(),
+  })),
+}).openapi('ShellyEnergyResponse', {
+  description: 'device_id is the shelly_devices ROW id (uuid), not the Shelly hex device id. from/to are the '
+    + 'LOCATION\'s calendar days (YYYY-MM-DD) inclusive of both ends — using a UTC "today" would put an evening '
+    + 'sample on the wrong bar. The series is ZERO-FILLED so a chart gets a contiguous run, and that is exactly '
+    + 'why `samples` rides alongside: at 0 kWh, "nothing was consumed" and "the cron never sampled" look '
+    + 'identical, and only samples > 0 distinguishes a genuinely quiet day from a gap. kwh is null only for a '
+    + 'stored value we could not read — absent is never zero.',
+})
+
+const ShellyRefreshResponse = z.object({
+  success: z.literal(true),
+  refreshed: z.number().int(),
+  read_failures: z.number().int(),
+  rate_limited: z.number().int(),
+  kind: z.string().nullable(),
+}).openapi('ShellyRefreshResponse', {
+  description: 'This route READS; it commands nothing and moves no relay, which is what makes it safe behind a '
+    + 'button an operator can press repeatedly. `refreshed` counts rows whose state actually CHANGED — the '
+    + 'deadband swallows a wattmeter twitching in the third decimal, so it is honestly smaller than "how many '
+    + 'devices we read", and 0 is the healthy answer for a studio whose readings have not moved. `rate_limited` '
+    + 'counts a RETRIED SUCCESS as well as a 429, so neither counter is a verdict on its own. A location with '
+    + 'nothing adopted answers all-zero and kind null without spending a slot of the shared account budget.',
+})
+
+const ShellySyncNamesResponse = z.object({
+  success: z.literal(true),
+  total: z.number().int(),
+  updated: z.number().int(),
+  unchanged: z.number().int(),
+  unresolved: z.number().int(),
+  write_failures: z.number().int(),
+  partial: z.literal(true).optional(),
+}).openapi('ShellySyncNamesResponse', {
+  description: 'This route writes ONE column (`name`) and reads; it commands nothing and moves no relay. `total` '
+    + 'is every adopted row at the location, and the four counters do NOT have to add up to it: a device in a '
+    + 'batch that failed, or one the time budget never reached, is counted in none of them — "we did not ask" is '
+    + 'not the same claim as "Shelly has no name for it", and `partial: true` is exactly the flag that says the '
+    + 'counters describe part of the location. `unresolved` is the diagnostic one: the account answered and '
+    + 'carried no label anywhere the resolver looks, which is the live failure this route was built for, and it '
+    + 'is accompanied by ONE server-side warning carrying the payload\'s KEY SHAPE (key names and typeof strings '
+    + 'only — settings carries the device\'s wifi and MQTT credentials, so no value from it is ever logged). '
+    + '`write_failures` counts a failed UPDATE *and* one that touched no row: a zero-row UPDATE is not an error '
+    + 'in PostgREST, and reading it as a success would report a name that never landed.',
+})
 
 registry.registerPath({
   method: 'get',
-  path: '/api/tapo/devices',
+  path: '/api/shelly/connection',
   tags: ['Automations'],
-  security: [{ CookieAuth: [] }],
-  summary: 'List Tapo devices at the active location (device_control)',
-  description: 'Full registry including enabled=false rows — those are bridge-discovered devices awaiting adoption (staff name + enable them).',
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'The active location\'s Shelly account, as the connection panel renders it (device_control)',
+  description:
+    'Never returns auth_key, and never the key fingerprint either. A transient database failure is a 500, NOT '
+    + '`connection: null` — the client keeps its last good render and retries on the next poll, because '
+    + 'answering "not connected" for a live studio would invite an owner to re-paste a working credential.',
   responses: {
-    200: {
-      description: 'Devices (enabled first, then by name)',
-      content: { 'application/json': { schema: z.object({ success: z.literal(true), devices: z.array(TapoDevice) }).openapi('TapoDeviceListResponse') } },
-    },
-    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
+    200: { description: 'Connection view (or null when the location has never connected)', content: { 'application/json': { schema: ShellyConnectionGetResponse } } },
+    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    500: { description: 'The connection row could not be read. Deliberately not a 200 with connection:null — see the summary.', content: { 'application/json': { schema: ShellyErrorResponse } } },
   },
 })
 
 registry.registerPath({
-  method: 'patch',
-  path: '/api/tapo/devices/{id}',
+  method: 'put',
+  path: '/api/shelly/connection',
   tags: ['Automations'],
-  security: [{ CookieAuth: [] }],
-  summary: 'Update a Tapo device config (device_control)',
-  description: 'Rename, set zone label, enable/adopt, and choose the schedule (none | fixed windows | class-linked). All body fields optional — send only what changed; an empty patch is a 400. Missing OR cross-location ids return 404 (no ID enumeration).',
-  request: {
-    params: z.object({ id: uuidLike }),
-    body: {
-      content: {
-        'application/json': {
-          schema: z.object({
-            name: z.string().min(1).max(120).optional(),
-            zone: z.string().max(60).nullable().optional(),
-            enabled: z.boolean().optional(),
-            schedule_mode: z.enum(['none', 'fixed', 'class']).optional(),
-            fixed_windows: z.array(z.object({
-              days: z.array(z.number().int().min(1).max(7)).min(1),
-              on: z.string(),
-              off: z.string(),
-            })).max(8).optional(),
-            class_rule: z.object({
-              lead_min: z.number().int().min(0).max(120),
-              lag_min: z.number().int().min(0).max(120),
-            }).optional(),
-          }).openapi('TapoDeviceConfigPatch'),
-        },
-      },
-    },
-  },
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Link a Shelly account, or re-paste an existing one (device_control + master/owner)',
+  description:
+    'Order is deliberate: normalise the host, merge the key (a blank key keeps the stored one), PROVE the pair '
+    + 'works against the Shelly cloud, THEN check the key\'s fingerprint is not another organisation\'s, and only '
+    + 'then write. Probing before writing is what stops a typo being persisted as a credential that fails forever '
+    + 'with an unreadable cloud error. A successful re-paste CLEARS the error state (status back to connected, '
+    + 'last_error cleared) — a stale sentence under a green chip is its own kind of wrong. Stricter than '
+    + 'device_control: managers and head coaches are refused, this surface holds a live credential.',
+  request: { body: { content: { 'application/json': { schema: ShellyConnectionPut } } } },
   responses: {
-    200: {
-      description: 'Updated device row',
-      content: { 'application/json': { schema: z.object({ success: z.literal(true), device: TapoDevice }).openapi('TapoDeviceResponse') } },
+    200: { description: 'Linked', content: { 'application/json': { schema: ShellyConnectionPutResponse } } },
+    400: {
+      description: 'Five distinct 400s, each with its own copy: an unusable server host; no key at all (nothing '
+        + 'stored and nothing pasted); a pasted key shorter than ' + MIN_AUTH_KEY_LENGTH + ' characters; a '
+        + 'database CHECK on the server or key format ("Shelly rejected the server or key format" — the '
+        + 'constraint message echoes the value, so it is mapped rather than surfaced); and '
+        + 'code: "key_rejected" — Shelly itself refused the key, the ONE failure that is evidence about the '
+        + 'credential. A network blip, a 5xx or a rate limit are never reported as a bad key: blaming the key for '
+        + 'those sends an owner hunting for a new credential. Validation failures and "no active location" also '
+        + 'land here.',
+      content: { 'application/json': { schema: ShellyErrorResponse } },
     },
-    400: { description: 'Validation failed or no editable fields supplied', content: { 'application/json': { schema: ErrorResponse } } },
-    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Device not found (or not at your active location)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control, or the caller is not a master/owner of the active location', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    409: {
+      description: 'Two shapes. code: "verification_unavailable" — the fingerprint lookup itself failed or was '
+        + 'truncated, so we cannot prove this key is not another tenant\'s; TRANSIENT and coded so the client can '
+        + 'offer "try again" rather than a dead end (every doubtful case refuses: a wrong "ok" hands one tenant '
+        + 'another tenant\'s relays). And an UNCODED refusal, "This Shelly account is already linked to another '
+        + 'business" — deliberately generic, naming no organisation, no location and no count, the same rule as '
+        + 'chooseTenantToBind. A unique-constraint collision on the write is a THIRD, also uncoded shape with a '
+        + 'DIFFERENT sentence ("Could not link this Shelly account"): it is a race, not a tenancy verdict, and '
+        + 'claiming another business holds the key would be an accusation we did not check.',
+      content: { 'application/json': { schema: ShellyErrorResponse } },
+    },
+    429: {
+      description: 'code: "rate_limited" — the SHARED 1 request/second Shelly account budget, most often the same '
+        + 'owner\'s other studio mid-reconcile. A retry-after condition, not a broken far end, which is why it is '
+        + 'not a 502.',
+      content: { 'application/json': { schema: ShellyErrorResponse } },
+    },
+    500: { description: 'The stored row could not be read while re-pasting a blank key, or the write failed', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    502: { description: 'Shelly cloud did not answer (code carries the client\'s failure tag)', content: { 'application/json': { schema: ShellyErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/shelly/connection',
+  tags: ['Automations'],
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Unlink the Shelly account (device_control + master/owner)',
+  description:
+    'Idempotent: disconnecting a location that has no connection is a success, not a 404. The adopted devices '
+    + 'are deliberately LEFT ALONE — deleting them would cascade their energy history (mig 562), so a mis-click '
+    + 'while chasing a bad key would destroy months of kWh readings to fix a credential. Re-linking restores '
+    + 'control of every device that is still there, and the response message says so.',
+  responses: {
+    200: { description: 'Disconnected (or already disconnected)', content: { 'application/json': { schema: z.object({ success: z.literal(true), message: z.string() }) } } },
+    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control, or the caller is not a master/owner of the active location', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    500: { description: 'The delete failed — deliberately not reported as "Disconnected", or the operator would walk away believing the key is gone while the cron keeps using it', content: { 'application/json': { schema: ShellyErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/shelly/discover',
+  tags: ['Automations'],
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Every relay channel the connected Shelly account can see, masked (device_control)',
+  description:
+    'The device list comes from the CALLER\'S OWN cloud account, so names, models and online flags are already '
+    + 'theirs. Our database contributes exactly one field per row (`adopted`) and, same-organisation only, one '
+    + 'more (`elsewhere_location_name`). The holder lookup behind that is cross-tenant BY DESIGN — (device_id, '
+    + 'channel) is UNIQUE across the whole estate, so a relay adopted by another business is un-adoptable here '
+    + 'and an operator who is not told that would hit an unexplained 409 at adopt time — but the ROW crosses the '
+    + 'tenant boundary while the RESPONSE does not.',
+  responses: {
+    200: { description: 'Masked device rows', content: { 'application/json': { schema: ShellyDiscoverResponse } } },
+    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    409: {
+      description: 'code: "not_connected" (link an account first) or code: "key_rejected" — Shelly refused the '
+        + 'STORED key, which also parks the connection at action_needed with the same copy the cron writes. Only '
+        + 'an auth failure does that; a blip or a 429 is never treated as evidence about the credential.',
+      content: { 'application/json': { schema: ShellyErrorResponse } },
+    },
+    429: { description: 'code: "rate_limited" — the shared 1 request/second account budget; retry in a few seconds', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    500: { description: 'The connection read failed (deliberately NOT reported as not_connected), or the holder lookup failed — a failed holder read is never degraded to "not adopted", because absence is what tells the operator a device is free', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    502: { description: 'Shelly cloud did not answer (code carries the client\'s failure tag)', content: { 'application/json': { schema: ShellyErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/shelly/devices',
+  tags: ['Automations'],
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'The active location\'s adopted relays, plus enough connection state to explain the page (device_control)',
+  description:
+    'Ordered by name then created_at (name is nullable and PostgREST orders NULLs last, so the tie-break keeps '
+    + 'the list stable between polls). Capped at ' + MAX_DEVICES_PER_LOCATION + ' — the same number the '
+    + 'shelly-reconcile cron reconciles per tick, so anything past the cap would be adopted but never controlled; '
+    + 'the excess is hidden and logged rather than returned. NOTE the third connection state: this route can '
+    + 'answer 200 with connected: null and connection_status: "unknown" — see ShellyDeviceListResponse.',
+  responses: {
+    200: { description: 'Devices + connection state', content: { 'application/json': { schema: ShellyDeviceListResponse } } },
+    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    500: { description: 'The device list itself could not be read (a failed CONNECTION read is a 200 with connected:null instead — see the summary)', content: { 'application/json': { schema: ShellyErrorResponse } } },
   },
 })
 
 registry.registerPath({
   method: 'post',
-  path: '/api/tapo/devices/{id}/toggle',
+  path: '/api/shelly/devices',
   tags: ['Automations'],
-  security: [{ CookieAuth: [] }],
-  summary: 'Set or clear a manual override on a Tapo device (device_control)',
-  description: 'Exactly one of `state` / `clear`. `state` writes an override honoured ahead of any schedule until `until` (default: upcoming Dublin midnight); `clear: true` hands control back to the schedule. The bridge applies it on its next reconcile tick.',
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Adopt one relay channel at the active location (device_control)',
+  description:
+    'THE ORDER OF THE CHECKS IS A SECURITY PROPERTY. The device is proved to be on the CALLER\'S OWN Shelly '
+    + 'account BEFORE this route looks at who holds it. (device_id, channel) is UNIQUE across the whole estate, '
+    + 'so the holder query is necessarily cross-tenant — and if it ran first, POSTing a guessed MAC would answer '
+    + '"already in use elsewhere" for another business\'s device and "not found" otherwise, which is an existence '
+    + 'oracle for other tenants\' hardware built out of two error messages. The device cap is counted BEFORE the '
+    + 'cloud call, so a location at the cap does not spend a slot of the shared 1 request/second budget to be '
+    + 'told no.',
+  request: { body: { content: { 'application/json': { schema: ShellyAdoptBody } } } },
+  responses: {
+    201: { description: 'Adopted — the full device row', content: { 'application/json': { schema: z.object({ success: z.literal(true), device: ShellyDevice }).openapi('ShellyAdoptResponse') } } },
+    400: {
+      description: 'code: "unsupported" with reason "gen1" | "no_switch" (v1 is Gen2+ switch devices only) — note '
+        + 'that only an EXPLICIT unsupported verdict refuses: a device that reported nothing to judge (usually an '
+        + 'offline plug) is adoptable, or the most common device in the estate would be permanently unadoptable '
+        + 'whenever it happened to be asleep. Or code: "bad_channel" — the device has no such channel, or it is '
+        + 'offline and only channel 0 (the one every relay has) can be adopted on faith. Also: validation '
+        + 'failures, a database CHECK the schema should have caught first, and "no active location".',
+      content: { 'application/json': { schema: ShellyErrorResponse } },
+    },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    404: {
+      description: 'code: "not_on_account" — "Not found on this Shelly account". THE SAME ANSWER, deliberately, '
+        + 'for "no such device anywhere" and "a device on another tenant\'s account": this is the gate that stops '
+        + 'the holder check below it being an existence oracle, so it must not leak WHY the id is unknown to us. '
+        + 'Every id a caller can get past it is one their own cloud account already told them about.',
+      content: { 'application/json': { schema: ShellyErrorResponse } },
+    },
+    409: {
+      description: 'code: "not_connected" (link an account first); "key_rejected" (Shelly refused the stored key '
+        + '— the connection is parked at action_needed); "device_cap" (this location already holds the maximum of '
+        + MAX_DEVICES_PER_LOCATION + ' devices, and adopting past it would create a row the cron slices off '
+        + 'every tick); "adopted_here" (already adopted at this location); "adopted" (held elsewhere — the '
+        + 'holder\'s location is NAMED only when it is in the caller\'s own organisation, and the cross-org form '
+        + 'names nobody). The UNIQUE index is the backstop for the race between the holder check and the insert, '
+        + 'and it answers the generic "adopted" too.',
+      content: { 'application/json': { schema: ShellyErrorResponse } },
+    },
+    429: { description: 'code: "rate_limited" — the shared 1 request/second account budget; retry in a few seconds', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    500: { description: 'The connection, the device count or the holder check could not be read, or the insert failed. The count failing REFUSES rather than waving the adopt through — an over-cap device is adopted, schedulable and silently never controlled.', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    502: { description: 'Shelly cloud did not answer (code carries the client\'s failure tag)', content: { 'application/json': { schema: ShellyErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/shelly/devices/{id}',
+  tags: ['Automations'],
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Edit one adopted device — name, enable, schedule mode, windows, class rule (device_control)',
+  description:
+    'THIS TOUCHES NO RELAY. In particular, DISABLING a device mid-window leaves it ON: enabled:false means "this '
+    + 'is not mine to touch", not "switch it off", so the planner returns before it can close anything. The '
+    + 'response carries a `notice` saying so when the row\'s last_applied action was "on" — silently leaving a '
+    + 'plug on all night is a support ticket. (The alternative, sending an explicit off on disable, was rejected: '
+    + 'an operator turning a schedule off at 06:00 to stop it firing at 07:00 would have the room go dark under '
+    + 'them.) The tenant filter is on the WRITE as well as the read, so a guessed id from another location is '
+    + 'never writable even for the instant between a read and a check.',
   request: {
     params: z.object({ id: uuidLike }),
-    body: {
-      content: {
-        'application/json': {
-          schema: z.object({
-            state: z.enum(['on', 'off']).optional(),
-            clear: z.boolean().optional(),
-            until: z.string().optional(),
-          }).openapi('TapoDeviceToggle'),
-        },
-      },
-    },
+    body: { content: { 'application/json': { schema: ShellyDevicePatch } } },
   },
   responses: {
-    200: {
-      description: 'Updated device row (override set or cleared)',
-      content: { 'application/json': { schema: z.object({ success: z.literal(true), device: TapoDevice }).openapi('TapoDeviceToggleResponse') } },
+    200: { description: 'Updated device row, plus `notice` when the patch disabled a schedule that is currently holding the relay on', content: { 'application/json': { schema: z.object({ success: z.literal(true), device: ShellyDevice, notice: z.string().optional() }).openapi('ShellyDeviceResponse') } } },
+    400: { description: 'Validation failed — a bad window shape, on === off, two windows overlapping on a shared day, an unknown key, or an empty body ("Nothing to update"). Also "no active location", and a database CHECK the schema should have caught first.', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    404: { description: 'Malformed id, an id at another location, or a row that was deleted between the read and the write — ALL THREE answer the identical body, which is what makes ids un-enumerable', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    500: { description: 'Database error', content: { 'application/json': { schema: ShellyErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/shelly/devices/{id}',
+  tags: ['Automations'],
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Un-adopt one device (device_control)',
+  description:
+    'REMOVING A DEVICE DESTROYS ITS ENERGY HISTORY — shelly_energy_daily is ON DELETE CASCADE from '
+    + 'shelly_devices.id (mig 562) — and because (device_id, channel) is UNIQUE across the estate, moving a plug '
+    + 'to another studio is NECESSARILY remove-then-adopt. The response message names the loss and the UI '
+    + 'confirms it before the click. The relay itself is not touched: it stays exactly where it was left. '
+    + 'Idempotent from the CLIENT\'S side, not the server\'s — an already-gone device answers 404 and the page '
+    + 'treats that as "done"; answering 200 for an id we never saw would be the enumeration oracle the 404 exists '
+    + 'to close.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Removed (the message names the energy history that went with it)', content: { 'application/json': { schema: z.object({ success: z.literal(true), message: z.string() }) } } },
+    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    404: { description: 'Malformed id, an id at another location, or already gone — one identical body', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    500: { description: 'Database error', content: { 'application/json': { schema: ShellyErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/shelly/devices/{id}/toggle',
+  tags: ['Automations'],
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Force one relay on or off for a while, or hand it back to its schedule (device_control)',
+  description:
+    'THE WRITE ORDER IS THE CONTRACT. The override (the operator\'s INTENT) is written FIRST, then the command is '
+    + 'sent. Once the override is on the row the cron applies it to every adopted device, enabled or not, so a '
+    + 'command that fails self-heals on the next tick; send-first would leave the intent living only in a request '
+    + 'that has already failed. Three consequences you must code against: (1) A FAILED COMMAND IS NOT A FAILED '
+    + 'REQUEST — it answers HTTP 200 with success:true, applied:false, pending:true. (2) The one exception is a '
+    + 'rate limit, which is HTTP 429 while the body STILL says success:true and pending:true — the 429 exists so '
+    + 'the client backs off instead of re-pressing, not to say the request failed. (3) A failed BOOKKEEPING write '
+    + 'after a successful command still reports applied:true — the relay physically moved, and telling the '
+    + 'operator otherwise is the louder failure. Only a failed OVERRIDE write fails closed (500), and nothing has '
+    + 'been sent at that point.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: ShellyToggleBody } } },
+  },
+  responses: {
+    200: { description: 'Applied, PENDING, or handed back to the schedule — branch on `pending` before rendering any new state. See ShellyToggleResponse.', content: { 'application/json': { schema: ShellyToggleResponse } } },
+    400: { description: 'Validation failed, `until` is already in the past, or `until` is more than ' + MAX_OVERRIDE_HOURS + ' hours out (further than that is a schedule, not a manual nudge). Also "no active location".', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    404: { description: 'Malformed id, an id at another location, or a row deleted mid-request — one identical body', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    409: { description: 'code: "not_connected" (link an account first). On the "auto" path only, also code: "key_rejected" — the run-now that follows the cleared override hit a rejected key; the body still carries `device` with the override already gone, and the copy says the device is back on its schedule.', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    429: {
+      description: 'TWO DIFFERENT BODIES AT THIS STATUS. On the on/off path it is the pending SUCCESS body — '
+        + 'success:true, pending:true, code:"rate_limited" — because the override is saved and the cron will '
+        + 'apply it; the 429 only tells the client to stop re-pressing. On the "auto" path it is an ordinary '
+        + 'failure envelope (success:false, code:"rate_limited"), because the override has been cleared and the '
+        + 'immediate re-run is what did not happen.',
+      content: { 'application/json': { schema: z.union([ShellyToggleResponse, ShellyErrorResponse]).openapi('ShellyToggleRateLimited') } },
     },
-    400: { description: 'Validation failed (both/neither of state+clear, or until not a future ISO datetime)', content: { 'application/json': { schema: ErrorResponse } } },
-    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Device not found (or not at your active location)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The device or connection read failed; the override write failed ("nothing was switched" — this is the one path that fails closed); the expiry could not be resolved; or, on the "auto" path, code: "bad_device" (the row cannot be commanded at all, and gets no "it will resume" reassurance because the next tick cannot apply it either) or code: "unexpected_noop" (the override IS cleared, but the forced re-run declined to act on a managed device — kept as a failure rather than dressed as "already on schedule")', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    502: { description: '"auto" path only: code "occurrences" (today\'s timetable could not be read, so a class-mode device is NOT forced off on the strength of an empty day) or the client\'s failure tag for an unreachable cloud', content: { 'application/json': { schema: ShellyErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/shelly/devices/{id}/run-now',
+  tags: ['Automations'],
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Stop waiting for the next tick — make this relay agree with its schedule now (device_control)',
+  description:
+    'The planner answers a bare no-op for three different situations, and this route keeps them apart because '
+    + 'they need three different actions from the operator: no schedule (build one), schedule switched off (turn '
+    + 'it on), already correct (nothing). no_schedule IS CHECKED FIRST, and the order matters for a device that '
+    + 'is both — "turn the schedule on" is useless advice when there is no schedule to turn on. Both refusals '
+    + 'come before the connection read and before anything reaches the cloud, so a device nobody is managing '
+    + 'never spends a slot of the shared 1 request/second budget to be told so.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Applied, or applied:null meaning "already correct"', content: { 'application/json': { schema: ShellyRunNowResponse } } },
+    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    404: { description: 'Malformed id or an id at another location — one identical body', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    409: { description: 'code: "no_schedule" (checked FIRST — there is nothing to apply); "disabled" (the schedule is switched off; turn it on first); "not_connected"; or "key_rejected" (Shelly refused the stored key, which also parks the connection at action_needed)', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    429: { description: 'code: "rate_limited" — the shared 1 request/second account budget; retry in a few seconds', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    500: { description: 'The device or connection read failed; code: "bad_device" (the row has no usable device id/channel — remove it and adopt it again); or code: "unexpected_noop", the unreachable case kept LOUD on purpose — the two 409s above take every state the forced planner can decline, so a no-op arriving here means the planner and this route disagree about what force means, and a cheerful applied:null would bury that under a green tick', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    502: { description: 'code "occurrences" (today\'s timetable could not be read — a class-mode device is refused rather than switched off on the strength of an empty day) or the client\'s failure tag for an unreachable cloud', content: { 'application/json': { schema: ShellyErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/shelly/devices/{id}/energy',
+  tags: ['Automations'],
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'One device\'s daily kWh, zero-filled, in the location\'s calendar days (device_control)',
+  description:
+    'Read PER DEVICE, never per location: 50 devices x 30 days is 1,500 rows and PostgREST caps every select at '
+    + '1,000 regardless of .limit(), so a location-wide read would silently lose a third of the estate\'s '
+    + 'history with no error anywhere. At most 90 rows come back. The 400 for a bad `days` carries the same '
+    + '{ error, issues } shape validateBody produces, so one client-side renderer covers both.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    query: ShellyEnergyQuery,
+  },
+  responses: {
+    200: { description: 'A contiguous, zero-filled day series — read `samples` to tell a quiet day from a gap', content: { 'application/json': { schema: ShellyEnergyResponse } } },
+    400: { description: '`days` was junk or out of the 1-90 range (an absent parameter and a bare `?days=` are both absorbed as the default 30). Also "no active location".', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    404: { description: 'Malformed id or an id at another location — one identical body', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    500: { description: 'Database error', content: { 'application/json': { schema: ShellyErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/shelly/refresh',
+  tags: ['Automations'],
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'One batched read of this location\'s plugs, so the page need not wait for the cron (device_control)',
+  description:
+    'This is the CRON\'S OWN read step (refreshLocationState), lifted out so this route could call it — same '
+    + 'batching, same "only a batch that SUCCEEDED speaks for its ids" rule, same deadband on the writes. A '
+    + 'second implementation here would be a second opinion about what a plug\'s state is. It COMMANDS NOTHING: '
+    + 'reads and last_state writes only, no relay moves and no schedule is applied, which is what makes it safe '
+    + 'behind a repeatable button. It runs on a request thread, so it carries an 8-second budget and degrades to '
+    + 'a PARTIAL refresh rather than a platform timeout.',
+  responses: {
+    200: { description: 'Refreshed (possibly partially — see ShellyRefreshResponse for why the counters are not verdicts)', content: { 'application/json': { schema: ShellyRefreshResponse } } },
+    400: { description: 'Caller has no active location', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    409: { description: 'code: "not_connected"; "key_rejected" (Shelly refused the stored key — the connection is parked at action_needed with the same copy the cron writes); or "bad_host" (the stored server never reached the network, so no amount of retrying helps — it is the connection settings, and the connection is parked with the same literal the cron writes)', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    429: { description: 'code: "rate_limited" — NOT ONE batch succeeded and the time budget is why. Judged on the un-conflated engine signals (anyOk + budgetHit), never on the counters: `rate_limited` counts a retried SUCCESS too, and refreshed:0 is the healthy answer for a studio whose readings have not moved.', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    500: { description: 'The connection or the device list could not be read', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    502: { description: 'Nothing succeeded, having actually tried (code carries the last failure tag, or "unreachable"). The schedule is untouched by this route, and the copy says so rather than implying the studio is now adrift.', content: { 'application/json': { schema: ShellyErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/shelly/sync-names',
+  tags: ['Automations'],
+  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // mobile JWT, and the toggle body's `until` explicitly normalises the offset
+  // forms those callers send — documenting cookie-only would have contradicted
+  // the schema one screen up.
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Copy the device labels from the Shelly account onto this location\'s adopted rows (device_control)',
+  description:
+    'Reads and writes ONE column (`name`); it commands nothing and moves no relay, which is what makes it safe '
+    + 'behind a repeatable button. `overwrite: false` (the default) touches only rows whose name is null — '
+    + 'replacing a name typed on the CRM side has no undo, so it is a separate, deliberate choice. A location '
+    + 'with nothing adopted answers all-zero WITHOUT spending a slot of the shared 1 request/second account '
+    + 'budget. Devices are read once each (a four-relay Pro 4PM is one read and up to four rows) in batches of '
+    + 'the client\'s own MAX_GET_IDS, under an 8-second budget, and only a batch that SUCCEEDED speaks for its '
+    + 'ids — a device we never asked about is never reported as one Shelly has no name for. Every device that '
+    + 'still resolves no name contributes to `unresolved`, and the request logs ONE warning carrying the '
+    + 'payload\'s KEY SHAPE — key names and typeof strings only, never a value, because `settings` carries the '
+    + 'device\'s wifi and MQTT credentials.',
+  request: { body: { content: { 'application/json': { schema: ShellySyncNamesBody } } } },
+  responses: {
+    200: { description: 'Synced (possibly partially — see ShellySyncNamesResponse for why the counters need not add up to `total`)', content: { 'application/json': { schema: ShellySyncNamesResponse } } },
+    400: { description: 'Caller has no active location, or the body carried an unknown key (rejected rather than dropped — see ShellySyncNamesBody)', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    409: { description: 'code: "not_connected" (link an account first) or "key_rejected" — Shelly refused the STORED key, which also parks the connection at action_needed with the same copy the cron writes. Nothing is written on either branch: the operator has to act and press again, and a name is re-derivable on that next press.', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    429: { description: 'code: "rate_limited" — the shared 1 request/second account budget; retry in a few seconds. Nothing is written, for the same reason as the 409s.', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    500: { description: 'The connection or the device list could not be read', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    502: { description: 'Shelly stopped answering mid-read (code carries the client\'s failure tag). The names already resolved ARE WRITTEN FIRST and the body carries the same counters as the 200 plus partial: true — a far end that may stay unreachable must not cost a completed batch its renames.', content: { 'application/json': { schema: ShellyErrorResponse.extend({ total: z.number().int().optional(), updated: z.number().int().optional(), unchanged: z.number().int().optional(), unresolved: z.number().int().optional(), write_failures: z.number().int().optional(), partial: z.literal(true).optional() }).openapi('ShellySyncNamesPartialError') } } },
   },
 })
 
@@ -4347,7 +5662,7 @@ registry.registerPath({
   path: '/api/live/{locationId}',
   tags: ['Live HR'],
   security: [{ CookieAuth: [] }],
-  summary: 'Current live HR sessions + available straps for a location (staff)',
+  summary: 'Current live HR sessions + available straps for a location (studio_management)',
   request: { params: z.object({ locationId: uuidLike }) },
   responses: {
     200: {
@@ -4366,7 +5681,7 @@ registry.registerPath({
         },
       },
     },
-    403: { description: 'Location not in scope', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Location not in scope, or studio_management not held there', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -4394,7 +5709,7 @@ registry.registerPath({
   responses: {
     200: { description: 'Paired — returns session_id' },
     400: { description: 'Missing required fields or pair failed', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Coach role or location scope required', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Coach role, location scope and studio_management all required', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -4424,7 +5739,7 @@ registry.registerPath({
         },
       },
     },
-    403: { description: 'Manager role or location scope required', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Manager role, location scope and studio_management all required', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -4444,7 +5759,7 @@ registry.registerPath({
         },
       },
     },
-    403: { description: 'Manager role or location scope required', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Manager role, location scope and studio_management all required', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -5986,10 +7301,13 @@ function buildSpec() {
   const doc = generator.generateDocument({
     openapi: '3.1.0',
     info: {
-      title: 'UN1T CRM API',
+      // CHROME.1 — platform chrome. This spec documents the PLATFORM's HTTP
+      // API to integrators; it names no gym and must not carry a tenant's
+      // brand. (The servers list below already leads with crm.repset.ie.)
+      title: 'Repset CRM API',
       version: '1.1.0',
       description:
-        'HTTP API for the UN1T gym CRM. Most endpoints accept either a Supabase ' +
+        'HTTP API for the Repset gym CRM. Most endpoints accept either a Supabase ' +
         'session cookie (browser) or a Bearer token for n8n / external integrations — ' +
         'a per-organization `unitk_…` API key (org-scoped) or the legacy shared ' +
         'CRM_API_KEY (unscoped). Mutating endpoints validate request bodies via Zod schemas; ' +
@@ -5997,7 +7315,10 @@ function buildSpec() {
         ' Covers the public, inbound-webhook, bridge and mobile integration surface; planned outbound events appear under webhooks.',
     },
     servers: [
-      { url: 'https://crm.un1tdublin.com', description: 'Production' },
+      // REPSET-P6.S2 — canonical host leads; legacy host stays listed so
+      // existing integrations pointed at it keep a documented base URL.
+      { url: 'https://crm.repset.ie', description: 'Production' },
+      { url: 'https://crm.un1tdublin.com', description: 'Production (legacy host)' },
       { url: 'http://localhost:3000', description: 'Local dev' },
     ],
   })

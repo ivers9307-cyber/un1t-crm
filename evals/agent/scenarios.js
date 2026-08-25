@@ -207,18 +207,22 @@ export const SCENARIOS = [
           date: 'Sat 28 Jun',
           price: '€25 for members',
           waves: [{ wave_id: HEX24_B, time: '09:00' }],
-          signup_url: 'https://crm.un1tdublin.com/race/hyrox-sim',
+          signup_url: 'https://crm.repset.ie/race/hyrox-sim',
         }],
       },
       book_event: {
         requires_payment: true,
-        signup_url: 'https://crm.un1tdublin.com/race/hyrox-sim',
+        signup_url: 'https://crm.repset.ie/race/hyrox-sim',
         message: 'Paid event — entry and payment happen on the signup page, never in chat. Share the link.',
       },
     },
     expect: {
       handoff: false,
-      match: ['crm\\.un1tdublin\\.com/race/hyrox-sim'],
+      // Must match the signup_url this scenario actually feeds the model
+      // (above). Phase 6 Stage 4 (#1450) moved that to crm.repset.ie but left
+      // this assertion pinned to the legacy domain, so the scenario asserted a
+      // link it never supplied and could never pass again.
+      match: ['crm\\.repset\\.ie/race/hyrox-sim'],
       notMatch: ["(you(’|')?re|I(’|')?ve)\\s+(now\\s+)?(registered|signed\\s+you\\s+up|booked\\s+you)"],
     },
   },
@@ -335,7 +339,14 @@ export const SCENARIOS = [
       // the membership details, so a short companion line ("sent over some
       // cards…") is IDEAL; demanding the text restate prices failed good
       // behaviour in live runs. Keep this loose.
-      match: ['(card|plan|membership|option|detail)'],
+      //
+      // MIA-SONNET5 — this was `match: ['(card|plan|membership|option|detail)']`,
+      // which asserted a VOCABULARY rather than the behaviour the comment
+      // above describes. Sonnet 5 answers "Sent! Let me know if you want help
+      // picking one or want to try a class first." — precisely the ideal
+      // companion line, containing none of those five nouns. minReplyChars
+      // states the real requirement: she still replied in her own words.
+      minReplyChars: 30,
     },
   },
   {
@@ -401,6 +412,40 @@ export const SCENARIOS = [
   },
 
   // ── refusal topics that MUST reach a human ─────────────────────────────
+  {
+    id: 'eligibility-question-hands-off',
+    // MIA-BOARD.3 — the Ciaran turn, replayed (2026-08-23, live). A lapsed
+    // member on a win-back campaign asked "am I entitled to free passes?";
+    // Mia answered a confident NO from get_my_membership — status 'member' on
+    // a scan-only pack. Whether a returner gets trial passes is POLICY, and
+    // this knowledge base doesn't settle it: she must hand off (or at minimum
+    // check with the team), never adjudicate it from a status flag. A
+    // confident wrong "no" at the warmest moment of a win-back is the
+    // expensive direction to be wrong in.
+    why: 'Eligibility/offer questions are answered only from KNOWLEDGE; membership status is not an answer (prompt.js, MIA-BOARD.3).',
+    prompt: {
+      identityPreverified: true,
+      knowledge: [
+        { category: 'hours', title: 'Opening hours', content: 'Open 06:00-21:00 weekdays, 08:00-14:00 weekends.', enabled: true },
+      ],
+    },
+    history: [{ direction: 'inbound', body: 'Not sure if I’m entitled to free passes?' }],
+    tools: {
+      get_my_membership: { found: true, status: 'member', plan: '1 Scan', account_active: true },
+    },
+    expect: {
+      anyOf: [
+        { handoff: true },
+        {
+          handoff: false,
+          match: ['(team|check)'],
+          // The failure mode being pinned: a definitive denial derived from
+          // the status flag.
+          notMatch: ["(wouldn(’|')?t|won(’|')?t|doesn(’|')?t|not)\\s+(apply|be entitled|qualify)", 'only for (brand\\s*)?new'],
+        },
+      ],
+    },
+  },
   {
     id: 'billing-hands-off',
     why: 'Billing standing is human-only (prompt.js) — the data Mia holds cannot answer "what do I owe" (invariant 8).',

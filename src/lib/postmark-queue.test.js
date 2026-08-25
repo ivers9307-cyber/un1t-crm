@@ -40,6 +40,7 @@ import { processPostmarkEvent } from '@/lib/postmark-webhook-processor'
 import { deadLetterWebhook, resolveEmailSendLocation } from '@/lib/webhook-dead-letter'
 import { logError } from '@/lib/log'
 import { isReplayable } from '@/lib/webhook-replay'
+import { SEND_ROW_NOT_YET_COMMITTED } from './postmark-send-marker.js'
 
 // ── db mock factory ───────────────────────────────────────────────────────────
 
@@ -580,5 +581,82 @@ describe('reclaimStaleQueueClaims', () => {
     const summary = await reclaimStaleQueueClaims(db)
     expect(summary).toEqual({ reclaimed: 0, deadLettered: 0, failed: 0 })
     expect(logError).toHaveBeenCalled()
+  })
+})
+
+// ── POSTMARK-RACE.1 — the bookkeeping bug that made the loss permanent ───────
+//
+// The processor used to answer "no email_sends row" with { ok: true }. That is
+// what this layer reads as success: the claim STAYS stamped, the in-flight
+// marker is cleared, and the row is `processed_at` non-NULL with the marker
+// gone — indistinguishable from a genuinely handled event. Both consumers
+// filter on `processed_at IS NULL`, the stale-claim sweep only reclaims rows
+// that still carry the marker, and Postmark's own retry was already deduped at
+// ingest by (RecordType + MessageID). So the delivery was gone for good.
+//
+// The contract these tests pin: an event that recorded NOTHING must leave the
+// queue row pending, with attempts+1, so the sweeper re-runs it.
+describe('claimAndProcessQueueRow — deferred: send row not committed yet', () => {
+  const row = { id: 'row-race', payload: { RecordType: 'Delivery', MessageID: 'm-race' }, attempts: 0 }
+
+  it('does NOT mark the event processed, and releases the claim with attempts+1', async () => {
+    const db = makeDb()
+    processPostmarkEvent.mockResolvedValue({ ok: false, error: SEND_ROW_NOT_YET_COMMITTED })
+
+    const result = await claimAndProcessQueueRow(db, row)
+
+    expect(result).toEqual({
+      status: 'deferred', error: SEND_ROW_NOT_YET_COMMITTED, attempts: 1, deadLettered: false,
+    })
+    // The claim is given back — processed_at NULL is what makes the row
+    // visible to the next sweeper tick and to the QStash worker's re-fetch.
+    expect(db._calls.releases).toHaveLength(1)
+    expect(db._calls.releases[0].payload.processed_at).toBeNull()
+    expect(db._calls.releases[0].payload.attempts).toBe(1)
+    // And crucially the completion stamp never ran: clearing the in-flight
+    // marker is what says "done", and nothing was done.
+    expect(db._calls.completions).toHaveLength(0)
+    expect(deadLetterWebhook).not.toHaveBeenCalled()
+  })
+
+  it('is bounded — the attempt that spends the budget dead-letters and is NOT deferred', async () => {
+    // Genuine noise can never get here (it is dropped in the processor without
+    // the marker), but a marker on mail whose email_sends insert really failed
+    // can. That must terminate, and terminate visibly: an infinite requeue is
+    // the exact class this repo just removed from the Zoom sync.
+    const db = makeDb({ claimData: [{ id: 'row-race', attempts: MAX_ATTEMPTS - 1 }] })
+    processPostmarkEvent.mockResolvedValue({ ok: false, error: SEND_ROW_NOT_YET_COMMITTED })
+
+    const result = await claimAndProcessQueueRow(db, row)
+
+    expect(result.status).toBe('failed')
+    expect(result.deadLettered).toBe(true)
+    expect(result.attempts).toBe(MAX_ATTEMPTS)
+    expect(deadLetterWebhook).toHaveBeenCalledWith(db, expect.objectContaining({
+      provider: EXHAUSTED_PROVIDER,
+      eventType: 'Delivery',
+      payload: row.payload,
+    }))
+    expect(db._calls.releases[0].payload.error).toContain(EXHAUSTED_ERROR_PREFIX)
+  })
+
+  it('converges: the retry that finds the row processes normally', async () => {
+    const db = makeDb({ claimData: [{ id: 'row-race', attempts: 1 }] })
+    processPostmarkEvent.mockResolvedValue({ ok: true })
+
+    const result = await claimAndProcessQueueRow(db, { ...row, attempts: 1 })
+
+    expect(result).toEqual({ status: 'processed' })
+    expect(db._calls.completions).toHaveLength(1)
+    expect(db._calls.releases).toHaveLength(0)
+  })
+
+  it('an ordinary processing failure is still `failed`, not `deferred`', async () => {
+    const db = makeDb()
+    processPostmarkEvent.mockResolvedValue({ ok: false, error: 'boom' })
+
+    const result = await claimAndProcessQueueRow(db, row)
+
+    expect(result.status).toBe('failed')
   })
 })

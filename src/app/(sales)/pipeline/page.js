@@ -27,6 +27,7 @@ import { hasPermission } from '@/lib/permissions'
 import { redirect } from 'next/navigation'
 import KanbanBoard from '@/components/KanbanBoard'
 import PipelineViewSwitcher from '@/components/PipelineViewSwitcher'
+import { splitStagesByFunnel } from '@/lib/pipeline-classifier'
 
 export const dynamic = 'force-dynamic'
 
@@ -41,7 +42,11 @@ export default async function PipelinePage(props) {
   // against both shapes — `await Promise.resolve(...)` is a no-op on a
   // plain object and unwraps the promise on 15.
   const sp = (await Promise.resolve(searchParams)) || {}
-  const view = sp?.view === 'dormant' ? 'dormant' : 'active'
+  // RETURNPIPE.1 — three boards now. Anything unrecognised still falls back to
+  // 'active', so an old bookmarked URL behaves exactly as before.
+  const view = sp?.view === 'dormant' ? 'dormant'
+    : sp?.view === 'returning' ? 'returning'
+    : 'active'
 
   const db = createServerClient()
 
@@ -56,9 +61,15 @@ export default async function PipelinePage(props) {
     .eq('archived', false)
     .order('display_order')
 
-  const activeStages = (allStages || []).filter((s) => !s.is_dormant)
-  const dormantStages = (allStages || []).filter((s) => s.is_dormant)
-  const visibleStages = view === 'dormant' ? dormantStages : activeStages
+  // RETURNPIPE.1 — splitStagesByFunnel owns the board/is_dormant partition so
+  // the page and the mobile screen can never disagree about which stage sits
+  // on which tab. A row with no `board` reads as 'acquisition', so every stage
+  // predating mig 558 lands exactly where it did before.
+  const { funnel: activeStages, offFunnel: dormantStages, returning: returningStages } =
+    splitStagesByFunnel(allStages || [])
+  const visibleStages = view === 'dormant' ? dormantStages
+    : view === 'returning' ? returningStages
+    : activeStages
 
   // 2. Deals — ship only the FIRST page per column + a per-stage total count,
   //    instead of the whole open-deal set (was ≤10k shipped to the client and
@@ -85,25 +96,21 @@ export default async function PipelinePage(props) {
 
   // 3. Tab badges — total open-deal counts per view. Use HEAD count
   //    queries (no row payload) so this stays cheap.
-  const [{ count: activeCount }, { count: dormantCount }] = await Promise.all([
-    activeStages.length > 0
-      ? db.from('deals').select('id', { count: 'exact', head: true })
-          .eq('status', 'open').eq('location_id', locationId)
-          .in('stage_id', activeStages.map((s) => s.id))
-      : Promise.resolve({ count: 0 }),
-    dormantStages.length > 0
-      ? db.from('deals').select('id', { count: 'exact', head: true })
-          .eq('status', 'open').eq('location_id', locationId)
-          .in('stage_id', dormantStages.map((s) => s.id))
-      : Promise.resolve({ count: 0 }),
-  ])
+  const tabCount = (stages) => (stages.length > 0
+    ? db.from('deals').select('id', { count: 'exact', head: true })
+        .eq('status', 'open').eq('location_id', locationId)
+        .in('stage_id', stages.map((s) => s.id))
+    : Promise.resolve({ count: 0 }))
+  const [{ count: activeCount }, { count: dormantCount }, { count: returningCount }] =
+    await Promise.all([tabCount(activeStages), tabCount(dormantStages), tabCount(returningStages)])
 
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold">Pipeline</h2>
         <span className="text-sm text-un1t-subtle">
-          {visibleTotal.toLocaleString()} {view === 'dormant' ? 'off-funnel' : 'funnel'} deals
+          {visibleTotal.toLocaleString()}{' '}
+          {view === 'dormant' ? 'off-funnel' : view === 'returning' ? 'returning' : 'funnel'} deals
         </span>
       </div>
 
@@ -111,6 +118,7 @@ export default async function PipelinePage(props) {
         view={view}
         activeCount={activeCount || 0}
         dormantCount={dormantCount || 0}
+        returningCount={returningCount || 0}
       />
 
       <KanbanBoard

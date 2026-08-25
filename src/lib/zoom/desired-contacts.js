@@ -24,6 +24,7 @@
 // be the second line of defence, not the first.
 
 import { normaliseForZoom } from './normalise-phone'
+import { e164Rejection } from './publishable-e164'
 
 const PAGE_SIZE = 1000       // PostgREST caps every select at 1000 rows
 const HARD_LIMIT = 40_000    // ~6.7k today; crossing this means streaming, not a bigger number
@@ -90,8 +91,12 @@ function nameOf(row) {
  *   deliberately the SAME code path the sync uses: a separate "which rows would
  *   be skipped" query is a second source of truth that drifts at the first
  *   normaliser change.
- * @returns {Promise<{ok: true, desired: Map<string, {name: string, contactId: string}>, stats: object, rejects?: object[]}
+ * @returns {Promise<{ok: true, desired: Map<string, {name: string, contactId: string}>,
+ *                    invalid: Set<string>, stats: object, rejects?: object[]}
  *                 | {ok: false, error: string}>}
+ *   `invalid` is every E.164 a scanned contact produced that Zoom would refuse.
+ *   It is NOT the complement of `desired` — a number in neither set is simply
+ *   gone from the CRM, which is a legitimate delete. See reconcile.js.
  */
 export async function buildDesiredContacts(db, { collectRejects = false } = {}) {
   // ZOOMSYNC.2 — the boundary first, before a single contact row is read.
@@ -105,14 +110,25 @@ export async function buildDesiredContacts(db, { collectRejects = false } = {}) 
   }
 
   const stats = {
-    scanned: 0, excludedClassPass: 0, rejected: 0, noName: 0, collapsed: 0,
+    scanned: 0, excludedClassPass: 0, rejected: 0, invalidE164: 0, noName: 0, collapsed: 0,
     orgLocations: locationIds.length,
   }
   const rejects = collectRejects ? [] : null
-  const note = (row, reason) => {
-    if (rejects) rejects.push({ id: String(row.id), name: nameOf(row), phone: row.phone ?? null, reason })
+  const note = (row, reason, detail = null) => {
+    if (rejects) {
+      rejects.push({
+        id: String(row.id), name: nameOf(row), phone: row.phone ?? null, reason,
+        ...(detail ? { detail } : {}),
+      })
+    }
   }
   const winners = new Map() // e164 → row
+  // ZOOMSYNC.4 — numbers that read as a phone number but that Zoom will not
+  // hold. Returned alongside `desired` because dropping them is NOT the end of
+  // it: the reconcile diffs desired against Zoom, so a key that silently
+  // vanishes from desired becomes a DELETE against any entry already created
+  // under it. reconcile.js protects these keys explicitly; see diffContacts.
+  const invalid = new Set()
 
   let pageStart = 0
   while (true) {
@@ -143,6 +159,16 @@ export async function buildDesiredContacts(db, { collectRejects = false } = {}) 
         note(row, String(row.phone ?? '').trim() ? 'unparseable' : 'no_phone')
         continue
       }
+      // ZOOMSYNC.4 — shape was never the same question as validity. Before this
+      // check the four numbers in the 06-Aug runtime log were enqueued nightly
+      // and 400'd nightly, forever.
+      const rejection = e164Rejection(e164)
+      if (rejection) {
+        stats.invalidE164++
+        invalid.add(e164)
+        note(row, 'invalid_e164', rejection)
+        continue
+      }
       if (!nameOf(row)) { stats.noName++; note(row, 'no_name'); continue }
 
       const held = winners.get(e164)
@@ -160,5 +186,5 @@ export async function buildDesiredContacts(db, { collectRejects = false } = {}) 
   for (const [e164, row] of winners) {
     desired.set(e164, { name: nameOf(row), contactId: String(row.id) })
   }
-  return { ok: true, desired, stats, ...(rejects ? { rejects } : {}) }
+  return { ok: true, desired, invalid, stats, ...(rejects ? { rejects } : {}) }
 }

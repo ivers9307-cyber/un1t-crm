@@ -65,6 +65,37 @@ function wrapBody(bodyHtml) {
  */
 export function defaultCopy(kind, tokens) {
   const bonusLine = tokens.bonus ? `, with ${tokens.bonus} included` : ''
+
+  // GIFTCARD.1 — a gift card buyer is usually NOT the person who will train,
+  // so the membership copy ("book classes through the app") is wrong for
+  // them in both directions: it tells the wrong person to book, and it says
+  // nothing about handing the card over. The 5-year validity is repeated
+  // here because the email is the buyer's record of the purchase.
+  if (tokens.category === 'gift_card') {
+    if (kind === 'paid') {
+      return {
+        subject: `Payment received: ${tokens.offer_name}`,
+        htmlBody: wrapBody(
+          `<p>Hi ${tokens.first_name},</p>` +
+          `<p>Thanks for buying a <strong>${tokens.offer_name}</strong>. We have your payment of ${tokens.amount}.</p>` +
+          `<p>We will have it ready within 24 hours and will email you everything you need to hand it over. Nothing else for you to do.</p>` +
+          `<p>If anything looks wrong, just reply to this email.</p>` +
+          `<p>${tokens.studio}</p>`
+        ),
+      }
+    }
+    return {
+      subject: `Your ${tokens.offer_name} is ready`,
+      htmlBody: wrapBody(
+        `<p>Hi ${tokens.first_name},</p>` +
+        `<p>Your <strong>${tokens.offer_name}</strong> is ready to hand over.</p>` +
+        `<p>It is valid for 5 years and can be used against any membership, class pack or drop-in at ${tokens.studio}. Whoever you are giving it to just needs to mention it at reception and we will take it from there.</p>` +
+        `<p>Any questions, reply to this email.</p>` +
+        `<p>${tokens.studio}</p>`
+      ),
+    }
+  }
+
   if (kind === 'paid') {
     return {
       subject: `Payment received: ${tokens.offer_name}`,
@@ -131,6 +162,7 @@ export async function sendOfferPurchaseEmail(db, { purchase, offer, kind = 'read
   const tokens = {
     first_name: (contact?.first_name || purchase.buyer_name || '').split(' ')[0] || 'there',
     offer_name: offer?.name || 'your purchase',
+    category: offer?.category || null,
     bonus: bonusPhrase(offer?.bonus_headline),
     amount: formatEuro(purchase.amount_cents || 0),
     studio: loc?.name || 'UN1T',

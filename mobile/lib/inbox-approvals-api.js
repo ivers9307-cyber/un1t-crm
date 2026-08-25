@@ -7,12 +7,10 @@
 // generic /api/approvals/pending hub (MOBILE_APPROVAL_KEYS) for the
 // /approvals screen — that's a different surface, out of scope here.
 
-import { authHeaders } from './api'
+// REPSET-P6.S2 — base comes from the shared extra.apiBaseUrl resolution in
+// lib/api.js (EXPO_PUBLIC_API_BASE_URL override, canonical repset default).
+import { authHeaders, API_BASE } from './api'
 import { supabase } from './supabase'
-
-const API_BASE =
-  process.env.EXPO_PUBLIC_API_BASE_URL ||
-  'https://crm.un1tdublin.com'
 
 /**
  * List agent approval requests for one WA/IG conversation (any status),

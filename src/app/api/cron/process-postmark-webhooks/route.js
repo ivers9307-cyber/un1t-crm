@@ -40,8 +40,25 @@ import { stampHeartbeat } from '@/lib/cron-heartbeat'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+// POSTMARK-RACE.2 — the batch below can now be three times the size, so the
+// invocation gets the headroom explicitly rather than inheriting a default.
+export const maxDuration = 300
 
-const BATCH_SIZE = 100 // events processed per cron tick
+// POSTMARK-RACE.2 — was 100, which with a */10 schedule is a hard ceiling of
+// 600 rows/hour on the sweeper. Measured on prod 2026-08-10: this cron ran at
+// EXACTLY 100 rows per tick from 18:10 until past 21:40 — the ceiling, not the
+// backlog, was setting the drain rate, and max queue lag over 60 days is
+// 4h15m. A single campaign burst produces ~1,000 events in one 10-minute
+// window (peak 1,038), so 100 could never absorb one. A 100-row batch measures
+// ~24s wall clock; 300 keeps well inside maxDuration and the TIME_BUDGET_MS
+// guard below stops a slow tick overrunning regardless.
+const BATCH_SIZE = 300 // events processed per cron tick
+
+// Stop claiming new rows once the invocation has spent this long. The rows we
+// did not reach stay pending (nothing is claimed until claimAndProcessQueueRow
+// runs), so the next tick picks them up in the same received_at order — the
+// batch getting larger must never turn into a timeout that strands a claim.
+const TIME_BUDGET_MS = 240_000
 
 function unauthorized() {
   return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
@@ -91,7 +108,19 @@ export async function GET(request) {
     dead_lettered_on_reclaim: reclaim.deadLettered,
   }
 
+  const startedAt = Date.now()
   for (const row of rows || []) {
+    if (Date.now() - startedAt > TIME_BUDGET_MS) {
+      summary.time_budget_exhausted = true
+      summary.unreached = (summary.batch_size || 0) - (
+        summary.processed + summary.failed + (summary.deferred || 0) + (summary.skipped || 0)
+      )
+      console.warn(
+        `[cron process-postmark-webhooks] time budget spent after ${summary.processed} processed — ` +
+        `${summary.unreached} rows left pending for the next tick`
+      )
+      break
+    }
     // Claim-before-process CAS, shared with the QStash worker route
     // (src/lib/postmark-queue.js). Vercel cron does not skip an
     // overlapping invocation, and the QStash push consumer races this
@@ -105,6 +134,18 @@ export async function GET(request) {
       summary.skipped = (summary.skipped || 0) + 1
     } else if (outcome.status === 'processed') {
       summary.processed += 1
+    } else if (outcome.status === 'deferred') {
+      // POSTMARK-RACE.1 — the send row had not committed when we looked. The
+      // row is pending again with attempts+1. Its FAST recovery path is the
+      // QStash worker's delayed re-publish (+60s); this cron is the guarantee
+      // behind that, so a deferral seen here lands in a later tick's
+      // `processed` at the latest. Counted separately
+      // rather than as `failed`: a steady trickle here is the race being
+      // absorbed as designed, whereas a rising count that never converts to
+      // processed means sends are being made whose email_sends insert is
+      // failing — a genuinely different incident, and the heartbeat's
+      // last_outcome is where an operator would see the difference.
+      summary.deferred = (summary.deferred || 0) + 1
     } else {
       summary.failed += 1
       const attempt = outcome.attempts ?? (row.attempts || 0) + 1

@@ -133,6 +133,10 @@
       "schedule": "*/15 * * * *"
     },
     {
+      "path": "/api/cron/agent-review",
+      "schedule": "0 3 * * *"
+    },
+    {
       "path": "/api/cron/sync-class-occurrences",
       "schedule": "*/15 * * * *"
     },
@@ -199,7 +203,8 @@
     { "path": "/api/cron/contract-reminders", "schedule": "0 8 * * *" },
     { "path": "/api/cron/equipment-inspection-reminder", "schedule": "0 6 * * *" },
     { "path": "/api/cron/equipment-inspection-sweep", "schedule": "0 19 * * *" },
-    { "path": "/api/cron/homey-reconcile", "schedule": "* * * * *" },
+    { "path": "/api/cron/sonos-reconcile", "schedule": "* * * * *" },
+    { "path": "/api/cron/shelly-reconcile", "schedule": "* * * * *" },
     { "path": "/api/cron/fleet-health", "schedule": "*/5 * * * *" },
     { "path": "/api/cron/attribution-health", "schedule": "45 21 * * *" },
     { "path": "/api/cron/zoom-contact-sync", "schedule": "30 4 * * *" },

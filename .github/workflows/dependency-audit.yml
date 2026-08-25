@@ -25,7 +25,8 @@
 # `.audit-allowlist.json` (with a reason and an EXPIRY) while a genuinely
 # new one still fails. Motivation: the ip-address advisories left this
 # job red on every branch 2026-08-04 → 08-07 and, because it is not a
-# required check (main has no branch protection at all), PRs merged
+# required check (main is protected since CI-GATE.1, but only Test & lint
+# and Next build are required — a registry-dependent job must not gate merges), PRs merged
 # straight past it. A permanently-red check is the worst of both worlds —
 # the noise of a gate with none of the protection — and a bare `npm audit`
 # gives no way to tell "the known one is still open" from "something new

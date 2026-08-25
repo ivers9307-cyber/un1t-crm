@@ -219,7 +219,13 @@ function buildLineItems(fields, accountTaxTypes = {}) {
     : Number.isFinite(sub) && Number.isFinite(tax) ? sub + tax
       : Number.isFinite(sub) ? sub : 0
   return [{
-    Description: `Invoice ${fields.invoice_number || ''} from ${fields.supplier_name || ''}`.trim() || '(invoice)',
+    // RECEIPT-NULLS.1 — a numberless receipt would otherwise describe itself
+    // as "Invoice  from Tesco Ireland", with the dangling word and the double
+    // space both visible to the bookkeeper in Xero.
+    Description: (fields.invoice_number
+      ? `Invoice ${fields.invoice_number} from ${fields.supplier_name || ''}`
+      : String(fields.supplier_name || '')
+    ).trim() || '(invoice)',
     Quantity: 1,
     UnitAmount: gross,
     ...(code ? { AccountCode: String(code) } : {}),
@@ -239,8 +245,12 @@ export function buildBillPayload(fields, { supplierContactId, accountTaxTypes = 
     Contact: { ContactID: supplierContactId },
     Date: fields.invoice_date,
     ...(fields.due_date ? { DueDate: fields.due_date } : {}),
-    InvoiceNumber: fields.invoice_number,
-    Reference: fields.invoice_number,
+    // RECEIPT-NULLS.1 — both are OPTIONAL on an ACCPAY bill, and a receipt
+    // with no invoice number is the normal case for a shop purchase. Omit
+    // the keys rather than posting an explicit null, matching the DueDate
+    // line above: Xero then leaves the fields empty instead of recording a
+    // null the bookkeeper has to look at.
+    ...(fields.invoice_number ? { InvoiceNumber: fields.invoice_number, Reference: fields.invoice_number } : {}),
     CurrencyCode: fields.currency || 'EUR',
     // Tax-INCLUSIVE: the single summary line's UnitAmount IS the gross
     // invoice total, so Xero's booked total always equals the captured
@@ -318,6 +328,35 @@ export async function pushQueueRowToXero(queueId) {
   if (!fields.xero_contact_ref) {
     throw new XeroError('No Xero supplier picked. Open the row in /invoices and choose a supplier before sending.')
   }
+  // RECEIPT-NULLS.1 — invoice_date is nullable at extraction now, because a
+  // till receipt often has no date Claude can read. This is the backstop
+  // that keeps that leniency out of the accounts: a bill must never reach
+  // Xero without a date.
+  //
+  // Deliberately a block, not a fallback to received_at. A bill's Date
+  // drives the VAT period, so an invented one misfiles the return — quietly,
+  // and in the direction nobody audits. The operator already reviews every
+  // row before sending (that is what data_approved means), so this asks for
+  // one field they can read off the receipt in front of them, in the same
+  // shape as the two guards above.
+  if (!fields.invoice_date) {
+    throw new XeroError('This receipt has no invoice date. Open the row in /invoices, set the date from the receipt, and send again — a bill cannot be filed to the right VAT period without one.')
+  }
+  // ZERO-TOTAL.1 — deliberately NO "total must be > 0" guard here, though the
+  // obvious instinct is to add one.
+  //
+  // The fix for an unreadable total belongs in the schema (see
+  // requiredMoney in invoice-extraction.js): a total Claude could not read now
+  // fails extraction outright instead of coercing to 0, so no NEW row can
+  // arrive here with a phantom zero. Nothing pending carries one either —
+  // checked against the live queue, every zero-total row is already forwarded.
+  //
+  // And a zero total is not self-evidently wrong here. The three live examples
+  // are CCF Autos customs SADs (deferred VAT on imported vehicles, booked to
+  // the "VRT/VAT for Cars" contact), each reviewed by a human hours after
+  // extraction and then forwarded on purpose. Blocking would break that flow
+  // to defend against a population that is currently empty. If those pushes
+  // turn out to have been mistakes, the guard goes here — one `if`.
 
   // OAuth + tenant lookup. withFreshToken returns the connection
   // alongside xfetch so we can compute the deep-link URL with the

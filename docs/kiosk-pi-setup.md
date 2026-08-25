@@ -9,14 +9,20 @@ only** setup — the Pi shows one URL and nothing else (it is NOT the champ-brid
 Kiosk mode is the studio-TV route with `?kiosk=1`:
 
 ```
-https://crm.un1tdublin.com/tv/<LOCATION_ID>?kiosk=1
+https://crm.repset.ie/tv/<LOCATION_ID>?kiosk=1
 ```
 
 Stillorgan (`a0000000-0000-0000-0000-000000000001`):
 
 ```
-https://crm.un1tdublin.com/tv/a0000000-0000-0000-0000-000000000001?kiosk=1
+https://crm.repset.ie/tv/a0000000-0000-0000-0000-000000000001?kiosk=1
 ```
+
+> **Legacy devices:** these URLs apply to **new** kiosk setups. A live kiosk
+> keeps the URL baked into it at provision time until an explicit per-device
+> refresh (`pi kiosk-refresh` in un1t-pi) — deliberately a separate, gated
+> operation. Kiosks provisioned against the legacy `crm.un1tdublin.com` host
+> keep working until that pass.
 
 `/tv/` is a **public route** (proxy allowlist) polling the public
 `/api/public/live/<location_id>` feed every 2 s — the Pi never logs in.
@@ -58,7 +64,7 @@ sudo reboot
 set -euo pipefail
 
 LOCATION_ID="${LOCATION_ID:-a0000000-0000-0000-0000-000000000001}"   # Stillorgan
-KIOSK_URL="https://crm.un1tdublin.com/tv/${LOCATION_ID}?kiosk=1"
+KIOSK_URL="https://crm.repset.ie/tv/${LOCATION_ID}?kiosk=1"
 BIN="$HOME/.local/bin"
 echo ">> Kiosk URL: $KIOSK_URL"
 

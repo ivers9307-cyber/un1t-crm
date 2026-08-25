@@ -12,12 +12,12 @@
 // the tab badge and the sidebar badge always agree because they're the
 // same fetch, not two implementations of "unread".
 //
-// /orders overshow: the tab mirrors the old sidebar entry's permission-only
-// gate (orders permission alone). The page's own role guard
-// (MANAGER_ROLES.includes(user.role)) still bounces non-managers who have
-// the permission but not the role — same pre-existing overshow the /money
-// index comment already documents, carried into the tab gate for
-// consistency rather than fixed here.
+// /orders: the tab carries the destination's role floor (HUBDOOR.4). It used
+// to gate on the permission alone, mirroring the old sidebar entry, so a
+// staff/reception holder of `orders` saw a tab that bounced them at the
+// page's own MANAGER_ROLES guard — the dead-door shape HUBDOOR.1 exists to
+// close, left open here because the Members strip was fixed and this one
+// was not.
 //
 // DEEP.4 Task 1 (4A) — Contractor invoices + Staff expenses are
 // CROSS-HUB tabs: their hrefs (/schedule/invoices, /schedule/expenses)
@@ -48,6 +48,7 @@
 
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
+import { MANAGER_ROLES } from '@/lib/schemas'
 import HubTabs from '@/components/HubTabs'
 
 export const dynamic = 'force-dynamic'
@@ -56,7 +57,11 @@ const TABS = [
   { id: 'overview', label: 'Overview',      href: '/accounting',    perms: ['accounting_hub'] },
   { id: 'invoices', label: 'Invoices',      href: '/invoices',      perms: ['invoices_inbox'], badgeUrl: '/api/invoices-inbox/unread-count' },
   { id: 'receipts', label: 'Card receipts', href: '/card-receipts', perms: ['card_receipts'] },
-  { id: 'orders',   label: 'Orders',        href: '/orders',        perms: ['orders'] },
+  // HUBDOOR.4 — same floor HUBDOOR.2 gave Challenges in the Members strip:
+  // /orders gates on MANAGER_ROLES AND the key, so a staff/reception holder of
+  // `orders` alone was shown a tab that bounced them. A tab with no `roles`
+  // has no floor.
+  { id: 'orders',   label: 'Orders',        href: '/orders',        perms: ['orders'], roles: MANAGER_ROLES },
   { id: 'offers',   label: 'Offer sales',   href: '/offer-sales',   perms: ['approvals_offer_purchases'] },
   { id: 'contractor-invoices', label: 'Contractor invoices', href: '/schedule/invoices', perms: ['approvals_contractor_invoices'] },
   { id: 'expenses',            label: 'Staff expenses',      href: '/schedule/expenses', perms: ['approvals_fte_expenses'] },
@@ -66,7 +71,7 @@ export default async function MoneyHubLayout({ children }) {
   const user = await getCurrentUser()
   if (!user) return children // pages own their auth redirects
   const tabs = TABS
-    .filter(t => t.perms.some(p => hasPermission(user, p)))
+    .filter(t => (!t.roles || t.roles.includes(user.role)) && t.perms.some(p => hasPermission(user, p)))
     .map(({ perms: _p, ...t }) => t)
   return (
     <>

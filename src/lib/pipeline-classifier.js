@@ -16,6 +16,8 @@ export {
   PIPELINE_THRESHOLDS,
   FUNNEL_STAGE_SLUGS,
   OFF_FUNNEL_STAGE_SLUGS,
+  RETURNING_STAGE_SLUGS,
+  returnEpisode,
   countAttendedBookings,
   nextBookedClass,
   classifyContact,

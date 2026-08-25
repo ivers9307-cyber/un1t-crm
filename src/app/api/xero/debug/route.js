@@ -50,7 +50,11 @@ export async function GET(req) {
     scopes: XERO_SCOPES,
     authorizeUrl,
     buildError,
-    expectedRedirectUriInXero: 'https://crm.un1tdublin.com/api/xero/callback',
-    note: 'Compare XERO_REDIRECT_URI here with what you registered in the Xero developer portal — they must match EXACTLY (no trailing slash, lowercase, https).',
+    // REPSET-P6.S2 — derived from the env, never a hard-coded host: this is
+    // the value the OAuth dance actually sends, so it is by definition what
+    // must be registered in the Xero portal. A literal here false-alarmed
+    // whenever the deployment's host moved ahead of (or behind) the string.
+    expectedRedirectUriInXero: process.env.XERO_REDIRECT_URI || null,
+    note: 'expectedRedirectUriInXero mirrors XERO_REDIRECT_URI — register EXACTLY that value in the Xero developer portal (no trailing slash, lowercase, https). If it is null, XERO_REDIRECT_URI is unset.',
   })
 }

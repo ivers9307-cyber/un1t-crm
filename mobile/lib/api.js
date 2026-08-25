@@ -12,7 +12,11 @@ import { supabase } from './supabase'
 import { readImpersonate } from './impersonate'
 import { buildAuthHeaders } from './api-headers'
 
-const API_BASE = Constants.expoConfig?.extra?.apiBaseUrl
+// REPSET-P6.S2 — exported so every hand-rolled client wrapper (checklists,
+// inbox approvals, issues, maintenance) builds on the SAME base as api(),
+// resolved once through app.config.js extra.apiBaseUrl (EXPO_PUBLIC_
+// override first, canonical repset default second). One flip point.
+export const API_BASE = Constants.expoConfig?.extra?.apiBaseUrl
 
 if (!API_BASE) {
   // eslint-disable-next-line no-console
@@ -64,7 +68,8 @@ export async function authHeaders({ locationId, json = false } = {}) {
  * @param {string} [options.method]    'GET' | 'POST' | 'PUT' | 'DELETE'
  * @param {object} [options.body]      JSON-serialisable
  * @param {string} [options.locationId] override the active location for this call
- * @returns {Promise<{success: boolean, data?: any, error?: string, issues?: any[]}>}
+ * @returns {Promise<{success: boolean, data?: any, error?: string, issues?: any[], transport?: true, status?: number}>}
+ *   `transport: true` (api()-minted, no server answer)
  */
 export async function api(path, options = {}) {
   const headers = await authHeaders({ locationId: options.locationId, json: true })
@@ -77,7 +82,12 @@ export async function api(path, options = {}) {
       body: options.body ? JSON.stringify(options.body) : undefined,
     })
   } catch (err) {
-    return { success: false, error: `Network error: ${err.message || err}` }
+    // transport: true marks an envelope api() minted itself without a server
+    // answer (dropped fetch, non-JSON body). Consumers that poll use it to
+    // keep their last good state through a blip rather than painting the
+    // failure — see SonosControlCard. Additive; every other caller reads
+    // only success/error.
+    return { success: false, transport: true, error: `Network error: ${err.message || err}` }
   }
 
   // The CRM responds with the standard { success, data?, error?, issues? }
@@ -86,15 +96,36 @@ export async function api(path, options = {}) {
   try {
     json = await response.json()
   } catch {
+    // `status` rides along so a consumer can tell an edge 5xx error page
+    // (retry) from an HTML 404 off a wrong base URL (don't) without
+    // parsing the message — geofence.js's retry queue is the reader.
     return {
       success: false,
+      transport: true,
+      status: response.status,
       error: `Non-JSON response (${response.status})`,
     }
   }
 
-  if (!response.ok && json?.success !== false) {
-    // Server returned non-2xx without our standard envelope.
-    return { success: false, error: json?.error || `HTTP ${response.status}` }
+  if (!response.ok && typeof json?.success !== 'boolean') {
+    // Server returned non-2xx without our standard envelope (an edge error
+    // page, a platform 504). Synthesise one, carrying `status` for the same
+    // reason the non-JSON branch above does: a caller that needs to tell one
+    // non-2xx from another must read a FIELD, not match this error string.
+    return { success: false, status: response.status, error: json?.error || `HTTP ${response.status}` }
   }
+  // SHELLY-MOB.1 — a non-2xx that DOES carry our envelope passes through
+  // UNCHANGED. The condition above used to be `success !== false`, which
+  // swallowed a body that explicitly said `success: true` — the one live
+  // case being POST /api/shelly/devices/<id>/toggle answering HTTP **429**
+  // with `success: true, pending: true`: the override IS saved and the cron
+  // will apply it; the 429 is a back-off signal so the client stops
+  // re-pressing, not a failure. Replacing that body rendered "HTTP 429" and
+  // told an operator their switch failed when it did not. Passing it through
+  // hands mobile/lib/shelly.js's isQueued/toggleResultText the real
+  // `pending`, `message` and `code` fields instead of a status-code
+  // inference — and existing callers see exactly what they always saw,
+  // because every pre-existing non-2xx either carries `success: false`
+  // (unchanged path) or no boolean `success` at all (still synthesised).
   return json
 }

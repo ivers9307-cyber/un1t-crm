@@ -4,6 +4,8 @@ import { resolveBrand, isFrameworkAsset } from '@/lib/brands'
 import { resolveTenantDomainBrand } from '@/lib/tenant-domains-edge'
 import { isApiKeyToken, sha256HexEdge } from '@/lib/api-keys-edge'
 import { readSupportModeEdge, decideSupportWriteBlock } from '@/lib/support-session-edge'
+import { decideLegacyHostRedirect } from '@/lib/legacy-host-redirect'
+import { decideStaffWebLock, STUDIO_SESSION_COOKIE } from '@/lib/staff-web-lock'
 
 // Constant-time string compare. Implemented inline because the proxy runs
 // in the Edge runtime which doesn't expose node:crypto.timingSafeEqual. The
@@ -30,6 +32,29 @@ function timingSafeEqualEdge(a, b) {
 // hash so Next re-emits the middleware on the next build.
 export async function proxy(request) {
   const hostname = request.headers.get('host') || ''
+
+  // ── Legacy CRM host → canonical repset host (REPSET-P6.S2) ───────
+  // Env-gated safety valve, default OFF. When REDIRECT_LEGACY_CRM_HOST=1,
+  // GET/HEAD page requests arriving on the exact legacy host
+  // (crm.un1tdublin.com) 308 to https://crm.repset.ie preserving the full
+  // path + query. The decision table — flag, exact-host match, method,
+  // the /api/* + /auth/callback + /reset-password exclusions — is pure
+  // and unit-tested in src/lib/legacy-host-redirect.test.js. Because it
+  // matches ONLY the exact CRM host it cannot interfere with the brand
+  // hosts resolved below (marketing un1tdublin.com, pay.ccfautos.com,
+  // DB-tier tenant domains all fall straight through).
+  {
+    const legacy = decideLegacyHostRedirect({
+      enabled: process.env.REDIRECT_LEGACY_CRM_HOST === '1',
+      host: hostname,
+      method: request.method,
+      pathname: request.nextUrl.pathname,
+      search: request.nextUrl.search,
+    })
+    if (legacy) {
+      return NextResponse.redirect(legacy.location, legacy.status)
+    }
+  }
 
   // ── Multi-brand routing (MULTIBRAND.1) ───────────────────────────
   // Tenant brands sharing this deployment (pay.ccfautos.com, the
@@ -170,8 +195,55 @@ export async function proxy(request) {
   // (Gmail clips a message over ~102KB, taking the footer and its unsubscribe
   // link with it). Authorised by an HMAC token that names one campaign and no
   // contact, so there is no session to gate on and nothing personal behind it.
-  const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/event/', '/event-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/api/fleet/', '/deposit/', '/welcome', '/free-class', '/start', '/offers', '/.well-known/', '/privacy', '/terms', '/legal/', '/technical', '/ccf', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/']
-  const isPublic = publicPaths.some(p => request.nextUrl.pathname.startsWith(p))
+  // /race/ + /race-pay/ — AUDIT-13.B. next.config.js forever-rewrites
+  // these to /event/ + /event-pay/ ("the critical ones — shared
+  // externally"), but middleware runs BEFORE afterFiles rewrites, so the
+  // proxy only ever sees the LEGACY path — and it was in no allowlist, so
+  // every anonymous visitor 307'd to /login before the rewrite could fire.
+  // Not dead config: Mia still MINTS these URLs today
+  // (src/lib/agent/event-tools.js signup_url, `${appUrl}/race/<slug>`) and
+  // both event register paths set the post-payment Revolut returnUrl to
+  // `${baseUrl}/race/<slug>/confirmed`. So the audience is a customer in
+  // WhatsApp and a payer coming back from a card form — neither can ever
+  // have a session.
+  // /account-deletion — PUBPATH.1. App-store compliance surface: it is the URL
+  // registered in the Google Play Console's "Account Deletion URL" field
+  // (docs/architecture/MOBILE.md — https://crm.un1tdublin.com/account-deletion,
+  // i.e. THIS host) and the Apple Guideline 5.1.1(v) deletion page, so a store
+  // reviewer with no session must reach it. It shipped auth-walled: the page's
+  // own header says "Must be publicly accessible (no auth) so reviewers can
+  // verify" while every anonymous hit 307'd to /login. Nothing personal is
+  // behind it — it is static copy naming an email address.
+  const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/event/', '/event-pay/', '/race/', '/race-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/api/fleet/', '/deposit/', '/welcome', '/free-class', '/start', '/offers', '/.well-known/', '/privacy', '/terms', '/legal/', '/technical', '/account-deletion', '/ccf', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/', '/use-the-app']
+
+  // Public paths matched EXACTLY (or as a parent segment), not as a bare
+  // prefix — for entries where a same-stem sibling route must NOT inherit the
+  // exemption. The list above is bare-prefix matched on purpose (`/welcome`
+  // has to cover `/welcome/<location>`), but that shape is wrong for a single
+  // named endpoint: it would quietly hand the exemption to whatever someone
+  // names next with the same stem.
+  //
+  // /api/mobile/review-login — REPSET-PUB.3A, the App Store reviewer login
+  // gate (ported from champ-app's July hardening). It is called BEFORE the
+  // reviewer has a session — minting one is its entire job — so behind the
+  // gate every attempt 401s and Apple can never sign in (Guideline 2.1).
+  // Exactly the /api/bridge/ + /api/fleet/ shape: the route self-guards, with
+  // the env-only gate code as the credential, a DB-backed per-IP limiter
+  // consulted BEFORE the credential check, a runtime not-staff assertion on
+  // the demo account, and a 404 when REVIEW_LOGIN_CODE is unset — which is its
+  // DEFAULT state, so this entry normally admits requests to a route that
+  // answers 404. Exact-matched (REPSET-PUB.3A-b) so a future
+  // /api/mobile/review-login-debug or -status is NOT public by inheritance:
+  // nobody adding such a route would think to check this allowlist. Not a
+  // public PAGE, so the other three allowlists (AppShell, brands,
+  // tenant-domains) don't apply — nothing renders a shell, and the mobile app
+  // calls the canonical CRM host, never a brand hostname.
+  const publicExactPaths = ['/api/mobile/review-login']
+
+  const pathname = request.nextUrl.pathname
+  const isPublic =
+    publicPaths.some(p => pathname.startsWith(p)) ||
+    publicExactPaths.some(p => pathname === p || pathname.startsWith(p + '/'))
   if (isPublic) return NextResponse.next()
 
   // Allow API requests authenticated with a valid Bearer token. Three paths:
@@ -285,6 +357,24 @@ export async function proxy(request) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     url.searchParams.set('redirect', request.nextUrl.pathname)
+    return NextResponse.redirect(url)
+  }
+
+  // STAFF-WEB-LOCK — with the flag on, an authenticated page request from a
+  // staff session is walled off to /use-the-app (every resolved profile on
+  // this host is a staff role, so no profiles lookup is needed). Studio
+  // devices ride the studio_session cookie exemption; TVs/present/cast and
+  // /api/* returned earlier and never reach this. Decision + full rationale
+  // in src/lib/staff-web-lock.js.
+  const lock = decideStaffWebLock({
+    enabled: process.env.STAFF_WEB_LOCK === '1',
+    pathname: request.nextUrl.pathname,
+    hasStudioSession: Boolean(request.cookies.get(STUDIO_SESSION_COOKIE)?.value),
+  })
+  if (lock) {
+    const url = request.nextUrl.clone()
+    url.pathname = lock.redirect
+    url.search = ''
     return NextResponse.redirect(url)
   }
 

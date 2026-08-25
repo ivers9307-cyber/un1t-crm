@@ -42,10 +42,36 @@ export const DEAD_LETTER_PROVIDER_LABELS = Object.freeze({
   email_ticket_forward: 'Forward — sent, not filed',
   glofox: 'Glofox',
   inbody: 'InBody',
+  // ZOOMSYNC.4 — a Zoom Phone directory write Zoom permanently refused (4xx).
+  // Not replayable: the same bytes get the same verdict. The fix is the phone
+  // number on the contact; resolving the row here un-parks it for the next
+  // nightly run.
+  zoom_contact_sync: 'Zoom directory write refused',
 })
 
 export function providerLabel(provider) {
   return DEAD_LETTER_PROVIDER_LABELS[provider] || String(provider || 'unknown')
+}
+
+/**
+ * Confirm-dialog wording for Discard, which does NOT mean the same thing for
+ * every provider (ZOOMSYNC.4).
+ *
+ * For the email family Discard really is inert bookkeeping: the event is over,
+ * nothing will re-derive it, and the row just stops nagging. For
+ * zoom_contact_sync it is load-bearing — the nightly reconcile re-derives the
+ * write from the contact row every night, and the dead-letter row is the ONLY
+ * thing suppressing it. Discarding there is the operator saying "this number
+ * is not getting fixed", and the suppression is permanent by design. Telling
+ * them it merely "stays on record" would describe the opposite of what happens.
+ */
+export function discardConfirmText(provider) {
+  if (provider === 'zoom_contact_sync') {
+    return 'Discard this number? It stops counting as unresolved AND stays suppressed — '
+      + 'the nightly Zoom sync will not try it again. Fix the number on the contact and '
+      + 'mark it resolved instead if you want it published.'
+  }
+  return 'Discard this event? It stays on record but stops counting as unresolved.'
 }
 
 /**
@@ -103,6 +129,18 @@ export function summarizeDeadLetter(row) {
     const head = parts.join(' ')
     const tail = ticket ? `not filed on ticket ${ticket}` : 'not filed'
     return head ? `${head} — delivered, ${tail}` : `Delivered, ${tail}`
+  }
+
+  // Zoom directory write (zoom_contact_sync): the payload is our own job, so
+  // its shape is known exactly. The number is the fact that matters — it is
+  // what an operator has to go and fix on the contact.
+  if (provider === 'zoom_contact_sync') {
+    const op = clip(p.op || row?.event_type, 20)
+    const number = clip(p.e164, 24)
+    const contact = clip(p.contactId, 40)
+    const head = [op, number].filter(Boolean).join(' ')
+    if (!head) return ''
+    return contact ? `${head} — contact ${contact}` : head
   }
 
   // Unknown providers: say nothing rather than risk echoing a payload field

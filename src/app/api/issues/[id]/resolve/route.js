@@ -13,6 +13,8 @@ import { logWarn } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { getEquipment, updateEquipment } from '@/lib/equipment-db'
 import { shouldReturnToService, EQUIPMENT_STATUS } from '@/lib/equipment'
+import { isIssueHandler } from '@/lib/issues-access'
+import { hasPermission } from '@/lib/permissions'
 
 const ResolveBody = z.object({
   notes: z.string().optional(),
@@ -21,17 +23,12 @@ const ResolveBody = z.object({
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-function isHandler(user) {
-  if (user?.role === 'master' || user?.profileRole === 'master' || user?.isMaster) return true
-  return user?.role === 'owner'
-}
-
 export const POST = withAuth(
   {},
   async ({ user, db, locationId, params, request }) => {
-    if (!isHandler(user)) {
+    if (!isIssueHandler(user)) {
       return NextResponse.json(
-        { success: false, error: 'Only owner + master can resolve issues.' },
+        { success: false, error: 'Only issue handlers can resolve issues.' },
         { status: 403 }
       )
     }
@@ -81,7 +78,24 @@ export const POST = withAuth(
     // kit taken off manually (no linked issue) stays off, and resolving an
     // unrelated issue on the same asset does nothing. Best-effort: a
     // failure here must not fail the resolve the operator just performed.
-    if (existing.equipment_id) {
+    //
+    // HUBDOOR.2 — `equipment_admin` guards the SIDE EFFECT, not the
+    // resolve. Returning an asset to service is the equipment register's
+    // mutation: the direct route for it,
+    // PATCH /api/equipment/[id], is withAuth({ permission:
+    // 'equipment_admin' }). Before HUBDOOR.1 the two gates coincided by
+    // accident — only owner/master reached this route and both hold
+    // equipment_admin by default — so widening the resolve gate to honour
+    // `issues_inbox` silently handed a granted head_coach or manager
+    // (equipment_admin: false by default for both, and one such grant is
+    // live at Stillorgan today) a way to put a machine back on the floor
+    // that PATCH /api/equipment/[id] would refuse them. That is a gate
+    // crossing the widening never argued for, so it is closed here rather
+    // than inherited: they still resolve the issue and still notify the
+    // submitter, and the asset stays off the floor until someone who owns
+    // the register clears it on /maintenance. Behaviour is unchanged for
+    // every actor who could reach this route before.
+    if (existing.equipment_id && hasPermission(user, 'equipment_admin')) {
       try {
         const asset = await getEquipment(db, existing.equipment_id)
         if (shouldReturnToService(asset, existing.id)) {

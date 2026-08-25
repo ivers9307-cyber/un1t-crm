@@ -2,7 +2,7 @@
 // is pure so most tests hit it directly. sendPostClassEmail is
 // tested with mocked Supabase + Postmark to confirm orchestration.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/postmark', () => ({
   sendTransactionalEmail: vi.fn(),
@@ -62,7 +62,18 @@ function ctx({
   }
 }
 
-beforeEach(() => { vi.clearAllMocks() })
+// URLSEAM.1 — the unsubscribe base now comes from getAppUrl(), which THROWS
+// when NEXT_PUBLIC_APP_URL is unset (CLAUDE.md: no silent env fallbacks).
+// Every compose in this file therefore needs the CRM host configured, the
+// same way prod configures it. The dedicated seam suite below overrides it.
+const CRM_HOST = 'https://crm.repset.ie'
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.stubEnv('NEXT_PUBLIC_APP_URL', CRM_HOST)
+})
+
+afterEach(() => { vi.unstubAllEnvs() })
 
 // ── composeEmail ────────────────────────────────────────────────
 
@@ -126,6 +137,84 @@ describe('composeEmail', () => {
     expect(out.html).toContain('/api/preferences/hr-emails')
     expect(out.html).toContain(`token=${UNSUB_TOKEN}`)
     expect(out.html).not.toContain('cid=c-1')
+  })
+
+  // REPSET-P6.C — the session CTA is a MEMBER link and must build on the
+  // member-app base, never on this repo's own NEXT_PUBLIC_APP_URL (the CRM
+  // host, which has no /sessions route — every CTA 404'd in prod).
+  it('session CTA builds on the member-app base in both HTML and text', () => {
+    const out = composeEmail(ctx(), { nowMs: NOW })
+    // REPSET-P6.S2 — code default flipped to the canonical repset member host.
+    expect(out.html).toContain('https://api.repset.ie/sessions/sess-1')
+    expect(out.text).toContain('https://api.repset.ie/sessions/sess-1')
+  })
+
+  it('unsubscribe link stays on the CRM base', () => {
+    const out = composeEmail(ctx(), { nowMs: NOW })
+    // REPSET-P6.S2 — code default flipped to the canonical repset CRM host.
+    expect(out.html).toContain('https://crm.repset.ie/api/preferences/hr-emails')
+  })
+})
+
+// URLSEAM.1 — this email crosses TWO hosts (member CTA vs CRM unsubscribe).
+// Both bases are resolved per call now, so stubbing the env is enough; the
+// old module-reimport dance is gone with the module-level consts.
+describe('composeEmail — URL bases vs env', () => {
+  const compose = (env) => {
+    for (const [k, v] of Object.entries(env)) vi.stubEnv(k, v)
+    return composeEmail(ctx(), { nowMs: NOW })
+  }
+
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  // The live bug (#1444): in THIS repo NEXT_PUBLIC_APP_URL is the CRM host.
+  // The old code built the session CTA on it → 404 in every email.
+  it('prod config (NEXT_PUBLIC_APP_URL = CRM host): CTA still on the member app', () => {
+    const out = compose({ NEXT_PUBLIC_APP_URL: 'https://crm.repset.ie' })
+    expect(out.html).toContain('https://api.repset.ie/sessions/sess-1')
+    expect(out.text).toContain('https://api.repset.ie/sessions/sess-1')
+    expect(out.html).not.toContain('https://crm.repset.ie/sessions/')
+  })
+
+  it('NEXT_PUBLIC_CHAMP_APP_URL overrides the member-app base (same var invite-app uses)', () => {
+    const out = compose({
+      NEXT_PUBLIC_APP_URL: 'https://crm.un1tdublin.com',
+      NEXT_PUBLIC_CHAMP_APP_URL: 'https://members.example.com',
+    })
+    expect(out.html).toContain('https://members.example.com/sessions/sess-1')
+    expect(out.text).toContain('https://members.example.com/sessions/sess-1')
+  })
+
+  // ── the defect ────────────────────────────────────────────────
+  // The unsubscribe endpoint is served by THIS deployment, so the base has
+  // to follow THIS deployment's env var. It used to read
+  // NEXT_PUBLIC_APP_URL_CRM — a var set on no deployment in this repo — so
+  // it always fell through to a literal and silently ignored the seam.
+  it('unsubscribe base follows NEXT_PUBLIC_APP_URL (the CRM seam)', () => {
+    const out = compose({ NEXT_PUBLIC_APP_URL: 'https://crm.example.com' })
+    expect(out.html).toContain('https://crm.example.com/api/preferences/hr-emails')
+  })
+
+  it('a preview host is followed, not overridden by a hard-coded default', () => {
+    const out = compose({ NEXT_PUBLIC_APP_URL: 'https://un1t-crm-git-x.vercel.app' })
+    expect(out.html).toContain('https://un1t-crm-git-x.vercel.app/api/preferences/hr-emails')
+    expect(out.html).not.toContain('crm.repset.ie')
+  })
+
+  // The phantom var must have NO effect any more. If someone re-introduces
+  // the old read, this fails.
+  it('NEXT_PUBLIC_APP_URL_CRM is a phantom var and drives nothing', () => {
+    const out = compose({
+      NEXT_PUBLIC_APP_URL: 'https://crm.example.com',
+      NEXT_PUBLIC_APP_URL_CRM: 'https://phantom.example.com',
+    })
+    expect(out.html).not.toContain('phantom.example.com')
+    expect(out.html).toContain('https://crm.example.com/api/preferences/hr-emails')
+  })
+
+  it('throws instead of guessing a host when NEXT_PUBLIC_APP_URL is unset', () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', '')
+    expect(() => composeEmail(ctx(), { nowMs: NOW })).toThrow(/NEXT_PUBLIC_APP_URL is not set/)
   })
 
   // Belt and braces: one contact in prod has no contact_preferences row, and a
@@ -342,6 +431,27 @@ describe('sendPostClassEmail', () => {
     const out = await sendPostClassEmail(db, 'sess-1', { nowMs: NOW })
     expect(out).toEqual({ ok: true, skipped: 'already-sent' })
     expect(sendTransactionalEmail).not.toHaveBeenCalled()
+  })
+
+  // URLSEAM.1 review — the counterpart to "getAppUrl throws instead of
+  // guessing a host". A throwing compose must still take the row OUT of the
+  // auto-end sweep: the sweep re-selects every session with
+  // `email_sent_at IS NULL` on a 5-minute tick, and composeEmail is a pure
+  // function of the loaded ctx + env, so a throw repeats identically forever.
+  // Without the stamp the fix for one silent failure creates a louder one — a
+  // "session ready" push every 5 minutes to a member's phone.
+  it('a throwing compose still leaves the auto-end sweep (no 5-minute re-push loop)', async () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', '') // unsubscribeUrl → getAppUrl() throws
+    const db = mockDb({ session: fullSessionRow() })
+    const out = await sendPostClassEmail(db, 'sess-1', { nowMs: NOW })
+    expect(out.ok).toBe(false)
+    expect(out.error).toMatch(/NEXT_PUBLIC_APP_URL is not set/)
+    expect(sendTransactionalEmail).not.toHaveBeenCalled()
+    // The whole point: stamped exactly once, so the next sweep tick skips it.
+    expect(db.__stamps).toHaveLength(1)
+    expect(db.__stamps[0]).toEqual(
+      expect.objectContaining({ email_sent_at: new Date(NOW).toISOString() }),
+    )
   })
 })
 

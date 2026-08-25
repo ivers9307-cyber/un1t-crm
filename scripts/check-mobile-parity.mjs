@@ -194,10 +194,6 @@ const WEB_ONLY_OK = {
   // bookkeeping surface, like bookkeeper/invoices analyse-and-send
   // flows; mobile counterpart deferred to RCOV.P2.
   accounting_hub: 'Desktop bookkeeping surface (coverage board); mobile counterpart deferred to RCOV.P2',
-  // TAPO-T1.4 — Tapo plug/switch control (registry + schedules +
-  // manual overrides at /automations/devices). Desktop operator
-  // surface; the mobile toggle ships in Tapo Wave T3.
-  device_control: 'Mobile toggle ships in Tapo Wave T3; web-only until then.',
   // APPROVALS-PERCAT.1 — six per-category approval grants (splitting the
   // former all-or-nothing approvals_inbox). Each gates a source
   // approve/decline route + the inbox tab for that category; the mobile
@@ -324,11 +320,35 @@ for (const m of MOBILE_PERMISSIONS) {
 // Re-deriving it here from the narrower nav-only data would either
 // duplicate that check with weaker data, or need to re-invent
 // WEB_ONLY_OK's exemption list a second time for hub-union keys that
-// were never meant to be mobile-navigable (e.g. `automations`,
-// `device_control` inside the Marketing hub's union) — the hub
-// collapse is exactly why "one web nav entry ↔ one mobile tab" no
-// longer holds, so this check only makes the claim that survives it:
-// mobile's own chosen nav surface should point at something real.
+// were never meant to be mobile-navigable (e.g. `automations` inside
+// the Marketing hub's union) — the hub collapse is exactly why "one web
+// nav entry ↔ one mobile tab" no longer holds, so this check only makes
+// the claim that survives it: mobile's own chosen nav surface should
+// point at something real.
+//
+// SHELLY-UI.8 — `device_control` used to be named above as a second
+// example of a never-mobile-navigable hub-union key. It is not one, and
+// hasn't been since SONOSMOB.2: shared/mobile-nav.js's Studio entry
+// lists it in permKeys, and it rides CROSS_PLATFORM_KEYS (the
+// `CROSS_PLATFORM_SET.has(w.key)` skip in webDrift above) rather than a
+// WEB_ONLY_OK entry, which is why it appears in neither map. What is
+// web-only is the AUTHORING half of both of its surfaces —
+// /automations/sonos (playback windows, run-now, pause override) and
+// /automations/shelly (power windows, class-linked rules, adopt/remove,
+// the connection itself, 30-day kWh history) — schedule editors that want
+// the screen.
+//
+// SHELLY-MOB.1 — the mobile live on/off toggle now EXISTS
+// (mobile/app/(staff)/shelly/, Studio hub → Smart plugs), so both device
+// surfaces have a mobile counterpart: live Sonos control and live Shelly
+// on/off. As predicted above it needed NO change here — it rides the same
+// top-level `device_control` key its routes already enforce. The
+// web-only/mobile split for `device_control` is therefore not
+// surface-by-surface but HALF-by-half, in both directions: CONTROL is on
+// both platforms, AUTHORING is web-only on both. What stays deferred on
+// mobile, and why, is still docs/BACKLOG.md, "Shelly smart plugs —
+// deferred by decision" — that heading is load-bearing as the pointer
+// this comment carries, so do not reword it.
 // --------------------------------------------------------------------
 
 const navItemsSrc = readFileSync(resolve(repoRoot, 'src/lib/nav-items.js'), 'utf8')

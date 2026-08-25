@@ -84,6 +84,7 @@ import { getAppUrl } from './app-url.js'
 import { logInfo } from './log.js'
 import { buildCampaignViewUrl, prependViewInBrowserLink, fetchLocationEmailCopy } from './campaign-web-view.js'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
+import { withSendMarker } from './postmark-send-marker.js'
 
 const CHUNK_SIZE = 500             // recipients per cron tick per campaign
 const AUDIENCE_PAGE_SIZE = 1000    // audience load page (CAMPAIGN.11)
@@ -104,6 +105,34 @@ export const MAX_SEND_ATTEMPTS = 3
 // (src/lib/sequences/scheduler.js): long enough to cover a tick's
 // processing, short enough that a crashed tick's rows retry promptly.
 export const SENDING_LEASE_MS = 10 * 60_000
+
+/**
+ * BAREWRITE.1 — every status/stamp write in this file used to be a BARE
+ * `await db.from(…).update(…)`: supabase-js RESOLVES with `{ data, error }`
+ * rather than throwing, so a failed write produced a resolved promise and the
+ * tick carried on as though the transition had happened. The consequences here
+ * are not cosmetic — a lost `campaign_recipients` status write re-queues a
+ * recipient who already received the mail (a DUPLICATE marketing email), and a
+ * lost `campaigns.updated_at` bump pins a waiting campaign at the FRONT of the
+ * cron's ascending fair-pick order forever, burning one of the per-tick slots
+ * on every tick while other queued campaigns starve.
+ *
+ * This is the one place that judgement lives: read the error, log it at error
+ * level with the campaign it belongs to, and hand it back so callers that have
+ * somewhere better to put it (campaigns.last_error, the returned tick result)
+ * can. It deliberately does NOT throw — a bookkeeping failure must not abort a
+ * tick that has already handed mail to Postmark.
+ *
+ * @param {PromiseLike<{ error: any }>} builder — an un-awaited supabase write
+ * @param {string} what — human description for the log line
+ * @param {string} campaignId
+ * @returns {Promise<any|null>} the supabase error, or null
+ */
+async function writeOrLog(builder, what, campaignId) {
+  const { error } = await builder
+  if (error) console.error(`[campaign-sender] ${what} failed (campaign ${campaignId}): ${error.message}`)
+  return error || null
+}
 
 /**
  * Process one cron tick of work for one campaign.
@@ -138,14 +167,21 @@ export async function tickCampaignSend(db, campaign) {
 
   // Hard stop — cancel-while-sending.
   if (campaign.cancel_requested_at) {
-    await db.from('campaign_recipients')
-      .update({ status: 'cancelled' })
-      .eq('campaign_id', campaignId)
-      .eq('status', 'queued')
-    await db.from('campaigns')
-      .update({ status: 'cancelled', sent_at: new Date().toISOString() })
-      .eq('id', campaignId)
-    return { phase: 'cancelled' }
+    await writeOrLog(
+      db.from('campaign_recipients')
+        .update({ status: 'cancelled' })
+        .eq('campaign_id', campaignId)
+        .eq('status', 'queued'),
+      'cancel queued recipients', campaignId)
+    const cancelErr = await writeOrLog(
+      db.from('campaigns')
+        .update({ status: 'cancelled', sent_at: new Date().toISOString() })
+        .eq('id', campaignId),
+      'cancel campaign', campaignId)
+    // A campaign that failed to record its own cancellation is still 'sending'
+    // and WILL be picked again next tick — say so rather than reporting a
+    // clean 'cancelled'.
+    return cancelErr ? { phase: 'cancelled', error: cancelErr.message } : { phase: 'cancelled' }
   }
 
   // TENANT.8 (item 3b) — location bundle/feature gate. Closes TENANT.6's
@@ -167,13 +203,37 @@ export async function tickCampaignSend(db, campaign) {
   // and record the reason on last_error (operator-visible, but not an
   // error-count field) so the pause is visible without being a failure.
   if (!isFeatureEnabledAtLocation(campaign.locations, 'email')) {
-    await db.from('campaigns')
-      .update({
-        updated_at: new Date().toISOString(),
-        last_error: 'Skipped — email is disabled at this location (feature toggle or bundle off).',
-      })
-      .eq('id', campaignId)
-    return { phase: 'bundle_disabled', sent: 0 }
+    // The updated_at bump IS the rotation — if it is lost, this campaign stays
+    // at the head of the ascending pick order and occupies a per-tick slot on
+    // every tick until the next successful write. It was a bare await until
+    // BAREWRITE.1.
+    //
+    // BAREWRITE.4 — it is reported as a `warning`, NOT an `error`, and that
+    // distinction is load-bearing on THIS path specifically. The bundle gate
+    // writes `last_error` on every single tick by design, so a bundle-disabled
+    // campaign always enters the next tick with `last_error` already set. A
+    // returned `error` reaches campaignFailurePatch, whose "genuinely stuck"
+    // test is (last_error already present) && (no send_started_at) && (older
+    // than the grace window) — and a bundle-disabled campaign satisfies the
+    // last two permanently. So the branch's `error` turned ONE transient bump
+    // failure into a campaign marked 'failed' forever, needing an operator to
+    // resurrect it. That is a louder failure than the silent one it replaced,
+    // which is exactly what this PR exists not to do.
+    //
+    // A warning is surfaced by the cron (logged at error level, counted in the
+    // response) without feeding the kill switch. A lost rotation bump is a
+    // fairness problem, never a reason to destroy a campaign.
+    const bumpErr = await writeOrLog(
+      db.from('campaigns')
+        .update({
+          updated_at: new Date().toISOString(),
+          last_error: 'Skipped — email is disabled at this location (feature toggle or bundle off).',
+        })
+        .eq('id', campaignId),
+      'bundle-disabled rotation bump', campaignId)
+    return bumpErr
+      ? { phase: 'bundle_disabled', sent: 0, warning: `rotation bump failed (campaign will pin a per-tick slot until a later write lands): ${bumpErr.message}` }
+      : { phase: 'bundle_disabled', sent: 0 }
   }
 
   // Phase 1 — if the campaign has not finished populating, populate it.
@@ -249,12 +309,28 @@ export async function tickCampaignSend(db, campaign) {
     }
 
     if (contacts.length === 0) {
-      await db.from('campaigns').update({
-        status: 'sent',
-        sent_at: new Date().toISOString(),
-        total_recipients: 0,
-      }).eq('id', campaignId)
-      return { phase: 'populate', sent: 0 }
+      // A `warning`, not an `error`, for the same reason as the rotation bumps
+      // — and it is NOT the same as the finalise at the end of the send loop.
+      // This one runs inside populate, where `send_started_at` is still null,
+      // which is one of the three conditions campaignFailurePatch tests for
+      // "genuinely stuck". `campaigns.last_error` is never cleared by the cron
+      // (only /api/campaigns/[id]/send clears it), so any campaign carrying an
+      // old error would be flipped to 'failed' by ONE transient blip here — and
+      // 'failed' is terminal: the cron only picks 'queued'/'sending', so
+      // nothing ever finishes it. `main` was silent and simply looped, and the
+      // loop is RIGHT: the campaign stays 'sending', the next tick re-runs
+      // populate, finds the same empty audience and finalises the moment the
+      // write lands. Keep the self-healing, add the visibility, drop the kill.
+      const emptyErr = await writeOrLog(
+        db.from('campaigns').update({
+          status: 'sent',
+          sent_at: new Date().toISOString(),
+          total_recipients: 0,
+        }).eq('id', campaignId),
+        'finalise empty-audience campaign', campaignId)
+      return emptyErr
+        ? { phase: 'populate', sent: 0, warning: `could not finalise an empty-audience campaign (it stays open and the next tick retries): ${emptyErr.message}` }
+        : { phase: 'populate', sent: 0 }
     }
 
     // CAMPAIGN-AB — assign the test slice at populate time so it's
@@ -345,10 +421,17 @@ export async function tickCampaignSend(db, campaign) {
     // ticks at most MAX_CAMPAIGNS_PER_TICK campaigns) — otherwise an
     // hours-long wait would pin one of the per-tick slots and starve
     // other queued campaigns.
-    await db.from('campaigns')
-      .update({ updated_at: new Date().toISOString() })
-      .eq('id', campaignId)
-    return { phase: 'ab_waiting', sent: 0 }
+    // Same as the bundle-gate bump above, and a `warning` for the same reason:
+    // it must reach the cron, but a lost rotation bump is never grounds for
+    // marking a campaign 'failed'.
+    const bumpErr = await writeOrLog(
+      db.from('campaigns')
+        .update({ updated_at: new Date().toISOString() })
+        .eq('id', campaignId),
+      'ab_waiting rotation bump', campaignId)
+    return bumpErr
+      ? { phase: 'ab_waiting', sent: 0, warning: `rotation bump failed (campaign will pin a per-tick slot until a later write lands): ${bumpErr.message}` }
+      : { phase: 'ab_waiting', sent: 0 }
   }
 
   if (abPhase === 'decide') {
@@ -371,11 +454,16 @@ export async function tickCampaignSend(db, campaign) {
       })
     }
     // CAS on ab_winner IS NULL — exactly one overlapping tick decides.
-    const { data: won } = await db.from('campaigns')
+    // The error is bound (BAREWRITE.1 follow-up): without it a failed CAS
+    // returns data:null, which is byte-identical to "a concurrent tick won" —
+    // so a persistent DB failure would look like a permanent race and the
+    // campaign would sit in 'decide' forever with nothing recorded anywhere.
+    const { data: won, error: casError } = await db.from('campaigns')
       .update({ ab_winner: winner, ab_decided_at: new Date().toISOString() })
       .eq('id', campaignId)
       .is('ab_winner', null)
       .select('id')
+    if (casError) return { phase: 'ab_decide', sent: 0, error: `ab_winner CAS failed: ${casError.message}` }
     if (!won || won.length === 0) {
       // A concurrent tick decided first; the next tick sends with its winner.
       return { phase: 'ab_decide', sent: 0 }
@@ -459,16 +547,20 @@ export async function tickCampaignSend(db, campaign) {
             .eq('campaign_id', campaignId)
             .eq('status', 'queued')
           if (abPhase === 'slice') skipQuery = skipQuery.not('ab_variant', 'is', null)
-          await skipQuery
+          await writeOrLog(skipQuery, 'cap-skip queued recipients', campaignId)
           return { phase: 'cap_skipped', skipped: capHeld, sent: 0 }
         }
         // Leave the campaign 'sending' (acceptable — the window is hours)
         // and rotate it to the back of the cron's pick order, mirroring
         // ab_waiting, so an hours-long cap hold can't pin a per-tick slot.
-        await db.from('campaigns')
-          .update({ updated_at: new Date().toISOString() })
-          .eq('id', campaignId)
-        return { phase: 'cap_deferred', deferred: capHeld, sent: 0 }
+        const bumpErr = await writeOrLog(
+          db.from('campaigns')
+            .update({ updated_at: new Date().toISOString() })
+            .eq('id', campaignId),
+          'cap_deferred rotation bump', campaignId)
+        return bumpErr
+          ? { phase: 'cap_deferred', deferred: capHeld, sent: 0, warning: `rotation bump failed (campaign will pin a per-tick slot until a later write lands): ${bumpErr.message}` }
+          : { phase: 'cap_deferred', deferred: capHeld, sent: 0 }
       }
     }
 
@@ -485,23 +577,29 @@ export async function tickCampaignSend(db, campaign) {
       if ((inflight || 0) > 0) return { phase: 'ab_slice', sent: 0 }
 
       // CAS on ab_test_started_at IS NULL — one tick starts the clock.
-      await db.from('campaigns')
-        .update({ ab_test_started_at: new Date().toISOString() })
-        .eq('id', campaignId)
-        .is('ab_test_started_at', null)
+      // No row-count check: the `.is(…, null)` CAS means "zero rows updated"
+      // is the ordinary losing-tick outcome, not a failure.
+      await writeOrLog(
+        db.from('campaigns')
+          .update({ ab_test_started_at: new Date().toISOString() })
+          .eq('id', campaignId)
+          .is('ab_test_started_at', null),
+        'ab_test_started CAS', campaignId)
       return { phase: 'ab_test_started', sent: 0 }
     }
 
     // Done — no more queued. Finalize.
-    await db.from('campaigns').update({
-      status: 'sent',
-      sent_at: campaign.sent_at || new Date().toISOString(),
-    }).eq('id', campaignId)
+    const finaliseErr = await writeOrLog(
+      db.from('campaigns').update({
+        status: 'sent',
+        sent_at: campaign.sent_at || new Date().toISOString(),
+      }).eq('id', campaignId),
+      'finalise campaign', campaignId)
 
     await db.rpc('recalculate_campaign_stats', { p_campaign_id: campaignId })
       .then(({ error }) => { if (error) console.error('[campaign-sender] recalc failed:', error.message) })
 
-    return { phase: 'finalise', sent: 0 }
+    return finaliseErr ? { phase: 'finalise', sent: 0, error: finaliseErr.message } : { phase: 'finalise', sent: 0 }
   }
 
   // Double-send guard (HIGH) — Vercel cron does NOT skip an overlapping
@@ -511,7 +609,7 @@ export async function tickCampaignSend(db, campaign) {
   // status='queued' after our row lock releases, matches 0 of these ids,
   // and claims a different chunk — so no recipient is ever sent twice.
   const candidateIds = candidateRows.map(r => r.id)
-  const { data: claimedRows } = await db
+  const { data: claimedRows, error: claimError } = await db
     .from('campaign_recipients')
     // claimed_at starts the CAMPAIGN-REL.2 lease clock — see
     // reclaimStuckSending above.
@@ -519,6 +617,10 @@ export async function tickCampaignSend(db, campaign) {
     .in('id', candidateIds)
     .eq('status', 'queued')
     .select('id')
+  // Same reason as the ab_winner CAS above: a failed claim and a lost race
+  // both arrive as an empty list, so without the error a broken claim reads
+  // as "another tick has it" every tick and the campaign never sends.
+  if (claimError) return { phase: 'send', sent: 0, bounced: 0, error: `recipient claim failed: ${claimError.message}` }
   const claimedIds = new Set((claimedRows || []).map(r => r.id))
   const claimed = candidateRows.filter(r => claimedIds.has(r.id))
   if (claimed.length === 0) {
@@ -556,10 +658,12 @@ export async function tickCampaignSend(db, campaign) {
     // the claim (no attempts bump — nothing reached Postmark) so a later
     // tick retries; if this release itself fails, reclaimStuckSending
     // sweeps the rows back after SENDING_LEASE_MS anyway.
-    await db.from('campaign_recipients')
-      .update({ status: 'queued', claimed_at: null })
-      .in('id', claimed.map(r => r.id))
-      .eq('status', 'sending')
+    await writeOrLog(
+      db.from('campaign_recipients')
+        .update({ status: 'queued', claimed_at: null })
+        .in('id', claimed.map(r => r.id))
+        .eq('status', 'sending'),
+      'release claim after consent re-check failure', campaignId)
     return { phase: 'send', error: `consent re-check failed: ${viewErr.message}` }
   }
   const eligibleIds = new Set((stillEligible || []).map(r => r.id))
@@ -574,9 +678,14 @@ export async function tickCampaignSend(db, campaign) {
     // Park them out of the queue without sending. Engagement counters are
     // sourced from email_sends (recalculate_campaign_stats), so a 'cancelled'
     // recipient row simply never counts as sent — no stat corruption.
-    await db.from('campaign_recipients')
-      .update({ status: 'cancelled' })
-      .in('id', suppressed.map(r => r.id))
+    // A lost cancel leaves these rows 'sending'; reclaimStuckSending returns
+    // them to 'queued' after the lease and the next tick would re-evaluate
+    // consent — correct, but only because that sweeper exists. Log it.
+    await writeOrLog(
+      db.from('campaign_recipients')
+        .update({ status: 'cancelled' })
+        .in('id', suppressed.map(r => r.id)),
+      'cancel consent-suppressed recipients', campaignId)
   }
   // UNSUBTOKEN.2 — a MARKETING email with no working unsubscribe link never
   // leaves the building. buildUnsubscribeUrl returns null when the contact has
@@ -610,10 +719,12 @@ export async function tickCampaignSend(db, campaign) {
     if (unsendable.length > 0) {
       const msg = `${unsendable.length} recipient(s) have no contact_preferences.unsubscribe_token — refused rather than send marketing email with a dead unsubscribe link. Contacts: ${unsendable.map(r => r.contact_id).join(', ')}`
       console.error('[campaign-sender]', msg)
-      await db.from('campaign_recipients')
-        .update({ status: 'failed', last_error: 'no unsubscribe token — refused (a marketing email needs a working opt-out link)' })
-        .in('id', unsendable.map(r => r.id))
-      await db.from('campaigns').update({ last_error: msg }).eq('id', campaignId)
+      await writeOrLog(
+        db.from('campaign_recipients')
+          .update({ status: 'failed', last_error: 'no unsubscribe token — refused (a marketing email needs a working opt-out link)' })
+          .in('id', unsendable.map(r => r.id)),
+        'fail recipients with no unsubscribe token', campaignId)
+      await writeOrLog(db.from('campaigns').update({ last_error: msg }).eq('id', campaignId), 'record unsubscribe-token error', campaignId)
     }
   }
 
@@ -732,10 +843,17 @@ export async function tickCampaignSend(db, campaign) {
       replyTo: campaign.reply_to || locationReplyTo || undefined,
       stream,
       tag: `campaign-${campaignId}`,
-      metadata: {
+      // POSTMARK-RACE.1 — `crm_send` promises the webhook processor that an
+      // email_sends row is coming for this message, so a Delivery that beats
+      // the insert below is retried instead of discarded. Safe to promise
+      // unconditionally here: every result carrying a MessageID gets a
+      // sendRecords entry a few lines down, and if that insert genuinely fails
+      // the retry budget converts the promise into a dead-letter row — which
+      // is the artefact this path has never had.
+      metadata: withSendMarker({
         campaign_id: campaignId,
         contact_id: contact.id,
-      },
+      }),
       unsubscribeUrl,
       _recipientId: row.id,
       _contactId: contact.id,
@@ -806,7 +924,7 @@ export async function tickCampaignSend(db, campaign) {
     if (insertErr) {
       const msg = `email_sends insert failed for ${sendRecords.length} recipients — delivery/open webhooks for this chunk will find no row: ${insertErr.message}`
       console.error('[campaign-sender]', msg)
-      await db.from('campaigns').update({ last_error: msg }).eq('id', campaignId)
+      await writeOrLog(db.from('campaigns').update({ last_error: msg }).eq('id', campaignId), 'record email_sends insert error', campaignId)
     }
     // FREQ-CAP.1 — batch marketing-touch stamp for this chunk's successful
     // sends. Marketing stream only (utility campaigns never stamp); stamped
@@ -826,13 +944,19 @@ export async function tickCampaignSend(db, campaign) {
 
     if (result.ErrorCode === 0 || result.MessageID) {
       sentCount++
-      await db.from('campaign_recipients')
-        .update({
-          status: 'sent',
-          postmark_message_id: result.MessageID,
-          sent_at: new Date().toISOString(),
-        })
-        .eq('id', item._recipientId)
+      // The most consequential write in the file: this row is what stops the
+      // next tick re-sending. A lost 'sent' leaves the recipient 'sending'
+      // until the lease expires, at which point reclaimStuckSending re-queues
+      // them and they receive the SAME marketing email a second time.
+      await writeOrLog(
+        db.from('campaign_recipients')
+          .update({
+            status: 'sent',
+            postmark_message_id: result.MessageID,
+            sent_at: new Date().toISOString(),
+          })
+          .eq('id', item._recipientId),
+        `stamp recipient ${item._recipientId} sent`, campaignId)
     } else if (isTransientSendError(result)) {
       // CAMPAIGN-REL.1 — transient (network/-1, HTTP 429/5xx, Postmark
       // rate-limit/maintenance): retry on a later tick, bounded by
@@ -842,14 +966,18 @@ export async function tickCampaignSend(db, campaign) {
       const attempts = (item._attempts || 0) + 1
       if (attempts < MAX_SEND_ATTEMPTS) {
         retriedCount++
-        await db.from('campaign_recipients')
-          .update({ status: 'queued', attempts, last_error: result.Message || null })
-          .eq('id', item._recipientId)
+        await writeOrLog(
+          db.from('campaign_recipients')
+            .update({ status: 'queued', attempts, last_error: result.Message || null })
+            .eq('id', item._recipientId),
+          `requeue recipient ${item._recipientId}`, campaignId)
       } else {
         failedCount++
-        await db.from('campaign_recipients')
-          .update({ status: 'failed', attempts, last_error: result.Message || null })
-          .eq('id', item._recipientId)
+        await writeOrLog(
+          db.from('campaign_recipients')
+            .update({ status: 'failed', attempts, last_error: result.Message || null })
+            .eq('id', item._recipientId),
+          `fail recipient ${item._recipientId}`, campaignId)
       }
     } else {
       // Permanent rejection (300 invalid email, 406 inactive recipient,
@@ -866,15 +994,17 @@ export async function tickCampaignSend(db, campaign) {
       // contacts reading as zero. `now` is the truthful instant — Postmark
       // rejected the address on this call, milliseconds ago.
       bouncedCount++
-      await db.from('campaign_recipients')
-        .update({
-          status: 'bounced',
-          bounce_type: 'rejected',
-          bounced_at: new Date().toISOString(),
-          attempts: (item._attempts || 0) + 1,
-          last_error: result.Message || null,
-        })
-        .eq('id', item._recipientId)
+      await writeOrLog(
+        db.from('campaign_recipients')
+          .update({
+            status: 'bounced',
+            bounce_type: 'rejected',
+            bounced_at: new Date().toISOString(),
+            attempts: (item._attempts || 0) + 1,
+            last_error: result.Message || null,
+          })
+          .eq('id', item._recipientId),
+        `stamp recipient ${item._recipientId} bounced`, campaignId)
     }
   }
 
@@ -941,6 +1071,6 @@ async function reclaimStuckSending(db, campaignId) {
     const update = attempts < MAX_SEND_ATTEMPTS
       ? { status: 'queued', attempts, last_error: 'send attempt timed out (reclaimed from sending)' }
       : { status: 'failed', attempts, last_error: 'send attempt timed out (reclaimed from sending)' }
-    await db.from('campaign_recipients').update(update).in('id', ids)
+    await writeOrLog(db.from('campaign_recipients').update(update).in('id', ids), 'reclaim stuck sending rows', campaignId)
   }
 }

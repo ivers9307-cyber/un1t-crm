@@ -3,10 +3,12 @@
 // for the location that initiated the flow.
 //
 // The same Xero login may grant access to several tenants (e.g. UN1T
-// Dublin gym + CCF Autos). v1 picks the first tenant by default; if
-// the user wants to attach a different one we can extend this to a
-// picker page later. For now, you can re-auth choosing only the org
-// you want for that location.
+// Dublin gym + CCF Autos). ONE LOCATION = ONE XERO ORG, never shared —
+// every business here is a separate legal entity, so a tenant bound to
+// two locations files one company's bills into another's books.
+// XERO-ONE-ORG.1: we refuse any org another location already holds, and
+// name the org we did bind so a wrong auto-pick is visible at once. The
+// operator can switch it on the settings card without re-doing OAuth.
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
@@ -14,7 +16,9 @@ import { createServerClient } from '@/lib/supabase'
 import { exchangeAuthorizationCode, listConnectedTenants, XeroError } from '@/lib/xero/client'
 import { pullAccounts } from '@/lib/xero/accounts-sync'
 import { pullTaxRates } from '@/lib/xero/tax-rates-sync'
+import { pullContacts } from '@/lib/xero/contacts-sync'
 import { safeReturnTo, decodeReturnTo } from '@/lib/xero/return-to'
+import { chooseTenantToBind } from '@/lib/xero/tenant-binding'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -91,14 +95,41 @@ export async function GET(req) {
     if (!tenants.length) {
       return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { error: 'No Xero tenants returned' }, returnTo)))
     }
-    // Default behaviour: take the first tenant. The user can re-auth
-    // and pick a different org from the Xero consent screen if they
-    // want to link a different one. Most users have a single tenant
-    // anyway.
-    const tenant = tenants[0]
+    // XERO-ONE-ORG.1 — this used to be `const tenant = tenants[0]`, on the
+    // stated assumption that "most users have a single tenant anyway". Every
+    // business in this estate is a separate legal entity with its own Xero
+    // org, and Xero's /connections returns EVERY org the login has ever
+    // authorised — so "the first one" was the same org on all three connects,
+    // and three locations silently ended up filing bills into one company's
+    // books. Nothing was shown to the operator and nothing checked whether the
+    // org was already spoken for.
+    //
+    // Now: never take an org another location holds, and say which one we did
+    // take so a wrong auto-pick is visible immediately rather than months later.
+    const db = createServerClient()
+    const { data: existing } = await db
+      .from('xero_connections')
+      .select('tenant_id, location_id, locations:location_id ( name )')
+    const existingRows = (existing || []).map((r) => ({
+      tenant_id: r.tenant_id,
+      location_id: r.location_id,
+      location_name: r.locations?.name || null,
+    }))
+    // XERO-ONE-ORG.2 — remember what this location was bound to, because a
+    // reconnect that lands on a DIFFERENT org makes every cached Xero id for
+    // this location wrong (accounts, tax rates and contacts are all per-org).
+    const previousTenantId = existingRows.find((r) => r.location_id === locationId)?.tenant_id || null
+
+    const choice = chooseTenantToBind(tenants, existingRows, locationId)
+    if (!choice.ok) {
+      const msg = choice.reason === 'all_taken'
+        ? `Every Xero organisation this login grants is already connected to another location (${choice.taken.map((t) => `${t.tenantName || t.tenantId} → ${t.claimedBy}`).join(', ')}). Each location needs its own Xero organisation.`
+        : 'No Xero tenants returned'
+      return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { error: msg }, returnTo)))
+    }
+    const tenant = choice.tenant
 
     const expiresAt = new Date(Date.now() + (tokens.expires_in || 1800) * 1000).toISOString()
-    const db = createServerClient()
     const { error: upErr } = await db
       .from('xero_connections')
       .upsert({
@@ -122,7 +153,25 @@ export async function GET(req) {
     try { await pullAccounts(locationId) } catch (e) { console.warn(`[xero connect] accounts sync: ${e?.message || e}`) }
     try { await pullTaxRates(locationId) } catch (e) { console.warn(`[xero connect] tax-rate sync: ${e?.message || e}`) }
 
-    return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { connected: tenant.tenantName || 'Xero' }, returnTo)))
+    // XERO-ONE-ORG.2 — contacts are NOT normally pulled on connect (it pages
+    // the whole address book, and the operator has a Sync contacts button).
+    // But when the org CHANGES, the cached contacts belong to the previous
+    // company: every id in them is dead in the new org, and picking one is an
+    // opaque "existing contact could not be found" at send time. Observed
+    // live — Stillorgan was reconnected onto its correct org and kept 415
+    // contacts from the old one. Both sync helpers upsert-then-delete-stale,
+    // so this replaces rather than merges.
+    const tenantChanged = previousTenantId && previousTenantId !== tenant.tenantId
+    if (tenantChanged) {
+      try { await pullContacts(locationId) } catch (e) { console.warn(`[xero connect] contacts sync after org change: ${e?.message || e}`) }
+    }
+
+    // Name the org that was bound. When more than one was free the pick was
+    // arbitrary, so say so — that is the moment to catch a wrong binding.
+    const connectedMsg = choice.ambiguous
+      ? `${tenant.tenantName || 'Xero'} (this login grants ${choice.alternatives.length + 1} organisations — check this is the right one for ${'this location'})`
+      : (tenant.tenantName || 'Xero')
+    return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { connected: connectedMsg }, returnTo)))
   } catch (e) {
     const msg = e instanceof XeroError ? e.message : (e.message || String(e))
     return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { error: msg }, returnTo)))

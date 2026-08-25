@@ -2,11 +2,9 @@
 // Mirrors the shape of mobile/lib/expenses-api.js so the styling
 // patterns stay aligned.
 
-import { authHeaders } from './api'
-
-const API_BASE =
-  process.env.EXPO_PUBLIC_API_BASE_URL ||
-  'https://crm.un1tdublin.com'
+// REPSET-P6.S2 — base comes from the shared extra.apiBaseUrl resolution in
+// lib/api.js (EXPO_PUBLIC_API_BASE_URL override, canonical repset default).
+import { authHeaders, API_BASE } from './api'
 
 /**
  * List the signed-in user's own issue submissions (newest first).
@@ -133,5 +131,5 @@ export const ISSUE_STATUS_TONE = Object.freeze({
   open:         { bg: 'bg-amber-500/15',  fg: 'text-amber-200',  border: 'border-amber-500/30' },
   in_progress:  { bg: 'bg-blue-500/15',   fg: 'text-blue-200',   border: 'border-blue-500/30' },
   resolved:     { bg: 'bg-green-500/15',  fg: 'text-green-200',  border: 'border-green-500/30' },
-  closed:       { bg: 'bg-un1t-gray/40',  fg: 'text-un1t-light', border: 'border-un1t-gray' },
+  closed:       { bg: 'bg-un1t-border/40',  fg: 'text-un1t-subtle', border: 'border-un1t-border' },
 })

@@ -265,9 +265,16 @@ export async function sendPush(userIds, payload, opts = {}) {
   if (!allowedIds.length) return { sent: 0, skipped, invalidated: 0, failed: 0 }
 
   // Fetch all push tokens for the allowed users.
+  //
+  // ANDROID-VIS.1 (mig 565) — expo_push_token is NULLABLE: a device row can
+  // now exist purely so the fleet report can see it (Android, until FCM
+  // credentials exist; iOS with notifications declined). Those rows are not
+  // recipients — `to: null` would be sent to Expo and come back as a
+  // per-ticket error, counted as `failed`, which is a lie about the send.
   const { data: tokens } = await db
     .from('device_tokens')
     .select('id, expo_push_token')
+    .not('expo_push_token', 'is', null)
     .in('user_id', allowedIds)
 
   if (!tokens?.length) return { sent: 0, skipped, invalidated: 0, failed: 0 }

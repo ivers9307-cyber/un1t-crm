@@ -257,7 +257,7 @@ describe('parseContractBlocks — unrecognised syntax falls back to literal text
     const src = [
       '# Employment Contract',
       '',
-      'This agreement is between **UN1T Dublin Ltd** and the Employee.',
+      'This agreement is between **Champ Fitness Ltd** and the Employee.',
       '',
       '## 1. Duties',
       '',
@@ -283,7 +283,7 @@ describe('parseContractBlocks — unrecognised syntax falls back to literal text
     }).join(' ')
 
     for (const needle of [
-      'Employment Contract', 'UN1T Dublin Ltd', 'Duties', 'Coach classes',
+      'Employment Contract', 'Champ Fitness Ltd', 'Duties', 'Coach classes',
       'Maintain the floor', 'Nothing here is legal advice', 'Appendix', '| a | b |',
     ]) {
       expect(flat).toContain(needle)

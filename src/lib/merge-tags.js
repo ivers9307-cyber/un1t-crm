@@ -41,6 +41,12 @@ export const MERGE_TAGS = Object.freeze([
   { tag: '{{unsubscribe_url}}', name: 'Unsubscribe', description: 'Unsubscribe link', offered: true },
   { tag: '{{preference_url}}', name: 'Preferences', description: 'Preference centre link', offered: true },
   { tag: '{{current_year}}', name: 'Year', description: 'Current year', offered: true },
+  {
+    tag: '{{booking_token}}',
+    name: 'Booking Token',
+    description: 'Prefills the booking form — append to your /start link as ?c={{booking_token}}',
+    offered: true,
+  },
 
   // ── substitutes, deliberately not offered ─────────────────────────
   {

@@ -26,7 +26,7 @@ on:
       base_url:
         description: 'Target URL'
         required: false
-        default: 'https://crm.un1tdublin.com'
+        default: 'https://crm.repset.ie'
 
 concurrency:
   group: e2e-smoke
@@ -68,7 +68,7 @@ jobs:
       - name: Run smoke pack
         if: steps.gate.outputs.configured == 'true'
         env:
-          E2E_BASE_URL: ${{ github.event.inputs.base_url || 'https://crm.un1tdublin.com' }}
+          E2E_BASE_URL: ${{ github.event.inputs.base_url || 'https://crm.repset.ie' }}
           E2E_EMAIL: ${{ secrets.E2E_SMOKE_EMAIL }}
           E2E_PASSWORD: ${{ secrets.E2E_SMOKE_PASSWORD }}
         run: npm run test:e2e

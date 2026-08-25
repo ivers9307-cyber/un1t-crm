@@ -25,7 +25,7 @@ export async function POST(_request, props) {
   const db = createServerClient()
   const { data: row } = await db
     .from('offer_purchases')
-    .select('id, state, location_id, fulfilled_at, contact_id, buyer_name, buyer_email, amount_cents, offer:offer_id ( name, bonus_headline )')
+    .select('id, state, location_id, fulfilled_at, contact_id, buyer_name, buyer_email, amount_cents, offer:offer_id ( name, bonus_headline, category )')
     .eq('id', id)
     .maybeSingle()
 

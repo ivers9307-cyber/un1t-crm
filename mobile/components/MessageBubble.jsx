@@ -72,7 +72,7 @@ export default function MessageBubble({ msg, myRating, onRate, onReact, reacting
           {media && (
             <View className={`flex-row items-center ${bodyText ? 'mb-0.5' : ''}`}>
               <Ionicons name={media.icon} size={14} color={out ? 'rgba(255,255,255,0.85)' : '#64748B'} />
-              <Text className={`text-sm italic ml-1.5 ${out ? 'text-white/85' : 'text-un1t-light'}`}>
+              <Text className={`text-sm italic ml-1.5 ${out ? 'text-white/85' : 'text-un1t-subtle'}`}>
                 {media.label}
               </Text>
             </View>

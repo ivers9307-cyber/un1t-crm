@@ -73,7 +73,12 @@ export async function POST(request) {
       db.from('profiles').select('id, active').eq('active', true).range(0, PAGE_MAX - 1),
       db
         .from('device_tokens')
-        .select('id, user_id, app_version, last_seen_at, last_update_nudge_at')
+        // ANDROID-VIS.1 — expo_push_token is selected but NOT filtered on:
+        // a token-less row still counts towards the version verdict (that
+        // is the whole point of it being visible) and still carries the
+        // throttle stamp. It just cannot be the reason we decide someone
+        // is reachable — see the candidate loop.
+        .select('id, user_id, app_version, last_seen_at, last_update_nudge_at, expo_push_token')
         .order('last_seen_at', { ascending: false })
         .order('id', { ascending: true })
         .range(0, PAGE_MAX - 1),
@@ -112,6 +117,12 @@ export async function POST(request) {
   // current device row to claim. The throttle is not judged here — see
   // the claim below.
   const candidates = []
+  // ANDROID-VIS.1b — two DIFFERENT facts, and they were being added into
+  // one counter. "No app installed" is a people problem (send them the
+  // install link); "has the app, holds no push token" is a platform
+  // problem (Android has no FCM credentials yet). Reporting them together
+  // told the operator to chase someone who had already installed it.
+  let skippedNoApp = 0
   let skippedNoToken = 0
 
   // Deduplicate: a repeated id in the request must not double-push.
@@ -123,13 +134,26 @@ export async function POST(request) {
     const own = byUser.get(id) || []
     const verdict = deviceVerdict(own, targetVersion, now)
     if (verdict.kind === 'no_device') {
-      // No token by definition — a push has nowhere to land.
-      skippedNoToken++
+      // No device row at all — the app was never installed here.
+      skippedNoApp++
       continue
     }
     // 'current' and 'unknown_version' are not nudge-able: we only ever
     // tell someone to update when we can see they are behind.
     if (verdict.kind !== 'outdated') continue
+
+    // ANDROID-VIS.1 — a device row no longer implies a push token (mig
+    // 565), so "outdated" and "reachable" are now different questions.
+    // Judged AFTER the verdict so skipped_no_token still counts only
+    // people we actually wanted to reach. sendPush fans out across ALL of
+    // a person's tokens, so the test is whether ANY of their devices has
+    // one — not whether their most recently seen one does. Getting that
+    // backwards would silently stop nudging an iPhone user the moment they
+    // also signed in on Android.
+    if (!own.some((d) => d.expo_push_token)) {
+      skippedNoToken++
+      continue
+    }
 
     const device = currentDevice(own)
     if (!device?.id) continue
@@ -139,7 +163,7 @@ export async function POST(request) {
   if (candidates.length === 0) {
     return NextResponse.json({
       success: true,
-      data: { sent: 0, skipped_throttled: 0, skipped_no_token: skippedNoToken },
+      data: { sent: 0, skipped_throttled: 0, skipped_no_app: skippedNoApp, skipped_no_token: skippedNoToken },
     })
   }
 
@@ -180,7 +204,7 @@ export async function POST(request) {
   if (recipientIds.length === 0) {
     return NextResponse.json({
       success: true,
-      data: { sent: 0, skipped_throttled: skippedThrottled, skipped_no_token: skippedNoToken },
+      data: { sent: 0, skipped_throttled: skippedThrottled, skipped_no_app: skippedNoApp, skipped_no_token: skippedNoToken },
     })
   }
 
@@ -242,7 +266,7 @@ export async function POST(request) {
 
     return NextResponse.json({
       success: true,
-      data: { sent: 0, skipped_throttled: skippedThrottled, skipped_no_token: skippedNoToken },
+      data: { sent: 0, skipped_throttled: skippedThrottled, skipped_no_app: skippedNoApp, skipped_no_token: skippedNoToken },
     })
   }
 
@@ -251,6 +275,7 @@ export async function POST(request) {
     data: {
       sent: recipientIds.length,
       skipped_throttled: skippedThrottled,
+      skipped_no_app: skippedNoApp,
       skipped_no_token: skippedNoToken,
     },
   })

@@ -1,7 +1,7 @@
 // ZOOMSYNC.1 — Zoom Server-to-Server OAuth + a thin fetch wrapper.
 //
 // Ships dark: with any of the four required env vars unset, zoomConfigured() is false
-// and callers no-op rather than erroring. Same pattern as the Homey client.
+// and callers no-op rather than erroring.
 
 const TOKEN_URL = 'https://zoom.us/oauth/token'
 const API_BASE = 'https://api.zoom.us/v2'

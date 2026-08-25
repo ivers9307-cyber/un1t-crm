@@ -9,7 +9,8 @@
 //
 // Flags:
 //   --no-commit   Skip the git commit + tag (default: commit + tag)
-//   --no-push     Skip the git push (default: push)
+//   --push        Push the commit + tag (default: DO NOT push)
+//   --no-push     Explicit no-op; kept so old muscle memory still works
 //
 // What it does (in order):
 //   1. Reads the existing `version: 'X.Y.Z'` line from
@@ -17,14 +18,32 @@
 //   2. Computes the new version (semver bump or explicit).
 //   3. Writes it back, leaving everything else byte-identical.
 //   4. Stages app.config.js, commits with a descriptive message,
-//      tags the commit `mobile-vX.Y.Z`, and pushes both.
+//      and tags the commit `mobile-vX.Y.Z`. Stops there.
+//
+// WHY THE PUSH IS OPT-IN (OTA-PATHS.1 review, 2026-08-19). This used to
+// push by default, which made `npm run version:patch` — documented as
+// step 1 of BOTH per-version store submission flows in
+// docs/architecture/MOBILE.md — a one-command production event:
+//
+//   mobile/app.config.js is in .github/workflows/eas-update.yml's publish
+//   allowlist (it carries runtimeVersion), so the bump commit landing on
+//   main publishes an OTA to the whole runtime lane. And `version` and
+//   `runtimeVersion` are TWO SEPARATE LITERALS (app.config.js:110 and
+//   :375) — bumping `version` to 2.3.1 leaves the runtime lane at 2.3.0,
+//   so the new group lands on the CURRENTLY LIVE lane, demoting the other
+//   ~90% of same-lane devices to the previous group and starting a fresh
+//   48h ramp-or-rollback clock (mobile/docs/ota-rollout.md).
+//
+// An operator following the release runbook mid-launch would have fired
+// that without ever being told. Committing is still the default; shipping
+// is now a decision. `git push --follow-tags` when you mean it.
 //
 // `buildNumber` is handled by EAS Build (eas.json sets
 // `appVersionSource: 'remote'`) — every native build auto-increments
 // the build number. We only manage the marketing version here.
 
 import { readFileSync, writeFileSync } from 'node:fs'
-import { execSync } from 'node:child_process'
+import { execSync, execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -60,7 +79,7 @@ function main() {
   const kind = positional[0]
 
   if (!kind) {
-    console.error('Usage: node scripts/bump-version.mjs <patch|minor|major|X.Y.Z> [--no-commit] [--no-push]')
+    console.error('Usage: node scripts/bump-version.mjs <patch|minor|major|X.Y.Z> [--no-commit] [--push]')
     process.exit(1)
   }
 
@@ -94,13 +113,38 @@ function main() {
   execSync(`git tag -a mobile-v${newVersion} -m "Mobile iOS release ${newVersion}"`, opts)
   console.log(`✓ Committed + tagged mobile-v${newVersion}`)
 
-  if (flags.has('--no-push')) {
-    console.log('  Skipped push (--no-push). Run `git push --follow-tags` when ready.')
+  if (!flags.has('--push') || flags.has('--no-push')) {
+    console.log()
+    console.log('  Not pushed (push is opt-in — pass --push, or run `git push --follow-tags`).')
+    console.log('  !  This commit touches mobile/app.config.js, which is in eas-update.yml\'s')
+    console.log('     publish allowlist. Pushing it to main PUBLISHES AN OTA at 10% on the')
+    console.log('     CURRENT runtime lane (runtimeVersion is a separate literal and does not')
+    console.log('     move with `version`), demoting same-lane devices to the previous group')
+    console.log('     and starting a 48h ramp-or-rollback clock. See mobile/docs/ota-rollout.md.')
+    console.log()
+    console.log('Next: trigger "Release iOS" at expo.dev → Workflows.')
     return
   }
 
-  execSync('git push --follow-tags', opts)
-  console.log(`✓ Pushed to origin (with tag).`)
+  const branch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  }).trim()
+
+  if (branch === 'main') {
+    console.error()
+    console.error('  REFUSING to push a version bump directly to main.')
+    console.error('  mobile/app.config.js is in eas-update.yml\'s publish allowlist, so this')
+    console.error('  push would immediately publish an OTA at 10% on the current runtime lane')
+    console.error('  and start a 48h ramp-or-rollback clock (mobile/docs/ota-rollout.md).')
+    console.error('  The commit + tag are made. Push from a branch and open a PR, or if you')
+    console.error('  genuinely mean to publish now, run `git push --follow-tags` by hand and')
+    console.error('  ramp per the runbook.')
+    process.exit(1)
+  }
+
+  execFileSync('git', ['push', '--follow-tags'], opts)
+  console.log(`✓ Pushed to origin (with tag) on branch ${branch}.`)
   console.log()
   console.log('Next: trigger "Release iOS" at expo.dev → Workflows.')
 }

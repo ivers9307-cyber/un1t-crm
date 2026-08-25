@@ -5,12 +5,17 @@
 // the set. Brief hold, then the whole thing resets and loops (~2.1s).
 //
 // WHY IT'S BUILT FROM PLAIN <View>s:
-//   `react-native-svg` is NOT installed and must not be added — it is a
-//   native module, so adding it would force a new store binary and this
-//   animation would stop being OTA-shippable. The mark is therefore four
-//   rounded rectangles: three vertical bars + one rotated bar for the
-//   strike. Reanimated 4.5.0 + react-native-worklets 0.10.0 are already
-//   in the build, so the motion itself rides the OTA lane.
+//   When this was written, `react-native-svg` was NOT installed and the
+//   rule was "must not be added" — a native module would have forced a
+//   new store binary and made this animation stop being OTA-shippable.
+//   PHASE2 (one-app merge) consciously repealed that exclusion:
+//   react-native-svg now ships in the 2.3.0 native lane alongside
+//   HealthKit (the member-app tree needs it). This component stays as
+//   plain <View>s because it works and there's no reason to rewrite it.
+//   The mark is four rounded rectangles: three vertical bars + one
+//   rotated bar for the strike. Reanimated 4.5.0 + react-native-worklets
+//   0.10.0 are already in the build, so the motion itself rides the OTA
+//   lane.
 //
 // PROPORTIONS are measured off mobile/assets/icon.png (1024×1024):
 //   bars at x≈288/458/630, width≈102, y≈265→760 (height≈495), gap≈68;

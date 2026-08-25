@@ -24,28 +24,44 @@ export async function GET() {
     .eq('profile_id', user.id)
   if (linkErr) return NextResponse.json({ success: false, error: linkErr.message }, { status: 400 })
 
-  const eligibleIds = (links || []).filter(l => !l.geofence_exempt).map(l => l.location_id)
+  const allIds = (links || []).map(l => l.location_id)
+  const eligible = new Set((links || []).filter(l => !l.geofence_exempt).map(l => l.location_id))
   let regions = []
+  const allRegions = []
   let gateCopy = null
-  if (eligibleIds.length > 0) {
+  if (allIds.length > 0) {
     const { data: locs, error: locErr } = await db
       .from('locations')
       .select('id, settings')
-      .in('id', eligibleIds)
+      .in('id', allIds)
       .order('id')
     if (locErr) return NextResponse.json({ success: false, error: locErr.message }, { status: 400 })
     for (const loc of locs || []) {
       const g = geofenceFromLocationSettings(loc.settings)
       if (!geofenceIsConfigured(g)) continue
-      regions.push({ location_id: loc.id, latitude: g.latitude, longitude: g.longitude, radius_m: g.radiusM })
-      if (!gateCopy) gateCopy = g.gateCopy
+      const region = { location_id: loc.id, latitude: g.latitude, longitude: g.longitude, radius_m: g.radiusM }
+      allRegions.push(region)
+      if (eligible.has(loc.id)) {
+        regions.push(region)
+        if (!gateCopy) gateCopy = g.gateCopy
+      }
     }
   }
-  // iOS caps region monitoring at 20 per app — keep headroom.
+  // iOS caps region monitoring at 20 per app — keep headroom. Applies only
+  // to `regions`, which mobile registers as OS-level geofences.
   regions = regions.slice(0, 15)
+  // all_regions has no OS resource to protect (the Home/on-site resolver
+  // just compares distances client-side) — left uncapped.
 
   return NextResponse.json({
     success: true,
-    data: { required: regions.length > 0, gate_copy: gateCopy || DEFAULT_GATE_COPY, regions },
+    data: {
+      required: regions.length > 0,
+      gate_copy: gateCopy || DEFAULT_GATE_COPY,
+      regions,
+      // HOME-LOC.1 — exemption-blind copy for the Home/on-site resolver.
+      // `regions` stays the attendance-registration list (exempt filtered).
+      all_regions: allRegions,
+    },
   })
 }

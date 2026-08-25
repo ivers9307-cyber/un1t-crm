@@ -170,7 +170,7 @@ the same so replies actually land somewhere monitored.
                    no big "follow us" block — looks like the bottom of a
                    normal email. -->
               <p style="margin:24px 0 8px 0; font-size:12px; color:#888888; line-height:1.4;">
-                Champ Champ Fitness Limited · UN1T Dublin · Stillorgan, Co. Dublin
+                Champ Fitness Ltd · UN1T Dublin · Stillorgan, Co. Dublin
               </p>
               <p style="margin:0; font-size:12px; color:#888888; line-height:1.4;">
                 Don't want these? <a href="{{unsubscribe_url}}" style="color:#888888; text-decoration:underline;">Unsubscribe</a>.

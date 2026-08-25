@@ -29,7 +29,6 @@
 
 import {
   MOBILE_PERMISSION_KEYS,
-  CROSS_PLATFORM_DASHBOARD_KEYS,
   CROSS_PLATFORM_KEYS,
   DEFAULT_MOBILE_PERMISSIONS_BY_ROLE, DEFAULT_WEB_PERMISSIONS_BY_ROLE,
   resolvePermission,
@@ -103,14 +102,25 @@ export function canMobile(profile, key, activeLocation = null) {
  *      blob) via canMobile — anything that controls a bottom-tab
  *      or sub-screen on the iOS app.
  *
- *   2. The cross-platform dashboard keys (top-level on the
- *      assignment blob — no .mobile namespace) via canDashboard.
- *      These are the three dashboard tiers (personal / studio /
- *      business) that render on the Home tab itself. A master at
- *      a partial-features location can have every .mobile.* key
- *      off but still be entitled to at least one dashboard tier —
- *      in that case Home should render the dashboard, not the
- *      "mobile features off" empty state.
+ *   2. EVERY cross-platform key (top-level on the assignment blob —
+ *      no .mobile namespace) via canDashboard. That is the three
+ *      dashboard tiers (personal / studio / business) that render on
+ *      the DASHBOARD tab since HOME-LOC.7 (they were on the Home tab
+ *      when this walk was written; the nudge below stayed on Home),
+ *      AND the top-level keys that open a tab or
+ *      sub-screen: studio_management, class_timer, bookkeeper,
+ *      email_inbox, device_control. A master at a partial-features
+ *      location can have every .mobile.* key off but still be
+ *      entitled to a dashboard tier; a head coach can hold nothing
+ *      but studio_management and still have a Studio tab in the bar.
+ *      In both cases Home must render, not show the "mobile features
+ *      off" empty state.
+ *
+ *      MOBILEFEAT.1 — this walk used to cover only the dashboard
+ *      tiers. Every other cross-platform key was invisible to it, so
+ *      a staff member whose sole entitlement was one of them saw the
+ *      "ask an admin" nudge with a working tab sitting beside it.
+ *      CROSS_PLATFORM_KEYS already includes the dashboard keys.
  *
  * Any tier-2 (per-user override) or tier-3 (role default) result
  * is honoured by the underlying resolver, so this gate flips
@@ -122,7 +132,7 @@ export function hasAnyMobileFeature(profile, activeLocation = null) {
   if (MOBILE_PERMISSION_KEYS.some(k => canMobile(profile, k, activeLocation))) {
     return true
   }
-  return CROSS_PLATFORM_DASHBOARD_KEYS.some(k => canDashboard(profile, k, activeLocation))
+  return CROSS_PLATFORM_KEYS.some(k => canDashboard(profile, k, activeLocation))
 }
 
 /**

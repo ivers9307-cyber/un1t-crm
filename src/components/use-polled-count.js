@@ -7,7 +7,10 @@
 
 import { useEffect, useState } from 'react'
 
-export const POLL_INTERVAL_MS = 60_000
+// AUDIT-13.G — module-private. It was exported and never imported;
+// usePolledCount() below is the only reader. (Unrelated same-named
+// constants live in AcControlPanel.jsx and two mobile files.)
+const POLL_INTERVAL_MS = 60_000
 
 export function usePolledCount({ enabled, url }) {
   const [count, setCount] = useState(0)

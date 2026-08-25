@@ -215,3 +215,124 @@ export function deviceVerdict(devices, targetVersion, now) {
   const kind = compareVersions(device.app_version, targetVersion) < 0 ? 'outdated' : 'current'
   return { kind, ...base }
 }
+
+/** A device is "recently seen" for push-health purposes within this window. */
+export const PUSH_HEALTHY_DAYS = 14
+
+/**
+ * ANDROID-VIS.1b — the per-staff verdict on /settings/notifications/health.
+ *
+ * Lifted out of the page so it can be tested, because it acquired a state
+ * that MATTERS: since mig 565 a device row no longer implies a push token,
+ * and the previous logic called a token-less device 🟢 Healthy. That is a
+ * confident lie on the one surface whose entire job is answering "would a
+ * push reach this phone" — and it sat next to a live "Send test push"
+ * button that could never do anything. Every Android device in the fleet
+ * would have rendered that way.
+ *
+ * Order matters: unreachable outranks stale. "We cannot push to this phone
+ * at all" is a more useful and more actionable fact than "we could, but its
+ * token may have aged out".
+ *
+ * `canPush` is the single source of truth for whether the test-push button
+ * is offered — never re-derive it from `kind` at a call site.
+ *
+ * @param {Array<{last_seen_at?: string|null, expo_push_token?: string|null}>} devices
+ * @param {number} now  injected clock; the lib stays pure
+ */
+export function pushHealthStatus(devices, now = Date.now()) {
+  const list = Array.isArray(devices) ? devices : []
+  if (!list.length) return { kind: 'red', label: 'No app', canPush: false }
+
+  const newest = list.reduce(
+    (max, d) => (!max || (d?.last_seen_at && d.last_seen_at > max) ? d?.last_seen_at : max),
+    null,
+  )
+  if (!newest) return { kind: 'red', label: 'No app', canPush: false }
+
+  // A missing key reads the same as an explicit null: a caller that forgot
+  // to select the column must not be told everyone is reachable.
+  if (!list.some((d) => d?.expo_push_token)) {
+    return { kind: 'nopush', label: 'Visible, no push', canPush: false }
+  }
+
+  const daysSince = (now - new Date(newest).getTime()) / DAY_MS
+  if (daysSince > PUSH_HEALTHY_DAYS) return { kind: 'amber', label: 'Stale', canPush: true }
+  return { kind: 'green', label: 'Healthy', canPush: true }
+}
+
+// --- REPSET-PUB.1A — which iOS BINARY is this device running? ------------
+
+/**
+ * A build number is a non-negative integer counter (EAS owns it under
+ * `appVersionSource: 'remote'`). Digits only, deliberately: `native_build`
+ * is client-reported text, and anything else — `'2.3.0'`, `'1e3'`, `'abc'`,
+ * a fractional number — is a value we cannot honestly compare, not a value
+ * to coerce.
+ */
+const BUILD_DIGITS = /^\d{1,10}$/
+
+/** @returns {number|null} null when the value is absent or unparseable — NEVER 0. */
+function parseBuild(value) {
+  // A caller holding Constants.nativeBuildVersion straight off a device may
+  // have a number (Android reports versionCode numerically); the column is
+  // text. Both are accepted, neither is coerced from junk.
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) && value >= 0 ? value : null
+  }
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!BUILD_DIGITS.test(trimmed)) return null
+  return Number(trimmed)
+}
+
+/**
+ * REPSET-PUB.1A — is this device on the OLD unlisted iOS app or the NEW
+ * public `ie.repset.app` one?
+ *
+ * Apple's unlisted-distribution rule is one-way, so the public app is a new
+ * App Store record with a new bundle id, while the old app keeps serving its
+ * installed base off the SAME OTA lane until sunset. Nothing on a
+ * `device_tokens` row separates the two by itself: `app_version` is the
+ * OTA-delivered JS version and is identical on both, and the bundle id
+ * cannot be read honestly from JS at all (`Constants.expoConfig` reflects
+ * the OTA-delivered config, so an old binary would report the new id once
+ * the config PR publishes). `native_build` — the binary's Info.plist build
+ * number, mig 567 — is OTA-immune, and EAS's remote build counter is
+ * monotonic across the shared project, so one threshold splits them:
+ * `lastOldIosBuild` (N) is the old app's FINAL build number.
+ *
+ * PURE and total. Four answers, and the two "we cannot say" ones are not
+ * interchangeable:
+ *   - `'n/a'`      — not iOS. Android keeps one app record and one package
+ *                    name, so it has no old-vs-new question; putting those
+ *                    devices in either bucket would corrupt the rollup.
+ *   - `'unknown'`  — iOS, but the build or the threshold is missing or
+ *                    unparseable. ABSENT IS NOT ZERO: every row written
+ *                    before 1A has a NULL `native_build`, and reading that
+ *                    as build 0 would report the whole fleet as un-migrated
+ *                    on no evidence.
+ *   - `'old-app'`  — build <= N. The boundary is INCLUSIVE because N is the
+ *                    old app's last build, not the new app's first.
+ *   - `'new-app'`  — build > N.
+ *
+ * N IS NOT WIRED ANYWHERE YET. It is read off EAS/ASC at Phase 2 and
+ * threaded in at Phase 4, when the migration report is built; until then
+ * this export exists so the report has one definition to share and the
+ * health page can just display the raw number.
+ *
+ * @param {string|null|undefined} platform      the row's `platform`
+ * @param {string|number|null|undefined} nativeBuild  the row's `native_build`
+ * @param {string|number|null|undefined} lastOldIosBuild  N
+ * @returns {'old-app'|'new-app'|'unknown'|'n/a'}
+ */
+export function classifyBinary(platform, nativeBuild, lastOldIosBuild) {
+  const os = typeof platform === 'string' ? platform.trim().toLowerCase() : ''
+  if (os !== 'ios') return 'n/a'
+
+  const build = parseBuild(nativeBuild)
+  const threshold = parseBuild(lastOldIosBuild)
+  if (build === null || threshold === null) return 'unknown'
+
+  return build <= threshold ? 'old-app' : 'new-app'
+}

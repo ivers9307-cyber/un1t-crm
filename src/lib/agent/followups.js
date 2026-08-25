@@ -27,7 +27,9 @@ import { getLocationBranding } from '@/lib/location-branding'
 import { anthropicMessages } from '@/lib/anthropic'
 import { dublinTodayStr } from '@/lib/dublin-time'
 
-const AGENT_MODEL = 'claude-sonnet-4-6'
+// MIA-SONNET5 — kept in step with the inbound reply path so a nudge sounds
+// like the same person who answers the thread.
+const AGENT_MODEL = 'claude-sonnet-5'
 const H_MS = 3600_000
 
 export const FOLLOWUP_DEFAULTS = {
@@ -310,7 +312,10 @@ async function loadAgentKnowledge(db, locationId) {
 // knowledge and biases the model straight to [[SKIP]]/handoff (the first-class
 // check-in's intro-offer framing depends on those facts). `today` is the Dublin
 // business day for the same reason.
-async function composeAgentText({ location, settings, historyRows, instruction, companyName, knowledge }) {
+// Exported for tests (repo convention) — compose-effort.test.js asserts the
+// request body, which is how MIA-HYGIENE.2 caught this path running at the
+// API-default effort.
+export async function composeAgentText({ location, settings, historyRows, instruction, companyName, knowledge }) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return { error: 'no_api_key' }
   // CACHE.2 — cache the stable prefix (no tools on this path, so it caches the
@@ -332,7 +337,15 @@ async function composeAgentText({ location, settings, historyRows, instruction, 
   try {
     // SAAS4-M1 — metered via the shared wrapper (source: followups).
     const { res, data: body } = await anthropicMessages(
-      { model: AGENT_MODEL, max_tokens: 300, system, messages },
+      // MIA-HYGIENE.2 — effort `low`: a proactive nudge is a short, scoped,
+      // latency-tolerant generation. Without this the call ran at the API
+      // default (`high`), which EFFORT.1 already rejected for the inbound
+      // reply path.
+      // MIA-SONNET5 — 300 → 600. This path has NO tools, so it needs no
+      // tool-eagerness, but Sonnet 5's tokenizer alone adds ~31% and adaptive
+      // thinking shares the same ceiling; a truncated nudge would be sent as
+      // a real message, so the cap gets room rather than a coin flip.
+      { model: AGENT_MODEL, max_tokens: 600, thinking: { type: 'adaptive' }, output_config: { effort: 'low' }, system, messages },
       { apiKey, locationId: location.id, source: 'followups' }
     )
     if (!res.ok) return { error: `model_http_${res.status}` }

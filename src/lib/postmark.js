@@ -3,6 +3,7 @@ import { resolvePostmarkToken } from './postmark-token'
 import { applyAudienceFilter, applyAudienceFilterAsync } from './audience-filter'
 import { htmlToPlainText } from './email-content'
 import { resolveEmailSender } from './tenant-email'
+import { withSendMarker } from './postmark-send-marker'
 
 const POSTMARK_API_URL = 'https://api.postmarkapp.com'
 
@@ -491,6 +492,14 @@ export function applyMergeTags(html, contact, extras = {}) {
     '{{location_name}}': extras.location_name || '',
     '{{unsubscribe_url}}': extras.unsubscribe_url || '',
     '{{preference_url}}': extras.preference_url || '',
+    // STARTPREFILL.1 — a capability token the /start funnel exchanges for this
+    // contact's own details, so an email that says "your classes are waiting"
+    // stops asking them to type their name in. Deliberately the TOKEN and not a
+    // finished URL: the funnel's public address differs per location and is
+    // operator-editable, so the operator owns the link and this owns the
+    // identity. Empty when the caller did not mint one — the link then still
+    // works, just without the prefill.
+    '{{booking_token}}': extras.booking_token || '',
     '{{current_year}}': new Date().getFullYear().toString(),
     '{{glofox_passcode}}': contact.glofox_passcode || '',
   }
@@ -778,11 +787,17 @@ export async function sendTransactionalEmail({
     stream: 'outbound',  // Postmark transactional stream
     tag: tag || 'transactional',
     sender: sender || undefined,
+    // POSTMARK-RACE.1 — the marker is stamped on EXACTLY the condition the
+    // email_sends insert below is gated on. `contactId` falsy means this send
+    // is deliberately unlogged (an ops alert, a staff notice, a race
+    // confirmation for a payer with no contact), and marking it would promise
+    // the webhook processor a row that is never coming.
+    metadata: contactId ? withSendMarker() : undefined,
   })
 
   // Log to email_sends
   if (contactId) {
-    await db.from('email_sends').insert({
+    const { error: logErr } = await db.from('email_sends').insert({
       contact_id: contactId,
       location_id: locationId,
       source_type: sourceType,
@@ -795,6 +810,16 @@ export async function sendTransactionalEmail({
       postmark_stream: 'outbound',
       status: 'sent',
     })
+    // POSTMARK-RACE.2 — this insert's error was discarded, and the marker
+    // stamped above PROMISES the webhook processor that the row is coming. A
+    // silent failure here therefore did not just lose the send log: it made
+    // every subsequent webhook for this message look like a race. Logged, not
+    // thrown — the mail genuinely went out and the caller must still see that.
+    if (logErr) {
+      console.error('[postmark] email_sends insert failed (transactional):', logErr.message, {
+        messageId: result.messageId, contactId,
+      })
+    }
   }
 
   return result
@@ -883,6 +908,11 @@ export async function getLocationInboxReplyTo(locationId) {
  */
 export async function sendMarketingEmail({
   to, subject, htmlBody, contactId, locationId, tag, unsubscribeUrl, replyTo,
+  // SEQSENDER.1 — optional per-send From ("Dean Nolan" <dean@un1tdublin.com>),
+  // the same lever campaign-sender.js has always had. Omitted (the case for
+  // every caller before this) → undefined → sendEmail falls through to
+  // POSTMARK_FROM_EMAIL exactly as before.
+  from,
   sourceType = 'sequence', sequenceId = null, sequenceStepId = null,
 }) {
   // EMAIL-INBOX.1 — marketing sends default their Reply-To to the
@@ -904,28 +934,53 @@ export async function sendMarketingEmail({
     to,
     subject,
     htmlBody,
+    from,
     replyTo: resolvedReplyTo || undefined,
     stream: 'broadcast',  // Postmark marketing stream — attaches List-Unsubscribe headers
     tag: tag || 'marketing',
     unsubscribeUrl,
     sender: sender || undefined,
+    // POSTMARK-RACE.1 — same pairing as sendTransactionalEmail: marked iff the
+    // insert below will run.
+    metadata: contactId ? withSendMarker() : undefined,
   })
+
+  // SEQSENDER.1 — mirror sendEmail's own From precedence (see the `From:` line
+  // in its body) so email_sends records the address that actually went on the
+  // wire. Reading sender.fromEmail alone was already only accidentally right:
+  // resolveEmailSender returns a populated fromEmail even when serverToken is
+  // null, and the tenant From is applied ONLY when that token exists. Without
+  // this, a per-sequence `from` would send correctly and log the wrong sender,
+  // which is the kind of quiet drift that makes a deliverability question
+  // unanswerable months later.
+  const tenantFrom = sender?.serverToken
+    ? (sender.fromName ? `${sender.fromName} <${sender.fromEmail}>` : sender.fromEmail)
+    : null
+  const loggedFromEmail = tenantFrom || from || process.env.POSTMARK_FROM_EMAIL
 
   // Log to email_sends (same shape as the campaign + transactional paths).
   if (contactId) {
-    await db.from('email_sends').insert({
+    const { error: logErr } = await db.from('email_sends').insert({
       contact_id: contactId,
       location_id: locationId,
       source_type: sourceType,
       sequence_id: sequenceId,
       sequence_step_id: sequenceStepId,
       subject,
-      from_email: sender?.fromEmail || process.env.POSTMARK_FROM_EMAIL,
+      from_email: loggedFromEmail,
       to_email: to,
       postmark_message_id: result.messageId,
       postmark_stream: 'broadcast',
       status: 'sent',
     })
+    // POSTMARK-RACE.2 — see sendTransactionalEmail; the marker promises this
+    // row exists, so a silent insert failure here mislabels every later webhook
+    // for the message as a race.
+    if (logErr) {
+      console.error('[postmark] email_sends insert failed (marketing):', logErr.message, {
+        messageId: result.messageId, contactId,
+      })
+    }
   }
 
   return result

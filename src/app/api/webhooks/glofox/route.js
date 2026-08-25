@@ -47,7 +47,7 @@ import {
 import { applyInvoiceWebhook } from '@/lib/glofox-invoices'
 import { applyServiceWebhook } from '@/lib/glofox-services'
 import { applyMembershipPauseWindow } from '@/lib/glofox-membership'
-import { maybeEnrolDunning, exitDunningForContact } from '@/lib/dunning'
+import { maybeEnrolDunning, exitDunningForContact, dunningActionFor } from '@/lib/dunning'
 import { applyMemberSync } from '@/lib/glofox-sync'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 
@@ -308,20 +308,22 @@ export async function POST(request) {
       }
     }
 
-    // 7b. GLOFOX-REACTIVE — event-driven dunning off the invoice
-    // status. PAST_DUE → enrol into the location's dunning sequence
-    // (opt-in via locations.dunning_auto_enroll; paused members skipped;
-    // idempotent so a new-invoice-id-per-attempt retry storm collapses
-    // to one enrolment). PAID / FORGIVEN → stop any in-flight dunning —
-    // the gap the manual "Send payment reminder" flow never closed.
+    // 7b. GLOFOX-REACTIVE / DUNNING.1 — event-driven dunning off the invoice
+    // status, MEMBERSHIP invoices only (the churn radar's Overdue category).
+    // PAST_DUE → enrol into the location's dunning sequence (opt-in via
+    // locations.dunning_auto_enroll; paused members skipped; idempotent so a
+    // retry storm collapses to one enrolment). PAID / FORGIVEN → stop any
+    // in-flight dunning. A fee / class pack / custom charge never starts OR
+    // stops a run — dunningActionFor returns null for those.
     // Best-effort: the helpers never throw, but guard anyway.
     let dunningResult = null
     if (isInvoiceEvent && ltvResult?.ok) {
       const invStatus = String(ltvResult.invoice_status || '').toUpperCase()
+      const action = dunningActionFor(invStatus, ltvResult.is_membership)
       try {
-        if (invStatus === 'PAST_DUE') {
-          dunningResult = await maybeEnrolDunning(db, creds.locationId, contact.id, { invoiceId: ltvResult.invoice_id })
-        } else if (invStatus === 'PAID' || invStatus === 'FORGIVEN') {
+        if (action === 'enrol') {
+          dunningResult = await maybeEnrolDunning(db, creds.locationId, contact.id, { invoiceId: ltvResult.invoice_id, isMembership: true })
+        } else if (action === 'exit') {
           dunningResult = await exitDunningForContact(db, creds.locationId, contact.id, `invoice_${invStatus.toLowerCase()}`)
         }
       } catch (e) {

@@ -19,15 +19,22 @@ const staff = { id: 'prof-1', role: 'staff', activeLocation: { id: 'loc1' }, loc
 
 const GEO = { enabled: true, latitude: 53.2905, longitude: -6.1988, radius_m: 200 }
 
-// profile_locations rows + locations rows behind one from() switch
+// profile_locations rows + locations rows behind one from() switch.
+// `in()` is faithful to the real query filter — it narrows `locs` to the
+// ids the route actually passed, so a route regression that narrows the
+// query back to eligible-only ids is caught by the tests below instead of
+// silently returning every fixture location regardless of what was asked for.
 function mockDb({ links, locs }) {
+  const inStub = (_col, ids) => ({
+    order: () => Promise.resolve({ data: (locs || []).filter(l => ids.includes(l.id)), error: null }),
+  })
   createServerClient.mockReturnValue({
     from: (table) => ({
       select: () => ({
         eq: () => table === 'profile_locations'
           ? Promise.resolve({ data: links, error: null })
-          : { in: () => ({ order: () => Promise.resolve({ data: locs, error: null }) }) },
-        in: () => ({ order: () => Promise.resolve({ data: locs, error: null }) }),
+          : { in: inStub },
+        in: inStub,
       }),
     }),
   })
@@ -72,5 +79,35 @@ describe('GET /api/attendance/geofence-config', () => {
       locs: [{ id: 'loc1', settings: { geofence: { ...GEO, enabled: false } } }],
     })
     expect((await (await GET(req())).json()).data.required).toBe(false)
+  })
+
+  it('includes exempt locations in all_regions but not regions', async () => {
+    getCurrentUser.mockResolvedValue(staff)
+    mockDb({
+      links: [
+        { location_id: 'locA', geofence_exempt: false },
+        { location_id: 'locB', geofence_exempt: true },
+      ],
+      locs: [
+        { id: 'locA', settings: { geofence: GEO } },
+        { id: 'locB', settings: { geofence: GEO } },
+      ],
+    })
+    const body = await (await GET(req())).json()
+    expect(body.data.regions.map(r => r.location_id)).toEqual(['locA'])
+    expect(body.data.all_regions.map(r => r.location_id).sort()).toEqual(['locA', 'locB'])
+    expect(body.data.required).toBe(true) // still driven by non-exempt regions only
+  })
+
+  it('all-exempt user gets all_regions but required:false and empty regions', async () => {
+    getCurrentUser.mockResolvedValue(staff)
+    mockDb({
+      links: [{ location_id: 'locA', geofence_exempt: true }],
+      locs: [{ id: 'locA', settings: { geofence: GEO } }],
+    })
+    const body = await (await GET(req())).json()
+    expect(body.data.regions).toEqual([])
+    expect(body.data.required).toBe(false)
+    expect(body.data.all_regions.map(r => r.location_id)).toEqual(['locA'])
   })
 })

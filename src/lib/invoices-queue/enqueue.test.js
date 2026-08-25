@@ -44,6 +44,10 @@ let enqueueModule
 beforeEach(async () => {
   vi.resetModules()
   mockDb.from.mockReset()
+  // CONTRACTOR-MIME.1 — the contractor path now reads Storage metadata, and
+  // its tests attach a `storage` stub per case. Clear it here so a stub can
+  // never leak into a test that means to exercise the no-Storage fallback.
+  delete mockDb.storage
   enqueueModule = await import('./enqueue')
 })
 
@@ -173,6 +177,74 @@ describe('enqueueFromContractorInvoice', () => {
     const r = await enqueueModule.enqueueFromContractorInvoice('missing')
     expect(r.ok).toBe(false)
     expect(r.error).toMatch(/not found/i)
+  })
+
+  // CONTRACTOR-MIME.1 — this path hard-coded attachment_mime_type to
+  // 'application/pdf' (its source column is named pdf_path, so the design
+  // assumed PDF-only) while every OTHER enqueue path reads the real mime
+  // from its source row. Contractors upload phone photos: a .png labelled
+  // application/pdf was sent to Anthropic in a `document` block and 400'd
+  // with "The PDF specified was not valid" (queue row ad57c308).
+  function contractorRow(pdfPath) {
+    return buildChainable({
+      data: {
+        id: 'inv1', location_id: 'loc1', status: 'approved',
+        pdf_path: pdfPath, invoice_number: 'A001',
+        period_start: '2026-05-01', period_end: '2026-05-31', invoice_amount: 100,
+        contractor: { id: 'p1', full_name: 'Coach Sam', email: 'sam@x.com' },
+      },
+      error: null,
+    })
+  }
+
+  it('reads the real mime + size from Storage rather than assuming PDF', async () => {
+    const queueChain = buildChainable({ data: { id: 'q1' }, error: null })
+    mockDb.from.mockImplementation((t) => t === 'contractor_invoices' ? contractorRow('p1/photo.png') : queueChain)
+    mockDb.storage = {
+      from: () => ({
+        list: async () => ({
+          data: [{ name: 'photo.png', metadata: { mimetype: 'image/png', size: 306832 } }],
+          error: null,
+        }),
+      }),
+    }
+    const r = await enqueueModule.enqueueFromContractorInvoice('inv1')
+    expect(r.ok).toBe(true)
+    const inserted = queueChain.insert.mock.calls[0][0]
+    expect(inserted.attachment_mime_type).toBe('image/png')
+    expect(inserted.attachment_size_bytes).toBe(306832)
+  })
+
+  it('falls back to the file extension when Storage cannot be read', async () => {
+    const queueChain = buildChainable({ data: { id: 'q1' }, error: null })
+    mockDb.from.mockImplementation((t) => t === 'contractor_invoices' ? contractorRow('p1/photo.png') : queueChain)
+    mockDb.storage = { from: () => ({ list: async () => { throw new Error('storage down') } }) }
+    const r = await enqueueModule.enqueueFromContractorInvoice('inv1')
+    expect(r.ok).toBe(true)
+    const inserted = queueChain.insert.mock.calls[0][0]
+    // The point of the ticket: NEVER application/pdf for a .png.
+    expect(inserted.attachment_mime_type).toBe('image/png')
+    expect(inserted.attachment_size_bytes).toBeNull()
+  })
+
+  it('still labels a real PDF as application/pdf', async () => {
+    const queueChain = buildChainable({ data: { id: 'q1' }, error: null })
+    mockDb.from.mockImplementation((t) => t === 'contractor_invoices' ? contractorRow('p1/invoice.pdf') : queueChain)
+    delete mockDb.storage
+    const r = await enqueueModule.enqueueFromContractorInvoice('inv1')
+    expect(r.ok).toBe(true)
+    expect(queueChain.insert.mock.calls[0][0].attachment_mime_type).toBe('application/pdf')
+  })
+
+  it('enqueues even when the mime cannot be determined at all', async () => {
+    const queueChain = buildChainable({ data: { id: 'q1' }, error: null })
+    mockDb.from.mockImplementation((t) => t === 'contractor_invoices' ? contractorRow('p1/scan') : queueChain)
+    delete mockDb.storage
+    const r = await enqueueModule.enqueueFromContractorInvoice('inv1')
+    // A null mime surfaces later as a clear "Unsupported MIME type for OCR"
+    // rather than a confusing Anthropic 400 — but the row must still exist.
+    expect(r.ok).toBe(true)
+    expect(queueChain.insert.mock.calls[0][0].attachment_mime_type).toBeNull()
   })
 })
 

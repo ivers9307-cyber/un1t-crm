@@ -1,9 +1,10 @@
-// Afterglow dark-canvas zone palette for the public TV boards (GRAFT-TV
-// 2026-08). Mirrors champ-app shared/zone-colors.js — the two must stay in
-// sync by hand. The canonical ZONE_DEFS in src/lib/heart-rate.js stays
-// untouched: its colours serve light surfaces and the zone science
-// (thresholds, points). This module is a VIEW for dark boards (iron #0F1216
-// canvas), never a mutation of the model.
+// Dark-canvas zone palette for the public TV boards (born Afterglow
+// GRAFT-TV 2026-08; board chrome is Repset since P4a — the five zone DATA
+// hues are unchanged). Mirrors champ-app shared/zone-colors.js — the two
+// must stay in sync by hand. The canonical ZONE_DEFS in
+// src/lib/heart-rate.js stays untouched: its colours serve light surfaces
+// and the zone science (thresholds, points). This module is a VIEW for dark
+// boards (ink #131316 canvas), never a mutation of the model.
 
 export const ZONE_COLORS_DARK = {
   1: '#A3ABB6', // Ash (Warm-up)
@@ -13,14 +14,17 @@ export const ZONE_COLORS_DARK = {
   5: '#FF4E42', // Redline (Max)
 }
 
-// Iron washed toward each zone — the tile background tints. Kept as flat
-// hexes (not rgba over #0F1216) so tiles composite predictably on any layer.
+// Ink washed toward each zone — the tile background tints. Kept as flat
+// hexes (not rgba over #131316) so tiles composite predictably on any layer.
+// P4a re-mix: same zone hues, only the mix base changed (iron #0F1216 →
+// ink #131316); each wash keeps its original per-channel delta over the
+// canvas, so tint strength and contrast are preserved exactly.
 export const ZONE_WASH_DARK = {
-  1: '#252A31',
-  2: '#1B2B3E',
-  3: '#17312C',
-  4: '#332C21',
-  5: '#332225',
+  1: '#292B31',
+  2: '#1F2C3E',
+  3: '#1B322C',
+  4: '#372D21',
+  5: '#372325',
 }
 
 /**

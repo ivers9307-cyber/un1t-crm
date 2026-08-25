@@ -9,6 +9,7 @@ import Link from 'next/link'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
+import { contractCountersignatureLabel } from '@/lib/contracting-entity'
 import ContractRevokeButton from '@/components/ContractRevokeButton'
 import ContractResendButton from '@/components/ContractResendButton'
 import ContractPrintButton from '@/components/ContractPrintButton'
@@ -68,6 +69,15 @@ export default async function ContractDetailAdmin(props) {
   if (!user.isMaster) q = q.eq('organization_id', orgId)
   const { data: c } = await q.maybeSingle()
   if (!c) notFound()
+
+  // LEGALENT.1 — the countersignature label asserts the CONTRACTING
+  // COMPANY. It is read from the contract's own FROZEN variables_data,
+  // never resolved live: a contract issued since LEGALENT.1 carries the
+  // entity beside its frozen body, and one issued before it keeps what
+  // it was issued and signed under. Same helper as the recipient page,
+  // the mobile screen and the stored PDF, so the four can never
+  // disagree about who the document is with.
+  const entityLabel = contractCountersignatureLabel(c)
 
   const badge = STATUS_BADGE[c.status] || { label: c.status, class: 'bg-un1t-border text-un1t-subtle' }
   // Both actions share the same gate (issued/viewed + owner/master) —
@@ -138,7 +148,7 @@ export default async function ContractDetailAdmin(props) {
         {/* Dual signature block */}
         <div className="mt-10 pt-6 border-t border-gray-300 grid grid-cols-1 sm:grid-cols-2 gap-6">
           <SignatureBlock
-            label="For UN1T Dublin Ltd"
+            label={`For ${entityLabel}`}
             name={c.issuer_signature}
             timestamp={c.issued_at}
           />

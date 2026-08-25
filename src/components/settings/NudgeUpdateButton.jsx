@@ -70,7 +70,10 @@ export default function NudgeUpdateButton({ recipients = [] }) {
               : <AlertTriangle size={12} className="text-amber-700" />}
             {result.sent} sent
             {result.skipped_throttled > 0 && <span>· {result.skipped_throttled} nudged today</span>}
-            {result.skipped_no_token > 0 && <span>· {result.skipped_no_token} no app</span>}
+            {result.skipped_no_app > 0 && <span>· {result.skipped_no_app} no app</span>}
+            {/* ANDROID-VIS.1b — distinct from "no app": these people HAVE
+                the app, it just cannot receive push yet (Android/FCM). */}
+            {result.skipped_no_token > 0 && <span>· {result.skipped_no_token} no push token</span>}
           </span>
         )}
         <Button

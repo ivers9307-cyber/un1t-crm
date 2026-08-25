@@ -66,11 +66,9 @@ export function urgencyChip(item, now = Date.now()) {
   return { label: `${waitedM}m ago`, tone: 'muted' }
 }
 
-// Customers queue: deadline items first (soonest class up top), then the rest
-// oldest-waiting first — position IS priority, nothing sinks quietly.
-export function customerQueue(providers, now = Date.now()) {
-  const agent = byKey(providers).agent_requests
-  const items = agent && Array.isArray(agent.items) ? [...agent.items] : []
+// Deadline items first (soonest class up top), then the rest oldest-waiting
+// first — position IS priority, nothing sinks quietly.
+function sortByUrgency(items, now) {
   return items.sort((a, b) => {
     const da = itemDeadline(a, now)
     const db = itemDeadline(b, now)
@@ -81,6 +79,23 @@ export function customerQueue(providers, now = Date.now()) {
     const tb = b.submittedAt ? new Date(b.submittedAt).getTime() : now
     return ta - tb
   })
+}
+
+// Customers queue: the pending agent requests.
+export function customerQueue(providers, now = Date.now()) {
+  const agent = byKey(providers).agent_requests
+  const items = agent && Array.isArray(agent.items) ? [...agent.items] : []
+  return sortByUrgency(items, now)
+}
+
+// AGENT-RETRY.2 — failed executions the server still offers for retry
+// (class in the future / recent failure — the gate lives server-side in the
+// provider, mobile renders what it is sent). Same urgency sort: a failed
+// booking for a class starting soon is the most on-fire thing in the hub.
+export function failedQueue(providers, now = Date.now()) {
+  const agent = byKey(providers).agent_requests
+  const items = agent && Array.isArray(agent.failedItems) ? [...agent.failedItems] : []
+  return sortByUrgency(items, now)
 }
 
 // ── Everything-else tab ─────────────────────────────────────────────
