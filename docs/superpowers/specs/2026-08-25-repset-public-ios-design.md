@@ -90,12 +90,15 @@ to its record, so the public app needs a new bundle ID.
 
 ### Telemetry for the migration
 
-`device_tokens` carries `app_version` but NOT the bundle id — old-app and
-new-app installs are indistinguishable server-side today. The nudge PR adds
-a `bundle_id` (or `app_id`) column + report so "who hasn't moved" is a
-query, and the kiosk list is checked off explicitly. (Small additive
-migration; the ANDROID-VIS route already upserts per device_key, so the new
-column rides the same report.)
+`device_tokens` carries `app_version` but nothing distinguishing the two
+iOS binaries — and the bundle id CANNOT be read honestly from JS
+(`Constants.expoConfig` reflects the OTA-delivered config, so old binaries
+would lie post-switch; `expo-application` is a native add, forbidden in the
+freeze window). The honest, dependency-free signal is
+`Constants.nativeBuildVersion` (binary Info.plist, OTA-immune): a new
+`native_build` column + the known final old-app build number N classifies
+every iOS row in the report query. (Amended during planning — see the
+plan's telemetry note.)
 
 ## Out of scope
 
