@@ -1,7 +1,10 @@
 // Decision-tree for one class_booking_requests row (run by the
-// process-class-bookings cron). Prior-attendance → staff review (never
-// auto-book). Otherwise: ensure a Glofox account + class credit, book the
-// class, send the booking_class_confirmed WhatsApp. Any failure → review.
+// process-class-bookings cron). Prior-attendance books against the
+// account's EXISTING balance (credits or an active membership); only a
+// returner with nothing to book with goes to staff review — and a
+// returner is never auto-granted a fresh trial. Brand-new leads: ensure a
+// Glofox account + trial credit, book the class, send the
+// booking_class_confirmed WhatsApp. Any failure → review.
 import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, interpretBookingResult, fetchUserCredits, fetchUserBookingsResult, GLOFOX_BOOKING_MODEL } from '@/lib/glofox'
 import { computeCreditsRemaining } from '@/lib/glofox-sync'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
@@ -83,7 +86,8 @@ export async function processClassBookingRequest(db, request) {
   const { data: contact } = await db.from('contacts')
     // last_name is REQUIRED: findOrCreateGlofoxMember's create path hard-guards on
     // first_name AND last_name — omitting it would fail every brand-new lead.
-    .select('id, first_name, last_name, name, email, phone, wa_phone, glofox_member_id, last_attended_at, ctwa_clid')
+    // glofox_membership_status: the attended-path balance gate reads it.
+    .select('id, first_name, last_name, name, email, phone, wa_phone, glofox_member_id, glofox_membership_status, last_attended_at, ctwa_clid')
     .eq('id', request.contact_id).maybeSingle()
   if (!contact) {
     await setStatus(db, request.id, { status: 'failed', last_error: 'contact_missing' })
@@ -91,13 +95,18 @@ export async function processClassBookingRequest(db, request) {
   }
   const firstName = contact.first_name || (contact.name ? contact.name.split(' ')[0] : '') || 'there'
 
-  // Cheap pre-gate: if we already know they've attended a class → review (rule 5).
-  if (contact.last_attended_at) return routeToReview(db, request, 'prior_attendance')
+  // AGENT-FUNNEL-CREDITS.1 — prior attendance alone no longer blocks the
+  // booking (Richard 2026-08-25). /start is aimed at new people, but a
+  // returner who books through it is still a customer trying to book: if
+  // the account holds a usable balance (class credits, or an active
+  // membership), book against it. Review is reserved for the returner with
+  // NOTHING to book with — the "do they get another free class?" decision
+  // staff actually need to make. Rule 5's real invariant is unchanged: a
+  // returner is NEVER granted a fresh trial automatically.
+  const attendedLocally = !!contact.last_attended_at
 
-  // Resolve identity WITHOUT creating an account: search Glofox by email + link.
-  // Doing this BEFORE the attendance gate lets us check an EXISTING (possibly
-  // lapsed) account's real history, so a repeat trainer is linked + sent to
-  // review rather than auto-booked + granted a fresh trial.
+  // Resolve identity WITHOUT creating an account: search Glofox by email +
+  // link, so a repeat trainer's real account (and balance) is what we judge.
   let memberId = contact.glofox_member_id
   if (!memberId) {
     const search = await findOrCreateGlofoxMember({ db, locationId: request.location_id, contact, source: 'booking_form', createIfMissing: false, attachTrial: false })
@@ -106,20 +115,34 @@ export async function processClassBookingRequest(db, request) {
     memberId = search.glofox_member_id || null // 'skipped' = no Glofox account exists
   }
 
-  // Existing account → authoritative WIDE attendance check. contacts.last_attended_at
-  // can be stale/NULL for lapsed trainers (the sync window is only ~30 days), so
-  // query the member's booking history directly over a wide window. Any prior
-  // attendance → review (rule 5); an uncertain (failed) check also → review so we
-  // never auto-book a free class against an unreadable signal.
-  if (memberId) {
+  // Attendance: trust the local stamp when set; otherwise ask Glofox over a
+  // WIDE window (contacts.last_attended_at can be stale/NULL for lapsed
+  // trainers — the sync window is only ~30 days). An uncertain read still
+  // fails safe to review: never auto-book a free class against an
+  // unreadable signal.
+  let attended = attendedLocally
+  if (!attended && memberId) {
     const { ok: attendOk, bookings } = await fetchUserBookingsResult(creds, memberId, { windowDays: 365 * 5 })
     if (!attendOk) return routeToReview(db, request, 'attendance_check_failed')
-    if (bookings.some((b) => b.attended === true)) return routeToReview(db, request, 'prior_attendance')
+    attended = bookings.some((b) => b.attended === true)
   }
 
-  // Never attended. Ensure an account + a class credit.
   let grantedTrial = false
-  if (!memberId) {
+  if (attended) {
+    // Attended before with no Glofox account at all → nothing to book with.
+    if (!memberId) return routeToReview(db, request, 'prior_attendance')
+    let credits = null
+    try { credits = computeCreditsRemaining(await fetchUserCredits(creds, memberId)) } catch (e) { logWarn('cbp', 'credit check failed', { err: e }) }
+    // computeCreditsRemaining is null for BOTH "no credits" and "membership
+    // without per-class credit records" — the CRM's synced membership status
+    // breaks the tie: an active membership is bookable (Glofox arbitrates,
+    // and a rejection routes to review as booking_failed below). Zero /
+    // null / unreadable with no active membership → staff.
+    const activeMembership = contact.glofox_membership_status === 'active'
+    if (!(credits > 0) && !activeMembership) return routeToReview(db, request, 'prior_attendance')
+    // Fall through to the booking — consuming the EXISTING balance, never a
+    // fresh trial.
+  } else if (!memberId) {
     // Truly brand-new (not found in Glofox) → create + grant the trial credit.
     // Only a clean create/link is safe; 'needs_review'/'failed' → staff.
     const trialOverride = (request.trial_membership_id && request.trial_plan_code)
@@ -132,9 +155,10 @@ export async function processClassBookingRequest(db, request) {
     memberId = res.glofox_member_id
     grantedTrial = res.status === 'created'
   }
-  // Existing account, no live credit → review (staff grant the trial + approve);
-  // an uncertain credit read also fails safe to review.
-  if (!grantedTrial) {
+  // Existing never-attended account, no live credit → review (staff grant the
+  // trial + approve); an uncertain credit read also fails safe to review.
+  // The attended path above did its own balance check.
+  if (!attended && !grantedTrial) {
     let credits = null
     try { credits = computeCreditsRemaining(await fetchUserCredits(creds, memberId)) } catch (e) { logWarn('cbp', 'credit check failed', { err: e }) }
     if (credits == null || credits <= 0) return routeToReview(db, request, 'needs_credit_grant')

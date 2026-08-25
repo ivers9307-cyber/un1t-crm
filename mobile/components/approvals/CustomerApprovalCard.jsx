@@ -49,6 +49,14 @@ export default function CustomerApprovalCard({ item, busy, onApprove, onDecline,
       {isFailed && item.failedWhy ? (
         <Text className="text-[12px] text-red-700 mt-1" numberOfLines={4}>{item.failedWhy}</Text>
       ) : null}
+      {/* AGENT-FUNNEL-CREDITS.1 — why it was flagged + what the account can
+          book with, so the decision needs no Glofox lookup. */}
+      {!isFailed && item.why ? (
+        <Text className="text-[12px] text-un1t-subtle mt-1" numberOfLines={4}>{item.why}</Text>
+      ) : null}
+      {item.accountLine ? (
+        <Text className="text-[12px] font-medium text-un1t-text mt-1" numberOfLines={2}>{item.accountLine}</Text>
+      ) : null}
       {item.customerNote ? (
         <Text className="text-[12px] italic text-un1t-subtle mt-1" numberOfLines={2}>“{item.customerNote}”</Text>
       ) : null}

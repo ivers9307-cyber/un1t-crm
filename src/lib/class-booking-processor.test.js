@@ -33,8 +33,29 @@ beforeEach(() => vi.clearAllMocks())
 
 describe('processClassBookingRequest', () => {
   const req = { id: 'r1', location_id: 'L', contact_id: 'c1', glofox_event_id: 'e1', class_name: 'S&C', starts_at: '2026-07-08T17:30:00.000Z' }
-  it('routes prior-attendance leads to review, never books', async () => {
-    const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', last_attended_at: '2026-06-01T10:00:00Z' }), req)
+  // AGENT-FUNNEL-CREDITS.1 — prior attendance books when the account holds a
+  // usable balance; review is only for returners with nothing to book with.
+  it('prior attendance WITH credits → books against the balance (no trial grant)', async () => {
+    // default mocks: credits 3
+    const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', last_attended_at: '2026-06-01T10:00:00Z' }), req)
+    expect(r.outcome).toBe('booked')
+    expect(createBooking).toHaveBeenCalled()
+    expect(findOrCreateGlofoxMember).not.toHaveBeenCalled() // no create, no trial
+  })
+  it('prior attendance with NO credits and no active membership → review, never books', async () => {
+    computeCreditsRemaining.mockReturnValueOnce(0)
+    const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', glofox_membership_status: 'trial', last_attended_at: '2026-06-01T10:00:00Z' }), req)
+    expect(r.outcome).toBe('needs_review')
+    expect(createBooking).not.toHaveBeenCalled()
+  })
+  it('prior attendance, null credits but ACTIVE membership → books (Glofox arbitrates)', async () => {
+    computeCreditsRemaining.mockReturnValueOnce(null)
+    const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', glofox_membership_status: 'active', last_attended_at: '2026-06-01T10:00:00Z' }), req)
+    expect(r.outcome).toBe('booked')
+  })
+  it('prior attendance with no Glofox account at all → review (nothing to book with)', async () => {
+    findOrCreateGlofoxMember.mockResolvedValueOnce({ status: 'skipped', glofox_member_id: null })
+    const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: null, last_attended_at: '2026-06-01T10:00:00Z' }), req)
     expect(r.outcome).toBe('needs_review')
     expect(createBooking).not.toHaveBeenCalled()
   })
@@ -65,12 +86,18 @@ describe('processClassBookingRequest', () => {
     expect(r.outcome).toBe('needs_review')
     expect(createBooking).not.toHaveBeenCalled()
   })
-  it('wide attendance check catches a repeat trainer with stale last_attended_at → review', async () => {
+  it('wide attendance check catches a repeat trainer with stale last_attended_at → balance gate (review when broke)', async () => {
     // last_attended_at is NULL (stale), but the live booking history shows a prior attended class.
     fetchUserBookingsResult.mockResolvedValueOnce({ ok: true, bookings: [{ attended: true, time_start: 1700000000 }] })
+    computeCreditsRemaining.mockReturnValueOnce(0)
     const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', last_attended_at: null }), req)
     expect(r.outcome).toBe('needs_review')
     expect(createBooking).not.toHaveBeenCalled()
+  })
+  it('wide-check repeat trainer WITH credits → books against the balance', async () => {
+    fetchUserBookingsResult.mockResolvedValueOnce({ ok: true, bookings: [{ attended: true, time_start: 1700000000 }] })
+    const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', last_attended_at: null }), req)
+    expect(r.outcome).toBe('booked')
   })
   it('uncertain attendance read (Glofox error) → review, never books', async () => {
     fetchUserBookingsResult.mockResolvedValueOnce({ ok: false, bookings: [] })

@@ -19,8 +19,11 @@
 // covers what CUSTOMERS see).
 
 const MACHINE_REASONS = {
+  // AGENT-FUNNEL-CREDITS.1 — since the balance-aware pipeline, a returner
+  // with credits or an active membership books automatically; this code now
+  // means "attended before AND nothing on the account to book with".
   prior_attendance:
-    'They have attended a class before, so the free intro-class auto-booking does not apply. Check their account in Glofox and decide.',
+    'They have attended before and no usable balance was found (no class credits, no active membership) — the free intro does not apply. Grant a credit or set up a membership in Glofox, then approve to book.',
   needs_credit_grant:
     'Their Glofox account has no class credits left. Approving grants the trial credit and completes the booking automatically.',
   account_ambiguous:
@@ -93,6 +96,29 @@ export function failureExplanation(row) {
   if (!code) return 'The execution failed. Check the account in Glofox, fix what is wrong, then retry.'
   return FAILURE_EXPLANATIONS[code]
     || `Glofox rejected the action (${code}). Fix the issue in Glofox, then retry.`
+}
+
+// AGENT-FUNNEL-CREDITS.1 — one-line account summary for approval cards, from
+// the membership fields the Glofox sync denormalises onto contacts. No live
+// API call: this is what the CRM already knows, at last-sync freshness.
+export function accountSummaryLine(contact) {
+  if (!contact) return null
+  const plan = contact.glofox_membership_plan || null
+  const status = contact.glofox_membership_status || null
+  const state = contact.glofox_membership_state || null
+  const credits = contact.trial_credits_remaining
+  const parts = []
+  if (plan) {
+    let qualifier = ''
+    if (status && status !== 'active') qualifier = state === 'future' ? `${status}, not started` : status
+    else if (state && state !== 'active') qualifier = state
+    parts.push(qualifier ? `${plan} (${qualifier})` : plan)
+  } else {
+    parts.push('No membership on file')
+  }
+  if (Number.isFinite(credits)) parts.push(`${credits} credit${credits === 1 ? '' : 's'} left`)
+  else parts.push('credits unknown')
+  return parts.join(' · ')
 }
 
 /**
