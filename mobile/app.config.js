@@ -191,6 +191,14 @@ export default ({ config }) => ({
     // consistency, even though Android doesn't have Apple's reuse
     // restriction. One namespace, one app, both stores.
     package: 'com.un1tdublin.crm',
+    // FCM-SETUP.1 — Android push (mobile/docs/android-fcm-setup.md). On EAS
+    // the GOOGLE_SERVICES_JSON file secret materialises as a path in this
+    // env var; local prebuilds fall back to a git-ignored copy on disk (the
+    // repo is public, so the file is never committed — Route A). Gradle
+    // consumes it at BUILD time: a new binary is required, but the JS↔native
+    // interface is unchanged, so runtimeVersion stays put (the 1.3.2 /
+    // ANDROID-R8 precedent above).
+    googleServicesFile: process.env.GOOGLE_SERVICES_JSON ?? './google-services.json',
     // MOBILE-AUDIT.2 — expo-image-picker adds RECORD_AUDIO by default
     // (for video capture); the app only picks/captures photos for
     // invoices and issue reports, never audio/video. Blocking it keeps
