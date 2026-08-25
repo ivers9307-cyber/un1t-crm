@@ -67,6 +67,7 @@ export const BOOKING_TOOLS = [
         event_id: { type: 'string', description: 'The 24-hex Glofox event id from list_upcoming_classes.' },
         class_name: { type: 'string', description: 'The class name you confirmed with the customer.' },
         class_time: { type: 'string', description: 'The class date/time you confirmed, as shown in the list.' },
+        starts_at: { type: 'string', description: 'The starts_at value for the chosen class, copied EXACTLY from list_upcoming_classes. Never invent or reformat it.' },
       },
       required: ['event_id'],
     },
@@ -223,6 +224,10 @@ export function shapeClassListForAgent(events, nowMs, limit = MAX_CLASS_LIST) {
       name: e.name || 'Class',
       start_sec: startSec,
       time: formatDublinClassTime(startSec),
+      // MIA-BOARD.2 — machine-readable instant, relayed back via book_class so
+      // the approval row is guardable against past-start execution. The
+      // display `time` stays what the customer sees.
+      starts_at: new Date(startSec * 1000).toISOString(),
       full,
       ...(!full && size > 0 && spotsLeft <= LIMITED_SPOTS_THRESHOLD ? { limited: true } : {}),
     })
@@ -487,10 +492,16 @@ export async function executeBookingTool(toolName, input, ctx) {
     if (!guard.ok) return guard
 
     const mode = bookingMode(settings)
+    // MIA-BOARD.2 — normalise the relayed instant; stamp only when it parses.
+    // The list emits it and the schema says copy-exactly, so a missing or
+    // junk value degrades to the legacy unguarded shape, never to a wrong
+    // expiry.
+    const relayedStartMs = Date.parse(input?.starts_at || '')
     const baseDetails = {
       event_id: input.event_id,
       class_name: input.class_name || null,
       class_time: input.class_time || null,
+      ...(Number.isFinite(relayedStartMs) ? { starts_at: new Date(relayedStartMs).toISOString() } : {}),
       mode,
     }
 

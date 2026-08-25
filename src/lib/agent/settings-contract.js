@@ -38,6 +38,9 @@ export const DEFAULTS = {
   // usable balance and the thread hands off to a human. Null → the code
   // default in lib/agent/core.js (DEFAULT_NO_CREDITS_HANDOFF_TEXT).
   no_credits_handoff_text: null,
+  // MIA-BOARD.2 — apology when a pending booking outlives its class. Null →
+  // DEFAULT_BOOKING_EXPIRED_TEXT in lib/agent/notify.js.
+  booking_expired_text: null,
   // APPROVALS-STUDIO.1 — sent in-thread when staff decline a customer
   // request. Null → the code default in lib/agent/notify.js.
   approval_decline_text: null,
@@ -94,6 +97,7 @@ export const SettingsSchema = z.object({
   cancellation_confirmation_text: z.string().max(500).nullable().optional(),
   booking_issue_handoff_text: z.string().max(500).nullable().optional(),
   no_credits_handoff_text: z.string().max(500).nullable().optional(),
+  booking_expired_text: z.string().max(500).nullable().optional(),
   approval_decline_text: z.string().max(500).nullable().optional(),
   welcome_greeting: z.string().max(500).nullable().optional(),
   link_button_text: z.string().max(25).nullable().optional(),
@@ -167,6 +171,7 @@ export function buildCustomerAgentSettings(data = {}) {
     cancellation_confirmation_text: data.cancellation_confirmation_text?.trim() || null,
     booking_issue_handoff_text: data.booking_issue_handoff_text?.trim() || null,
     no_credits_handoff_text: data.no_credits_handoff_text?.trim() || null,
+    booking_expired_text: data.booking_expired_text?.trim() || null,
     approval_decline_text: data.approval_decline_text?.trim() || null,
     welcome_greeting: data.welcome_greeting?.trim() || null,
     link_button_text: data.link_button_text?.trim() || null,
