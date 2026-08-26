@@ -1,4 +1,4 @@
--- 572: MAILBOX-CONNECT.5.2 — cron_heartbeats seed for /api/cron/poll-imap-mailboxes.
+-- 573: MAILBOX-CONNECT.5.2 — cron_heartbeats seed for /api/cron/poll-imap-mailboxes.
 --
 -- CLAUDE.md: a new cron ships its route, its vercel.json entry, its
 -- stampHeartbeat() call and its heartbeat ROW together. stampHeartbeat() is

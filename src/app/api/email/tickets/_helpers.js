@@ -46,7 +46,7 @@ import {
   ticketParticipants, normalizeAddressList, replyMode, MAX_RECIPIENTS,
 } from '@/lib/email-recipients'
 
-// MAILBOX-CONNECT.7 — `egress` ('postmark' | 'smtp', mig 571) rides along.
+// MAILBOX-CONNECT.7 — `egress` ('postmark' | 'smtp', mig 572) rides along.
 // There is no select('*') on email_mailboxes anywhere in this repo, so a
 // column is invisible to the API until a named list asks for it, and this is
 // the list every ticket route's mailbox object comes from (loadTicketForUser

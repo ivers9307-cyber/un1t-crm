@@ -27,7 +27,7 @@
 import { GLOFOX_BOOKING_MODEL } from '@/lib/glofox'
 import {
   linkedAccountsForContact, corroborated, findBookingAcrossAccounts, hasBookableMembership,
-  electWriteAccount, fanUpcomingBookings, summariseBookingFan,
+  electWriteAccount, fanUpcomingBookings, summariseBookingFan, directSiblingRows, reusableSibling, chunkIds,
 } from '@/lib/person-accounts'
 import { DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT } from './notify'
 import { notifyAgentApprovalRequest } from './approval-notify'
@@ -447,22 +447,43 @@ export function bookingRejectionRoute(messageCode) {
   return CUSTOMER_ANSWERABLE_CODES.has(messageCode) ? 'reply' : 'approval'
 }
 
-// One pending approval per (contact, event): a retried tool call must not
+// One pending approval per (PERSON, event): a retried tool call must not
 // double-card staff. Best-effort — on lookup failure we'd rather risk a
 // duplicate card than lose the fallback entirely.
-async function pendingBookingApprovalId(db, ctx, eventId, excludeId, contactId = null) {
+//
+// PERSON-ACCT.7 deduped against the contact the row would be FILED against
+// (the elected account) rather than the anchor. PERSON-ACCT.9 widens that to
+// the whole PERSON: one human holds 2-3 contacts rows, so a card already
+// sitting on a sibling — filed by an earlier turn that elected a different
+// account, or by the /start funnel — is a duplicate of this one even though
+// no single contact_id matches. `personIds` carries the group plus the direct
+// siblings the REUSE rule accepts (never a phone-only match — that may be a
+// partner, see reusableSibling); the elected/anchor id is always included.
+// Chunked at ≤150 per `.in()` (PostgREST URL length).
+//
+// ACCEPTED LIMITATION: still SELECT-then-INSERT with no DB constraint behind
+// it (no unique index on (contact_id, kind, details->>event_id)), so two
+// concurrent turns can both miss and both file. This shrinks the window; it
+// does not close the race.
+async function pendingBookingApprovalId(db, ctx, eventId, excludeId, contactId = null, personIds = null) {
+  const ids = [...new Set([
+    contactId || ctx.verifiedContactId || ctx.contactId,
+    ...(Array.isArray(personIds) ? personIds : []),
+  ].filter(Boolean))]
+  if (!ids.length) return null
   try {
-    const { data } = await db.from('agent_membership_requests')
-      .select('id')
-      // PERSON-ACCT.7 — deduped against the contact the row would be FILED
-      // against (the elected account), not the anchor: those are the rows a
-      // retry would duplicate.
-      .eq('contact_id', contactId || ctx.verifiedContactId || ctx.contactId)
-      .eq('kind', 'class_booking')
-      .eq('status', 'pending')
-      .contains('details', { event_id: eventId })
-      .limit(5)
-    return (data || []).map((r) => r.id).find((id) => id && id !== excludeId) || null
+    for (const batch of chunkIds(ids)) {
+      const { data } = await db.from('agent_membership_requests')
+        .select('id')
+        .in('contact_id', batch)
+        .eq('kind', 'class_booking')
+        .eq('status', 'pending')
+        .contains('details', { event_id: eventId })
+        .limit(5)
+      const hit = (data || []).map((r) => r.id).find((id) => id && id !== excludeId)
+      if (hit) return hit
+    }
+    return null
   } catch { return null }
 }
 
@@ -597,6 +618,25 @@ export async function executeBookingTool(toolName, input, ctx) {
     const accounts = linked.readFailed ? [] : linked.accounts
     const anchorRow = linked.contacts.find((c) => c && c.id === verifiedContactId) || null
 
+    // PERSON-ACCT.9 — every contact id that is THIS PERSON, for the approval
+    // dedupe below: the person group, plus the rows a direct phone/email
+    // search finds that the REUSE rule accepts (a contact created by a public
+    // form minutes ago is in no group yet — the group only forms when
+    // detection runs). Election inputs are deliberately unchanged: this widens
+    // what counts as an existing card, not what may receive a booking.
+    //
+    // reusableSibling, NOT corroborated: a phone-only match may be the
+    // customer's partner, and couples train together, so same-number +
+    // same-class is exactly the collision. Suppressing this customer's card
+    // because their partner already has one leaves a real request with no card
+    // at all — a silent loss, against a duplicate card staff can dismiss.
+    const direct = anchorRow ? await directSiblingRows(db, { anchorRow, locationId }) : { rows: [] }
+    const personIds = [...new Set([
+      verifiedContactId,
+      ...linked.contacts.map((c) => c && c.id),
+      ...direct.rows.filter((r) => reusableSibling(anchorRow, r)).map((r) => r.id),
+    ].filter(Boolean))]
+
     let concernsMemberIds = []
     if (credsUsable && accounts.length) {
       const fan = summariseBookingFan(
@@ -674,7 +714,7 @@ export async function executeBookingTool(toolName, input, ctx) {
         }))
         const summary = [input.class_name, input.class_time, 'two live accounts — Mia would not guess']
           .filter(Boolean).join(' · ')
-        let approvalId = await pendingBookingApprovalId(db, ctx, input.event_id, null, top.id)
+        let approvalId = await pendingBookingApprovalId(db, ctx, input.event_id, null, top.id, personIds)
         if (!approvalId) {
           approvalId = await logBookingRequest(db, ctx, {
             kind: 'class_booking', status: 'pending', contactId: top.id,
@@ -752,7 +792,7 @@ export async function executeBookingTool(toolName, input, ctx) {
           // approvals queue provides; the auto-reply loop sees no_credits on
           // this result and hands the THREAD off deterministically (script +
           // park + manager push) — the customer is never left with silence.
-          let approvalId = await pendingBookingApprovalId(db, ctx, input.event_id, null, electedContactId)
+          let approvalId = await pendingBookingApprovalId(db, ctx, input.event_id, null, electedContactId, personIds)
           if (!approvalId) {
             approvalId = await logBookingRequest(db, ctx, {
               kind: 'class_booking', status: 'pending', contactId: electedContactId,
@@ -829,7 +869,7 @@ export async function executeBookingTool(toolName, input, ctx) {
     // MIA-BOOK.1 — account-shaped (or unknown) rejection: hand to a human.
     // The intent row becomes the approval card; approving re-runs the booking
     // after staff fix the account. Never tell the customer it's booked.
-    const dupId = await pendingBookingApprovalId(db, ctx, input.event_id, auditId, electedContactId)
+    const dupId = await pendingBookingApprovalId(db, ctx, input.event_id, auditId, electedContactId, personIds)
     const summary = `Glofox rejected this booking (${messageCode || `status_${result.status}`}). Fix the member's account (credits/membership), then Approve to retry the booking.`
     await finalizeBookingRequest(db, ctx, auditId, {
       kind: 'class_booking',

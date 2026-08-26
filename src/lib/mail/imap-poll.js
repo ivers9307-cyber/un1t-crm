@@ -113,7 +113,7 @@ import { isConfigured } from './secret-box'
 
 /* ────────────────────────────── constants ─────────────────────────────── */
 
-/** The CRM's own name for the lane, not the IMAP path. See mig 571's comment. */
+/** The CRM's own name for the lane, not the IMAP path. See mig 572's comment. */
 export const DEFAULT_FOLDER = 'inbox'
 
 /**

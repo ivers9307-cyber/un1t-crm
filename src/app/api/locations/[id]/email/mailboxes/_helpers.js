@@ -26,7 +26,7 @@ import { assertLocationAccess, guardMasterOrOwner } from '@/lib/auth'
 // There is no `select('*')` on email_mailboxes anywhere — every read site
 // names its columns — so a column added by a migration stays INVISIBLE to the
 // API until a constant like this one is edited. `ingress`/`egress` arrived
-// with mig 571 (MAILBOX-CONNECT.2) carrying NOT NULL DEFAULT 'postmark', so
+// with mig 572 (MAILBOX-CONNECT.2) carrying NOT NULL DEFAULT 'postmark', so
 // nothing broke when they landed; they are added here because the settings
 // card renders the connection state chip straight off the mailbox list rather
 // than firing a second request per account. Leaving them out is this repo's

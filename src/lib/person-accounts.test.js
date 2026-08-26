@@ -4,6 +4,7 @@ import { describe, it, expect } from 'vitest'
 import {
   linkedAccountsForContact, corroborated, findBookingAcrossAccounts, hasBookableMembership,
   MEMBER_STATUSES, electWriteAccount, fanUpcomingBookings, summariseBookingFan,
+  directSiblingRows, personRowsForContact, chunkIds, reusableSibling,
 } from './person-accounts'
 
 // ---------------------------------------------------------------------------
@@ -848,5 +849,267 @@ describe('summariseBookingFan', () => {
     const out = summariseBookingFan([{ account: a1, ok: true, bookings: [{ _id: 'b1', model_id: EVENT }] }], null)
     expect(out.alreadyBookedOn).toBeNull()
     expect(out.concernsMemberIds).toEqual(['gf-1'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// PERSON-ACCT.9 — seeing the person BEFORE the group exists
+// ---------------------------------------------------------------------------
+
+// A second double, deliberately separate from makeDb above: these two
+// functions issue query SHAPES that one does not model (`.or()` for the phone
+// suffix, `.ilike()` for the email, `.limit()`), and answering them the way
+// PostgREST would is the only way the search itself gets exercised.
+function makeSearchDb({ rows = [], groupMembers = [], phoneError = null, emailError = null } = {}) {
+  const queries = []
+  const selectCols = []
+  return {
+    queries,
+    selectCols,
+    from(table) {
+      const st = { or: null, ilike: null, filters: {}, limit: null }
+      const settle = (single) => {
+        if (table === 'person_group_members') {
+          if (st.cols?.includes('group_id')) {
+            const row = groupMembers.find((m) => m.contact_id === st.filters.contact_id)
+            return { data: row ? { group_id: row.group_id } : null, error: null }
+          }
+          return { data: groupMembers.filter((m) => m.group_id === st.filters.group_id), error: null }
+        }
+        if (table !== 'contacts') return { data: single ? null : [], error: null }
+        let out
+        if (st.or) {
+          if (phoneError) return { data: null, error: phoneError }
+          const nums = [...st.or.matchAll(/ilike\.%(\d+)/g)].map((m) => m[1])
+          out = rows.filter((c) => nums.some((n) => [c.phone, c.wa_phone]
+            .some((p) => typeof p === 'string' && p.replace(/\D/g, '').endsWith(n))))
+        } else if (st.ilike) {
+          if (emailError) return { data: null, error: emailError }
+          out = rows.filter((c) => (c.email || '').toLowerCase() === st.ilike.toLowerCase())
+        } else if (Array.isArray(st.filters.id)) {
+          out = rows.filter((c) => st.filters.id.includes(c.id))
+        } else {
+          out = rows.filter((c) => c.id === st.filters.id)
+        }
+        if (st.filters.location_id) out = out.filter((c) => c.location_id === st.filters.location_id)
+        return single ? { data: out[0] || null, error: null } : { data: out, error: null }
+      }
+      const b = {
+        select(cols) { st.cols = cols || ''; selectCols.push({ table, cols: cols || '' }); return b },
+        eq(col, val) { st.filters[col] = val; return b },
+        in(col, vals) { st.filters[col] = vals; return b },
+        or(expr) { st.or = expr; queries.push({ kind: 'or', expr }); return b },
+        ilike(col, val) { st.ilike = val; queries.push({ kind: 'ilike', col, val }); return b },
+        limit(n) { st.limit = n; return b },
+        async maybeSingle() { return settle(true) },
+        then(resolve, reject) { return Promise.resolve(settle(false)).then(resolve, reject) },
+      }
+      return b
+    },
+  }
+}
+
+const searchRow = (id, extra = {}) => ({
+  id, name: 'Sam', glofox_member_id: null, glofox_membership_status: 'lead',
+  glofox_membership_state: null, trial_credits_remaining: null, last_attended_at: null,
+  phone: '+353871234567', wa_phone: null, email: 'sam@example.com',
+  updated_at: '2026-08-01T00:00:00Z', location_id: 'L1', ...extra,
+})
+
+describe('directSiblingRows', () => {
+  const anchor = searchRow('c1')
+
+  it('finds a sibling by the LAST NINE digits of the phone, across phone and wa_phone', async () => {
+    const db = makeSearchDb({ rows: [anchor, searchRow('c2', { phone: null, wa_phone: '00353 87 123 4567', email: 'other@x.com' })] })
+    const { rows, readFailed } = await directSiblingRows(db, { anchorRow: anchor, locationId: 'L1' })
+    expect(rows.map((r) => r.id)).toEqual(['c2'])
+    expect(readFailed).toBe(false)
+  })
+
+  it('finds a sibling by email, case-insensitively, and never returns the anchor itself', async () => {
+    const db = makeSearchDb({ rows: [anchor, searchRow('c2', { phone: '+353870000000', email: 'SAM@Example.com' })] })
+    const { rows } = await directSiblingRows(db, { anchorRow: anchor, locationId: 'L1' })
+    expect(rows.map((r) => r.id)).toEqual(['c2'])
+  })
+
+  it('the email lookup is an EQUALITY check — LIKE metacharacters are escaped, not honoured', async () => {
+    const db = makeSearchDb({ rows: [anchor] })
+    await directSiblingRows(db, { anchorRow: { ...anchor, email: 'a_b%c@x.com' }, locationId: 'L1' })
+    const ilike = db.queries.find((q) => q.kind === 'ilike')
+    expect(ilike.val).toBe('a\\_b\\%c@x.com')
+  })
+
+  it('scopes both searches to the location', async () => {
+    const db = makeSearchDb({ rows: [anchor, searchRow('c2', { location_id: 'L2', email: 'x@x.com' })] })
+    const { rows } = await directSiblingRows(db, { anchorRow: anchor, locationId: 'L1' })
+    expect(rows).toEqual([])
+  })
+
+  it('a failed search reports readFailed and NEVER an empty person', async () => {
+    const db = makeSearchDb({ rows: [anchor, searchRow('c2', { email: 'sam@example.com', phone: '+353870000000' })], phoneError: { message: 'boom' } })
+    const { rows, readFailed } = await directSiblingRows(db, { anchorRow: anchor, locationId: 'L1' })
+    expect(readFailed).toBe(true)
+    // The half that DID read still comes back — a partial answer beats none.
+    expect(rows.map((r) => r.id)).toEqual(['c2'])
+  })
+
+  it('no phone and no email → no queries at all, and that is not a failure', async () => {
+    const db = makeSearchDb({ rows: [anchor] })
+    const out = await directSiblingRows(db, { anchorRow: { id: 'c1', phone: null, wa_phone: null, email: null }, locationId: 'L1' })
+    expect(out).toEqual({ rows: [], readFailed: false })
+    expect(db.queries).toEqual([])
+  })
+
+  it('a missing anchor row is unreadable, never "nobody"', async () => {
+    expect(await directSiblingRows(makeSearchDb({}), { anchorRow: null })).toEqual({ rows: [], readFailed: true })
+  })
+
+  it('asks for the shared column list (a predicate must never read an unselected column)', async () => {
+    const db = makeSearchDb({ rows: [anchor] })
+    await directSiblingRows(db, { anchorRow: anchor, locationId: 'L1' })
+    for (const { cols } of db.selectCols) {
+      for (const col of ['glofox_member_id', 'glofox_membership_status', 'glofox_membership_state',
+        'trial_credits_remaining', 'last_attended_at', 'phone', 'wa_phone', 'email', 'updated_at', 'location_id']) {
+        expect(cols).toContain(col)
+      }
+    }
+  })
+})
+
+describe('personRowsForContact', () => {
+  it('unions the person GROUP with the direct search, deduped', async () => {
+    const anchor = searchRow('c1')
+    const db = makeSearchDb({
+      rows: [anchor, searchRow('c2', { phone: '+353870000000', email: 'grouped@x.com' }), searchRow('c3', { email: 'x@x.com' })],
+      groupMembers: [{ contact_id: 'c1', group_id: 'g1' }, { contact_id: 'c2', group_id: 'g1' }],
+    })
+    const { rows, readFailed, anchorRow } = await personRowsForContact(db, { contactId: 'c1', contact: anchor, locationId: 'L1' })
+    expect(rows.map((r) => r.id).sort()).toEqual(['c2', 'c3'])
+    expect(anchorRow).toBe(anchor)
+    expect(readFailed).toBe(false)
+  })
+
+  it('drops a group row that belongs to ANOTHER location, keeps one whose location is unknown', async () => {
+    const anchor = searchRow('c1')
+    const db = makeSearchDb({
+      rows: [
+        anchor,
+        searchRow('c2', { location_id: 'L2', phone: '+353870000000', email: 'a@x.com' }),
+        searchRow('c3', { location_id: null, phone: '+353870000001', email: 'b@x.com' }),
+      ],
+      groupMembers: [{ contact_id: 'c1', group_id: 'g1' }, { contact_id: 'c2', group_id: 'g1' }, { contact_id: 'c3', group_id: 'g1' }],
+    })
+    const { rows } = await personRowsForContact(db, { contactId: 'c1', contact: anchor, locationId: 'L1' })
+    expect(rows.map((r) => r.id)).toEqual(['c3'])
+  })
+
+  it('a failed half sets readFailed while still returning the rows that read', async () => {
+    const anchor = searchRow('c1')
+    const db = makeSearchDb({
+      rows: [anchor, searchRow('c2', { phone: '+353870000000', email: 'grouped@x.com' })],
+      groupMembers: [{ contact_id: 'c1', group_id: 'g1' }, { contact_id: 'c2', group_id: 'g1' }],
+      phoneError: { message: 'boom' },
+      emailError: { message: 'boom' },
+    })
+    const { rows, readFailed } = await personRowsForContact(db, { contactId: 'c1', contact: anchor, locationId: 'L1' })
+    expect(readFailed).toBe(true)
+    expect(rows.map((r) => r.id)).toEqual(['c2'])
+  })
+
+  it('no contact id → unreadable, never an empty person', async () => {
+    const out = await personRowsForContact(makeSearchDb({}), { contactId: null })
+    expect(out.readFailed).toBe(true)
+    expect(out.rows).toEqual([])
+  })
+})
+
+describe('chunkIds', () => {
+  it('caps every chunk at 150 and drops nothing', () => {
+    const ids = Array.from({ length: 400 }, (_, i) => `c${i}`)
+    const chunks = chunkIds(ids)
+    expect(chunks.map((c) => c.length)).toEqual([150, 150, 100])
+    expect(chunks.flat()).toEqual(ids)
+  })
+  it('skips falsy ids and tolerates a non-array', () => {
+    expect(chunkIds(['a', null, 'b', undefined])).toEqual([['a', 'b']])
+    expect(chunkIds(null)).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// PERSON-ACCT.9 — reusableSibling: may a WRITE move onto this row's account?
+//
+// The rule exists because `corroborated` is TOO WEAK for a write: it accepts a
+// shared phone, and couples/families share numbers. Stillorgan, live
+// 2026-08-26: 326 phone-groups, 62 with different first names, 59 of those
+// holding multiple Glofox accounts. core.js's resolveAutoVerify already
+// refuses to auto-verify two ungrouped contacts on a shared number ("the
+// couple case", core.test.js) — this is the same refusal at the write
+// boundary.
+// ---------------------------------------------------------------------------
+describe('reusableSibling', () => {
+  const anchor = { id: 'c1', phone: '+353871234567', wa_phone: null, email: 'sam@example.com' }
+  const phoneOnly = { id: 'c2', phone: '+353871234567', wa_phone: null, email: 'partner@example.com' }
+  const emailOnly = { id: 'c3', phone: '+353870000000', wa_phone: null, email: 'SAM@Example.com' }
+  const nothing = { id: 'c4', phone: '+353870000001', wa_phone: null, email: 'other@example.com' }
+
+  it('REFUSES a phone-only match from the direct search — it may be a partner', () => {
+    expect(corroborated(anchor, phoneOnly)).toBe(true)      // corroboration says yes…
+    expect(reusableSibling(anchor, phoneOnly)).toBe(false)  // …the write rule says no
+  })
+
+  it('accepts that same phone-only row once it is a vetted GROUP member', () => {
+    expect(reusableSibling(anchor, phoneOnly, { viaGroup: true })).toBe(true)
+  })
+
+  it('accepts an exact email match with no group at all (contacts_email_unique is global)', () => {
+    expect(reusableSibling(anchor, emailOnly)).toBe(true)
+  })
+
+  it('refuses a GROUP row that shares no identifier at all (a name-ish link is not a mandate)', () => {
+    expect(reusableSibling(anchor, nothing, { viaGroup: true })).toBe(false)
+  })
+
+  it('a row is always reusable with itself; null rows never are', () => {
+    expect(reusableSibling(anchor, { ...anchor })).toBe(true)
+    expect(reusableSibling(anchor, null)).toBe(false)
+    expect(reusableSibling(null, anchor)).toBe(false)
+  })
+
+  it('a missing phone/email never matches (an empty field corroborates nothing)', () => {
+    const blank = { id: 'c5', phone: null, wa_phone: null, email: null }
+    expect(reusableSibling(blank, { id: 'c6', phone: null, wa_phone: null, email: null }, { viaGroup: true })).toBe(false)
+  })
+
+  it('viaGroup must be exactly true — a truthy accident does not unlock a write', () => {
+    expect(reusableSibling(anchor, phoneOnly, { viaGroup: 'yes' })).toBe(false)
+    expect(reusableSibling(anchor, phoneOnly, { viaGroup: 1 })).toBe(false)
+  })
+})
+
+describe('personRowsForContact reports provenance', () => {
+  it('groupContactIds names the rows the GROUP vouched for, not the direct-search ones', async () => {
+    const anchor = searchRow('c1')
+    const db = makeSearchDb({
+      rows: [
+        anchor,
+        searchRow('c2', { phone: '+353870000000', email: 'grouped@x.com' }),  // group only
+        searchRow('c3', { email: 'phone-only@x.com' }),                        // direct only
+      ],
+      groupMembers: [{ contact_id: 'c1', group_id: 'g1' }, { contact_id: 'c2', group_id: 'g1' }],
+    })
+    const { rows, groupContactIds } = await personRowsForContact(db, { contactId: 'c1', contact: anchor, locationId: 'L1' })
+    expect(rows.map((r) => r.id).sort()).toEqual(['c2', 'c3'])
+    expect(groupContactIds).toEqual(['c2'])
+  })
+
+  it('a row found BOTH ways keeps its group provenance (the stronger evidence wins)', async () => {
+    const anchor = searchRow('c1')
+    const db = makeSearchDb({
+      rows: [anchor, searchRow('c2', { email: 'both@x.com' })], // same phone AND grouped
+      groupMembers: [{ contact_id: 'c1', group_id: 'g1' }, { contact_id: 'c2', group_id: 'g1' }],
+    })
+    const { groupContactIds } = await personRowsForContact(db, { contactId: 'c1', contact: anchor, locationId: 'L1' })
+    expect(groupContactIds).toEqual(['c2'])
   })
 })

@@ -291,9 +291,20 @@ export async function PATCH(request, { params }) {
   if (executing && row.kind === 'class_booking' && !expiredBeforeExecution) {
     const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, interpretBookingResult, GLOFOX_BOOKING_MODEL } =
       await import('@/lib/glofox')
+    // PERSON-ACCT.9 — the row is FILED against the contact this booking
+    // belongs to for attribution (the /start funnel row carries the ctwa_clid
+    // and the phone the confirmation goes to), but the ACCOUNT the write runs
+    // on may be a corroborated SIBLING's — the funnel reuses an existing
+    // account rather than minting a duplicate. `details.executing_contact_id`
+    // names that row; without honouring it the executor would read the funnel
+    // row's empty glofox_member_id and answer NOT_EXECUTABLE on a booking
+    // staff can see is ready to go. Same override the class_cancellation lane
+    // above already makes, and it defaults to row.contact_id, so every row
+    // written before this existed executes exactly as it did.
+    const executingContactId = row.details?.executing_contact_id || row.contact_id
     const { data: contact } = await db.from('contacts')
       .select('glofox_member_id')
-      .eq('id', row.contact_id)
+      .eq('id', executingContactId)
       .maybeSingle()
     const creds = await glofoxCredentialsForLocation(db, row.location_id)
     // PERSON-ACCT.7 — the agent ELECTED one of this person's linked Glofox
@@ -314,7 +325,7 @@ export async function PATCH(request, { params }) {
       executed = { ok: false, message_code: 'ACCOUNT_MISMATCH' }
       details = { ...details, result: executed }
       finalStatus = 'failed'
-      console.warn(`[agent-requests] refused execution ${id}: elected account ${electedMemberId} no longer matches contact ${row.contact_id}`)
+      console.warn(`[agent-requests] refused execution ${id}: elected account ${electedMemberId} no longer matches contact ${executingContactId}`)
     } else {
       // If the processor sent this for a credit grant (existing account with no
       // live credits), grant the trial class credit BEFORE booking — otherwise

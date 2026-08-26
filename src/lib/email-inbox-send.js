@@ -54,7 +54,7 @@
 // A mailbox connected over IMAP/SMTP (the mailbox connector, design §4) sends
 // its replies over its OWN provider's SMTP rather than through Postmark,
 // because Postmark cannot DKIM-sign a domain the business does not control.
-// `email_mailboxes.egress` ('postmark' | 'smtp', mig 571) is the switch, and
+// `email_mailboxes.egress` ('postmark' | 'smtp', mig 572) is the switch, and
 // sendTicketEmail branches on it in its FIRST statement — ahead of the server
 // token, the stream and plannedFroms(), all three of which are Postmark
 // vocabulary that an SMTP send has no answer for.

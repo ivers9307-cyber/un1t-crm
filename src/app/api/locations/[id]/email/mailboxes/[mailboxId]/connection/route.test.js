@@ -136,7 +136,7 @@ function extendDb(db, { credentials = [], ingressRows = [] } = {}) {
   return db
 }
 
-// mig 571 added ingress/egress as NOT NULL DEFAULT 'postmark'; the shared
+// mig 572 added ingress/egress as NOT NULL DEFAULT 'postmark'; the shared
 // mailbox fixtures predate it, so the columns are stated here.
 const onPostmark = (m) => ({ ...m, ingress: 'postmark', egress: 'postmark' })
 

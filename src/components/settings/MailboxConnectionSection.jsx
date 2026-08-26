@@ -85,7 +85,7 @@ export const PROVIDER_PRESETS = {
     sent_folder: 'Sent Items',
     // 🔴 KEPT IN THE LIST AND DISABLED, deliberately. Exchange Online stopped
     // accepting a mailbox password over IMAP, so this cannot be connected at
-    // all until the OAuth work lands (mig 571's auth_type comment defers it).
+    // all until the OAuth work lands (mig 572's auth_type comment defers it).
     // Removing the option would leave an operator searching for Microsoft,
     // failing to find it, and concluding the connector is broken. Naming it
     // and saying why sends them to ask for the thing that would fix it.

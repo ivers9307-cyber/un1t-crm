@@ -551,7 +551,7 @@ describe('attachments ride the ticketing server, not the marketing one', () => {
 //
 // A mailbox connected over IMAP/SMTP sends its replies through its own
 // provider rather than through Postmark, because Postmark cannot DKIM-sign a
-// domain the business does not control. `email_mailboxes.egress` (mig 571) is
+// domain the business does not control. `email_mailboxes.egress` (mig 572) is
 // the switch and sendTicketEmail branches on it in its first statement.
 //
 // THE FIRST GROUP IS THE LOAD-BEARING ONE. Three routes call this function
@@ -617,7 +617,7 @@ describe('transport selection', () => {
 
   describe('`egress: postmark` — the default column value, same path again', () => {
     it('takes the Postmark path exactly as a missing mailbox does', async () => {
-      // mig 571 adds the column NOT NULL DEFAULT 'postmark', so every mailbox
+      // mig 572 adds the column NOT NULL DEFAULT 'postmark', so every mailbox
       // in the estate arrives here carrying this value the moment the settings
       // helper starts selecting it. It must be a no-op.
       fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())

@@ -32,6 +32,15 @@ function makeDb(contact) {
     from(table) { this._table = table; return this },
     select(cols) { selects.push({ table: this._table, cols }); return this },
     eq() { return this }, is() { return this }, contains() { return this }, limit() { return this },
+    // PERSON-ACCT.9 — the processor now also asks "who else is this person?"
+    // (a person-group `.in()`, a phone `.or()`, an email `.ilike()`) before it
+    // is allowed to mint a Glofox account. This double answers those with an
+    // EMPTY result set — the single-row world every test below describes —
+    // rather than throwing, which the processor would (correctly) treat as an
+    // unreadable person and refuse to mint over. The person-wide behaviour has
+    // its own file: class-booking-processor-person.test.js.
+    or() { return this }, ilike() { return this }, in() { return this }, order() { return this },
+    then(resolve, reject) { return Promise.resolve({ data: [], error: null }).then(resolve, reject) },
     maybeSingle: async () => ({ data: contact }),
     update() { return { eq: () => ({ is: async () => ({}) }) } },
     insert() { return { select: () => ({ maybeSingle: async () => ({ data: { id: 'amr1' } }), single: async () => ({ data: { id: 'amr1' } }) }) } },

@@ -145,7 +145,7 @@ function connectionView(row) {
  * does that). 'microsoft' is accepted by the CHECK on the column and refused
  * here: Exchange Online turned off basic-auth IMAP, so a Microsoft account
  * cannot be connected with a password at all, and it needs the OAuth work that
- * mig 571's auth_type comment defers. Keeping the preset and refusing it with
+ * mig 572's auth_type comment defers. Keeping the preset and refusing it with
  * a reason beats hiding it — an operator who cannot find Microsoft in the list
  * assumes the connector is broken; one who is told why goes and asks for
  * OAuth.
@@ -159,7 +159,7 @@ const MICROSOFT_REFUSAL =
 const ConnectionBody = z.object({
   provider: z.enum(['gmail', 'microsoft', 'custom']).optional().default('custom'),
   // 320 = the RFC's practical local@domain ceiling; the username is USUALLY
-  // the address but is not structurally required to be (mig 571's column
+  // the address but is not structurally required to be (mig 572's column
   // comment) — some hosts authenticate on a separate account name.
   username: z.string().min(3).max(320),
   // Optional on purpose. The form renders the password blank on an already
@@ -428,7 +428,7 @@ const IMAP_FAILURE_MESSAGE = {
 // this form — pairing 587 with implicit TLS fails as an opaque connect timeout
 // rather than as a TLS error — so that sentence survives the redaction, as does
 // the way out: the outgoing server is optional and receive-only is a supported
-// release state (mig 571's `egress` comment).
+// release state (mig 572's `egress` comment).
 const SMTP_FAILURE_MESSAGE = {
   auth:
     'The outgoing server refused that username and password. Some providers need a separate ' +
@@ -710,7 +710,7 @@ export async function PUT(request, props) {
   //
   // The refusal names the way out: the outgoing server is OPTIONAL, and
   // receive-over-IMAP-while-replying-through-Postmark is a supported release
-  // state (mig 571's `egress` comment), not a broken half-configuration. So
+  // state (mig 572's `egress` comment), not a broken half-configuration. So
   // "clear this field and you are still connected for receiving" is a real
   // answer, which is why refusing here does not cost the operator the feature.
   //

@@ -35,25 +35,42 @@ const nowSec = () => Math.floor(Date.now() / 1000)
 
 // Same double as booking-tools-fanout.test.js, plus the insert's contact_id
 // (which account the approval row is filed against is now load-bearing).
-function stubDb(trace, { contacts = [], groupId = 'g-1', pendingRows = [] } = {}) {
+// PERSON-ACCT.9 — `groupIds` (default: every fixture) splits "in the person
+// group" from "findable by phone/email", so the dedupe's two id sources can be
+// told apart; `.or()`/`.ilike()` answer the direct sibling search the way
+// PostgREST would, and pending rows carrying a contact_id are matched against
+// the ids the lookup actually filtered on.
+function stubDb(trace, { contacts = [], groupId = 'g-1', pendingRows = [], groupIds = null } = {}) {
+  const inGroup = (c) => (groupIds ? groupIds.includes(c.id) : true)
   return {
     from(table) {
-      const st = { table, cols: '', filters: {}, op: null }
+      const st = { table, cols: '', filters: {}, op: null, or: null, ilike: null }
       const settle = (single) => {
         if (table === 'person_group_members') {
           if (st.cols.includes('group_id')) return { data: { group_id: groupId }, error: null }
-          return { data: contacts.map((c) => ({ contact_id: c.id })), error: null }
+          return { data: contacts.filter(inGroup).map((c) => ({ contact_id: c.id })), error: null }
         }
         if (table === 'contacts') {
-          const want = st.filters.id
-          const list = Array.isArray(want)
-            ? contacts.filter((c) => want.includes(c.id))
-            : contacts.filter((c) => c.id === want)
+          let list
+          if (st.or) {
+            const nums = [...st.or.matchAll(/ilike\.%(\d+)/g)].map((m) => m[1])
+            list = contacts.filter((c) => nums.some((n) => [c.phone, c.wa_phone]
+              .some((p) => typeof p === 'string' && p.replace(/\D/g, '').endsWith(n))))
+          } else if (st.ilike) {
+            list = contacts.filter((c) => (c.email || '').toLowerCase() === st.ilike.toLowerCase())
+          } else {
+            const want = st.filters.id
+            list = Array.isArray(want)
+              ? contacts.filter((c) => want.includes(c.id))
+              : contacts.filter((c) => c.id === want)
+          }
           return single ? { data: list[0] || null, error: null } : { data: list, error: null }
         }
         if (table === 'agent_membership_requests') {
           if (st.op === 'insert') return { data: { id: 'req-1' }, error: null }
-          return { data: single ? null : pendingRows, error: null }
+          const ids = Array.isArray(st.filters.contact_id) ? st.filters.contact_id : [st.filters.contact_id]
+          const rows = pendingRows.filter((r) => !r.contact_id || ids.includes(r.contact_id))
+          return { data: single ? null : rows, error: null }
         }
         return { data: single ? null : [], error: null }
       }
@@ -61,6 +78,8 @@ function stubDb(trace, { contacts = [], groupId = 'g-1', pendingRows = [] } = {}
         select(cols) { st.cols = cols || ''; return b },
         eq(col, val) { st.filters[col] = val; return b },
         in(col, vals) { st.filters[col] = vals; return b },
+        or(expr) { st.or = expr; return b },
+        ilike(_col, val) { st.ilike = val; return b },
         contains: () => b,
         limit: () => b,
         order: () => b,
@@ -193,6 +212,71 @@ describe('book_class elects the write account', () => {
     expect(insert.details.elected_glofox_member_id).toBe('gf-2')
     expect(insert.contactId).toBe('c-2')
     expect(glofox.createBooking).not.toHaveBeenCalled()
+  })
+})
+
+// PERSON-ACCT.9 — one human, several contacts rows, ONE card. The dedupe used
+// to match a single contact_id, so a card already sitting on a sibling (filed
+// by an earlier turn that elected a different account, or by the /start
+// funnel) was invisible and staff got a second one for the same person and the
+// same class.
+describe('the pending-approval dedupe is person-wide', () => {
+  it("a SIBLING's pending row for this event prevents a second card", async () => {
+    const group = [acct('c-1', 'gf-1'), acct('c-2', 'gf-2')]
+    creditsByMember({}) // every account confirmed empty → the no_credits lane
+    const trace = []
+    const res = await executeBookingTool('book_class', { event_id: EVENT_ID },
+      // The card sits on c-2; the election (both accounts bare leads, so the
+      // id tiebreak wins) files against c-1 — only a person-wide match sees it.
+      ctx(stubDb(trace, { contacts: group, pendingRows: [{ id: 'existing-9', contact_id: 'c-2' }] })))
+
+    expect(res).toMatchObject({ no_credits: true })
+    expect(trace.filter((t) => t.step === 'insert')).toHaveLength(0)
+    expect(notifyAgentApprovalRequest).not.toHaveBeenCalled()
+  })
+
+  it('an UNGROUPED sibling matched by EMAIL counts too (the group forms later, the card exists now)', async () => {
+    // c-2 is NOT in the group — only the direct search can find it, and only
+    // the EMAIL half of that search is identity (contacts_email_unique is
+    // global). Different phone, same address.
+    const people = [
+      acct('c-1', 'gf-1', { email: 'sam@example.com' }),
+      acct('c-2', 'gf-2', { phone: '+353870000000', email: 'SAM@Example.com' }),
+    ]
+    creditsByMember({})
+    const trace = []
+    const res = await executeBookingTool('book_class', { event_id: EVENT_ID },
+      ctx(stubDb(trace, { contacts: people, groupIds: ['c-1'], pendingRows: [{ id: 'existing-9', contact_id: 'c-2' }] })))
+
+    expect(res).toMatchObject({ no_credits: true })
+    expect(trace.filter((t) => t.step === 'insert')).toHaveLength(0)
+  })
+
+  // The couple case again, from the other side: suppressing a real customer's
+  // card because their PARTNER has one for the same class is a silent loss —
+  // and couples train together, so it is the likely collision, not a corner.
+  it("an UNGROUPED PHONE-ONLY match does NOT suppress this person's card", async () => {
+    const people = [
+      acct('c-1', 'gf-1', { email: 'sam@example.com' }),
+      // Same number, different person: no group, no shared address.
+      acct('c-2', 'gf-2', { email: 'partner@example.com' }),
+    ]
+    creditsByMember({})
+    const trace = []
+    await executeBookingTool('book_class', { event_id: EVENT_ID },
+      ctx(stubDb(trace, { contacts: people, groupIds: ['c-1'], pendingRows: [{ id: 'partners-card', contact_id: 'c-2' }] })))
+
+    expect(trace.filter((t) => t.step === 'insert')).toHaveLength(1)
+  })
+
+  it("a STRANGER's pending row for the same event does not suppress this card", async () => {
+    const group = [acct('c-1', 'gf-1'), acct('c-2', 'gf-2')]
+    creditsByMember({})
+    const trace = []
+    await executeBookingTool('book_class', { event_id: EVENT_ID },
+      ctx(stubDb(trace, { contacts: group, pendingRows: [{ id: 'someone-else', contact_id: 'c-99' }] })))
+
+    expect(trace.filter((t) => t.step === 'insert')).toHaveLength(1)
   })
 })
 

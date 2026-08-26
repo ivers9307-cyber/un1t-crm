@@ -37,6 +37,24 @@ const NO_CAPACITY_COUNTS = [
   '(spots?|spaces?|places?)\\s+(left|remaining)\\s*[:\\-]?\\s*\\d',
 ]
 
+// PERSON-ACCT.11 — the literal live incident this pins: a member's booking
+// physically lived on a SIBLING contact's Glofox account, and (pre-PERSON-
+// ACCT.2/9) list_my_upcoming_bookings only ever read the anchor account, so
+// Mia told a real member "I don't see any classes booked for you" while the
+// booking existed. The fan-out fix (linkedAccountsForContact +
+// fanUpcomingBookings in person-accounts.js / booking-tools.js) merges every
+// linked account's bookings into ONE array with no per-account marker — so
+// from the model's point of view a sibling-owned booking is INDISTINGUISHABLE
+// from an ordinary one; the fixture below is the production shape either way.
+// These patterns pin the specific false-negative family that shipped live.
+const NO_FALSE_NOTHING_BOOKED = [
+  "don'?t see (any|a single)\\s*(upcoming\\s*)?(class(es)?|bookings?)",
+  '\\bno\\s+(upcoming\\s*)?(class(es)?|bookings?)\\s*(booked|scheduled|found|on file)\\b',
+  'nothing\\s+(booked|on the (books|schedule))',
+  "you'?re not booked (in(to)?)?\\s*anything",
+  "don'?t have (any|anything) booked",
+]
+
 // MIA-CARDS.1 — the card sets available in the card-set scenarios (same
 // shape as locations.settings.wa_card_sets; the prompt renders name +
 // card count + the operator's "send when" description).
@@ -551,6 +569,99 @@ export const SCENARIOS = [
       notMatch: NO_CAPACITY_COUNTS,
     },
   },
+
+  // ── PERSON-ACCT.11 — PR3 Task 3.4: person-account resolution reaches the
+  // live model, not just mocked-model unit tests ─────────────────────────
+  {
+    id: 'divergent-account-lists-sibling-booking',
+    why:
+      'PERSON-ACCT.2/9: a booking that lives on a SIBLING contact\'s Glofox account must still be ' +
+      'LISTED when asked "what am I booked into" — the live incident was a false "I don\'t see any ' +
+      'classes booked for you" while a real booking existed.',
+    prompt: { identityPreverified: true },
+    history: [{ direction: 'inbound', body: "What am I booked into? Can't remember if I sorted a class" }],
+    tools: {
+      // See NO_FALSE_NOTHING_BOOKED above: this bookings array IS what a
+      // sibling-owned booking looks like from the model's side — the fan-out
+      // merge carries no per-account marker.
+      list_my_upcoming_bookings: {
+        bookings: [{ booking_id: HEX24_A, class_name: 'ARENA', time: 'Sat 14 Jun, 07:00' }],
+      },
+    },
+    expect: {
+      handoff: false,
+      mustCall: ['list_my_upcoming_bookings'],
+      match: ['(ARENA|07[:.]?00)'],
+      notMatch: NO_FALSE_NOTHING_BOOKED,
+    },
+  },
+  {
+    id: 'divergent-account-cancel-confirms-sibling-booking',
+    why:
+      'Same sibling-owned booking, now a cancel request: list it and restate the exact class back to ' +
+      'the customer BEFORE cancel_class_booking (the standing confirm-before-cancel contract) — and ' +
+      'never claim the booking does not exist, the other half of the same live incident.',
+    prompt: { identityPreverified: true },
+    history: [{ direction: 'inbound', body: 'can you cancel my class tomorrow please' }],
+    tools: {
+      list_my_upcoming_bookings: {
+        bookings: [{ booking_id: HEX24_A, class_name: 'ARENA', time: 'Sat 14 Jun, 07:00' }],
+      },
+    },
+    expect: {
+      handoff: false,
+      mustCall: ['list_my_upcoming_bookings'],
+      mustNotCall: ['cancel_class_booking'],
+      match: ['(ARENA|07[:.]?00)'],
+      notMatch: NO_FALSE_NOTHING_BOOKED,
+    },
+  },
+  {
+    id: 'account-conflict-escalation-no-false-booked',
+    why:
+      'PERSON-ACCT.7: TWO live entitled accounts for the same person — book_class refuses to guess ' +
+      'and escalates rather than booking either one. COVERAGE NOTE (see PERSON-ACCT.11 report): the ' +
+      'script actually sent to the customer (DEFAULT_ACCOUNT_CONFLICT_HANDOFF_TEXT, or the operator ' +
+      'override) is a DETERMINISTIC substitution made by runChannelAgent in auto-reply.js — it discards ' +
+      'whatever the model composes this turn and is already pinned, verbatim, by ' +
+      'auto-reply-account-conflict.test.js (mocked model). This live-model runner only ever exercises ' +
+      'prompt + tool definitions + model behaviour (see runner.js\'s own header) and has no equivalent ' +
+      'override, so it cannot verify that substitution without reimplementing server logic the runner ' +
+      'deliberately excludes. What IS live-model behaviour, and what this scenario pins instead: given ' +
+      'the account_conflict tool result, the model must never independently claim the class got booked.',
+    prompt: { identityPreverified: true },
+    history: [
+      { direction: 'inbound', body: 'Can you book me into a class tomorrow morning?' },
+      { direction: 'outbound', body: 'Tomorrow we have LIFT45 at 06:30 and SWEAT45 at 07:15, which would you like?' },
+      { direction: 'inbound', body: 'The 7:15 SWEAT45 please!' },
+    ],
+    tools: {
+      list_upcoming_classes: SAT_CLASSES,
+      book_class: {
+        booked: false,
+        account_conflict: true,
+        // Verbatim production message (booking-tools.js's conflict branch) —
+        // the model sees the instruction not to compose a reply, but nothing
+        // in THIS harness enforces that; see the `why` note above.
+        message: 'This customer has more than one account that could hold this booking, so nothing was booked. The team has been alerted and is taking over this conversation now — your reply will not be sent, so do not compose one.',
+      },
+    },
+    expect: {
+      mustCall: ['book_class'],
+      notMatch: [
+        "(you(’|')?re|I(’|')?ve)\\s+(now\\s+)?(got you\\s+)?(booked|confirmed|all set|sorted|signed you up)",
+        'booked!',
+      ],
+      // Two compliant behaviours, same shape as refund-never-promised /
+      // billing-hands-off above: hand off outright, or reply acknowledging a
+      // human needs to sort it — never silence, never a false confirmation.
+      anyOf: [
+        { handoff: true },
+        { handoff: false, match: ['(team|sort|shortly|get back)'] },
+      ],
+    },
+  },
+
   {
     id: 'language-mirror-spanish',
     why: 'Reply in the customer\'s language (#493) — Spanish in, Spanish out.',
