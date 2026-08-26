@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
-import { Trash2 } from 'lucide-react'
+import { Trash2, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui'
 import { createBrowserClient } from '@/lib/supabase'
 import { groupWaTemplates, listWaTemplateGroups, UNGROUPED_LABEL } from '@shared/wa-template-groups'
@@ -30,6 +30,12 @@ export default function WhatsappTemplatesList({ locationId }) {
   // by template id; saved on blur/Enter so a batch of templates can be
   // organised without opening each editor page.
   const [groupDrafts, setGroupDrafts] = useState({})
+  // These rows are a CACHE of Meta's templates, and nothing refreshes them on its
+  // own — so what is on screen can be months behind what Meta will actually send.
+  // "Refresh from Meta" is the only trigger, and syncError is the only way a failed
+  // refresh is distinguishable from a clean one.
+  const [syncing, setSyncing] = useState(false)
+  const [syncError, setSyncError] = useState(null)
 
   const fetchTemplates = useCallback(async () => {
     if (!locationId) return
@@ -39,6 +45,26 @@ export default function WhatsappTemplatesList({ locationId }) {
       if (data.success) setTemplates(data.templates || [])
     } catch { /* best-effort */ }
   }, [locationId])
+
+  // Deliberately NOT folded into fetchTemplates: that one also runs on every
+  // realtime template change, and syncing on each would hammer Meta's API.
+  async function refreshFromMeta() {
+    if (!locationId || syncing) return
+    setSyncing(true)
+    setSyncError(null)
+    try {
+      const res = await fetch(`/api/whatsapp/templates?location_id=${locationId}&sync=true`)
+      const data = await res.json()
+      if (!data.success) throw new Error(data.error || 'Refresh failed')
+      setTemplates(data.templates || [])
+      // null means the refresh genuinely landed; a string means these rows are stale.
+      setSyncError(data.sync_error || null)
+    } catch (err) {
+      setSyncError(err.message || 'Could not refresh templates from Meta.')
+    } finally {
+      setSyncing(false)
+    }
+  }
 
   async function handleDelete(t) {
     if (!confirm(`Delete "${t.name}"? It will also be removed from your Meta account, and any automation still sending it will fail. This cannot be undone.`)) return
@@ -87,8 +113,30 @@ export default function WhatsappTemplatesList({ locationId }) {
     } catch { /* best-effort — the realtime refresh will reconcile */ }
   }
 
+  const header = (
+    <div className="flex items-center justify-between gap-3 px-1 pb-1">
+      <p className="text-xs text-un1t-subtle">Cached from Meta — refresh to pick up edits made in WhatsApp Manager.</p>
+      <Button variant="secondary" size="sm" icon={RefreshCw} loading={syncing} onClick={refreshFromMeta} disabled={!locationId}>
+        Refresh from Meta
+      </Button>
+    </div>
+  )
+
+  // Rendered in BOTH the empty and populated states: a refresh that failed matters
+  // most when the list looks wrong or empty, which is exactly when the old code
+  // returned early and showed nothing at all.
+  const syncBanner = syncError ? (
+    <p className="text-xs text-amber-700 px-1 py-2" role="status">Showing cached templates — {syncError}</p>
+  ) : null
+
   if (templates.length === 0) {
-    return <p className="text-sm text-un1t-subtle px-1 py-4">No WhatsApp templates yet.</p>
+    return (
+      <div>
+        {header}
+        {syncBanner}
+        <p className="text-sm text-un1t-subtle px-1 py-4">No WhatsApp templates yet.</p>
+      </div>
+    )
   }
 
   const groups = groupWaTemplates(templates)
@@ -96,6 +144,8 @@ export default function WhatsappTemplatesList({ locationId }) {
 
   return (
     <div>
+      {header}
+      {syncBanner}
       <datalist id="wa-template-group-options">
         {groupSuggestions.map(g => <option key={g} value={g} />)}
       </datalist>
