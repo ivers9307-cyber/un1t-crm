@@ -26,13 +26,22 @@ import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
  * @param {object} args.race     race_events row incl. waves, fees, slug, location_id
  * @param {string|null} args.waveId
  * @param {object} args.contact  { id, name, first_name, last_name, email, phone }
+ * @param {boolean} [args.memberOverride]  PERSON-ACCT.4 — the caller has
+ *   already determined (across the entrant's whole person group, via
+ *   hasBookableMembership) that this person holds a real bookable
+ *   membership, even if it lives on a SIBLING contacts row the email-based
+ *   validateMemberByEmail lookup below can't see (it only matches the one
+ *   email on this roster entry). When true, the entrant counts as a member
+ *   for pricing/members-only regardless of what that lookup returns. Default
+ *   false preserves the original email-only behaviour for every other
+ *   caller (the membership-requests draft executor does not pass it).
  * @returns one of:
  *   { ok: true, registrationId }
  *   { ok: false, reason: 'closed'|'not_open_yet'|'past'|'inactive'|'bad_wave'|
  *     'wave_full'|'need_email'|'members_only'|'requires_payment'|
  *     'already_registered'|'db_error', totalCents?, message? }
  */
-export async function registerSoloEventEntry(db, { race, waveId, contact }) {
+export async function registerSoloEventEntry(db, { race, waveId, contact, memberOverride = false }) {
   if (!race || !contact?.id) return { ok: false, reason: 'db_error', message: 'missing args' }
 
   const email = String(contact.email || '').trim().toLowerCase()
@@ -77,6 +86,11 @@ export async function registerSoloEventEntry(db, { race, waveId, contact }) {
     validatedRoster = roster.map((m) => ({
       name: m.name, email: m.email, is_member: false, member_contact_id: null, status: 'not_applicable',
     }))
+  }
+  // PERSON-ACCT.4 — see the memberOverride jsdoc above. Solo entry only, so
+  // this always affects the one roster row.
+  if (memberOverride) {
+    validatedRoster = validatedRoster.map((m) => ({ ...m, is_member: true }))
   }
   if (race.members_only && validatedRoster.some((m) => !m.is_member)) {
     return { ok: false, reason: 'members_only' }

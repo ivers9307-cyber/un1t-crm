@@ -19,6 +19,12 @@ vi.mock('@/lib/glofox', async (importOriginal) => ({
   cancelBooking: vi.fn(),
   fetchUpcomingEvents: vi.fn(),
   fetchMemberBookings: vi.fn(),
+  // PERSON-ACCT.2 — cancel now locates the booking's owning account before
+  // executing. Here the anchor's own account holds it, so the trace below is
+  // unchanged.
+  // (the id literal is repeated rather than referencing EVENT_ID — the mock
+  // factory is hoisted above the const, so the binding is in its TDZ here)
+  fetchUserBookingsResult: vi.fn(async () => ({ ok: true, bookings: [{ _id: '64aa00000000000000000001' }] })),
 }))
 
 import * as glofox from '@/lib/glofox'
@@ -59,6 +65,14 @@ function auditDb(trace, { insertId = 'req-1', insertThrows = false } = {}) {
           return b
         },
         then(resolve) {
+          // PERSON-ACCT.2 — linkedAccountsForContact reads the person's
+          // contacts rows through an awaited (non-maybeSingle) builder. One
+          // ungrouped contact, linked to gf-1: the same single account this
+          // file always modelled.
+          if (selected && table === 'contacts') {
+            resolve({ data: [{ id: 'c-1', glofox_member_id: 'gf-1', glofox_membership_status: 'member', phone: '+353871234567', wa_phone: null, email: 'a@example.com' }], error: null })
+            return
+          }
           resolve({ data: selected && table === 'agent_membership_requests' ? db.pendingLookupRows : null, error: null })
         },
       }

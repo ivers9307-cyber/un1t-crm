@@ -23,6 +23,7 @@
 
 import { formatDublinClassTime } from './dublin-format'
 import { escapeLikePattern } from '../like-escape'
+import { linkedAccountsForContact, hasBookableMembership } from '@/lib/person-accounts'
 
 // ── Anthropic tool definitions ──────────────────────────────────────
 export const ACCOUNT_TOOLS = [
@@ -312,6 +313,75 @@ export function formatRecentAttendance(contact) {
   return { found: true, attended_last_30d: a30, attended_last_7d: a7, last_attended: last }
 }
 
+// PERSON-ACCT.3 — a person's membership/attendance can live on ANY of
+// their linked contact rows, not just the one a conversation happens to
+// be attached to. These three pure helpers pick/merge across the group
+// (linkedAccountsForContact's `contacts` array); the executor supplies
+// the rows and reads no further than what it already reads for a single
+// contact.
+
+/**
+ * Pick the row whose membership best represents the person, across every
+ * contact row in their person group. Pure. Pick order:
+ *   1. a row with a genuinely bookable membership (hasBookableMembership —
+ *      MEMBER_STATUSES status whose state hasn't ended; NOT the same as
+ *      glofox_membership_status === 'active', which never occurs — see
+ *      person-accounts.js)
+ *   2. a row with glofox_membership_status === 'trial' AND
+ *      trial_credits_remaining > 0
+ *   3. otherwise the row with the most recent updated_at
+ * Returns null for an empty/absent pool.
+ */
+export function pickBestMembershipContact(contacts) {
+  const rows = Array.isArray(contacts) ? contacts.filter(Boolean) : []
+  if (rows.length === 0) return null
+  const bookable = rows.find((c) => hasBookableMembership(c))
+  if (bookable) return bookable
+  const trialWithCredits = rows.find(
+    (c) => c.glofox_membership_status === 'trial' && Number(c.trial_credits_remaining) > 0,
+  )
+  if (trialWithCredits) return trialWithCredits
+  return rows.reduce((best, c) => {
+    if (!best) return c
+    return new Date(c.updated_at || 0) > new Date(best.updated_at || 0) ? c : best
+  }, null)
+}
+
+/**
+ * True when 2+ rows in the group each carry a genuinely bookable membership
+ * (hasBookableMembership) — worth a note for staff to look at, even though
+ * the model still answers from whichever single row
+ * pickBestMembershipContact chose. A ClassPass PAYG account never trips
+ * this: its status is 'classpass_payg', which isn't in MEMBER_STATUSES,
+ * however live its glofox_membership_state might read.
+ */
+export function hasDoubleMembership(contacts) {
+  const rows = Array.isArray(contacts) ? contacts.filter(Boolean) : []
+  const bookableRows = rows.filter((c) => hasBookableMembership(c))
+  return bookableRows.length >= 2
+}
+
+/**
+ * Merge per-contact attendance rollups across the person group into one
+ * pseudo-row of the same shape formatRecentAttendance already reads:
+ * counts SUM across accounts, last_attended is the MOST RECENT across
+ * accounts. Pure.
+ */
+export function mergeRecentAttendanceRows(rows) {
+  const list = Array.isArray(rows) ? rows.filter(Boolean) : []
+  let attended30 = 0
+  let attended7 = 0
+  let last = null
+  for (const r of list) {
+    attended30 += Number(r.total_attended_30d) || 0
+    attended7 += Number(r.total_attended_7d) || 0
+    if (r.last_attended_at && (!last || new Date(r.last_attended_at) > new Date(last))) {
+      last = r.last_attended_at
+    }
+  }
+  return { total_attended_30d: attended30, total_attended_7d: attended7, last_attended_at: last }
+}
+
 // ── pure request builders ───────────────────────────────────────────
 function cleanDate(d) {
   if (!d) return null
@@ -399,6 +469,30 @@ async function contactsByEmail(db, locationId, email) {
     .ilike('email', escapeLikePattern(email))
     .limit(5)
   return data || []
+}
+
+// PERSON-ACCT.3 — chunk any .in() call at <=150 ids (house rule / PostREST
+// URL-length limit). Person groups are 2-6 rows in practice, so this loop
+// almost always runs once; the cap is house law regardless.
+const ID_CHUNK_SIZE = 150
+function chunkIds(ids, size = ID_CHUNK_SIZE) {
+  const out = []
+  for (let i = 0; i < ids.length; i += size) out.push(ids.slice(i, i + size))
+  return out
+}
+
+// Fetch `columns` for every id in `ids`, chunked. Throws on the first
+// Postgrest error so the caller's try/catch can fall back to the
+// single-contact read — an unreadable group must never present as an
+// empty/wrong answer.
+async function fetchContactRowsByIds(db, ids, columns) {
+  const rows = []
+  for (const batch of chunkIds(ids)) {
+    const { data, error } = await db.from('contacts').select(columns).in('id', batch)
+    if (error) throw error
+    rows.push(...(data || []))
+  }
+  return rows
 }
 
 // Tool results are written FOR the model (the card-tools convention): a raw
@@ -501,9 +595,22 @@ export async function executeAccountTool(toolName, input, ctx) {
   }
 
   if (toolName === 'get_my_membership') {
+    // PERSON-ACCT.3 — a member's LIVE membership can sit on a sibling
+    // contact row (person_groups), not the one this conversation is bound
+    // to. Read the whole group and answer from whichever row is genuinely
+    // best, never just the acting row. readFailed → today's single-row
+    // behaviour, unchanged (never a confident wrong answer).
+    const linked = await linkedAccountsForContact(db, verifiedId)
+    let targetId = verifiedId
+    let doubleMembership = false
+    if (!linked.readFailed) {
+      doubleMembership = hasDoubleMembership(linked.contacts)
+      const best = pickBestMembershipContact(linked.contacts)
+      if (best?.id) targetId = best.id
+    }
     const { data } = await db.from('contacts')
       .select('glofox_membership_state, glofox_account_active, glofox_membership_plan, glofox_membership_plan_full')
-      .eq('id', verifiedId)
+      .eq('id', targetId)
       .maybeSingle()
     // Resolve the plan's description (pricing + commitment terms) from the
     // studio membership catalog by plan name — same lookup the contact
@@ -524,10 +631,28 @@ export async function executeAccountTool(toolName, input, ctx) {
       })
       if (catMatch?.description) data.membership_description = catMatch.description
     }
-    return formatMembership(data)
+    const result = formatMembership(data)
+    // The model still answers normally from the chosen row — this flag is
+    // for the decision log (it stringifies the whole tool result), not a
+    // change in what the customer is told.
+    if (doubleMembership) result.note_for_staff = 'double_membership'
+    return result
   }
 
   if (toolName === 'get_my_next_class') {
+    // PERSON-ACCT.3 — the soonest booking can be on any linked account.
+    const linked = await linkedAccountsForContact(db, verifiedId)
+    if (!linked.readFailed) {
+      const ids = linked.contacts.map((c) => c?.id).filter(Boolean)
+      try {
+        const rows = await fetchContactRowsByIds(db, ids, 'recent_bookings')
+        const combined = rows.flatMap((r) => (Array.isArray(r?.recent_bookings) ? r.recent_bookings : []))
+        return formatNextClass(combined)
+      } catch (err) {
+        console.error('[agent][account] get_my_next_class group read failed:', err?.message || err)
+        // fall through to the single-contact read below
+      }
+    }
     const { data } = await db.from('contacts')
       .select('recent_bookings')
       .eq('id', verifiedId)
@@ -536,6 +661,21 @@ export async function executeAccountTool(toolName, input, ctx) {
   }
 
   if (toolName === 'get_my_recent_attendance') {
+    // PERSON-ACCT.3 — attendance rolls up per account; merge across the
+    // group so a class attended on a sibling account still counts.
+    const linked = await linkedAccountsForContact(db, verifiedId)
+    if (!linked.readFailed) {
+      const ids = linked.contacts.map((c) => c?.id).filter(Boolean)
+      try {
+        const rows = await fetchContactRowsByIds(
+          db, ids, 'total_attended_30d, total_attended_7d, last_attended_at',
+        )
+        return formatRecentAttendance(mergeRecentAttendanceRows(rows))
+      } catch (err) {
+        console.error('[agent][account] get_my_recent_attendance group read failed:', err?.message || err)
+        // fall through to the single-contact read below
+      }
+    }
     const { data } = await db.from('contacts')
       .select('total_attended_30d, total_attended_7d, last_attended_at')
       .eq('id', verifiedId)

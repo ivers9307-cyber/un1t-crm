@@ -22,17 +22,21 @@ import { executeBookingTool } from './booking-tools'
 
 const EVENT_ID = '64aa00000000000000000001'
 
-function stubDb(trace, { membershipStatus = null, pendingRows = [] } = {}) {
+function stubDb(trace, { membershipStatus = null, membershipState = null, pendingRows = [] } = {}) {
   const db = {
     from(table) {
       let selected = false
       const b = {
-        select: () => { selected = true; return b },
+        // Traced (not just resolved regardless of what was asked for) so a
+        // test can pin the exact column list — a double that ignores its
+        // select argument is how a column gets silently dropped from the
+        // real query with no test noticing.
+        select: (cols) => { selected = true; trace.push({ step: 'select', table, cols }); return b },
         eq: () => b,
         contains: () => b,
         limit: () => b,
         async maybeSingle() {
-          if (table === 'contacts') return { data: { glofox_member_id: 'gf-1', glofox_membership_status: membershipStatus }, error: null }
+          if (table === 'contacts') return { data: { glofox_member_id: 'gf-1', glofox_membership_status: membershipStatus, glofox_membership_state: membershipState }, error: null }
           return { data: null, error: null }
         },
         async single() { return { data: { id: 'req-1' }, error: null } },
@@ -85,12 +89,23 @@ describe('book_class credit pre-flight', () => {
     expect(glofox.createBooking).toHaveBeenCalled()
   })
 
-  it('empty credits but ACTIVE membership → proceeds (Glofox arbitrates)', async () => {
+  // PERSON-ACCT.3 — glofox_membership_status is NEVER the string 'active' in
+  // prod; a bookable membership is status 'member'/'credit_member' with a
+  // state that hasn't ended (hasBookableMembership, src/lib/person-accounts.js).
+  it('empty credits but a bookable membership (member + active state) → proceeds (Glofox arbitrates)', async () => {
     glofox.fetchUserCreditsResult.mockResolvedValue({ ok: true, credits: [] })
     const trace = []
-    const res = await executeBookingTool('book_class', { event_id: EVENT_ID }, ctx(stubDb(trace, { membershipStatus: 'active' })))
+    const res = await executeBookingTool('book_class', { event_id: EVENT_ID }, ctx(stubDb(trace, { membershipStatus: 'member', membershipState: 'active' })))
     expect(res.no_credits).toBeUndefined()
     expect(glofox.createBooking).toHaveBeenCalled()
+  })
+
+  it('empty credits + a classpass_payg account with state active → STILL no_credits (classpass is never a bookable membership)', async () => {
+    glofox.fetchUserCreditsResult.mockResolvedValue({ ok: true, credits: [] })
+    const trace = []
+    const res = await executeBookingTool('book_class', { event_id: EVENT_ID }, ctx(stubDb(trace, { membershipStatus: 'classpass_payg', membershipState: 'active' })))
+    expect(res).toMatchObject({ booked: false, no_credits: true })
+    expect(glofox.createBooking).not.toHaveBeenCalled()
   })
 
   it('UNREADABLE balance (Glofox blip) → proceeds, never escalates', async () => {
@@ -108,5 +123,21 @@ describe('book_class credit pre-flight', () => {
     expect(res).toMatchObject({ no_credits: true })
     expect(trace.filter((t) => t.step === 'insert')).toHaveLength(0)
     expect(notifyAgentApprovalRequest).not.toHaveBeenCalled()
+  })
+
+  // Quality-review finding: stubDb used to return the fixture regardless of
+  // what was requested, so the select() string itself was never exercised —
+  // a future editor could drop glofox_membership_state from the query and
+  // every test here would stay green while hasBookableMembership silently
+  // returned false forever. Pin the column list, not just the shape it
+  // happens to produce today.
+  it('the contacts select includes glofox_membership_state and glofox_member_id (pins the widened column list)', async () => {
+    glofox.fetchUserCreditsResult.mockResolvedValue({ ok: true, credits: [] })
+    const trace = []
+    await executeBookingTool('book_class', { event_id: EVENT_ID }, ctx(stubDb(trace, { membershipStatus: 'member', membershipState: 'active' })))
+    const sel = trace.find((t) => t.step === 'select' && t.table === 'contacts')
+    expect(sel).toBeTruthy()
+    expect(sel.cols).toContain('glofox_membership_state')
+    expect(sel.cols).toContain('glofox_member_id')
   })
 })

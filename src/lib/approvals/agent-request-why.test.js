@@ -95,16 +95,39 @@ describe('accountSummaryLine', () => {
     expect(accountSummaryLine({ glofox_membership_plan: 'The UN1T Trial', glofox_membership_status: 'trial', glofox_membership_state: 'future', trial_credits_remaining: 3 }))
       .toBe('The UN1T Trial (trial, not started) · 3 credits left')
   })
-  it('active membership renders without a qualifier', () => {
-    expect(accountSummaryLine({ glofox_membership_plan: 'UN1T Unlimited', glofox_membership_status: 'active', glofox_membership_state: 'active', trial_credits_remaining: null }))
+  // PERSON-ACCT.3 — glofox_membership_status is NEVER the string 'active' in
+  // prod; a genuinely bookable membership is status 'member'/'credit_member'
+  // with state 'active' (or null).
+  it('a bookable membership (member + active state) renders without a qualifier', () => {
+    expect(accountSummaryLine({ glofox_membership_plan: 'UN1T Unlimited', glofox_membership_status: 'member', glofox_membership_state: 'active', trial_credits_remaining: null }))
       .toBe('UN1T Unlimited · credits unknown')
+  })
+  // PERSON-ACCT.3 — the state, not the status, is what says this account
+  // cannot book right now; the OLD `status !== 'active'` check (always true,
+  // since that string never occurs) meant a paused/locked member rendered as
+  // if nothing were wrong. These two prove the state now surfaces.
+  it('a paused membership surfaces BOTH the status and the blocking state', () => {
+    expect(accountSummaryLine({ glofox_membership_plan: 'UN1T Unlimited', glofox_membership_status: 'member', glofox_membership_state: 'paused', trial_credits_remaining: null }))
+      .toBe('UN1T Unlimited (member, paused) · credits unknown')
+  })
+  it('a locked membership (in arrears) surfaces the same way', () => {
+    expect(accountSummaryLine({ glofox_membership_plan: 'UN1T Unlimited', glofox_membership_status: 'credit_member', glofox_membership_state: 'locked', trial_credits_remaining: null }))
+      .toBe('UN1T Unlimited (credit_member, locked) · credits unknown')
+  })
+  it('an ACTIVE-state trial is still just "(trial)" — active state alone never clears the qualifier', () => {
+    expect(accountSummaryLine({ glofox_membership_plan: 'The UN1T Trial', glofox_membership_status: 'trial', glofox_membership_state: 'active', trial_credits_remaining: 2 }))
+      .toBe('The UN1T Trial (trial) · 2 credits left')
+  })
+  it('an ACTIVE-state classpass_payg account is "(classpass_payg)" — never mistaken for a real membership', () => {
+    expect(accountSummaryLine({ glofox_membership_plan: 'ClassPass', glofox_membership_status: 'classpass_payg', glofox_membership_state: 'active', trial_credits_remaining: null }))
+      .toBe('ClassPass (classpass_payg) · credits unknown')
   })
   it('no membership + zero credits (the grant-first case)', () => {
     expect(accountSummaryLine({ glofox_membership_plan: null, trial_credits_remaining: 0 }))
       .toBe('No membership on file · 0 credits left')
   })
   it('singular credit', () => {
-    expect(accountSummaryLine({ glofox_membership_plan: 'Pack', glofox_membership_status: 'active', trial_credits_remaining: 1 }))
+    expect(accountSummaryLine({ glofox_membership_plan: 'Pack', glofox_membership_status: 'member', glofox_membership_state: 'active', trial_credits_remaining: 1 }))
       .toBe('Pack · 1 credit left')
   })
   it('null contact → null', () => {
