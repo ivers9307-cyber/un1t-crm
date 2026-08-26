@@ -506,6 +506,88 @@ export async function POST(request, { params }) {
   return res
 }
 
+// MAILBOX-PAGE.1 — page size and runaway ceiling for the active-mailbox scan.
+//
+// PostgREST caps EVERY select at 1,000 rows whatever `.limit()` says, so the
+// unpaginated read this replaces was silently a `LIMIT 1000` with no ORDER BY.
+// 1,000 matches the canonical pager this copies (src/lib/pipeline-reclassify.js).
+// The ceiling is a runaway guard, not a working limit: at today's two active
+// mailboxes the loop makes exactly ONE query and returns on the short page, so
+// this is not an extra round trip on the hot path.
+const MAILBOX_PAGE_SIZE = 1000
+const MAX_ACTIVE_MAILBOXES = 10_000
+
+/**
+ * Every ACTIVE mailbox in the estate, ordered and fully paginated.
+ *
+ * WHY THIS EXISTS (MAILBOX-PAGE.1)
+ * Both readers below used to do a bare `.select().eq('active', true)`. That is
+ * the 1,000-row-cap invariant: the row set was capped at 1,000 with NO ORDER BY,
+ * so past that many active mailboxes estate-wide the rows PostgREST happened to
+ * return decided where a member's email was filed. Two outcomes, both silent:
+ * a message resolving to the wrong studio, or dead-lettering as
+ * `no_matching_mailbox` while its mailbox exists and is active.
+ *
+ * That is the same class of bug as the "oldest active location" fallback this
+ * route's header describes removing — a routing decision made by something
+ * other than the address the mail was sent to.
+ *
+ * ORDER BY id IS BEHAVIOUR-PRESERVING BELOW THE CAP, and that was verified
+ * rather than assumed, because "add an ORDER BY" is only safe if row order
+ * cannot change the answer:
+ *   • resolveMailboxByRecipient builds its map FIRST-WINS
+ *     (`if (!byAddress.has(a))`), so order matters only when two rows produce
+ *     the same key.
+ *   • The key is `normalizeEmail(address)` = lower(trim(address)).
+ *   • `email_mailboxes_address_uidx` is UNIQUE on lower(address) and is NOT
+ *     partial — it binds inactive rows too.
+ *   • `email_mailboxes_address_shape` forbids whitespace inside an address, so
+ *     trim() is a no-op on anything that can be stored.
+ * The JS map key is therefore exactly the database's unique key: two rows can
+ * never collide, the first-wins branch can never fire, and the order the rows
+ * arrive in cannot change which mailbox wins. (Both index and CHECK confirmed
+ * against the live database, not just the migration file.)
+ *
+ * DELIBERATELY DOES NOT CATCH. A thrown error propagates exactly as the bare
+ * query's would have: POST releases the dedupe claim on a throw, which is what
+ * keeps Postmark's retry alive. Swallowing here would convert a retryable fault
+ * into a permanently lost email — the failure class this whole route is about.
+ *
+ * @returns {Promise<{ok: true, mailboxes: object[]} | {ok: false, error: object}>}
+ *   `error` is shaped like a PostgREST error so the caller can hand it to
+ *   recordInboundFailure unchanged.
+ */
+async function loadActiveMailboxes(db) {
+  const mailboxes = []
+  for (let start = 0; start < MAX_ACTIVE_MAILBOXES; start += MAILBOX_PAGE_SIZE) {
+    const end = Math.min(start + MAILBOX_PAGE_SIZE, MAX_ACTIVE_MAILBOXES) - 1
+    const { data, error } = await db.from('email_mailboxes')
+      .select('id, location_id, address, active')
+      .eq('active', true)
+      .order('id', { ascending: true })
+      .range(start, end)
+    if (error) return { ok: false, error }
+    const page = Array.isArray(data) ? data : []
+    mailboxes.push(...page)
+    // A short page means the table is exhausted. This is the canonical repo
+    // idiom; it is also why the ceiling below is only reachable by a genuinely
+    // enormous estate rather than by a slow page.
+    if (page.length < end - start + 1) return { ok: true, mailboxes }
+  }
+  // Past the ceiling we cannot prove we have the mailbox this mail was sent to,
+  // and guessing is what the no-fallback rule exists to forbid. Reported as a
+  // lookup FAILURE so it takes the route's existing 500 door — visible in
+  // error_events, and retried by Postmark — rather than inventing a new
+  // outcome or, worse, filing against a partial set.
+  return {
+    ok: false,
+    error: {
+      code: 'mailbox_scan_ceiling',
+      message: `More than ${MAX_ACTIVE_MAILBOXES} active mailboxes: refusing to resolve a recipient against a partial set.`,
+    },
+  }
+}
+
 /**
  * DEADLETTER-LOC.1 — best-effort location for a dead-lettered inbound email:
  * the recipient address → active mailbox → location, the same resolution the
@@ -516,10 +598,13 @@ export async function POST(request, { params }) {
  */
 async function bestEffortInboundLocation(db, body) {
   try {
-    const { data: mailboxes } = await db.from('email_mailboxes')
-      .select('id, location_id, address, active')
-      .eq('active', true)
-    const mailbox = resolveMailboxByRecipient(mailboxes || [], recipientEmails(body))
+    // Best-effort by contract: a read failure or the scan ceiling both mean
+    // "no location to claim", which is the same NULL this already returned for
+    // an unmatched recipient. It must not become a second way to fail a
+    // request — its only caller is already on a dead-letter path.
+    const loaded = await loadActiveMailboxes(db)
+    if (!loaded.ok) return null
+    const mailbox = resolveMailboxByRecipient(loaded.mailboxes, recipientEmails(body))
     return mailbox?.location_id ?? null
   } catch {
     return null
@@ -638,18 +723,22 @@ async function processInboundEmail(db, body, messageId) {
   }
 
   // Recipient address → mailbox → location. AUTHORITATIVE, and the only
-  // thing that decides where this mail is filed. Small table — match in JS
+  // thing that decides where this mail is filed. Match in JS
   // (resolveMailboxByRecipient also enforces the recipient precedence order,
   // so a message addressed to two of our mailboxes resolves the same way
   // regardless of what order the rows came back in).
-  const { data: mailboxes, error: mbErr } = await db.from('email_mailboxes')
-    .select('id, location_id, address, active')
-    .eq('active', true)
-  if (mbErr) {
-    await recordInboundFailure('mailbox_lookup_failed', mbErr)
+  //
+  // MAILBOX-PAGE.1 — paginated and ordered. This read used to be bare, which
+  // made it a silent `LIMIT 1000` with no ORDER BY on the one query that
+  // decides which studio a member's email belongs to. See loadActiveMailboxes
+  // for why ORDER BY id cannot change the answer below the cap.
+  const loaded = await loadActiveMailboxes(db)
+  if (!loaded.ok) {
+    await recordInboundFailure('mailbox_lookup_failed', loaded.error)
     return unfiled(NextResponse.json({ success: false, error: 'mailbox_lookup_failed' }, { status: 500 }))
   }
-  const mailbox = resolveMailboxByRecipient(mailboxes || [], recipients)
+  const mailboxes = loaded.mailboxes
+  const mailbox = resolveMailboxByRecipient(mailboxes, recipients)
   if (!mailbox) {
     // No fallback, by design — see the header. 200 because retrying will not
     // conjure a mailbox and a non-2xx makes Postmark disable the webhook.
