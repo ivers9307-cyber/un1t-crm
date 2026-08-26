@@ -23,7 +23,7 @@
 
 import { formatDublinClassTime } from './dublin-format'
 import { escapeLikePattern } from '../like-escape'
-import { linkedAccountsForContact, hasBookableMembership } from '@/lib/person-accounts'
+import { linkedAccountsForContact, hasBookableMembership, electWriteAccount } from '@/lib/person-accounts'
 
 // ── Anthropic tool definitions ──────────────────────────────────────
 export const ACCOUNT_TOOLS = [
@@ -546,8 +546,11 @@ export async function executeAccountTool(toolName, input, ctx) {
       return { verified: false, hint: verifyFailureHint(linked) }
     }
 
-    // Stamp the matched contact. auto-reply resolves this to the person-group
-    // primary for the acting account on this and subsequent turns.
+    // Stamp the matched contact. PERSON-ACCT.6 — auto-reply acts on this id AS
+    // STAMPED, on this and subsequent turns: it is the person's anchor, and
+    // reads span the whole person group from it (person-accounts.js). It used
+    // to be remapped to the group's DISPLAY primary, which routinely holds none
+    // of the person's activity.
     await db.from(conversationsTable).update({
       agent_verified_contact_id: matchedContact.id,
       agent_verified_at: new Date().toISOString(),
@@ -686,9 +689,51 @@ export async function executeAccountTool(toolName, input, ctx) {
   if (toolName === 'request_pause' || toolName === 'request_cancellation') {
     const kind = toolName === 'request_pause' ? 'pause' : 'cancellation'
     const details = kind === 'pause' ? buildPauseDetails(input) : buildCancellationDetails(input)
+
+    // PERSON-ACCT.8 — same discipline as book_class (PERSON-ACCT.7): the
+    // membership this person actually holds can live on a SIBLING contact
+    // row, not the one this conversation happens to be bound to. Elect ONE
+    // account to file the row against rather than always the anchor. No
+    // concernsMemberIds here — pause/cancel are membership-level actions,
+    // not tied to one class's booking history the way book_class is.
+    //
+    // Unlike book_class, staff action pause/cancellation MANUALLY in
+    // Glofox after approving (there is no automated Glofox call this route
+    // could run against the wrong account), so a 'conflict' still files —
+    // staff decide which account is right themselves, same as they always
+    // have. It is never handed off the way book_class's live account
+    // conflict is: nothing here would execute incorrectly by waiting.
+    const linked = await linkedAccountsForContact(db, verifiedId)
+    const accounts = linked.readFailed ? [] : linked.accounts
+    const election = electWriteAccount({ accounts, anchorContactId: verifiedId, locationId })
+
+    let targetContactId = verifiedId
+    if (election.outcome === 'elected') {
+      targetContactId = election.account.id
+      // Same convention book_class stamps — lets the executor's
+      // ACCOUNT_MISMATCH-style cross-check (or an operator eyeballing the
+      // card) recognise which account this request concerns.
+      details.elected_glofox_member_id = election.account.glofox_member_id
+    } else if (election.outcome === 'conflict') {
+      const top = election.candidates[0]
+      targetContactId = top.id
+      // Structured data only — NEVER details.reason, which on this kind is
+      // the customer's own words and is rendered as a quote on the card.
+      details.candidates = election.candidates.map((c) => ({
+        contact_id: c.id,
+        glofox_member_id: c.glofox_member_id,
+        membership_status: c.glofox_membership_status || null,
+        credits: Number.isFinite(c.trial_credits_remaining) ? c.trial_credits_remaining : null,
+        name: c.name || null,
+      }))
+    }
+    // outcome 'none' (or an unreadable group) leaves targetContactId at
+    // verifiedId — today's behaviour, unchanged: never a confident guess
+    // when there is nothing to elect from.
+
     const { data: inserted, error } = await db.from('agent_membership_requests').insert({
       location_id: locationId,
-      contact_id: verifiedId,
+      contact_id: targetContactId,
       kind,
       channel: ctx.channel || null,
       conversation_id: conversationId || null,

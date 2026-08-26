@@ -94,6 +94,10 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
   // AGENT-RETRY.2 — the provider ships failed-retryable rows as their own
   // queue: the card opens in fix-&-retry mode (retry is the only decision;
   // decline on a failed row would 409 server-side).
+  // PERSON-ACCT.7 — the linked accounts an account_conflict escalation could
+  // not choose between, and the one the row will execute against.
+  const candidates = Array.isArray(item.details?.candidates) ? item.details.candidates : []
+  const electedMemberId = item.details?.elected_glofox_member_id || null
   const isFailedItem = !!item.failed
   const failWhy = isFailedItem ? failureExplanation({ status: 'failed', details: item.details }) : null
   const reasonOptions = BOOKING_KINDS.has(item.kind)
@@ -181,6 +185,32 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
           <span className="font-semibold text-un1t-text">Why it needs review:</span> {why}
         </p>
       )}
+      {/* PERSON-ACCT.7 — an account_conflict row carries the accounts Mia
+          refused to choose between, live-verified at the moment of the
+          escalation. Rendered so the operator can decide from the card
+          instead of reconstructing the ambiguity in Glofox. `credits: null`
+          means the balance could not be read — never shown as zero. */}
+      {candidates.length > 0 && (
+        <div className="mt-2.5">
+          <p className="text-[10px] uppercase tracking-wide text-un1t-subtle">Accounts found</p>
+          <ul className="mt-1 space-y-1">
+            {candidates.map((c, i) => (
+              <li key={c.glofox_member_id || c.contact_id || i} className="text-xs text-un1t-muted">
+                <span className="font-semibold text-un1t-text">{c.name || c.glofox_member_id || 'Account'}</span>
+                {c.membership_status ? ` · ${c.membership_status}` : ''}
+                {' · '}
+                {Number.isFinite(c.credits) ? `${c.credits} credit${c.credits === 1 ? '' : 's'}` : 'credits unknown'}
+                {c.glofox_member_id === electedMemberId && (
+                  <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-700">
+                    books against this one
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {said && (
         <p className="text-xs text-un1t-muted mt-1.5 border-l-2 border-un1t-border pl-2">
           <span className="font-semibold text-un1t-text">Customer said:</span> “{said}”

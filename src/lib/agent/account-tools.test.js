@@ -1,5 +1,12 @@
 // RADAR-AGENT Phase 1 — unit tests for account-tool pure helpers.
 import { describe, it, expect, vi } from 'vitest'
+
+// PERSON-ACCT.8 — request_pause/request_cancellation now reach this dynamic
+// import on the success path (they never did before, since every prior test
+// either errors out first or is the pure-helper suite). Mocked so a test
+// asserting the insert shape isn't also exercising the real push-dedup
+// stack against a stub db that doesn't implement it.
+vi.mock('./approval-notify', () => ({ notifyAgentApprovalRequest: vi.fn(async () => {}) }))
 import {
   identityMatches,
   surnameInName,
@@ -448,5 +455,210 @@ describe('executeAccountTool · request queue failures never leak the raw DB err
     expect(res.error).toBe('queue_failed')
     expect(res.message).not.toContain('constraint')
     spy.mockRestore()
+  })
+})
+
+// PERSON-ACCT.8 — request_pause/request_cancellation elect ONE of a
+// person's linked accounts (electWriteAccount, person-accounts.js) rather
+// than always filing against the contact the conversation happens to be
+// bound to — same discipline book_class already applies (PERSON-ACCT.7).
+//
+// stubDb mirrors booking-tools-elect.test.js's double: person_group_members
+// resolves the group, contacts answers eq('id', x) / in('id', [...]), and
+// agent_membership_requests captures whatever the insert actually wrote so
+// assertions read the real row shape, not a reimplementation of it.
+describe('executeAccountTool · request_pause / request_cancellation elect the write account', () => {
+  function stubDb(trace, { contacts = [], groupId = 'g-1' } = {}) {
+    return {
+      from(table) {
+        const st = { cols: '', filters: {} }
+        const settle = (single) => {
+          if (table === 'person_group_members') {
+            if (st.cols.includes('group_id')) return { data: { group_id: groupId }, error: null }
+            return { data: contacts.map((c) => ({ contact_id: c.id })), error: null }
+          }
+          if (table === 'contacts') {
+            const want = st.filters.id
+            const list = Array.isArray(want)
+              ? contacts.filter((c) => want.includes(c.id))
+              : contacts.filter((c) => c.id === want)
+            return { data: list, error: null }
+          }
+          if (table === 'agent_membership_requests') {
+            if (st.op === 'insert') return { data: { id: 'req-1' }, error: null }
+            return single ? { data: null, error: null } : { data: [], error: null }
+          }
+          return single ? { data: null, error: null } : { data: [], error: null }
+        }
+        const b = {
+          select(cols) { st.cols = cols || ''; return b },
+          eq(col, val) { st.filters[col] = val; return b },
+          in(col, vals) { st.filters[col] = vals; return b },
+          limit() { return b },
+          insert(row) {
+            st.op = 'insert'
+            trace.push({
+              contactId: row.contact_id, kind: row.kind, details: row.details,
+              customerNote: row.customer_note, retentionFlagged: row.retention_flagged,
+            })
+            return b
+          },
+          async maybeSingle() { return settle(true) },
+          async single() { return settle(true) },
+          then(resolve, reject) { return Promise.resolve(settle(false)).then(resolve, reject) },
+        }
+        return b
+      },
+    }
+  }
+
+  const PHONE = '+353871234567'
+  const acct = (id, memberId, extra = {}) => ({
+    id,
+    name: `Vanessa ${id}`,
+    glofox_member_id: memberId,
+    glofox_membership_status: 'lead',
+    glofox_membership_state: null,
+    trial_credits_remaining: null,
+    last_attended_at: null,
+    updated_at: '2026-08-01T00:00:00Z',
+    phone: PHONE,
+    wa_phone: null,
+    email: null,
+    location_id: null,
+    ...extra,
+  })
+
+  const ctx = (db) => ({
+    db, conversationId: 'conv-1', conversationsTable: 'whatsapp_conversations',
+    contactId: 'c-1', verifiedContactId: 'c-1', locationId: 'loc-1', channel: 'whatsapp',
+    nameHint: 'Vanessa',
+  })
+
+  it('pause files against the ELECTED sibling, stamped with elected_glofox_member_id', async () => {
+    const group = [
+      acct('c-1', 'gf-1'), // the anchor — bare lead, conversation is bound here
+      acct('c-2', 'gf-2', { glofox_membership_status: 'member', glofox_membership_state: 'active' }),
+    ]
+    const trace = []
+    const db = stubDb(trace, { contacts: group })
+    const res = await executeAccountTool('request_pause', { reason: 'going travelling for a month' }, ctx(db))
+    expect(res).toEqual({ requested: true, kind: 'pause' })
+    expect(trace).toHaveLength(1)
+    expect(trace[0].contactId).toBe('c-2')
+    expect(trace[0].details.elected_glofox_member_id).toBe('gf-2')
+    expect(trace[0].details.candidates).toBeUndefined()
+    // Customer's own words survive verbatim, in both details.reason and
+    // the top-level customer_note the card reads.
+    expect(trace[0].details.reason).toBe('going travelling for a month')
+    expect(trace[0].customerNote).toBe('going travelling for a month')
+  })
+
+  it('cancellation does the same', async () => {
+    const group = [
+      acct('c-1', 'gf-1'),
+      acct('c-2', 'gf-2', { glofox_membership_status: 'member', glofox_membership_state: 'active' }),
+    ]
+    const trace = []
+    const db = stubDb(trace, { contacts: group })
+    const res = await executeAccountTool('request_cancellation', { reason: "can't afford it right now" }, ctx(db))
+    expect(res).toEqual({ requested: true, kind: 'cancellation' })
+    expect(trace[0].contactId).toBe('c-2')
+    expect(trace[0].details.elected_glofox_member_id).toBe('gf-2')
+    expect(trace[0].details.reason).toBe("can't afford it right now")
+    expect(trace[0].customerNote).toBe("can't afford it right now")
+    expect(trace[0].retentionFlagged).toBe(true)
+  })
+
+  it('conflict: files against the top candidate with details.candidates, and the customer\'s words are untouched', async () => {
+    const older = acct('c-1', 'gf-1', {
+      glofox_membership_status: 'member', glofox_membership_state: 'active',
+      last_attended_at: '2026-08-01T00:00:00Z', trial_credits_remaining: 4,
+    })
+    const newer = acct('c-2', 'gf-2', {
+      glofox_membership_status: 'member', glofox_membership_state: 'active',
+      last_attended_at: '2026-08-10T00:00:00Z', trial_credits_remaining: 0,
+    })
+    const trace = []
+    const db = stubDb(trace, { contacts: [older, newer] })
+    const said = 'moving to another city next month, please cancel'
+    const res = await executeAccountTool('request_cancellation', { reason: said }, ctx(db))
+    expect(res).toEqual({ requested: true, kind: 'cancellation' })
+    // Ranked: 'newer' (more recent activity) is the top candidate.
+    expect(trace[0].contactId).toBe('c-2')
+    expect(trace[0].details.elected_glofox_member_id).toBeUndefined()
+    expect(trace[0].details.candidates).toEqual([
+      { contact_id: 'c-2', glofox_member_id: 'gf-2', membership_status: 'member', credits: 0, name: 'Vanessa c-2' },
+      { contact_id: 'c-1', glofox_member_id: 'gf-1', membership_status: 'member', credits: 4, name: 'Vanessa c-1' },
+    ])
+    // The whole point of this test: a machine-shaped candidates array sits
+    // ALONGSIDE details.reason, never inside or instead of it — the reason
+    // is the exact customer string, still renderable as a quote.
+    expect(trace[0].details.reason).toBe(said)
+    expect(trace[0].customerNote).toBe(said)
+  })
+
+  it('customer_note is preserved exactly as the tool captured it, regardless of election outcome', async () => {
+    // A single bare contact — election outcome 'none' (no linked group to
+    // elect from — see the readFailed-equivalent test below for the other
+    // 'stay put' path).
+    const trace = []
+    const db = stubDb(trace, { contacts: [] })
+    const res = await executeAccountTool('request_pause', { reason: '  injury, need a break  ', start_date: '2026-09-01' }, ctx(db))
+    expect(res).toEqual({ requested: true, kind: 'pause' })
+    expect(trace[0].contactId).toBe('c-1')
+    expect(trace[0].customerNote).toBe('injury, need a break')
+    expect(trace[0].details.reason).toBe('injury, need a break')
+  })
+
+  it('readFailed (unreadable group) → unchanged single-contact filing, no election fields added', async () => {
+    const failingDb = {
+      from(table) {
+        if (table === 'person_group_members') {
+          return {
+            select() { return this },
+            eq() { return this },
+            async maybeSingle() { return { data: null, error: { message: 'boom' } } },
+          }
+        }
+        // Never reached for contacts once the group lookup errors, but keep
+        // it harmless in case the code path changes.
+        if (table === 'contacts') {
+          return { select() { return this }, eq() { return this }, in() { return this }, then(resolve) { resolve({ data: [], error: null }) } }
+        }
+        if (table === 'agent_membership_requests') {
+          const b = {
+            select() { return b },
+            insert(row) { trace.push({ contactId: row.contact_id, details: row.details }); return b },
+            async single() { return { data: { id: 'req-1' }, error: null } },
+          }
+          return b
+        }
+        return { select() { return this }, eq() { return this }, then(resolve) { resolve({ data: [], error: null }) } }
+      },
+    }
+    const trace = []
+    const res = await executeAccountTool('request_cancellation', { reason: 'no longer needed' }, ctx(failingDb))
+    expect(res).toEqual({ requested: true, kind: 'cancellation' })
+    expect(trace[0].contactId).toBe('c-1') // the anchor — verifiedContactId, unchanged
+    expect(trace[0].details.elected_glofox_member_id).toBeUndefined()
+    expect(trace[0].details.candidates).toBeUndefined()
+  })
+
+  it('locationId guard wiring: a foreign-location sibling is excluded, so the anchor is elected instead of escalating to conflict', async () => {
+    const home = acct('c-1', 'gf-1', {
+      glofox_membership_status: 'member', glofox_membership_state: 'active', location_id: 'loc-1',
+    })
+    const foreign = acct('c-2', 'gf-2', {
+      glofox_membership_status: 'member', glofox_membership_state: 'active', location_id: 'loc-2',
+    })
+    const trace = []
+    const db = stubDb(trace, { contacts: [home, foreign] })
+    // ctx() sets locationId: 'loc-1' — foreign's loc-2 must be excluded.
+    const res = await executeAccountTool('request_pause', { reason: 'need a break' }, ctx(db))
+    expect(res).toEqual({ requested: true, kind: 'pause' })
+    expect(trace[0].contactId).toBe('c-1')
+    expect(trace[0].details.elected_glofox_member_id).toBe('gf-1')
+    expect(trace[0].details.candidates).toBeUndefined()
   })
 })

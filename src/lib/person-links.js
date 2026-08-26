@@ -359,10 +359,11 @@ export async function getPersonGroup(db, contactId) {
  *
  * AGENT-AUTH.2 — one batch lookup that resolves, for a set of contact ids,
  * each contact's person-group id and each group's primary_contact_id, returned
- * as pure closures. Feeds the link-aware agent verifier (`resolveAutoVerify` /
- * `resolveActingContactId` in agent/core.js) so duplicate records of one person
- * collapse to a single identity + the canonical (primary) account. IO-light:
- * at most two SELECTs, both `.in()` over a tiny id set.
+ * as pure closures. Feeds the link-aware agent verifier (`resolveAutoVerify` in
+ * agent/core.js) so duplicate records of one person collapse to a single
+ * identity, and the display-only primary lookup (`resolveActingContactId`,
+ * PERSON-ACCT.6 — the agent ACTS on the verified contact, not this primary).
+ * IO-light: at most two SELECTs, both `.in()` over a tiny id set.
  */
 export async function personGroupResolver(db, contactIds) {
   const ids = [...new Set((contactIds || []).filter(Boolean))]

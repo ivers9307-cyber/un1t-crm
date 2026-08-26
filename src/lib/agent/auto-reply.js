@@ -35,6 +35,7 @@ import {
   AGENT_MESSAGE_SOURCE,
   DEFAULT_HOLDING_MESSAGE,
   DEFAULT_NO_CREDITS_HANDOFF_TEXT,
+  DEFAULT_ACCOUNT_CONFLICT_HANDOFF_TEXT,
   resolveAutoVerify,
   resolveActingContactId,
   distinctPersonCount,
@@ -609,12 +610,15 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // AGENT-AUTH.1 + .2 — identity resolution. On a trusted channel (WhatsApp)
     // the SIM-bound sender number pre-verifies the contact. AGENT-AUTH.2 makes
     // that LINK-AWARE: a number on several contacts that are all ONE linked
-    // Person (incl. the thread's) verifies and resolves to the group PRIMARY
-    // rather than bailing to the email+surname quiz. A number genuinely shared
-    // by two different people stays ambiguous → quiz. Instagram has no phone,
-    // so its adapter doesn't set trustsSenderIdentity and the question flow
-    // stands there — but a still-fresh prior verification is honoured on both
-    // channels and ALWAYS resolves to the person's primary account (below).
+    // Person (incl. the thread's) verifies rather than bailing to the
+    // email+surname quiz. A number genuinely shared by two different people
+    // stays ambiguous → quiz. Instagram has no phone, so its adapter doesn't
+    // set trustsSenderIdentity and the question flow stands there — but a
+    // still-fresh prior verification is honoured on both channels.
+    // PERSON-ACCT.6 — the ACTING account is the verified contact itself (the
+    // thread's own row on the phone lane, the quiz's matched row on the other),
+    // never the person group's display primary. Reads span the whole group
+    // anyway (person-accounts.js), so the acting id only has to be the ANCHOR.
     let preverifiedContactId = null
     let phoneMatches = null
     if (adapter.trustsSenderIdentity && conv?.contact_id && recipient) {
@@ -642,8 +646,12 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
         conversationContactId: conv.contact_id,
         matches: phoneMatches,
         groupOf,
-        primaryOf,
       })
+      // PERSON-ACCT.6 — stamp the RAW verified contact. Both lanes now stamp
+      // and act on the same thing; before this the phone lane stamped the
+      // group's display primary while the quiz stamped its raw match, so the
+      // stored verification meant two different things depending on how it
+      // was earned.
       preverifiedContactId = verdict?.actingContactId || null
       if (preverifiedContactId && conv.agent_verified_contact_id !== preverifiedContactId) {
         await db.from(adapter.conversationsTable).update({
@@ -680,19 +688,50 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // sweep compares against it after the reply goes out.
     const lastInboundSeenIso = (historyDesc || []).find((m) => m.direction === 'inbound')?.created_at || null
 
+    // A still-fresh prior verification, re-read from the stamp.
+    // PERSON-ACCT.6 — used AS STAMPED (no primary remap; see the phone lane
+    // above), but only once we know the contact still exists: a merge deletes
+    // the losing row, and a stamp naming a deleted contact would otherwise
+    // authorise the turn against an id no read can answer for. A positive
+    // "no row" clears it → the customer re-verifies. An ERROR does not: an
+    // unreadable contacts row is an infrastructure failure, not proof the
+    // contact is gone, and re-quizzing a verified member over a transient
+    // read is a louder failure than carrying the stamp one more turn.
+    let storedVerifiedContactId = null
+    if (!preverifiedContactId && conv?.agent_verified_contact_id && isVerificationFresh(conv?.agent_verified_at)) {
+      const { data: stampedContact, error: stampedErr } = await db.from('contacts')
+        .select('id')
+        .eq('id', conv.agent_verified_contact_id)
+        .maybeSingle()
+      storedVerifiedContactId = stampedErr
+        ? conv.agent_verified_contact_id
+        : (stampedContact?.id || null)
+    }
+
     // Acting contact for this turn (a phone/link-preverified id, else a
-    // still-fresh prior verification). Resolved once and reused for both the
-    // prompt's known-contact awareness and the tool context so they agree.
-    const resolvedVerifiedContactId = preverifiedContactId
-      || (isVerificationFresh(conv?.agent_verified_at)
-        ? resolveActingContactId({ contactId: conv?.agent_verified_contact_id, groupOf, primaryOf })
-        : null)
+    // still-fresh prior verification). Resolved once and reused by the tool
+    // context; the prompt's name block asks a DIFFERENT question (below).
+    const resolvedVerifiedContactId = preverifiedContactId || storedVerifiedContactId
 
     // Known-contact awareness — if the linked contact already has a name/email
     // on file, tell the prompt so Mia never re-asks for them (Edel Crehan,
     // 2026-07-06). Best-effort; a missing contact just omits the block.
+    //
+    // PERSON-ACCT.6 — DISPLAY, NOT ACTING. These two are deliberately
+    // different questions and must not be "unified": which name to greet a
+    // person by is the display/outreach question `pickPrimary` (person-links)
+    // exists to answer, so a VERIFIED person resolves through their group's
+    // primary here — unchanged by this task. Which account the agent reads and
+    // writes is the acting question, and that now stays on the verified contact
+    // (`resolvedVerifiedContactId`), because the primary is ranked for outreach
+    // and routinely holds none of the person's activity. An unverified thread
+    // keeps greeting from its OWN contact rather than a group primary: we have
+    // not established who is typing, and a wrongly-grouped link would put
+    // someone else's first name in the greeting.
     let knownContact = null
-    const promptContactId = resolvedVerifiedContactId || conv?.contact_id || contactId || null
+    const promptContactId = resolvedVerifiedContactId
+      ? resolveActingContactId({ contactId: resolvedVerifiedContactId, groupOf, primaryOf })
+      : (conv?.contact_id || contactId || null)
     if (promptContactId) {
       const { data: kc } = await db.from('contacts')
         .select('first_name, email')
@@ -768,6 +807,9 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // MIA-CREDITS.1 — set when book_class pre-flights to no_credits; the
     // turn ends in a deterministic handoff (script + park + manager push).
     let noCreditsHandoff = false
+    // PERSON-ACCT.7 — set when book_class finds two live accounts and refuses
+    // to guess; same deterministic-handoff posture as no_credits.
+    let accountConflictHandoff = false
     let modelText = ''
     // A stop_reason / tool outcome that must NOT become a customer reply.
     // Set inside the loop, actioned as a soft handoff just after it.
@@ -883,6 +925,9 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
             if (block.name === 'book_class' && result?.no_credits === true) {
               noCreditsHandoff = true
             }
+            if (block.name === 'book_class' && result?.account_conflict === true) {
+              accountConflictHandoff = true
+            }
             if (block.name === 'verify_identity') {
               // AGENT-VERIFY-HANDOFF.1 — track consecutive failures so a stuck
               // quiz hands off (reset on success, +1 on failure).
@@ -894,13 +939,13 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
                   .select('agent_verified_contact_id')
                   .eq('id', conversationId)
                   .single()
-                const rawVerified = fresh?.agent_verified_contact_id || toolCtx.verifiedContactId
-                // AGENT-AUTH.2 — act on the person's PRIMARY account, not whichever
-                // duplicate the email+surname quiz happened to match.
-                const r = await personGroupResolver(db, [rawVerified])
-                toolCtx.verifiedContactId = resolveActingContactId({
-                  contactId: rawVerified, groupOf: r.groupOf, primaryOf: r.primaryOf,
-                }) || rawVerified
+                // PERSON-ACCT.6 — act as the contact the quiz actually
+                // matched. It used to be remapped to the person group's
+                // display primary here; that primary is ranked for outreach
+                // and typically holds none of this person's activity, so the
+                // remap answered from an empty sibling account. Group-wide
+                // reads (person-accounts.js) make the anchor sufficient.
+                toolCtx.verifiedContactId = fresh?.agent_verified_contact_id || toolCtx.verifiedContactId
                 trace.actingContactId = toolCtx.verifiedContactId
               }
             }
@@ -1032,6 +1077,21 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
         holdingOverride: (settings?.no_credits_handoff_text || '').trim() || DEFAULT_NO_CREDITS_HANDOFF_TEXT,
       })
       return { handled: true, action: 'handoff', reason: 'no_credits' }
+    }
+
+    // PERSON-ACCT.7 — the booking tool found more than one live account for
+    // this person and filed the intent as an account_conflict approval rather
+    // than guessing which one to book. Same deterministic shape as the
+    // no_credits handoff: the model's composed text is DISCARDED (it has no
+    // way to know which account is right and would only reassure), the
+    // customer reads the operator-editable script, and a human takes the
+    // thread while they are still warm.
+    if (accountConflictHandoff) {
+      await handoff(db, adapter, {
+        ...common, reason: 'account_conflict', settings,
+        holdingOverride: (settings?.account_conflict_handoff_text || '').trim() || DEFAULT_ACCOUNT_CONFLICT_HANDOFF_TEXT,
+      })
+      return { handled: true, action: 'handoff', reason: 'account_conflict' }
     }
 
     if (shouldHandoffAfterVerifyFail(verifyFails, verifyFailThreshold)) {

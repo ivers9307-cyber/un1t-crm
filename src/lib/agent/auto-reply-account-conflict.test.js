@@ -1,9 +1,9 @@
-// MIA-CREDITS.1 — when book_class pre-flights to no_credits, the turn ends
-// in a DETERMINISTIC handoff: the model's composed text is discarded, the
-// customer gets the operator-editable escalation script (default in
+// PERSON-ACCT.7 — when book_class refuses to guess between two live accounts
+// the turn ends in a DETERMINISTIC handoff: the model's composed text is
+// discarded, the customer gets the operator-editable script (default in
 // core.js), the thread parks for a human, managers are pushed. Same posture
-// as the verify-fail handoff (auto-reply-verify-handoff.test.js — this
-// harness mirrors that file's).
+// as the no_credits handoff (auto-reply-no-credits.test.js — this harness
+// mirrors that file's).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/whatsapp', () => ({
@@ -18,7 +18,6 @@ vi.mock('@/lib/location-branding', () => ({
   getLocationBranding: vi.fn(async () => ({})),
 }))
 vi.mock('@/lib/person-links', () => ({
-  // The real resolver hands back CLOSURES, not Maps (person-links.js).
   personGroupResolver: vi.fn(async () => ({ groupOf: () => null, primaryOf: () => null })),
 }))
 vi.mock('./booking-tools', async (importOriginal) => ({
@@ -28,7 +27,8 @@ vi.mock('./booking-tools', async (importOriginal) => ({
 
 import { runChannelAgent } from './auto-reply'
 import { executeBookingTool } from './booking-tools'
-import { DEFAULT_NO_CREDITS_HANDOFF_TEXT } from './core'
+import { sendPushToRolesAtLocation } from '@/lib/push'
+import { DEFAULT_ACCOUNT_CONFLICT_HANDOFF_TEXT } from './core'
 
 function agentDb({ conv, history, calls, settings }) {
   const mk = (table) => {
@@ -95,7 +95,6 @@ const ctx = {
 
 const HISTORY = [{ direction: 'inbound', body: 'can you book me into ENG1NE tomorrow 7am?', message_type: 'text', created_at: new Date().toISOString() }]
 
-// One book_class tool call, then the model's own reply (which must be discarded).
 function bookThenReply() {
   const turns = [
     {
@@ -123,9 +122,9 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('runChannelAgent — deterministic handoff on a no_credits booking pre-flight', () => {
-  it('sends the escalation script (not the model text), parks the thread, reason no_credits', async () => {
-    executeBookingTool.mockResolvedValue({ booked: false, no_credits: true, message: 'no balance' })
+describe('runChannelAgent — deterministic handoff on an account_conflict booking', () => {
+  it('sends the escalation script (not the model text), parks the thread, pushes managers', async () => {
+    executeBookingTool.mockResolvedValue({ booked: false, account_conflict: true, message: 'two live accounts' })
     vi.stubGlobal('fetch', bookThenReply())
     const calls = []
     const adapter = makeAdapter()
@@ -136,29 +135,30 @@ describe('runChannelAgent — deterministic handoff on a no_credits booking pre-
 
     const result = await runChannelAgent(db, adapter, ctx)
 
-    expect(result).toMatchObject({ handled: true, action: 'handoff', reason: 'no_credits' })
+    expect(result).toMatchObject({ handled: true, action: 'handoff', reason: 'account_conflict' })
     expect(adapter.send).toHaveBeenCalledTimes(1)
     const sentText = adapter.send.mock.calls[0][1]
-    expect(sentText).toBe(DEFAULT_NO_CREDITS_HANDOFF_TEXT)
+    expect(sentText).toBe(DEFAULT_ACCOUNT_CONFLICT_HANDOFF_TEXT)
     expect(sentText).not.toContain('MODEL COMPOSED')
     const handoffPatch = calls.find(c => c.op === 'update' && c.patch?.agent_handed_off_at)
     expect(handoffPatch.patch).toMatchObject({ agent_active: false, handoff_escalated_at: null })
+    expect(sendPushToRolesAtLocation).toHaveBeenCalled()
   })
 
   it('operator-edited script wins over the default', async () => {
-    executeBookingTool.mockResolvedValue({ booked: false, no_credits: true })
+    executeBookingTool.mockResolvedValue({ booked: false, account_conflict: true })
     vi.stubGlobal('fetch', bookThenReply())
     const calls = []
     const adapter = makeAdapter()
     const db = agentDb({
       conv: { agent_active: true, contact_id: 'c-1', agent_verified_contact_id: 'c-1', agent_last_reply_at: null },
       history: HISTORY, calls,
-      settings: { enabled: true, no_credits_handoff_text: 'Custom wording from the operator.' },
+      settings: { enabled: true, account_conflict_handoff_text: 'Two accounts here — a coach will sort it.' },
     })
 
     await runChannelAgent(db, adapter, ctx)
 
-    expect(adapter.send.mock.calls[0][1]).toBe('Custom wording from the operator.')
+    expect(adapter.send.mock.calls[0][1]).toBe('Two accounts here — a coach will sort it.')
   })
 
   it('a booking WITHOUT the flag replies normally (no handoff)', async () => {

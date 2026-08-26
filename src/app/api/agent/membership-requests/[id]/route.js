@@ -207,11 +207,17 @@ export async function PATCH(request, { params }) {
       .eq('id', row.contact_id)
       .maybeSingle()
     const creds = await glofoxCredentialsForLocation(db, row.location_id)
-    if (!contact?.glofox_member_id || !creds || missingGlofoxCredentialsForLocation(creds).length) {
+    // PERSON-ACCT.7 — the booking may live on a SIBLING account (the agent
+    // resolves ownership across the whole person before drafting and records
+    // it). Cancelling against row.contact_id's account would simply fail
+    // against the wrong account — which is why PR1 refused to draft those at
+    // all. Honour the override when the row carries one.
+    const executingMemberId = row.details?.executing_glofox_member_id || contact?.glofox_member_id || null
+    if (!executingMemberId || !creds || missingGlofoxCredentialsForLocation(creds).length) {
       finalStatus = 'failed'
       details = { ...details, result: { ok: false, message_code: 'NOT_EXECUTABLE' } }
     } else {
-      const result = await cancelBooking(creds, details.booking_id, contact.glofox_member_id)
+      const result = await cancelBooking(creds, details.booking_id, executingMemberId)
       const messageCode = result?.body?.message_code || result?.body?.message || null
       executed = { ok: result.ok, status: result.status, message_code: messageCode }
       details = { ...details, result: executed }
@@ -290,9 +296,25 @@ export async function PATCH(request, { params }) {
       .eq('id', row.contact_id)
       .maybeSingle()
     const creds = await glofoxCredentialsForLocation(db, row.location_id)
+    // PERSON-ACCT.7 — the agent ELECTED one of this person's linked Glofox
+    // accounts for the write and stamped it on the row. By the time staff
+    // approve, the contact's link may have been repointed (a merge, a
+    // re-sync, a manual fix in Glofox), so executing anyway would book a
+    // class on an account nobody chose — silently, with a confirmation sent.
+    // Refuse instead and land the row on 'failed', where the existing
+    // Fix & retry lane picks it up once the operator has sorted the account.
+    const electedMemberId = row.details?.elected_glofox_member_id || null
+    const accountMismatch = !!electedMemberId
+      && !!contact?.glofox_member_id
+      && contact.glofox_member_id !== electedMemberId
     if (!contact?.glofox_member_id || !creds || missingGlofoxCredentialsForLocation(creds).length) {
       finalStatus = 'failed'
       details = { ...details, result: { ok: false, message_code: 'NOT_EXECUTABLE' } }
+    } else if (accountMismatch) {
+      executed = { ok: false, message_code: 'ACCOUNT_MISMATCH' }
+      details = { ...details, result: executed }
+      finalStatus = 'failed'
+      console.warn(`[agent-requests] refused execution ${id}: elected account ${electedMemberId} no longer matches contact ${row.contact_id}`)
     } else {
       // If the processor sent this for a credit grant (existing account with no
       // live credits), grant the trial class credit BEFORE booking — otherwise

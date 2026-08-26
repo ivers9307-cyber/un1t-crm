@@ -34,6 +34,10 @@ const MACHINE_REASONS = {
     'Mia escalated: they asked to book but have no class credits or active membership. Talk to them in the conversation, grant a credit or set them up in Glofox, then approve to book.',
   account_ambiguous:
     'More than one Glofox account matched this customer. Pick the right account in Glofox before approving.',
+  // PERSON-ACCT.7 — the agent elects ONE linked account per booking and
+  // escalates instead of coin-flipping between two that are both live.
+  account_conflict:
+    'Mia found more than one account holding a live membership/credits and escalated rather than guess. Confirm which account is right in Glofox, then approve — the booking runs against the account shown.',
   account_failed:
     'Their Glofox account could not be found or created automatically. Sort the account in Glofox, then approve to book.',
   account_needs_review:
@@ -90,6 +94,11 @@ const FAILURE_EXPLANATIONS = {
     'Glofox refused the booking — no class credits on their account. Grant a credit in Glofox, then retry.',
   NOT_EXECUTABLE:
     'The request could not be executed — the contact has no linked Glofox account (or Glofox is not configured here). Link the account, then retry.',
+  // PERSON-ACCT.7 — the row named the Glofox account the agent chose for this
+  // booking, and the contact is now linked to a different one, so nothing was
+  // booked (rather than booking on an account nobody picked).
+  ACCOUNT_MISMATCH:
+    'This booking was queued for a different Glofox account than the one the contact is linked to now, so it was not executed. Check which account is right in Glofox, then retry.',
 }
 
 /**
@@ -148,6 +157,33 @@ export function accountSummaryLine(contact) {
   if (Number.isFinite(credits)) parts.push(`${credits} credit${credits === 1 ? '' : 's'} left`)
   else parts.push('credits unknown')
   return parts.join(' · ')
+}
+
+/**
+ * PERSON-ACCT.8 — pause/cancellation elect ONE of a person's linked
+ * accounts and stamp `details.elected_glofox_member_id`, same convention
+ * book_class uses. But class_booking's ACCOUNT_MISMATCH cross-check
+ * (src/app/api/agent/membership-requests/[id]/route.js) is BLOCKING for a
+ * reason that does not apply here: approving a class_booking re-runs a
+ * live Glofox call, so a stale election would book the wrong account
+ * silently, and refusing is strictly safer than executing. Pause and
+ * cancellation are NOT in EXECUTING_KINDS (request-recovery.js) — staff
+ * make the actual Glofox change by hand after approving, so there is no
+ * automated write for a block to protect against. Blocking the DECISION
+ * itself (approve/decline/save) here would only strand a legitimate
+ * request behind a mismatch that may already be moot by the time staff
+ * look at it (the account could have been fixed, merged, or re-synced
+ * since the request was filed) — worse than the risk it guards against.
+ * So this is a WARNING for the operator to double-check in Glofox, never a
+ * refusal to decide. Pure — the card renders it, nothing calls it to gate
+ * anything.
+ */
+export function accountMismatchWarning(row) {
+  if (!row || (row.kind !== 'pause' && row.kind !== 'cancellation')) return null
+  const elected = row.details?.elected_glofox_member_id || null
+  const current = row.contact?.glofox_member_id || null
+  if (!elected || !current || elected === current) return null
+  return 'This request was filed against a different Glofox account than the one the contact is linked to now — check which account is right before making the change in Glofox.'
 }
 
 /**

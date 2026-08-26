@@ -16,7 +16,7 @@ import { normalisePhone9 } from './person-links'
 
 const CONTACT_COLUMNS =
   'id, name, glofox_member_id, glofox_membership_status, glofox_membership_state, ' +
-  'trial_credits_remaining, last_attended_at, phone, wa_phone, email, updated_at'
+  'trial_credits_remaining, last_attended_at, phone, wa_phone, email, updated_at, location_id'
 
 const CHUNK_SIZE = 150
 
@@ -218,6 +218,160 @@ export function corroborated(anchorRow, otherRow) {
   return false
 }
 
+// Tier an account for write-election purposes: 2 = has a bookable membership
+// right now, 1 = no membership but holds trial credits, 0 = neither (pure
+// recency tiebreak territory). Higher tier always outranks a lower one
+// regardless of recency — a stale membership still beats a very-recently-
+// active account with nothing to spend.
+function writeElectionTier(row) {
+  if (hasBookableMembership(row)) return 2
+  if (Number(row?.trial_credits_remaining) > 0) return 1
+  return 0
+}
+
+// Most-recent-activity timestamp for ranking, ms since epoch. Tries
+// last_attended_at first; falls back to updated_at only when the primary is
+// absent OR fails to parse. Both absent/unparseable → -Infinity, i.e. this
+// row sorts LAST — an account election must never treat "we don't know when
+// this was last used" as "just used".
+function writeElectionActivityMs(row) {
+  const primary = row?.last_attended_at
+  const primaryMs = primary != null ? Date.parse(primary) : NaN
+  if (!Number.isNaN(primaryMs)) return primaryMs
+  const fallback = row?.updated_at
+  const fallbackMs = fallback != null ? Date.parse(fallback) : NaN
+  if (!Number.isNaN(fallbackMs)) return fallbackMs
+  return -Infinity
+}
+
+// Total order over candidates: tier desc, then activity desc, then id asc.
+// The id tiebreak is what makes election a pure function of the account SET
+// rather than of `accounts`' incoming array order — two callers who fetch
+// the same group in different orders (e.g. a cache vs a fresh read) must
+// never elect different accounts for the same write.
+function compareForElection(a, b) {
+  const tierA = writeElectionTier(a)
+  const tierB = writeElectionTier(b)
+  if (tierA !== tierB) return tierB - tierA
+  // Compare via equality first, not subtraction: both sides commonly land on
+  // -Infinity (no usable activity at all), and -Infinity - -Infinity is NaN,
+  // which silently corrupts Array.sort's ordering instead of throwing.
+  const ma = writeElectionActivityMs(a)
+  const mb = writeElectionActivityMs(b)
+  if (ma !== mb) return mb - ma
+  const idA = String(a.id)
+  const idB = String(b.id)
+  if (idA < idB) return -1
+  if (idA > idB) return 1
+  return 0
+}
+
+/**
+ * electWriteAccount({ accounts, anchorContactId, concernsMemberIds = [], locationId }) →
+ *   { outcome: 'none', candidates: [] }
+ * | { outcome: 'elected', account, candidates: [account] }
+ * | { outcome: 'conflict', candidates: [...tied, ranked] }
+ *
+ * PERSON-ACCT.5 — deliberately elects ONE account for a WRITE (book/cancel/
+ * pause), or escalates, rather than reading `accounts` in whatever order the
+ * caller happened to fetch it. This is NOT `pickPrimary` (person-links.js),
+ * which ranks accounts for DISPLAY/outreach — which row a contact list or
+ * churn radar shows as "the" contact. That ranking still puts a classpass
+ * row on the podium (score 0, but still sorted and returned) because
+ * showing it is harmless; WRITING to it is not (below). Reusing a display
+ * ranking to decide which Glofox account actually receives a booking/cancel
+ * call is exactly the bug this task exists to prevent: pickPrimary happily
+ * returns whichever row scores highest even when that row is a stranger's
+ * (it has no corroboration concept at all), so a shared surname/lookup that
+ * grouped the wrong two contacts together would silently book the WRONG
+ * PERSON's class. Election refuses to guess: it only ever picks among rows
+ * that are actually corroborated with the person being written for, and it
+ * answers 'conflict' rather than a coin-flip when two accounts are equally
+ * good candidates.
+ *
+ * ClassPass rows stay READ-visible elsewhere in this module (linkedAccounts-
+ * ForContact, findBookingAcrossAccounts) because showing a customer their
+ * ClassPass booking is correct — but classpass_payg is a status Glofox
+ * itself does not treat as a normal membership: bookings/cancellations for
+ * it are governed by ClassPass's own payment/credit/refund flow. Writing to
+ * it directly through the Glofox member API would create or cancel a
+ * booking Glofox thinks the member paid for directly, while ClassPass's own
+ * ledger never hears about it — a silent double-booking/refund mismatch.
+ * So classpass_payg is excluded from candidates ALWAYS, even when it is the
+ * only entitled (bookable-membership or credits-holding) row in the group.
+ *
+ * Rules, applied in order:
+ *  1. Candidates = accounts minus classpass_payg rows, minus rows that fail
+ *     `corroborated(anchorRow, row)` (anchorRow = the row whose id ===
+ *     anchorContactId if present, else the first account by id sort — a row
+ *     is always corroborated with itself, so the anchor is never excluded
+ *     by its own rule), minus — when `locationId` is passed — rows whose
+ *     OWN `location_id` is present AND differs from it. Zero candidates →
+ *     'none'.
+ *
+ *     The location guard is defensive hardening, not a rule the data
+ *     currently exercises: `linkedAccountsForContact` resolves a person's
+ *     WHOLE group regardless of location, and — verified against
+ *     production 2026-08-26 — zero person groups today span more than one
+ *     location. But nothing stops one existing (a member who trains at two
+ *     studios), and electing an account at the WRONG location would file an
+ *     approval row whose `contact_id` and `location_id` disagree. A null or
+ *     absent `location_id` is NEVER treated as evidence of a foreign
+ *     location — excluding it on absence alone could strand a legitimate
+ *     account behind a sync gap, which is worse than the latent risk this
+ *     guards against. Passing no `locationId` at all (the parameter's
+ *     default) is a complete no-op, preserving every existing caller's
+ *     behaviour exactly.
+ *  2. If concernsMemberIds intersects the candidate set, narrow candidates
+ *     to that intersection — the account already holding the activity this
+ *     write concerns wins over a bare entitlement elsewhere, so a person's
+ *     booking/cancel history doesn't fragment across accounts.
+ *  3. Rank the remaining candidates: bookable membership, then credits,
+ *     then most-recent activity, then id (deterministic, order-independent).
+ *  4. Conflict: if ≥2 candidates tie at the TOP tier (both counted as
+ *     "having a bookable membership", or — only when none do — both
+ *     "holding credits") → 'conflict' with the tied rows, ranked. A tie at
+ *     the bottom (recency-only) tier is NOT a conflict — the id tiebreak
+ *     always yields a single, deterministic winner there.
+ *  5. Otherwise → 'elected' with the top-ranked candidate.
+ *
+ * Pure: never mutates `accounts` (every sort/filter runs over a copy).
+ */
+export function electWriteAccount({ accounts, anchorContactId, concernsMemberIds = [], locationId = null } = {}) {
+  const list = Array.isArray(accounts) ? accounts : []
+
+  const anchorRow = list.find((a) => a && a.id === anchorContactId)
+    ?? [...list].sort((a, b) => (String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0))[0]
+
+  const eligible = list.filter((acct) => {
+    if (!acct) return false
+    if (acct.glofox_membership_status === 'classpass_payg') return false
+    // Location guard (defensive hardening, see the doc comment above): only
+    // ever excludes on a POSITIVE mismatch — a row with no location_id at
+    // all is never treated as foreign.
+    if (locationId != null && acct.location_id != null && acct.location_id !== locationId) return false
+    return corroborated(anchorRow, acct)
+  })
+
+  if (eligible.length === 0) return { outcome: 'none', candidates: [] }
+
+  const concerns = Array.isArray(concernsMemberIds) ? concernsMemberIds : []
+  let pool = eligible
+  if (concerns.length > 0) {
+    const concerned = eligible.filter((acct) => concerns.includes(acct.glofox_member_id))
+    if (concerned.length > 0) pool = concerned
+  }
+
+  const ranked = [...pool].sort(compareForElection)
+  const topTier = writeElectionTier(ranked[0])
+  const tiedAtTop = topTier > 0 ? ranked.filter((acct) => writeElectionTier(acct) === topTier) : [ranked[0]]
+
+  if (tiedAtTop.length >= 2) {
+    return { outcome: 'conflict', candidates: tiedAtTop }
+  }
+  return { outcome: 'elected', account: ranked[0], candidates: [ranked[0]] }
+}
+
 /**
  * findBookingAcrossAccounts(creds, accounts, bookingId, fetchImpl) →
  *   { owner, unreadable }
@@ -238,9 +392,46 @@ export function corroborated(anchorRow, otherRow) {
  * `fetchImpl` never throws — every account is reported unreadable.
  */
 export async function findBookingAcrossAccounts(creds, accounts, bookingId, fetchImpl) {
+  const reads = await fanUpcomingBookings(creds, accounts, fetchImpl)
+
+  let owner = null
+  const unreadable = []
+
+  for (const { account, ok, bookings } of reads) {
+    if (!ok) {
+      unreadable.push(account)
+      continue
+    }
+    if (!owner && bookings.some((b) => b && b._id === bookingId)) {
+      owner = account
+    }
+  }
+
+  return { owner, unreadable }
+}
+
+/**
+ * fanUpcomingBookings(creds, accounts, fetchImpl) →
+ *   [{ account, ok, bookings }]  (input order preserved)
+ *
+ * PERSON-ACCT.7 — the ONE upcoming-bookings fan-out. Every caller that asks
+ * "what is this whole person booked into" runs through here: the agent's
+ * list_my_upcoming_bookings merge, cancel_class_booking's owner lookup
+ * (findBookingAcrossAccounts, above) and book_class's election-activity +
+ * double-booking backstop. Sharing it is the point — three copies of the
+ * same allSettled would be three chances to drift on the window, the cap, or
+ * on what counts as an unreadable account.
+ *
+ * `ok: false` covers a rejected promise AND a result reporting `ok: false`.
+ * An ok read with no bookings is EMPTY, not unreadable — the distinction is
+ * load-bearing (an unreadable account must never become "you have nothing
+ * booked"). A missing/non-function `fetchImpl` never throws: every account
+ * comes back unreadable.
+ */
+export async function fanUpcomingBookings(creds, accounts, fetchImpl) {
   const list = Array.isArray(accounts) ? accounts : []
   if (typeof fetchImpl !== 'function') {
-    return { owner: null, unreadable: [...list] }
+    return list.map((account) => ({ account, ok: false, bookings: [] }))
   }
   const settled = await Promise.allSettled(
     list.map((account) => fetchImpl(creds, account.glofox_member_id, {
@@ -251,21 +442,74 @@ export async function findBookingAcrossAccounts(creds, accounts, bookingId, fetc
       limit: 100,
     })),
   )
-
-  let owner = null
-  const unreadable = []
-
-  settled.forEach((result, i) => {
+  return settled.map((result, i) => {
     const account = list[i]
     if (result.status !== 'fulfilled' || !result.value || result.value.ok !== true) {
-      unreadable.push(account)
-      return
+      return { account, ok: false, bookings: [] }
     }
-    const bookings = Array.isArray(result.value.bookings) ? result.value.bookings : []
-    if (!owner && bookings.some((b) => b && b._id === bookingId)) {
-      owner = account
+    return {
+      account,
+      ok: true,
+      bookings: Array.isArray(result.value.bookings) ? result.value.bookings : [],
     }
   })
+}
 
-  return { owner, unreadable }
+// The Glofox Booking is POLYMORPHIC: its class reference is `model_id` (with
+// discriminator model:'events'), NOT a top-level `event_id` — the same read
+// mapBookingToRosterRow makes (src/lib/class-bookings.js), where hard-
+// requiring event_id left class_bookings empty all-time.
+function bookingEventId(b) {
+  const id = b?.model_id ?? b?.event_id
+  return id == null ? null : String(id)
+}
+
+// /2.0/bookings is fetched with exclude_cancelled=false, so cancelled rows
+// come back too. Mirrors shapeMemberBookingsForAgent: a missing status counts
+// as booked, anything other than BOOKED does not.
+function isActiveBooking(b) {
+  const status = typeof b?.status === 'string' ? b.status.toUpperCase() : null
+  return !status || status === 'BOOKED'
+}
+
+/**
+ * summariseBookingFan(reads, eventId) →
+ *   { concernsMemberIds, alreadyBookedOn, unreadable }   [pure]
+ *
+ * PERSON-ACCT.7 — reads a fanUpcomingBookings result for the two things a
+ * WRITE needs to know:
+ *   • concernsMemberIds — the accounts actually holding this person's
+ *     upcoming bookings, fed to electWriteAccount so the write lands where
+ *     their activity already is rather than fragmenting across accounts;
+ *   • alreadyBookedOn — the account already holding `eventId` (null if none,
+ *     the first in `reads` order if somehow two do). This is the
+ *     cross-account double-booking backstop: Glofox dedupes per member id,
+ *     so it cannot see a booking sitting on the person's OTHER account.
+ *
+ * Unreadable accounts are reported, never counted as empty. A null/absent
+ * eventId can only yield `alreadyBookedOn: null` — an unmatchable id must
+ * never produce a confident "already booked".
+ */
+export function summariseBookingFan(reads, eventId) {
+  const wanted = eventId == null ? null : String(eventId)
+  const concernsMemberIds = []
+  const unreadable = []
+  let alreadyBookedOn = null
+
+  for (const read of Array.isArray(reads) ? reads : []) {
+    if (!read) continue
+    if (!read.ok) {
+      unreadable.push(read.account)
+      continue
+    }
+    const active = (Array.isArray(read.bookings) ? read.bookings : []).filter(isActiveBooking)
+    if (active.length && read.account?.glofox_member_id) {
+      concernsMemberIds.push(read.account.glofox_member_id)
+    }
+    if (!alreadyBookedOn && wanted && active.some((b) => bookingEventId(b) === wanted)) {
+      alreadyBookedOn = read.account
+    }
+  }
+
+  return { concernsMemberIds, alreadyBookedOn, unreadable }
 }
