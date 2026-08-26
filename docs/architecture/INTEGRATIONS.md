@@ -61,6 +61,9 @@ PAY_HOSTNAME=pay.ccfautos.com    # middleware uses this to gate which paths are 
 
 # InBody / Lookin'Body WebAPI (CONSULTATIONS SP2) — see src/lib/inbody-webhook.js
 INBODY_WEBHOOK_SECRET=           # shared secret we set as a custom header (x-inbody-secret) in the InBody portal Step 3; /api/webhooks/inbody 500s if unset, 403s on mismatch
+
+# IMAP/SMTP mailbox connector — see "Mailbox connector (IMAP/SMTP) — secrets at rest"
+MAILBOX_SECRET_KEY=              # base64, EXACTLY 32 random bytes (44 chars) — the AES-256-GCM master key for customer mailbox credentials in email_mailbox_credentials. NO plaintext fallback: unset = the connect route refuses and every connected mailbox resolves not_configured. Generate with `openssl rand -base64 32`. Never commit it, never put it in the database it protects (not Supabase Vault), never reuse a value across environments.
 ```
 
 
@@ -353,3 +356,58 @@ End-to-end flow: operator clicks one button on a car → buyer gets an SMS with 
 **Concurrency.** Each car is fully isolated end-to-end (`deposit_token`, `deposit_revolut_order_id`, `deposit_revolut_checkout_url`, idempotency key all keyed off the car). 4-5 simultaneous deposits work without contention — Postgres serializes UPDATEs naturally on different rows, Vercel scales horizontally per request, Revolut webhooks land in different car rows. Only edge case: two operators issuing the same car at the exact same moment would race — easy to fix with row-level lock if it ever matters.
 
 
+## Mailbox connector (IMAP/SMTP) — secrets at rest
+
+`src/lib/mail/secret-box.js` (AES-256-GCM) + `src/lib/mail/auth-strategy.js`. Applies to `email_mailbox_credentials` — the table holding a **customer's** mailbox login for the IMAP connector (mailboxes on domains whose MX we will never control, e.g. `hatchstreet@un1t.com`). Design doc: `docs/superpowers/specs/2026-08-26-imap-mailbox-connector-design.md` §6.
+
+**Why this one is encrypted when `xero_connections` and `recon_mailboxes` are not.** Those hold *our* tokens for *our* accounts, and a leak costs us a re-auth we perform ourselves (mig 029 says as much, in a `TODO`). This table holds a *customer's* IMAP app password, which is total mailbox authority — read every message the account ever received, and send as them. The same DB-level disclosure that costs us a Xero reconnect costs an operator their entire correspondence. The precedent deliberately does not transfer.
+
+**The key must not live in the database it protects**, which rules out Supabase Vault and a pgcrypto key in a table. It lives in `MAILBOX_SECRET_KEY` on Vercel; the database only ever sees ciphertext.
+
+### Generating the key
+
+```bash
+openssl rand -base64 32        # 44 characters, e.g. 8Jx…= — this is the whole value
+```
+
+Must decode to **exactly 32 bytes**. `secret-box.js` validates the alphabet and the decoded length and throws naming the variable if either is wrong — Node's base64 decoder silently skips characters outside the alphabet, so an unchecked typo would decode to *something* and surface later as every mailbox in the estate failing to decrypt at once. url-safe base64 (`-`/`_`) is accepted and normalised.
+
+Set it in **Vercel → Settings → Environment Variables** for Production, Preview and Development. Use a **different key per environment** — a preview deployment must not be able to decrypt production credentials. Local `.env.local` gets its own throwaway value; credentials sealed locally are simply unreadable in prod, which is the correct outcome.
+
+### Fail-closed behaviour (do not "fix" this)
+
+| Situation | What happens |
+|---|---|
+| `MAILBOX_SECRET_KEY` unset or malformed | `isConfigured()` → `false`; `seal()`/`open()` throw naming the variable; `resolveAuth()` returns `not_configured` |
+| Ciphertext will not open under the current key | `resolveAuth()` returns `decrypt_failed` |
+| Column tampered / truncated | GCM tag check fails → `decrypt_failed` |
+
+There is **no plaintext fallback, in any environment.** A fallback would silently write a customer's password to the database in the clear on the one deploy where the env var was forgotten, and nothing downstream could tell afterwards. This is the one place where "never trade a silent failure for a louder one" points the other way: the loud failure is a mailbox that will not connect until an env var is set; the silent one is a plaintext credential leak.
+
+Note the deliberate split between `not_configured` and `decrypt_failed`. A missing env var flips **every** mailbox at once, which reads like a key compromise if it reports as `decrypt_failed` — so the resolver checks the key before attempting the open.
+
+### Ciphertext format
+
+```
+v1:<base64 12-byte IV>:<base64 16-byte GCM tag>:<base64 ciphertext>
+```
+
+A fresh IV per `seal()` (GCM nonce reuse under one key is catastrophic). The `v1:` prefix is the rotation seam: `open()` refuses any other version by name, so a half-finished rotation reads as "this deploy cannot read that row", not as a corrupt database.
+
+### Rotating the key
+
+Rotation is a **re-encrypt**, not a swap: the old ciphertexts are unreadable the moment the old key leaves the environment. Nothing in the estate does this automatically, so it is a deliberate, staffed operation.
+
+1. Generate the new key (`openssl rand -base64 32`). Keep the current one — you need both.
+2. Teach `open()` the second key: add a `v2:` branch reading `MAILBOX_SECRET_KEY_NEXT`, keeping `v1:` on the existing key, and have `seal()` emit `v2:`. Deploy that first, with **both** env vars set. Now every write is on the new key and every read still works.
+3. Re-encrypt in place: for each `email_mailbox_credentials` row, `open()` then `seal()` each of `secret_ciphertext`, `oauth_access_token_ciphertext`, `oauth_refresh_token_ciphertext`, and write back. Run it as a one-off script or an admin route — never as a migration, because the key is not available to the database.
+4. Verify no `v1:` prefix survives: `select count(*) from email_mailbox_credentials where secret_ciphertext like 'v1:%'` (and the two oauth columns) must be **0**.
+5. Only then remove the old key and the `v1:` branch. Removing it before step 4 reads zero is what turns a rotation into a mass lockout.
+
+If the old key is already lost, there is no recovery: clear the credential columns and have each operator reconnect their mailbox. Say so plainly rather than leaving rows that fail forever.
+
+### Handling rules
+
+- The ciphertext columns are **never** selected by any GET. Write-only from the operator's side; the UI shows connection *state*, never the value (`key_hint`-style last-four is the pattern, per Shelly).
+- `resolveAuth()` (`src/lib/mail/auth-strategy.js`) is the only reader. It returns `{ user, pass }` or `{ user, accessToken }` — never a raw secret to be passed around — and **never throws, and never puts the secret in an error string**, because those strings land in `email_mailbox_ingress.last_error` and on the operator's screen.
+- Gate credential writes with `guardMailboxAdmin` (master or owner-at-location) and write an audit event on every connect / disconnect / credential change.
