@@ -67,6 +67,7 @@ export default function CustomerAgentClient() {
         cancellation_confirmation_text: settings.cancellation_confirmation_text || null,
         booking_issue_handoff_text: settings.booking_issue_handoff_text || null,
         no_credits_handoff_text: settings.no_credits_handoff_text || null,
+        account_conflict_handoff_text: settings.account_conflict_handoff_text || null,
         booking_expired_text: settings.booking_expired_text || null,
         approval_decline_text: settings.approval_decline_text || null,
         welcome_greeting: settings.welcome_greeting || null,
@@ -448,6 +449,17 @@ export default function CustomerAgentClient() {
             onChange={e => setField('no_credits_handoff_text', e.target.value)}
             placeholder="You're out of class credits at the moment so I can't book that one straight away. I'll escalate this to a team member to help you out now." />
           <p className="text-xs text-un1t-muted mt-1">Sent word-for-word when a customer asks to book but has no credits or active membership. The conversation is handed to the team immediately and the booking request appears in Approvals. Leave blank to use the default shown.</p>
+        </div>
+
+        {/* PERSON-ACCT.7 — sent verbatim when the booking tool finds two live
+            accounts for the same person and hands off rather than guessing.
+            Default mirrors DEFAULT_ACCOUNT_CONFLICT_HANDOFF_TEXT in core.js. */}
+        <div>
+          <label className="block text-sm font-medium text-un1t-text mb-1">Duplicate-account escalation message</label>
+          <input className={inputCls} maxLength={500} value={settings.account_conflict_handoff_text || ''}
+            onChange={e => setField('account_conflict_handoff_text', e.target.value)}
+            placeholder="You have more than one account with us so I want to get this booking exactly right. I'll get a team member to sort it for you now." />
+          <p className="text-xs text-un1t-muted mt-1">Sent word-for-word when a customer has more than one account holding a live membership or credits, so the agent will not guess which one to book. The conversation is handed to the team and the booking request appears in Approvals with the accounts listed. Leave blank to use the default shown.</p>
         </div>
 
         {/* MIA-BOARD.2 — sent when a pending booking outlives its class.

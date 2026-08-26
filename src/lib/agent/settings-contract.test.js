@@ -45,6 +45,22 @@ describe('settings write-through contract', () => {
     ).toBe(null)
   })
 
+  // PERSON-ACCT.7 — the deterministic script for the two-live-accounts
+  // handoff. A customer-facing string that never reaches the blob is the
+  // failure mode this whole file exists for (#495).
+  it('account_conflict_handoff_text round-trips; blank → null (core default)', () => {
+    expect(
+      buildCustomerAgentSettings(
+        SettingsSchema.parse({ enabled: true, account_conflict_handoff_text: '  Two accounts — a coach will sort it.  ' }),
+      ).account_conflict_handoff_text,
+    ).toBe('Two accounts — a coach will sort it.')
+    expect(
+      buildCustomerAgentSettings(SettingsSchema.parse({ enabled: true, account_conflict_handoff_text: '   ' }))
+        .account_conflict_handoff_text,
+    ).toBe(null)
+    expect(DEFAULTS.account_conflict_handoff_text).toBe(null)
+  })
+
   it('existing transforms hold: trim-to-null, agent_name default, nested merges', () => {
     const built = buildCustomerAgentSettings(
       SettingsSchema.parse({

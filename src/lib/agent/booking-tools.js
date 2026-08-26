@@ -25,7 +25,10 @@
 // does the IO and never throws (mirrors executeAccountTool).
 
 import { GLOFOX_BOOKING_MODEL } from '@/lib/glofox'
-import { linkedAccountsForContact, corroborated, findBookingAcrossAccounts, hasBookableMembership } from '@/lib/person-accounts'
+import {
+  linkedAccountsForContact, corroborated, findBookingAcrossAccounts, hasBookableMembership,
+  electWriteAccount, fanUpcomingBookings, summariseBookingFan,
+} from '@/lib/person-accounts'
 import { DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT } from './notify'
 import { notifyAgentApprovalRequest } from './approval-notify'
 import { formatDublinClassTime } from './dublin-format'
@@ -382,11 +385,18 @@ async function resolveConsultationEventType(db, locationId, settings) {
 // as complete for reconciliation. A row left behind by a crash stays
 // 'pending' and surfaces in the approvals queue, where approving it re-runs
 // the action (Glofox is the arbiter of double-booking).
-async function logBookingRequest(db, ctx, { kind, status, details, customerNote = null }) {
+//
+// PERSON-ACCT.7 — `contactId` overrides which contact the row is filed
+// against. book_class elects ONE of a person's linked accounts for the write,
+// and the approval executor re-runs the action against row.contact_id's
+// account, so a row filed against the anchor while the booking was elected to
+// a sibling would execute on the wrong account. Every booking-shaped row this
+// module files names the contact whose account the write belongs to.
+async function logBookingRequest(db, ctx, { kind, status, details, customerNote = null, contactId = null }) {
   try {
     const { data, error } = await db.from('agent_membership_requests').insert({
       location_id: ctx.locationId,
-      contact_id: ctx.verifiedContactId || ctx.contactId || null,
+      contact_id: contactId || ctx.verifiedContactId || ctx.contactId || null,
       kind,
       channel: ctx.channel || null,
       conversation_id: ctx.conversationId || null,
@@ -440,17 +450,81 @@ export function bookingRejectionRoute(messageCode) {
 // One pending approval per (contact, event): a retried tool call must not
 // double-card staff. Best-effort — on lookup failure we'd rather risk a
 // duplicate card than lose the fallback entirely.
-async function pendingBookingApprovalId(db, ctx, eventId, excludeId) {
+async function pendingBookingApprovalId(db, ctx, eventId, excludeId, contactId = null) {
   try {
     const { data } = await db.from('agent_membership_requests')
       .select('id')
-      .eq('contact_id', ctx.verifiedContactId || ctx.contactId)
+      // PERSON-ACCT.7 — deduped against the contact the row would be FILED
+      // against (the elected account), not the anchor: those are the rows a
+      // retry would duplicate.
+      .eq('contact_id', contactId || ctx.verifiedContactId || ctx.contactId)
       .eq('kind', 'class_booking')
       .eq('status', 'pending')
       .contains('details', { event_id: eventId })
       .limit(5)
     return (data || []).map((r) => r.id).find((id) => id && id !== excludeId) || null
   } catch { return null }
+}
+
+// PERSON-ACCT.7 — live entitlement probe for ONE account, used both to
+// verify a conflict before it costs a human's attention and to rescue a
+// confirmed-empty election onto a sibling that still holds credits.
+//
+// The balance is the only per-account LIVE signal on this path, so it is
+// paired with the CRM's membership flag: a genuine membership books with no
+// credit records at all, and credits alone would demote every unlimited
+// member. `readOk: false` is NOT a confident "no" — callers treat an
+// unverifiable candidate as "not a live conflict" (which proceeds to a
+// booking Glofox still arbitrates), never as "this account is empty".
+async function probeAccountCredits(creds, account, fetchUserCreditsResult, computeCreditsRemaining) {
+  try {
+    const { ok, credits } = await fetchUserCreditsResult(creds, account.glofox_member_id)
+    if (!ok) return { account, readOk: false, credits: null, entitled: false }
+    const remaining = computeCreditsRemaining(credits)
+    return {
+      account,
+      readOk: true,
+      credits: remaining,
+      entitled: remaining > 0 || hasBookableMembership(account),
+    }
+  } catch {
+    return { account, readOk: false, credits: null, entitled: false }
+  }
+}
+
+// Probe several accounts at once. allSettled, not all: one dead account must
+// never lose the others' answers.
+async function probeAccounts(creds, accounts, fetchUserCreditsResult, computeCreditsRemaining) {
+  const settled = await Promise.allSettled(
+    accounts.map((a) => probeAccountCredits(creds, a, fetchUserCreditsResult, computeCreditsRemaining)),
+  )
+  return settled.map((r, i) => (
+    r.status === 'fulfilled' ? r.value : { account: accounts[i], readOk: false, credits: null, entitled: false }
+  ))
+}
+
+/**
+ * PERSON-ACCT.7 — the elected account is confirmed empty. Before anyone is
+ * told "no credits", check the REST of this person's accounts LIVE:
+ * contacts.trial_credits_remaining is a sync artefact, so a sibling can hold
+ * credits the CRM-ranked election could not see.
+ *
+ * Eligibility mirrors electWriteAccount's rule 1 deliberately — corroborated
+ * with the anchor (never a stranger's account), never classpass_payg (those
+ * bookings are governed by ClassPass's own ledger). The id sort makes the
+ * rescue a pure function of the account SET, not of fetch order.
+ */
+async function reelectSiblingWithCredits({
+  creds, accounts, anchorRow, excludeMemberId, fetchUserCreditsResult, computeCreditsRemaining,
+}) {
+  const siblings = accounts
+    .filter((a) => a && a.glofox_member_id && a.glofox_member_id !== excludeMemberId)
+    .filter((a) => a.glofox_membership_status !== 'classpass_payg')
+    .filter((a) => corroborated(anchorRow, a))
+    .sort((a, b) => (String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0))
+  if (!siblings.length) return null
+  const probes = await probeAccounts(creds, siblings, fetchUserCreditsResult, computeCreditsRemaining)
+  return probes.find((p) => p.entitled)?.account || null
 }
 
 // ── executor (IO) ───────────────────────────────────────────────────
@@ -498,12 +572,134 @@ export async function executeBookingTool(toolName, input, ctx) {
     // junk value degrades to the legacy unguarded shape, never to a wrong
     // expiry.
     const relayedStartMs = Date.parse(input?.starts_at || '')
-    const baseDetails = {
+
+    const {
+      glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation,
+      fetchUserBookingsResult, fetchUserCreditsResult, createBooking, interpretBookingResult,
+    } = await import('@/lib/glofox')
+    const { computeCreditsRemaining } = await import('@/lib/glofox-sync')
+    const creds = await glofoxCredentialsForLocation(db, locationId)
+    // Resolved here rather than returned on: draft mode has never needed
+    // Glofox credentials and must keep drafting without them (the auto lane
+    // below still answers no_booking_system).
+    const credsUsable = !!creds && missingGlofoxCredentialsForLocation(creds).length === 0
+
+    // PERSON-ACCT.7 — one person routinely holds 2-3 contacts rows, each
+    // linked to a DIFFERENT Glofox account, and the conversation is attached
+    // to whichever one the inbound number matched. Booking that one is how a
+    // real member's booking lands on an empty account. Read the whole person,
+    // then elect ONE account for the write. readFailed is never "this person
+    // has no accounts": it falls back to the single account this conversation
+    // is attached to, i.e. the pre-election behaviour.
+    const linked = verifiedContactId
+      ? await linkedAccountsForContact(db, verifiedContactId)
+      : { readFailed: true, contacts: [], accounts: [] }
+    const accounts = linked.readFailed ? [] : linked.accounts
+    const anchorRow = linked.contacts.find((c) => c && c.id === verifiedContactId) || null
+
+    let concernsMemberIds = []
+    if (credsUsable && accounts.length) {
+      const fan = summariseBookingFan(
+        await fanUpcomingBookings(creds, accounts, fetchUserBookingsResult),
+        input.event_id,
+      )
+      concernsMemberIds = fan.concernsMemberIds
+      if (fan.alreadyBookedOn) {
+        // Glofox dedupes per member id, so its own already-booked guard
+        // CANNOT see a booking sitting on this person's other account: the
+        // customer ends up in the class twice, paying twice on a credits
+        // account. Answer exactly as interpretBookingResult's alreadyBooked
+        // path already does — the member IS in the class. No audit row is
+        // written on purpose: nothing was attempted, so there is no attempt
+        // to record (the existing booking has its own history).
+        //
+        // An UNREADABLE account is not proof of absence, but it is not
+        // grounds to refuse the booking either: proceeding leaves Glofox to
+        // arbitrate the elected account, which is what happened before this
+        // backstop existed.
+        return { booked: true, class_name: input.class_name || null, class_time: input.class_time || null }
+      }
+    }
+
+    const election = electWriteAccount({ accounts, anchorContactId: verifiedContactId, concernsMemberIds, locationId })
+    // 'none' — no account is readable, or every one is classpass/
+    // uncorroborated — keeps the pre-election lanes exactly as they were:
+    // the contact this conversation is attached to (already guarded above for
+    // not_linked, and still subject to the no_credits pre-flight below).
+    const elected = election.outcome === 'elected' ? election.account : null
+    let electedMemberId = elected?.glofox_member_id || glofoxMemberId
+    let electedContactId = elected?.id || null
+    let electedRow = elected || membershipRow
+
+    const bookingDetails = (extra = {}) => ({
       event_id: input.event_id,
       class_name: input.class_name || null,
       class_time: input.class_time || null,
       ...(Number.isFinite(relayedStartMs) ? { starts_at: new Date(relayedStartMs).toISOString() } : {}),
       mode,
+      // PERSON-ACCT.7 — every booking-shaped row names the account the write
+      // ran (or will run) against. The approval executor refuses to execute a
+      // row whose contact no longer carries this id (ACCOUNT_MISMATCH)
+      // instead of booking a class on an account nobody chose.
+      elected_glofox_member_id: electedMemberId,
+      ...extra,
+    })
+
+    if (election.outcome === 'conflict') {
+      // PERSON-ACCT.7 — two accounts tie at the top on what the CRM knows.
+      // A CRM tie is not evidence of a LIVE tie (trial_credits_remaining is a
+      // sync artefact and an account can have been closed in Glofox since),
+      // and a card staff cannot act on is worse than no card. Verify against
+      // Glofox first: only a tie that survives live verification is worth a
+      // human's attention; anything less resolves itself here.
+      const candidates = election.candidates
+      const probes = await probeAccounts(creds, candidates, fetchUserCreditsResult, computeCreditsRemaining)
+      const live = probes.filter((p) => p.entitled)
+
+      if (live.length >= 2) {
+        const top = candidates[0]
+        electedMemberId = top.glofox_member_id
+        electedContactId = top.id
+        electedRow = top
+        // The ambiguity is STRUCTURED data, never free text stuffed into
+        // details.reason (which is a machine code on class_booking rows and
+        // is read as one by whyFlagged and the approval cards).
+        const candidateDetails = probes.map((p) => ({
+          contact_id: p.account.id,
+          glofox_member_id: p.account.glofox_member_id,
+          name: p.account.name || null,
+          membership_status: p.account.glofox_membership_status || null,
+          // null = we could not read it. NEVER rendered as zero.
+          credits: p.credits,
+        }))
+        const summary = [input.class_name, input.class_time, 'two live accounts — Mia would not guess']
+          .filter(Boolean).join(' · ')
+        let approvalId = await pendingBookingApprovalId(db, ctx, input.event_id, null, top.id)
+        if (!approvalId) {
+          approvalId = await logBookingRequest(db, ctx, {
+            kind: 'class_booking', status: 'pending', contactId: top.id,
+            details: bookingDetails({ reason: 'account_conflict', candidates: candidateDetails }),
+          })
+          if (approvalId) {
+            await notifyAgentApprovalRequest(db, {
+              requestId: approvalId, locationId, kind: 'class_booking', customerName: ctx.nameHint, summary,
+            })
+          }
+        }
+        return {
+          booked: false,
+          account_conflict: true,
+          message: 'This customer has more than one account that could hold this booking, so nothing was booked. The team has been alerted and is taking over this conversation now — your reply will not be sent, so do not compose one.',
+        }
+      }
+
+      // Fewer than two verified: elect the live one, or (nothing verified at
+      // all — every read down) the top-ranked candidate. A broken pre-check
+      // must never block a booking that would have worked.
+      const fallback = live.length === 1 ? live[0].account : candidates[0]
+      electedMemberId = fallback.glofox_member_id
+      electedContactId = fallback.id
+      electedRow = fallback
     }
 
     // MIA-CREDITS.1 — pre-flight the balance BEFORE drafting or executing.
@@ -516,57 +712,71 @@ export async function executeBookingTool(toolName, input, ctx) {
     // or a CRM-synced active membership proceeds; an UNREADABLE balance also
     // proceeds — a broken pre-check must never block a booking that would
     // have worked (Glofox still arbitrates at execute time).
+    // PERSON-ACCT.7 — run against THE ELECTED ACCOUNT, not the anchor.
     {
       let credits = null
       let readFailed = false
-      try {
-        const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, fetchUserCreditsResult } = await import('@/lib/glofox')
-        const { computeCreditsRemaining } = await import('@/lib/glofox-sync')
-        const creds = await glofoxCredentialsForLocation(db, locationId)
-        if (!creds || missingGlofoxCredentialsForLocation(creds).length) {
-          readFailed = true // no Glofox here — the execute path answers no_booking_system
-        } else {
+      if (!credsUsable) {
+        readFailed = true // no Glofox here — the execute path answers no_booking_system
+      } else {
+        try {
           // ok-aware read: a Glofox blip must NOT escalate every booking to
           // a human — only a confirmed-empty balance does.
-          const { ok, credits: rows } = await fetchUserCreditsResult(creds, glofoxMemberId)
+          const { ok, credits: rows } = await fetchUserCreditsResult(creds, electedMemberId)
           if (!ok) readFailed = true
           else credits = computeCreditsRemaining(rows)
-        }
-      } catch { readFailed = true }
+        } catch { readFailed = true }
+      }
       // hasBookableMembership, NOT status === 'active' — that string never
       // occurs in contacts.glofox_membership_status (see person-accounts.js);
       // this exact check was dead code until PERSON-ACCT.3 fixed it here.
-      const activeMembership = hasBookableMembership(membershipRow)
+      const activeMembership = hasBookableMembership(electedRow)
       if (!readFailed && !(credits > 0) && !activeMembership) {
-        // File the booking intent as a pending approval (deduped per
-        // contact+event) so staff keep the one-tap grant-then-book flow the
-        // approvals queue provides; the auto-reply loop sees no_credits on
-        // this result and hands the THREAD off deterministically (script +
-        // park + manager push) — the customer is never left with silence.
-        let approvalId = await pendingBookingApprovalId(db, ctx, input.event_id, null)
-        if (!approvalId) {
-          approvalId = await logBookingRequest(db, ctx, {
-            kind: 'class_booking', status: 'pending',
-            details: { ...baseDetails, reason: 'no_credits' },
+        // PERSON-ACCT.7 — the elected account has nothing, but this person
+        // may have credits sitting on a sibling the CRM ranking could not
+        // see. Re-elect to it rather than escalating a customer who is, in
+        // fact, entitled to book.
+        const rescue = credsUsable
+          ? await reelectSiblingWithCredits({
+            creds, accounts, anchorRow, excludeMemberId: electedMemberId,
+            fetchUserCreditsResult, computeCreditsRemaining,
           })
-          if (approvalId) {
-            await notifyAgentApprovalRequest(db, {
-              requestId: approvalId, locationId, kind: 'class_booking', customerName: ctx.nameHint,
-              summary: [input.class_name, input.class_time, 'no credits — Mia escalated'].filter(Boolean).join(' · '),
+          : null
+        if (rescue) {
+          electedMemberId = rescue.glofox_member_id
+          electedContactId = rescue.id
+          electedRow = rescue
+        } else {
+          // File the booking intent as a pending approval (deduped per
+          // contact+event) so staff keep the one-tap grant-then-book flow the
+          // approvals queue provides; the auto-reply loop sees no_credits on
+          // this result and hands the THREAD off deterministically (script +
+          // park + manager push) — the customer is never left with silence.
+          let approvalId = await pendingBookingApprovalId(db, ctx, input.event_id, null, electedContactId)
+          if (!approvalId) {
+            approvalId = await logBookingRequest(db, ctx, {
+              kind: 'class_booking', status: 'pending', contactId: electedContactId,
+              details: bookingDetails({ reason: 'no_credits' }),
             })
+            if (approvalId) {
+              await notifyAgentApprovalRequest(db, {
+                requestId: approvalId, locationId, kind: 'class_booking', customerName: ctx.nameHint,
+                summary: [input.class_name, input.class_time, 'no credits — Mia escalated'].filter(Boolean).join(' · '),
+              })
+            }
           }
-        }
-        return {
-          booked: false,
-          no_credits: true,
-          message: 'The customer has no class credits and no active membership, so this booking cannot proceed. The team has been alerted and is taking over this conversation now — your reply will not be sent, so do not compose one.',
+          return {
+            booked: false,
+            no_credits: true,
+            message: 'The customer has no class credits and no active membership, so this booking cannot proceed. The team has been alerted and is taking over this conversation now — your reply will not be sent, so do not compose one.',
+          }
         }
       }
     }
 
     if (mode === 'draft') {
       const draftId = await logBookingRequest(db, ctx, {
-        kind: 'class_booking', status: 'pending', details: baseDetails,
+        kind: 'class_booking', status: 'pending', contactId: electedContactId, details: bookingDetails(),
       })
       await notifyAgentApprovalRequest(db, {
         requestId: draftId, locationId, kind: 'class_booking', customerName: ctx.nameHint,
@@ -578,18 +788,16 @@ export async function executeBookingTool(toolName, input, ctx) {
       }
     }
 
-    const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, interpretBookingResult } =
-      await import('@/lib/glofox')
-    const creds = await glofoxCredentialsForLocation(db, locationId)
-    if (!creds || missingGlofoxCredentialsForLocation(creds).length) {
+    if (!credsUsable) {
       return { error: 'no_booking_system', message: 'Class booking is not connected at this studio — hand off to the team.' }
     }
     // Intent BEFORE the side effect (see logBookingRequest).
     const auditId = await logBookingRequest(db, ctx, {
-      kind: 'class_booking', status: 'pending', details: { ...baseDetails, stage: 'executing' },
+      kind: 'class_booking', status: 'pending', contactId: electedContactId,
+      details: bookingDetails({ stage: 'executing' }),
     })
     const result = await createBooking(creds, {
-      user_id: glofoxMemberId,
+      user_id: electedMemberId,
       model: GLOFOX_BOOKING_MODEL,
       model_id: input.event_id,
     })
@@ -603,14 +811,14 @@ export async function executeBookingTool(toolName, input, ctx) {
     if (success) {
       await finalizeBookingRequest(db, ctx, auditId, {
         kind: 'class_booking', status: 'actioned',
-        details: { ...baseDetails, result: resultDetails },
+        details: bookingDetails({ result: resultDetails }),
       })
       return { booked: true, class_name: input.class_name || null, class_time: input.class_time || null }
     }
     if (bookingRejectionRoute(messageCode) === 'reply') {
       await finalizeBookingRequest(db, ctx, auditId, {
         kind: 'class_booking', status: 'failed',
-        details: { ...baseDetails, result: resultDetails },
+        details: bookingDetails({ result: resultDetails }),
       })
       return {
         booked: false,
@@ -621,17 +829,16 @@ export async function executeBookingTool(toolName, input, ctx) {
     // MIA-BOOK.1 — account-shaped (or unknown) rejection: hand to a human.
     // The intent row becomes the approval card; approving re-runs the booking
     // after staff fix the account. Never tell the customer it's booked.
-    const dupId = await pendingBookingApprovalId(db, ctx, input.event_id, auditId)
+    const dupId = await pendingBookingApprovalId(db, ctx, input.event_id, auditId, electedContactId)
     const summary = `Glofox rejected this booking (${messageCode || `status_${result.status}`}). Fix the member's account (credits/membership), then Approve to retry the booking.`
     await finalizeBookingRequest(db, ctx, auditId, {
       kind: 'class_booking',
       status: dupId ? 'failed' : 'pending',
-      details: {
-        ...baseDetails,
+      details: bookingDetails({
         reason: dupId ? 'superseded_duplicate' : 'booking_rejected',
         ...(dupId ? { duplicate_of: dupId } : { summary }),
         result: resultDetails,
-      },
+      }),
     })
     if (!dupId) {
       await notifyAgentApprovalRequest(db, {
@@ -692,10 +899,11 @@ export async function executeBookingTool(toolName, input, ctx) {
     if (!creds || missingGlofoxCredentialsForLocation(creds).length) {
       return { error: 'no_booking_system', message: 'Class booking is not connected at this studio — hand off to the team.' }
     }
-    // windowDays:0 → time_start cutoff = now → upcoming bookings only.
-    // allSettled, not all: one dead account must not lose the others' rows.
-    const settled = await Promise.allSettled(accounts.map((account) =>
-      fetchUserBookingsResult(creds, account.glofox_member_id, { windowDays: 0, limit: 100 })))
+    // PERSON-ACCT.7 — the shared fan-out (windowDays:0 → upcoming only;
+    // allSettled, so one dead account never loses the others' rows). book_class
+    // and cancel_class_booking read the same helper, so the window, the cap and
+    // what counts as an unreadable account cannot drift between them.
+    const reads = await fanUpcomingBookings(creds, accounts, fetchUserBookingsResult)
 
     const nowMs = Date.now()
     // Shape ONE raw row at a time: same helper, same filtering (still-BOOKED,
@@ -711,12 +919,12 @@ export async function executeBookingTool(toolName, input, ctx) {
     // trusts the model for it.
     const merged = []
     let failedReads = 0
-    settled.forEach((res) => {
-      if (res.status !== 'fulfilled' || !res.value || res.value.ok !== true) {
+    reads.forEach((res) => {
+      if (!res.ok) {
         failedReads += 1
         return
       }
-      for (const raw of Array.isArray(res.value.bookings) ? res.value.bookings : []) {
+      for (const raw of res.bookings) {
         const [shaped] = shapeMemberBookingsForAgent([raw], nowMs)
         if (!shaped) continue
         // No `|| 0` fallback: the shaper only emits a row whose time_start is

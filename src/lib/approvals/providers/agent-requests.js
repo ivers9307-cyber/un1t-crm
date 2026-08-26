@@ -29,12 +29,14 @@
 import { viewerActiveLocationId } from '../registry'
 import { formatMoneyMinor } from '@/lib/money-format'
 import { EXECUTING_KINDS, retryOffered } from '@/lib/agent/request-recovery'
-import { failureExplanation, accountSummaryLine, whyFlagged } from '@/lib/approvals/agent-request-why'
+import { failureExplanation, accountSummaryLine, whyFlagged, accountMismatchWarning } from '@/lib/approvals/agent-request-why'
 
 // AGENT-FUNNEL-CREDITS.1 — the membership/credit fields the Glofox sync
 // denormalises onto contacts, surfaced on every approval card so staff see
-// what the account can book with before deciding.
-const CONTACT_EMBED = 'contact:contacts!contact_id ( id, name, email, phone, glofox_membership_plan, glofox_membership_status, glofox_membership_state, trial_credits_remaining )'
+// what the account can book with before deciding. glofox_member_id
+// (PERSON-ACCT.8) is read only for accountMismatchWarning's comparison
+// against details.elected_glofox_member_id — never displayed itself.
+const CONTACT_EMBED = 'contact:contacts!contact_id ( id, name, email, phone, glofox_member_id, glofox_membership_plan, glofox_membership_status, glofox_membership_state, trial_credits_remaining )'
 
 const KIND_LABELS = {
   pause: 'Pause membership',
@@ -89,6 +91,10 @@ function toItem(r) {
     // Pre-computed (like failedWhy) so mobile renders them without a lib.
     accountLine: accountSummaryLine(r.contact),
     why: whyFlagged(r),
+    // PERSON-ACCT.8 — pause/cancellation only; null for every other kind
+    // (class_booking gets its own BLOCKING ACCOUNT_MISMATCH treatment at
+    // execute time — see agent-request-why.js's doc comment).
+    accountMismatch: accountMismatchWarning(r),
   }
 }
 

@@ -184,7 +184,9 @@ describe('runChannelAgent — auto-handoff after N failed verify_identity attemp
     const adapter = makeAdapter()
     const db = agentDb({
       // The re-read after a successful verify returns the stamped account —
-      // the person-group primary, which may differ from the thread's contact.
+      // the contact the quiz matched, which may differ from the thread's
+      // contact (PERSON-ACCT.6: it is used as stamped, never remapped to the
+      // person group's display primary).
       conv: {
         agent_active: true, contact_id: 'c-1', agent_last_reply_at: null,
         agent_verify_attempts: 1, agent_verified_contact_id: 'primary-1',
