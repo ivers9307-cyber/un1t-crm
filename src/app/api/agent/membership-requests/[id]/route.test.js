@@ -15,6 +15,7 @@ vi.mock('@/lib/glofox', async (importOriginal) => ({
   glofoxCredentialsForLocation: vi.fn(async () => ({ branchId: 'b', apiKey: 'k', apiToken: 't' })),
   missingGlofoxCredentialsForLocation: vi.fn(() => []),
   createBooking: vi.fn(),
+  cancelBooking: vi.fn(),
 }))
 vi.mock('@/lib/agent/notify', () => ({
   sendAgentThreadMessage: vi.fn(async () => ({ ok: true })),
@@ -25,7 +26,7 @@ vi.mock('@/lib/agent/notify', () => ({
   agentConfirmationTemplates: vi.fn(async () => ({})),
 }))
 
-import { createBooking } from '@/lib/glofox'
+import { createBooking, cancelBooking } from '@/lib/glofox'
 import { sendAgentThreadMessage } from '@/lib/agent/notify'
 import { PATCH } from './route.js'
 
@@ -274,5 +275,86 @@ describe('PATCH class_booking approval — past-start guard', () => {
     const res = await approve()
     expect((await res.json()).success).toBe(true)
     expect(createBooking).toHaveBeenCalledTimes(1)
+  })
+})
+
+// PERSON-ACCT.7 — the executor's account cross-check. book_class elects ONE
+// of a person's linked Glofox accounts and stamps it on the row; by the time
+// staff approve, that contact's link may have been repointed (a merge, a
+// re-sync, a manual fix). Executing anyway books a class on an account
+// nobody chose — so the row lands 'failed' with ACCOUNT_MISMATCH and rides
+// the existing Fix & retry lane instead.
+describe('PATCH class_booking approval — elected-account cross-check', () => {
+  const electedRow = (memberId) => ({ ...ROW, details: { ...ROW.details, elected_glofox_member_id: memberId } })
+
+  it('elected account no longer matches the contact → failed ACCOUNT_MISMATCH, NO Glofox call', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    db = makeDbFor(electedRow('gm-elsewhere'), updates)
+
+    const res = await approve()
+    const json = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(createBooking).not.toHaveBeenCalled()
+    expect(json.executed).toMatchObject({ ok: false, message_code: 'ACCOUNT_MISMATCH' })
+    const final = updates.at(-1).patch
+    expect(final.status).toBe('failed')
+    expect(final.details.result).toMatchObject({ ok: false, message_code: 'ACCOUNT_MISMATCH' })
+    expect(sendAgentThreadMessage).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('elected account still matches → executes normally', async () => {
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { _id: 'gfb-ok' } })
+    db = makeDbFor(electedRow('gm1'), updates)
+
+    await approve()
+
+    expect(createBooking).toHaveBeenCalledTimes(1)
+    expect(createBooking.mock.calls[0][1]).toMatchObject({ user_id: 'gm1' })
+    expect(updates.at(-1).patch.status).toBe('actioned')
+  })
+
+  it('a legacy row with no elected stamp is not cross-checked (unchanged)', async () => {
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { _id: 'gfb-legacy' } })
+    db = makeDbFor({ ...ROW }, updates)
+
+    await approve()
+
+    expect(createBooking).toHaveBeenCalledTimes(1)
+    expect(updates.at(-1).patch.status).toBe('actioned')
+  })
+})
+
+// PERSON-ACCT.7 — a cancellation drafted for a booking that lives on a
+// SIBLING account carries details.executing_glofox_member_id. The executor
+// used to cancel against row.contact_id's account unconditionally, which is
+// why PR1 refused to draft those at all.
+describe('PATCH class_cancellation approval — executing account override', () => {
+  const cancelRow = (details) => ({
+    ...ROW,
+    kind: 'class_cancellation',
+    details: { booking_id: '64bb00000000000000000001', class_name: 'ARENA', class_time: 'Mon 06:15', ...details },
+  })
+
+  it('honours details.executing_glofox_member_id — cancels against THAT account', async () => {
+    cancelBooking.mockResolvedValueOnce({ ok: true, status: 200, body: {} })
+    db = makeDbFor(cancelRow({ executing_glofox_member_id: 'gm-sibling', executing_contact_id: 'c-2' }), updates)
+
+    const res = await approve()
+    const json = await res.json()
+
+    expect(json.executed).toMatchObject({ ok: true })
+    expect(cancelBooking).toHaveBeenCalledWith(expect.anything(), '64bb00000000000000000001', 'gm-sibling')
+    expect(updates.at(-1).patch.status).toBe('actioned')
+  })
+
+  it('no override → cancels against the row contact\'s own account (unchanged)', async () => {
+    cancelBooking.mockResolvedValueOnce({ ok: true, status: 200, body: {} })
+    db = makeDbFor(cancelRow({}), updates)
+
+    await approve()
+
+    expect(cancelBooking).toHaveBeenCalledWith(expect.anything(), '64bb00000000000000000001', 'gm1')
   })
 })

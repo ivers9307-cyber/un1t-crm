@@ -38,6 +38,11 @@ export const DEFAULTS = {
   // usable balance and the thread hands off to a human. Null → the code
   // default in lib/agent/core.js (DEFAULT_NO_CREDITS_HANDOFF_TEXT).
   no_credits_handoff_text: null,
+  // PERSON-ACCT.7 — sent verbatim when the booking tool finds two live
+  // accounts for the same person and hands off rather than guessing. Null →
+  // the code default in lib/agent/core.js
+  // (DEFAULT_ACCOUNT_CONFLICT_HANDOFF_TEXT).
+  account_conflict_handoff_text: null,
   // MIA-BOARD.2 — apology when a pending booking outlives its class. Null →
   // DEFAULT_BOOKING_EXPIRED_TEXT in lib/agent/notify.js.
   booking_expired_text: null,
@@ -97,6 +102,7 @@ export const SettingsSchema = z.object({
   cancellation_confirmation_text: z.string().max(500).nullable().optional(),
   booking_issue_handoff_text: z.string().max(500).nullable().optional(),
   no_credits_handoff_text: z.string().max(500).nullable().optional(),
+  account_conflict_handoff_text: z.string().max(500).nullable().optional(),
   booking_expired_text: z.string().max(500).nullable().optional(),
   approval_decline_text: z.string().max(500).nullable().optional(),
   welcome_greeting: z.string().max(500).nullable().optional(),
@@ -171,6 +177,7 @@ export function buildCustomerAgentSettings(data = {}) {
     cancellation_confirmation_text: data.cancellation_confirmation_text?.trim() || null,
     booking_issue_handoff_text: data.booking_issue_handoff_text?.trim() || null,
     no_credits_handoff_text: data.no_credits_handoff_text?.trim() || null,
+    account_conflict_handoff_text: data.account_conflict_handoff_text?.trim() || null,
     booking_expired_text: data.booking_expired_text?.trim() || null,
     approval_decline_text: data.approval_decline_text?.trim() || null,
     welcome_greeting: data.welcome_greeting?.trim() || null,

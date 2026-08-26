@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   linkedAccountsForContact, corroborated, findBookingAcrossAccounts, hasBookableMembership,
-  MEMBER_STATUSES, electWriteAccount,
+  MEMBER_STATUSES, electWriteAccount, fanUpcomingBookings, summariseBookingFan,
 } from './person-accounts'
 
 // ---------------------------------------------------------------------------
@@ -696,5 +696,95 @@ describe('electWriteAccount', () => {
     expect(accounts).toEqual(before)
     expect(accounts[0]).toBe(a)
     expect(accounts[1]).toBe(b)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// PERSON-ACCT.7 — the upcoming-bookings fan-out, shared by
+// list_my_upcoming_bookings (merge), cancel_class_booking
+// (findBookingAcrossAccounts) and now book_class (election activity + the
+// cross-account double-booking backstop).
+// ---------------------------------------------------------------------------
+describe('fanUpcomingBookings', () => {
+  const creds = { branchId: 'b' }
+  const accounts = [
+    { id: 'c-1', glofox_member_id: 'gf-1' },
+    { id: 'c-2', glofox_member_id: 'gf-2' },
+  ]
+
+  it('reads UPCOMING bookings only (windowDays 0) for every account', async () => {
+    const calls = []
+    const fetchImpl = async (_c, memberId, opts) => {
+      calls.push([memberId, opts])
+      return { ok: true, bookings: [] }
+    }
+    const reads = await fanUpcomingBookings(creds, accounts, fetchImpl)
+    expect(calls).toEqual([['gf-1', { windowDays: 0, limit: 100 }], ['gf-2', { windowDays: 0, limit: 100 }]])
+    expect(reads.map((r) => r.ok)).toEqual([true, true])
+  })
+
+  it('a rejected or not-ok read is ok:false — never an empty success', async () => {
+    const fetchImpl = async (_c, memberId) => {
+      if (memberId === 'gf-1') throw new Error('network')
+      return { ok: false, bookings: [] }
+    }
+    const reads = await fanUpcomingBookings(creds, accounts, fetchImpl)
+    expect(reads.map((r) => r.ok)).toEqual([false, false])
+    expect(reads.map((r) => r.account.id)).toEqual(['c-1', 'c-2'])
+  })
+
+  it('a missing fetchImpl reports every account unreadable rather than throwing', async () => {
+    const reads = await fanUpcomingBookings(creds, accounts, undefined)
+    expect(reads.every((r) => r.ok === false)).toBe(true)
+  })
+})
+
+describe('summariseBookingFan', () => {
+  const a1 = { id: 'c-1', glofox_member_id: 'gf-1' }
+  const a2 = { id: 'c-2', glofox_member_id: 'gf-2' }
+  const EVENT = '64aa00000000000000000001'
+
+  it('names the accounts holding activity and the one already holding this event', () => {
+    const out = summariseBookingFan([
+      { account: a1, ok: true, bookings: [{ _id: 'b1', model_id: 'other-event', status: 'BOOKED' }] },
+      { account: a2, ok: true, bookings: [{ _id: 'b2', model_id: EVENT, status: 'BOOKED' }] },
+    ], EVENT)
+    expect(out.concernsMemberIds).toEqual(['gf-1', 'gf-2'])
+    expect(out.alreadyBookedOn).toBe(a2)
+    expect(out.unreadable).toEqual([])
+  })
+
+  // /2.0/bookings is fetched with exclude_cancelled=false, so a cancelled row
+  // for the very class the customer is re-booking comes back in the fan.
+  // Treating it as "already booked" would refuse a legitimate re-book.
+  it('a CANCELLED row is neither activity nor an existing booking', () => {
+    const out = summariseBookingFan([
+      { account: a1, ok: true, bookings: [{ _id: 'b1', model_id: EVENT, status: 'CANCELLED' }] },
+    ], EVENT)
+    expect(out.alreadyBookedOn).toBeNull()
+    expect(out.concernsMemberIds).toEqual([])
+  })
+
+  // The Glofox Booking is polymorphic: the class reference is model_id, with
+  // event_id only ever a defensive fallback (src/lib/class-bookings.js).
+  it('matches on model_id, falling back to event_id', () => {
+    expect(summariseBookingFan([{ account: a1, ok: true, bookings: [{ event_id: EVENT }] }], EVENT).alreadyBookedOn).toBe(a1)
+    expect(summariseBookingFan([{ account: a1, ok: true, bookings: [{ model_id: EVENT }] }], EVENT).alreadyBookedOn).toBe(a1)
+  })
+
+  it('an unreadable account is listed, never read as "nothing booked here"', () => {
+    const out = summariseBookingFan([
+      { account: a1, ok: false, bookings: [] },
+      { account: a2, ok: true, bookings: [] },
+    ], EVENT)
+    expect(out.unreadable).toEqual([a1])
+    expect(out.concernsMemberIds).toEqual([])
+    expect(out.alreadyBookedOn).toBeNull()
+  })
+
+  it('no event id to match → activity only, never an already-booked claim', () => {
+    const out = summariseBookingFan([{ account: a1, ok: true, bookings: [{ _id: 'b1', model_id: EVENT }] }], null)
+    expect(out.alreadyBookedOn).toBeNull()
+    expect(out.concernsMemberIds).toEqual(['gf-1'])
   })
 })

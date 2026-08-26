@@ -35,6 +35,7 @@ import {
   AGENT_MESSAGE_SOURCE,
   DEFAULT_HOLDING_MESSAGE,
   DEFAULT_NO_CREDITS_HANDOFF_TEXT,
+  DEFAULT_ACCOUNT_CONFLICT_HANDOFF_TEXT,
   resolveAutoVerify,
   resolveActingContactId,
   distinctPersonCount,
@@ -806,6 +807,9 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // MIA-CREDITS.1 — set when book_class pre-flights to no_credits; the
     // turn ends in a deterministic handoff (script + park + manager push).
     let noCreditsHandoff = false
+    // PERSON-ACCT.7 — set when book_class finds two live accounts and refuses
+    // to guess; same deterministic-handoff posture as no_credits.
+    let accountConflictHandoff = false
     let modelText = ''
     // A stop_reason / tool outcome that must NOT become a customer reply.
     // Set inside the loop, actioned as a soft handoff just after it.
@@ -920,6 +924,9 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
             }
             if (block.name === 'book_class' && result?.no_credits === true) {
               noCreditsHandoff = true
+            }
+            if (block.name === 'book_class' && result?.account_conflict === true) {
+              accountConflictHandoff = true
             }
             if (block.name === 'verify_identity') {
               // AGENT-VERIFY-HANDOFF.1 — track consecutive failures so a stuck
@@ -1070,6 +1077,21 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
         holdingOverride: (settings?.no_credits_handoff_text || '').trim() || DEFAULT_NO_CREDITS_HANDOFF_TEXT,
       })
       return { handled: true, action: 'handoff', reason: 'no_credits' }
+    }
+
+    // PERSON-ACCT.7 — the booking tool found more than one live account for
+    // this person and filed the intent as an account_conflict approval rather
+    // than guessing which one to book. Same deterministic shape as the
+    // no_credits handoff: the model's composed text is DISCARDED (it has no
+    // way to know which account is right and would only reassure), the
+    // customer reads the operator-editable script, and a human takes the
+    // thread while they are still warm.
+    if (accountConflictHandoff) {
+      await handoff(db, adapter, {
+        ...common, reason: 'account_conflict', settings,
+        holdingOverride: (settings?.account_conflict_handoff_text || '').trim() || DEFAULT_ACCOUNT_CONFLICT_HANDOFF_TEXT,
+      })
+      return { handled: true, action: 'handoff', reason: 'account_conflict' }
     }
 
     if (shouldHandoffAfterVerifyFail(verifyFails, verifyFailThreshold)) {

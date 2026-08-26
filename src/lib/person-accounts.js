@@ -372,9 +372,46 @@ export function electWriteAccount({ accounts, anchorContactId, concernsMemberIds
  * `fetchImpl` never throws — every account is reported unreadable.
  */
 export async function findBookingAcrossAccounts(creds, accounts, bookingId, fetchImpl) {
+  const reads = await fanUpcomingBookings(creds, accounts, fetchImpl)
+
+  let owner = null
+  const unreadable = []
+
+  for (const { account, ok, bookings } of reads) {
+    if (!ok) {
+      unreadable.push(account)
+      continue
+    }
+    if (!owner && bookings.some((b) => b && b._id === bookingId)) {
+      owner = account
+    }
+  }
+
+  return { owner, unreadable }
+}
+
+/**
+ * fanUpcomingBookings(creds, accounts, fetchImpl) →
+ *   [{ account, ok, bookings }]  (input order preserved)
+ *
+ * PERSON-ACCT.7 — the ONE upcoming-bookings fan-out. Every caller that asks
+ * "what is this whole person booked into" runs through here: the agent's
+ * list_my_upcoming_bookings merge, cancel_class_booking's owner lookup
+ * (findBookingAcrossAccounts, above) and book_class's election-activity +
+ * double-booking backstop. Sharing it is the point — three copies of the
+ * same allSettled would be three chances to drift on the window, the cap, or
+ * on what counts as an unreadable account.
+ *
+ * `ok: false` covers a rejected promise AND a result reporting `ok: false`.
+ * An ok read with no bookings is EMPTY, not unreadable — the distinction is
+ * load-bearing (an unreadable account must never become "you have nothing
+ * booked"). A missing/non-function `fetchImpl` never throws: every account
+ * comes back unreadable.
+ */
+export async function fanUpcomingBookings(creds, accounts, fetchImpl) {
   const list = Array.isArray(accounts) ? accounts : []
   if (typeof fetchImpl !== 'function') {
-    return { owner: null, unreadable: [...list] }
+    return list.map((account) => ({ account, ok: false, bookings: [] }))
   }
   const settled = await Promise.allSettled(
     list.map((account) => fetchImpl(creds, account.glofox_member_id, {
@@ -385,21 +422,74 @@ export async function findBookingAcrossAccounts(creds, accounts, bookingId, fetc
       limit: 100,
     })),
   )
-
-  let owner = null
-  const unreadable = []
-
-  settled.forEach((result, i) => {
+  return settled.map((result, i) => {
     const account = list[i]
     if (result.status !== 'fulfilled' || !result.value || result.value.ok !== true) {
-      unreadable.push(account)
-      return
+      return { account, ok: false, bookings: [] }
     }
-    const bookings = Array.isArray(result.value.bookings) ? result.value.bookings : []
-    if (!owner && bookings.some((b) => b && b._id === bookingId)) {
-      owner = account
+    return {
+      account,
+      ok: true,
+      bookings: Array.isArray(result.value.bookings) ? result.value.bookings : [],
     }
   })
+}
 
-  return { owner, unreadable }
+// The Glofox Booking is POLYMORPHIC: its class reference is `model_id` (with
+// discriminator model:'events'), NOT a top-level `event_id` — the same read
+// mapBookingToRosterRow makes (src/lib/class-bookings.js), where hard-
+// requiring event_id left class_bookings empty all-time.
+function bookingEventId(b) {
+  const id = b?.model_id ?? b?.event_id
+  return id == null ? null : String(id)
+}
+
+// /2.0/bookings is fetched with exclude_cancelled=false, so cancelled rows
+// come back too. Mirrors shapeMemberBookingsForAgent: a missing status counts
+// as booked, anything other than BOOKED does not.
+function isActiveBooking(b) {
+  const status = typeof b?.status === 'string' ? b.status.toUpperCase() : null
+  return !status || status === 'BOOKED'
+}
+
+/**
+ * summariseBookingFan(reads, eventId) →
+ *   { concernsMemberIds, alreadyBookedOn, unreadable }   [pure]
+ *
+ * PERSON-ACCT.7 — reads a fanUpcomingBookings result for the two things a
+ * WRITE needs to know:
+ *   • concernsMemberIds — the accounts actually holding this person's
+ *     upcoming bookings, fed to electWriteAccount so the write lands where
+ *     their activity already is rather than fragmenting across accounts;
+ *   • alreadyBookedOn — the account already holding `eventId` (null if none,
+ *     the first in `reads` order if somehow two do). This is the
+ *     cross-account double-booking backstop: Glofox dedupes per member id,
+ *     so it cannot see a booking sitting on the person's OTHER account.
+ *
+ * Unreadable accounts are reported, never counted as empty. A null/absent
+ * eventId can only yield `alreadyBookedOn: null` — an unmatchable id must
+ * never produce a confident "already booked".
+ */
+export function summariseBookingFan(reads, eventId) {
+  const wanted = eventId == null ? null : String(eventId)
+  const concernsMemberIds = []
+  const unreadable = []
+  let alreadyBookedOn = null
+
+  for (const read of Array.isArray(reads) ? reads : []) {
+    if (!read) continue
+    if (!read.ok) {
+      unreadable.push(read.account)
+      continue
+    }
+    const active = (Array.isArray(read.bookings) ? read.bookings : []).filter(isActiveBooking)
+    if (active.length && read.account?.glofox_member_id) {
+      concernsMemberIds.push(read.account.glofox_member_id)
+    }
+    if (!alreadyBookedOn && wanted && active.some((b) => bookingEventId(b) === wanted)) {
+      alreadyBookedOn = read.account
+    }
+  }
+
+  return { concernsMemberIds, alreadyBookedOn, unreadable }
 }

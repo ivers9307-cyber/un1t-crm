@@ -3,7 +3,7 @@ import { whyFlagged, customerWords } from './agent-request-why'
 
 describe('whyFlagged', () => {
   it('translates every routeToReview machine code for class bookings', () => {
-    for (const code of ['prior_attendance', 'needs_credit_grant', 'no_credits', 'account_ambiguous', 'account_failed', 'attendance_check_failed', 'booking_rejected', 'superseded_duplicate']) {
+    for (const code of ['prior_attendance', 'needs_credit_grant', 'no_credits', 'account_ambiguous', 'account_conflict', 'account_failed', 'attendance_check_failed', 'booking_rejected', 'superseded_duplicate']) {
       const out = whyFlagged({ kind: 'class_booking', details: { reason: code } })
       expect(out, code).toBeTruthy()
       // Operator copy, never the raw snake_case code on its own.
@@ -19,6 +19,15 @@ describe('whyFlagged', () => {
   it('has plain-English copy for the no-credits Glofox code', () => {
     const out = whyFlagged({ kind: 'class_booking', details: { reason: 'booking_failed:YOU_HAVE_NO_CREDITS_LEFT' } })
     expect(out).toMatch(/no class credits/i)
+  })
+
+  // PERSON-ACCT.7 — account_conflict must NOT fall through to the generic
+  // account_<status> prefix line: Mia found two live accounts and refused to
+  // guess, which is a different instruction to the operator.
+  it('account_conflict gets its own copy, not the account_ prefix fallback', () => {
+    const out = whyFlagged({ kind: 'class_booking', details: { reason: 'account_conflict' } })
+    expect(out).toMatch(/more than one account/i)
+    expect(out).not.toContain('account_conflict')
   })
 
   it('covers the account_<status> family via the prefix fallback', () => {
@@ -75,6 +84,13 @@ describe('failureExplanation', () => {
       .toMatch(/linked/i)
   })
   it('keeps an unknown code visible', () => {
+    // PERSON-ACCT.7 — the executor refused because the row's elected account
+    // no longer matches the contact's link.
+    expect(failureExplanation({ status: 'failed', details: { result: { message_code: 'ACCOUNT_MISMATCH' } } }))
+      .toMatch(/account/i)
+    expect(failureExplanation({ status: 'failed', details: { result: { message_code: 'ACCOUNT_MISMATCH' } } }))
+      .not.toContain('ACCOUNT_MISMATCH')
+
     expect(failureExplanation({ status: 'failed', details: { result: { message_code: 'CLASS_IS_FULL' } } }))
       .toContain('CLASS_IS_FULL')
   })

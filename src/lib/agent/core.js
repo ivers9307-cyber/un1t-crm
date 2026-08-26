@@ -18,6 +18,14 @@ export const DEFAULT_HOLDING_MESSAGE =
 export const DEFAULT_NO_CREDITS_HANDOFF_TEXT =
   "You're out of class credits at the moment so I can't book that one straight away. I'll escalate this to a team member to help you out now."
 
+// PERSON-ACCT.7 — sent (verbatim, operator-editable via
+// settings.account_conflict_handoff_text) when book_class finds TWO live
+// accounts for the same person and refuses to guess which one the booking
+// belongs on. Same posture as the no-credits script: say what is happening
+// without exposing the studio's internal account mess, and promise a person.
+export const DEFAULT_ACCOUNT_CONFLICT_HANDOFF_TEXT =
+  "You have more than one account with us so I want to get this booking exactly right. I'll get a team member to sort it for you now."
+
 /** Normalise a phone to digits only (drops +, spaces, dashes). */
 export function normalisePhone(p) {
   return String(p || '').replace(/[^\d]/g, '')

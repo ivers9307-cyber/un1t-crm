@@ -34,6 +34,10 @@ const MACHINE_REASONS = {
     'Mia escalated: they asked to book but have no class credits or active membership. Talk to them in the conversation, grant a credit or set them up in Glofox, then approve to book.',
   account_ambiguous:
     'More than one Glofox account matched this customer. Pick the right account in Glofox before approving.',
+  // PERSON-ACCT.7 — the agent elects ONE linked account per booking and
+  // escalates instead of coin-flipping between two that are both live.
+  account_conflict:
+    'Mia found more than one account holding a live membership/credits and escalated rather than guess. Confirm which account is right in Glofox, then approve — the booking runs against the account shown.',
   account_failed:
     'Their Glofox account could not be found or created automatically. Sort the account in Glofox, then approve to book.',
   account_needs_review:
@@ -90,6 +94,11 @@ const FAILURE_EXPLANATIONS = {
     'Glofox refused the booking — no class credits on their account. Grant a credit in Glofox, then retry.',
   NOT_EXECUTABLE:
     'The request could not be executed — the contact has no linked Glofox account (or Glofox is not configured here). Link the account, then retry.',
+  // PERSON-ACCT.7 — the row named the Glofox account the agent chose for this
+  // booking, and the contact is now linked to a different one, so nothing was
+  // booked (rather than booking on an account nobody picked).
+  ACCOUNT_MISMATCH:
+    'This booking was queued for a different Glofox account than the one the contact is linked to now, so it was not executed. Check which account is right in Glofox, then retry.',
 }
 
 /**
