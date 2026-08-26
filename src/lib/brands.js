@@ -166,18 +166,29 @@ export const BRANDS = [
   // because it's deployment-critical brand infrastructure like the
   // pay subdomain above. (CCF-WEB.1)
   {
-    id: 'ccfautos-web',
-    description: 'CCF Autos public marketing site (apex + www)',
-    hostnames: (process.env.CCF_MARKETING_HOSTNAMES || 'ccfautos.com,www.ccfautos.com')
-      .split(',').map((s) => s.trim()).filter(Boolean),
+    id: 'giversautos-web',
+    description: 'Givers Autos public marketing site (apex + www, plus the legacy ccfautos.com pair)',
+    // GIVERS-WEB.1 — the business rebranded from CCF Autos to Givers
+    // Autos and moved to giversautos.com. The ccfautos.com pair stays
+    // on this brand ON PURPOSE: the old domain was live and printed/
+    // shared, so it keeps serving the (now Givers-branded) page rather
+    // than dying. Both apexes render the same page; if a 301 to the new
+    // domain is wanted later, that needs a new 'redirect' rootHandler in
+    // src/proxy.js (the brand system only rewrites/rejects today).
+    // NOTE: pay.ccfautos.com (brand 'ccfautos-pay' above) is a SEPARATE
+    // surface — the buyer deposit pages — and is deliberately untouched.
+    hostnames: (
+      process.env.GIVERS_MARKETING_HOSTNAMES ||
+      'giversautos.com,www.giversautos.com,ccfautos.com,www.ccfautos.com'
+    ).split(',').map((s) => s.trim()).filter(Boolean),
     allowedPaths: [
-      '/ccf',                    // coming-soon landing page (src/app/ccf)
-      '/api/public/ccf-enquiry', // contact-form capture
+      '/givers',                    // coming-soon landing page (src/app/givers)
+      '/api/public/givers-enquiry', // contact-form capture
     ],
     rootHandler: 'rewrite',
-    rootRewriteTo: '/ccf',
+    rootRewriteTo: '/givers',
     fallbackHandler: 'rewrite',
-    fallbackRewriteTo: '/ccf',
+    fallbackRewriteTo: '/givers',
   },
 
   // ─── Adding another brand ──────────────────────────────────────
