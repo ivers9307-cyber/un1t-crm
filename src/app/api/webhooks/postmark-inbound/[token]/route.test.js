@@ -222,12 +222,42 @@ function makeDb(state = {}) {
       }
       return { data: null, error: null }
     }
-    const list = rowsFor(b)
+    // MAILBOX-PAGE.1 — THE READ THAT DECIDES WHERE A MEMBER'S EMAIL IS FILED
+    // MUST BE PAGED, and the fake is where that is enforced.
+    //
+    // PostgREST caps every select at 1,000 rows whatever the code asks for, so
+    // an unpaged `email_mailboxes` read is a silent `LIMIT 1000` with no
+    // ORDER BY — past that many active mailboxes, the rows the server happened
+    // to return decide the routing. Throwing here means a future edit that
+    // drops the paging fails loudly in this suite instead of shipping and
+    // waiting for the estate to grow. Mirrors the same guard in the poller's
+    // fake client.
+    if (b._table === 'email_mailboxes' && b._op === 'select' && !b._range) {
+      throw new Error(
+        'email_mailboxes was read without .range() — every read of this table must be paginated (see loadActiveMailboxes)'
+      )
+    }
+
+    let list = rowsFor(b)
+
+    // Ordering is applied BEFORE the slice, exactly as Postgres would: a
+    // .range() over an unordered set is the bug this whole change is about.
+    if (b._order) {
+      const { col, ascending } = b._order
+      list = [...list].sort((x, y) => {
+        const a = x?.[col]
+        const c = y?.[col]
+        if (a === c) return 0
+        return (a > c ? 1 : -1) * (ascending ? 1 : -1)
+      })
+    }
+    if (b._range) list = list.slice(b._range[0], b._range[1] + 1)
+
     return shape === 'list' ? { data: list, error: null } : { data: list[0] ?? null, error: null }
   }
 
   db.from = (table) => {
-    const b = { _table: table, _op: 'select', _payload: null, _filters: [] }
+    const b = { _table: table, _op: 'select', _payload: null, _filters: [], _order: null, _range: null }
     const filter = (kind) => (...args) => { b._filters.push([kind, ...args]); return b }
     b.select = () => b
     b.insert = (p) => { b._op = 'insert'; b._payload = p; return b }
@@ -239,7 +269,16 @@ function makeDb(state = {}) {
     b.in = filter('in')
     b.ilike = filter('ilike')
     b.or = filter('or')
-    b.order = () => b
+    // MAILBOX-PAGE.1 — order and range are MODELLED, not stubbed.
+    //
+    // `.order()` used to be `() => b` and `.range()` did not exist at all,
+    // which is a large part of why the unpaginated mailbox read survived: a
+    // fake that ignores paging cannot tell a paged read from an unpaged one,
+    // so every test passed either way. Same reasoning as the modelled unique
+    // indexes above — a fake that does not enforce the thing under test proves
+    // nothing.
+    b.order = (col, opts) => { b._order = { col, ascending: opts?.ascending !== false }; return b }
+    b.range = (from, to) => { b._range = [from, to]; return b }
     b.limit = () => b
     b.single = () => Promise.resolve(settle(b, 'single'))
     b.maybeSingle = () => Promise.resolve(settle(b, 'single'))
@@ -320,6 +359,81 @@ beforeEach(() => {
 })
 afterEach(() => {
   delete process.env.POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN
+})
+
+// MAILBOX-PAGE.1 — the active-mailbox scan is paged, ordered and bounded.
+//
+// Both readers used to do a bare `.select().eq('active', true)`. PostgREST caps
+// every select at 1,000 rows regardless, so that was a silent `LIMIT 1000` with
+// no ORDER BY on the ONE query that decides which studio a member's email is
+// filed into. Past 1,000 active mailboxes estate-wide, whichever rows the
+// server happened to return decided the routing — a message landing in the
+// wrong studio, or dead-lettering as `no_matching_mailbox` while its mailbox
+// exists and is active. Same class as the "oldest active location" fallback
+// this route's header describes removing.
+describe('mailbox routing — the scan is paged (MAILBOX-PAGE.1)', () => {
+  // Ids sort BEFORE 'mb-hatch' (…'f' < 'h'), so with the scan ordered by id
+  // the real mailbox lands past the first page and is only reachable by a
+  // reader that asks for the second one.
+  const filler = (n) => Array.from({ length: n }, (_, i) => ({
+    id: `mb-fill-${String(i).padStart(5, '0')}`,
+    location_id: 'loc-filler',
+    address: `filler-${i}@example.org`,
+    active: true,
+    created_at: '2026-01-01T00:00:00Z',
+  }))
+
+  it('resolves a mailbox that sits past the first page', async () => {
+    // 1,000 fillers push HATCH to index 1000 — the first row of page two, and
+    // exactly the row an unpaged read could never see.
+    db = makeDb({ mailboxes: [...filler(1000), HATCH] })
+    createServerClient.mockImplementation(() => db)
+
+    const res = await post(inbound())
+
+    expect(res.status).toBe(200)
+    const tickets = insertsInto(db, 'email_tickets')
+    expect(tickets).toHaveLength(1)
+    // The point: filed at HATCH's studio, not at a filler's and not nowhere.
+    expect(tickets[0].payload.location_id).toBe('loc-hatch')
+    expect(deadLetterWebhook).not.toHaveBeenCalled()
+  })
+
+  it('stamps a dead-letter location from a mailbox past the first page', async () => {
+    // The OTHER reader — bestEffortInboundLocation (DEADLETTER-LOC.1). It was
+    // unpaginated too, and it is the one that decides whether a captured
+    // payload shows up in the right studio's integration-health count or in
+    // nobody's. Unpaged, a mailbox on page two makes this silently NULL.
+    db = makeDb({ mailboxes: [...filler(1000), HATCH] })
+    createServerClient.mockImplementation(() => db)
+
+    // A sender-less payload: dead-lettered for a reason that is NOT routing,
+    // so the recipient still names the mailbox and the location is knowable.
+    const res = await post(inbound({ From: undefined, FromFull: undefined }))
+
+    expect(await res.json()).toEqual({ success: true, dead_lettered: 'no_sender' })
+    expect(deadLetterWebhook.mock.calls[0][1].locationId).toBe('loc-hatch')
+  })
+
+  it('REFUSES rather than resolving against a partial set past the ceiling', async () => {
+    // An estate too large to scan cannot prove it holds the mailbox this mail
+    // was addressed to, and guessing is exactly what the no-fallback rule
+    // forbids. It takes the route's EXISTING mailbox_lookup_failed door — a
+    // 500, which releases the dedupe claim so Postmark retries — rather than
+    // inventing a new outcome or filing against whatever it managed to read.
+    db = makeDb({ mailboxes: filler(10_000) })
+    createServerClient.mockImplementation(() => db)
+
+    const res = await post(inbound())
+
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'mailbox_lookup_failed' })
+    // Nothing filed, and NOT dead-lettered as no_matching_mailbox: that would
+    // be a 200 and would strand the email on a claim nothing retries.
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(0)
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(0)
+    expect(deadLetterWebhook).not.toHaveBeenCalled()
+  })
 })
 
 describe('mailbox routing', () => {
