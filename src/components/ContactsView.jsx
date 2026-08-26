@@ -34,6 +34,7 @@ export default function ContactsView({
   initialContacts,
   locationId,
   crossoverContext = {},
+  listFlags = {},
   initialStatus = '',
   initialSearch = '',
   canMerge = false,
@@ -55,6 +56,7 @@ export default function ContactsView({
   // "we have the API result, show it".
   const [clientContacts, setClientContacts] = useState(null)
   const [clientCrossoverContext, setClientCrossoverContext] = useState({})
+  const [clientListFlags, setClientListFlags] = useState({})
   const [count, setCount] = useState(null)
   const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -194,7 +196,10 @@ export default function ContactsView({
       }
       const incoming = json.contacts || []
       setCount(json.count)
-      setClientCrossoverContext(json.crossoverContext || {})
+      // Merge, never replace: `append` grows the contact list, so replacing the
+    // decoration map would strip the pills off every earlier page.
+    setClientCrossoverContext((prev) => (append ? { ...prev, ...(json.crossoverContext || {}) } : (json.crossoverContext || {})))
+    setClientListFlags((prev) => (append ? { ...prev, ...(json.listFlags || {}) } : (json.listFlags || {})))
       setClientContacts(append ? [...(base || []), ...incoming] : incoming)
     } catch (e) {
       setError(e.message || 'Network error')
@@ -263,6 +268,7 @@ export default function ContactsView({
   // server-rendered initial context. Mirrors the clientContacts vs
   // initialContacts choice in visibleContacts.
   const activeCrossoverContext = clientContacts !== null ? clientCrossoverContext : crossoverContext
+  const activeListFlags = clientContacts !== null ? clientListFlags : listFlags
 
   // Pagination (lift the 200-row cap). rawLoaded is the un-overlaid loaded list
   // — the server initial 200, or the accumulated search pages. "Load more"
@@ -457,7 +463,7 @@ export default function ContactsView({
         <div className="mb-3 text-xs text-un1t-subtle">Loading…</div>
       )}
 
-      <ContactsTable contacts={visibleContacts} locationId={locationId} crossoverContext={activeCrossoverContext} canMerge={canMerge} canDelete={canDelete} />
+      <ContactsTable contacts={visibleContacts} locationId={locationId} crossoverContext={activeCrossoverContext} listFlags={activeListFlags} canMerge={canMerge} canDelete={canDelete} />
 
       {hasMore && (
         <div className="mt-4 flex flex-col items-center gap-2">

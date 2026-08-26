@@ -14,7 +14,7 @@ let db
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
 vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(async () => null), assertLocationAccess: vi.fn(() => null) }))
 vi.mock('@/lib/audience-filter', () => ({ applyAudienceFilterAsync: vi.fn(), InvalidAudienceFilterError: class extends Error {} }))
-vi.mock('@/lib/contact-crossovers', () => ({ crossoverContactIds: vi.fn(), fetchCrossoverContext: vi.fn() }))
+vi.mock('@/lib/contact-crossovers', () => ({ crossoverContactIds: vi.fn(), fetchCrossoverContext: vi.fn(), fetchListMembershipFlags: vi.fn() }))
 vi.mock('@/lib/person-links', () => ({ attachLinkedCounts: vi.fn() }))
 
 import { GET } from './route.js'

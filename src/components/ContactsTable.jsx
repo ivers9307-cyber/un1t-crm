@@ -64,6 +64,37 @@ function CrossoverMarker({ ctx }) {
   )
 }
 
+// LISTFLAG.1 — "also on <studio>'s list". Distinct from CrossoverMarker above:
+// that one means "owned elsewhere, has a DEAL here", this one means "holds a
+// contact_location_preferences row at another studio", which is what actually
+// identifies a pre-opening waitlist. Muted styling when that studio's email
+// marketing is off, so "on the list" and "on the list but opted out" can never
+// read the same to an operator about to hit send.
+function ListFlagMarker({ flags }) {
+  if (!Array.isArray(flags) || flags.length === 0) return null
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1 align-middle ml-2">
+      {flags.map((f) => (
+        <span
+          key={f.id}
+          className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+            f.emailMarketing
+              ? 'bg-emerald-500/15 text-emerald-700'
+              : 'bg-zinc-500/15 text-zinc-700'
+          }`}
+          title={
+            f.emailMarketing
+              ? `Also on the ${f.name} list`
+              : `Also on the ${f.name} list, but email marketing is off for that studio`
+          }
+        >
+          {f.name}
+        </span>
+      ))}
+    </span>
+  )
+}
+
 // CONTACT-DEDUP — the lookup list shows ONE row per linked person (the group
 // primary). This chip flags that the row folds in other accounts so the
 // operator knows the duplicates aren't lost — they're on the profile.
@@ -80,7 +111,7 @@ function LinkedMarker({ contact }) {
   )
 }
 
-export default function ContactsTable({ contacts, locationId, crossoverContext = {}, canMerge = false, canDelete = false }) {
+export default function ContactsTable({ contacts, locationId, crossoverContext = {}, listFlags = {}, canMerge = false, canDelete = false }) {
   // Set<contactId>. Set so toggle is O(1) and resilient to the contact
   // list changing under us (filter / search updates).
   const [selectedIds, setSelectedIds] = useState(() => new Set())
@@ -221,6 +252,7 @@ export default function ContactsTable({ contacts, locationId, crossoverContext =
                   <td className="p-3">
                     <Link href={`/contacts/${c.id}`} className="font-medium hover:underline">{c.name}</Link>
                     <CrossoverMarker ctx={crossoverContext[c.id]} />
+                    <ListFlagMarker flags={listFlags[c.id]} />
                     <LinkedMarker contact={c} />
                   </td>
                   <td className="p-3 text-un1t-subtle">{c.email}</td>
@@ -296,6 +328,7 @@ export default function ContactsTable({ contacts, locationId, crossoverContext =
                           {formatStage(c.pipeline_stage_slug)}
                         </span>
                         <CrossoverMarker ctx={crossoverContext[c.id]} />
+                        <ListFlagMarker flags={listFlags[c.id]} />
                         <LinkedMarker contact={c} />
                       </div>
                       {(c.email || c.phone) && (
