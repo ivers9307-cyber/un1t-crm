@@ -44,6 +44,11 @@ function auditDb(trace, { insertId = 'req-1', insertThrows = false } = {}) {
         select: () => { selected = true; return b },
         eq: () => b,
         contains: () => b,
+        // PERSON-ACCT.9 — the pending-approval dedupe matches across ALL of
+        // this person's contact ids, so it filters with `.in()` rather than
+        // `.eq()`. Without this the lookup throws and the dedupe silently
+        // degrades to "no existing card".
+        in: () => b,
         limit: () => b,
         async maybeSingle() {
           if (table === 'contacts') return { data: { glofox_member_id: 'gf-1' }, error: null }

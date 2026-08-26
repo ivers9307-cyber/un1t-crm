@@ -326,6 +326,90 @@ describe('PATCH class_booking approval — elected-account cross-check', () => {
   })
 })
 
+// PERSON-ACCT.9 — the /start funnel reuses a corroborated SIBLING's Glofox
+// account instead of minting a duplicate, so the approval row is filed against
+// the funnel contact (attribution — its ctwa_clid, and the phone the
+// confirmation goes to) while the write belongs to the sibling's account.
+// Executing against row.contact_id would read an empty glofox_member_id and
+// answer NOT_EXECUTABLE on a booking staff can see is ready to go.
+describe('PATCH class_booking approval — executing-contact override', () => {
+  // Same double, except the contacts read HONOURS its id filter — the whole
+  // point of the override is which row gets read.
+  function makeDbForPerson(row, updates, membersById) {
+    const reads = []
+    const db = {
+      reads,
+      from(table) {
+        let patch = null
+        let contactId = null
+        const b = {
+          select: () => b,
+          eq(col, val) { if (col === 'id') contactId = val; return b },
+          update(p) { patch = p; updates.push({ table, patch: p }); return b },
+          async maybeSingle() {
+            if (patch) return { data: { id: row.id }, error: null }
+            if (table === 'contacts') {
+              reads.push(contactId)
+              return { data: { glofox_member_id: membersById[contactId] ?? null }, error: null }
+            }
+            return { data: row, error: null }
+          },
+          async single() {
+            return { data: { id: row.id, status: patch?.status, decided_at: null, decision_note: null, details: patch?.details }, error: null }
+          },
+        }
+        return b
+      },
+    }
+    return db
+  }
+
+  it('books against details.executing_contact_id\'s account, not the row contact\'s', async () => {
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { _id: 'gfb-sib' } })
+    const row = {
+      ...ROW,
+      contact_id: 'c-funnel',
+      conversation_id: null,
+      details: { ...ROW.details, executing_contact_id: 'c-sibling', elected_glofox_member_id: 'gm-sibling' },
+    }
+    db = makeDbForPerson(row, updates, { 'c-funnel': null, 'c-sibling': 'gm-sibling' })
+
+    await approve()
+
+    expect(db.reads).toContain('c-sibling')
+    expect(createBooking).toHaveBeenCalledTimes(1)
+    expect(createBooking.mock.calls[0][1]).toMatchObject({ user_id: 'gm-sibling' })
+    expect(updates.at(-1).patch.status).toBe('actioned')
+  })
+
+  it('the elected cross-check still applies to the EXECUTING contact (repointed link → ACCOUNT_MISMATCH)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const row = {
+      ...ROW,
+      contact_id: 'c-funnel',
+      details: { ...ROW.details, executing_contact_id: 'c-sibling', elected_glofox_member_id: 'gm-sibling' },
+    }
+    db = makeDbForPerson(row, updates, { 'c-funnel': 'gm-sibling', 'c-sibling': 'gm-moved' })
+
+    const res = await approve()
+    const json = await res.json()
+
+    expect(createBooking).not.toHaveBeenCalled()
+    expect(json.executed).toMatchObject({ ok: false, message_code: 'ACCOUNT_MISMATCH' })
+    warn.mockRestore()
+  })
+
+  it('no override → reads the row contact exactly as before', async () => {
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { _id: 'gfb-own' } })
+    db = makeDbForPerson({ ...ROW, conversation_id: null }, updates, { c1: 'gm1' })
+
+    await approve()
+
+    expect(db.reads).toEqual(['c1'])
+    expect(createBooking.mock.calls[0][1]).toMatchObject({ user_id: 'gm1' })
+  })
+})
+
 // PERSON-ACCT.7 — a cancellation drafted for a booking that lives on a
 // SIBLING account carries details.executing_glofox_member_id. The executor
 // used to cancel against row.contact_id's account unconditionally, which is
