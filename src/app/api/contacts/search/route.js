@@ -5,7 +5,7 @@ import { authenticateApiKey, orgScopeLocationIds } from '@/lib/api-auth'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { applyAudienceFilterAsync, InvalidAudienceFilterError } from '@/lib/audience-filter'
 import { audienceFilterSchema } from '@/lib/schemas'
-import { crossoverContactIds, fetchCrossoverContext } from '@/lib/contact-crossovers'
+import { crossoverContactIds, fetchCrossoverContext, fetchListMembershipFlags } from '@/lib/contact-crossovers'
 import { attachLinkedCounts } from '@/lib/person-links'
 import { validateBody } from '@/lib/validate'
 
@@ -234,10 +234,19 @@ export async function POST(request) {
   const crossoverContext = wantCrossovers
     ? await fetchCrossoverContext(db, contacts, locationId)
     : {}
+  // LISTFLAG.1 — gated on the same flag as the crossover context: the two
+  // decorate the contacts LIST, and the other callers of this route (the send
+  // people-picker) neither ask for them nor should pay for the queries.
+  // ContactsView swaps to this route the moment the operator searches or
+  // filters, so omitting it here would make the pills flicker out mid-typing.
+  const listFlags = wantCrossovers
+    ? await fetchListMembershipFlags(db, contacts, locationId)
+    : {}
   return NextResponse.json({
     success: true,
     contacts,
     crossoverContext,
+    listFlags,
     count: countRes.count ?? 0,
     limit,
     offset,

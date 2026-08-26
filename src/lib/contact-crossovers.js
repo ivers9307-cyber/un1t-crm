@@ -97,3 +97,115 @@ export async function canViewContact(db, user, contact) {
     return false
   }
 }
+
+// ── LISTFLAG.1 — "this person is also on another studio's list" ──────────
+//
+// Deliberately NOT the crossover mechanism above, and the gap between the two
+// is the whole reason this exists. `crossover_contact_ids` keys on **deals**,
+// so at Hatch Street it finds exactly ONE person — while 33 Stillorgan-owned
+// contacts had registered interest in Hatch and were invisible in every list
+// view. Those 33 exist only as `contact_location_preferences` rows: the
+// per-location comms model, where a row's PRESENCE is what makes a location
+// allowed to mail that person at all. Flagging deals answers "who has bought
+// here"; flagging preference rows answers "who is on this list", which is the
+// question an operator staring at a pre-opening waitlist is actually asking.
+//
+// Returns { [contactId]: [{ id, name, emailMarketing }] } — every ACTIVE,
+// non-host-anchor studio the contact holds a preferences row at, EXCLUDING
+// their own home studio (true of everyone, so it carries no information) and
+// the studio being viewed (the crossover pill already names that one). Sorted
+// by name so pills keep a stable order between renders.
+//
+// `emailMarketing` rides along because the flag's whole audience is an
+// operator about to send something: "on the Hatch list" and "on the Hatch
+// list but opted out" must not look identical.
+//
+// Best-effort — {} on any error. A decorative pill must never take the
+// contacts list down with it.
+
+// Ids per `.in()`. Matches attachLinkedCounts' CHUNK: PostgREST sends the
+// filter as a GET URL, and an unbounded id list overruns Cloudflare's URI
+// limit → 414. This is the same wall CROSSOVER_ID_CAP was built for.
+const LIST_FLAG_ID_CHUNK = 120
+
+// Rows per page WITHIN a chunk. The 1,000-row select cap applies regardless
+// of `.limit()`, and a chunk can legitimately exceed it (120 contacts x N
+// studios), so the read is `.range()`-paginated under a total order. Today
+// the inner loop runs exactly once; it stays correct as studios are added.
+const LIST_FLAG_ROW_PAGE = 1000
+
+export async function fetchListMembershipFlags(db, contacts, activeLocationId) {
+  const list = (Array.isArray(contacts) ? contacts : []).filter((c) => c && c.id)
+  if (list.length === 0) return {}
+
+  // A contact whose home studio we cannot see is SKIPPED, not flagged. Both
+  // callers select `location_id` today, but if either field list is ever
+  // narrowed, the alternative is a pill naming the contact's OWN studio —
+  // wrong, and wrong in the quiet way that survives a review.
+  const homeById = new Map(
+    list.filter((c) => c.location_id).map((c) => [c.id, c.location_id])
+  )
+  const ids = [...homeById.keys()]
+  if (ids.length === 0) return {}
+
+  try {
+    const prefRows = []
+    for (let i = 0; i < ids.length; i += LIST_FLAG_ID_CHUNK) {
+      const slice = ids.slice(i, i + LIST_FLAG_ID_CHUNK)
+      for (let from = 0; ; from += LIST_FLAG_ROW_PAGE) {
+        // (contact_id, location_id) is the table's identity, so this order is
+        // total — without one, `.range()` paging can repeat or skip rows.
+        const { data, error } = await db
+          .from('contact_location_preferences')
+          .select('contact_id, location_id, email_marketing')
+          .in('contact_id', slice)
+          .order('contact_id', { ascending: true })
+          .order('location_id', { ascending: true })
+          .range(from, from + LIST_FLAG_ROW_PAGE - 1)
+        if (error || !Array.isArray(data)) return {}
+        prefRows.push(...data)
+        if (data.length < LIST_FLAG_ROW_PAGE) break
+      }
+    }
+
+    // Drop the two uninformative cases before we bother naming anything.
+    const relevant = prefRows.filter(
+      (r) =>
+        r &&
+        r.location_id &&
+        r.location_id !== homeById.get(r.contact_id) &&
+        r.location_id !== activeLocationId
+    )
+    if (relevant.length === 0) return {}
+
+    // Only real, operator-facing studios become pills. A host-anchor or a
+    // deactivated location holding a stray preferences row is noise on a row
+    // the operator is trying to read at a glance.
+    const locIds = [...new Set(relevant.map((r) => r.location_id))]
+    const { data: locs, error: locErr } = await db
+      .from('locations')
+      .select('id, name')
+      .in('id', locIds)
+      .eq('active', true)
+      .eq('is_host_anchor', false)
+    if (locErr || !Array.isArray(locs)) return {}
+    const locName = new Map(locs.map((l) => [l.id, l.name]))
+
+    const flags = {}
+    for (const r of relevant) {
+      const name = locName.get(r.location_id)
+      if (!name) continue
+      ;(flags[r.contact_id] ||= []).push({
+        id: r.location_id,
+        name,
+        emailMarketing: r.email_marketing === true,
+      })
+    }
+    for (const k of Object.keys(flags)) {
+      flags[k].sort((a, b) => a.name.localeCompare(b.name))
+    }
+    return flags
+  } catch {
+    return {}
+  }
+}
