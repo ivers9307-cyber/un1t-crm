@@ -20,6 +20,51 @@ const CONTACT_COLUMNS =
 
 const CHUNK_SIZE = 150
 
+// PERSON-ACCT.3 — same cohort as src/lib/account-home.js / churn-radar.js's
+// MEMBER_STATUSES ('member' + 'credit_member' = a genuine paying membership,
+// as opposed to a lead/trial/drop-in). Defined locally rather than imported
+// from account-home.js: that module pulls @/lib/auth, which pulls
+// next/headers + next/server + @supabase/ssr — this module is imported
+// directly (unmocked) by the agent's account/booking tools on every
+// WhatsApp turn that reads a membership, so it must stay free of that
+// stack. person-accounts.test.js asserts this list equals account-home's
+// export so the two can never silently drift.
+export const MEMBER_STATUSES = Object.freeze(['member', 'credit_member'])
+
+/**
+ * Does this contact row hold a membership that can actually book a class
+ * right now? Pure.
+ *
+ * Verified against live prod (2026-08-26, 8,646 contacts):
+ * contacts.glofox_membership_status is NEVER the string 'active' — real
+ * values are trial (3701), lead (1723), classpass_payg (1630), member
+ * (1045), null (268), cold (172), credit_member (65), no_sale_trial (36),
+ * no_sale_tour (5), tour (1). And glofox_membership_state === 'active'
+ * ALONE is not proof of a real membership either: 1,679 LEADS and 1,630
+ * classpass_payg rows also carry state='active' — it is the state of
+ * whatever membership record Glofox last synced, not evidence that record
+ * is a genuine subscription/credit membership.
+ *
+ * The correct test combines BOTH columns: a genuine member/credit_member
+ * STATUS (MEMBER_STATUSES) whose STATE has not ended — 'active' or
+ * null/never-set count as live-right-now; 'paused'/'locked' are a real
+ * membership that just can't book today, and 'future' hasn't started yet,
+ * so both are correctly excluded here (a caller wanting "is this person a
+ * member at all, regardless of whether they can book today" wants
+ * MEMBER_STATUSES.includes(...) alone, not this helper).
+ *
+ * DO NOT "simplify" this back to `glofox_membership_status === 'active'` —
+ * per the distribution above that string never occurs, so that check is
+ * dead code that always evaluates false. It was live at three sites in
+ * this repo before PERSON-ACCT.3 caught it (two already shipped) — see
+ * that task's commit for the incident.
+ */
+export function hasBookableMembership(row) {
+  if (!row) return false
+  if (!MEMBER_STATUSES.includes(row.glofox_membership_status)) return false
+  return row.glofox_membership_state === 'active' || row.glofox_membership_state == null
+}
+
 // Defensive-by-convention: person groups are 2-6 rows in practice, so this
 // loop almost always runs once. The ≤150 cap is house law for every
 // `.in()` call regardless (PostgREST URL-length limit — BUG-FIX #538).

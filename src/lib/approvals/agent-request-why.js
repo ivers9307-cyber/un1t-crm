@@ -1,3 +1,5 @@
+import { hasBookableMembership } from '@/lib/person-accounts'
+
 // AGENT-REQ-UX.1 — operator-readable explanations for agent requests.
 //
 // `agent_membership_requests.details.reason` carries two very different
@@ -102,6 +104,18 @@ export function failureExplanation(row) {
     || `Glofox rejected the action (${code}). Fix the issue in Glofox, then retry.`
 }
 
+// PERSON-ACCT.3 — states that mean the membership (whatever its status)
+// cannot book right now. glofox_membership_status is NEVER the string
+// 'active' in prod (see person-accounts.js's hasBookableMembership for the
+// live-DB distribution) — the previous `status !== 'active'` check always
+// took this branch, so the STATE (paused/locked/future) was never surfaced
+// and a paused/locked member rendered as if nothing were wrong.
+const BLOCKING_STATE_LABELS = {
+  future: 'not started',
+  paused: 'paused',
+  locked: 'locked',
+}
+
 // AGENT-FUNNEL-CREDITS.1 — one-line account summary for approval cards, from
 // the membership fields the Glofox sync denormalises onto contacts. No live
 // API call: this is what the CRM already knows, at last-sync freshness.
@@ -114,8 +128,19 @@ export function accountSummaryLine(contact) {
   const parts = []
   if (plan) {
     let qualifier = ''
-    if (status && status !== 'active') qualifier = state === 'future' ? `${status}, not started` : status
-    else if (state && state !== 'active') qualifier = state
+    const blockerLabel = state ? BLOCKING_STATE_LABELS[state] : null
+    if (blockerLabel) {
+      // A real membership that just can't book RIGHT NOW — lead with the
+      // status (when there is one) so staff see both facts, e.g.
+      // "member, paused".
+      qualifier = status ? `${status}, ${blockerLabel}` : blockerLabel
+    } else if (!hasBookableMembership(contact)) {
+      // Not a blocked state, but also not a genuine bookable membership
+      // (trial, classpass_payg, lead, ...) — surface the status as-is.
+      qualifier = status || ''
+    }
+    // else: a genuinely bookable membership (hasBookableMembership true,
+    // no blocking state) — no qualifier, nothing for staff to act on.
     parts.push(qualifier ? `${plan} (${qualifier})` : plan)
   } else {
     parts.push('No membership on file')

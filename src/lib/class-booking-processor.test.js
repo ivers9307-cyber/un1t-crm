@@ -20,9 +20,18 @@ import { computeCreditsRemaining } from '@/lib/glofox-sync'
 import { maybeSendBookingWhatsappConfirm, CLASS_CONFIRM_TEMPLATE } from '@/lib/automations/booking-whatsapp-confirm'
 
 function makeDb(contact) {
+  // Every select is traced (table + the exact column string requested), not
+  // just resolved regardless of it — a double that ignores its select
+  // argument is how a column gets silently dropped from the real query with
+  // no test noticing (a real quality gap found in this task: the
+  // glofox_membership_state widening was unpinned until this fix).
+  const selects = []
   const api = {
-    from() { return this },
-    select() { return this }, eq() { return this }, is() { return this }, contains() { return this }, limit() { return this },
+    selects,
+    _table: null,
+    from(table) { this._table = table; return this },
+    select(cols) { selects.push({ table: this._table, cols }); return this },
+    eq() { return this }, is() { return this }, contains() { return this }, limit() { return this },
     maybeSingle: async () => ({ data: contact }),
     update() { return { eq: () => ({ is: async () => ({}) }) } },
     insert() { return { select: () => ({ maybeSingle: async () => ({ data: { id: 'amr1' } }), single: async () => ({ data: { id: 'amr1' } }) }) } },
@@ -48,10 +57,20 @@ describe('processClassBookingRequest', () => {
     expect(r.outcome).toBe('needs_review')
     expect(createBooking).not.toHaveBeenCalled()
   })
-  it('prior attendance, null credits but ACTIVE membership → books (Glofox arbitrates)', async () => {
+  // PERSON-ACCT.3 — glofox_membership_status is NEVER the string 'active'
+  // in prod (real values: member, credit_member, trial, classpass_payg,
+  // lead, ...); a bookable membership is status 'member'/'credit_member'
+  // with a state that hasn't ended (hasBookableMembership).
+  it('prior attendance, null credits but a bookable membership (member + active state) → books (Glofox arbitrates)', async () => {
     computeCreditsRemaining.mockReturnValueOnce(null)
-    const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', glofox_membership_status: 'active', last_attended_at: '2026-06-01T10:00:00Z' }), req)
+    const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', glofox_membership_status: 'member', glofox_membership_state: 'active', last_attended_at: '2026-06-01T10:00:00Z' }), req)
     expect(r.outcome).toBe('booked')
+  })
+  it('prior attendance, null credits, a classpass_payg account with state active → still review (classpass is never a bookable membership)', async () => {
+    computeCreditsRemaining.mockReturnValueOnce(null)
+    const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', glofox_membership_status: 'classpass_payg', glofox_membership_state: 'active', last_attended_at: '2026-06-01T10:00:00Z' }), req)
+    expect(r.outcome).toBe('needs_review')
+    expect(createBooking).not.toHaveBeenCalled()
   })
   it('prior attendance with no Glofox account at all → review (nothing to book with)', async () => {
     findOrCreateGlofoxMember.mockResolvedValueOnce({ status: 'skipped', glofox_member_id: null })
@@ -117,5 +136,20 @@ describe('processClassBookingRequest', () => {
     createBooking.mockResolvedValueOnce({ ok: false, status: 400, body: { message_code: 'YOU_HAVE_BOOKED_FOR_THIS_EVENT' } })
     const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', last_attended_at: null }), req)
     expect(r.outcome).toBe('booked')
+  })
+
+  // Quality-review finding: makeDb used to return the fixture regardless of
+  // what was requested, so the select() string itself was never exercised —
+  // a future editor could drop glofox_membership_state from the query and
+  // every test here would stay green while hasBookableMembership silently
+  // returned false forever. Pin the column list, not just the shape it
+  // happens to produce today.
+  it('the contacts select includes glofox_membership_state and glofox_member_id (pins the widened column list)', async () => {
+    const db = makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', glofox_membership_status: 'member', glofox_membership_state: 'active', last_attended_at: '2026-06-01T10:00:00Z' })
+    await processClassBookingRequest(db, req)
+    const contactsSelect = db.selects.find((s) => s.table === 'contacts')
+    expect(contactsSelect).toBeTruthy()
+    expect(contactsSelect.cols).toContain('glofox_membership_state')
+    expect(contactsSelect.cols).toContain('glofox_member_id')
   })
 })

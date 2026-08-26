@@ -25,7 +25,7 @@
 // does the IO and never throws (mirrors executeAccountTool).
 
 import { GLOFOX_BOOKING_MODEL } from '@/lib/glofox'
-import { linkedAccountsForContact, corroborated, findBookingAcrossAccounts } from '@/lib/person-accounts'
+import { linkedAccountsForContact, corroborated, findBookingAcrossAccounts, hasBookableMembership } from '@/lib/person-accounts'
 import { DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT } from './notify'
 import { notifyAgentApprovalRequest } from './approval-notify'
 import { formatDublinClassTime } from './dublin-format'
@@ -480,14 +480,14 @@ export async function executeBookingTool(toolName, input, ctx) {
     // Re-read the verified contact's Glofox link server-side — never
     // trust the model for identity-adjacent state.
     let glofoxMemberId = null
-    let membershipStatus = null
+    let membershipRow = null
     if (verifiedContactId) {
       const { data } = await db.from('contacts')
-        .select('glofox_member_id, glofox_membership_status')
+        .select('glofox_member_id, glofox_membership_status, glofox_membership_state')
         .eq('id', verifiedContactId)
         .maybeSingle()
       glofoxMemberId = data?.glofox_member_id || null
-      membershipStatus = data?.glofox_membership_status || null
+      membershipRow = data || null
     }
     const guard = classBookingGuard({ verifiedContactId, glofoxMemberId, eventId: input?.event_id })
     if (!guard.ok) return guard
@@ -533,7 +533,10 @@ export async function executeBookingTool(toolName, input, ctx) {
           else credits = computeCreditsRemaining(rows)
         }
       } catch { readFailed = true }
-      const activeMembership = membershipStatus === 'active'
+      // hasBookableMembership, NOT status === 'active' — that string never
+      // occurs in contacts.glofox_membership_status (see person-accounts.js);
+      // this exact check was dead code until PERSON-ACCT.3 fixed it here.
+      const activeMembership = hasBookableMembership(membershipRow)
       if (!readFailed && !(credits > 0) && !activeMembership) {
         // File the booking intent as a pending approval (deduped per
         // contact+event) so staff keep the one-tap grant-then-book flow the

@@ -1,7 +1,7 @@
 // src/lib/person-accounts.test.js — PERSON-ACCT.1
 
 import { describe, it, expect } from 'vitest'
-import { linkedAccountsForContact, corroborated, findBookingAcrossAccounts } from './person-accounts'
+import { linkedAccountsForContact, corroborated, findBookingAcrossAccounts, hasBookableMembership, MEMBER_STATUSES } from './person-accounts'
 
 // ---------------------------------------------------------------------------
 // Fake db — mirrors the house idiom (agent-requests.test.js / booking-tools
@@ -22,11 +22,13 @@ function makeDb({
   const inCalls = []
   const contactsReads = []
   const membershipLookups = []
+  const contactsSelectCols = []
 
   return {
     inCalls,
     contactsReads,
     membershipLookups,
+    contactsSelectCols,
     from(table) {
       if (table === 'person_group_members') {
         const state = {}
@@ -70,7 +72,11 @@ function makeDb({
       if (table === 'contacts') {
         const state = {}
         const builder = {
-          select() { return builder },
+          // Traced (not just resolved regardless of what was asked for) so a
+          // test can pin CONTACT_COLUMNS itself — a double that ignores its
+          // select argument is how a field can be silently dropped from the
+          // shared constant with no test noticing.
+          select(cols) { contactsSelectCols.push(cols); return builder },
           eq(col, val) { state.eqCol = col; state.eqVal = val; return builder },
           in(col, vals) {
             inCalls.push({ table, col, vals: [...vals] })
@@ -436,5 +442,69 @@ describe('findBookingAcrossAccounts', () => {
   it('guards a non-function fetchImpl by reporting every account unreadable instead of throwing', async () => {
     const res = await findBookingAcrossAccounts(creds, accounts, 'any-booking', { not: 'a function' })
     expect(res).toEqual({ owner: null, unreadable: accounts })
+  })
+})
+
+// PERSON-ACCT.3 — hasBookableMembership. Live prod (2026-08-26, 8,646
+// contacts) proved contacts.glofox_membership_status is NEVER the string
+// 'active' — the check this replaces (`status === 'active'`) was dead code
+// at every site that had it. The real signal combines a genuine
+// member/credit_member STATUS with a STATE that hasn't ended.
+describe('hasBookableMembership', () => {
+  it('member/credit_member + state active → bookable', () => {
+    expect(hasBookableMembership({ glofox_membership_status: 'member', glofox_membership_state: 'active' })).toBe(true)
+    expect(hasBookableMembership({ glofox_membership_status: 'credit_member', glofox_membership_state: 'active' })).toBe(true)
+  })
+  it('member/credit_member + state null/never-set → bookable', () => {
+    expect(hasBookableMembership({ glofox_membership_status: 'member', glofox_membership_state: null })).toBe(true)
+    expect(hasBookableMembership({ glofox_membership_status: 'credit_member' })).toBe(true) // state undefined
+  })
+  it('member/credit_member + state paused/locked/future → NOT bookable (a real membership, just not right now)', () => {
+    expect(hasBookableMembership({ glofox_membership_status: 'member', glofox_membership_state: 'paused' })).toBe(false)
+    expect(hasBookableMembership({ glofox_membership_status: 'member', glofox_membership_state: 'locked' })).toBe(false)
+    expect(hasBookableMembership({ glofox_membership_status: 'credit_member', glofox_membership_state: 'future' })).toBe(false)
+  })
+  it('classpass_payg + state active → NOT bookable (a live account, but not a MEMBER_STATUSES status)', () => {
+    expect(hasBookableMembership({ glofox_membership_status: 'classpass_payg', glofox_membership_state: 'active' })).toBe(false)
+  })
+  it('trial + state active → NOT bookable (same reason — trial is not in MEMBER_STATUSES)', () => {
+    expect(hasBookableMembership({ glofox_membership_status: 'trial', glofox_membership_state: 'active' })).toBe(false)
+  })
+  it('null/missing status → NOT bookable', () => {
+    expect(hasBookableMembership({ glofox_membership_status: null, glofox_membership_state: 'active' })).toBe(false)
+    expect(hasBookableMembership({ glofox_membership_state: 'active' })).toBe(false)
+  })
+  it('null/missing row → NOT bookable', () => {
+    expect(hasBookableMembership(null)).toBe(false)
+    expect(hasBookableMembership(undefined)).toBe(false)
+  })
+})
+
+// Quality-review finding: makeDb's 'contacts' builder used to return the
+// fixture regardless of what select() asked for, so CONTACT_COLUMNS itself
+// was never exercised — a future editor could drop
+// glofox_membership_state (or any other field the fan-out helpers read)
+// from that shared constant and every test in this file would stay green.
+// Every consumer (get_my_membership's pick order, get_my_next_class,
+// get_my_recent_attendance) reads only what linkedAccountsForContact
+// selects, so this one assertion is load-bearing for all of them.
+describe('CONTACT_COLUMNS carries every field the fan-out helpers read', () => {
+  it('the contacts select includes glofox_member_id, glofox_membership_status, glofox_membership_state, trial_credits_remaining, phone, wa_phone, email', async () => {
+    const db = makeDb({ contacts: [{ id: 'c1', glofox_member_id: 'gf-1' }] })
+    await linkedAccountsForContact(db, 'c1')
+    expect(db.contactsSelectCols.length).toBeGreaterThan(0)
+    for (const col of ['glofox_member_id', 'glofox_membership_status', 'glofox_membership_state', 'trial_credits_remaining', 'phone', 'wa_phone', 'email']) {
+      expect(db.contactsSelectCols[0]).toContain(col)
+    }
+  })
+})
+
+// Drift guard: person-accounts.js defines its own MEMBER_STATUSES (rather
+// than importing account-home.js's, which pulls @/lib/auth's next/headers
+// stack) — this pins the two lists equal so they can never silently diverge.
+describe('MEMBER_STATUSES stays in lockstep with account-home.js', () => {
+  it('matches src/lib/account-home.js\'s MEMBER_STATUSES exactly', async () => {
+    const { MEMBER_STATUSES: ACCOUNT_HOME_MEMBER_STATUSES } = await import('./account-home')
+    expect([...MEMBER_STATUSES]).toEqual([...ACCOUNT_HOME_MEMBER_STATUSES])
   })
 })

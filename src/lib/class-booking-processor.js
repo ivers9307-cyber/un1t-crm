@@ -8,6 +8,7 @@
 import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, interpretBookingResult, fetchUserCredits, fetchUserBookingsResult, GLOFOX_BOOKING_MODEL } from '@/lib/glofox'
 import { computeCreditsRemaining } from '@/lib/glofox-sync'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
+import { hasBookableMembership } from '@/lib/person-accounts'
 import { maybeSendBookingWhatsappConfirm, CLASS_CONFIRM_TEMPLATE } from '@/lib/automations/booking-whatsapp-confirm'
 import { sendCtwaConversion, sendWebsiteConversion } from '@/lib/meta-capi'
 import { logWarn } from '@/lib/log'
@@ -86,8 +87,9 @@ export async function processClassBookingRequest(db, request) {
   const { data: contact } = await db.from('contacts')
     // last_name is REQUIRED: findOrCreateGlofoxMember's create path hard-guards on
     // first_name AND last_name — omitting it would fail every brand-new lead.
-    // glofox_membership_status: the attended-path balance gate reads it.
-    .select('id, first_name, last_name, name, email, phone, wa_phone, glofox_member_id, glofox_membership_status, last_attended_at, ctwa_clid')
+    // glofox_membership_status + glofox_membership_state: the attended-path
+    // balance gate reads both (hasBookableMembership needs both columns).
+    .select('id, first_name, last_name, name, email, phone, wa_phone, glofox_member_id, glofox_membership_status, glofox_membership_state, last_attended_at, ctwa_clid')
     .eq('id', request.contact_id).maybeSingle()
   if (!contact) {
     await setStatus(db, request.id, { status: 'failed', last_error: 'contact_missing' })
@@ -135,10 +137,13 @@ export async function processClassBookingRequest(db, request) {
     try { credits = computeCreditsRemaining(await fetchUserCredits(creds, memberId)) } catch (e) { logWarn('cbp', 'credit check failed', { err: e }) }
     // computeCreditsRemaining is null for BOTH "no credits" and "membership
     // without per-class credit records" — the CRM's synced membership status
-    // breaks the tie: an active membership is bookable (Glofox arbitrates,
+    // breaks the tie: a bookable membership is bookable (Glofox arbitrates,
     // and a rejection routes to review as booking_failed below). Zero /
-    // null / unreadable with no active membership → staff.
-    const activeMembership = contact.glofox_membership_status === 'active'
+    // null / unreadable with no bookable membership → staff.
+    // hasBookableMembership, NOT status === 'active' — that string never
+    // occurs in contacts.glofox_membership_status (see person-accounts.js);
+    // this exact check was dead code until PERSON-ACCT.3 fixed it here.
+    const activeMembership = hasBookableMembership(contact)
     if (!(credits > 0) && !activeMembership) return routeToReview(db, request, 'prior_attendance')
     // Fall through to the booking — consuming the EXISTING balance, never a
     // fresh trial.
