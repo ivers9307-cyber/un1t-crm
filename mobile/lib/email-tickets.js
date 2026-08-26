@@ -7,15 +7,24 @@
 // re-statement rather than an import: mobile cannot reach into src/lib
 // (CLAUDE.md — `shared/` is the seam, and that file is web-side, carrying
 // Tailwind chip recipes and a URL builder for a surface mobile does not
-// have). What IS copied here is the one rule that must be identical on both
-// platforms:
+// have). What IS copied here are the rules that must be identical on both
+// platforms, and the list is the whole point of the file:
 //
-//   AN INTERNAL NOTE IS STORED WITH direction = 'outbound'.
+//   1. AN INTERNAL NOTE IS STORED WITH direction = 'outbound'.
+//      So "is it ours?" and "was it sent?" are different questions, and
+//      is_internal_note has to be tested FIRST. Test direction first and a
+//      staff-only note paints exactly like a reply the member received — the
+//      one mistake this surface must never make.
+//   2. THE FOUR DELIVERY STATES, and which of them is silent — see the block
+//      comment above ticketDeliveryMeta. A NULL status means "we have not
+//      heard", which is neither delivered nor failed.
+//   3. A REPLY SENT FROM SOMEBODY'S OWN MAIL CLIENT IS MARKED AS SUCH
+//      (MAILBOX-COEXIST.1) — and the CRM never claims to have sent it. See
+//      ticketSendOriginMeta and the mail-client branch of ticketDeliveryMeta.
 //
-// So "is it ours?" and "was it sent?" are different questions, and
-// is_internal_note has to be tested FIRST. Test direction first and a
-// staff-only note paints exactly like a reply the member received — the one
-// mistake this surface must never make.
+// Rule 2 has already diverged once (web shipped the not-tracked branch and
+// mobile did not, so one message read differently on a phone and at the desk),
+// which is why rule 3 was written into both files in the same pass.
 //
 // No React-Native imports anywhere in this file: it runs under vitest's node
 // environment (see vitest.config.js include for mobile/lib).
@@ -132,6 +141,55 @@ export function ticketMessageKind(message) {
   if (!message) return 'inbound'
   if (message.is_internal_note) return 'note'
   return message.direction === 'outbound' ? 'outbound' : 'inbound'
+}
+
+// ── Where a reply was actually sent from (MAILBOX-COEXIST.1) ─────────
+//
+// Rule 3 in the file header. A re-statement of sendOriginMeta in
+// src/lib/ticket-display.js — same predicate, same words, for the reason the
+// header gives.
+//
+// Phase 8 polls a connected mailbox's Sent folder, so a reply somebody typed
+// in Gmail lands here as an outbound row: source 'mail_client', no author
+// (nobody signed in to send it), no Postmark id. The failure the phase exists
+// to remove is TWO PEOPLE ANSWERING ONE MEMBER, and this screen is where the
+// second of them would start typing. If a mail-client reply looks identical to
+// one composed in the CRM, the thread can say that the member was answered but
+// not from where — and with no author to name, the origin is the only honest
+// answer to "who replied?" there is.
+//
+// ticketMessageKind deliberately does NOT grow a fourth value: it IS an
+// outbound message, and that function's three-case note-first ordering is the
+// safety property of this whole screen. This is a separate rule beside it.
+
+/**
+ * Where an outbound message was sent from, when that is not the CRM.
+ *
+ * Null for everything composed here — source 'operator', and every row written
+ * before Phase 8, whose source is NULL. Inbound mail and notes are excluded
+ * first: an inbound message's origin is the sender's own business, and a note
+ * was never sent from anywhere.
+ *
+ * `icon` is an Ionicons name, matching the shape ticketDeliveryMeta returns —
+ * the web version leaves icon choice to its component, which is the same split
+ * this file already lives with.
+ *
+ * @param {object|null} message
+ * @returns {null | { source: 'mail_client', label: string, detail: string, icon: string }}
+ */
+export function ticketSendOriginMeta(message) {
+  if (!message) return null
+  if (message.is_internal_note) return null
+  if (message.direction !== 'outbound') return null
+  if (message.source !== 'mail_client') return null
+  return {
+    source: 'mail_client',
+    label: 'Sent from the mail client',
+    detail:
+      'Somebody answered from Gmail or Outlook rather than from the CRM. This is the copy '
+      + 'the CRM read out of the mailbox’s Sent folder, so it cannot say which person sent it.',
+    icon: 'open-outline',
+  }
 }
 
 // ── Recipients (EMAIL-CC.1) ──────────────────────────────────────────
@@ -511,6 +569,37 @@ export function ticketDeliveryMeta(message) {
       text: 'text-amber-700',
       icon: 'warning-outline',
       iconColor: '#B45309',
+    }
+  }
+
+  // MAILBOX-COEXIST.1 — A REPLY WE ONLY OBSERVED, AND NEVER SENT.
+  //
+  // Mirrors the branch of the same name in src/lib/ticket-display.js; rule 3
+  // in the file header.
+  //
+  // 🔴 IT EXISTS BECAUSE THE BRANCH BELOW WOULD OTHERWISE SWALLOW IT AND SAY
+  // SOMETHING FALSE. A mail-client row is outbound with no status, no Postmark
+  // id and an rfc id — byte for byte the SMTP predicate — so it would inherit
+  // that branch's copy, "sent from this mailbox's own server". We sent it from
+  // no server of ours: somebody typed it in Gmail and the poller read a copy
+  // out of a folder. Naming a send path we did not use is worse than the
+  // unknown-provenance case the branch below already refuses to guess about,
+  // because it is specific enough to send an operator to check the wrong one.
+  //
+  // Keyed on `source` (stamped by the Sent-lane writer), not on the null-pair,
+  // which is an inference that merely happens to be true today. Above the SMTP
+  // branch so the more specific fact wins; below the status branches so a real
+  // outcome is never swallowed. Both orderings are pinned in the test file.
+  //
+  // Same "Not tracked" label as the SMTP case on purpose: the delivery fact an
+  // operator reads is identical (nothing known, nothing coming) and one fact
+  // does not need two words. Only the reason differs, and that is `detail`.
+  if (!status && message.source === 'mail_client') {
+    return {
+      status: null,
+      tone: 'quiet',
+      label: 'Not tracked',
+      detail: 'The CRM did not send this — it was read out of the mailbox’s Sent folder, so there is no delivery information for it and none can arrive.',
     }
   }
 

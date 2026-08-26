@@ -5,6 +5,16 @@
 // on a domain whose MX we will never control (the whole point of the feature —
 // see docs/superpowers/specs/2026-08-26-imap-mailbox-connector-design.md §1).
 //
+// SINCE PHASE 8 THIS ONE TICK SWEEPS TWO LANES: INBOX, then the account's Sent
+// folder (§5). The second exists because a reply somebody types in Gmail never
+// touches INBOX, so without it the ticket sits "needs reply" forever and a
+// second person answers the member again. There is deliberately NO second cron
+// and no second heartbeat: the lanes share one wall-clock budget inside
+// pollAllMailboxes, which sweeps inbox to completion first precisely so a busy
+// Sent folder can never delay a member's own mail. A tick that runs out of
+// clock before the sent lane is a healthy tick — that lane's watermark did not
+// move, so the next tick reads the same messages.
+//
 // A THIN WRAPPER, on purpose. Everything that decides anything lives in
 // src/lib/mail/imap-poll.js, where it is unit-tested against a fake IMAP
 // client and a fake fetch. What lives HERE is the CRON_SECRET gate, the
@@ -42,7 +52,9 @@ export const dynamic = 'force-dynamic'
 // download, its attachments, and one 30s-capped POST at our own webhook.
 // Mailboxes run three at a time, so a handful of connected accounts with a
 // backlog can genuinely use minutes. 300s is the Vercel Pro ceiling and the
-// same budget run-sequences takes.
+// same budget run-sequences takes. Two lanes do NOT double it: they share the
+// one DEFAULT_TICK_BUDGET_MS deadline, which is what 300s has always had 120s
+// of headroom over.
 export const maxDuration = 300
 
 export async function GET(request) {

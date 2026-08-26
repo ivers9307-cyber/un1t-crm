@@ -10,7 +10,9 @@
 //   - the presets carry the right hosts, ports and TLS pairing (465/true vs
 //     587/false), because a wrong value here is a support ticket per operator.
 //   - Microsoft is present, disabled, and says why.
-//   - BOTH required disclosures appear before an operator can connect.
+//   - the required permanence disclosure appears before an operator can
+//     connect, and the mail-client warning Phase 8 RETRACTED does not
+//     (MAILBOX-COEXIST.1 — a stale warning is worse than none).
 //   - nothing that looks like a credential ever reaches the screen.
 //   - THE PANEL NEVER SAYS TWO CONTRADICTORY THINGS ABOUT ONE MAILBOX. A save
 //     used to print "Connected. The login was checked against the mail server
@@ -197,14 +199,36 @@ describe('rendering — never connected', () => {
     expect(screen.queryByRole('button', { name: /disconnect/i })).toBeNull()
   })
 
-  it('shows BOTH required disclosures before the connect button', async () => {
+  it('shows the required permanence disclosure before the connect button', async () => {
     await openPanel()
     await waitFor(() => expect(screen.getByRole('button', { name: /check and connect/i })).toBeTruthy())
-    // (a) ingested mail is permanent and survives contact erasure
+    // Ingested mail is permanent and survives contact erasure (spec §6). Still
+    // true, still shown.
     expect(screen.getByText(/kept permanently/i)).toBeTruthy()
     expect(screen.getByText(/data-erasure request/i)).toBeTruthy()
-    // (b) the Phase 8 gap — replies from their own mail client are invisible
-    expect(screen.getByText(/will not show up here yet/i)).toBeTruthy()
+  })
+
+  // 🔴 MAILBOX-COEXIST.1 — THE RETRACTED CLAIM.
+  //
+  // This screen used to carry a second panel warning that replies sent from
+  // Gmail or Outlook would not show up in the CRM, and telling the team to
+  // reply from the CRM while that was the case. It was true of the
+  // receive-only release, which polled INBOX only. Phase 8 polls the Sent
+  // folder, so it stopped being true the moment that shipped.
+  //
+  // A retired warning is worse than one that was never written: it has a team
+  // routing every reply through the CRM to dodge a problem that no longer
+  // exists, and it gives them no way to tell which of the panels on this
+  // screen still holds. This test is the guard against it coming back — by a
+  // revert, a merge, or somebody restoring "the disclosure that got deleted".
+  it('no longer claims mail-client replies are invisible — Phase 8 files them', async () => {
+    await openPanel()
+    await waitFor(() => expect(screen.getByRole('button', { name: /check and connect/i })).toBeTruthy())
+    expect(screen.queryByText(/will not show up here/i)).toBeNull()
+    expect(screen.queryByText(/reply from the CRM while/i)).toBeNull()
+    // Broader than the exact sentence: any panel telling the operator their
+    // own mail app is invisible to the CRM is now false, however it is worded.
+    expect(screen.queryByText(/only mail arriving in the inbox is read/i)).toBeNull()
   })
 
   it('spells out how to get a Gmail app password, inline', async () => {

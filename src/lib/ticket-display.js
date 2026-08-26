@@ -173,6 +173,61 @@ export function messageKind(message) {
   return message.direction === 'outbound' ? 'outbound' : 'inbound'
 }
 
+// ── Where a reply was actually sent from (MAILBOX-COEXIST.1) ─────────
+//
+// Phase 8 polls a connected mailbox's Sent folder, so a reply somebody typed
+// in Gmail is now filed here as an outbound row: `source: 'mail_client'`,
+// `author_profile_id: null`, `postmark_message_id: null`, `rfc_message_id`
+// set. Until this phase every outbound row on this surface was composed in the
+// CRM, so the thread could say "we answered" and leave it there.
+//
+// IT CANNOT LEAVE IT THERE ANY MORE, and that is the whole point of the phase.
+// The failure it exists to remove is two people answering one member. If the
+// thread renders a mail-client reply identically to one composed here, an
+// operator can see THAT it was answered but not FROM WHERE — so they cannot
+// tell whether the colleague they need to ask is in the CRM's audit trail at
+// all. There is no author to name (nobody signed in to send it; the writer
+// deliberately does not invent one), so naming the ORIGIN is the only honest
+// answer available to "who replied, and from where".
+//
+// `messageKind` deliberately does NOT grow a fourth value for this. It IS an
+// outbound message — it went to the member, it is not a note — and every
+// consumer of that function branches on three cases with the note-first
+// ordering as its safety property. Widening it would put a fourth case into
+// the one function on this surface that must never be got wrong, to carry a
+// fact that is not about how the bubble is shaped. This is a separate rule,
+// read alongside it.
+//
+// Keyed on `source`, which the Sent-lane writer stamps, not on the shape of
+// the row: "no postmark id but an rfc id" also describes an SMTP send from the
+// CRM itself, and those two are different facts that must not merge.
+
+/**
+ * Where an outbound message was sent from, when that is not the CRM.
+ *
+ * Returns null for everything composed here (`source: 'operator'` and every
+ * row written before Phase 8, whose source is NULL) — the ordinary case says
+ * nothing, exactly as it always has. Inbound mail and internal notes are
+ * excluded first: an inbound message's origin is the sender's own mail app and
+ * none of our business, and a note was never sent from anywhere.
+ *
+ * @param {object|null} message
+ * @returns {null | { source: 'mail_client', label: string, detail: string }}
+ */
+export function sendOriginMeta(message) {
+  if (!message) return null
+  if (message.is_internal_note) return null
+  if (message.direction !== 'outbound') return null
+  if (message.source !== 'mail_client') return null
+  return {
+    source: 'mail_client',
+    label: 'Sent from the mail client',
+    detail:
+      'Somebody answered from Gmail or Outlook rather than from the CRM. This is the copy '
+      + 'the CRM read out of the mailbox’s Sent folder, so it cannot say which person sent it.',
+  }
+}
+
 // ── Forwarding (EMAIL-FORWARD.1) ─────────────────────────────────────
 
 /**
@@ -379,6 +434,47 @@ export function deliveryMeta(message) {
       advice: 'It reached them, but they reported it. Further email to this address is likely to be filtered — reach them another way.',
       detail,
       chip: 'bg-amber-500/10 text-amber-700',
+    }
+  }
+
+  // MAILBOX-COEXIST.1 — A REPLY WE ONLY OBSERVED, AND NEVER SENT.
+  //
+  // 🔴 THIS BRANCH EXISTS BECAUSE THE ONE BELOW WOULD HAVE SWALLOWED IT AND
+  // THEN SAID SOMETHING FALSE. A mail-client row is outbound with no status,
+  // no `postmark_message_id` and a populated `rfc_message_id` — byte for byte
+  // the SMTP predicate — so before Phase 8 it would have inherited that
+  // branch's copy: "sent from this mailbox's own server". We did not send it
+  // from any server of ours. Somebody typed it in Gmail and we read a copy of
+  // it out of a folder. That is precisely the invented provenance the block
+  // comment below refuses for rows with neither id, arriving from the other
+  // direction, and it is worse here because it is specific: it names a send
+  // path, and an operator chasing a message a member says never arrived would
+  // go and check the wrong one.
+  //
+  // Keyed on `source`, which the Sent-lane writer stamps, NOT on the null-pair
+  // the branch below infers from. The pair is an inference that happens to be
+  // true today; `source` is the direct evidence, and it stays true if our own
+  // SMTP send path ever starts capturing something else.
+  //
+  // It sits ABOVE the SMTP branch so the more specific fact wins, and BELOW
+  // the status branches so a real outcome is never swallowed — the same
+  // ordering rule the SMTP branch already lives under. Both orderings are
+  // pinned in ticket-display.test.js, because nothing else would notice.
+  //
+  // The LABEL is deliberately the same "Not tracked". To an operator the
+  // delivery fact is identical — nothing is known, and nothing is ever
+  // coming — and a second label for one fact is vocabulary without meaning.
+  // Only the REASON differs, and `detail` is where the reason goes. Where it
+  // came FROM is a different question, answered by sendOriginMeta.
+  //
+  // Quiet, not warn: this is the normal state of every reply a connected
+  // mailbox's owner sends from their phone. It is not a fault.
+  if (!status && message.source === 'mail_client') {
+    return {
+      status: null,
+      tone: 'quiet',
+      label: 'Not tracked',
+      detail: 'The CRM did not send this — it was read out of the mailbox’s Sent folder, so there is no delivery information for it and none can arrive.',
     }
   }
 

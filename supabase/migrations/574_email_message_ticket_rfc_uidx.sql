@@ -1,0 +1,83 @@
+-- MAILBOX-SENT.1 — the idempotency key for the Sent-folder lane.
+-- Spec: docs/superpowers/specs/2026-08-26-imap-mailbox-connector-design.md §5
+-- Phase 8A. Extends mig 394, which created email_inbox_messages.
+--
+-- WHY
+-- A connected mailbox is a REAL mailbox that people still open. Head office
+-- reads hatchstreet@un1t.com in Gmail; a coach answers from their phone. A
+-- reply sent that way goes to the account's Sent folder and never touches
+-- INBOX, so the poller never sees it: the ticket sits "needs reply" forever
+-- and the next person to look answers the member a second time. Double-
+-- replying to a member is the one divergence in §5's table that is
+-- customer-facing, and this migration is the half of the fix that lives in the
+-- database.
+--
+-- Phase 8 polls the Sent folder and files what it finds as OUTBOUND messages
+-- (src/lib/mail/sent-lane.js). This index is what stops that writer filing the
+-- same reply twice.
+--
+-- ── 🔴 SCOPED TO (ticket_id, rfc_message_id), NOT GLOBAL ON rfc_message_id ──
+--
+-- A global unique index on rfc_message_id is the obvious idea and it is WRONG.
+-- Do not "fix" this to one. The connector deliberately files ONE COPY PER
+-- CONNECTED MAILBOX when two of them are on the same thread: syntheticMessageId
+-- (src/lib/mail/imap-message.js) folds the mailbox id into the dedupe key for
+-- exactly that reason, so sales@ and accounts@ both being copied on a member's
+-- email produces two tickets — which is what an operator expects when two
+-- studios' addresses are both on a conversation. One RFC Message-ID therefore
+-- lands LEGITIMATELY on two different tickets.
+--
+-- A global index would refuse the second mailbox's copy. It would not fail
+-- loudly either: the writer treats 23505 as "already filed, skip", so the
+-- second studio's copy of the reply would silently never appear on its own
+-- ticket — which is the cross-mailbox misfiling the connector's routing rules
+-- (IMAP-ROUTE-FORGE.1, dropForeignMailboxes) were written to prevent, re-
+-- introduced from the other end.
+--
+-- The scope is per TICKET because that is the grain the duplicate actually has:
+-- "this reply is already on this thread".
+--
+-- ── THE INDEX DOES DOUBLE DUTY, AND THAT IS THE DESIGN ──
+--
+--   1. Re-polling Sent cannot double-file the same reply onto the same ticket.
+--      The poller's cursor only advances on a handled message, so a tick that
+--      dies mid-message is DESIGNED to re-deliver it (see imap-poll.js).
+--
+--   2. It is also the dedupe against OUR OWN SMTP SENDS, which land in the same
+--      Sent folder. /api/email/tickets/[id]/reply already writes an outbound
+--      row on that ticket carrying that rfc_message_id at send time
+--      (MAILBOX-CONNECT.7), so the Sent copy of our own reply collides here and
+--      is skipped. There is NO separate "is this ours?" comparison anywhere in
+--      the Sent lane, and none is wanted — one mechanism, two jobs, and no
+--      second predicate to drift out of step with the first.
+--
+-- That second job is also why rfc_message_id must be stored BARE — brackets
+-- stripped, as extractRfcMessageId() returns it. The whole threading chain is
+-- plain string equality, so a '<id>' on one side and 'id' on the other collide
+-- with nothing and the index silently protects nothing. That exact bug shipped
+-- once already in the send path.
+--
+-- ── PARTIAL, ON rfc_message_id IS NOT NULL ──
+-- Nulls are not equal to each other in a unique index, so the WHERE clause
+-- changes no semantics — it keeps the index off the 30 inbound rows and the
+-- whole email_sends-era back-catalogue that carry no RFC id at all. A message
+-- with no Message-ID header (scripts, some ticketing systems) is still filed;
+-- it simply cannot be deduped, which the writer logs.
+--
+-- ── SAFE TO CREATE ──
+-- Verified against the live database 2026-08-26: email_inbox_messages holds 42
+-- rows, 30 with a non-null rfc_message_id, and those 30 are DISTINCT — zero
+-- duplicates, so this cannot fail on existing data. Nothing has yet sent over
+-- SMTP (0 outbound rows carry an rfc_message_id).
+--
+-- IF NOT EXISTS, and NOT CONCURRENTLY: the table is small (42 rows), so the
+-- brief ACCESS EXCLUSIVE lock is cheaper than the failure modes CONCURRENTLY
+-- brings (it cannot run inside the migration's transaction, and a failed run
+-- leaves an INVALID index behind that nothing here would clean up).
+
+CREATE UNIQUE INDEX IF NOT EXISTS email_inbox_messages_ticket_rfc_uidx
+  ON public.email_inbox_messages (ticket_id, rfc_message_id)
+  WHERE rfc_message_id IS NOT NULL;
+
+COMMENT ON INDEX public.email_inbox_messages_ticket_rfc_uidx IS
+  'MAILBOX-SENT.1: idempotency key for the Sent-folder lane (src/lib/mail/sent-lane.js). SCOPED PER TICKET, NEVER GLOBAL — the connector deliberately files one copy per connected mailbox when two are on the same thread, so one RFC Message-ID legitimately lands on two tickets and a global unique index would silently drop the second studio''s copy. Doubles as the dedupe against our own SMTP sends: the reply route already wrote this rfc_message_id on this ticket, so the Sent copy hits 23505 and is skipped. Requires rfc_message_id to be stored BARE (brackets stripped) — the threading chain is plain string equality.';
