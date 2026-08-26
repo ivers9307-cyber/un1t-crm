@@ -13,6 +13,7 @@
 // BUG-FIX #538 lesson referenced in person-links.js).
 
 import { normalisePhone9 } from './person-links'
+import { escapeLikePattern } from './like-escape'
 
 const CONTACT_COLUMNS =
   'id, name, glofox_member_id, glofox_membership_status, glofox_membership_state, ' +
@@ -68,9 +69,13 @@ export function hasBookableMembership(row) {
 // Defensive-by-convention: person groups are 2-6 rows in practice, so this
 // loop almost always runs once. The ≤150 cap is house law for every
 // `.in()` call regardless (PostgREST URL-length limit — BUG-FIX #538).
-function chunkIds(ids, size = CHUNK_SIZE) {
+// Exported since PERSON-ACCT.9 so callers OUTSIDE this module (the funnel's
+// person-wide approval dedupe, book_class's) chunk the same way instead of
+// re-rolling the loop and getting the cap wrong.
+export function chunkIds(ids, size = CHUNK_SIZE) {
+  const list = (Array.isArray(ids) ? ids : []).filter(Boolean)
   const out = []
-  for (let i = 0; i < ids.length; i += size) out.push(ids.slice(i, i + size))
+  for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size))
   return out
 }
 
@@ -206,16 +211,207 @@ function normaliseEmail(raw) {
 export function corroborated(anchorRow, otherRow) {
   if (!anchorRow || !otherRow) return false
   if (anchorRow.id != null && otherRow.id != null && anchorRow.id === otherRow.id) return true
-
-  const anchorPhones = [normalisePhone9(anchorRow.phone), normalisePhone9(anchorRow.wa_phone)].filter(Boolean)
-  const otherPhones = [normalisePhone9(otherRow.phone), normalisePhone9(otherRow.wa_phone)].filter(Boolean)
-  if (anchorPhones.some((p) => otherPhones.includes(p))) return true
-
-  const anchorEmail = normaliseEmail(anchorRow.email)
-  const otherEmail = normaliseEmail(otherRow.email)
-  if (anchorEmail && otherEmail && anchorEmail === otherEmail) return true
-
+  if (sharePhone(anchorRow, otherRow)) return true
+  if (sameEmail(anchorRow, otherRow)) return true
   return false
+}
+
+// The two halves of `corroborated`, separately — because for an UNGROUPED row
+// they are not the same strength of evidence (see reusableSibling below).
+function sharePhone(a, b) {
+  const aPhones = [normalisePhone9(a?.phone), normalisePhone9(a?.wa_phone)].filter(Boolean)
+  const bPhones = [normalisePhone9(b?.phone), normalisePhone9(b?.wa_phone)].filter(Boolean)
+  return aPhones.some((p) => bPhones.includes(p))
+}
+
+function sameEmail(a, b) {
+  const aEmail = normaliseEmail(a?.email)
+  const bEmail = normaliseEmail(b?.email)
+  return !!aEmail && !!bEmail && aEmail === bEmail
+}
+
+/**
+ * reusableSibling(anchorRow, row, { viaGroup }) -> boolean [pure]
+ *
+ * May a WRITE — a booking, a credit spend, a membership ride — be moved onto
+ * `row`'s Glofox account silently, with no human looking at it?
+ *
+ * This is deliberately STRICTER than `corroborated`, and the difference is
+ * one thing: **a shared phone number is not a shared identity.** Couples and
+ * families share a number. Measured at Stillorgan (2026-08-26): 326 contact
+ * groups share a phone, 62 of those carry DIFFERENT first names, and 59 of
+ * the 62 hold more than one Glofox account. So "same last-9 digits" would
+ * silently book PERSON B's class against PERSON A's account and spend A's
+ * credits — the wrong-account write this whole programme exists to remove,
+ * committed by the code meant to remove it.
+ *
+ * The codebase already knows this hazard and already refuses it elsewhere:
+ * `resolveAutoVerify` (src/lib/agent/core.js) returns null — will not
+ * auto-verify — when two UNGROUPED contacts share the inbound number, pinned
+ * as "the couple case" in core.test.js. This predicate is the same refusal at
+ * the write boundary.
+ *
+ * Reuse is therefore allowed on exactly two kinds of evidence:
+ *   (a) `viaGroup` — the row is a person_group member. person-detect vetted
+ *       that link with its own high-confidence rules (and its own refusal of
+ *       the couple case), or a human linked it by hand. Corroboration is
+ *       still required on top, mirroring electWriteAccount's rule 1: a group
+ *       row sharing NO identifier at all is a name match somebody accepted
+ *       for display, not a mandate to write.
+ *   (b) an exact email match — `contacts_email_unique` is GLOBAL in this
+ *       schema (mig 008: `ON contacts (email) WHERE email IS NOT NULL`) and
+ *       prod carries zero shared addresses, so one address really is one
+ *       person. Being case-SENSITIVE, that index still permits a casing
+ *       variant, which our trim+lowercase compare catches — the one shape
+ *       where two rows legitimately share an address.
+ *
+ * A phone-only match from the DIRECT search is neither: it blocks the mint
+ * (conservative — a human decides), but it never moves a write. Do NOT
+ * "simplify" this back to `corroborated` — that is the defect, not a tidy-up.
+ */
+export function reusableSibling(anchorRow, row, { viaGroup = false } = {}) {
+  if (!anchorRow || !row) return false
+  if (anchorRow.id != null && row.id != null && anchorRow.id === row.id) return true
+  if (sameEmail(anchorRow, row)) return true
+  return viaGroup === true && corroborated(anchorRow, row)
+}
+
+// ---------------------------------------------------------------------------
+// PERSON-ACCT.9 — seeing the person BEFORE the group exists
+// ---------------------------------------------------------------------------
+
+// A person's rows are 2-6 in practice; this cap only stops a pathological
+// shared/blank number (a studio landline typed into 400 lead forms) from
+// pulling a page of strangers into a decision. It is a bound, not a filter:
+// everything returned is still corroboration-checked by the caller.
+const SIBLING_SEARCH_LIMIT = 50
+
+/**
+ * directSiblingRows(db, { anchorRow, locationId }) →
+ *   { rows, readFailed }
+ *
+ * The half of "who is this person" that `person_group_members` CANNOT
+ * answer: a contact created seconds ago by a public form is not in any
+ * group yet (groups only form when detection runs, or when staff link by
+ * hand), so a returner who fills the form with a new email looks like a
+ * blank slate to every group-based read.
+ *
+ * Two searches, both scoped to `locationId` when one is given:
+ *   • phone — last 9 digits, matched across BOTH `phone` and `wa_phone` on
+ *     both sides. normalisePhone9 strips every non-digit, so the pattern
+ *     carries no LIKE wildcard and no PostgREST `or` separator; the `%`
+ *     prefix is a DELIBERATE suffix search, spelled in the source (the
+ *     no-unescaped-ilike-pattern convention).
+ *   • email — exact, case-insensitive. `.ilike` + escapeLikePattern, NOT
+ *     `.eq` (contacts are stored mixed-case) and NOT a raw `.ilike` (`_`
+ *     and `%` are legal email characters — the 2026-08-07 incident).
+ *
+ * The anchor's own row is dropped. `readFailed: true` on ANY failed read,
+ * with whatever rows did come back still returned — a caller must never
+ * read an unreadable search as "this person has no other rows".
+ */
+export async function directSiblingRows(db, { anchorRow, locationId = null } = {}) {
+  if (!db || !anchorRow) return { rows: [], readFailed: true }
+  const anchorId = anchorRow.id ?? null
+  const rows = []
+  let readFailed = false
+
+  const scoped = (q) => (locationId != null ? q.eq('location_id', locationId) : q)
+
+  const phones = [...new Set(
+    [normalisePhone9(anchorRow.phone), normalisePhone9(anchorRow.wa_phone)].filter(Boolean),
+  )]
+  if (phones.length) {
+    try {
+      const or = phones.flatMap((p) => [`phone.ilike.%${p}`, `wa_phone.ilike.%${p}`]).join(',')
+      const { data, error } = await scoped(
+        db.from('contacts').select(CONTACT_COLUMNS).or(or),
+      ).limit(SIBLING_SEARCH_LIMIT)
+      if (error) throw error
+      rows.push(...(data || []))
+    } catch (err) {
+      readFailed = true
+      console.error('[person-accounts] directSiblingRows phone search failed:', err?.message || err)
+    }
+  }
+
+  const email = normaliseEmail(anchorRow.email)
+  if (email) {
+    try {
+      const { data, error } = await scoped(
+        db.from('contacts').select(CONTACT_COLUMNS).ilike('email', escapeLikePattern(email)),
+      ).limit(SIBLING_SEARCH_LIMIT)
+      if (error) throw error
+      rows.push(...(data || []))
+    } catch (err) {
+      readFailed = true
+      console.error('[person-accounts] directSiblingRows email search failed:', err?.message || err)
+    }
+  }
+
+  const byId = new Map()
+  for (const row of rows) {
+    if (!row || !row.id || row.id === anchorId) continue
+    if (!byId.has(row.id)) byId.set(row.id, row)
+  }
+  return { rows: [...byId.values()], readFailed }
+}
+
+/**
+ * personRowsForContact(db, { contactId, contact, locationId, groupId }) →
+ *   { anchorRow, rows, groupContactIds, readFailed }
+ *
+ * Every `contacts` row that plausibly belongs to the same PERSON as
+ * `contactId`, at `locationId`: the person-group union
+ * (linkedAccountsForContact) UNIONed with the direct phone/email search
+ * above. `rows` excludes the anchor itself and is deduped by id.
+ *
+ * Group membership and a direct identifier match are deliberately NOT the
+ * same evidence, and this function does not conflate them — it returns the
+ * union, tells the caller WHICH ids came from the group (`groupContactIds`),
+ * and leaves the split to `corroborated` / `reusableSibling`. A grouped row
+ * that shares no phone or email is a name-ish match somebody (or detection)
+ * once accepted: good enough to REFUSE to mint a duplicate over, never good
+ * enough to WRITE to. A phone-only row from the DIRECT search is weaker
+ * still — it may be the anchor's partner (see reusableSibling).
+ *
+ * A row whose OWN `location_id` is present and differs from `locationId` is
+ * dropped (the group read spans locations by design). A null location_id is
+ * never treated as foreign — same rule as electWriteAccount's location
+ * guard, for the same reason: a sync gap must not strand a real account.
+ *
+ * `readFailed` is the OR of both halves. It never means "no rows".
+ */
+export async function personRowsForContact(db, { contactId, contact = null, locationId = null, groupId = null } = {}) {
+  const anchorId = contactId ?? contact?.id ?? null
+  if (!db || !anchorId) return { anchorRow: contact || null, rows: [], groupContactIds: [], readFailed: true }
+
+  let readFailed = false
+  const byId = new Map()
+  const groupContactIds = new Set()
+  const add = (row, { viaGroup = false } = {}) => {
+    if (!row || !row.id || row.id === anchorId) return
+    if (locationId != null && row.location_id != null && row.location_id !== locationId) return
+    if (!byId.has(row.id)) byId.set(row.id, row)
+    // Provenance is recorded even when the row was already known from the
+    // other half: being ALSO findable by phone never weakens a vetted group
+    // link, and the group is the stronger evidence of the two.
+    if (viaGroup) groupContactIds.add(row.id)
+  }
+
+  const linked = await linkedAccountsForContact(db, anchorId, { groupId })
+  if (linked.readFailed) readFailed = true
+  for (const row of linked.contacts) add(row, { viaGroup: true })
+
+  // Prefer the caller's own freshly-read row as the anchor (it is the row the
+  // decision is being made FOR); fall back to the group read's copy.
+  const anchorRow = contact || linked.contacts.find((c) => c && c.id === anchorId) || null
+
+  const direct = await directSiblingRows(db, { anchorRow, locationId })
+  if (direct.readFailed) readFailed = true
+  for (const row of direct.rows) add(row)
+
+  return { anchorRow, rows: [...byId.values()], groupContactIds: [...groupContactIds], readFailed }
 }
 
 // Tier an account for write-election purposes: 2 = has a bookable membership

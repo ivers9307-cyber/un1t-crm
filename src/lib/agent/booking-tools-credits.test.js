@@ -34,6 +34,11 @@ function stubDb(trace, { membershipStatus = null, membershipState = null, pendin
         select: (cols) => { selected = true; trace.push({ step: 'select', table, cols }); return b },
         eq: () => b,
         contains: () => b,
+        // PERSON-ACCT.9 — the pending-approval dedupe matches across ALL of
+        // this person's contact ids, so it filters with `.in()` rather than
+        // `.eq()`. Without this the lookup throws and the dedupe silently
+        // degrades to "no existing card".
+        in: () => b,
         limit: () => b,
         async maybeSingle() {
           if (table === 'contacts') return { data: { glofox_member_id: 'gf-1', glofox_membership_status: membershipStatus, glofox_membership_state: membershipState }, error: null }

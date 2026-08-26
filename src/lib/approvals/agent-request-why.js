@@ -38,6 +38,10 @@ const MACHINE_REASONS = {
   // escalates instead of coin-flipping between two that are both live.
   account_conflict:
     'Mia found more than one account holding a live membership/credits and escalated rather than guess. Confirm which account is right in Glofox, then approve — the booking runs against the account shown.',
+  // PERSON-ACCT.9 — the funnel could not read this person's other contact
+  // rows, so it refused to mint a Glofox account it might be duplicating.
+  account_check_failed:
+    'Their other contact records could not be read, so no Glofox account was created (it might have been a duplicate). Check whether they already have an account, then approve to book.',
   account_failed:
     'Their Glofox account could not be found or created automatically. Sort the account in Glofox, then approve to book.',
   account_needs_review:
