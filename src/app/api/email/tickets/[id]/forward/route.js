@@ -290,6 +290,8 @@ export async function POST(request, props) {
   // the row below, which is what the inbound webhook threads on.
   const send = await sendTicketEmail({
     mailboxAddress: mailbox?.address || null,
+    // MAILBOX-CONNECT.7 — see the compose route.
+    mailbox: mailbox || null,
     to: wire.to,
     cc: wire.cc,
     bcc: wire.bcc,
@@ -329,6 +331,11 @@ export async function POST(request, props) {
     subject,
     text_body: outboundText,
     postmark_message_id: send.result.messageId,
+    // MAILBOX-CONNECT.7 — the threading key on the SMTP path; see the compose
+    // route for the full reasoning. An SMTP send carries no Postmark id, so
+    // without this a recipient's reply forks a new ticket. NULL on the Postmark
+    // path, which is today's behaviour.
+    rfc_message_id: send.result.rfcMessageId || null,
     // mig 501 — WHAT was passed on. The thread renders the marker off this
     // rather than off the "Fwd: " prefix, which is editable text.
     forwarded_message_id: source.id,
@@ -355,6 +362,9 @@ export async function POST(request, props) {
         // the SENT text (note + quoted correspondence) a third party now has.
         forwarded_message_id: source.id,
         postmark_message_id: send.result.messageId,
+        // MAILBOX-CONNECT.7 — the re-fileable record needs the threading key;
+        // on the SMTP path the RFC id is the only one that exists.
+        rfc_message_id: send.result.rfcMessageId || null,
         from_email: send.fromEmail || null,
         recipients: { to: recipients.to, cc: recipients.cc, bcc: recipients.bcc },
         subject,

@@ -235,6 +235,13 @@ export async function POST(request) {
 
   const send = await sendTicketEmail({
     mailboxAddress: mailbox.address,
+    // MAILBOX-CONNECT.7 — the mailbox ROW, not just its address. sendTicketEmail
+    // reads `egress` off it to choose the transport; a mailbox connected over
+    // IMAP/SMTP sends as its own address over its own SMTP, because Postmark
+    // cannot DKIM-sign a domain we do not control. Omitting this is not a
+    // degraded send, it is silently the wrong sender — which is why every call
+    // site passes it rather than the send path defaulting.
+    mailbox,
     to: wire.to,
     cc: wire.cc,
     bcc: wire.bcc,
@@ -307,6 +314,10 @@ export async function POST(request) {
           ticket_id: ticketId,
           mailbox_id: mailbox.id,
           postmark_message_id: result.messageId,
+          // MAILBOX-CONNECT.7 — this payload is the re-fileable record, so it
+          // has to carry what a re-file needs. On the SMTP path the RFC id is
+          // the ONLY threading key that exists.
+          rfc_message_id: result.rfcMessageId || null,
           from_email: send.fromEmail || null,
           recipients: { to: recipients.to, cc: recipients.cc, bcc: recipients.bcc },
           subject,
@@ -376,6 +387,26 @@ export async function POST(request) {
     subject,
     text_body: outboundText,
     postmark_message_id: result.messageId,
+    // MAILBOX-CONNECT.7 — THE THREADING KEY ON THE SMTP PATH, and the reason a
+    // reply to a connected mailbox lands on this ticket instead of forking a
+    // new one.
+    //
+    // The inbound webhook resolves a thread by matching the incoming
+    // In-Reply-To/References against BOTH email_inbox_messages.rfc_message_id
+    // and .postmark_message_id (route.js ~740). A Postmark send is covered by
+    // the second: Postmark mints the RFC id and embeds its API MessageID in it,
+    // which is what `result.messageId` above stores.
+    //
+    // An SMTP send has no Postmark id at all — sendViaSmtp returns
+    // `messageId: null` on purpose, because no provider event will ever arrive
+    // for it. So without this line an SMTP-sent message matches NEITHER column,
+    // and every customer reply to it opens a brand new ticket while the
+    // original sits unanswered. Nodemailer returns the RFC id it actually
+    // generated; store it.
+    //
+    // NULL on the Postmark path (sendEmail does not report the RFC id), which
+    // is exactly today's behaviour — this is purely additive.
+    rfc_message_id: result.rfcMessageId || null,
     // mig 493 — WHO wrote it. On a shared queue an anonymous "outbound" is the
     // difference between a conversation and a pile of text.
     author_profile_id: user.id,

@@ -215,11 +215,63 @@ describe('time', () => {
 // it as either "delivered" or "failed" would be a lie in one direction or the
 // other, and the second one is the lie this whole feature exists to stop.
 describe('deliveryMeta (EMAIL-DELIVERY.1)', () => {
-  const outbound = (extra) => ({ direction: 'outbound', is_internal_note: false, ...extra })
+  // The default fixture is a POSTMARK send, which is what EMAIL-DELIVERY.1 is
+  // about: it carries an API MessageID, so an event can still arrive for it.
+  // MAILBOX-CONNECT.7 made that field load-bearing — an outbound row WITHOUT
+  // one was sent over the mailbox's own SMTP and no event ever can arrive.
+  const outbound = (extra) => ({
+    direction: 'outbound',
+    is_internal_note: false,
+    postmark_message_id: 'a8c1040e-db1c-4e18-ac79-bc5f64c7ce2c',
+    ...extra,
+  })
 
   it('says NOTHING about a message with no provider event yet', () => {
     expect(deliveryMeta(outbound({ delivery_status: null }))).toBeNull()
     expect(deliveryMeta(outbound({}))).toBeNull()
+  })
+
+  // MAILBOX-CONNECT.7 — the two NULL states are different facts. "Sent, heard
+  // nothing YET" and "sent, and nothing can ever arrive" render identically
+  // without this, and the difference is exactly what an operator needs when a
+  // member says they never got a reply.
+  it('says NOT TRACKED for an SMTP send, which can never get an event', () => {
+    const meta = deliveryMeta(outbound({
+      delivery_status: null, postmark_message_id: null, rfc_message_id: 'a@theirgym.ie',
+    }))
+    expect(meta).not.toBeNull()
+    expect(meta.label).toBe('Not tracked')
+    expect(meta.tone).toBe('quiet')
+    expect(meta.detail).toMatch(/does not report delivery/i)
+  })
+
+  it('still reports a real outcome on an SMTP row if one somehow exists', () => {
+    // Defensive: the not-tracked branch must sit BELOW the status branches, so
+    // a genuine bounce is never swallowed by the absence of a Postmark id.
+    const meta = deliveryMeta(outbound({
+      delivery_status: 'bounced', postmark_message_id: null, rfc_message_id: 'a@theirgym.ie',
+    }))
+    expect(meta.label).toBe('Not delivered')
+  })
+
+  // AUDIT FIX — keying on a missing Postmark id ALONE also matched every
+  // historical row whose id was never captured, and the degraded plannedFroms
+  // path, and told the operator those had been sent over SMTP. Asserting a
+  // false fact about how a message was sent is worse than saying nothing.
+  it('says NOTHING about a row with neither id — it does not invent provenance', () => {
+    expect(deliveryMeta(outbound({
+      delivery_status: null, postmark_message_id: null, rfc_message_id: null,
+    }))).toBeNull()
+    expect(deliveryMeta(outbound({ delivery_status: null, postmark_message_id: null }))).toBeNull()
+  })
+
+  it('does not claim not-tracked for an inbound message or an internal note', () => {
+    expect(deliveryMeta({
+      direction: 'inbound', postmark_message_id: null, rfc_message_id: 'a@b.com',
+    })).toBeNull()
+    expect(deliveryMeta(outbound({
+      is_internal_note: true, postmark_message_id: null, rfc_message_id: 'a@b.com',
+    }))).toBeNull()
   })
 
   it('says nothing about an unrecognised status rather than guessing', () => {
