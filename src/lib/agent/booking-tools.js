@@ -621,7 +621,7 @@ export async function executeBookingTool(toolName, input, ctx) {
       }
     }
 
-    const election = electWriteAccount({ accounts, anchorContactId: verifiedContactId, concernsMemberIds })
+    const election = electWriteAccount({ accounts, anchorContactId: verifiedContactId, concernsMemberIds, locationId })
     // 'none' — no account is readable, or every one is classpass/
     // uncorroborated — keeps the pre-election lanes exactly as they were:
     // the contact this conversation is attached to (already guarded above for

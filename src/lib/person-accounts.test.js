@@ -492,11 +492,17 @@ describe('hasBookableMembership', () => {
 // get_my_recent_attendance) reads only what linkedAccountsForContact
 // selects, so this one assertion is load-bearing for all of them.
 describe('CONTACT_COLUMNS carries every field the fan-out helpers read', () => {
-  it('the contacts select includes glofox_member_id, glofox_membership_status, glofox_membership_state, trial_credits_remaining, phone, wa_phone, email', async () => {
+  it('the contacts select includes glofox_member_id, glofox_membership_status, glofox_membership_state, trial_credits_remaining, phone, wa_phone, email, location_id', async () => {
     const db = makeDb({ contacts: [{ id: 'c1', glofox_member_id: 'gf-1' }] })
     await linkedAccountsForContact(db, 'c1')
     expect(db.contactsSelectCols.length).toBeGreaterThan(0)
-    for (const col of ['glofox_member_id', 'glofox_membership_status', 'glofox_membership_state', 'trial_credits_remaining', 'phone', 'wa_phone', 'email']) {
+    // PERSON-ACCT.8 — location_id is pinned alongside the rest: the repo has
+    // a live bug class where a predicate reads a column the query never
+    // SELECTED and is therefore silently always-false (electWriteAccount's
+    // location guard reads acct.location_id — if this constant ever dropped
+    // the field, every account would arrive with location_id === undefined
+    // and the guard would just never fire).
+    for (const col of ['glofox_member_id', 'glofox_membership_status', 'glofox_membership_state', 'trial_credits_remaining', 'phone', 'wa_phone', 'email', 'location_id']) {
       expect(db.contactsSelectCols[0]).toContain(col)
     }
   })
@@ -533,6 +539,7 @@ describe('electWriteAccount', () => {
       trial_credits_remaining: 0,
       last_attended_at: null,
       updated_at: null,
+      location_id: null,
       ...overrides,
     }
   }
@@ -696,6 +703,61 @@ describe('electWriteAccount', () => {
     expect(accounts).toEqual(before)
     expect(accounts[0]).toBe(a)
     expect(accounts[1]).toBe(b)
+  })
+
+  // PERSON-ACCT.8 — defensive hardening: linkedAccountsForContact does not
+  // filter by location, so a person group that ever spans two locations
+  // (none do today, verified against prod 2026-08-26) would otherwise let a
+  // write elect a contact at the WRONG location.
+  describe('locationId guard', () => {
+    it('excludes a foreign-location account: a tie collapses to the in-location survivor', () => {
+      const home = row({
+        id: 'home-1', glofox_member_id: 'gf-home', glofox_membership_status: 'member',
+        glofox_membership_state: 'active', location_id: 'loc-1',
+      })
+      const foreign = row({
+        id: 'foreign-1', glofox_member_id: 'gf-foreign', glofox_membership_status: 'member',
+        glofox_membership_state: 'active', location_id: 'loc-2',
+      })
+      // Without the guard this would be a conflict (both tie at the
+      // bookable-membership tier) — proof the foreign row was actually
+      // excluded, not just outranked.
+      const withoutGuard = electWriteAccount({ accounts: [home, foreign], anchorContactId: 'home-1' })
+      expect(withoutGuard.outcome).toBe('conflict')
+
+      const result = electWriteAccount({ accounts: [home, foreign], anchorContactId: 'home-1', locationId: 'loc-1' })
+      expect(result).toEqual({ outcome: 'elected', account: home, candidates: [home] })
+    })
+
+    it('keeps a null-location account — absence is never evidence of a foreign location', () => {
+      const home = row({
+        id: 'home-2', glofox_member_id: 'gf-home2', glofox_membership_status: 'member',
+        glofox_membership_state: 'active', location_id: 'loc-1',
+      })
+      const noLocation = row({
+        id: 'nolocation-2', glofox_member_id: 'gf-nolocation2', glofox_membership_status: 'member',
+        glofox_membership_state: 'active', location_id: null,
+      })
+      const result = electWriteAccount({ accounts: [home, noLocation], anchorContactId: 'home-2', locationId: 'loc-1' })
+      // Both survive the guard, so this is a real tie — same as if locationId
+      // had never been passed at all.
+      expect(result.outcome).toBe('conflict')
+      expect(result.candidates.map((c) => c.id).sort()).toEqual(['home-2', 'nolocation-2'])
+    })
+
+    it('is a no-op when locationId is not passed, even with mixed locations present', () => {
+      const home = row({
+        id: 'home-3', glofox_member_id: 'gf-home3', glofox_membership_status: 'member',
+        glofox_membership_state: 'active', location_id: 'loc-1',
+      })
+      const other = row({
+        id: 'other-3', glofox_member_id: 'gf-other3', glofox_membership_status: 'member',
+        glofox_membership_state: 'active', location_id: 'loc-2',
+      })
+      const result = electWriteAccount({ accounts: [home, other], anchorContactId: 'home-3' })
+      expect(result.outcome).toBe('conflict')
+      expect(result.candidates.map((c) => c.id).sort()).toEqual(['home-3', 'other-3'])
+    })
   })
 })
 

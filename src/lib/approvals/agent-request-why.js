@@ -160,6 +160,33 @@ export function accountSummaryLine(contact) {
 }
 
 /**
+ * PERSON-ACCT.8 — pause/cancellation elect ONE of a person's linked
+ * accounts and stamp `details.elected_glofox_member_id`, same convention
+ * book_class uses. But class_booking's ACCOUNT_MISMATCH cross-check
+ * (src/app/api/agent/membership-requests/[id]/route.js) is BLOCKING for a
+ * reason that does not apply here: approving a class_booking re-runs a
+ * live Glofox call, so a stale election would book the wrong account
+ * silently, and refusing is strictly safer than executing. Pause and
+ * cancellation are NOT in EXECUTING_KINDS (request-recovery.js) — staff
+ * make the actual Glofox change by hand after approving, so there is no
+ * automated write for a block to protect against. Blocking the DECISION
+ * itself (approve/decline/save) here would only strand a legitimate
+ * request behind a mismatch that may already be moot by the time staff
+ * look at it (the account could have been fixed, merged, or re-synced
+ * since the request was filed) — worse than the risk it guards against.
+ * So this is a WARNING for the operator to double-check in Glofox, never a
+ * refusal to decide. Pure — the card renders it, nothing calls it to gate
+ * anything.
+ */
+export function accountMismatchWarning(row) {
+  if (!row || (row.kind !== 'pause' && row.kind !== 'cancellation')) return null
+  const elected = row.details?.elected_glofox_member_id || null
+  const current = row.contact?.glofox_member_id || null
+  if (!elected || !current || elected === current) return null
+  return 'This request was filed against a different Glofox account than the one the contact is linked to now — check which account is right before making the change in Glofox.'
+}
+
+/**
  * The customer's own words, when captured. Prefer the explicit note; for
  * pause/cancellation the tools also write details.reason in the
  * customer's words. class_booking details.reason is a machine code and

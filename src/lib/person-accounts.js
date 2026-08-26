@@ -16,7 +16,7 @@ import { normalisePhone9 } from './person-links'
 
 const CONTACT_COLUMNS =
   'id, name, glofox_member_id, glofox_membership_status, glofox_membership_state, ' +
-  'trial_credits_remaining, last_attended_at, phone, wa_phone, email, updated_at'
+  'trial_credits_remaining, last_attended_at, phone, wa_phone, email, updated_at, location_id'
 
 const CHUNK_SIZE = 150
 
@@ -267,7 +267,7 @@ function compareForElection(a, b) {
 }
 
 /**
- * electWriteAccount({ accounts, anchorContactId, concernsMemberIds = [] }) →
+ * electWriteAccount({ accounts, anchorContactId, concernsMemberIds = [], locationId }) →
  *   { outcome: 'none', candidates: [] }
  * | { outcome: 'elected', account, candidates: [account] }
  * | { outcome: 'conflict', candidates: [...tied, ranked] }
@@ -305,7 +305,23 @@ function compareForElection(a, b) {
  *     `corroborated(anchorRow, row)` (anchorRow = the row whose id ===
  *     anchorContactId if present, else the first account by id sort — a row
  *     is always corroborated with itself, so the anchor is never excluded
- *     by its own rule). Zero candidates → 'none'.
+ *     by its own rule), minus — when `locationId` is passed — rows whose
+ *     OWN `location_id` is present AND differs from it. Zero candidates →
+ *     'none'.
+ *
+ *     The location guard is defensive hardening, not a rule the data
+ *     currently exercises: `linkedAccountsForContact` resolves a person's
+ *     WHOLE group regardless of location, and — verified against
+ *     production 2026-08-26 — zero person groups today span more than one
+ *     location. But nothing stops one existing (a member who trains at two
+ *     studios), and electing an account at the WRONG location would file an
+ *     approval row whose `contact_id` and `location_id` disagree. A null or
+ *     absent `location_id` is NEVER treated as evidence of a foreign
+ *     location — excluding it on absence alone could strand a legitimate
+ *     account behind a sync gap, which is worse than the latent risk this
+ *     guards against. Passing no `locationId` at all (the parameter's
+ *     default) is a complete no-op, preserving every existing caller's
+ *     behaviour exactly.
  *  2. If concernsMemberIds intersects the candidate set, narrow candidates
  *     to that intersection — the account already holding the activity this
  *     write concerns wins over a bare entitlement elsewhere, so a person's
@@ -321,7 +337,7 @@ function compareForElection(a, b) {
  *
  * Pure: never mutates `accounts` (every sort/filter runs over a copy).
  */
-export function electWriteAccount({ accounts, anchorContactId, concernsMemberIds = [] } = {}) {
+export function electWriteAccount({ accounts, anchorContactId, concernsMemberIds = [], locationId = null } = {}) {
   const list = Array.isArray(accounts) ? accounts : []
 
   const anchorRow = list.find((a) => a && a.id === anchorContactId)
@@ -330,6 +346,10 @@ export function electWriteAccount({ accounts, anchorContactId, concernsMemberIds
   const eligible = list.filter((acct) => {
     if (!acct) return false
     if (acct.glofox_membership_status === 'classpass_payg') return false
+    // Location guard (defensive hardening, see the doc comment above): only
+    // ever excludes on a POSITIVE mismatch — a row with no location_id at
+    // all is never treated as foreign.
+    if (locationId != null && acct.location_id != null && acct.location_id !== locationId) return false
     return corroborated(anchorRow, acct)
   })
 
