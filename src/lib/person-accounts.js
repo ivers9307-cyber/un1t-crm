@@ -218,6 +218,140 @@ export function corroborated(anchorRow, otherRow) {
   return false
 }
 
+// Tier an account for write-election purposes: 2 = has a bookable membership
+// right now, 1 = no membership but holds trial credits, 0 = neither (pure
+// recency tiebreak territory). Higher tier always outranks a lower one
+// regardless of recency — a stale membership still beats a very-recently-
+// active account with nothing to spend.
+function writeElectionTier(row) {
+  if (hasBookableMembership(row)) return 2
+  if (Number(row?.trial_credits_remaining) > 0) return 1
+  return 0
+}
+
+// Most-recent-activity timestamp for ranking, ms since epoch. Tries
+// last_attended_at first; falls back to updated_at only when the primary is
+// absent OR fails to parse. Both absent/unparseable → -Infinity, i.e. this
+// row sorts LAST — an account election must never treat "we don't know when
+// this was last used" as "just used".
+function writeElectionActivityMs(row) {
+  const primary = row?.last_attended_at
+  const primaryMs = primary != null ? Date.parse(primary) : NaN
+  if (!Number.isNaN(primaryMs)) return primaryMs
+  const fallback = row?.updated_at
+  const fallbackMs = fallback != null ? Date.parse(fallback) : NaN
+  if (!Number.isNaN(fallbackMs)) return fallbackMs
+  return -Infinity
+}
+
+// Total order over candidates: tier desc, then activity desc, then id asc.
+// The id tiebreak is what makes election a pure function of the account SET
+// rather than of `accounts`' incoming array order — two callers who fetch
+// the same group in different orders (e.g. a cache vs a fresh read) must
+// never elect different accounts for the same write.
+function compareForElection(a, b) {
+  const tierA = writeElectionTier(a)
+  const tierB = writeElectionTier(b)
+  if (tierA !== tierB) return tierB - tierA
+  // Compare via equality first, not subtraction: both sides commonly land on
+  // -Infinity (no usable activity at all), and -Infinity - -Infinity is NaN,
+  // which silently corrupts Array.sort's ordering instead of throwing.
+  const ma = writeElectionActivityMs(a)
+  const mb = writeElectionActivityMs(b)
+  if (ma !== mb) return mb - ma
+  const idA = String(a.id)
+  const idB = String(b.id)
+  if (idA < idB) return -1
+  if (idA > idB) return 1
+  return 0
+}
+
+/**
+ * electWriteAccount({ accounts, anchorContactId, concernsMemberIds = [] }) →
+ *   { outcome: 'none', candidates: [] }
+ * | { outcome: 'elected', account, candidates: [account] }
+ * | { outcome: 'conflict', candidates: [...tied, ranked] }
+ *
+ * PERSON-ACCT.5 — deliberately elects ONE account for a WRITE (book/cancel/
+ * pause), or escalates, rather than reading `accounts` in whatever order the
+ * caller happened to fetch it. This is NOT `pickPrimary` (person-links.js),
+ * which ranks accounts for DISPLAY/outreach — which row a contact list or
+ * churn radar shows as "the" contact. That ranking still puts a classpass
+ * row on the podium (score 0, but still sorted and returned) because
+ * showing it is harmless; WRITING to it is not (below). Reusing a display
+ * ranking to decide which Glofox account actually receives a booking/cancel
+ * call is exactly the bug this task exists to prevent: pickPrimary happily
+ * returns whichever row scores highest even when that row is a stranger's
+ * (it has no corroboration concept at all), so a shared surname/lookup that
+ * grouped the wrong two contacts together would silently book the WRONG
+ * PERSON's class. Election refuses to guess: it only ever picks among rows
+ * that are actually corroborated with the person being written for, and it
+ * answers 'conflict' rather than a coin-flip when two accounts are equally
+ * good candidates.
+ *
+ * ClassPass rows stay READ-visible elsewhere in this module (linkedAccounts-
+ * ForContact, findBookingAcrossAccounts) because showing a customer their
+ * ClassPass booking is correct — but classpass_payg is a status Glofox
+ * itself does not treat as a normal membership: bookings/cancellations for
+ * it are governed by ClassPass's own payment/credit/refund flow. Writing to
+ * it directly through the Glofox member API would create or cancel a
+ * booking Glofox thinks the member paid for directly, while ClassPass's own
+ * ledger never hears about it — a silent double-booking/refund mismatch.
+ * So classpass_payg is excluded from candidates ALWAYS, even when it is the
+ * only entitled (bookable-membership or credits-holding) row in the group.
+ *
+ * Rules, applied in order:
+ *  1. Candidates = accounts minus classpass_payg rows, minus rows that fail
+ *     `corroborated(anchorRow, row)` (anchorRow = the row whose id ===
+ *     anchorContactId if present, else the first account by id sort — a row
+ *     is always corroborated with itself, so the anchor is never excluded
+ *     by its own rule). Zero candidates → 'none'.
+ *  2. If concernsMemberIds intersects the candidate set, narrow candidates
+ *     to that intersection — the account already holding the activity this
+ *     write concerns wins over a bare entitlement elsewhere, so a person's
+ *     booking/cancel history doesn't fragment across accounts.
+ *  3. Rank the remaining candidates: bookable membership, then credits,
+ *     then most-recent activity, then id (deterministic, order-independent).
+ *  4. Conflict: if ≥2 candidates tie at the TOP tier (both counted as
+ *     "having a bookable membership", or — only when none do — both
+ *     "holding credits") → 'conflict' with the tied rows, ranked. A tie at
+ *     the bottom (recency-only) tier is NOT a conflict — the id tiebreak
+ *     always yields a single, deterministic winner there.
+ *  5. Otherwise → 'elected' with the top-ranked candidate.
+ *
+ * Pure: never mutates `accounts` (every sort/filter runs over a copy).
+ */
+export function electWriteAccount({ accounts, anchorContactId, concernsMemberIds = [] } = {}) {
+  const list = Array.isArray(accounts) ? accounts : []
+
+  const anchorRow = list.find((a) => a && a.id === anchorContactId)
+    ?? [...list].sort((a, b) => (String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0))[0]
+
+  const eligible = list.filter((acct) => {
+    if (!acct) return false
+    if (acct.glofox_membership_status === 'classpass_payg') return false
+    return corroborated(anchorRow, acct)
+  })
+
+  if (eligible.length === 0) return { outcome: 'none', candidates: [] }
+
+  const concerns = Array.isArray(concernsMemberIds) ? concernsMemberIds : []
+  let pool = eligible
+  if (concerns.length > 0) {
+    const concerned = eligible.filter((acct) => concerns.includes(acct.glofox_member_id))
+    if (concerned.length > 0) pool = concerned
+  }
+
+  const ranked = [...pool].sort(compareForElection)
+  const topTier = writeElectionTier(ranked[0])
+  const tiedAtTop = topTier > 0 ? ranked.filter((acct) => writeElectionTier(acct) === topTier) : [ranked[0]]
+
+  if (tiedAtTop.length >= 2) {
+    return { outcome: 'conflict', candidates: tiedAtTop }
+  }
+  return { outcome: 'elected', account: ranked[0], candidates: [ranked[0]] }
+}
+
 /**
  * findBookingAcrossAccounts(creds, accounts, bookingId, fetchImpl) →
  *   { owner, unreadable }

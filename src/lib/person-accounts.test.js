@@ -1,7 +1,10 @@
 // src/lib/person-accounts.test.js — PERSON-ACCT.1
 
 import { describe, it, expect } from 'vitest'
-import { linkedAccountsForContact, corroborated, findBookingAcrossAccounts, hasBookableMembership, MEMBER_STATUSES } from './person-accounts'
+import {
+  linkedAccountsForContact, corroborated, findBookingAcrossAccounts, hasBookableMembership,
+  MEMBER_STATUSES, electWriteAccount,
+} from './person-accounts'
 
 // ---------------------------------------------------------------------------
 // Fake db — mirrors the house idiom (agent-requests.test.js / booking-tools
@@ -506,5 +509,192 @@ describe('MEMBER_STATUSES stays in lockstep with account-home.js', () => {
   it('matches src/lib/account-home.js\'s MEMBER_STATUSES exactly', async () => {
     const { MEMBER_STATUSES: ACCOUNT_HOME_MEMBER_STATUSES } = await import('./account-home')
     expect([...MEMBER_STATUSES]).toEqual([...ACCOUNT_HOME_MEMBER_STATUSES])
+  })
+})
+
+// PERSON-ACCT.5 — electWriteAccount. All fixtures share one anchor phone
+// number so "corroborated" is the default; a row is deliberately given a
+// DIFFERENT phone+email when a test needs it excluded as a stranger.
+describe('electWriteAccount', () => {
+  const ANCHOR_PHONE = '0870001111'
+  const ANCHOR_EMAIL = 'anchor@example.com'
+
+  // Base shape every fixture spreads over — keeps each test's overrides down
+  // to the one or two fields that actually matter for that test.
+  function row(overrides) {
+    return {
+      id: 'row',
+      glofox_member_id: 'gf-row',
+      phone: ANCHOR_PHONE,
+      wa_phone: null,
+      email: null,
+      glofox_membership_status: 'trial',
+      glofox_membership_state: null,
+      trial_credits_remaining: 0,
+      last_attended_at: null,
+      updated_at: null,
+      ...overrides,
+    }
+  }
+
+  it('zero accounts → none', () => {
+    expect(electWriteAccount({ accounts: [], anchorContactId: 'anchor-1' }))
+      .toEqual({ outcome: 'none', candidates: [] })
+  })
+
+  it('all-classpass → none, even though the rows corroborate with each other', () => {
+    const anchor = row({ id: 'anchor-1', glofox_member_id: 'gf-a', glofox_membership_status: 'classpass_payg' })
+    const sibling = row({ id: 'sib-1', glofox_member_id: 'gf-s', glofox_membership_status: 'classpass_payg' })
+    expect(electWriteAccount({ accounts: [anchor, sibling], anchorContactId: 'anchor-1' }))
+      .toEqual({ outcome: 'none', candidates: [] })
+  })
+
+  it('a single uncorroborated sibling → none (anchor\'s own account is ClassPass, so nothing survives)', () => {
+    const anchor = row({
+      id: 'anchor-1', glofox_member_id: 'gf-a', email: ANCHOR_EMAIL,
+      glofox_membership_status: 'classpass_payg', glofox_membership_state: 'active',
+    })
+    const stranger = row({
+      id: 'sib-1', glofox_member_id: 'gf-s', phone: '0861119999', email: 'stranger@example.com',
+      glofox_membership_status: 'member', glofox_membership_state: 'active',
+    })
+    expect(electWriteAccount({ accounts: [anchor, stranger], anchorContactId: 'anchor-1' }))
+      .toEqual({ outcome: 'none', candidates: [] })
+  })
+
+  it('classpass excluded even when it is the only entitled row', () => {
+    const anchorClasspass = row({
+      id: 'anchor-2', glofox_member_id: 'gf-a2', email: ANCHOR_EMAIL,
+      glofox_membership_status: 'classpass_payg', glofox_membership_state: 'active',
+      trial_credits_remaining: 5, // the ONLY row with any entitlement
+    })
+    const bareSibling = row({ id: 'sib-3', glofox_member_id: 'gf-s3', last_attended_at: '2026-08-01T00:00:00Z' })
+    const result = electWriteAccount({ accounts: [anchorClasspass, bareSibling], anchorContactId: 'anchor-2' })
+    expect(result).toEqual({ outcome: 'elected', account: bareSibling, candidates: [bareSibling] })
+  })
+
+  it('uncorroborated sibling excluded even when entitled; the anchor itself is never excluded by corroboration', () => {
+    const anchor = row({ id: 'anchor-3', glofox_member_id: 'gf-a3', email: ANCHOR_EMAIL })
+    const strangerWithMembership = row({
+      id: 'sib-4', glofox_member_id: 'gf-s4', phone: '0865551234', email: 'nomatch@example.com',
+      glofox_membership_status: 'member', glofox_membership_state: 'active',
+    })
+    const result = electWriteAccount({ accounts: [anchor, strangerWithMembership], anchorContactId: 'anchor-3' })
+    expect(result).toEqual({ outcome: 'elected', account: anchor, candidates: [anchor] })
+  })
+
+  it('concernsMemberIds narrows the field: a concerned row with NO entitlement beats an unconcerned row WITH entitlement', () => {
+    const unconcernedWithMembership = row({
+      id: 'a4', glofox_member_id: 'gf-a4', glofox_membership_status: 'member', glofox_membership_state: 'active',
+    })
+    const concernedBare = row({ id: 'b4', glofox_member_id: 'gf-b4' })
+    const result = electWriteAccount({
+      accounts: [unconcernedWithMembership, concernedBare],
+      anchorContactId: 'a4',
+      concernsMemberIds: ['gf-b4'],
+    })
+    expect(result).toEqual({ outcome: 'elected', account: concernedBare, candidates: [concernedBare] })
+  })
+
+  it('concernsMemberIds that intersects nothing in the candidate set leaves the field unnarrowed', () => {
+    const withMembership = row({
+      id: 'a4b', glofox_member_id: 'gf-a4b', glofox_membership_status: 'member', glofox_membership_state: 'active',
+    })
+    const bare = row({ id: 'b4b', glofox_member_id: 'gf-b4b' })
+    const result = electWriteAccount({
+      accounts: [withMembership, bare],
+      anchorContactId: 'a4b',
+      concernsMemberIds: ['gf-does-not-exist'],
+    })
+    expect(result).toEqual({ outcome: 'elected', account: withMembership, candidates: [withMembership] })
+  })
+
+  it('rank order: bookable membership beats both credits and recency', () => {
+    const membership = row({
+      id: 'm5', glofox_member_id: 'gf-m5', glofox_membership_status: 'member', glofox_membership_state: 'active',
+    })
+    const credits = row({ id: 'c5', glofox_member_id: 'gf-c5', trial_credits_remaining: 3, last_attended_at: '2026-08-20T00:00:00Z' })
+    const recency = row({ id: 'r5', glofox_member_id: 'gf-r5', last_attended_at: '2026-08-25T00:00:00Z' })
+    const result = electWriteAccount({ accounts: [recency, credits, membership], anchorContactId: 'm5' })
+    expect(result).toEqual({ outcome: 'elected', account: membership, candidates: [membership] })
+  })
+
+  it('rank order: credits beat recency when no row has a bookable membership', () => {
+    const credits = row({ id: 'c5b', glofox_member_id: 'gf-c5b', trial_credits_remaining: 1 })
+    const recency = row({ id: 'r5b', glofox_member_id: 'gf-r5b', last_attended_at: '2026-08-25T00:00:00Z' })
+    const result = electWriteAccount({ accounts: [recency, credits], anchorContactId: 'c5b' })
+    expect(result).toEqual({ outcome: 'elected', account: credits, candidates: [credits] })
+  })
+
+  it('recency: a later last_attended_at wins over an earlier one', () => {
+    const earlier = row({ id: 'a6', glofox_member_id: 'gf-a6', last_attended_at: '2026-08-01T00:00:00Z' })
+    const later = row({ id: 'b6', glofox_member_id: 'gf-b6', last_attended_at: '2026-08-20T00:00:00Z' })
+    const result = electWriteAccount({ accounts: [earlier, later], anchorContactId: 'a6' })
+    expect(result).toEqual({ outcome: 'elected', account: later, candidates: [later] })
+  })
+
+  it('recency: falls back to updated_at when last_attended_at is absent', () => {
+    const olderUpdated = row({ id: 'c6', glofox_member_id: 'gf-c6', last_attended_at: null, updated_at: '2026-08-10T00:00:00Z' })
+    const newerUpdated = row({ id: 'd6', glofox_member_id: 'gf-d6', last_attended_at: null, updated_at: '2026-08-24T00:00:00Z' })
+    const result = electWriteAccount({ accounts: [olderUpdated, newerUpdated], anchorContactId: 'c6' })
+    expect(result).toEqual({ outcome: 'elected', account: newerUpdated, candidates: [newerUpdated] })
+  })
+
+  it('recency: an unparseable last_attended_at (with no usable updated_at) sorts last, even against a very old but valid date', () => {
+    const unparseable = row({ id: 'e6', glofox_member_id: 'gf-e6', last_attended_at: 'not-a-date', updated_at: null })
+    const veryOldButValid = row({ id: 'f6', glofox_member_id: 'gf-f6', last_attended_at: null, updated_at: '2020-01-01T00:00:00Z' })
+    const result = electWriteAccount({ accounts: [unparseable, veryOldButValid], anchorContactId: 'e6' })
+    expect(result).toEqual({ outcome: 'elected', account: veryOldButValid, candidates: [veryOldButValid] })
+  })
+
+  it('determinism: the same input in a different array order elects the same account (id tie-break)', () => {
+    const g = row({ id: 'ggg', glofox_member_id: 'gf-ggg' })
+    const h = row({ id: 'hhh', glofox_member_id: 'gf-hhh' })
+    const order1 = electWriteAccount({ accounts: [g, h], anchorContactId: 'ggg' })
+    const order2 = electWriteAccount({ accounts: [h, g], anchorContactId: 'ggg' })
+    expect(order1).toEqual({ outcome: 'elected', account: g, candidates: [g] })
+    expect(order2).toEqual({ outcome: 'elected', account: g, candidates: [g] })
+  })
+
+  it('conflict: two tied bookable memberships escalate, most-recent-first, instead of guessing', () => {
+    const older = row({
+      id: 'iii', glofox_member_id: 'gf-iii', glofox_membership_status: 'member', glofox_membership_state: 'active',
+      last_attended_at: '2026-08-01T00:00:00Z',
+    })
+    const newer = row({
+      id: 'jjj', glofox_member_id: 'gf-jjj', glofox_membership_status: 'member', glofox_membership_state: 'active',
+      last_attended_at: '2026-08-10T00:00:00Z',
+    })
+    const result = electWriteAccount({ accounts: [older, newer], anchorContactId: 'iii' })
+    expect(result).toEqual({ outcome: 'conflict', candidates: [newer, older] })
+  })
+
+  it('one bookable membership + one credits-only is elected, NOT a conflict (membership outranks credits)', () => {
+    const membership = row({
+      id: 'm8', glofox_member_id: 'gf-m8', glofox_membership_status: 'member', glofox_membership_state: 'active',
+    })
+    const creditsOnly = row({ id: 'c8', glofox_member_id: 'gf-c8', trial_credits_remaining: 4 })
+    const result = electWriteAccount({ accounts: [membership, creditsOnly], anchorContactId: 'm8' })
+    expect(result).toEqual({ outcome: 'elected', account: membership, candidates: [membership] })
+  })
+
+  it('conflict: two credits-only rows with no membership escalate', () => {
+    const fewer = row({ id: 'kkk', glofox_member_id: 'gf-kkk', trial_credits_remaining: 2 })
+    const more = row({ id: 'lll', glofox_member_id: 'gf-lll', trial_credits_remaining: 5 })
+    const result = electWriteAccount({ accounts: [fewer, more], anchorContactId: 'kkk' })
+    expect(result.outcome).toBe('conflict')
+    expect(result.candidates).toHaveLength(2)
+    expect(result.candidates.map((c) => c.id).sort()).toEqual(['kkk', 'lll'])
+  })
+
+  it('never mutates the input accounts array', () => {
+    const a = row({ id: 'zzz', glofox_member_id: 'gf-zzz' })
+    const b = row({ id: 'aaa', glofox_member_id: 'gf-aaa' })
+    const accounts = [a, b]
+    const before = [...accounts]
+    electWriteAccount({ accounts, anchorContactId: 'zzz' })
+    expect(accounts).toEqual(before)
+    expect(accounts[0]).toBe(a)
+    expect(accounts[1]).toBe(b)
   })
 })
