@@ -48,7 +48,7 @@ describe('whatsapp broadcasts POST — audience filter validated at save time (B
     expect(res.status).toBe(400)
     expect(inserted).toHaveLength(0)
     const json = await res.json()
-    expect(json.error).toMatch(/OR logic is not supported together with tag or event filters/)
+    expect(json.error).toMatch(/OR logic is not supported together with tag, event or studio-list filters/)
   })
 
   it('rejects an unknown field with a 400', async () => {

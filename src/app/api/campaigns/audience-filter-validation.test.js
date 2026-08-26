@@ -78,7 +78,7 @@ describe('POST /api/campaigns — audience filter validated at save time (P1.5)'
     const res = await post(OR_PLUS_TAG)
     expect(res.status).toBe(400)
     expect(inserted).toHaveLength(0)
-    expect((await res.json()).error).toMatch(/OR logic is not supported together with tag or event filters/)
+    expect((await res.json()).error).toMatch(/OR logic is not supported together with tag, event or studio-list filters/)
   })
 
   it('rejects an unpicked segment-tag row', async () => {
@@ -120,7 +120,7 @@ describe('PUT /api/campaigns/[id] — audience filter validated at save time (P1
     const res = await put(OR_PLUS_TAG)
     expect(res.status).toBe(400)
     expect(updated).toHaveLength(0)
-    expect((await res.json()).error).toMatch(/OR logic is not supported together with tag or event filters/)
+    expect((await res.json()).error).toMatch(/OR logic is not supported together with tag, event or studio-list filters/)
   })
 
   it('rejects a blank numeric', async () => {

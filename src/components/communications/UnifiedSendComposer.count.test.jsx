@@ -75,9 +75,9 @@ function sendButton() {
 
 describe('UnifiedSendComposer — count errors surface and gate Send (B6)', () => {
   it('renders the server error message from a 400 count, not the placeholder', async () => {
-    stubCount(() => bad('OR logic is not supported together with tag or event filters. Use AND, or send these as separate audiences.'))
+    stubCount(() => bad('OR logic is not supported together with tag, event or studio-list filters. Use AND, or send these as separate audiences.'))
     render(<UnifiedSendComposer locationId="loc-1" channels={['sms']} initialAudienceFilter={FILTER} />)
-    await screen.findByText(/OR logic is not supported together with tag or event filters/, {}, COUNTED)
+    await screen.findByText(/OR logic is not supported together with tag, event or studio-list filters/, {}, COUNTED)
     expect(screen.queryByText(/Add a condition to see how many contacts match/)).toBeNull()
   })
 
