@@ -30,6 +30,19 @@
 //
 // Pure helpers tested in event-tools.test.js; executor does the IO
 // and never throws (mirrors executeBookingTool).
+//
+// PERSON-ACCT.4 — one person routinely holds 2-3 `contacts` rows (linked via
+// person_groups/person_group_members), each a different account. Before this
+// task get_my_event_registrations / cancel_event_registration /
+// reschedule_event_wave / book_event's member gate all read the single acting
+// contact row, so a customer whose registration or Glofox membership sits on
+// a sibling row got told they had no registration (live incident, "Julie
+// Cross") or was charged/refused as a non-member despite a real membership on
+// a sibling account. `linkedAccountsForContact`/`hasBookableMembership` are
+// the shared PERSON-ACCT.1/.3 helpers — see person-accounts.js; NOT modified
+// here.
+
+import { linkedAccountsForContact, hasBookableMembership } from '@/lib/person-accounts'
 
 export const EVENT_TOOLS = [
   {
@@ -273,6 +286,35 @@ export function shapeMyRegistrationsForAgent(rows, nowMs) {
   return out
 }
 
+// PERSON-ACCT.4 — chunk any `.in()` at ≤150 ids (house rule / PostgREST
+// URL-length limit, BUG-FIX #538). Person groups are 2-6 rows in practice so
+// this loop almost always runs once; the cap is house law regardless.
+const ID_CHUNK_SIZE = 150
+function chunkIds(ids, size = ID_CHUNK_SIZE) {
+  const out = []
+  for (let i = 0; i < ids.length; i += size) out.push(ids.slice(i, i + size))
+  return out
+}
+
+// Fetch this person's group's live future registrations, chunked. Throws on
+// the first Postgrest error so the caller's try/catch can fall back to the
+// single-contact read — an unreadable group must never present as "no
+// registrations".
+async function fetchRegistrationsForContactIds(db, ids, locationId, today) {
+  const rows = []
+  for (const batch of chunkIds(ids)) {
+    const { data, error } = await db.from('race_registrations')
+      .select('id, status, race_events!inner(name, kind, race_date, location_id), race_waves(start_time)')
+      .in('contact_id', batch)
+      .eq('race_events.location_id', locationId)
+      .gte('race_events.race_date', today)
+      .limit(20)
+    if (error) throw error
+    rows.push(...(data || []))
+  }
+  return rows
+}
+
 // ── executor (IO) ───────────────────────────────────────────────────
 // ctx: { db, locationId, contactId, verifiedContactId }
 export async function executeEventTool(toolName, input, ctx) {
@@ -313,12 +355,31 @@ export async function executeEventTool(toolName, input, ctx) {
       return { error: 'no_contact', message: 'No contact is linked to this conversation — ask the team to check instead.' }
     }
     const today = dublinToday(Date.now())
-    const { data: rows } = await db.from('race_registrations')
-      .select('id, status, race_events!inner(name, kind, race_date, location_id), race_waves(start_time)')
-      .eq('contact_id', targetContactId)
-      .eq('race_events.location_id', locationId)
-      .gte('race_events.race_date', today)
-      .limit(20)
+
+    // PERSON-ACCT.4 — the registration can sit on ANY contact row in this
+    // person's group, not just the one this conversation is bound to. Fan the
+    // read out across the whole group; an unreadable group falls back to the
+    // pre-existing single-contact read, never a confident "no registrations".
+    let rows = null
+    const linked = await linkedAccountsForContact(db, targetContactId)
+    if (!linked.readFailed) {
+      const ids = linked.contacts.map((c) => c?.id).filter(Boolean)
+      try {
+        rows = await fetchRegistrationsForContactIds(db, ids, locationId, today)
+      } catch (err) {
+        console.error('[agent][events] get_my_event_registrations group read failed:', err?.message || err)
+        rows = null // fall through to the single-contact read below
+      }
+    }
+    if (rows == null) {
+      const { data } = await db.from('race_registrations')
+        .select('id, status, race_events!inner(name, kind, race_date, location_id), race_waves(start_time)')
+        .eq('contact_id', targetContactId)
+        .eq('race_events.location_id', locationId)
+        .gte('race_events.race_date', today)
+        .limit(20)
+      rows = data
+    }
     const registrations = shapeMyRegistrationsForAgent(rows, Date.now())
     return registrations.length
       ? { registrations }
@@ -390,8 +451,26 @@ export async function executeEventTool(toolName, input, ctx) {
       return { requested: true, message: 'Queued for the team to confirm — tell the customer they will hear back shortly. Never say it is booked yet.' }
     }
 
+    // PERSON-ACCT.4 — member pricing / members-only gates on
+    // validateMemberByEmail (registerSoloEventEntry → member-validation.js),
+    // which matches the acting contact's OWN email against
+    // contacts.pipeline_stage_slug — it never sees a sibling contact row. The
+    // person's REAL Glofox membership can live on a sibling account, so widen
+    // the signal: if ANY row in this person's group carries a genuinely
+    // bookable membership (hasBookableMembership — see person-accounts.js for
+    // why `glofox_membership_status === 'active'` alone never fires in prod),
+    // count the entrant as a member too. readFailed → no override, i.e. the
+    // unchanged single-contact/email-only behaviour.
+    let memberOverride = false
+    if (race.member_pricing_enabled || race.members_only) {
+      const linkedForMembership = await linkedAccountsForContact(db, targetContactId)
+      if (!linkedForMembership.readFailed) {
+        memberOverride = linkedForMembership.contacts.some((c) => hasBookableMembership(c))
+      }
+    }
+
     const { registerSoloEventEntry } = await import('@/lib/race-register-solo')
-    const result = await registerSoloEventEntry(db, { race, waveId: input?.wave_id || null, contact })
+    const result = await registerSoloEventEntry(db, { race, waveId: input?.wave_id || null, contact, memberOverride })
     await logEventRequest(db, ctx, {
       kind: 'event_booking',
       status: result.ok ? 'actioned' : 'failed',
@@ -449,8 +528,25 @@ export async function executeEventTool(toolName, input, ctx) {
       .maybeSingle()
     if (!reg) return { error: 'not_found', message: 'That registration was not found — re-check get_my_event_registrations.' }
 
+    // PERSON-ACCT.4 — ownership must span the whole person group: the
+    // registration routinely sits on a SIBLING contact row, not the verified
+    // acting one. Unlike the class-booking sibling path (booking-tools.js),
+    // which additionally demands corroboration (a shared phone/email) before
+    // trusting a Glofox account as the same person, NO extra corroboration is
+    // required here: race_registrations is a row this CRM owns outright, and
+    // person_group_members is this CRM's OWN assertion that these contact
+    // rows are the same human — there is no external system's competing
+    // ownership claim to cross-check, the way a Glofox member id is. An
+    // unreadable group (`readFailed`) falls back to the original
+    // acting-contact-only check, never a confident wrong answer.
+    const linkedForOwnership = await linkedAccountsForContact(db, targetContactId)
+    const ownerIds = linkedForOwnership.readFailed
+      ? [targetContactId]
+      : linkedForOwnership.contacts.map((c) => c?.id).filter(Boolean)
+    const isOwner = ownerIds.includes(reg.contact_id)
+
     if (toolName === 'reschedule_event_wave') {
-      if (reg.contact_id !== targetContactId) {
+      if (!isOwner) {
         return { error: 'not_yours', message: 'That registration belongs to someone else — hand off to the team.' }
       }
       const { moveRegistrationWave } = await import('@/lib/race-cancel')
@@ -476,7 +572,7 @@ export async function executeEventTool(toolName, input, ctx) {
     const { registrationPaidCents, cancelRaceRegistration } = await import('@/lib/race-cancel')
     const paidCents = await registrationPaidCents(db, reg.id)
     const decision = classifyEventCancellation({
-      isOwner: reg.contact_id === targetContactId,
+      isOwner,
       status: reg.status,
       eventDate: String(reg.race_events.race_date),
       paidCents,
