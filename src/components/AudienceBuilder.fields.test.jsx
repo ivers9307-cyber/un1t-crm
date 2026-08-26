@@ -28,7 +28,7 @@ function renderRow(row) {
 const fieldSelect = (container) => container.querySelectorAll('select')[0]
 
 describe('AudienceBuilder — fields are grouped, not a flat wall (A2.1)', () => {
-  it('declares the nine operator-facing groups in order', () => {
+  it('declares the ten operator-facing groups in order', () => {
     expect(FIELD_GROUPS).toEqual([
       'Funnel',
       'Membership & billing',
@@ -37,6 +37,7 @@ describe('AudienceBuilder — fields are grouped, not a flat wall (A2.1)', () =>
       'Email behaviour',
       'Tags & labels',
       'Events',
+      'Studios',
       'Dates & tenure',
       'Profile & data quality',
     ])

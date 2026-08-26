@@ -157,7 +157,7 @@ describe('PUT /api/sequences/[id] — audience filter validated at save time (CO
 
     expect(res.status).toBe(400)
     expect(updateSpy).not.toHaveBeenCalled()
-    expect((await res.json()).error).toMatch(/OR logic is not supported together with tag or event filters/)
+    expect((await res.json()).error).toMatch(/OR logic is not supported together with tag, event or studio-list filters/)
   })
 
   it('rejects an unknown audience field with a 400 and writes nothing', async () => {

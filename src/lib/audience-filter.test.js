@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { applyAudienceFilter, AUDIENCE_FIELDS, InvalidAudienceFilterError, resolveTagFilters, resolveEventFilters, applyAudienceFilterAsync, mergeRegistrationContactIds, LIVE_REGISTRATION_STATUSES, validateAudienceFilter, isUnsetFilterRow, stripUnsetFilterRows } from './audience-filter.js'
+import { applyAudienceFilter, AUDIENCE_FIELDS, InvalidAudienceFilterError, resolveTagFilters, resolveEventFilters, resolveLocationListFilters, applyAudienceFilterAsync, mergeRegistrationContactIds, LIVE_REGISTRATION_STATUSES, validateAudienceFilter, isUnsetFilterRow, stripUnsetFilterRows } from './audience-filter.js'
 
 // Mock Supabase query builder — every method returns `this` and records the call.
 function makeMockQuery() {
@@ -754,6 +754,180 @@ describe('mergeRegistrationContactIds', () => {
   })
 })
 
+describe('resolveLocationListFilters — LISTFILTER.1', () => {
+  // Explicit thenable chain (NOT a Proxy) for the same reason the event mock
+  // above is one: the PromiseLike auto-unwrap makes Supabase-builder mocking
+  // fragile. selectAll ends every chain in .order().range().
+  function listDb(rowsByLocation, { onCall } = {}) {
+    return {
+      from(table) {
+        if (table !== 'contact_location_preferences') throw new Error(`unexpected table ${table}`)
+        let locId = null
+        const chain = {
+          select: () => chain,
+          eq: (col, val) => { if (col === 'location_id') locId = val; return chain },
+          order: () => chain,
+          range: () => chain,
+          then: (resolve) => {
+            onCall?.(locId)
+            return Promise.resolve({ data: rowsByLocation[locId] || [], error: null }).then(resolve)
+          },
+        }
+        return chain
+      },
+    }
+  }
+  function captureQuery() {
+    const calls = []
+    const query = {
+      in: (...a) => { calls.push(['in', ...a]); return query },
+      eq: (...a) => { calls.push(['eq', ...a]); return query },
+      not: (...a) => { calls.push(['not', ...a]); return query },
+    }
+    return { query, calls }
+  }
+
+  it('eq → query.in(id, everyone holding a preferences row at that studio)', async () => {
+    const { query, calls } = captureQuery()
+    const db = listDb({ hatch: [{ contact_id: 'a' }, { contact_id: 'b' }] })
+    await resolveLocationListFilters({ db, query, filter: { filters: [{ field: 'location_list', op: 'eq', value: 'hatch' }] } })
+    const inCall = calls.find(c => c[0] === 'in' && c[1] === 'id')
+    expect(new Set(inCall[2])).toEqual(new Set(['a', 'b']))
+  })
+
+  it('dedupes contact_ids (a contact can hold more than one row)', async () => {
+    const { query, calls } = captureQuery()
+    const db = listDb({ hatch: [{ contact_id: 'a' }, { contact_id: 'a' }, { contact_id: 'b' }] })
+    await resolveLocationListFilters({ db, query, filter: { filters: [{ field: 'location_list', op: 'eq', value: 'hatch' }] } })
+    expect(calls.find(c => c[0] === 'in')[2].sort()).toEqual(['a', 'b'])
+  })
+
+  it('eq with nobody on the list → unsatisfiable sentinel, not "everyone"', async () => {
+    const { query, calls } = captureQuery()
+    const db = listDb({ hatch: [] })
+    await resolveLocationListFilters({ db, query, filter: { filters: [{ field: 'location_list', op: 'eq', value: 'hatch' }] } })
+    expect(calls).toEqual([['eq', 'id', '00000000-0000-0000-0000-000000000000']])
+  })
+
+  it('two eq clauses INTERSECT (on both lists), never union', async () => {
+    const { query, calls } = captureQuery()
+    const db = listDb({
+      hatch: [{ contact_id: 'a' }, { contact_id: 'b' }],
+      stillorgan: [{ contact_id: 'b' }, { contact_id: 'c' }],
+    })
+    await resolveLocationListFilters({ db, query, filter: { filters: [
+      { field: 'location_list', op: 'eq', value: 'hatch' },
+      { field: 'location_list', op: 'eq', value: 'stillorgan' },
+    ] } })
+    expect(calls.find(c => c[0] === 'in')[2]).toEqual(['b'])
+  })
+
+  it('neq → NOT IN', async () => {
+    const { query, calls } = captureQuery()
+    const db = listDb({ hatch: [{ contact_id: 'a' }] })
+    await resolveLocationListFilters({ db, query, filter: { filters: [{ field: 'location_list', op: 'neq', value: 'hatch' }] } })
+    expect(calls.find(c => c[0] === 'not')).toEqual(['not', 'id', 'in', '(a)'])
+  })
+
+  it('refuses an exclusion too large to ride in the GET URL', async () => {
+    const many = Array.from({ length: 2001 }, (_, i) => ({ contact_id: `c${i}` }))
+    const { query } = captureQuery()
+    const db = listDb({ big: many })
+    await expect(resolveLocationListFilters({
+      db, query, filter: { filters: [{ field: 'location_list', op: 'neq', value: 'big' }] },
+    })).rejects.toThrow(/too many contacts/)
+  })
+
+  it('refuses an INCLUSION too large to ride in the GET URL', async () => {
+    // The likely way to blow the URI limit on this field: a whole studio's
+    // roll-call. Stillorgan holds 7,444 preference rows in production.
+    const many = Array.from({ length: 2001 }, (_, i) => ({ contact_id: `c${i}` }))
+    const { query } = captureQuery()
+    const db = listDb({ big: many })
+    await expect(resolveLocationListFilters({
+      db, query, filter: { filters: [{ field: 'location_list', op: 'eq', value: 'big' }] },
+    })).rejects.toThrow(/too many contacts/)
+  })
+
+  it('allows an inclusion right at the cap', async () => {
+    const atCap = Array.from({ length: 2000 }, (_, i) => ({ contact_id: `c${i}` }))
+    const { query, calls } = captureQuery()
+    const db = listDb({ ok: atCap })
+    await resolveLocationListFilters({ db, query, filter: { filters: [{ field: 'location_list', op: 'eq', value: 'ok' }] } })
+    expect(calls.find(c => c[0] === 'in')[2]).toHaveLength(2000)
+  })
+
+  it('rejects an empty / whitespace location id without hitting the DB', async () => {
+    let dbCalled = false
+    const db = { from: () => { dbCalled = true; return null } }
+    await expect(resolveLocationListFilters({
+      db, query: {}, filter: { filters: [{ field: 'location_list', op: 'eq', value: '  ' }] },
+    })).rejects.toThrow(/non-empty/)
+    expect(dbCalled).toBe(false)
+  })
+
+  it('returns { query } untouched for a null filter or one with no list rows', async () => {
+    const dummy = { id: 'unchanged' }
+    const db = { from: () => { throw new Error('should not be called') } }
+    expect((await resolveLocationListFilters({ db, query: dummy, filter: null })).query).toBe(dummy)
+    expect((await resolveLocationListFilters({
+      db, query: dummy, filter: { filters: [{ field: 'pipeline_stage_slug', op: 'eq', value: 'member' }] },
+    })).query).toBe(dummy)
+  })
+
+  it('filters on ROW PRESENCE, not on email_marketing', async () => {
+    // The predicate is membership, not mailability: the send path gates
+    // consent itself. Selecting on email_marketing here would silently answer
+    // a different question than the operator asked.
+    const seen = []
+    const { query, calls } = captureQuery()
+    const db = {
+      from() {
+        const chain = {
+          select: (cols) => { seen.push(cols); return chain },
+          eq: () => chain, order: () => chain, range: () => chain,
+          then: (r) => Promise.resolve({ data: [{ contact_id: 'a' }], error: null }).then(r),
+        }
+        return chain
+      },
+    }
+    await resolveLocationListFilters({ db, query, filter: { filters: [{ field: 'location_list', op: 'eq', value: 'hatch' }] } })
+    expect(seen.every(c => !String(c).includes('email_marketing'))).toBe(true)
+    expect(calls.find(c => c[0] === 'in')[2]).toEqual(['a'])
+  })
+})
+
+describe('location_list — field wiring', () => {
+  it('is a known audience field with exactly eq / neq', () => {
+    expect(AUDIENCE_FIELDS.location_list).toEqual({ type: 'location_list', ops: ['eq', 'neq'] })
+  })
+
+  it('the scalar builder SKIPS it — the resolver owns it', () => {
+    const q = makeMockQuery()
+    applyAudienceFilter(q.query, { filters: [{ field: 'location_list', op: 'eq', value: 'hatch' }] })
+    // No `eq('location_list', …)` may reach the query: that column does not exist.
+    expect(q.calls.some(c => c[1] === 'location_list')).toBe(false)
+  })
+
+  it('refuses OR logic rather than silently widening the audience', () => {
+    const q = makeMockQuery()
+    expect(() => applyAudienceFilter(q.query, {
+      logic: 'or',
+      filters: [
+        { field: 'location_list', op: 'eq', value: 'hatch' },
+        { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
+      ],
+    })).toThrow(InvalidAudienceFilterError)
+  })
+
+  it('validateAudienceFilter rejects a saved row with no studio picked', () => {
+    expect(() => validateAudienceFilter({ filters: [{ field: 'location_list', op: 'eq', value: '' }] }))
+      .toThrow(/non-empty/)
+    expect(() => validateAudienceFilter({ filters: [{ field: 'location_list', op: 'eq', value: 'hatch' }] }))
+      .not.toThrow()
+  })
+})
+
 describe('resolveEventFilters — sync edges (no DB)', () => {
   it('is exported as an async function', () => {
     expect(typeof resolveEventFilters).toBe('function')
@@ -913,7 +1087,7 @@ describe('validateAudienceFilter (COMMSFIX.B.7)', () => {
         { field: 'tag', op: 'eq', value: 'hot_lead' },
         { field: 'pipeline_stage_slug', op: 'eq', value: 'new_lead' },
       ],
-    })).toThrow(/OR logic is not supported together with tag or event filters/)
+    })).toThrow(/OR logic is not supported together with tag, event or studio-list filters/)
   })
 
   it('rejects an off-allowlist op and a blank numeric value', () => {

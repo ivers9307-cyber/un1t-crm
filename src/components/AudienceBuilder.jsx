@@ -26,6 +26,11 @@ export const FIELD_GROUPS = Object.freeze([
   'Email behaviour',
   'Tags & labels',
   'Events',
+  // LISTFILTER.1 — its own group rather than folded into Tags & labels: a
+  // studio-list row is membership of another location's comms list, not a
+  // label someone applied, and burying it would leave the only answer to
+  // "who is on the Hatch list" undiscoverable.
+  'Studios',
   'Dates & tenure',
   'Profile & data quality',
 ])
@@ -198,6 +203,11 @@ export const FIELD_OPTIONS = [
   // resolveEventFilters (race_registrations → contacts.id). Options load
   // dynamically from /api/communications/events. Value is a race_events id.
   { value: 'event_registration',    label: 'Registered for event',  type: 'event-select', group: 'Events' },
+  // LISTFILTER.1 — virtual field. Resolved server-side via
+  // resolveLocationListFilters (contact_location_preferences → contacts.id).
+  // Options load from /api/locations. Value is a locations id.
+  { value: 'location_list',         label: "On another studio's list", type: 'location-select', group: 'Studios',
+    hint: 'Who holds a comms record at that studio — a waitlist or registered-interest roll-call, not a send estimate. Consent is applied separately by the send itself.' },
   // ── Dates & tenure ──────────────────────────────────────────────
   { value: 'created_at',            label: 'Contact Created',       type: 'date',
     group: 'Dates & tenure',
@@ -245,6 +255,11 @@ const OPS_BY_TYPE = {
   'event-select': [
     { value: 'eq',  label: 'registered for' },
     { value: 'neq', label: 'not registered for' },
+  ],
+  // location-select — on / not on a given studio's list.
+  'location-select': [
+    { value: 'eq',  label: 'on the list for' },
+    { value: 'neq', label: 'not on the list for' },
   ],
   // plan-select — dynamic membership-plan dropdown. is_null / not_null
   // need no value (the value selector hides via needsValue()).
@@ -340,7 +355,7 @@ function needsValue(op) {
 // a PENDING row (field chosen, value not yet) and a committed row render the
 // identical control. Without the extraction the pending row would need its own
 // copy and the two would drift.
-function DynamicValueSelect({ type, value, disabled, onChange, tagOptions, planOptions, eventOptions, className }) {
+function DynamicValueSelect({ type, value, disabled, onChange, tagOptions, planOptions, eventOptions, locationOptions, className }) {
   const cls = className || 'bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-text focus-visible:border-un1t-text flex-1'
   if (type === 'tag-select') {
     return (
@@ -362,6 +377,17 @@ function DynamicValueSelect({ type, value, disabled, onChange, tagOptions, planO
       <select value={value || ''} disabled={disabled} onChange={onChange} aria-label="Membership plan" className={cls}>
         <option value="">{planOptions === null ? 'Loading plans…' : '— pick a plan —'}</option>
         {(planOptions || []).map(plan => <option key={plan} value={plan}>{plan}</option>)}
+      </select>
+    )
+  }
+  // LISTFILTER.1 — explicit, and placed BEFORE the events control on purpose:
+  // that one used to be the bare fallthrough, so any dynamic type added after
+  // it would have quietly rendered an events dropdown labelled "Event".
+  if (type === 'location-select') {
+    return (
+      <select value={value || ''} disabled={disabled} onChange={onChange} aria-label="Studio" className={cls}>
+        <option value="">{locationOptions === null ? 'Loading studios…' : '— pick a studio —'}</option>
+        {(locationOptions || []).map(loc => <option key={loc.id} value={loc.id}>{loc.name}</option>)}
       </select>
     )
   }
@@ -542,7 +568,7 @@ export function euroTextToCents(text) {
 // filter requires a non-empty string value") and which a plan row compiles to
 // `plan = ''` — a filter that matches nobody, silently. Either way the row is
 // born broken. It stays UNSET (and therefore inert) until a value is picked.
-const AWAITS_A_VALUE = ['tag-select', 'event-select', 'plan-select']
+const AWAITS_A_VALUE = ['tag-select', 'event-select', 'plan-select', 'location-select']
 
 // FILTER-B.1 / FILTER-FOUND row 2 — `audienceCount` DEFAULTS TO NULL. The
 // footer below renders on a non-null count, so a host that simply OMITTED the
@@ -655,6 +681,20 @@ export default function AudienceBuilder({ filter, onChange, audienceCount = null
     }).catch(() => { if (!cancelled) setEventOptions([]) })
     return () => { cancelled = true }
   }, [usesEventField, eventOptions])
+
+  // LISTFILTER.1 — studio options, loaded once the operator adds an
+  // "On another studio's list" row. Mirrors the tag/plan/event loaders.
+  const [locationOptions, setLocationOptions] = useState(null)
+  const usesLocationField = filters.some(f => f.field === 'location_list') || pendingList.includes('location_list')
+  useEffect(() => {
+    if (!usesLocationField || locationOptions !== null) return
+    let cancelled = false
+    fetch('/api/locations').then(r => r.json()).then(j => {
+      if (!cancelled && j?.success) setLocationOptions(j.data || [])
+      else if (!cancelled) setLocationOptions([])
+    }).catch(() => { if (!cancelled) setLocationOptions([]) })
+    return () => { cancelled = true }
+  }, [usesLocationField, locationOptions])
 
   function updateFilter(newFilters, newLogic) {
     // COMMSFIX.B.3 — a disabled builder is read-only: belt-and-braces on top
@@ -908,7 +948,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount = null
                     type={pendingConfig.type}
                     value=""
                     disabled={disabled}
-                    tagOptions={tagOptions} planOptions={planOptions} eventOptions={eventOptions}
+                    tagOptions={tagOptions} planOptions={planOptions} eventOptions={eventOptions} locationOptions={locationOptions}
                     onChange={e => commitPendingRow(index, pending, e.target.value)}
                   />
                 )}
@@ -1027,7 +1067,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount = null
                   type={fieldConfig.type}
                   value={f.value}
                   disabled={disabled}
-                  tagOptions={tagOptions} planOptions={planOptions} eventOptions={eventOptions}
+                  tagOptions={tagOptions} planOptions={planOptions} eventOptions={eventOptions} locationOptions={locationOptions}
                   onChange={e => updateRow(index, { value: e.target.value })}
                 />
               ) : showValue && fieldConfig.type === 'number' ? (
