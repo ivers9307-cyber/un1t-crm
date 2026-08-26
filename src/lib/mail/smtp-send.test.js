@@ -43,7 +43,7 @@ const MAILBOX = Object.freeze({
   egress: 'smtp',
 })
 
-const APP_PASSWORD = 'abcd efgh ijkl mnop'
+const APP_PASSWORD = 'not-a-real-app-password'
 
 const SEND = Object.freeze({
   to: 'member@example.com',

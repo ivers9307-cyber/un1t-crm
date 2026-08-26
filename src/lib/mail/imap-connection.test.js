@@ -17,7 +17,7 @@ const CONFIG = {
   host: 'imap.gmail.com',
   port: 993,
   secure: true,
-  auth: { user: 'hatchstreet@un1t.com', pass: 'abcd efgh ijkl mnop' },
+  auth: { user: 'hatchstreet@un1t.com', pass: 'not-a-real-app-password' },
 }
 
 /**

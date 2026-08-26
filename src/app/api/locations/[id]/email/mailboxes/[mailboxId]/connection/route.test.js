@@ -65,7 +65,11 @@ import {
 
 // 32 random bytes, base64 — a real key, so seal()/open() run for real and the
 // stored value can be proven to be ciphertext rather than the password.
-const TEST_KEY = 'Yqz3JmQ0v1oQ9m0kfP2s0h9j5X8bT4nA6cE1uW7dR2k='
+// Deterministic and obviously synthetic: a hardcoded 44-char base64 literal
+// is indistinguishable from a live AES key to a secret scanner (and to a
+// human skimming the file), so it is COMPUTED rather than pasted. Any
+// 32-byte value works — seal()/open() run for real either way.
+const TEST_KEY = Buffer.alloc(32, 11).toString('base64')
 
 // ── The fake DB, extended ───────────────────────────────────────────────────
 // email_mailbox_credentials and email_mailbox_ingress are not in the shared
@@ -143,7 +147,7 @@ const onPostmark = (m) => ({ ...m, ingress: 'postmark', egress: 'postmark' })
 const GMAIL = {
   provider: 'gmail',
   username: 'studio@un1tdublin.com',
-  password: 'abcd efgh ijkl mnop',
+  password: 'not-a-real-app-password',
   imap_host: 'imap.gmail.com',
   imap_port: 993,
   imap_secure: true,
@@ -352,7 +356,7 @@ describe('PUT — verify before persist', () => {
       host: 'smtp.gmail.com',
       port: 465,
       secure: true,
-      auth: { user: 'studio@un1tdublin.com', pass: 'abcd efgh ijkl mnop' },
+      auth: { user: 'studio@un1tdublin.com', pass: 'not-a-real-app-password' },
     })
   })
 
@@ -369,7 +373,7 @@ describe('PUT — verify before persist', () => {
         host: 'imap.gmail.com',
         port: 993,
         secure: true,
-        auth: { user: 'studio@un1tdublin.com', pass: 'abcd efgh ijkl mnop' },
+        auth: { user: 'studio@un1tdublin.com', pass: 'not-a-real-app-password' },
       },
       'INBOX'
     )

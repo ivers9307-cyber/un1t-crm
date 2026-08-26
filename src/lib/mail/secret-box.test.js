@@ -28,7 +28,7 @@ afterEach(() => setKey(ORIGINAL))
 
 describe('secret-box — round trip', () => {
   it('opens what it seals', () => {
-    const secret = 'abcd efgh ijkl mnop' // the shape of a Google app password
+    const secret = 'not-a-real-app-password' // the shape of a Google app password
     expect(open(seal(secret))).toBe(secret)
   })
 
@@ -192,7 +192,7 @@ describe('secret-box — malformed input', () => {
   it('open() refuses a plaintext value that was never sealed', () => {
     // The whole point of failing closed: a column holding a legacy plaintext
     // password must not silently pass through.
-    expect(() => open('abcd efgh ijkl mnop')).toThrow(/expected 4 colon-separated fields/)
+    expect(() => open('not-a-real-app-password')).toThrow(/expected 4 colon-separated fields/)
   })
 
   it('open() refuses the wrong field count', () => {

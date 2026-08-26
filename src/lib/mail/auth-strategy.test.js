@@ -13,7 +13,7 @@ function setKey(value) {
   else process.env.MAILBOX_SECRET_KEY = value
 }
 
-const PASSWORD = 'abcd efgh ijkl mnop'
+const PASSWORD = 'not-a-real-app-password'
 const TOKEN = 'ya29.a0-FAKE-ACCESS-TOKEN-VALUE'
 const USER = 'hatchstreet@un1t.com'
 

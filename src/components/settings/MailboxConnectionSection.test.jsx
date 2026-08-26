@@ -253,7 +253,7 @@ describe('rendering — never connected', () => {
     await openPanel()
     await waitFor(() => expect(screen.getByLabelText(/app password/i)).toBeTruthy())
 
-    fireEvent.change(screen.getByLabelText(/app password/i), { target: { value: 'abcd efgh ijkl mnop' } })
+    fireEvent.change(screen.getByLabelText(/app password/i), { target: { value: 'not-a-real-app-password' } })
     fireEvent.click(screen.getByRole('button', { name: /check and connect/i }))
 
     await waitFor(() => expect(sent).toBeTruthy())
@@ -262,7 +262,7 @@ describe('rendering — never connected', () => {
     expect(sent.imap_port).toBe(993)
     expect(sent.smtp_host).toBe('smtp.gmail.com')
     expect(sent.sent_folder).toBe('[Gmail]/Sent Mail')
-    expect(sent.password).toBe('abcd efgh ijkl mnop')
+    expect(sent.password).toBe('not-a-real-app-password')
     // Defaults to the account's own address rather than making the operator
     // retype it.
     expect(sent.username).toBe(MAILBOX.address)

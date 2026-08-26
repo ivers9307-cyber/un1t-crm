@@ -67,7 +67,7 @@ function credential(overrides = {}) {
     provider: 'gmail',
     auth_type: 'password',
     username: 'hatchstreet@un1t.com',
-    secret_ciphertext: seal('abcd efgh ijkl mnop'),
+    secret_ciphertext: seal('not-a-real-app-password'),
     oauth_access_token_ciphertext: null,
     oauth_expires_at: null,
     imap_host: 'imap.gmail.com',
