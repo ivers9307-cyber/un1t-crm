@@ -250,28 +250,42 @@ describe('getCrmHostnames — dual-domain CRM host set', () => {
   })
 })
 
-describe('ccfautos-web brand', () => {
-  const brand = BRANDS.find((b) => b.id === 'ccfautos-web')
+describe('giversautos-web brand', () => {
+  const brand = BRANDS.find((b) => b.id === 'giversautos-web')
 
   it('exists and covers apex + www', () => {
     expect(brand).toBeTruthy()
-    expect(brand.hostnames).toContain('ccfautos.com')
-    expect(brand.hostnames).toContain('www.ccfautos.com')
+    expect(brand.hostnames).toContain('giversautos.com')
+    expect(brand.hostnames).toContain('www.giversautos.com')
   })
 
   it('resolves from the hostname, with and without a port', () => {
+    expect(resolveBrand('giversautos.com')).toBe(brand)
+    expect(resolveBrand('www.giversautos.com:443')).toBe(brand)
+  })
+
+  // The business rebranded from CCF Autos; the old domain was live and
+  // shared, so it must keep serving rather than fall through to the CRM
+  // auth gate (which is what an unregistered hostname does).
+  it('keeps the legacy ccfautos.com pair serving the same page', () => {
     expect(resolveBrand('ccfautos.com')).toBe(brand)
-    expect(resolveBrand('www.ccfautos.com:443')).toBe(brand)
+    expect(resolveBrand('www.ccfautos.com')).toBe(brand)
+  })
+
+  // pay.ccfautos.com is the buyer deposit surface and must NOT be
+  // swallowed by the marketing brand — it has its own reject-mode entry.
+  it('does not capture the pay subdomain', () => {
+    expect(resolveBrand('pay.ccfautos.com').id).toBe('ccfautos-pay')
   })
 
   it('rewrites root and strays to the landing page', () => {
     expect(brand.rootHandler).toBe('rewrite')
-    expect(brand.rootRewriteTo).toBe('/ccf')
+    expect(brand.rootRewriteTo).toBe('/givers')
     expect(brand.fallbackHandler).toBe('rewrite')
-    expect(brand.fallbackRewriteTo).toBe('/ccf')
+    expect(brand.fallbackRewriteTo).toBe('/givers')
   })
 
   it('allows ONLY the landing page + its enquiry API', () => {
-    expect(brand.allowedPaths).toEqual(['/ccf', '/api/public/ccf-enquiry'])
+    expect(brand.allowedPaths).toEqual(['/givers', '/api/public/givers-enquiry'])
   })
 })

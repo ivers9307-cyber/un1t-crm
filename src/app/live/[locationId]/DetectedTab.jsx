@@ -215,7 +215,16 @@ function ClaimModal({ row, locationId, onClose, onDone }) {
     try {
       const res = await fetch(`/api/live/${locationId}/register-device`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ device_key: row.device_key, contact_id: contactId, device_type: deviceType }),
+        body: JSON.stringify({
+          device_key: row.device_key,
+          contact_id: contactId,
+          device_type: deviceType,
+          // The advertised name ("WHOOP 5C00039155") embeds the device serial —
+          // the identity anchor that survives an address change, and the label
+          // a human recognises on the member's profile. register-device already
+          // accepts it; dropping it here was discarding it.
+          label: row.last_name || undefined,
+        }),
       })
       const json = await res.json()
       if (!res.ok || !json.ok) throw new Error(json.error || 'Claim failed')

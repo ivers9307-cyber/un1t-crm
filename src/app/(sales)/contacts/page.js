@@ -6,7 +6,7 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import { hasPermission } from '@/lib/permissions'
 import ContactsView from '@/components/ContactsView'
 import ContactsHeaderActions from '@/components/ContactsHeaderActions'
-import { crossoverContactIds, fetchCrossoverContext } from '@/lib/contact-crossovers'
+import { crossoverContactIds, fetchCrossoverContext, fetchListMembershipFlags } from '@/lib/contact-crossovers'
 import { attachLinkedCounts } from '@/lib/person-links'
 import ContactDuplicatesView from '@/components/ContactDuplicatesView'
 
@@ -103,6 +103,10 @@ export default async function ContactsPage(props) {
   const { data: rawContacts } = await query
   const contacts = await attachLinkedCounts(db, rawContacts || [])
   const crossoverContext = await fetchCrossoverContext(db, contacts, locationId)
+  // LISTFLAG.1 — preference-row membership at OTHER studios. Must be fed to
+  // ContactsView alongside the crossover context AND returned by
+  // /api/contacts/search, or the pills vanish the moment the operator types.
+  const listFlags = await fetchListMembershipFlags(db, contacts, locationId)
 
   const canCreate = MANAGER_ROLES.includes(user.role)
   // Delete + bulk-delete: head_coach / manager / owner / master
@@ -172,6 +176,7 @@ export default async function ContactsPage(props) {
           initialContacts={contacts || []}
           locationId={locationId}
           crossoverContext={crossoverContext}
+          listFlags={listFlags}
           initialStatus={status}
           initialSearch={search}
           canMerge={canMerge}

@@ -106,7 +106,7 @@ describe('POST /api/contacts/segments — filter validated at save time (P1.5)',
     })
     expect(res.status).toBe(400)
     expect(inserted).toHaveLength(0)
-    expect((await res.json()).error).toMatch(/OR logic is not supported together with tag or event filters/)
+    expect((await res.json()).error).toMatch(/OR logic is not supported together with tag, event or studio-list filters/)
   })
 
   it('rejects an unpicked segment-tag row', async () => {

@@ -153,7 +153,7 @@ describe('email-draft — audience filter validated at save time (B7)', () => {
     expect(res.status).toBe(400)
     expect(inserted).toHaveLength(0)
     const body = await res.json()
-    expect(body.error).toMatch(/OR logic is not supported together with tag or event filters/)
+    expect(body.error).toMatch(/OR logic is not supported together with tag, event or studio-list filters/)
   })
 
   it('rejects an unknown legacy field', async () => {

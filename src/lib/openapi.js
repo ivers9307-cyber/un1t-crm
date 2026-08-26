@@ -22,7 +22,7 @@ import {
   reportFrequencySchema, reportTypeSchema,
   permissionsSchema, audienceFilterSchema,
   passwordSchema, tenantDomainBrandConfigSchema,
-  ccfEnquirySchema,
+  giversEnquirySchema,
 } from './schemas.js'
 import { LeadSchema } from './leads.js'
 import { MAX_STORED_EXAMPLE_CHARS, MAX_STORED_EXAMPLES } from '@/lib/hyrox/constants'
@@ -359,13 +359,13 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
-  path: '/api/public/ccf-enquiry',
+  path: '/api/public/givers-enquiry',
   tags: ['Public'],
-  summary: 'CCF Autos coming-soon page enquiry capture',
-  description: 'Anonymous. Rate-limited to 5 requests per IP per 15 min. Inserts into car_enquiries (CCF-WEB.1).',
-  // Same .extend({}) trick as LeadSchema above: ccfEnquirySchema is built in
+  summary: 'Givers Autos coming-soon page enquiry capture',
+  description: 'Anonymous. Rate-limited to 5 requests per IP per 15 min. Inserts into car_enquiries (GIVERS-WEB.1).',
+  // Same .extend({}) trick as LeadSchema above: giversEnquirySchema is built in
   // schemas.js before extendZodWithOpenApi(z) runs here.
-  request: { body: { content: { 'application/json': { schema: ccfEnquirySchema.extend({}).openapi('CcfEnquiry') } } } },
+  request: { body: { content: { 'application/json': { schema: giversEnquirySchema.extend({}).openapi('GiversEnquiry') } } } },
   responses: {
     200: { description: 'Enquiry captured' },
     400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },

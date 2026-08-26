@@ -927,7 +927,23 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
             </div>
 
             {editorMode === 'visual' ? (
-              <div id="unlayer-editor" ref={editorRef} className="flex-1" style={{ minHeight: '600px' }} />
+              // UNLAYER-H.1/H.2 — the mount div MUST have a DEFINITE height,
+              // and MUST NOT be a flex item. Unlayer's embed sizes its iframe
+              // `height: 100%`; a percentage needs a definite height to resolve
+              // against or it becomes auto and the iframe falls back to the
+              // 150px HTML default — a squashed tool panel over a dead dark
+              // block. H.1 declared the height here but left `flex-1` on, and
+              // `flex: 1 1 0%` REPLACES `height` as the flex base size, so the
+              // declaration was never consulted: the height came from flex
+              // layout inside a column that is itself indefinite (`h-full` over
+              // the plain-div chain left by DESIGN-2, which dropped this
+              // editor's `h-screen` when it moved into the comms shell), and a
+              // flex item is only definite if its container is. Measured
+              // against the live embed: same 600px mount, iframe 150px with
+              // `flex-1` and 600px without. No `flex-1` here — same shape as
+              // the two mounts that never broke (UnifiedSendComposer
+              // `h-[560px]`, HostEmails `height: 620`).
+              <div id="unlayer-editor" ref={editorRef} style={{ height: '75vh', minHeight: '600px' }} />
             ) : (
               <textarea
                 value={htmlContent}

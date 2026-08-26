@@ -118,6 +118,39 @@ describe('CampaignEditor — a code-authored draft opens in code mode', () => {
   })
 })
 
+// UNLAYER-H.2 — the visual mount has to be able to SIZE Unlayer's iframe.
+// The embed sizes that iframe `height: 100%`, so the mount needs a height a
+// percentage can resolve against. UNLAYER-H.1 declared `height: 75vh` on it but
+// left `className="flex-1"` in place, and `flex: 1 1 0%` REPLACES `height` as
+// the flex base size — so the declared height was never consulted. The used
+// height came out of flex layout inside a column whose own height is indefinite
+// (`h-full` on top of the plain-div chain DESIGN-2 left behind when it dropped
+// the editor's `h-screen`), and a percentage against an indefinite height
+// resolves to auto, so the iframe fell back to the 150px HTML default: a
+// squashed tool panel over a dead dark block.
+//
+// Measured against the live embed with the app's exact init config — same 600px
+// mount either way, iframe 150px WITH `flex-1` and 600px WITHOUT it. jsdom does
+// no layout, so this pins the DOM contract that measurement proved, not pixels.
+describe('CampaignEditor — the visual mount can size the Unlayer iframe', () => {
+  function visualMount() {
+    const { container } = renderEditor({ html_content: null, design_json: { body: { rows: [] } } })
+    const el = container.querySelector('#unlayer-editor')
+    expect(el).not.toBeNull()
+    return el
+  }
+
+  it('declares a definite height on the mount', () => {
+    const height = visualMount().style.height
+    expect(height).toMatch(/^[0-9]/)
+    expect(height).not.toBe('auto')
+  })
+
+  it('does not flex the mount, which would discard that height', () => {
+    expect(visualMount().className).not.toMatch(/(^|\s)flex-1(\s|$)/)
+  })
+})
+
 describe('CampaignEditor — the schedule input seeds in LOCAL time', () => {
   // Run this file under TZ=Europe/Dublin and TZ=America/New_York; the
   // assertion is offset-derived so it holds in both.

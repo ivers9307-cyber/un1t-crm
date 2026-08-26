@@ -1,5 +1,5 @@
-// POST /api/public/ccf-enquiry — contact-form capture for the
-// ccfautos.com coming-soon page (CCF-WEB.1, spec 2026-08-04).
+// POST /api/public/givers-enquiry — contact-form capture for the
+// giversautos.com coming-soon page (GIVERS-WEB.1; was ccf-enquiry).
 //
 // Anonymous by design (/api/public/** is route-guards-exempt); the
 // abuse guard is the rate limit — deliberately NO honeypot, because
@@ -11,18 +11,18 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validate'
-import { ccfEnquirySchema } from '@/lib/schemas'
+import { giversEnquirySchema } from '@/lib/schemas'
 
 export const runtime = 'nodejs'
 
 export async function POST(request) {
-  const validation = await validateBody(request, ccfEnquirySchema)
+  const validation = await validateBody(request, giversEnquirySchema)
   if (!validation.ok) return validation.response
   const { name, phone, email, message } = validation.data
 
   const db = createServerClient()
   const ip = getClientIp(request)
-  const limit = await checkRateLimit(db, `ccf-enquiry:${ip}`, { max: 5, windowMs: 15 * 60_000 })
+  const limit = await checkRateLimit(db, `givers-enquiry:${ip}`, { max: 5, windowMs: 15 * 60_000 })
   if (!limit.allowed) {
     return rateLimitResponse(limit, 'Too many enquiries from this connection. Please call us on 086 822 5779 instead.')
   }

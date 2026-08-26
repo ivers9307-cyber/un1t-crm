@@ -83,9 +83,9 @@ describe('AudienceCount — states', () => {
   })
 
   it('surfaces the server error message rather than the placeholder', async () => {
-    stubCount(() => bad('OR logic is not supported together with tag or event filters.'))
+    stubCount(() => bad('OR logic is not supported together with tag, event or studio-list filters.'))
     render(<AudienceCount locationId="loc-1" filter={FILTER} channel="sms" />)
-    await screen.findByText(/OR logic is not supported together with tag or event filters/, undefined, WAIT)
+    await screen.findByText(/OR logic is not supported together with tag, event or studio-list filters/, undefined, WAIT)
     expect(screen.queryByText(/Add a condition to see how many contacts match/)).toBeNull()
   })
 })

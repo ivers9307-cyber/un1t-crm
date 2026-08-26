@@ -225,7 +225,10 @@ export default function TemplateEditor({ template, locationId, userId }) {
       {/* Editor */}
       <div className="flex-1">
         {editorMode === 'visual' ? (
-          <div id="unlayer-template-editor" ref={editorRef} className="h-full" style={{ minHeight: '600px' }} />
+          // UNLAYER-H.1 — definite height required (see CampaignEditor): the
+          // embed's iframe is `height: 100%`, and h-full resolves through an
+          // indefinite ancestor chain, so the iframe collapsed to 150px.
+          <div id="unlayer-template-editor" ref={editorRef} style={{ height: '75vh', minHeight: '600px' }} />
         ) : (
           <textarea
             value={htmlContent}

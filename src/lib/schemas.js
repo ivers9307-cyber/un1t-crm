@@ -346,10 +346,10 @@ export const contractRevokeSchema = z.object({
   revoked_reason: z.string().min(1).max(500),
 })
 
-// CCF-WEB.1 — public enquiry from the ccfautos.com coming-soon page.
+// GIVERS-WEB.1 — public enquiry from the giversautos.com coming-soon page.
 // email/message accept '' so the form can send its fields verbatim;
 // the route normalises '' → null before insert.
-export const ccfEnquirySchema = z.object({
+export const giversEnquirySchema = z.object({
   name: z.string().trim().min(1, 'Name is required').max(120),
   phone: z.string().trim().min(5, 'Phone is required').max(40),
   email: email.or(z.literal('')).optional(),

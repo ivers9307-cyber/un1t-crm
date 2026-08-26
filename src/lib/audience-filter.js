@@ -1,6 +1,7 @@
 // Shared audience filter logic for email campaigns and WhatsApp broadcasts.
 //
-// AUDIT P1-2 — the virtual-field resolvers below (tag + event_registration)
+// AUDIT P1-2 — the virtual-field resolvers below (tag + event_registration
+// + location_list)
 // fan out over contact_tags / race_registrations / team_members. At
 // Stillorgan's scale (2000+ active contacts, large tag cohorts) a bare
 // `.select('contact_id')` silently truncates at the PostgREST 1000-row cap,
@@ -200,6 +201,22 @@ export const AUDIENCE_FIELDS = Object.freeze({
   // caller injects them as an id IN (…) constraint. The builder's value
   // is a race_events UUID. eq = registered for; neq = not registered for.
   event_registration:        { type: 'event',   ops: ['eq', 'neq'] },
+
+  // LISTFILTER.1 — virtual field. 'location_list' is not a contacts column;
+  // resolveLocationListFilters() pre-fetches the contact_ids holding a
+  // contact_location_preferences row at the chosen studio and the caller
+  // injects them as an id IN (…) constraint. Value is a locations UUID.
+  // eq = on that studio's list; neq = not on it.
+  //
+  // MEMBERSHIP, NOT MAILABILITY. The predicate is the PRESENCE of the
+  // preferences row, which under the per-location comms model is what makes
+  // a studio allowed to mail that person at all — deliberately NOT
+  // `email_marketing = true`. The send path applies consent itself (the
+  // audience view is already gated on the consent column for the sending
+  // location), so folding it in here would double-gate the sender and, worse,
+  // would quietly answer a different question than the one the operator
+  // asked: "who is on the Hatch list" is a roll-call, not a send estimate.
+  location_list:             { type: 'location_list', ops: ['eq', 'neq'] },
 
   // PILLAR2 — explicit recipients. Deliberately NOT in AudienceBuilder's
   // FIELD_OPTIONS (operators don't filter on raw UUIDs): the unified send
@@ -456,10 +473,10 @@ export function applyAudienceFilter(query, filter) {
     // participate in an OR disjunction with the scalar predicates, so under
     // OR logic we fail loudly rather than silently dropping them (which
     // would widen the audience to everyone matching the scalar OR).
-    if (fieldConfig.type === 'tag' || fieldConfig.type === 'event') {
+    if (fieldConfig.type === 'tag' || fieldConfig.type === 'event' || fieldConfig.type === 'location_list') {
       if (useOr) {
         throw new InvalidAudienceFilterError(
-          'OR logic is not supported together with tag or event filters. Use AND, or send these as separate audiences.'
+          'OR logic is not supported together with tag, event or studio-list filters. Use AND, or send these as separate audiences.'
         )
       }
       // AND: skip here — the scalar-filter loop must not apply a virtual
@@ -822,6 +839,96 @@ export async function resolveEventFilters({ db, query, filter }) {
 }
 
 /**
+ * LISTFILTER.1 — resolve `location_list` rows into a contacts.id constraint.
+ *
+ * Answers "who is on <studio>'s list", which the deal-keyed crossover
+ * machinery cannot: a person who registered interest at a pre-opening studio
+ * holds no deal there, only a contact_location_preferences row.
+ *
+ * Same wrapped { query } return as resolveTagFilters — defeats the
+ * thenable-protocol auto-unwrap. See that function's header.
+ */
+export async function resolveLocationListFilters({ db, query, filter }) {
+  if (!filter?.filters?.length) return { query }
+
+  const positives = []
+  const negatives = []
+  for (const f of filter.filters) {
+    const cfg = AUDIENCE_FIELDS[f?.field]
+    if (!cfg || cfg.type !== 'location_list') continue
+    if (typeof f.value !== 'string' || !f.value.trim()) {
+      throw new InvalidAudienceFilterError('studio-list filter requires a non-empty location id')
+    }
+    const locId = f.value.trim()
+    if (f.op === 'eq') positives.push(locId)
+    else if (f.op === 'neq') negatives.push(locId)
+  }
+  if (positives.length === 0 && negatives.length === 0) return { query }
+
+  // Paginated for the same reason the tag + event resolvers are: a studio's
+  // preference-row set runs to thousands (Stillorgan alone is 7k+), and the
+  // 1,000-row select cap applies regardless of .limit(). A truncated set here
+  // does not error — it silently narrows the audience, which on a send path
+  // means people quietly not receiving something.
+  async function contactIdsOnList(locationId) {
+    let rows
+    try {
+      rows = await selectAll((from, to) => db
+        .from('contact_location_preferences')
+        .select('contact_id')
+        .eq('location_id', locationId)
+        .order('contact_id', { ascending: true })
+        .range(from, to))
+    } catch (err) {
+      throw new InvalidAudienceFilterError(`studio-list lookup failed: ${err.message}`)
+    }
+    return [...new Set(rows.map(r => r?.contact_id).filter(Boolean))]
+  }
+
+  // Positives: intersect across all "on X's list" clauses (AND).
+  let allowed = null
+  for (const locId of positives) {
+    const ids = await contactIdsOnList(locId)
+    allowed = allowed === null ? new Set(ids) : new Set([...allowed].filter(x => ids.includes(x)))
+    if (allowed.size === 0) {
+      return { query: query.eq('id', '00000000-0000-0000-0000-000000000000') }
+    }
+  }
+  if (allowed && allowed.size > 0) {
+    // The INCLUSION list rides in the GET URL exactly like the exclusion one
+    // below, and for this field a positive clause is the likely way to blow
+    // it: "on the list for <an established studio>" is a whole studio's
+    // roll-call — Stillorgan alone holds 7,444 preference rows, ~275KB of
+    // uuids, comfortably past Cloudflare's URI limit. Fail with something an
+    // operator can act on rather than a bare 414, or worse a truncation that
+    // quietly drops people from a send.
+    if (allowed.size > MAX_EXCLUSION_IDS) {
+      throw new InvalidAudienceFilterError(
+        `That studio's list has too many contacts (${allowed.size}) to filter on in one query — add another filter (a stage, a date) to narrow the audience first.`
+      )
+    }
+    query = query.in('id', [...allowed])
+  }
+
+  // Negatives: one deduped, size-bounded NOT IN — the exclusion list rides in
+  // the GET URL, so an unbounded one is a 414. See resolveTagFilters.
+  const negIds = new Set()
+  for (const locId of negatives) {
+    for (const id of await contactIdsOnList(locId)) negIds.add(id)
+  }
+  if (negIds.size > MAX_EXCLUSION_IDS) {
+    throw new InvalidAudienceFilterError(
+      `Studio-list exclusion matches too many contacts (${negIds.size}) to apply in one query — add a positive filter to narrow the audience first.`
+    )
+  }
+  if (negIds.size > 0) {
+    query = query.not('id', 'in', `(${[...negIds].join(',')})`)
+  }
+
+  return { query }
+}
+
+/**
  * COMMSFIX.B.7 — validate an audience filter WITHOUT building a query or
  * touching the DB. For routes that PERSIST a filter (email-draft, SMS/WA
  * broadcast create, sequences PUT): an invalid filter must be rejected with
@@ -851,11 +958,14 @@ export function validateAudienceFilter(filter) {
     if (cfg.type === 'event' && (typeof f.value !== 'string' || !f.value.trim())) {
       throw new InvalidAudienceFilterError('event filter requires a non-empty event id')
     }
+    if (cfg.type === 'location_list' && (typeof f.value !== 'string' || !f.value.trim())) {
+      throw new InvalidAudienceFilterError('studio-list filter requires a non-empty location id')
+    }
   }
 }
 
 /**
- * Convenience wrapper: resolve tag + event virtual fields AND apply scalar
+ * Convenience wrapper: resolve tag + event + location_list virtual fields AND apply scalar
  * filters in one call. Use this in async contexts (most route handlers
  * already are). Existing sync callers continue using applyAudienceFilter
  * directly until they need virtual-field support.
@@ -869,5 +979,6 @@ export function validateAudienceFilter(filter) {
 export async function applyAudienceFilterAsync({ db, query, filter, locationId }) {
   const tagResult = await resolveTagFilters({ db, query, filter, locationId })
   const eventResult = await resolveEventFilters({ db, query: tagResult.query, filter })
-  return { query: applyAudienceFilter(eventResult.query, filter) }
+  const listResult = await resolveLocationListFilters({ db, query: eventResult.query, filter })
+  return { query: applyAudienceFilter(listResult.query, filter) }
 }
