@@ -28,6 +28,10 @@ import {
   HardDrive, Trash2, RefreshCw,
 } from 'lucide-react'
 import { Button, Card } from '@/components/ui'
+// MAILBOX-CONNECT.6 — the per-account IMAP connection panel. Its own file
+// because this card was already 614 lines and the connect flow is a form, a
+// live login check, three states and two required disclosures.
+import MailboxConnectionSection from './MailboxConnectionSection'
 import { MAILBOX_LABEL_MAX, mailboxInputIssues } from '@/lib/email-mailbox-admin'
 import { EMAIL_MAILBOX_QUOTA_BYTES, formatBytes, quotaMessage } from '@/lib/email-attachment-quota'
 
@@ -468,6 +472,18 @@ export default function EmailMailboxesCard({ locationId }) {
                     </ul>
                   )}
                 </div>
+
+                {/* MAILBOX-CONNECT.6 — how mail REACHES this account. Rendered
+                    for deactivated accounts too: an operator must always be
+                    able to disconnect a stored login, and hiding the panel
+                    would strand the credential. `onChanged` reloads the list so
+                    the state chip, which reads off mailbox.ingress, is right
+                    immediately after a connect or a disconnect. */}
+                <MailboxConnectionSection
+                  locationId={locationId}
+                  mailbox={m}
+                  onChanged={load}
+                />
               </li>
             )
           })}

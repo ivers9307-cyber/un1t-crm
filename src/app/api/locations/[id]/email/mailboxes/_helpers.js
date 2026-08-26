@@ -23,7 +23,16 @@
 import { NextResponse } from 'next/server'
 import { assertLocationAccess, guardMasterOrOwner } from '@/lib/auth'
 
-export const MAILBOX_COLUMNS = 'id, location_id, address, label, is_default, active, created_at'
+// There is no `select('*')` on email_mailboxes anywhere — every read site
+// names its columns — so a column added by a migration stays INVISIBLE to the
+// API until a constant like this one is edited. `ingress`/`egress` arrived
+// with mig 572 (MAILBOX-CONNECT.2) carrying NOT NULL DEFAULT 'postmark', so
+// nothing broke when they landed; they are added here because the settings
+// card renders the connection state chip straight off the mailbox list rather
+// than firing a second request per account. Leaving them out is this repo's
+// "the column exists and nothing reads it" outcome.
+export const MAILBOX_COLUMNS =
+  'id, location_id, address, label, is_default, active, created_at, ingress, egress'
 
 // A studio runs a handful of accounts and employs a few dozen people, but
 // every .select() caps at 1,000 rows whatever the caller asks for — so the

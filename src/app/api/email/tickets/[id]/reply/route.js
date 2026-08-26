@@ -388,6 +388,11 @@ export async function POST(request, props) {
   // deleted) still sends, from a domain we own.
   const send = await sendTicketEmail({
     mailboxAddress: mailbox?.address || null,
+    // MAILBOX-CONNECT.7 — see the compose route. `mailbox` may be null here (an
+    // elevated caller answering correspondence whose address was deleted); the
+    // send path treats absent exactly as it treats egress 'postmark', so that
+    // case is unchanged.
+    mailbox: mailbox || null,
     to: wire.to,
     cc: wire.cc,
     bcc: wire.bcc,
@@ -515,6 +520,11 @@ export async function POST(request, props) {
     // received, so it must not show a shorter message than was sent.
     text_body: outboundText,
     postmark_message_id: result.messageId,
+    // MAILBOX-CONNECT.7 — the threading key on the SMTP path; see the compose
+    // route for the full reasoning. An SMTP send carries no Postmark id, so
+    // without this the member's reply to OUR reply forks a new ticket. NULL on
+    // the Postmark path, which is today's behaviour.
+    rfc_message_id: result.rfcMessageId || null,
     in_reply_to: lastInbound?.rfc_message_id || null,
     is_internal_note: false,
     source: 'operator',
@@ -542,6 +552,9 @@ export async function POST(request, props) {
         payload: {
           ticket_id: ticket.id,
           postmark_message_id: result.messageId,
+          // MAILBOX-CONNECT.7 — the re-fileable record needs the threading key;
+          // on the SMTP path the RFC id is the only one that exists.
+          rfc_message_id: result.rfcMessageId || null,
           from_email: send.fromEmail || null,
           recipients: { to: recipients.to, cc: recipients.cc, bcc: recipients.bcc },
           subject,

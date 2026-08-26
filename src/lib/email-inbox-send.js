@@ -46,9 +46,32 @@
 // Nothing here throws. Every function returns a verdict and the ROUTE decides
 // what to do with it — a send path must not blow up on a config lookup. But
 // "never throws" is not "always sends": see NOT CONFIGURED below.
+//
+// ─────────────────────────────────────────────────────────────────────
+// MAILBOX-CONNECT.7 — THERE ARE NOW TWO TRANSPORTS, AND THE ROUTES DO NOT
+// KNOW WHICH ONE RAN.
+//
+// A mailbox connected over IMAP/SMTP (the mailbox connector, design §4) sends
+// its replies over its OWN provider's SMTP rather than through Postmark,
+// because Postmark cannot DKIM-sign a domain the business does not control.
+// `email_mailboxes.egress` ('postmark' | 'smtp', mig 572) is the switch, and
+// sendTicketEmail branches on it in its FIRST statement — ahead of the server
+// token, the stream and plannedFroms(), all three of which are Postmark
+// vocabulary that an SMTP send has no answer for.
+//
+// THE OLD PATH IS UNTOUCHED, AND THAT IS A REQUIREMENT RATHER THAN A HOPE.
+// The new `mailbox` parameter is optional; absent — every caller as written
+// today — or `egress: 'postmark'` runs exactly the code that ran before, in
+// the same order, producing the same Postmark request and the same verdict
+// object with the same keys. The suite pins it. This is the whole reason the
+// switch is a branch at the top rather than a condition threaded through
+// plannedFroms(): a transport that shares the From-resolution code would
+// eventually inherit its fallback, which on SMTP is a silent change of the
+// address the customer sees (see smtp-send.js's header for why).
 
 import { sendEmail } from './postmark'
 import { logError } from './log'
+import { sendViaSmtp } from './mail/smtp-send'
 
 /**
  * THIS APP'S internal stream for all ticket mail. Ticket mail is
@@ -298,14 +321,61 @@ function markUnverified(address) {
  * second attempt; that is correct (the first attempt was refused at submit
  * time, so nothing was transmitted) and it is why the array is built once,
  * outside the loop.
+ *
+ * ─────────────────────────────────────────────────────────────────────
+ * MAILBOX-CONNECT.7 — THE OPTIONAL `mailbox` ARGUMENT IS THE TRANSPORT.
+ *
+ * Pass the email_mailboxes row (`{ id, address, egress }` is all that is read)
+ * and an `egress` of 'smtp' routes the send to the mailbox's own SMTP server
+ * instead of Postmark. Omit it — as every caller does today — and nothing
+ * changes: no lookup, no branch taken, the Postmark path below runs verbatim.
+ *
+ * `mailboxAddress` is kept as its own parameter rather than derived from
+ * `mailbox`, because the two answer different questions. A ticket whose
+ * mailbox row was deleted still has an address to put in Reply-To; an elevated
+ * caller answering that correspondence passes `mailboxAddress` with no
+ * `mailbox` at all. Deriving one from the other would make that case
+ * unrepresentable.
+ *
+ * ON THE SMTP BRANCH THE VERDICT GAINS ONE KEY, `deliveryTracked: false`, and
+ * the Postmark branch deliberately does NOT gain `deliveryTracked: true`. An
+ * SMTP send can never receive a Postmark Delivery/Bounce webhook, so mig 498's
+ * NULL delivery_status is its PERMANENT state rather than a state it is
+ * waiting to leave — a different fact from the one NULL usually tells, and one
+ * the thread has to be able to render as "not tracked" rather than as an event
+ * still in flight. Keeping the key off the Postmark verdict keeps that path
+ * byte-identical to what three routes already consume.
  */
 export async function sendTicketEmail({
   mailboxAddress = null,
+  // MAILBOX-CONNECT.7 — the transport selector; see the docblock. Optional,
+  // and defaulting to null keeps every existing call site byte-identical.
+  mailbox = null,
   // EMAIL-CC.1 / EMAIL-OUTBOUND-ATTACH.1 — cc, bcc and attachments all default
   // to undefined, so a caller that passes none of them (and every caller
   // before those two tasks) produces a byte-identical sendEmail call.
   to, cc, bcc, subject, htmlBody, textBody, tag, metadata, headers, attachments,
 }) {
+  // ── TRANSPORT SELECTION — FIRST, BEFORE ANY POSTMARK VOCABULARY ─────
+  // Ahead of resolveInboxServerToken() on purpose. Everything below this point
+  // is about Postmark — its server token, its message stream, its sender
+  // signatures — and none of it has a meaning for a send that leaves over the
+  // customer's own SMTP. Resolving any of it first would either refuse an SMTP
+  // send because OUR Postmark server is unconfigured (a wholly unrelated fact)
+  // or leak a Postmark concept into a path that has no Postmark in it.
+  //
+  // `tag` and `metadata` are deliberately NOT forwarded. Both are Postmark
+  // features: `tag` groups messages in Postmark's own UI, and `metadata`
+  // carries POSTMARK-RACE.1's send marker, which exists so a Delivery webhook
+  // arriving before the email_sends row can still be matched. Neither has a
+  // counterpart on SMTP, and there are no webhooks to match, so passing them
+  // would be bookkeeping for events that never happen.
+  if (mailbox?.egress === 'smtp') {
+    return sendViaSmtp({
+      mailbox, to, cc, bcc, subject, htmlBody, textBody, headers, attachments,
+    })
+  }
+
   const serverToken = resolveInboxServerToken()
   if (!serverToken) {
     // Loud: this is the one condition where a support reply does not go out,

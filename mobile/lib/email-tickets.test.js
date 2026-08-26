@@ -248,6 +248,28 @@ describe('ticketDeliveryMeta (EMAIL-DELIVERY.1)', () => {
     expect(ticketDeliveryMeta({ direction: 'inbound', delivery_status: 'delivered' })).toBeNull()
   })
 
+  // MAILBOX-CONNECT.7 — web/mobile parity on the SMTP case. The first pass
+  // shipped this branch on web only, so the same message read "Not tracked" on
+  // a desktop and said nothing on a phone. The header of this section lists the
+  // rules that must not diverge; this is one of them.
+  it('says NOT TRACKED for an SMTP send, matching web', () => {
+    const meta = ticketDeliveryMeta(outbound({
+      delivery_status: null, postmark_message_id: null, rfc_message_id: 'a@theirgym.ie',
+    }))
+    expect(meta).not.toBeNull()
+    expect(meta.label).toBe('Not tracked')
+    expect(meta.tone).toBe('quiet')
+  })
+
+  it('does not invent provenance for a row carrying neither id', () => {
+    // Keying on the missing Postmark id alone would also match the whole
+    // back-catalogue and the degraded-sender path, and tell the operator those
+    // went out over SMTP. Saying nothing is the honest answer.
+    expect(ticketDeliveryMeta(outbound({
+      delivery_status: null, postmark_message_id: null, rfc_message_id: null,
+    }))).toBeNull()
+  })
+
   it('renders a delivery quietly — no panel classes at all', () => {
     const m = ticketDeliveryMeta(outbound({ delivery_status: 'delivered' }))
     expect(m).toMatchObject({ tone: 'quiet', label: 'Delivered' })
