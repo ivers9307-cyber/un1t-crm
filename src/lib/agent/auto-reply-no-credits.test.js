@@ -18,7 +18,8 @@ vi.mock('@/lib/location-branding', () => ({
   getLocationBranding: vi.fn(async () => ({})),
 }))
 vi.mock('@/lib/person-links', () => ({
-  personGroupResolver: vi.fn(async () => ({ groupOf: new Map(), primaryOf: new Map() })),
+  // The real resolver hands back CLOSURES, not Maps (person-links.js).
+  personGroupResolver: vi.fn(async () => ({ groupOf: () => null, primaryOf: () => null })),
 }))
 vi.mock('./booking-tools', async (importOriginal) => ({
   ...(await importOriginal()),

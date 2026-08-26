@@ -573,8 +573,17 @@ export function autoVerifyContactId({ trusted, conversationContactId, matches })
  * (or any second contact when the thread contact is ungrouped) means a real
  * stranger could hold the number → returns null → falls back to the quiz.
  *
- * On success the acting account resolves to the group's PRIMARY (the canonical
- * record) so bookings/lookups hit the right account, not a duplicate.
+ * PERSON-ACCT.6 — on success the acting account is the CONVERSATION'S OWN
+ * contact, not the group's primary. The primary is a DISPLAY/outreach ranking
+ * (`pickPrimary`, person-links.js) that knows nothing about which account holds
+ * the person's activity: 879 of 887 person_groups hold divergent Glofox
+ * accounts, so swapping in the primary read an empty sibling account and told a
+ * member with a staff-made booking "I don't see any classes booked for you"
+ * (live, 2026-08-25). Since PR1 every read spans the whole group
+ * (person-accounts.js), so the acting contact only has to be the person's
+ * ANCHOR — and the thread's own contact is the one the customer is actually
+ * talking on. The same-person check above is unaffected: it still decides
+ * WHETHER this verifies; only the id handed back changed.
  *
  * Group data is injected as pure closures so this stays IO-free; the batch
  * resolver that builds them lives in person-links.js (`personGroupResolver`).
@@ -584,10 +593,9 @@ export function autoVerifyContactId({ trusted, conversationContactId, matches })
  * @param {string|null} args.conversationContactId
  * @param {Array<{id:string}>|null} args.matches contacts matching the sender's number at this location
  * @param {(contactId:string)=>string|null} args.groupOf   person-group id for a contact, or null
- * @param {(groupId:string)=>string|null} args.primaryOf   the group's primary contact id, or null
  * @returns {{ actingContactId: string } | null}
  */
-export function resolveAutoVerify({ trusted, conversationContactId, matches, groupOf, primaryOf }) {
+export function resolveAutoVerify({ trusted, conversationContactId, matches, groupOf }) {
   if (!trusted || !conversationContactId) return null
   if (!Array.isArray(matches) || matches.length === 0) return null
 
@@ -602,15 +610,23 @@ export function resolveAutoVerify({ trusted, conversationContactId, matches, gro
   })
   if (!allSamePerson) return null
 
-  return { actingContactId: resolveActingContactId({ contactId: conversationContactId, groupOf, primaryOf }) }
+  return { actingContactId: conversationContactId }
 }
 
 /**
- * Resolve the account the agent should ACT on for a verified contact. Pure.
- * If the contact is part of a person_group, returns the group's primary (the
- * canonical account); otherwise the contact itself. Applied everywhere the
- * agent books or looks up an account so linked duplicates always resolve to
- * one record — including the email+surname quiz path, not just phone matches.
+ * Resolve a contact to its person-group's primary. Pure.
+ * If the contact is part of a person_group, returns the group's primary
+ * (`primary_contact_id`, ranked by `pickPrimary` in person-links.js);
+ * otherwise the contact itself.
+ *
+ * PERSON-ACCT.6 — this is a DISPLAY-ONLY resolution now: which row a human (or
+ * a greeting) should be shown as "the" record for this person. It must NOT be
+ * used to decide which account the agent ACTS on — `pickPrimary` ranks for
+ * outreach and knows nothing about which account holds the person's bookings,
+ * membership or credits, so acting on it silently answered from an empty
+ * sibling account. Reads span the whole group (person-accounts.js); writes
+ * elect an account (`electWriteAccount`). Kept exported because the display
+ * question is a real one and the agent's name/greeting block still asks it.
  */
 export function resolveActingContactId({ contactId, groupOf, primaryOf }) {
   if (!contactId) return contactId

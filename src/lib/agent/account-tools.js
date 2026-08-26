@@ -546,8 +546,11 @@ export async function executeAccountTool(toolName, input, ctx) {
       return { verified: false, hint: verifyFailureHint(linked) }
     }
 
-    // Stamp the matched contact. auto-reply resolves this to the person-group
-    // primary for the acting account on this and subsequent turns.
+    // Stamp the matched contact. PERSON-ACCT.6 — auto-reply acts on this id AS
+    // STAMPED, on this and subsequent turns: it is the person's anchor, and
+    // reads span the whole person group from it (person-accounts.js). It used
+    // to be remapped to the group's DISPLAY primary, which routinely holds none
+    // of the person's activity.
     await db.from(conversationsTable).update({
       agent_verified_contact_id: matchedContact.id,
       agent_verified_at: new Date().toISOString(),

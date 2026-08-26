@@ -659,9 +659,9 @@ describe('resolveAgentEffort', () => {
 
 // AGENT-AUTH.2 — link-aware phone verification. When the sender's number maps
 // to several contacts that are all ONE linked Person (incl. the thread's
-// contact), verify and act on the group's PRIMARY. A number shared by two
-// DIFFERENT people stays ambiguous → quiz. Pure: group data is fed in via
-// groupOf/primaryOf closures (the IO resolver lives in person-links.js).
+// contact), verify and act as the thread's own contact (PERSON-ACCT.6). A
+// number shared by two DIFFERENT people stays ambiguous → quiz. Pure: group
+// data is fed in via groupOf closures (the IO resolver lives in person-links).
 describe('resolveAutoVerify (link-aware)', () => {
   const noGroups = { groupOf: () => null, primaryOf: () => null }
 
@@ -691,11 +691,16 @@ describe('resolveAutoVerify (link-aware)', () => {
     groupOf: (id) => (['c1', 'c2', 'c3'].includes(id) ? 'G' : null),
     primaryOf: (g) => (g === 'G' ? 'c2' : null),
   }
-  it('verifies when all matches + thread contact are one Person → acts on the group PRIMARY', () => {
+  // PERSON-ACCT.6 — the group collapses the IDENTITY question (all three rows
+  // are one person, so the number verifies), but the acting account is the
+  // thread's OWN contact. It used to return the group primary c2; that primary
+  // is a display/outreach ranking and typically holds none of the person's
+  // activity, so the agent read an empty sibling account (live, 2026-08-25).
+  it('verifies when all matches + thread contact are one Person → acts on the THREAD contact', () => {
     expect(resolveAutoVerify({
       trusted: true, conversationContactId: 'c1',
       matches: [{ id: 'c1' }, { id: 'c2' }, { id: 'c3' }], ...grouped,
-    })).toEqual({ actingContactId: 'c2' }) // primary c2, not the thread contact c1
+    })).toEqual({ actingContactId: 'c1' }) // the thread contact c1, not the primary c2
   })
   it('returns null when a match is OUTSIDE the thread contact’s group (a real stranger on the number)', () => {
     const g = {
