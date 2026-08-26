@@ -37,6 +37,11 @@
 //   • an oversized part is screened on the ENCODED size BEFORE it is
 //     downloaded, so a 30 MB file never becomes a 30 MB buffer.
 //
+// The one ceiling that is NOT the shim's is MAX_ATTACHMENT_PARTS, because the
+// shim never had this problem: Postmark had already bounded the message for it.
+// Here the bodyStructure is the sender's, so the WALK is bounded too — see the
+// constant. The excess is reported, never truncated away.
+//
 // ── THE GOVERNING RULE: A FILE MAY NEVER COST AN EMAIL ────────────────────
 // Inherited verbatim from the route this feeds. Nothing here throws and
 // nothing here returns a failure the poller is expected to act on. Every
@@ -143,11 +148,15 @@ function partFilename(node) {
  * ordinary for the cid: images Apple Mail and Outlook produce. Erring the
  * other way would drop a member's photo with no row and no log line — the
  * exact silent-loss shape this feature is careful about everywhere else.
+ *
+ * `partId` is resolved by the WALKER and passed in rather than read off the
+ * node, because the root of a single-part message carries no `part` at all —
+ * see attachmentParts().
  */
-function isAttachmentNode(node, type) {
+function isAttachmentNode(node, type, partId) {
   // No part id means nothing to FETCH — a container, or a structure we cannot
   // address. The walker descends into it instead.
-  if (!node.part) return false
+  if (!partId) return false
 
   const disposition = String(node.disposition || '').toLowerCase()
   if (disposition === 'attachment') return true
@@ -156,6 +165,15 @@ function isAttachmentNode(node, type) {
   // A cid: image referenced from the HTML body: inline, named by Content-ID
   // rather than by filename.
   if (disposition === 'inline' && node.id) return true
+
+  // A leaf declaring NO type at all is not a file. imapflow always sets one on
+  // a structure it parsed, so an absent type means a synthetic or unparsed node
+  // — and the permissive rule below would otherwise turn a bare
+  // `bodyStructure: {}` into a phantom attachment whose part id is the root
+  // fallback '1', i.e. it would stage the message BODY as a file. The strong
+  // signals above still win: a part that declares a disposition, a filename or
+  // a Content-ID is a file whatever its type says.
+  if (!type) return false
 
   // text/plain + text/html with no disposition and no name ARE the body; they
   // become TextBody/HtmlBody, not files. message/* is a container — the walk
@@ -168,33 +186,75 @@ function isAttachmentNode(node, type) {
 }
 
 /**
+ * The most parts one walk will ever ENUMERATE.
+ *
+ * A bound on the forwarded PAYLOAD, not on how many files we are willing to
+ * keep — MAX_ATTACHMENTS_PER_MESSAGE (25) decides that, and it caps only the
+ * DOWNLOADS: every part past it still becomes a stripped entry in the array the
+ * poller POSTs. So a message carrying a few thousand tiny parts would push that
+ * JSON past Vercel's ~4.5 MB body cap, which is answered with a plain-text 413
+ * BEFORE the route runs — and since the cursor only advances on a 2xx, the
+ * poller would re-poll that same UID every tick forever and the mailbox would
+ * never ingest another email again. One malformed message, an inbox that stops.
+ *
+ * Ten times the per-message cap: far above anything real mail produces, far
+ * below the cliff. What the walk declines to enumerate it COUNTS, and
+ * stageImapAttachments turns that count into one visible entry — see there.
+ */
+export const MAX_ATTACHMENT_PARTS = 250
+
+/**
  * Every part of one message that should become an `Attachments` entry, in the
- * order the array will carry them.
+ * order the array will carry them — plus a count of the ones the bound above
+ * refused to enumerate.
  *
  * PURE, and the order is load-bearing — see the idempotency note in the header.
  * Depth-first, left to right, over a structure the IMAP server derives from the
- * message itself, so two polls of the same UID produce the same list.
+ * message itself, so two polls of the same UID produce the same list and the
+ * same `overflow`.
  *
  * @param {object} bodyStructure imapflow's parsed BODYSTRUCTURE
- * @returns {Array<{part:string, contentType:string, filename:string,
- *                  contentId:string, encoding:string, size:number}>}
+ * @returns {{parts: Array<{part:string, contentType:string, filename:string,
+ *            contentId:string, encoding:string, size:number}>, overflow:number}}
  */
 export function attachmentParts(bodyStructure) {
-  const out = []
+  const parts = []
+  let overflow = 0
 
-  const walk = (node) => {
+  const walk = (node, depth) => {
     if (!node || typeof node !== 'object') return
     const type = String(node.type || '').toLowerCase()
 
     // multipart/* holds no bytes of its own, ever.
     if (type.startsWith('multipart/')) {
-      for (const child of node.childNodes || []) walk(child)
+      for (const child of node.childNodes || []) walk(child, depth + 1)
       return
     }
 
-    if (isAttachmentNode(node, type)) {
-      out.push({
-        part: String(node.part),
+    // 🔴 A SINGLE-PART MESSAGE'S ROOT NODE CARRIES NO `part` — imapflow only
+    // sets it once the walk is at least one level deep — and a leaf has no
+    // childNodes either, so requiring one here dropped the entire attachment of
+    // a scanner or fax-to-email message (top-level `application/pdf;
+    // name="scan.pdf"`, `Content-Disposition: attachment`) with no row, no
+    // skipped_reason and no log line. selectBodyParts() declines it too — it is
+    // not text/* — so the ticket arrived completely empty. RFC 3501 numbers the
+    // body of a non-multipart message '1', which is exactly what the sibling
+    // module already asks for (imap-poll.js).
+    //
+    // ROOT ONLY, deliberately: a partless node further down is a structure we
+    // cannot address, and claiming '1' for it would stage some other part's
+    // bytes onto the ticket under this one's name.
+    const partId = node.part ? String(node.part) : (depth === 0 ? '1' : '')
+
+    if (isAttachmentNode(node, type, partId)) {
+      if (parts.length >= MAX_ATTACHMENT_PARTS) {
+        // Counted, never silently dropped. Counting is free — the tree is
+        // already in memory, imapflow parsed it before we were called.
+        overflow += 1
+        return
+      }
+      parts.push({
+        part: partId,
         contentType: type,
         filename: partFilename(node),
         // Postmark hands a bare Content-ID; MIME wraps it in angle brackets.
@@ -207,11 +267,11 @@ export function attachmentParts(bodyStructure) {
       return
     }
 
-    for (const child of node.childNodes || []) walk(child)
+    for (const child of node.childNodes || []) walk(child, depth + 1)
   }
 
-  walk(bodyStructure)
-  return out
+  walk(bodyStructure, 0)
+  return { parts, overflow }
 }
 
 /**
@@ -409,14 +469,17 @@ export async function stageImapAttachments(db, client, msg, { mailboxId, message
   const result = { attachments: [], skipped: [] }
 
   let parts
+  let overflow
   try {
-    parts = attachmentParts(msg?.bodyStructure)
+    ;({ parts, overflow } = attachmentParts(msg?.bodyStructure))
   } catch (err) {
     // A bodyStructure shaped in a way the walk did not anticipate must not cost
     // the email. The message files with no attachments, loudly.
     console.error('[imap-attachments] could not walk bodyStructure', { mailboxId }, '—', err?.message)
     return result
   }
+  // `overflow` can only be non-zero once `parts` is full, so this is not a
+  // path that can hide one.
   if (parts.length === 0) return result
 
   const canStage = canStageForMessage(messageId)
@@ -447,6 +510,31 @@ export async function stageImapAttachments(db, client, msg, { mailboxId, message
       )
       result.skipped.push({ name: safeAttachmentFilename(part.filename), reason: 'rehost_failed' })
     }
+  }
+
+  if (overflow > 0) {
+    // THE EXCESS IS ACCOUNTED FOR, NOT TRUNCATED. One entry, in the vocabulary
+    // the route already speaks: no marker, so its `too_many` branch fires on
+    // the ARRAY POSITION — past MAX_ATTACHMENTS_PER_MESSAGE by construction,
+    // since the walk bound is ten times it — before it ever consults one, and
+    // records a row from `ContentLength`. An operator then sees "…N more files
+    // were not recorded — not stored" on the ticket and can ask for a resend,
+    // instead of the files existing nowhere. 'too_many' is in mig 496's CHECK.
+    const name = safeAttachmentFilename(`${overflow} more files were not recorded`)
+    console.error(
+      '[imap-attachments] message carries more parts than the walk will enumerate; ' +
+      'the excess is recorded as too_many rather than forwarded.',
+      { mailboxId, enumerated: parts.length, overflow },
+    )
+    result.attachments.push(strippedAttachment({
+      Name: name,
+      Content: '',
+      ContentType: safeMimeType('application/octet-stream'),
+      // Unknown, and size_bytes > 0 is a CHECK — the same 1 attachmentSizeHint()
+      // falls back to on the route side.
+      ContentLength: 1,
+    }))
+    result.skipped.push({ name, reason: 'too_many' })
   }
 
   return result

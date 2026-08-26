@@ -26,7 +26,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { makeDb, objectKeys } from '@/app/api/email/tickets/_test-db'
 import { readStagedMarker, STAGED_MARKER_KEY } from '@/lib/email-attachment-staging'
 import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE } from '@/lib/email-attachment-quota'
-import { attachmentParts, canStageForMessage, stageImapAttachments } from './imap-attachments'
+import {
+  MAX_ATTACHMENT_PARTS,
+  attachmentParts,
+  canStageForMessage,
+  stageImapAttachments,
+} from './imap-attachments'
 
 const MAILBOX = 'b0000000-0000-4000-8000-000000000002'
 
@@ -94,11 +99,11 @@ afterEach(() => {
 
 describe('attachmentParts — files, not the body', () => {
   it('leaves text/plain and text/html alone', () => {
-    expect(attachmentParts(mixed([textBody, htmlBody]))).toEqual([])
+    expect(attachmentParts(mixed([textBody, htmlBody]))).toEqual({ parts: [], overflow: 0 })
   })
 
   it('finds a disposition:attachment part', () => {
-    const parts = attachmentParts(mixed([textBody, pdfPart()]))
+    const { parts } = attachmentParts(mixed([textBody, pdfPart()]))
     expect(parts).toHaveLength(1)
     expect(parts[0]).toMatchObject({ part: '2', contentType: 'application/pdf', filename: 'invoice.pdf' })
   })
@@ -107,12 +112,12 @@ describe('attachmentParts — files, not the body', () => {
     // Plenty of senders omit Content-Disposition entirely and only set
     // Content-Type: …; name="x". Dropping those would lose real files.
     const node = { part: '2', type: 'text/calendar', encoding: '7bit', size: 90, parameters: { name: 'invite.ics' } }
-    expect(attachmentParts(mixed([textBody, node]))).toHaveLength(1)
+    expect(attachmentParts(mixed([textBody, node])).parts).toHaveLength(1)
   })
 
   it('finds an inline cid: image that has no filename', () => {
     const img = { part: '2', type: 'image/png', encoding: 'base64', size: 200, disposition: 'inline', id: '<logo@un1t.com>' }
-    const parts = attachmentParts({ type: 'multipart/related', childNodes: [htmlBody, img] })
+    const { parts } = attachmentParts({ type: 'multipart/related', childNodes: [htmlBody, img] })
     expect(parts).toHaveLength(1)
     // MIME wraps a Content-ID in angle brackets; Postmark hands over a bare one.
     expect(parts[0].contentId).toBe('logo@un1t.com')
@@ -128,8 +133,7 @@ describe('attachmentParts — files, not the body', () => {
       dispositionParameters: { filename: 'forwarded.eml' },
       childNodes: [{ part: '2.1', type: 'application/pdf', encoding: 'base64', size: 900, disposition: 'attachment' }],
     }
-    const parts = attachmentParts(mixed([textBody, eml]))
-    expect(parts.map(p => p.part)).toEqual(['2'])
+    expect(attachmentParts(mixed([textBody, eml])).parts.map(p => p.part)).toEqual(['2'])
   })
 
   it('is deterministic, depth first — the index IS the attachment_index', () => {
@@ -140,14 +144,231 @@ describe('attachmentParts — files, not the body', () => {
       pdfPart({ part: '2', dispositionParameters: { filename: 'a.pdf' } }),
       pdfPart({ part: '3', dispositionParameters: { filename: 'b.pdf' } }),
     ])
-    expect(attachmentParts(tree).map(p => p.filename)).toEqual(['a.pdf', 'b.pdf'])
-    expect(attachmentParts(tree).map(p => p.filename)).toEqual(['a.pdf', 'b.pdf'])
+    expect(attachmentParts(tree).parts.map(p => p.filename)).toEqual(['a.pdf', 'b.pdf'])
+    expect(attachmentParts(tree).parts.map(p => p.filename)).toEqual(['a.pdf', 'b.pdf'])
   })
 
   it('survives a bodyStructure that is missing or junk', () => {
-    expect(attachmentParts(undefined)).toEqual([])
-    expect(attachmentParts(null)).toEqual([])
-    expect(attachmentParts('not a tree')).toEqual([])
+    expect(attachmentParts(undefined)).toEqual({ parts: [], overflow: 0 })
+    expect(attachmentParts(null)).toEqual({ parts: [], overflow: 0 })
+    expect(attachmentParts('not a tree')).toEqual({ parts: [], overflow: 0 })
+  })
+})
+
+// ── E1: the single-part message ─────────────────────────────────────────
+
+describe('attachmentParts — a SINGLE-PART, attachment-only message', () => {
+  // A scanner or a fax-to-email gateway sends exactly this: no multipart
+  // wrapper at all, the top-level Content-Type IS the file. imapflow only sets
+  // `part` once the walk is at least one level deep, so the root of a
+  // non-multipart message carries NONE — and a leaf has no childNodes, so a
+  // walk that required `part` returned []. There was then no attachment row,
+  // no skipped_reason and no log line, and because selectBodyParts()
+  // (imap-poll.js) also declines a non-text/* root the ticket was completely
+  // empty. RFC 3501 numbers the body of a non-multipart message '1', which is
+  // exactly what the sibling module already asks for.
+  const scan = (over = {}) => ({
+    type: 'application/pdf',
+    encoding: 'base64',
+    size: 1400,
+    disposition: 'attachment',
+    dispositionParameters: { filename: 'scan.pdf' },
+    ...over,
+  })
+
+  it('🔴 finds it, and addresses it as part 1', () => {
+    expect(attachmentParts(scan())).toEqual({
+      parts: [{
+        part: '1',
+        contentType: 'application/pdf',
+        filename: 'scan.pdf',
+        contentId: '',
+        encoding: 'base64',
+        size: 1400,
+      }],
+      overflow: 0,
+    })
+  })
+
+  it('🔴 finds one with no disposition either — Content-Type name only', () => {
+    const { parts } = attachmentParts({
+      type: 'application/pdf', encoding: 'base64', size: 900, parameters: { name: 'scan.pdf' },
+    })
+    expect(parts.map(p => p.part)).toEqual(['1'])
+  })
+
+  it('still leaves a single-part text/plain message alone — that IS the body', () => {
+    // The same root fallback must not turn every plain-text email into an
+    // attachment; selectBodyParts() claims this one as TextBody.
+    expect(attachmentParts({ type: 'text/plain', encoding: '7bit', size: 400 }).parts).toEqual([])
+    expect(attachmentParts({ type: 'text/html', encoding: 'quoted-printable', size: 900 }).parts).toEqual([])
+  })
+
+  it('🔴 does not turn an EMPTY bodyStructure into a phantom attachment', () => {
+    // The root fallback makes every root addressable, so the permissive tail of
+    // isAttachmentNode would otherwise call a typeless `{}` a file, stage part
+    // '1' — the message BODY — as one, and put it on the ticket as
+    // `attachment` / application/octet-stream. A leaf with no declared type is
+    // a structure imapflow did not parse, not a file.
+    expect(attachmentParts({})).toEqual({ parts: [], overflow: 0 })
+    expect(attachmentParts({ type: '' })).toEqual({ parts: [], overflow: 0 })
+    expect(attachmentParts({ type: '', childNodes: [] })).toEqual({ parts: [], overflow: 0 })
+  })
+
+  it('still trusts a declared disposition over a missing type', () => {
+    // The strong signals stay strong: something that says it is an attachment
+    // is one even when the sender omitted Content-Type.
+    const { parts } = attachmentParts(mixed([
+      textBody,
+      { part: '2', encoding: 'base64', size: 90, disposition: 'attachment', dispositionParameters: { filename: 'x.bin' } },
+    ]))
+    expect(parts.map(p => p.part)).toEqual(['2'])
+  })
+
+  it('does NOT claim part 1 for a partless node deeper in the tree', () => {
+    // Only the ROOT of a non-multipart message is legitimately part '1'.
+    // Anywhere else a missing `part` means a structure we cannot address, and
+    // staging it as '1' would put some other part's bytes on the ticket under
+    // this one's name.
+    const orphan = { type: 'application/pdf', encoding: 'base64', size: 700, disposition: 'attachment' }
+    expect(attachmentParts(mixed([textBody, orphan])).parts).toEqual([])
+  })
+
+  it('stages the bytes end to end, through the ROUTE’s own reader', async () => {
+    const bytes = Buffer.from('%PDF-1.4 scanned by the office printer')
+    const client = makeClient({ 1: bytes })
+    const out = await stageImapAttachments(db, client, message(scan()), {
+      mailboxId: MAILBOX, messageId: MSG,
+    })
+
+    expect(client.calls.map(c => c.part)).toEqual(['1'])
+    expect(out.attachments).toHaveLength(1)
+    expect(out.attachments[0].Name).toBe('scan.pdf')
+    expect(marker(out.attachments[0], 0)).toEqual({
+      kind: 'staged', path: `inbound/${MSG}/0.pdf`, sizeBytes: bytes.length,
+    })
+    expect(objectKeys(db)).toEqual([`${BUCKET}/inbound/${MSG}/0.pdf`])
+  })
+})
+
+// ── E2: the walk is bounded ─────────────────────────────────────────────
+
+describe('attachmentParts — the walk is bounded', () => {
+  /** One multipart/mixed carrying `n` tiny attachment parts. */
+  const manyParts = (n) => mixed([
+    textBody,
+    ...Array.from({ length: n }, (_, i) => pdfPart({
+      part: String(i + 2),
+      size: 10,
+      dispositionParameters: { filename: `f${i}.pdf` },
+    })),
+  ])
+
+  it('🔴 stops enumerating at MAX_ATTACHMENT_PARTS and COUNTS the rest', () => {
+    // Unbounded, a message with a few thousand tiny parts inflates the
+    // forwarded JSON past Vercel's ~4.5 MB body cap. That is answered with a
+    // plain-text 413 BEFORE the route runs, and since the cursor only advances
+    // on a 2xx the poller re-polls the same UID forever — the mailbox never
+    // ingests another email again.
+    const { parts, overflow } = attachmentParts(manyParts(4000))
+    expect(parts).toHaveLength(MAX_ATTACHMENT_PARTS)
+    expect(overflow).toBe(4000 - MAX_ATTACHMENT_PARTS)
+    // 🔴 LOAD-BEARING, not decoration. The overflow entry carries no marker, so
+    // it is only ever RECORDED if its array position is past
+    // MAX_ATTACHMENTS_PER_MESSAGE — that is the route's `too_many` branch.
+    // Lower the walk bound under the per-message cap and the entry would
+    // instead reach storeOne(), read as `inline`, decode the empty Content to
+    // nothing and write no row: the excess would vanish in silence, which is
+    // the exact outcome this bound exists to prevent.
+    expect(MAX_ATTACHMENT_PARTS).toBeGreaterThan(MAX_ATTACHMENTS_PER_MESSAGE)
+  })
+
+  it('takes the FIRST parts, so the index is still stable across polls', () => {
+    const { parts } = attachmentParts(manyParts(MAX_ATTACHMENT_PARTS + 5))
+    expect(parts[0].filename).toBe('f0.pdf')
+    expect(parts[MAX_ATTACHMENT_PARTS - 1].filename).toBe(`f${MAX_ATTACHMENT_PARTS - 1}.pdf`)
+  })
+
+  it('does not fire on an ordinary message', () => {
+    expect(attachmentParts(manyParts(MAX_ATTACHMENT_PARTS)).overflow).toBe(0)
+    expect(attachmentParts(mixed([textBody, pdfPart()])).overflow).toBe(0)
+  })
+})
+
+describe('stageImapAttachments — past the walk bound', () => {
+  const manyParts = (n, filename = (i) => `f${i}.pdf`) => mixed([
+    textBody,
+    ...Array.from({ length: n }, (_, i) => pdfPart({
+      part: String(i + 2),
+      size: 10,
+      dispositionParameters: { filename: filename(i) },
+    })),
+  ])
+
+  it('🔴 files the message, bounded, with the excess VISIBLY accounted for', async () => {
+    const bytes = {}
+    for (let i = 0; i < 3000; i += 1) bytes[String(i + 2)] = Buffer.from('x')
+
+    const out = await stageImapAttachments(db, makeClient(bytes), message(manyParts(3000)), {
+      mailboxId: MAILBOX, messageId: MSG,
+    })
+
+    // Bounded: the enumerated parts, plus ONE entry that says there was more.
+    expect(out.attachments).toHaveLength(MAX_ATTACHMENT_PARTS + 1)
+
+    const tail = out.attachments[MAX_ATTACHMENT_PARTS]
+    // No marker — the route's own `too_many` branch fires on the ARRAY
+    // POSITION (which is past MAX_ATTACHMENTS_PER_MESSAGE by construction)
+    // before it ever consults one, and records a row from ContentLength.
+    expect(tail[STAGED_MARKER_KEY]).toBeUndefined()
+    expect(tail.Content).toBe('')
+    expect(tail.ContentLength).toBeGreaterThan(0)
+    // …and it NAMES the excess, so an operator can ask for a resend rather
+    // than never learning the files existed.
+    expect(tail.Name).toContain(String(3000 - MAX_ATTACHMENT_PARTS))
+    expect(out.skipped.at(-1)).toEqual({ name: tail.Name, reason: 'too_many' })
+    // 'too_many' is in mig 496's CHECK vocabulary; anything else fails the insert.
+    expect(['quota', 'too_large', 'too_many', 'rehost_failed', 'pruned'])
+      .toContain(out.skipped.at(-1).reason)
+
+    // Only the first MAX_ATTACHMENTS_PER_MESSAGE were ever downloaded.
+    expect(objectKeys(db)).toHaveLength(MAX_ATTACHMENTS_PER_MESSAGE)
+    expect(error.mock.calls.some(c => String(c[0]).includes('more parts than the walk'))).toBe(true)
+  })
+
+  it('🔴 keeps the forwarded payload far below Vercel’s ~4.5 MB body cap', async () => {
+    // THE PROPERTY THAT ACTUALLY MATTERS. Vercel answers a body over ~4.5 MB
+    // with a plain-text 413 BEFORE the route runs, and the cursor only advances
+    // on a 2xx — so an over-cap payload is not a dropped attachment, it is a
+    // mailbox that re-polls the same UID every five minutes and never ingests
+    // another email again.
+    const VERCEL_BODY_CAP = 4.5 * 1024 * 1024
+    const TOTAL = 20_000
+    // Filenames are the sender's, up to ATTACHMENT_FILENAME_MAX (200) each.
+    const tree = manyParts(TOTAL, (i) => `${String(i).padStart(6, '0')}-${'invoice'.repeat(27)}.pdf`)
+
+    const bytes = {}
+    for (let i = 0; i < MAX_ATTACHMENTS_PER_MESSAGE; i += 1) bytes[String(i + 2)] = Buffer.from('x')
+
+    const out = await stageImapAttachments(db, makeClient(bytes), message(tree), {
+      mailboxId: MAILBOX, messageId: MSG,
+    })
+
+    // The fixture really is over the cap unbounded — measured off a REAL entry
+    // this run produced, so the arithmetic cannot drift away from the code.
+    const perEntry = Buffer.byteLength(JSON.stringify(out.attachments[100]))
+    expect(perEntry * TOTAL).toBeGreaterThan(VERCEL_BODY_CAP)
+
+    const payloadBytes = Buffer.byteLength(JSON.stringify({ Attachments: out.attachments }))
+    expect(payloadBytes).toBeLessThan(VERCEL_BODY_CAP / 8)
+  })
+
+  it('adds nothing at all when the bound was not reached', async () => {
+    const out = await stageImapAttachments(db, makeClient({ 2: Buffer.from('x') }), message(mixed([textBody, pdfPart()])), {
+      mailboxId: MAILBOX, messageId: MSG,
+    })
+    expect(out.attachments).toHaveLength(1)
+    expect(out.skipped).toEqual([])
   })
 })
 

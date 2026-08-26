@@ -26,11 +26,23 @@
 //     matches it against active mailboxes. That, and only that, is why an IMAP
 //     message files itself into the right studio's queue with ZERO changes to
 //     the webhook route.
-//     ⚠️ Precedence is ToFull → CcFull → To → OriginalRecipient. A message
-//     addressed *To* a DIFFERENT mailbox of ours but delivered to this one
-//     resolves to the other one. That is the documented behaviour (§3.1), not
-//     a bug in this mapper — we emit the truth of the headers and let the
-//     existing precedence decide.
+//     🔴 Precedence is ToFull → CcFull → To → OriginalRecipient, so the header
+//     the SENDER wrote outranks the address the message was physically
+//     delivered to. That used to be documented here as "the existing route's
+//     behaviour, not a bug in this mapper". It was a bug, and a cross-tenant
+//     one (IMAP-ROUTE-FORGE.1): studio A connects hello@studioA.com, a stranger
+//     mails that address with a forged `To: accounts@studioB.com`, and the
+//     webhook resolves studio B — filing the ticket at B's location, staging
+//     the attachments there, contact-matching against B's contacts and pushing
+//     it to B's staff. Studio A never sees it at all, because the POST returned
+//     2xx and the poller's watermark advanced past it.
+//     THE PRODUCER KNOWS WHICH MAILBOX PHYSICALLY RECEIVED THE MESSAGE, and
+//     throwing that knowledge away was the whole defect. `opts.foreignAddresses`
+//     is that knowledge: the poller hands over every OTHER connected mailbox
+//     address in the estate, and dropFrom() removes them from ToFull/CcFull/To
+//     so resolveMailboxByRecipient can only ever land on the delivering
+//     mailbox. See dropForeignMailboxes() for why losing those entries from
+//     `to_emails`/`cc_emails` is the consistent outcome rather than a cost.
 //   • Headers — an array of { Name, Value }, because that is the shape
 //     getHeader() reads. The route pulls Message-ID, In-Reply-To and
 //     References out of it and that is how a reply threads onto an existing
@@ -74,6 +86,11 @@
 
 import { createHash } from 'node:crypto'
 import { sanitizeDbText } from '../db-safe-text'
+// normalizeEmail is the SAME function recipientEmails() normalises with, which
+// is what makes the foreign-address drop-set exact: an address is dropped here
+// if and only if it would have been collected there. A second, near-enough
+// normaliser would leave a gap for a forged header to walk through.
+import { normalizeEmail } from '../email-inbox'
 
 /**
  * How the poller must hand bodies to this mapper.
@@ -101,6 +118,65 @@ const HTML_KEYS = ['html', 'htmlBody']
  * real mail system produces.
  */
 const MAX_RFC_MESSAGE_ID_CHARS = 400
+
+/**
+ * ══ THE FORWARD BUDGET (IMAP-FORWARD-413.1) ═════════════════════════════
+ *
+ * Every cap below exists for one reason: A POST OVER VERCEL'S ~4.5 MB BODY
+ * LIMIT IS REJECTED AS A PLAIN-TEXT 413 BEFORE THE ROUTE RUNS. A 413 is not a
+ * 2xx and it is not the route's own 400, so the poller used to read it as
+ * "retry later" — and since the payload is deterministic, "later" meant
+ * forever. One crafted email killed a connected mailbox permanently: it
+ * retried the same message every tick, ingested nothing else ever again, and
+ * the cron heartbeat stayed green throughout.
+ *
+ * The bodies were already bounded (imap-poll's MAX_TEXT_BODY_CHARS /
+ * HTML_BODY_MAX_CHARS). Everything else on the payload was not, and all of it
+ * is attacker-suppliable: a message can carry a few thousand tiny attachment
+ * parts, a thousand recipients, a megabyte-long Subject or a References chain
+ * with no end. So each one is capped HERE, at the point of emission, rather
+ * than trusted to a downstream consumer — the route's own MAX_STORED_RECIPIENTS
+ * caps what it STORES, which is no help at all to a payload that never reaches
+ * it.
+ *
+ * The numbers:
+ *   • recipients — 50, matching MAX_STORED_RECIPIENTS in email-recipients.js.
+ *     Anything past what the route would store is weight on the wire for
+ *     nothing. Not imported, because these two caps are allowed to diverge:
+ *     this one is a transport bound, that one is a storage bound.
+ *   • attachments — 300, and deliberately NOT MAX_ATTACHMENTS_PER_MESSAGE (25).
+ *     Capping at 25 is the obvious move and it is WRONG: the route records
+ *     every entry past its own cap as a `too_many` row on purpose — "an
+ *     operator seeing '12 files not stored' can go and ask for them; a
+ *     silently truncated list looks like the member never sent them"
+ *     (email-attachments-server.js). Cutting the array at 25 here would delete
+ *     exactly that signal, which is a fix turning into a quieter version of the
+ *     bug. 300 sits just above what imap-attachments' walker can enumerate
+ *     (MAX_ATTACHMENT_PARTS 250 plus its overflow entry), so in practice this
+ *     never fires — it is a floor under a future walker change or a
+ *     hand-assembled caller, not the working cap. Each entry is bounded anyway:
+ *     safeAttachmentFilename caps a name at 200 characters and safeMimeType a
+ *     type at 100, so 300 of them is ~120 KB.
+ *   • addresses and display names — 320 each, RFC 5321's maximum path length.
+ *     A longer address is invalid, so normalizeEmail would reject it anyway.
+ *   • Subject — 2000. Real subjects are under 200 (RFC 5322 recommends 78 per
+ *     line); this is generous by an order of magnitude and still bounded.
+ *   • threading headers — 8000, about 130 message-ids, far past the deepest
+ *     real thread. Truncated at the last complete `<…>` so the tokenizer in
+ *     extractCandidateMessageIds never sees a dangling fragment.
+ *
+ * ⚠️ These are a FLOOR, not the guarantee. Bounding the fields still leaves the
+ * bodies, and a control-byte-heavy body inflates ~6x through JSON.stringify.
+ * The guarantee is enforceForwardBudget() in imap-poll.js, which measures the
+ * serialised bytes. Do not delete one because the other exists — this one keeps
+ * the trimmer from ever having to fire on ordinary mail.
+ */
+const MAX_PAYLOAD_RECIPIENTS = 50
+const MAX_PAYLOAD_ATTACHMENTS = 300
+const MAX_ADDRESS_CHARS = 320
+const MAX_DISPLAY_NAME_CHARS = 320
+const MAX_SUBJECT_CHARS = 2000
+const MAX_THREADING_HEADER_CHARS = 8000
 
 /**
  * 🔴 THE SYNTHETIC MessageID MUST MATCH /^[A-Za-z0-9_-]{1,64}$/. DO NOT
@@ -285,9 +361,9 @@ function toAddressEntry(entry) {
     if (angled) {
       const name = angled[1].trim().replace(/^"(.*)"$/, '$1').trim()
       const email = angled[2].trim()
-      return email ? { Email: email, Name: name || null } : null
+      return email ? boundedEntry(email, name) : null
     }
-    return { Email: trimmed, Name: null }
+    return boundedEntry(trimmed, '')
   }
   if (typeof entry !== 'object') return null
   const email = typeof entry.address === 'string' ? entry.address.trim() : ''
@@ -299,13 +375,107 @@ function toAddressEntry(entry) {
     // lesson senderEmail() learned in src/lib/email-inbox.js).
     return name ? toAddressEntry(name) : null
   }
-  return { Email: email, Name: name || null }
+  return boundedEntry(email, name)
+}
+
+/**
+ * One { Email, Name } pair with both halves inside the forward budget.
+ *
+ * Truncating an address past 320 characters cannot lose a real one — that is
+ * RFC 5321's maximum path length, so anything longer is already invalid and
+ * normalizeEmail refuses it downstream either way. A display name is free text
+ * and genuinely unbounded, which is exactly why it needs the same ceiling.
+ */
+function boundedEntry(email, name) {
+  const address = email.slice(0, MAX_ADDRESS_CHARS)
+  if (!address) return null
+  const display = name ? name.slice(0, MAX_DISPLAY_NAME_CHARS) : ''
+  return { Email: address, Name: display || null }
 }
 
 /** An imapflow envelope address array → [{ Email, Name }], junk dropped. */
 function toAddressList(list) {
   if (!Array.isArray(list)) return []
   return list.map(toAddressEntry).filter(Boolean)
+}
+
+/**
+ * 🔴 THE CROSS-TENANT GUARD (IMAP-ROUTE-FORGE.1).
+ *
+ * Remove every address that belongs to a DIFFERENT connected mailbox, so the
+ * only address of ours left anywhere on the payload is the one that physically
+ * received the message.
+ *
+ * It closes two defects at once, and they are the same defect seen from two
+ * sides:
+ *
+ *   • FORGERY. `To:` is written by the sender. Without this, a stranger mailing
+ *     studio A's connected address with `To: accounts@studioB.com` gets their
+ *     message filed at studio B — B's location, B's contacts, B's staff
+ *     notifications, B's attachment quota — while A, the studio the mail was
+ *     actually delivered to, never sees it. That is a cross-tenant write driven
+ *     by an unauthenticated header.
+ *   • DOUBLE-FILING. With sales@ and accounts@ both connected and a member
+ *     mailing `To: sales@, Cc: accounts@`, the accounts@ poll ALSO resolved
+ *     sales@ — so sales@ got two tickets and accounts@ got none. Mailbox
+ *     visibility is grant-gated, so a coach granted only accounts@ never saw
+ *     their own correspondence. After the drop, each poll files its own copy,
+ *     which is what syntheticMessageId's per-mailbox namespacing has always
+ *     said is intended.
+ *
+ * LOSING THOSE ENTRIES FROM `to_emails`/`cc_emails` IS THE CONSISTENT OUTCOME,
+ * not a cost. loadOwnAddresses() (src/app/api/email/tickets/_helpers.js) already
+ * strips every connected address out of a reply-all at SEND time — deliberately
+ * unscoped to location, for the same reason — so an address dropped here would
+ * have been dropped there anyway the moment anyone answered the ticket. The one
+ * address that must survive is this mailbox's own, and it survives twice over:
+ * it is never in the drop-set (see the filter below) and it is the payload's
+ * OriginalRecipient regardless.
+ *
+ * Dropping happens BEFORE the 50-recipient cap on purpose. The other order
+ * lets a hostile header pad the first fifty slots with our own addresses and
+ * push the real recipients off the end.
+ */
+function dropForeignMailboxes(entries, foreign) {
+  if (foreign.size === 0) return entries
+  return entries.filter(e => !foreign.has(normalizeEmail(e.Email) ?? ''))
+}
+
+/**
+ * The set of addresses dropForeignMailboxes() removes.
+ *
+ * `mailboxAddress` is subtracted here rather than at the call site so the
+ * caller may hand over the WHOLE estate's address list without having to
+ * remember to exclude the mailbox it is polling. A caller that forgets would
+ * otherwise strip the one address that routes the mail — a fix that quietly
+ * became the bug it replaced.
+ */
+function foreignAddressSet(foreignAddresses, mailboxAddress) {
+  const out = new Set()
+  if (!Array.isArray(foreignAddresses)) return out
+  const own = normalizeEmail(mailboxAddress)
+  for (const value of foreignAddresses) {
+    const normalized = normalizeEmail(value)
+    if (normalized && normalized !== own) out.add(normalized)
+  }
+  return out
+}
+
+/**
+ * A threading header bounded to the forward budget, cut at a token boundary.
+ *
+ * References and In-Reply-To are read by extractCandidateMessageIds(), which
+ * pulls `<…>` tokens out of the string. Slicing at an arbitrary character can
+ * land inside a token and leave `<half-an-i`, which is not a message-id anybody
+ * will ever match — so the cut moves back to the last complete `>`. When there
+ * is no complete token inside the budget the header is dropped entirely: a
+ * threading header nothing can be extracted from is weight, not information.
+ */
+function capThreadingHeader(value) {
+  if (typeof value !== 'string' || value.length <= MAX_THREADING_HEADER_CHARS) return value
+  const cut = value.slice(0, MAX_THREADING_HEADER_CHARS)
+  const lastClose = cut.lastIndexOf('>')
+  return lastClose > 0 ? cut.slice(0, lastClose + 1) : null
 }
 
 /** [{ Email, Name }] → the RFC display string a `To:`/`From:` header carries. */
@@ -398,13 +568,24 @@ export function syntheticMessageId(mailboxId, rfcMessageId) {
  *   becomes OriginalRecipient, which is what routes the mail
  * @param {string} opts.mailboxId  email_mailboxes.id — namespaces the MessageID
  * @param {Array} [opts.attachments]  Postmark-shaped Attachments entries, as
- *   produced by Phase 4's stageImapAttachments(). Passed through untouched.
+ *   produced by Phase 4's stageImapAttachments(). Capped at
+ *   MAX_PAYLOAD_ATTACHMENTS; otherwise passed through untouched.
+ * @param {string[]} [opts.foreignAddresses]  🔴 every OTHER connected mailbox
+ *   address in the estate. Dropped from ToFull/CcFull/To so a forged `To:`
+ *   cannot file this message into another tenant's inbox. The polling
+ *   mailbox's own address is subtracted from the set, so passing the whole
+ *   estate list is safe and is what the poller does. Defaults to none, which
+ *   is the pre-IMAP-ROUTE-FORGE.1 behaviour — a caller that omits it gets the
+ *   forgeable precedence back, so DO NOT omit it in a production path.
  * @returns {object} the payload. `MessageID` is null when the message has
  *   neither an RFC Message-ID nor a usable UID — the route answers 400 for
  *   that and the poller isolates it per-message (5.1), which is the honest
  *   outcome: without a stable id there is nothing to dedupe on.
  */
-export function toInboundPayload(msg, { mailboxAddress, mailboxId, attachments = [] } = {}) {
+export function toInboundPayload(
+  msg,
+  { mailboxAddress, mailboxId, attachments = [], foreignAddresses = [] } = {},
+) {
   const source = msg && typeof msg === 'object' ? msg : {}
   const envelope = source.envelope && typeof source.envelope === 'object' ? source.envelope : {}
   const headers = parseHeaderBlock(source.headers)
@@ -417,9 +598,11 @@ export function toInboundPayload(msg, { mailboxAddress, mailboxId, attachments =
   const rfcMessageId = safeRfcMessageId(
     headerValue(headers, MESSAGE_ID_HEADER) ?? envelope.messageId
   )
-  const inReplyTo = headerValue(headers, IN_REPLY_TO_HEADER)
-    ?? (typeof envelope.inReplyTo === 'string' ? envelope.inReplyTo.trim() || null : null)
-  const references = headerValue(headers, REFERENCES_HEADER)
+  const inReplyTo = capThreadingHeader(
+    headerValue(headers, IN_REPLY_TO_HEADER)
+      ?? (typeof envelope.inReplyTo === 'string' ? envelope.inReplyTo.trim() || null : null),
+  )
+  const references = capThreadingHeader(headerValue(headers, REFERENCES_HEADER))
 
   // Emit a header ONLY when there is a real value behind it. An empty
   // In-Reply-To would be written to email_inbox_messages.in_reply_to as '' —
@@ -450,9 +633,16 @@ export function toInboundPayload(msg, { mailboxAddress, mailboxId, attachments =
     ?? (uid ? `no-message-id.uid-${uid}.${envelopeDate ?? internalDate ?? 'nodate'}` : null)
 
   // ── Addresses ────────────────────────────────────────────────────
+  // 🔴 Drop first, cap second. See dropForeignMailboxes() for both halves of
+  // why — the drop is what stops a forged `To:` filing this message into
+  // another tenant's inbox, and doing it before the cap is what stops a padded
+  // header pushing the real recipients past the ceiling.
+  const foreign = foreignAddressSet(foreignAddresses, mailboxAddress)
   const fromEntry = toAddressList(envelope.from)[0] ?? null
-  const toEntries = toAddressList(envelope.to)
-  const ccEntries = toAddressList(envelope.cc)
+  const toEntries = dropForeignMailboxes(toAddressList(envelope.to), foreign)
+    .slice(0, MAX_PAYLOAD_RECIPIENTS)
+  const ccEntries = dropForeignMailboxes(toAddressList(envelope.cc), foreign)
+    .slice(0, MAX_PAYLOAD_RECIPIENTS)
 
   // ── Bodies ───────────────────────────────────────────────────────
   // TextBody defaults to '' and HtmlBody to null, matching how the route reads
@@ -481,7 +671,9 @@ export function toInboundPayload(msg, { mailboxAddress, mailboxId, attachments =
     // disagree with the first.
     CcFull: ccEntries,
 
-    Subject: typeof envelope.subject === 'string' ? envelope.subject : '',
+    Subject: typeof envelope.subject === 'string'
+      ? envelope.subject.slice(0, MAX_SUBJECT_CHARS)
+      : '',
     TextBody: textBody ?? '',
     HtmlBody: htmlBody ?? null,
 
@@ -499,6 +691,16 @@ export function toInboundPayload(msg, { mailboxAddress, mailboxId, attachments =
     OriginalRecipient: typeof mailboxAddress === 'string' ? mailboxAddress : '',
 
     Headers: outHeaders,
-    Attachments: Array.isArray(attachments) ? attachments : [],
+    // Bounded, not cut to the storage cap — see MAX_PAYLOAD_ATTACHMENTS for
+    // why cutting at 25 would delete the route's own "N files not stored"
+    // signal rather than protect anything.
+    // Sliced only when it is actually over the cap, so the ordinary case keeps
+    // passing the caller's own array through untouched (same idiom as the body
+    // truncation in imap-poll's attachBodies).
+    Attachments: Array.isArray(attachments)
+      ? (attachments.length > MAX_PAYLOAD_ATTACHMENTS
+        ? attachments.slice(0, MAX_PAYLOAD_ATTACHMENTS)
+        : attachments)
+      : [],
   }
 }

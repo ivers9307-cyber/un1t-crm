@@ -514,6 +514,32 @@ export function ticketDeliveryMeta(message) {
     }
   }
 
+  // MAILBOX-CONNECT.7 — SENT OVER THE MAILBOX'S OWN SMTP SERVER.
+  //
+  // Mirrors the branch of the same name in src/lib/ticket-display.js; this is
+  // one of the RULES the header above says must not diverge, and it was missed
+  // on the first pass (web said "Not tracked", mobile said nothing about the
+  // same message).
+  //
+  // A Postmark send always carries an API MessageID, and that id is the key
+  // every Delivery/Bounce/SpamComplaint event correlates on. An SMTP send has
+  // none — no provider event can ever arrive for it. That is a DIFFERENT fact
+  // from the NULL above, which means "we have not heard YET".
+  //
+  // Both halves of the predicate are load-bearing. Keying on the missing
+  // Postmark id alone would also match every historical row whose id was never
+  // captured and the degraded-sender path, and assert something false about how
+  // those were sent. Only the SMTP path writes rfc_message_id on an outbound
+  // row, so the pair distinguishes the three states cleanly.
+  if (!status && message.postmark_message_id == null && message.rfc_message_id != null) {
+    return {
+      status: null,
+      tone: 'quiet',
+      label: 'Not tracked',
+      detail: 'Sent from this mailbox’s own server, which does not report delivery back to the CRM.',
+    }
+  }
+
   // NULL / anything unrecognised — say nothing. See the block comment above.
   return null
 }

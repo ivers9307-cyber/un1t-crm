@@ -46,7 +46,18 @@ import {
   ticketParticipants, normalizeAddressList, replyMode, MAX_RECIPIENTS,
 } from '@/lib/email-recipients'
 
-const MAILBOX_COLUMNS = 'id, location_id, address, label, is_default, active'
+// MAILBOX-CONNECT.7 — `egress` ('postmark' | 'smtp', mig 571) rides along.
+// There is no select('*') on email_mailboxes anywhere in this repo, so a
+// column is invisible to the API until a named list asks for it, and this is
+// the list every ticket route's mailbox object comes from (loadTicketForUser
+// and loadSendingMailbox both resolve through loadVisibleMailboxes below).
+// sendTicketEmail reads `mailbox.egress` to choose its transport; without the
+// column it would read `undefined` on a connected mailbox and quietly keep
+// sending that customer's replies through Postmark — signed by a domain they
+// do not own, i.e. the exact DMARC failure the connector exists to remove, and
+// with no error anywhere to say so. It is not a secret: an enum naming which
+// way mail leaves, never a host, a username or a credential.
+const MAILBOX_COLUMNS = 'id, location_id, address, label, is_default, active, egress'
 
 // Both sets are tiny (a studio has a handful of addresses; a person a handful
 // of grants), but every .select() caps at 1,000 rows whatever the caller asks

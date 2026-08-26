@@ -27,11 +27,27 @@
 // "someone will add a second open() later and forget" is exactly how a
 // read-only guarantee dies.
 //
-// AND LOGOUT ALWAYS RUNS. An abandoned IMAP connection holds a server-side
-// session; Gmail caps simultaneous IMAP connections per account, and a poller
-// that leaks one per tick locks the operator out of their own mailbox within
-// the hour. `finally`, unconditionally, swallowing its own error — a failed
-// logout must never mask the real error from `fn`.
+// AND THE CONNECTION IS ALWAYS RELEASED. An abandoned IMAP connection holds a
+// server-side session; Gmail caps simultaneous IMAP connections per account,
+// and a poller that leaks one per tick locks the operator out of their own
+// mailbox within the hour.
+//
+// 🔴 THAT MEANS connect() IS INSIDE THE try, NOT IN FRONT OF IT. connect() is
+// where LOGIN happens, and imapflow does NOT close the socket when
+// authentication fails: startSession() rejects out of beginSession() with the
+// TCP connection still up and nothing scheduled to take it down (contrast the
+// transport failures — ECONNREFUSED, connection timeout, greeting timeout —
+// which all go through closeAfter()). A revoked app password fails at LOGIN on
+// every five-minute tick, forever, which is precisely the sustained-failure
+// case that exhausts the cap; with the connect outside the try the `finally`
+// never ran and each tick leaked one live session.
+//
+// The release is LOGOUT first (the graceful end, and the only one the server is
+// told about), then close() unconditionally behind it — because a logout can be
+// a no-op on a socket that never came up, or can itself fail on one that did,
+// and the thing that has to be true either way is that no socket is left
+// holding a slot. Both are swallowed: a failed release must never mask the real
+// error from `fn`.
 
 import { ImapFlow } from 'imapflow'
 
@@ -127,7 +143,8 @@ function safeError(err, auth) {
 }
 
 /**
- * Connect, open one folder READ-ONLY, run `fn`, and always log out.
+ * Connect, open one folder READ-ONLY, run `fn`, and always release the
+ * connection — on every path, including a connect that never authenticated.
  *
  * @param {{host: string, port?: number, secure?: boolean, auth: object}} config
  *   host/port/TLS from email_mailbox_credentials; `auth` straight from
@@ -154,8 +171,11 @@ function safeError(err, auth) {
 export async function withMailbox({ host, port, secure, auth }, folderPath, fn, deps = {}) {
   const createClient = deps.createClient || ((opts) => new ImapFlow(opts))
   const client = createClient(clientOptions({ host, port, secure, auth }))
-  await client.connect()
   try {
+    // 🔴 INSIDE the try. connect() is where LOGIN happens and a LOGIN failure
+    // leaves the socket up — see the header. Outside it, the `finally` below
+    // never ran for the one failure that repeats forever.
+    await client.connect()
     // 🔴 readOnly: true. Not negotiable, not configurable, not overridable
     // from the caller — see the header comment. imapflow's own default is
     // false, so omitting the option would silently issue SELECT instead of
@@ -163,10 +183,34 @@ export async function withMailbox({ host, port, secure, auth }, folderPath, fn, 
     const mailbox = await client.mailboxOpen(folderPath, { readOnly: true })
     return await fn(client, mailbox)
   } finally {
-    // Swallowed deliberately: a logout that fails after a successful poll must
-    // not turn a good tick into a failed one, and a logout that fails after
-    // `fn` threw must not replace the diagnosis with "connection closed".
-    await client.logout().catch(() => {})
+    await releaseConnection(client)
+  }
+}
+
+/**
+ * End the session, whatever state it is in. NEVER THROWS, never rejects.
+ *
+ * LOGOUT then close(), for the reasons in the header: LOGOUT is the graceful
+ * end and the only one the server hears about, but it is a no-op on a socket
+ * that never came up and it can fail on one that did — and what actually costs
+ * the operator their mailbox is a socket still holding a slot, not an
+ * un-greeted server. close() is imapflow's own forceful teardown: synchronous,
+ * idempotent, and it swallows internally.
+ *
+ * Both swallowed deliberately: a release that fails after a successful poll
+ * must not turn a good tick into a failed one, and one that fails after `fn`
+ * threw must not replace the diagnosis with "connection closed".
+ */
+async function releaseConnection(client) {
+  try {
+    await client.logout()
+  } catch {
+    // Deliberate — see above.
+  }
+  try {
+    client.close?.()
+  } catch {
+    // Deliberate — see above.
   }
 }
 

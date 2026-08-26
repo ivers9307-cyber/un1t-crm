@@ -156,20 +156,96 @@ describe('toInboundPayload — OriginalRecipient (the field that routes the mail
     expect(resolved.id).toBe(MAILBOX_ID)
   })
 
-  it('⚠️ pins the documented precedence: a To: naming ANOTHER of our mailboxes wins', () => {
-    // §3.1's known sharp edge, pinned rather than discovered in production.
-    // recipientEmails' order is ToFull → CcFull → To → OriginalRecipient, so a
-    // message addressed to stillorgan@ but DELIVERED to hatchstreet@ files
-    // into Stillorgan. That is the existing route's behaviour and the mapper
-    // does not fight it — it emits the truth of the headers.
+  it('🔴 a FORGED To: naming another studio cannot steal the message (IMAP-ROUTE-FORGE.1)', () => {
+    // THE CROSS-TENANT TEST. `To:` is written by whoever sent the mail, and
+    // recipientEmails' precedence is ToFull → CcFull → To → OriginalRecipient,
+    // so a stranger mailing hatchstreet@ with `To: stillorgan@un1t.com` used to
+    // resolve STILLORGAN: the ticket filed at Stillorgan's location, its
+    // attachments staged against Stillorgan, contact-matched against
+    // Stillorgan's contacts, pushed to Stillorgan's staff — while Hatch
+    // Street, the studio the message was actually delivered to, never saw it,
+    // because the POST answered 2xx and the poller's watermark advanced.
+    //
+    // This ran through the REAL route helpers, not a restatement of them.
     const mailboxes = [
       { id: MAILBOX_ID, location_id: 'loc-hatch', address: MAILBOX_ADDRESS, active: true },
       { id: 'still', location_id: 'loc-still', address: 'stillorgan@un1t.com', active: true },
     ]
-    const payload = map(fixture({
+    const forged = fixture({
       envelope: { to: [{ name: null, address: 'stillorgan@un1t.com' }] },
-    }))
-    expect(resolveMailboxByRecipient(mailboxes, recipientEmails(payload)).id).toBe('still')
+    })
+
+    const guarded = map(forged, { foreignAddresses: ['stillorgan@un1t.com'] })
+    expect(guarded.ToFull).toEqual([])
+    expect(guarded.To).toBe('')
+    expect(resolveMailboxByRecipient(mailboxes, recipientEmails(guarded)).id).toBe(MAILBOX_ID)
+
+    // And the defect itself, pinned: WITHOUT the estate list the precedence is
+    // forgeable, which is why the poller refuses to poll when it cannot read
+    // that list rather than falling back to this.
+    const unguarded = map(forged)
+    expect(resolveMailboxByRecipient(mailboxes, recipientEmails(unguarded)).id).toBe('still')
+  })
+
+  it('🔴 matches the drop-set case-insensitively and through display forms', () => {
+    // The comparison goes through normalizeEmail — the SAME function
+    // recipientEmails() collects with — so `STILLORGAN@UN1T.com` in a header
+    // cannot walk past a lower-cased drop-set.
+    const payload = map(fixture({
+      envelope: { to: [{ name: 'Stillorgan', address: '  STILLORGAN@UN1T.com ' }] },
+    }), { foreignAddresses: ['stillorgan@un1t.com'] })
+    expect(payload.ToFull).toEqual([])
+  })
+
+  it('🔴 drops a foreign mailbox off Cc too, so each mailbox files its OWN copy', () => {
+    // The second half of the same defect. With sales@ and accounts@ both
+    // connected and a member mailing `To: sales@, Cc: accounts@`, the
+    // accounts@ POLL also resolved sales@ — sales@ got two tickets, accounts@
+    // got none, and because mailbox visibility is grant-gated a coach granted
+    // only accounts@ never saw their own correspondence.
+    const accounts = 'accounts@un1t.com'
+    const payload = toInboundPayload(fixture({
+      envelope: {
+        to: [{ name: null, address: 'sales@un1t.com' }],
+        cc: [{ name: null, address: accounts }],
+      },
+    }), {
+      mailboxAddress: accounts,
+      mailboxId: MAILBOX_ID,
+      foreignAddresses: ['sales@un1t.com', accounts],
+    })
+
+    expect(payload.ToFull).toEqual([])
+    expect(payload.CcFull).toEqual([{ Email: accounts, Name: null }])
+    expect(payload.OriginalRecipient).toBe(accounts)
+    const mailboxes = [
+      { id: 'sales', location_id: 'loc-1', address: 'sales@un1t.com', active: true },
+      { id: 'accounts', location_id: 'loc-1', address: accounts, active: true },
+    ]
+    expect(resolveMailboxByRecipient(mailboxes, recipientEmails(payload)).id).toBe('accounts')
+  })
+
+  it('🔴 never drops the POLLING mailbox, even when handed the whole estate list', () => {
+    // The caller passes every active address in the estate and does not have
+    // to remember to subtract its own — a fix that quietly deleted the one
+    // address that routes the mail would be the bug it replaced.
+    const payload = map(fixture(), {
+      foreignAddresses: [MAILBOX_ADDRESS, 'stillorgan@un1t.com', MAILBOX_ADDRESS.toUpperCase()],
+    })
+    expect(payload.ToFull).toEqual([{ Email: MAILBOX_ADDRESS, Name: null }])
+    expect(payload.OriginalRecipient).toBe(MAILBOX_ADDRESS)
+  })
+
+  it('🔴 drops BEFORE capping, so a padded header cannot push the real recipients off the end', () => {
+    // The other order is a bypass: fifty of our own addresses in front of the
+    // real one, and the cap throws the real one away while the drop-set has
+    // nothing left to remove.
+    const padding = Array.from({ length: 60 }, () => ({ name: null, address: 'stillorgan@un1t.com' }))
+    const payload = map(fixture({
+      envelope: { to: [...padding, { name: null, address: 'member@example.com' }] },
+    }), { foreignAddresses: ['stillorgan@un1t.com'] })
+
+    expect(payload.ToFull).toEqual([{ Email: 'member@example.com', Name: null }])
   })
 })
 
@@ -590,5 +666,94 @@ describe('toInboundPayload — payload shape', () => {
 
   it('is deterministic — two calls on the same input agree', () => {
     expect(map(fixture())).toEqual(map(fixture()))
+  })
+})
+
+/* ─────────────────────── the forward budget (D4) ───────────────────────── */
+
+describe('toInboundPayload — the forward budget', () => {
+  // 🔴 IMAP-FORWARD-413.1. A POST over Vercel's ~4.5 MB limit is answered with
+  // a PLAIN-TEXT 413 raised BEFORE the route runs. The poller read that as
+  // "retry later", the payload was deterministic, and so "later" meant forever:
+  // one crafted email permanently killed a connected mailbox — it retried the
+  // same message every tick, ingested nothing else ever again, and the cron
+  // heartbeat stayed green throughout. Every field a stranger can inflate is
+  // capped here, at the point of emission.
+
+  it('🔴 caps ToFull and CcFull at 50, the route’s own MAX_STORED_RECIPIENTS', () => {
+    const many = (prefix) => Array.from({ length: 900 }, (_, i) => ({ name: null, address: `${prefix}${i}@x.com` }))
+    const p = map(fixture({ envelope: { to: many('to'), cc: many('cc') } }))
+    expect(p.ToFull).toHaveLength(50)
+    expect(p.CcFull).toHaveLength(50)
+    // The display string is derived from the same capped list, so it cannot
+    // reintroduce the weight through the back door.
+    expect(p.To.split(',')).toHaveLength(50)
+  })
+
+  it('bounds the Attachments array without cutting it to the STORAGE cap', () => {
+    // 🔴 The obvious cap here is MAX_ATTACHMENTS_PER_MESSAGE (25) and it would
+    // be a regression: the route records every entry past its own cap as a
+    // `too_many` row deliberately, so an operator sees "12 files not stored"
+    // instead of a list that looks like the member never sent them. The bound
+    // is above what the attachment walker can even enumerate, so it is a floor
+    // under a future change rather than the working cap.
+    const attachments = Array.from({ length: 3000 }, (_, i) => ({
+      Name: `f${i}.txt`, ContentType: 'text/plain', ContentLength: 1,
+    }))
+    expect(map(fixture(), { attachments }).Attachments).toHaveLength(300)
+    // A realistic over-cap message still carries every `too_many` entry.
+    expect(map(fixture(), { attachments: attachments.slice(0, 40) }).Attachments).toHaveLength(40)
+  })
+
+  it('caps the Subject, and leaves an ordinary one untouched', () => {
+    expect(map(fixture({ envelope: { subject: 'x'.repeat(50_000) } })).Subject).toHaveLength(2000)
+    expect(map(fixture()).Subject).toBe('Trial class question')
+  })
+
+  it('🔴 caps References at a TOKEN boundary, so nothing threads on half an id', () => {
+    // extractCandidateMessageIds pulls `<…>` tokens out of the string. A cut
+    // landing inside one leaves `<half-an-i`, which no reply will ever match —
+    // a threading failure dressed up as a threading header.
+    const ids = Array.from({ length: 400 }, (_, i) => `<ref${i}@mail.example.com>`).join(' ')
+    const capped = map({
+      ...fixture(),
+      headers: headerBuffer(['Message-ID: <a@x.com>', `References: ${ids}`]),
+    })
+    const references = capped.Headers.find(h => h.Name === 'References').Value
+    expect(references.length).toBeLessThanOrEqual(8000)
+    expect(references.endsWith('>')).toBe(true)
+    // Every surviving token is whole, and they are still the FIRST ones — the
+    // root of the thread is what threading actually needs.
+    expect(references.startsWith('<ref0@mail.example.com>')).toBe(true)
+    expect(extractCandidateMessageIds(capped.Headers).length).toBeGreaterThan(50)
+  })
+
+  it('caps an address and a display name at RFC 5321’s maximum path length', () => {
+    const p = map(fixture({
+      envelope: { from: [{ name: 'n'.repeat(9000), address: `${'a'.repeat(9000)}@x.com` }] },
+    }))
+    expect(p.FromFull.Email).toHaveLength(320)
+    expect(p.FromFull.Name).toHaveLength(320)
+  })
+
+  it('🔴 a maximally hostile message still serialises to a fraction of the 4.5 MB limit', () => {
+    // The caps as a whole, measured the way the platform measures them: bytes
+    // on the wire. Bodies are excluded because imap-poll bounds those (and
+    // enforceForwardBudget measures the total); this is the header half.
+    const hostile = fixture({
+      envelope: {
+        subject: 'x'.repeat(200_000),
+        to: Array.from({ length: 5000 }, (_, i) => ({ name: 'n'.repeat(400), address: `t${i}@x.com` })),
+        cc: Array.from({ length: 5000 }, (_, i) => ({ name: 'n'.repeat(400), address: `c${i}@x.com` })),
+      },
+      headers: headerBuffer([
+        'Message-ID: <a@x.com>',
+        `References: ${Array.from({ length: 5000 }, (_, i) => `<r${i}@x.com>`).join(' ')}`,
+      ]),
+      text: '',
+    })
+    const attachments = Array.from({ length: 5000 }, (_, i) => ({ Name: `${'f'.repeat(200)}${i}.txt`, ContentType: 'text/plain' }))
+    const bytes = Buffer.byteLength(JSON.stringify(map(hostile, { attachments })), 'utf8')
+    expect(bytes).toBeLessThan(200_000)
   })
 })

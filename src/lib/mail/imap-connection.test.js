@@ -43,6 +43,11 @@ function fakeClient({ failAt = null, mailbox = {} } = {}) {
       if (failAt === 'logout') throw new Error('connection already closed')
       return true
     },
+    // imapflow's forceful teardown. Recorded because it is the half of the
+    // release guarantee that still holds when LOGOUT cannot run or fails.
+    close() {
+      calls.push(['close'])
+    },
     // Never expected to be called — a write would break the read-only posture.
     async messageFlagsAdd() { calls.push(['messageFlagsAdd']); return true },
     async messageFlagsSet() { calls.push(['messageFlagsSet']); return true },
@@ -75,7 +80,7 @@ describe('withMailbox', () => {
     const { deps } = seam(client)
     return withMailbox(CONFIG, 'INBOX', async () => 'result', deps).then((out) => {
       expect(out).toBe('result')
-      expect(client.calls.map(c => c[0])).toEqual(['connect', 'mailboxOpen', 'logout'])
+      expect(client.calls.map(c => c[0])).toEqual(['connect', 'mailboxOpen', 'logout', 'close'])
       expect(client.calls[1]).toEqual(['mailboxOpen', 'INBOX', { readOnly: true }])
     })
   })
@@ -108,7 +113,7 @@ describe('withMailbox', () => {
     const client = fakeClient({ failAt: 'open' })
     const { deps } = seam(client)
     await expect(withMailbox(CONFIG, 'INBOX', async () => true, deps)).rejects.toThrow(/Mailbox does not exist/)
-    expect(client.calls.map(c => c[0])).toEqual(['connect', 'mailboxOpen', 'logout'])
+    expect(client.calls.map(c => c[0])).toEqual(['connect', 'mailboxOpen', 'logout', 'close'])
   })
 
   it('a failing logout does not mask a successful poll', async () => {
@@ -128,11 +133,62 @@ describe('withMailbox', () => {
     ).rejects.toThrow('the real problem')
   })
 
-  it('does not log out when connect itself fails (there is no session to end)', async () => {
+  it('🔴 RELEASES THE CONNECTION when connect() fails at LOGIN', async () => {
+    // The case this file's header is actually worried about. connect() is
+    // where LOGIN happens, and imapflow does NOT close the socket when
+    // authentication fails — it rejects out of beginSession() with the TCP
+    // connection still up. A revoked Gmail app password fails there on every
+    // five-minute tick, forever, so a connect outside the try/finally leaked
+    // one live session per tick straight into Gmail's per-account connection
+    // cap and locked the operator out of their own mailbox.
+    const client = fakeClient()
+    client.connect = async () => {
+      client.calls.push(['connect'])
+      const err = new Error('Invalid credentials (Failure)')
+      err.authenticationFailed = true
+      throw err
+    }
+    const { deps } = seam(client)
+    await expect(withMailbox(CONFIG, 'INBOX', async () => true, deps))
+      .rejects.toThrow('Invalid credentials (Failure)')
+    expect(client.calls.map(c => c[0])).toEqual(['connect', 'logout', 'close'])
+  })
+
+  it('🔴 releases it on a transport failure too, and never opens the folder', async () => {
     const client = fakeClient({ failAt: 'connect' })
     const { deps } = seam(client)
     await expect(withMailbox(CONFIG, 'INBOX', async () => true, deps)).rejects.toThrow('ECONNREFUSED')
-    expect(client.calls.map(c => c[0])).toEqual(['connect'])
+    // No session to log out of — imapflow has already torn the socket down —
+    // but the attempt is cheap and the close() behind it is what guarantees it.
+    expect(client.calls.map(c => c[0])).not.toContain('mailboxOpen')
+    expect(client.calls.map(c => c[0])).toContain('close')
+  })
+
+  it('🔴 closes even when LOGOUT itself throws — the socket is what leaks', async () => {
+    // A logout that fails on a live socket used to leave that socket holding a
+    // slot against the connection cap with nothing to reclaim it.
+    const client = fakeClient({ failAt: 'logout' })
+    const { deps } = seam(client)
+    await withMailbox(CONFIG, 'INBOX', async () => 'ok', deps)
+    expect(client.calls.map(c => c[0])).toEqual(['connect', 'mailboxOpen', 'logout', 'close'])
+  })
+
+  it('🔴 the release path is never the thing that throws', async () => {
+    // withMailbox is on the path to POSTing a message a member is waiting on an
+    // answer to. Whatever the client turns out to be — an ImapFlow that closed
+    // itself, a future test double, a mock with half the surface — tearing the
+    // connection down must not manufacture a failure the poller then records as
+    // `connect_failed` against a mailbox that polled perfectly.
+    const bare = { async connect() {}, async mailboxOpen() { return {} } }
+    await expect(
+      withMailbox(CONFIG, 'INBOX', async () => 'ok', { createClient: () => bare })
+    ).resolves.toBe('ok')
+
+    // …and it still surfaces fn's own error rather than the release's.
+    await expect(
+      withMailbox(CONFIG, 'INBOX', async () => { throw new Error('the real problem') },
+        { createClient: () => bare })
+    ).rejects.toThrow('the real problem')
   })
 
   it('never writes a flag, moves or deletes anything', async () => {
@@ -273,6 +329,19 @@ describe('verifyConnection', () => {
     const { deps } = seam(client)
     await verifyConnection(CONFIG, 'INBOX', deps)
     expect(client.calls.map(c => c[0])).toContain('logout')
+  })
+
+  it('🔴 releases the connection when the operator typed a bad password', async () => {
+    // "Test connection" is the single most likely place to fail at LOGIN, and
+    // an operator retrying it a dozen times must not spend a dozen slots.
+    const client = fakeClient()
+    client.connect = async () => {
+      client.calls.push(['connect'])
+      throw new Error('Invalid credentials (Failure)')
+    }
+    const { deps } = seam(client)
+    expect((await verifyConnection(CONFIG, 'INBOX', deps)).ok).toBe(false)
+    expect(client.calls.map(c => c[0])).toContain('close')
   })
 })
 

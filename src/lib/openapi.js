@@ -1730,6 +1730,75 @@ registry.registerPath({
   },
 })
 
+// MAILBOX-CONNECT.6 — the IMAP/SMTP connection on one account.
+//
+// The secret is WRITE-ONLY across all three verbs: no response, log or audit
+// row ever carries `secret_ciphertext` or an `oauth_*` column, and the GET
+// returns no masked hint either — a `••••abcd` tail would leak the last four
+// characters of a live app password to every owner-shaped session. The row's
+// existence is the "leave blank to keep it" signal.
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/email/mailboxes/{mailboxId}/connection',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Connection state for one email account',
+  description: "Returns { connection, ingress, egress, folders } — host/port/username/provider plus the per-folder poll cursors (last_ok_at, last_error, consecutive_failures) that say whether receiving actually works. NEVER returns the stored secret in any form, masked or otherwise. Master or owner-at-location only; the same gate as mailbox grants, because whoever may grant access to a mailbox is exactly whoever may connect one.",
+  request: { params: z.object({ id: uuidLike, mailboxId: uuidLike }) },
+  responses: {
+    200: { description: '{ connection, ingress, egress, folders }' },
+    403: { description: 'Not master/owner at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such mailbox at this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/email/mailboxes/{mailboxId}/connection',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Connect an email account over IMAP (and optionally SMTP)',
+  description: "Verify-before-persist: the IMAP login is attempted live, and the SMTP login too when an outgoing server is supplied, BOTH refusing with nothing written. An inbox that cannot authenticate is worse than no inbox — it sits there failing silently while the card claims it receives. On success the credential is sealed with AES-256-GCM, the mailbox flips to ingress=imap, and the poll cursor's failure state (consecutive_failures / paused_until / last_error) is cleared so the next tick polls — without that, a freshly verified password would sit behind an auth backoff for up to 24 hours while the panel said Connected. egress FOLLOWS the outgoing server field (smtp when supplied, postmark when absent or cleared), because that optional field is itself the opt-in for replies leaving as this address. The UID cursor is reset ONLY when the account identity changed (username or imap_host). Omit `password` to keep the stored one. Master or owner-at-location only. This handler DIALS AN OPERATOR-SUPPLIED HOST from inside the function, so it is rate limited and the host and port are constrained — see the field notes.",
+  request: {
+    params: z.object({ id: uuidLike, mailboxId: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      provider: z.enum(['gmail', 'microsoft', 'custom']),
+      username: z.string(),
+      password: z.string().optional().openapi({ description: 'Omit to keep the stored secret. Never returned by any endpoint, masked or otherwise.' }),
+      imap_host: z.string().openapi({ description: 'Must resolve to a PUBLIC address. Reserved and internal names, single-label names, and any host resolving to loopback, RFC1918, link-local (incl. 169.254.169.254), CGNAT, or their IPv6 equivalents and IPv4-embedding forms are refused before any socket is opened.' }),
+      imap_port: z.union([z.literal(143), z.literal(993)]).optional().openapi({ description: '993 (implicit TLS) or 143 (STARTTLS). No other port is accepted.' }),
+      imap_secure: z.boolean().optional(),
+      smtp_host: z.string().nullable().optional().openapi({ description: 'Optional, and it IS the opt-in for egress=smtp. Same public-address rule as imap_host.' }),
+      smtp_port: z.union([z.literal(465), z.literal(587), z.literal(2525)]).nullable().optional().openapi({ description: '465 (implicit TLS), 587 (STARTTLS) or 2525. Port 25 is deliberately excluded — it is relay rather than submission, and the most useful port for probing an internal network.' }),
+      smtp_secure: z.boolean().optional(),
+      sent_folder: z.string().nullable().optional(),
+    }).openapi('EmailMailboxConnectionSet') } } },
+  },
+  responses: {
+    200: { description: '{ connection, ingress, egress, verified }' },
+    400: { description: 'Login failed, or the host/port is not dialable — nothing was stored. The message is a fixed category (auth / TLS / could-not-connect); the remote server’s own bytes are deliberately NOT echoed, since that would make this an SSRF probe with a response oracle.', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not master/owner at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such mailbox at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Too many verification attempts (20 per 15 minutes per user). The budget is spent immediately before the dial, so a refused host or a missing password does not consume it.', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'MAILBOX_SECRET_KEY is not configured — refused before any write rather than storing a credential that cannot be sealed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/locations/{id}/email/mailboxes/{mailboxId}/connection',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Disconnect an email account',
+  description: 'Drops the stored credential, returns the mailbox to ingress=postmark / egress=postmark, and deletes the poll cursors. The cursor goes deliberately: a watermark belongs to the login it was read from, so reconnecting a different account behind a stale last_uid would skip every message below it. Cold start ingests nothing, so dropping it costs nothing. Master or owner-at-location only.',
+  request: { params: z.object({ id: uuidLike, mailboxId: uuidLike }) },
+  responses: {
+    200: { description: '{ changed, connection: null, ingress, egress }' },
+    403: { description: 'Not master/owner at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such mailbox at this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/webhooks/sequence/{token}',

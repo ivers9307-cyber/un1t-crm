@@ -208,6 +208,7 @@
     { "path": "/api/cron/fleet-health", "schedule": "*/5 * * * *" },
     { "path": "/api/cron/attribution-health", "schedule": "45 21 * * *" },
     { "path": "/api/cron/zoom-contact-sync", "schedule": "30 4 * * *" },
-    { "path": "/api/cron/repeat-bounce-sweep", "schedule": "45 5 * * *" }
+    { "path": "/api/cron/repeat-bounce-sweep", "schedule": "45 5 * * *" },
+    { "path": "/api/cron/poll-imap-mailboxes", "schedule": "*/5 * * * *" }
   ]
 }

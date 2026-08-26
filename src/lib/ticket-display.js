@@ -382,6 +382,48 @@ export function deliveryMeta(message) {
     }
   }
 
+  // MAILBOX-CONNECT.7 — SENT OVER THE MAILBOX'S OWN SMTP SERVER.
+  //
+  // A Postmark send always carries an API MessageID, and that id is the
+  // correlation key every Delivery/Bounce/SpamComplaint event arrives on. An
+  // SMTP send has none — sendViaSmtp returns `messageId: null` deliberately —
+  // because Google delivered the mail and will never call our webhook about it.
+  //
+  // So the two NULL states are NOT the same fact, and mig 498's block comment
+  // is careful about exactly this: its NULL means "we sent it and we have heard
+  // nothing", which carries an implicit "yet". Here there is no yet. Leaving
+  // both silent would render a permanently unanswerable row identically to one
+  // whose event is still in flight, and the difference is what an operator
+  // needs when a member says they never received a reply.
+  //
+  // Quiet, not warn: this is the normal and expected state of every reply from
+  // a connected mailbox, not a fault. It says what we know and does not imply
+  // a problem.
+  //
+  // 🔴 THE PREDICATE NEEDS BOTH HALVES, and the second one is why. Keying on a
+  // missing postmark_message_id ALONE was wrong (caught by audit): it also
+  // matches every historical outbound row whose Postmark id was never captured,
+  // and the degraded plannedFroms path — and it would then assert something
+  // FALSE about how those messages were sent. Inventing history is worse than
+  // saying nothing, which is what the block comment above this function is
+  // about.
+  //
+  // The three states are distinguishable without a new column:
+  //   postmark id set                  → Postmark; an event may still arrive
+  //   both null                        → unknown provenance; say nothing
+  //   rfc id set, postmark id null     → SMTP; nothing can EVER arrive
+  // Only the SMTP send writes rfc_message_id on an outbound row — sendEmail
+  // does not report the RFC id, so the Postmark path leaves it NULL. That
+  // asymmetry is not incidental; it is what makes this readable.
+  if (!status && message.postmark_message_id == null && message.rfc_message_id != null) {
+    return {
+      status: null,
+      tone: 'quiet',
+      label: 'Not tracked',
+      detail: 'Sent from this mailbox’s own server, which does not report delivery back to the CRM.',
+    }
+  }
+
   // NULL / anything unrecognised — say nothing. See the block comment above.
   return null
 }

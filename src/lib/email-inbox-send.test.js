@@ -17,6 +17,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('./tenant-email', () => ({ resolveEmailSender: vi.fn() }))
 vi.mock('./supabase', () => ({ createServerClient: vi.fn(() => ({ __service: true })) }))
+// MAILBOX-CONNECT.7 — the SMTP transport is MOCKED here, and only here.
+// sendTicketEmail calls sendViaSmtp with production arguments and no test seam
+// (deliberately: the seam belongs to the module that owns the socket, not to
+// the branch that chooses it), so a mock is the only way to ask the questions
+// this file is for — WHICH transport ran, with WHAT, and whether the other one
+// was touched. What sendViaSmtp then does with a socket is pinned against a
+// fake transporter in src/lib/mail/smtp-send.test.js, including the two rules
+// that matter most: the From never falls back, and the password never reaches
+// a returned error.
+vi.mock('./mail/smtp-send', () => ({ sendViaSmtp: vi.fn() }))
 
 import {
   sendTicketEmail,
@@ -32,6 +42,7 @@ import {
 } from './email-inbox-send.js'
 import { consentFieldForStream } from './postmark.js'
 import { resolveEmailSender } from './tenant-email.js'
+import { sendViaSmtp } from './mail/smtp-send.js'
 
 const INBOX_TOKEN = 'ticketing-server-token'
 const MARKETING_TOKEN = 'marketing-server-token'
@@ -532,5 +543,232 @@ describe('attachments ride the ticketing server, not the marketing one', () => {
     const res = await sendTicketEmail({ ...SEND, mailboxAddress: HATCH, attachments: [FILE] })
     expect(res).toMatchObject({ ok: false, reason: 'not_configured' })
     expect(fetchSpy).not.toHaveBeenCalled()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────
+// MAILBOX-CONNECT.7 — TWO TRANSPORTS, AND THE OLD ONE IS UNTOUCHED.
+//
+// A mailbox connected over IMAP/SMTP sends its replies through its own
+// provider rather than through Postmark, because Postmark cannot DKIM-sign a
+// domain the business does not control. `email_mailboxes.egress` (mig 571) is
+// the switch and sendTicketEmail branches on it in its first statement.
+//
+// THE FIRST GROUP IS THE LOAD-BEARING ONE. Three routes call this function
+// with no `mailbox` at all, and none of them knows a second transport exists.
+// "Nothing changed" is not something to take on trust from a diff — a branch
+// added above resolveInboxServerToken() is one typo away from swallowing every
+// support reply in the estate, and it would swallow them silently.
+describe('transport selection', () => {
+  const SMTP_MAILBOX = { id: 'mb-1', address: 'hello@theirgym.ie', egress: 'smtp' }
+  const POSTMARK_MAILBOX = { id: 'mb-2', address: HATCH, egress: 'postmark' }
+
+  const SMTP_OK = Object.freeze({
+    ok: true,
+    result: { messageId: null, rfcMessageId: '<x@theirgym.ie>', accepted: ['member@example.com'] },
+    fromEmail: 'hello@theirgym.ie',
+    degraded: null,
+    deliveryTracked: false,
+  })
+
+  describe('no `mailbox` — byte-identical to before this task', () => {
+    it('sends through Postmark and never touches the SMTP path', async () => {
+      fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
+      const res = await sendTicketEmail({ ...SEND, mailboxAddress: HATCH })
+
+      expect(res.ok).toBe(true)
+      expect(sendViaSmtp).not.toHaveBeenCalled()
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      expect(tokenOf(fetchSpy.mock.calls[0])).toBe(INBOX_TOKEN)
+      expect(bodyOf(fetchSpy.mock.calls[0]).From).toBe(HATCH)
+      expect(bodyOf(fetchSpy.mock.calls[0]).MessageStream).toBe(DEFAULT_INBOX_MESSAGE_STREAM)
+    })
+
+    it('returns EXACTLY the four keys the routes already destructure', async () => {
+      // Not toMatchObject: an extra key is precisely the kind of change that
+      // looks harmless and then diverges what three routes write to the
+      // database. The SMTP branch's `deliveryTracked` must stay on its own
+      // branch.
+      fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
+      const res = await sendTicketEmail({ ...SEND, mailboxAddress: HATCH })
+      expect(Object.keys(res).sort()).toEqual(['degraded', 'fromEmail', 'ok', 'result'])
+      expect(res).not.toHaveProperty('deliveryTracked')
+    })
+
+    it('still refuses when the ticketing server token is unset', async () => {
+      delete process.env.POSTMARK_EMAIL_INBOX_SERVER_TOKEN
+      fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
+      const res = await sendTicketEmail({ ...SEND, mailboxAddress: HATCH })
+      expect(res).toMatchObject({ ok: false, reason: 'not_configured' })
+      expect(sendViaSmtp).not.toHaveBeenCalled()
+    })
+
+    it('still degrades the From on a sender-signature rejection', async () => {
+      // The Postmark path's two-attempt plan is untouched — it is correct
+      // THERE, and it is the thing the SMTP path must never inherit.
+      fetchSpy = vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(signatureRejection())
+        .mockResolvedValueOnce(okResponse())
+      const res = await sendTicketEmail({ ...SEND, mailboxAddress: STILLORGAN })
+      expect(res).toMatchObject({ ok: true, fromEmail: GLOBAL_FROM, degraded: 'unverified_sender' })
+      expect(sendViaSmtp).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('`egress: postmark` — the default column value, same path again', () => {
+    it('takes the Postmark path exactly as a missing mailbox does', async () => {
+      // mig 571 adds the column NOT NULL DEFAULT 'postmark', so every mailbox
+      // in the estate arrives here carrying this value the moment the settings
+      // helper starts selecting it. It must be a no-op.
+      fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
+      const res = await sendTicketEmail({ ...SEND, mailboxAddress: HATCH, mailbox: POSTMARK_MAILBOX })
+
+      expect(res.ok).toBe(true)
+      expect(sendViaSmtp).not.toHaveBeenCalled()
+      expect(bodyOf(fetchSpy.mock.calls[0]).From).toBe(HATCH)
+    })
+
+    it('an unrecognised egress value is treated as Postmark, not as a refusal', async () => {
+      // Fail SAFE, not closed: a row written by a newer deploy must not stop a
+      // support reply going out. The CHECK constraint is the place that
+      // refuses a bad value, at write time, where an operator can see it.
+      fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
+      const res = await sendTicketEmail({
+        ...SEND, mailboxAddress: HATCH, mailbox: { ...POSTMARK_MAILBOX, egress: 'carrier-pigeon' },
+      })
+      expect(res.ok).toBe(true)
+      expect(sendViaSmtp).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('`egress: smtp` — the connected mailbox sends as itself', () => {
+    it('routes to SMTP and never calls Postmark', async () => {
+      sendViaSmtp.mockResolvedValue(SMTP_OK)
+      fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
+
+      const res = await sendTicketEmail({ ...SEND, mailboxAddress: SMTP_MAILBOX.address, mailbox: SMTP_MAILBOX })
+
+      expect(res).toEqual(SMTP_OK)
+      expect(sendViaSmtp).toHaveBeenCalledTimes(1)
+      expect(fetchSpy).not.toHaveBeenCalled()
+    })
+
+    it('branches AHEAD of the Postmark server token, so an unconfigured one is irrelevant', async () => {
+      // The whole point of putting the branch first. An SMTP send has nothing
+      // to do with our Postmark account, and refusing it because OUR ticketing
+      // server is unconfigured would block a tenant on a fact about us.
+      delete process.env.POSTMARK_EMAIL_INBOX_SERVER_TOKEN
+      sendViaSmtp.mockResolvedValue(SMTP_OK)
+      const res = await sendTicketEmail({ ...SEND, mailbox: SMTP_MAILBOX })
+      expect(res.ok).toBe(true)
+    })
+
+    it('carries the message, the mailbox, the recipients and the attachments', async () => {
+      sendViaSmtp.mockResolvedValue(SMTP_OK)
+      const FILE = { Name: 'invoice.pdf', Content: 'aGVsbG8=', ContentType: 'application/pdf' }
+      await sendTicketEmail({
+        ...SEND,
+        mailbox: SMTP_MAILBOX,
+        cc: 'colleague@example.com',
+        bcc: 'archive@example.com',
+        headers: [{ Name: 'In-Reply-To', Value: '<inbound-1@mail.example.com>' }],
+        attachments: [FILE],
+      })
+
+      expect(sendViaSmtp).toHaveBeenCalledWith(expect.objectContaining({
+        mailbox: SMTP_MAILBOX,
+        to: SEND.to,
+        cc: 'colleague@example.com',
+        bcc: 'archive@example.com',
+        subject: SEND.subject,
+        htmlBody: SEND.htmlBody,
+        textBody: SEND.textBody,
+        headers: [{ Name: 'In-Reply-To', Value: '<inbound-1@mail.example.com>' }],
+        attachments: [FILE],
+      }))
+    })
+
+    it('does NOT forward `tag` or `metadata` — both are Postmark-only', async () => {
+      // `metadata` carries POSTMARK-RACE.1's send marker, which exists so a
+      // Delivery webhook can be matched to a row that did not exist yet. There
+      // are no webhooks on this path, so forwarding it would be bookkeeping
+      // for events that never happen.
+      sendViaSmtp.mockResolvedValue(SMTP_OK)
+      await sendTicketEmail({ ...SEND, mailbox: SMTP_MAILBOX })
+
+      const args = sendViaSmtp.mock.calls[0][0]
+      expect(args).not.toHaveProperty('tag')
+      expect(args).not.toHaveProperty('metadata')
+    })
+
+    it('🔴 the From never falls back — plannedFroms is not consulted at all', async () => {
+      // On SMTP there is no "unverified sender" refusal to catch: the provider
+      // sends as the authenticated account, so a fallback would change the
+      // address the customer sees rather than rescuing a refused send. The
+      // observable form of "plannedFroms did not run" is that nothing about
+      // the fallback address reaches the SMTP call and no Postmark attempt is
+      // made — even for the address Postmark is known to refuse.
+      process.env.POSTMARK_FROM_EMAIL = GLOBAL_FROM
+      sendViaSmtp.mockResolvedValue(SMTP_OK)
+      fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(signatureRejection())
+
+      const res = await sendTicketEmail({
+        ...SEND, mailboxAddress: STILLORGAN, mailbox: { ...SMTP_MAILBOX, address: STILLORGAN },
+      })
+
+      expect(res.ok).toBe(true)
+      expect(fetchSpy).not.toHaveBeenCalled()
+      const args = sendViaSmtp.mock.calls[0][0]
+      expect(JSON.stringify(args)).not.toContain('un1t.ie')
+      expect(args).not.toHaveProperty('mailboxAddress')
+      expect(args).not.toHaveProperty('from')
+    })
+
+    it('an SMTP failure is returned as `send_failed`, not thrown and not retried on Postmark', async () => {
+      sendViaSmtp.mockResolvedValue({
+        ok: false, reason: 'send_failed', error: 'Invalid login: 535-5.7.8 [redacted]',
+      })
+      fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
+
+      const res = await sendTicketEmail({ ...SEND, mailbox: SMTP_MAILBOX })
+
+      expect(res).toEqual({
+        ok: false, reason: 'send_failed', error: 'Invalid login: 535-5.7.8 [redacted]',
+      })
+      // Falling back to Postmark on an SMTP failure would send the reply from
+      // the wrong domain, unsigned — the exact outcome the connector removes.
+      expect(fetchSpy).not.toHaveBeenCalled()
+    })
+
+    it('an unconfigured mailbox is `not_configured`, so the route still answers 503', async () => {
+      sendViaSmtp.mockResolvedValue({
+        ok: false, reason: 'not_configured', error: 'no mail account is connected to it',
+      })
+      const res = await sendTicketEmail({ ...SEND, mailbox: SMTP_MAILBOX })
+      expect(res.reason).toBe('not_configured')
+    })
+
+    it('carries the credential-free error through verbatim', async () => {
+      // The redaction itself is smtp-send.js's guarantee and is tested there.
+      // What is pinned HERE is that this branch does not decorate, re-wrap or
+      // re-log the string on its way out — a second copy of an error is a
+      // second place for a credential to end up.
+      const error = 'Invalid login: 535-5.7.8 Username and Password not accepted'
+      sendViaSmtp.mockResolvedValue({ ok: false, reason: 'send_failed', error })
+      const res = await sendTicketEmail({ ...SEND, mailbox: SMTP_MAILBOX })
+      expect(res.error).toBe(error)
+      expect(Object.keys(res).sort()).toEqual(['error', 'ok', 'reason'])
+    })
+
+    it('marks the send as delivery-untracked, which the Postmark path never is', async () => {
+      // mig 498's NULL delivery_status means "sent, we have heard nothing".
+      // Here it is permanent — no Postmark event can ever arrive — and the
+      // thread has to be able to say "not tracked" instead of rendering an
+      // event still in flight.
+      sendViaSmtp.mockResolvedValue(SMTP_OK)
+      const res = await sendTicketEmail({ ...SEND, mailbox: SMTP_MAILBOX })
+      expect(res.deliveryTracked).toBe(false)
+      expect(res.result.messageId).toBeNull()
+    })
   })
 })
