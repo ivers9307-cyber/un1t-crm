@@ -44,6 +44,13 @@ export async function GET(request) {
   const db = createServerClient()
   const sync = searchParams.get('sync')  // ?sync=true to refresh from Meta
 
+  // The cached rows below are served whether or not the refresh worked, so this
+  // field is the ONLY thing that tells an operator they are reading stale data.
+  // Swallowing it is how `book_first_visit` showed a months-old body and button
+  // config in the send preview while the approved template said otherwise
+  // (found 2026-08-26). Null = the refresh actually succeeded.
+  let syncError = null
+
   // If sync requested, fetch from Meta and update local records
   if (sync === 'true') {
     try {
@@ -51,6 +58,7 @@ export async function GET(request) {
       // WABA — or a Meta-Manager-created template for this number is never seen.
       const metaTemplates = await getMetaTemplates(100, { locationId })
 
+      let failed = 0
       for (const mt of metaTemplates) {
         const row = {
           meta_template_id: mt.id,
@@ -65,15 +73,30 @@ export async function GET(request) {
         // Manual upsert keyed on (meta_template_id, location_id): there is NO unique
         // constraint on meta_template_id, so a PostgREST `onConflict` upsert throws
         // 42P10 and the whole sync was silently swallowed by the catch below.
-        const { data: existing } = await db.from('whatsapp_templates')
+        const { data: existing, error: findError } = await db.from('whatsapp_templates')
           .select('id').eq('meta_template_id', mt.id).eq('location_id', locationId).maybeSingle()
-        if (existing) await db.from('whatsapp_templates').update(row).eq('id', existing.id)
-        else await db.from('whatsapp_templates').insert(row)
+        if (findError) { failed++; continue }
+        // supabase-js REPORTS a failed write on `error`, it does not throw — so the
+        // catch below never sees one. Unchecked, a sync that persisted nothing at
+        // all still returned a clean result over top of the stale rows.
+        const { error: writeError } = existing
+          ? await db.from('whatsapp_templates').update(row).eq('id', existing.id)
+          : await db.from('whatsapp_templates').insert(row)
+        if (writeError) failed++
+      }
+
+      if (failed > 0) {
+        syncError = `Refreshed from Meta, but ${failed} of ${metaTemplates.length} templates could not be saved.`
       }
     } catch (err) {
       console.error('Template sync error:', err)
+      syncError = err?.message || 'Could not refresh templates from Meta.'
     }
   }
+
+  // Present only when a refresh was actually asked for, so a caller that did not
+  // request one can't mistake an absent key for a clean sync. null = it worked.
+  const syncField = sync === 'true' ? { sync_error: syncError } : {}
 
   let query = db.from('whatsapp_templates')
     .select('*')
@@ -83,7 +106,7 @@ export async function GET(request) {
     query = query.eq('location_id', locationId)
   } else {
     const userLocationIds = getUserLocationIds(user)
-    if (userLocationIds.length === 0) return NextResponse.json({ success: true, templates: [] })
+    if (userLocationIds.length === 0) return NextResponse.json({ success: true, templates: [], ...syncField })
     query = query.in('location_id', userLocationIds)
   }
 
@@ -93,7 +116,7 @@ export async function GET(request) {
   const { data, error } = await query
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
-  return NextResponse.json({ success: true, templates: data })
+  return NextResponse.json({ success: true, templates: data, ...syncField })
 }
 
 // POST /api/whatsapp/templates — create template and submit to Meta
