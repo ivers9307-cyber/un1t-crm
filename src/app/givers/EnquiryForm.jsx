@@ -1,7 +1,7 @@
 'use client'
 
-// Enquiry form for the ccfautos.com coming-soon page (CCF-WEB.1).
-// POSTs to /api/public/ccf-enquiry; success swaps the card content,
+// Enquiry form for the giversautos.com coming-soon page (GIVERS-WEB.1).
+// POSTs to /api/public/givers-enquiry; success swaps the card content,
 // failure surfaces the API error (which carries the phone number as
 // the fallback contact). Styles live in page.js's scoped stylesheet.
 
@@ -18,7 +18,7 @@ export default function EnquiryForm() {
     setError('')
     const form = new FormData(e.currentTarget)
     try {
-      const res = await fetch('/api/public/ccf-enquiry', {
+      const res = await fetch('/api/public/givers-enquiry', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -43,8 +43,8 @@ export default function EnquiryForm() {
 
   if (status === 'sent') {
     return (
-      <div className="ccf-form-card ccf-sent" role="status">
-        <span className="ccf-sent-mark" aria-hidden="true">✓</span>
+      <div className="givers-form-card givers-sent" role="status">
+        <span className="givers-sent-mark" aria-hidden="true">✓</span>
         <h3>Thanks, we&apos;ll be in touch.</h3>
         <p>
           Your enquiry is with us. If it&apos;s urgent, call{' '}
@@ -55,22 +55,22 @@ export default function EnquiryForm() {
   }
 
   return (
-    <form className="ccf-form-card" onSubmit={handleSubmit}>
-      <div className="ccf-field-row">
-        <label className="ccf-field">
+    <form className="givers-form-card" onSubmit={handleSubmit}>
+      <div className="givers-field-row">
+        <label className="givers-field">
           <span>Name *</span>
           <input name="name" required maxLength={120} autoComplete="name" placeholder="Your name" />
         </label>
-        <label className="ccf-field">
+        <label className="givers-field">
           <span>Phone *</span>
           <input name="phone" required maxLength={40} autoComplete="tel" inputMode="tel" placeholder="08X XXX XXXX" />
         </label>
       </div>
-      <label className="ccf-field">
+      <label className="givers-field">
         <span>Email</span>
         <input name="email" type="email" maxLength={320} autoComplete="email" placeholder="you@example.com (optional)" />
       </label>
-      <label className="ccf-field">
+      <label className="givers-field">
         <span>What are you looking for?</span>
         <textarea
           name="message"
@@ -80,12 +80,12 @@ export default function EnquiryForm() {
         />
       </label>
       {status === 'error' && (
-        <p className="ccf-form-error" role="alert">{error}</p>
+        <p className="givers-form-error" role="alert">{error}</p>
       )}
-      <button type="submit" className="ccf-submit" disabled={status === 'sending'}>
+      <button type="submit" className="givers-submit" disabled={status === 'sending'}>
         {status === 'sending' ? 'Sending…' : 'Send enquiry'}
       </button>
-      <p className="ccf-form-note">We&apos;ll only use your details to reply to this enquiry.</p>
+      <p className="givers-form-note">We&apos;ll only use your details to reply to this enquiry.</p>
     </form>
   )
 }

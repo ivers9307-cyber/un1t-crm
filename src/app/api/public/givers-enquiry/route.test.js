@@ -1,4 +1,4 @@
-// Route tests for the public ccfautos.com enquiry capture (CCF-WEB.1).
+// Route tests for the public giversautos.com enquiry capture (GIVERS-WEB.1).
 // Contract: validation 400s before any DB touch, rate limiting 429s
 // before the insert, inserts normalise empty optionals to null, and a
 // DB failure 500s with the phone number as the fallback contact.
@@ -32,7 +32,7 @@ beforeEach(() => {
   checkRateLimit.mockResolvedValue({ allowed: true })
 })
 
-describe('POST /api/public/ccf-enquiry', () => {
+describe('POST /api/public/givers-enquiry', () => {
   it('missing name → 400 before any DB', async () => {
     const res = await POST(makeReq({ phone: '0868225779' }))
     expect(res.status).toBe(400)
