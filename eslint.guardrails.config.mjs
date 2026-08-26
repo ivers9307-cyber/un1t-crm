@@ -213,6 +213,13 @@ const config = [
       // it exists for — a failed link that answers `{ success: true }` and a
       // green "Connected" chip over a studio whose cron has no credential.
       'src/app/api/shelly/**',
+      // TPLSYNC.1 — the WhatsApp template sync. Its per-row upsert was the
+      // textbook shape: two bare writes inside a try/catch that cannot fire for
+      // them, so a refresh that persisted NOTHING still returned a clean list of
+      // the stale rows it had just failed to replace. That is how the send
+      // preview offered a body and a Flow button months out of date while the
+      // approved template said otherwise. Driven to zero here, so armed.
+      'src/app/api/whatsapp/templates/route.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },
