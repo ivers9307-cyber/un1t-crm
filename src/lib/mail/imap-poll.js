@@ -153,7 +153,7 @@ import { mapWithConcurrency } from '../concurrency'
 import { discardStagedAttachments } from '../email-attachments-server'
 import { HTML_BODY_MAX_CHARS } from '../email-inbox'
 import { logError, logInfo, logWarn } from '../log'
-import { resolveAuth } from './auth-strategy'
+import { resolveFreshAuth } from './oauth-tokens'
 import { fetchSince, withMailbox } from './imap-connection'
 import { attachmentParts, canStageForMessage, stageImapAttachments } from './imap-attachments'
 // storeInboundAttachments is direction-AGNOSTIC despite the name: it takes a
@@ -436,9 +436,18 @@ const MAX_ERROR_CHARS = 500
  * accident. Everything after resolveAuth() sees an auth object, never a
  * credential row.
  */
+// 🔴 oauth_refresh_token_ciphertext IS LOAD-BEARING AND ITS ABSENCE IS SILENT.
+// resolveFreshAuth needs it to renew a spent access token. Omit it and every
+// OAuth mailbox degrades to "works for one token lifetime, then reports an
+// expired sign-in forever" — with every row and every log line saying the poll
+// ran correctly, because it did. The failure would look like the provider's
+// fault. Added here as a named column rather than reached for via select('*'),
+// which this table never uses (mig 572: the secret must be structurally
+// impossible to leak through a careless SELECT).
 const CREDENTIAL_COLUMNS = [
   'mailbox_id', 'provider', 'auth_type', 'username',
-  'secret_ciphertext', 'oauth_access_token_ciphertext', 'oauth_expires_at',
+  'secret_ciphertext',
+  'oauth_access_token_ciphertext', 'oauth_refresh_token_ciphertext', 'oauth_expires_at',
   'imap_host', 'imap_port', 'imap_secure', 'sent_folder',
 ].join(', ')
 
@@ -1285,7 +1294,15 @@ export async function pollMailbox(db, mailbox, options = {}) {
     foreignAddresses = loaded.addresses
   }
 
-  const verdict = resolveAuth(credential)
+  // MAILBOX-OAUTH.5 — resolveFreshAuth, not resolveAuth. For a password row it
+  // IS resolveAuth (one type check, then straight through). For an OAuth row it
+  // renews a spent access token first, persists the rotated pair and then
+  // delegates back to resolveAuth, so the verdict shape below is unchanged in
+  // both modes. Without it an OAuth mailbox would work for exactly one token
+  // lifetime — about an hour — and then report `oauth_expired` forever, which
+  // is a refusal nothing acts on: the poller cannot mint a token and the
+  // operator has nothing to fix.
+  const verdict = await resolveFreshAuth(db, credential, { now: () => now })
   if (!verdict.ok) {
     // 🔴 A DEPLOYMENT FAULT IS NOT A TENANT'S FAULT (IMAP-CONFIGPAUSE.1).
     //
@@ -1309,12 +1326,38 @@ export async function pollMailbox(db, mailbox, options = {}) {
         log: 'mailbox encryption is not configured on this deployment — refusing to poll, and NOT pausing',
       })
     }
-    // Everything else resolveAuth reports is a per-mailbox operator action (no
-    // credential, wrong key, expired token), so it takes the auth curve — and
-    // its `error` is a constant sentence written for a person, which is why it
-    // is stored verbatim.
+    // MAILBOX-OAUTH.5 — the SAME shape, one deploy-level fault later. A
+    // provider whose client id was removed from the environment, or whose
+    // registry entry was flipped to 'unavailable', fails every mailbox on that
+    // provider at the same instant. Feeding that to the auth curve would pause
+    // every one of them for up to 24 hours over an env var, which is exactly
+    // what IMAP-CONFIGPAUSE.1 fixed for MAILBOX_SECRET_KEY. Recorded so the
+    // card can say something, never counted, never paused.
+    if (verdict.reason === 'provider_unavailable') {
+      return await recordConfigFault(db, mailboxId, folder, {
+        error: verdict.error, reason: verdict.reason, nowIso,
+        log: 'this mailbox’s sign-in provider is not available on this deployment — refusing to poll, and NOT pausing',
+      })
+    }
+    // 🔴 MAILBOX-OAUTH.5 — A RENEWAL THAT COULD NOT BE ATTEMPTED IS NOT A
+    // REVOKED SIGN-IN, AND THE TWO MUST NOT SHARE A CURVE.
+    //
+    // `oauth_refresh_failed` means the provider's identity service was
+    // unreachable, slow, rate-limited or 5xx'd. The grant is fine, nothing is
+    // wrong with the mailbox and there is NO operator action — retrying IS the
+    // fix. On the auth curve a ten-minute outage at Microsoft would park a
+    // studio's mail for half a day and put "sign in again" on their settings
+    // card, sending them to re-authorise something that was never broken. It
+    // takes the TRANSPORT curve, like any other unreachable host.
+    //
+    // Everything else — no credential, wrong key, an expired token a refresh
+    // did not fix, and `oauth_revoked`, which is the provider telling us in so
+    // many words that the grant is gone — is a per-mailbox operator action and
+    // keeps the auth curve. Each verdict's `error` is a constant sentence
+    // written for a person, which is why it is stored verbatim.
     return await recordFailure(db, mailboxId, folder, {
-      kind: 'auth', error: verdict.error, reason: verdict.reason, nowIso, now,
+      kind: verdict.reason === 'oauth_refresh_failed' ? 'transport' : 'auth',
+      error: verdict.error, reason: verdict.reason, nowIso, now,
     })
   }
   const auth = verdict.auth

@@ -621,11 +621,41 @@ describe('PUT — connecting', () => {
     expect(credentialFor(MB_ACCOUNTS.id)).toBeNull()
   })
 
-  it('refuses Microsoft with the reason, and stores nothing', async () => {
+  // 🔴 MAILBOX-OAUTH.6 — STILL REFUSED HERE, FOR A REASON THAT HAS CHANGED
+  // SHAPE. Exchange Online still will not take a mailbox password over IMAP, so
+  // this route still cannot connect a Microsoft account. What is different is
+  // that the refusal is now a SIGNPOST: the sign-in it points at exists
+  // (…/oauth/start). The old sentence said the release did not include one, and
+  // leaving it would have put "not supported yet" three centimetres above the
+  // button that supports it.
+  it('refuses Microsoft here and points at the sign-in, storing nothing', async () => {
     const { res, body } = await put(MB_STUDIO.id, { ...GMAIL, provider: 'microsoft' })
     expect(res.status).toBe(400)
-    expect(body.error).toMatch(/Exchange Online no longer allows a mailbox password/i)
+    expect(body.error).toMatch(/Exchange Online no longer allows one over IMAP/i)
+    expect(body.error).toMatch(/Sign in with Microsoft/i)
+    // And it must NOT claim the feature is missing — the exact stale sentence.
+    expect(body.error).not.toMatch(/this release does not include/i)
     expect(writesTo(db)).toEqual([])
+    expect(verifyConnection).not.toHaveBeenCalled()
+  })
+
+  // 🔴 A PASSWORD SAVE MUST NOT SILENTLY REPLACE A PROVIDER SIGN-IN.
+  //
+  // This route writes `auth_type: 'password'` unconditionally, so without this
+  // guard a save on an OAuth-connected mailbox would overwrite a live grant
+  // with a password Exchange Online refuses — the mailbox would go from
+  // receiving to failing on the next tick, caused by the operator's own save,
+  // with nothing on the way there saying so.
+  it('refuses to overwrite an OAuth sign-in with a password', async () => {
+    world({}, {
+      credentials: [{ ...storedCredential(MB_STUDIO.id, 'ignored'), auth_type: 'oauth', secret_ciphertext: null }],
+    })
+    const { res, body } = await put(MB_STUDIO.id, GMAIL)
+    expect(res.status).toBe(400)
+    expect(body.code).toBe('oauth_connected')
+    expect(body.error).toMatch(/Disconnect first/i)
+    expect(writesTo(db)).toEqual([])
+    // No dial is spent on a save that was never going to be written.
     expect(verifyConnection).not.toHaveBeenCalled()
   })
 
@@ -883,8 +913,16 @@ describe('the secret is write-only', () => {
     const serialised = JSON.stringify(body)
     expect(serialised).not.toContain('stored-app-password')
     expect(serialised).not.toContain('secret_ciphertext')
-    expect(serialised).not.toContain('oauth')
     expect(serialised).not.toContain(credentialFor(MB_STUDIO.id).secret_ciphertext)
+    // 🔴 MAILBOX-OAUTH.6 — this used to be `not.toContain('oauth')`, which was
+    // a proxy for "no token leaked" and stopped working the moment the GET
+    // started serving the provider catalogue (whose Google entry is a paragraph
+    // about OAuth app verification). Narrowed to the actual COLUMN NAMES and
+    // the actual VALUES, which is what the assertion was always for and is a
+    // strictly stronger claim than a substring of English prose.
+    expect(serialised).not.toContain('oauth_access_token_ciphertext')
+    expect(serialised).not.toContain('oauth_refresh_token_ciphertext')
+    expect(serialised).not.toContain('oauth_expires_at')
 
     // The projection that went on the wire names no secret column either —
     // "the response happens not to include it" is a weaker claim than "the

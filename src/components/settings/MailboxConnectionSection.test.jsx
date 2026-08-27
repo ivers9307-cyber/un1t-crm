@@ -24,7 +24,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
-import MailboxConnectionSection, { PROVIDER_PRESETS, connectionStatus } from './MailboxConnectionSection'
+import MailboxConnectionSection, { PROVIDER_PRESETS, connectionStatus, providerNote } from './MailboxConnectionSection'
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 const MAILBOX = {
@@ -206,8 +206,61 @@ describe('provider presets', () => {
     expect(PROVIDER_PRESETS.microsoft.smtp_secure).toBe(false)
   })
 
-  it('keeps Microsoft in the list but marks it unsupported', () => {
-    expect(PROVIDER_PRESETS.microsoft.supported).toBe(false)
+  // 🔴 MAILBOX-OAUTH.6 — THIS TEST USED TO ASSERT THE OPPOSITE, AND IT WAS
+  // RIGHT TO. It pinned `supported: false` for Microsoft, because Exchange
+  // Online refuses a mailbox password over IMAP and no sign-in existed. Half of
+  // that is still true and is now the REASON this row is OAuth-only rather than
+  // OAuth-optional; the other half stopped being true when …/oauth/start landed.
+  //
+  // Flipped rather than deleted, so the pin survives: a merge or a revert that
+  // puts `supported: false` back turns the only way into a Microsoft mailbox
+  // into a greyed-out option again, and that is a regression nothing else here
+  // would catch.
+  it('offers Microsoft as a sign-in provider, not as a disabled option', () => {
+    expect(PROVIDER_PRESETS.microsoft.supported).toBe(true)
+    expect(PROVIDER_PRESETS.microsoft.auth).toBe('oauth')
+    expect(PROVIDER_PRESETS.microsoft.oauthKey).toBe('microsoft')
+  })
+
+  it('keeps Gmail on the password path and points its OAuth refusal at Google', () => {
+    // The distinction the whole screen turns on: Gmail CONNECTS today, with an
+    // app password. What does not exist is "Sign in with Google" — so the
+    // refusal belongs on this row as a note beside a working form, never as a
+    // disabled option that would read as "no Gmail".
+    expect(PROVIDER_PRESETS.gmail.auth).toBe('password')
+    expect(PROVIDER_PRESETS.gmail.supported).toBe(true)
+    expect(PROVIDER_PRESETS.gmail.oauthKey).toBe('google')
+  })
+})
+
+describe('providerNote — whose refusal belongs on which row', () => {
+  const CATALOGUE = [
+    { key: 'microsoft', label: 'Microsoft 365 / Outlook', status: 'available', unavailableReason: null },
+    { key: 'google', label: 'Google', status: 'unavailable', unavailableReason: 'CASA Tier 2 assessment required.' },
+  ]
+
+  it('shows Google’s reason on the Gmail row', () => {
+    expect(providerNote(PROVIDER_PRESETS.gmail, CATALOGUE)).toBe('CASA Tier 2 assessment required.')
+  })
+
+  it('says nothing about a provider that works', () => {
+    expect(providerNote(PROVIDER_PRESETS.microsoft, CATALOGUE)).toBeNull()
+  })
+
+  it('says nothing for a preset with no OAuth counterpart', () => {
+    expect(providerNote(PROVIDER_PRESETS.custom, CATALOGUE)).toBeNull()
+  })
+
+  // 🔴 NEVER INVENTS A SENTENCE. The whole value of this paragraph is that
+  // it names the real blocker — app verification, a CASA assessment — rather
+  // than "not supported". A catalogue that has not loaded, or an entry with no
+  // reason, renders NOTHING; a placeholder would be a claim we did not make.
+  it('renders nothing rather than a guess when the catalogue is missing or silent', () => {
+    expect(providerNote(PROVIDER_PRESETS.gmail, null)).toBeNull()
+    expect(providerNote(PROVIDER_PRESETS.gmail, [])).toBeNull()
+    expect(providerNote(PROVIDER_PRESETS.gmail, [
+      { key: 'google', status: 'unavailable', unavailableReason: '' },
+    ])).toBeNull()
   })
 })
 
@@ -273,12 +326,64 @@ describe('rendering — never connected', () => {
     expect(screen.getByText(/never the account password/i)).toBeTruthy()
   })
 
-  it('lists Microsoft, disabled, with the reason', async () => {
+  it('lists Microsoft as a selectable sign-in, not a dead option', async () => {
     await openPanel()
     await waitFor(() => expect(screen.getByLabelText(/mail provider/i)).toBeTruthy())
     const option = screen.getByRole('option', { name: /Microsoft 365/i })
-    expect(option.disabled).toBe(true)
-    expect(option.textContent).toMatch(/not supported yet/i)
+    expect(option.disabled).toBe(false)
+    expect(option.textContent).not.toMatch(/not supported yet/i)
+  })
+
+  // 🔴 MAILBOX-OAUTH.6 — selecting Microsoft REPLACES the form rather than
+  // disabling it. Every field on the password form is one the connector already
+  // knows for this provider, so leaving them visible would invite an operator to
+  // type a host, a port and a password that are all either ignored or wrong.
+  it('swaps the password form for a sign-in button when Microsoft is chosen', async () => {
+    await openPanel()
+    await waitFor(() => expect(screen.getByLabelText(/mail provider/i)).toBeTruthy())
+    fireEvent.change(screen.getByLabelText(/mail provider/i), { target: { value: 'microsoft' } })
+
+    await waitFor(() => expect(screen.getByRole('link', { name: /sign in with microsoft/i })).toBeTruthy())
+    expect(screen.queryByLabelText(/password/i)).toBeNull()
+    expect(screen.queryByLabelText(/incoming \(IMAP\) server/i)).toBeNull()
+    expect(screen.queryByRole('button', { name: /check and connect/i })).toBeNull()
+    // The permanence disclosure is REQUIRED before any connect, and this path
+    // is a connect — losing it by moving the button was the easy mistake here.
+    expect(screen.getByText(/kept permanently/i)).toBeTruthy()
+  })
+
+  it('points the sign-in link at this mailbox’s own start route', async () => {
+    await openPanel()
+    await waitFor(() => expect(screen.getByLabelText(/mail provider/i)).toBeTruthy())
+    fireEvent.change(screen.getByLabelText(/mail provider/i), { target: { value: 'microsoft' } })
+
+    const link = await screen.findByRole('link', { name: /sign in with microsoft/i })
+    expect(link.getAttribute('href')).toBe(
+      `/api/locations/${LOC}/email/mailboxes/${MAILBOX.id}/oauth/start?provider=microsoft`
+    )
+  })
+
+  // The Google half of the pair: NOT a disabled option, because Gmail connects
+  // perfectly well with an app password. What is refused is "Sign in with
+  // Google", and the reason for it comes from the API so there is one copy.
+  it('renders Google’s real refusal beside the Gmail form, from the server', async () => {
+    mockFetch(async () => jsonRes({
+      connection: null, ingress: 'postmark', egress: 'postmark', folders: [], address: MAILBOX.address,
+      oauth_providers: [
+        { key: 'microsoft', label: 'Microsoft 365 / Outlook', status: 'available', unavailableReason: null },
+        {
+          key: 'google',
+          label: 'Google',
+          status: 'unavailable',
+          unavailableReason: 'Needs OAuth app verification plus an annual CASA Tier 2 assessment.',
+        },
+      ],
+    }))
+    await openPanel()
+    await waitFor(() => expect(screen.getByLabelText(/app password/i)).toBeTruthy())
+    expect(screen.getByText(/CASA Tier 2 assessment/i)).toBeTruthy()
+    // And the app-password path it points at is still right there.
+    expect(screen.getByRole('button', { name: /check and connect/i })).toBeTruthy()
   })
 
   it('surfaces a refused login instead of pretending the account connected', async () => {

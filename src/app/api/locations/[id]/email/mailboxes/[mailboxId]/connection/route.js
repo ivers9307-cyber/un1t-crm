@@ -75,6 +75,7 @@ import { checkRateLimit, rateLimitResponse } from '@/lib/rate-limit'
 import { isFreshSecret } from '@/lib/integration-secret-merge'
 import { isConfigured, seal } from '@/lib/mail/secret-box'
 import { resolveAuth } from '@/lib/mail/auth-strategy'
+import { oauthProviderCatalogue } from '@/lib/mail/oauth-providers'
 import { verifyConnection } from '@/lib/mail/imap-connection'
 import { verifySmtpConnection } from '@/lib/mail/smtp-send'
 import {
@@ -146,18 +147,40 @@ function connectionView(row) {
 /**
  * `provider` drives the settings-UI preset, not the auth mechanism (auth_type
  * does that). 'microsoft' is accepted by the CHECK on the column and refused
- * here: Exchange Online turned off basic-auth IMAP, so a Microsoft account
- * cannot be connected with a password at all, and it needs the OAuth work that
- * mig 572's auth_type comment defers. Keeping the preset and refusing it with
- * a reason beats hiding it — an operator who cannot find Microsoft in the list
- * assumes the connector is broken; one who is told why goes and asks for
- * OAuth.
+ * on THIS route: Exchange Online turned off basic-auth IMAP, so a Microsoft
+ * account cannot be connected with a password at all.
+ *
+ * 🔴 MAILBOX-OAUTH.6 — THIS REFUSAL IS NOW A SIGNPOST, NOT A DEAD END. It used
+ * to say the release did not include a Microsoft sign-in. It does: see
+ * …/oauth/start. Leaving the old sentence standing would be worse than never
+ * having written it — an operator would read "not supported yet" three
+ * centimetres above the button that supports it. A retracted limitation is
+ * rewritten, not softened (the same call MAILBOX-COEXIST.1 made when Phase 8
+ * made its own warning false).
  */
 const MICROSOFT_REFUSAL =
-  'Microsoft 365 and Outlook accounts cannot be connected yet. Exchange Online no longer ' +
-  'allows a mailbox password over IMAP, so these accounts need a Microsoft sign-in ' +
-  '(OAuth) that this release does not include. Gmail, Google Workspace and any host ' +
-  'that still accepts an app password work today.'
+  'Microsoft 365 and Outlook accounts cannot be connected with a password — Exchange Online no ' +
+  'longer allows one over IMAP. Use “Sign in with Microsoft” on this account instead; it is on ' +
+  'this same screen and it is the only way in for these accounts.'
+
+/**
+ * MAILBOX-OAUTH.6 — refusing to overwrite a Microsoft sign-in with a password.
+ *
+ * Not a safety rail, an honesty one. This route writes `auth_type: 'password'`
+ * unconditionally, so a save on an OAuth-connected mailbox would replace a live
+ * OAuth grant with a password — and for Exchange Online that password cannot
+ * work, so the mailbox would go from receiving to silently failing on the next
+ * tick. The operator's own action would break it and nothing on the way there
+ * would have said so.
+ *
+ * Disconnect is the deliberate way out, and it says so: it deletes the stored
+ * grant, which is the thing that ought to happen before a mailbox changes how
+ * it authenticates.
+ */
+const OAUTH_ALREADY_CONNECTED_REFUSAL =
+  'This account is connected with a provider sign-in, not a password. Saving a password here would ' +
+  'replace that sign-in with one the provider will refuse, and mail would stop arriving. Press ' +
+  'Disconnect first if you really want to switch it to a password.'
 
 const ConnectionBody = z.object({
   provider: z.enum(['gmail', 'microsoft', 'custom']).optional().default('custom'),
@@ -519,6 +542,17 @@ export async function GET(_request, props) {
       // The mailbox address, so the form can offer it as the username without
       // the client having to hold the account list to render this panel.
       address: mailbox.address,
+      // MAILBOX-OAUTH.6 — which provider sign-ins exist and, for the ones that
+      // do not work, WHY. Served rather than hard-coded in the component for
+      // one reason: Google's refusal is a paragraph about app verification and
+      // a CASA assessment, and the day that changes it must change in ONE
+      // place. A second copy in JSX is how a screen ends up telling an operator
+      // something the API stopped believing months ago.
+      //
+      // Carries no client id and no secret and does not vary per tenant — it
+      // is a table of product facts, safe for any session that reached this
+      // route's gate.
+      oauth_providers: oauthProviderCatalogue(),
     },
   })
 }
@@ -686,6 +720,13 @@ export async function PUT(request, props) {
       locationId: params.id, mailboxId: params.mailboxId, error: existingErr.message,
     })
     return bad('Could not read this account’s current connection.', 500)
+  }
+
+  // MAILBOX-OAUTH.6 — see OAUTH_ALREADY_CONNECTED_REFUSAL. Checked here rather
+  // than at the top because it needs the stored row, and placed BEFORE the
+  // credential merge so no dial is spent on a save that will not be written.
+  if (existing && String(existing.auth_type || '').toLowerCase() === 'oauth') {
+    return bad(OAUTH_ALREADY_CONNECTED_REFUSAL, 400, { code: 'oauth_connected' })
   }
 
   const username = body.username.trim()

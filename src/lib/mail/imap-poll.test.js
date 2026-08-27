@@ -2417,3 +2417,204 @@ describe('a sweep polls inbox first and then sent, on one shared budget', () => 
     expect(db.state.ingress.get(`${MAILBOX.id}:sent`).consecutive_failures).toBe(1)
   })
 })
+
+/* ═══════ 12. MAILBOX-OAUTH.5 — which curve an OAuth failure takes ═════ */
+
+// 🔴 THE WHOLE POINT OF THIS SECTION IS THAT TWO IDENTICAL-LOOKING FAILURES
+// MUST NOT SHARE A BACKOFF CURVE.
+//
+//   REVOKED     the operator (or their admin) withdrew consent. Nothing we do
+//               fixes it; the remedy is a human clicking Sign in. AUTH curve
+//               (30min → 24h), and the card says so.
+//   COULD NOT   the identity service was slow, rate-limited or 5xx'd. The
+//   REFRESH     grant is perfectly good and retrying IS the fix. TRANSPORT
+//               curve (10min → 2h), and the operator is told nothing is their
+//               fault.
+//
+// Getting this backwards in either direction is a real incident: a ten-minute
+// blip at Microsoft would park a studio's mail for half a day and print "sign
+// in again" on their settings card, sending them to re-authorise something
+// that was never broken.
+//
+// The token endpoint is stubbed at globalThis.fetch because resolveFreshAuth
+// reaches for it directly — the poller's own `deps.fetch` is the webhook leg
+// and is a different seam. Left unstubbed these tests would make real requests
+// to login.microsoftonline.com.
+describe('MAILBOX-OAUTH.5 — a refresh failure and a revoked grant take different curves', () => {
+  const OAUTH_ENV = {
+    MAILBOX_OAUTH_MICROSOFT_CLIENT_ID: 'the-client-id',
+    MAILBOX_OAUTH_MICROSOFT_CLIENT_SECRET: 'the-client-secret',
+  }
+
+  /** A Microsoft credential whose access token is spent, so a refresh is due. */
+  const oauthCredential = (overrides = {}) => credential({
+    provider: 'microsoft',
+    auth_type: 'oauth',
+    secret_ciphertext: null,
+    oauth_access_token_ciphertext: seal('ACCESS-TOKEN-SPENT'),
+    oauth_refresh_token_ciphertext: seal('REFRESH-TOKEN-LIVE'),
+    oauth_expires_at: new Date(NOW - 60_000).toISOString(),
+    imap_host: 'outlook.office365.com',
+    ...overrides,
+  })
+
+  /** Answer the token endpoint once with this status + body. */
+  const tokenEndpoint = (status, body) => vi.fn(async () => ({
+    ok: status >= 200 && status < 300, status, json: async () => body,
+  }))
+
+  beforeEach(() => {
+    Object.assign(process.env, OAUTH_ENV)
+  })
+  afterEach(() => {
+    for (const k of Object.keys(OAUTH_ENV)) delete process.env[k]
+    vi.unstubAllGlobals()
+  })
+
+  it('🔴 a revoked grant takes the AUTH curve and says "sign in again"', async () => {
+    vi.stubGlobal('fetch', tokenEndpoint(400, { error: 'invalid_grant' }))
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: oauthCredential() },
+      ingress: { [`${MAILBOX.id}:inbox`]: { mailbox_id: MAILBOX.id, folder: 'inbox', consecutive_failures: 1 } },
+    })
+    let created = false
+
+    const out = await pollMailbox(db, MAILBOX, {
+      now: NOW,
+      deps: { createClient: () => { created = true; return fakeImap().client } },
+    })
+
+    expect(out).toMatchObject({ ok: false, reason: 'oauth_revoked' })
+    // Nothing is dialled — there is no token to dial with.
+    expect(created).toBe(false)
+    const cursor = lastCursor(db)
+    expect(cursor.consecutive_failures).toBe(2)
+    // 30min base, one doubling past the free first failure.
+    expect(Date.parse(cursor.paused_until) - NOW).toBe(30 * 60_000)
+    expect(cursor.last_error).toMatch(/sign in again/i)
+  })
+
+  it('🔴 an unreachable identity service takes the TRANSPORT curve, NOT the auth one', async () => {
+    vi.stubGlobal('fetch', tokenEndpoint(503, { error: 'temporarily_unavailable' }))
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: oauthCredential() },
+      ingress: { [`${MAILBOX.id}:inbox`]: { mailbox_id: MAILBOX.id, folder: 'inbox', consecutive_failures: 1 } },
+    })
+
+    const out = await pollMailbox(db, MAILBOX, {
+      now: NOW,
+      deps: { createClient: () => fakeImap().client },
+    })
+
+    expect(out).toMatchObject({ ok: false, reason: 'oauth_refresh_failed' })
+    const cursor = lastCursor(db)
+    // 10min, not 30 — the difference between a blip and half a day of silence.
+    expect(Date.parse(cursor.paused_until) - NOW).toBe(10 * 60_000)
+    // And the operator is told this is not their fault and needs no action.
+    expect(cursor.last_error).not.toMatch(/sign in again/i)
+    expect(cursor.last_error).toMatch(/resume on its own/i)
+  })
+
+  it('a socket failure reaching the identity service is transient too', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('ECONNRESET') }))
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: oauthCredential() },
+      ingress: { [`${MAILBOX.id}:inbox`]: { mailbox_id: MAILBOX.id, folder: 'inbox', consecutive_failures: 1 } },
+    })
+    const out = await pollMailbox(db, MAILBOX, { now: NOW, deps: { createClient: () => fakeImap().client } })
+    expect(out.reason).toBe('oauth_refresh_failed')
+    expect(Date.parse(lastCursor(db).paused_until) - NOW).toBe(10 * 60_000)
+  })
+
+  // 🔴 A 400 is ALSO what our own malformed request gets. Telling an operator
+  // their consent was withdrawn because WE sent a bad client id would have
+  // them chasing their IT department over our defect.
+  it('a 400 that is NOT invalid_grant is ours, and does not accuse the operator', async () => {
+    vi.stubGlobal('fetch', tokenEndpoint(400, { error: 'invalid_client' }))
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: oauthCredential() },
+      ingress: { [`${MAILBOX.id}:inbox`]: { mailbox_id: MAILBOX.id, folder: 'inbox', consecutive_failures: 1 } },
+    })
+    const out = await pollMailbox(db, MAILBOX, { now: NOW, deps: { createClient: () => fakeImap().client } })
+    expect(out.reason).toBe('oauth_refresh_failed')
+    expect(lastCursor(db).last_error).not.toMatch(/sign in again/i)
+  })
+
+  // 🔴 EVERY MAILBOX ON THAT PROVIDER HITS THIS AT THE SAME INSTANT. On the
+  // auth curve that pauses all of them for up to 24 hours over an env var —
+  // exactly what IMAP-CONFIGPAUSE.1 fixed for MAILBOX_SECRET_KEY.
+  it('a provider this deployment can no longer run is a CONFIG fault: recorded, never counted, never paused', async () => {
+    delete process.env.MAILBOX_OAUTH_MICROSOFT_CLIENT_ID
+    const db = makeDb({ credentials: { [MAILBOX.id]: oauthCredential() } })
+
+    const out = await pollMailbox(db, MAILBOX, { now: NOW, deps: { createClient: () => fakeImap().client } })
+
+    expect(out).toMatchObject({ ok: false, reason: 'provider_unavailable' })
+    expect(lastCursor(db).consecutive_failures).toBeUndefined()
+    expect(lastCursor(db).paused_until).toBeUndefined()
+    // The sentence is carried through verbatim — it already names the fix.
+    expect(lastCursor(db).last_error).toMatch(/MAILBOX_OAUTH_MICROSOFT_CLIENT_ID/)
+  })
+
+  it('a successful refresh polls normally, with the NEW token', async () => {
+    vi.stubGlobal('fetch', tokenEndpoint(200, {
+      access_token: 'ACCESS-TOKEN-RENEWED', refresh_token: 'REFRESH-TOKEN-ROTATED', expires_in: 3600,
+    }))
+    const imap = fakeImap({ uidNext: 1, messages: [] })
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: oauthCredential() },
+      ingress: { [`${MAILBOX.id}:inbox`]: { mailbox_id: MAILBOX.id, folder: 'inbox', uidvalidity: 12345, last_uid: 0 } },
+    })
+    let opts = null
+
+    const out = await pollMailbox(db, MAILBOX, {
+      now: NOW,
+      deps: { createClient: (o) => { opts = o; return imap.client } },
+    })
+
+    expect(out.ok).toBe(true)
+    // imapflow reads `{ user, accessToken }` VERBATIM — never a `pass`, and
+    // never the spent token the row still held when the tick began.
+    expect(opts.auth).toEqual({
+      user: 'hatchstreet@un1t.com', accessToken: 'ACCESS-TOKEN-RENEWED',
+    })
+    expect(opts.auth.pass).toBeUndefined()
+  })
+
+  // 🔴 THE REGRESSION THAT WOULD HURT MOST. resolveFreshAuth now sits in front
+  // of every password mailbox in the estate, on this exact line.
+  it('🔴 A PASSWORD MAILBOX IS UNTOUCHED — no token request, and the same auth object as before', async () => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const imap = fakeImap({ uidNext: 1, messages: [] })
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: credential() },
+      ingress: { [`${MAILBOX.id}:inbox`]: { mailbox_id: MAILBOX.id, folder: 'inbox', uidvalidity: 12345, last_uid: 0 } },
+    })
+    let opts = null
+
+    const out = await pollMailbox(db, MAILBOX, {
+      now: NOW,
+      deps: { createClient: (o) => { opts = o; return imap.client } },
+    })
+
+    expect(out.ok).toBe(true)
+    // No identity service is contacted for a mailbox that authenticates with a
+    // password. Not "the request succeeded" — it was never made.
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(opts.auth).toEqual({
+      user: 'hatchstreet@un1t.com', pass: 'not-a-real-app-password',
+    })
+    expect(opts.auth.accessToken).toBeUndefined()
+  })
+
+  it('a password mailbox with a revoked password still takes the AUTH curve, as it always did', async () => {
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: credential({ secret_ciphertext: null }) },
+      ingress: { [`${MAILBOX.id}:inbox`]: { mailbox_id: MAILBOX.id, folder: 'inbox', consecutive_failures: 1 } },
+    })
+    const out = await pollMailbox(db, MAILBOX, { now: NOW, deps: { createClient: () => fakeImap().client } })
+    expect(out.reason).toBe('not_configured')
+    expect(Date.parse(lastCursor(db).paused_until) - NOW).toBe(30 * 60_000)
+  })
+})

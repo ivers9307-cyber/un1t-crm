@@ -127,7 +127,7 @@
 import nodemailer from 'nodemailer'
 import { createServerClient } from '../supabase'
 import { logError, logWarn } from '../log'
-import { resolveAuth } from './auth-strategy.js'
+import { resolveFreshAuth } from './oauth-tokens.js'
 
 /**
  * Timeouts, deliberately far below nodemailer's defaults (2min connect /
@@ -156,9 +156,15 @@ const MAX_ERROR_CHARS = 500
  * path is allowed to touch.
  */
 const CREDENTIAL_COLUMNS = [
-  'mailbox_id', 'auth_type', 'username',
+  // 🔴 MAILBOX-OAUTH.5 — `provider` and `oauth_refresh_token_ciphertext` are
+  // here because resolveFreshAuth needs both to renew a spent access token:
+  // the first says WHICH identity service to ask, the second is what it is
+  // asked with. Dropping either does not break loudly — it makes every OAuth
+  // mailbox stop sending about an hour after it was connected, reporting an
+  // expired sign-in that no operator action can clear.
+  'mailbox_id', 'provider', 'auth_type', 'username',
   'secret_ciphertext',
-  'oauth_access_token_ciphertext', 'oauth_expires_at',
+  'oauth_access_token_ciphertext', 'oauth_refresh_token_ciphertext', 'oauth_expires_at',
   'smtp_host', 'smtp_port', 'smtp_secure',
 ].join(', ')
 
@@ -231,10 +237,13 @@ export function adaptAuthForNodemailer(auth) {
   if (auth && typeof auth.accessToken === 'string' && auth.accessToken) {
     // No refreshToken / clientId / serviceClient is supplied, so nodemailer's
     // XOAuth2 helper cannot mint a new token — it reuses this one and reports
-    // an error if it is rejected. That is exactly right: refreshing is
-    // auth-strategy.js's job (it already returns `oauth_expired` when the
-    // stored token is spent), and a refresh performed down here would leave
-    // the database holding a token we had silently replaced.
+    // an error if it is rejected. That is exactly right, and MAILBOX-OAUTH.5
+    // made it more so rather than less: renewal happens in
+    // src/lib/mail/oauth-tokens.js, ABOVE this call, where the rotated refresh
+    // token is sealed and written back. A refresh performed down here would
+    // leave the database holding a token we had silently replaced — and
+    // nodemailer would do it per transport, so two concurrent replies would
+    // race to mint tokens neither of them stored.
     return { type: 'OAuth2', user: auth.user, accessToken: auth.accessToken }
   }
   return auth
@@ -511,15 +520,26 @@ export async function sendViaSmtp({
   }
 
   // The OAuth seam. Verdicts other than `not_configured` (decrypt_failed,
-  // oauth_expired, unsupported_auth_type) are all mapped onto `not_configured`
-  // HERE rather than widening sendTicketEmail's envelope: they are the same
-  // KIND of thing from the route's point of view — nothing was attempted, the
-  // fault is in the stored configuration, retry once it is fixed — and the
-  // envelope is a contract three routes already branch on. resolveAuth's own
-  // sentence is carried through verbatim, so the operator still sees which of
-  // the four it was; it never contains the secret (that is a guarantee of
-  // auth-strategy.js, not an accident of this call).
-  const verdict = resolveAuth(credential)
+  // oauth_expired, oauth_revoked, oauth_refresh_failed, provider_unavailable,
+  // unsupported_auth_type) are all mapped onto `not_configured` HERE rather
+  // than widening sendTicketEmail's envelope: they are the same KIND of thing
+  // from the route's point of view — nothing was attempted, the fault is in
+  // the stored configuration, retry once it is fixed — and the envelope is a
+  // contract three routes already branch on. The verdict's own sentence is
+  // carried through verbatim, so the operator still sees which one it was, and
+  // "sign in again" and "the provider could not be reached" read differently on
+  // the screen even though the envelope cannot tell them apart. It never
+  // contains the secret (that is a guarantee of auth-strategy.js and
+  // oauth-tokens.js, not an accident of this call).
+  //
+  // MAILBOX-OAUTH.5 — resolveFreshAuth rather than resolveAuth, so an operator
+  // hitting Send on a mailbox that has been idle past its token's lifetime
+  // gets a renewal instead of a refusal. A password mailbox is unaffected: the
+  // wrapper's first branch hands it straight to resolveAuth. This is the one
+  // send-path call that can now make a network request before the SMTP dial,
+  // which is why the refresh carries its own 15-second timeout — an operator
+  // is watching a spinner.
+  const verdict = await resolveFreshAuth(db, credential)
   if (!verdict.ok) return fail('not_configured', verdict.error)
 
   const auth = verdict.auth
