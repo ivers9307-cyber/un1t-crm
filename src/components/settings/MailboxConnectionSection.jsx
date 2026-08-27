@@ -124,15 +124,38 @@ const MICROSOFT_NOTE =
  * a fault with the mailbox: the connection may be perfectly fine and blaming
  * it would send an operator hunting for a new app password.
  *
- * @param {{ingress?: string, connection?: object|null, folders?: Array|null, now?: number}} state
+ * 🔴 MAILBOX-UNREACHABLE.1 REWROTE THE 'NOT CONNECTED' BRANCH, because it was
+ * the single sentence this feature's founding bug is made of. It read "Mail
+ * reaches this account through the standard route" — an unconditional claim,
+ * printed underneath `stillorgan@un1t.com`, where the standard route is
+ * Postmark's inbound webhook and `un1t.com`'s MX points at Google and always
+ * will. Not connected is the RIGHT label for that account; "and mail reaches
+ * it anyway" was the lie. The verdict (src/lib/mail/mailbox-reachability.js)
+ * is passed in rather than computed here — that module imports node:dns and a
+ * client component cannot touch it.
+ *
+ * @param {{ingress?: string, connection?: object|null, folders?: Array|null, reachability?: object|null, now?: number}} state
  */
-export function connectionStatus({ ingress, connection, folders, now = Date.now() } = {}) {
+export function connectionStatus({ ingress, connection, folders, reachability, now = Date.now() } = {}) {
   if (!connection || ingress !== 'imap') {
+    const state = reachability?.state
     return {
-      tone: 'idle',
+      tone: state === 'unreachable' ? 'unreachable' : 'idle',
       label: 'Not connected',
-      chip: 'bg-slate-500/10 text-slate-700',
-      detail: 'Mail reaches this account through the standard route. Connect its mailbox login to pull mail in directly.',
+      chip: state === 'unreachable'
+        ? 'bg-red-500/10 text-red-700'
+        : 'bg-slate-500/10 text-slate-700',
+      detail: state === 'unreachable'
+        // Deliberately NOT the full banner text — that is already on the row
+        // above, always visible; this panel collapses, and a truth folded
+        // behind a toggle is not a truth anybody was told. This is the
+        // one-line version plus the thing this panel is for.
+        ? 'Mail sent to this address does not reach the platform at all — see the warning above. ' +
+          'Connecting its mailbox login here is what fixes that.'
+        : state === 'indirect'
+          ? 'Mail reaches this account through a forward set up at the mail host, not through ' +
+            'anything the platform controls. Connect its mailbox login to remove that dependency.'
+          : 'Mail reaches this account through the standard route. Connect its mailbox login to pull mail in directly.',
     }
   }
 
@@ -270,7 +293,7 @@ function PermanenceDisclosure() {
  *   the card already holds, so opening the Email settings page does not fire
  *   one request per account.
  */
-export default function MailboxConnectionSection({ locationId, mailbox, onChanged }) {
+export default function MailboxConnectionSection({ locationId, mailbox, reachability, onChanged }) {
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [state, setState] = useState(null)
@@ -395,7 +418,7 @@ export default function MailboxConnectionSection({ locationId, mailbox, onChange
       // that everything is fine.
       const fresh = await load()
       const after = fresh
-        ? connectionStatus({ ingress: fresh.ingress, connection: fresh.connection, folders: fresh.folders })
+        ? connectionStatus({ ingress: fresh.ingress, connection: fresh.connection, folders: fresh.folders, reachability })
         : null
       setNote(after && (after.tone === 'paused' || after.tone === 'failing')
         ? 'Saved — the login was checked against the mail server before it was stored. This account is ' +
@@ -442,8 +465,8 @@ export default function MailboxConnectionSection({ locationId, mailbox, onChange
   // is correct before anything is fetched.
   const status = connectionStatus(
     state
-      ? { ingress: state.ingress, connection: state.connection, folders: state.folders }
-      : { ingress: mailbox.ingress, connection: mailbox.ingress === 'imap' ? {} : null, folders: [] }
+      ? { ingress: state.ingress, connection: state.connection, folders: state.folders, reachability }
+      : { ingress: mailbox.ingress, connection: mailbox.ingress === 'imap' ? {} : null, folders: [], reachability }
   )
   const connected = !!state?.connection
   const inbox = (state?.folders || []).find(f => f.folder === 'inbox') || null

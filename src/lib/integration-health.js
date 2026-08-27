@@ -19,6 +19,10 @@
 
 import { getConnection } from '@/lib/connection-registry'
 import { gradeXeroConnection } from '@/lib/integrations-hub'
+// MAILBOX-UNREACHABLE.1 — the structural "can this address receive at all"
+// verdict. Node-only (it resolves MX), which is fine here: every caller of
+// getIntegrationHealth is a server page or an /api route.
+import { assessMailboxReachability } from '@/lib/mail/mailbox-reachability'
 
 // ── Pure status helpers (unit-tested) ─────────────────────────────────
 
@@ -107,9 +111,30 @@ export function emailSendStatus({ total = 0, bounced = 0, complained = 0 } = {})
 // Thresholds scale with observed volume so a quiet-by-nature address doesn't
 // cry wolf: a busy mailbox (≥8 arrivals in the window) warns after 7 quiet
 // days and goes down after 14; an occasional one (1–7) after 14/28. A mailbox
-// with NOTHING in the window is 'unknown', not red — it may be new, or
-// Stillorgan's cannot-receive domain — but note a dead webhook passes through
-// warn and down on its way there, so silence is never green.
+// with NOTHING in the window is 'unknown', not red — it may simply be new —
+// but note a dead webhook passes through warn and down on its way there, so
+// silence is never green.
+//
+// 🔴 MAILBOX-UNREACHABLE.1 — "OR STILLORGAN'S CANNOT-RECEIVE DOMAIN" USED TO BE
+// IN THAT SENTENCE, AND THAT WAS THE HOLE. This row graded a mailbox that has
+// never received and never CAN as 'unknown', which reads as "no news yet" —
+// the same grey a genuinely-new address gets, on a row whose whole purpose is
+// to notice mail that stopped arriving. `stillorgan@un1t.com` has been the
+// location's ONLY mailbox and its is_default since mig 485, so the pane has
+// been quietly grey while 20,356 broadcast sends stamped it as Reply-To.
+//
+// Silence could not tell those two apart, and no silence-shaped threshold ever
+// could — that is why the answer comes from somewhere else entirely: the
+// caller resolves the address's DOMAIN (src/lib/mail/mailbox-reachability.js)
+// and hands the verdict in. Volume is not consulted for it, so a healthy
+// address that had no mail this week is untouched by this branch; only a
+// mailbox whose domain provably does not deliver here is graded on it.
+//
+// DEFAULT vs NOT is the difference between down and warn, deliberately. An
+// unreachable address nobody is pointed at is a configuration gap. THE
+// DEFAULT is the address the platform prints in every campaign's Reply-To and
+// tells members to write to — that is not a gap, it is a broken inbound
+// channel with customers already using it.
 //
 // rehost_failed folds in because a spike there is exactly how the shim's
 // Storage-auth bug hid (#1268): mail kept filing, files kept vanishing.
@@ -118,7 +143,7 @@ const EMAIL_INBOUND_DAY_MS = 24 * 60 * 60 * 1000
 const BUSY_MAILBOX_MIN_ARRIVALS = 8
 const REHOST_FAILED_DOWN_AT = 10
 
-export function emailInboundStatus({ mailboxes = [], inbound = [], rehostFailed24h = 0, now } = {}) {
+export function emailInboundStatus({ mailboxes = [], inbound = [], rehostFailed24h = 0, reachability = null, now } = {}) {
   const nowMs = Number(now) || 0
   const byMailbox = new Map()
   for (const row of inbound) {
@@ -135,6 +160,15 @@ export function emailInboundStatus({ mailboxes = [], inbound = [], rehostFailed2
   let lastInboundMs = 0
   const graded = []
   for (const mb of mailboxes) {
+    // The structural verdict is checked FIRST and short-circuits the volume
+    // thresholds entirely. An unreachable mailbox has no arrivals to reason
+    // about, and letting it fall through to 'unknown' is precisely the bug
+    // this branch exists to close. Anything the caller did not hand a verdict
+    // for behaves exactly as it did before.
+    if (reachability?.[mb?.id]?.state === 'unreachable') {
+      graded.push({ status: mb?.is_default ? 'down' : 'warn', mb, unreachable: true })
+      continue
+    }
     const seen = byMailbox.get(mb?.id)
     if (!seen) { graded.push({ status: 'unknown', mb }) ; continue }
     if (seen.lastAt > lastInboundMs) lastInboundMs = seen.lastAt
@@ -160,7 +194,12 @@ export function emailInboundStatus({ mailboxes = [], inbound = [], rehostFailed2
   const parts = []
   if (offenders.length) {
     parts.push(offenders
-      .map((g) => `${g.mb?.address || 'mailbox'} quiet ${Math.floor(g.quietDays)}d`)
+      .map((g) => g.unreachable
+        // Says the CAUSE, not the symptom. "quiet 21d" would send an operator
+        // hunting for an outage that is not there; this one names the thing
+        // they have to decide about.
+        ? `${g.mb?.address || 'mailbox'} cannot receive${g.mb?.is_default ? ' (studio default)' : ''}`
+        : `${g.mb?.address || 'mailbox'} quiet ${Math.floor(g.quietDays)}d`)
       .join(' · '))
   } else if (known.length === 0) {
     parts.push(`No inbound email in ${EMAIL_INBOUND_WINDOW_DAYS} days`)
@@ -365,8 +404,12 @@ export async function getIntegrationHealth(db, locationId) {
   // mailboxes — a studio without email has nothing to monitor. Derived from
   // filed rows, not a heartbeat stamp: see emailInboundStatus.
   try {
+    // is_default + ingress arrive for MAILBOX-UNREACHABLE.1: the first decides
+    // warn vs down for an address that cannot receive, the second tells the
+    // assessor to skip a connected account (where the domain's MX is beside
+    // the point — that is the whole premise of the IMAP connector).
     const { data: mailboxes } = await db.from('email_mailboxes')
-      .select('id, address')
+      .select('id, address, is_default, ingress')
       .eq('location_id', locationId)
       .eq('active', true)
       .limit(200)
@@ -399,12 +442,28 @@ export async function getIntegrationHealth(db, locationId) {
         mailboxId: r?.email_tickets?.mailbox_id || null,
         createdAt: r?.created_at,
       }))
+      // Best-effort and never fatal: an unreadable resolver leaves the row
+      // grading exactly as it did before this landed, which is the correct
+      // degradation for a check that can only ever ADD a fault.
+      let reachability = null
+      try {
+        reachability = await assessMailboxReachability(db, locationId, mailboxes)
+      } catch { reachability = null }
+
       const s = emailInboundStatus({
-        mailboxes, inbound, rehostFailed24h: rehostRes?.count || 0, now: Date.now(),
+        mailboxes, inbound, rehostFailed24h: rehostRes?.count || 0, reachability, now: Date.now(),
       })
+      const anyUnreachable = Object.values(reachability || {}).some(v => v?.state === 'unreachable')
       rows.push({
         key: 'email_inbound', name: 'Email (inbound)',
         status: s.status, detail: s.detail, lastSuccess: s.lastInboundAt,
+        // Only on the reachability fault. The quiet-mailbox grades already
+        // read as their own instruction ("quiet 21d"), and a remedy line
+        // stapled to every one of them is how a pane stops being read.
+        remedy: anyUnreachable
+          ? 'That address\'s domain does not deliver mail to this platform. Connect its mailbox login, or point the studio default at an address that does receive here.'
+          : undefined,
+        href: anyUnreachable ? `/settings/locations/${locationId}?section=email` : undefined,
       })
     }
   } catch { rows.push({ key: 'email_inbound', name: 'Email (inbound)', status: 'unknown', detail: 'Unavailable' }) }

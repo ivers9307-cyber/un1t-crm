@@ -13,12 +13,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+// MAILBOX-UNREACHABLE.1 — GET now resolves each address's MX. Mocked so no
+// test in this file touches the network: the fixtures use REAL domains
+// (un1tdublin.com, hatchstreetfitness.com) and a unit suite that quietly
+// depends on live DNS goes red the day a resolver hiccups in CI.
+vi.mock('node:dns/promises', () => ({ resolveMx: vi.fn() }))
 vi.mock('@/lib/auth', async () => {
   const actual = await vi.importActual('@/lib/auth')
   return { ...actual, getCurrentUser: vi.fn() }
 })
 
+import { resolveMx } from 'node:dns/promises'
 import { GET, POST } from './route'
+import { _resetMxCache } from '@/lib/mail/mailbox-reachability'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { makeDb, insertsInto, updatesTo, writesTo } from '@/app/api/email/tickets/_test-db'
@@ -52,8 +59,15 @@ async function list(p = props) {
   return { res, body: await res.json() }
 }
 
+// Google's MX, as un1tdublin.com really publishes it (checked 2026-08-26) —
+// so the fixture studio is, correctly, an address that cannot receive here.
+const GOOGLE_MX = [{ priority: 10, exchange: 'aspmx.l.google.com' }]
+const POSTMARK_MX = [{ priority: 10, exchange: 'inbound.postmarkapp.com' }]
+
 beforeEach(() => {
   vi.clearAllMocks()
+  _resetMxCache()
+  resolveMx.mockResolvedValue(POSTMARK_MX)
   getCurrentUser.mockResolvedValue(OWNER_A)
   setupDb(adminState())
 })
@@ -293,5 +307,50 @@ describe('POST — adding an account', () => {
     const { res } = await post({ address: 'x@y.ie', label: 'X' }, { params: { id: LOC_B } })
     expect(res.status).toBe(403)
     expect(writesTo(db)).toEqual([])
+  })
+})
+
+// MAILBOX-UNREACHABLE.1 — the card cannot warn about an address it was never
+// told about, so the verdict has to ride on the list response. These assert
+// the ROUTE's contract (a verdict per row, and a list that survives without
+// one); the four states themselves are proven in
+// src/lib/mail/mailbox-reachability.test.js.
+describe('GET — whether each address can actually receive', () => {
+  it('attaches a verdict to every mailbox', async () => {
+    const { body } = await list()
+    for (const m of body.data.mailboxes) {
+      expect(m.reachability).toBeTruthy()
+      expect(typeof m.reachability.state).toBe('string')
+    }
+  })
+
+  it('flags a studio whose domain delivers somewhere else, and ships the copy with it', async () => {
+    resolveMx.mockResolvedValue(GOOGLE_MX)
+    const { body } = await list()
+    const studio = body.data.mailboxes.find(m => m.id === MB_STUDIO.id)
+    expect(studio.reachability.state).toBe('unreachable')
+    // The sentences are built server-side: the card is a client component and
+    // the reachability module imports node:dns, so it cannot build them itself.
+    expect(studio.reachability.notice.chip).toBe('Cannot receive')
+    expect(studio.reachability.notice.detail).toContain('un1tdublin.com')
+    expect(studio.reachability.notice.detail).toContain('aspmx.l.google.com')
+  })
+
+  it('says NOTHING about an address whose domain does deliver here — however quiet it is', async () => {
+    // adminState() files no inbound mail at all. A reachable mailbox with zero
+    // arrivals must still render clean, or the warning stops being read.
+    const { body } = await list()
+    const studio = body.data.mailboxes.find(m => m.id === MB_STUDIO.id)
+    expect(studio.reachability.state).toBe('ok')
+    expect(studio.reachability.notice).toBeNull()
+  })
+
+  it('still returns the accounts when the lookup blows up entirely', async () => {
+    resolveMx.mockImplementation(() => { throw new Error('resolver on fire') })
+    const { res, body } = await list()
+    expect(res.status).toBe(200)
+    expect(body.data.mailboxes.length).toBeGreaterThan(0)
+    // Unknown, not "cannot receive": a DNS fault must never invent a fault.
+    for (const m of body.data.mailboxes) expect(m.reachability?.notice ?? null).toBeNull()
   })
 })

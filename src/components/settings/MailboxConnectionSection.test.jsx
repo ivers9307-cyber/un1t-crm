@@ -148,8 +148,42 @@ describe('connectionStatus — the three states must be distinguishable', () => 
       connectionStatus({ ingress: 'imap', connection: CONNECTION, folders: [okInbox] }),
       connectionStatus({ ingress: 'imap', connection: CONNECTION, folders: [{ ...okInbox, last_error: 'x' }] }),
       connectionStatus({ ingress: 'imap', connection: CONNECTION, folders: [] }),
+      connectionStatus({ ingress: 'postmark', connection: null, folders: [], reachability: { state: 'unreachable' } }),
+      connectionStatus({ ingress: 'postmark', connection: null, folders: [], reachability: { state: 'indirect' } }),
     ]
     for (const s of states) expect(s.chip).toMatch(/^bg-[a-z]+-500\/10 text-[a-z]+-700$/)
+  })
+
+  // MAILBOX-UNREACHABLE.1 — the 'Not connected' detail line used to assert
+  // "Mail reaches this account through the standard route" for EVERY mailbox,
+  // including one on a domain that has never delivered here and never will.
+  describe('the "not connected" detail must not claim mail arrives', () => {
+    const notConnected = (reachability) =>
+      connectionStatus({ ingress: 'postmark', connection: null, folders: [], reachability })
+
+    it('keeps the old sentence for an address that really is on the standard route', () => {
+      expect(notConnected({ state: 'ok' }).detail).toMatch(/standard route/)
+      expect(notConnected(null).detail).toMatch(/standard route/)
+    })
+
+    it('never claims the standard route for an unreachable address', () => {
+      const s = notConnected({ state: 'unreachable' })
+      expect(s.detail).not.toMatch(/standard route/)
+      expect(s.detail).toMatch(/does not reach the platform/)
+      expect(s.tone).toBe('unreachable')
+      expect(s.label).toBe('Not connected')  // still true, and still the label
+    })
+
+    it('names the forward for an address that only receives indirectly', () => {
+      const s = notConnected({ state: 'indirect' })
+      expect(s.detail).toMatch(/forward/)
+      expect(s.detail).not.toMatch(/standard route/)
+    })
+
+    it('an unknown verdict is treated exactly like no verdict at all', () => {
+      expect(notConnected({ state: 'unknown' }).detail).toBe(notConnected(null).detail)
+      expect(notConnected({ state: 'unknown' }).tone).toBe('idle')
+    })
   })
 })
 

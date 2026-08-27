@@ -44,6 +44,39 @@ const ROLE_LABEL = {
   staff: 'Staff',
 }
 
+/**
+ * MAILBOX-UNREACHABLE.1 — the banner that says an address cannot receive.
+ *
+ * The whole notice (headline, detail, remedy, chip word) is built SERVER-side
+ * in src/lib/mail/mailbox-reachability.js and arrives on the mailbox row: that
+ * module imports node:dns, so a client component cannot import it, and having
+ * one author for the sentences is what stops this card and the integration
+ * health pane describing the same mailbox two different ways.
+ *
+ * It renders nothing at all when there is nothing true to say — an address on
+ * a domain that does deliver here, a connected account, or a DNS lookup that
+ * could not be completed. A quiet mailbox is NEVER a reason for this to
+ * appear; the verdict behind it never looks at volume (see that module's
+ * header for why).
+ */
+function ReachabilityNotice({ notice }) {
+  if (!notice) return null
+  const error = notice.tone === 'error'
+  const box = error
+    ? 'border-red-500/30 bg-red-500/10 text-red-700'
+    : 'border-amber-500/30 bg-amber-500/10 text-amber-700'
+  return (
+    <div className={`mt-3 flex items-start gap-2 rounded-lg border p-3 text-[11px] ${box}`}>
+      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
+      <span>
+        <strong className="block text-xs">{notice.headline}</strong>
+        <span className="mt-1 block">{notice.detail}</span>
+        {notice.remedy && <span className="mt-1 block">{notice.remedy}</span>}
+      </span>
+    </div>
+  )
+}
+
 function AccessChip({ access }) {
   if (access === 'implicit') {
     return <span className={`${CHIP} bg-purple-500/10 text-purple-700`}>Always</span>
@@ -369,6 +402,16 @@ export default function EmailMailboxesCard({ locationId }) {
                         {!m.active && (
                           <span className={`${CHIP} bg-amber-500/10 text-amber-700`}>Deactivated</span>
                         )}
+                        {/* Next to Default on purpose. "Default" and "Cannot
+                            receive" on the same line is the sentence an owner
+                            needs to read in one glance — it is the pairing,
+                            not either chip, that is the problem. */}
+                        {m.reachability?.notice?.chip && (
+                          <span className={`${CHIP} bg-red-500/10 text-red-700`}>
+                            <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+                            {m.reachability.notice.chip}
+                          </span>
+                        )}
                       </div>
                     )}
                     <div className="mt-1 font-mono text-xs text-un1t-subtle break-all">{m.address}</div>
@@ -409,6 +452,8 @@ export default function EmailMailboxesCard({ locationId }) {
                     </Button>
                   </div>
                 </div>
+
+                <ReachabilityNotice notice={m.reachability?.notice} />
 
                 {!m.active && (
                   <p className="mt-2 text-[11px] text-un1t-muted">
@@ -482,6 +527,7 @@ export default function EmailMailboxesCard({ locationId }) {
                 <MailboxConnectionSection
                   locationId={locationId}
                   mailbox={m}
+                  reachability={m.reachability}
                   onChanged={load}
                 />
               </li>

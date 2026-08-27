@@ -224,6 +224,70 @@ describe('emailInboundStatus', () => {
   it('tolerates empty input', () => {
     expect(emailInboundStatus({ now: NOW }).status).toBe('unknown')
   })
+
+  // MAILBOX-UNREACHABLE.1 — the branch that separates "quiet" from "cannot
+  // possibly receive". Everything above this comment must keep behaving
+  // exactly as it did, which is why every case here passes `reachability`
+  // explicitly and none of the ones above do.
+  describe('an address whose domain does not deliver here', () => {
+    const DEAD = { id: 'mb-dead', address: 'stillorgan@un1t.com', is_default: true }
+    const DEAD_SPARE = { id: 'mb-dead', address: 'old@un1t.com', is_default: false }
+    const unreachable = { 'mb-dead': { state: 'unreachable' } }
+
+    it('is DOWN when it is the studio default — members are told to reply there', () => {
+      const s = emailInboundStatus({ mailboxes: [DEAD], inbound: [], reachability: unreachable, now: NOW })
+      expect(s.status).toBe('down')
+      expect(s.detail).toContain('stillorgan@un1t.com')
+      expect(s.detail).toMatch(/cannot receive/)
+      expect(s.detail).toMatch(/studio default/)
+    })
+
+    it('is WARN when nobody is pointed at it — a configuration gap, not a broken channel', () => {
+      const s = emailInboundStatus({ mailboxes: [DEAD_SPARE], inbound: [], reachability: unreachable, now: NOW })
+      expect(s.status).toBe('warn')
+      expect(s.detail).not.toMatch(/studio default/)
+    })
+
+    it('says the CAUSE, never "quiet Nd" — that would send someone hunting an outage', () => {
+      const s = emailInboundStatus({ mailboxes: [DEAD], inbound: [], reachability: unreachable, now: NOW })
+      expect(s.detail).not.toMatch(/quiet/)
+    })
+
+    it('cannot be masked by a healthy sibling', () => {
+      const s = emailInboundStatus({
+        mailboxes: [MB, DEAD],
+        inbound: arrivals('mb-1', 10, 0.1),
+        reachability: unreachable,
+        now: NOW,
+      })
+      expect(s.status).toBe('down')
+    })
+
+    // 🔴 THE ANTI-CRY-WOLF PROPERTY. A reachable mailbox with no mail at all
+    // must stay 'unknown' — grey, not red. If this ever flips, the row stops
+    // being read and the case above stops mattering.
+    it('leaves a REACHABLE mailbox with zero arrivals exactly as it was', () => {
+      const s = emailInboundStatus({
+        mailboxes: [MB], inbound: [], reachability: { 'mb-1': { state: 'ok' } }, now: NOW,
+      })
+      expect(s.status).toBe('unknown')
+    })
+
+    it('an unreadable DNS answer changes nothing', () => {
+      const s = emailInboundStatus({
+        mailboxes: [MB], inbound: [], reachability: { 'mb-1': { state: 'unknown' } }, now: NOW,
+      })
+      expect(s.status).toBe('unknown')
+    })
+
+    it('an indirect (forwarded) mailbox is graded on arrivals like any other', () => {
+      const s = emailInboundStatus({
+        mailboxes: [MB], inbound: arrivals('mb-1', 10, 0.1),
+        reachability: { 'mb-1': { state: 'indirect' } }, now: NOW,
+      })
+      expect(s.status).toBe('ok')
+    })
+  })
 })
 
 // ── getIntegrationHealth — the webhook dead-letter block (DEADLETTER-LOC.1) ──
