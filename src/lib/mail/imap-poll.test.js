@@ -35,11 +35,22 @@ vi.mock('../log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn()
 // way the contract says they do.
 vi.mock('./sent-lane', () => ({ fileClientSentReply: vi.fn() }))
 
+// MAILBOX-SENT-ATTACH.1 — the attachment ROW-WRITER, mocked. It is shared with
+// the inbound webhook and has its own tests; what belongs here is only whether
+// this lane calls it, with the MESSAGE row id rather than the synthetic one,
+// and — the half that actually matters — whether the bytes are handed back on
+// an accepted outcome that filed no row.
+vi.mock('@/lib/email-attachments-server', async (importOriginal) => ({
+  ...(await importOriginal()),
+  storeInboundAttachments: vi.fn(async () => ({ stored: 1, skipped: 0, bytesStored: 900, reasons: {} })),
+}))
+
 // Imported back so the LOUD half of several fixes can be asserted. A step-over,
 // a dead-letter and a blank body are each "correct" only because an operator is
 // told; a test that checked the cursor and not the log would pass on a version
 // that lost the message in silence.
 import { logError, logWarn } from '../log'
+import { storeInboundAttachments } from '@/lib/email-attachments-server'
 import { fileClientSentReply } from './sent-lane'
 import { seal } from './secret-box'
 import {
@@ -1560,6 +1571,19 @@ describe('a message that cannot be forwarded never stalls the mailbox forever', 
   })
 })
 
+/**
+ * imapflow's downloadMany() shape, which is what the attachment path uses.
+ *
+ * Module-scoped because BOTH lanes stage now: the bare fake's downloadMany()
+ * returns {}, so a test that forgets this measures zero uploads and passes
+ * while proving nothing — which is exactly what an earlier draft of the sent
+ * lane's attachment tests did.
+ */
+function withAttachmentDownload(imap) {
+  imap.client.downloadMany = async () => ({ 2: { content: Buffer.from('%PDF-1.4') } })
+  return imap
+}
+
 /* ══════════ 10. staged attachment bytes are never orphaned ═══════════ */
 
 describe('staged attachment bytes', () => {
@@ -1583,11 +1607,7 @@ describe('staged attachment bytes', () => {
     return msg
   }
 
-  /** imapflow's downloadMany() shape, which is what the attachment path uses. */
-  function withAttachmentDownload(imap) {
-    imap.client.downloadMany = async () => ({ 2: { content: Buffer.from('%PDF-1.4') } })
-    return imap
-  }
+  // withAttachmentDownload is now module-scoped — the sent lane needs it too.
 
   const seeded = {
     mailbox_id: MAILBOX.id, folder: 'inbox', uidvalidity: 12345, last_uid: 10,
@@ -2073,15 +2093,15 @@ describe('the sent lane files a reply instead of posting it', () => {
     )
   })
 
-  it('🔴 stages NO attachment bytes, and says so rather than losing them in silence', async () => {
-    // The sent lane writes a message row and nothing else, so staged bytes
-    // would sit in the metered bucket with nothing that will ever name them —
-    // billed against the mailbox's quota, invisible. Skipping the upload is
-    // right; skipping it QUIETLY would not be, because a colleague's attached
-    // file genuinely does not reach the ticket.
-    stubFetch({ status: 200 })
-    const withFile = sentMessage(11)
-    withFile.bodyStructure = {
+  // MAILBOX-SENT-ATTACH.1 — the sent lane now STAGES AND REDEEMS.
+  //
+  // It used to stage nothing, because staging without a redeemer orphans
+  // billable bytes. storeInboundAttachments is direction-agnostic, so the lane
+  // has a redeemer now — and the half that matters is the NEGATIVE case: an
+  // accepted outcome that filed no message row must still give the bytes back.
+  const withPdf = (uid) => {
+    const m = sentMessage(uid)
+    m.bodyStructure = {
       type: 'multipart/mixed',
       childNodes: [
         { part: '1', type: 'text/plain', encoding: '7bit', size: 40 },
@@ -2091,25 +2111,87 @@ describe('the sent lane files a reply instead of posting it', () => {
         },
       ],
     }
-    const { deps } = fakeImap({
-      uidNext: 12, messages: [withFile], bodies: { '11:1': 'see attached' },
-    })
+    return m
+  }
+
+  const sentWorld = (uid) => {
+    // withAttachmentDownload is what makes downloadMany() actually yield bytes
+    // — the bare fake returns {}, which is why an earlier draft of these tests
+    // measured zero uploads and proved nothing.
+    const { deps } = withAttachmentDownload(fakeImap({
+      uidNext: uid + 1, messages: [withPdf(uid)], bodies: { [`${uid}:1`]: 'see attached' },
+    }))
     const db = makeDb({
       credentials: { [MAILBOX.id]: credential() },
       ingress: { [`${MAILBOX.id}:sent`]: sentCursor },
     })
+    return { db, deps }
+  }
+
+  it('stages a mail-client reply’s files and REDEEMS them when it is filed', async () => {
+    fileClientSentReply.mockResolvedValue({
+      ok: true, outcome: 'filed', ticketId: 'tk-1', messageId: 'msg-99',
+    })
+    const { db, deps } = sentWorld(11)
 
     const out = await pollMailbox(db, MAILBOX, { now: NOW, folder: 'sent', deps })
 
     expect(out).toMatchObject({ ok: true, ingested: 1 })
-    // Nothing uploaded, so nothing to orphan and nothing to discard.
-    expect(db.state.uploads).toHaveLength(0)
+    // The bytes went up…
+    expect(db.state.uploads.length).toBeGreaterThan(0)
+    // …the markers reached the writer…
+    expect(fileClientSentReply.mock.calls[0][1].payload.Attachments).not.toEqual([])
+    // …the row-writer was handed the MESSAGE row id, not the synthetic one…
+    expect(storeInboundAttachments).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ messageId: 'msg-99', mailboxId: MAILBOX.id }),
+    )
+    // …and nothing was thrown away.
     expect(db.state.removed).toHaveLength(0)
-    expect(fileClientSentReply.mock.calls[0][1].payload.Attachments).toEqual([])
-    expect(logWarn).toHaveBeenCalledWith(
+  })
+
+  it('🔴 GIVES THE BYTES BACK when the reply was a duplicate — nothing will ever name them', async () => {
+    // `duplicate` is ACCEPTED, so the watermark advances and pollOpenFolder's
+    // only other discard (the permanent-rejection path) is never reached. If
+    // the accepted path did not drop these, every re-poll of our own SMTP
+    // sends would leak a fresh copy into a metered bucket for ever.
+    fileClientSentReply.mockResolvedValue({ ok: true, outcome: 'duplicate', ticketId: 'tk-1' })
+    const { db, deps } = sentWorld(11)
+
+    const out = await pollMailbox(db, MAILBOX, { now: NOW, folder: 'sent', deps })
+
+    expect(out).toMatchObject({ ok: true, ingested: 1 })
+    expect(storeInboundAttachments).not.toHaveBeenCalled()
+    expect(db.state.removed.length).toBeGreaterThan(0)
+  })
+
+  it('🔴 GIVES THE BYTES BACK on an orphan — there is no row to hang them off', async () => {
+    fileClientSentReply.mockResolvedValue({ ok: true, outcome: 'orphan' })
+    const { db, deps } = sentWorld(11)
+
+    await pollMailbox(db, MAILBOX, { now: NOW, folder: 'sent', deps })
+
+    expect(storeInboundAttachments).not.toHaveBeenCalled()
+    expect(db.state.removed.length).toBeGreaterThan(0)
+  })
+
+  it('keeps the reply when attachment filing throws — bookkeeping never costs the message', async () => {
+    // The reply is already on the ticket. Turning an attachment fault into a
+    // retry would re-file the message; the operator sees the reply without its
+    // files, which is the old behaviour, not a loss.
+    fileClientSentReply.mockResolvedValue({
+      ok: true, outcome: 'filed', ticketId: 'tk-1', messageId: 'msg-99',
+    })
+    storeInboundAttachments.mockRejectedValueOnce(new Error('storage is down'))
+    const { db, deps } = sentWorld(11)
+
+    const out = await pollMailbox(db, MAILBOX, { now: NOW, folder: 'sent', deps })
+
+    expect(out).toMatchObject({ ok: true, ingested: 1 })
+    expect(logError).toHaveBeenCalledWith(
       'imap-poll',
-      expect.stringContaining('NOT recorded on the ticket'),
-      expect.objectContaining({ uid: 11, files: 1 }),
+      expect.stringContaining('its files are not'),
+      expect.objectContaining({ uid: 11 }),
     )
   })
 
