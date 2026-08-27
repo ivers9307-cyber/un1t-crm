@@ -21,16 +21,25 @@
 // only new code is a token-refresh step inside this file plus a consent
 // screen — not surgery across the poller, the verifier and the sender.
 //
-// ── Why OAuth is stubbed rather than built ────────────────────────────────
-// Gmail over IMAP with XOAUTH2 needs the `https://mail.google.com/` scope,
-// which Google classes as RESTRICTED. Shipping that to users outside our own
-// Workspace requires OAuth app verification PLUS an annual third-party CASA
-// Tier 2 assessment — real money and months of calendar time, and leaving the
-// app in Testing status is not a workaround (refresh tokens expire after 7
-// days). Microsoft is, counterintuitively, the cheap one: a multi-tenant app
-// registration and ordinary user consent, no CASA. So R1 ships password auth
-// with the columns and this resolver already in place; the provider work is
-// deferred, not designed around.
+// ── The provider work landed; this file did not change shape ──────────────
+// MAILBOX-OAUTH.1 filled the seam in. Microsoft is wired end to end (a
+// multi-tenant app registration and ordinary consent — no CASA, and Exchange
+// Online has no basic-auth IMAP left, so it is the only way into those
+// mailboxes). Google is present and REFUSING with its real reason: Gmail over
+// IMAP with XOAUTH2 needs the `https://mail.google.com/` scope, which Google
+// classes as RESTRICTED, and shipping that to users outside our own Workspace
+// requires OAuth app verification PLUS an annual third-party CASA Tier 2
+// assessment — real money and months of calendar time. Leaving the app in
+// Testing status is not a workaround (those refresh tokens expire after 7
+// days). See src/lib/mail/oauth-providers.js.
+//
+// 🔴 THE REFRESH LIVES NEXT DOOR, DELIBERATELY. This function stays PURE and
+// SYNCHRONOUS — no DB, no network — because three call sites depend on that,
+// including one (the connect route's credential merge) that cannot await.
+// `resolveFreshAuth(db, row)` in src/lib/mail/oauth-tokens.js is the wrapper
+// that renews a spent token and then delegates right back here, so both paths
+// build the auth object with the same code. Call sites that can await use the
+// wrapper; the verdicts below are unchanged either way.
 //
 // ── Two hard guarantees ───────────────────────────────────────────────────
 // 1. IT NEVER THROWS. Callers are a cron poller and a connect route, and both
@@ -60,9 +69,16 @@ import { isConfigured, open } from './secret-box.js'
  * "expired" verdict. Connecting, opening a folder and fetching takes seconds,
  * so the check has to cover the whole operation, not its first millisecond.
  *
- * Inert until OAuth is actually built (no row can carry `auth_type: 'oauth'`
- * before then), and safe when it is: the remedy for `oauth_expired` is a
- * refresh, so erring early costs a refresh call, not a lost message.
+ * Safe to err early: the remedy for `oauth_expired` is a refresh, so it costs
+ * a refresh call, not a lost message.
+ *
+ * 🔴 STRICTLY SMALLER THAN oauth-tokens.js's REFRESH_WINDOW_MS (5 minutes),
+ * and the ordering is the point. That one decides when to SPEND a refresh;
+ * this one decides when to REFUSE a token outright. Keeping the refresh window
+ * wider means the renewal always fires first, so a caller going through
+ * `resolveFreshAuth` should essentially never see `oauth_expired` — and when
+ * it does, that is the genuinely different fact that a refresh was attempted
+ * and did not stick.
  */
 const EXPIRY_SKEW_MS = 60_000
 

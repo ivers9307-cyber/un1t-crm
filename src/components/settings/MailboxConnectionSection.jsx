@@ -43,7 +43,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import {
-  Link2, Link2Off, Loader2, AlertTriangle, CheckCircle2, ShieldAlert, PauseCircle, Clock,
+  Link2, Link2Off, Loader2, AlertTriangle, CheckCircle2, ShieldAlert, PauseCircle, Clock, LogIn,
 } from 'lucide-react'
 import { Button } from '@/components/ui'
 
@@ -75,7 +75,17 @@ export const PROVIDER_PRESETS = {
     smtp_port: 465,
     smtp_secure: true,
     sent_folder: '[Gmail]/Sent Mail',
+    // How this provider authenticates on this screen. 'password' renders the
+    // host/port form; 'oauth' replaces it with a single sign-in button and no
+    // fields at all, because for an OAuth provider every one of those fields is
+    // ours to know and none of them is the operator's to guess.
+    auth: 'password',
     supported: true,
+    // MAILBOX-OAUTH.6 — the key in the server's oauth_providers catalogue whose
+    // refusal belongs on THIS row. Gmail connects with an app password today,
+    // and 'Sign in with Google' is the thing that does not exist; the reason
+    // comes from the server so there is exactly one copy of it.
+    oauthKey: 'google',
   },
   microsoft: {
     label: 'Microsoft 365 / Outlook',
@@ -86,13 +96,20 @@ export const PROVIDER_PRESETS = {
     smtp_port: 587,
     smtp_secure: false,
     sent_folder: 'Sent Items',
-    // 🔴 KEPT IN THE LIST AND DISABLED, deliberately. Exchange Online stopped
-    // accepting a mailbox password over IMAP, so this cannot be connected at
-    // all until the OAuth work lands (mig 572's auth_type comment defers it).
-    // Removing the option would leave an operator searching for Microsoft,
-    // failing to find it, and concluding the connector is broken. Naming it
-    // and saying why sends them to ask for the thing that would fix it.
-    supported: false,
+    // 🔴 MAILBOX-OAUTH.6 — THIS ROW USED TO SAY `supported: false`, AND THE
+    // REASON IT GAVE HAS STOPPED BEING TRUE. Exchange Online still refuses a
+    // mailbox password over IMAP — that half stands, and is exactly why this
+    // provider is OAuth-only rather than OAuth-as-an-option. What changed is
+    // that the Microsoft sign-in now exists (…/oauth/start), so the disabled
+    // option and its 'not supported yet' note would now be a false statement
+    // rendered next to the button that contradicts it.
+    //
+    // A retracted limitation is REWRITTEN, not softened — the same call
+    // MAILBOX-COEXIST.1 made when Phase 8 falsified its own warning about
+    // replies sent from a mail client.
+    auth: 'oauth',
+    supported: true,
+    oauthKey: 'microsoft',
   },
   custom: {
     label: 'Other IMAP host',
@@ -103,14 +120,31 @@ export const PROVIDER_PRESETS = {
     smtp_port: 465,
     smtp_secure: true,
     sent_folder: '',
+    auth: 'password',
     supported: true,
+    oauthKey: null,
   },
 }
 
-const MICROSOFT_NOTE =
-  'Microsoft 365 and Outlook accounts cannot be connected yet. Exchange Online no longer accepts ' +
-  'a mailbox password over IMAP, so these need a Microsoft sign-in (OAuth) that this release does ' +
-  'not include. Gmail, Google Workspace and any host that still issues app passwords work today.'
+/**
+ * The provider sign-in note for a preset, taken from the SERVER's catalogue.
+ *
+ * Returns null when there is nothing to say — the provider is available, or the
+ * catalogue has not loaded, or this preset has no OAuth counterpart. Never
+ * invents a sentence: an unavailable provider whose reason we do not have is
+ * shown as nothing rather than as a guess, because the whole value of this
+ * paragraph is that it names the real blocker (Google's app verification and
+ * CASA assessment) rather than 'not supported'.
+ *
+ * Pure and exported so the states are tested directly rather than through the
+ * markup.
+ */
+export function providerNote(preset, catalogue) {
+  if (!preset?.oauthKey || !Array.isArray(catalogue)) return null
+  const entry = catalogue.find(p => p && p.key === preset.oauthKey)
+  if (!entry || entry.status === 'available') return null
+  return entry.unavailableReason || null
+}
 
 /**
  * Turn the route's state into the one chip an operator reads at a glance.
@@ -302,6 +336,17 @@ export default function MailboxConnectionSection({ locationId, mailbox, reachabi
   const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState(false)
 
+  // MAILBOX-OAUTH.6 — what the server says about provider sign-ins. Held rather
+  // than hard-coded so Google's refusal (app verification + a CASA assessment)
+  // has exactly one author. Null until the panel is opened and the state loads,
+  // which is why providerNote() answers null rather than guessing.
+  const [providers, setProviders] = useState(null)
+
+  // The outcome of a consent round trip, read once off the URL the callback
+  // redirected to. A returning operator lands on a page with one collapsed row
+  // per account, so this both OPENS the right panel and says what happened.
+  const [oauthOutcome, setOauthOutcome] = useState(null)
+
   const [form, setForm] = useState(() => ({
     provider: 'gmail',
     username: mailbox.address || '',
@@ -324,6 +369,7 @@ export default function MailboxConnectionSection({ locationId, mailbox, reachabi
         return null
       } else {
         setState(j.data)
+        if (Array.isArray(j.data.oauth_providers)) setProviders(j.data.oauth_providers)
         if (j.data.connection) {
           setForm(f => ({
             ...f,
@@ -357,6 +403,41 @@ export default function MailboxConnectionSection({ locationId, mailbox, reachabi
   // Lazily — a studio with six accounts must not fire six health requests just
   // because someone opened the Email settings page.
   useEffect(() => { if (open) load() }, [open, load])
+
+  // MAILBOX-OAUTH.6 — the return leg of a consent flow.
+  //
+  // Read from window.location rather than useSearchParams() deliberately: this
+  // component renders inside a card inside a server page, and pulling in the
+  // navigation hook would put every mailbox row in a Suspense boundary for a
+  // value that is read once, on mount, in a browser. It runs in an effect so
+  // there is no window access during render.
+  //
+  // The params are CLEARED from the URL afterwards. A "connected" banner that
+  // survives a refresh — or a bookmark, or a shared link — is a claim about a
+  // check that ran minutes ago, and the chip below is the live answer. Removing
+  // them with replaceState also keeps a mailbox id out of anything the operator
+  // pastes to a colleague.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('email_oauth_mailbox') !== mailbox.id) return
+    const connected = params.get('email_oauth_connected')
+    const failed = params.get('email_oauth_error')
+    if (!connected && !failed) return
+
+    setOauthOutcome(connected ? { ok: true, message: connected } : { ok: false, message: failed })
+    // Opening the panel triggers the load() effect above, so the chip beside
+    // this message is the freshly-read state and not a stale render.
+    setOpen(true)
+
+    params.delete('email_oauth_mailbox')
+    params.delete('email_oauth_connected')
+    params.delete('email_oauth_error')
+    const query = params.toString()
+    window.history.replaceState(
+      null, '', `${window.location.pathname}${query ? `?${query}` : ''}`
+    )
+  }, [mailbox.id])
 
   const applyPreset = (provider) => {
     const preset = PROVIDER_PRESETS[provider] || PROVIDER_PRESETS.custom
@@ -472,6 +553,21 @@ export default function MailboxConnectionSection({ locationId, mailbox, reachabi
   const inbox = (state?.folders || []).find(f => f.folder === 'inbox') || null
   const showForm = !connected || editing
   const preset = PROVIDER_PRESETS[form.provider] || PROVIDER_PRESETS.custom
+  // MAILBOX-OAUTH.6 — this provider signs in rather than takes a password, so
+  // the host/port/password fields are not merely optional here, they are
+  // meaningless: every one of those values is ours to supply and none of them is
+  // the operator's to guess. The form is REPLACED, not disabled.
+  const isOAuthProvider = preset.auth === 'oauth'
+  // Google's sentence when gmail is selected; null when there is nothing true
+  // to say. Never a fallback string — see providerNote(). Named for what it IS
+  // rather than `note`, which this component already uses for the transient
+  // banner a save writes.
+  const providerRefusal = providerNote(preset, providers)
+  // Whether the STORED connection is a provider sign-in, which is a different
+  // question from which provider is selected in the form above.
+  const connectedViaOAuth = state?.connection?.auth_type === 'oauth'
+  const oauthStartHref =
+    `/api/locations/${locationId}/email/mailboxes/${mailbox.id}/oauth/start?provider=${encodeURIComponent(preset.oauthKey || '')}`
 
   return (
     <div className="mt-3 border-t border-un1t-border pt-3">
@@ -491,6 +587,24 @@ export default function MailboxConnectionSection({ locationId, mailbox, reachabi
           {loading && (
             <div className="flex items-center gap-2 text-xs text-un1t-subtle">
               <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> Reading the connection…
+            </div>
+          )}
+
+          {/* MAILBOX-OAUTH.6 — what came back from the provider. Rendered ABOVE
+              the chip's own detail so the two read in the order they happened:
+              what you just did, then where the account stands now. It never
+              contradicts the chip, because it says what the callback observed
+              and the chip says what the panel just re-read. */}
+          {oauthOutcome && (
+            <div
+              className={oauthOutcome.ok
+                ? 'flex items-start gap-2 rounded-lg border border-green-500/30 bg-green-500/10 p-3 text-sm text-green-700'
+                : 'flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-700'}
+            >
+              {oauthOutcome.ok
+                ? <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
+                : <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />}
+              <span>{oauthOutcome.message}</span>
             </div>
           )}
 
@@ -541,18 +655,39 @@ export default function MailboxConnectionSection({ locationId, mailbox, reachabi
                 )}
               </dl>
 
-              {/* The password is never shown, not even as a masked tail —
-                  there is nothing here to reveal. */}
+              {/* Neither credential is ever shown, not even as a masked tail —
+                  there is nothing here to reveal. The two sentences differ
+                  because the two REMEDIES differ: a password is retyped, a
+                  provider sign-in is redone at the provider, and telling an
+                  operator to "type a new password" for a Microsoft account
+                  would send them looking for something that does not exist. */}
               <p className="mt-2 text-[11px] text-un1t-muted">
-                The password is stored encrypted and is never shown again. Replacing it means typing
-                a new one.
+                {connectedViaOAuth
+                  ? 'This account is connected with a provider sign-in. Nothing is stored that anyone ' +
+                    'can read or reuse, and access renews itself. If the provider ever withdraws it, ' +
+                    'sign in again here.'
+                  : 'The password is stored encrypted and is never shown again. Replacing it means typing ' +
+                    'a new one.'}
               </p>
 
               <div className="mt-3 flex flex-wrap items-center gap-2">
-                {!editing && (
+                {!editing && !connectedViaOAuth && (
                   <Button type="button" size="sm" variant="secondary" onClick={() => setEditing(true)}>
                     Change settings or password
                   </Button>
+                )}
+                {connectedViaOAuth && (
+                  // A plain link, not a fetch: the provider's consent screen is
+                  // a full page navigation and there is nothing to POST. It
+                  // re-runs the same flow, which is what "sign in again" means
+                  // after a grant is withdrawn.
+                  <a
+                    href={`/api/locations/${locationId}/email/mailboxes/${mailbox.id}/oauth/start?provider=${encodeURIComponent(state.connection.provider || '')}`}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-un1t-border px-3 py-1.5 text-xs font-medium text-un1t-text hover:bg-un1t-bg"
+                  >
+                    <LogIn className="h-3.5 w-3.5" aria-hidden="true" />
+                    Sign in again
+                  </a>
                 )}
                 <Button
                   type="button"
@@ -583,129 +718,168 @@ export default function MailboxConnectionSection({ locationId, mailbox, reachabi
                   >
                     {Object.entries(PROVIDER_PRESETS).map(([key, p]) => (
                       <option key={key} value={key} disabled={!p.supported}>
-                        {p.label}{p.supported ? '' : ' — not supported yet'}
+                        {p.label}
+                        {p.supported ? (p.auth === 'oauth' ? ' — sign in' : '') : ' — not supported yet'}
                       </option>
                     ))}
                   </select>
                 </div>
-                <div>
-                  <label htmlFor={`username-${mailbox.id}`} className="mb-1 block text-sm text-un1t-text">
-                    Sign in as
-                  </label>
-                  <input
-                    id={`username-${mailbox.id}`}
-                    type="text"
-                    value={form.username}
-                    onChange={(e) => setForm(f => ({ ...f, username: e.target.value }))}
-                    placeholder={mailbox.address}
-                    className={INPUT}
-                  />
-                  <p className="mt-1 text-[11px] text-un1t-muted">
-                    Usually the address itself. Some hosts use a separate account name.
-                  </p>
-                </div>
+                {/* An OAuth provider authenticates AS the address — Microsoft's
+                    XOAUTH2 exchange takes it verbatim, and for a shared mailbox
+                    it is deliberately the shared address rather than whoever
+                    signed in. There is nothing here for an operator to choose,
+                    so the field is not shown rather than shown and ignored. */}
+                {!isOAuthProvider && (
+                  <div>
+                    <label htmlFor={`username-${mailbox.id}`} className="mb-1 block text-sm text-un1t-text">
+                      Sign in as
+                    </label>
+                    <input
+                      id={`username-${mailbox.id}`}
+                      type="text"
+                      value={form.username}
+                      onChange={(e) => setForm(f => ({ ...f, username: e.target.value }))}
+                      placeholder={mailbox.address}
+                      className={INPUT}
+                    />
+                    <p className="mt-1 text-[11px] text-un1t-muted">
+                      Usually the address itself. Some hosts use a separate account name.
+                    </p>
+                  </div>
+                )}
               </div>
 
-              {form.provider === 'microsoft' && (
-                <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-[11px] text-red-700">
-                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
-                  <span>{MICROSOFT_NOTE}</span>
+              {/* MAILBOX-OAUTH.6 — the provider's own sentence about why its
+                  sign-in is unavailable, served by the API so there is one copy
+                  of it. Today that is Google: app verification plus an annual
+                  CASA Tier 2 assessment. Shown on the GMAIL row, where it is
+                  useful — beside the app-password walkthrough that DOES work —
+                  rather than as a separate dead option in the list. */}
+              {providerRefusal && (
+                <div className="flex items-start gap-2 rounded-lg border border-un1t-border bg-un1t-bg/60 p-3 text-[11px] text-un1t-muted">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-amber-700" aria-hidden="true" />
+                  <span>{providerRefusal}</span>
                 </div>
               )}
 
               {form.provider === 'gmail' && <GmailHelp />}
 
-              <div>
-                <label htmlFor={`password-${mailbox.id}`} className="mb-1 block text-sm text-un1t-text">
-                  {form.provider === 'gmail' ? 'App password' : 'Password'}
-                </label>
-                <input
-                  id={`password-${mailbox.id}`}
-                  type="password"
-                  autoComplete="new-password"
-                  value={form.password}
-                  onChange={(e) => setForm(f => ({ ...f, password: e.target.value }))}
-                  placeholder={connected ? 'Leave blank to keep the current password' : ''}
-                  className={INPUT}
-                />
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-3">
-                <div className="sm:col-span-2">
-                  <label htmlFor={`imap-host-${mailbox.id}`} className="mb-1 block text-sm text-un1t-text">
-                    Incoming (IMAP) server
-                  </label>
-                  <input
-                    id={`imap-host-${mailbox.id}`}
-                    type="text"
-                    value={form.imap_host}
-                    onChange={(e) => setForm(f => ({ ...f, imap_host: e.target.value }))}
-                    placeholder="imap.example.com"
-                    className={INPUT}
-                  />
-                </div>
-                <div>
-                  <label htmlFor={`imap-port-${mailbox.id}`} className="mb-1 block text-sm text-un1t-text">
-                    Port
-                  </label>
-                  <input
-                    id={`imap-port-${mailbox.id}`}
-                    type="number"
-                    value={form.imap_port}
-                    onChange={(e) => setForm(f => ({ ...f, imap_port: e.target.value }))}
-                    className={INPUT}
-                  />
-                </div>
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-3">
-                <div className="sm:col-span-2">
-                  <label htmlFor={`smtp-host-${mailbox.id}`} className="mb-1 block text-sm text-un1t-text">
-                    Outgoing (SMTP) server — optional
-                  </label>
-                  <input
-                    id={`smtp-host-${mailbox.id}`}
-                    type="text"
-                    value={form.smtp_host}
-                    onChange={(e) => setForm(f => ({ ...f, smtp_host: e.target.value }))}
-                    placeholder="smtp.example.com"
-                    className={INPUT}
-                  />
-                  <p className="mt-1 text-[11px] text-un1t-muted">
-                    Checked now if you enter one. Replies still leave through the standard mail
-                    route until sending from this account is switched on — leave it blank to
-                    connect for receiving only.
+              {isOAuthProvider ? (
+                <div className="rounded-lg border border-un1t-border bg-un1t-bg/60 p-3">
+                  <p className="text-[11px] text-un1t-muted">
+                    Microsoft 365 and Outlook accounts sign in at Microsoft — there is no password to
+                    type, and Exchange Online will not accept one over IMAP in any case. You will be
+                    asked to sign in as <span className="font-mono">{mailbox.address}</span> and to
+                    allow this CRM to read that mailbox and send as it. Server settings are filled in
+                    for you and the sign-in is checked against the real mailbox before anything is saved.
+                  </p>
+                  {!connected && <div className="mt-3"><PermanenceDisclosure /></div>}
+                  <a
+                    href={oauthStartHref}
+                    className="mt-3 inline-flex items-center gap-2 rounded-md bg-un1t-text px-3 py-2 text-sm font-medium text-un1t-bg hover:opacity-90"
+                  >
+                    <LogIn className="h-4 w-4" aria-hidden="true" />
+                    Sign in with Microsoft
+                  </a>
+                  <p className="mt-2 text-[11px] text-un1t-muted">
+                    If Microsoft refuses, an administrator on that tenant may need to allow this app
+                    and switch IMAP on for the mailbox.
                   </p>
                 </div>
+              ) : (
+                <>
                 <div>
-                  <label htmlFor={`smtp-port-${mailbox.id}`} className="mb-1 block text-sm text-un1t-text">
-                    Port
+                  <label htmlFor={`password-${mailbox.id}`} className="mb-1 block text-sm text-un1t-text">
+                    {form.provider === 'gmail' ? 'App password' : 'Password'}
                   </label>
                   <input
-                    id={`smtp-port-${mailbox.id}`}
-                    type="number"
-                    value={form.smtp_port}
-                    onChange={(e) => setForm(f => ({ ...f, smtp_port: e.target.value }))}
+                    id={`password-${mailbox.id}`}
+                    type="password"
+                    autoComplete="new-password"
+                    value={form.password}
+                    onChange={(e) => setForm(f => ({ ...f, password: e.target.value }))}
+                    placeholder={connected ? 'Leave blank to keep the current password' : ''}
                     className={INPUT}
                   />
                 </div>
-              </div>
 
-              {!connected && <PermanenceDisclosure />}
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="sm:col-span-2">
+                    <label htmlFor={`imap-host-${mailbox.id}`} className="mb-1 block text-sm text-un1t-text">
+                      Incoming (IMAP) server
+                    </label>
+                    <input
+                      id={`imap-host-${mailbox.id}`}
+                      type="text"
+                      value={form.imap_host}
+                      onChange={(e) => setForm(f => ({ ...f, imap_host: e.target.value }))}
+                      placeholder="imap.example.com"
+                      className={INPUT}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor={`imap-port-${mailbox.id}`} className="mb-1 block text-sm text-un1t-text">
+                      Port
+                    </label>
+                    <input
+                      id={`imap-port-${mailbox.id}`}
+                      type="number"
+                      value={form.imap_port}
+                      onChange={(e) => setForm(f => ({ ...f, imap_port: e.target.value }))}
+                      className={INPUT}
+                    />
+                  </div>
+                </div>
 
-              <div className="flex flex-wrap items-center gap-2">
-                <Button type="submit" size="sm" icon={CheckCircle2} loading={saving} disabled={!preset.supported}>
-                  {connected ? 'Check and save' : 'Check and connect'}
-                </Button>
-                {connected && (
-                  <Button type="button" size="sm" variant="ghost" onClick={() => { setEditing(false); setError(null) }}>
-                    Cancel
-                  </Button>
-                )}
-                <span className="text-[11px] text-un1t-muted">
-                  The login is tried against the mail server before anything is stored.
-                </span>
-              </div>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="sm:col-span-2">
+                    <label htmlFor={`smtp-host-${mailbox.id}`} className="mb-1 block text-sm text-un1t-text">
+                      Outgoing (SMTP) server — optional
+                    </label>
+                    <input
+                      id={`smtp-host-${mailbox.id}`}
+                      type="text"
+                      value={form.smtp_host}
+                      onChange={(e) => setForm(f => ({ ...f, smtp_host: e.target.value }))}
+                      placeholder="smtp.example.com"
+                      className={INPUT}
+                    />
+                    <p className="mt-1 text-[11px] text-un1t-muted">
+                      Checked now if you enter one. Replies still leave through the standard mail
+                      route until sending from this account is switched on — leave it blank to
+                      connect for receiving only.
+                    </p>
+                  </div>
+                  <div>
+                    <label htmlFor={`smtp-port-${mailbox.id}`} className="mb-1 block text-sm text-un1t-text">
+                      Port
+                    </label>
+                    <input
+                      id={`smtp-port-${mailbox.id}`}
+                      type="number"
+                      value={form.smtp_port}
+                      onChange={(e) => setForm(f => ({ ...f, smtp_port: e.target.value }))}
+                      className={INPUT}
+                    />
+                  </div>
+                </div>
+                  {!connected && <PermanenceDisclosure />}
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button type="submit" size="sm" icon={CheckCircle2} loading={saving}>
+                      {connected ? 'Check and save' : 'Check and connect'}
+                    </Button>
+                    {connected && (
+                      <Button type="button" size="sm" variant="ghost" onClick={() => { setEditing(false); setError(null) }}>
+                        Cancel
+                      </Button>
+                    )}
+                    <span className="text-[11px] text-un1t-muted">
+                      The login is tried against the mail server before anything is stored.
+                    </span>
+                  </div>
+                </>
+              )}
             </form>
           )}
         </div>

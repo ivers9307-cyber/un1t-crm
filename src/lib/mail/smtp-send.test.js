@@ -705,3 +705,179 @@ describe('verifySmtpConnection', () => {
     expect(t.closed).toBe(1)
   })
 })
+
+/* ══════════ MAILBOX-OAUTH.5 — refresh before send ══════════════════ */
+//
+// `sendViaSmtp` swapped `resolveAuth(credential)` for
+// `await resolveFreshAuth(db, credential)`. Two things have to be true of that
+// and they pull in opposite directions:
+//
+//   • An OAuth mailbox that has been idle past its token's lifetime must get a
+//     RENEWAL, not a refusal. An operator hitting Send is watching a spinner,
+//     and "the sign-in expired" is a refusal they can do nothing about.
+//   • 🔴 A PASSWORD MAILBOX MUST BE COMPLETELY UNAFFECTED. Every mailbox in
+//     production today is one, so this is the regression that would hurt most:
+//     it would hurt on the path that carries a member's reply.
+//
+// The token endpoint is stubbed at globalThis.fetch, because that is where
+// resolveFreshAuth reaches — `createTransport` is the SMTP seam and is a
+// different one. Unstubbed, these would call login.microsoftonline.com.
+describe('MAILBOX-OAUTH.5 — the send path renews before it dials', () => {
+  const OAUTH_ENV = {
+    MAILBOX_OAUTH_MICROSOFT_CLIENT_ID: 'the-client-id',
+    MAILBOX_OAUTH_MICROSOFT_CLIENT_SECRET: 'the-client-secret',
+  }
+
+  /**
+   * The credential fake above answers reads only. resolveFreshAuth also
+   * PERSISTS a rotated token, so this one records updates as well — otherwise
+   * "the send worked" would be proven while the write that keeps the NEXT send
+   * working was silently missing.
+   */
+  function fakeDbWithWrites(row) {
+    const updates = []
+    return {
+      updates,
+      from() {
+        const b = {
+          _filters: [],
+          select() { return b },
+          eq(col, val) { b._filters.push([col, val]); return b },
+          async maybeSingle() { return { data: row, error: null } },
+          update(payload) {
+            const u = {
+              _f: [],
+              eq(col, val) { u._f.push([col, val]); return u },
+              then(res, rej) {
+                updates.push({ payload, filters: u._f })
+                return Promise.resolve({ data: null, error: null }).then(res, rej)
+              },
+            }
+            return u
+          },
+        }
+        return b
+      },
+    }
+  }
+
+  const oauthRow = (overrides = {}) => credentialRow({
+    provider: 'microsoft',
+    auth_type: 'oauth',
+    secret_ciphertext: null,
+    oauth_access_token_ciphertext: seal('ACCESS-SPENT'),
+    oauth_refresh_token_ciphertext: seal('REFRESH-LIVE'),
+    // Already dead: without a renewal this send is refused.
+    oauth_expires_at: new Date(Date.now() - 60_000).toISOString(),
+    smtp_host: 'smtp.office365.com',
+    smtp_port: 587,
+    smtp_secure: false,
+    ...overrides,
+  })
+
+  const tokenEndpoint = (status, body) => vi.fn(async () => ({
+    ok: status >= 200 && status < 300, status, json: async () => body,
+  }))
+
+  beforeEach(() => { Object.assign(process.env, OAUTH_ENV) })
+  afterEach(() => {
+    for (const k of Object.keys(OAUTH_ENV)) delete process.env[k]
+    vi.unstubAllGlobals()
+  })
+
+  // 🔴 THE REGRESSION PIN. Every mailbox in production is a password mailbox.
+  it('🔴 A PASSWORD MAILBOX MAKES NO TOKEN REQUEST AND NO WRITE — nothing changed for it', async () => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const t = fakeTransport()
+    const db = fakeDbWithWrites(credentialRow())
+
+    const res = await sendViaSmtp({ mailbox: MAILBOX, ...SEND }, { db, ...t.deps })
+
+    expect(res.ok).toBe(true)
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(db.updates).toEqual([])
+    // And the credential still reaches nodemailer as a plain LOGIN pair.
+    expect(t.made[0].auth).toEqual({ user: 'hello@theirgym.ie', pass: APP_PASSWORD })
+    expect(t.made[0].auth.type).toBeUndefined()
+  })
+
+  it('renews a spent token and sends with the NEW one', async () => {
+    vi.stubGlobal('fetch', tokenEndpoint(200, {
+      access_token: 'ACCESS-RENEWED', refresh_token: 'REFRESH-ROTATED', expires_in: 3600,
+    }))
+    const t = fakeTransport()
+    const db = fakeDbWithWrites(oauthRow())
+
+    const res = await sendViaSmtp({ mailbox: MAILBOX, ...SEND }, { db, ...t.deps })
+
+    expect(res.ok).toBe(true)
+    // 🔴 The XOAUTH2 shape, with the renewed token — nodemailer keys off
+    // `auth.type` and drops a bare accessToken into a LOGIN attempt.
+    expect(t.made[0].auth).toEqual({
+      type: 'OAuth2', user: 'hello@theirgym.ie', accessToken: 'ACCESS-RENEWED',
+    })
+    expect(t.made[0].auth.pass).toBeUndefined()
+  })
+
+  it('persists the rotated refresh token, or the NEXT send breaks instead of this one', async () => {
+    vi.stubGlobal('fetch', tokenEndpoint(200, {
+      access_token: 'ACCESS-RENEWED', refresh_token: 'REFRESH-ROTATED', expires_in: 3600,
+    }))
+    const t = fakeTransport()
+    const db = fakeDbWithWrites(oauthRow())
+    await sendViaSmtp({ mailbox: MAILBOX, ...SEND }, { db, ...t.deps })
+    expect(db.updates).toHaveLength(1)
+    expect(db.updates[0].payload.oauth_refresh_token_ciphertext).toBeTruthy()
+  })
+
+  // The envelope cannot tell these apart — three routes branch on it — but the
+  // SENTENCE must, because one asks the operator to act and the other asks
+  // them to wait.
+  it('a revoked grant refuses the send and says to sign in again', async () => {
+    vi.stubGlobal('fetch', tokenEndpoint(400, { error: 'invalid_grant' }))
+    const t = fakeTransport()
+    const res = await sendViaSmtp({ mailbox: MAILBOX, ...SEND }, { db: fakeDbWithWrites(oauthRow()), ...t.deps })
+    expect(res).toMatchObject({ ok: false, reason: 'not_configured' })
+    expect(res.error).toMatch(/sign in again/i)
+    expect(t.sent).toHaveLength(0)
+  })
+
+  it('an unreachable identity service says the opposite — nothing for them to fix', async () => {
+    vi.stubGlobal('fetch', tokenEndpoint(503, {}))
+    const t = fakeTransport()
+    const res = await sendViaSmtp({ mailbox: MAILBOX, ...SEND }, { db: fakeDbWithWrites(oauthRow()), ...t.deps })
+    expect(res).toMatchObject({ ok: false, reason: 'not_configured' })
+    expect(res.error).not.toMatch(/sign in again/i)
+    expect(res.error).toMatch(/Nothing is wrong with the connection/i)
+    expect(t.sent).toHaveLength(0)
+  })
+
+  // 🔴 Dropping either column does not break loudly — it makes every OAuth
+  // mailbox stop sending about an hour after it was connected, reporting an
+  // expired sign-in that no operator action can clear.
+  it('selects `provider` and the refresh token, or renewal is impossible', async () => {
+    vi.stubGlobal('fetch', tokenEndpoint(200, { access_token: 'A', expires_in: 3600 }))
+    const t = fakeTransport()
+    const db = fakeDb({ row: credentialRow() })
+    await sendViaSmtp({ mailbox: MAILBOX, ...SEND }, { db, ...t.deps })
+    expect(db.calls.columns).toContain('provider')
+    expect(db.calls.columns).toContain('oauth_refresh_token_ciphertext')
+  })
+
+  it('never puts a token in the verdict, on any of these paths', async () => {
+    for (const doFetch of [
+      tokenEndpoint(200, { access_token: 'ACCESS-RENEWED', refresh_token: 'REFRESH-ROTATED', expires_in: 3600 }),
+      tokenEndpoint(400, { error: 'invalid_grant', error_description: 'REFRESH-LIVE rejected' }),
+      tokenEndpoint(503, { error_description: 'REFRESH-LIVE' }),
+    ]) {
+      vi.stubGlobal('fetch', doFetch)
+      const t = fakeTransport()
+      const res = await sendViaSmtp({ mailbox: MAILBOX, ...SEND }, { db: fakeDbWithWrites(oauthRow()), ...t.deps })
+      const serialised = JSON.stringify(res)
+      expect(serialised).not.toContain('REFRESH-LIVE')
+      expect(serialised).not.toContain('REFRESH-ROTATED')
+      expect(serialised).not.toContain('the-client-secret')
+    }
+  })
+})

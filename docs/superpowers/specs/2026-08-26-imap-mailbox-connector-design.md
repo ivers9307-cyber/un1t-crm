@@ -568,3 +568,54 @@ accepted but before the 250, the route writes nothing and an operator retry send
 member a second copy. A pre-send claim would convert that into permanent silent loss
 on a process kill, which CLAUDE.md's rule ranks as the worse failure. Phase 8's Sent
 lane makes a duplicate *visible* within ~5 minutes without preventing it.
+
+---
+
+## 14. What the OAuth phase corrected (MAILBOX-OAUTH.1–6)
+
+§2.1 said "ship password auth, build the seam, defer the provider work". The
+seam held — `resolveAuth` did not change shape, and no migration was needed
+(mig 572's `auth_type` + nullable `oauth_*` columns were already right, verified
+against the live database 2026-08-27). Three things it did not anticipate:
+
+**Microsoft is not merely the cheap one, it is the ONLY one.** §2.1 framed the
+Microsoft-vs-Google ordering as a cost inversion. It is stronger than that:
+Exchange Online has no basic-auth IMAP at all, so before this phase every
+Microsoft-shaped customer was *unreachable* — the connect route refused them
+outright with a sentence saying the release did not include a sign-in. Google,
+by contrast, connects perfectly well today with a 16-character app password.
+So the shipped shape is **Microsoft as OAuth-only** (the password form is
+replaced, not disabled) and **Google as a note beside a working app-password
+form**, not as a disabled option. A disabled "Google" row would have read as
+"no Gmail", which is false.
+
+🔴 **A deployment fault was being classified by a function that asks a different
+question first.** `resolveFreshAuth` delegated the missing-`MAILBOX_SECRET_KEY`
+case to `resolveAuth`, on the reasoning that it answers `not_configured`. It
+does — but only after judging EXPIRY first, and that branch is reachable only
+when a refresh is due, i.e. when the token is spent. So a missing key answered
+`oauth_expired`, which walks straight past the poller's config-fault door
+(`reason === 'not_configured' && !isConfigured()`) onto the AUTH backoff curve,
+pausing the tenant for up to 24 hours over an env var nobody set. That is
+IMAP-CONFIGPAUSE.1 exactly, reintroduced. The verdict is now stated at the site
+rather than delegated. **The general rule: a fault's CLASSIFICATION must be made
+where the fault is known, not inferred from a function that was written to
+answer something else.**
+
+**A refresh failure and a revoked grant are told apart by the OAuth `error`
+CODE, never by the HTTP status.** RFC 6749 §5.2 reserves `invalid_grant` for a
+dead grant; a 400 carrying any other code is OUR malformed request. Collapsing
+them would tell an operator their consent was withdrawn because we sent a bad
+client id, sending them to their IT department over our defect. `oauth_revoked`
+takes the auth curve, `oauth_refresh_failed` takes the transport curve, and
+`provider_unavailable` (a dropped env var — it hits every mailbox on that
+provider at the same instant) is a config fault that is never counted and never
+paused.
+
+**Still open:** the registry keys Google as `google` while
+`email_mailbox_credentials.provider` is CHECK-constrained to
+`('gmail','microsoft','custom')`. Inert while Google is `unavailable`, because
+no row can be written for it — but enabling Google needs that CHECK widened (or
+the key renamed) in the same change, or the INSERT fails with a 23514 *after*
+consent, leaving a live grant at Google that nothing refers to. Pinned by a test
+in `oauth-providers.test.js`.
