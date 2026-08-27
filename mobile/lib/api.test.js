@@ -21,10 +21,15 @@ vi.mock('expo-constants', () => ({
   default: { expoConfig: { extra: { apiBaseUrl: 'https://test.local' } } },
 }))
 
+const OK_SESSION = { data: { session: { access_token: 'jwt-1' } } }
+
 vi.mock('./supabase', () => ({
   supabase: {
     auth: {
-      getSession: async () => ({ data: { session: { access_token: 'jwt-1' } } }),
+      // vi.fn so MOBILE-SESSION.1's retry can be driven per test; the default
+      // implementation is restored in beforeEach so every other case sees a
+      // session that simply resolves.
+      getSession: vi.fn(async () => OK_SESSION),
     },
   },
 }))
@@ -34,9 +39,12 @@ vi.mock('./impersonate', () => ({
 }))
 
 import { api } from './api'
+import { supabase } from './supabase'
 
 beforeEach(() => {
   delete global.fetch
+  vi.mocked(supabase.auth.getSession).mockReset()
+  vi.mocked(supabase.auth.getSession).mockImplementation(async () => OK_SESSION)
 })
 
 describe('api() transport tag', () => {
@@ -129,5 +137,45 @@ describe('api() transport tag', () => {
     const r = await api('/api/anything')
 
     expect(r).toEqual({ success: false, error: 'Connect your Shelly account first', code: 'not_connected' })
+  })
+})
+
+describe('api() session guard (MOBILE-SESSION.1)', () => {
+  it('a session read that keeps failing answers a transport envelope — and never sends the request', async () => {
+    // authHeaders() -> supabase.auth.getSession() is a NETWORK call once the
+    // access token has aged out. It used to sit outside every try in api(), so
+    // this rejection escaped to the screen, which printed it verbatim: the
+    // Hatch Street "JSON Parse error" on a 5G link, with no request ever
+    // reaching the server (production logs showed zero toggle hits).
+    vi.mocked(supabase.auth.getSession).mockRejectedValue(
+      new SyntaxError('JSON Parse error: Unexpected character: <')
+    )
+    global.fetch = vi.fn()
+
+    const r = await api('/api/shelly/devices/abc/toggle', { method: 'POST', body: { state: 'off' } })
+
+    expect(r.success).toBe(false)
+    // Same fact as a dropped fetch: no server answer, nothing was sent. Pollers
+    // read this tag to keep their last good rows.
+    expect(r.transport).toBe(true)
+    expect(r.error).toMatch(/could not refresh your session/)
+    expect(r.error).not.toMatch(/JSON Parse error/)
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+
+  it('retries ONCE and proceeds when the second read succeeds — the dropped-packet case', async () => {
+    vi.mocked(supabase.auth.getSession)
+      .mockRejectedValueOnce(new SyntaxError('JSON Parse error: Unexpected character: <'))
+      .mockImplementation(async () => OK_SESSION)
+    global.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ success: true }) }))
+
+    const r = await api('/api/anything')
+
+    expect(r).toEqual({ success: true })
+    expect(vi.mocked(supabase.auth.getSession)).toHaveBeenCalledTimes(2)
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+    // The retry produced a real token, so the request is authenticated — a
+    // retry that silently sent an anonymous request would 401 instead.
+    expect(global.fetch.mock.calls[0][1].headers.Authorization).toBe('Bearer jwt-1')
   })
 })

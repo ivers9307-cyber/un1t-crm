@@ -40,8 +40,26 @@ if (!API_BASE) {
  * @param {boolean} [opts.json]      include Content-Type: application/json
  * @returns {Promise<Record<string,string>>}
  */
+// MOBILE-SESSION.1 — getSession() is a NETWORK call whenever the access
+// token has aged out (Supabase refreshes on read, hourly by default), so on a
+// marginal mobile link it can fail — and a refresh whose body arrives
+// truncated throws a JSON parse SyntaxError out of the Supabase client, not a
+// tidy error result. One retry costs a few hundred ms and clears the common
+// case: a single dropped packet during a 5G handover. A second failure
+// rethrows, and api() below turns it into a transport envelope.
+const SESSION_RETRY_MS = 400
+
+async function getSessionWithRetry() {
+  try {
+    return await supabase.auth.getSession()
+  } catch {
+    await new Promise((resolve) => setTimeout(resolve, SESSION_RETRY_MS))
+    return supabase.auth.getSession()
+  }
+}
+
 export async function authHeaders({ locationId, json = false } = {}) {
-  const { data: { session } } = await supabase.auth.getSession()
+  const { data: { session } } = await getSessionWithRetry()
 
   // Master impersonation (mig 035). Best-effort — never fail a call
   // because the local impersonate blob couldn't be read. readImpersonate
@@ -72,7 +90,24 @@ export async function authHeaders({ locationId, json = false } = {}) {
  *   `transport: true` (api()-minted, no server answer)
  */
 export async function api(path, options = {}) {
-  const headers = await authHeaders({ locationId: options.locationId, json: true })
+  // MOBILE-SESSION.1 — INSIDE the guard, not above it. authHeaders() awaits a
+  // token refresh that can throw on a bad link, and this call used to sit
+  // outside every try in the file: the throw escaped api() itself, so screens
+  // rendered whatever the Supabase client raised — an operator at Hatch Street
+  // pressing a plug off on 5G was shown a raw "JSON Parse error". A session we
+  // could not read is the same fact as a dropped fetch (no server answer, the
+  // request was never sent), so it answers with the same transport envelope
+  // and pollers keep their last good state through it.
+  let headers
+  try {
+    headers = await authHeaders({ locationId: options.locationId, json: true })
+  } catch {
+    return {
+      success: false,
+      transport: true,
+      error: 'Network error: could not refresh your session — check your connection and try again',
+    }
+  }
 
   let response
   try {

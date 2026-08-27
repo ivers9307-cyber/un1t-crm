@@ -179,8 +179,9 @@ export default function Home() {
       // costs the next launch its head start and nothing else).
       writeShiftsCache(profile.id, res.data || [])
     } catch (e) {
-      // authHeaders() → supabase.auth.getSession() runs OUTSIDE api()'s own
-      // try, so an uncaught rejection there would strand the spinner forever.
+      // MOBILE-SESSION.1 — api() now guards authHeaders() (a failed token
+      // refresh answers a transport envelope instead of throwing), so this
+      // catch is defence in depth against a defect in the handler itself.
       if (isActive()) setShiftsError(e?.message || 'Could not load your shifts')
     }
   }, [profile?.id])
