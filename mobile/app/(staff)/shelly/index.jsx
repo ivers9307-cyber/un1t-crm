@@ -274,10 +274,15 @@ export default function ShellyScreen() {
       setConnected(r.connected)
       setConnectionStatus(r.connection_status)
       listLocationRef.current = locationId
-    } catch (e) {
+    } catch {
       if (stale() || n !== seq.current || !isActive()) return
+      // MOBILE-SESSION.1 — never the raw `e.message`. api() answers a failed
+      // session read or dropped fetch with an envelope now, so reaching this
+      // catch means a defect in the handler above, and an operator cannot act
+      // on a parser's wording (the Hatch Street "JSON Parse error" came from
+      // exactly here).
       if (painted()) setRetrying(true)
-      else setError(e?.message || 'Could not load the smart plugs')
+      else setError('Could not load the smart plugs')
     }
   }, [locationId])
 
@@ -332,8 +337,9 @@ export default function ShellyScreen() {
       const done = state === 'on' ? 'Switched on.' : 'Switched off.'
       setNote(device.id, { tone: 'ok', text: extra ? `${done} ${extra}` : done })
       await load(() => true)
-    } catch (e) {
-      setNote(device.id, { tone: 'error', text: e?.message || 'That did not work' })
+    } catch {
+      // Human copy, not the exception — see the load() catch above.
+      setNote(device.id, { tone: 'error', text: 'That did not work — try again' })
     } finally {
       setBusyId(null)
     }
