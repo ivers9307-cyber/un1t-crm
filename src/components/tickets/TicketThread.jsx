@@ -56,6 +56,7 @@ import Link from 'next/link'
 import {
   ArrowLeft, Lock, Mail, AlertCircle, MailCheck, ImageOff, Maximize2, Minimize2,
   ShieldAlert, Download, FileWarning, Check, MailX, ShieldX, Forward, UserPlus,
+  ExternalLink,
 } from 'lucide-react'
 import { EmptyState, Loading } from '@/components/ui'
 import { formatBytes, SKIPPED_REASON_LABEL } from '@/lib/email-attachment-quota'
@@ -76,6 +77,7 @@ import {
   threadSignature,
   canForwardMessage,
   forwardedMarker,
+  sendOriginMeta,
 } from '@/lib/ticket-display'
 import { joinPointsByMessage } from '@/lib/email-tickets'
 import TicketReplyBox from './TicketReplyBox'
@@ -628,21 +630,60 @@ function Attachments({ ticketId, attachments, onAccent = false, onOpen }) {
 }
 
 /**
- * "Delivered" — the QUIET half of EMAIL-DELIVERY.1.
+ * The QUIET half of EMAIL-DELIVERY.1 — one short phrase on the meta line the
+ * bubble already has, in the same muted ramp. Confirming that the normal thing
+ * happened normally must never compete for attention with the panel below,
+ * which is the whole reason that feature exists. There is deliberately NO
+ * counterpart for a message with no event yet: that renders as the bare
+ * "Sent to …" it always did.
  *
- * It rides the meta line the bubble already has, in the same muted ramp, and
- * says one word. Confirming that the normal thing happened normally must never
- * compete for attention with the panel below, which is the whole reason this
- * feature exists. There is deliberately NO counterpart for a message with no
- * event yet: that renders as the bare "Sent to …" it always did.
+ * 🔴 IT RENDERS `delivery.label`, AND IT USED TO RENDER THE WORD "Delivered".
+ * That was correct while `delivered` was the only quiet outcome. MAILBOX-
+ * CONNECT.7 then added a second one — "Not tracked", for a send over the
+ * mailbox's own SMTP, which no provider event can EVER confirm — and this
+ * component still printed "Delivered" for it, so the one row in the thread
+ * that can never be confirmed was the row asserting confirmation hardest. The
+ * lib had been careful and the component threw the care away. Read the label;
+ * do not restate it here.
+ *
+ * The tick is reserved for a genuine confirmation, so an operator can scan for
+ * it. Anything else says its piece in words, with the lib's sentence as the
+ * title — that sentence is the only place the REASON nothing was confirmed is
+ * written down.
  */
-function DeliveredMarker({ message }) {
+function DeliveryMarker({ delivery, message }) {
+  const confirmed = delivery.status === 'delivered'
   const stamp = deliveryTimestamp(message)
+  const title = confirmed
+    ? (stamp ? `Delivered ${stamp}` : 'Delivered')
+    : (delivery.detail || delivery.label)
   return (
-    <span className="inline-flex items-center gap-0.5" title={stamp ? `Delivered ${stamp}` : 'Delivered'}>
-      <Check size={11} className="shrink-0" aria-hidden="true" />
-      Delivered
+    <span className="inline-flex items-center gap-0.5" title={title}>
+      {confirmed && <Check size={11} className="shrink-0" aria-hidden="true" />}
+      {delivery.label}
     </span>
+  )
+}
+
+/**
+ * "Sent from the mail client" (MAILBOX-COEXIST.1).
+ *
+ * Its own line above the envelope, in the shape ForwardedMarker already
+ * established, because it changes how the whole bubble reads: this reply is in
+ * the CRM's record but was never in the CRM's hands, so there is no author to
+ * ask, no delivery to chase and no draft to look back at. On the muted meta
+ * line it would be one clause among four and skim past.
+ */
+function SendOriginMarker({ origin, onAccent = false }) {
+  if (!origin) return null
+  return (
+    <p
+      className={`mb-1 flex items-center gap-1.5 text-[11px] ${onAccent ? 'text-white/75' : 'text-un1t-muted'}`}
+      title={origin.detail}
+    >
+      <ExternalLink size={11} className="shrink-0" aria-hidden="true" />
+      {origin.label}
+    </p>
   )
 }
 
@@ -1041,6 +1082,9 @@ function ThreadMessage({ message, ticketId, onOpenAttachment, onForward, message
     // EMAIL-DELIVERY.1 — null for "sent, no event yet", which is most messages
     // and every message written before mig 498. Nothing is rendered for it.
     const delivery = deliveryMeta(message)
+    // MAILBOX-COEXIST.1 — null for everything composed in the CRM, which is
+    // every outbound row this thread had before Phase 8 polled a Sent folder.
+    const origin = sendOriginMeta(message)
     return (
       <div className="space-y-1.5">
         <div className="flex justify-end">
@@ -1050,11 +1094,15 @@ function ThreadMessage({ message, ticketId, onOpenAttachment, onForward, message
               Sent to {message.to_email || 'the member'}
               {message.author_name && ` · Replied by ${message.author_name}`}
               {stamp && ` · ${stamp}`}
-              {delivery?.tone === 'quiet' && <>{' · '}<DeliveredMarker message={message} /></>}
+              {delivery?.tone === 'quiet' && <>{' · '}<DeliveryMarker delivery={delivery} message={message} /></>}
             </p>
             {/* Above the recipients, because "this was a forward" changes how
                 the To line reads: those addresses are a third party, not the
-                member. */}
+                member. Origin above both: it changes how EVERYTHING under it
+                reads, including the absent "Replied by" in the line above —
+                a mail-client reply has no CRM author to name, and without this
+                marker that gap looks like missing data rather than a fact. */}
+            <SendOriginMarker origin={origin} onAccent />
             <ForwardedMarker label={forwarded} onAccent />
             <MessageEnvelope message={message} onAccent />
             {html ? (

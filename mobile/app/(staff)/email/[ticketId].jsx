@@ -80,7 +80,7 @@ import {
   ticketMessageRecipients, sentToLabel, isArchivedStatus, TICKET_STATUS_ORDER,
   formatAttachmentSize, ticketAttachmentSkippedLabel, ticketAttachmentIcon,
   threadRefreshMs, ticketReplyAudienceMeta, ticketReplyPlaceholder,
-  ticketThreadAudienceLines,
+  ticketThreadAudienceLines, ticketSendOriginMeta,
 } from '../../../lib/email-tickets'
 import BackHeaderLeft from '../../../components/BackHeaderLeft'
 
@@ -323,6 +323,9 @@ function MessageBubble({ msg, ticketId, locationId, onViewImage }) {
     // and every message written before mig 498. Nothing is rendered for it, so
     // the bubble makes no claim it cannot back up.
     const delivery = ticketDeliveryMeta(msg)
+    // MAILBOX-COEXIST.1 — null for everything composed in the CRM, which is
+    // every outbound row this thread had before Phase 8 polled a Sent folder.
+    const origin = ticketSendOriginMeta(msg)
     return (
       <View className="mb-1.5">
         <View className="flex-row justify-end">
@@ -333,8 +336,22 @@ function MessageBubble({ msg, ticketId, locationId, onViewImage }) {
                 Sent to {sentToLabel(msg)}
               </Text>
             </View>
-            {/* toShownInHeader: the line directly above names the recipient in
-                full when there is one, and the first of several otherwise —
+            {/* WHERE IT WAS SENT FROM, when that was not the CRM. Its own row,
+                not a clause on the footer below, because it changes how the
+                whole bubble reads: nobody here typed it, so there is no author
+                to ask and no delivery to chase. The footer's author slot is
+                empty for these rows, and without this line that gap reads as
+                missing data rather than as a fact. */}
+            {origin ? (
+              <View className="flex-row items-center mb-1">
+                <Ionicons name={origin.icon} size={11} color="rgba(255,255,255,0.75)" style={{ marginRight: 4 }} />
+                <Text className="text-[11px] text-white/75 flex-1" numberOfLines={1}>
+                  {origin.label}
+                </Text>
+              </View>
+            ) : null}
+            {/* toShownInHeader: the "Sent to" header above names the recipient
+                in full when there is one, and the first of several otherwise —
                 so a lone To here would just repeat it. */}
             <RecipientLines msg={msg} onAccent toShownInHeader />
             <Text className="text-base text-white">{body}</Text>
@@ -347,10 +364,16 @@ function MessageBubble({ msg, ticketId, locationId, onViewImage }) {
             />
             <Text className="text-[10px] text-white/60 mt-1 text-right">
               {msg.author_name ? `${msg.author_name} · ` : ''}{stamp}
-              {/* The QUIET half: one word, in the line that is already there.
-                  Confirming the normal case must not compete with the panel
-                  below, which is the entire point of the feature. */}
-              {delivery?.tone === 'quiet' ? ' · Delivered' : ''}
+              {/* The QUIET half: a short phrase in the line that is already
+                  there. Confirming the normal case must not compete with the
+                  panel below, which is the entire point of the feature.
+                  🔴 IT PRINTS delivery.label AND USED TO PRINT "Delivered".
+                  That was true while `delivered` was the only quiet outcome;
+                  "Not tracked" is a second one, and printing "Delivered" for
+                  it made the rows that can NEVER be confirmed the ones
+                  asserting confirmation hardest. The lib was careful and this
+                  line threw the care away. Read the label. */}
+              {delivery?.tone === 'quiet' ? ` · ${delivery.label}` : ''}
             </Text>
           </View>
         </View>

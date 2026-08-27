@@ -1,6 +1,7 @@
 # IMAP/SMTP mailbox connector — design + implementation plan
 
-**Status:** approved 2026-08-26; phases 1–7 built on branch `imap-mailbox-connector`.
+**Status:** phases 1–7 MERGED 2026-08-26 (#1540, migs 572/573, live). Phase 8 built on
+branch `mailbox-sent-lane` (mig 574).
 See §12 for the corrections the build forced on this document.
 **Date:** 2026-08-26
 **Prompted by:** `hatchstreet@un1t.com` — a franchise address on a domain we do not own
@@ -417,7 +418,7 @@ The phase that stops the CRM lying about whether a member was answered.
 | Poller re-ingests after a UIDVALIDITY change | Re-anchor, never re-ingest; RFC Message-ID dedupe is the backstop |
 | A large message exhausts function memory | bodyStructure-first, selective part download, size cap — the `MAX_PART_BYTES` pattern |
 | Credential leak | §6 |
-| 🔴 Staff reply in Gmail; CRM shows the ticket unanswered and someone answers twice | Phase 8. Until it ships, the connect screen must say so — §5 |
+| ~~Staff reply in Gmail; CRM shows the ticket unanswered~~ | **CLOSED by Phase 8.** The Sent lane files it as an outbound message and clears needs-reply |
 
 ## 10. Decisions taken
 
@@ -496,3 +497,57 @@ said to meter bytes via `add_email_storage_bytes`. `storeOne()`
 (`email-attachments-server.js:377`) already reserves for a staged attachment, so doing
 it again would have billed every IMAP attachment twice and silently halved the mailbox's
 5 GB quota. The Edge shim does not meter, for the same reason.
+
+---
+
+## 13. What Phase 8 corrected
+
+**§5's "a reply reopens a closed ticket" does not apply to the Sent lane.** That rule
+is about a MEMBER reply. A staff reply read out of the Sent folder files, bumps and
+clears needs-reply, but leaves `status` alone — closing is internal bookkeeping, and
+a colleague answering does not reopen what someone deliberately closed. §8.6's test
+list said "closed ticket reopens" and was wrong.
+
+**The needs-reply clear had to become STATE-GUARDED.** The plan said "clear needs
+reply" flatly. The poller runs up to five minutes behind, so a member can genuinely
+write again between a colleague's Gmail reply and our reading it — and an
+unconditional `last_message_direction: 'outbound'` would then clear needs-reply on a
+ticket where the member IS waiting. That is this phase's own failure, inverted. The
+bump now applies only when the message is genuinely the ticket's newest, reusing the
+inbound webhook's skew constant. The 23505 path re-runs the same guarded bump, or a
+transient failure would strand a ticket saying "needs reply" with the answer inside it.
+
+**There is no `needs_reply` column.** It is the derived predicate
+`status = 'open' AND last_message_direction = 'inbound'`. Setting the direction IS
+the clear, which is why leaving `status` alone still empties the queue and the badge.
+
+🔴 **The delivery "quiet" branch was never rendered, and rendered a falsehood.** Both
+platforms gated on `tone === 'quiet'` and then printed the hard-coded word
+**"Delivered"** — so from the moment MAILBOX-CONNECT.7 merged, every SMTP-sent reply
+would have claimed a confirmed delivery that by construction can never exist, while
+the `detail` explaining why was dead text rendered nowhere. Nobody saw it: no mailbox
+was connected, so no SMTP send had happened. **The class is the lesson** — a new
+return shape was added to `deliveryMeta` and tested at the FUNCTION, while its only
+consumer had assumed `quiet` could only ever mean `delivered`. 70+ passing tests all
+asserted the object; none asserted what the thread printed.
+
+**A client-sent reply's attachments are NOT recorded, deliberately.** `pollOpenFolder`
+stages attachments into the METERED bucket before delivering, which is right for the
+inbox lane (the webhook consumes the markers) and orphaning for the Sent lane, which
+writes no attachment rows and has no discard path. The Sent lane therefore stages
+nothing and logs a warning naming the count, so the gap is visible rather than
+silent. `fileOutboundAttachments` plus the `messageId` on the `filed` verdict is the
+shape for a later phase.
+
+**Idempotency is `(ticket_id, rfc_message_id)`, never global.** A global unique index
+on `rfc_message_id` is the obvious idea and would re-create the cross-tenant misfiling
+the audit fixed: the connector deliberately files one copy per connected mailbox when
+two are on the same thread, so one RFC id legitimately lands on two tickets. The
+per-ticket index also dedupes our OWN SMTP sends for free — the send path already
+wrote that id on that ticket, so the Sent copy hits 23505 and is skipped. One
+mechanism, two jobs, no "is this ours?" comparison anywhere.
+
+**`OriginalRecipient` is meaningless on the Sent lane.** `toInboundPayload` sets it to
+the mailbox address, which reads as "the address that received this" for a message the
+mailbox sent. Inert today — the Sent writer takes the mailbox directly and never reads
+it — but do not trust that field on this lane.

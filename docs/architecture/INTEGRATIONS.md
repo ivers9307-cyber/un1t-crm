@@ -372,7 +372,23 @@ openssl rand -base64 32        # 44 characters, e.g. 8Jx…= — this is the who
 
 Must decode to **exactly 32 bytes**. `secret-box.js` validates the alphabet and the decoded length and throws naming the variable if either is wrong — Node's base64 decoder silently skips characters outside the alphabet, so an unchecked typo would decode to *something* and surface later as every mailbox in the estate failing to decrypt at once. url-safe base64 (`-`/`_`) is accepted and normalised.
 
-Set it in **Vercel → Settings → Environment Variables** for Production, Preview and Development. Use a **different key per environment** — a preview deployment must not be able to decrypt production credentials. Local `.env.local` gets its own throwaway value; credentials sealed locally are simply unreadable in prod, which is the correct outcome.
+Set it in **Vercel → Settings → Environment Variables** on **Production only**.
+
+🔴 **Do NOT set a second key on Preview.** This section originally said to set a
+different key per environment, on the reasoning that a preview must not be able to
+decrypt production credentials. That goal is right and the instruction was wrong,
+because **previews in this project run against the PRODUCTION Supabase** — there is
+no preview database. So a second key does not isolate anything useful: it stops a
+preview *reading* prod credentials, but the moment anyone connects a mailbox from a
+preview URL the ciphertext lands in the **production** `email_mailbox_credentials`
+table sealed with a key production cannot open. That mailbox then reports
+`decrypt_failed` for ever, and the only fix is deleting and re-entering the
+credential.
+
+Leaving it unset on Preview is strictly better: `isConfigured()` returns false, the
+connect route refuses with 503, and a preview URL can neither read a production
+credential nor write a poisoned row. Local `.env.local` does not matter either way —
+local dev has no database at all.
 
 ### Fail-closed behaviour (do not "fix" this)
 

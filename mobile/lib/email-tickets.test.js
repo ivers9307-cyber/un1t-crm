@@ -14,6 +14,7 @@ import {
   ticketReplyPlaceholder,
   ticketThreadAudienceLines,
   ticketDeliveryMeta,
+  ticketSendOriginMeta,
   requesterLabel,
   mailboxLabel,
   ticketToInboxRow,
@@ -51,6 +52,61 @@ describe('ticketMessageKind', () => {
   it('defaults to inbound for junk', () => {
     expect(ticketMessageKind(null)).toBe('inbound')
     expect(ticketMessageKind({})).toBe('inbound')
+  })
+
+  // MAILBOX-COEXIST.1 — a reply typed in Gmail IS outbound: it reached the
+  // member and it is not a note. Where it came FROM is a separate rule
+  // (ticketSendOriginMeta), deliberately not a fourth value in the one
+  // function on this screen whose three-case ordering is the safety property.
+  it('calls a mail-client reply outbound — no fourth kind', () => {
+    expect(ticketMessageKind({
+      direction: 'outbound', is_internal_note: false, source: 'mail_client',
+    })).toBe('outbound')
+  })
+})
+
+// MAILBOX-COEXIST.1 — rule 3 in the module header, and a mirror of
+// sendOriginMeta's block in src/lib/ticket-display.test.js. Phase 8 polls a
+// connected mailbox's Sent folder, so an outbound row can now be a reply
+// somebody typed in Gmail with no CRM author on it. The phase exists to stop
+// two people answering one member, and this screen is where the second of them
+// would start typing — so it has to be able to say a reply came from outside.
+describe('ticketSendOriginMeta (MAILBOX-COEXIST.1)', () => {
+  const mailClient = (extra) => ({
+    direction: 'outbound',
+    is_internal_note: false,
+    source: 'mail_client',
+    postmark_message_id: null,
+    rfc_message_id: 'CAF=9x@mail.gmail.com',
+    author_profile_id: null,
+    ...extra,
+  })
+
+  it('marks a reply sent from someone’s own mail client, in the same words as web', () => {
+    const origin = ticketSendOriginMeta(mailClient())
+    expect(origin).not.toBeNull()
+    expect(origin.source).toBe('mail_client')
+    expect(origin.label).toBe('Sent from the mail client')
+    expect(origin.detail).toMatch(/cannot say which person/i)
+    // An Ionicons name, so the screen can render it without choosing one.
+    expect(origin.icon).toBe('open-outline')
+  })
+
+  it('says NOTHING about a reply composed in the CRM', () => {
+    expect(ticketSendOriginMeta(mailClient({ source: 'operator' }))).toBeNull()
+    // Every outbound row written before Phase 8 stamped a source.
+    expect(ticketSendOriginMeta(mailClient({ source: null }))).toBeNull()
+    expect(ticketSendOriginMeta(mailClient({ source: undefined }))).toBeNull()
+  })
+
+  it('says nothing about inbound mail or an internal note', () => {
+    expect(ticketSendOriginMeta({ direction: 'inbound', source: 'mail_client' })).toBeNull()
+    expect(ticketSendOriginMeta(mailClient({ is_internal_note: true }))).toBeNull()
+  })
+
+  it('does not throw on a malformed row', () => {
+    expect(ticketSendOriginMeta(null)).toBeNull()
+    expect(ticketSendOriginMeta({})).toBeNull()
   })
 })
 
@@ -259,6 +315,57 @@ describe('ticketDeliveryMeta (EMAIL-DELIVERY.1)', () => {
     expect(meta).not.toBeNull()
     expect(meta.label).toBe('Not tracked')
     expect(meta.tone).toBe('quiet')
+  })
+
+  // 🔴 MAILBOX-COEXIST.1 — THE HONESTY CASE, and rule 3 of the module header.
+  // A mail-client row matches the SMTP predicate byte for byte, so without its
+  // own branch it would inherit that branch's copy and tell an operator this
+  // was sent from the mailbox's own server. Nothing of ours sent it: the
+  // poller read a copy of it out of a folder.
+  it('does NOT tell an operator a mail-client reply went out over our SMTP', () => {
+    const meta = ticketDeliveryMeta(outbound({
+      delivery_status: null, source: 'mail_client',
+      postmark_message_id: null, rfc_message_id: 'CAF=9x@mail.gmail.com',
+    }))
+    expect(meta).not.toBeNull()
+    expect(meta.detail).not.toMatch(/mailbox.s own server/i)
+    expect(meta.detail).not.toMatch(/does not report delivery/i)
+  })
+
+  it('says NOT TRACKED for a mail-client reply, in web’s words', () => {
+    const meta = ticketDeliveryMeta(outbound({
+      delivery_status: null, source: 'mail_client',
+      postmark_message_id: null, rfc_message_id: 'CAF=9x@mail.gmail.com',
+    }))
+    // Same label as the SMTP case deliberately: the delivery fact is identical
+    // (nothing known, nothing coming), only the reason differs.
+    expect(meta.label).toBe('Not tracked')
+    expect(meta.tone).toBe('quiet')
+    expect(meta.detail).toMatch(/did not send this/i)
+    expect(meta.detail).toMatch(/Sent folder/i)
+    expect(meta.detail).toMatch(/none can arrive/i)
+  })
+
+  it('reads a mail-client row by its source, not by the shape of its ids', () => {
+    const meta = ticketDeliveryMeta(outbound({
+      delivery_status: null, source: 'mail_client',
+      postmark_message_id: null, rfc_message_id: null,
+    }))
+    expect(meta?.label).toBe('Not tracked')
+  })
+
+  // Both orderings the branch rests on: below the status branches, above the
+  // SMTP one. Nothing else would notice if it moved.
+  it('keeps a real outcome on a mail-client row, and beats the SMTP branch', () => {
+    expect(ticketDeliveryMeta(outbound({
+      delivery_status: 'bounced', source: 'mail_client',
+      postmark_message_id: null, rfc_message_id: 'a@b.com',
+    })).label).toBe('Not delivered')
+
+    expect(ticketDeliveryMeta(outbound({
+      delivery_status: null, source: 'mail_client',
+      postmark_message_id: null, rfc_message_id: 'a@b.com',
+    })).detail).toMatch(/did not send this/i)
   })
 
   it('does not invent provenance for a row carrying neither id', () => {

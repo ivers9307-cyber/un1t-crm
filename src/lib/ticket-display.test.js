@@ -20,6 +20,7 @@ import {
   forwardedMarker,
   replyActionLabel,
   deliveryMeta,
+  sendOriginMeta,
   deliveryTimestamp,
   requesterLabel,
   initialsOf,
@@ -104,6 +105,69 @@ describe('messageKind — the safety-critical one', () => {
   it('never guesses "sent" for a malformed row', () => {
     expect(messageKind(null)).toBe('inbound')
     expect(messageKind({})).toBe('inbound')
+  })
+
+  // MAILBOX-COEXIST.1 — a reply typed in Gmail IS an outbound message: it went
+  // to the member and it is not a note. The three-case shape of this function
+  // is the safety property of the whole thread pane, and where a message came
+  // FROM is not a fact about the shape of its bubble. It is answered by
+  // sendOriginMeta, beside this, not by a fourth value in here.
+  it('calls a mail-client reply outbound — it does NOT grow a fourth kind', () => {
+    expect(messageKind({
+      direction: 'outbound', is_internal_note: false, source: 'mail_client',
+    })).toBe('outbound')
+  })
+})
+
+// MAILBOX-COEXIST.1 — Phase 8 files a connected mailbox's Sent folder, so an
+// outbound row can now be a reply somebody typed in Gmail, with no CRM author
+// to name. The failure the phase exists to remove is two people answering one
+// member; a thread that cannot say a reply came from outside the CRM can say
+// THAT the member was answered but not by whom or from where, which leaves the
+// second person with nothing to check.
+describe('sendOriginMeta (MAILBOX-COEXIST.1)', () => {
+  const mailClient = (extra) => ({
+    direction: 'outbound',
+    is_internal_note: false,
+    source: 'mail_client',
+    postmark_message_id: null,
+    rfc_message_id: 'CAF=9x@mail.gmail.com',
+    author_profile_id: null,
+    ...extra,
+  })
+
+  it('marks a reply sent from someone’s own mail client', () => {
+    const origin = sendOriginMeta(mailClient())
+    expect(origin).not.toBeNull()
+    expect(origin.source).toBe('mail_client')
+    expect(origin.label).toBe('Sent from the mail client')
+    // It must not claim to know WHO: author_profile_id is deliberately null on
+    // these rows, and inventing an author is the one thing worse than saying
+    // nothing about them.
+    expect(origin.detail).toMatch(/cannot say which person/i)
+  })
+
+  // The distinction the whole rule is for. Both rows are outbound, both went
+  // to the member, and before Phase 8 they were indistinguishable on screen.
+  it('says NOTHING about a reply composed in the CRM', () => {
+    expect(sendOriginMeta(mailClient({ source: 'operator' }))).toBeNull()
+    // Every outbound row written before Phase 8 — source is nullable and was
+    // never stamped for them.
+    expect(sendOriginMeta(mailClient({ source: null }))).toBeNull()
+    expect(sendOriginMeta(mailClient({ source: undefined }))).toBeNull()
+  })
+
+  it('says nothing about inbound mail — the member’s own mail app is not ours to report', () => {
+    expect(sendOriginMeta({ direction: 'inbound', source: 'mail_client' })).toBeNull()
+  })
+
+  it('says nothing about an internal note, which was never sent from anywhere', () => {
+    expect(sendOriginMeta(mailClient({ is_internal_note: true }))).toBeNull()
+  })
+
+  it('does not throw on a malformed row', () => {
+    expect(sendOriginMeta(null)).toBeNull()
+    expect(sendOriginMeta({})).toBeNull()
   })
 })
 
@@ -243,6 +307,76 @@ describe('deliveryMeta (EMAIL-DELIVERY.1)', () => {
     expect(meta.label).toBe('Not tracked')
     expect(meta.tone).toBe('quiet')
     expect(meta.detail).toMatch(/does not report delivery/i)
+  })
+
+  // 🔴 MAILBOX-COEXIST.1 — THE HONESTY CASE. A mail-client row matches the
+  // SMTP predicate exactly (outbound, no status, no Postmark id, an rfc id),
+  // so without its own branch it would inherit the SMTP branch's copy and tell
+  // the operator this was "sent from this mailbox's own server". It was not
+  // sent from any server of ours: the poller found a copy of it in a folder.
+  // Naming a send path we did not use is a specific falsehood, and it would
+  // send anyone chasing a message a member says never arrived to the wrong
+  // place. These three tests are the whole reason the branch exists.
+  it('does NOT tell an operator a mail-client reply was sent from our SMTP', () => {
+    const meta = deliveryMeta(outbound({
+      delivery_status: null,
+      source: 'mail_client',
+      postmark_message_id: null,
+      rfc_message_id: 'CAF=9x@mail.gmail.com',
+    }))
+    expect(meta).not.toBeNull()
+    // The SMTP branch's sentence, which is FALSE for this row.
+    expect(meta.detail).not.toMatch(/mailbox.s own server/i)
+    expect(meta.detail).not.toMatch(/does not report delivery/i)
+  })
+
+  it('says NOT TRACKED for a mail-client reply, because nothing can ever arrive', () => {
+    const meta = deliveryMeta(outbound({
+      delivery_status: null,
+      source: 'mail_client',
+      postmark_message_id: null,
+      rfc_message_id: 'CAF=9x@mail.gmail.com',
+    }))
+    // Same LABEL as the SMTP case on purpose — the delivery fact an operator
+    // reads is identical, and one fact does not need two words. Only the
+    // reason differs, and the reason is what `detail` carries.
+    expect(meta.label).toBe('Not tracked')
+    expect(meta.tone).toBe('quiet')
+    // What it actually says: we did not send it, and no event is coming.
+    expect(meta.detail).toMatch(/did not send this/i)
+    expect(meta.detail).toMatch(/Sent folder/i)
+    expect(meta.detail).toMatch(/none can arrive/i)
+  })
+
+  // The branch is keyed on `source`, which is the direct evidence, so it must
+  // still fire on a row that does NOT match the SMTP shape — a Sent copy whose
+  // Message-ID header the mapper could not read, say. The point of keying on
+  // source rather than the null-pair is that it does not depend on the pair.
+  it('reads a mail-client row by its source, not by the shape of its ids', () => {
+    const meta = deliveryMeta(outbound({
+      delivery_status: null, source: 'mail_client',
+      postmark_message_id: null, rfc_message_id: null,
+    }))
+    expect(meta?.label).toBe('Not tracked')
+    expect(meta.detail).toMatch(/did not send this/i)
+  })
+
+  // BOTH ORDERINGS THE BRANCH DEPENDS ON, pinned because nothing else would
+  // notice if someone moved it. It must sit BELOW the status branches (so a
+  // real outcome is never swallowed) and ABOVE the SMTP branch (so the more
+  // specific fact wins over the one inferred from the id shape).
+  it('keeps a real outcome on a mail-client row, and beats the SMTP branch', () => {
+    const bounced = deliveryMeta(outbound({
+      delivery_status: 'bounced', source: 'mail_client',
+      postmark_message_id: null, rfc_message_id: 'a@b.com',
+    }))
+    expect(bounced.label).toBe('Not delivered')
+
+    const quiet = deliveryMeta(outbound({
+      delivery_status: null, source: 'mail_client',
+      postmark_message_id: null, rfc_message_id: 'a@b.com',
+    }))
+    expect(quiet.detail).toMatch(/did not send this/i)
   })
 
   it('still reports a real outcome on an SMTP row if one somehow exists', () => {

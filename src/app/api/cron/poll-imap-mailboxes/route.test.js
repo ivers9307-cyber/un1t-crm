@@ -11,6 +11,13 @@
 // stated here as a test because it is a judgement call, and a later reader
 // looking at `failed: 3` next to a fresh heartbeat needs to see that it was
 // deliberate.
+//
+// Since Phase 8 there is a fifth: this ONE tick sweeps BOTH lanes. The route
+// says so by NOT saying anything — it passes no lane argument, so the lane
+// list and its order (inbox first, then sent, on one shared budget) live in
+// pollAllMailboxes where the deadline does. A route that named the lanes
+// itself would be a policy decision in a wrapper that is meant to hold only
+// the CRON_SECRET gate, the heartbeat and the JSON.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -25,7 +32,11 @@ import { GET } from './route.js'
 import { pollAllMailboxes } from '@/lib/mail/imap-poll'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 
-const DORMANT = { ok: true, mailboxes: 0, ingested: 0, skipped: 0, failed: 0, paused: 0 }
+const ZERO_LANE = { ingested: 0, skipped: 0, failed: 0, paused: 0, unconfigured: 0 }
+const DORMANT = {
+  ok: true, mailboxes: 0, ingested: 0, skipped: 0, failed: 0, paused: 0,
+  lanes: { inbox: { ...ZERO_LANE }, sent: { ...ZERO_LANE } },
+}
 
 function req(auth = 'Bearer test-secret') {
   return { headers: { get: (k) => (k.toLowerCase() === 'authorization' ? auth : null) } }
@@ -98,6 +109,42 @@ describe('GET /api/cron/poll-imap-mailboxes', () => {
 
     expect(body).toMatchObject({ success: false, reason: 'mailbox_lookup_failed' })
     expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('🔴 sweeps BOTH lanes by asking for none — the lane order lives with the budget', async () => {
+    // No second cron, no vercel.json entry, no second heartbeat row: one tick
+    // reads INBOX and then the account's Sent folder out of the same
+    // wall-clock budget. The route passes exactly one argument, which is what
+    // makes the library's DEFAULT_LANES the single place that order is decided
+    // — and the order matters, because sent must never starve inbox.
+    await GET(req())
+    expect(pollAllMailboxes).toHaveBeenCalledWith(fakeDb)
+    expect(pollAllMailboxes.mock.calls[0]).toHaveLength(1)
+  })
+
+  it('the per-lane breakdown rides into the heartbeat, not just the totals', async () => {
+    // `last_outcome` is what ops read without opening the logs, and the
+    // counters exist so it can tell "ran, nothing connected" from "ran, the
+    // sent lane is failing on three mailboxes". Collapsing the lanes into the
+    // totals alone would hide exactly the half this phase added — including
+    // `unconfigured`, which is a mailbox with no Sent folder and is NOT a
+    // fault. Numbers and reason codes only: no address, no host, no error.
+    const out = {
+      ok: true, mailboxes: 4, ingested: 9, skipped: 1, failed: 3, paused: 0,
+      lanes: {
+        inbox: { ingested: 8, skipped: 1, failed: 0, paused: 0, unconfigured: 0 },
+        sent: { ingested: 1, skipped: 0, failed: 3, paused: 0, unconfigured: 1 },
+      },
+    }
+    pollAllMailboxes.mockResolvedValue(out)
+
+    const body = await (await GET(req())).json()
+
+    expect(stampHeartbeat).toHaveBeenCalledWith('poll-imap-mailboxes', out)
+    expect(body).toMatchObject({ success: true, lanes: out.lanes })
+    // A sent lane failing is a per-mailbox condition like any other: it counts,
+    // it does not stale the cron.
+    expect(body.success).toBe(true)
   })
 
   it('a heartbeat that fails does not fail the tick', async () => {

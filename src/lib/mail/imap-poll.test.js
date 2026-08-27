@@ -12,21 +12,35 @@
 //   • a fake global fetch standing in for the inbound webhook, which is where
 //     the status codes that drive the whole cursor discipline come from.
 //
-// The tests are organised around the seven things that must never regress.
-// The one that matters most is "a 5xx does NOT advance the watermark": get it
+// The tests are organised around the things that must never regress. The one
+// that matters most is "a 5xx does NOT advance the watermark": get it
 // backwards and mail is lost silently, which is the failure class this entire
 // subsystem's history is about.
+//
+// Since Phase 8 there is a fourth fake — Phase 8A's fileClientSentReply(),
+// mocked — because the poller now sweeps two lanes and the 'sent' lane files
+// through a writer instead of POSTing. Its four verdicts are the sent lane's
+// answer to the same question the HTTP statuses answer for inbox, so §14
+// re-states the whole cursor discipline against them rather than trusting that
+// "it is the same code" stays true.
 
 import { Readable } from 'node:stream'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('../log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
+// 🔴 Phase 8A's writer, mocked. It has its own tests; what belongs HERE is
+// only the seam — that the sent lane reaches it at all, that the inbox lane
+// never does, and that its four verdicts map onto the cursor discipline the
+// way the contract says they do.
+vi.mock('./sent-lane', () => ({ fileClientSentReply: vi.fn() }))
+
 // Imported back so the LOUD half of several fixes can be asserted. A step-over,
 // a dead-letter and a blank body are each "correct" only because an operator is
 // told; a test that checked the cursor and not the log would pass on a version
 // that lost the message in silence.
 import { logError, logWarn } from '../log'
+import { fileClientSentReply } from './sent-lane'
 import { seal } from './secret-box'
 import {
   pollMailbox,
@@ -108,6 +122,29 @@ function alternativeMessage(uid, { messageId = `m${uid}@x.com` } = {}) {
   return msg
 }
 
+/**
+ * What a reply typed in Gmail looks like once it lands in the Sent folder:
+ * FROM the connected mailbox, TO the member, carrying the threading headers
+ * that let Phase 8A find the ticket.
+ */
+function sentMessage(uid, { messageId = `s${uid}@mail.gmail.com`, inReplyTo = '<m11@x.com>' } = {}) {
+  return {
+    uid,
+    envelope: {
+      subject: 'Re: Hello',
+      from: [{ name: 'Hatch Street', address: 'hatchstreet@un1t.com' }],
+      to: [{ name: 'Ada Lovelace', address: 'ada@example.com' }],
+      date: new Date('2026-08-26T11:30:00.000Z'),
+      messageId,
+    },
+    internalDate: new Date('2026-08-26T11:30:01.000Z'),
+    bodyStructure: { type: 'text/plain', encoding: '7bit', size: 40 },
+    headers: Buffer.from(
+      `Message-ID: <${messageId}>\r\nIn-Reply-To: ${inReplyTo}\r\nReferences: ${inReplyTo}\r\nSubject: Re: Hello\r\n`,
+    ),
+  }
+}
+
 /* ───────────────────────────── the fake IMAP ──────────────────────────── */
 
 /**
@@ -159,6 +196,47 @@ function fakeImap({
     async logout() { timeline.push('logout') },
   }
   return { client, deps: { createClient: () => client } }
+}
+
+/**
+ * A fake IMAP whose contents depend on WHICH FOLDER was opened.
+ *
+ * The single-folder fake above cannot express the thing the sent lane is for:
+ * a mailbox where INBOX holds a member's question and `[Gmail]/Sent Mail`
+ * holds the colleague's answer. Keyed by the real IMAP path, so a test that
+ * expects the Sent lane to open `[Gmail]/Sent Mail` fails loudly if the lane
+ * ever resolves somewhere else.
+ */
+function fakeImapByFolder(byPath, { timeline = [] } = {}) {
+  let current = { uidValidity: 12345n, uidNext: 1, messages: [], bodies: {} }
+  const client = {
+    timeline,
+    async connect() { timeline.push('connect') },
+    async mailboxOpen(path, opts) {
+      timeline.push(['mailboxOpen', path, opts])
+      current = { uidValidity: 12345n, uidNext: 1, messages: [], bodies: {}, ...(byPath[path] || {}) }
+      return {
+        path,
+        uidValidity: current.uidValidity,
+        uidNext: current.uidNext,
+        exists: current.messages.length,
+        readOnly: true,
+      }
+    },
+    async *fetch() {
+      timeline.push('fetch')
+      for (const msg of current.messages) yield msg
+    },
+    async download(uid, part) {
+      timeline.push(['download', String(uid), part])
+      const entry = current.bodies[`${uid}:${part}`]
+      if (entry === undefined) throw new Error(`no such part ${part}`)
+      return { meta: { charset: 'utf-8' }, content: Readable.from([Buffer.from(String(entry), 'utf8')]) }
+    },
+    async downloadMany() { return {} },
+    async logout() { timeline.push('logout') },
+  }
+  return { client, timeline, deps: { createClient: () => client } }
 }
 
 /* ─────────────────────────────── the fake db ──────────────────────────── */
@@ -304,6 +382,11 @@ beforeEach(() => {
   process.env.POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN = 'inbound-token-abc'
   process.env.CRM_WEBHOOK_BASE_URL = 'https://crm.example.test'
   vi.clearAllMocks()
+  // The happy verdict, so a test that is not ABOUT the writer's answer does
+  // not have to state one. Set after clearAllMocks, which clears calls only —
+  // an implementation set once at module scope would survive, but stating it
+  // here is what makes each test's override obviously an override.
+  fileClientSentReply.mockResolvedValue({ ok: true, outcome: 'filed', ticketId: 'tkt-1', messageId: 'msg-1' })
 })
 
 afterEach(() => {
@@ -855,6 +938,10 @@ describe('isolation', () => {
     const out = await pollAllMailboxes(db, {
       now: NOW,
       concurrency: 2,
+      // 🔴 One lane, because this test is about TENANT isolation and a
+      // two-lane sweep would double every count in it for reasons that have
+      // nothing to do with what it pins. The lane loop has its own tests.
+      lanes: ['inbox'],
       // One client per mailbox: the broken one for MAILBOX, the working one
       // for OTHER_MAILBOX. createClient sees the options, which carry the
       // username, so the fake can route on it.
@@ -897,6 +984,9 @@ describe('isolation', () => {
     await pollAllMailboxes(db, {
       now: NOW,
       concurrency: 1,
+      // One lane: `seen` is an ORDER assertion, and a second lane would append
+      // its own pass to the same array.
+      lanes: ['inbox'],
       deps: {
         createClient: (opts) => {
           seen.push(opts.auth.user)
@@ -909,9 +999,14 @@ describe('isolation', () => {
   })
 
   it('a sweep with nothing connected is a healthy, dormant tick', async () => {
+    // The `lanes` breakdown is seeded even here, and deliberately: a key that
+    // appears only on a busy tick is a key nothing can chart, and this shape
+    // rides into cron_heartbeats.last_outcome.
     const db = makeDb({ mailboxes: [] })
+    const zero = { ingested: 0, skipped: 0, failed: 0, paused: 0, unconfigured: 0 }
     await expect(pollAllMailboxes(db, { now: NOW })).resolves.toEqual({
       ok: true, mailboxes: 0, ingested: 0, skipped: 0, failed: 0, paused: 0,
+      lanes: { inbox: { ...zero }, sent: { ...zero } },
     })
   })
 
@@ -1594,15 +1689,42 @@ describe('a configuration fault is recorded, never counted and never paused', ()
     expect(lastCursor(db).consecutive_failures).toBe(1)
   })
 
-  it('a lane with no IMAP folder is configuration too — recorded, not backed off', async () => {
+  it('🔴 a mailbox with no Sent folder is simply NOT SWEPT for sent — not a fault, not a row', async () => {
+    // Phase 8B. A Sent folder is provider-specific and optional: the "other"
+    // provider preset ships an empty box, so a mailbox whose operator never
+    // named one is the ORDINARY state, not a broken mailbox. The sweep now
+    // asks every connected mailbox for this lane every five minutes, so
+    // recording it as a config fault would paint a healthy mailbox red on the
+    // settings card forever and write a cursor row for a lane nobody asked
+    // for.
     const db = makeDb({ credentials: { [MAILBOX.id]: credential({ sent_folder: null }) } })
+    let created = false
 
     const out = await pollMailbox(db, MAILBOX, {
-      now: NOW, folder: 'sent', deps: { createClient: () => fakeImap().client },
+      now: NOW,
+      folder: 'sent',
+      deps: { createClient: () => { created = true; return fakeImap().client } },
+    })
+
+    expect(out).toMatchObject({ ok: true, ingested: 0, skipped: 0, reason: 'lane_not_configured' })
+    // Nothing dialled, nothing written, nothing counted, nothing paused — and
+    // no error log, because one line per mailbox per tick IS the noise.
+    expect(created).toBe(false)
+    expect(db.state.upserts).toHaveLength(0)
+    expect(logError).not.toHaveBeenCalled()
+  })
+
+  it('a lane this module does not know IS a fault — recorded, not backed off', async () => {
+    // The counter-case. An unresolvable lane that is not 'sent' can only be a
+    // caller passing a name that does not exist, which is a bug worth seeing.
+    const db = makeDb({ credentials: { [MAILBOX.id]: credential() } })
+
+    const out = await pollMailbox(db, MAILBOX, {
+      now: NOW, folder: 'drafts', deps: { createClient: () => fakeImap().client },
     })
 
     expect(out).toMatchObject({ ok: false, reason: 'no_folder' })
-    const cursor = lastCursor(db, MAILBOX.id, 'sent')
+    const cursor = lastCursor(db, MAILBOX.id, 'drafts')
     expect(cursor.consecutive_failures).toBeUndefined()
     expect(cursor.paused_until).toBeUndefined()
     expect(cursor.last_error).toMatch(/No IMAP folder is configured/)
@@ -1754,6 +1876,8 @@ describe('listing connected mailboxes', () => {
     const out = await pollAllMailboxes(db, {
       now: NOW,
       concurrency: 4,
+      // One lane: the ceiling is per lane per tick, and `polled` counts dials.
+      lanes: ['inbox'],
       deps: {
         createClient: (opts) => {
           polled.push(opts.auth.user)
@@ -1778,5 +1902,436 @@ describe('listing connected mailboxes', () => {
     })
 
     expect(db.state.reads.filter(r => r === 'pollable').length).toBeGreaterThanOrEqual(3)
+  })
+})
+
+/* ═════════ 14. the sent lane — the sink, not the webhook ════════════ */
+
+describe('the sent lane files a reply instead of posting it', () => {
+  const sentCursor = {
+    mailbox_id: MAILBOX.id, folder: 'sent', uidvalidity: 12345, last_uid: 10,
+    consecutive_failures: 0, paused_until: null,
+  }
+
+  /** A mailbox seeded on the sent lane, with one reply waiting at uid 11. */
+  function sentSetup({ ingress = { [`${MAILBOX.id}:sent`]: sentCursor } } = {}) {
+    const { deps, client } = fakeImap({
+      uidNext: 12, messages: [sentMessage(11)], bodies: { '11:1': 'Thanks, see you Tuesday.' },
+    })
+    const db = makeDb({ credentials: { [MAILBOX.id]: credential() }, ingress })
+    return { deps, client, db }
+  }
+
+  it('🔴 a message in the Sent folder reaches fileClientSentReply and NEVER the inbound webhook', async () => {
+    // THE test for this phase. `processInboundEmail` writes
+    // `direction: 'inbound'` throughout, so POSTing a colleague's reply at the
+    // inbound webhook would file the studio's own answer as though the member
+    // had written it — a worse outcome than the divergence Phase 8 exists to
+    // close, because it is wrong rather than merely missing.
+    const { fn } = stubFetch({ status: 200 })
+    const { deps, client, db } = sentSetup()
+
+    const out = await pollMailbox(db, MAILBOX, { now: NOW, folder: 'sent', deps })
+
+    expect(out).toMatchObject({ ok: true, ingested: 1, skipped: 0 })
+    expect(fn).not.toHaveBeenCalled()
+    expect(fileClientSentReply).toHaveBeenCalledTimes(1)
+
+    // The PROVIDER-SPECIFIC folder off the credential row, still read-only.
+    expect(client.timeline).toContainEqual(['mailboxOpen', '[Gmail]/Sent Mail', { readOnly: true }])
+
+    // The writer is handed the mailbox row (it needs location_id to scope the
+    // threading query), the raw message, and the same Postmark-shaped payload
+    // the mapper builds for inbox — so the Sent lane reuses one body parser.
+    const [dbArg, args] = fileClientSentReply.mock.calls[0]
+    expect(dbArg).toBe(db)
+    expect(args.mailbox).toBe(MAILBOX)
+    expect(args.msg.uid).toBe(11)
+    expect(args.payload.TextBody).toBe('Thanks, see you Tuesday.')
+    // Threading is what makes the reply land on the right ticket at all.
+    expect(args.payload.Headers.find(h => h.Name === 'In-Reply-To').Value).toBe('<m11@x.com>')
+    expect(args.payload.Headers.find(h => h.Name === 'Message-ID').Value).toBe('<s11@mail.gmail.com>')
+  })
+
+  it('🔴 …and an INBOX message still goes to the webhook and never to the writer', async () => {
+    // The other half of the seam. One lane changing behaviour is a feature;
+    // both changing is a regression nobody would notice until a member's
+    // question arrived as an outbound row.
+    const { fn } = stubFetch({ status: 200 })
+    const { deps } = fakeImap({
+      uidNext: 12, messages: [plainMessage(11)], bodies: { '11:1': 'a' },
+    })
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: credential() },
+      ingress: {
+        [`${MAILBOX.id}:inbox`]: {
+          mailbox_id: MAILBOX.id, folder: 'inbox', uidvalidity: 12345, last_uid: 10,
+          consecutive_failures: 0,
+        },
+      },
+    })
+
+    const out = await pollMailbox(db, MAILBOX, { now: NOW, deps })
+
+    expect(out).toMatchObject({ ok: true, ingested: 1 })
+    expect(fn).toHaveBeenCalledTimes(1)
+    expect(fileClientSentReply).not.toHaveBeenCalled()
+  })
+
+  it('🔴 the two lanes keep SEPARATE cursors on the same mailbox', async () => {
+    // mig 572 put `folder` in the ingress primary key precisely so this needs
+    // no migration. One shared cursor would make each lane jump the other's
+    // watermark and lose everything between the two UID positions.
+    stubFetch({ status: 200 })
+    const db = makeDb({
+      mailboxes: [MAILBOX],
+      credentials: { [MAILBOX.id]: credential() },
+      ingress: {
+        [`${MAILBOX.id}:inbox`]: {
+          mailbox_id: MAILBOX.id, folder: 'inbox', uidvalidity: 12345, last_uid: 10,
+          consecutive_failures: 0,
+        },
+        [`${MAILBOX.id}:sent`]: { ...sentCursor, last_uid: 40 },
+      },
+    })
+    const { deps } = fakeImapByFolder({
+      'INBOX': { uidNext: 12, messages: [plainMessage(11)], bodies: { '11:1': 'a' } },
+      '[Gmail]/Sent Mail': { uidNext: 42, messages: [sentMessage(41)], bodies: { '41:1': 'b' } },
+    })
+
+    await pollAllMailboxes(db, { now: NOW, concurrency: 1, deps })
+
+    // Two rows, two watermarks, neither disturbed by the other.
+    expect(db.state.ingress.get(`${MAILBOX.id}:inbox`).last_uid).toBe(11)
+    expect(db.state.ingress.get(`${MAILBOX.id}:sent`).last_uid).toBe(41)
+  })
+
+  it('🔴 duplicate and orphan are HANDLED — both advance the watermark', async () => {
+    // The contract's own words. A `duplicate` is a reply already on the ticket
+    // (ours over SMTP, or one a previous tick filed); an `orphan` is a reply
+    // on a thread we never ingested, which the writer deliberately does NOT
+    // conjure a ticket for. Re-reading either next tick produces the same
+    // answer forever, so holding the watermark would stall the lane on a
+    // message nothing can change — a denial of the whole Sent folder.
+    for (const outcome of ['duplicate', 'orphan']) {
+      vi.clearAllMocks()
+      fileClientSentReply.mockResolvedValue({ ok: true, outcome, ticketId: 'tkt-1' })
+      stubFetch({ status: 200 })
+      const { deps, db } = sentSetup()
+
+      const out = await pollMailbox(db, MAILBOX, { now: NOW, folder: 'sent', deps })
+
+      expect(out).toMatchObject({ ok: true, ingested: 1 })
+      const cursor = lastCursor(db, MAILBOX.id, 'sent')
+      expect(cursor.last_uid).toBe(11)
+      expect(cursor.last_ok_at).toBe(NOW_ISO)
+      expect(cursor.consecutive_failures).toBe(0)
+    }
+  })
+
+  it('🔴 ok:false does NOT advance the watermark — it is a 5xx by another name', async () => {
+    // Identical to the inbox lane's rule and for identical reasons: the writer
+    // recorded nothing, so advancing past this reply would drop it on the
+    // floor silently and forever. The next tick reads the same message.
+    fileClientSentReply.mockResolvedValue({ ok: false, reason: 'insert_failed', error: new Error('deadlock detected') })
+    stubFetch({ status: 200 })
+    const { deps, db } = sentSetup()
+
+    const out = await pollMailbox(db, MAILBOX, { now: NOW, folder: 'sent', deps })
+
+    expect(out).toMatchObject({ ok: false, ingested: 0, skipped: 0, reason: 'forward_failed' })
+    const cursor = lastCursor(db, MAILBOX.id, 'sent')
+    expect(cursor.last_uid).toBeUndefined()
+    expect(db.state.ingress.get(`${MAILBOX.id}:sent`).last_uid).toBe(10)
+    // Counted and backed off exactly as a failing forward is — the settings
+    // card is what tells an operator a lane has stopped.
+    expect(cursor.consecutive_failures).toBe(1)
+    // 🔴 The machine reason reaches the log; `last_error` stays a sentence a
+    // customer-tier owner can read, with no database internals in it
+    // (MAILBOX-CONNECT.8).
+    expect(logWarn).toHaveBeenCalledWith(
+      'imap-poll', expect.stringContaining('could not file a reply'),
+      expect.objectContaining({ uid: 11, reason: 'insert_failed' }),
+    )
+    expect(cursor.last_error).not.toMatch(/deadlock/)
+  })
+
+  it('a writer that THROWS is retryable too — a bug must not cost the reply', async () => {
+    // The contract says it never throws. If it ever does, the reply is still
+    // in the customer's Sent folder and the watermark has not moved, so the
+    // next tick tries again: a broken promise costs a tick, not a message.
+    fileClientSentReply.mockRejectedValue(new Error('boom'))
+    stubFetch({ status: 200 })
+    const { deps, db } = sentSetup()
+
+    const out = await pollMailbox(db, MAILBOX, { now: NOW, folder: 'sent', deps })
+
+    expect(out).toMatchObject({ ok: false, reason: 'forward_failed' })
+    expect(db.state.ingress.get(`${MAILBOX.id}:sent`).last_uid).toBe(10)
+    expect(logError).toHaveBeenCalledWith(
+      'imap-poll', expect.stringContaining('sent-lane writer threw'), expect.objectContaining({ uid: 11 }),
+    )
+  })
+
+  it('🔴 stages NO attachment bytes, and says so rather than losing them in silence', async () => {
+    // The sent lane writes a message row and nothing else, so staged bytes
+    // would sit in the metered bucket with nothing that will ever name them —
+    // billed against the mailbox's quota, invisible. Skipping the upload is
+    // right; skipping it QUIETLY would not be, because a colleague's attached
+    // file genuinely does not reach the ticket.
+    stubFetch({ status: 200 })
+    const withFile = sentMessage(11)
+    withFile.bodyStructure = {
+      type: 'multipart/mixed',
+      childNodes: [
+        { part: '1', type: 'text/plain', encoding: '7bit', size: 40 },
+        {
+          part: '2', type: 'application/pdf', encoding: 'base64', size: 900,
+          disposition: 'attachment', dispositionParameters: { filename: 'invoice.pdf' },
+        },
+      ],
+    }
+    const { deps } = fakeImap({
+      uidNext: 12, messages: [withFile], bodies: { '11:1': 'see attached' },
+    })
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: credential() },
+      ingress: { [`${MAILBOX.id}:sent`]: sentCursor },
+    })
+
+    const out = await pollMailbox(db, MAILBOX, { now: NOW, folder: 'sent', deps })
+
+    expect(out).toMatchObject({ ok: true, ingested: 1 })
+    // Nothing uploaded, so nothing to orphan and nothing to discard.
+    expect(db.state.uploads).toHaveLength(0)
+    expect(db.state.removed).toHaveLength(0)
+    expect(fileClientSentReply.mock.calls[0][1].payload.Attachments).toEqual([])
+    expect(logWarn).toHaveBeenCalledWith(
+      'imap-poll',
+      expect.stringContaining('NOT recorded on the ticket'),
+      expect.objectContaining({ uid: 11, files: 1 }),
+    )
+  })
+
+  it('files replies even when the inbound webhook token is missing', async () => {
+    // The lane posts nothing, so it needs no forward target. Tying it to one
+    // would mean a deployment that lost an env var also stopped recording that
+    // members had been answered — for no reason at all.
+    delete process.env.POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN
+    const { fn } = stubFetch({ status: 200 })
+    const { deps, db } = sentSetup()
+
+    const out = await pollMailbox(db, MAILBOX, { now: NOW, folder: 'sent', deps })
+
+    expect(out).toMatchObject({ ok: true, ingested: 1 })
+    expect(fn).not.toHaveBeenCalled()
+    expect(lastCursor(db, MAILBOX.id, 'sent').last_uid).toBe(11)
+  })
+
+  it('🔴 the stall escape binds this lane too — a reply nothing can file is eventually dead-lettered', async () => {
+    // "Retry" needs a floor here for exactly the reason it needs one on the
+    // inbox lane: a reply the writer refuses every single time would otherwise
+    // park the Sent folder forever, and every later reply with it. The probe
+    // is what proves the writer is healthy before anything is stepped over.
+    fileClientSentReply
+      .mockResolvedValueOnce({ ok: false, reason: 'insert_failed' })
+      .mockResolvedValue({ ok: true, outcome: 'filed', ticketId: 'tkt-1' })
+    stubFetch({ status: 200 })
+    const { deps } = fakeImap({
+      uidNext: 14,
+      messages: [sentMessage(11), sentMessage(12), sentMessage(13)],
+      bodies: { '11:1': 'a', '12:1': 'b', '13:1': 'c' },
+    })
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: credential() },
+      // 12 consecutive zero-progress ticks — MAX_STALL_TICKS.
+      ingress: { [`${MAILBOX.id}:sent`]: { ...sentCursor, consecutive_failures: 12 } },
+    })
+
+    const out = await pollMailbox(db, MAILBOX, { now: NOW, folder: 'sent', deps })
+
+    expect(out).toMatchObject({ ok: true, ingested: 2, skipped: 1 })
+    expect(lastCursor(db, MAILBOX.id, 'sent').last_uid).toBe(13)
+    expect(logError).toHaveBeenCalledWith(
+      'imap-poll', expect.stringContaining('DEAD-LETTERED'),
+      expect.objectContaining({ uid: 11, folder: 'sent' }),
+    )
+  })
+
+  it('cold start on the sent lane ingests NOTHING, exactly as inbox does', async () => {
+    // A mailbox connected mid-conversation must not have its whole Sent folder
+    // filed as fresh outbound rows on tickets that may not exist.
+    stubFetch({ status: 200 })
+    const { deps, db } = sentSetup({ ingress: {} })
+
+    const out = await pollMailbox(db, MAILBOX, { now: NOW, folder: 'sent', deps })
+
+    expect(out).toMatchObject({ ok: true, ingested: 0, reason: 'cold_start' })
+    expect(fileClientSentReply).not.toHaveBeenCalled()
+    expect(lastCursor(db, MAILBOX.id, 'sent').last_uid).toBe(11)
+  })
+})
+
+/* ═══════ 15. one tick, two lanes, one budget ════════════════════════ */
+
+describe('a sweep polls inbox first and then sent, on one shared budget', () => {
+  it('🔴 sweeps both lanes of a mailbox in one tick, INBOX FIRST', async () => {
+    const { calls } = stubFetch({ status: 200 })
+    const db = makeDb({
+      mailboxes: [MAILBOX],
+      credentials: { [MAILBOX.id]: credential() },
+      ingress: {
+        [`${MAILBOX.id}:inbox`]: {
+          mailbox_id: MAILBOX.id, folder: 'inbox', uidvalidity: 12345, last_uid: 10,
+          consecutive_failures: 0,
+        },
+        [`${MAILBOX.id}:sent`]: {
+          mailbox_id: MAILBOX.id, folder: 'sent', uidvalidity: 12345, last_uid: 40,
+          consecutive_failures: 0,
+        },
+      },
+    })
+    const { deps, timeline } = fakeImapByFolder({
+      'INBOX': { uidNext: 12, messages: [plainMessage(11)], bodies: { '11:1': 'question' } },
+      '[Gmail]/Sent Mail': { uidNext: 42, messages: [sentMessage(41)], bodies: { '41:1': 'answer' } },
+    })
+
+    const out = await pollAllMailboxes(db, { now: NOW, concurrency: 1, deps })
+
+    // One member question forwarded, one colleague reply filed.
+    expect(calls).toHaveLength(1)
+    expect(fileClientSentReply).toHaveBeenCalledTimes(1)
+    expect(out).toMatchObject({
+      ok: true, mailboxes: 1, ingested: 2, failed: 0,
+      lanes: {
+        inbox: { ingested: 1, failed: 0, unconfigured: 0 },
+        sent: { ingested: 1, failed: 0, unconfigured: 0 },
+      },
+    })
+
+    // 🔴 THE ORDER. Receiving a member's question matters more than recording
+    // that a colleague answered one, so inbox is opened first — always.
+    const opened = timeline.filter(e => Array.isArray(e) && e[0] === 'mailboxOpen').map(e => e[1])
+    expect(opened).toEqual(['INBOX', '[Gmail]/Sent Mail'])
+  })
+
+  it('🔴 SENT NEVER STARVES INBOX: a budget spent by the inbox lane skips sent cleanly', async () => {
+    // The property the phase brief calls non-negotiable. Nothing is lost by
+    // skipping: the sent cursor did not move, so the next tick reads the same
+    // replies — where a sweep that ran sent first, or split the budget, would
+    // have delayed a member's own mail to record the studio's answer.
+    stubFetch({ status: 200 })
+    let inboxDone = false
+    const db = makeDb({
+      mailboxes: [MAILBOX],
+      credentials: { [MAILBOX.id]: credential() },
+      ingress: {
+        [`${MAILBOX.id}:inbox`]: {
+          mailbox_id: MAILBOX.id, folder: 'inbox', uidvalidity: 12345, last_uid: 10,
+          consecutive_failures: 0,
+        },
+        [`${MAILBOX.id}:sent`]: {
+          mailbox_id: MAILBOX.id, folder: 'sent', uidvalidity: 12345, last_uid: 40,
+          consecutive_failures: 0,
+        },
+      },
+    })
+    const built = fakeImapByFolder({
+      'INBOX': { uidNext: 12, messages: [plainMessage(11)], bodies: { '11:1': 'question' } },
+      '[Gmail]/Sent Mail': { uidNext: 42, messages: [sentMessage(41)], bodies: { '41:1': 'answer' } },
+    })
+    // The clock is spent the moment the inbox lane closes its folder — which
+    // is a real shape (a mailbox draining a backlog), stated deterministically.
+    const realLogout = built.client.logout
+    built.client.logout = async function logout() { inboxDone = true; return realLogout.call(this) }
+
+    const out = await pollAllMailboxes(db, {
+      now: NOW, concurrency: 1, deps: built.deps,
+      budgetMs: 1000,
+      clock: () => (inboxDone ? 10_000 : 0),
+    })
+
+    // Inbox got its whole tick…
+    expect(out.lanes.inbox.ingested).toBe(1)
+    expect(db.state.ingress.get(`${MAILBOX.id}:inbox`).last_uid).toBe(11)
+    // …and sent was not started at all: no writer call, no cursor movement,
+    // and the tick is still HEALTHY rather than a failure.
+    expect(fileClientSentReply).not.toHaveBeenCalled()
+    expect(db.state.ingress.get(`${MAILBOX.id}:sent`).last_uid).toBe(40)
+    expect(out).toMatchObject({ ok: true, failed: 0 })
+    expect(built.timeline.filter(e => Array.isArray(e) && e[0] === 'mailboxOpen')).toHaveLength(1)
+    // Visible, because a lane silently never running is the shape that hides a
+    // slow tenant.
+    expect(logWarn).toHaveBeenCalledWith(
+      'imap-poll', expect.stringContaining('inbox is swept first on purpose'),
+      expect.objectContaining({ lane: 'sent' }),
+    )
+  })
+
+  it('🔴 a mailbox with no Sent folder is counted as unconfigured, never as failed', async () => {
+    // It must not increment consecutive_failures, must not pause anything, and
+    // must not read as a broken mailbox in the heartbeat — the "other"
+    // provider preset ships an empty Sent box, so this is an ordinary state
+    // that every tick will meet again.
+    stubFetch({ status: 200 })
+    const db = makeDb({
+      mailboxes: [MAILBOX],
+      credentials: { [MAILBOX.id]: credential({ sent_folder: null }) },
+      ingress: {
+        [`${MAILBOX.id}:inbox`]: {
+          mailbox_id: MAILBOX.id, folder: 'inbox', uidvalidity: 12345, last_uid: 10,
+          consecutive_failures: 0,
+        },
+      },
+    })
+    const { deps, timeline } = fakeImapByFolder({
+      'INBOX': { uidNext: 12, messages: [plainMessage(11)], bodies: { '11:1': 'question' } },
+    })
+
+    const out = await pollAllMailboxes(db, { now: NOW, concurrency: 1, deps })
+
+    expect(out).toMatchObject({
+      ok: true, failed: 0, ingested: 1,
+      lanes: { inbox: { ingested: 1, failed: 0 }, sent: { failed: 0, unconfigured: 1 } },
+    })
+    // The Sent folder is never opened and no cursor row is written for it.
+    expect(timeline.filter(e => Array.isArray(e) && e[0] === 'mailboxOpen')).toHaveLength(1)
+    expect(db.state.ingress.has(`${MAILBOX.id}:sent`)).toBe(false)
+    expect(fileClientSentReply).not.toHaveBeenCalled()
+  })
+
+  it('one lane failing does not stop the other — the lanes are as isolated as the mailboxes', async () => {
+    // A revoked app password fails both lanes, but a writer outage must not
+    // stop a member's question arriving.
+    stubFetch({ status: 200 })
+    fileClientSentReply.mockResolvedValue({ ok: false, reason: 'insert_failed' })
+    const db = makeDb({
+      mailboxes: [MAILBOX],
+      credentials: { [MAILBOX.id]: credential() },
+      ingress: {
+        [`${MAILBOX.id}:inbox`]: {
+          mailbox_id: MAILBOX.id, folder: 'inbox', uidvalidity: 12345, last_uid: 10,
+          consecutive_failures: 0,
+        },
+        [`${MAILBOX.id}:sent`]: {
+          mailbox_id: MAILBOX.id, folder: 'sent', uidvalidity: 12345, last_uid: 40,
+          consecutive_failures: 0,
+        },
+      },
+    })
+    const { deps } = fakeImapByFolder({
+      'INBOX': { uidNext: 12, messages: [plainMessage(11)], bodies: { '11:1': 'question' } },
+      '[Gmail]/Sent Mail': { uidNext: 42, messages: [sentMessage(41)], bodies: { '41:1': 'answer' } },
+    })
+
+    const out = await pollAllMailboxes(db, { now: NOW, concurrency: 1, deps })
+
+    expect(out).toMatchObject({
+      ok: true, ingested: 1, failed: 1,
+      lanes: { inbox: { ingested: 1, failed: 0 }, sent: { ingested: 0, failed: 1 } },
+    })
+    expect(db.state.ingress.get(`${MAILBOX.id}:inbox`).last_uid).toBe(11)
+    expect(db.state.ingress.get(`${MAILBOX.id}:sent`).last_uid).toBe(40)
+    expect(db.state.ingress.get(`${MAILBOX.id}:sent`).consecutive_failures).toBe(1)
   })
 })

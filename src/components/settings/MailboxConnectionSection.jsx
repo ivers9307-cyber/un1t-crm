@@ -5,7 +5,7 @@
 // WHERE THIS LIVES AND WHY IT IS ITS OWN FILE
 // It renders inside each account's row in EmailMailboxesCard, under "Who can
 // read this". EmailMailboxesCard was already 614 lines before this arrived and
-// the connect flow is a form, a live check, three states and two disclosures —
+// the connect flow is a form, a live check, three states and a disclosure —
 // putting it inline would have doubled a file that is already the longest on
 // the settings surface. The card renders <MailboxConnectionSection/> and knows
 // nothing about IMAP.
@@ -18,19 +18,22 @@
 // account's claim true. See docs/superpowers/specs/2026-08-26-imap-mailbox-
 // connector-design.md.
 //
-// TWO DISCLOSURES ARE SHOWN BEFORE THE CONNECT BUTTON, AND BOTH ARE REQUIRED:
-//   1. Mail pulled in here is PERMANENT. GDPR contact erasure deliberately
-//      skips the email tables, so deleting a contact does not delete their
-//      correspondence. That is a knowing trade (spec §6) and the operator is
-//      the one who has to live with it — they get told before they opt in, not
-//      after a subject-access request.
-//   2. Replies sent from their OWN mail client will not appear in the CRM yet.
-//      This release polls INBOX only; a reply someone sends from Gmail goes to
-//      Sent, never to INBOX, so the ticket sits "needs reply" and a colleague
-//      answers the member a second time (spec §5 — the one divergence that is
-//      customer-facing rather than cosmetic). Polling Sent is Phase 8. An
-//      operator who is told this arranges their team around it; one who is not
-//      discovers it through a confused member.
+// ONE DISCLOSURE IS SHOWN BEFORE THE CONNECT BUTTON, AND IT IS REQUIRED:
+//   Mail pulled in here is PERMANENT. GDPR contact erasure deliberately skips
+//   the email tables, so deleting a contact does not delete their
+//   correspondence. That is a knowing trade (spec §6) and the operator is the
+//   one who has to live with it — they get told before they opt in, not after
+//   a subject-access request.
+//
+// THERE WAS A SECOND ONE AND PHASE 8 RETRACTED IT (MAILBOX-COEXIST.1). It
+// warned that replies sent from their own mail client would not appear in the
+// CRM, because the receive-only release polled INBOX only and a reply typed in
+// Gmail goes to Sent (spec §5 — the one divergence that was customer-facing
+// rather than cosmetic). Phase 8 polls the Sent folder, so the warning became
+// FALSE the moment it shipped, and a false warning on this screen is worse
+// than none: it would have a team routing every reply through the CRM to avoid
+// a problem that no longer exists, and give them no reason to trust the panel
+// that is still true. Deleted, not softened — see PermanenceDisclosure.
 //
 // THE PASSWORD FIELD IS WRITE-ONLY, IN BOTH DIRECTIONS. The server never sends
 // a stored credential — not even a masked tail, which would leak the last four
@@ -227,30 +230,35 @@ function GmailHelp() {
 }
 
 /**
- * The two things an operator must know before mail starts being pulled in.
+ * The one thing an operator must know before mail starts being pulled in.
  * Rendered above the connect button, not behind a link.
+ *
+ * IT USED TO BE TWO, AND THE SECOND ONE WAS RETRACTED BY PHASE 8
+ * (MAILBOX-COEXIST.1). It said replies sent from Gmail or Outlook would not
+ * show up here, and told the operator to reply from the CRM while that was the
+ * case. Phase 8 polls the Sent folder, so that is no longer true — a reply
+ * typed in a mail client is filed on the ticket and clears "needs reply".
+ *
+ * A retired warning is DELETED, not softened. Left standing it is worse than
+ * never having been shown: it tells a team to work around a limitation that no
+ * longer exists, and the operator has no way to know which of the two panels
+ * on this screen still holds. Softening it to "replies may take a few minutes
+ * to appear" would have been a different claim about polling latency, invented
+ * here rather than measured, on a screen whose whole job is to be believed.
+ *
+ * The permanence disclosure below is untouched and still true: GDPR contact
+ * erasure deliberately skips the email tables (spec §6).
  */
-function Disclosures() {
+function PermanenceDisclosure() {
   return (
-    <div className="space-y-2">
-      <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-[11px] text-amber-700">
-        <ShieldAlert className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
-        <span>
-          <strong>Mail pulled in here is kept permanently.</strong> Deleting a contact under a
-          data-erasure request removes their contact record, but it does <strong>not</strong> remove
-          email that arrived at this account — correspondence is kept as a business record. Connect
-          an account only if you are comfortable with that.
-        </span>
-      </div>
-      <div className="flex items-start gap-2 rounded-lg border border-un1t-border bg-un1t-bg/60 p-3 text-[11px] text-un1t-muted">
-        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
-        <span>
-          <strong>Replies you send from Gmail or Outlook will not show up here yet.</strong> Only mail
-          arriving in the inbox is read. If someone answers a member from their own mail app, the
-          ticket will still look unanswered and a colleague may answer a second time — so reply from
-          the CRM while this is the case.
-        </span>
-      </div>
+    <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-[11px] text-amber-700">
+      <ShieldAlert className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
+      <span>
+        <strong>Mail pulled in here is kept permanently.</strong> Deleting a contact under a
+        data-erasure request removes their contact record, but it does <strong>not</strong> remove
+        email that arrived at this account — correspondence is kept as a business record. Connect
+        an account only if you are comfortable with that.
+      </span>
     </div>
   )
 }
@@ -660,7 +668,7 @@ export default function MailboxConnectionSection({ locationId, mailbox, onChange
                 </div>
               </div>
 
-              {!connected && <Disclosures />}
+              {!connected && <PermanenceDisclosure />}
 
               <div className="flex flex-wrap items-center gap-2">
                 <Button type="submit" size="sm" icon={CheckCircle2} loading={saving} disabled={!preset.supported}>

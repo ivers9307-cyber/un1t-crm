@@ -2,12 +2,13 @@
 // Spec: docs/superpowers/specs/2026-08-26-imap-mailbox-connector-design.md §3
 //
 // ══ WHAT THIS IS: A PRODUCER, NOT A SECOND PIPELINE ═════════════════
-// This module reads new mail off a connected IMAP account and POSTs each
-// message, reshaped as a Postmark inbound payload, at the EXISTING webhook
-// route (/api/webhooks/postmark-inbound/<token>). It files nothing itself: no
-// ticket, no message row, no attachment row, no counter. Everything downstream
-// — mailbox routing, threading, dedupe, dead-lettering, the storage quota — is
-// inherited from that route, unchanged.
+// This module reads new mail off a connected IMAP account and hands each
+// message, reshaped as a Postmark inbound payload, to the LANE'S SINK. On the
+// 'inbox' lane that sink POSTs it at the EXISTING webhook route
+// (/api/webhooks/postmark-inbound/<token>) and this module files nothing
+// itself: no ticket, no message row, no attachment row, no counter. Everything
+// downstream — mailbox routing, threading, dedupe, dead-lettering, the storage
+// quota — is inherited from that route, unchanged.
 //
 // It is the SECOND INSTANCE of supabase/functions/postmark-inbound-shim, and
 // the resemblance is deliberate down to the details: build a payload, forward
@@ -23,6 +24,39 @@
 // error mapping — i.e. it would be a second pipeline wearing the first one's
 // clothes. Over HTTP, "indistinguishable from Postmark" is a property of the
 // system rather than a claim in a comment.
+//
+// ══ TWO LANES, AND THE SINK IS THE ONLY DIFFERENCE (§5) ═════════════
+// A connected mailbox is a REAL MAILBOX THAT PEOPLE STILL OPEN. A reply
+// somebody types in Gmail lands in that account's Sent folder and never in
+// INBOX, so an INBOX-only poller never sees it: the ticket sits "needs reply"
+// forever and a second person answers the member again. That is the one
+// divergence in §5's table that is customer-facing, and it is why this poller
+// sweeps two lanes rather than one.
+//
+// 🔴 THE PRODUCER PATTERN DOES NOT CARRY US ON THE SENT LANE, and this is the
+// only place in the whole design where it does not. `processInboundEmail`
+// writes `direction: 'inbound'` throughout, and a reply a colleague sent is
+// OUTBOUND — POSTing it at the inbound webhook would file the studio's own
+// answer as though the member had written it, which is worse than not seeing
+// it at all. The 'sent' lane therefore has its own writer,
+// fileClientSentReply() in ./sent-lane.js, and this file reaches it through a
+// per-lane SINK rather than by forking pollOpenFolder(). Everything else here
+// — the cursor, the stall escape, the wall-clock budget, per-message
+// isolation, the cross-tenant address guard — is lane-agnostic and MUST stay
+// that way: a second copy of the cursor discipline is a second place to get it
+// backwards, and getting it backwards loses mail.
+//
+// A sink answers with a NORMALISED verdict, never a status code the loop has
+// to interpret, so a 2xx and an `{ ok: true }` from the sent writer are the
+// same thing to the loop, and so are a 5xx and an `{ ok: false }`. See
+// inboundSink()/sentSink().
+//
+// 🔴 INBOX IS SWEPT FIRST AND SENT CANNOT STARVE IT. Both lanes share ONE
+// wall-clock budget, and the lane loop in pollAllMailboxes() re-checks the
+// deadline before it starts the second lane. Receiving a member's question
+// matters more than recording that a colleague answered one, so when there is
+// only enough clock for one lane it is always inbox. Nothing is lost by that:
+// the sent lane's own watermark does not move, so the next tick picks it up.
 //
 // ══ THE CURSOR IS THE WHOLE SAFETY STORY (§3.3) ═════════════════════
 // `email_mailbox_ingress.last_uid` ADVANCES ONLY ON A 2xx FROM THE ROUTE.
@@ -40,6 +74,12 @@
 //     After MAX_STALL_TICKS of zero progress the poller stops taking a
 //     retryable refusal at face value and proves which side is broken; read
 //     the deferral in pollOpenFolder() before changing any of it.
+//   • 🔴 THE SAME RULES BIND THE 'sent' LANE, WORD FOR WORD. `filed`,
+//     `duplicate` and `orphan` are all "handled" — the reply is recorded, or
+//     is already recorded, or has been judged to belong to no thread we hold —
+//     so all three ADVANCE. Only `ok: false` does not. The lane keeps its own
+//     `(mailbox_id, folder)` cursor row; mig 572 put `folder` in the ingress
+//     primary key precisely so this needed no migration of its own.
 //
 // Getting this backwards loses mail silently, which is the failure class this
 // entire subsystem's history is about.
@@ -99,6 +139,14 @@
 //     step.
 //   • It never touches src/lib/recon/ — that is the receipt-hunt engine, a
 //     live feature that happens to use the same IMAP library.
+//   • On the 'sent' lane it never STAGES an attachment either. Staging uploads
+//     bytes into a metered bucket under a marker only processInboundEmail's
+//     attachment writer redeems, and fileClientSentReply() writes a message
+//     row and nothing else — so anything staged there would sit in the bucket
+//     billed forever with nothing that will ever name it. The consequence is
+//     stated rather than hidden: a file a colleague attached in Gmail is not
+//     recorded on the ticket, only the reply's text is, and pollOpenFolder()
+//     says so at warn level when it happens.
 
 import { getAppUrl } from '../app-url'
 import { mapWithConcurrency } from '../concurrency'
@@ -107,9 +155,13 @@ import { HTML_BODY_MAX_CHARS } from '../email-inbox'
 import { logError, logInfo, logWarn } from '../log'
 import { resolveAuth } from './auth-strategy'
 import { fetchSince, withMailbox } from './imap-connection'
-import { canStageForMessage, stageImapAttachments } from './imap-attachments'
+import { attachmentParts, canStageForMessage, stageImapAttachments } from './imap-attachments'
 import { SYNTHETIC_ID_RE, toInboundPayload } from './imap-message'
 import { isConfigured } from './secret-box'
+// 🔴 THE ONE PLACE THIS MODULE FILES ANYTHING ITSELF, and it is deliberately
+// somebody else's function. See the two-lanes note in the header for why the
+// inbound webhook cannot serve the Sent folder.
+import { fileClientSentReply } from './sent-lane'
 
 /* ────────────────────────────── constants ─────────────────────────────── */
 
@@ -117,13 +169,39 @@ import { isConfigured } from './secret-box'
 export const DEFAULT_FOLDER = 'inbox'
 
 /**
+ * The Sent lane's name — again the CRM's name, not the IMAP path. The path is
+ * provider-specific and lives on the credential row; see folderPathFor().
+ */
+export const SENT_FOLDER = 'sent'
+
+/**
+ * 🔴 THE LANES ONE TICK SWEEPS, IN ORDER, AND THE ORDER IS THE POINT.
+ *
+ * Inbox first, sent second, inside the SAME wall-clock budget (see
+ * DEFAULT_TICK_BUDGET_MS and the lane loop in pollAllMailboxes). Receiving a
+ * member's question matters more than recording that a colleague answered one,
+ * so if a tick has clock for only one lane it must always be inbox. Reversing
+ * this list, or running the two lanes concurrently, would let a mailbox with a
+ * busy Sent folder delay its own INBOX — i.e. delay the member's mail to
+ * record the studio's reply, which is exactly backwards.
+ *
+ * Nothing is lost to the lane that does not run: its watermark does not move,
+ * so the next tick reads the same messages.
+ */
+export const DEFAULT_LANES = [DEFAULT_FOLDER, SENT_FOLDER]
+
+/**
  * How the lane name maps onto a real IMAP folder.
  *
  * 'inbox' is INBOX and nothing else (§3.4): `[Gmail]/All Mail` contains SENT
  * mail, so polling it would re-ingest every reply Phase 7 sends over SMTP as
- * if a member had written it. Phase 8's 'sent' lane resolves to the
+ * if a member had written it. The 'sent' lane resolves to the
  * PROVIDER-SPECIFIC folder stored on the credential row (Gmail's is
- * `[Gmail]/Sent Mail`), which is why it cannot be a constant here.
+ * `[Gmail]/Sent Mail`, Outlook's `Sent Items`), which is why it cannot be a
+ * constant here — and why `null` is a NORMAL answer for it rather than a
+ * fault: the "other" provider preset ships an empty box, so a mailbox whose
+ * operator never named a Sent folder is simply not swept for that lane. See
+ * the call site in pollMailbox().
  */
 function folderPathFor(folder, credential) {
   if (folder === DEFAULT_FOLDER) return 'INBOX'
@@ -772,6 +850,166 @@ async function postInbound(target, payloadJson) {
   }
 }
 
+/* ───────────────────────────── the lane sinks ─────────────────────────── */
+
+/**
+ * 🔴 WHERE A PREPARED MESSAGE GOES — THE ONLY THING THAT DIFFERS BETWEEN LANES.
+ *
+ * pollOpenFolder() is the cursor discipline, the stall escape, the wall-clock
+ * budget and the per-message isolation, and none of that is lane-specific. So
+ * the lane does not get its own copy of that function; it gets a SINK, and the
+ * loop calls `sink.deliver()` where it used to call postInbound() directly.
+ *
+ * A sink answers with a NORMALISED VERDICT rather than something the loop has
+ * to interpret:
+ *
+ *   accepted    the message is recorded somewhere a human can see. ADVANCE the
+ *               watermark. A 2xx from the route and an `{ ok: true }` from the
+ *               sent writer mean exactly this and exactly the same thing.
+ *   permanent   it never will be recorded, however many times we resend the
+ *               same bytes. Step over it, loudly. Only the inbox lane can
+ *               answer this — see PERMANENT_REJECTION_STATUSES.
+ *   (neither)   RETRYABLE. Nothing was recorded; hold the watermark and let
+ *               the next tick try again, with MAX_STALL_TICKS as the floor.
+ *   status      the HTTP status where there is one, `null` on the sent lane.
+ *   detail      ONE operator-readable sentence. It becomes `last_error`, which
+ *               a customer-tier owner can read on the settings card, so it
+ *               carries no remote server's words (MAILBOX-CONNECT.8).
+ *   message     the subject of the step-over log line, so its wording belongs
+ *               to the lane rather than to the loop.
+ *   logFields   lane-specific extras for that same log line.
+ *
+ * And two static properties:
+ *   lane                the folder name, for log context.
+ *   stagesAttachments   whether this lane redeems staged attachment bytes.
+ *   logContext          fields every log line for this lane carries.
+ */
+
+/**
+ * The 'inbox' sink: the Postmark-shaped forward that this module has always
+ * done. Unchanged behaviour — the budget measurement, the POST, and the
+ * status-to-verdict mapping are the same code in a different shape.
+ */
+function inboundSink(target) {
+  return {
+    lane: DEFAULT_FOLDER,
+    stagesAttachments: true,
+    logContext: { forward: target.loggable },
+
+    async deliver({ payload, uid, mailboxId }) {
+      // The measured budget, and the last thing between us and a plain-text
+      // 413 raised before the route even runs (IMAP-FORWARD-413.1).
+      const wire = enforceForwardBudget(payload)
+      if (!wire.ok) {
+        // Permanent by construction: the next tick builds byte-identical
+        // bodies and measures the same overflow, so retrying is a guaranteed
+        // stall. The per-field caps in imap-message.js should make this
+        // unreachable — it is a floor, not an expected outcome.
+        return {
+          accepted: false,
+          permanent: true,
+          status: null,
+          detail: 'The message is too large to forward even with its bodies emptied.',
+          message: 'payload will not fit the forward budget even with its bodies emptied',
+          logFields: { bytes: wire.bytes },
+        }
+      }
+      if (wire.trimmed) {
+        logWarn('imap-poll', 'trimmed the message bodies to fit the forward budget', { mailboxId, uid })
+      }
+
+      const res = await postInbound(target, wire.body)
+      const accepted = res.status >= 200 && res.status < 300
+      return {
+        accepted,
+        permanent: !accepted && PERMANENT_REJECTION_STATUSES.has(res.status),
+        status: res.status,
+        // `res.error` is OUR fetch's message, never the route's response body,
+        // so this stays safe to render on the settings card.
+        detail: `Inbound route answered ${res.status || 'no response'}${res.error ? `: ${res.error}` : ''}`,
+        message: 'inbound route permanently refused a message — stepping over it',
+        logFields: { body: res.body },
+      }
+    },
+  }
+}
+
+/**
+ * The 'sent' sink: a client-sent reply, filed as an OUTBOUND message on the
+ * ticket it belongs to.
+ *
+ * 🔴 NOTHING GOES OVER THE WIRE HERE. That is the whole reason this lane
+ * exists as a sink rather than as another producer — see the two-lanes note in
+ * the header. It also means the inbound webhook's token is irrelevant to this
+ * lane, which is why pollMailbox() only resolves the forward target for
+ * 'inbox': a deployment missing POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN can still
+ * record that a member was answered.
+ *
+ * @param {object} db  service-role Supabase client
+ * @param {object} mailbox  the email_mailboxes row being polled — the writer
+ *   needs the location and the address, not just the id.
+ */
+function sentSink(db, mailbox) {
+  const mailboxId = mailbox?.id ?? null
+  return {
+    lane: SENT_FOLDER,
+    stagesAttachments: false,
+    logContext: { writer: 'sent-lane' },
+
+    async deliver({ payload, msg, uid }) {
+      let verdict
+      try {
+        verdict = await fileClientSentReply(db, { mailbox, msg, payload })
+      } catch (err) {
+        // The module contract says it never throws — every database error is a
+        // returned verdict. A bug that breaks that promise must not cost the
+        // reply, so it is treated exactly as a 5xx is: retryable, watermark
+        // held, with MAX_STALL_TICKS as the floor if it never clears.
+        logError('imap-poll', 'the sent-lane writer threw — treating it as retryable', {
+          mailboxId, uid, err,
+        })
+        verdict = { ok: false, reason: 'writer_threw' }
+      }
+
+      // 🔴 `filed`, `duplicate` AND `orphan` ARE ALL HANDLED.
+      //   • `filed`     — the reply is on the ticket. Obvious.
+      //   • `duplicate` — it is already on the ticket: this Sent copy is one we
+      //     sent over SMTP ourselves, or one a previous tick filed. Mig 574's
+      //     partial unique index is what makes that an exact answer rather
+      //     than a heuristic.
+      //   • `orphan`    — the writer resolved no thread we hold and
+      //     deliberately did NOT conjure a ticket (§5, 8.5). Re-reading it
+      //     next tick produces the same answer forever.
+      // Holding the watermark for any of the three would stall the lane behind
+      // a message that nothing can change, which is the denial-of-inbox this
+      // file spends its length avoiding. Only `ok: false` is unhandled.
+      const accepted = verdict?.ok === true
+      if (!accepted) {
+        // The detail below is deliberately vague for the operator's card; the
+        // machine reason belongs in the log, where an engineer will look.
+        logWarn('imap-poll', 'the sent-lane writer could not file a reply — the watermark is held', {
+          mailboxId, uid, reason: verdict?.reason ?? null, err: verdict?.error ?? null,
+        })
+      }
+
+      return {
+        accepted,
+        // Never permanent. The writer's only failure mode is a database fault,
+        // and a database fault is by definition worth retrying; a reply we
+        // stepped over could never be recovered, because the Sent folder is
+        // read-only to us and the cursor would have moved past it.
+        permanent: false,
+        status: null,
+        detail: accepted
+          ? `Filed as ${verdict.outcome}.`
+          : 'Could not record a reply sent from the mail client; the next tick will try again.',
+        message: 'sent-lane writer refused a reply — stepping over it',
+        logFields: { outcome: verdict?.outcome ?? null, reason: verdict?.reason ?? null },
+      }
+    },
+  }
+}
+
 /**
  * Write the cursor row. Upsert, because cold start has no row yet.
  *
@@ -811,7 +1049,10 @@ async function writeIngress(db, mailboxId, folder, patch, nowIso) {
  * @param {{id: string, address: string, location_id?: string}} mailbox  an
  *   email_mailboxes row with `ingress = 'imap'`
  * @param {object} [options]
- * @param {string} [options.folder='inbox']  the LANE, not the IMAP path
+ * @param {string} [options.folder='inbox']  the LANE, not the IMAP path. One
+ *   of DEFAULT_LANES; it picks the SINK as well as the folder and the cursor
+ *   row, and 'sent' on a mailbox with no Sent folder configured is a no-op
+ *   rather than a fault — see the lane resolution below.
  * @param {number} [options.cap=25]  messages ingested this tick
  * @param {number} [options.now]  injectable clock, for tests
  * @param {string[]} [options.mailboxAddresses]  🔴 every active mailbox address
@@ -854,45 +1095,11 @@ export async function pollMailbox(db, mailbox, options = {}) {
     return { ok: false, ingested: 0, skipped: 0, reason: 'invalid_mailbox', error: 'Mailbox row has no id or address.' }
   }
 
-  // ── Where does the mail go? Answered before anything is opened. ────
-  const target = resolveInboundTarget()
-  if (!target.ok) {
-    // A deployment-level fault, not this mailbox's. It is recorded so the
-    // settings card can say something, but it does NOT increment the failure
-    // counter and does NOT pause: every connected mailbox in the estate hits
-    // this at the same moment, and pausing them all for a day because an env
-    // var was missing for ten minutes is exactly the silent stop this feature
-    // exists to avoid.
-    logError('imap-poll', 'no inbound target configured — refusing to poll', { mailboxId, err: target.error })
-    await writeIngress(db, mailboxId, folder, { last_run_at: nowIso, last_error: target.error }, nowIso)
-    return { ok: false, ingested: 0, skipped: 0, reason: 'not_configured', error: target.error }
-  }
-
-  // ── Which addresses are OURS? Answered before anything is opened. ──
-  // 🔴 FAIL CLOSED HERE, and it is the narrow case that earns it. Without this
-  // list a forged `To:` header files a member's email into a DIFFERENT
-  // tenant's inbox — their location, their contacts, their staff — and deletes
-  // it from the one it was addressed to, because the POST answers 2xx and the
-  // watermark advances. Proceeding is actively harmful, irreversible and
-  // cross-tenant; refusing costs one skipped tick, because the watermark does
-  // not move and the next tick re-reads the same messages.
-  //
-  // Recorded like the missing-target fault above and for the same reason: an
-  // unreadable email_mailboxes is an estate-wide fault, so it must NOT count
-  // as this tenant's failure and must NOT pause them for a day.
-  let foreignAddresses = mailboxAddresses
-  if (!Array.isArray(foreignAddresses)) {
-    const loaded = await loadActiveMailboxAddresses(db)
-    if (!loaded.ok) {
-      return await recordConfigFault(db, mailboxId, folder, {
-        error: loaded.error, reason: 'address_set_unavailable', nowIso,
-        log: 'could not read the estate mailbox addresses — refusing to poll rather than risk cross-tenant filing',
-      })
-    }
-    foreignAddresses = loaded.addresses
-  }
-
   // ── Credentials ───────────────────────────────────────────────────
+  // 🔴 READ FIRST, before anything else this function does, because the LANE
+  // cannot be resolved without it: `sent_folder` lives on this row, and a
+  // mailbox that has no Sent folder configured must be skipped before it costs
+  // an auth evaluation, an address read or a cursor row.
   let credential = null
   try {
     const { data, error } = await db
@@ -915,6 +1122,86 @@ export async function pollMailbox(db, mailbox, options = {}) {
     return await recordFailure(db, mailboxId, folder, {
       kind: 'transport', error: safeErrorText(err), reason: 'credential_lookup_failed', nowIso, now,
     })
+  }
+
+  // ── Which lane, which folder, which sink? ─────────────────────────
+  const folderPath = folderPathFor(folder, credential)
+  if (!folderPath) {
+    if (folder === SENT_FOLDER) {
+      // 🔴 NOT A FAULT, AND IT IS THE ONE THAT LOOKS MOST LIKE ONE.
+      //
+      // A Sent folder is provider-specific and OPTIONAL: the "other" provider
+      // preset ships an empty box, so a mailbox whose operator never named one
+      // is the ordinary case, not a broken mailbox. The sweep now asks EVERY
+      // connected mailbox for this lane on EVERY tick, so treating the absence
+      // as a config fault would write a `last_error` onto a cursor row for a
+      // lane that was never asked for, and paint a healthy mailbox red on the
+      // settings card every five minutes forever.
+      //
+      // So: no cursor row, no `last_error`, no counter, no pause, and not even
+      // a log line — at one line per mailbox per tick a log line IS the noise.
+      // The lane is simply not swept. `ok: true` keeps it out of the cron's
+      // failure count; pollAllMailboxes counts it as `unconfigured` so the
+      // heartbeat can still say how much of the estate has no Sent folder.
+      return { ok: true, ingested: 0, skipped: 0, reason: 'lane_not_configured' }
+    }
+    // Any OTHER unresolvable lane is a caller passing a name this module does
+    // not know — configuration, not authentication. No number of retries
+    // resolves it and no pause helps, so it is recorded and left uncounted.
+    const error = `No IMAP folder is configured for the '${folder}' lane on this mailbox.`
+    return await recordConfigFault(db, mailboxId, folder, {
+      error, reason: 'no_folder', nowIso,
+      log: 'no IMAP folder is configured for this lane — refusing to poll, and NOT pausing',
+    })
+  }
+
+  // ── Where does a prepared message go? Answered before anything is
+  //    opened, so a deployment with nowhere to deliver never logs in to a
+  //    customer's mailbox and downloads a message to find that out. ───
+  let sink
+  if (folder === SENT_FOLDER) {
+    // Files directly; needs no forward target, so a missing webhook token
+    // cannot stop a member's answer being recorded.
+    sink = sentSink(db, mailbox)
+  } else {
+    const target = resolveInboundTarget()
+    if (!target.ok) {
+      // A deployment-level fault, not this mailbox's. It is recorded so the
+      // settings card can say something, but it does NOT increment the failure
+      // counter and does NOT pause: every connected mailbox in the estate hits
+      // this at the same moment, and pausing them all for a day because an env
+      // var was missing for ten minutes is exactly the silent stop this
+      // feature exists to avoid.
+      logError('imap-poll', 'no inbound target configured — refusing to poll', { mailboxId, err: target.error })
+      await writeIngress(db, mailboxId, folder, { last_run_at: nowIso, last_error: target.error }, nowIso)
+      return { ok: false, ingested: 0, skipped: 0, reason: 'not_configured', error: target.error }
+    }
+    sink = inboundSink(target)
+  }
+
+  // ── Which addresses are OURS? Answered before anything is opened. ──
+  // 🔴 FAIL CLOSED HERE, and it is the narrow case that earns it. Without this
+  // list a forged `To:` header files a member's email into a DIFFERENT
+  // tenant's inbox — their location, their contacts, their staff — and deletes
+  // it from the one it was addressed to, because the sink accepts it and the
+  // watermark advances. It binds BOTH lanes: a Cc naming another studio is as
+  // forgeable on a reply as on an inbound. Proceeding is actively harmful,
+  // irreversible and cross-tenant; refusing costs one skipped tick, because
+  // the watermark does not move and the next tick re-reads the same messages.
+  //
+  // Recorded like the missing-target fault above and for the same reason: an
+  // unreadable email_mailboxes is an estate-wide fault, so it must NOT count
+  // as this tenant's failure and must NOT pause them for a day.
+  let foreignAddresses = mailboxAddresses
+  if (!Array.isArray(foreignAddresses)) {
+    const loaded = await loadActiveMailboxAddresses(db)
+    if (!loaded.ok) {
+      return await recordConfigFault(db, mailboxId, folder, {
+        error: loaded.error, reason: 'address_set_unavailable', nowIso,
+        log: 'could not read the estate mailbox addresses — refusing to poll rather than risk cross-tenant filing',
+      })
+    }
+    foreignAddresses = loaded.addresses
   }
 
   const verdict = resolveAuth(credential)
@@ -950,19 +1237,6 @@ export async function pollMailbox(db, mailbox, options = {}) {
     })
   }
   const auth = verdict.auth
-
-  const folderPath = folderPathFor(folder, credential)
-  if (!folderPath) {
-    // Configuration, not authentication. No number of retries resolves it and
-    // no pause helps: nothing will succeed until an operator names a folder, so
-    // counting it as a consecutive failure only buries the mailbox under a
-    // 24-hour auth pause for a fault that was never about credentials.
-    const error = `No IMAP folder is configured for the '${folder}' lane on this mailbox.`
-    return await recordConfigFault(db, mailboxId, folder, {
-      error, reason: 'no_folder', nowIso,
-      log: 'no IMAP folder is configured for this lane — refusing to poll, and NOT pausing',
-    })
-  }
 
   // ── The cursor ────────────────────────────────────────────────────
   let cursor = null
@@ -1022,7 +1296,7 @@ export async function pollMailbox(db, mailbox, options = {}) {
     run = await withMailbox(config, folderPath, async (client, box) => (
       pollOpenFolder({
         db, client, box, mailboxId, mailboxAddress, foreignAddresses,
-        cap, target, storedUidValidity, storedLastUid,
+        cap, sink, storedUidValidity, storedLastUid,
         stalledTicks, deadlineAt, clock,
       })
     ), deps)
@@ -1088,7 +1362,7 @@ export async function pollMailbox(db, mailbox, options = {}) {
     // recorded downstream and the watermark is held, which is the decision the
     // line is reporting. `last_error` carries which one it was.
     logError('imap-poll', 'a message could not be delivered onward — watermark held', {
-      mailboxId, folder, forward: target.loggable, status: run.halted.status,
+      mailboxId, folder, ...sink.logContext, status: run.halted.status,
       ingested: run.ingested, error: run.halted.error,
     })
     return {
@@ -1120,15 +1394,21 @@ export async function pollMailbox(db, mailbox, options = {}) {
 
 /**
  * Everything that happens with the folder open. Split out so pollMailbox()
- * reads as the decision it is (credentials → cursor → connect → record) and so
- * the three anchoring outcomes are visible side by side.
+ * reads as the decision it is (credentials → lane → cursor → connect → record)
+ * and so the three anchoring outcomes are visible side by side.
+ *
+ * 🔴 LANE-AGNOSTIC, AND IT STAYS THAT WAY. This function is the cursor
+ * discipline, the stall escape, the wall-clock budget and the per-message
+ * isolation; none of that differs between 'inbox' and 'sent'. The one thing
+ * that does is where a prepared message goes, and that arrives as `sink`. Do
+ * not branch on the lane in here — fork the sink instead.
  *
  * @returns {Promise<{ingested: number, skipped: number, advancedTo: number|null,
  *                    uidValidity: number|null, reason?: string,
  *                    halted?: {status: number, error: string}}>}
  */
 async function pollOpenFolder({
-  db, client, box, mailboxId, mailboxAddress, foreignAddresses, cap, target,
+  db, client, box, mailboxId, mailboxAddress, foreignAddresses, cap, sink,
   storedUidValidity, storedLastUid, stalledTicks = 0, deadlineAt = null, clock = Date.now,
 }) {
   const uidValidity = toUidNumber(box?.uidValidity)
@@ -1209,7 +1489,8 @@ async function pollOpenFolder({
     if (deadlineAt != null && clock() >= deadlineAt) {
       budgetStopped = true
       logWarn('imap-poll', 'tick budget spent — stopping this mailbox cleanly, the rest carries to the next tick', {
-        mailboxId, ingested, skipped, remaining: messages.length - (ingested + skipped),
+        mailboxId, folder: sink.lane, ingested, skipped,
+        remaining: messages.length - (ingested + skipped),
       })
       break
     }
@@ -1278,27 +1559,49 @@ async function pollOpenFolder({
       continue
     }
 
-    // Boundary assertions, both against the OWNING module's own contract
-    // rather than a copied regex. If the synthetic-id format ever drifts out
-    // of the Storage path alphabet this says so at the source, once per
-    // message, instead of degrading every attachment in the estate to
-    // `rehost_failed` quietly.
-    if (!SYNTHETIC_ID_RE.test(payload.MessageID) || !canStageForMessage(payload.MessageID)) {
-      logError('imap-poll', 'synthetic MessageID is not a safe Storage path segment — attachments on this message cannot be staged', {
-        mailboxId, uid, messageId: payload.MessageID,
-      })
-    }
+    // ── Attachments, on the lanes that redeem them ─────────────────
+    // 🔴 STAGING IS NOT FREE AND IT IS NOT UNIVERSAL. It uploads bytes into a
+    // metered bucket under a staging marker that only processInboundEmail's
+    // attachment writer ever redeems, so a lane whose sink does not go through
+    // that route would leave every file billed forever with nothing that will
+    // ever name it — the exact orphan dropStagedBytes() below exists to
+    // prevent. The 'sent' lane files a message row and nothing else, so it
+    // stages nothing, and the cost of that is stated at warn level rather than
+    // hidden: a file a colleague attached in Gmail does not reach the ticket.
+    if (sink.stagesAttachments) {
+      // Boundary assertions, both against the OWNING module's own contract
+      // rather than a copied regex. If the synthetic-id format ever drifts out
+      // of the Storage path alphabet this says so at the source, once per
+      // message, instead of degrading every attachment in the estate to
+      // `rehost_failed` quietly.
+      if (!SYNTHETIC_ID_RE.test(payload.MessageID) || !canStageForMessage(payload.MessageID)) {
+        logError('imap-poll', 'synthetic MessageID is not a safe Storage path segment — attachments on this message cannot be staged', {
+          mailboxId, uid, messageId: payload.MessageID,
+        })
+      }
 
-    // stageImapAttachments never throws and never costs the email: an
-    // unusable id, an oversized part or a failed upload each come back as an
-    // entry the route records as skipped, so the file is ON the ticket rather
-    // than absent from it.
-    const staged = await stageImapAttachments(db, client, msg, { mailboxId, messageId: payload.MessageID })
-    payload.Attachments = staged.attachments
-    if (staged.skipped.length > 0) {
-      logWarn('imap-poll', 'some attachments were not stored', {
-        mailboxId, uid, skipped: staged.skipped,
-      })
+      // stageImapAttachments never throws and never costs the email: an
+      // unusable id, an oversized part or a failed upload each come back as an
+      // entry the route records as skipped, so the file is ON the ticket rather
+      // than absent from it.
+      const staged = await stageImapAttachments(db, client, msg, { mailboxId, messageId: payload.MessageID })
+      payload.Attachments = staged.attachments
+      if (staged.skipped.length > 0) {
+        logWarn('imap-poll', 'some attachments were not stored', {
+          mailboxId, uid, skipped: staged.skipped,
+        })
+      }
+    } else {
+      payload.Attachments = []
+      // Pure, and it is the attachment walker's own answer rather than a
+      // second opinion, so the two can never disagree about what counts as a
+      // file (a .txt attachment does; a forwarded .eml is one part, not many).
+      const files = attachmentParts(msg?.bodyStructure)
+      if (files.parts.length > 0) {
+        logWarn('imap-poll', 'a reply sent from the mail client carries files that are NOT recorded on the ticket — only its text is filed', {
+          mailboxId, folder: sink.lane, uid, files: files.parts.length,
+        })
+      }
     }
 
     /**
@@ -1313,44 +1616,41 @@ async function pollOpenFolder({
       postmarkMessageId: payload.MessageID,
     })
 
-    // The measured budget, and the last thing between us and a plain-text 413.
-    const wire = enforceForwardBudget(payload)
-    if (!wire.ok) {
-      logError('imap-poll', 'payload will not fit the forward budget even with its bodies emptied — stepping over it', {
-        mailboxId, uid, bytes: wire.bytes,
-      })
-      await dropStagedBytes()
-      stepOver()
-      continue
-    }
-    if (wire.trimmed) {
-      logWarn('imap-poll', 'trimmed the message bodies to fit the forward budget', { mailboxId, uid })
-    }
+    // 🔴 THE ONE CALL THAT DIFFERS BETWEEN LANES, and the reason this function
+    // is not forked: 'inbox' POSTs at the inbound webhook, 'sent' hands the
+    // reply to fileClientSentReply(). Everything below judges the normalised
+    // verdict and never the lane.
+    const res = await sink.deliver({ payload, msg, uid, mailboxId })
 
-    const res = await postInbound(target, wire.body)
-
-    if (res.status >= 200 && res.status < 300) {
+    if (res.accepted) {
       if (deferred) {
-        // 🔴 THE PROOF. The route just accepted a different message over the
-        // same hop, so the held-back one is not an outage — it is a message
-        // this pipeline cannot forward, and it has already had MAX_STALL_TICKS
-        // worth of ticks to prove otherwise. Dead-letter it: loud, named by
-        // UID and status, so it can be read out of the mailbox by hand.
-        logError('imap-poll', '🔴 DEAD-LETTERED: the inbound route accepted the NEXT message, so this one is permanently unforwardable and is being stepped over', {
-          mailboxId, uid: deferred.uid, status: deferred.status, body: deferred.body,
-          forward: target.loggable, stalledTicks,
+        // 🔴 THE PROOF. The sink just accepted a DIFFERENT message — the route
+        // over the same hop, or the writer against the same database — so the
+        // held-back one is not an outage: it is a message this pipeline cannot
+        // deliver, and it has already had MAX_STALL_TICKS worth of ticks to
+        // prove otherwise. Dead-letter it: loud, named by UID and lane, so it
+        // can be read out of the mailbox by hand.
+        logError('imap-poll', '🔴 DEAD-LETTERED: the sink accepted the NEXT message, so this one is permanently undeliverable and is being stepped over', {
+          mailboxId, folder: sink.lane, uid: deferred.uid, status: deferred.status,
+          detail: deferred.detail, ...sink.logContext, stalledTicks,
         })
         await deferred.dropStagedBytes()
         skipped += 1
         deferred = null
       }
       // 🔴 THE ONLY PLACE THE WATERMARK MOVES ON AN INGESTED MESSAGE.
+      //
+      // `ingested` counts messages the SINK ACCEPTED, which on the sent lane
+      // includes a `duplicate` (already on the ticket) and an `orphan` (no
+      // thread we hold). Both are handled — see the sink — and neither is a
+      // step-over, because a step-over is inert while a deferral is open and
+      // an accepted message is exactly the proof a deferral is waiting for.
       ingested += 1
       advancedTo = uid ?? advancedTo
       continue
     }
 
-    if (PERMANENT_REJECTION_STATUSES.has(res.status)) {
+    if (res.permanent) {
       // See PERMANENT_REJECTION_STATUSES. Retrying is guaranteed to fail
       // identically, so the choice is between stepping over one message and
       // losing every message behind it. The staged bytes go with it — the
@@ -1359,13 +1659,18 @@ async function pollOpenFolder({
       //
       // Reached with a deferral open too, and stepOver() is inert there on
       // purpose: the probe simply moves on to the message after this one. A
-      // permanent rejection is no proof the route is HEALTHY (a 413 is raised
+      // permanent rejection is no proof the sink is HEALTHY (a 413 is raised
       // by the platform before the function even runs), so it may not be
       // allowed to resolve a deferral — but neither may it halt the probe, or
       // one poison message followed by one unrepresentable one would stall the
       // mailbox forever between them.
-      logError('imap-poll', 'inbound route permanently refused a message — stepping over it', {
-        mailboxId, uid, forward: target.loggable, status: res.status, body: res.body,
+      //
+      // The wording is the SINK's, because "permanently refused" means
+      // something different to a route and to a writer, and only the sent lane
+      // knows that it can never answer this at all.
+      logError('imap-poll', res.message, {
+        mailboxId, folder: sink.lane, uid, ...sink.logContext,
+        status: res.status, ...res.logFields,
       })
       await dropStagedBytes()
       stepOver()
@@ -1373,14 +1678,15 @@ async function pollOpenFolder({
     }
 
     // A retryable refusal — 5xx, 503 claim_in_flight, a 404 from a wrong
-    // token, a timeout. The route did NOT record this message.
+    // token, a timeout, or a database fault on the sent lane. Nothing was
+    // recorded, on either lane.
     if (!deferred && stalled && ingested === 0 && advancedTo === null) {
       // Nothing has moved this tick and nothing has moved for MAX_STALL_TICKS
       // ticks, so this message is the one blocking the mailbox. Hold it back
       // and probe the next one rather than halting again into the same wall.
-      deferred = { uid, status: res.status, body: res.body, dropStagedBytes }
+      deferred = { uid, status: res.status, detail: res.detail, dropStagedBytes }
       logWarn('imap-poll', 'mailbox has been stalled on this message for many ticks — holding it back and probing the next one', {
-        mailboxId, uid, status: res.status, stalledTicks,
+        mailboxId, folder: sink.lane, uid, status: res.status, stalledTicks,
       })
       continue
     }
@@ -1390,16 +1696,13 @@ async function pollOpenFolder({
     // jump the cursor over this one to be filed at all. When a deferral is
     // open, `advancedTo` is still null by construction, so halting here also
     // un-defers safely — the held-back message is simply retried next tick.
-    return halt(
-      res.status,
-      `Inbound route answered ${res.status || 'no response'}${res.error ? `: ${res.error}` : ''}`,
-    )
+    return halt(res.status, res.detail)
   }
 
   if (deferred) {
     // The loop ran out of messages before the probe could prove anything (the
     // held-back message was the last one). Halt: no proof, no step-over.
-    return halt(deferred.status, `Inbound route answered ${deferred.status || 'no response'}`)
+    return halt(deferred.status, deferred.detail)
   }
 
   return {
@@ -1415,12 +1718,19 @@ async function pollOpenFolder({
  * Record a CONFIGURATION fault: visible, but not counted and not paused.
  *
  * 🔴 The distinction recordFailure() cannot make. A missing env var, an
- * unreadable estate-wide table or a lane with no folder configured are all
- * faults that NO amount of retrying fixes and that pausing actively harms:
+ * unreadable estate-wide table or a lane whose name resolves to no folder are
+ * all faults that NO amount of retrying fixes and that pausing actively harms:
  * the first two hit every connected mailbox in the estate at the same instant,
  * so feeding them to the auth curve parks every tenant for up to 24 hours over
- * a deployment mistake that takes ten minutes to correct. The third is a
- * static per-mailbox setting — a pause adds nothing an operator can act on.
+ * a deployment mistake that takes ten minutes to correct. The third is a bug
+ * in a caller — a pause adds nothing an operator can act on.
+ *
+ * 🔴 IT IS NOT THE ANSWER FOR A MAILBOX WITH NO SENT FOLDER, and that is the
+ * near-miss worth naming. That lane is OPTIONAL, so its absence is not a fault
+ * at all: recording one would write `last_error` onto a cursor row for a lane
+ * nobody asked for and paint a healthy mailbox red every five minutes. See the
+ * lane resolution in pollMailbox(), which returns `lane_not_configured` and
+ * writes nothing.
  *
  * So the row still says what is wrong (`last_error` is what the settings card
  * renders), and `consecutive_failures` / `paused_until` are left alone. This is
@@ -1491,14 +1801,35 @@ async function recordFailure(db, mailboxId, folder, { kind, error, reason, nowIs
  *     mapWithConcurrency() catches anyway. One tenant's revoked password is a
  *     counter in the summary, never an aborted sweep.
  *   • FAIR ORDERING. Oldest `last_run_at` first, never-polled first of all, so
- *     a mailbox cannot be starved by another that happens to sort earlier.
+ *     a mailbox cannot be starved by another that happens to sort earlier. It
+ *     is computed PER LANE, because each lane keeps its own cursor row.
  *
+ * 🔴 AND THE LANES RUN IN ORDER, SEQUENTIALLY, ON ONE SHARED DEADLINE (§5).
+ * Inbox is swept to completion first and only then is sent swept, out of the
+ * SAME wall-clock budget — receiving a member's question matters more than
+ * recording that a colleague answered one, so if there is clock for only one
+ * lane it must be inbox. Running them concurrently would halve the budget of
+ * the lane that matters more and double the IMAP sessions against every
+ * customer's mail server at once; running sent first would let a busy Sent
+ * folder delay the member's own mail. Whatever the second lane does not reach
+ * is not lost — its watermark did not move, so the next tick reads it again.
+ *
+ * @param {object} [options]
+ * @param {string[]} [options.lanes=DEFAULT_LANES]  the lanes to sweep, in
+ *   order. `options.folder` is the single-lane spelling of the same thing and
+ *   is what a caller that wants ONLY the inbox lane passes.
  * @returns {Promise<{ok: boolean, mailboxes: number, ingested: number,
- *                    skipped: number, failed: number, paused: number, reason?: string}>}
+ *                    skipped: number, failed: number, paused: number,
+ *                    lanes: Record<string, object>, reason?: string}>}
+ *   The top-level counters are totals ACROSS lanes; `lanes` breaks them down,
+ *   so `last_outcome` can distinguish "ran, nothing connected" from "ran, the
+ *   sent lane is failing on three mailboxes". Numbers and reason codes only —
+ *   no address, no host, no error text.
  */
 export async function pollAllMailboxes(db, options = {}) {
   const {
-    folder = DEFAULT_FOLDER,
+    folder,
+    lanes = folder ? [folder] : DEFAULT_LANES,
     cap = DEFAULT_CAP,
     concurrency = POLL_CONCURRENCY,
     now = Date.now(),
@@ -1507,84 +1838,119 @@ export async function pollAllMailboxes(db, options = {}) {
     deps,
   } = options
 
-  // ONE deadline for the whole sweep, taken before any work. Per-mailbox
-  // budgets would multiply by the number of tenants, which is the starvation
-  // this is here to prevent.
+  // ONE deadline for the whole sweep — every lane, every mailbox — taken
+  // before any work. Per-lane or per-mailbox budgets would multiply by the
+  // number of lanes times the number of tenants, which is the starvation this
+  // is here to prevent.
   const deadlineAt = clock() + budgetMs
 
-  const listed = await loadPollableMailboxes(db)
-  if (!listed.ok) {
-    return { ok: false, mailboxes: 0, ingested: 0, skipped: 0, failed: 0, paused: 0, reason: 'mailbox_lookup_failed' }
+  const summary = {
+    ok: true, mailboxes: 0, ingested: 0, skipped: 0, failed: 0, paused: 0,
+    // Seeded up front so the shape is the same on a dormant tick, a refused
+    // sweep and a full one. A key that appears only sometimes is a key nothing
+    // can chart.
+    lanes: Object.fromEntries(lanes.map((lane) => [lane, {
+      ingested: 0, skipped: 0, failed: 0, paused: 0, unconfigured: 0,
+    }])),
   }
+
+  const listed = await loadPollableMailboxes(db)
+  if (!listed.ok) return { ...summary, ok: false, reason: 'mailbox_lookup_failed' }
   const mailboxes = listed.mailboxes
 
   // Dormant is the normal state until an operator connects a login in Phase 6,
   // and a dormant tick is a healthy tick — it still stamps the heartbeat.
-  if (mailboxes.length === 0) {
-    return { ok: true, mailboxes: 0, ingested: 0, skipped: 0, failed: 0, paused: 0 }
-  }
+  if (mailboxes.length === 0) return summary
 
-  // 🔴 The estate's address list, read ONCE for the sweep rather than once per
-  // mailbox: it is the same answer for every tenant, and re-reading it N times
-  // per tick would be the one query in this file that scales with tenants. If
-  // it cannot be read, NOTHING is polled — see the fail-closed reasoning in
-  // pollMailbox(); a poll without it can file a member's email into another
-  // tenant's inbox on a forged header.
+  // 🔴 The estate's address list, read ONCE for the whole sweep rather than
+  // once per mailbox or once per lane: it is the same answer for every tenant
+  // and every folder, and re-reading it would be the one query in this file
+  // that scales with tenants. If it cannot be read, NOTHING is polled — see
+  // the fail-closed reasoning in pollMailbox(); a poll without it can file a
+  // member's email into another tenant's inbox on a forged header.
   const addresses = await loadActiveMailboxAddresses(db)
   if (!addresses.ok) {
     logError('imap-poll', 'could not read the estate mailbox addresses — refusing the whole sweep', { err: addresses.error })
-    return { ok: false, mailboxes: 0, ingested: 0, skipped: 0, failed: 0, paused: 0, reason: 'address_set_unavailable' }
+    return { ...summary, ok: false, reason: 'address_set_unavailable' }
   }
 
-  // 🔴 ORDER FIRST, CUT SECOND. Cutting first is what made the old
-  // `.limit(200)` a starvation bug rather than a bound — see
-  // MAX_MAILBOXES_PER_TICK.
-  const ordered = (await orderByLastRun(db, mailboxes, folder)).slice(0, MAX_MAILBOXES_PER_TICK)
   if (mailboxes.length > MAX_MAILBOXES_PER_TICK) {
     logWarn('imap-poll', 'more connected mailboxes than one tick polls — the least-recently-run were taken, the rest lead the next tick', {
       ceiling: MAX_MAILBOXES_PER_TICK, connected: mailboxes.length,
     })
   }
 
-  const results = await mapWithConcurrency(ordered, concurrency, (mailbox) => {
-    // Checked between mailboxes as well as between messages: one slow tenant
-    // must not be able to spend a later tenant's share of the budget, and a
-    // mailbox that is never STARTED costs nothing and sorts to the front of
-    // the next tick (its `last_run_at` did not move).
-    if (clock() >= deadlineAt) {
-      return { ok: true, ingested: 0, skipped: 0, reason: 'budget_exhausted' }
+  for (const [index, lane] of lanes.entries()) {
+    // 🔴 SENT NEVER STARVES INBOX. The deadline is re-checked BETWEEN lanes as
+    // well as between mailboxes and between messages, and the first lane is
+    // never skipped by it — a budget already spent before any work began is
+    // reported by the per-mailbox check below, which is where the estate-wide
+    // "unstarted" signal comes from. From the second lane on, an exhausted
+    // budget means this lane simply does not run this tick.
+    if (index > 0 && clock() >= deadlineAt) {
+      logWarn('imap-poll', 'tick budget spent before the later lanes — inbox is swept first on purpose, and the unswept lane holds its watermark for the next tick', {
+        lane, budgetMs,
+      })
+      break
     }
-    return pollMailbox(db, mailbox, {
-      folder, cap, now, deps, clock, deadlineAt,
-      mailboxAddresses: addresses.addresses,
-    })
-  })
 
-  const summary = { ok: true, mailboxes: ordered.length, ingested: 0, skipped: 0, failed: 0, paused: 0 }
-  let unstarted = 0
-  for (const result of results) {
-    // mapWithConcurrency's own catch. pollMailbox() is written never to reach
-    // it; if it ever does, the sweep still finishes and the count still says so.
-    if (!result?.ok) {
-      summary.failed += 1
-      continue
+    // 🔴 ORDER FIRST, CUT SECOND. Cutting first is what made the old
+    // `.limit(200)` a starvation bug rather than a bound — see
+    // MAX_MAILBOXES_PER_TICK. Ordered per lane: the cursor rows are per
+    // (mailbox, folder), so the sent lane's fairness is its own.
+    const ordered = (await orderByLastRun(db, mailboxes, lane)).slice(0, MAX_MAILBOXES_PER_TICK)
+    summary.mailboxes = Math.max(summary.mailboxes, ordered.length)
+
+    const results = await mapWithConcurrency(ordered, concurrency, (mailbox) => {
+      // Checked between mailboxes as well as between messages: one slow tenant
+      // must not be able to spend a later tenant's share of the budget, and a
+      // mailbox that is never STARTED costs nothing and sorts to the front of
+      // the next tick (its `last_run_at` did not move).
+      if (clock() >= deadlineAt) {
+        return { ok: true, ingested: 0, skipped: 0, reason: 'budget_exhausted' }
+      }
+      return pollMailbox(db, mailbox, {
+        folder: lane, cap, now, deps, clock, deadlineAt,
+        mailboxAddresses: addresses.addresses,
+      })
+    })
+
+    const laneSummary = summary.lanes[lane]
+    let unstarted = 0
+    for (const result of results) {
+      // mapWithConcurrency's own catch. pollMailbox() is written never to reach
+      // it; if it ever does, the sweep still finishes and the count still says so.
+      if (!result?.ok) {
+        laneSummary.failed += 1
+        continue
+      }
+      const verdict = result.value
+      laneSummary.ingested += Number(verdict?.ingested) || 0
+      laneSummary.skipped += Number(verdict?.skipped) || 0
+      if (verdict?.reason === 'paused') laneSummary.paused += 1
+      else if (verdict?.reason === 'budget_exhausted') unstarted += 1
+      // A mailbox with no Sent folder is NOT a failure — it is a lane the
+      // operator never configured, which is the ordinary state of a mailbox on
+      // the "other" provider preset. Counted so the estate's coverage is
+      // visible, never counted as broken.
+      else if (verdict?.reason === 'lane_not_configured') laneSummary.unconfigured += 1
+      else if (verdict?.ok === false) laneSummary.failed += 1
     }
-    const verdict = result.value
-    summary.ingested += Number(verdict?.ingested) || 0
-    summary.skipped += Number(verdict?.skipped) || 0
-    if (verdict?.reason === 'paused') summary.paused += 1
-    else if (verdict?.reason === 'budget_exhausted') unstarted += 1
-    else if (verdict?.ok === false) summary.failed += 1
-  }
 
-  // Not a summary field — the shape is pinned and read by the cron. A tick
-  // that ran out of clock is healthy, but it must not be INVISIBLE: a sweep
-  // silently leaving half the estate unpolled every tick is the shape that
-  // hides a slow tenant.
-  if (unstarted > 0) {
-    logWarn('imap-poll', 'tick budget spent before every mailbox was started — they lead the next tick', {
-      unstarted, mailboxes: ordered.length, budgetMs,
-    })
+    // Not a summary field — the shape is pinned and read by the cron. A tick
+    // that ran out of clock is healthy, but it must not be INVISIBLE: a sweep
+    // silently leaving half the estate unpolled every tick is the shape that
+    // hides a slow tenant.
+    if (unstarted > 0) {
+      logWarn('imap-poll', 'tick budget spent before every mailbox was started — they lead the next tick', {
+        lane, unstarted, mailboxes: ordered.length, budgetMs,
+      })
+    }
+
+    summary.ingested += laneSummary.ingested
+    summary.skipped += laneSummary.skipped
+    summary.failed += laneSummary.failed
+    summary.paused += laneSummary.paused
   }
 
   return summary
