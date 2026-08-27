@@ -53,6 +53,12 @@ import { logError, logWarn } from '../log'
 import { storeInboundAttachments } from '@/lib/email-attachments-server'
 import { fileClientSentReply } from './sent-lane'
 import { seal } from './secret-box'
+import { toInboundPayload } from './imap-message'
+// 🔴 The surface value comes from the WRITE-BACK module, not from a literal
+// here. imap-poll.js keeps its own local copy of the constant deliberately —
+// importing would drag ImapFlow into the cron's bundle — and this import is
+// what pins the two together: drift the poller's copy and §16 stops mirroring.
+import { INBOX_SURFACE } from './imap-writeback'
 import {
   pollMailbox,
   pollAllMailboxes,
@@ -62,6 +68,9 @@ import {
   toUidNumber,
   resolveInboundTarget,
   enforceForwardBudget,
+  syncSeenFlags,
+  SEEN_SYNC_WINDOW,
+  SEEN_SYNC_MIN_INTERVAL_MS,
 } from './imap-poll'
 
 /* ─────────────────────────────── fixtures ─────────────────────────────── */
@@ -170,9 +179,15 @@ function fakeImap({
   bodies = {},
   failAt = null,
   timeline = [],
+  // INBOX-SURFACE.A — read state, per UID. Only ever handed back when the
+  // caller actually ASKS for flags, so a test cannot accidentally prove the
+  // mirror works off a fetch that never requested them.
+  flagsByUid = {},
 } = {}) {
+  const fetches = []
   const client = {
     timeline,
+    fetches,
     async connect() {
       timeline.push('connect')
       if (failAt === 'connect') throw new Error('ECONNREFUSED imap.gmail.com:993')
@@ -187,9 +202,31 @@ function fakeImap({
       timeline.push(['mailboxOpen', path, opts])
       return { path, uidValidity, uidNext, exists: messages.length, readOnly: true }
     },
-    async *fetch() {
+    /**
+     * Two shapes, because the poller now issues two shapes.
+     *
+     * `N:*` is fetchSince()'s — the fake yields everything and lets the REAL
+     * fetchSince apply its `> sinceUid` filter, which is what keeps the `N:*`
+     * trap under test.
+     *
+     * `lo:hi` is the \Seen mirror's, and the fake HONOURS IT. That is the whole
+     * point: the mirror's cost story rests on the range being bounded, so a
+     * fake that ignored the range would let an unbounded scan pass as bounded.
+     */
+    async *fetch(range, query) {
       timeline.push('fetch')
-      for (const msg of messages) yield msg
+      fetches.push({ range: String(range), query })
+      if (failAt === 'flags-fetch' && query?.flags) throw new Error('FETCH timed out')
+      const bounded = String(range).match(/^(\d+):(\d+)$/)
+      for (const msg of messages) {
+        if (bounded) {
+          const uid = Number(msg?.uid)
+          if (!(uid >= Number(bounded[1]) && uid <= Number(bounded[2]))) continue
+        }
+        yield query?.flags
+          ? { ...msg, flags: new Set(flagsByUid[msg.uid] || []) }
+          : msg
+      }
     },
     async download(uid, part) {
       timeline.push(['download', String(uid), part])
@@ -272,11 +309,17 @@ function makeDb(seed = {}) {
     mailboxes: seed.mailboxes || [],
     credentials: new Map(Object.entries(seed.credentials || {})),
     ingress: new Map(Object.entries(seed.ingress || {})),
+    // INBOX-SURFACE.A — the rows the \Seen mirror reconciles against, keyed the
+    // way the real table is: by the SYNTHETIC postmark_message_id the mapper
+    // minted at ingest.
+    messages: (seed.messages || []).map(m => ({ ...m })),
     errors: seed.errors || {},
     upserts: [],
     uploads: [],
     removed: [],
     reads: [],
+    seenWrites: [],
+    selects: [],
   }
 
   const key = (mailboxId, folder) => `${mailboxId}:${folder}`
@@ -284,13 +327,29 @@ function makeDb(seed = {}) {
   function chain(table) {
     const filters = {}
     let bounds = null
+    let mutation = null
     const api = {
-      select() { return api },
+      select(cols) {
+        // Recorded, not ignored: a column silently dropped from a SELECT list
+        // is one of this subsystem's documented silent-failure shapes (the
+        // oauth refresh token, and now `surface`), and a fake that hands back
+        // whole seeded objects can never notice one going missing.
+        if (typeof cols === 'string') state.selects.push({ table, cols })
+        return api
+      },
       eq(col, val) { filters[col] = val; return api },
       in(col, vals) { filters[col] = vals; return api },
       limit() { return api },
       order(col) { filters._order = col; return api },
       range(from, to) { bounds = [from, to]; return api },
+      // INBOX-SURFACE.A — the mirror's write, plus the two transition guards
+      // that make it idempotent. Modelled rather than ignored: the guards are
+      // what keep the steady state a zero-row UPDATE, and a fake that dropped
+      // them would let a version that rewrites the whole window every quarter
+      // hour pass as correct.
+      update(patch) { mutation = patch; return api },
+      is(col, val) { filters[`${col}__is`] = val; return api },
+      not(col, op, val) { filters[`${col}__not_${op}`] = val; return api },
       async maybeSingle() {
         if (table === 'email_mailbox_credentials') {
           if (state.errors.credentials) return { data: null, error: state.errors.credentials }
@@ -336,6 +395,23 @@ function makeDb(seed = {}) {
           result = state.errors.order
             ? { data: null, error: state.errors.order }
             : { data: ids.map(id => state.ingress.get(key(id, filters.folder))).filter(Boolean), error: null }
+        } else if (table === 'email_inbox_messages') {
+          if (!mutation) throw new Error('email_inbox_messages is only ever written by the mirror')
+          if (state.errors.seenWrite) {
+            result = { data: null, error: state.errors.seenWrite }
+          } else {
+            const wanted = filters.postmark_message_id || []
+            const matched = state.messages.filter(row => {
+              if (!wanted.includes(row.postmark_message_id)) return false
+              // The transition guards, exactly as PostgREST applies them.
+              if ('seen_at__is' in filters) return row.seen_at == null
+              if ('seen_at__not_is' in filters) return row.seen_at != null
+              return true
+            })
+            for (const row of matched) Object.assign(row, mutation)
+            state.seenWrites.push({ patch: mutation, ids: wanted, changed: matched.length })
+            result = { data: matched.map(r => ({ id: r.id })), error: null }
+          }
         } else {
           throw new Error(`unexpected list read on ${table}`)
         }
@@ -2616,5 +2692,472 @@ describe('MAILBOX-OAUTH.5 — a refresh failure and a revoked grant take differe
     const out = await pollMailbox(db, MAILBOX, { now: NOW, deps: { createClient: () => fakeImap().client } })
     expect(out.reason).toBe('not_configured')
     expect(Date.parse(lastCursor(db).paused_until) - NOW).toBe(30 * 60_000)
+  })
+})
+
+/* ═══════ 16. INBOX-SURFACE.A — the \Seen mirror (read state, both ways) ══ */
+
+describe('the \\Seen mirror', () => {
+  // 🔴 The surface value is imported from the WRITE-BACK module rather than
+  // spelled here. imap-poll.js keeps its own local copy of the constant on
+  // purpose (importing would drag ImapFlow into the cron's bundle), and this
+  // import is what pins the two together: drift the poller's copy and every
+  // test below stops mirroring.
+  const INBOX_MAILBOX = { ...MAILBOX, surface: INBOX_SURFACE }
+
+  /** The id the mapper minted at ingest — the mirror must derive the same one. */
+  const idFor = (msg) =>
+    toInboundPayload(msg, { mailboxAddress: MAILBOX.address, mailboxId: MAILBOX.id }).MessageID
+
+  /** A cursor that has ingested up to `lastUid` and has never run the mirror. */
+  const anchored = (lastUid, extra = {}) => ({
+    mailbox_id: MAILBOX.id, folder: 'inbox',
+    uidvalidity: 12345, last_uid: lastUid, ...extra,
+  })
+
+  /** The window fetch the mirror issued, if it issued one. */
+  const flagFetch = (client) => client.fetches.find(f => f.query?.flags === true)
+
+  it('🔴 marks a message read in the CRM because it was read in Gmail', async () => {
+    // The whole reason this exists: without it Richard reads a member's email
+    // on his phone, the CRM still shows it bold, and he triages it a second
+    // time — which makes the trial a comparison against "an inbox plus
+    // duplicated work" rather than against an inbox.
+    stubFetch({ status: 200 })
+    const old = plainMessage(9)
+    const { deps, client } = fakeImap({
+      uidNext: 11, messages: [old], flagsByUid: { 9: ['\\Seen'] },
+    })
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: credential() },
+      ingress: { [`${MAILBOX.id}:inbox`]: anchored(9) },
+      messages: [{ id: 'row-9', postmark_message_id: idFor(old), seen_at: null }],
+    })
+
+    const out = await pollMailbox(db, INBOX_MAILBOX, { now: NOW, deps })
+
+    expect(out.ok).toBe(true)
+    expect(db.state.messages[0].seen_at).toBe(NOW_ISO)
+    expect(flagFetch(client)).toBeTruthy()
+  })
+
+  it('🔴 clears it again when it is marked unread in Gmail — the MAILBOX is the truth', async () => {
+    // A one-way ratchet would take away the one gesture triage depends on:
+    // "put that back, I have not dealt with it". NULL means unread.
+    stubFetch({ status: 200 })
+    const old = plainMessage(9)
+    const { deps } = fakeImap({ uidNext: 11, messages: [old], flagsByUid: { 9: [] } })
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: credential() },
+      ingress: { [`${MAILBOX.id}:inbox`]: anchored(9) },
+      messages: [{ id: 'row-9', postmark_message_id: idFor(old), seen_at: NOW_ISO }],
+    })
+
+    await pollMailbox(db, INBOX_MAILBOX, { now: NOW, deps })
+
+    expect(db.state.messages[0].seen_at).toBeNull()
+  })
+
+  it('🔴 THE WINDOW IS ENFORCED — it is a bounded range, never the whole mailbox', async () => {
+    // This is the cost story. Read state changes BELOW the watermark, so the
+    // naive mirror is a second full-mailbox scan every five minutes on every
+    // connected account, forever. The bound is what stops that, so the bound
+    // is asserted as a RANGE rather than trusted.
+    stubFetch({ status: 200 })
+    const outside = plainMessage(100)   // far below the window
+    const inside = plainMessage(499)
+    const { deps, client } = fakeImap({
+      uidNext: 501,
+      messages: [outside, inside],
+      flagsByUid: { 100: ['\\Seen'], 499: ['\\Seen'] },
+    })
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: credential() },
+      ingress: { [`${MAILBOX.id}:inbox`]: anchored(500) },
+      messages: [
+        { id: 'row-100', postmark_message_id: idFor(outside), seen_at: null },
+        { id: 'row-499', postmark_message_id: idFor(inside), seen_at: null },
+      ],
+    })
+
+    await pollMailbox(db, INBOX_MAILBOX, { now: NOW, deps })
+
+    expect(flagFetch(client).range).toBe(`${500 - SEEN_SYNC_WINDOW + 1}:500`)
+    // Inside the window converges; outside it is left exactly as it was.
+    expect(db.state.messages.find(m => m.id === 'row-499').seen_at).toBe(NOW_ISO)
+    expect(db.state.messages.find(m => m.id === 'row-100').seen_at).toBeNull()
+  })
+
+  it('🔴 THE CADENCE IS ENFORCED — a recent sync means no fetch at all this tick', async () => {
+    stubFetch({ status: 200 })
+    const old = plainMessage(9)
+    const { deps, client } = fakeImap({ uidNext: 11, messages: [old], flagsByUid: { 9: ['\\Seen'] } })
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: credential() },
+      ingress: {
+        [`${MAILBOX.id}:inbox`]: anchored(9, {
+          last_seen_sync_at: new Date(NOW - SEEN_SYNC_MIN_INTERVAL_MS + 1000).toISOString(),
+        }),
+      },
+      messages: [{ id: 'row-9', postmark_message_id: idFor(old), seen_at: null }],
+    })
+
+    await pollMailbox(db, INBOX_MAILBOX, { now: NOW, deps })
+
+    expect(flagFetch(client)).toBeUndefined()
+    expect(db.state.messages[0].seen_at).toBeNull()
+    // …and the stamp is NOT re-written, so the cadence measures from the last
+    // run rather than sliding forward on every tick.
+    expect(lastCursor(db).last_seen_sync_at).toBeUndefined()
+  })
+
+  it('runs once the interval has passed, and STAMPS the cadence on the cursor upsert', async () => {
+    stubFetch({ status: 200 })
+    const old = plainMessage(9)
+    const { deps, client } = fakeImap({ uidNext: 11, messages: [old], flagsByUid: { 9: ['\\Seen'] } })
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: credential() },
+      ingress: {
+        [`${MAILBOX.id}:inbox`]: anchored(9, {
+          last_seen_sync_at: new Date(NOW - SEEN_SYNC_MIN_INTERVAL_MS).toISOString(),
+        }),
+      },
+      messages: [{ id: 'row-9', postmark_message_id: idFor(old), seen_at: null }],
+    })
+
+    await pollMailbox(db, INBOX_MAILBOX, { now: NOW, deps })
+
+    expect(flagFetch(client)).toBeTruthy()
+    // 🔴 The stamp rides the cursor upsert that was happening anyway — that is
+    // what makes the cadence cost zero extra queries.
+    const cursor = lastCursor(db)
+    expect(cursor.last_seen_sync_at).toBe(NOW_ISO)
+    expect(db.state.upserts.filter(u => u.table === 'email_mailbox_ingress')).toHaveLength(1)
+  })
+
+  it('🔴 NEVER runs for a ticketing-surface mailbox — mig 575 changes nothing for them', async () => {
+    stubFetch({ status: 200 })
+    const old = plainMessage(9)
+    const { deps, client } = fakeImap({ uidNext: 11, messages: [old], flagsByUid: { 9: ['\\Seen'] } })
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: credential() },
+      ingress: { [`${MAILBOX.id}:inbox`]: anchored(9) },
+      messages: [{ id: 'row-9', postmark_message_id: idFor(old), seen_at: null }],
+    })
+
+    await pollMailbox(db, { ...MAILBOX, surface: 'tickets' }, { now: NOW, deps })
+
+    expect(flagFetch(client)).toBeUndefined()
+    expect(db.state.seenWrites).toEqual([])
+    expect(db.state.messages[0].seen_at).toBeNull()
+  })
+
+  it('does not run for a mailbox row whose surface could not be read — fail closed', async () => {
+    stubFetch({ status: 200 })
+    const { deps, client } = fakeImap({ uidNext: 11, messages: [plainMessage(9)], flagsByUid: { 9: ['\\Seen'] } })
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: credential() },
+      ingress: { [`${MAILBOX.id}:inbox`]: anchored(9) },
+    })
+
+    await pollMailbox(db, MAILBOX, { now: NOW, deps })  // MAILBOX carries no `surface`
+
+    expect(flagFetch(client)).toBeUndefined()
+  })
+
+  it('does not run on the SENT lane — an outbound message has no unread badge', async () => {
+    stubFetch({ status: 200 })
+    const { deps, client } = fakeImap({ uidNext: 11, messages: [sentMessage(9)], flagsByUid: { 9: ['\\Seen'] } })
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: credential() },
+      ingress: { [`${MAILBOX.id}:sent`]: { ...anchored(9), folder: 'sent' } },
+    })
+
+    await pollMailbox(db, INBOX_MAILBOX, { folder: 'sent', now: NOW, deps })
+
+    expect(flagFetch(client)).toBeUndefined()
+  })
+
+  it('does not run on a cold start or a re-anchor — nothing was ever filed to reconcile', async () => {
+    stubFetch({ status: 200 })
+    const cold = fakeImap({ uidNext: 431, messages: [plainMessage(430)], flagsByUid: { 430: ['\\Seen'] } })
+    const coldDb = makeDb({ credentials: { [MAILBOX.id]: credential() } })
+    await pollMailbox(coldDb, INBOX_MAILBOX, { now: NOW, deps: cold.deps })
+    expect(flagFetch(cold.client)).toBeUndefined()
+
+    const reanchor = fakeImap({
+      uidValidity: 99999n, uidNext: 431, messages: [plainMessage(430)], flagsByUid: { 430: ['\\Seen'] },
+    })
+    const reDb = makeDb({
+      credentials: { [MAILBOX.id]: credential() },
+      ingress: { [`${MAILBOX.id}:inbox`]: anchored(9) },
+    })
+    await pollMailbox(reDb, INBOX_MAILBOX, { now: NOW, deps: reanchor.deps })
+    expect(flagFetch(reanchor.client)).toBeUndefined()
+  })
+
+  it('🔴 STILL WRITES NO IMAP FLAG — it reads flags and writes OUR column', async () => {
+    // The connector's read-only posture survives INBOX-SURFACE.A untouched.
+    // The two IMAP writes live in imap-writeback.js, behind a surface guard,
+    // and the cron does not call them.
+    stubFetch({ status: 200 })
+    const old = plainMessage(9)
+    const { deps, client } = fakeImap({ uidNext: 11, messages: [old], flagsByUid: { 9: [] } })
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: credential() },
+      ingress: { [`${MAILBOX.id}:inbox`]: anchored(9) },
+      messages: [{ id: 'row-9', postmark_message_id: idFor(old), seen_at: null }],
+    })
+
+    await pollMailbox(db, INBOX_MAILBOX, { now: NOW, deps })
+
+    expect(client.messageFlagsAdd).toBeUndefined()
+    expect(client.messageMove).toBeUndefined()
+    const opens = client.timeline.filter(e => Array.isArray(e) && e[0] === 'mailboxOpen')
+    for (const open of opens) expect(open[2]).toEqual({ readOnly: true })
+  })
+
+  it('🔴 a flags fetch that FAILS costs a stale badge and nothing else', async () => {
+    // Log it and carry on — the same posture as attachment bookkeeping. It must
+    // not reach the per-mailbox catch, which would record a failure, increment
+    // the backoff counter and eventually pause a mailbox receiving mail fine.
+    stubFetch({ status: 200 })
+    const { deps } = fakeImap({
+      uidNext: 12, messages: [plainMessage(10), plainMessage(11)],
+      bodies: { '10:1': 'hi', '11:1': 'hi' },
+      failAt: 'flags-fetch',
+    })
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: credential() },
+      ingress: { [`${MAILBOX.id}:inbox`]: anchored(9) },
+    })
+
+    const out = await pollMailbox(db, INBOX_MAILBOX, { now: NOW, deps })
+
+    expect(out).toMatchObject({ ok: true, ingested: 2 })
+    const cursor = lastCursor(db)
+    expect(cursor.last_uid).toBe(11)
+    expect(cursor.last_ok_at).toBe(NOW_ISO)
+    expect(cursor.consecutive_failures).toBe(0)
+    // Not stamped: a mirror that could not run is due again immediately.
+    expect(cursor.last_seen_sync_at).toBeUndefined()
+    expect(logWarn).toHaveBeenCalledWith(
+      'imap-poll', expect.stringMatching(/unread marks are stale/i), expect.anything(),
+    )
+  })
+
+  it('🔴 a read-state WRITE that fails is logged and never stalls the lane', async () => {
+    stubFetch({ status: 200 })
+    const old = plainMessage(9)
+    const { deps } = fakeImap({ uidNext: 11, messages: [old], flagsByUid: { 9: ['\\Seen'] } })
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: credential() },
+      ingress: { [`${MAILBOX.id}:inbox`]: anchored(9) },
+      messages: [{ id: 'row-9', postmark_message_id: idFor(old), seen_at: null }],
+      errors: { seenWrite: { message: 'deadlock detected' } },
+    })
+
+    const out = await pollMailbox(db, INBOX_MAILBOX, { now: NOW, deps })
+
+    expect(out.ok).toBe(true)
+    expect(lastCursor(db).last_ok_at).toBe(NOW_ISO)
+    expect(logWarn).toHaveBeenCalledWith(
+      'imap-poll', expect.stringMatching(/could not write mirrored read state/i), expect.anything(),
+    )
+  })
+
+  it('🔴 the steady state writes NOTHING — the transition guards do the diff', async () => {
+    // Without `.is(seen_at, null)` / `.not(seen_at, is, null)` every run would
+    // rewrite the whole window, producing WAL and a realtime repaint on every
+    // connected client every quarter of an hour, forever.
+    stubFetch({ status: 200 })
+    const seen = plainMessage(8)
+    const unseen = plainMessage(9)
+    const { deps } = fakeImap({
+      uidNext: 11, messages: [seen, unseen], flagsByUid: { 8: ['\\Seen'], 9: [] },
+    })
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: credential() },
+      ingress: { [`${MAILBOX.id}:inbox`]: anchored(9) },
+      messages: [
+        { id: 'row-8', postmark_message_id: idFor(seen), seen_at: NOW_ISO },
+        { id: 'row-9', postmark_message_id: idFor(unseen), seen_at: null },
+      ],
+    })
+
+    await pollMailbox(db, INBOX_MAILBOX, { now: NOW, deps })
+
+    expect(db.state.seenWrites.map(w => w.changed)).toEqual([0, 0])
+  })
+
+  it('runs AFTER the poll, so a message ingested this tick gets its read state too', async () => {
+    stubFetch({ status: 200 })
+    const fresh = plainMessage(10)
+    const { deps, client } = fakeImap({
+      uidNext: 11, messages: [fresh], bodies: { '10:1': 'hello' }, flagsByUid: { 10: ['\\Seen'] },
+    })
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: credential() },
+      ingress: { [`${MAILBOX.id}:inbox`]: anchored(9) },
+      messages: [{ id: 'row-10', postmark_message_id: idFor(fresh), seen_at: null }],
+    })
+
+    const out = await pollMailbox(db, INBOX_MAILBOX, { now: NOW, deps })
+
+    expect(out.ingested).toBe(1)
+    // The window's top is the watermark AFTER this tick, so uid 10 is in it.
+    expect(flagFetch(client).range.endsWith(':10')).toBe(true)
+    expect(db.state.messages[0].seen_at).toBe(NOW_ISO)
+  })
+
+  it('fetches flags + envelope + the Message-ID header, and NEVER a body', async () => {
+    stubFetch({ status: 200 })
+    const { deps, client } = fakeImap({ uidNext: 11, messages: [plainMessage(9)], flagsByUid: { 9: [] } })
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: credential() },
+      ingress: { [`${MAILBOX.id}:inbox`]: anchored(9) },
+    })
+
+    await pollMailbox(db, INBOX_MAILBOX, { now: NOW, deps })
+
+    expect(flagFetch(client).query).toEqual({
+      uid: true, flags: true, envelope: true, internalDate: true, headers: ['message-id'],
+    })
+  })
+
+  it('gives way to the wall-clock budget — it is the last work a tick does', async () => {
+    stubFetch({ status: 200 })
+    const { deps, client } = fakeImap({ uidNext: 11, messages: [plainMessage(9)], flagsByUid: { 9: ['\\Seen'] } })
+    const db = makeDb({
+      credentials: { [MAILBOX.id]: credential() },
+      ingress: { [`${MAILBOX.id}:inbox`]: anchored(9) },
+    })
+
+    let t = 0
+    await pollMailbox(db, INBOX_MAILBOX, {
+      now: NOW, deps, clock: () => (t += 100_000), budgetMs: 1,
+    })
+
+    expect(flagFetch(client)).toBeUndefined()
+  })
+})
+
+/* ═══ 17. syncSeenFlags on its own — the edges the poller cannot reach ══ */
+
+describe('syncSeenFlags', () => {
+  const ctx = { mailboxId: MAILBOX.id, mailboxAddress: MAILBOX.address, nowIso: NOW_ISO }
+
+  it('refuses a watermark it cannot use rather than fetching from UID 1', async () => {
+    const { client } = fakeImap()
+    for (const lastUid of [null, undefined, 0, -3, 'nonsense']) {
+      const out = await syncSeenFlags(makeDb(), client, { ...ctx, lastUid })
+      expect(out).toEqual({ ran: false, reason: 'no_watermark' })
+    }
+    expect(client.fetches).toEqual([])
+  })
+
+  it('never asks below UID 1, however small the watermark is', async () => {
+    const { client } = fakeImap({ messages: [] })
+    await syncSeenFlags(makeDb(), client, { ...ctx, lastUid: 3 })
+    expect(client.fetches[0].range).toBe('1:3')
+  })
+
+  it('drops a message the server volunteers outside the range it was given', async () => {
+    // A bounded range cannot trip the `N:*` trap, but a server that answered
+    // wider would silently widen the window.
+    const inRange = plainMessage(9)
+    const client = {
+      fetches: [],
+      async *fetch(range, query) {
+        this.fetches.push({ range, query })
+        yield { ...plainMessage(1), flags: new Set(['\\Seen']) }
+        yield { ...inRange, flags: new Set(['\\Seen']) }
+      },
+    }
+    const db = makeDb({
+      messages: [
+        { id: 'row-1', postmark_message_id: 'imap-11111111-out-of-range', seen_at: null },
+        { id: 'row-9', postmark_message_id: null, seen_at: null },
+      ],
+    })
+
+    const out = await syncSeenFlags(db, client, { ...ctx, lastUid: 9, window: 5 })
+
+    expect(out).toMatchObject({ ran: true, scanned: 1 })
+  })
+
+  it('🔴 mirrors a message that carries NO Message-ID header, via the same surrogate ingest used', async () => {
+    // This is the case a hand-rolled second derivation gets wrong. The mapper
+    // falls back to a UID+date surrogate when a message has no Message-ID
+    // (scripts and some ticketing systems omit it), so the mirror MUST go
+    // through toInboundPayload rather than reproducing the seed — otherwise
+    // these messages' read state silently never converges, forever, with
+    // nothing in any log to say so.
+    const bare = { ...plainMessage(9), headers: Buffer.from('Subject: no id\r\n') }
+    delete bare.envelope.messageId
+    const id = toInboundPayload(bare, { mailboxAddress: MAILBOX.address, mailboxId: MAILBOX.id }).MessageID
+    expect(id).toBeTruthy()
+
+    const client = { fetches: [], async *fetch() { yield { ...bare, flags: new Set(['\\Seen']) } } }
+    const db = makeDb({ messages: [{ id: 'row-9', postmark_message_id: id, seen_at: null }] })
+
+    await syncSeenFlags(db, client, { ...ctx, lastUid: 9 })
+
+    expect(db.state.messages[0].seen_at).toBe(NOW_ISO)
+  })
+
+  it('skips a message whose id cannot be derived rather than writing a null key', async () => {
+    // Neither a Message-ID nor a usable UID: the mapper mints nothing, so
+    // there is nothing this message was ever filed under.
+    const client = {
+      fetches: [],
+      async *fetch() { yield { uid: '9', envelope: {}, flags: new Set(['\\Seen']) } },
+    }
+    const db = makeDb()
+    const out = await syncSeenFlags(db, client, { ...ctx, lastUid: 9 })
+    expect(out).toMatchObject({ ran: true, scanned: 1, marked: 0, cleared: 0 })
+    expect(db.state.seenWrites).toEqual([])
+  })
+
+  it('reads flags handed back as an array as well as a Set', async () => {
+    const msg = plainMessage(9)
+    const id = toInboundPayload(msg, { mailboxAddress: MAILBOX.address, mailboxId: MAILBOX.id }).MessageID
+    const client = { fetches: [], async *fetch() { yield { ...msg, flags: ['\\Seen'] } } }
+    const db = makeDb({ messages: [{ id: 'row-9', postmark_message_id: id, seen_at: null }] })
+
+    await syncSeenFlags(db, client, { ...ctx, lastUid: 9 })
+
+    expect(db.state.messages[0].seen_at).toBe(NOW_ISO)
+  })
+})
+
+/* ══════ 18. the SELECT lists — a dropped column here fails silently ═════ */
+
+describe('the column lists', () => {
+  it('🔴 the mailbox read asks for `surface`, or the mirror never runs in production', async () => {
+    // The gate reads mailbox.surface. Drop it from POLL_MAILBOX_COLUMNS and
+    // every connected mailbox silently reports `undefined`, the mirror is
+    // never due for anybody, and every log line still says the poll succeeded.
+    const db = makeDb({
+      mailboxes: [{ ...MAILBOX, surface: INBOX_SURFACE }],
+      credentials: { [MAILBOX.id]: credential() },
+    })
+    stubFetch({ status: 200 })
+    await pollAllMailboxes(db, { now: NOW, lanes: ['inbox'], deps: fakeImap().deps })
+
+    const cols = db.state.selects.filter(s => s.table === 'email_mailboxes').map(s => s.cols)
+    expect(cols.some(c => c.includes('surface'))).toBe(true)
+  })
+
+  it('🔴 the cursor read asks for `last_seen_sync_at`, or the cadence is not a cadence', async () => {
+    // An absent stamp reads as "never synced" — so forgetting the column makes
+    // the mirror run on EVERY tick while the constant says every fifteen
+    // minutes. The expensive failure is the silent one.
+    const db = makeDb({ credentials: { [MAILBOX.id]: credential() } })
+    stubFetch({ status: 200 })
+    await pollMailbox(db, { ...MAILBOX, surface: INBOX_SURFACE }, { now: NOW, deps: fakeImap().deps })
+
+    const cols = db.state.selects.filter(s => s.table === 'email_mailbox_ingress').map(s => s.cols)
+    expect(cols.some(c => c.includes('last_seen_sync_at'))).toBe(true)
   })
 })

@@ -13,6 +13,14 @@
 // The scroller/fade/badge machinery below is kept as-is (harmless at two
 // tabs, and this component still needs to survive the same 375px
 // viewport COMMSLAYOUT.2 fixed for six).
+//
+// INBOX-SURFACE.C adds a THIRD tab, conditionally: Mail, the other half of the
+// ticketing A/B. `canMail` is DATA-gated, not permission-gated — the layout
+// resolves it by asking whether this studio has an active account on that
+// surface — because a tab that opens onto a surface with nothing routed to it
+// reads as broken mail, not as a feature that is off. The strip is back to
+// being wider than a 375px viewport with three tabs, which is exactly what the
+// scroller and fades below already handle.
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import Link from 'next/link'
@@ -20,7 +28,7 @@ import { usePathname } from 'next/navigation'
 import clsx from 'clsx'
 import { usePolledCount } from '../use-polled-count'
 
-export default function CommunicationsTabs({ canWhatsapp, canEmailInbox }) {
+export default function CommunicationsTabs({ canWhatsapp, canEmailInbox, canMail = false }) {
   const pathname = usePathname()
   const activeRef = useRef(null)
   const scrollerRef = useRef(null)
@@ -58,6 +66,20 @@ export default function CommunicationsTabs({ canWhatsapp, canEmailInbox }) {
     // reason, and "Ticket" still stays the name of the DATA MODEL — the route,
     // the API and the `email_tickets` table are deliberately unchanged.
     canEmailInbox && { id: 'tickets',  label: 'Email inbox', href: '/communications/tickets', badge: emailNeedsReplyCount },
+    // INBOX-SURFACE.C — the mail surface. Labelled "Mail", NOT "Inbox": the
+    // first tab is already an inbox, and two tabs called Inbox is an operator
+    // guessing which queue they are opening. The route is /communications/mail
+    // for the same reason — /communications/inbox has been the unified
+    // WhatsApp + Instagram queue since UIX-P1b and still redirects ?ch=em
+    // callers to tickets.
+    //
+    // NO BADGE YET, deliberately. The needs-reply count next door is the ticket
+    // surface's, scoped to ticket-surface mailboxes; pointing it at this tab
+    // would put the same number on two tabs that hold different mail. Its own
+    // count belongs with the surface that defines what "outstanding" means
+    // there (Phase B), and a wrong badge is worse than none — a red dot with
+    // nothing behind it is one an operator learns to ignore.
+    canMail && { id: 'mail', label: 'Mail', href: '/communications/mail' },
   ].filter(Boolean)
 
   // COMMS-DETAIL-FIX.2 — measured rather than assumed, because "does this

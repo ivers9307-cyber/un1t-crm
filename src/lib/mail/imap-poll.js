@@ -127,7 +127,14 @@
 //
 // ══ WHAT THIS MODULE DELIBERATELY DOES NOT DO ═══════════════════════
 //   • It never writes an IMAP flag. withMailbox() opens read-only and this
-//     file never asks for anything else (§3.4).
+//     file never asks for anything else (§3.4). 🔴 INBOX-SURFACE.A DID NOT
+//     CHANGE THAT. The \Seen mirror below READS flags off the folder and
+//     writes email_inbox_messages.seen_at — our column, our database. The two
+//     IMAP writes this codebase performs live in ./imap-writeback.js, behind a
+//     surface guard, and are called from the inbox surface's own routes. The
+//     poller does not import that module and must not start: a cron that can
+//     mutate a customer's mailbox is a different risk from an operator action
+//     that can.
 //   • It never meters attachment bytes. storeOne() in
 //     src/lib/email-attachments-server.js already reserves quota from the
 //     staging marker, exactly as it does for an inline attachment. Metering
@@ -403,6 +410,77 @@ const MAX_BODY_PART_BYTES = 1_000_000
 const MAX_TEXT_BODY_CHARS = HTML_BODY_MAX_CHARS
 
 /**
+ * The email_mailboxes.surface value that gets the \Seen mirror (mig 575).
+ *
+ * Deliberately a local constant rather than an import from imap-writeback.js:
+ * that module is request-scoped and pulls in ImapFlow for its writable open,
+ * and the poller has no business depending on the write path to read a
+ * presentation flag. The value is pinned against the writeback module's own
+ * export by a test, so the two cannot drift.
+ */
+const INBOX_SURFACE = 'inbox'
+
+/**
+ * 🔴 HOW FAR BACK THE \Seen MIRROR LOOKS — AND WHY THERE IS A CEILING AT ALL.
+ *
+ * Read this with SEEN_SYNC_MIN_INTERVAL_MS below; the two are one decision.
+ *
+ * The ordinary fetch asks for UIDs ABOVE the watermark, which is what keeps a
+ * tick O(new mail) rather than O(mailbox). Read state does not work like that:
+ * a member's email from three weeks ago gets opened in Gmail this afternoon,
+ * and its UID is far BELOW the watermark. The naive mirror is therefore a
+ * second, FULL-mailbox scan every five minutes on every connected account,
+ * forever — the exact query shape the rest of this subsystem exists to avoid,
+ * and it would grow without bound as a studio's mailbox grows while doing
+ * strictly less useful work each year.
+ *
+ * So the mirror is bounded twice, and this is the first bound: the most recent
+ * SEEN_SYNC_WINDOW UIDs at or below the watermark, and nothing else. The work
+ * is O(1) in mailbox size. What it costs is that read state on a message older
+ * than the window never converges — which is the right thing to give up,
+ * because triage happens on recent mail and a two-month-old thread's read
+ * badge is not what the trial is measuring.
+ *
+ * 50 is roughly a month of INBOX at the volume this is being trialled against
+ * (29 tickets over 17 days on the ticketing surface) and about a day on a
+ * mailbox ten times busier. It is also comfortably inside the 1,000-row select
+ * cap for the database half, which is why the chunking below is a safety net
+ * rather than a load-bearing loop.
+ */
+export const SEEN_SYNC_WINDOW = 50
+
+/**
+ * The second bound: the mirror runs at most this often per mailbox.
+ *
+ * Every five minutes is wasted work — nobody's read state changes 288 times a
+ * day — so the mirror runs on its own slower clock, stamped on
+ * email_mailbox_ingress.last_seen_sync_at (mig 575). Fifteen minutes means at
+ * most a quarter of an hour where the CRM still shows bold something Richard
+ * has already read in Gmail, which is well inside "did not have to triage it
+ * twice", and it cuts the mirror's cost to a third of a per-tick one.
+ *
+ * 🔴 THE STAMP RIDES THE CURSOR UPSERT THE POLLER ALREADY DOES, so the cadence
+ * itself costs ZERO extra queries: the gate is read from the cursor row that
+ * pollMailbox has already loaded, and written into the patch that
+ * writeIngress() was going to send anyway. A cadence that needed its own read
+ * and its own write would have cost more than the work it was skipping.
+ *
+ * NULL (never synced) reads as DUE, which is the right answer for a mailbox an
+ * operator has just moved onto the inbox surface.
+ */
+export const SEEN_SYNC_MIN_INTERVAL_MS = 15 * 60_000
+
+/**
+ * Ids per `.in()` clause when reconciling read state.
+ *
+ * A synthetic MessageID is 54 characters, so a whole window fits one clause
+ * comfortably — this exists so that raising SEEN_SYNC_WINDOW cannot silently
+ * produce a query string long enough for PostgREST to refuse, which would show
+ * up as read state that stops converging rather than as an error anybody sees.
+ */
+const SEEN_SYNC_ID_CHUNK = 50
+
+/**
  * Backoff, per failure CLASS (§9.3 — "a revoked password is an operator
  * action, not an outage").
  *
@@ -451,9 +529,16 @@ const CREDENTIAL_COLUMNS = [
   'imap_host', 'imap_port', 'imap_secure', 'sent_folder',
 ].join(', ')
 
+// `last_seen_sync_at` (mig 575) is the \Seen mirror's cadence gate. Named here
+// rather than reached for separately so the gate costs no read of its own —
+// see SEEN_SYNC_MIN_INTERVAL_MS. Its ABSENCE would be silent in the worst way:
+// an unreadable stamp reads as "never synced", so forgetting it would make the
+// mirror run on every single tick while every log line said it was on a
+// cadence.
 const INGRESS_COLUMNS = [
   'mailbox_id', 'folder', 'uidvalidity', 'last_uid',
   'last_run_at', 'last_ok_at', 'last_error', 'consecutive_failures', 'paused_until',
+  'last_seen_sync_at',
 ].join(', ')
 
 /**
@@ -465,7 +550,13 @@ const INGRESS_COLUMNS = [
  * phases and select for other purposes. `address` is the load-bearing one: it
  * becomes OriginalRecipient, which is what routes the mail.
  */
-const POLL_MAILBOX_COLUMNS = 'id, location_id, address, label, active, ingress'
+// `surface` (mig 575) gates the \Seen mirror. A mailbox row that arrives here
+// WITHOUT it — a direct caller passing a partial row — simply gets no mirror,
+// which is the fail-closed direction: the mirror is an addition to a surface
+// that does not exist yet, and not running it costs a badge, where running it
+// on a mailbox whose surface we could not read writes a column that surface's
+// UI never asked for.
+const POLL_MAILBOX_COLUMNS = 'id, location_id, address, label, active, ingress, surface'
 
 /* ─────────────────────────── small pure helpers ───────────────────────── */
 
@@ -1126,6 +1217,255 @@ async function writeIngress(db, mailboxId, folder, patch, nowIso) {
   }
 }
 
+/* ─────────────────────────── the \Seen mirror ─────────────────────────── */
+
+/**
+ * 🔴 WHY THIS EXISTS: SO NOBODY TRIAGES THE SAME EMAIL TWICE.
+ *
+ * A connected mailbox is a mailbox a human still opens. Head office reads
+ * hatchstreet@un1t.com in Gmail on a phone. If mail read there still shows as
+ * unread in the CRM, the inbox surface is a second queue over the same
+ * messages rather than a replacement for the first — and the A/B trial would
+ * be comparing "an inbox" against "an inbox plus duplicated work", which
+ * answers a question nobody asked.
+ *
+ * So this mirrors the IMAP \Seen flag onto email_inbox_messages.seen_at.
+ *
+ * ══ IT IS STILL READ-ONLY ON THE IMAP SIDE ══════════════════════════
+ * Nothing in this function writes to the mailbox. It FETCHes flags and writes
+ * OUR OWN column. The poller's "never writes an IMAP flag" property (see the
+ * module header) is intact; the only IMAP writes in this codebase live in
+ * imap-writeback.js, behind a surface guard, and the poller does not call them.
+ *
+ * ══ BOTH DIRECTIONS, AND THE MAILBOX WINS ═══════════════════════════
+ * \Seen present and seen_at NULL → set it. \Seen absent and seen_at set →
+ * clear it. The mailbox is the source of truth, so "marked unread again in
+ * Gmail" has to reach the CRM as well, or the badge is only ever a one-way
+ * ratchet and the operator loses the one gesture triage actually depends on.
+ *
+ * 🔴 The consequence, stated rather than hidden: a surface that writes seen_at
+ * WITHOUT also setting \Seen over IMAP (markSeen, imap-writeback.js) will have
+ * that write converged away at the next sync. That is the intended behaviour —
+ * it is what makes the two agree — but it means the inbox's own "mark read"
+ * must be the PAIRED write, never the column alone.
+ *
+ * ══ THE COST, WHICH IS THE WHOLE DESIGN ═════════════════════════════
+ * Bounded twice — a fixed recent-UID window (SEEN_SYNC_WINDOW) and a cadence
+ * (SEEN_SYNC_MIN_INTERVAL_MS, gated by the caller). Read both constants; the
+ * short version is that read state changes BELOW the watermark, so the obvious
+ * implementation is a second full-mailbox scan every five minutes forever.
+ *
+ * Per run: ONE bounded IMAP FETCH (flags + envelope + the Message-ID header —
+ * no bodies, no attachments, no downloads) and at most four small UPDATEs.
+ *
+ * ══ THE IDS ARE DERIVED BY THE SAME FUNCTION THAT DERIVED THEM ══════
+ * 🔴 toInboundPayload() is called for its MessageID and nothing else, and that
+ * is deliberate. email_inbox_messages.postmark_message_id holds the SYNTHETIC
+ * id the mapper minted at ingest — a digest over (mailbox id, RFC Message-ID),
+ * with a UID+date surrogate when a message carries no Message-ID at all. A
+ * second, "obviously equivalent" derivation here would be a silent failure the
+ * day the seed changes: the ids simply stop matching, every UPDATE touches
+ * zero rows, and read state quietly never converges again with nothing in any
+ * log to say so. One derivation, one code path, no drift. The wasted address
+ * and body work inside the mapper is pure and costs nothing worth measuring.
+ *
+ * ══ NEVER THROWS ════════════════════════════════════════════════════
+ * A write-back failure must never cost the message or stall the lane — same
+ * posture as attachment bookkeeping. Every exit is a verdict; the caller does
+ * not consult it for anything except whether to stamp the cadence.
+ *
+ * @param {object} db  service-role Supabase client
+ * @param {import('imapflow').ImapFlow} client  a client with INBOX already open
+ * @param {object} ctx
+ * @param {string} ctx.mailboxId
+ * @param {string} ctx.mailboxAddress
+ * @param {number} ctx.lastUid  the watermark — the top of the window
+ * @param {string} ctx.nowIso   the timestamp written into seen_at
+ * @param {number} [ctx.window=SEEN_SYNC_WINDOW]
+ * @returns {Promise<{ran: boolean, reason?: string, scanned?: number,
+ *                    marked?: number, cleared?: number}>}
+ */
+/**
+ * Should this tick run the \Seen mirror at all? PURE.
+ *
+ * Six conditions, and every one of them is a way the mirror would otherwise be
+ * wasted work or the wrong work:
+ *
+ *   1. THE INBOX LANE ONLY. The Sent folder's read state describes what a
+ *      colleague has re-read of their own outbox, which is nothing anybody
+ *      triages. And the Sent lane's rows are OUTBOUND, so an unread badge on
+ *      one would be meaningless in any surface.
+ *   2. THE INBOX SURFACE ONLY. This is what makes mig 575 true when it says
+ *      applying it changes nothing: every mailbox in prod is 'tickets', the
+ *      ticketing surface has no unread model, and a mailbox whose `surface` we
+ *      could not read (a partial row from a direct caller) gets no mirror
+ *      rather than a guess.
+ *   3. NOT ON A COLD START OR A RE-ANCHOR. Both anchor the watermark without
+ *      ingesting anything, so every UID in the window belongs to a message
+ *      that was never filed and has no row to reconcile against. The whole run
+ *      would be a fetch that matched nothing.
+ *   4. THE CADENCE. See SEEN_SYNC_MIN_INTERVAL_MS. NULL/unparseable reads as
+ *      due, which is right for a mailbox just moved onto the surface and is
+ *      also the harmless direction for a corrupt value.
+ *   5. THE WALL-CLOCK BUDGET. Checked here as well as inside the message loop:
+ *      the mirror is the LAST thing a tick does, so it is exactly the work
+ *      that must give way when the budget is gone. Skipping it costs a stale
+ *      badge for one cadence; overrunning costs every other tenant their tick.
+ *   6. A WATERMARK TO ANCHOR THE WINDOW ON. Handled inside syncSeenFlags too;
+ *      checked here as well so a mailbox that has ingested nothing does not
+ *      even open the question.
+ */
+function shouldSyncSeen({ folder, mailbox, cursor, outcome, now, deadlineAt, clock }) {
+  if (folder !== DEFAULT_FOLDER) return false
+  if (mailbox?.surface !== INBOX_SURFACE) return false
+  if (outcome?.reason === 'cold_start' || outcome?.reason === 'uidvalidity_changed') return false
+  if (deadlineAt != null && clock() >= deadlineAt) return false
+
+  const watermark = toUidNumber(outcome?.advancedTo ?? cursor?.last_uid)
+  if (!Number.isInteger(watermark) || watermark < 1) return false
+
+  const last = cursor?.last_seen_sync_at ? Date.parse(cursor.last_seen_sync_at) : NaN
+  if (!Number.isFinite(last)) return true
+  return now - last >= SEEN_SYNC_MIN_INTERVAL_MS
+}
+
+export async function syncSeenFlags(db, client, {
+  mailboxId, mailboxAddress, lastUid, nowIso, window = SEEN_SYNC_WINDOW,
+} = {}) {
+  const top = toUidNumber(lastUid)
+  if (!Number.isInteger(top) || top < 1) {
+    // No watermark means nothing of this mailbox has been ingested, so there is
+    // no row anywhere for a flag to mirror onto. Not a fault.
+    return { ran: false, reason: 'no_watermark' }
+  }
+  const from = Math.max(1, top - Math.max(1, window) + 1)
+
+  const seenIds = []
+  const unseenIds = []
+  let scanned = 0
+
+  try {
+    for await (const msg of client.fetch(
+      `${from}:${top}`,
+      {
+        uid: true,
+        flags: true,
+        envelope: true,
+        internalDate: true,
+        // The Message-ID header only. fetchSince() takes three headers because
+        // it has to thread; this one only has to identify, and every extra
+        // header is bytes on the wire for every message in the window on every
+        // run.
+        headers: ['message-id'],
+      },
+      { uid: true },
+    )) {
+      const uid = toUidNumber(msg?.uid)
+      // A bounded range cannot trip the `N:*` trap fetchSince() guards against,
+      // but a server that answers outside the range it was given would silently
+      // widen the window, so the bound is asserted rather than assumed.
+      if (uid == null || uid < from || uid > top) continue
+      scanned += 1
+
+      const messageId = toInboundPayload(msg, { mailboxAddress, mailboxId })?.MessageID
+      // A message with no derivable id was never filed under one either, so
+      // there is nothing to reconcile it against. Silent on purpose: the
+      // ingest path already logged it loudly at the time, and repeating that
+      // every fifteen minutes for the life of the mailbox would be noise.
+      if (!messageId) continue
+
+      ;(hasSeenFlag(msg?.flags) ? seenIds : unseenIds).push(messageId)
+    }
+  } catch (err) {
+    // The folder is open and the ordinary poll has already finished, so a
+    // failure here costs a stale badge and nothing else. It must not reach the
+    // caller's per-mailbox catch, which would record a failure, increment the
+    // backoff counter and eventually pause a mailbox that is receiving mail
+    // perfectly well.
+    logWarn('imap-poll', 'could not read read-state flags — the CRM’s unread marks are stale for this tick', {
+      mailboxId, from, to: top, err,
+    })
+    return { ran: false, reason: 'fetch_failed' }
+  }
+
+  const marked = await applySeenState(db, seenIds, { mailboxId, value: nowIso })
+  const cleared = await applySeenState(db, unseenIds, { mailboxId, value: null })
+
+  if (marked > 0 || cleared > 0) {
+    logInfo('imap-poll', 'mirrored read state from the mailbox', {
+      mailboxId, scanned, marked, cleared, from, to: top,
+    })
+  }
+  return { ran: true, scanned, marked, cleared }
+}
+
+/** Does this message carry \Seen? imapflow hands flags back as a Set. */
+function hasSeenFlag(flags) {
+  if (flags instanceof Set) return flags.has('\\Seen')
+  // Array and undefined are both defensive: a fake, an older imapflow, or a
+  // server that answered no FLAGS item at all. Absent flags read as UNSEEN,
+  // which is the harmless direction — the worst it does is leave a badge on.
+  if (Array.isArray(flags)) return flags.includes('\\Seen')
+  return false
+}
+
+/**
+ * Set (or clear) seen_at on the rows named by `ids`, in chunks.
+ *
+ * 🔴 THE TRANSITION GUARD IS WHAT MAKES THIS CHEAP AND IDEMPOTENT. `.is(...)` /
+ * `.not(...)` means the statement touches ONLY the rows whose state actually
+ * differs, so the steady state — everything already agrees — writes zero rows,
+ * produces zero WAL and fires zero realtime events. Without it every run would
+ * rewrite the whole window and every connected client would repaint every
+ * fifteen minutes.
+ *
+ * Scoping is by `postmark_message_id`, which is globally unique (mig 394's
+ * partial unique index) AND namespaced to the mailbox by construction — the
+ * synthetic id folds the mailbox's own uuid into its digest — so this cannot
+ * reach another tenant's row even though the statement carries no location
+ * filter.
+ *
+ * @returns {Promise<number>} rows changed. Zero on failure, which is honest:
+ *   nothing was changed.
+ */
+async function applySeenState(db, ids, { mailboxId, value }) {
+  if (!Array.isArray(ids) || ids.length === 0) return 0
+  let changed = 0
+
+  for (let i = 0; i < ids.length; i += SEEN_SYNC_ID_CHUNK) {
+    const chunk = ids.slice(i, i + SEEN_SYNC_ID_CHUNK)
+    try {
+      const query = db
+        .from('email_inbox_messages')
+        .update({ seen_at: value })
+        .in('postmark_message_id', chunk)
+      const guarded = value == null
+        ? query.not('seen_at', 'is', null)
+        : query.is('seen_at', null)
+      // `.select('id')` so the row COUNT is knowable: a zero-row UPDATE is not
+      // an error in PostgREST, and "nothing differed" and "nothing matched"
+      // have to be tellable apart from the counters this returns.
+      const { data, error } = await guarded.select('id')
+      if (error) {
+        // Logged, never thrown, never returned as a failure the lane can act
+        // on. A lost read-state write costs a stale badge somebody fixes by
+        // opening the message; turning it into a poll failure would pause a
+        // healthy mailbox and cost the mail.
+        logWarn('imap-poll', 'could not write mirrored read state', {
+          mailboxId, seen: value != null, ids: chunk.length, err: error,
+        })
+        continue
+      }
+      changed += Array.isArray(data) ? data.length : 0
+    } catch (err) {
+      logWarn('imap-poll', 'writing mirrored read state threw', {
+        mailboxId, seen: value != null, ids: chunk.length, err,
+      })
+    }
+  }
+  return changed
+}
+
 /* ──────────────────────────── one mailbox ─────────────────────────────── */
 
 /**
@@ -1416,14 +1756,50 @@ export async function pollMailbox(db, mailbox, options = {}) {
   const stalledTicks = Number(cursor?.consecutive_failures) || 0
 
   let run
+  // Whether the \Seen mirror actually ran this tick — the ONLY thing its
+  // verdict is consulted for, because it may not influence the cursor, the
+  // health signal or the backoff. See the stamp below.
+  let seenSynced = false
   try {
-    run = await withMailbox(config, folderPath, async (client, box) => (
-      pollOpenFolder({
+    run = await withMailbox(config, folderPath, async (client, box) => {
+      const outcome = await pollOpenFolder({
         db, client, box, mailboxId, mailboxAddress, foreignAddresses,
         cap, sink, storedUidValidity, storedLastUid,
         stalledTicks, deadlineAt, clock,
       })
-    ), deps)
+
+      // ── The \Seen mirror (INBOX-SURFACE.A) ──────────────────────
+      // 🔴 AFTER the poll, never before, and never instead of it. Receiving a
+      // member's question matters more than recording that somebody has read
+      // one, so the mirror gets whatever clock is left and no more — the same
+      // priority rule the two lanes follow.
+      //
+      // 🔴 AND IT IS WRAPPED AGAIN HERE even though syncSeenFlags() is written
+      // never to throw. The catch below this callback is the one that records
+      // a failure, increments consecutive_failures and eventually PAUSES the
+      // mailbox. A bug in read-state bookkeeping must never be able to stop a
+      // mailbox receiving mail, so the two layers are deliberate rather than
+      // redundant: the inner one is a contract, this one is the guarantee.
+      if (shouldSyncSeen({ folder, mailbox, cursor, outcome, now, deadlineAt, clock })) {
+        try {
+          const synced = await syncSeenFlags(db, client, {
+            mailboxId,
+            mailboxAddress,
+            // The watermark AFTER this tick, so a message ingested moments ago
+            // is inside the window and gets its read state on the same pass.
+            lastUid: outcome.advancedTo ?? storedLastUid,
+            nowIso,
+          })
+          seenSynced = synced.ran === true
+        } catch (err) {
+          logError('imap-poll', 'the read-state mirror threw — the poll itself is unaffected', {
+            mailboxId, err,
+          })
+        }
+      }
+
+      return outcome
+    }, deps)
   } catch (err) {
     const kind = classifyImapFailure(err)
     // 🔴 TWO DIFFERENT AUDIENCES, AND ONLY ONE OF THEM GETS THE SERVER'S WORDS.
@@ -1462,6 +1838,14 @@ export async function pollMailbox(db, mailbox, options = {}) {
   // further. `advancedTo` is null when nothing was accepted, which leaves the
   // stored value exactly where it was.
   if (run.advancedTo != null) patch.last_uid = run.advancedTo
+
+  // The mirror's cadence stamp, and it rides the write that was happening
+  // anyway — which is the whole reason the cadence costs nothing (see
+  // SEEN_SYNC_MIN_INTERVAL_MS). Stamped on BOTH the halted and the healthy
+  // paths below: the mirror ran, and a mailbox whose forwarding is broken every
+  // tick must not therefore re-run the mirror every tick. Only stamped when it
+  // actually ran, so a fetch that failed is due again immediately.
+  if (seenSynced) patch.last_seen_sync_at = nowIso
 
   if (run.halted) {
     // Partial success is still a failure of this tick: some mail is filed, the

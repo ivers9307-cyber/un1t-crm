@@ -96,6 +96,14 @@ export default function TicketReplyBox({
   participantSaving = false,
   sending = false,
   signature,
+  // MAIL-TRIAL.B — the ONE sentence in this composer written in the ticket
+  // lifecycle's own vocabulary. The Mail surface reuses this box whole (see
+  // TicketThread.jsx's slot comment for why forking it is not an option) and
+  // calls the same state "Archived", so a line reading "This ticket is closed"
+  // would be the composer contradicting every other word on that screen.
+  // `undefined` keeps the sentence exactly as it was; a node replaces it;
+  // `null` drops it.
+  archivedHint,
 }) {
   const [mode, setMode] = useState('reply')
   const [text, setText] = useState('')
@@ -412,9 +420,11 @@ export default function TicketReplyBox({
       </div>
 
       {!isNote && archived && (
-        <p className="mt-1.5 text-[11px] text-un1t-muted">
-          This ticket is {statusMeta(ticket?.status).label.toLowerCase()} — sending a reply moves it back to pending.
-        </p>
+        archivedHint !== undefined ? archivedHint : (
+          <p className="mt-1.5 text-[11px] text-un1t-muted">
+            This ticket is {statusMeta(ticket?.status).label.toLowerCase()} — sending a reply moves it back to pending.
+          </p>
+        )
       )}
     </form>
   )

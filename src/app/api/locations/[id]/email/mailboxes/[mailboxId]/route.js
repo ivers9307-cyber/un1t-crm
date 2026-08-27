@@ -1,7 +1,24 @@
 // EMAIL-MAILBOX-ADMIN.1 — edit one email account.
 //
 // PATCH /api/locations/[id]/email/mailboxes/[mailboxId]
-//   Body: { label?, is_default?, active? }
+//   Body: { label?, is_default?, active?, surface? }
+//
+// INBOX-SURFACE.C — `surface` IS THE A/B SWITCH, and it lives here rather than
+// on a route of its own because it is the same kind of decision as `active`
+// and `is_default`: a property of one account, set by the one population
+// allowed to manage accounts, on the screen where accounts are managed. A
+// separate endpoint would be a second gate to keep in step with this one.
+//
+// It moves that account's mail between two surfaces — the ticket queue at
+// /communications/tickets and the mail surface at /communications/mail. NOTHING
+// IS COPIED AND NOTHING IS DELETED: `surface` is read at LIST time by whichever
+// queue is asking, so flipping it is instantaneous, reversible, and leaves
+// every ticket, message and attachment exactly where it was. That is precisely
+// why it is safe to offer as a plain toggle rather than a migration.
+//
+// It is audit-logged under its OWN action for the same reason deactivation is:
+// an operator asking "where did our mail go" needs one greppable line in
+// /admin/audit-log that says who moved it and when.
 //
 // THERE IS NO DELETE, DELIBERATELY.
 // email_tickets.mailbox_id is ON DELETE SET NULL, so deleting a mailbox would
@@ -23,7 +40,7 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { logAuditEvent } from '@/lib/audit'
 import {
-  MAILBOX_COLUMNS, guardMailboxAdmin, mailboxUnauthorized, loadMailboxOr404,
+  MAILBOX_SURFACES, guardMailboxAdmin, mailboxUnauthorized, loadMailboxOr404,
 } from '../_helpers'
 import {
   MAILBOX_LABEL_MAX,
@@ -39,6 +56,11 @@ const PatchBody = z.object({
   label: z.string().min(1).max(MAILBOX_LABEL_MAX + 200).optional(),
   is_default: z.boolean().optional(),
   active: z.boolean().optional(),
+  // Validated against the same two values the table's named CHECK carries, so
+  // a typo is a 400 with a sentence rather than a 23514 the operator cannot
+  // read. z.enum, not a free string: `surface` decides which screen a studio's
+  // mail appears on, and a third value would be a mailbox on NO screen.
+  surface: z.enum(MAILBOX_SURFACES).optional(),
 })
 
 export async function PATCH(request, props) {
@@ -51,7 +73,8 @@ export async function PATCH(request, props) {
   const validation = await validateBody(request, PatchBody)
   if (!validation.ok) return validation.response
   const body = validation.data
-  if (body.label === undefined && body.is_default === undefined && body.active === undefined) {
+  if (body.label === undefined && body.is_default === undefined
+      && body.active === undefined && body.surface === undefined) {
     return NextResponse.json({ success: false, error: 'Nothing to change.' }, { status: 400 })
   }
 
@@ -62,7 +85,15 @@ export async function PATCH(request, props) {
   // Snapshot the prior state by VALUE. The audit row's whole worth is the
   // before/after pair, and reading `mailbox.label` again after the UPDATE
   // would record the new value as the old one.
-  const before = { label: mailbox.label, is_default: mailbox.is_default, active: mailbox.active }
+  // `surface` falls back to 'tickets' when the column is absent from the row
+  // (pre-mig-575), matching the column's own DEFAULT — so the audit row never
+  // records a move away from `undefined`.
+  const before = {
+    label: mailbox.label,
+    is_default: mailbox.is_default,
+    active: mailbox.active,
+    surface: mailbox.surface || MAILBOX_SURFACES[0],
+  }
 
   const patch = { updated_at: new Date().toISOString() }
 
@@ -109,6 +140,14 @@ export async function PATCH(request, props) {
     patch.is_default = false
   }
 
+  // INBOX-SURFACE.C — no interaction with any of the branches above, and that
+  // is deliberate. A moved account keeps its label, its default flag, its
+  // grants and its whole ticket history; only the queue that LISTS it changes.
+  // Deactivated accounts may be moved too: the panel stays reachable for one
+  // (see the card), and refusing here would strand a deactivated account on
+  // whichever surface it happened to be on.
+  if (body.surface !== undefined) patch.surface = body.surface
+
   const { error: updateErr } = await db.from('email_mailboxes')
     .update(patch)
     .eq('id', params.mailboxId)
@@ -125,7 +164,15 @@ export async function PATCH(request, props) {
     category: 'mutation',
     // Deactivation is its own action so it is greppable in /admin/audit-log —
     // it is the change that makes a studio's mail stop arriving.
-    action: body.active === false ? 'email_mailbox.deactivated' : 'email_mailbox.updated',
+    // A surface move outranks a plain update for the same reason deactivation
+    // does — it is the change that makes a studio's mail appear somewhere else
+    // — but NOT deactivation, which stops mail arriving at all and is the more
+    // serious of the two if somebody manages to do both in one request.
+    action: body.active === false
+      ? 'email_mailbox.deactivated'
+      : (patch.surface !== undefined && patch.surface !== before.surface
+        ? 'email_mailbox.surface_changed'
+        : 'email_mailbox.updated'),
     actor: { id: user.id, full_name: user.full_name, email: user.email },
     target: { label: `${before.label} <${mailbox.address}>`, resource: `email_mailbox/${params.mailboxId}` },
     locationId: params.id,
@@ -136,6 +183,7 @@ export async function PATCH(request, props) {
         label: patch.label ?? before.label,
         is_default: patch.is_default ?? before.is_default,
         active: patch.active ?? before.active,
+        surface: patch.surface ?? before.surface,
       },
     },
     request,

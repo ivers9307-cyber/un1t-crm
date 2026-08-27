@@ -34,12 +34,23 @@
 // location off the session, `{ success, data: { count } }`, and count 0 —
 // rather than an error — for a session that simply isn't eligible, because the
 // 60s poll must be harmless if it ever runs for the wrong user.
+//
+// INBOX-SURFACE.C — AND IT COUNTS ONLY THIS SURFACE'S MAILBOXES. The badge sits
+// on the tab this list route backs, so it has to be narrowed by `surface` for
+// the same reason scopeToUnmerged is applied below: a badge counting rows the
+// tab then refuses to show is the red dot an operator clicks, finds nothing
+// behind, and learns to ignore. During the trial the moved mailbox's unanswered
+// mail is real work — it is just counted on the OTHER surface's badge, which is
+// exactly the comparison Richard is running.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
-import { loadVisibleMailboxes, scopeToVisibleMailboxes, scopeToNeedsReply, scopeToUnmerged } from '../_helpers'
+import {
+  loadVisibleMailboxes, scopeToVisibleMailboxes, scopeToNeedsReply, scopeToUnmerged,
+  mailboxesForSurface, SURFACE_TICKETS,
+} from '../_helpers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -64,12 +75,17 @@ export async function GET() {
   // ignores a non-ok response and keeps the last good count, so a blip shows a
   // slightly stale number instead of a confident, wrong "nothing to do".
   if (visibility.response) return visibility.response
-  const { elevated, mailboxes } = visibility
+  const { elevated, mailboxes: visible } = visibility
 
   // Genuinely nothing visible — a studio with no addresses, or a person with no
   // grants. Zero is the honest answer, and it skips a query that would return
-  // it anyway.
-  if (mailboxes.length === 0) return zero()
+  // it anyway. Keyed on the PRE-surface set for the same reason the list route
+  // is: an elevated caller at a studio that has moved every account to the
+  // inbox can still have NULL-mailbox tickets waiting, and those are counted
+  // here because they are shown here.
+  if (visible.length === 0) return zero()
+
+  const mailboxes = mailboxesForSurface(visible, SURFACE_TICKETS)
 
   // head: true — the badge wants a number, never the rows. Every filter here is
   // a plain column on email_tickets; the count-only select that silently
