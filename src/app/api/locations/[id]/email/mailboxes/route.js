@@ -34,6 +34,11 @@ import {
   orderMailboxAdminList,
   mailboxAccessRows,
 } from '@/lib/email-mailbox-admin'
+// MAILBOX-UNREACHABLE.1 — whether each address can actually receive. Resolved
+// here rather than on the client because it needs DNS and a service-role read,
+// and because the card is the one screen where the answer has to be present
+// the first time it renders.
+import { assessMailboxReachability } from '@/lib/mail/mailbox-reachability'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -66,9 +71,20 @@ export async function GET(_request, props) {
     grants = data || []
   }
 
+  // MAILBOX-UNREACHABLE.1 — never allowed to fail the list. Managing addresses
+  // and grants has to keep working when a resolver does not; an absent verdict
+  // renders as nothing, which is the same thing a DNS miss renders as.
+  let reachability = {}
+  try {
+    reachability = await assessMailboxReachability(db, params.id, mailboxes || [])
+  } catch {
+    reachability = {}
+  }
+
   const shaped = orderMailboxAdminList(mailboxes || []).map(m => ({
     ...m,
     access: mailboxAccessRows({ staff, grants: grants.filter(g => g.mailbox_id === m.id) }),
+    reachability: reachability[m.id] || null,
   }))
 
   return NextResponse.json({ success: true, data: { mailboxes: shaped, staff } })
