@@ -203,3 +203,53 @@ describe('CommunicationsTabs — measure() re-render bail-out (FU-COMMSTABS-BAIL
     expect(polled.mock.calls.length).toBe(2)
   })
 })
+
+// INBOX-SURFACE.C — the Mail tab, and the reason it is DATA-gated.
+//
+// /communications/mail lists the accounts whose email_mailboxes.surface is
+// 'inbox' and nothing else. A studio that has moved none has nothing there, so
+// the tab must not appear: an operator who clicks an empty surface concludes
+// their mail is missing, not that a trial is off for them. An empty surface in
+// the nav is worse than no surface.
+//
+// The gate is resolved in the hub layout (it needs a query) and arrives here as
+// a boolean, so what this file pins is that the boolean is honoured and that
+// nothing about it is inferred from a permission.
+describe('CommunicationsTabs — the Mail surface (INBOX-SURFACE.C)', () => {
+  it('is ABSENT by default — a studio not in the trial sees the two tabs it had', () => {
+    const { container } = render(<CommunicationsTabs {...ALL} />)
+    const labels = within(container).getAllByRole('link').map(a => a.textContent)
+    expect(labels).toEqual(['WhatsApp & Instagram inbox', 'Email inbox'])
+  })
+
+  it('is absent when canMail is false, even holding the email_inbox key', () => {
+    // The permission is not the gate. Someone who works the queue every day at
+    // a studio with nothing moved must not be shown an empty surface.
+    render(<CommunicationsTabs canWhatsapp={false} canEmailInbox canMail={false} />)
+    expect(screen.queryByRole('link', { name: /^Mail$/ })).toBeNull()
+  })
+
+  it('appears when the location has an account on that surface', () => {
+    render(<CommunicationsTabs {...ALL} canMail />)
+    const tab = screen.getByRole('link', { name: /^Mail$/ })
+    // NOT /communications/inbox — that is the WhatsApp + Instagram queue, whose
+    // tab is rendered right beside this one.
+    expect(tab.getAttribute('href')).toBe('/communications/mail')
+  })
+
+  it('is labelled Mail, not Inbox — two tabs called Inbox is a guess', () => {
+    const { container } = render(<CommunicationsTabs {...ALL} canMail />)
+    const labels = within(container).getAllByRole('link').map(a => a.textContent)
+    expect(labels).toEqual(['WhatsApp & Instagram inbox', 'Email inbox', 'Mail'])
+  })
+
+  it('carries no badge — the needs-reply count belongs to the ticket surface', () => {
+    // Reusing that number here would put one count on two tabs holding
+    // different mail, and a badge with nothing behind it is one an operator
+    // learns to ignore.
+    polled.mockReturnValue(7)
+    render(<CommunicationsTabs canWhatsapp={false} canEmailInbox canMail />)
+    expect(screen.getByRole('link', { name: /^Mail$/ }).textContent).toBe('Mail')
+    expect(screen.getByRole('link', { name: /Email inbox/ }).textContent).toContain('7')
+  })
+})

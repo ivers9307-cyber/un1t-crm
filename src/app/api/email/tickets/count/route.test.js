@@ -29,7 +29,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { makeDb, selectsFrom } from '../_test-db'
 import {
-  LOC_A, LOC_B, MB_STUDIO, T_STUDIO, T_ACCOUNTS, T_OTHER_LOCATION,
+  LOC_A, LOC_B, MB_STUDIO, MB_ACCOUNTS, MB_OTHER_LOCATION, T_STUDIO, T_ACCOUNTS, T_OTHER_LOCATION,
   COACH, COACH_NO_INBOX, OWNER, MULTI_LOCATION,
   GRANT_STUDIO, GRANT_MULTI_OTHER_LOCATION, baseState,
 } from '../_test-fixtures'
@@ -285,6 +285,48 @@ describe('GET /api/email/tickets/count — cheapness and failure', () => {
   })
 })
 
+// INBOX-SURFACE.C — the badge counts THIS surface's mailboxes only.
+//
+// The badge sits on the tab the list route backs, so it has to be narrowed the
+// same way. A badge counting mail that surface refuses to show is the red dot
+// an operator clicks, finds nothing behind, and learns to ignore — the same
+// argument the tombstone scope above makes. The moved account's unanswered mail
+// is still real work; it is just counted by the other surface, which IS the
+// comparison being run.
+describe('GET /api/email/tickets/count — mailbox surface', () => {
+  const MOVED = { ...MB_ACCOUNTS, surface: 'inbox' }
+  const STAYS = { ...MB_STUDIO, surface: 'tickets' }
+
+  it('does not count tickets on a mailbox moved to the mail surface', async () => {
+    getCurrentUser.mockResolvedValue(at(OWNER))
+    setupDb(baseState({
+      mailboxes: [STAYS, MOVED, MB_OTHER_LOCATION],
+      tickets: NEEDS_REPLY_BOTH,
+      grants: [],
+    }))
+    // An owner is elevated, so without the surface narrowing this is 2.
+    expect((await count()).body.data.count).toBe(1)
+  })
+
+  it('still counts an ORPHAN when every account has moved', async () => {
+    // The tab strip is empty in this world but the queue is not: an orphan has
+    // no mailbox, so no surface, and it stays on the ticket surface. A badge of
+    // 0 here would say "nothing to answer" about mail nobody can see anywhere
+    // else.
+    const orphan = {
+      ...T_STUDIO, id: 'aaaaaaa8-0000-4000-8000-000000000008',
+      mailbox_id: null, status: 'open', last_message_direction: 'inbound',
+    }
+    getCurrentUser.mockResolvedValue(at(OWNER))
+    setupDb(baseState({
+      mailboxes: [{ ...MB_STUDIO, surface: 'inbox' }, MOVED, MB_OTHER_LOCATION],
+      tickets: [...NEEDS_REPLY_BOTH, orphan],
+      grants: [],
+    }))
+    expect((await count()).body.data.count).toBe(1)
+  })
+})
+
 describe('GET /api/email/tickets/count — agrees with the queue it badges', () => {
   it('matches the list route’s needs_reply view exactly', async () => {
     // Both sides import the SAME predicate from _helpers (scopeToNeedsReply) so
@@ -303,6 +345,33 @@ describe('GET /api/email/tickets/count — agrees with the queue it badges', () 
     const badge = (await count()).body.data.count
 
     setupDb(baseState({ tickets: world, grants: [GRANT_STUDIO] }))
+    const listed = await LIST(new Request(`http://x/api/email/tickets?location_id=${LOC_A}&view=needs_reply`))
+    const rows = (await listed.json()).data.tickets
+
+    expect(badge).toBe(rows.length)
+    expect(badge).toBe(1)
+  })
+
+  it('still agrees once an account has been MOVED to the other surface', async () => {
+    // INBOX-SURFACE.C — the agreement has to survive the split, or the trial
+    // ships a badge and a tab that disagree from day one. Same world, same
+    // caller, elevated so neither side is being narrowed by grants.
+    const { GET: LIST } = await import('../route')
+    const mailboxes = [
+      { ...MB_STUDIO, surface: 'tickets' },
+      { ...MB_ACCOUNTS, surface: 'inbox' },
+      MB_OTHER_LOCATION,
+    ]
+    const world = [
+      { ...T_STUDIO, status: 'open', last_message_direction: 'inbound' },
+      { ...T_ACCOUNTS, status: 'open', last_message_direction: 'inbound' },
+    ]
+    getCurrentUser.mockResolvedValue(at(OWNER))
+
+    setupDb(baseState({ mailboxes, tickets: world, grants: [] }))
+    const badge = (await count()).body.data.count
+
+    setupDb(baseState({ mailboxes, tickets: world, grants: [] }))
     const listed = await LIST(new Request(`http://x/api/email/tickets?location_id=${LOC_A}&view=needs_reply`))
     const rows = (await listed.json()).data.tickets
 

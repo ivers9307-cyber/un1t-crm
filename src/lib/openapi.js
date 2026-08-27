@@ -1259,7 +1259,7 @@ registry.registerPath({
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'List email tickets + the caller’s visible mailboxes',
-  description: 'The studio ticket queue at one location, plus the mailboxes this caller may see (already in tab order). Filtered to those mailboxes and capped at 200, newest activity first. No visible mailboxes = an empty list, not an error.',
+  description: 'The studio ticket queue at one location, plus the mailboxes this caller may see (already in tab order). Filtered to those mailboxes and capped at 200, newest activity first. No visible mailboxes = an empty list, not an error. INBOX-SURFACE.C: mailboxes whose `surface` is \'inbox\' (mig 575) are EXCLUDED from both the tab strip and the query — they are worked on /communications/mail instead, and each account belongs to exactly one surface. Tickets with a NULL mailbox_id (ON DELETE SET NULL, plus mig 484\'s backfill) stay on THIS surface and are visible to elevated callers only: they carry no mailbox, so they carry no surface, and \'tickets\' is both the column\'s default and the only surface that exists at every location.',
   request: {
     query: z.object({
       location_id: uuidLike,
@@ -1275,6 +1275,85 @@ registry.registerPath({
   },
 })
 
+// ══ MAIL-TRIAL.B — the second email surface ═══════════════════════════════
+// The SAME data model as the ticket queue above, presented as a mail client
+// rather than a ticketing system: read/unread weight, archive as the primary
+// verb, no assignment and no four-state lifecycle. `email_mailboxes.surface`
+// (mig 575) decides which of the two lists a mailbox, and it lists in EXACTLY
+// ONE — that exclusivity is what makes the head-to-head trial a comparison
+// rather than one pile of mail shown twice.
+//
+// 🔴 THESE ARE THE ONLY ROUTES IN THE ESTATE THAT WRITE TO A CUSTOMER'S REAL
+// MAILBOX. Marking read/unread sets or clears IMAP \Seen and archiving MOVEs
+// the message, both via src/lib/mail/imap-writeback.js, which re-reads the
+// mailbox row and refuses anything not on the inbox surface. There is no
+// delete, no expunge and no trash on any path, and archiving REFUSES outright
+// on a server that does not advertise RFC 6851 MOVE rather than let the client
+// library emulate it as copy-then-delete.
+registry.registerPath({
+  method: 'get',
+  path: '/api/email/mail',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List mail-surface conversations (the A/B alternative to the ticket queue)',
+  description:
+    'Conversations for mailboxes whose `surface` is \'inbox\', at one location, newest activity first. Gated exactly like the ticket queue (location access, `email_inbox`, per-mailbox grant), then narrowed to this surface. A ticket with a NULL mailbox_id has no surface and therefore never appears here — it stays on the ticket queue, where elevated callers can still reach it; widening it would put one conversation on both screens. `before` is a KEYSET cursor on last_message_at and is INCLUSIVE: that column is neither unique nor NOT NULL, so a strict comparison dropped both halves of a tie at a page boundary and the second was unreachable for good. The client de-duplicates appended pages by id, so the repeated boundary row costs a duplicate rather than a loss. Per-conversation read counts come off one bounded scan: `counts_partial` (page bigger than one scan) and `counts_unavailable` (scan failed) stay distinct on the wire because neither may render as "all read".',
+  request: {
+    query: z.object({
+      location_id: uuidLike,
+      mailbox_id: uuidLike.optional(),
+      view: z.enum(['inbox', 'needs_reply', 'archived']).optional(),
+      before: z.string().optional(),
+    }),
+  },
+  responses: {
+    200: { description: '{ mailboxes, conversations, next_before, needs_reply_count, counts_partial?, counts_unavailable? }' },
+    400: { description: 'Missing location_id / unknown view', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing email_inbox permission or foreign location', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Mailbox visibility or list query failed — NOT an empty inbox', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/mail/{id}/seen',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Mark one conversation read or unread — in the CRM AND the real mailbox',
+  description:
+    '🔴 A PAIRED WRITE, ALWAYS. `email_inbox_messages.seen_at` (mig 575) is a MIRROR of the IMAP \\Seen flag, and the poller converges the two in BOTH directions on a ~15-minute cadence — so writing the column alone marks something read for a few minutes and then lets the sync put it back, with nothing on screen to explain why. Both halves or neither: `seen: true` stamps seen_at and sets \\Seen, `seen: false` clears both. Only INBOUND messages have read state (our own replies are not something to read). The transition guard mirrors the direction, so the mailbox half acts on exactly the rows that changed and pressing the button twice opens no second connection. `email_tickets.unread_count` is derived from those same rows rather than incremented separately — two counters for one fact is how a badge ends up pointing at an empty list — and its write is best-effort: losing it costs a stale badge, refusing over it would cost the operator the read state they asked for. The CRM half is NEVER rolled back when the mailbox half fails; `writeback_notice` says which half is behind, and it is not an error.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ seen: z.boolean() }) } } },
+  },
+  responses: {
+    200: { description: '{ id, unread, changed, writeback_notice }' },
+    400: { description: 'Invalid body', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such conversation, not yours, or not on the mail surface', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Read-state write failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/mail/{id}/archive',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Archive one conversation, or bring it back — in the CRM AND the real mailbox',
+  description:
+    'Archive is `email_tickets.status = \'closed\'` wearing a different word: ONE lifecycle, two vocabularies, so nothing drifts. Bringing one back writes `open` (never `pending`, which would claim we had already answered) and clears the stamps. On the way IN it also MOVEs the conversation\'s INBOUND messages to the provider\'s Archive folder — outbound replies live in Sent, so there is nothing there to move. The destination is resolved per-mailbox from the server\'s own SPECIAL-USE advertisement (\\Archive, then \\All for Gmail), or from the `archive_folder` override, and a Trash or Junk folder is REFUSED on both paths: archive must stay recoverable, and deleting a customer\'s correspondence is permanently out of scope. 🔴 UN-ARCHIVE IS NOT PAIRED — the write-back module has no move-out-of-Archive — so bringing a conversation back here leaves the message in the mail app\'s Archive; the surface says so rather than diverging silently. At most 5 messages move per click, NEWEST first: the cap makes that ordering decide what stays in the operator\'s real INBOX, and nothing converges archive state, so the remainder stays there and the notice names it as work to finish in the mail app.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ archived: z.boolean() }) } } },
+  },
+  responses: {
+    200: { description: '{ conversation, writeback_notice }' },
+    400: { description: 'Invalid body', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such conversation, not yours, or not on the mail surface', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Status write failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // EMAIL-TICKET-CLEANUP.3 — the Email nav badge. Deliberately parameterless
 // (location comes off the session), like every other badge count endpoint.
 registry.registerPath({
@@ -1284,7 +1363,7 @@ registry.registerPath({
   security: [{ CookieAuth: [] }],
   summary: 'Count email tickets awaiting a reply (nav badge)',
   description:
-    'Tickets at the caller’s ACTIVE location, on a mailbox they may see, that are `open` with an inbound last message — i.e. mail nobody has answered yet. The same predicate as the list route’s `needs_reply` view, so the badge and that tab always agree. Not the whole live queue: nothing in this feature auto-closes, so counting tickets already waiting on the member would never come down. Returns count 0 (not an error) for a session without the permission or without an active location.',
+    'Tickets at the caller’s ACTIVE location, on a mailbox they may see AND on the ticket surface (INBOX-SURFACE.C — mailboxes moved to `surface` \'inbox\' are counted by the mail surface instead, so this badge and the tab it sits on always hold the same rows), that are `open` with an inbound last message — i.e. mail nobody has answered yet. The same predicate as the list route’s `needs_reply` view, so the badge and that tab always agree. Not the whole live queue: nothing in this feature auto-closes, so counting tickets already waiting on the member would never come down. Returns count 0 (not an error) for a session without the permission or without an active location.',
   responses: {
     200: { description: '{ count }', content: { 'application/json': { schema: SuccessResponse(z.object({ count: z.number() })) } } },
     401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },
@@ -1654,7 +1733,7 @@ registry.registerPath({
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'The studio’s email accounts and who may read each',
-  description: "Returns { mailboxes, staff }. Unlike the inbox this INCLUDES deactivated accounts — managing them is the point of the surface. Each mailbox carries an `access` array listing every active staff member at the location tagged implicit (owner-at-location or master — no grant row exists and none can be created), granted (a row in email_mailbox_access) or none. Master or owner-at-location only.",
+  description: "Returns { mailboxes, staff }. Unlike the inbox this INCLUDES deactivated accounts — managing them is the point of the surface. Each mailbox carries an `access` array listing every active staff member at the location tagged implicit (owner-at-location or master — no grant row exists and none can be created), granted (a row in email_mailbox_access) or none. INBOX-SURFACE.C: each mailbox also carries `surface` ('tickets' | 'inbox', mig 575) — which of the two screens its mail is worked on. Master or owner-at-location only.",
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: '{ mailboxes, staff }' },
@@ -1690,14 +1769,15 @@ registry.registerPath({
   path: '/api/locations/{id}/email/mailboxes/{mailboxId}',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Rename, re-default, deactivate or reactivate an account',
-  description: "THERE IS NO DELETE: email_tickets.mailbox_id is ON DELETE SET NULL, so deleting would strip historic tickets of the address they arrived at. active=false is the removal path — it stops inbound routing and hides the tab from everyone including owners, keeping the row and its history — and it CLEARS is_default so a studio never defaults to an undeliverable address. The address itself is immutable (editing it would reattribute history). is_default=true clears the incumbent first and is refused for a deactivated account. Master or owner-at-location only; another studio's mailbox id is 404, never 403.",
+  summary: 'Rename, re-default, deactivate, reactivate or move an account between surfaces',
+  description: "THERE IS NO DELETE: email_tickets.mailbox_id is ON DELETE SET NULL, so deleting would strip historic tickets of the address they arrived at. active=false is the removal path — it stops inbound routing and hides the tab from everyone including owners, keeping the row and its history — and it CLEARS is_default so a studio never defaults to an undeliverable address. The address itself is immutable (editing it would reattribute history). is_default=true clears the incumbent first and is refused for a deactivated account. INBOX-SURFACE.C: `surface` ('tickets' | 'inbox', mig 575) chooses WHICH SCREEN this account's mail is worked on — the ticket queue at /communications/tickets or the mail surface at /communications/mail — and an account appears on exactly one of them, which is what makes the head-to-head trial a comparison rather than one pile shown twice. Moving COPIES AND DELETES NOTHING: the column is read when a queue lists, so the move is instant, reversible, and leaves every ticket, message, attachment and access grant untouched; only the queue that lists it changes. A move is audit-logged as its own action (email_mailbox.surface_changed) so \"where did our mail go\" has one greppable answer. Master or owner-at-location only; another studio's mailbox id is 404, never 403.",
   request: {
     params: z.object({ id: uuidLike, mailboxId: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({
       label: z.string().min(1).max(40).optional(),
       is_default: z.boolean().optional(),
       active: z.boolean().optional(),
+      surface: z.enum(['tickets', 'inbox']).optional(),
     }).openapi('EmailMailboxPatch') } } },
   },
   responses: {
@@ -6233,7 +6313,7 @@ registry.registerPath({
   tags: ['Dashboard'],
   security: [{ CookieAuth: [] }],
   summary: 'The needs-attention triage queue',
-  description: 'Merges approvals, needs-reply email tickets and the unified WhatsApp/Instagram inbox into one sorted list. Each source is gated exactly as its own count route (approvals via the registry\'s per-provider gates, tickets via email_inbox + per-account mailbox visibility, inbox via the whatsapp permission); an ineligible source, or no active location, contributes nothing rather than erroring. Rows are pre-capped to 20 per source, merge-sorted by occurredAt descending and capped at 30 overall; counts are always the TRUE uncapped number per source, reusing each surface\'s own count query. EMAIL-TICKET-CLEANUP.2: a FAILED tickets mailbox-visibility lookup is not the same as "no tickets need a reply" — it reports counts.tickets = null (never 0) and lists `tickets` in `degraded`. A 500 here means every source degraded, not just one.',
+  description: 'Merges approvals, needs-reply email tickets and the unified WhatsApp/Instagram inbox into one sorted list. Each source is gated exactly as its own count route (approvals via the registry\'s per-provider gates, tickets via email_inbox + per-account mailbox visibility, inbox via the whatsapp permission); an ineligible source, or no active location, contributes nothing rather than erroring. Rows are pre-capped to 20 per source, merge-sorted by occurredAt descending and capped at 30 overall; counts are always the TRUE uncapped number per source, reusing each surface\'s own count query. EMAIL-TICKET-CLEANUP.2: a FAILED tickets mailbox-visibility lookup is not the same as "no tickets need a reply" — it reports counts.tickets = null (never 0) and lists `tickets` in `degraded`. A 500 here means every source degraded, not just one. MAILBOX-SURFACE.1: needs-reply spans BOTH email surfaces, so the tickets source answers two counts — `counts.tickets` (mailboxes on the ticket queue, plus NULL-mailbox tickets for elevated callers) and `counts.mail` (mailboxes on /communications/mail) — and each row carries the `source` and `href` of the surface that actually LISTS it, so a row can never link to a queue that would not show it. Orphans are counted on the tickets side ONLY, or the two sections would sum to more than the queue holds. Both degrade to null together, because both read through the same visibility lookup.',
   responses: {
     200: { description: '{ rows, counts: { approvals, tickets, inbox|null }, total, degraded? }' },
     401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },

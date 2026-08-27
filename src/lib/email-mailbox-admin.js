@@ -137,6 +137,15 @@ export function mailboxConstraintMessage(error) {
   if (/email_mailbox_access_pkey/i.test(msg)) {
     return 'That person already has access to this account.'
   }
+  // MAILBOX-SURFACE.1 — mig 575's CHECK. The route validates the value first,
+  // so reaching this means something bypassed that (an older client posting a
+  // surface this build does not know, a script). It is named in the migration
+  // precisely so there is a name to match here: an auto-generated constraint
+  // name gives this function nothing to key on, and the operator gets the raw
+  // "new row violates check constraint" string under a 500 instead.
+  if (/email_mailboxes_surface_check/i.test(msg)) {
+    return 'An account can be shown in Tickets or in Mail, and nothing else.'
+  }
   return null
 }
 

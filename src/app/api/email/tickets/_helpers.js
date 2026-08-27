@@ -57,7 +57,57 @@ import {
 // do not own, i.e. the exact DMARC failure the connector exists to remove, and
 // with no error anywhere to say so. It is not a secret: an enum naming which
 // way mail leaves, never a host, a username or a credential.
-const MAILBOX_COLUMNS = 'id, location_id, address, label, is_default, active, egress'
+// INBOX-SURFACE.C — `surface` ('tickets' | 'inbox', mig 575) rides along for
+// the same reason `egress` does, and it is the column the whole A/B trial
+// turns on. Nothing in this repo does select('*') on email_mailboxes, so a
+// column absent from a list like this one is INVISIBLE to the API — the
+// house name for that outcome is "the column exists and nothing reads it",
+// and here it would mean the tickets queue silently kept showing the
+// mailboxes the trial had moved to the inbox, i.e. both surfaces showing
+// everything and the trial answering nothing.
+//
+// 🔴 DEPLOY ORDER: mig 575 must be APPLIED BEFORE this code deploys. An
+// explicit column list against a column that does not exist is a PostgREST
+// 42703 on the whole select, which loadVisibleMailboxes correctly reports as
+// mailboxesUnavailable() — a 500 on the ticket queue, estate-wide. Same rule
+// as every other column added here (CLAUDE.md: apply the migration first).
+const MAILBOX_COLUMNS = 'id, location_id, address, label, is_default, active, egress, surface'
+
+// The two surfaces a mailbox can live on. `tickets` is the DEFAULT in the
+// schema, which is what makes mig 575 a no-op for every existing row.
+export const SURFACE_TICKETS = 'tickets'
+export const SURFACE_INBOX = 'inbox'
+
+/**
+ * INBOX-SURFACE.C — the mailboxes that belong to ONE surface.
+ *
+ * 🔴 THE PROPERTY THE WHOLE TRIAL RESTS ON: a mailbox appears in EXACTLY ONE
+ * surface. `accounts@` stays on the ticket queue, `hatchstreet@` moves to the
+ * inbox, Richard picks one. If both surfaces listed both mailboxes there is no
+ * head-to-head at all — just one pile of mail rendered two ways, which answers
+ * nothing and doubles the chance a member is answered twice.
+ *
+ * Applied to the LIST and the COUNT only, deliberately NOT inside
+ * loadVisibleMailboxes. The detail routes (loadTicketForUser,
+ * loadSendingMailbox) resolve through that function too, and the inbox surface
+ * reuses the existing thread + reply routes rather than forking them — so
+ * narrowing visibility itself would 404 every read and refuse every reply from
+ * the very surface being trialled. Visibility is "may this person see this
+ * account at all"; surface is "which screen lists it". Two different questions,
+ * and only the second one is a routing decision.
+ *
+ * A row with no `surface` at all — pre-migration, or a fixture that predates
+ * it — reads as `tickets`, matching the column's own DEFAULT. The fallback is
+ * here rather than at the call sites so there is one answer to "where does an
+ * unmarked mailbox live", and it is the answer that changes nothing.
+ *
+ * @param {Array} mailboxes
+ * @param {'tickets'|'inbox'} surface
+ */
+export function mailboxesForSurface(mailboxes, surface) {
+  if (!Array.isArray(mailboxes)) return []
+  return mailboxes.filter(m => (m?.surface || SURFACE_TICKETS) === surface)
+}
 
 // Both sets are tiny (a studio has a handful of addresses; a person a handful
 // of grants), but every .select() caps at 1,000 rows whatever the caller asks
@@ -242,6 +292,18 @@ export function scopeToVisibleMailboxes(query, { mailboxes, elevated }) {
   if (elevated && visibleIds.length > 0 && visibleIds.every(id => UUID_SHAPE.test(id))) {
     return query.or(`mailbox_id.in.(${visibleIds.join(',')}),mailbox_id.is.null`)
   }
+  // INBOX-SURFACE.C — an ELEVATED caller with an empty id set still gets the
+  // orphans. Before the trial that combination could not arise (the two callers
+  // returned early on an empty visible set, and the branch above covered the
+  // rest), so it fell through to `.in('mailbox_id', [])` — which matches
+  // nothing, NULLs included. It arises now: a studio can legitimately move
+  // EVERY mailbox to the inbox surface, leaving the ticket queue with no
+  // mailboxes but still holding tickets whose mailbox was deleted
+  // (ON DELETE SET NULL) or which predate the column (mig 484's backfill).
+  // Falling through would have made those vanish from the only surface that
+  // shows them — a visible record silently disappearing, which is the one
+  // outcome this split must never produce.
+  if (elevated && visibleIds.length === 0) return query.is('mailbox_id', null)
   return query.in('mailbox_id', visibleIds)
 }
 

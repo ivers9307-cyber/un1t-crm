@@ -132,6 +132,36 @@ export default function TicketThread({
   // whose target is deliberately NOT in the queue (tombstones' survivors may
   // sit outside the current view).
   onOpenTicket,
+
+  // ── MAIL-TRIAL.B — three slots, so a SECOND surface can reuse this pane ──
+  //
+  // The Mail surface (/communications/mail) is an inbox-shaped alternative to
+  // the ticket queue, running against the same rows for the trial. Everything
+  // below the header — the thread, the HTML sandbox, attachments, the delivery
+  // marker, the mail-client marker, join markers, the composer — is identical
+  // on both and must stay ONE implementation: this file already carries two
+  // security-critical literals that src/lib/email-html.test.js asserts against
+  // its own source, and a copy of it would be a copy with nothing asserting
+  // those. (This codebase has been bitten by exactly that: two restatements of
+  // deliveryMeta drifted inside a week.)
+  //
+  // What genuinely differs is the ticket-only CHROME, so that is what became a
+  // slot. Each prop distinguishes three states, which is why they default to
+  // `undefined` rather than to a value:
+  //   undefined — render the ticket chrome, byte-for-byte as before
+  //   null      — render nothing
+  //   a node    — render that instead
+  // Passing nothing leaves this component exactly as it was; every existing
+  // ticket test pins that.
+  //
+  // The names are deliberately about POSITION, not about either surface —
+  // this file must not learn which screen is asking.
+  statusChip,   // beside the subject: the lifecycle chip, or the caller's own
+  controls,     // under the header: status + owner + duplicate rows
+  emptyState,   // with no selection: "Select a ticket", or the caller's own
+  // Forwarded verbatim to the composer — the one sentence in there written in
+  // the ticket lifecycle's vocabulary. See TicketReplyBox.jsx.
+  archivedHint,
 }) {
   const endRef = useRef(null)
   // EMAIL-ATTACH-RACE.1 — scroll on a NEW message, not on every re-read.
@@ -152,6 +182,7 @@ export default function TicketThread({
   useEffect(() => { setOpenAttachment(null) }, [ticketId])
 
   if (!hasSelection) {
+    if (emptyState !== undefined) return emptyState
     return (
       <EmptyState
         icon={<Mail size={30} />}
@@ -210,9 +241,11 @@ export default function TicketThread({
               <h2 className="truncate text-sm font-semibold text-un1t-text">
                 {ticket?.subject || '(no subject)'}
               </h2>
-              <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${status.chip}`}>
-                {status.label}
-              </span>
+              {statusChip !== undefined ? statusChip : (
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${status.chip}`}>
+                  {status.label}
+                </span>
+              )}
               {priority && (
                 <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${priority.chip}`}>
                   {priority.label} priority
@@ -248,6 +281,12 @@ export default function TicketThread({
           </div>
         </div>
 
+        {/* MAIL-TRIAL.B — the ticket-only chrome, in one slot. The three rows
+            below are the whole of what the Mail surface drops (four-state
+            lifecycle, assignment, duplicate folding); everything else on this
+            pane is shared. `undefined` renders them exactly as before. */}
+        {controls !== undefined ? controls : (
+        <>
         {/* Lifecycle. All four states on screen, always: nothing in this
             system closes itself, so closing has to be one click from the
             thread rather than something an operator has to go looking for. */}
@@ -314,6 +353,8 @@ export default function TicketThread({
               </div>
             )}
           </div>
+        )}
+        </>
         )}
       </div>
 
@@ -398,6 +439,7 @@ export default function TicketThread({
           onRestoreRecipient={onRestoreRecipient}
           participantSaving={participantSaving}
           sending={sending}
+          archivedHint={archivedHint}
         />
       )}
     </>

@@ -59,6 +59,9 @@ import { needsAction } from '@/lib/inbox-queues'
 import {
   loadVisibleMailboxes,
   scopeToVisibleMailboxes,
+  mailboxesForSurface,
+  SURFACE_TICKETS,
+  SURFACE_INBOX,
   scopeToNeedsReply,
   scopeToUnmerged,
 } from '@/app/api/email/tickets/_helpers'
@@ -145,10 +148,40 @@ function applyTicketScope(query, vis) {
   return scopeToUnmerged(scopeToNeedsReply(scopeToVisibleMailboxes(query, vis)))
 }
 
-function toTicketRow(t) {
+/**
+ * MAILBOX-SURFACE.1 — WHICH SURFACE LISTS THIS TICKET'S MAIL.
+ *
+ * The needs-reply predicate is identical on both surfaces, so this lane keeps
+ * ONE query. What differs is where the operator has to go to answer it, and a
+ * hard-coded '/communications/tickets' became a DEAD END the moment an account
+ * moved: the row still appears here, the click lands on a queue that no longer
+ * lists that mail, and the operator is left hunting for a member's question
+ * they were just told about. That is the "where did my mail go" failure the
+ * surface split exists to avoid, arriving through the back door.
+ *
+ * A NULL mailbox_id routes to tickets, matching the split's own rule: `surface`
+ * DEFAULTS to 'tickets', and an orphan is exactly the case where nobody said
+ * otherwise. It is also elevated-only and has always lived there, so nothing an
+ * owner sees today moves.
+ *
+ * An UNKNOWN mailbox_id routes to tickets too. It cannot normally happen — the
+ * ticket is scoped to visible mailboxes, so its mailbox is in this very map —
+ * but "the surface I could not identify" must land somewhere real rather than
+ * nowhere.
+ */
+function ticketSurface(mailboxId, surfaceById) {
+  if (!mailboxId) return SURFACE_TICKETS
+  return surfaceById.get(mailboxId) === SURFACE_INBOX ? SURFACE_INBOX : SURFACE_TICKETS
+}
+
+function toTicketRow(t, surfaceById) {
+  const onMail = ticketSurface(t.mailbox_id, surfaceById) === SURFACE_INBOX
   return {
-    source: 'tickets',
-    sourceLabel: 'Tickets',
+    // The SOURCE is what the row is grouped and labelled by, so a ticket whose
+    // account moved reads as Mail here too. Labelling it 'Tickets' while
+    // linking to Mail would be a different lie in the same place.
+    source: onMail ? 'mail' : 'tickets',
+    sourceLabel: onMail ? 'Mail' : 'Tickets',
     id: t.id,
     title: t.subject || t.requester_name || t.requester_email || 'Ticket',
     subtitle: t.requester_name || t.requester_email || null,
@@ -159,7 +192,7 @@ function toTicketRow(t) {
     // row). There is nothing to append here; this is a plain landing on
     // the queue, same as every other provider's reviewUrl would be without
     // a focus affordance on its target page.
-    href: '/communications/tickets',
+    href: onMail ? '/communications/mail' : '/communications/tickets',
   }
 }
 
@@ -169,27 +202,56 @@ async function fetchTicketsSource(db, user, locationId) {
 
   const rowsQuery = applyTicketScope(
     db.from('email_tickets')
-      .select('id, subject, requester_name, requester_email, last_message_at')
+      // mailbox_id rides along for MAILBOX-SURFACE.1 — a row has to know which
+      // surface LISTS its mail before it can offer a link there.
+      .select('id, subject, requester_name, requester_email, last_message_at, mailbox_id')
       .eq('location_id', locationId),
     vis
   ).order('last_message_at', { ascending: false, nullsFirst: false }).limit(SOURCE_PRE_CAP)
 
-  const countQuery = applyTicketScope(
-    db.from('email_tickets').select('*', { count: 'exact', head: true }).eq('location_id', locationId),
-    vis
-  )
+  // 🔴 TWO COUNTS, ONE PER SURFACE — because there are now two SECTIONS.
+  // One combined number was correct only while one lane rendered it. Since the
+  // rows split into a Tickets group and a Mail group, a single total put the
+  // mail rows' count on the Tickets heading: a badge promising more than the
+  // list under it holds, which is the red dot an operator clicks, finds nothing
+  // behind, and afterwards ignores.
+  //
+  // The ORPHANS belong to exactly one of these, and only the ticket half may
+  // claim them: applyTicketScope's elevated branch already widens to
+  // `mailbox_id is null`, so reusing it for the mail half would count every
+  // orphan TWICE and make the two sections add up to more than the queue holds.
+  // The mail half is therefore scoped strictly to its own mailbox ids.
+  const ticketsMailboxes = mailboxesForSurface(vis.mailboxes, SURFACE_TICKETS)
+  const mailIds = mailboxesForSurface(vis.mailboxes, SURFACE_INBOX).map(m => m.id)
 
-  const [{ data, error: rowsErr }, { count, error: countErr }] = await Promise.all([
-    rowsQuery, countQuery,
-  ])
+  const baseCount = () => db.from('email_tickets')
+    .select('*', { count: 'exact', head: true })
+    .eq('location_id', locationId)
+
+  const ticketsCountQuery = scopeToUnmerged(scopeToNeedsReply(
+    scopeToVisibleMailboxes(baseCount(), { ...vis, mailboxes: ticketsMailboxes })
+  ))
+  const mailCountQuery = scopeToUnmerged(scopeToNeedsReply(
+    baseCount().in('mailbox_id', mailIds)
+  ))
+
+  const [
+    { data, error: rowsErr },
+    { count, error: countErr },
+    { count: mailCount, error: mailCountErr },
+  ] = await Promise.all([rowsQuery, ticketsCountQuery, mailCountQuery])
   if (rowsErr) throw new Error(`tickets rows: ${rowsErr.message}`)
   if (countErr) throw new Error(`tickets count: ${countErr.message}`)
+  if (mailCountErr) throw new Error(`mail count: ${mailCountErr.message}`)
 
   // The query above already carries .limit(SOURCE_PRE_CAP); the slice is a
   // defence-in-depth backstop (cheap on an already-≤20 array) so the pre-cap
   // invariant holds even if a future edit drops the query-level limit.
-  const rows = (data || []).slice(0, SOURCE_PRE_CAP).map(toTicketRow)
-  return { rows, count: count || 0 }
+  // Built from the SAME visibility read the scope used, so the map can never
+  // disagree with the rows about which mailboxes exist.
+  const surfaceById = new Map((vis.mailboxes || []).map(m => [m.id, m.surface]))
+  const rows = (data || []).slice(0, SOURCE_PRE_CAP).map(t => toTicketRow(t, surfaceById))
+  return { rows, count: count || 0, mailCount: mailCount || 0 }
 }
 
 async function countTicketsNeedsReply(db, user, locationId) {
@@ -279,7 +341,7 @@ async function countInboxNeedsAction(db, user, locationId) {
 export async function assembleHomeQueue(db, user) {
   const locationId = user?.activeLocation?.id || null
   if (!locationId) {
-    return { rows: [], counts: { approvals: 0, tickets: 0, inbox: 0 }, total: 0 }
+    return { rows: [], counts: { approvals: 0, tickets: 0, mail: 0, inbox: 0 }, total: 0 }
   }
 
   const settled = await Promise.allSettled([
@@ -295,6 +357,10 @@ export async function assembleHomeQueue(db, user) {
     const name = SOURCE_NAMES[i]
     if (s.status === 'fulfilled') {
       counts[name] = s.value.count
+      // The tickets source answers for BOTH surfaces (one query, one visibility
+      // read); `mail` is its second count rather than a fourth source, so the
+      // two can never disagree about which mailboxes exist.
+      if (name === 'tickets') counts.mail = s.value.mailCount ?? 0
       rows = rows.concat(s.value.rows)
     } else if (name === 'tickets' && s.reason instanceof TicketsVisibilityUnavailableError) {
       // EMAIL-TICKET-CLEANUP.2 — see the error class above: null, not 0.
@@ -302,10 +368,15 @@ export async function assembleHomeQueue(db, user) {
       // distinguishable all the way to the response.
       console.warn(`[home-queue] source 'tickets' degraded: mailbox visibility lookup failed`)
       counts.tickets = null
+      // Both surfaces read through the SAME visibility lookup, so when it fails
+      // neither number is known. `mail` degrades to null for the same reason
+      // and by the same rule: an unknown must never render as a confident 0.
+      counts.mail = null
       degraded.push('tickets')
     } else {
       console.warn(`[home-queue] source '${name}' failed: ${s.reason?.message || s.reason}`)
       counts[name] = 0
+      if (name === 'tickets') counts.mail = 0
       degraded.push(name)
     }
   })
@@ -318,7 +389,7 @@ export async function assembleHomeQueue(db, user) {
   // unknown contributor must not silently read as a known zero. The
   // `degraded` array is what tells a caller the total is a floor, not the
   // whole picture.
-  const total = [counts.approvals, counts.tickets, counts.inbox]
+  const total = [counts.approvals, counts.tickets, counts.mail, counts.inbox]
     .filter((n) => typeof n === 'number')
     .reduce((sum, n) => sum + n, 0)
   const result = { rows, counts, total }
@@ -382,6 +453,10 @@ export function queueCountLabel(total, rowsCount) {
 // approval provider.
 export function queueRowGroup(row) {
   if (row?.source === 'tickets') return 'tickets'
+  // MAILBOX-SURFACE.1 — its own group, NOT 'inbox': that key is the unified
+  // WhatsApp/Instagram queue at /communications/inbox, and folding email into
+  // it would send the operator to the surface email deliberately left.
+  if (row?.source === 'mail') return 'mail'
   if (row?.source === 'inbox') return 'inbox'
   return 'approvals'
 }
@@ -389,6 +464,7 @@ export function queueRowGroup(row) {
 const GROUP_META = {
   approvals: { label: 'Approvals', href: '/approvals' },
   tickets: { label: 'Tickets', href: '/communications/tickets' },
+  mail: { label: 'Mail', href: '/communications/mail' },
   inbox: { label: 'Inbox', href: '/communications/inbox' },
 }
 
