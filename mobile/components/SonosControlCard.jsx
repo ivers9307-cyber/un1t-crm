@@ -59,9 +59,9 @@ function useNowPlaying(target, locationId) {
   const seq = useRef(0)
   const load = useCallback(async () => {
     const n = ++seq.current
-    // try/catch: authHeaders() → getSession() runs OUTSIDE api()'s own try
-    // (same guard as `send` and the screen) — an uncaught rejection here
-    // would leave "Checking what's playing…" painted forever.
+    // try/catch: defence in depth. MOBILE-SESSION.1 moved the token refresh
+    // inside api()'s guard (a failed one answers a transport envelope), so
+    // reaching here means a defect in this handler, not a flaky link.
     try {
       const r = await getSonosNowPlaying(target, locationId)
       if (n !== seq.current) return
@@ -160,9 +160,9 @@ export default function SonosControlCard({ schedule, group, favorites = [], loca
     }
   }, [state, notifyStale])
 
-  // try/finally, not a bare await: authHeaders() → supabase.auth.getSession()
-  // runs OUTSIDE api()'s own try, so if it ever rejects the only thing
-  // standing between us and a forever-disabled card is the finally.
+  // try/finally, not a bare await: whatever happens above, the card must not
+  // be left disabled. (Since MOBILE-SESSION.1 a failed token refresh answers
+  // an envelope rather than throwing, so this is the last-resort net.)
   const send = useCallback(async (action, value) => {
     setBusy(true); setError(null); setPartialFailure(false)
     try {

@@ -240,9 +240,9 @@ export default function ShellyScreen() {
     }, NOTE_CLEAR_MS)
   }, [])
 
-  // try/catch around the whole thing: authHeaders() → supabase.auth.getSession()
-  // runs OUTSIDE api()'s own try, so an uncaught rejection there would strand
-  // the screen on its loading spinner forever (same guard as the Sonos screen).
+  // try/catch around the whole thing: defence in depth. MOBILE-SESSION.1 put
+  // the token refresh inside api()'s guard — a failed one now answers a
+  // transport envelope — so reaching this catch means a defect in the handler.
   //
   // `isActive` guards every setState against a blur-before-resolve race.
   // `stale()` is an INTERNAL guard on purpose — every exit below checks it,
@@ -304,9 +304,9 @@ export default function ShellyScreen() {
     }
   }, [load])
 
-  // try/finally, not a bare await: authHeaders() → getSession() runs outside
-  // api()'s own try, so if it ever rejects the only thing standing between us
-  // and a forever-disabled row is the finally.
+  // try/finally, not a bare await: whatever happens above, the row must not be
+  // left spinning. (Since MOBILE-SESSION.1 a failed token refresh answers an
+  // envelope rather than throwing, so this is the last-resort net.)
   const toggle = useCallback(async (device, state) => {
     setBusyId(device.id)
     setNote(device.id, null)

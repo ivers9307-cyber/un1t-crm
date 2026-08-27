@@ -71,9 +71,9 @@ export default function SonosScreen() {
   // Schedules + favourites change rarely: fetched on focus, not polled.
   // The cards poll now-playing themselves.
   //
-  // try/catch: authHeaders() → supabase.auth.getSession() runs OUTSIDE
-  // api()'s own try, so an uncaught rejection there would otherwise strand
-  // the screen on its loading spinner forever (mirrors the card's `send`).
+  // try/catch: defence in depth. Since MOBILE-SESSION.1 api() guards the
+  // token refresh itself (a failed one answers a transport envelope rather
+  // than throwing), so reaching here means a defect in the handler.
   //
   // `isActive` guards every setState against a blur-before-resolve race —
   // the effect below flips it false on cleanup, before it can paint stale
