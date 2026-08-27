@@ -551,3 +551,20 @@ mechanism, two jobs, no "is this ours?" comparison anywhere.
 the mailbox address, which reads as "the address that received this" for a message the
 mailbox sent. Inert today — the Sent writer takes the mailbox directly and never reads
 it — but do not trust that field on this lane.
+
+**S7 (delivery-rate reporting) was a FALSE POSITIVE, resolved by tracing rather than
+by a change.** The audit flagged that every SMTP send writes an `email_sends` row that
+can never receive a Delivery event, degrading `email_administrative` delivery rates.
+Every consumer was traced 2026-08-27: the communications hub already filters
+`postmark_stream = 'broadcast'` and ticket replies write `'outbound'`; campaign and
+sequence stats are id-scoped; the contact timeline falls through to **"Sent"**, which
+is exactly true; bounce-escalation treats `delivered_at` as evidence that can only
+withhold an override, never invent one; usage rollups count volume. **Nothing to
+exclude — and excluding would have hidden real sends from surfaces that already omit
+them or display them honestly.** Recorded in `smtp-send.js` so it is not re-raised.
+
+**The SMTP duplicate window is named, not guarded.** If the socket dies after DATA is
+accepted but before the 250, the route writes nothing and an operator retry sends the
+member a second copy. A pre-send claim would convert that into permanent silent loss
+on a process kill, which CLAUDE.md's rule ranks as the worse failure. Phase 8's Sent
+lane makes a duplicate *visible* within ~5 minutes without preventing it.
