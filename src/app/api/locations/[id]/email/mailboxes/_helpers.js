@@ -38,6 +38,22 @@ export const MAILBOX_COLUMNS =
 // every .select() caps at 1,000 rows whatever the caller asks for — so the
 // bounds are stated rather than left implicit.
 export const MAILBOX_LIMIT = 200
+
+// PHASE 11.1 — how many accounts ONE LOCATION may have CONNECTED at once.
+//
+// Distinct from MAILBOX_LIMIT above, which is a .limit() sized against the
+// 1,000-row select cap and caps nothing in practice. This one is a real
+// tenancy rule, and it is about the SHARED CRON: every connected mailbox is an
+// IMAP session, a body download per message and an attachment upload per file,
+// every five minutes, out of one wall-clock budget. The poller degrades
+// gracefully under load rather than failing — which is exactly why a runaway
+// tenant would otherwise just make everyone else's mail slower, silently.
+//
+// 12 is deliberately generous against observed use: a studio runs a handful
+// (studio@, accounts@, sales@, info@). It is a backstop against a mistake or an
+// import gone wrong, not a commercial tier — raising it is a one-line change
+// and the refusal says so, so nobody has to guess whether they hit a bug.
+export const MAX_CONNECTED_MAILBOXES_PER_LOCATION = 12
 export const STAFF_LIMIT = 500
 export const GRANT_LIMIT = 1000
 

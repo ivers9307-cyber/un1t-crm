@@ -62,6 +62,7 @@ import {
   LOC_A, MB_STUDIO, MB_ACCOUNTS, MB_OTHER_LOCATION,
   OWNER_A, OWNER_B, MANAGER_A, MASTER, adminState,
 } from '../../_test-fixtures'
+import { MAX_CONNECTED_MAILBOXES_PER_LOCATION } from '../../_helpers'
 
 // 32 random bytes, base64 — a real key, so seal()/open() run for real and the
 // stored value can be proven to be ciphertext rather than the password.
@@ -932,6 +933,76 @@ describe('the secret is write-only', () => {
     expect(res.status).toBe(200)
     expect(body.data.connection).toBeNull()
     expect(body.data.ingress).toBe('postmark')
+  })
+})
+
+// PHASE 11.1 — how many accounts ONE LOCATION may connect.
+//
+// Every connected mailbox is an IMAP session, a body download per message and
+// an attachment upload per file, every five minutes, out of ONE shared cron
+// with ONE wall-clock budget. The poller degrades GRACEFULLY under load rather
+// than failing, which is precisely why an uncapped tenant would just make
+// everyone else's mail slower and nothing would ever say so.
+describe('connected-mailbox limit', () => {
+  // A location already sitting exactly on the cap. MB_STUDIO stays on Postmark
+  // so it is the one being newly connected; the fillers are what fill the quota.
+  const atCap = (studio = onPostmark(MB_STUDIO)) => {
+    const fillers = Array.from({ length: MAX_CONNECTED_MAILBOXES_PER_LOCATION }, (_, i) => ({
+      ...MB_ACCOUNTS,
+      id: `mb-filler-${i}`,
+      address: `filler-${i}@un1tdublin.com`,
+      ingress: 'imap',
+      egress: 'postmark',
+    }))
+    return world({ mailboxes: [studio, ...fillers, onPostmark(MB_OTHER_LOCATION)] })
+  }
+
+  it('refuses a NEW connection at the cap, and costs no dial', async () => {
+    atCap()
+    const { res, body } = await put(MB_STUDIO.id, GMAIL)
+
+    expect(res.status).toBe(400)
+    expect(body.code).toBe('connected_mailbox_limit')
+    // The refusal has to be actionable: which way out, and that the ceiling is
+    // a policy rather than a bug the operator has hit.
+    expect(body.error).toMatch(/Disconnect one/i)
+    // Refused BEFORE the socket, like every other refusal on this route — a
+    // capped tenant must not be able to spend dials either.
+    expect(verifyConnection).not.toHaveBeenCalled()
+    expect(writesTo(db)).toEqual([])
+  })
+
+  it('🔴 STILL LETS AN ALREADY-CONNECTED MAILBOX BE FIXED AT THE CAP', async () => {
+    // The trap. PUT is also how a revoked app password is rotated and how a
+    // wrong host is corrected. Counting the mailbox in front of us would mean a
+    // studio sitting exactly on the cap could no longer repair a broken
+    // connection — and the only workaround, disconnect-then-reconnect, DROPS
+    // THE POLL CURSOR. A limit that blocks maintenance is worse than no limit.
+    atCap({ ...MB_STUDIO, ingress: 'imap', egress: 'postmark' })
+    const { res } = await put(MB_STUDIO.id, { ...GMAIL, password: 'new-app-password' })
+
+    expect(res.status).toBe(200)
+    expect(verifyConnection).toHaveBeenCalled()
+    expect(openSealed(credentialFor(MB_STUDIO.id).secret_ciphertext)).toBe('new-app-password')
+  })
+
+  it('counts only THIS location — another studio being full is not our problem', async () => {
+    const fillers = Array.from({ length: MAX_CONNECTED_MAILBOXES_PER_LOCATION }, (_, i) => ({
+      ...MB_OTHER_LOCATION, id: `mb-other-${i}`, address: `other-${i}@elsewhere.ie`, ingress: 'imap',
+    }))
+    world({ mailboxes: [onPostmark(MB_STUDIO), ...fillers] })
+
+    const { res } = await put(MB_STUDIO.id, GMAIL)
+    expect(res.status).toBe(200)
+  })
+
+  it('FAILS OPEN when the count cannot be read', async () => {
+    // The ceiling is a fairness nicety, not a safety property. Refusing a
+    // legitimate connection over a transient database fault trades a working
+    // mailbox for nothing — log loudly, let it through.
+    world({ errors: { email_mailboxes: { code: '42501', message: 'permission denied' } } })
+    const { res } = await put(MB_STUDIO.id, GMAIL)
+    expect(res.status).not.toBe(400)
   })
 })
 
