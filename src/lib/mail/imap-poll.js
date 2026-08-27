@@ -156,6 +156,11 @@ import { logError, logInfo, logWarn } from '../log'
 import { resolveAuth } from './auth-strategy'
 import { fetchSince, withMailbox } from './imap-connection'
 import { attachmentParts, canStageForMessage, stageImapAttachments } from './imap-attachments'
+// storeInboundAttachments is direction-AGNOSTIC despite the name: it takes a
+// message row id and writes email_ticket_attachments against it. The sent lane
+// redeems its staged bytes through the same writer, quota accounting and
+// skipped_reason vocabulary the inbound path uses.
+import { storeInboundAttachments } from '@/lib/email-attachments-server'
 import { SYNTHETIC_ID_RE, toInboundPayload } from './imap-message'
 import { isConfigured } from './secret-box'
 // 🔴 THE ONE PLACE THIS MODULE FILES ANYTHING ITSELF, and it is deliberately
@@ -922,6 +927,13 @@ function inboundSink(target) {
       const accepted = res.status >= 200 && res.status < 300
       return {
         accepted,
+        // MAILBOX-SENT-ATTACH.1 — the ROUTE redeems this lane's staged bytes:
+        // processInboundEmail reads the markers off body.Attachments and calls
+        // storeInboundAttachments itself. So an accepted inbox message has
+        // always had its bytes claimed, and pollOpenFolder must not drop them.
+        // Stated rather than defaulted, because the sent lane's answer differs
+        // per outcome and a silent default would be wrong for one of them.
+        redeemed: true,
         permanent: !accepted && PERMANENT_REJECTION_STATUSES.has(res.status),
         status: res.status,
         // `res.error` is OUR fetch's message, never the route's response body,
@@ -953,7 +965,21 @@ function sentSink(db, mailbox) {
   const mailboxId = mailbox?.id ?? null
   return {
     lane: SENT_FOLDER,
-    stagesAttachments: false,
+    // MAILBOX-SENT-ATTACH.1 — this lane now stages, and REDEEMS WHAT IT STAGES.
+    //
+    // It used to be false with a warning, because staging without a redeemer is
+    // the orphan this file spends its length avoiding: the bytes land in the
+    // metered bucket with nothing that will ever name them. The inbox lane is
+    // redeemed by the webhook route; the sent lane had no equivalent, so the
+    // safe answer was to stage nothing and say so at warn level.
+    //
+    // It has one now. storeInboundAttachments() is direction-AGNOSTIC despite
+    // its name — it takes a message row id and writes email_ticket_attachments
+    // against it — so a client-sent reply's files are filed by exactly the same
+    // writer, the same quota accounting and the same skipped_reason vocabulary
+    // as an inbound message's. See `redeemed` below for the half that keeps the
+    // bytes honest when the reply is NOT filed.
+    stagesAttachments: true,
     logContext: { writer: 'sent-lane' },
 
     async deliver({ payload, msg, uid }) {
@@ -992,8 +1018,54 @@ function sentSink(db, mailbox) {
         })
       }
 
+      // MAILBOX-SENT-ATTACH.1 — REDEEM THE STAGED BYTES, OR SAY WE DID NOT.
+      //
+      // Only `filed` produced a message row, and a row is the only thing an
+      // email_ticket_attachments row can hang off. `duplicate` means the reply
+      // is already on the ticket — either one WE sent over SMTP, whose files
+      // the composer already filed at send time, or one an earlier tick filed
+      // with its own copy of these same bytes. `orphan` produced no row at all.
+      // In both of those the freshly staged copy is referenced by nothing, so
+      // it must go back, and `redeemed: false` is what tells pollOpenFolder to
+      // drop it on a path that otherwise never drops anything.
+      //
+      // Once storeInboundAttachments has run, redeemed is TRUE unconditionally
+      // — including on a partial store. It records a skipped file rather than
+      // dropping it (quota, too_large, rehost_failed all become rows), so
+      // discarding afterwards would delete bytes a row now points at. A
+      // half-stored message is bookkeeping to read, never bytes to reclaim.
+      let redeemed = false
+      if (verdict?.outcome === 'filed' && verdict.messageId) {
+        try {
+          const stored = await storeInboundAttachments(db, {
+            attachments: payload.Attachments,
+            messageId: verdict.messageId,
+            locationId: mailbox?.location_id ?? null,
+            mailboxId,
+            postmarkMessageId: payload.MessageID,
+          })
+          redeemed = true
+          if (stored.skipped > 0) {
+            logWarn('imap-poll', 'some files on a mail-client reply were not stored', {
+              mailboxId, uid, stored: stored.stored, skipped: stored.skipped,
+              reasons: stored.reasons,
+            })
+          }
+        } catch (err) {
+          // The reply itself is already on the ticket. Attachment bookkeeping
+          // must never turn that into a retry, which would re-file the message
+          // — so this is logged and the bytes are dropped, exactly as an
+          // unredeemed outcome is. The operator sees the reply without its
+          // files, which is the pre-MAILBOX-SENT-ATTACH.1 behaviour, not a loss.
+          logError('imap-poll', 'filing a mail-client reply’s attachments threw — the reply is filed, its files are not', {
+            mailboxId, uid, messageId: verdict.messageId, err,
+          })
+        }
+      }
+
       return {
         accepted,
+        redeemed,
         // Never permanent. The writer's only failure mode is a database fault,
         // and a database fault is by definition worth retrying; a reply we
         // stepped over could never be recovered, because the Sent folder is
@@ -1559,15 +1631,22 @@ async function pollOpenFolder({
       continue
     }
 
-    // ── Attachments, on the lanes that redeem them ─────────────────
-    // 🔴 STAGING IS NOT FREE AND IT IS NOT UNIVERSAL. It uploads bytes into a
-    // metered bucket under a staging marker that only processInboundEmail's
-    // attachment writer ever redeems, so a lane whose sink does not go through
-    // that route would leave every file billed forever with nothing that will
-    // ever name it — the exact orphan dropStagedBytes() below exists to
-    // prevent. The 'sent' lane files a message row and nothing else, so it
-    // stages nothing, and the cost of that is stated at warn level rather than
-    // hidden: a file a colleague attached in Gmail does not reach the ticket.
+    // ── Attachments: STAGE, THEN REDEEM OR GIVE BACK ───────────────
+    // 🔴 STAGING IS NOT FREE. It uploads bytes into a metered bucket under a
+    // marker that only an attachment WRITER redeems, so bytes staged for a
+    // message nothing files are billed for ever with nothing that will ever
+    // name them.
+    //
+    // Both lanes stage now, and they redeem differently — which is the whole
+    // reason the sink reports `redeemed` rather than this function inferring it
+    // from the lane:
+    //   • inbox — the route redeems, inside processInboundEmail. Accepted
+    //     always means claimed.
+    //   • sent  — the SINK redeems, and only on `filed`. `duplicate` and
+    //     `orphan` are accepted with no message row to hang an attachment row
+    //     off, so their bytes go back on the accepted path below.
+    // MAILBOX-SENT-ATTACH.1. Before it the sent lane staged nothing at all,
+    // because it had no redeemer and a quiet orphan was the worse trade.
     if (sink.stagesAttachments) {
       // Boundary assertions, both against the OWNING module's own contract
       // rather than a copied regex. If the synthetic-id format ever drifts out
@@ -1645,6 +1724,15 @@ async function pollOpenFolder({
       // thread we hold). Both are handled — see the sink — and neither is a
       // step-over, because a step-over is inert while a deferral is open and
       // an accepted message is exactly the proof a deferral is waiting for.
+      // MAILBOX-SENT-ATTACH.1 — an ACCEPTED message whose bytes nobody
+      // redeemed. The inbox lane never reaches this: its sink hands the markers
+      // to the route, which files them. The sent lane reaches it on `duplicate`
+      // and `orphan`, where no message row exists to hang an attachment row
+      // off, so the staged copy is referenced by nothing and is billable
+      // forever if it stays. This is the one drop on the accepted path, and it
+      // is why the sink reports `redeemed` rather than pollOpenFolder guessing
+      // from the lane.
+      if (!res.redeemed) await dropStagedBytes()
       ingested += 1
       advancedTo = uid ?? advancedTo
       continue
