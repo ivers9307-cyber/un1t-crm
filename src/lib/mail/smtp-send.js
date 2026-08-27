@@ -55,6 +55,65 @@
 // and the thread can say "not tracked" from it rather than rendering a pending
 // event that is never going to resolve.
 //
+// ── THE email_sends ROW NEEDS NO REPORTING EXCLUSION. CHECKED, NOT ASSUMED ──
+//
+// An audit raised this as a live risk: every SMTP send writes an email_sends row
+// that can never receive a Delivery event, so an email_administrative delivery
+// RATE would quietly degrade as connected mailboxes reply — a metric that starts
+// lying rather than data that goes missing. Real-sounding, and worth resolving
+// before someone "fixes" it by filtering rows out of a surface that never
+// counted them. Every consumer of email_sends was traced 2026-08-27:
+//
+//   • communications hub stats — filters `.eq('postmark_stream','broadcast')`.
+//     Ticket replies write TICKET_INTERNAL_STREAM ('outbound'), so they were
+//     ALREADY outside every rate on that surface, by rule rather than accident.
+//   • campaign + sequence stats — scoped by campaign_id / sequence_id. A ticket
+//     reply belongs to neither and cannot enter the denominator.
+//   • the contact timeline (emailStatusPill) — falls through to **"Sent"** when
+//     delivered_at is null, which is exactly true of an SMTP send. It reads
+//     honestly with no change.
+//   • bounce-escalation — treats delivered_at as EVIDENCE that overrides a
+//     bounce. Absence of evidence withholds an override; it never invents one.
+//     Conservative in the safe direction.
+//   • usage rollups — count volume, not delivery.
+//
+// So there is nothing to exclude, and excluding would be the worse move: it
+// would hide real sends from surfaces that either already omit them or display
+// them accurately. The row stays. `postmark_message_id IS NULL` is a reliable
+// discriminator on this path if a FUTURE rate ever needs to segment (the id is
+// minted by Postmark and the row is written after the API returns, so a
+// Postmark ticket send always has one) — but do not spend it on a problem that
+// does not exist yet.
+//
+// ── AT-LEAST-ONCE, NOT EXACTLY-ONCE: THE DUPLICATE WINDOW ─────────────────
+//
+// SMTP has no way to make this exactly-once, and pretending otherwise would be
+// worse than naming it. If the connection dies AFTER the submission server has
+// accepted DATA but BEFORE its 250 reaches us, nodemailer throws, this function
+// answers `send_failed`, the route answers 400 and writes NOTHING — no
+// email_inbox_messages row, no email_sends row. The member has the reply. The
+// operator sees a failure and presses Send again, and now the member has it
+// twice.
+//
+// It is NOT guarded, deliberately. The alternatives are worse:
+//   • A claim/lease taken BEFORE the send converts a possible duplicate into a
+//     permanent SILENT LOSS whenever the process dies mid-send — CLAUDE.md's
+//     rule, learned four times over on BAREWRITE: for a customer-facing message,
+//     losing it is worse than the rare duplicate the guard was added to prevent.
+//   • Recording the send optimistically and reconciling later needs a signal to
+//     reconcile against, and this path has none by construction — that is the
+//     entire subject of the block above.
+//
+// Phase 8's Sent-folder lane narrows it in practice without being designed to:
+// the copy the provider kept lands back in the CRM on the next poll, so a
+// duplicate becomes VISIBLE in the thread within about five minutes even though
+// it was not prevented. That is a mitigation, not a fix, and it only helps a
+// mailbox with a sent_folder configured.
+//
+// If this ever needs closing properly, the shape is a lease column something
+// later re-opens (the WhatsApp drip claim is the estate's worked example), not
+// a pre-send stamp.
+//
 // ── Fail-safe shape ───────────────────────────────────────────────────────
 // NOTHING HERE THROWS. Same verdict envelope as sendTicketEmail, because this
 // IS one of sendTicketEmail's two branches and the routes must not be able to
