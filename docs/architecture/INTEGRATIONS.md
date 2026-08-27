@@ -427,3 +427,95 @@ If the old key is already lost, there is no recovery: clear the credential colum
 - The ciphertext columns are **never** selected by any GET. Write-only from the operator's side; the UI shows connection *state*, never the value (`key_hint`-style last-four is the pattern, per Shelly).
 - `resolveAuth()` (`src/lib/mail/auth-strategy.js`) is the only reader. It returns `{ user, pass }` or `{ user, accessToken }` — never a raw secret to be passed around — and **never throws, and never puts the secret in an error string**, because those strings land in `email_mailbox_ingress.last_error` and on the operator's screen.
 - Gate credential writes with `guardMailboxAdmin` (master or owner-at-location) and write an audit event on every connect / disconnect / credential change.
+
+---
+
+## Mailbox connector — operator runbook
+
+The half of the connector that is not code. `MAILBOX_SECRET_KEY` and the crypto
+are above; this is what someone actually does at Settings → Locations → *studio*
+→ Email, and what to do when it stops working.
+
+### Connecting an account
+
+1. **Get an app password**, not the account password. Google: the account needs
+   2-step verification on, then Google Account → Security → App passwords. The
+   Workspace admin can disable app passwords org-wide — if the option is absent,
+   that is why, and no amount of retrying will produce one.
+2. Settings → Locations → *studio* → Email → the account's **Connection**
+   section → fill in the login and Save.
+3. The login is **proven against the real server before anything is stored.** A
+   typo fails in the form, while you are still looking at it. Nothing is written
+   on a failure — there is no half-connected state to clean up.
+4. Mail starts arriving as tickets within five minutes. **Nothing already in the
+   mailbox is imported** — the first poll anchors at the current newest message
+   and ingests nothing. That is deliberate: new mail only, no backfill, ever.
+
+The **outgoing server is optional and it IS the opt-in for replying as that
+address.** Fill it in and replies leave over that account's own SMTP, signed by
+the provider and aligned with its DMARC. Leave it blank and mail still arrives
+over IMAP while replies keep leaving through Postmark — a supported, normal
+state, not a half-configuration.
+
+⚠️ **465 is implicit TLS (secure ON); 587 is STARTTLS (secure OFF).** Pairing 587
+with secure ON is the single most common misconfiguration in any SMTP connector
+and it fails as an opaque connect timeout rather than a TLS error.
+
+### Rotating an app password
+
+🔴 **Save a new password on the existing connection. Do NOT disconnect first.**
+
+Disconnect deletes the poll cursor, and reconnecting cold-starts the folder —
+which anchors at the newest message and ingests nothing. **Everything that
+arrived between the old password dying and the reconnect is skipped, silently.**
+Saving over the connection keeps the cursor, so the backlog is collected on the
+next tick.
+
+The per-location connected-mailbox cap never counts the account you are editing,
+precisely so a studio sitting on the limit can still do this.
+
+A verified save also clears the failure state — `consecutive_failures`,
+`paused_until` and `last_error` — so polling resumes on the next tick rather
+than waiting out a backoff that can be up to 24 hours.
+
+### Disconnecting
+
+Removes the credential, returns the account to Postmark for both directions, and
+deletes the poll cursor. Tickets and messages already filed are untouched.
+Reconnecting later starts fresh from the newest message.
+
+### Diagnosing a mailbox that stopped receiving
+
+The Connection section shows the state. Read it in this order:
+
+| What you see | What it means | What to do |
+|---|---|---|
+| **Paused**, error mentions an app password | The provider refused the login — almost always a revoked or expired app password, or 2SV reset | Generate a new app password and **save it over the connection** (see above) |
+| **Paused**, "could not reach the mail server" | Host or port wrong, or the provider is having an outage | Check the incoming server and port; if they are right, wait |
+| **Waiting for the first check** | Connected, never polled yet | Wait one tick (5 min) |
+| Connected, no tickets, no error | Genuinely quiet, or mail is going somewhere else | Send a test message to the address and watch |
+
+**The error text is a category, never the mail server's own words.** That is
+deliberate: the card is readable by an owner, and echoing a remote server's
+response there would turn it into a probe. The detail is in the logs.
+
+**A tenant failing to authenticate does not stale the cron.** The poller stamps
+its heartbeat as long as it could read its mailbox list — a revoked password is
+an operator's problem, not an outage, and it is recorded per mailbox instead.
+
+### Two things the connector deliberately does not do
+
+- **Read-state and deletions are never synced.** Reading or archiving a message
+  in the mail client changes nothing here, and vice versa. The CRM is a record of
+  correspondence; a ticket vanishing because someone tidied an inbox would be a
+  worse outcome than one that lingers.
+- **A reply sent from the mail client keeps no attachments.** The text and the
+  fact of the reply are filed (that is what stops the double-reply); the files
+  are not. They remain in the recipient's inbox and in the provider's Sent
+  folder.
+
+### If it is a Microsoft account
+
+It cannot be connected. Exchange Online no longer allows a mailbox password over
+IMAP, so these need a Microsoft sign-in rather than a password — see §2.1 of the
+design doc. The preset is present and disabled with that reason on the card.
