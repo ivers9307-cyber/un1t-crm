@@ -1776,7 +1776,7 @@ registry.registerPath({
   },
   responses: {
     200: { description: '{ connection, ingress, egress, verified }' },
-    400: { description: 'Login failed, or the host/port is not dialable — nothing was stored. The message is a fixed category (auth / TLS / could-not-connect); the remote server’s own bytes are deliberately NOT echoed, since that would make this an SSRF probe with a response oracle.', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Login failed, the host/port is not dialable, or this location is already at its connected-mailbox limit (`code: connected_mailbox_limit`) — nothing was stored in any case. A login failure reports a fixed category (auth / TLS / could-not-connect); the remote server’s own bytes are deliberately NOT echoed, since that would make this an SSRF probe with a response oracle. The limit counts CONNECTED mailboxes at this location and never counts the one being edited, so an account already connected can always be repaired.', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Not master/owner at this location', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'No such mailbox at this location', content: { 'application/json': { schema: ErrorResponse } } },
     429: { description: 'Too many verification attempts (20 per 15 minutes per user). The budget is spent immediately before the dial, so a refused host or a missing password does not consume it.', content: { 'application/json': { schema: ErrorResponse } } },

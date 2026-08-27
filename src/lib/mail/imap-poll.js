@@ -247,7 +247,16 @@ export const POLL_CONCURRENCY = 3
  * loadPollableMailboxes), ordered by least-recently-run, and only THEN cut to
  * this ceiling. So the ceiling still bounds a tick's work, but the mailboxes it
  * drops are the ones polled most recently, and they sort to the front of the
- * next tick. Phase 11.1 owns the real per-tenant limit.
+ * next tick.
+ *
+ * PHASE 11.1 SHIPPED THE OTHER HALF, and the two are deliberately different
+ * shapes. This ceiling bounds ONE TICK'S WORK and drops nothing permanently —
+ * it is a rate limiter with a fair queue behind it. The per-tenant limit is
+ * MAX_CONNECTED_MAILBOXES_PER_LOCATION, enforced where an operator can act on
+ * it (the connect route refuses with a sentence naming the way out) rather than
+ * here, where the only available answer would be to silently poll someone less
+ * often. A ceiling reached in the poller is a fact to log; a ceiling reached at
+ * connect time is a decision somebody can make.
  */
 export const MAX_MAILBOXES_PER_TICK = 200
 

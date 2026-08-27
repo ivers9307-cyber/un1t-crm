@@ -77,7 +77,10 @@ import { isConfigured, seal } from '@/lib/mail/secret-box'
 import { resolveAuth } from '@/lib/mail/auth-strategy'
 import { verifyConnection } from '@/lib/mail/imap-connection'
 import { verifySmtpConnection } from '@/lib/mail/smtp-send'
-import { guardMailboxAdmin, mailboxUnauthorized, loadMailboxOr404 } from '../../_helpers'
+import {
+  guardMailboxAdmin, mailboxUnauthorized, loadMailboxOr404,
+  MAX_CONNECTED_MAILBOXES_PER_LOCATION,
+} from '../../_helpers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -570,6 +573,54 @@ export async function PUT(request, props) {
   }
 
   if (body.provider === 'microsoft') return bad(MICROSOFT_REFUSAL, 400)
+
+  // ── PHASE 11.1 — HOW MANY ACCOUNTS ONE LOCATION MAY CONNECT ───────────────
+  //
+  // Connected mailboxes are not free to anyone but the tenant who connects
+  // them. Each one is an IMAP session, a body download per message and an
+  // attachment upload per file, every five minutes, out of ONE shared cron with
+  // ONE wall-clock budget. imap-poll.js already stops that becoming a
+  // cross-tenant outage — fair ordering by last_run_at, a concurrency cap and a
+  // deadline re-checked between mailboxes — but every one of those degrades the
+  // sweep GRACEFULLY, which is another way of saying a runaway tenant makes
+  // everyone else's mail slower and nothing ever says so.
+  //
+  // 🔴 THE CAP IS ON CONNECTING, NOT ON EXISTING. A mailbox row is nearly free:
+  // MAILBOX_LIMIT is a .limit() sized against the 1,000-row select cap, not a
+  // tenancy rule, and a Postmark-MX mailbox costs the poller nothing at all. It
+  // is the LOGIN that costs, so that is what is counted.
+  //
+  // 🔴 AND ONLY WHEN THIS ONE IS NOT ALREADY CONNECTED. PUT is also how a
+  // password is rotated and how a host is corrected. Counting the mailbox in
+  // front of us would mean a studio sitting exactly on the cap could no longer
+  // fix a revoked app password — the cap would turn a routine repair into a
+  // disconnect-and-reconnect dance, and the disconnect drops the poll cursor.
+  // A limit that blocks maintenance is worse than no limit.
+  const alreadyConnected = mailbox.ingress === 'imap'
+  if (!alreadyConnected) {
+    const { count, error: countErr } = await db.from('email_mailboxes')
+      .select('id', { count: 'exact', head: true })
+      .eq('location_id', params.id)
+      .eq('ingress', 'imap')
+    if (countErr) {
+      // Fail OPEN, loudly. Refusing on an unreadable count would block a
+      // legitimate connection over a transient database fault, and the ceiling
+      // this protects is a fairness nicety — not a safety property worth
+      // trading a working mailbox for. The estate's rule: log structurally,
+      // accept the rarer wrong outcome, fail closed only when proceeding is
+      // actively harmful.
+      logError(MODULE, 'could not count connected mailboxes — allowing the connect', {
+        locationId: params.id, mailboxId: params.mailboxId, error: countErr.message,
+      })
+    } else if ((count ?? 0) >= MAX_CONNECTED_MAILBOXES_PER_LOCATION) {
+      return bad(
+        `This studio already has ${count} connected mailboxes, which is the limit. ` +
+        'Disconnect one you no longer read before connecting another, or ask for the limit to be raised.',
+        400,
+        { code: 'connected_mailbox_limit' }
+      )
+    }
+  }
 
   // NEVER fall back to storing plaintext. secret-box throws on a missing or
   // malformed key by design; checking first turns that into a sentence an
