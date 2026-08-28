@@ -64,7 +64,8 @@ export const WRITEBACK_MAX_MESSAGES = 5
  * @param {string[]} rfcMessageIds  the messages the CRM write actually changed
  * @param {'seen'|'archive'} op
  * @returns {Promise<{attempted:number, applied:number, skipped:number,
- *                    unreferenced:number, failures:Array<{reason:string,error:string}>}>}
+ *                    unreferenced:number, noMailbox:boolean,
+ *                    failures:Array<{reason:string,error:string}>}>}
  */
 export async function applyWriteback(db, mailboxId, rfcMessageIds, op) {
   const all = Array.isArray(rfcMessageIds) ? rfcMessageIds : []
@@ -76,6 +77,16 @@ export async function applyWriteback(db, mailboxId, rfcMessageIds, op) {
     applied: 0,
     skipped: referenced.length - targets.length,
     unreferenced: all.length - referenced.length,
+    // 🔴 "THERE IS NO MAILBOX HALF" IS NOT "THE MAILBOX HALF FAILED".
+    // A Postmark-fed account has no mail server behind it at all — the domain's
+    // MX points at inbound.postmarkapp.com, so the message was never stored
+    // anywhere this could reach. That is a permanent, correct, uninteresting
+    // fact about the account, not something that went wrong with this click,
+    // and it must not be reported as one. Counting it as a failure put
+    // "there is no mailbox to change" under EVERY read and EVERY archive on
+    // such an account — a true sentence rendered as an error, on the one
+    // configuration where nothing could possibly have gone wrong.
+    noMailbox: false,
     failures: [],
   }
   if (!mailboxId || targets.length === 0) return result
@@ -95,6 +106,13 @@ export async function applyWriteback(db, mailboxId, rfcMessageIds, op) {
     if (verdict?.ok || verdict?.reason === 'not_in_mailbox') {
       result.applied += 1
       continue
+    }
+    // The answer is a property of the ACCOUNT, not of this message, so it is
+    // identical for every target — stop rather than re-reading the mailbox row
+    // once per message to be told the same thing.
+    if (verdict?.reason === 'not_imap') {
+      result.noMailbox = true
+      break
     }
     result.failures.push({
       reason: verdict?.reason || 'write_failed',
@@ -121,6 +139,9 @@ export async function applyWriteback(db, mailboxId, rfcMessageIds, op) {
  */
 export function writebackNotice(result, op) {
   if (!result) return null
+  // Nothing to say: this account has no mail server behind it, so there is no
+  // second half that could be behind. See applyWriteback's `noMailbox`.
+  if (result.noMailbox) return null
   if (result.failures.length > 0) return result.failures[0].error
   if (result.skipped > 0) {
     // 🔴 THE TWO HALVES OF THIS SENTENCE ARE NOT SYMMETRIC, AND THE ARCHIVE ONE
