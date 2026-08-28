@@ -212,3 +212,159 @@ describe('MailList — the mailbox chip', () => {
     expect(screen.queryByText('Studio')).toBeNull()
   })
 })
+
+// ── Task 6 — the one-line row ────────────────────────────────────────────
+//
+// The redesign's whole point is density: no avatar, one line, sender in a
+// fixed column, chips inline, preview gated by density. These tests check
+// the density gain itself, not just that the old behaviour survived it.
+describe('MailList — one line, no avatar', () => {
+  it('renders no avatar or initials — the density gain the whole redesign rests on', () => {
+    renderList()
+    // "Ella Byrne" → initials "EB". If an avatar tile still rendered, its
+    // initials would be a visible text node nowhere else in this row.
+    expect(screen.queryByText('EB')).toBeNull()
+  })
+
+  it('keeps sender, subject and preview in the same row element', () => {
+    renderList({ density: 'comfortable' })
+    const r = row()
+    expect(within(r).getByText('Ella Byrne')).toBeTruthy()
+    expect(within(r).getByText('Membership freeze')).toBeTruthy()
+    expect(within(r).getByText(/Can I freeze from Monday\?/)).toBeTruthy()
+  })
+
+  it('hides the preview at compact density', () => {
+    renderList({ density: 'compact' })
+    expect(screen.queryByText(/Can I freeze from Monday\?/)).toBeNull()
+  })
+
+  it('shows the preview at comfortable density', () => {
+    renderList({ density: 'comfortable' })
+    expect(screen.getByText(/Can I freeze from Monday\?/)).toBeTruthy()
+  })
+
+  it('defaults to compact — hides the preview when no density prop is given at all', () => {
+    renderList()
+    expect(screen.queryByText(/Can I freeze from Monday\?/)).toBeNull()
+  })
+
+  it('renders needs-reply inline, ahead of the subject, on the same line', () => {
+    renderList({ conversations: [conv({ needs_reply: true })] })
+    const text = row().textContent
+    expect(text).toContain('Needs reply')
+    expect(text.indexOf('Needs reply')).toBeLessThan(text.indexOf('Membership freeze'))
+  })
+})
+
+// ── LAYOUT-FIX.1 — row layout structure ───────────────────────────────────
+//
+// 🔴 jsdom has NO layout engine. getByText(...) passes whether an element
+// renders at 400px or at 0px — which is exactly why the 29 tests above this
+// point all passed against a shipped row where the subject rendered at or
+// near 0px, a long sender's count never painted, and "Comfortable" changed
+// nothing on screen. These tests do NOT prove pixel widths and must never be
+// read as doing so. What they CAN and DO assert is the DOM STRUCTURE a
+// correct flex layout depends on — sibling vs. nested, `min-w-0` present on
+// the elements that must be allowed to shrink, the count living outside the
+// truncating name span — because that structure is exactly what regressed,
+// and it is the only part of this a jsdom test can honestly speak to. The
+// actual pixel behaviour (subject gets priority, preview shrinks away first,
+// the count is never clipped) was checked by hand in a real browser against
+// the measured 87px/119px tracks — see the commit message, not this file.
+describe('MailList — row layout structure (LAYOUT-FIX.1)', () => {
+  it('renders the subject and preview as SIBLINGS — never one nested inside the other', () => {
+    renderList({ density: 'comfortable' })
+    const subject = screen.getByTestId('mail-row-subject')
+    const preview = screen.getByTestId('mail-row-preview')
+    expect(subject.parentElement).toBe(preview.parentElement)
+    expect(subject.contains(preview)).toBe(false)
+    expect(preview.contains(subject)).toBe(false)
+  })
+
+  it('gives the subject a shrink-permitting min-w-0 — without it a flex child never shrinks below its own content width', () => {
+    renderList()
+    const subject = screen.getByTestId('mail-row-subject')
+    expect(subject.className.split(/\s+/)).toContain('min-w-0')
+  })
+
+  it('gives the preview a shrink-permitting min-w-0 too, so it can shrink away rather than clip its container', () => {
+    renderList({ density: 'comfortable' })
+    const preview = screen.getByTestId('mail-row-preview')
+    expect(preview.className.split(/\s+/)).toContain('min-w-0')
+  })
+
+  it('keeps the count OUT of the truncating sender-name element', () => {
+    renderList({ conversations: [conv({ requester_name: 'Elizabeth Fitzgerald', message_count: 5 })] })
+    const name = screen.getByTestId('mail-row-sender-name')
+    const count = screen.getByTestId('mail-row-count')
+    expect(name.textContent).not.toContain('5')
+    expect(name.contains(count)).toBe(false)
+    // Still the same cell, just siblings rather than parent/child — the
+    // count must sit right next to the name, not float off elsewhere.
+    expect(name.parentElement).toBe(count.parentElement)
+  })
+
+  it('renders a preview element at comfortable density and none at all at compact — the toggle must do something', () => {
+    renderList({ density: 'comfortable' })
+    expect(screen.getByTestId('mail-row-preview')).toBeTruthy()
+    cleanup()
+    renderList({ density: 'compact' })
+    expect(screen.queryByTestId('mail-row-preview')).toBeNull()
+  })
+
+  it('still renders the needs-reply chip, the mailbox chip AND the subject together when all three hold', () => {
+    renderList({
+      conversations: [conv({ needs_reply: true })],
+      showMailbox: true,
+      mailboxById: { 'mb-1': { id: 'mb-1', address: 'a-very-long-studio-mailbox-address@example.com' } },
+    })
+    const r = row()
+    expect(within(r).getByText('Needs reply')).toBeTruthy()
+    expect(within(r).getByTestId('mail-row-subject')).toBeTruthy()
+  })
+
+  it('caps the mailbox chip so an unbounded address fallback cannot claim the whole track', () => {
+    renderList({
+      showMailbox: true,
+      mailboxById: { 'mb-1': { id: 'mb-1', address: 'a-very-long-studio-mailbox-address@example.com' } },
+    })
+    const chip = screen.getByTitle('a-very-long-studio-mailbox-address@example.com')
+    const classes = chip.className.split(/\s+/)
+    expect(classes.some(c => c.startsWith('max-w-'))).toBe(true)
+    expect(classes).toContain('truncate')
+  })
+})
+
+// 🔴 Task 2's Will problem: websearch_to_tsquery('english', 'Will') is an EMPTY
+// query, so a search for a member named Will can genuinely find nothing while
+// looking exactly like a search that never ran. Echoing the query back is the
+// honest compensation — it tells the operator what was actually asked.
+describe('MailList — search state', () => {
+  it('says no mail matches when a search is active and empty, generically without a query', () => {
+    renderList({ conversations: [], searchActive: true })
+    expect(screen.getByText('No mail matches that search.')).toBeTruthy()
+    // It must not read as an empty inbox — the ordinary empty-state copy.
+    expect(screen.queryByText('Inbox zero')).toBeNull()
+  })
+
+  it('echoes the operator’s own query back on an empty search', () => {
+    renderList({ conversations: [], searchActive: true, searchQuery: 'Will' })
+    expect(screen.getByText('No mail matches “Will”.')).toBeTruthy()
+  })
+
+  it('still shows the ordinary empty state when no search is active', () => {
+    renderList({ conversations: [], searchActive: false })
+    expect(screen.getByText('Inbox zero')).toBeTruthy()
+  })
+
+  it('banners a truncated search scan', () => {
+    renderList({ searchPartial: true })
+    expect(screen.getByText(/scanned only part/)).toBeTruthy()
+  })
+
+  it('shows no truncation banner when the scan was not partial', () => {
+    renderList({ searchPartial: false })
+    expect(screen.queryByText(/scanned only part/)).toBeNull()
+  })
+})

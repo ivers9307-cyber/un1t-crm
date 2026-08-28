@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+//
 // MAIL-TRIAL.B — the Mail surface's vocabulary and its keyboard helpers.
 //
 // Two of these are load-bearing rather than cosmetic:
@@ -6,11 +8,17 @@
 //   • isTypingTarget() is what stops a single-letter shortcut eating a
 //     half-written reply, which is the most expensive bug this surface could
 //     ship.
+//
+// MAIL-DENSITY.1 needs a real `window.localStorage`/`Storage` (it spies on
+// `Storage.prototype`), which the default `node` environment does not
+// provide — this file now opts into jsdom the same way its siblings
+// (MailThread/MailSurface/MailList.test.jsx) already do.
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   MAIL_VIEWS, DEFAULT_MAIL_VIEW, mailView, buildMailUrl,
   isArchived, needsReply, isUnread, isTypingTarget, neighbourId,
+  DENSITIES, DEFAULT_DENSITY, readDensity, writeDensity, MAIL_DENSITY_KEY,
 } from './mail-display'
 
 describe('the two states a conversation can be in', () => {
@@ -153,5 +161,44 @@ describe('neighbourId — j and k', () => {
   it('answers null for an empty list rather than undefined', () => {
     expect(neighbourId([], 'a', 1)).toBeNull()
     expect(neighbourId(undefined, 'a', 1)).toBeNull()
+  })
+})
+
+describe('density preference', () => {
+  beforeEach(() => { window.localStorage.clear() })
+
+  it('defaults to compact — the density Richard asked for', () => {
+    expect(DEFAULT_DENSITY).toBe('compact')
+    expect(DENSITIES).toEqual(['compact', 'comfortable'])
+  })
+
+  it('reads a stored preference back', () => {
+    window.localStorage.setItem(MAIL_DENSITY_KEY, 'comfortable')
+    expect(readDensity()).toBe('comfortable')
+  })
+
+  it('falls back to the default for anything it does not recognise', () => {
+    window.localStorage.setItem(MAIL_DENSITY_KEY, 'enormous')
+    expect(readDensity()).toBe('compact')
+  })
+
+  it('round-trips a write', () => {
+    writeDensity('comfortable')
+    expect(readDensity()).toBe('comfortable')
+  })
+
+  it('refuses to store a value that is not a density', () => {
+    writeDensity('enormous')
+    expect(window.localStorage.getItem(MAIL_DENSITY_KEY)).toBeNull()
+  })
+
+  // Storage throws outright in a locked-down browser or a private window. A
+  // display preference is never worth taking the surface down for.
+  it('survives storage being unavailable, in both directions', () => {
+    const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('denied') })
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('denied') })
+    expect(readDensity()).toBe('compact')
+    expect(() => writeDensity('comfortable')).not.toThrow()
+    get.mockRestore(); set.mockRestore()
   })
 })

@@ -6,6 +6,7 @@ import {
   loadInboxMailboxes, loadConversationCounts,
   scopeToNeedsReply, scopeToUnmerged, isNeedsReply, isArchived,
 } from './_helpers'
+import { searchTicketIds } from './_search'
 
 // GET /api/email/mail — the Mail surface's conversation list (MAIL-TRIAL.B).
 //
@@ -143,6 +144,10 @@ export async function GET(request) {
   // already on the page the caller is reading.
   const before = searchParams.get('before')
 
+  // MAIL-SEARCH.3 — the query an operator typed, or absent. See below for why
+  // it deliberately overrides `view`.
+  const q = searchParams.get('q')
+
   let query = db.from('email_tickets')
     .select('*')
     .eq('location_id', locationId)
@@ -162,6 +167,42 @@ export async function GET(request) {
   // what keeps that correspondence reachable. Widening it here would put the
   // same conversation on both screens and end the trial's exclusivity.
   query = query.in('mailbox_id', scopeIds)
+
+  // ══ SEARCH ═══════════════════════════════════════════════════════════════
+  // 🔴 INTERSECTED WITH THE SCOPE QUERY, NEVER SUBSTITUTED FOR IT. Everything
+  // above this line — location, visible mailboxes, surface, unmerged — still
+  // applies; search can only ever REMOVE rows from that set. _search.js is
+  // deliberately scope-free for the same reason: two copies of "who may see
+  // what" drift, and the copy nobody is looking at is the one that widens.
+  //
+  // It also OVERRIDES the view. A folder is not a filing cabinet: an operator
+  // searching for a member's name wants the answer whether it is in the inbox
+  // or archived, which is what every mail client does. Merged tombstones stay
+  // excluded — scopeToUnmerged is applied above and is not a view.
+  let searchPartial = false
+  // Only asked at all when the caller actually typed something — an absent
+  // `q` has nothing for _search.js to normalize, so there is no reason to pay
+  // for the round trip (and every existing, unsearched test relies on that:
+  // a page load with no query must never touch the search scan).
+  if (q) {
+    const searched = await searchTicketIds(db, { locationId, q })
+    if (!searched.ok) {
+      // A failed search is NOT "no results". Reporting it as an empty list
+      // would tell the operator a member's mail does not exist.
+      return NextResponse.json(
+        { success: false, error: 'Could not search this mailbox — try again' },
+        { status: 500 },
+      )
+    }
+    if (!searched.skipped) {
+      searchPartial = searched.partial
+      query = query.in('id', searched.ids)
+    } else {
+      query = applyView(query, view)
+    }
+  } else {
+    query = applyView(query, view)
+  }
 
   // 🔴 INCLUSIVE, NOT STRICT — `lte`, and the difference is a conversation.
   // `last_message_at` is nullable and NOT unique: two messages can carry the
@@ -183,7 +224,6 @@ export async function GET(request) {
   // an inbox-surface mailbox today. Fix it with a compound cursor if a studio
   // ever moves a backfilled address onto this surface.
   if (before) query = query.lte('last_message_at', before)
-  query = applyView(query, view)
 
   const { data, error } = await query
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
@@ -241,6 +281,7 @@ export async function GET(request) {
       needs_reply_count: needsReplyCount,
       counts_unavailable: counts.unavailable,
       counts_partial: counts.partial,
+      search_partial: searchPartial,
     },
   })
 }
