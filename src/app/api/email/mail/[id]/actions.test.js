@@ -40,6 +40,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { markSeen, markUnseen, archiveMessage } from '@/lib/mail/imap-writeback'
+import { applyWriteback, writebackNotice } from '../_writeback'
 import { makeDb, updatesTo, writesTo } from '../../tickets/_test-db'
 import {
   T_STUDIO, T_ACCOUNTS, COACH, OWNER, GRANT_STUDIO, mailState, message,
@@ -403,6 +404,45 @@ describe('POST /api/email/mail/[id]/seen', () => {
     expect(markUnseen).not.toHaveBeenCalled()
   })
 
+  // 🔴 THE POSTMARK CASE. accounts@hatchstreetfitness.com has its domain MX
+  // pointed at inbound.postmarkapp.com, so there is no mail server behind it —
+  // the message was never stored anywhere the write-back could reach. That is a
+  // permanent fact about the account, not a failure of this click, and counting
+  // it as one put "there is no mailbox to change" under every read and every
+  // archive on the one configuration where nothing could have gone wrong.
+  //
+  // Asserted on the ROUTE'S RESPONSE, not on applyWriteback's return value: the
+  // whole defect was that a correct verdict object was rendered as an error.
+  it('says NOTHING when the account has no mail server behind it', async () => {
+    markSeen.mockResolvedValue({ ok: false, reason: 'not_imap', error: 'This account receives mail through Postmark rather than a connected login, so there is no mailbox to change.' })
+    withMessages([
+      message({ id: 'm1', rfc_message_id: '<1@mail>', seen_at: null }),
+      message({ id: 'm2', rfc_message_id: '<2@mail>', seen_at: null }),
+      message({ id: 'm3', rfc_message_id: '<3@mail>', seen_at: null }),
+    ])
+
+    const { res, body } = await seen(T_STUDIO.id, { seen: true })
+
+    expect(res.status).toBe(200)
+    expect(body.data.writeback_notice).toBeNull()
+    // The CRM half still happened — the read state is the point of the click.
+    expect(db._state.messages.every(m => m.seen_at !== null)).toBe(true)
+    // And it asked ONCE, not once per message: the answer is a property of the
+    // account, so re-reading the mailbox row three times to be told the same
+    // thing is pure cost.
+    expect(markSeen).toHaveBeenCalledTimes(1)
+  })
+
+  it('says nothing on archive either, for the same account', async () => {
+    archiveMessage.mockResolvedValue({ ok: false, reason: 'not_imap', error: 'no mailbox' })
+    withMessages([message({ id: 'm1', rfc_message_id: '<1@mail>' })])
+
+    const { body } = await archive(T_STUDIO.id, { archived: true })
+
+    expect(body.data.writeback_notice).toBeNull()
+    expect(body.data.conversation.status).toBe('closed')
+  })
+
   it('keeps email_tickets.unread_count in agreement with the rows it just wrote', async () => {
     // Two counters for one fact is how a badge ends up pointing at an empty
     // list. seen_at is the truth; the column follows it.
@@ -425,5 +465,33 @@ describe('POST /api/email/mail/[id]/seen', () => {
     const { res, body } = await seen(T_STUDIO.id, { seen: true })
     expect(res.status).toBe(500)
     expect(body.success).toBe(false)
+  })
+})
+
+
+// The two halves of the Postmark fix, exercised directly. The route tests above
+// prove the operator sees nothing; these prove WHY, so a future edit to either
+// half fails here rather than silently restoring "there is no mailbox to
+// change" under every click.
+describe('applyWriteback / writebackNotice — an account with no mail server', () => {
+  it('reports noMailbox and files NO failure', async () => {
+    markSeen.mockResolvedValue({ ok: false, reason: 'not_imap', error: 'no mailbox' })
+
+    const out = await applyWriteback({}, 'mb-1', ['<1@mail>', '<2@mail>'], 'seen')
+
+    expect(out.noMailbox).toBe(true)
+    expect(out.failures).toEqual([])
+    // Asked once for two messages: the answer is a property of the account.
+    expect(markSeen).toHaveBeenCalledTimes(1)
+  })
+
+  it('stays silent even if a result somehow carries both', () => {
+    // Unreachable through applyWriteback (the skip breaks before any failure
+    // can be pushed), and asserted anyway: "this account has no mailbox" is the
+    // stronger fact, and it must win over whatever else is in the object.
+    expect(writebackNotice(
+      { noMailbox: true, failures: [{ reason: 'x', error: 'boom' }], skipped: 3, unreferenced: 2 },
+      'seen',
+    )).toBeNull()
   })
 })
