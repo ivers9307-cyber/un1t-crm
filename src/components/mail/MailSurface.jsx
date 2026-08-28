@@ -31,17 +31,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Mail, RefreshCw, AlertCircle, Plus } from 'lucide-react'
 import { EmptyState, Button } from '@/components/ui'
-import { mailboxLabel, NO_MAILBOX_EMPTY, threadRefreshMs } from '@/lib/ticket-display'
+import { NO_MAILBOX_EMPTY, threadRefreshMs } from '@/lib/ticket-display'
 import TicketCompose from '@/components/tickets/TicketCompose'
 import TicketForward from '@/components/tickets/TicketForward'
 import MailList from './MailList'
+import MailRail from './MailRail'
 import MailThread from './MailThread'
 import {
   MAIL_VIEWS, DEFAULT_MAIL_VIEW, mailView, buildMailUrl,
   isArchived, isUnread, isTypingTarget, neighbourId,
+  DENSITIES, DEFAULT_DENSITY, readDensity, writeDensity,
 } from './mail-display'
 
 const POLL_MS = 60_000
+// 🔴 DEBOUNCED. Every keystroke is otherwise a full-text scan plus a
+// conversation-count pass, and a fast typist queues eight of them to see the
+// result of the last.
+const SEARCH_DEBOUNCE_MS = 350
 
 export default function MailSurface({ locationId, locationName, userId }) {
   const [mailboxes, setMailboxes] = useState([])
@@ -52,9 +58,25 @@ export default function MailSurface({ locationId, locationName, userId }) {
   const [nextBefore, setNextBefore] = useState(null)
   const [needsReplyCount, setNeedsReplyCount] = useState(0)
   const [countsUnavailable, setCountsUnavailable] = useState(false)
+  // The scan behind the search results was truncated — real results, maybe
+  // not all of them. Task 3's route stamps this beside counts_partial.
+  const [searchPartial, setSearchPartial] = useState(false)
 
   const [mailboxId, setMailboxId] = useState(null)
   const [viewId, setViewId] = useState(DEFAULT_MAIL_VIEW)
+
+  // MAIL-DENSITY.1 — the row layout preference. Starts at the DEFAULT (never
+  // read from storage in the initial useState: the server renders with no
+  // localStorage, and reading it during render would mismatch the server's
+  // HTML) and is hydrated once, after mount, below.
+  const [density, setDensity] = useState(DEFAULT_DENSITY)
+
+  // MAIL-SEARCH — the raw box value, and the value that actually drives the
+  // request. `queryText` updates on every keystroke; `debouncedQuery` lags it
+  // by DEBOUNCE_MS so a fast typist does not queue a full-text scan plus a
+  // conversation-count pass per keystroke to see only the last one's result.
+  const [queryText, setQueryText] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState('')
 
   const [selectedId, setSelectedId] = useState(null)
   const [conversation, setConversation] = useState(null)
@@ -80,7 +102,25 @@ export default function MailSurface({ locationId, locationName, userId }) {
   const [forwarding, setForwarding] = useState(null)
 
   const view = mailView(viewId)
-  const listUrl = buildMailUrl({ locationId, mailboxId, viewId })
+  const listUrl = buildMailUrl({ locationId, mailboxId, viewId, q: debouncedQuery })
+
+  // Hydrate the density preference AFTER mount, never during render — the
+  // server has no localStorage, so reading it in the initial useState would
+  // mismatch the server's own HTML.
+  useEffect(() => { setDensity(readDensity()) }, [])
+
+  function chooseDensity(next) {
+    setDensity(next)
+    writeDensity(next)
+  }
+
+  // The debounce: `debouncedQuery` only moves SEARCH_DEBOUNCE_MS after the
+  // last keystroke, and that value alone feeds `listUrl` above — never
+  // `queryText` directly.
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(queryText.trim()), SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [queryText])
 
   // Which request each pane currently belongs to — the ticket surface's
   // TICKET-FETCH-RACE.1 idiom, kept because the failure it prevents is worse
@@ -113,6 +153,11 @@ export default function MailSurface({ locationId, locationName, userId }) {
       // the read state on this page is not to be trusted, and the list says so
       // rather than rendering every row as read.
       setCountsUnavailable(!!body.data?.counts_unavailable || !!body.data?.counts_partial)
+      // The search scan itself was truncated — the rows shown are real, but
+      // may not be all of them (Task 3's route stamps this beside the flag
+      // above, and it means something different: "not found yet", not "not
+      // here").
+      setSearchPartial(!!body.data?.search_partial)
     } catch {
       if (listRequest.current !== url) return
       // Transient — keep the last good list on screen rather than blanking it,
@@ -634,71 +679,30 @@ export default function MailSurface({ locationId, locationName, userId }) {
 
   const mailboxById = Object.fromEntries(mailboxes.map(m => [m.id, m]))
 
+  // MAIL-RAIL.1's shape: `{id, label, count}`, count `null` when unknown.
+  // needs_reply is the one view whose count this surface actually tracks —
+  // an unknown count must not render as 0 (the rail already omits `null`),
+  // so inbox/archived pass null rather than a fabricated zero.
+  const railViews = MAIL_VIEWS.map(v => ({
+    id: v.id,
+    label: v.label,
+    count: v.id === 'needs_reply' ? needsReplyCount : null,
+  }))
+
   return (
     <div className={shellClasses}>
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-un1t-border px-3 py-2">
-        {mailboxes.length > 1 ? (
-          <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label="Mail accounts">
-            <TabPill active={mailboxId === null} onClick={() => changeMailbox(null)} label="All accounts" />
-            {mailboxes.map(m => (
-              <TabPill
-                key={m.id}
-                active={mailboxId === m.id}
-                onClick={() => changeMailbox(m.id)}
-                label={mailboxLabel(m)}
-                title={m.address}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="flex min-w-0 items-center gap-2 text-sm">
-            <Mail size={15} className="shrink-0 text-channel-em" />
-            <span className="truncate font-medium text-un1t-text">
-              {mailboxes[0] ? mailboxLabel(mailboxes[0]) : 'Mail'}
-            </span>
-            {mailboxes[0]?.address && (
-              <span className="hidden truncate text-xs text-un1t-muted sm:inline">
-                {mailboxes[0].address}
-              </span>
-            )}
-          </div>
-        )}
-
-        <div className="flex items-center gap-2">
-          <Button type="button" size="sm" variant="secondary" icon={Plus} onClick={() => setComposeOpen(true)}>
-            New email
-          </Button>
-          <button
-            type="button"
-            onClick={() => loadList()}
-            className="inline-flex items-center gap-1.5 rounded-md border border-un1t-border px-2 py-1 text-xs text-un1t-subtle transition-colors hover:text-un1t-text"
-          >
-            <RefreshCw size={13} className={loading ? 'animate-spin' : undefined} />
-            Refresh
-          </button>
-        </div>
-      </div>
-
-      {/* Three filters, and the badge sits on the one that is a question about
-          the studio's own behaviour rather than about the mail.
-          Named as a group because "Needs reply" is also a chip on the rows
-          below it — without a name, the filter and the chip are two identical
-          strings to anyone navigating by label. */}
-      <div
-        role="group"
-        aria-label="Mail views"
-        className="flex flex-wrap items-center gap-1 border-b border-un1t-border px-3 py-2"
-      >
-        {MAIL_VIEWS.map(v => (
-          <TabPill
-            key={v.id}
-            active={viewId === v.id}
-            onClick={() => changeView(v.id)}
-            label={v.label}
-            title={v.hint}
-            badge={v.id === 'needs_reply' ? needsReplyCount : 0}
-          />
-        ))}
+      <div className="flex items-center justify-end gap-2 border-b border-un1t-border px-3 py-2">
+        <Button type="button" size="sm" variant="secondary" icon={Plus} onClick={() => setComposeOpen(true)}>
+          New email
+        </Button>
+        <button
+          type="button"
+          onClick={() => loadList()}
+          className="inline-flex items-center gap-1.5 rounded-md border border-un1t-border px-2 py-1 text-xs text-un1t-subtle transition-colors hover:text-un1t-text"
+        >
+          <RefreshCw size={13} className={loading ? 'animate-spin' : undefined} />
+          Refresh
+        </button>
       </div>
 
       {listError && (
@@ -727,9 +731,49 @@ export default function MailSurface({ locationId, locationName, userId }) {
       )}
 
       <div className="flex min-h-0 flex-1">
+        <MailRail
+          views={railViews}
+          viewId={viewId}
+          onView={changeView}
+          mailboxes={mailboxes}
+          mailboxId={mailboxId}
+          onMailbox={changeMailbox}
+          locationLabel={locationName}
+        />
+
         <div
           className={`${selectedId ? 'hidden md:flex' : 'flex'} w-full shrink-0 flex-col border-r border-un1t-border md:w-[22rem] lg:w-[24rem]`}
         >
+          <div className="flex items-center gap-2 border-b border-un1t-border px-2 py-1.5">
+            <input
+              type="search"
+              role="searchbox"
+              aria-label="Search mail"
+              value={queryText}
+              onChange={(e) => setQueryText(e.target.value)}
+              placeholder="Search mail"
+              className="min-w-0 flex-1 rounded-md border border-un1t-border bg-un1t-surface px-2.5 py-1 text-[13px] text-un1t-text placeholder:text-un1t-muted focus:border-un1t-muted focus:outline-none"
+            />
+            {/* MAIL-DENSITY.1's two-button toggle — Compact/Comfortable, not a
+                select, so the current density is always visible without a
+                click. */}
+            <div className="flex shrink-0 overflow-hidden rounded-md border border-un1t-border" role="group" aria-label="Row density">
+              {DENSITIES.map(d => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => chooseDensity(d)}
+                  aria-pressed={density === d}
+                  className={`px-2 py-1 text-[11px] font-medium transition-colors ${
+                    density === d ? 'bg-un1t-text text-un1t-bg' : 'bg-un1t-bg text-un1t-subtle hover:text-un1t-text'
+                  }`}
+                >
+                  {d === 'compact' ? 'Compact' : 'Comfortable'}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <MailList
             conversations={conversations}
             loading={loading}
@@ -747,6 +791,10 @@ export default function MailSurface({ locationId, locationName, userId }) {
             onLoadMore={loadMore}
             loadingMore={loadingMore}
             countsUnavailable={countsUnavailable}
+            density={density}
+            searchActive={!!debouncedQuery}
+            searchQuery={debouncedQuery}
+            searchPartial={searchPartial}
           />
         </div>
 
@@ -803,28 +851,5 @@ export default function MailSurface({ locationId, locationName, userId }) {
         />
       )}
     </div>
-  )
-}
-
-function TabPill({ active, onClick, label, title, badge = 0 }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      aria-pressed={active}
-      className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
-        active
-          ? 'border-transparent bg-un1t-text font-medium text-un1t-bg'
-          : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
-      }`}
-    >
-      {label}
-      {badge > 0 && (
-        <span className="ml-1.5 inline-flex h-[17px] min-w-[17px] items-center justify-center rounded-full bg-amber-500/10 px-1 text-[10px] font-semibold text-amber-700 align-middle">
-          {badge > 99 ? '99+' : badge}
-        </span>
-      )}
-    </button>
   )
 }

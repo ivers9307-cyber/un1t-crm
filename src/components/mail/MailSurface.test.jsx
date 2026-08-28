@@ -21,7 +21,7 @@
 //    to ignore.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, cleanup, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { render, cleanup, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
 import MailSurface from './MailSurface.jsx'
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
@@ -131,7 +131,11 @@ const listCalls = () => calls.filter(c => c.url.startsWith('/api/email/mail?'))
 // The filter strip is named, because "Needs reply" is also a chip on the rows
 // below it — without the name they are two identical strings to anyone
 // navigating by label, in a test and with a screen reader alike.
-const views = () => screen.getByRole('group', { name: 'Mail views' })
+//
+// MAIL-SURFACE.2 — the old `role="group"` pill row moved into the rail
+// (`nav[aria-label="Mail folders"]`); this helper follows it there rather
+// than asserting against a strip that no longer exists.
+const views = () => screen.getByRole('navigation', { name: 'Mail folders' })
 const postsTo = (fragment) => calls.filter(c => c.method === 'POST' && c.url.includes(fragment))
 
 describe('MailSurface — the filter strip', () => {
@@ -425,5 +429,75 @@ describe('MailSurface — a mailbox half that did not land', () => {
     await waitFor(() => expect(
       screen.getByText('Could not reach the mail server, so the change was not made in the mailbox.'),
     ).toBeTruthy())
+  })
+})
+
+// MAIL-SURFACE.2 — the rail, the search box and the density toggle.
+describe('MailSurface — rail, search and density', () => {
+  it('renders the rail instead of the old tab strip', async () => {
+    renderSurface()
+    await screen.findByText('Membership freeze')
+    expect(screen.getByRole('navigation', { name: /Mail folders/i })).toBeTruthy()
+    expect(screen.queryByRole('tablist', { name: /Mail accounts/i })).toBeNull()
+  })
+
+  // Fake timers only go on AFTER the initial load has settled (real timers),
+  // and always come back off — `screen.findByText`'s polling relies on real
+  // timers, so switching before the first render has resolved hangs every
+  // test in the file behind it, not just this one.
+  describe('debounce', () => {
+    afterEach(() => { vi.useRealTimers() })
+
+    it('sends the typed query to the list route, debounced', async () => {
+      renderSurface()
+      await screen.findByText('Membership freeze')
+      calls.length = 0
+      vi.useFakeTimers()
+
+      const box = screen.getByRole('searchbox', { name: /Search mail/i })
+      fireEvent.change(box, { target: { value: 'freeze' } })
+      // Nothing yet — a request per keystroke is a request per keystroke.
+      expect(calls.filter(c => c.url.includes('q=freeze'))).toHaveLength(0)
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(400) })
+      expect(calls.some(c => c.url.includes('q=freeze'))).toBe(true)
+    })
+
+    it('does not send q at all when the box is cleared', async () => {
+      renderSurface()
+      await screen.findByText('Membership freeze')
+      const box = screen.getByRole('searchbox', { name: /Search mail/i })
+      vi.useFakeTimers()
+
+      fireEvent.change(box, { target: { value: 'freeze' } })
+      await act(async () => { await vi.advanceTimersByTimeAsync(400) })
+      calls.length = 0
+
+      fireEvent.change(box, { target: { value: '' } })
+      await act(async () => { await vi.advanceTimersByTimeAsync(400) })
+      expect(calls.every(c => !c.url.includes('q='))).toBe(true)
+    })
+  })
+
+  it('starts compact and remembers a switch to comfortable', async () => {
+    renderSurface()
+    await screen.findByText('Membership freeze')
+
+    expect(screen.getByRole('button', { name: /^Compact$/i }).getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: /^Comfortable$/i }))
+    expect(window.localStorage.getItem('un1t.mail.density')).toBe('comfortable')
+  })
+
+  // The search box is a typing target, so the shortcut guard has to cover it —
+  // typing "e" into search must not archive the open conversation.
+  it('NEVER archives while the operator is typing in the search box', async () => {
+    renderSurface()
+    fireEvent.click(await screen.findByText('Membership freeze'))
+    await screen.findByText('Message on Membership freeze')
+
+    const box = screen.getByRole('searchbox', { name: /Search mail/i })
+    fireEvent.keyDown(box, { key: 'e' })
+
+    expect(postsTo('/archive')).toHaveLength(0)
   })
 })
