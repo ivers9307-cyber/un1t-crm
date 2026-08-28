@@ -1,16 +1,37 @@
-// MAIL-SEARCH.2 — text query → candidate conversation ids.
+// MAIL-SEARCH.2/.6 — text query → candidate conversation ids, from TWO legs:
+//
+//   1. FTS over email_inbox_messages.search_tsv — "which conversations CONTAIN
+//      this text" (migs 576/577).
+//   2. Escaped ILIKE over email_tickets.requester_name / requester_email —
+//      "which conversations are FROM someone whose name or address contains
+//      this text".
+//
+// The sender leg exists because names are STRUCTURED data the tsvector never
+// covered: requester_name is not in the generation expression at all, and when
+// this was measured against production, 12 of the 27 named conversations had a
+// requester whose first name appeared in NO indexed field — those people were
+// simply unfindable. It also closes the stopword hole precisely: 'Will' and
+// 'Don' are English stopwords, so websearch_to_tsquery discards them into an
+// EMPTY query and the FTS leg reports a confident zero — while a no-stopword
+// index config (the rejected alternative) would have both broken multi-word
+// searches (kept stopwords are ANDed: "freeze my membership" would demand the
+// literal word "my") and drowned the person in prose ("I will attend").
+// Matching the person on the fields where a person lives fixes the harmful
+// case without touching either trade-off.
 //
 // 🔴 THIS MODULE APPLIES NO VISIBILITY SCOPING, AND MUST NOT LEARN ANY.
-// It answers exactly one question: which conversations at this location contain
-// this text? The list route then filters those ids through the SAME query it
-// runs for an unsearched page — location, visible mailboxes, surface='inbox',
-// unmerged — so there is one authority on who may see what. A second scoping
-// implementation in here is precisely how a search box becomes an IDOR: the two
-// copies drift, and the one nobody is looking at is the one that widens.
+// Both legs answer "…at this location", nothing more. The list route filters
+// every id returned here through the SAME query it runs for an unsearched
+// page — location, visible mailboxes, surface='inbox', unmerged — so there is
+// one authority on who may see what. A second scoping implementation in here
+// is precisely how a search box becomes an IDOR: the two copies drift, and the
+// one nobody is looking at is the one that widens.
 //
-// The `location_id` filter below is a PERFORMANCE bound, not a security one.
-// Deleting it would not leak anything (the route still filters), but it would
-// scan every studio's mail to answer one studio's search.
+// The `location_id` filters below are a PERFORMANCE bound, not a security one.
+// Deleting them would not leak anything (the route still filters), but it
+// would scan every studio's mail to answer one studio's search.
+
+import { escapeLikePattern } from '@/lib/like-escape'
 
 /**
  * How many message rows one search may scan. Every PostgREST select caps at
@@ -34,11 +55,19 @@ export const SEARCH_SCAN_LIMIT = 1000
  *
  * 300 ids is ~12 KB, comfortably inside every limit in that chain, and far more
  * conversations than a page shows. Slicing here rather than at the call site
- * keeps `partial` honest: the ids are already ordered newest-first by the scan,
- * so a truncated set is the most RECENT matches and the caller is told the
- * answer is incomplete rather than being handed a silent subset.
+ * keeps `partial` honest — and SENDER matches are placed ahead of FTS matches
+ * before the slice, so the person an operator searched for is never the id
+ * that gets dropped to make room for the 300th body-text hit.
  */
 export const MAX_TICKET_IDS = 300
+
+/**
+ * How many conversations one SENDER leg may return. email_tickets holds one
+ * row per conversation (30 in production today), so this is headroom, not a
+ * working bound — stated because every PostgREST select silently caps at 1,000
+ * and an unstated bound is one nobody re-examines when the table grows.
+ */
+export const SENDER_MATCH_LIMIT = 200
 
 /**
  * The query an operator actually typed, or null when there is nothing worth
@@ -64,7 +93,57 @@ export function normalizeQuery(raw) {
 }
 
 /**
- * Which conversations at this location contain `q`?
+ * The conversations whose REQUESTER matches the query — by name or by address.
+ *
+ * Two SEPARATE `.ilike` queries, never one `.or()`: `.or()` takes a raw
+ * PostgREST filter string, and operator-typed text inside one can rewrite the
+ * filter (a stray `)` is enough — CLAUDE.md documents the incident). The
+ * operator text is escaped with escapeLikePattern and the deliberate substring
+ * wildcards are spelled HERE in the source, per the house `.ilike` rule:
+ * without the escape, `_` and `%` in the typed text are LIKE wildcards, so
+ * searching `a_b` would also match `axb`.
+ *
+ * Double quotes are stripped first: they are websearch phrase syntax on the
+ * FTS leg and never part of a real name or address, so a quoted name should
+ * still match the requester fields.
+ */
+async function senderTicketIds(db, { locationId, query }) {
+  const term = query.replace(/"/g, '').trim()
+  if (term.length < 2) return { ok: true, ids: [] }
+
+  const ids = new Set()
+
+  for (const column of ['requester_name', 'requester_email']) {
+    const { data, error } = await db.from('email_tickets')
+      .select('id')
+      .eq('location_id', locationId)
+      // Wildcards spelled HERE, escaped term inside — the exact shape the
+      // no-unescaped-ilike-pattern guardrail requires, so a deliberate
+      // substring search is visibly distinct from a forgotten escape.
+      .ilike(column, `%${escapeLikePattern(term)}%`)
+      // Newest activity first, so if the bound ever bites, what survives is
+      // the person's RECENT conversations — same reasoning as the FTS scan.
+      .order('last_message_at', { ascending: false, nullsFirst: false })
+      .limit(SENDER_MATCH_LIMIT)
+
+    if (error) {
+      // A failed sender leg must never quietly become "that person has no
+      // mail" — the confident-zero lie again, this time about the exact case
+      // this leg exists to fix. Logged here because the route's handler
+      // returns a generic 500 with no log of its own.
+      console.error(`[email/mail] sender search (${column}) failed:`, error.message)
+      return { ok: false, error: error.message }
+    }
+    for (const row of data || []) {
+      if (row?.id) ids.add(row.id)
+    }
+  }
+
+  return { ok: true, ids: Array.from(ids) }
+}
+
+/**
+ * Which conversations at this location match `q` — by content OR by sender?
  *
  * @returns {Promise<
  *   {ok: true, skipped: true, ids: null, partial: false} |
@@ -91,8 +170,8 @@ export async function searchTicketIds(db, { locationId, q }) {
     // `websearch` is the syntax a person already knows from every search box:
     // quoted phrases, OR, and a leading minus to exclude. `plain` would treat a
     // quoted phrase as loose words and quietly return the wrong thing. The
-    // config MUST match mig 576's generation expression — see that migration
-    // for why a bare (unconfigured) call would silently drift.
+    // config MUST match mig 576/577's generation expression — see those
+    // migrations for why a bare (unconfigured) call would silently drift.
     .textSearch('search_tsv', query, { type: 'websearch', config: 'english' })
     // Newest first, so a scan that HITS the cap below has thrown away the
     // OLDEST matches, not an arbitrary set. With no ORDER BY, a GIN bitmap
@@ -107,9 +186,9 @@ export async function searchTicketIds(db, { locationId, q }) {
   if (error) {
     // Logged at the failure site, matching the sibling scan next door
     // (_helpers.js's loadConversationCounts logs
-    // '[email/mail] message count scan failed:'). Task 3's route handler
-    // returns a generic 500 with no log of its own, so if this call site
-    // doesn't log it, a search failing in production leaves no trace at all.
+    // '[email/mail] message count scan failed:'). The route handler returns a
+    // generic 500 with no log of its own, so if this call site doesn't log it,
+    // a search failing in production leaves no trace at all.
     console.error('[email/mail] search scan failed:', error.message)
     // A failed query is not an empty result — the two must never collapse into
     // one another. "boom" reaching the operator as a calm empty inbox is the
@@ -117,34 +196,39 @@ export async function searchTicketIds(db, { locationId, q }) {
     return { ok: false, error: error.message }
   }
 
-  const rows = data || []
-  const ids = Array.from(new Set(rows.map(r => r.ticket_id).filter(Boolean)))
+  const sender = await senderTicketIds(db, { locationId, query })
+  if (!sender.ok) {
+    // Both legs are halves of ONE answer. Returning the FTS half while the
+    // sender half silently failed would tell an operator that the person they
+    // searched for has no mail — the precise lie the sender leg exists to end.
+    // Search is stateless and retryable, so failing loudly costs one retry.
+    return { ok: false, error: sender.error }
+  }
 
-  // 🔴 THREE STATES SHARE THE SHAPE {ok:true, skipped:false, ids:[]}, AND ONLY
-  // ONE OF THEM MEANS "THIS PERSON'S MAIL GENUINELY DOESN'T MENTION THAT":
-  //   1. the query ran and genuinely matched nothing.
-  //   2. the query ran, hit SEARCH_SCAN_LIMIT, and none of the (most recent)
-  //      1,000 rows scanned matched — distinguishable via `partial: true`.
-  //   3. the query NEVER REALLY RAN. websearch_to_tsquery('english', …)
-  //      returns an EMPTY tsquery for input that is entirely English
-  //      stopwords or punctuation — verified against the live database for
-  //      'Will', 'the', 'or', 'down', 'the will be', '-', '---', '!!!', '@' —
-  //      and an empty tsquery matches every row's tsvector zero times. On the
-  //      wire this is byte-identical to state 1: a member named Will is
-  //      unfindable by first name, and the operator is told, confidently,
-  //      that no such mail exists.
-  // State 3 is not detected here. There is no cheap PostgREST-side way to ask
-  // "did the query produce anything to search for" — only an RPC could, and
-  // building one is a separate, reviewed decision, not something to reach for
-  // quietly inside this helper. The honest fix for now lives on the SURFACE,
-  // not in this module: it echoes the operator's own typed query back in its
-  // empty state ("No results for 'Will'"), so someone who knows they searched
-  // a common first name can see exactly what was asked for and try a fuller
-  // phrase instead of trusting a confident zero.
+  const rows = data || []
+  const ftsIds = rows.map(r => r.ticket_id).filter(Boolean)
+
+  // 🔴 THE STOPWORD GAP, NARROWED BUT NOT GONE — the honest state of play:
+  //   · a PERSON named Will/Don is now found, by the sender leg, because the
+  //     name lives in requester_name/requester_email and matching those fields
+  //     structurally does not care what English considers a stopword.
+  //   · a PROSE search whose every term is a stopword ('off', 'no', 'the will
+  //     be') still never really runs on the FTS leg — verified live:
+  //     websearch_to_tsquery('english', …) returns an EMPTY tsquery for those,
+  //     which matches nothing, byte-identically to a genuine miss. Only the
+  //     sender leg can answer such a query now, and the surface still echoes
+  //     the typed query back in its empty state so a zero is legible.
+  // There is no cheap PostgREST-side detection of the empty-tsquery case; an
+  // RPC could tell, and building one is a separate, reviewed decision.
+  //
+  // SENDER IDS FIRST, then FTS ids, deduped, then the URL cap. The order is
+  // load-bearing: under the cap, the person an operator searched for must
+  // never be the id dropped to make room for the 300th body-text match.
+  const union = Array.from(new Set([...sender.ids, ...ftsIds]))
+  const capped = union.slice(0, MAX_TICKET_IDS)
   // Two independent reasons the answer can be incomplete, and the caller only
-  // needs to know THAT it is: the scan hit its row cap, or more conversations
-  // matched than one URL can carry.
-  const capped = ids.slice(0, MAX_TICKET_IDS)
-  const partial = rows.length >= SEARCH_SCAN_LIMIT || ids.length > MAX_TICKET_IDS
+  // needs to know THAT it is: the message scan hit its row cap, or more
+  // conversations matched than one URL can carry.
+  const partial = rows.length >= SEARCH_SCAN_LIMIT || union.length > MAX_TICKET_IDS
   return { ok: true, skipped: false, ids: capped, partial }
 }
