@@ -22,6 +22,25 @@
 export const SEARCH_SCAN_LIMIT = 1000
 
 /**
+ * How many conversation ids one search may hand back to the caller.
+ *
+ * 🔴 A URL BOUND, NOT A RELEVANCE ONE. The caller intersects these with
+ * `.in('id', ids)`, which postgrest-js serialises into the GET query string as
+ * `id=in.(<uuid>,<uuid>,…)` — roughly 39 bytes per id once escaped. A thousand
+ * of them is a ~39 KB URL, and the proxies, CDNs and servers in front of this
+ * app do not agree on how much of that they will carry; the ones that refuse
+ * do it with a 414 or a truncated query, neither of which reads as "your
+ * search was too broad".
+ *
+ * 300 ids is ~12 KB, comfortably inside every limit in that chain, and far more
+ * conversations than a page shows. Slicing here rather than at the call site
+ * keeps `partial` honest: the ids are already ordered newest-first by the scan,
+ * so a truncated set is the most RECENT matches and the caller is told the
+ * answer is incomplete rather than being handed a silent subset.
+ */
+export const MAX_TICKET_IDS = 300
+
+/**
  * The query an operator actually typed, or null when there is nothing worth
  * running.
  *
@@ -122,5 +141,10 @@ export async function searchTicketIds(db, { locationId, q }) {
   // empty state ("No results for 'Will'"), so someone who knows they searched
   // a common first name can see exactly what was asked for and try a fuller
   // phrase instead of trusting a confident zero.
-  return { ok: true, skipped: false, ids, partial: rows.length >= SEARCH_SCAN_LIMIT }
+  // Two independent reasons the answer can be incomplete, and the caller only
+  // needs to know THAT it is: the scan hit its row cap, or more conversations
+  // matched than one URL can carry.
+  const capped = ids.slice(0, MAX_TICKET_IDS)
+  const partial = rows.length >= SEARCH_SCAN_LIMIT || ids.length > MAX_TICKET_IDS
+  return { ok: true, skipped: false, ids: capped, partial }
 }

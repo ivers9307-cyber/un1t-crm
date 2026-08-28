@@ -4,7 +4,7 @@
 // uses for an unsearched page, so there is exactly one authority on who may see
 // what. A second scoping implementation here is how search becomes an IDOR.
 import { describe, it, expect } from 'vitest'
-import { searchTicketIds, SEARCH_SCAN_LIMIT, normalizeQuery } from './_search'
+import { searchTicketIds, SEARCH_SCAN_LIMIT, MAX_TICKET_IDS, normalizeQuery } from './_search'
 
 function makeDb(rows, error = null) {
   const calls = []
@@ -106,6 +106,30 @@ describe('searchTicketIds', () => {
   it('is not partial when the scan came back under the cap', async () => {
     const db = makeDb([{ ticket_id: 't1' }])
     const out = await searchTicketIds(db, { locationId: 'loc-1', q: 'freeze' })
+    expect(out.partial).toBe(false)
+  })
+
+  // 🔴 A URL BOUND. The caller feeds these to `.in('id', ids)`, which becomes
+  // ~39 bytes of query string per id — a thousand of them is a ~39 KB URL, and
+  // the proxies in front of this app disagree about how much of that they will
+  // carry. A 414 or a truncated query does not read as "your search was broad".
+  it('caps how many ids it hands back, and says the answer is incomplete', async () => {
+    const rows = Array.from({ length: MAX_TICKET_IDS + 50 }, (_, i) => ({ ticket_id: `t${i}` }))
+    const db = makeDb(rows)
+
+    const out = await searchTicketIds(db, { locationId: 'loc-1', q: 'freeze' })
+
+    expect(out.ids).toHaveLength(MAX_TICKET_IDS)
+    expect(out.partial).toBe(true)
+    // Newest-first from the scan, so a truncated set is the most RECENT matches.
+    expect(out.ids[0]).toBe('t0')
+  })
+
+  it('is not partial when the id set fits under the cap', async () => {
+    const rows = Array.from({ length: 5 }, (_, i) => ({ ticket_id: `t${i}` }))
+    const db = makeDb(rows)
+    const out = await searchTicketIds(db, { locationId: 'loc-1', q: 'freeze' })
+    expect(out.ids).toHaveLength(5)
     expect(out.partial).toBe(false)
   })
 
