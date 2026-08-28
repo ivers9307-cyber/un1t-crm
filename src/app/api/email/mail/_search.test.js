@@ -1,4 +1,4 @@
-// MAIL-SEARCH.1 — the search helper answers ONE question: which conversations
+// MAIL-SEARCH.2 — the search helper answers ONE question: which conversations
 // at this location contain this text? It applies NO visibility scoping and is
 // not allowed to: the list route filters these ids through the same query it
 // uses for an unsearched page, so there is exactly one authority on who may see
@@ -14,6 +14,7 @@ function makeDb(rows, error = null) {
     eq(col, val) { calls.push(['eq', col, val]); return b },
     not(col, op, val) { calls.push(['not', col, op, val]); return b },
     textSearch(col, q, opts) { calls.push(['textSearch', col, q, opts]); return b },
+    order(col, opts) { calls.push(['order', col, opts]); return b },
     limit(n) { calls.push(['limit', n]); return b },
     then(resolve, reject) {
       return Promise.resolve({ data: rows, error }).then(resolve, reject)
@@ -34,8 +35,9 @@ describe('normalizeQuery', () => {
     expect(normalizeQuery(undefined)).toBeNull()
   })
 
-  // A one-character query matches most of the corpus and costs a full scan to
-  // say so. Two is the shortest thing worth running.
+  // The floor is a typing-debounce, not a scan-cost argument — a single
+  // non-stopword character is answered by an ordinary GIN lookup, not a full
+  // scan. Two is simply the shortest query worth the round trip.
   it('answers null for a single character', () => {
     expect(normalizeQuery('a')).toBeNull()
     expect(normalizeQuery('ab')).toBe('ab')
@@ -43,12 +45,17 @@ describe('normalizeQuery', () => {
 })
 
 describe('searchTicketIds', () => {
-  it('returns the DISTINCT ticket ids of matching messages', async () => {
+  it('returns the DISTINCT ticket ids of matching messages, and does NOT skip', async () => {
     const db = makeDb([
       { ticket_id: 't1' }, { ticket_id: 't2' }, { ticket_id: 't1' },
     ])
     const out = await searchTicketIds(db, { locationId: 'loc-1', q: 'freeze' })
     expect(out.ok).toBe(true)
+    // A genuine search MUST report skipped:false — Task 3's route reads this
+    // field alone to decide whether to apply the search at all. Flip it and
+    // the ids are computed and thrown away: the operator types a query, gets
+    // the unfiltered inbox back, and nothing downstream notices.
+    expect(out.skipped).toBe(false)
     expect(out.ids.sort()).toEqual(['t1', 't2'])
   })
 
@@ -67,6 +74,23 @@ describe('searchTicketIds', () => {
     expect(ts[1]).toBe('search_tsv')
     expect(ts[2]).toBe('"membership freeze"')
     expect(ts[3]).toEqual({ type: 'websearch', config: 'english' })
+  })
+
+  // With no ORDER BY, a GIN bitmap heap scan over an append-only table comes
+  // back roughly oldest-first — backwards for a mail search, where recent
+  // correspondence is what an operator wants. Newest-first is what makes a
+  // truncated scan mean "the most recent 1,000 matches" instead of an
+  // arbitrary, unstated subset.
+  it('orders newest-first so a truncated scan drops the OLDEST matches, not an arbitrary set', async () => {
+    const db = makeDb([{ ticket_id: 't1' }])
+    await searchTicketIds(db, { locationId: 'loc-1', q: 'freeze' })
+    expect(db._b.calls).toContainEqual(['order', 'created_at', { ascending: false }])
+  })
+
+  it('caps the scan at SEARCH_SCAN_LIMIT', async () => {
+    const db = makeDb([{ ticket_id: 't1' }])
+    await searchTicketIds(db, { locationId: 'loc-1', q: 'freeze' })
+    expect(db._b.calls).toContainEqual(['limit', SEARCH_SCAN_LIMIT])
   })
 
   // 🔴 The 1,000-row cap applies to every select. A broad query truncates, and
@@ -99,6 +123,22 @@ describe('searchTicketIds', () => {
     const out = await searchTicketIds(db, { locationId: 'loc-1', q: '  ' })
     expect(out.ok).toBe(true)
     expect(out.skipped).toBe(true)
+    // null, not [] — a caller that applies `.in('id', ids)` unconditionally on
+    // an empty array here would silently render an empty inbox for "no query
+    // typed yet". null makes that mistake throw instead.
+    expect(out.ids).toBeNull()
+    expect(db._b.calls).toEqual([])
+  })
+
+  // Behaviour, not call shape: a missing locationId must be treated exactly
+  // like "no query" — including never touching the db — not merely produce a
+  // similar-looking response.
+  it('treats a missing locationId as no query, and never touches the db', async () => {
+    const db = makeDb([{ ticket_id: 't1' }])
+    const out = await searchTicketIds(db, { q: 'freeze' })
+    expect(out.ok).toBe(true)
+    expect(out.skipped).toBe(true)
+    expect(out.ids).toBeNull()
     expect(db._b.calls).toEqual([])
   })
 })
