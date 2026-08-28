@@ -340,6 +340,65 @@ describe('MailList — row layout structure (LAYOUT-FIX.1)', () => {
 // query, so a search for a member named Will can genuinely find nothing while
 // looking exactly like a search that never ran. Echoing the query back is the
 // honest compensation — it tells the operator what was actually asked.
+// ── the attachment paperclip ────────────────────────────────────────────
+//
+// email_ticket_attachments has no ticket_id, only message_id — the route's
+// per-conversation `has_attachments` (via _helpers.js's loadConversationCounts
+// embed) is the only source of truth this row can render off. Structural
+// assertions only (jsdom has no layout engine): presence/absence of the icon
+// node, not its rendered size.
+describe('MailList — the attachment paperclip', () => {
+  it('renders the paperclip when the conversation has an attachment', () => {
+    renderList({ conversations: [conv({ has_attachments: true })] })
+    expect(within(row()).getByTestId('mail-row-attachment')).toBeTruthy()
+  })
+
+  it('renders no paperclip when it does not', () => {
+    renderList({ conversations: [conv({ has_attachments: false })] })
+    expect(within(row()).queryByTestId('mail-row-attachment')).toBeNull()
+  })
+
+  it('renders no paperclip when the field is simply absent', () => {
+    renderList({ conversations: [conv({ has_attachments: undefined })] })
+    expect(within(row()).queryByTestId('mail-row-attachment')).toBeNull()
+  })
+
+  // A SKIPPED (unstorable) attachment still counts server-side — the icon
+  // itself only ever reads the boolean the route already resolved that with.
+  it('shows it the same way for a skipped-only attachment as a stored one', () => {
+    renderList({ conversations: [conv({ has_attachments: true })] })
+    expect(within(row()).getByTestId('mail-row-attachment')).toBeTruthy()
+  })
+
+  it('renders at comfortable density too', () => {
+    renderList({ conversations: [conv({ has_attachments: true })], density: 'comfortable' })
+    expect(within(row()).getByTestId('mail-row-attachment')).toBeTruthy()
+  })
+
+  it('renders at compact density too', () => {
+    renderList({ conversations: [conv({ has_attachments: true })], density: 'compact' })
+    expect(within(row()).getByTestId('mail-row-attachment')).toBeTruthy()
+  })
+
+  it('does not disturb the subject/preview sibling structure LAYOUT-FIX.1 depends on', () => {
+    renderList({ conversations: [conv({ has_attachments: true })], density: 'comfortable' })
+    const subject = screen.getByTestId('mail-row-subject')
+    const preview = screen.getByTestId('mail-row-preview')
+    expect(subject.parentElement).toBe(preview.parentElement)
+    const clip = screen.getByTestId('mail-row-attachment')
+    // A shrink-0 sibling in the same row, never nested inside the truncating
+    // subject or preview spans — nesting it there would make it a candidate
+    // for their own clipping, the exact defect LAYOUT-FIX.1 fixed once.
+    expect(subject.contains(clip)).toBe(false)
+    expect(preview.contains(clip)).toBe(false)
+  })
+
+  it('carries an accessible name, since the icon alone is decorative', () => {
+    renderList({ conversations: [conv({ has_attachments: true })] })
+    expect(within(row()).getByText(/attachment/i)).toBeTruthy()
+  })
+})
+
 describe('MailList — search state', () => {
   it('says no mail matches when a search is active and empty, generically without a query', () => {
     renderList({ conversations: [], searchActive: true })

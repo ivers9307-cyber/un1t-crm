@@ -21,6 +21,7 @@
 //     queue because a person put it there.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
 import { Mail, RefreshCw, AlertCircle, Plus } from 'lucide-react'
 import { EmptyState, Button } from '@/components/ui'
 import {
@@ -30,6 +31,7 @@ import {
   buildTicketsUrl,
   mailboxLabel,
   NO_MAILBOX_EMPTY,
+  MAILBOXES_ON_MAIL_EMPTY,
   threadRefreshMs,
 } from '@/lib/ticket-display'
 import TicketList from './TicketList'
@@ -48,6 +50,12 @@ export default function TicketInbox({ locationId, locationName, userId }) {
   const [tickets, setTickets] = useState([])
   const [loading, setLoading] = useState(true)
   const [queueError, setQueueError] = useState(null)
+  // INBOX-SURFACE.E — labels of this location's mailboxes that moved to
+  // Mail (`email_mailboxes.surface = 'inbox'`). Always an array on the wire
+  // (the route's own early return keeps it `[]`), but an OLD server mid-
+  // deploy-skew won't send the key at all — `|| []` below treats that
+  // exactly like an empty list rather than crashing on undefined.
+  const [mailboxesOnMail, setMailboxesOnMail] = useState([])
 
   const [mailboxId, setMailboxId] = useState(null)
   const [viewId, setViewId] = useState(DEFAULT_VIEW_ID)
@@ -118,6 +126,7 @@ export default function TicketInbox({ locationId, locationName, userId }) {
       setQueueError(null)
       setMailboxes(body.data?.mailboxes || [])
       setTickets(body.data?.tickets || [])
+      setMailboxesOnMail(body.data?.mailboxes_on_mail || [])
       setViewerIsElevated(!!body.data?.viewer_is_elevated)
     } catch {
       if (queueRequest.current !== url) return
@@ -656,7 +665,49 @@ export default function TicketInbox({ locationId, locationName, userId }) {
 
   // No visible mailboxes is a normal state, not an error — and it is a
   // different situation from an empty queue, so it gets its own copy.
-  if (!loading && mailboxes.length === 0) {
+  //
+  // INBOX-SURFACE.E — but "no visible mailboxes" has TWO distinct causes and
+  // NO_MAILBOX_EMPTY's copy is only honest for one of them. If this
+  // location's only mailbox(es) moved to Mail rather than never existing or
+  // never being granted, `mailboxes_on_mail` says so — and telling the
+  // operator "you have not been given access" when access was never touched
+  // is how a deliberate surface move turns into a support ping about broken
+  // permissions. Same shell, same icon — only the copy and the destination
+  // link differ.
+  //
+  // AUDIT #4 — this full-screen branch must ALSO require `tickets.length ===
+  // 0`. scopeToVisibleMailboxes (src/app/api/email/tickets/_helpers.js) keeps
+  // returning NULL-mailbox orphan tickets to an ELEVATED caller even when
+  // every mailbox has moved to Mail — its own comment calls a vanished record
+  // "the one outcome this split must never produce" — and the Mail surface
+  // (INBOX-SURFACE.C) explicitly excludes orphans, so a full-screen takeover
+  // here on `mailboxes.length === 0` alone would show them NEITHER surface:
+  // this one lies ("answered on Mail, open Mail") and Mail has genuinely
+  // never carried them. `tickets` is present in that response — falling
+  // through to the ordinary populated list is what keeps the record visible;
+  // the moved-accounts pointer survives too, as the banner below instead of a
+  // full-screen claim it made alone before.
+  if (!loading && mailboxes.length === 0 && tickets.length === 0) {
+    if (mailboxesOnMail.length > 0) {
+      const movedCopy = MAILBOXES_ON_MAIL_EMPTY(mailboxesOnMail)
+      return (
+        <div className={shellClasses}>
+          <EmptyState
+            icon={<Mail size={28} />}
+            title={movedCopy.title}
+            description={movedCopy.description}
+            action={
+              <Link
+                href="/communications/mail"
+                className="inline-flex items-center gap-1.5 rounded-md border border-un1t-border px-2.5 py-1.5 text-xs text-un1t-subtle hover:text-un1t-text transition-colors"
+              >
+                Open Mail
+              </Link>
+            }
+          />
+        </div>
+      )
+    }
     return (
       <div className={shellClasses}>
         <EmptyState
@@ -745,6 +796,26 @@ export default function TicketInbox({ locationId, locationName, userId }) {
         >
           <AlertCircle size={12} className="shrink-0" />
           {queueError}
+        </p>
+      )}
+
+      {/* AUDIT #4 — the moved-accounts pointer, kept alive as a slim banner
+          rather than the full-screen takeover it used to be alone. Only
+          reachable here at all because `mailboxes.length === 0` with
+          `tickets.length > 0` fell through the empty-state branch above
+          (an elevated caller's orphan tickets, INBOX-SURFACE.C's own "must
+          never vanish" case) — informational, not an error, hence the blue
+          idiom (TicketMerge.jsx) rather than the amber one above. */}
+      {mailboxes.length === 0 && mailboxesOnMail.length > 0 && (
+        <p
+          className="flex flex-wrap items-center gap-1.5 border-b border-un1t-border bg-blue-500/10 px-3 py-1.5 text-xs text-blue-700"
+          role="status"
+        >
+          <Mail size={12} className="shrink-0" />
+          {MAILBOXES_ON_MAIL_EMPTY(mailboxesOnMail).description}
+          <Link href="/communications/mail" className="font-medium underline hover:no-underline">
+            Open Mail
+          </Link>
         </p>
       )}
 

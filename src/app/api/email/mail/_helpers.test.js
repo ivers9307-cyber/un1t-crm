@@ -74,10 +74,88 @@ describe('loadConversationCounts', () => {
     )
     expect(partial).toBe(false)
     expect(unavailable).toBe(false)
-    expect(counts.get('t1')).toEqual({ messages: 3, unread: 1 })
+    expect(counts.get('t1')).toEqual({ messages: 3, unread: 1, hasAttachments: false })
     // An outbound message with no seen_at is not unread — our own replies are
     // not something to read.
-    expect(counts.get('t2')).toEqual({ messages: 1, unread: 0 })
+    expect(counts.get('t2')).toEqual({ messages: 1, unread: 0, hasAttachments: false })
+  })
+
+  // ── the attachment embed ──────────────────────────────────────────────
+  //
+  // Reuses the SAME scan rather than a second query — see the file header on
+  // loadConversationCounts. email_ticket_attachments has no ticket_id (only
+  // message_id), so the only way to answer "does this conversation have an
+  // attachment" off one pass is the embedded resource on each message row.
+  describe('has_attachments — via the embedded email_ticket_attachments(id)', () => {
+    it('is true when ANY message in the conversation embeds an attachment row', async () => {
+      const { counts } = await loadConversationCounts(
+        scanReturning({
+          data: [
+            { ticket_id: 't1', direction: 'inbound', seen_at: '2026-08-06T09:00:00Z', email_ticket_attachments: [] },
+            { ticket_id: 't1', direction: 'outbound', seen_at: null, email_ticket_attachments: [{ id: 'att-1' }] },
+          ],
+          error: null,
+        }),
+        ['t1']
+      )
+      expect(counts.get('t1').hasAttachments).toBe(true)
+    })
+
+    it('is false when no message in the conversation embeds one', async () => {
+      const { counts } = await loadConversationCounts(
+        scanReturning({
+          data: [{ ticket_id: 't1', direction: 'inbound', seen_at: null, email_ticket_attachments: [] }],
+          error: null,
+        }),
+        ['t1']
+      )
+      expect(counts.get('t1').hasAttachments).toBe(false)
+    })
+
+    // 🔴 A SKIPPED attachment (storage_path null, skipped_reason set — the XOR
+    // constraint) still has a ROW: the email genuinely arrived with a file, we
+    // just could not store it. The embed cannot see the XOR itself (it only
+    // selects `id`), so any row present at all — stored or skipped — counts.
+    it('counts a skipped-but-present attachment row as "has attachments" too', async () => {
+      const { counts } = await loadConversationCounts(
+        scanReturning({
+          data: [{ ticket_id: 't1', direction: 'inbound', seen_at: null, email_ticket_attachments: [{ id: 'skipped-1' }] }],
+          error: null,
+        }),
+        ['t1']
+      )
+      expect(counts.get('t1').hasAttachments).toBe(true)
+    })
+
+    // The embed is absent altogether on a row (a stub that never sends it, or
+    // a PostgREST response shaped without it) — must read as "none", not throw.
+    it('treats a missing embed field as no attachments rather than throwing', async () => {
+      const { counts } = await loadConversationCounts(
+        scanReturning({ data: [{ ticket_id: 't1', direction: 'inbound', seen_at: null }], error: null }),
+        ['t1']
+      )
+      expect(counts.get('t1').hasAttachments).toBe(false)
+    })
+
+    it('selects the embedded resource on the SAME scan — no second query', async () => {
+      let selectedFields = null
+      const db = {
+        from: () => ({
+          select: (fields) => {
+            selectedFields = fields
+            return {
+              in: () => ({
+                order: () => ({
+                  limit: () => Promise.resolve({ data: [], error: null }),
+                }),
+              }),
+            }
+          },
+        }),
+      }
+      await loadConversationCounts(db, ['t1'])
+      expect(selectedFields).toContain('email_ticket_attachments(id)')
+    })
   })
 
   // 🔴 Rows arrive ordered by ticket_id, so hitting the cap starves a SUFFIX of

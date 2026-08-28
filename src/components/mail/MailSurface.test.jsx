@@ -22,6 +22,34 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
+
+// MAIL-DEEPLINK.1 — `?c=<id>`. `routerReplace`/`routerPush` are the spies
+// every deep-link test reads; `currentSearchParams` is reassigned per test
+// (default: empty) so a test can simulate landing on
+// /communications/mail?c=<id> without a real Next router underneath it.
+//
+// L6 — `replace` ALSO updates `currentSearchParams` from the url it was
+// given, mirroring what Next itself does (a replace changes what
+// useSearchParams() returns on the next render). Without this, L6's
+// "already correct — skip the replace" guard could never see a TRUE
+// current value: it would always compare against the frozen value from
+// mount, making every later replace look like a no-op regardless of what
+// this surface actually asked for.
+let routerReplace
+let routerPush
+let currentSearchParams
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({
+    replace: (url, opts) => {
+      const qIndex = String(url).indexOf('?')
+      currentSearchParams = new URLSearchParams(qIndex === -1 ? '' : String(url).slice(qIndex + 1))
+      routerReplace(url, opts)
+    },
+    push: (...args) => routerPush(...args),
+  }),
+  useSearchParams: () => currentSearchParams,
+}))
+
 import MailSurface from './MailSurface.jsx'
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
@@ -51,6 +79,16 @@ const CONV_B = {
 }
 
 const MAILBOX = { id: 'mb-1', label: 'Studio', address: 'hatchstreet@un1t.com', is_default: true, active: true }
+
+// MAIL-DEEPLINK-SEC.1 — the mount-time `?c=` read is validated against the
+// house uuid shape, so any test that seeds `currentSearchParams` with an id
+// for the mount effect to pick up needs a REAL uuid-shaped one; the rest of
+// this file's fixture ids (conv-a, conv-b, …) deliberately stay short and
+// readable everywhere else (selection is always by explicit id, never
+// parsed off a URL, outside these deep-link tests).
+const DEEP_LINK_UUID = 'b0000000-0000-4000-8000-000000000001'
+const OFF_LIST_UUID = 'c0000000-0000-4000-8000-000000000002'
+const CONV_B_UUID = { ...CONV_B, id: 'd0000000-0000-4000-8000-000000000003', unread: true }
 
 // Every request the surface makes, recorded, so a test can assert WHAT was
 // asked for rather than only what came back. The stub also HONOURS the archive
@@ -117,6 +155,9 @@ const json = (body) => ({ ok: true, status: 200, json: async () => body })
 beforeEach(() => {
   window.HTMLElement.prototype.scrollIntoView = vi.fn()
   stubNetwork()
+  routerReplace = vi.fn()
+  routerPush = vi.fn()
+  currentSearchParams = new URLSearchParams()
 })
 
 afterEach(() => {
@@ -684,5 +725,572 @@ describe('MailSurface — the rail below md', () => {
     const wrapper = rail.parentElement
     expect(wrapper.className).toMatch(/(?:^|\s)hidden(?:\s|$)/)
     expect(wrapper.className).toMatch(/(?:^|\s)md:flex(?:\s|$)/)
+  })
+})
+
+// MAIL-DEEPLINK.1 — `?c=<id>` on /communications/mail. The Today dashboard's
+// mail lane names a specific conversation ("Sarah — needs reply"); until this,
+// its href was a bare `/communications/mail` and the operator landed at the
+// top of the list, not on the conversation named.
+describe('MailSurface — deep link (?c=)', () => {
+  it('writes ?c=<id> via router.replace — never push — when a conversation is selected', async () => {
+    renderSurface()
+    fireEvent.click(await screen.findByText('Membership freeze'))
+    await screen.findByText('Message on Membership freeze')
+
+    expect(routerReplace).toHaveBeenCalledWith('/communications/mail?c=conv-a', { scroll: false })
+    expect(routerPush).not.toHaveBeenCalled()
+  })
+
+  it('j/k walking the list keeps REPLACING as it moves — no history spam', async () => {
+    renderSurface()
+    await screen.findByText('Membership freeze')
+    fireEvent.keyDown(document.body, { key: 'j' })
+    await screen.findByText('Message on Membership freeze')
+    fireEvent.keyDown(document.body, { key: 'j' })
+    await screen.findByText('Message on Class times')
+
+    expect(routerReplace).toHaveBeenCalledWith('/communications/mail?c=conv-a', { scroll: false })
+    expect(routerReplace).toHaveBeenCalledWith('/communications/mail?c=conv-b', { scroll: false })
+    expect(routerPush).not.toHaveBeenCalled()
+  })
+
+  it('u clears the param', async () => {
+    renderSurface()
+    fireEvent.click(await screen.findByText('Membership freeze'))
+    await screen.findByText('Message on Membership freeze')
+    routerReplace.mockClear()
+
+    fireEvent.keyDown(document.body, { key: 'u' })
+
+    expect(routerReplace).toHaveBeenCalledWith('/communications/mail', { scroll: false })
+  })
+
+  // 'u' with nothing selected already short-circuits before clearSelection is
+  // even called (the existing `if (!selectedId) return` guard in the keydown
+  // handler) — so the case worth pinning is a view/mailbox SWITCH, which
+  // calls clearSelection() UNCONDITIONALLY regardless of whether anything is
+  // selected.
+  it('L6 — does not replace the URL when switching view/mailbox and there is nothing to clear', async () => {
+    renderSurface()
+    await screen.findByText('Membership freeze')
+    routerReplace.mockClear()
+
+    fireEvent.click(within(views()).getByRole('button', { name: /Needs reply/ }))
+    await waitFor(() => expect(listCalls().some(c => c.url.includes('view=needs_reply'))).toBe(true))
+
+    expect(routerReplace).not.toHaveBeenCalled()
+  })
+
+  // Switching mailbox/view already calls clearSelection() for reasons
+  // unrelated to the URL (a genuinely fresh context) — reusing it here means
+  // the param drops FOR FREE, and the two states (a selection, and the id in
+  // the address bar) can never independently drift apart.
+  it('switching view clears the selection, and so clears the param — the same coherent rule as u', async () => {
+    renderSurface()
+    fireEvent.click(await screen.findByText('Membership freeze'))
+    await screen.findByText('Message on Membership freeze')
+    routerReplace.mockClear()
+
+    fireEvent.click(within(views()).getByRole('button', { name: /Needs reply/ }))
+
+    expect(routerReplace).toHaveBeenCalledWith('/communications/mail', { scroll: false })
+  })
+
+  it('reads ?c= on mount and loads that conversation BY ID, even when it is not on page 1 of the list', async () => {
+    currentSearchParams = new URLSearchParams(`c=${DEEP_LINK_UUID}`)
+    // The list response never returns this id at all — it is not on any page
+    // of the current view (e.g. it is old, or archived, or simply outside the
+    // default sort). loadThread fetches by id unconditionally, so the pane
+    // must still resolve without it.
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      const u = String(url)
+      if (u.startsWith('/api/email/mail?')) {
+        return json({
+          success: true,
+          data: {
+            mailboxes: [MAILBOX], conversations: [CONV_A], next_before: null,
+            needs_reply_count: 0, counts_unavailable: false, counts_partial: false,
+          },
+        })
+      }
+      if (u === `/api/email/tickets/${DEEP_LINK_UUID}`) {
+        return json({
+          success: true,
+          data: {
+            ticket: { id: DEEP_LINK_UUID, subject: 'Off-page match', requester_email: 'z@member.ie', mailbox: MAILBOX },
+            messages: [{
+              id: 'm-z', direction: 'inbound', is_internal_note: false,
+              from_email: 'z@member.ie', text_body: 'Message on off-page match',
+              created_at: '2026-08-26T08:00:00Z',
+            }],
+            reply_recipients: { to: ['z@member.ie'], mode: 'reply' },
+          },
+        })
+      }
+      return json({ success: true, data: {} })
+    }))
+
+    renderSurface()
+    await screen.findByText('Message on off-page match')
+  })
+
+  it('ignores a non-uuid ?c= outright, same as if it were absent (MAIL-DEEPLINK-SEC.1)', async () => {
+    // Every id this surface deals in is a uuid; anything else has no honest
+    // interpretation and must not be handed to loadThread/markRead —
+    // `?c=..%2F..%2Ffoo` decodes to exactly this shape.
+    currentSearchParams = new URLSearchParams('c=../../foo')
+    renderSurface()
+    await screen.findByText('Membership freeze')
+    expect(calls.some(c => c.url.startsWith('/api/email/tickets/'))).toBe(false)
+  })
+
+  it('never lets ?c reach the list-fetch URL — buildMailUrl has no idea it exists', async () => {
+    currentSearchParams = new URLSearchParams(`c=${OFF_LIST_UUID}`)
+    renderSurface()
+    // The deep link selects this id (thread pane header) even though it is
+    // not in the stubbed list at all — the fallback ticket-detail response
+    // below still names it "Membership freeze".
+    await screen.findByText('Message on Membership freeze')
+    expect(listCalls().every(c => !c.url.includes('c='))).toBe(true)
+    expect(listCalls().every(c => !c.url.includes(OFF_LIST_UUID))).toBe(true)
+  })
+
+  // Reconciliation: the synthesized `{ id }` selection the mount effect seeds
+  // carries none of the list row's own fields (unread, archived, …) —
+  // loadThread's ticket-detail response doesn't carry them either (confirmed
+  // by reading src/app/api/email/tickets/[id]/route.js). Once the list DOES
+  // contain the row, an unread one must be marked read exactly as a click
+  // would — an operator landing here from a link should not still see it bold.
+  it('reconciles a deep-linked, unread row once the list contains it — marking it read like a click would', async () => {
+    currentSearchParams = new URLSearchParams(`c=${CONV_B_UUID.id}`)
+    stubNetwork({ conversations: [CONV_A, CONV_B_UUID] })
+
+    renderSurface()
+    await screen.findByText('Message on Class times')
+    await waitFor(() => expect(postsTo('/seen').length).toBeGreaterThan(0))
+    expect(postsTo('/seen')[0].url).toBe(`/api/email/mail/${CONV_B_UUID.id}/seen`)
+    expect(postsTo('/seen')[0].body).toEqual({ seen: true })
+  })
+
+  // CONTRACTS finding 1+2(a) — this is the bug the fix actually closes: an
+  // off-page conversation (never in ANY list payload) used to be read and
+  // answered but never marked read at all, because the old code only marked
+  // read when the list happened to contain the row.
+  it('marks an off-page (never-listed) deep-linked conversation read once its thread loads — not dependent on list membership', async () => {
+    currentSearchParams = new URLSearchParams(`c=${DEEP_LINK_UUID}`)
+    const seenCalls = []
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+      const u = String(url)
+      if (u.startsWith('/api/email/mail?')) {
+        // The list NEVER contains this id, on any page, ever.
+        return json({
+          success: true,
+          data: {
+            mailboxes: [MAILBOX], conversations: [CONV_A], next_before: null,
+            needs_reply_count: 0, counts_unavailable: false, counts_partial: false,
+          },
+        })
+      }
+      if (u === `/api/email/tickets/${DEEP_LINK_UUID}`) {
+        return json({
+          success: true,
+          data: {
+            ticket: { id: DEEP_LINK_UUID, subject: 'Off-page', requester_email: 'z@member.ie', mailbox: MAILBOX },
+            messages: [{
+              id: 'm-z', direction: 'inbound', is_internal_note: false,
+              from_email: 'z@member.ie', text_body: 'Message on off-page',
+              created_at: '2026-08-26T08:00:00Z',
+            }],
+            reply_recipients: { to: ['z@member.ie'], mode: 'reply' },
+          },
+        })
+      }
+      if (u.includes('/seen')) {
+        seenCalls.push({ url: u, body: JSON.parse(init.body) })
+        return json({ success: true, data: { unread: 0, writeback_notice: null } })
+      }
+      return json({ success: true, data: {} })
+    }))
+
+    renderSurface()
+    await screen.findByText('Message on off-page')
+    await waitFor(() => expect(seenCalls.length).toBeGreaterThan(0))
+    expect(seenCalls[0].url).toBe(`/api/email/mail/${DEEP_LINK_UUID}/seen`)
+    expect(seenCalls[0].body).toEqual({ seen: true })
+    // The toggle itself renders coherently afterwards — the ticket-detail
+    // payload carries no `unread` flag, so without this fix the pane could
+    // show "Mark unread" for a conversation that was never actually marked.
+    await screen.findByRole('button', { name: 'Mark unread' })
+  })
+
+  // CONTRACTS finding 1+2(b) — the sharper bug: the OLD reconciliation ref
+  // stayed armed forever, so a match arriving much later (a poll surfacing
+  // new mail on the ORIGINAL deep-linked id) fired against whatever the
+  // operator had since selected. Proven here by driving the exact sequence:
+  // mount with an off-page id, let the first list settle (disarms the
+  // reconciliation ref), select something else, THEN let a later poll
+  // return a list that finally contains the original id — nothing must be
+  // marked read and nothing must be repainted onto the new selection.
+  it('does not repaint or mark-read the ORIGINAL deep-linked id once the operator has moved on to something else', async () => {
+    currentSearchParams = new URLSearchParams(`c=${DEEP_LINK_UUID}`)
+    const seenCalls = []
+    // This test installs its OWN fetch stub (not the shared stubNetwork()),
+    // so it keeps its own request log too — the shared `calls`/`listCalls()`
+    // helpers only see requests made through the default stub.
+    const listUrlLog = []
+    let includeDeepLinkedRow = false
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+      const u = String(url)
+      if (u.startsWith('/api/email/mail?')) {
+        listUrlLog.push(u)
+        const rows = includeDeepLinkedRow
+          ? [CONV_A, CONV_B, { id: DEEP_LINK_UUID, requester_name: 'Zara', subject: 'Off-page', last_message_at: '2026-08-26T10:00:00Z', unread: true }]
+          : [CONV_A, CONV_B]
+        return json({
+          success: true,
+          data: { mailboxes: [MAILBOX], conversations: rows, next_before: null, needs_reply_count: 0, counts_unavailable: false, counts_partial: false },
+        })
+      }
+      if (u === `/api/email/tickets/${DEEP_LINK_UUID}`) {
+        return json({ success: true, data: { ticket: { id: DEEP_LINK_UUID, subject: 'Off-page', mailbox: MAILBOX }, messages: [], reply_recipients: null } })
+      }
+      if (u.startsWith('/api/email/tickets/')) {
+        const id = u.split('/')[4]
+        const row = [CONV_A, CONV_B].find(c => c.id === id) || CONV_A
+        return json({
+          success: true,
+          data: {
+            ticket: { ...row, mailbox: MAILBOX },
+            messages: [{ id: `m-${id}`, direction: 'inbound', is_internal_note: false, from_email: row.requester_email, text_body: `Message on ${row.subject}`, created_at: '2026-08-26T08:00:00Z' }],
+            reply_recipients: { to: [row.requester_email], mode: 'reply' },
+          },
+        })
+      }
+      if (u.includes('/seen')) {
+        seenCalls.push({ url: u, body: JSON.parse(init.body) })
+        return json({ success: true, data: { unread: 0, writeback_notice: null } })
+      }
+      return json({ success: true, data: {} })
+    }))
+
+    renderSurface()
+    // The deep-linked thread loads (and IS marked read — the loadThread-
+    // success path, proven separately above); the first list settles WITHOUT
+    // the row, which disarms the reconciliation ref for good.
+    await waitFor(() => expect(seenCalls.length).toBe(1))
+    seenCalls.length = 0
+
+    // The operator moves on to a completely different conversation.
+    fireEvent.click(await screen.findByText('Class times'))
+    await screen.findByText('Message on Class times')
+
+    // NOW a later poll (focus, in this test) returns a list that finally
+    // contains the original deep-linked id. `window.addEventListener` is
+    // what the poll effect uses (not React's synthetic events), so this
+    // dispatches directly rather than through fireEvent.
+    const listCallsBefore = listUrlLog.length
+    includeDeepLinkedRow = true
+    await act(async () => { window.dispatchEvent(new Event('focus')) })
+    await waitFor(() => expect(listUrlLog.length).toBeGreaterThan(listCallsBefore))
+    // Give any (incorrect) reconciliation a moment it would need to run.
+    await new Promise(r => setTimeout(r, 20))
+
+    // Nothing was marked read on the reappeared id, and the pane still shows
+    // the conversation the operator actually selected.
+    expect(seenCalls).toHaveLength(0)
+    expect(screen.getByText('Message on Class times')).toBeTruthy()
+  })
+
+  // A narrower race than the one above: here the deep-linked row genuinely
+  // IS on the first list page (so the "disarm on first settle, regardless
+  // of match" rule alone would happily reconcile it) — but the operator
+  // presses `u` BEFORE that first, slow list response ever resolves. `u`
+  // clears the selection — and disarms the ref — synchronously; the list
+  // settling afterwards must not repaint a pane that no longer has this
+  // conversation open. Structurally, every `setSelectedId` call in this file
+  // lives in exactly three places — the mount effect (which ARMS the ref),
+  // and selectConversation/clearSelection (which both disarm it) — so this
+  // also demonstrates why the reconciliation effect's OWN `selectedId !== id`
+  // check never gets to be the ONLY thing standing between a match and a
+  // wrong repaint in this codebase: by the time selectedId genuinely differs
+  // from the armed id, one of those two disarms has already run.
+  it('u pressed before the FIRST (slow) list response resolves leaves nothing to reconcile once it does', async () => {
+    currentSearchParams = new URLSearchParams(`c=${DEEP_LINK_UUID}`)
+    let resolveList
+    const pendingList = new Promise((res) => { resolveList = res })
+    // A local log, not the shared `calls`/`postsTo` helpers — this test
+    // installs its own fetch stub (not stubNetwork()), so those helpers
+    // would only see requests made through the DEFAULT stub from beforeEach.
+    const seenUrls = []
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      const u = String(url)
+      if (u.startsWith('/api/email/mail?')) {
+        await pendingList // the list is SLOW — resolves only when told to
+        return json({
+          success: true,
+          data: {
+            // The deep-linked row genuinely IS on this (first) page.
+            mailboxes: [MAILBOX],
+            conversations: [CONV_A, CONV_B, { id: DEEP_LINK_UUID, requester_name: 'Zara', subject: 'Off-page', last_message_at: '2026-08-26T10:00:00Z', unread: true }],
+            next_before: null, needs_reply_count: 0, counts_unavailable: false, counts_partial: false,
+          },
+        })
+      }
+      if (u === `/api/email/tickets/${DEEP_LINK_UUID}`) {
+        return json({
+          success: true,
+          data: {
+            ticket: { id: DEEP_LINK_UUID, subject: 'Off-page', mailbox: MAILBOX },
+            messages: [{ id: 'm-z', direction: 'inbound', is_internal_note: false, from_email: 'z@x.com', text_body: 'Message on off-page', created_at: '2026-08-26T08:00:00Z' }],
+            reply_recipients: null,
+          },
+        })
+      }
+      if (u.includes('/seen')) {
+        seenUrls.push(u)
+        return json({ success: true, data: { unread: 0, writeback_notice: null } })
+      }
+      return json({ success: true, data: {} })
+    }))
+
+    renderSurface()
+    // The deep-linked thread itself loads fine (it does not wait on the
+    // list at all) — but the list request is still hanging.
+    await screen.findByText('Message on off-page')
+    // …and it IS marked read (loadThread's own success path) — proven
+    // separately above; this test cares about what happens AFTER, so let
+    // that settle before pressing u.
+    await waitFor(() => expect(seenUrls.length).toBe(1))
+    seenUrls.length = 0
+
+    // The operator backs out before the list ever answers.
+    fireEvent.keyDown(document.body, { key: 'u' })
+    await waitFor(() => expect(screen.queryByText('Message on off-page')).toBeNull())
+
+    // NOW the slow list resolves, with the deep-linked row genuinely on it.
+    resolveList()
+    await waitFor(() => expect(screen.getByText('Off-page')).toBeTruthy()) // the list row itself
+
+    // No selection was repainted back onto the pane, and nothing was posted
+    // to /seen for it again — a match arriving after the operator has
+    // already backed out must not resurrect the selection.
+    expect(screen.queryByText('Message on off-page')).toBeNull()
+    expect(seenUrls).toHaveLength(0)
+  })
+})
+
+// TASK 2 — RAPID SINGLE ARCHIVES MUST NOT VANISH. archive()/markReadAction()
+// used to bail out on `actionSaving`: hover-archive five rows click-click-
+// click, and only the click whose POST happens to resolve first (usually the
+// first one) does anything — the other four are silently dropped, with no
+// visible cause. A client-side FIFO queue is the fix that keeps the single
+// verb honest without building the multi-select toolbar the product review
+// deliberately did NOT ask for.
+describe('MailSurface — the archive queue', () => {
+  const rowArchiveButtons = () =>
+    screen.getAllByRole('button', { name: /^Archive .+'s conversation$/ })
+
+  // CONTRACTS finding M3 — the SAME row, twice, rapidly. `e` computes its
+  // target from `!isArchived(row)`, read off list state that has not moved
+  // yet (the archive write is a multi-second, sequential IMAP call), so both
+  // keystrokes used to compute the SAME `true` and the queue faithfully
+  // archived it twice — where the second `e` plainly meant "put it back".
+  it('two rapid e presses on the SAME conversation archive then UN-archive — a real undo, not a double archive', async () => {
+    let resolveA
+    const pendingA = new Promise((res) => { resolveA = res })
+    const archivePosts = []
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+      const u = String(url)
+      if (u.startsWith('/api/email/mail?')) {
+        return json({
+          success: true,
+          data: { mailboxes: [MAILBOX], conversations: [CONV_A, CONV_B], next_before: null, needs_reply_count: 0, counts_unavailable: false, counts_partial: false },
+        })
+      }
+      if (u.startsWith('/api/email/tickets/')) {
+        const id = u.split('/')[4]
+        const row = [CONV_A, CONV_B].find(c => c.id === id) || CONV_A
+        return json({
+          success: true,
+          data: {
+            ticket: { ...row, mailbox: MAILBOX },
+            messages: [{ id: `m-${id}`, direction: 'inbound', is_internal_note: false, from_email: row.requester_email, text_body: `Message on ${row.subject}`, created_at: '2026-08-26T08:00:00Z' }],
+            reply_recipients: { to: [row.requester_email], mode: 'reply' },
+          },
+        })
+      }
+      if (u.includes('/archive')) {
+        const id = u.split('/')[4]
+        const body = JSON.parse(init.body)
+        archivePosts.push({ id, archived: body.archived })
+        // conv-a's FIRST write hangs — the second `e` fires while list state
+        // still says "not archived", which is exactly the stale read this
+        // fix must not trust.
+        if (id === 'conv-a' && archivePosts.length === 1) await pendingA
+        return json({ success: true, data: { conversation: { id, status: body.archived ? 'closed' : 'open', archived: body.archived }, writeback_notice: null } })
+      }
+      if (u.includes('/seen')) return json({ success: true, data: { unread: 0, writeback_notice: null } })
+      return json({ success: true, data: {} })
+    }))
+
+    renderSurface()
+    fireEvent.click(await screen.findByText('Membership freeze'))
+    await screen.findByText('Message on Membership freeze')
+
+    // Two rapid `e` presses — the first's write is still in flight (hung on
+    // pendingA) when the second is queued.
+    fireEvent.keyDown(document.body, { key: 'e' })
+    fireEvent.keyDown(document.body, { key: 'e' })
+    resolveA()
+
+    await waitFor(() => expect(archivePosts).toHaveLength(2))
+    expect(archivePosts[0]).toEqual({ id: 'conv-a', archived: true })
+    // The SECOND post — not a repeat of the first — carries the UNDO.
+    expect(archivePosts[1]).toEqual({ id: 'conv-a', archived: false })
+  })
+
+  it('queues a second archive on a different row, firing it only after the first COMPLETES', async () => {
+    let resolveA
+    const pendingA = new Promise((res) => { resolveA = res })
+    const archiveUrls = []
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      const u = String(url)
+      if (u.startsWith('/api/email/mail?')) {
+        return json({
+          success: true,
+          data: { mailboxes: [MAILBOX], conversations: [CONV_A, CONV_B], next_before: null, needs_reply_count: 0, counts_unavailable: false, counts_partial: false },
+        })
+      }
+      if (u.startsWith('/api/email/tickets/')) {
+        const id = u.split('/')[4]
+        const row = [CONV_A, CONV_B].find(c => c.id === id) || CONV_A
+        return json({ success: true, data: { ticket: { ...row, mailbox: MAILBOX }, messages: [], reply_recipients: null } })
+      }
+      if (u.includes('/archive')) {
+        archiveUrls.push(u)
+        const id = u.split('/')[4]
+        if (id === 'conv-a') await pendingA
+        return json({ success: true, data: { conversation: { id, status: 'closed', archived: true }, writeback_notice: null } })
+      }
+      return json({ success: true, data: {} })
+    }))
+
+    renderSurface()
+    await screen.findByText('Membership freeze')
+
+    const buttons = rowArchiveButtons()
+    fireEvent.click(buttons[0]) // conv-a — hangs on pendingA
+    fireEvent.click(buttons[1]) // conv-b — must be QUEUED, not dropped
+
+    // conv-a's write fired; conv-b's has NOT — it is waiting its turn, not
+    // silently discarded the way it would have been before this fix.
+    await waitFor(() => expect(archiveUrls).toHaveLength(1))
+    expect(archiveUrls[0]).toBe('/api/email/mail/conv-a/archive')
+
+    resolveA()
+    await waitFor(() => expect(archiveUrls).toHaveLength(2))
+    expect(archiveUrls[1]).toBe('/api/email/mail/conv-b/archive')
+  })
+
+  it('a failed queued action surfaces its own error but does not drop the next queued action', async () => {
+    // Tracks archived rows itself (mirroring stubNetwork's `archivedIds`) so
+    // the quiet loadList(true) refresh a SUCCESSFUL archive triggers reflects
+    // it — otherwise that refresh would silently re-add the row this test is
+    // asserting left the list, for a reason that has nothing to do with the
+    // queue.
+    const archivedIds = new Set()
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      const u = String(url)
+      if (u.startsWith('/api/email/mail?')) {
+        const live = [CONV_A, CONV_B].filter(c => !archivedIds.has(c.id))
+        return json({
+          success: true,
+          data: { mailboxes: [MAILBOX], conversations: live, next_before: null, needs_reply_count: 0, counts_unavailable: false, counts_partial: false },
+        })
+      }
+      if (u.startsWith('/api/email/tickets/')) {
+        const id = u.split('/')[4]
+        const row = [CONV_A, CONV_B].find(c => c.id === id) || CONV_A
+        return json({
+          success: true,
+          data: {
+            ticket: { ...row, mailbox: MAILBOX },
+            messages: [{ id: `m-${id}`, direction: 'inbound', is_internal_note: false, from_email: row.requester_email, text_body: `Message on ${row.subject}`, created_at: '2026-08-26T08:00:00Z' }],
+            reply_recipients: { to: [row.requester_email], mode: 'reply' },
+          },
+        })
+      }
+      if (u.includes('/archive')) {
+        const id = u.split('/')[4]
+        if (id === 'conv-a') return json({ success: false, error: 'Could not archive that' })
+        archivedIds.add(id)
+        return json({ success: true, data: { conversation: { id, status: 'closed', archived: true }, writeback_notice: null } })
+      }
+      if (u.includes('/seen')) return json({ success: true, data: { unread: 0, writeback_notice: null } })
+      return json({ success: true, data: {} })
+    }))
+
+    renderSurface()
+    fireEvent.click(await screen.findByText('Membership freeze'))
+    await screen.findByText('Message on Membership freeze')
+
+    // conv-a via the open thread pane — will fail.
+    fireEvent.click(screen.getByRole('button', { name: /^Archive$/ }))
+    // conv-b via its row action — queued behind conv-a, must still run.
+    const buttons = rowArchiveButtons()
+    fireEvent.click(buttons[1])
+
+    await screen.findByText('Could not archive that')
+    // conv-b's row is gone — its archive, queued behind a FAILED one, still
+    // went through.
+    await waitFor(() => expect(screen.queryByText('Class times')).toBeNull())
+    // conv-a genuinely failed — nothing was rolled back (rolling it back
+    // would cost the operator having to redo it), and it is still on screen.
+    expect(screen.getByText('Message on Membership freeze')).toBeTruthy()
+  })
+
+  it('stops draining after unmount — it does not fire the next queued write into a dead component', async () => {
+    let resolveA
+    const pendingA = new Promise((res) => { resolveA = res })
+    const archiveUrls = []
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      const u = String(url)
+      if (u.startsWith('/api/email/mail?')) {
+        return json({
+          success: true,
+          data: { mailboxes: [MAILBOX], conversations: [CONV_A, CONV_B], next_before: null, needs_reply_count: 0, counts_unavailable: false, counts_partial: false },
+        })
+      }
+      if (u.startsWith('/api/email/tickets/')) {
+        return json({ success: true, data: { ticket: { ...CONV_A, mailbox: MAILBOX }, messages: [], reply_recipients: null } })
+      }
+      if (u.includes('/archive')) {
+        archiveUrls.push(u)
+        const id = u.split('/')[4]
+        if (id === 'conv-a') await pendingA
+        return json({ success: true, data: { conversation: { id, status: 'closed', archived: true }, writeback_notice: null } })
+      }
+      return json({ success: true, data: {} })
+    }))
+
+    const { unmount } = render(<MailSurface locationId={LOC} locationName="UN1T Hatch Street" userId="me-1" />)
+    await screen.findByText('Membership freeze')
+    const buttons = rowArchiveButtons()
+    fireEvent.click(buttons[0]) // conv-a — pending
+    fireEvent.click(buttons[1]) // conv-b — queued behind it
+    await waitFor(() => expect(archiveUrls).toEqual(['/api/email/mail/conv-a/archive']))
+
+    expect(() => unmount()).not.toThrow()
+    resolveA()
+    // Let every pending microtask from conv-a's resolution settle.
+    await act(async () => {
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
+    })
+
+    // conv-b's write never fired — the queue stopped when the component did,
+    // rather than continuing to shift and process a row nobody can see the
+    // result of any more.
+    expect(archiveUrls).toEqual(['/api/email/mail/conv-a/archive'])
   })
 })

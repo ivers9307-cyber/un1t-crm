@@ -582,6 +582,32 @@ export const NO_MAILBOX_EMPTY = Object.freeze({
     + 'grant you access to an existing one.',
 })
 
+// INBOX-SURFACE.E — a THIRD reason the queue can be empty: not "never set
+// up" and not "no grant", but "moved". Once an account's `email_mailboxes.
+// surface` flips to `'inbox'` (Mail), the tickets route's visible set no
+// longer includes it and this component would otherwise fall straight into
+// NO_MAILBOX_EMPTY above — which tells the operator their ACCESS was pulled.
+// For a studio whose only mailbox just moved that is doubly wrong: they
+// still have access, and nothing was taken away. `labels` is the tickets
+// list response's `mailboxes_on_mail` (the moved account's label, or its
+// address when it has none) — naming it is what makes this copy honest
+// rather than another generic "nothing here".
+export function MAILBOXES_ON_MAIL_EMPTY(labels) {
+  const names = Array.isArray(labels) ? labels.filter(Boolean) : []
+  const named = names.length === 1
+    ? names[0]
+    : names.length > 1
+      ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+      : null
+  const verb = names.length === 1 ? 'is' : 'are'
+  return {
+    title: 'Email for this studio is answered on Mail',
+    description: named
+      ? `${named} ${verb} now answered on Mail, not here. Nothing about your access changed — open Mail to read and reply.`
+      : "This studio's email is now answered on Mail, not here. Nothing about your access changed — open Mail to read and reply.",
+  }
+}
+
 // ── Time ─────────────────────────────────────────────────────────────
 const MINUTE = 60_000
 const HOUR = 60 * MINUTE

@@ -182,12 +182,13 @@ export function isArchived(row) {
 export const MESSAGE_SCAN_LIMIT = 1000
 
 /**
- * Per-conversation message count and unread count for one page of the list.
+ * Per-conversation message count, unread count and attachment presence for
+ * one page of the list.
  *
- * ONE SCAN, TWO FACTS. Both come off the same rows, so they can never disagree
- * about a conversation, and a mail row needs both: the count is what makes it
- * read as a conversation rather than a message, and the unread flag is what
- * makes the list weigh.
+ * ONE SCAN, THREE FACTS. All three come off the same rows, so they can never
+ * disagree about a conversation: the count is what makes it read as a
+ * conversation rather than a message, the unread flag is what makes the list
+ * weigh, and has_attachments is the paperclip.
  *
  * UNREAD IS `seen_at IS NULL` ON AN INBOUND MESSAGE (mig 575), not
  * email_tickets.unread_count. That is the whole point of the column: it mirrors
@@ -204,7 +205,24 @@ export const MESSAGE_SCAN_LIMIT = 1000
  * the column may simply not exist yet on a deploy that ran ahead of mig 575,
  * and the correspondence itself is still perfectly readable without it.
  *
- * @returns {Promise<{ counts: Map<string, {messages: number, unread: number}>,
+ * HAS_ATTACHMENTS RIDES THE SAME SCAN RATHER THAN A NEW QUERY.
+ * `email_ticket_attachments` has NO ticket_id (only message_id) — the only
+ * table it can join against directly is `email_inbox_messages`, which this
+ * scan already reads one row per message of. So the embedded resource
+ * `email_ticket_attachments(id)` is added to the SAME select rather than run
+ * as a second query per page: PostgREST does the join per row, which inflates
+ * each row's payload slightly — an accepted cost, cheaper than a second round
+ * trip, and the scan is already bounded by MESSAGE_SCAN_LIMIT either way.
+ * Selecting only `id` keeps that join as thin as it can be while still
+ * answering "is there at least one".
+ *
+ * A SKIPPED ATTACHMENT COUNTS TOO. `email_ticket_attachments` rows are XOR on
+ * storage_path vs skipped_reason — a row can exist for a file we could not
+ * store. The embed only selects `id`, so it cannot see which XOR branch a row
+ * took, and it does not need to: the email genuinely arrived with a file
+ * either way, which is what the paperclip promises the operator.
+ *
+ * @returns {Promise<{ counts: Map<string, {messages: number, unread: number, hasAttachments: boolean}>,
  *                     partial: boolean, unavailable: boolean }>}
  */
 export async function loadConversationCounts(db, ticketIds) {
@@ -212,7 +230,7 @@ export async function loadConversationCounts(db, ticketIds) {
   if (!Array.isArray(ticketIds) || ticketIds.length === 0) return empty
 
   const { data, error } = await db.from('email_inbox_messages')
-    .select('ticket_id, direction, seen_at')
+    .select('ticket_id, direction, seen_at, email_ticket_attachments(id)')
     .in('ticket_id', ticketIds)
     // Ordered so the truncation, if it happens, is a clean suffix rather than
     // an arbitrary sample — which is what makes `partial` a usable answer.
@@ -233,11 +251,16 @@ export async function loadConversationCounts(db, ticketIds) {
   for (const r of rows) {
     const key = r?.ticket_id
     if (!key) continue
-    const entry = counts.get(key) || { messages: 0, unread: 0 }
+    const entry = counts.get(key) || { messages: 0, unread: 0, hasAttachments: false }
     entry.messages += 1
     // Only INBOUND mail can be unread: seen_at mirrors \Seen on mail that
     // arrived, and our own sent replies are never something to read.
     if (r.direction === 'inbound' && !r.seen_at) entry.unread += 1
+    // A missing embed (an older stub, a response shaped without it) reads as
+    // "none" rather than throwing — `Array.isArray` guards the absent case.
+    if (Array.isArray(r.email_ticket_attachments) && r.email_ticket_attachments.length > 0) {
+      entry.hasAttachments = true
+    }
     counts.set(key, entry)
   }
   return { counts, partial: false, unavailable: false }

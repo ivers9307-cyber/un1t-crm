@@ -4,7 +4,7 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import {
   loadVisibleMailboxes, scopeToVisibleMailboxes, scopeToNeedsReply, scopeToUnmerged,
-  mailboxesForSurface, SURFACE_TICKETS,
+  mailboxesForSurface, SURFACE_TICKETS, SURFACE_INBOX,
 } from './_helpers'
 
 // GET /api/email/tickets — the studio's ticket queue (EMAIL-TICKET.4).
@@ -15,6 +15,15 @@ import {
 //     order. The tab strip is not decoration: it is the access model made
 //     visible, so it is not something the client should assemble itself.
 //   • `tickets`   — the queue, filtered to those mailboxes.
+//   • `mailboxes_on_mail` (MAIL-WEEKONE.2) — the labels of the caller's OTHER
+//     visible mailboxes, the ones this trial moved to /communications/mail.
+//     This route already computes that split to build `mailboxes` above and
+//     used to discard the excluded half; surfacing it is what lets this
+//     screen tell an operator "some of your mail moved" instead of just
+//     going quiet about accounts it no longer lists. ALWAYS present
+//     (possibly `[]`), including on the early `visible.length === 0` return —
+//     a field a consumer must guard for is a field somebody eventually reads
+//     wrong.
 //
 // TWO GATES. `email_inbox` gates the surface (this is a service-role route,
 // so the check here IS the gate — note it is NOT the older `email` key, which
@@ -113,6 +122,21 @@ export async function GET(request) {
   // this operator — it is being worked somewhere else, which is the point.
   const mailboxes = mailboxesForSurface(visible, SURFACE_TICKETS)
 
+  // INBOX-SURFACE.C — the OTHER half of the split, surfaced rather than
+  // thrown away. `visible` already answers "which accounts moved to Mail" —
+  // it is exactly what `mailboxes` above excludes — so this is a read over a
+  // value already in hand, never a second query. Labels rather than ids: the
+  // banner this backs names an account for an operator, and an id would mean
+  // a second round trip just to say which one moved. Falls back to the
+  // address when a mailbox carries no label, the same rule the tab strip
+  // itself follows (orderMailboxTabs). ALWAYS present, including when
+  // `visible` is empty (then correctly `[]`) — a field that only sometimes
+  // exists is a field every consumer has to guard defensively, and a consumer
+  // cannot tell "nothing moved" from "the field was dropped" if it is ever
+  // simply absent.
+  const mailboxesOnMail = mailboxesForSurface(visible, SURFACE_INBOX)
+    .map(m => m.label || m.address)
+
   // Nothing visible AT ALL → nothing to show. Not an error.
   //
   // Deliberately keyed on the PRE-surface set. A studio that has moved every
@@ -123,7 +147,10 @@ export async function GET(request) {
   // orphan fallback is elevation, and an elevated caller at a studio with
   // mailboxes always has a non-empty `visible`).
   if (visible.length === 0) {
-    return NextResponse.json({ success: true, data: { mailboxes: [], tickets: [], viewer_is_elevated: elevated } })
+    return NextResponse.json({
+      success: true,
+      data: { mailboxes: [], tickets: [], viewer_is_elevated: elevated, mailboxes_on_mail: mailboxesOnMail },
+    })
   }
 
   // Asking for an account you cannot see is also empty rather than an error:
@@ -131,7 +158,10 @@ export async function GET(request) {
   // but not yours" would leak which addresses the studio runs.
   const mailboxId = searchParams.get('mailbox_id')
   if (mailboxId && !mailboxes.some(m => m.id === mailboxId)) {
-    return NextResponse.json({ success: true, data: { mailboxes, tickets: [], viewer_is_elevated: elevated } })
+    return NextResponse.json({
+      success: true,
+      data: { mailboxes, tickets: [], viewer_is_elevated: elevated, mailboxes_on_mail: mailboxesOnMail },
+    })
   }
 
   let query = db.from('email_tickets')
@@ -205,6 +235,9 @@ export async function GET(request) {
       // The reassign control gates on this — claiming needs no elevation,
       // assigning somebody ELSE does.
       viewer_is_elevated: elevated,
+      // MAIL-WEEKONE.2 — see the computation above for why this is always
+      // present rather than an occasionally-omitted field.
+      mailboxes_on_mail: mailboxesOnMail,
     },
   })
 }

@@ -192,15 +192,19 @@ describe('CommunicationsTabs — overflow affordance (COMMS-DETAIL-FIX.2)', () =
 // forced a spurious extra render — which re-invoked every poller hook
 // in the component body (usePolledCount for inbox + email counts here),
 // discarding whatever the first render's poll saw. `polled` (the mocked
-// usePolledCount) is called exactly twice per render (once per badge),
-// so counting its total calls after mount pins the render count.
+// usePolledCount) is called exactly three times per render now
+// (INBOX-SURFACE.E added the Mail tab's own poller alongside inbox +
+// tickets — the hook is called unconditionally regardless of `canMail`,
+// just with `enabled: false` when there is nothing to poll), so counting
+// its total calls after mount still pins the render count.
 describe('CommunicationsTabs — measure() re-render bail-out (FU-COMMSTABS-BAILOUT)', () => {
   it('does not spuriously re-render on mount when the measured edges already match initial state', () => {
     render(<CommunicationsTabs {...ALL} />)
-    // One render's worth of poller calls (inbox + email) — not 4 or 6,
-    // which is what stacking the layout-effect and mount-effect measure()
-    // calls on top of the initial render would produce without the bail-out.
-    expect(polled.mock.calls.length).toBe(2)
+    // One render's worth of poller calls (inbox + email + mail) — not 6 or
+    // 9, which is what stacking the layout-effect and mount-effect
+    // measure() calls on top of the initial render would produce without
+    // the bail-out.
+    expect(polled.mock.calls.length).toBe(3)
   })
 })
 
@@ -243,13 +247,43 @@ describe('CommunicationsTabs — the Mail surface (INBOX-SURFACE.C)', () => {
     expect(labels).toEqual(['WhatsApp & Instagram inbox', 'Email inbox', 'Mail'])
   })
 
-  it('carries no badge — the needs-reply count belongs to the ticket surface', () => {
-    // Reusing that number here would put one count on two tabs holding
-    // different mail, and a badge with nothing behind it is one an operator
-    // learns to ignore.
-    polled.mockReturnValue(7)
+  // INBOX-SURFACE.E — the badge exists now. GET /api/email/mail/count mirrors
+  // /api/email/tickets/count but is scoped to MAIL-surface mailboxes, so this
+  // is genuinely this tab's own number, not the ticket queue's count wearing
+  // this tab's badge (the objection recorded above was to a WRONG number, not
+  // to a badge at all).
+  it('polls its own endpoint and renders the count as a badge, distinct from the tickets badge', () => {
+    polled.mockImplementation(({ url }) => {
+      if (url === '/api/email/mail/count') return 4
+      if (url === '/api/email/tickets/count') return 7
+      return 0
+    })
+    render(<CommunicationsTabs canWhatsapp={false} canEmailInbox canMail />)
+    expect(screen.getByRole('link', { name: /Mail/ }).textContent).toContain('4')
+    expect(screen.getByRole('link', { name: /Email inbox/ }).textContent).toContain('7')
+  })
+
+  it('does not poll the mail count when canMail is false — nothing to act on', () => {
+    render(<CommunicationsTabs canWhatsapp={false} canEmailInbox canMail={false} />)
+    const mailCountCalls = polled.mock.calls.filter(([opts]) => opts.url === '/api/email/mail/count')
+    expect(mailCountCalls.length).toBeGreaterThan(0)
+    for (const [opts] of mailCountCalls) {
+      expect(opts.enabled).toBe(false)
+    }
+  })
+
+  it('enables the mail-count poll once canMail is true', () => {
+    render(<CommunicationsTabs canWhatsapp={false} canEmailInbox canMail />)
+    const mailCountCalls = polled.mock.calls.filter(([opts]) => opts.url === '/api/email/mail/count')
+    expect(mailCountCalls.length).toBeGreaterThan(0)
+    for (const [opts] of mailCountCalls) {
+      expect(opts.enabled).toBe(true)
+    }
+  })
+
+  it('renders no badge on the Mail tab when its count is zero', () => {
+    polled.mockImplementation(({ url }) => (url === '/api/email/mail/count' ? 0 : 7))
     render(<CommunicationsTabs canWhatsapp={false} canEmailInbox canMail />)
     expect(screen.getByRole('link', { name: /^Mail$/ }).textContent).toBe('Mail')
-    expect(screen.getByRole('link', { name: /Email inbox/ }).textContent).toContain('7')
   })
 })
