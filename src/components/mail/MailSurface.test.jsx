@@ -501,3 +501,188 @@ describe('MailSurface — rail, search and density', () => {
     expect(postsTo('/archive')).toHaveLength(0)
   })
 })
+
+// Types into the search box and lets the debounce settle. Written once so
+// every test below shares the exact choreography the debounce block above
+// already validates (fake timers only after the first real render, always
+// back off before any findBy/waitFor that needs them).
+async function searchFor(value) {
+  const box = screen.getByRole('searchbox', { name: /Search mail/i })
+  vi.useFakeTimers()
+  fireEvent.change(box, { target: { value } })
+  await act(async () => { await vi.advanceTimersByTimeAsync(400) })
+  vi.useRealTimers()
+  return box
+}
+
+// Defect 1 — "Older conversations" must carry the query, and the response's
+// search_partial must update state, or page 2 of a search is unfiltered mail
+// rendered as search hits with no way to reach the real matches beyond it.
+describe('MailSurface — paging a search', () => {
+  it('carries q into "Older conversations", and updates search_partial from that response', async () => {
+    const seen = []
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      const u = String(url)
+      seen.push(u)
+      if (u.startsWith('/api/email/mail?')) {
+        if (u.includes('before=')) {
+          // Page 2 only returns the real match when q travelled with it —
+          // exactly the request the route needs to find matches beyond page 1.
+          if (!u.includes('q=freeze')) {
+            return json({
+              success: true,
+              data: {
+                mailboxes: [MAILBOX], conversations: [], next_before: null,
+                needs_reply_count: 0, counts_unavailable: false, counts_partial: false,
+                search_partial: false,
+              },
+            })
+          }
+          return json({
+            success: true,
+            data: {
+              mailboxes: [MAILBOX],
+              conversations: [{ ...CONV_B, id: 'conv-c', subject: 'Older freeze match' }],
+              next_before: null,
+              needs_reply_count: 0,
+              counts_unavailable: false,
+              counts_partial: false,
+              // Page 2's own scan was truncated — distinct from page 1's flag.
+              search_partial: true,
+            },
+          })
+        }
+        return json({
+          success: true,
+          data: {
+            mailboxes: [MAILBOX], conversations: [CONV_A], next_before: 'cursor-1',
+            needs_reply_count: 0, counts_unavailable: false, counts_partial: false,
+            search_partial: false,
+          },
+        })
+      }
+      if (u.startsWith('/api/email/tickets/')) {
+        return json({ success: true, data: { ticket: { ...CONV_A, mailbox: MAILBOX }, messages: [], reply_recipients: null } })
+      }
+      return json({ success: true, data: {} })
+    }))
+
+    renderSurface()
+    await screen.findByText('Membership freeze')
+    await searchFor('freeze')
+    await screen.findByText('Membership freeze')
+
+    fireEvent.click(screen.getByRole('button', { name: /Older conversations/i }))
+    await screen.findByText('Older freeze match')
+
+    const pagedCall = seen.find(u => u.includes('before='))
+    expect(pagedCall).toContain('q=freeze')
+
+    // search_partial from THIS page reached the screen — loadMore is not a
+    // dead end for the flag the way it used to be.
+    await screen.findByText(/scanned only part of the mailbox/i)
+  })
+})
+
+// Defect 2 — clicking a rail view mid-search must actually change what is
+// shown, not relabel the rail and close the pane over identical rows.
+describe('MailSurface — rail views during a search', () => {
+  it('clears the search on a view click, rather than refetching the same rows', async () => {
+    renderSurface()
+    await screen.findByText('Membership freeze')
+    const box = await searchFor('freeze')
+    expect(box.value).toBe('freeze')
+
+    calls.length = 0
+    fireEvent.click(within(views()).getByRole('button', { name: /Needs reply/ }))
+
+    await waitFor(() => expect(listCalls().some(c => c.url.includes('view=needs_reply'))).toBe(true))
+    // The request for the new view carries no leftover query…
+    expect(listCalls().every(c => !c.url.includes('q='))).toBe(true)
+    // …and the box on screen agrees: the click did what it looks like it did.
+    expect(box.value).toBe('')
+  })
+})
+
+// Defect 3 — an archived row that still matches an active search must stay
+// in the list, updated in place, not be removed and then silently return.
+describe('MailSurface — archiving during a search', () => {
+  it('keeps the row in place, rather than removing it and jumping the selection', async () => {
+    let archivedId = null
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      const u = String(url)
+      if (u.startsWith('/api/email/mail?')) {
+        const isSearch = u.includes('q=freeze')
+        // Outside a search, an archived row drops out of the (default inbox)
+        // scope — inside one, the route ignores view and it is still a match.
+        const rows = [CONV_A, CONV_B]
+          .filter(c => isSearch || c.id !== archivedId)
+          .map(c => (c.id === archivedId ? { ...c, archived: true, status: 'closed' } : c))
+        return json({
+          success: true,
+          data: {
+            mailboxes: [MAILBOX], conversations: rows, next_before: null,
+            needs_reply_count: 0, counts_unavailable: false, counts_partial: false,
+            search_partial: false,
+          },
+        })
+      }
+      if (u.startsWith('/api/email/tickets/')) {
+        const id = u.split('/')[4]
+        const row = [CONV_A, CONV_B].find(c => c.id === id) || CONV_A
+        return json({
+          success: true,
+          data: {
+            ticket: { ...row, mailbox: MAILBOX },
+            messages: [{
+              id: `m-${id}`, direction: 'inbound', is_internal_note: false,
+              from_email: row.requester_email, text_body: `Message on ${row.subject}`,
+              created_at: '2026-08-26T08:00:00Z',
+            }],
+            reply_recipients: { to: [row.requester_email], mode: 'reply' },
+          },
+        })
+      }
+      if (u.includes('/archive')) {
+        const id = u.split('/')[4]
+        archivedId = id
+        return json({ success: true, data: { conversation: { id, archived: true, status: 'closed' }, writeback_notice: null } })
+      }
+      if (u.includes('/seen')) return json({ success: true, data: { unread: 0, writeback_notice: null } })
+      return json({ success: true, data: {} })
+    }))
+
+    renderSurface()
+    await screen.findByText('Membership freeze')
+    await searchFor('freeze')
+
+    fireEvent.click(await screen.findByText('Membership freeze'))
+    await screen.findByText('Message on Membership freeze')
+
+    fireEvent.click(screen.getByRole('button', { name: /^Archive$/ }))
+
+    // The row survives IN THE LIST — a search hit, archived or not — as well
+    // as in the thread heading: two instances of the subject on screen, not
+    // one. The old behaviour would drop to one (list row gone) for a moment
+    // and then bounce back once the quiet refetch below landed.
+    await waitFor(() => expect(screen.getAllByText('Membership freeze')).toHaveLength(2))
+    // …and the operator is left reading the same conversation, not bounced
+    // off it onto a successor.
+    expect(screen.getByText('Message on Membership freeze')).toBeTruthy()
+  })
+})
+
+// Defect 4 — below `md`, the rail must not consume width the shell cannot
+// afford. jsdom has NO layout engine, so pixel overflow cannot be measured
+// here; this asserts the CLASS/structure that produces the responsive
+// behaviour instead — a structural stand-in, not a claim about pixels.
+describe('MailSurface — the rail below md', () => {
+  it('wraps the rail in hidden/md:flex, so it drops out of the layout below md', async () => {
+    renderSurface()
+    await screen.findByText('Membership freeze')
+    const rail = screen.getByRole('navigation', { name: 'Mail folders' })
+    const wrapper = rail.parentElement
+    expect(wrapper.className).toMatch(/(?:^|\s)hidden(?:\s|$)/)
+    expect(wrapper.className).toMatch(/(?:^|\s)md:flex(?:\s|$)/)
+  })
+})

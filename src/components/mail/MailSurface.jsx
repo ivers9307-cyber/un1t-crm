@@ -184,12 +184,22 @@ export default function MailSurface({ locationId, locationName, userId }) {
   // `listRequest`: a page-2 read is not a new scope, and stamping it as one
   // would make the next background poll look superseded and skip its own
   // repaint.
+  //
+  // 🔴 `q` MUST TRAVEL WITH THE CURSOR. The route ignores `view` entirely
+  // once `q` is present (a search deliberately spans inbox and archive), so a
+  // page-2 request built without `q` does not narrow that scope — it takes a
+  // completely different branch of the route, re-imposes the current view,
+  // and hands back the newest 50 rows in THAT scope older than the cursor.
+  // Appended onto page 1's search results, that is unrelated mail rendered as
+  // search hits (with `e` one keystroke from archiving the wrong message out
+  // of a real mailbox), while genuine matches beyond page 1 become
+  // unreachable — no request that would return them is ever issued.
   async function loadMore() {
     if (!nextBefore || loadingMore) return
     setLoadingMore(true)
     try {
       const res = await fetch(
-        buildMailUrl({ locationId, mailboxId, viewId, before: nextBefore }),
+        buildMailUrl({ locationId, mailboxId, viewId, before: nextBefore, q: debouncedQuery }),
         { cache: 'no-store' }
       )
       const body = await res.json()
@@ -205,6 +215,10 @@ export default function MailSurface({ locationId, locationName, userId }) {
         return [...prev, ...older.filter(c => !seen.has(c.id))]
       })
       setNextBefore(body.data?.next_before || null)
+      // Page 2 of a search can be truncated exactly like page 1 — carry the
+      // flag through, or a partial scan on this page silently reads as
+      // complete because page 1 happened to say so.
+      setSearchPartial(!!body.data?.search_partial)
     } catch {
       setListError('Could not load older conversations — check your connection and try again')
     } finally {
@@ -361,7 +375,25 @@ export default function MailSurface({ locationId, locationName, userId }) {
   }
 
   function changeMailbox(id) { setMailboxId(id); clearSelection() }
-  function changeView(id) { setViewId(id); clearSelection() }
+
+  // 🔴 A VIEW CLICK DURING A SEARCH MUST DO SOMETHING, NOT LOOK LIKE IT DID.
+  // The route ignores `view` entirely while `q` is present (search spans
+  // inbox and archive on purpose), so switching views mid-search used to
+  // refetch, relabel the rail, and close the reading pane while returning
+  // EXACTLY the same rows — visible feedback for a filter that filtered
+  // nothing. Of the two honest options (clear the search so the click does
+  // what it reads as, or grey the rail out while a search is active), this
+  // clears the search: it needs no change outside this file (muting the rail
+  // buttons would mean teaching MailRail a disabled state, which is out of
+  // scope here), and it matches the convention operators already know from
+  // Gmail — clicking a folder while searching takes you to that folder,
+  // un-scoped by whatever you were searching for.
+  function changeView(id) {
+    setViewId(id)
+    setQueryText('')
+    setDebouncedQuery('')
+    clearSelection()
+  }
 
   // ── Archive ────────────────────────────────────────────────────────
   //
@@ -397,11 +429,18 @@ export default function MailSurface({ locationId, locationName, userId }) {
       // behind. Set before the row may leave the list, so it survives.
       setWritebackNotice(body.data?.writeback_notice || null)
       const updated = body.data?.conversation
-      // Does it still belong on this view? The archive tab wants archived rows
-      // and the other two want live ones — asked as a question about the row
-      // rather than hard-coded per view, so a fourth view would not need a
-      // fourth branch here.
-      const stillHere = viewId === 'archived' ? archived : !archived
+      // Does it still belong on this list? Ordinarily that is a question about
+      // the VIEW — the archive tab wants archived rows, the other two want
+      // live ones. But the route ignores `view` entirely while a search is
+      // active (a search deliberately spans inbox and archive), so the list is
+      // not scoped by view at all right now — an archived match is still a
+      // legitimate result. Without this, the row would be filtered out here,
+      // the selection would jump, and the very next quiet refetch below would
+      // bring the row straight back — moving the operator off what they were
+      // reading for nothing.
+      const stillHere = debouncedQuery
+        ? true
+        : (viewId === 'archived' ? archived : !archived)
 
       if (stillHere) {
         setConversations(prev => prev.map(c => (c.id === id ? { ...c, ...updated } : c)))
@@ -433,7 +472,7 @@ export default function MailSurface({ locationId, locationName, userId }) {
     // in the dependency list even though the callback is only ever invoked
     // from an event.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [actionSaving, conversations, selectedId, viewId, loadList])
+  }, [actionSaving, conversations, selectedId, viewId, debouncedQuery, loadList])
 
   // The defer verb. Paired with markUnseen() over IMAP by the route, so it
   // survives the poller's convergence — see the seen route's header.
@@ -731,15 +770,26 @@ export default function MailSurface({ locationId, locationName, userId }) {
       )}
 
       <div className="flex min-h-0 flex-1">
-        <MailRail
-          views={railViews}
-          viewId={viewId}
-          onView={changeView}
-          mailboxes={mailboxes}
-          mailboxId={mailboxId}
-          onMailbox={changeMailbox}
-          locationLabel={locationName}
-        />
+        {/* MailRail's own root sets a fixed `w-44 shrink-0` — neither it nor
+            the list column below (`w-full shrink-0`) can shrink, so below
+            `md` the row is 176px wider than this shell, which clips it
+            (`shellClasses` carries `overflow-hidden`) with no scroll to
+            reach the rest — the date and hover actions on every row go
+            unreachable. The list/thread panes already solve this same
+            problem with `hidden md:flex` keyed off `selectedId`; the rail
+            has no such per-selection state, so it is unconditional — the
+            rail is chrome the shell cannot afford below `md` at all. */}
+        <div className="hidden shrink-0 md:flex">
+          <MailRail
+            views={railViews}
+            viewId={viewId}
+            onView={changeView}
+            mailboxes={mailboxes}
+            mailboxId={mailboxId}
+            onMailbox={changeMailbox}
+            locationLabel={locationName}
+          />
+        </div>
 
         <div
           className={`${selectedId ? 'hidden md:flex' : 'flex'} w-full shrink-0 flex-col border-r border-un1t-border md:w-[22rem] lg:w-[24rem]`}
