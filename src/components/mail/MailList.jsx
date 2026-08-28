@@ -221,21 +221,61 @@ function MailRow({
 
         {/* Sender: a FIXED column, not a share of the flex row — so a page of
             names lines up on one edge and the eye scans straight down it
-            instead of re-finding the start of every row. */}
-        <span className={`min-w-0 truncate text-sm text-un1t-text ${unread ? 'font-semibold' : 'font-normal'}`}>
-          {name}
+            instead of re-finding the start of every row.
+            LAYOUT-FIX.1 — the count used to sit INSIDE this truncating span,
+            so a name alone (no count needed) could already fill all 112px
+            and the count was clipped away by the very `truncate` meant for
+            the name ("Elizabeth Fitzgerald" needs ~133px on its own). The
+            fix is a small flex row: the name gets its own truncating child
+            (`min-w-0` — a flex child's default min-width is its content
+            width, so without this it never shrinks and `truncate` never
+            fires) and the count is a SEPARATE `shrink-0` sibling, so it is
+            never a candidate for the name's own clipping. */}
+        <span className="flex min-w-0 items-center gap-1">
+          <span
+            data-testid="mail-row-sender-name"
+            className={`min-w-0 truncate text-sm text-un1t-text ${unread ? 'font-semibold' : 'font-normal'}`}
+          >
+            {name}
+          </span>
           {/* The count is what makes this a conversation rather than a
               message. Hidden at 1 — "1" on every row is noise, and a thread
-              of one is just an email. */}
+              of one is just an email. `shrink-0` so it is never the thing
+              that gives when the name is long — it is short and load-bearing,
+              same reasoning as the chips below. */}
           {!countsUnavailable && count > 1 && (
-            <span className="ml-1 text-[11px] font-normal text-un1t-muted">{count}</span>
+            <span data-testid="mail-row-count" className="shrink-0 text-[11px] font-normal text-un1t-muted">
+              {count}
+            </span>
           )}
         </span>
 
-        {/* Subject + preview share the rest of the line. The two status
-            chips this surface keeps — and the mailbox chip — sit INLINE
-            here, ahead of the subject: they used to own a whole row of their
-            own, and at one line there is no spare row to give them. */}
+        {/* Subject + preview share the rest of the line, in priority order:
+            chips (short, load-bearing, `shrink-0`) > subject (the next claim
+            on space, truncates rather than vanishing) > preview (only what
+            is left, first to disappear under pressure).
+            LAYOUT-FIX.1 — this used to be ONE flex row holding the chips
+            plus a SINGLE nested span with the subject text and the preview
+            span both inside it. That inner span had `truncate` but no
+            `min-w-0`, so as a flex item its default `min-width: auto` meant
+            it would never shrink below its own (subject + preview) content
+            width — the surrounding `overflow-hidden` then just clipped the
+            whole thing, chips-and-all, at whatever the track happened to be.
+            Two structural changes fix it: (1) the mailbox chip's label can
+            fall back to `mailbox.address`, up to ~124px against a ~119px
+            track on its own — `max-w-[70px] truncate` caps how much of the
+            track any one chip can claim; (2) subject and preview are now
+            SIBLINGS, each with its own `min-w-0` so each can genuinely
+            shrink independently. Priority between the two is a `shrink`
+            differential, not equal shrinking: preview's `shrink-[6]` against
+            subject's default `shrink` (1) means the standard CSS flex-shrink
+            resolution (weighted by shrink-factor × basis, re-run against
+            whatever is left each time a item freezes at its own floor)
+            drains preview toward zero long before subject gives up any
+            meaningful width, and only spills into subject once preview has
+            nothing left to give. Below `lg` there usually isn't a spare
+            pixel for it at all (~87px measured at `md`), so it is `hidden`
+            below that breakpoint rather than rendering an unreadable sliver. */}
         <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
           {waiting && (
             <span className="shrink-0 rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
@@ -249,22 +289,33 @@ function MailRow({
           )}
           {showMailbox && (
             <span
-              className="shrink-0 rounded-full bg-un1t-surface px-1.5 py-0.5 text-[10px] text-un1t-subtle ring-1 ring-inset ring-un1t-border"
+              className="max-w-[70px] shrink-0 truncate rounded-full bg-un1t-surface px-1.5 py-0.5 text-[10px] text-un1t-subtle ring-1 ring-inset ring-un1t-border"
               title={mailbox?.address || 'No mail account on this conversation'}
             >
               {mailboxLabel(mailbox)}
             </span>
           )}
-          <span className={`truncate text-sm text-un1t-text ${unread ? 'font-medium' : 'font-normal'}`}>
+          <span
+            data-testid="mail-row-subject"
+            className={`min-w-0 shrink truncate text-sm text-un1t-text ${unread ? 'font-medium' : 'font-normal'}`}
+          >
             {outbound && <span className="text-un1t-muted">You: </span>}
             {conversation.subject || '(no subject)'}
-            {/* comfortable keeps the preview after an em-dash; compact drops
-                it entirely — that IS the density difference (see
-                DENSITIES' doc comment in mail-display.js). */}
-            {comfortable && preview && (
-              <span className="text-un1t-subtle"> — {preview}</span>
-            )}
           </span>
+          {/* comfortable keeps the preview after an em-dash, as its own
+              sibling element; compact drops it entirely — that IS the
+              density difference (see DENSITIES' doc comment in
+              mail-display.js). It must be a sibling of the subject, not
+              nested inside it, or it is back to competing for the same
+              `min-width: auto` floor that caused LAYOUT-FIX.1. */}
+          {comfortable && preview && (
+            <span
+              data-testid="mail-row-preview"
+              className="hidden min-w-0 shrink-[6] truncate text-sm text-un1t-subtle lg:inline-block"
+            >
+              {' '}— {preview}
+            </span>
+          )}
         </span>
 
         {/* Date: right-aligned and tabular, so a column of them lines up
