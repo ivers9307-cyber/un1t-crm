@@ -179,3 +179,47 @@ export function neighbourId(ids, currentId, delta) {
   if (next < 0 || next >= list.length) return null
   return list[next]
 }
+
+/* ─────────────────────────── row density ─────────────────────────── */
+
+/**
+ * MAIL-DENSITY.1 — how much of a conversation one row shows.
+ *
+ * `compact` is one line: sender, subject, preview and date, ~31px. `comfortable`
+ * is the same line with the preview given room to breathe. Compact is the
+ * DEFAULT because that is what Richard asked for after seeing both; the toggle
+ * exists because the right answer differs between triaging a morning's mail and
+ * reading one thread, and it is two lines of state to keep.
+ */
+export const DENSITIES = ['compact', 'comfortable']
+export const DEFAULT_DENSITY = 'compact'
+export const MAIL_DENSITY_KEY = 'un1t.mail.density'
+
+/**
+ * The stored preference, or the default.
+ *
+ * 🔴 EVERY ACCESS IS WRAPPED. localStorage is not merely absent during SSR — it
+ * THROWS on access in a private window and under a "block site data" policy, so
+ * an unguarded read takes the whole surface down over a display preference.
+ */
+export function readDensity() {
+  try {
+    if (typeof window === 'undefined') return DEFAULT_DENSITY
+    const stored = window.localStorage.getItem(MAIL_DENSITY_KEY)
+    return DENSITIES.includes(stored) ? stored : DEFAULT_DENSITY
+  } catch {
+    return DEFAULT_DENSITY
+  }
+}
+
+/** Persist a density. Silently ignores anything that is not one. */
+export function writeDensity(density) {
+  if (!DENSITIES.includes(density)) return
+  try {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(MAIL_DENSITY_KEY, density)
+  } catch {
+    // A preference that could not be saved is a preference that resets next
+    // visit. Never worth an error on screen.
+  }
+}
