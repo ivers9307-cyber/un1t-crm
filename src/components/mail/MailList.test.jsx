@@ -212,3 +212,80 @@ describe('MailList — the mailbox chip', () => {
     expect(screen.queryByText('Studio')).toBeNull()
   })
 })
+
+// ── Task 6 — the one-line row ────────────────────────────────────────────
+//
+// The redesign's whole point is density: no avatar, one line, sender in a
+// fixed column, chips inline, preview gated by density. These tests check
+// the density gain itself, not just that the old behaviour survived it.
+describe('MailList — one line, no avatar', () => {
+  it('renders no avatar or initials — the density gain the whole redesign rests on', () => {
+    renderList()
+    // "Ella Byrne" → initials "EB". If an avatar tile still rendered, its
+    // initials would be a visible text node nowhere else in this row.
+    expect(screen.queryByText('EB')).toBeNull()
+  })
+
+  it('keeps sender, subject and preview in the same row element', () => {
+    renderList({ density: 'comfortable' })
+    const r = row()
+    expect(within(r).getByText('Ella Byrne')).toBeTruthy()
+    expect(within(r).getByText('Membership freeze')).toBeTruthy()
+    expect(within(r).getByText(/Can I freeze from Monday\?/)).toBeTruthy()
+  })
+
+  it('hides the preview at compact density', () => {
+    renderList({ density: 'compact' })
+    expect(screen.queryByText(/Can I freeze from Monday\?/)).toBeNull()
+  })
+
+  it('shows the preview at comfortable density', () => {
+    renderList({ density: 'comfortable' })
+    expect(screen.getByText(/Can I freeze from Monday\?/)).toBeTruthy()
+  })
+
+  it('defaults to compact — hides the preview when no density prop is given at all', () => {
+    renderList()
+    expect(screen.queryByText(/Can I freeze from Monday\?/)).toBeNull()
+  })
+
+  it('renders needs-reply inline, ahead of the subject, on the same line', () => {
+    renderList({ conversations: [conv({ needs_reply: true })] })
+    const text = row().textContent
+    expect(text).toContain('Needs reply')
+    expect(text.indexOf('Needs reply')).toBeLessThan(text.indexOf('Membership freeze'))
+  })
+})
+
+// 🔴 Task 2's Will problem: websearch_to_tsquery('english', 'Will') is an EMPTY
+// query, so a search for a member named Will can genuinely find nothing while
+// looking exactly like a search that never ran. Echoing the query back is the
+// honest compensation — it tells the operator what was actually asked.
+describe('MailList — search state', () => {
+  it('says no mail matches when a search is active and empty, generically without a query', () => {
+    renderList({ conversations: [], searchActive: true })
+    expect(screen.getByText('No mail matches that search.')).toBeTruthy()
+    // It must not read as an empty inbox — the ordinary empty-state copy.
+    expect(screen.queryByText('Inbox zero')).toBeNull()
+  })
+
+  it('echoes the operator’s own query back on an empty search', () => {
+    renderList({ conversations: [], searchActive: true, searchQuery: 'Will' })
+    expect(screen.getByText('No mail matches “Will”.')).toBeTruthy()
+  })
+
+  it('still shows the ordinary empty state when no search is active', () => {
+    renderList({ conversations: [], searchActive: false })
+    expect(screen.getByText('Inbox zero')).toBeTruthy()
+  })
+
+  it('banners a truncated search scan', () => {
+    renderList({ searchPartial: true })
+    expect(screen.getByText(/scanned only part/)).toBeTruthy()
+  })
+
+  it('shows no truncation banner when the scan was not partial', () => {
+    renderList({ searchPartial: false })
+    expect(screen.queryByText(/scanned only part/)).toBeNull()
+  })
+})
