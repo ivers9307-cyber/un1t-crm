@@ -71,6 +71,28 @@ describe('MailRail', () => {
     expect(screen.queryByText('null')).toBeNull()
   })
 
+  // 🔴 Both halves of this matter, and the given suite caught neither.
+  // `count != null` would let a non-number (e.g. a stringified count from an
+  // un-coerced API response) through unchanged; and a bare `{count && …}`
+  // renders `0` as a raw text node — React drops `null`/`false`/`undefined`
+  // as children but PRINTS `0` — so the badge would lose its span and its
+  // styling while a `getByText('0')` assertion kept right on passing. Assert
+  // the ELEMENT the zero lives in, not just the text.
+  it('renders a zero count as a styled badge, and ignores a non-numeric count', () => {
+    renderRail({ views: [
+      { id: 'inbox', label: 'Inbox', count: 0 },
+      { id: 'archived', label: 'Archived', count: '11' },
+    ] })
+    // The zero is a real element carrying the count's styling, not a stray
+    // text node dropped straight into the button by `{0 && …}`.
+    const zero = screen.getByText('0')
+    expect(zero.tagName).toBe('SPAN')
+    expect(zero.className).toMatch(/tabular-nums/)
+    // A string is not a count — `typeof count === 'number'` is the guard,
+    // not truthiness or a null check.
+    expect(screen.queryByText('11')).toBeNull()
+  })
+
   // One account is not a choice, and a switcher offering it is furniture.
   it('hides the account section when there is only one account', () => {
     renderRail({ mailboxes: [MAILBOXES[0]] })
