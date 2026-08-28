@@ -136,7 +136,10 @@ describe('GET /api/email/tickets — mailbox visibility', () => {
     setupDb(baseState({ grants: [] }))
     const { res, body } = await list()
     expect(res.status).toBe(200)
-    expect(body).toEqual({ success: true, data: { mailboxes: [], tickets: [], viewer_is_elevated: false } })
+    expect(body).toEqual({
+      success: true,
+      data: { mailboxes: [], tickets: [], viewer_is_elevated: false, mailboxes_on_mail: [] },
+    })
   })
 
   it('a granted user sees only their mailbox’s tickets', async () => {
@@ -354,7 +357,9 @@ describe('GET /api/email/tickets — a failed mailbox lookup is not an empty inb
     setupDb(baseState({ grants: [] }))
     const { res, body } = await list()
     expect(res.status).toBe(200)
-    expect(body.data).toEqual({ mailboxes: [], tickets: [], viewer_is_elevated: false })
+    expect(body.data).toEqual({
+      mailboxes: [], tickets: [], viewer_is_elevated: false, mailboxes_on_mail: [],
+    })
   })
 })
 
@@ -475,11 +480,94 @@ describe('GET /api/email/tickets — mailbox surface', () => {
       setupDb(baseState({ tickets: [{ ...T_STUDIO }, orphan], grants: [] }))
       const { res, body } = await list()
       expect(res.status).toBe(200)
-      expect(body.data).toEqual({ mailboxes: [], tickets: [], viewer_is_elevated: false })
+      expect(body.data).toEqual({
+        mailboxes: [], tickets: [], viewer_is_elevated: false, mailboxes_on_mail: [],
+      })
     })
   })
 })
 
+// MAIL-WEEKONE.2 — `mailboxes_on_mail`, the half of the split this route used
+// to throw away. Labels of the caller's VISIBLE mailboxes that moved to
+// /communications/mail, so the ticket screen can say so rather than just
+// going quiet about an account it no longer lists.
+describe('GET /api/email/tickets — mailboxes_on_mail', () => {
+  const MB_MOVED = { ...MB_ACCOUNTS, surface: 'inbox' }
+  const MB_STAYS = { ...MB_STUDIO, surface: 'tickets' }
+
+  it('is empty when nothing has moved to Mail', async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    setupDb(baseState({ grants: [] }))   // fixtures carry no `surface` — both default to tickets
+    const { body } = await list()
+    expect(body.data.mailboxes_on_mail).toEqual([])
+  })
+
+  it('names the mailbox that moved, for an elevated caller', async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    setupDb(baseState({ mailboxes: [MB_STAYS, MB_MOVED, MB_OTHER_LOCATION], grants: [] }))
+    const { body } = await list()
+    expect(body.data.mailboxes_on_mail).toEqual(['Accounts'])
+  })
+
+  it('is still populated for a GRANTED caller — the flag reads VISIBLE mailboxes, not just this surface\'s', async () => {
+    // The coach holds a grant on accounts@ (the moved one) as well as studio@,
+    // so it is genuinely visible to them even though it is excluded from
+    // `mailboxes` above.
+    getCurrentUser.mockResolvedValue(COACH)
+    setupDb(baseState({
+      mailboxes: [MB_STAYS, MB_MOVED, MB_OTHER_LOCATION],
+      grants: [GRANT_STUDIO, { mailbox_id: MB_ACCOUNTS.id, profile_id: COACH.id }],
+    }))
+    const { body } = await list()
+    expect(body.data.mailboxes_on_mail).toEqual(['Accounts'])
+  })
+
+  it('does NOT name a moved mailbox the caller cannot see', async () => {
+    // Same coach, but without the accounts@ grant this time — the property
+    // that keeps this flag from leaking which addresses a studio runs to
+    // someone who cannot open them.
+    getCurrentUser.mockResolvedValue(COACH)
+    setupDb(baseState({
+      mailboxes: [MB_STAYS, MB_MOVED, MB_OTHER_LOCATION],
+      grants: [GRANT_STUDIO],
+    }))
+    const { body } = await list()
+    expect(body.data.mailboxes_on_mail).toEqual([])
+  })
+
+  it('falls back to the address when the moved mailbox has no label', async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    setupDb(baseState({
+      mailboxes: [MB_STAYS, { ...MB_MOVED, label: null }, MB_OTHER_LOCATION],
+      grants: [],
+    }))
+    const { body } = await list()
+    expect(body.data.mailboxes_on_mail).toEqual([MB_ACCOUNTS.address])
+  })
+
+  it('is present, and empty, on the visible.length === 0 early return', async () => {
+    getCurrentUser.mockResolvedValue(COACH)
+    setupDb(baseState({ grants: [] }))
+    const { body } = await list()
+    expect(body.data).toHaveProperty('mailboxes_on_mail')
+    expect(body.data.mailboxes_on_mail).toEqual([])
+  })
+
+  it('is present, and lists the moved account, when EVERY mailbox has moved', async () => {
+    // The tab strip (`mailboxes`) is empty here, but this flag must not be —
+    // that combination is exactly what tells the operator where their mail
+    // went, and it is the case the PRE-surface `visible.length === 0` guard
+    // must not swallow (both mailboxes ARE visible; neither is on tickets).
+    getCurrentUser.mockResolvedValue(OWNER)
+    setupDb(baseState({
+      mailboxes: [{ ...MB_STUDIO, surface: 'inbox' }, MB_MOVED, MB_OTHER_LOCATION],
+      grants: [],
+    }))
+    const { body } = await list()
+    expect(body.data.mailboxes).toEqual([])
+    expect(body.data.mailboxes_on_mail.sort()).toEqual(['Accounts', 'Studio'].sort())
+  })
+})
 
 // EMAIL-ASSIGN.1 — the queue resolves assignee names server-side (profiles is
 // unreadable client-side) and tells the UI whether the viewer may reassign.

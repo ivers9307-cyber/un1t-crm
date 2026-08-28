@@ -186,13 +186,18 @@ function toTicketRow(t, surfaceById) {
     title: t.subject || t.requester_name || t.requester_email || 'Ticket',
     subtitle: t.requester_name || t.requester_email || null,
     occurredAt: t.last_message_at,
-    // TicketInbox holds no query-param deep link for a single ticket
-    // (confirmed by reading src/components/tickets/TicketInbox.jsx,
-    // 2026-08-15 — selection is client-only React state, set by clicking a
-    // row). There is nothing to append here; this is a plain landing on
-    // the queue, same as every other provider's reviewUrl would be without
-    // a focus affordance on its target page.
-    href: onMail ? '/communications/mail' : '/communications/tickets',
+    // MAIL-DEEPLINK.1 — MailSurface.jsx now reads `?c=<id>` on mount and
+    // selects + loads that conversation BY ID, even when it is not on page 1
+    // of the list, so a mail row here can finally land the operator ON the
+    // conversation this row named ("Sarah — needs reply") instead of at the
+    // top of whichever view the inbox happens to be showing. TicketInbox
+    // holds NO such deep link (confirmed by reading
+    // src/components/tickets/TicketInbox.jsx, 2026-08-15 — selection there is
+    // client-only React state, set by clicking a row), so the tickets half of
+    // this ternary stays a plain landing on the queue, same as every other
+    // provider's reviewUrl would be without a focus affordance on its target
+    // page.
+    href: onMail ? `/communications/mail?c=${t.id}` : '/communications/tickets',
   }
 }
 

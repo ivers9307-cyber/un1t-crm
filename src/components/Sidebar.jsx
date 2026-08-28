@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { LogOut, Activity, ExternalLink, X, ChevronDown, ChevronRight as ChevronRightIcon, Store, Search } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
+import { clearAllReplyDrafts } from '@/components/mail/mail-display'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
 import clsx from 'clsx'
@@ -221,6 +222,13 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
         // ignore — the close-stale-impersonations cron is the backstop
       }
     }
+    // MAIL-WEEKONE.M2 — reply drafts live in localStorage keyed per TICKET,
+    // not per user, so on a shared front-desk browser the next person to sign
+    // in would otherwise inherit this person's half-written replies — one Send
+    // from a mis-send under the wrong identity. Best-effort by design: the
+    // helper try/catches every storage access and returns a count, and a
+    // hostile localStorage must never be able to block a sign-out.
+    clearAllReplyDrafts()
     const supabase = createBrowserClient()
     // scope:'local' — sign out THIS browser only. The supabase-js default
     // (scope:'global') revokes every session the user holds, so signing out

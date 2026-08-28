@@ -51,6 +51,19 @@ export default function CommunicationsTabs({ canWhatsapp, canEmailInbox, canMail
     url: '/api/email/tickets/count',
   })
 
+  // INBOX-SURFACE.E — the Mail tab's own needs-reply count. This is the
+  // number the header comment below used to say did not exist yet: GET
+  // /api/email/mail/count mirrors /api/email/tickets/count exactly (same
+  // predicate, same shape) but scopes to MAIL-surface mailboxes, so it can
+  // never be the ticket queue's count wearing this tab's badge — it is
+  // genuinely this surface's own outstanding count. `enabled: !!canMail`
+  // matters: a studio with nothing routed to Mail has nothing to poll for,
+  // and polling anyway would be a request with no possible answer.
+  const mailNeedsReplyCount = usePolledCount({
+    enabled: !!canMail,
+    url: '/api/email/mail/count',
+  })
+
   const tabs = [
     // UIX-P1b: one unified WhatsApp + Instagram queue — the separate
     // Instagram tab retired (/communications/instagram redirects here).
@@ -73,13 +86,15 @@ export default function CommunicationsTabs({ canWhatsapp, canEmailInbox, canMail
     // WhatsApp + Instagram queue since UIX-P1b and still redirects ?ch=em
     // callers to tickets.
     //
-    // NO BADGE YET, deliberately. The needs-reply count next door is the ticket
-    // surface's, scoped to ticket-surface mailboxes; pointing it at this tab
-    // would put the same number on two tabs that hold different mail. Its own
-    // count belongs with the surface that defines what "outstanding" means
-    // there (Phase B), and a wrong badge is worse than none — a red dot with
-    // nothing behind it is one an operator learns to ignore.
-    canMail && { id: 'mail', label: 'Mail', href: '/communications/mail' },
+    // INBOX-SURFACE.E — badge added. This tab shipped with NO badge on
+    // purpose: the only needs-reply count that existed was the ticket
+    // surface's, scoped to ticket-surface mailboxes, and pointing that
+    // number at this tab would have put one count on two tabs holding
+    // different mail — the objection was to a WRONG number, never to a
+    // badge existing at all. `mailNeedsReplyCount` is now this surface's
+    // own count (GET /api/email/mail/count, scoped to mail-surface
+    // mailboxes), so the reason to withhold it is gone.
+    canMail && { id: 'mail', label: 'Mail', href: '/communications/mail', badge: mailNeedsReplyCount },
   ].filter(Boolean)
 
   // COMMS-DETAIL-FIX.2 — measured rather than assumed, because "does this

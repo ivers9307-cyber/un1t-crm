@@ -80,8 +80,53 @@ import {
   sendOriginMeta,
 } from '@/lib/ticket-display'
 import { joinPointsByMessage } from '@/lib/email-tickets'
+// EMAIL-CONTACT-CHIP.1 — the house funnel/off-funnel taxonomy (FUNNEL.1),
+// reused ONLY for the chip's colour/intent grouping. There is no single
+// canonical slug→label lib in this codebase for the TEXT (three independent
+// hand-rolled maps already exist: PersonHeader.jsx, AudienceBuilder.jsx,
+// PipelineReclassifyTab.jsx — see the comment on stageChipLabel below), so
+// this file adds a fourth only for the one thing that IS a real shared
+// registry: which slugs are member-ish vs still-a-lead.
+import { FUNNEL_STAGE_SLUGS, RETURNING_STAGE_SLUGS, OFF_FUNNEL_STAGE_SLUGS } from '@/lib/pipeline-classifier'
 import TicketReplyBox from './TicketReplyBox'
 import TicketMerge from './TicketMerge'
+
+// member-ish (green): the off-funnel "steady state" slugs (minus the two that
+// are really a lead who went cold/quiet, not a member) plus 'converted' —
+// the funnel's own hand-off into membership, funnel or returning.
+const STAGE_CHIP_MEMBER_ISH = new Set([
+  ...OFF_FUNNEL_STAGE_SLUGS.filter((s) => s !== 'cold_lead' && s !== 'dormant'),
+  'converted',
+  'returning_converted',
+])
+// lead-ish (amber): still moving through a funnel toward that hand-off.
+const STAGE_CHIP_LEAD_ISH = new Set([
+  ...FUNNEL_STAGE_SLUGS.filter((s) => s !== 'converted'),
+  ...RETURNING_STAGE_SLUGS.filter((s) => s !== 'returning_converted'),
+])
+// Everything else (cold_lead, dormant, an unrecognised/legacy slug): neutral.
+// Chip recipe per CLAUDE.md: bg-<c>-500/10 text-<c>-700 (never -300/-400).
+const STAGE_CHIP_CLASS = {
+  member: 'bg-emerald-500/10 text-emerald-700',
+  lead: 'bg-amber-500/10 text-amber-700',
+  neutral: 'bg-gray-500/10 text-gray-700',
+}
+
+function stageChipClass(slug) {
+  if (STAGE_CHIP_MEMBER_ISH.has(slug)) return STAGE_CHIP_CLASS.member
+  if (STAGE_CHIP_LEAD_ISH.has(slug)) return STAGE_CHIP_CLASS.lead
+  return STAGE_CHIP_CLASS.neutral
+}
+
+// Algorithmic title-case off the raw slug ('new_lead' -> 'New lead') rather
+// than a maintained slug→label object: the closest thing this codebase has to
+// a canonical registry is the funnel/off-funnel SLUG LISTS above, which name
+// no display copy at all, and three separate components already hand-roll
+// their own label map (drift risk this file declines to add a fourth
+// instance of). Never renders the raw slug — the one thing the spec forbids.
+function stageChipLabel(slug) {
+  return slug.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
 
 export default function TicketThread({
   hasSelection,
@@ -181,6 +226,43 @@ export default function TicketThread({
   const ticketId = ticket?.id
   useEffect(() => { setOpenAttachment(null) }, [ticketId])
 
+  // EMAIL-CONTACT-CHIP.2 — "Add to contacts" on an unlinked thread. Every
+  // other mutation on this pane (status, assign, merge, participants) is a
+  // callback prop the INBOX owns, because the actual write has to happen
+  // exactly once no matter which of the two surfaces is rendering this file.
+  // A callback here would need BOTH TicketInbox and MailSurface — owned by
+  // other agents on this branch — to wire it up, so this one mutation is
+  // self-contained instead: it POSTs its own route and holds the result in
+  // local state, same shape as openAttachment above (reset on ticket change,
+  // never mixed with another ticket's result).
+  const [linkedContact, setLinkedContact] = useState(null)
+  const [linkingContact, setLinkingContact] = useState(false)
+  const [linkContactError, setLinkContactError] = useState(null)
+  useEffect(() => {
+    setLinkedContact(null)
+    setLinkingContact(false)
+    setLinkContactError(null)
+  }, [ticketId])
+
+  async function handleLinkContact() {
+    if (!ticketId || linkingContact) return
+    setLinkingContact(true)
+    setLinkContactError(null)
+    try {
+      const res = await fetch(`/api/email/tickets/${ticketId}/link-contact`, { method: 'POST' })
+      const body = await res.json().catch(() => null)
+      if (!res.ok || !body?.success) {
+        setLinkContactError(body?.error || 'Could not add this contact. Try again.')
+        return
+      }
+      setLinkedContact(body.data?.contact || null)
+    } catch {
+      setLinkContactError('Could not add this contact. Try again.')
+    } finally {
+      setLinkingContact(false)
+    }
+  }
+
   if (!hasSelection) {
     if (emptyState !== undefined) return emptyState
     return (
@@ -195,6 +277,10 @@ export default function TicketThread({
   const name = requesterLabel(ticket)
   const status = statusMeta(ticket?.status)
   const priority = priorityMeta(ticket?.priority)
+  // EMAIL-CONTACT-CHIP.2 — the ticket's own embed wins; local state only fills
+  // in right after a successful link, before the next full fetch replaces
+  // `ticket` with the server's own copy (which will carry `contact` too).
+  const effectiveContact = ticket?.contact?.id ? ticket.contact : linkedContact
   // EMAIL-FORWARD.1 — so a forward's bubble can name the message it passed on.
   // Built once per render rather than inside the map, which would be quadratic
   // on a thread at the 200-message cap.
@@ -270,12 +356,36 @@ export default function TicketThread({
                 <span>No mailbox on this ticket</span>
               )}
               <span>{assigneeLabel(ticket, currentUserId)}</span>
-              {ticket?.contact?.id ? (
-                <Link href={`/contacts/${ticket.contact.id}`} className="text-un1t-accent hover:underline">
-                  View contact
-                </Link>
+              {effectiveContact?.id ? (
+                <>
+                  <Link href={`/contacts/${effectiveContact.id}`} className="text-un1t-accent hover:underline">
+                    View contact
+                  </Link>
+                  {/* EMAIL-CONTACT-CHIP.1 — human label, never the raw slug;
+                      absent entirely on a null/unrecognised stage. Reads
+                      'glofox_membership_status' NEVER: prod never contains
+                      'active' there (a recorded trap) — pipeline_stage_slug is
+                      the one the funnel classifier actually maintains. */}
+                  {effectiveContact.pipeline_stage_slug && (
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${stageChipClass(effectiveContact.pipeline_stage_slug)}`}>
+                      {stageChipLabel(effectiveContact.pipeline_stage_slug)}
+                    </span>
+                  )}
+                </>
+              ) : ticket?.requester_email ? (
+                <button
+                  type="button"
+                  onClick={handleLinkContact}
+                  disabled={linkingContact}
+                  className="text-un1t-accent hover:underline disabled:cursor-default disabled:opacity-50"
+                >
+                  {linkingContact ? 'Adding…' : 'Add to contacts'}
+                </button>
               ) : (
                 <span>Not linked to a contact</span>
+              )}
+              {linkContactError && (
+                <span className="text-red-700" role="alert">{linkContactError}</span>
               )}
             </div>
           </div>

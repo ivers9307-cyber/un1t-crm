@@ -250,6 +250,9 @@ export async function GET(request) {
       message_count: c ? c.messages : null,
       unread_count_messages: c ? c.unread : null,
       unread: c ? c.unread > 0 : false,
+      // MAIL-WEEKONE.7 — boolean-default like `unread`, not null-default like
+      // the counts: an unavailable scan must never CLAIM an attachment.
+      has_attachments: c ? c.hasAttachments : false,
     }
   })
 

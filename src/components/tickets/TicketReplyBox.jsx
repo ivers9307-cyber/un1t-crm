@@ -71,7 +71,7 @@
 // blocks the note until they are removed. The route refuses the combination
 // too, so the rule is stated in both places.
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Send, Lock, Users, AlertCircle, RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui'
 import { isArchivedStatus, statusMeta, replyActionLabel } from '@/lib/ticket-display'
@@ -82,6 +82,12 @@ import { MAX_RECIPIENTS } from '@/lib/email-recipients'
 import SignatureHint from './SignatureHint'
 import RecipientEditor, { EMPTY_RECIPIENTS } from './RecipientEditor'
 import AttachmentPicker, { readyDrafts, hasPendingUploads } from './AttachmentPicker'
+// MAIL-TRIAL draft persistence — see that file's header comment for why the
+// draft is keyed per ticket id rather than anything shared: TicketThread's
+// `key={ticketId}` remount is TICKET-COMPOSER-LEAK.1's guard against a
+// cross-ticket send, and this store rides on exactly that key rather than
+// creating a second one.
+import { readReplyDraft, writeReplyDraft, clearReplyDraft } from '@/components/mail/mail-display'
 
 const MAX_LENGTH = 10000
 
@@ -109,6 +115,40 @@ export default function TicketReplyBox({
   const [text, setText] = useState('')
   const [recipients, setRecipients] = useState(EMPTY_RECIPIENTS)
   const [files, setFiles] = useState([])
+
+  const ticketId = ticket?.id
+
+  // DRAFT PERSISTENCE (never initial useState — that would run during SSR,
+  // where there is no window and no ticket-specific draft to read yet).
+  //
+  // `skipNextWriteRef` exists to stop the write-through effect below from
+  // firing on the SAME render pass this hydration effect runs on: both
+  // effects flush after mount with the pre-hydration `text`/`mode` (''/
+  // 'reply') still in their closures, and without the guard that pass would
+  // write-through the blank state and immediately clear the very draft this
+  // effect just read back off disk. It is consumed exactly once per
+  // ticket — read here, spent by the write-through effect's first run for
+  // this ticket — and reset whenever the ticket id changes again.
+  const skipNextWriteRef = useRef(true)
+  useEffect(() => {
+    skipNextWriteRef.current = true
+    const draft = readReplyDraft(ticketId)
+    setText(draft ? draft.text : '')
+    setMode(draft ? draft.mode : 'reply')
+    // Recipients/files are never restored — see mail-display.js's header
+    // comment on why only { text, mode } are ever persisted.
+  }, [ticketId])
+
+  // Write-through: every change to the words or the mode is saved, so a row
+  // switch, an `e`, a refresh or a crash can never destroy them again. Never
+  // recipients, files, or anything else derived per ticket — same reason.
+  useEffect(() => {
+    if (skipNextWriteRef.current) {
+      skipNextWriteRef.current = false
+      return
+    }
+    writeReplyDraft(ticketId, { text, mode })
+  }, [ticketId, text, mode])
 
   const isNote = mode === 'note'
   // The reply route 400s without a requester address. Say so up front rather
@@ -204,6 +244,11 @@ export default function TicketReplyBox({
       // message's own keys), so clearing is not just tidying — holding them
       // would offer the operator references that no longer resolve.
       setFiles([])
+      // Cleared explicitly rather than left to the write-through effect's
+      // own empty-text branch: a successful send is the one moment this
+      // draft is DEFINITELY done, and saying so here does not depend on the
+      // effect having run yet.
+      clearReplyDraft(ticketId)
     }
     // Anything else keeps the draft — INCLUDING `result.sent`, the
     // delivered-but-unfiled case (EMAIL-REPLY-UNFILED.1): the mail went out

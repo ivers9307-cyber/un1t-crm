@@ -29,6 +29,7 @@
 // a subscription that quietly does not.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Mail, RefreshCw, AlertCircle, Plus } from 'lucide-react'
 import { EmptyState, Button } from '@/components/ui'
 import { NO_MAILBOX_EMPTY, threadRefreshMs } from '@/lib/ticket-display'
@@ -49,7 +50,22 @@ const POLL_MS = 60_000
 // result of the last.
 const SEARCH_DEBOUNCE_MS = 350
 
+// MAIL-DEEPLINK-SEC.1 — `?c=` is an operator-editable URL, not server data.
+// Interpolated raw it turns into a same-origin request forger (a crafted
+// `?c=..%2F..%2Ffoo` aimed via loadThread at a route this file never meant to
+// call, still carrying the operator's own session), so the mount read below
+// is validated against the house id shape before it is trusted with
+// anything — every id in this system is one, so a non-uuid `?c=` is not a
+// legitimate deep link and is ignored outright, the same as if it were
+// absent. Replicated, not imported: the source
+// (src/app/api/email/tickets/_helpers.js's UUID_SHAPE) is not exported, and
+// exporting it is a change to a file this surface does not own.
+const UUID_SHAPE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+
 export default function MailSurface({ locationId, locationName, userId }) {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+
   const [mailboxes, setMailboxes] = useState([])
   const [conversations, setConversations] = useState([])
   const [loading, setLoading] = useState(true)
@@ -129,6 +145,103 @@ export default function MailSurface({ locationId, locationName, userId }) {
   // member.
   const listRequest = useRef(null)
   const threadFor = useRef(null)
+
+  // TASK 2 — mirrors listRequest/threadFor's "ref for a fact that must never
+  // itself trigger a render" idiom. Set true on mount, false in the unmount
+  // cleanup; the archive queue (below) checks it before every setState call
+  // that follows an `await`, so a write still in flight when the operator
+  // navigates away never touches a component that is no longer there.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
+
+  // ── Deep link (?c=<id>) ────────────────────────────────────────────
+  //
+  // MAIL-DEEPLINK.1. Read ONCE, on mount — after that this surface's own
+  // clicks and keyboard own the selection, and the URL exists to be walked
+  // TO, not synced FROM continuously (an external edit to the address bar
+  // while the surface is open is not a supported gesture here, the same way
+  // it is not for KanbanBoard's `?contact=`). `initialDeepLinkRef` is what
+  // makes it once-only: every later `router.replace` this file makes (below)
+  // also changes `searchParams`, and without the ref this effect would fire
+  // again on the surface's OWN writes and re-select whatever `?c=` happened
+  // to hold at that moment.
+  const initialDeepLinkRef = useRef(false)
+  // The id a deep link seeded that has not yet been checked against a real
+  // list row — disarmed (never re-armed) the moment the reconciliation
+  // effect below gets its ONE look, win or lose; also disarmed early by
+  // selectConversation/clearSelection if the operator moves on first. Lets
+  // the mount effect select and load a conversation that is NOT ON PAGE 1
+  // (the ordinary case for a link named by relevance rather than recency)
+  // without waiting on the list at all: loadThread fetches by id
+  // unconditionally.
+  const deepLinkReconcileRef = useRef(null)
+  // CONTRACTS finding 1+2 — a SEPARATE ref from the one above, and the fix
+  // for the sharper of the two bugs that ref alone had: mark-read must not
+  // be keyed off list membership at all (an off-page row was read and
+  // answered but never marked read; worse, the old code kept firing against
+  // WHATEVER the operator was looking at the moment the id eventually
+  // resurfaced in some later list payload — new mail landing on the original
+  // conversation 40 minutes on, surfaced by the routine poll, silently
+  // marked read on arrival). Cleared by loadThread's own success handler
+  // (below, near its declaration) the instant that read genuinely happens —
+  // the one fact list membership can never stand in for.
+  const deepLinkMarkReadRef = useRef(null)
+
+  // Selection writes `?c=<id>` with router.replace — REPLACE, not push, so
+  // j/k walking the list does not spam browser history with one entry per
+  // row (the operator would need dozens of Back presses just to leave the
+  // surface). `null` removes it. Built from the CURRENT searchParams rather
+  // than a bare template string so a future param this surface does not yet
+  // know about survives a selection change untouched — the same reasoning as
+  // KanbanBoard's `?contact=` writer.
+  //
+  // L6 — a no-op guard: `clearSelection` calls this UNCONDITIONALLY (see
+  // there), and `changeMailbox`/`changeView` call `clearSelection`
+  // unconditionally too — so switching tabs with nothing selected used to
+  // `router.replace` the CURRENT url with itself on every click. This route
+  // is `force-dynamic`, so that is not a no-op in Next's eyes: a wasted RSC
+  // refetch (and a fresh `getCurrentUser()`) per click. Skipped whenever the
+  // target value already matches what is in the URL.
+  const writeSelectedParam = useCallback((id) => {
+    if ((searchParams.get('c') || null) === (id || null)) return
+    const params = new URLSearchParams(searchParams.toString())
+    if (id) params.set('c', id)
+    else params.delete('c')
+    const qs = params.toString()
+    router.replace(qs ? `/communications/mail?${qs}` : '/communications/mail', { scroll: false })
+  }, [router, searchParams])
+
+  useEffect(() => {
+    if (initialDeepLinkRef.current) return
+    initialDeepLinkRef.current = true
+    const id = searchParams.get('c')
+    // MAIL-DEEPLINK-SEC.1 — anything that is not the house id shape is not a
+    // legitimate deep link. Ignored outright rather than sanitised and used
+    // anyway: every id this surface ever deals in is a uuid, so a non-uuid
+    // value here has no honest interpretation.
+    if (!id || !UUID_SHAPE.test(id)) return
+    threadFor.current = id
+    setSelectedId(id)
+    // Painted minimally — selectConversation's usual "paint from the list row
+    // immediately" has no row to paint from yet. The existing selectedId
+    // effect below fires loadThread within one round trip, which is also
+    // where the mark-read for this id actually happens — see loadThread's
+    // own success handler, near its declaration.
+    setConversation({ id })
+    deepLinkReconcileRef.current = id
+    deepLinkMarkReadRef.current = id
+    // Deliberately does NOT call writeSelectedParam: the param is already
+    // there (that is where `id` came from) — replacing it with itself would
+    // only cost a needless history-API call on every mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // The reconciliation effect for the block above lives further down, right
+  // before selectConversation (it needs `loading`, `conversations` and
+  // `selectedId`, all already in scope by then).
 
   // ── List ───────────────────────────────────────────────────────────
   const loadList = useCallback(async (quiet = false) => {
@@ -226,57 +339,6 @@ export default function MailSurface({ locationId, locationName, userId }) {
     }
   }
 
-  // ── Conversation ───────────────────────────────────────────────────
-  // The ticket surface's own detail route, unchanged. Its payload is what
-  // TicketThread already knows how to render, and a second read path would be
-  // a second sanitiser decision, a second attachment shape and a second
-  // reply-audience derivation.
-  const loadThread = useCallback(async (id, { quiet = false } = {}) => {
-    if (!id) return
-    if (!quiet) {
-      setThreadLoading(true)
-      setThreadError(null)
-    }
-    try {
-      const res = await fetch(`/api/email/tickets/${id}`, { cache: 'no-store' })
-      const body = await res.json()
-      if (threadFor.current !== id) return // superseded — the operator moved on
-      if (!body?.success) {
-        if (!quiet) setThreadError(body?.error || 'Could not load this conversation')
-        return
-      }
-      // The detail row carries the mailbox and the linked contact; the list row
-      // carries this surface's derived flags. Spread the server row UNDER the
-      // flags so neither loses to the other.
-      setConversation(prev => ({ ...(prev || {}), ...(body.data?.ticket || {}) }))
-      setMessages(body.data?.messages || [])
-      setAttachmentsUnavailable(!!body.data?.attachments_unavailable)
-      setReplyRecipients(body.data?.reply_recipients || null)
-    } catch {
-      if (threadFor.current !== id) return
-      if (!quiet) setThreadError('Could not load this conversation')
-    } finally {
-      if (!quiet && threadFor.current === id) setThreadLoading(false)
-    }
-  }, [])
-
-  useEffect(() => { if (selectedId) loadThread(selectedId) }, [selectedId, loadThread])
-
-  // An open conversation re-reads itself — fast while its newest message is
-  // young enough that attachment rows may still be arriving, the list's own
-  // 60s otherwise (EMAIL-ATTACH-RACE.1's cadence, shared).
-  const threadPollMs = threadRefreshMs(messages)
-  useEffect(() => {
-    if (!selectedId) return undefined
-    const timer = setInterval(() => loadThread(selectedId, { quiet: true }), threadPollMs)
-    const onFocus = () => loadThread(selectedId, { quiet: true })
-    window.addEventListener('focus', onFocus)
-    return () => {
-      clearInterval(timer)
-      window.removeEventListener('focus', onFocus)
-    }
-  }, [selectedId, threadPollMs, loadThread])
-
   // ── Read state ─────────────────────────────────────────────────────
   //
   // Opening a conversation marks it read, which is what an inbox does. The
@@ -298,7 +360,7 @@ export default function MailSurface({ locationId, locationName, userId }) {
   const markRead = useCallback(async (id, { incidental = false } = {}) => {
     if (!id) return { ok: false }
     try {
-      const res = await fetch(`/api/email/mail/${id}/seen`, {
+      const res = await fetch(`/api/email/mail/${encodeURIComponent(id)}/seen`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ seen: true }),
@@ -332,11 +394,109 @@ export default function MailSurface({ locationId, locationName, userId }) {
       return { ok: false }
     }
   }, [])
+  // ── Conversation ───────────────────────────────────────────────────
+  // The ticket surface's own detail route, unchanged. Its payload is what
+  // TicketThread already knows how to render, and a second read path would be
+  // a second sanitiser decision, a second attachment shape and a second
+  // reply-audience derivation.
+  const loadThread = useCallback(async (id, { quiet = false } = {}) => {
+    if (!id) return
+    if (!quiet) {
+      setThreadLoading(true)
+      setThreadError(null)
+    }
+    try {
+      const res = await fetch(`/api/email/tickets/${encodeURIComponent(id)}`, { cache: 'no-store' })
+      const body = await res.json()
+      if (threadFor.current !== id) return // superseded — the operator moved on
+      if (!body?.success) {
+        if (!quiet) setThreadError(body?.error || 'Could not load this conversation')
+        return
+      }
+      // The detail row carries the mailbox and the linked contact; the list row
+      // carries this surface's derived flags. Spread the server row UNDER the
+      // flags so neither loses to the other.
+      setConversation(prev => ({ ...(prev || {}), ...(body.data?.ticket || {}) }))
+      setMessages(body.data?.messages || [])
+      setAttachmentsUnavailable(!!body.data?.attachments_unavailable)
+      setReplyRecipients(body.data?.reply_recipients || null)
+      // CONTRACTS finding 1+2 — the deep-link mark-read belongs HERE, keyed
+      // off a genuinely successful load of THIS id, not off list membership
+      // (see deepLinkMarkReadRef's own comment near the top of this file).
+      // Unconditional on unread state: the ticket-detail payload carries no
+      // `unread` flag to check, and marking an already-read conversation
+      // read again is a harmless no-op — the only failure mode worth
+      // avoiding is the one this replaces (never marking it at all, or
+      // marking the WRONG one later).
+      if (deepLinkMarkReadRef.current === id) {
+        deepLinkMarkReadRef.current = null
+        markRead(id, { incidental: true })
+      }
+    } catch {
+      if (threadFor.current !== id) return
+      if (!quiet) setThreadError('Could not load this conversation')
+    } finally {
+      if (!quiet && threadFor.current === id) setThreadLoading(false)
+    }
+  }, [markRead])
+
+  useEffect(() => { if (selectedId) loadThread(selectedId) }, [selectedId, loadThread])
+
+  // An open conversation re-reads itself — fast while its newest message is
+  // young enough that attachment rows may still be arriving, the list's own
+  // 60s otherwise (EMAIL-ATTACH-RACE.1's cadence, shared).
+  const threadPollMs = threadRefreshMs(messages)
+  useEffect(() => {
+    if (!selectedId) return undefined
+    const timer = setInterval(() => loadThread(selectedId, { quiet: true }), threadPollMs)
+    const onFocus = () => loadThread(selectedId, { quiet: true })
+    window.addEventListener('focus', onFocus)
+    return () => {
+      clearInterval(timer)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [selectedId, threadPollMs, loadThread])
+
+
+  // MAIL-DEEPLINK.1's reconciliation half — see the effect's own comment
+  // where deepLinkReconcileRef is declared, near the top of this file.
+  //
+  // CONTRACTS finding 1+2 — this used to ALSO mark the row read whenever it
+  // matched, which was wrong twice over: (a) mark-read now lives on
+  // loadThread's own success (above, near its declaration) — list membership
+  // was never "the operator read it", and (b) the ref stayed armed
+  // indefinitely, so a match arriving MUCH LATER (new mail landing on the
+  // original id during a routine 60s poll, long after the operator moved on)
+  // would repaint fields into whatever conversation is on screen NOW — a
+  // second surface's row briefly wearing the first one's data. Disarmed
+  // unconditionally the first time the list settles (matched or not — this
+  // effect gets exactly ONE look) and again early by selectConversation/
+  // clearSelection if the operator moves on before the list even answers.
+  useEffect(() => {
+    if (loading) return // the first list payload has not settled yet
+    const id = deepLinkReconcileRef.current
+    if (!id) return
+    deepLinkReconcileRef.current = null // one attempt, win or lose — never re-armed
+    if (selectedId !== id) return // the operator has since moved on
+    const row = conversations.find(c => c.id === id)
+    if (!row) return
+    // `row` first, whatever loadThread already painted last — the ticket
+    // detail may carry richer fields (mailbox, contact) the list row does
+    // not, and those must not be clobbered by reconciling against it.
+    setConversation(prev => ({ ...row, ...(prev || {}) }))
+  }, [loading, conversations, selectedId])
 
   function selectConversation(row) {
     if (!row?.id) return
     threadFor.current = row.id
     setSelectedId(row.id)
+    writeSelectedParam(row.id)
+    // CONTRACTS finding 1+2 — a normal selection supersedes any still-armed
+    // deep link: without this, a MUCH LATER list refresh (or successful
+    // thread load) that happens to match the ORIGINAL deep-linked id would
+    // repaint fields into whatever conversation is on screen NOW.
+    deepLinkReconcileRef.current = null
+    deepLinkMarkReadRef.current = null
     // A forward composer left open across a switch would be holding a message
     // from the conversation you just left — one click from sending somebody
     // else's correspondence to the address you were about to type.
@@ -362,9 +522,20 @@ export default function MailSurface({ locationId, locationName, userId }) {
   // to the ACTION, not to the selection, and the last conversation leaving is
   // exactly when a failed mailbox write most needs saying. Switching mailbox or
   // view is a genuinely fresh context, so those clear it.
+  //
+  // MAIL-DEEPLINK.1 — this is also the ONE place `?c=` gets cleared, and that
+  // is deliberate rather than an oversight needing a second call site:
+  // changeMailbox/changeView (below) both call clearSelection() already (a
+  // switch of context is a genuinely fresh one, same reasoning as the notice
+  // above), so the param drops for free there too. The id in the URL names a
+  // SELECTION; whenever there is none, the URL should stop claiming otherwise.
   function clearSelection({ keepNotice = false } = {}) {
     threadFor.current = null
     setSelectedId(null)
+    writeSelectedParam(null)
+    // Same reasoning as selectConversation's own disarm, above.
+    deepLinkReconcileRef.current = null
+    deepLinkMarkReadRef.current = null
     setConversation(null)
     setMessages([])
     setAttachmentsUnavailable(false)
@@ -407,20 +578,26 @@ export default function MailSurface({ locationId, locationName, userId }) {
   // and the selection moves to the next conversation. That is the behaviour
   // that makes an inbox clearable: waiting for the next 60s poll to remove a
   // row an operator has just dealt with is what turns a list into a queue.
-  const archive = useCallback(async (row, archived) => {
-    const id = row?.id
-    if (!id || actionSaving) return
-    setActionSaving(true)
-    setBusyId(id)
+  //
+  // 🔴 THIS is the write itself — performArchive does not decide WHETHER to
+  // run, only HOW. It used to also bail on `actionSaving`, which is the bug
+  // Task 2 fixes: an operator hover-archiving five rows click-click-click had
+  // clicks 2–5 silently do nothing, because only the click whose POST
+  // happened to resolve first got to run. That guard is gone from here; it
+  // moves to the QUEUE below, which serialises writes the same way but
+  // without dropping any of them.
+  const performArchive = useCallback(async (row, archived) => {
+    const id = row.id
     setThreadError(null)
     setWritebackNotice(null)
     try {
-      const res = await fetch(`/api/email/mail/${id}/archive`, {
+      const res = await fetch(`/api/email/mail/${encodeURIComponent(id)}/archive`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ archived }),
       })
       const body = await res.json()
+      if (!mountedRef.current) return
       if (!body?.success) {
         setThreadError(body?.error || (archived ? 'Could not archive that' : 'Could not bring that back'))
         return
@@ -461,34 +638,30 @@ export default function MailSurface({ locationId, locationName, userId }) {
       }
       // Quietly, so a refresh hiccup cannot repaint the surface as an error
       // over an action that succeeded.
-      await loadList(true)
+      if (mountedRef.current) await loadList(true)
     } catch {
+      if (!mountedRef.current) return
       setThreadError('Could not reach the server — nothing was changed')
-    } finally {
-      setActionSaving(false)
-      setBusyId(null)
     }
     // `conversations`/`selectedId` are read for the successor, so they belong
     // in the dependency list even though the callback is only ever invoked
-    // from an event.
+    // from the queue worker below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [actionSaving, conversations, selectedId, viewId, debouncedQuery, loadList])
+  }, [conversations, selectedId, viewId, debouncedQuery, loadList])
 
   // The defer verb. Paired with markUnseen() over IMAP by the route, so it
   // survives the poller's convergence — see the seen route's header.
-  const markUnreadAction = useCallback(async (row) => {
-    const id = row?.id
-    if (!id || actionSaving) return
-    setActionSaving(true)
-    setBusyId(id)
+  const performMarkUnread = useCallback(async (row) => {
+    const id = row.id
     setWritebackNotice(null)
     try {
-      const res = await fetch(`/api/email/mail/${id}/seen`, {
+      const res = await fetch(`/api/email/mail/${encodeURIComponent(id)}/seen`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ seen: false }),
       })
       const body = await res.json()
+      if (!mountedRef.current) return
       if (!body?.success) {
         setThreadError(body?.error || 'Could not mark that unread')
         return
@@ -500,25 +673,134 @@ export default function MailSurface({ locationId, locationName, userId }) {
       setConversation(prev => (prev?.id === id ? { ...prev, unread: unreadCount > 0 } : prev))
       setWritebackNotice(body.data?.writeback_notice || null)
     } catch {
+      if (!mountedRef.current) return
       setThreadError('Could not reach the server — nothing was changed')
-    } finally {
-      setActionSaving(false)
-      setBusyId(null)
     }
-  }, [actionSaving])
+  }, [])
 
-  const markReadAction = useCallback(async (row) => {
-    const id = row?.id
-    if (!id || actionSaving) return
+  // markRead itself already has no actionSaving guard (it is the incidental
+  // side effect of opening a conversation, not a verb an operator mashes) —
+  // this is only the queue-worker shape of the button-triggered path.
+  const performMarkRead = useCallback(async (row) => {
+    await markRead(row.id)
+  }, [markRead])
+
+  // ── Action queue ───────────────────────────────────────────────────
+  //
+  // TASK 2 — RAPID SINGLE ARCHIVES MUST NOT VANISH. The recorded decision
+  // against a multi-select/bulk toolbar stands — this only makes the single
+  // verb honest about what a rapid run of it does. Every click below
+  // ENQUEUES; a single worker (the effect further down) drains the queue in
+  // order, one write at a time — click 5 fires exactly as reliably as click
+  // 1, it just waits its turn. Serial on purpose, not merely as a side effect
+  // of the fix: the IMAP write-back on the server is per-request sequential
+  // anyway, so two archives in flight at once would only risk the same
+  // overlapping-write-against-one-row hazard `actionSaving` always existed to
+  // prevent for a SINGLE row — queuing preserves that per row while no longer
+  // punishing every OTHER row for it.
+  //
+  // The queue's CONTENTS live in a ref (`actionQueueRef`), not state —
+  // pushing onto it must not itself trigger a render, the same reasoning as
+  // `listRequest`/`threadFor` above. `queueTick` is a bare counter that exists
+  // solely to nudge the drain effect after an enqueue or a completed item.
+  const actionQueueRef = useRef([])
+  const queueRunningRef = useRef(false)
+  const [queueTick, setQueueTick] = useState(0)
+
+  // CONTRACTS finding M3 — a per-row PENDING target, separate from the queue
+  // itself. `archive(row, archived)` is always called with a boolean computed
+  // by the CALLER from CURRENT list/pane state (`!isArchived(row)`), but that
+  // state does not update until the archive's response returns — a
+  // multi-second, sequential IMAP write. Two rapid `e` presses (or a keyboard
+  // `e` racing a hover click on the same row) therefore both read the SAME
+  // stale "not archived yet", both compute `true`, and the queue used to
+  // faithfully execute "archive" twice — where the second keystroke plainly
+  // MEANT "undo". This map holds what the row's target ALREADY IS once
+  // something is pending/queued for it, so a second archive on the same row
+  // toggles relative to THAT, not to stale list state — `e` `e` becomes a
+  // real archive-then-unarchive. Cleared once nothing archive-shaped remains
+  // queued for that row (see the drain effect's `finally`, below) — a click
+  // AFTER everything has settled goes back to reading real list state, which
+  // is correct again by then.
+  const pendingArchiveRef = useRef(new Map())
+
+  const enqueueAction = useCallback((type, row, args = {}) => {
+    if (!row?.id) return
+    actionQueueRef.current.push({ type, row, args })
+    setQueueTick(t => t + 1)
+  }, [])
+
+  // The worker. Deliberately an EFFECT keyed on the perform* callbacks rather
+  // than one long-lived async loop started on the first click: those
+  // callbacks close over conversations/selectedId/viewId/debouncedQuery, and
+  // a loop started on click 1 would keep running clicks 2 through 5 against
+  // click 1's SNAPSHOT of that state — resolving conv-3's successor, say,
+  // against a list that no longer has conv-1 or conv-2 in it. Re-deriving the
+  // worker from the CURRENT render on every item instead means each queued
+  // write sees the state as it stands right before its own turn, same as if
+  // it had been clicked (and run immediately) at that moment.
+  useEffect(() => {
+    if (queueRunningRef.current) return
+    const item = actionQueueRef.current[0]
+    if (!item) return
+    queueRunningRef.current = true
     setActionSaving(true)
-    setBusyId(id)
-    try {
-      await markRead(id)
-    } finally {
-      setActionSaving(false)
-      setBusyId(null)
-    }
-  }, [actionSaving, markRead])
+    setBusyId(item.row.id)
+    ;(async () => {
+      try {
+        if (item.type === 'archive') await performArchive(item.row, item.args.archived)
+        else if (item.type === 'markUnread') await performMarkUnread(item.row)
+        else if (item.type === 'markRead') await performMarkRead(item.row)
+      } finally {
+        // Popped either way — the array is a ref, not component state, so
+        // mutating it after unmount is harmless; it is the setState calls
+        // right below that must not run against a dead component.
+        actionQueueRef.current.shift()
+        queueRunningRef.current = false
+        // CONTRACTS finding M3 — the pending-target map entry for THIS row
+        // only clears once nothing archive-shaped remains queued for it. A
+        // third rapid `e` (while the first is still in flight) enqueues a
+        // second archive item before this one finishes — clearing here
+        // unconditionally would let that second item's toggle read stale
+        // list state again, the exact bug this map exists to prevent.
+        if (item.type === 'archive' && item.row?.id) {
+          const stillQueued = actionQueueRef.current.some(
+            q => q.type === 'archive' && q.row?.id === item.row.id
+          )
+          if (!stillQueued) pendingArchiveRef.current.delete(item.row.id)
+        }
+        if (mountedRef.current) {
+          setActionSaving(false)
+          setBusyId(null)
+          // Nudges this effect to check for a next item. Also covers the
+          // "queue drains on unmount safely" requirement's other half: if the
+          // component is gone, this never fires, so item 2 is never started
+          // against it — see the queue-stops-on-unmount test.
+          setQueueTick(t => t + 1)
+        }
+      }
+    })()
+  }, [queueTick, performArchive, performMarkUnread, performMarkRead])
+
+  const archive = useCallback((row, requestedArchived) => {
+    if (!row?.id) return
+    // CONTRACTS finding M3 — ignore the caller's boolean once something is
+    // already pending/queued for this row; toggle relative to THAT instead.
+    // See pendingArchiveRef's own comment, above.
+    const target = pendingArchiveRef.current.has(row.id)
+      ? !pendingArchiveRef.current.get(row.id)
+      : requestedArchived
+    pendingArchiveRef.current.set(row.id, target)
+    enqueueAction('archive', row, { archived: target })
+  }, [enqueueAction])
+
+  const markUnreadAction = useCallback((row) => {
+    enqueueAction('markUnread', row)
+  }, [enqueueAction])
+
+  const markReadAction = useCallback((row) => {
+    enqueueAction('markRead', row)
+  }, [enqueueAction])
 
   // ── Send / participants ────────────────────────────────────────────
   // Both are the ticket surface's routes, unchanged — see the header.
@@ -528,7 +810,7 @@ export default function MailSurface({ locationId, locationName, userId }) {
     setSending(true)
     setThreadError(null)
     try {
-      const res = await fetch(`/api/email/tickets/${selectedId}/reply`, {
+      const res = await fetch(`/api/email/tickets/${encodeURIComponent(selectedId)}/reply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(internal ? { text, internal: true } : {
@@ -571,7 +853,7 @@ export default function MailSurface({ locationId, locationName, userId }) {
     setParticipantSaving(true)
     setThreadError(null)
     try {
-      const res = await fetch(`/api/email/tickets/${id}/participants`, {
+      const res = await fetch(`/api/email/tickets/${encodeURIComponent(id)}/participants`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

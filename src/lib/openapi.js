@@ -1259,7 +1259,7 @@ registry.registerPath({
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'List email tickets + the caller’s visible mailboxes',
-  description: 'The studio ticket queue at one location, plus the mailboxes this caller may see (already in tab order). Filtered to those mailboxes and capped at 200, newest activity first. No visible mailboxes = an empty list, not an error. INBOX-SURFACE.C: mailboxes whose `surface` is \'inbox\' (mig 575) are EXCLUDED from both the tab strip and the query — they are worked on /communications/mail instead, and each account belongs to exactly one surface. Tickets with a NULL mailbox_id (ON DELETE SET NULL, plus mig 484\'s backfill) stay on THIS surface and are visible to elevated callers only: they carry no mailbox, so they carry no surface, and \'tickets\' is both the column\'s default and the only surface that exists at every location.',
+  description: 'The studio ticket queue at one location, plus the mailboxes this caller may see (already in tab order). Filtered to those mailboxes and capped at 200, newest activity first. No visible mailboxes = an empty list, not an error. INBOX-SURFACE.C: mailboxes whose `surface` is \'inbox\' (mig 575) are EXCLUDED from both the tab strip and the query — they are worked on /communications/mail instead, and each account belongs to exactly one surface. Tickets with a NULL mailbox_id (ON DELETE SET NULL, plus mig 484\'s backfill) stay on THIS surface and are visible to elevated callers only: they carry no mailbox, so they carry no surface, and \'tickets\' is both the column\'s default and the only surface that exists at every location. MAIL-WEEKONE.2: `mailboxes_on_mail` is the OTHER half of that same split, surfaced rather than discarded — the labels (or, lacking one, the address) of the caller\'s VISIBLE mailboxes that moved to the mail surface, so this screen can say some of your mail moved instead of just going quiet about an account it no longer lists. ALWAYS present (possibly `[]`), including on the empty-list and mailbox-not-found responses — there is exactly one shape for this payload, not one with the field and one without.',
   request: {
     query: z.object({
       location_id: uuidLike,
@@ -1268,7 +1268,7 @@ registry.registerPath({
     }),
   },
   responses: {
-    200: { description: '{ mailboxes, tickets }' },
+    200: { description: '{ mailboxes, tickets, viewer_is_elevated, mailboxes_on_mail }' },
     400: { description: 'Missing location_id / unknown view', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Missing email_inbox permission or foreign location', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'Mailbox visibility lookup failed — NOT an empty inbox', content: { 'application/json': { schema: ErrorResponse } } },
@@ -1372,6 +1372,31 @@ registry.registerPath({
   },
 })
 
+// INBOX-SURFACE.C — the Mail surface's OWN nav badge, the mirror image of the
+// ticket count above. TWO badges exist rather than one shared count because
+// each counts EXACTLY the rows its own queue lists (MAIL-TRIAL.B): a mailbox
+// moved to Mail is excluded from the ticket badge and counted here instead, so
+// neither badge ever points an operator at a tab with nothing behind it. The
+// definitions otherwise agree byte-for-byte — same predicate, same
+// parameterless/session-location posture, same "500, never a badge of 0"
+// failure rule — with one deliberate divergence: this count carries NO orphan
+// widening. A NULL-mailbox ticket has no `surface` to read, so it is the
+// ticket badge's to count (its own DEFAULT), never this one's.
+registry.registerPath({
+  method: 'get',
+  path: '/api/email/mail/count',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Count mail-surface conversations awaiting a reply (nav badge)',
+  description:
+    'Conversations at the caller’s ACTIVE location, on a mailbox they may see AND on the MAIL surface (INBOX-SURFACE.C — the mirror image of /api/email/tickets/count, which counts the ticket surface instead so the two badges never disagree about who owns a given mailbox’s unanswered mail), that are `open` with an inbound last message. The same predicate as the mail list route’s `needs_reply` view and `needs_reply_count`, so this badge and that tab always agree. Unlike the ticket badge, there is NO orphan widening: a ticket with a NULL mailbox_id has no surface to read and is counted on the ticket surface only (its own schema default), never here — mirrors the mail LIST route’s own `.in(\'mailbox_id\', ids)` scope exactly, with no `.or(mailbox_id.is.null)` branch. An empty narrowed mailbox set answers 0 without running a query. Returns count 0 (not an error) for a session without the permission or without an active location.',
+  responses: {
+    200: { description: '{ count }', content: { 'application/json': { schema: SuccessResponse(z.object({ count: z.number() })) } } },
+    401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Mailbox visibility or count query failed — NOT a zero', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'get',
   path: '/api/email/tickets/{id}',
@@ -1417,6 +1442,22 @@ registry.registerPath({
 })
 
 // EMAIL-FORWARD.1 (mig 501) — pass one message on the ticket to a third party.
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/tickets/{id}/link-contact',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Link (or create) the contact for a ticket\u2019s sender',
+  description: 'EMAIL-CONTACT-CHIP.2 \u2014 resolves ticket.requester_email to a contact via findOrCreateRaceContact (restrictToOrg: true, the LEADCAP.1 create-or-link helper \u2014 email is globally unique on contacts). Idempotent: a ticket that already carries contact_id answers 200 with that contact rather than erroring or re-linking. Backfills contact_id onto the ticket\u2019s own messages that have none, mirroring what the inbound webhook denormalises at ingest. Gated through loadTicketForUser like every ticket write: 404, never 403, for a ticket that does not exist, is at a location the caller cannot reach, is on a mailbox they cannot see, or is at a location where they lack email_inbox.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Linked (or already-linked) contact: { id, name, first_name, email, pipeline_stage_slug }' },
+    400: { description: 'Ticket has no requester_email to link from', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Contact resolution or a write failed \u2014 nothing changed, or a cosmetic mirror missed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/email/tickets/{id}/forward',

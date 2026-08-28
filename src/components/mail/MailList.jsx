@@ -32,7 +32,7 @@
 // avatar is gone: at one line there is no room for a 32px tile, and initials
 // were never the thing an operator scanned for anyway (the sender NAME was).
 
-import { Inbox, Search, Archive, ArchiveRestore, Mail, MailOpen } from 'lucide-react'
+import { Inbox, Search, Archive, ArchiveRestore, Mail, MailOpen, Paperclip } from 'lucide-react'
 import { EmptyState, Loading } from '@/components/ui'
 import { requesterLabel, relativeTime, mailboxLabel } from '@/lib/ticket-display'
 import { isArchived, needsReply, isUnread, DEFAULT_DENSITY } from './mail-display'
@@ -293,6 +293,23 @@ function MailRow({
               title={mailbox?.address || 'No mail account on this conversation'}
             >
               {mailboxLabel(mailbox)}
+            </span>
+          )}
+          {/* MAIL-ATTACH.1 — the paperclip. `has_attachments` is stamped by
+              the list route off loadConversationCounts' one message scan (a
+              skipped-but-unstorable attachment still counts: the email
+              genuinely arrived with a file). A `shrink-0` sibling of subject
+              and preview, same as the chips above — never nested inside
+              either truncating span, which is the LAYOUT-FIX.1 defect one
+              component wide of here. */}
+          {conversation.has_attachments && (
+            <span
+              data-testid="mail-row-attachment"
+              className="inline-flex shrink-0 items-center text-un1t-muted"
+              title="Has attachments"
+            >
+              <Paperclip size={12} aria-hidden="true" />
+              <span className="sr-only">Has attachments</span>
             </span>
           )}
           <span

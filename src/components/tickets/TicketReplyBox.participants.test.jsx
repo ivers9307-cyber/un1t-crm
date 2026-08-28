@@ -24,10 +24,17 @@ beforeEach(() => {
   // quiet stub the sibling composer tests use — the signature preview treats a
   // missing signature as cosmetic, and no other request is made on mount.
   vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+  // Every case here mounts ticket-1. Since the composer now hydrates a
+  // per-ticket draft from localStorage on mount (see TicketReplyBox.draft
+  // .test.jsx), a value typed in one test would otherwise leak into the next
+  // test's fresh render of the "same" ticket — nothing to do with the
+  // recipient behaviour these tests actually pin.
+  window.localStorage.clear()
 })
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  window.localStorage.clear()
 })
 
 const TICKET = {

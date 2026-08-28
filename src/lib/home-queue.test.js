@@ -593,26 +593,41 @@ describe('assembleHomeQueue — tickets routed by mailbox surface', () => {
     loadVisibleMailboxes.mockResolvedValue({ elevated: true, mailboxes })
     const db = makeDb({ email_tickets: { rows: [row], count: 1 } })
     const result = await assembleHomeQueue(db, userAt())
-    return result.rows.find(r => r.id === 't1')
+    return result.rows.find(r => r.id === row.id)
   }
 
-  it('links a ticket on an inbox-surface mailbox to Mail, and labels it Mail', async () => {
+  // MAIL-DEEPLINK.1 — the Mail surface reads `?c=<id>` on mount and selects
+  // that conversation, even off page 1 (MailSurface.jsx). A mail row must
+  // carry it, or the operator lands on the top of the list rather than on the
+  // conversation this row named — the exact "where did my mail go" failure
+  // MAILBOX-SURFACE.1 already fixed for which SURFACE the link goes to.
+  it('links a ticket on an inbox-surface mailbox to Mail WITH a deep link to it, and labels it Mail', async () => {
     const r = await rowFor({
       mailboxes: [{ id: 'mb1', surface: 'inbox' }],
       row: ticket(),
     })
-    expect(r.href).toBe('/communications/mail')
+    expect(r.href).toBe('/communications/mail?c=t1')
     expect(r.source).toBe('mail')
     expect(r.sourceLabel).toBe('Mail')
   })
 
-  it('leaves a ticket on a ticketing mailbox pointed at Tickets', async () => {
+  it('leaves a ticket on a ticketing mailbox pointed at Tickets, with NO deep link (TicketInbox has none)', async () => {
     const r = await rowFor({
       mailboxes: [{ id: 'mb1', surface: 'tickets' }],
       row: ticket(),
     })
     expect(r.href).toBe('/communications/tickets')
     expect(r.source).toBe('tickets')
+  })
+
+  // The `?c=` value must be THIS ticket's own id, not a fixed string — a
+  // second fixture with a different id catches a hard-coded '?c=t1'.
+  it('carries the SPECIFIC ticket id in the deep link, not a fixed value', async () => {
+    const r = await rowFor({
+      mailboxes: [{ id: 'mb1', surface: 'inbox' }],
+      row: ticket({ id: 't-other' }),
+    })
+    expect(r.href).toBe('/communications/mail?c=t-other')
   })
 
   // The two "nobody said otherwise" cases. Both must land somewhere REAL —
