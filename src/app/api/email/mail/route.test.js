@@ -28,11 +28,16 @@ vi.mock('@/lib/permissions', async () => {
   const actual = await vi.importActual('@/lib/permissions')
   return { ...actual, hasPermissionForLocation: vi.fn(() => true) }
 })
+vi.mock('./_search', () => ({
+  searchTicketIds: vi.fn(),
+  SEARCH_SCAN_LIMIT: 1000,
+}))
 
 import { GET } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
+import { searchTicketIds } from './_search'
 import { makeDb } from '../tickets/_test-db'
 import {
   LOC_A, LOC_B, MB_MAIL, MB_TICKETS, T_STUDIO, T_ACCOUNTS,
@@ -61,6 +66,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   hasPermissionForLocation.mockReturnValue(true)
   getCurrentUser.mockResolvedValue(OWNER)
+  searchTicketIds.mockResolvedValue({ ok: true, skipped: true, ids: null, partial: false })
   setupDb(mailState())
 })
 
@@ -342,5 +348,69 @@ describe('GET /api/email/mail — paging', () => {
     expect(got).toContain('conv-tie-a')
     expect(got).toContain('conv-tie-b')
     expect(got).toContain('conv-older')
+  })
+})
+
+// MAIL-SEARCH.3 — search narrows, it NEVER widens.
+describe('GET /api/email/mail — search', () => {
+  it('🔴 cannot reach a conversation on a mailbox the caller may not see', async () => {
+    // T_ACCOUNTS lives on the TICKET surface, so the mail surface must not list
+    // it — with or without a query. If search bypassed the scope query this
+    // would return it, which is the whole reason the ids are intersected rather
+    // than trusted.
+    setupDb(mailState({ tickets: [{ ...T_STUDIO }, { ...T_ACCOUNTS }] }))
+    searchTicketIds.mockResolvedValue({
+      ok: true, skipped: false, partial: false,
+      ids: [T_STUDIO.id, T_ACCOUNTS.id],
+    })
+
+    const { body } = await list(`?location_id=${LOC_A}&q=freeze`)
+
+    expect(ids(body.data.conversations)).toEqual([T_STUDIO.id])
+  })
+
+  it('searches across views — an archived conversation is still findable', async () => {
+    setupDb(mailState({ tickets: [{ ...T_STUDIO, status: 'closed' }] }))
+    searchTicketIds.mockResolvedValue({ ok: true, skipped: false, partial: false, ids: [T_STUDIO.id] })
+
+    // The inbox view would normally exclude a closed conversation.
+    const { body } = await list(`?location_id=${LOC_A}&view=inbox&q=freeze`)
+
+    expect(ids(body.data.conversations)).toEqual([T_STUDIO.id])
+  })
+
+  it('answers an empty page when nothing matched, without running an unfiltered query', async () => {
+    setupDb(mailState({ tickets: [{ ...T_STUDIO }] }))
+    searchTicketIds.mockResolvedValue({ ok: true, skipped: false, partial: false, ids: [] })
+
+    const { body } = await list(`?location_id=${LOC_A}&q=zzzz`)
+
+    expect(body.success).toBe(true)
+    expect(body.data.conversations).toEqual([])
+  })
+
+  it('surfaces a FAILED search as an error, never as no results', async () => {
+    setupDb(mailState({ tickets: [{ ...T_STUDIO }] }))
+    searchTicketIds.mockResolvedValue({ ok: false, error: 'boom' })
+
+    const { res, body } = await list(`?location_id=${LOC_A}&q=freeze`)
+
+    expect(res.status).toBe(500)
+    expect(body.success).toBe(false)
+  })
+
+  it('passes search_partial through so the list can say the scan was truncated', async () => {
+    setupDb(mailState({ tickets: [{ ...T_STUDIO }] }))
+    searchTicketIds.mockResolvedValue({ ok: true, skipped: false, partial: true, ids: [T_STUDIO.id] })
+
+    const { body } = await list(`?location_id=${LOC_A}&q=the`)
+
+    expect(body.data.search_partial).toBe(true)
+  })
+
+  it('does not search at all when no query was given', async () => {
+    setupDb(mailState({ tickets: [{ ...T_STUDIO }] }))
+    await list(`?location_id=${LOC_A}`)
+    expect(searchTicketIds).not.toHaveBeenCalled()
   })
 })
