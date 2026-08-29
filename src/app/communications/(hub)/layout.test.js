@@ -3,8 +3,10 @@
 // THE PROPERTY THIS FILE EXISTS FOR
 // /communications/mail is the email surface; the tab is data-gated on
 // "does this studio hold any ACTIVE email account" (RETIRE-TICKETS.1 — the
-// per-mailbox surface flag it used to read retired with mig 578). A studio
-// with none has nothing there, so the tab must not be in the strip: an
+// per-mailbox surface flag it used to read retired with mig 578; MAIL-ALLLOC.1
+// widened it across every studio the caller holds email_inbox at, so the tab
+// survives the location picker landing on a mailbox-less studio). A caller
+// with none anywhere has nothing there, so the tab must not be in the strip: an
 // operator who clicks an empty surface concludes their mail has gone missing.
 // An empty surface in the nav is worse than no surface.
 //
@@ -24,7 +26,12 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
+vi.mock('@/lib/auth', async (importOriginal) => ({
+  // Real module, one override — the layout also reads getUserLocationIds,
+  // and the per-location resolution under test must be the REAL one.
+  ...(await importOriginal()),
+  getCurrentUser: vi.fn(),
+}))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('next/navigation', () => ({
   redirect: vi.fn((url) => {
@@ -46,6 +53,10 @@ const owner = () => ({
   role: 'owner',
   activeLocation: { id: LOC, name: 'UN1T Stillorgan', features: {} },
   activeAssignment: { permissions: {} },
+  // MAIL-ALLLOC.1 — the gate resolves per location now, so the fixture
+  // carries the multi-location shape getCurrentUser really returns.
+  locations: [{ id: LOC, name: 'UN1T Stillorgan', role: 'owner', features: {} }],
+  assignmentsByLocation: { [LOC]: { role: 'owner', permissions: {} } },
 })
 
 /**
@@ -59,6 +70,7 @@ function mockDb({ rows = [], error = null, throws = false } = {}) {
   const builder = {
     select: () => builder,
     eq: (col, val) => { filters.push([col, val]); return builder },
+    in: (col, vals) => { filters.push([col, vals]); return builder },
     limit: () => Promise.resolve({ data: error ? null : rows, error }),
   }
   createServerClient.mockImplementation(() => {
@@ -99,15 +111,16 @@ describe('the Mail tab gate', () => {
     expect((await render()).canMail).toBe(true)
   })
 
-  it('asks about THIS studio and only ACTIVE accounts — and never reads the retired surface column', async () => {
+  it('asks about the caller\'s mail-eligible studios and only ACTIVE accounts — never the retired surface column', async () => {
     // A deactivated account is hidden from every inbox, so it is not a reason
-    // to put the tab in the nav. RETIRE-TICKETS.1: the `.eq('surface', …)`
-    // half of this filter retired with the column (mig 578) — nothing may
-    // read it any more, which this exact-filters assertion also proves.
+    // to put the tab in the nav. MAIL-ALLLOC.1 widened the scope from the
+    // active studio to every studio the caller holds email_inbox at — the
+    // exact-filters assertion still proves nothing reads the retired
+    // `surface` column (mig 578) and nothing queries beyond that set.
     const filters = mockDb({ rows: [{ id: 'mb-1' }] })
     await render()
     expect(filters).toEqual([
-      ['location_id', LOC],
+      ['location_id', [LOC]],
       ['active', true],
     ])
   })
@@ -139,6 +152,8 @@ describe('the Mail tab gate', () => {
       ...owner(),
       role: 'staff',
       activeAssignment: { permissions: { email_inbox: false, whatsapp: true } },
+      locations: [{ id: LOC, name: 'UN1T Stillorgan', role: 'staff', features: {} }],
+      assignmentsByLocation: { [LOC]: { role: 'staff', permissions: { email_inbox: false, whatsapp: true } } },
     })
     mockDb({ rows: [{ id: 'mb-1' }] })
     const props = await render()

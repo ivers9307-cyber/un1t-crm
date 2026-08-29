@@ -24,12 +24,20 @@
 // mail-surface mailbox is a normal state and renders an explained empty
 // screen, never an error.
 //
+// MAIL-ALLLOC.1 — the gate is "ANY location where the caller holds the key",
+// not the active one: this mirrors the hub layout's tab gate exactly, so a
+// multi-location person whose active studio happens to lack the key still
+// reaches the Mail they can read elsewhere instead of bouncing off a redirect
+// the tab just invited them into. The eligible ids/names are passed down so
+// MailSurface knows single vs multi BEFORE the digest answers — the tile row
+// renders on first paint for multi-location callers, with no flash.
+//
 // NOTE the key is `email_inbox`, NOT the older `email` one — that gates
 // marketing/campaign mail and is a different population of people.
 
 import { redirect } from 'next/navigation'
-import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { hasPermissionForLocation } from '@/lib/permissions'
 import MailSurface from '@/components/mail/MailSurface'
 
 export const dynamic = 'force-dynamic'
@@ -37,12 +45,32 @@ export const dynamic = 'force-dynamic'
 export default async function MailPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!hasPermission(user, 'email_inbox')) redirect('/communications')
+
+  const eligibleIds = getUserLocationIds(user)
+    .filter(id => hasPermissionForLocation(user, id, 'email_inbox'))
+  if (eligibleIds.length === 0) redirect('/communications')
+
+  // Name-sorted, matching the digest route's own tile order, so the pre-digest
+  // tiles and the post-digest tiles cannot reshuffle under a moving cursor.
+  const locations = eligibleIds
+    .map(id => ({ id, name: (user.locations || []).find(l => l.id === id)?.name || null }))
+    .sort((a, b) => (a.name || `~${a.id}`).localeCompare(b.name || `~${b.id}`))
+
+  // The single-location props: the ACTIVE location when it is eligible (the
+  // exact behaviour this page always had), otherwise the caller's one eligible
+  // studio — a single-location caller must see today's UI unchanged, whichever
+  // studio that is.
+  const activeId = user.activeLocation?.id || null
+  const scopedLocation = (activeId && eligibleIds.includes(activeId))
+    ? { id: activeId, name: user.activeLocation?.name || null }
+    : locations[0]
 
   return (
     <MailSurface
-      locationId={user.activeLocation?.id || null}
-      locationName={user.activeLocation?.name || null}
+      locationId={scopedLocation.id}
+      locationName={scopedLocation.name}
+      locations={locations}
+      userId={user.id}
     />
   )
 }

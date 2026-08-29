@@ -64,6 +64,27 @@ export function isNeedsReply(row) {
   return row?.status === 'open' && row?.last_message_direction === 'inbound'
 }
 
+// ── Views (hoisted from route.js for MAIL-ALLLOC.1, so the scoped list and
+// the multi-location digest share ONE definition of every view) ──────────
+
+export const MAIL_VIEWS = Object.freeze(['inbox', 'needs_reply', 'archived'])
+
+// Legacy `solved` — a status this surface never writes but old rows carry —
+// deserves an explicit decision rather than falling out of a negation. It is
+// NOT archived, so it is live.
+export const LIVE_STATUSES = Object.freeze(['open', 'pending', 'solved'])
+
+export function applyView(query, view) {
+  switch (view) {
+    // The one thing a mail client cannot tell you. Shared scope with the nav
+    // badge, so the number and the list can never mean different things.
+    case 'needs_reply': return scopeToNeedsReply(query)
+    // "Archived" is the word on screen; `closed` is the word on disk.
+    case 'archived': return query.eq('status', 'closed')
+    default: return query.in('status', LIVE_STATUSES)
+  }
+}
+
 /** Archive is `status='closed'`, presented as "Archived". There is no second lifecycle. */
 export function isArchived(row) {
   return row?.status === 'closed'

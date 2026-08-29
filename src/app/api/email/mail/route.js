@@ -5,6 +5,7 @@ import { hasPermissionForLocation } from '@/lib/permissions'
 import {
   loadInboxMailboxes, loadConversationCounts,
   scopeToNeedsReply, scopeToUnmerged, isNeedsReply, isArchived,
+  MAIL_VIEWS, applyView,
 } from './_helpers'
 import { scopeToVisibleMailboxes } from '../tickets/_helpers'
 import { searchTicketIds } from './_search'
@@ -40,33 +41,16 @@ import { searchTicketIds } from './_search'
 // Views, as wire words. Anything else is a 400 rather than a silent default:
 // a typo'd view that quietly showed the whole inbox is how an operator ends up
 // believing the archive is empty.
-export const MAIL_VIEWS = Object.freeze(['inbox', 'needs_reply', 'archived'])
+// MAIL_VIEWS / LIVE_STATUSES / applyView hoisted to _helpers.js
+// (MAIL-ALLLOC.1) so the digest route shares them; MAIL_VIEWS is re-exported
+// via the import above because tests read it from this module.
+export { MAIL_VIEWS }
 
-// One screenful. The ticket queue hands back 200 in one go because it is a
-// work QUEUE that an operator narrows with a filter; a mail list is scrolled,
-// so it pages — and a smaller page is what keeps the per-conversation message
-// scan below comfortably inside the 1,000-row select cap.
+// One screenful. The ticket queue handed back 200 in one go because it was a
+// work QUEUE narrowed by filters; a mail list is scrolled, so it pages — and
+// a smaller page keeps the per-conversation message scan comfortably inside
+// the 1,000-row select cap.
 const PAGE_SIZE = 50
-
-// Live statuses, spelled OUT rather than expressed as "not closed".
-// `.neq('status','closed')` would read the same and be wrong twice over: the
-// shared test double models no `neq` (so it would no-op and every view test
-// would pass with the filter deleted), and `solved` — a legacy value this
-// surface never writes but old rows carry — deserves an explicit decision
-// rather than falling out of a negation. It is NOT archived, so it is here.
-const LIVE_STATUSES = Object.freeze(['open', 'pending', 'solved'])
-
-function applyView(query, view) {
-  switch (view) {
-    // The one thing a mail client cannot tell you. Shared scope with the
-    // ticket surface and its nav badge, so the number and the list can never
-    // mean different things.
-    case 'needs_reply': return scopeToNeedsReply(query)
-    // "Archived" is the word on screen; `closed` is the word on disk.
-    case 'archived': return query.eq('status', 'closed')
-    default: return query.in('status', LIVE_STATUSES)
-  }
-}
 
 export async function GET(request) {
   const user = await getCurrentUser()

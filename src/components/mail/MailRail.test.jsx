@@ -104,3 +104,64 @@ describe('MailRail', () => {
     expect(screen.getByText('Hatch Street')).toBeTruthy()
   })
 })
+
+// MAIL-ALLLOC.1 — the location tiles at the head of the rail.
+describe('MailRail — location tiles', () => {
+  const TILES = [
+    { id: 'all', name: 'All locations', count: 5 },
+    { id: 'loc-a', name: 'Hatch Street', count: 4 },
+    { id: 'loc-b', name: 'Stillorgan', count: 1 },
+  ]
+
+  it('renders one tile per entry and calls back with the scope', () => {
+    const p = renderRail({ tiles: TILES, scope: 'all', onScope: vi.fn(), locationLabel: null })
+    screen.getByRole('button', { name: /Stillorgan/ }).click()
+    expect(p.onScope).toHaveBeenCalledWith('loc-b')
+    screen.getByRole('button', { name: /All locations/ }).click()
+    expect(p.onScope).toHaveBeenCalledWith('all')
+  })
+
+  it('marks the active tile with aria-pressed, not aria-current — the view keeps the rail’s one "where am I"', () => {
+    renderRail({ tiles: TILES, scope: 'loc-a', onScope: vi.fn() })
+    const tile = screen.getByRole('button', { name: /Hatch Street/ })
+    expect(tile.getAttribute('aria-pressed')).toBe('true')
+    expect(tile.getAttribute('aria-current')).toBeNull()
+    const current = screen.getAllByRole('button').filter(b => b.getAttribute('aria-current') === 'true')
+    expect(current).toHaveLength(1) // still the view, and only the view
+  })
+
+  it('shows a needs-reply chip only above zero — 0 and unknown both render nothing', () => {
+    renderRail({
+      tiles: [
+        { id: 'all', name: 'All locations', count: null }, // never known yet
+        { id: 'loc-a', name: 'Hatch Street', count: 4 },
+        { id: 'loc-b', name: 'Stillorgan', count: 0 },
+      ],
+      scope: 'all', onScope: vi.fn(),
+      views: [{ id: 'inbox', label: 'Inbox', count: null }],
+    })
+    expect(screen.getByText('4')).toBeTruthy()
+    expect(screen.queryByText('0')).toBeNull()
+    expect(screen.getByRole('button', { name: /All locations/ }).textContent).toBe('All locations')
+  })
+
+  it('does not render tiles for fewer than two studios — a single-location rail stays byte-for-byte', () => {
+    renderRail({ tiles: [TILES[0], TILES[1]], scope: 'all', onScope: vi.fn() })
+    expect(screen.queryByText('All locations')).toBeNull()
+    expect(screen.queryByText('Location')).toBeNull()
+    // The plain location label renders instead, exactly as before.
+    expect(screen.getByText('Hatch Street')).toBeTruthy()
+  })
+
+  it('replaces the account filter with the disclosure line in All mode', () => {
+    renderRail({ tiles: TILES, scope: 'all', onScope: vi.fn(), mailboxes: [] })
+    expect(screen.getByText(/Pick a studio to filter by account/)).toBeTruthy()
+    expect(screen.queryByText('Accounts')).toBeNull()
+  })
+
+  it('shows the account filter again once scoped to one studio', () => {
+    renderRail({ tiles: TILES, scope: 'loc-a', onScope: vi.fn() })
+    expect(screen.queryByText(/Pick a studio to filter by account/)).toBeNull()
+    expect(screen.getByRole('button', { name: 'All accounts' })).toBeTruthy()
+  })
+})
