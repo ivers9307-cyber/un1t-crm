@@ -23,6 +23,20 @@ describe('LeadSchema', () => {
   it('rejects a too-short phone', () => {
     expect(LeadSchema.safeParse({ ...valid, phone: '123' }).success).toBe(false)
   })
+  // The three shapes real Hatch Street leads actually typed. The bare
+  // no-trunk-zero form and the +353 form both appear in live signups, so a
+  // stricter gate must keep accepting them.
+  it.each(['0876449676', '871496810', '+353871494721', '087 123 4567'])(
+    'accepts the real mobile form %s', (phone) => {
+      expect(LeadSchema.safeParse({ ...valid, phone }).success).toBe(true)
+    })
+  // 2026-08-24→28: a bot posted 71 signups to the hatch-street lead form with
+  // random 10-digit non-Irish numbers. The old >=7-digits refine waved every
+  // one through; a mobile gate rejects all of them.
+  it.each(['9102985384', '5124203409', '2331614872', '4016013375'])(
+    'rejects the bot-signup number %s', (phone) => {
+      expect(LeadSchema.safeParse({ ...valid, phone }).success).toBe(false)
+    })
   it('rejects consent !== true', () => {
     expect(LeadSchema.safeParse({ ...valid, consent: false }).success).toBe(false)
     expect(LeadSchema.safeParse({ ...valid, consent: undefined }).success).toBe(false)

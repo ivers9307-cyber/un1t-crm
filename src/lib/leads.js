@@ -2,6 +2,7 @@
 // Consumed by POST /api/public/leads. No DB, no side effects — unit-tested.
 
 import { z } from 'zod'
+import { isValidMobileNumber } from '@/lib/phone-validate'
 
 // Defaults when a lead_form block hasn't overridden them. Hatch's
 // founding-member launch is the first use; both are operator-overridable
@@ -17,7 +18,7 @@ export const LeadSchema = z.object({
   first_name: z.string().trim().min(1, 'Your name is required').max(120),
   email: z.string().trim().email('Enter a valid email').max(320),
   phone: z.string().trim().min(1, 'Phone number is required').max(50)
-    .refine((v) => v.replace(/\D/g, '').length >= 7, 'Enter a valid phone number'),
+    .refine(isValidMobileNumber, 'Enter a valid mobile number'),
   consent: z.boolean().refine((v) => v === true, { message: 'Please tick the consent box to continue' }),
   public_path: z.string().trim().min(1).max(120),
   // Optional campaign key (paid-traffic landing pages). Validated
