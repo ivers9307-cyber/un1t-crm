@@ -18,6 +18,17 @@
 // resend" 500, renders as the red panel above the dock with every field
 // untouched. A failed send must not cost the operator the email.
 //
+// MAIL-ALLLOC.1 — THE GROUPED FROM PICKER. A caller with 2+ readable studios
+// gets the From options grouped by studio name (locked design); sending is
+// unchanged (compose already takes mailbox_id, and the sign/send calls carry
+// the CHOSEN MAILBOX'S OWN location as their header — mailboxLocationId).
+// THE DATA CHOICE, documented per contract: the studio set arrives as the
+// `locs` route param the Mail tab's FAB hands over (mail-digest.js
+// buildScopeParams), and this sheet then fetches each studio's own listMail
+// mailboxes in ONE parallel round — no digest call from compose, and the
+// mailbox set is exactly what each scoped inbox would show. A deep link with
+// no/broken params stays today's single-location sheet, byte-for-byte.
+//
 // ATTACHMENTS mirror the web picker's shape (AttachmentPicker.jsx): each file
 // uploads the moment it is chosen — the waiting happens while they type, and
 // Send can be honestly disabled while anything is still moving — via
@@ -29,12 +40,12 @@
 // outbound/ — quota is charged only when a message row is filed (the web
 // picker documents the same accepted race).
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   View, Text, ScrollView, Pressable, TextInput, ActivityIndicator,
   Alert, KeyboardAvoidingView, Platform, Modal,
 } from 'react-native'
-import { router, Stack } from 'expo-router'
+import { router, Stack, useLocalSearchParams } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as DocumentPicker from 'expo-document-picker'
@@ -51,7 +62,9 @@ import {
   classifyPickedFiles, attachmentBudget, readyAttachmentRefs,
   composeSendState, sendFailureMessage, defaultMailboxId, mailboxDisplay,
   composeIsDirty, composeCloseAction,
+  groupMailboxesByLocation, groupedDefaultMailboxId, mailboxLocationId,
 } from '../../../lib/mail-compose'
+import { ALL_SCOPE, parseLocationsParam } from '../../../lib/mail-digest'
 import { formatAttachmentSize } from '../../../lib/email-tickets'
 
 // How long a keystroke rests before the directory is asked. Matches the feel
@@ -86,7 +99,26 @@ export default function ComposeEmail() {
   const [mailboxId, setMailboxId] = useState(null)
   const [mailboxesLoading, setMailboxesLoading] = useState(true)
   const [mailboxesError, setMailboxesError] = useState(null)
+  // Audit M5 — a partial From list (one studio's fetch failed) says so.
+  const [mailboxesNotice, setMailboxesNotice] = useState(null)
   const [pickerOpen, setPickerOpen] = useState(false)
+  // MAIL-ALLLOC.1 — non-null only when 2+ studios each brought a sendable
+  // account: the picker then renders group headers. `mailboxes` stays the
+  // flat list (each entry location-stamped) so everything reading it —
+  // defaults, the From row, the attachment gate — works unchanged.
+  const [mailboxGroups, setMailboxGroups] = useState(null)
+
+  // The studio set the Mail tab handed over (see the file header for the
+  // data choice). Memoised on the raw string so the fetch effect sees a
+  // stable value.
+  const routeParams = useLocalSearchParams()
+  const locsRaw = typeof routeParams?.locs === 'string' ? routeParams.locs : ''
+  const scopeRaw = typeof routeParams?.scope === 'string' ? routeParams.scope : ''
+  const paramLocations = useMemo(() => parseLocationsParam(locsRaw), [locsRaw])
+  const multiStudio = (paramLocations || []).length >= 2
+  // The default From follows the Mail tab's scope: a scoped studio's default
+  // account when scoped, the active location's otherwise (mockup §02 note 2).
+  const preferredLocationId = scopeRaw && scopeRaw !== ALL_SCOPE ? scopeRaw : locationId
 
   // To — pills + the text being typed after them.
   const [pills, setPills] = useState([])
@@ -111,9 +143,48 @@ export default function ComposeEmail() {
   const suggestSeq = useRef(0)
 
   useEffect(() => {
-    if (!locationId || !canEmail) return
+    if (!canEmail) return
     let alive = true
     setMailboxesLoading(true)
+
+    // MAIL-ALLLOC.1 — multi-studio: one parallel round of the SAME list call
+    // per studio the Mail tab named, then group. A studio whose fetch failed
+    // is dropped from the picker (a From list must never invent accounts) —
+    // only every studio failing is a load error.
+    if (multiStudio) {
+      Promise.all(paramLocations.map(l =>
+        listMail(l.id)
+          .then(res => ({
+            locationId: l.id,
+            name: l.name,
+            mailboxes: res.success ? res.mailboxes || [] : [],
+            failed: !res.success,
+          }))
+          .catch(() => ({ locationId: l.id, name: l.name, mailboxes: [], failed: true }))
+      )).then(perLocation => {
+        if (!alive) return
+        setMailboxesLoading(false)
+        const groupedBoxes = groupMailboxesByLocation(perLocation)
+        if (groupedBoxes.flat.length === 0 && groupedBoxes.anyFailed) {
+          setMailboxesError('Could not load your email accounts.')
+          return
+        }
+        setMailboxesError(null)
+        // Audit M5 — one studio's mailbox fetch failing must not silently
+        // shorten the From list; the picker says a studio is missing.
+        setMailboxesNotice(groupedBoxes.anyFailed
+          ? 'Some studios\u2019 accounts couldn\u2019t be loaded \u2014 their addresses are missing from this list.'
+          : null)
+        setMailboxes(groupedBoxes.flat)
+        setMailboxGroups(groupedBoxes.multi ? groupedBoxes.groups : null)
+        setMailboxId(prev => (groupedBoxes.multi
+          ? groupedDefaultMailboxId(groupedBoxes.groups, { preferredLocationId, initialId: prev })
+          : defaultMailboxId(groupedBoxes.flat, prev)))
+      })
+      return () => { alive = false }
+    }
+
+    if (!locationId) return () => { alive = false }
     listMail(locationId).then(res => {
       if (!alive) return
       setMailboxesLoading(false)
@@ -124,10 +195,11 @@ export default function ComposeEmail() {
       setMailboxesError(null)
       const boxes = res.mailboxes || []
       setMailboxes(boxes)
+      setMailboxGroups(null)
       setMailboxId(prev => defaultMailboxId(boxes, prev))
     })
     return () => { alive = false }
-  }, [locationId, canEmail])
+  }, [locationId, canEmail, multiStudio, paramLocations, preferredLocationId])
 
   // Contact autocomplete — debounced, stale responses dropped. Filtering
   // against the current pills happens at render time so a just-added pill
@@ -205,13 +277,17 @@ export default function ComposeEmail() {
   }, [])
 
   const uploadEntry = useCallback(async (entry, forMailboxId) => {
+    // MAIL-ALLLOC.1 — the sign authorises against the mailbox, so the
+    // location header must be the MAILBOX'S OWN studio (stamped on the flat
+    // list in multi-studio mode; null → today's single-location fallback).
+    const signLocationId = mailboxLocationId(mailboxes, forMailboxId) || locationId
     try {
       const signed = await signOutboundAttachment({
         filename: entry.filename,
         size: entry.size,
         mime: entry.mime,
         mailboxId: forMailboxId,
-        locationId,
+        locationId: signLocationId,
       })
       if (!signed.success) {
         patchFile(entry.key, { status: 'failed', error: signed.error || 'Could not start that upload.' })
@@ -230,7 +306,7 @@ export default function ComposeEmail() {
     } catch {
       patchFile(entry.key, { status: 'failed', error: 'Upload failed — check your connection.' })
     }
-  }, [locationId, patchFile])
+  }, [locationId, mailboxes, patchFile])
 
   const [pickError, setPickError] = useState(null)
 
@@ -322,7 +398,10 @@ export default function ComposeEmail() {
       subject: subject.trim(),
       text,
       attachments: attachments.length ? attachments : undefined,
-      locationId,
+      // The chosen mailbox's own studio (MAIL-ALLLOC.1) — sending is
+      // otherwise unchanged: the conversation files at the mailbox's
+      // location, exactly as it always has.
+      locationId: mailboxLocationId(mailboxes, mailboxId) || locationId,
     })
     setSending(false)
     if (!res?.success) {
@@ -433,6 +512,9 @@ export default function ComposeEmail() {
         </Pressable>
         {mailboxesError ? (
           <Text className="px-4 py-2 text-xs text-red-700 bg-red-500/10">{mailboxesError}</Text>
+        ) : null}
+        {!mailboxesError && mailboxesNotice ? (
+          <Text className="px-4 py-2 text-xs text-amber-700 bg-amber-500/10">{mailboxesNotice}</Text>
         ) : null}
         {!mailboxesLoading && !mailboxesError && mailboxes.length === 0 ? (
           <Text className="px-4 py-2 text-xs text-un1t-subtle">
@@ -636,24 +718,38 @@ export default function ComposeEmail() {
             <Text className="text-xs font-extrabold uppercase text-un1t-subtle mb-2">
               Send from
             </Text>
-            {mailboxes.map(m => (
-              <Pressable
-                key={m.id}
-                onPress={() => { setMailboxId(m.id); setPickerOpen(false) }}
-                className="flex-row items-center py-3 border-b border-un1t-border"
-              >
-                <View className="flex-1">
-                  <Text className={`text-sm ${m.id === mailboxId ? 'font-extrabold text-un1t-text' : 'text-un1t-text'}`}>
-                    {mailboxDisplay(m)}
+            {/* MAIL-ALLLOC.1 — grouped by studio when 2+ studios brought a
+                sendable account; the flat list otherwise (today's picker). */}
+            {(mailboxGroups || [{ locationId: null, name: null, mailboxes }]).map(group => (
+              <View key={group.locationId ?? 'flat'}>
+                {group.name ? (
+                  <Text
+                    className="text-[10px] font-extrabold uppercase text-un1t-subtle mt-2 mb-0.5"
+                    style={{ letterSpacing: 1 }}
+                  >
+                    {group.name}
                   </Text>
-                  {m.label && m.address ? (
-                    <Text className="text-[11px] text-un1t-subtle">{m.label}</Text>
-                  ) : null}
-                </View>
-                {m.id === mailboxId ? (
-                  <Ionicons name="checkmark" size={16} color="#111827" />
                 ) : null}
-              </Pressable>
+                {group.mailboxes.map(m => (
+                  <Pressable
+                    key={m.id}
+                    onPress={() => { setMailboxId(m.id); setPickerOpen(false) }}
+                    className="flex-row items-center py-3 border-b border-un1t-border"
+                  >
+                    <View className="flex-1">
+                      <Text className={`text-sm ${m.id === mailboxId ? 'font-extrabold text-un1t-text' : 'text-un1t-text'}`}>
+                        {mailboxDisplay(m)}
+                      </Text>
+                      {m.label && m.address ? (
+                        <Text className="text-[11px] text-un1t-subtle">{m.label}</Text>
+                      ) : null}
+                    </View>
+                    {m.id === mailboxId ? (
+                      <Ionicons name="checkmark" size={16} color="#111827" />
+                    ) : null}
+                  </Pressable>
+                ))}
+              </View>
             ))}
             <Text className="text-[11px] text-un1t-subtle mt-2.5">
               The reply comes back to this account, and the conversation is filed under it.
@@ -663,7 +759,10 @@ export default function ComposeEmail() {
       </Modal>
 
       {/* ── Sent toast — confirms, then the sheet dismisses itself ───── */}
-      {sent ? (
+      {/* Audit M4 — the sent-but-unfiled refusal sets BOTH sent (kills Send)
+          and error (the do-not-resend sentence); the toast must not sit on
+          top of the one sentence that path exists to make the operator read. */}
+      {sent && !error ? (
         <View className="absolute left-0 right-0 top-0 bottom-0 items-center justify-center bg-black/20">
           <View className="flex-row items-center bg-un1t-text rounded-2xl px-5 py-3">
             <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" style={{ marginRight: 7 }} />

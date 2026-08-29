@@ -187,6 +187,110 @@ export const SEARCH_ERROR_COPY = Object.freeze({
   retry: 'Try again',
 })
 
+// ═══ MAIL-ALLLOC.1 — the All-mode fan-out ═══════════════════════════
+//
+// When the Mail tab's scope is All, search fans out one existing
+// listMail(loc, { q }) per readable studio CLIENT-SIDE (the digest route is
+// a triage surface, not a search engine) and renders the results grouped by
+// studio under the same section headers as the All-mode inbox, uncapped per
+// section. The locked partial-failure posture: a failed studio's section
+// shows the error state while the other sections still render; only EVERY
+// studio failing is a failed search (the controller's 'error' phase, keeping
+// previous results, exactly as for a scoped search).
+//
+// THE CONTROLLER IS UNCHANGED. createFanOutSearch builds a drop-in `search`
+// function for it, whose `data` is an array of SECTIONS rather than rows —
+// the debounce, the stale-response guard and the phases neither know nor
+// care. The screen knows it is in grouped mode from its own scope params
+// (mail-digest.js parseScopeParams) and reads state.rows as sections there.
+
+/**
+ * A `search` function for createMailSearchController that fans one
+ * searchOne(locationId, q) out per location and groups the answers.
+ *
+ * @param {object} opts
+ * @param {{id: string, name: string}[]} opts.locations  the digest's
+ *   readable studios, already name-ordered (parseScopeParams' shape)
+ * @param {(locationId: string, q: string) => Promise<{success: boolean,
+ *   data?: object[], searchPartial?: boolean}>} opts.searchOne  usually
+ *   `(id, q) => listMail(id, { q })`
+ * @returns {(q: string) => Promise<{success: boolean, data?: object[],
+ *   searchPartial?: boolean, error?: string}>}  data = sections:
+ *   [{ location_id, name, rows, failed }]
+ */
+export function createFanOutSearch({ locations, searchOne } = {}) {
+  const targets = locations || []
+  return async (q) => {
+    const answers = await Promise.all(targets.map(l =>
+      Promise.resolve()
+        .then(() => searchOne(l.id, q))
+        .catch(() => ({ success: false }))
+    ))
+    const sections = targets.map((l, i) => ({
+      location_id: l.id,
+      name: l.name,
+      failed: !answers[i]?.success,
+      rows: answers[i]?.success ? (answers[i].data || []) : [],
+      searchPartial: !!answers[i]?.searchPartial,
+    }))
+    if (sections.length > 0 && sections.every(s => s.failed)) {
+      return { success: false, error: 'The search failed.' }
+    }
+    return {
+      success: true,
+      data: sections,
+      searchPartial: sections.some(s => s.searchPartial),
+    }
+  }
+}
+
+/**
+ * What the grouped results screen renders from the controller's state:
+ * the visible sections (a healthy studio with no matches is noise and drops
+ * out; a FAILED studio stays — its error state IS the content), the true
+ * total across healthy sections, whether every healthy section came back
+ * empty (the no-matches state), and whether any failed.
+ *
+ * Inert outside grouped results — phases other than 'results'/'error'/
+ * 'searching' answer the empty shape so the screen needs no guards.
+ */
+export function groupedSearchDisplay(state) {
+  const sections = state && state.phase !== 'idle' && Array.isArray(state.rows) ? state.rows : []
+  const healthy = sections.filter(s => !s?.failed)
+  const total = healthy.reduce((sum, s) => sum + (Array.isArray(s.rows) ? s.rows.length : 0), 0)
+  return {
+    sections: sections.filter(s => s?.failed || (Array.isArray(s?.rows) && s.rows.length > 0)),
+    total,
+    allEmpty: healthy.length > 0 && total === 0,
+    anyFailed: sections.some(s => s?.failed),
+  }
+}
+
+/**
+ * The grouped twin of searchScopeLine: the estate-wide count, the scope in
+ * words, and the truncation admission. Null before results exist and at
+ * zero, for the same one-message-per-fact reason.
+ */
+export function groupedScopeLine(state) {
+  if (!state || state.phase !== 'results') return null
+  const { total } = groupedSearchDisplay(state)
+  if (total === 0) return null
+  const base = `${total} conversation${total === 1 ? '' : 's'} · all locations · all views`
+  return state.searchPartial ? `${base} · showing the most recent matches` : base
+}
+
+/**
+ * A grouped result section's header: the studio and its match count. A
+ * failed studio makes NO count claim — "0" over an error is the confident
+ * zero this whole surface exists to refuse.
+ */
+export function searchSectionHeader(section) {
+  return {
+    title: section?.name || 'Studio',
+    detail: section?.failed ? null : String((section?.rows || []).length),
+  }
+}
+
 // ── Highlight splitting (mockup §03, callout 1) ─────────────────────
 
 const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')

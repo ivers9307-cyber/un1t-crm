@@ -7,6 +7,10 @@ import {
   noMatchesCopy,
   SEARCH_ERROR_COPY,
   splitHighlight,
+  createFanOutSearch,
+  groupedSearchDisplay,
+  groupedScopeLine,
+  searchSectionHeader,
 } from './mail-search'
 
 // MOBILE-MAIL-SEARCH.1 — the search screen's whole decision surface lives in
@@ -513,5 +517,152 @@ describe('splitHighlight', () => {
     expect(splitHighlight('Invoice for August', 'freeze')).toEqual([
       { text: 'Invoice for August', match: false },
     ])
+  })
+})
+
+// ═══ MAIL-ALLLOC.1 — the All-mode fan-out ════════════════════════════
+//
+// When the Mail tab's scope is All, search fans out one listMail({ q }) per
+// readable studio CLIENT-SIDE and renders results grouped by studio. The
+// grouping, the partial-failure posture (a failed studio shows an error
+// section, the others still render) and the honest counts live here; the
+// screen renders verdicts.
+
+describe('createFanOutSearch', () => {
+  const locations = [
+    { id: 'loc-a', name: 'Hatch Street' },
+    { id: 'loc-b', name: 'Stillorgan' },
+  ]
+  const row = (id) => ({ id, subject: `S-${id}` })
+
+  it('searches every location and answers sections in the given (name) order', async () => {
+    const searchOne = vi.fn(async (id, _q) => ({
+      success: true,
+      data: id === 'loc-a' ? [row('t1'), row('t2')] : [row('t3')],
+      searchPartial: false,
+    }))
+    const search = createFanOutSearch({ locations, searchOne })
+    const res = await search('freeze')
+    expect(searchOne).toHaveBeenCalledWith('loc-a', 'freeze')
+    expect(searchOne).toHaveBeenCalledWith('loc-b', 'freeze')
+    expect(res.success).toBe(true)
+    expect(res.data.map(s => s.location_id)).toEqual(['loc-a', 'loc-b'])
+    expect(res.data[0]).toMatchObject({ name: 'Hatch Street', failed: false })
+    expect(res.data[0].rows.map(r => r.id)).toEqual(['t1', 't2'])
+    expect(res.data[1].rows.map(r => r.id)).toEqual(['t3'])
+  })
+
+  it('one failed studio is an error SECTION, not a failed search — the others still render', async () => {
+    const searchOne = vi.fn(async (id) => (
+      id === 'loc-a' ? { success: false, error: 'blip' } : { success: true, data: [row('t3')] }
+    ))
+    const res = await createFanOutSearch({ locations, searchOne })('x')
+    expect(res.success).toBe(true)
+    expect(res.data[0]).toMatchObject({ failed: true, rows: [] })
+    expect(res.data[1]).toMatchObject({ failed: false })
+  })
+
+  it('a rejecting search counts as that studio failing, never as an unhandled throw', async () => {
+    const searchOne = vi.fn(async (id) => {
+      if (id === 'loc-b') throw new Error('boom')
+      return { success: true, data: [row('t1')] }
+    })
+    const res = await createFanOutSearch({ locations, searchOne })('x')
+    expect(res.success).toBe(true)
+    expect(res.data[1].failed).toBe(true)
+  })
+
+  it('EVERY studio failing is a failed search — the house rule, estate-wide', async () => {
+    const searchOne = vi.fn(async () => ({ success: false }))
+    const res = await createFanOutSearch({ locations, searchOne })('x')
+    expect(res.success).toBe(false)
+    expect(res.error).toBeTruthy()
+  })
+
+  it('ORs searchPartial — one truncated scan makes the whole answer admit it', async () => {
+    const searchOne = vi.fn(async (id) => ({
+      success: true, data: [], searchPartial: id === 'loc-b',
+    }))
+    const res = await createFanOutSearch({ locations, searchOne })('x')
+    expect(res.searchPartial).toBe(true)
+  })
+})
+
+describe('groupedSearchDisplay', () => {
+  const section = (id, name, rows, failed = false) => ({ location_id: id, name, rows, failed })
+
+  it('totals only what actually rendered and hides empty healthy sections', () => {
+    const state = {
+      phase: 'results',
+      rows: [
+        section('loc-a', 'A', [{ id: 't1' }, { id: 't2' }]),
+        section('loc-b', 'B', []),
+        section('loc-c', 'C', [], true),
+      ],
+    }
+    const d = groupedSearchDisplay(state)
+    expect(d.total).toBe(2)
+    expect(d.anyFailed).toBe(true)
+    expect(d.allEmpty).toBe(false)
+    // The failed section stays visible (its error state IS the content);
+    // a healthy studio with no matches is noise and drops out.
+    expect(d.sections.map(s => s.location_id)).toEqual(['loc-a', 'loc-c'])
+  })
+
+  it('allEmpty only when every HEALTHY section found nothing', () => {
+    const clean = groupedSearchDisplay({
+      phase: 'results',
+      rows: [section('loc-a', 'A', []), section('loc-b', 'B', [])],
+    })
+    expect(clean.allEmpty).toBe(true)
+    expect(clean.anyFailed).toBe(false)
+    expect(clean.sections).toEqual([])
+  })
+
+  it('is inert outside grouped results', () => {
+    const d = groupedSearchDisplay({ phase: 'idle', rows: [] })
+    expect(d).toEqual({ sections: [], total: 0, allEmpty: false, anyFailed: false })
+  })
+})
+
+describe('groupedScopeLine', () => {
+  const rows = [
+    { location_id: 'loc-a', name: 'A', rows: [{ id: 't1' }, { id: 't2' }], failed: false },
+    { location_id: 'loc-b', name: 'B', rows: [{ id: 't3' }], failed: false },
+  ]
+
+  it('states the estate-wide count and scope', () => {
+    expect(groupedScopeLine({ phase: 'results', rows, searchPartial: false }))
+      .toBe('3 conversations · all locations · all views')
+    expect(groupedScopeLine({ phase: 'results', rows: [rows[1]], searchPartial: false }))
+      .toBe('1 conversation · all locations · all views')
+  })
+
+  it('admits a truncated scan', () => {
+    expect(groupedScopeLine({ phase: 'results', rows, searchPartial: true }))
+      .toBe('3 conversations · all locations · all views · showing the most recent matches')
+  })
+
+  it('is null before results and at zero — the empty state carries that message', () => {
+    expect(groupedScopeLine({ phase: 'searching', rows })).toBe(null)
+    expect(groupedScopeLine({ phase: 'results', rows: [], searchPartial: false })).toBe(null)
+    expect(groupedScopeLine({
+      phase: 'results',
+      rows: [{ location_id: 'loc-a', name: 'A', rows: [], failed: false }],
+    })).toBe(null)
+  })
+})
+
+describe('searchSectionHeader', () => {
+  it('names the studio with its match count', () => {
+    expect(searchSectionHeader({ name: 'Hatch Street', rows: [{ id: 't1' }, { id: 't2' }], failed: false }))
+      .toEqual({ title: 'Hatch Street', detail: '2' })
+  })
+  it('makes no count claim for a failed studio', () => {
+    expect(searchSectionHeader({ name: 'Hatch Street', rows: [], failed: true }))
+      .toEqual({ title: 'Hatch Street', detail: null })
+  })
+  it('survives a nameless location', () => {
+    expect(searchSectionHeader({ rows: [], failed: false }).title).toBe('Studio')
   })
 })
