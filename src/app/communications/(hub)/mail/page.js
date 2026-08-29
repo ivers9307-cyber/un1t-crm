@@ -43,7 +43,6 @@ export default async function MailPage() {
     <MailSurface
       locationId={user.activeLocation?.id || null}
       locationName={user.activeLocation?.name || null}
-      userId={user.id}
     />
   )
 }

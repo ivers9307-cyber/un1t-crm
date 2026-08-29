@@ -62,7 +62,7 @@ const SEARCH_DEBOUNCE_MS = 350
 // exporting it is a change to a file this surface does not own.
 const UUID_SHAPE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
 
-export default function MailSurface({ locationId, locationName, userId }) {
+export default function MailSurface({ locationId, locationName }) {
   const router = useRouter()
   const searchParams = useSearchParams()
 
@@ -1139,7 +1139,6 @@ export default function MailSurface({ locationId, locationName, userId }) {
             attachmentsUnavailable={attachmentsUnavailable}
             loading={threadLoading}
             error={threadError}
-            currentUserId={userId}
             onBack={clearSelection}
             onSend={handleSend}
             sending={sending}

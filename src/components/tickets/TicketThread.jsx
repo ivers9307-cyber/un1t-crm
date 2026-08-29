@@ -66,12 +66,10 @@ import {
   initialsOf,
   statusMeta,
   priorityMeta,
-  STATUS_ORDER,
   messageKind,
   messageTimestamp,
   deliveryMeta,
   deliveryTimestamp,
-  assigneeLabel,
   mailboxLabel,
   messageEnvelope,
   threadSignature,
@@ -89,7 +87,6 @@ import { joinPointsByMessage } from '@/lib/email-tickets'
 // registry: which slugs are member-ish vs still-a-lead.
 import { FUNNEL_STAGE_SLUGS, RETURNING_STAGE_SLUGS, OFF_FUNNEL_STAGE_SLUGS } from '@/lib/pipeline-classifier'
 import TicketReplyBox from './TicketReplyBox'
-import TicketMerge from './TicketMerge'
 
 // member-ish (green): the off-funnel "steady state" slugs (minus the two that
 // are really a lead who went cold/quiet, not a member) plus 'converted' —
@@ -141,15 +138,9 @@ export default function TicketThread({
   attachmentsUnavailable = false,
   loading = false,
   error,
-  currentUserId,
   onBack,
-  onStatusChange,
-  statusSaving = false,
-  // EMAIL-ASSIGN.1 — claim/release for everyone, reassign for elevated
-  // viewers. onAssign takes 'me' | null | <profile id>; the route decides.
-  onAssign,
-  assignSaving = false,
-  viewerIsElevated = false,
+  // (RETIRE-TICKETS.2 — the onStatusChange/onAssign/onMerge prop family left
+  // with the deleted controls fallback; their routes are gone.)
   onSend,
   sending = false,
   // EMAIL-PARTICIPANTS.7 — takes ONE address off the reply audience, stickily.
@@ -165,18 +156,6 @@ export default function TicketThread({
   // inbox (like compose), because a forward is a modal over the whole surface
   // rather than something a bubble can render inside itself.
   onForward,
-  // EMAIL-MERGE.6 — folding this ticket into another, and undoing it. The
-  // WRITES are the inbox's, like every other mutation on this pane: a merge
-  // takes this ticket out of the queue and rewrites the survivor's row, and
-  // neither of those finishes inside a presentational component. onMerge
-  // resolves to { ok, error?, stale? } so the dialog can show a failure that
-  // leaves it useful — the same contract onSend already answers.
-  onMerge,
-  onUnmerge,
-  // (id) => void — select another ticket. Used by the merged banner's Open,
-  // whose target is deliberately NOT in the queue (tombstones' survivors may
-  // sit outside the current view).
-  onOpenTicket,
 
   // ── MAIL-TRIAL.B — three slots, so a SECOND surface can reuse this pane ──
   //
@@ -289,21 +268,6 @@ export default function TicketThread({
   // derived, and computed once per render for the same reason as the map above.
   const joinPoints = joinPointsByMessage(messages)
 
-  // EMAIL-MERGE.6 — held in one place because it is rendered in two: bare when
-  // this ticket is a tombstone (the banner is the whole row) and inside a
-  // labelled strip when it is not. Two copies of the prop list is two places to
-  // forget onUnmerge, and the one that forgot it would be the merged branch —
-  // the only branch where the undo exists.
-  const mergeControl = (
-    <TicketMerge
-      ticket={ticket}
-      messageCount={messages.length}
-      onMerge={onMerge}
-      onUnmerge={onUnmerge}
-      onOpenTicket={onOpenTicket}
-    />
-  )
-
   return (
     <>
       {/* Header */}
@@ -355,7 +319,6 @@ export default function TicketThread({
                 // orphans its correspondence rather than hiding it.
                 <span>No mailbox on this ticket</span>
               )}
-              <span>{assigneeLabel(ticket, currentUserId)}</span>
               {effectiveContact?.id ? (
                 <>
                   <Link href={`/contacts/${effectiveContact.id}`} className="text-un1t-accent hover:underline">
@@ -391,81 +354,17 @@ export default function TicketThread({
           </div>
         </div>
 
-        {/* MAIL-TRIAL.B — the ticket-only chrome, in one slot. The three rows
-            below are the whole of what the Mail surface drops (four-state
-            lifecycle, assignment, duplicate folding); everything else on this
-            pane is shared. `undefined` renders them exactly as before. */}
-        {controls !== undefined ? controls : (
-        <>
-        {/* Lifecycle. All four states on screen, always: nothing in this
-            system closes itself, so closing has to be one click from the
-            thread rather than something an operator has to go looking for. */}
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <span className="text-[11px] uppercase tracking-wide text-un1t-muted">Status</span>
-          <div className="flex flex-wrap gap-1" role="group" aria-label="Ticket status">
-            {STATUS_ORDER.map(s => {
-              const m = statusMeta(s)
-              const active = ticket?.status === s
-              return (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => onStatusChange(s)}
-                  disabled={statusSaving || active}
-                  aria-pressed={active}
-                  title={m.hint}
-                  className={`rounded-md border px-2.5 py-1 text-xs transition-colors disabled:cursor-default ${
-                    active
-                      ? 'border-transparent bg-un1t-text font-medium text-un1t-bg'
-                      : 'border-un1t-border text-un1t-subtle hover:text-un1t-text disabled:opacity-50'
-                  }`}
-                >
-                  {m.label}
-                </button>
-              )
-            })}
-          </div>
-          <span className="text-[11px] text-un1t-muted">Nothing closes itself — close it when it's done.</span>
-        </div>
-
-        {/* Ownership (EMAIL-ASSIGN.1). Claim is one click because the common
-            case is "I'm answering this"; release undoes exactly that; the
-            reassign picker appears only for elevated viewers, fed by the
-            assignees route (grant-holders + owners — people who can SEE it). */}
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <span className="text-[11px] uppercase tracking-wide text-un1t-muted">Owner</span>
-          <AssignControl
-            ticket={ticket}
-            currentUserId={currentUserId}
-            viewerIsElevated={viewerIsElevated}
-            onAssign={onAssign}
-            saving={assignSaving}
-          />
-        </div>
-
-        {/* Duplicates (EMAIL-MERGE.6). Two tickets that are one conversation
-            is the failure this row exists for — an operator answered both and
-            the correspondent got the same reply twice. TicketMerge renders the
-            ACTION normally and the merged BANNER once this ticket is a
-            tombstone, so the row changes shape rather than the header growing
-            a second one. The banner is full-width because it is the most
-            important thing on a merged ticket: it is the only route to the
-            live thread and the only route back. */}
-        {ticket?.id && (
-          <div className="mt-2">
-            {ticket.merged_into_id ? mergeControl : (
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[11px] uppercase tracking-wide text-un1t-muted">Duplicate</span>
-                {mergeControl}
-                <span className="text-[11px] text-un1t-muted">
-                  Same conversation as another ticket? Fold this one into it.
-                </span>
-              </div>
-            )}
-          </div>
-        )}
-        </>
-        )}
+        {/* RETIRE-TICKETS.2 — the `controls` slot survives; its FALLBACK is
+            gone. The fallback was the ticket queue's chrome (four-state
+            lifecycle, assignment, duplicate folding) rendered when no slot
+            was passed — and since RETIRE-TICKETS.1 deleted that queue, the
+            only mounter (MailThread) always passes its own controls, the
+            handlers' routes are deleted, and a fallback nobody can reach is
+            exactly the dead code this sweep exists to remove. Merge lives on
+            as DATA (tombstones, scopeToUnmerged, the merge route) — offering
+            it on Mail again means building a Mail affordance, not reviving
+            this block. */}
+        {controls}
       </div>
 
       {/* Thread */}
@@ -1089,63 +988,6 @@ function MessageEnvelope({ message, onAccent = false }) {
         <div className={`space-y-0.5 ${collapsible.length > 0 ? 'mt-1' : ''}`}>
           {alwaysOn.map(renderLine)}
         </div>
-      )}
-    </div>
-  )
-}
-
-/**
- * Claim / release / reassign (EMAIL-ASSIGN.1). The assignee list is fetched
- * lazily, once per ticket, and only for elevated viewers — it enumerates
- * colleagues' mailbox access, which the route 403s to everybody else.
- */
-function AssignControl({ ticket, currentUserId, viewerIsElevated, onAssign, saving }) {
-  const [assignees, setAssignees] = useState(null)
-  const mine = !!currentUserId && ticket?.assigned_to === currentUserId
-  const assigned = !!ticket?.assigned_to
-  const ticketId = ticket?.id || null
-
-  useEffect(() => {
-    setAssignees(null)
-    if (!viewerIsElevated || !ticketId) return undefined
-    let cancelled = false
-    fetch(`/api/email/tickets/${ticketId}/assignees`)
-      .then(r => r.json())
-      .then(j => { if (!cancelled && j?.success) setAssignees(j.data?.assignees || []) })
-      // A failed lookup just hides the picker; claim/release still work.
-      .catch(() => {})
-    return () => { cancelled = true }
-  }, [ticketId, viewerIsElevated])
-
-  const btn = 'rounded-md border border-un1t-border px-2.5 py-1 text-xs text-un1t-subtle transition-colors hover:text-un1t-text disabled:opacity-50'
-
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      {!assigned && (
-        <button type="button" onClick={() => onAssign?.('me')} disabled={saving} className={btn}>
-          Claim
-        </button>
-      )}
-      {(mine || (assigned && viewerIsElevated)) && (
-        <button type="button" onClick={() => onAssign?.(null)} disabled={saving} className={btn}>
-          {mine ? 'Release' : 'Unassign'}
-        </button>
-      )}
-      {viewerIsElevated && Array.isArray(assignees) && assignees.length > 0 && (
-        <select
-          aria-label="Assign to"
-          value=""
-          disabled={saving}
-          onChange={(e) => { if (e.target.value) onAssign?.(e.target.value) }}
-          className="rounded-md border border-un1t-border bg-un1t-bg px-2 py-1 text-xs text-un1t-subtle focus:outline-none"
-        >
-          <option value="">Assign to…</option>
-          {assignees
-            .filter(a => a.id !== ticket?.assigned_to)
-            .map(a => (
-              <option key={a.id} value={a.id}>{a.full_name || 'Unnamed'}</option>
-            ))}
-        </select>
       )}
     </div>
   )

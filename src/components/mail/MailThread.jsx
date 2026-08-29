@@ -43,7 +43,6 @@ export default function MailThread({
   attachmentsUnavailable = false,
   loading = false,
   error,
-  currentUserId,
   onBack,
   onSend,
   sending = false,
@@ -69,7 +68,6 @@ export default function MailThread({
       attachmentsUnavailable={attachmentsUnavailable}
       loading={loading}
       error={error}
-      currentUserId={currentUserId}
       onBack={onBack}
       onSend={onSend}
       sending={sending}
