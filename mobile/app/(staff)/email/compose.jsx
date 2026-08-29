@@ -50,7 +50,7 @@ import {
   filterContactSuggestions, shouldSearchContacts,
   classifyPickedFiles, attachmentBudget, readyAttachmentRefs,
   composeSendState, sendFailureMessage, defaultMailboxId, mailboxDisplay,
-  composeIsDirty,
+  composeIsDirty, composeCloseAction,
 } from '../../../lib/mail-compose'
 import { formatAttachmentSize } from '../../../lib/email-tickets'
 
@@ -339,8 +339,14 @@ export default function ComposeEmail() {
   }
 
   function requestClose() {
-    if (sending) return
-    if (composeIsDirty({ pills, pending, subject, text, files })) {
+    // One derivation (composeCloseAction) decides: mid-send blocks, a SENT
+    // sheet dismisses without the confirm — during the ~900ms toast window
+    // the fields still hold the email, but "Nothing has been sent" would be
+    // a lie and there is nothing left to discard — and only a dirty
+    // pre-send sheet gets asked.
+    const action = composeCloseAction({ sending, sent, pills, pending, subject, text, files })
+    if (action === 'block') return
+    if (action === 'confirm') {
       Alert.alert(
         'Discard this email?',
         'Nothing has been sent, and the draft is not kept.',

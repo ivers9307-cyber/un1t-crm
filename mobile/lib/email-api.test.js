@@ -24,7 +24,7 @@ import { supabase } from './supabase'
 import { readFileAsArrayBuffer } from './upload-bytes'
 import {
   getTicket, getMailCount, listMail, archiveConversation, setConversationSeen,
-  replyToTicket, composeEmail, draftUuid,
+  replyToTicket, composeEmail, forwardMessage, draftUuid,
   signOutboundAttachment, uploadSignedAttachment,
   EMAIL_ATTACHMENT_BUCKET, MAX_OUTBOUND_ATTACHMENT_TOTAL_BYTES, MAX_OUTBOUND_ATTACHMENTS,
 } from './email-api'
@@ -319,6 +319,60 @@ describe('composeEmail', () => {
       mailboxId: 'mb-1', to: ['a@x.com'], subject: 'Hi', text: 'Body', locationId: 'loc-1',
     })
     expect(res).toEqual({ success: false, error: 'One email can reach up to 25 people.' })
+  })
+})
+
+// MOBILE-MAIL-FORWARD.1 — pass one message on the ticket to somebody else.
+// The route owns every refusal (the note ban, unstored files, the recipient
+// cap, the 7 MiB ceiling re-measured on real bytes); this wrapper's whole job
+// is the right wire shape and passing the envelope through UNTOUCHED.
+describe('forwardMessage', () => {
+  it('posts the full wire body to the ticket forward route', async () => {
+    api.mockResolvedValue({ success: true, data: { message_id: 'pm-1' } })
+    const res = await forwardMessage({
+      ticketId: 'T-1', messageId: 'm-1',
+      to: ['acct@x.com'], cc: ['b@x.com'], bcc: ['c@x.com'],
+      note: 'For the August books', attachmentIds: ['att-1', 'att-2'],
+      locationId: 'loc-1',
+    })
+    expect(api).toHaveBeenCalledWith('/api/email/tickets/T-1/forward', {
+      method: 'POST', locationId: 'loc-1',
+      body: {
+        message_id: 'm-1', to: ['acct@x.com'], cc: ['b@x.com'], bcc: ['c@x.com'],
+        note: 'For the August books', attachment_ids: ['att-1', 'att-2'],
+      },
+    })
+    expect(res).toEqual({ success: true, data: { message_id: 'pm-1' } })
+  })
+
+  it('omits empty cc/bcc/note/attachment_ids — the smallest body is the shape nothing can misread', async () => {
+    api.mockResolvedValue({ success: true, data: {} })
+    await forwardMessage({
+      ticketId: 'T-1', messageId: 'm-1', to: ['acct@x.com'],
+      cc: [], bcc: [], note: '', attachmentIds: [], locationId: 'loc-1',
+    })
+    expect(api).toHaveBeenCalledWith('/api/email/tickets/T-1/forward', {
+      method: 'POST', locationId: 'loc-1',
+      body: { message_id: 'm-1', to: ['acct@x.com'] },
+    })
+  })
+
+  it('a whitespace-only note stays off the wire too — the route would store a blank covering note', async () => {
+    api.mockResolvedValue({ success: true, data: {} })
+    await forwardMessage({ ticketId: 'T-1', messageId: 'm-1', to: ['a@x.com'], note: '   ', locationId: 'loc-1' })
+    const [, opts] = api.mock.calls[0]
+    expect(opts.body.note).toBeUndefined()
+  })
+
+  it('passes a refusal through untouched — including the sent-but-unfiled "do not resend" answer with its data marker', async () => {
+    const unfiled = {
+      success: false,
+      error: 'The forward was sent but could not be filed on the ticket. Do not resend — check with the recipient before trying again.',
+      data: { sent: true, message_id: 'pm-9' },
+    }
+    api.mockResolvedValue(unfiled)
+    const res = await forwardMessage({ ticketId: 'T-1', messageId: 'm-1', to: ['a@x.com'], locationId: 'loc-1' })
+    expect(res).toEqual(unfiled)
   })
 })
 
