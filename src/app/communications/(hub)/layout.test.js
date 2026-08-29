@@ -1,11 +1,12 @@
 // INBOX-SURFACE.C — the Mail tab's gate is DATA, not permission.
 //
 // THE PROPERTY THIS FILE EXISTS FOR
-// /communications/mail lists the accounts whose email_mailboxes.surface is
-// 'inbox' (mig 575) and nothing else. A studio that has moved none has nothing
-// there, so the tab must not be in the strip: an operator who clicks an empty
-// surface concludes their mail has gone missing, not that a trial is off for
-// them. An empty surface in the nav is worse than no surface.
+// /communications/mail is the email surface; the tab is data-gated on
+// "does this studio hold any ACTIVE email account" (RETIRE-TICKETS.1 — the
+// per-mailbox surface flag it used to read retired with mig 578). A studio
+// with none has nothing there, so the tab must not be in the strip: an
+// operator who clicks an empty surface concludes their mail has gone missing.
+// An empty surface in the nav is worse than no surface.
 //
 // The strip itself only receives a boolean (CommunicationsTabs.test.jsx pins
 // that it is honoured). What is pinned HERE is the half that can only be got
@@ -88,33 +89,31 @@ beforeEach(() => {
 })
 
 describe('the Mail tab gate', () => {
-  it('is OFF for a studio with no account on that surface', async () => {
+  it('is OFF for a studio with no active email account', async () => {
     mockDb({ rows: [] })
     expect((await render()).canMail).toBe(false)
   })
 
-  it('is ON once one account has been moved there', async () => {
+  it('is ON once the studio holds an active account', async () => {
     mockDb({ rows: [{ id: 'mb-1' }] })
     expect((await render()).canMail).toBe(true)
   })
 
-  it('asks about THIS studio, that surface, and only ACTIVE accounts', async () => {
-    // A deactivated account is hidden from every inbox, so one sitting on the
-    // mail surface is not a reason to put the tab in the nav.
+  it('asks about THIS studio and only ACTIVE accounts — and never reads the retired surface column', async () => {
+    // A deactivated account is hidden from every inbox, so it is not a reason
+    // to put the tab in the nav. RETIRE-TICKETS.1: the `.eq('surface', …)`
+    // half of this filter retired with the column (mig 578) — nothing may
+    // read it any more, which this exact-filters assertion also proves.
     const filters = mockDb({ rows: [{ id: 'mb-1' }] })
     await render()
     expect(filters).toEqual([
       ['location_id', LOC],
-      ['surface', 'inbox'],
       ['active', true],
     ])
   })
 
-  it('is OFF when the query ERRORS — including mig 575 not being applied yet', async () => {
-    // 42703 is what an unapplied migration looks like from PostgREST. Hiding
-    // the tab is the whole point: the code can ship before the DDL lands and
-    // the hub is untouched until it does.
-    mockDb({ error: { code: '42703', message: 'column "surface" does not exist' } })
+  it('is OFF when the query ERRORS', async () => {
+    mockDb({ error: { code: '08006', message: 'connection reset' } })
     expect((await render()).canMail).toBe(false)
   })
 
@@ -124,11 +123,11 @@ describe('the Mail tab gate', () => {
     expect((await render()).canMail).toBe(false)
   })
 
-  it('leaves the other two tabs exactly as they were on every failure path', async () => {
+  it('leaves the WhatsApp tab exactly as it was on every failure path', async () => {
     mockDb({ error: { message: 'boom' } })
     const props = await render()
     expect(props.canWhatsapp).toBe(true)
-    expect(props.canEmailInbox).toBe(true)
+    expect(props.canMail).toBe(false)
   })
 
   it('never queries at all without the email_inbox key', async () => {
@@ -143,7 +142,6 @@ describe('the Mail tab gate', () => {
     })
     mockDb({ rows: [{ id: 'mb-1' }] })
     const props = await render()
-    expect(props.canEmailInbox).toBe(false)
     expect(props.canMail).toBe(false)
     expect(createServerClient).not.toHaveBeenCalled()
   })

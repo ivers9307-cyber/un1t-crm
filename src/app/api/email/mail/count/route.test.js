@@ -99,35 +99,38 @@ describe('GET /api/email/mail/count — gates', () => {
   })
 })
 
-describe('GET /api/email/mail/count — surface narrowing', () => {
-  it('counts ONLY tickets on mailboxes that are ON THE MAIL SURFACE', async () => {
-    // Owner is elevated (needs no grant), so the mailbox-access gate cannot be
-    // what is doing the exclusion here — only the surface filter can be.
+describe('GET /api/email/mail/count — scope (RETIRE-TICKETS.1: all visible mailboxes + elevated orphans)', () => {
+  it('counts tickets on EVERY visible mailbox for an elevated caller', async () => {
     getCurrentUser.mockResolvedValue(at(OWNER))
     setupDb(mailState({ tickets: NEEDS_REPLY_BOTH, grants: [] }))
+    expect((await count()).body.data.count).toBe(2)
+  })
+
+  it('counts only granted mailboxes for a coach', async () => {
+    // GRANT_STUDIO covers studio@ only — accounts@ stays out of the badge for
+    // the person who cannot open it.
+    setupDb(mailState({ tickets: NEEDS_REPLY_BOTH, grants: [GRANT_STUDIO] }))
     expect((await count()).body.data.count).toBe(1)
   })
 
-  it('does not count a needs-reply ticket on a TICKETS-surface mailbox even when granted', async () => {
-    // GRANT_STUDIO only covers studio@ (MB_MAIL); add a grant on accounts@ too
-    // so the per-account gate would let it through — the surface filter must
-    // still be what keeps it out.
-    const grantAccounts = { mailbox_id: MB_TICKETS.id, profile_id: COACH.id }
-    setupDb(mailState({ tickets: NEEDS_REPLY_BOTH, grants: [GRANT_STUDIO, grantAccounts] }))
-    expect((await count()).body.data.count).toBe(1)
-  })
-
-  it('does NOT widen to a NULL-mailbox ticket for an elevated caller (no orphan fallback here)', async () => {
-    // The mirror-image case to the ticket badge's own orphan test — and the
-    // opposite answer. An orphan has no surface, so it is the TICKET
-    // surface's by the schema's own default; counting it here would let the
-    // same correspondence badge on both screens.
+  it('DOES count a NULL-mailbox conversation for an elevated caller — orphans live here now', async () => {
+    // The ticket queue was the orphan's only home; RETIRE-TICKETS.1 deleted
+    // it, so the badge (like the list) carries the elevated `.or` branch.
     const orphan = {
       ...T_STUDIO, id: 'aaaaaaa9-0000-4000-8000-000000000009',
       mailbox_id: null, status: 'open', last_message_direction: 'inbound',
     }
     getCurrentUser.mockResolvedValue(at(OWNER))
     setupDb(mailState({ tickets: [...NEEDS_REPLY_BOTH, orphan], grants: [] }))
+    expect((await count()).body.data.count).toBe(3)
+  })
+
+  it('does NOT count an orphan for a granted, non-elevated coach', async () => {
+    const orphan = {
+      ...T_STUDIO, id: 'aaaaaaa9-0000-4000-8000-000000000009',
+      mailbox_id: null, status: 'open', last_message_direction: 'inbound',
+    }
+    setupDb(mailState({ tickets: [...NEEDS_REPLY_BOTH, orphan], grants: [GRANT_STUDIO] }))
     expect((await count()).body.data.count).toBe(1)
   })
 
@@ -137,7 +140,7 @@ describe('GET /api/email/mail/count — surface narrowing', () => {
       tickets: [...NEEDS_REPLY_BOTH, { ...T_OTHER_LOCATION, status: 'open', last_message_direction: 'inbound' }],
       grants: [],
     }))
-    expect((await count()).body.data.count).toBe(1)
+    expect((await count()).body.data.count).toBe(2)
   })
 
   it('answers 0 — not an error — when the caller genuinely has no grants', async () => {
@@ -145,22 +148,6 @@ describe('GET /api/email/mail/count — surface narrowing', () => {
     const { res, body } = await count()
     expect(res.status).toBe(200)
     expect(body.data.count).toBe(0)
-  })
-
-  it('answers 0 with NO ticket query at all when the narrowed set is empty', async () => {
-    // Every visible mailbox is on the ticket surface — a studio not yet moved
-    // to the trial, or one moved entirely back. There is nothing this badge
-    // could count, and it must not pay for a query that can only return 0.
-    getCurrentUser.mockResolvedValue(at(OWNER))
-    setupDb(mailState({
-      mailboxes: [MB_TICKETS, MB_OTHER],
-      tickets: NEEDS_REPLY_BOTH,
-      grants: [],
-    }))
-    const { res, body } = await count()
-    expect(res.status).toBe(200)
-    expect(body.data.count).toBe(0)
-    expect(selectsFrom(db, 'email_tickets')).toEqual([])
   })
 })
 

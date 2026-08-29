@@ -4,10 +4,9 @@
 // unreadable at 375px. The row scrolls horizontally on narrow screens and
 // keeps the even-width desktop layout via `min-w-full` + `flex-1`.
 //
-// DEEP.4 Task 2 (4B) — this component slimmed from six tabs to two: Send /
-// Sent / Templates / Segments moved to communications/(marketing-era) (see
-// that layout's header comment). What's left is Inbox + Email inbox, so
-// this file's fixtures and assertions shrink to match — the scroller/fade/
+// DEEP.4 Task 2 (4B) slimmed this component from six tabs to two;
+// RETIRE-TICKETS.1 then retired the "Email inbox" ticket-queue tab, so the
+// two tabs are the WhatsApp/Instagram inbox and Mail. The scroller/fade/
 // badge behaviour underneath is unchanged and still worth pinning at two
 // tabs (a narrow viewport can still overflow with badges attached).
 
@@ -15,12 +14,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, within, fireEvent, act } from '@testing-library/react'
 
 const { polled } = vi.hoisted(() => ({ polled: vi.fn(() => 0) }))
-vi.mock('next/navigation', () => ({ usePathname: () => '/communications/tickets' }))
+vi.mock('next/navigation', () => ({ usePathname: () => '/communications/mail' }))
 vi.mock('../use-polled-count', () => ({ usePolledCount: (...args) => polled(...args) }))
 
 import CommunicationsTabs from './CommunicationsTabs.jsx'
 
-const ALL = { canWhatsapp: true, canEmailInbox: true }
+const ALL = { canWhatsapp: true, canMail: true }
 
 beforeEach(() => {
   cleanup()
@@ -39,23 +38,23 @@ describe('CommunicationsTabs — 375px survivability (COMMSLAYOUT.2)', () => {
   it('renders both tabs when both permissions are held', () => {
     const { container } = render(<CommunicationsTabs {...ALL} />)
     const labels = within(container).getAllByRole('link').map((a) => a.textContent)
-    expect(labels).toEqual(['WhatsApp & Instagram inbox', 'Email inbox'])
+    expect(labels).toEqual(['WhatsApp & Instagram inbox', 'Mail'])
   })
 
-  it('renders only Inbox when canEmailInbox is false', () => {
-    render(<CommunicationsTabs canWhatsapp canEmailInbox={false} />)
+  it('renders only Inbox when canMail is false', () => {
+    render(<CommunicationsTabs canWhatsapp canMail={false} />)
     expect(screen.getByRole('link', { name: /^WhatsApp & Instagram inbox$/ })).toBeTruthy()
-    expect(screen.queryByRole('link', { name: /^Email inbox$/ })).toBeNull()
+    expect(screen.queryByRole('link', { name: /^Mail$/ })).toBeNull()
   })
 
-  it('renders only Email inbox when canWhatsapp is false', () => {
-    render(<CommunicationsTabs canWhatsapp={false} canEmailInbox />)
+  it('renders only Mail when canWhatsapp is false', () => {
+    render(<CommunicationsTabs canWhatsapp={false} canMail />)
     expect(screen.queryByRole('link', { name: /^WhatsApp & Instagram inbox$/ })).toBeNull()
-    expect(screen.getByRole('link', { name: /^Email inbox$/ })).toBeTruthy()
+    expect(screen.getByRole('link', { name: /^Mail$/ })).toBeTruthy()
   })
 
-  it('renders nothing when neither permission is held', () => {
-    const { container } = render(<CommunicationsTabs canWhatsapp={false} canEmailInbox={false} />)
+  it('renders nothing when neither gate is open', () => {
+    const { container } = render(<CommunicationsTabs canWhatsapp={false} canMail={false} />)
     expect(within(container).queryAllByRole('link')).toHaveLength(0)
   })
 
@@ -86,7 +85,7 @@ describe('CommunicationsTabs — 375px survivability (COMMSLAYOUT.2)', () => {
 
   it('keeps the active-state styling', () => {
     const { container } = render(<CommunicationsTabs {...ALL} />)
-    const active = within(container).getByRole('link', { name: /^Email inbox$/ })
+    const active = within(container).getByRole('link', { name: /^Mail$/ })
     expect(active.className).toContain('bg-un1t-text')
     expect(active.className).toContain('text-un1t-bg')
     const inactive = within(container).getByRole('link', { name: /^WhatsApp & Instagram inbox$/ })
@@ -110,10 +109,10 @@ describe('CommunicationsTabs — badges survive the layout change', () => {
     expect(within(container).getByRole('link', { name: /WhatsApp & Instagram inbox/ }).textContent).toContain('7')
   })
 
-  it('still renders a badge on the Email inbox tab', () => {
-    polled.mockImplementation(({ url }) => (url.includes('tickets') ? 3 : 0))
+  it('still renders a badge on the Mail tab', () => {
+    polled.mockImplementation(({ url }) => (url.includes('mail') ? 3 : 0))
     const { container } = render(<CommunicationsTabs {...ALL} />)
-    expect(within(container).getByRole('link', { name: /Email inbox/ }).textContent).toContain('3')
+    expect(within(container).getByRole('link', { name: /Mail/ }).textContent).toContain('3')
   })
 })
 
@@ -200,71 +199,46 @@ describe('CommunicationsTabs — overflow affordance (COMMS-DETAIL-FIX.2)', () =
 describe('CommunicationsTabs — measure() re-render bail-out (FU-COMMSTABS-BAILOUT)', () => {
   it('does not spuriously re-render on mount when the measured edges already match initial state', () => {
     render(<CommunicationsTabs {...ALL} />)
-    // One render's worth of poller calls (inbox + email + mail) — not 6 or
-    // 9, which is what stacking the layout-effect and mount-effect
-    // measure() calls on top of the initial render would produce without
-    // the bail-out.
-    expect(polled.mock.calls.length).toBe(3)
+    // One render's worth of poller calls (inbox + mail) — not 4 or 6, which
+    // is what stacking the layout-effect and mount-effect measure() calls on
+    // top of the initial render would produce without the bail-out.
+    expect(polled.mock.calls.length).toBe(2)
   })
 })
 
 // INBOX-SURFACE.C — the Mail tab, and the reason it is DATA-gated.
 //
-// /communications/mail lists the accounts whose email_mailboxes.surface is
-// 'inbox' and nothing else. A studio that has moved none has nothing there, so
-// the tab must not appear: an operator who clicks an empty surface concludes
-// their mail is missing, not that a trial is off for them. An empty surface in
-// the nav is worse than no surface.
-//
-// The gate is resolved in the hub layout (it needs a query) and arrives here as
-// a boolean, so what this file pins is that the boolean is honoured and that
+// The gate arrives from the hub layout as a boolean ("does this studio hold
+// any active email account"): a studio with none has nothing for the tab to
+// show, and an operator who clicks an empty surface concludes their mail is
+// missing. What this file pins is that the boolean is honoured and that
 // nothing about it is inferred from a permission.
-describe('CommunicationsTabs — the Mail surface (INBOX-SURFACE.C)', () => {
-  it('is ABSENT by default — a studio not in the trial sees the two tabs it had', () => {
-    const { container } = render(<CommunicationsTabs {...ALL} />)
-    const labels = within(container).getAllByRole('link').map(a => a.textContent)
-    expect(labels).toEqual(['WhatsApp & Instagram inbox', 'Email inbox'])
-  })
-
-  it('is absent when canMail is false, even holding the email_inbox key', () => {
-    // The permission is not the gate. Someone who works the queue every day at
-    // a studio with nothing moved must not be shown an empty surface.
-    render(<CommunicationsTabs canWhatsapp={false} canEmailInbox canMail={false} />)
+describe('CommunicationsTabs — the Mail tab (INBOX-SURFACE.C / RETIRE-TICKETS.1)', () => {
+  it('is absent when canMail is false — no email tab renders at all', () => {
+    render(<CommunicationsTabs canWhatsapp={false} canMail={false} />)
     expect(screen.queryByRole('link', { name: /^Mail$/ })).toBeNull()
   })
 
-  it('appears when the location has an account on that surface', () => {
-    render(<CommunicationsTabs {...ALL} canMail />)
+  it('links /communications/mail — never the WhatsApp inbox', () => {
+    render(<CommunicationsTabs {...ALL} />)
     const tab = screen.getByRole('link', { name: /^Mail$/ })
-    // NOT /communications/inbox — that is the WhatsApp + Instagram queue, whose
-    // tab is rendered right beside this one.
     expect(tab.getAttribute('href')).toBe('/communications/mail')
   })
 
   it('is labelled Mail, not Inbox — two tabs called Inbox is a guess', () => {
-    const { container } = render(<CommunicationsTabs {...ALL} canMail />)
+    const { container } = render(<CommunicationsTabs {...ALL} />)
     const labels = within(container).getAllByRole('link').map(a => a.textContent)
-    expect(labels).toEqual(['WhatsApp & Instagram inbox', 'Email inbox', 'Mail'])
+    expect(labels).toEqual(['WhatsApp & Instagram inbox', 'Mail'])
   })
 
-  // INBOX-SURFACE.E — the badge exists now. GET /api/email/mail/count mirrors
-  // /api/email/tickets/count but is scoped to MAIL-surface mailboxes, so this
-  // is genuinely this tab's own number, not the ticket queue's count wearing
-  // this tab's badge (the objection recorded above was to a WRONG number, not
-  // to a badge at all).
-  it('polls its own endpoint and renders the count as a badge, distinct from the tickets badge', () => {
-    polled.mockImplementation(({ url }) => {
-      if (url === '/api/email/mail/count') return 4
-      if (url === '/api/email/tickets/count') return 7
-      return 0
-    })
-    render(<CommunicationsTabs canWhatsapp={false} canEmailInbox canMail />)
+  it('polls its own endpoint and renders the count as a badge', () => {
+    polled.mockImplementation(({ url }) => (url === '/api/email/mail/count' ? 4 : 0))
+    render(<CommunicationsTabs canWhatsapp={false} canMail />)
     expect(screen.getByRole('link', { name: /Mail/ }).textContent).toContain('4')
-    expect(screen.getByRole('link', { name: /Email inbox/ }).textContent).toContain('7')
   })
 
   it('does not poll the mail count when canMail is false — nothing to act on', () => {
-    render(<CommunicationsTabs canWhatsapp={false} canEmailInbox canMail={false} />)
+    render(<CommunicationsTabs canWhatsapp={false} canMail={false} />)
     const mailCountCalls = polled.mock.calls.filter(([opts]) => opts.url === '/api/email/mail/count')
     expect(mailCountCalls.length).toBeGreaterThan(0)
     for (const [opts] of mailCountCalls) {
@@ -273,7 +247,7 @@ describe('CommunicationsTabs — the Mail surface (INBOX-SURFACE.C)', () => {
   })
 
   it('enables the mail-count poll once canMail is true', () => {
-    render(<CommunicationsTabs canWhatsapp={false} canEmailInbox canMail />)
+    render(<CommunicationsTabs canWhatsapp={false} canMail />)
     const mailCountCalls = polled.mock.calls.filter(([opts]) => opts.url === '/api/email/mail/count')
     expect(mailCountCalls.length).toBeGreaterThan(0)
     for (const [opts] of mailCountCalls) {
@@ -282,8 +256,8 @@ describe('CommunicationsTabs — the Mail surface (INBOX-SURFACE.C)', () => {
   })
 
   it('renders no badge on the Mail tab when its count is zero', () => {
-    polled.mockImplementation(({ url }) => (url === '/api/email/mail/count' ? 0 : 7))
-    render(<CommunicationsTabs canWhatsapp={false} canEmailInbox canMail />)
+    polled.mockReturnValue(0)
+    render(<CommunicationsTabs canWhatsapp={false} canMail />)
     expect(screen.getByRole('link', { name: /^Mail$/ }).textContent).toBe('Mail')
   })
 })

@@ -5,7 +5,7 @@
 // The reply-draft store keys on the USER (see mail-display.js's
 // replyDraftKey), and the composer is rendered several layers below anything
 // that holds the server-resolved user, so threading the id down as a prop
-// would touch TicketThread, MailSurface AND TicketInbox for one string.
+// would touch TicketThread AND MailSurface for one string.
 // Instead the composer asks the browser supabase client, which reads the
 // session from its own storage — cheap, local, and already the identity the
 // whole app runs on.

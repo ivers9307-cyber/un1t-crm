@@ -3,7 +3,7 @@
 import { CHANNELS, channelOf } from '../../../shared/channels';
 
 // INBOX-SPLIT.1 — the `em` variant is gone with EmailInbox.jsx: email is not
-// an inbox channel any more (its surface is /communications/tickets, which
+// an inbox channel any more (its surface is /communications/mail, which
 // draws its own lucide Mail icon). Leaving the maps keyed for a channel
 // CHANNELS no longer describes would be a trap — `CHANNELS['em'].name` below
 // would throw. The `channel-em` Tailwind colour token itself stays; the

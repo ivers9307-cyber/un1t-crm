@@ -1,5 +1,13 @@
 'use client'
 
+// 🔴 DORMANT SINCE RETIRE-TICKETS.1 — TicketInbox, the only surface that
+// passed onMerge/onUnmerge, is deleted, and MailThread deliberately supplies
+// its own `controls` slot, so nothing on the web renders this today. It is
+// KEPT, not deleted: merge tombstone handling (scopeToUnmerged, the banner,
+// the undo) is live data behaviour, the merge API routes still exist, and
+// re-offering merge on Mail one day means passing two props — not rebuilding
+// this. Comments below still say "TicketInbox" for how the wiring worked.
+
 // EMAIL-MERGE.6 — folding one ticket into another, and undoing it.
 //
 // THE INCIDENT: two tickets that were one conversation with Dublin City

@@ -58,7 +58,6 @@ import { toInboundPayload } from './imap-message'
 // here. imap-poll.js keeps its own local copy of the constant deliberately —
 // importing would drag ImapFlow into the cron's bundle — and this import is
 // what pins the two together: drift the poller's copy and §16 stops mirroring.
-import { INBOX_SURFACE } from './imap-writeback'
 import {
   pollMailbox,
   pollAllMailboxes,
@@ -2703,7 +2702,7 @@ describe('the \\Seen mirror', () => {
   // purpose (importing would drag ImapFlow into the cron's bundle), and this
   // import is what pins the two together: drift the poller's copy and every
   // test below stops mirroring.
-  const INBOX_MAILBOX = { ...MAILBOX, surface: INBOX_SURFACE }
+  const INBOX_MAILBOX = MAILBOX
 
   /** The id the mapper minted at ingest — the mirror must derive the same one. */
   const idFor = (msg) =>
@@ -2835,35 +2834,8 @@ describe('the \\Seen mirror', () => {
     expect(db.state.upserts.filter(u => u.table === 'email_mailbox_ingress')).toHaveLength(1)
   })
 
-  it('🔴 NEVER runs for a ticketing-surface mailbox — mig 575 changes nothing for them', async () => {
-    stubFetch({ status: 200 })
-    const old = plainMessage(9)
-    const { deps, client } = fakeImap({ uidNext: 11, messages: [old], flagsByUid: { 9: ['\\Seen'] } })
-    const db = makeDb({
-      credentials: { [MAILBOX.id]: credential() },
-      ingress: { [`${MAILBOX.id}:inbox`]: anchored(9) },
-      messages: [{ id: 'row-9', postmark_message_id: idFor(old), seen_at: null }],
-    })
-
-    await pollMailbox(db, { ...MAILBOX, surface: 'tickets' }, { now: NOW, deps })
-
-    expect(flagFetch(client)).toBeUndefined()
-    expect(db.state.seenWrites).toEqual([])
-    expect(db.state.messages[0].seen_at).toBeNull()
-  })
-
-  it('does not run for a mailbox row whose surface could not be read — fail closed', async () => {
-    stubFetch({ status: 200 })
-    const { deps, client } = fakeImap({ uidNext: 11, messages: [plainMessage(9)], flagsByUid: { 9: ['\\Seen'] } })
-    const db = makeDb({
-      credentials: { [MAILBOX.id]: credential() },
-      ingress: { [`${MAILBOX.id}:inbox`]: anchored(9) },
-    })
-
-    await pollMailbox(db, MAILBOX, { now: NOW, deps })  // MAILBOX carries no `surface`
-
-    expect(flagFetch(client)).toBeUndefined()
-  })
+  // (RETIRE-TICKETS.1 — the two surface-gate pins that sat here are gone with
+  // the surface itself, mig 578: the mirror no longer reads a surface at all.)
 
   it('does not run on the SENT lane — an outbound message has no unread badge', async () => {
     stubFetch({ status: 200 })
@@ -3134,28 +3106,13 @@ describe('syncSeenFlags', () => {
 /* ══════ 18. the SELECT lists — a dropped column here fails silently ═════ */
 
 describe('the column lists', () => {
-  it('🔴 the mailbox read asks for `surface`, or the mirror never runs in production', async () => {
-    // The gate reads mailbox.surface. Drop it from POLL_MAILBOX_COLUMNS and
-    // every connected mailbox silently reports `undefined`, the mirror is
-    // never due for anybody, and every log line still says the poll succeeded.
-    const db = makeDb({
-      mailboxes: [{ ...MAILBOX, surface: INBOX_SURFACE }],
-      credentials: { [MAILBOX.id]: credential() },
-    })
-    stubFetch({ status: 200 })
-    await pollAllMailboxes(db, { now: NOW, lanes: ['inbox'], deps: fakeImap().deps })
-
-    const cols = db.state.selects.filter(s => s.table === 'email_mailboxes').map(s => s.cols)
-    expect(cols.some(c => c.includes('surface'))).toBe(true)
-  })
-
   it('🔴 the cursor read asks for `last_seen_sync_at`, or the cadence is not a cadence', async () => {
     // An absent stamp reads as "never synced" — so forgetting the column makes
     // the mirror run on EVERY tick while the constant says every fifteen
     // minutes. The expensive failure is the silent one.
     const db = makeDb({ credentials: { [MAILBOX.id]: credential() } })
     stubFetch({ status: 200 })
-    await pollMailbox(db, { ...MAILBOX, surface: INBOX_SURFACE }, { now: NOW, deps: fakeImap().deps })
+    await pollMailbox(db, MAILBOX, { now: NOW, deps: fakeImap().deps })
 
     const cols = db.state.selects.filter(s => s.table === 'email_mailbox_ingress').map(s => s.cols)
     expect(cols.some(c => c.includes('last_seen_sync_at'))).toBe(true)

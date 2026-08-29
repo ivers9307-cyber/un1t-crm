@@ -95,23 +95,36 @@ describe('POST /api/email/mail/[id]/archive', () => {
     expect(writesTo(db)).toEqual([])
   })
 
-  // 🔴 The surface guard.
-  it('404s — and writes nothing — for a conversation on a surface=tickets mailbox', async () => {
-    const { res, body } = await archive(T_ACCOUNTS.id, { archived: true })
-    expect(res.status).toBe(404)
-    // 404, never 403: the caller must not learn that the id exists on the
-    // other screen.
-    expect(body.error).toBe('Not found')
-    expect(writesTo(db)).toEqual([])
+  // RETIRE-TICKETS.1 — the surface guard that used to 404 the second account
+  // here is gone with the surface split (mig 578). What remains load-bearing
+  // is the ACCESS gate, and the orphan rule.
+  it('archives a conversation on ANY visible mailbox — the second account included', async () => {
+    const { res } = await archive(T_ACCOUNTS.id, { archived: true })
+    expect(res.status).toBe(200)
+    const [write] = updatesTo(db, 'email_tickets')
+    expect(write.payload.status).toBe('closed')
   })
 
-  it('404s for a conversation with no mailbox at all', async () => {
+  it('archives an ORPHAN (no mailbox) for an elevated caller — DB half only, no IMAP write', async () => {
+    // The ticket queue was the orphan's only home; it lives here now. The
+    // mailbox half short-circuits on the null id (applyWriteback), so nothing
+    // ever tries to open a connection for an account that does not exist.
     setupDb(mailState({ tickets: [{ ...T_STUDIO, mailbox_id: null }] }))
+    const { res } = await archive(T_STUDIO.id, { archived: true })
+    expect(res.status).toBe(200)
+    const [write] = updatesTo(db, 'email_tickets')
+    expect(write.payload.status).toBe('closed')
+    expect(archiveMessage).not.toHaveBeenCalled()
+  })
+
+  it('404s an orphan for a NON-elevated caller — orphans stay elevated-only', async () => {
+    getCurrentUser.mockResolvedValue(COACH)
+    setupDb(mailState({ tickets: [{ ...T_STUDIO, mailbox_id: null }], grants: [GRANT_STUDIO] }))
     expect((await archive(T_STUDIO.id, { archived: true })).res.status).toBe(404)
     expect(writesTo(db)).toEqual([])
   })
 
-  it('refuses LOUDLY rather than writing when the surface check itself fails', async () => {
+  it('refuses LOUDLY rather than writing when the access check itself fails', async () => {
     setupDb(mailState({ errors: { email_mailboxes: { code: '42703', message: 'boom' } } }))
     const { res } = await archive(T_STUDIO.id, { archived: true })
     // The access gate fails first here, and either way nothing is written on a
@@ -305,9 +318,8 @@ describe('POST /api/email/mail/[id]/archive', () => {
 describe('POST /api/email/mail/[id]/seen', () => {
   const withMessages = (rows) => setupDb(mailState({ tickets: [{ ...T_STUDIO }], messages: rows }))
 
-  it('404s — and writes nothing — for a conversation on the ticket surface', async () => {
-    expect((await seen(T_ACCOUNTS.id, { seen: true })).res.status).toBe(404)
-    expect(writesTo(db)).toEqual([])
+  it('marks a conversation on ANY visible mailbox — the second account included', async () => {
+    expect((await seen(T_ACCOUNTS.id, { seen: true })).res.status).toBe(200)
   })
 
   it('stamps seen_at on the unread inbound messages only', async () => {

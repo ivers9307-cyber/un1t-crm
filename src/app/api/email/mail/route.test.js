@@ -98,58 +98,53 @@ describe('GET /api/email/mail — gates', () => {
 })
 
 // 🔴 The property the whole trial rests on.
-describe('GET /api/email/mail — each mailbox belongs to exactly ONE surface', () => {
-  it('shows only surface=inbox mailboxes, to an elevated caller who can see both', async () => {
+// RETIRE-TICKETS.1 — the surface split is retired (mig 578): this is THE
+// email surface and it lists every mailbox the caller may see, orphans
+// included for elevated callers. The old exclusivity pins became these.
+describe('GET /api/email/mail — lists every visible mailbox', () => {
+  it('shows BOTH of a studio\'s accounts, and both conversations, to an owner', async () => {
     const { body } = await list()
-    expect(body.data.mailboxes.map(m => m.id)).toEqual([MB_MAIL.id])
-    // accounts@ is at the SAME location and this caller is an owner — the only
-    // thing keeping it off this screen is the surface filter.
-    expect(body.data.mailboxes.map(m => m.id)).not.toContain(MB_TICKETS.id)
+    expect(body.data.mailboxes.map(m => m.id).sort()).toEqual([MB_MAIL.id, MB_TICKETS.id].sort())
+    expect(ids(body.data.conversations).sort()).toEqual([T_STUDIO.id, T_ACCOUNTS.id].sort())
   })
 
-  it('never lists a conversation that arrived at a surface=tickets mailbox', async () => {
-    const { body } = await list()
-    expect(ids(body.data.conversations)).toEqual([T_STUDIO.id])
-    expect(ids(body.data.conversations)).not.toContain(T_ACCOUNTS.id)
-  })
-
-  it('shows nothing at all when every mailbox is on the ticket surface', async () => {
-    setupDb(mailState({ mailboxes: [{ ...MB_MAIL, surface: 'tickets' }, MB_TICKETS] }))
-    const { res, body } = await list()
-    // A studio that has not opted into the trial is a NORMAL state, not an
-    // error: mig 575 defaults every existing row to 'tickets'.
-    expect(res.status).toBe(200)
-    expect(body.data.mailboxes).toEqual([])
-    expect(body.data.conversations).toEqual([])
-  })
-
-  it('does not treat an UNREADABLE surface value as inbox', async () => {
-    // A mailbox row missing from the surface read (a race with a deletion) must
-    // not be guessed onto this screen.
-    setupDb(mailState({ mailboxes: [{ ...MB_MAIL, surface: null }, MB_TICKETS] }))
-    expect((await list()).body.data.mailboxes).toEqual([])
-  })
-
-  it('refuses LOUDLY when the surface lookup fails, rather than showing an empty inbox', async () => {
-    // Same reasoning as EMAIL-TICKET-CLEANUP.2 next door: an operator reads an
-    // empty inbox as "no mail" and stops looking. The two outcomes have to look
+  it('refuses LOUDLY when the visibility lookup fails, rather than showing an empty inbox', async () => {
+    // Same reasoning as EMAIL-TICKET-CLEANUP.2: an operator reads an empty
+    // inbox as "no mail" and stops looking. The two outcomes have to look
     // different to the person reading them.
-    setupDb(mailState({ errors: { email_mailboxes: { code: '42703', message: 'column "surface" does not exist' } } }))
+    setupDb(mailState({ errors: { email_mailboxes: { code: '08006', message: 'connection reset' } } }))
     const { res, body } = await list()
     expect(res.status).toBe(500)
     expect(body.success).toBe(false)
     expect(body.data).toBeUndefined()
   })
 
-  it('a NULL-mailbox conversation is not on this surface, even for an owner', async () => {
-    // mailbox_id is ON DELETE SET NULL, so orphaned correspondence exists. The
-    // ticket queue still shows it to elevated callers — which is what keeps it
-    // reachable — and it must therefore NOT also appear here, or one
-    // conversation would sit on both screens.
+  it('🔴 a NULL-mailbox conversation IS on this surface for an owner — orphans live here now', async () => {
+    // mailbox_id is ON DELETE SET NULL, so orphaned correspondence exists.
+    // The ticket queue — its only other home — is deleted; excluding it here
+    // would make a member's correspondence silently stop existing, the one
+    // outcome the retirement must never produce.
     setupDb(mailState({
       tickets: [{ ...T_STUDIO }, { ...T_ACCOUNTS, id: 'orphan-1', mailbox_id: null }],
     }))
+    expect(ids((await list()).body.data.conversations).sort()).toEqual([T_STUDIO.id, 'orphan-1'].sort())
+  })
+
+  it('an orphan stays ELEVATED-ONLY — a granted coach never sees it', async () => {
+    getCurrentUser.mockResolvedValue(COACH)
+    setupDb(mailState({
+      tickets: [{ ...T_STUDIO }, { ...T_ACCOUNTS, id: 'orphan-1', mailbox_id: null }],
+      grants: [GRANT_STUDIO],
+    }))
     expect(ids((await list()).body.data.conversations)).toEqual([T_STUDIO.id])
+  })
+
+  it('an orphan never rides a mailbox TAB — it belongs to no account', async () => {
+    setupDb(mailState({
+      tickets: [{ ...T_STUDIO }, { ...T_ACCOUNTS, id: 'orphan-1', mailbox_id: null }],
+    }))
+    const { body } = await list(`?location_id=${LOC_A}&mailbox_id=${MB_MAIL.id}`)
+    expect(ids(body.data.conversations)).toEqual([T_STUDIO.id])
   })
 })
 
@@ -170,7 +165,11 @@ describe('GET /api/email/mail — per-account access still applies', () => {
     expect(ids(body.data.conversations)).toEqual([T_STUDIO.id])
   })
 
-  it('filtering to a mailbox that is not on this surface returns nothing, not an error', async () => {
+  it('filtering to a mailbox the caller cannot see returns nothing, not an error', async () => {
+    // The id came from the caller; answering differently for "exists but not
+    // yours" would leak which addresses the studio runs.
+    getCurrentUser.mockResolvedValue(COACH)
+    setupDb(mailState({ grants: [GRANT_STUDIO] }))
     const { res, body } = await list(`?location_id=${LOC_A}&mailbox_id=${MB_TICKETS.id}`)
     expect(res.status).toBe(200)
     expect(body.data.conversations).toEqual([])
@@ -354,11 +353,12 @@ describe('GET /api/email/mail — paging', () => {
 // MAIL-SEARCH.3 — search narrows, it NEVER widens.
 describe('GET /api/email/mail — search', () => {
   it('🔴 cannot reach a conversation on a mailbox the caller may not see', async () => {
-    // T_ACCOUNTS lives on the TICKET surface, so the mail surface must not list
-    // it — with or without a query. If search bypassed the scope query this
-    // would return it, which is the whole reason the ids are intersected rather
-    // than trusted.
-    setupDb(mailState({ tickets: [{ ...T_STUDIO }, { ...T_ACCOUNTS }] }))
+    // The coach holds a grant on studio@ only, so accounts@ is invisible to
+    // them — with or without a query. If search bypassed the scope query this
+    // would return it, which is the whole reason the ids are intersected
+    // rather than trusted.
+    getCurrentUser.mockResolvedValue(COACH)
+    setupDb(mailState({ tickets: [{ ...T_STUDIO }, { ...T_ACCOUNTS }], grants: [GRANT_STUDIO] }))
     searchTicketIds.mockResolvedValue({
       ok: true, skipped: false, partial: false,
       ids: [T_STUDIO.id, T_ACCOUNTS.id],

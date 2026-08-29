@@ -20,8 +20,7 @@
 //   1. mark \Seen        (messageFlagsAdd)
 //   2. move to Archive   (messageMove)
 //
-// and NOTHING ELSE, EVER, on mailboxes whose `surface` is 'inbox' and nothing
-// else. In particular:
+// and NOTHING ELSE, EVER. In particular:
 //
 // 🔴 DELETING IS NOT IN SCOPE AND MUST NEVER BE ADDED. Archive is recoverable
 // — Gmail keeps the message in All Mail, Outlook keeps it in Archive — and
@@ -42,16 +41,14 @@
 //
 // ══ THE GUARD IS AT THE SOURCE, AND IT RE-READS THE DATABASE ════════
 // Every entry point starts by loading the mailbox row BY ID and refusing
-// unless `surface = 'inbox'`. It does NOT trust a `surface` field on whatever
-// object the caller passed, because the whole point of a source-side guard is
-// that a future caller — a bulk action, a cron, a script, an agent tool —
-// cannot mutate a ticketing mailbox by constructing `{ surface: 'inbox' }` or
-// by handing over a row it read five minutes ago. One extra SELECT per write
-// is the correct price for "this cannot be got wrong from outside".
-//
-// The same read also refuses a mailbox that is not `ingress = 'imap'` (there
-// is no account to write to) and one that is deactivated (an operator has
-// already said stop touching this).
+// unless it is an ACTIVE, `ingress = 'imap'` account. It does NOT trust
+// whatever object the caller passed, because the whole point of a source-side
+// guard is that a future caller — a bulk action, a cron, a script, an agent
+// tool — cannot reach a mailbox it should not by constructing a row or
+// handing over one it read five minutes ago. One extra SELECT per write is
+// the correct price for "this cannot be got wrong from outside".
+// (RETIRE-TICKETS.1 — the guard also used to refuse non-mail-SURFACE
+// mailboxes; that axis is gone with the surface split, mig 578.)
 //
 // ══ WHY THE WRITABLE OPEN LIVES HERE AND NOT IN imap-connection.js ══
 // withMailbox() forces `readOnly: true` and is asserted to on every path by a
@@ -94,15 +91,6 @@ import { resolveFreshAuth } from './oauth-tokens'
 
 /* ────────────────────────────── constants ─────────────────────────────── */
 
-/**
- * 🔴 The only value of email_mailboxes.surface this module will write for.
- *
- * Exported so a caller can say what it is checking for without spelling the
- * literal, and so a test can assert the refusal against the same constant the
- * guard uses rather than against a copy of the string.
- */
-export const INBOX_SURFACE = 'inbox'
-
 /** The folder the inbox surface reads and writes. See imap-connection.js §3.4. */
 const INBOX_PATH = 'INBOX'
 
@@ -124,10 +112,10 @@ const MAX_ERROR_CHARS = 500
 /**
  * The mailbox columns the guard needs, named rather than `select('*')`.
  *
- * `surface` is the gate. `ingress` and `active` are the other two ways a write
- * can be wrong for a mailbox that happens to be on the right surface.
+ * `ingress` and `active` are the two ways a write can be wrong for a mailbox
+ * that exists.
  */
-const WRITEBACK_MAILBOX_COLUMNS = 'id, location_id, address, active, ingress, surface'
+const WRITEBACK_MAILBOX_COLUMNS = 'id, location_id, address, active, ingress'
 
 /**
  * The credential columns. Same list as the poller's, minus the two it needs
@@ -346,8 +334,8 @@ async function releaseConnection(client) {
 /* ─────────────────────────── the source guard ─────────────────────────── */
 
 /**
- * 🔴 THE GUARD. Load the mailbox BY ID and refuse unless it is an inbox-surface
- * IMAP mailbox that is still active.
+ * 🔴 THE GUARD. Load the mailbox BY ID and refuse unless it is an IMAP
+ * mailbox that is still active.
  *
  * Re-read from the database on purpose — see the header. A caller cannot talk
  * its way past this with a hand-built object or a stale row.
@@ -373,7 +361,7 @@ async function loadWritableMailbox(db, mailboxId) {
       return {
         ok: false,
         reason: 'mailbox_unreadable',
-        error: 'Could not check which surface this account belongs to, so nothing was changed in the mailbox.',
+        error: 'Could not read that email account, so nothing was changed in the mailbox.',
       }
     }
     row = data
@@ -382,7 +370,7 @@ async function loadWritableMailbox(db, mailboxId) {
     return {
       ok: false,
       reason: 'mailbox_unreadable',
-      error: 'Could not check which surface this account belongs to, so nothing was changed in the mailbox.',
+      error: 'Could not read that email account, so nothing was changed in the mailbox.',
     }
   }
 
@@ -390,22 +378,11 @@ async function loadWritableMailbox(db, mailboxId) {
     return { ok: false, reason: 'mailbox_not_found', error: 'That email account no longer exists.' }
   }
 
-  // 🔴 THE REFUSAL THIS MODULE EXISTS FOR. A ticketing-surface mailbox has
-  // never had an IMAP flag written to it and must not start now because some
-  // future caller reached for the nearest helper. Logged at WARN rather than
-  // silently returned: a call that gets here is a bug in the caller, and a
-  // refusal nobody can see is how the bug survives.
-  if (row.surface !== INBOX_SURFACE) {
-    logWarn('imap-writeback', 'refused an IMAP write on a mailbox that is not on the inbox surface', {
-      mailboxId, surface: row.surface ?? null,
-    })
-    return {
-      ok: false,
-      reason: 'not_inbox_surface',
-      error: 'This account is on the ticketing surface, which never changes anything in the mailbox itself.',
-    }
-  }
-
+  // RETIRE-TICKETS.1 — the surface refusal that used to sit here is gone with
+  // the surface itself (mig 578: one surface, and `surface` is deprecated —
+  // nothing reads it). What still gates a write is real capability, below:
+  // `ingress === 'imap'` (a Postmark-fed account has no mailbox to change)
+  // and an active row.
   if (row.ingress !== 'imap') {
     return {
       ok: false,

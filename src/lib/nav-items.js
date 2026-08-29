@@ -113,13 +113,13 @@ export const ALL_NAV = [
   // accounts@/sales@ and holds none of the marketing `email`/
   // `whatsapp`/`sms` keys still needs a way into the hub). Folding the
   // key into the union rather than dropping the entry is what keeps
-  // that population seeing Messages at all. The ticket queue itself
-  // didn't move — it's still reachable as the "Email inbox" tab inside
-  // CommunicationsTabs (COMMS-IA.3), gated the same way, badge intact —
-  // only its OWN top-level sidebar row is gone. No extraActivePaths:
-  // every one of its routes (/communications/send, /communications/
-  // tickets, /communications/inbox, …) is already a literal child of
-  // /communications, so the bare href prefix-matches all of them.
+  // that population seeing Messages at all. Email is the "Mail" tab
+  // inside CommunicationsTabs (/communications/mail — RETIRE-TICKETS.1
+  // retired the old ticket-queue tab), gated the same way, badge
+  // intact. No extraActivePaths: every one of its routes
+  // (/communications/send, /communications/mail, /communications/
+  // inbox, …) is already a literal child of /communications, so the
+  // bare href prefix-matches all of them.
   //
   // DEEP.4 Task 2 (4B) — the union below is UNCHANGED even though the
   // campaign-lifecycle pages (Send/Sent/Templates/Segments/List health)
@@ -141,8 +141,8 @@ export const ALL_NAV = [
   // HOME.3 — the standalone Approvals + Issues sidebar entries (the old
   // "queues" holding pen) retired here. The needs-attention queue on
   // /dashboard/today (assembleHomeQueue, src/lib/home-queue.js) is now
-  // the entry point for both: it merges approvals + issues + email
-  // tickets + the unified inbox into one item-level list, so a
+  // the entry point for both: it merges approvals + issues + mail
+  // + the unified inbox into one item-level list, so a
   // dedicated Approvals/Issues sidebar row would just be a second way
   // to reach a subset of what the queue already shows. Both pages
   // still exist and both routes still work — /approvals and /issues
@@ -527,8 +527,8 @@ export const ALL_NAV = [
 // via which of its paths. Longest-match across every item's href,
 // extraActivePaths, and children hrefs (CalendlyTabs semantics, already
 // used by HubTabs). The old per-item bare startsWith let every prefix
-// light simultaneously — /communications + /communications/tickets both
-// lit on the tickets page, and Members + Operations both lit on the
+// light simultaneously — /communications + /communications/mail both
+// lit on the mail page, and Members + Operations both lit on the
 // class timer. One winner only.
 // Returns { itemHref, matchedPath } or null. A child match returns the
 // PARENT item's href as itemHref and the child's href as matchedPath, so

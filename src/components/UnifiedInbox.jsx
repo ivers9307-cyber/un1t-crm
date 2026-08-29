@@ -13,12 +13,12 @@
 //
 // INBOX-SPLIT.1 (Richard, 2026-08-07) — EMAIL IS NOT AN INBOX CHANNEL.
 // EMAIL-INBOX.1 had made it a third channel here; email now has its own
-// surface at /communications/tickets with a real ticket lifecycle, and
+// surface — today /communications/mail (RETIRE-TICKETS.1) — and
 // leaving it in both places meant the same message was workable from two
 // places under two different state models (email_conversations
 // resolve/unresolve vs the ticket lifecycle). That is a correctness
 // problem, not a convenience one. ?ch=em deep links redirect to
-// /communications/tickets from the page above.
+// /communications/mail from the page above.
 
 import { useState, useEffect, useCallback } from 'react'
 import { createBrowserClient } from '@/lib/supabase'

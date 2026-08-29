@@ -224,113 +224,12 @@ describe('PATCH — audit', () => {
   })
 })
 
-// INBOX-SURFACE.C — the A/B switch.
-//
-// THREE PROPERTIES, and the first is the security one.
-//
-// 1. IT IS BEHIND guardMailboxAdmin LIKE EVERY OTHER MAILBOX WRITE. A manager
-//    holds `email_inbox` and works the queue every day, so a manager is exactly
-//    who would reach for this — and a manager is NOT elevated. If this were
-//    ever gated on the surface permission instead, a manager could move the
-//    studio's billing correspondence onto a surface of their choosing, and the
-//    test below fails rather than that shipping.
-// 2. IT IS AUDITED UNDER ITS OWN ACTION. "Where did our mail go" needs one
-//    greppable line in /admin/audit-log, not an `email_mailbox.updated` that
-//    looks like a rename.
-// 3. IT MOVES NOTHING. No ticket, message, grant or attachment is touched —
-//    only the column that decides which queue LISTS the account.
-describe('PATCH — surface (the ticketing / mail A/B switch)', () => {
-  it('REFUSES a manager, and the surface is unchanged afterwards', async () => {
-    // The manager holds email_inbox. That is not this gate.
-    getCurrentUser.mockResolvedValue(MANAGER_A)
-    const { res, body } = await patch(MB_ACCOUNTS.id, { surface: 'inbox' })
-    expect(res.status).toBe(403)
-    expect(body.success).toBe(false)
-    expect(writesTo(db)).toEqual([])
-    expect(rowFor(MB_ACCOUNTS.id).surface).toBeUndefined()
-  })
-
-  it('refuses an owner of a different studio', async () => {
-    getCurrentUser.mockResolvedValue(OWNER_B)
-    expect((await patch(MB_ACCOUNTS.id, { surface: 'inbox' })).res.status).toBe(403)
-    expect(writesTo(db)).toEqual([])
-  })
-
-  it('moves an account to the mail surface for an owner here', async () => {
-    const { res, body } = await patch(MB_ACCOUNTS.id, { surface: 'inbox' })
-    expect(res.status).toBe(200)
-    expect(rowFor(MB_ACCOUNTS.id).surface).toBe('inbox')
-    // …and the row that comes back carries it, so the card can re-render
-    // without guessing what it just wrote.
-    expect(body.data.mailbox.surface).toBe('inbox')
-  })
-
-  it('moves it back', async () => {
-    await patch(MB_ACCOUNTS.id, { surface: 'inbox' })
-    await patch(MB_ACCOUNTS.id, { surface: 'tickets' })
-    expect(rowFor(MB_ACCOUNTS.id).surface).toBe('tickets')
-  })
-
-  it('rejects a value that is neither surface, writing nothing', async () => {
-    // A third value would be an account on NO screen — mail that exists and is
-    // listed nowhere. The z.enum is what stops it reaching the CHECK.
-    const { res } = await patch(MB_ACCOUNTS.id, { surface: 'archive' })
+// RETIRE-TICKETS.1 — `surface` left the PATCH body when the mig-575 A/B
+// ended (mig 578). The one thing worth pinning is that the retired field is
+// now refused rather than silently applied.
+describe('PATCH — surface is retired', () => {
+  it('rejects a body that still tries to move an account between surfaces', async () => {
+    const { res } = await patch({ surface: 'inbox' })
     expect(res.status).toBe(400)
-    expect(writesTo(db)).toEqual([])
-  })
-
-  it('touches NOTHING but email_mailboxes — no ticket is moved or rewritten', async () => {
-    await patch(MB_STUDIO.id, { surface: 'inbox' })
-    const tables = [...new Set(writesTo(db).map(w => w.table))]
-    expect(tables.sort()).toEqual(['audit_events', 'email_mailboxes'])
-    // The ticket that arrived at it is untouched: its mailbox_id still points
-    // at the same account, which is what makes the move reversible.
-    expect(db._state.tickets[0].mailbox_id).toBe(MB_STUDIO.id)
-  })
-
-  it('leaves label, default and active alone', async () => {
-    await patch(MB_STUDIO.id, { surface: 'inbox' })
-    const row = rowFor(MB_STUDIO.id)
-    expect(row.label).toBe(MB_STUDIO.label)
-    expect(row.is_default).toBe(true)
-    expect(row.active).toBe(true)
-  })
-
-  it('is allowed on a DEACTIVATED account', async () => {
-    // Refusing would strand a deactivated account on whichever surface it
-    // happened to be on when it was switched off.
-    setupDb(adminState({
-      mailboxes: [{ ...MB_STUDIO }, { ...MB_ACCOUNTS, active: false }, { ...MB_OTHER_LOCATION }],
-      tickets: [{ ...T_STUDIO }],
-    }))
-    expect((await patch(MB_ACCOUNTS.id, { surface: 'inbox' })).res.status).toBe(200)
-    expect(rowFor(MB_ACCOUNTS.id).surface).toBe('inbox')
-  })
-
-  it('writes an audit row under its OWN action, with before and after', async () => {
-    await patch(MB_ACCOUNTS.id, { surface: 'inbox' })
-    const audits = insertsInto(db, 'audit_events')
-    expect(audits).toHaveLength(1)
-    expect(audits[0].payload.action).toBe('email_mailbox.surface_changed')
-    expect(audits[0].payload.actor_id).toBe(OWNER_A.id)
-    expect(audits[0].payload.location_id).toBe(LOC_A)
-    // 'tickets' rather than undefined — the column's own DEFAULT, so the row
-    // never records a move away from nothing.
-    expect(audits[0].payload.details.before.surface).toBe('tickets')
-    expect(audits[0].payload.details.after.surface).toBe('inbox')
-  })
-
-  it('does not claim a surface change when the value did not change', async () => {
-    // A no-op PATCH is still a legal write (the label branch may have done
-    // work), but calling it a surface change would put a lie in the audit log
-    // that an operator would then go looking for.
-    await patch(MB_ACCOUNTS.id, { surface: 'tickets' })
-    expect(insertsInto(db, 'audit_events')[0].payload.action).toBe('email_mailbox.updated')
-  })
-
-  it('does not audit a refused move', async () => {
-    getCurrentUser.mockResolvedValue(MANAGER_A)
-    await patch(MB_ACCOUNTS.id, { surface: 'inbox' })
-    expect(insertsInto(db, 'audit_events')).toEqual([])
   })
 })

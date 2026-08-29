@@ -31,7 +31,6 @@ import { seal } from './secret-box'
 import { withMailbox } from './imap-connection'
 import { classifyImapFailure, operatorFacingDialError } from './imap-poll'
 import {
-  INBOX_SURFACE,
   markSeen,
   markUnseen,
   archiveMessage,
@@ -53,7 +52,6 @@ function mailboxRow(overrides = {}) {
     address: 'hatchstreet@un1t.com',
     active: true,
     ingress: 'imap',
-    surface: INBOX_SURFACE,
     ...overrides,
   }
 }
@@ -199,56 +197,24 @@ beforeEach(() => {
 
 /* ═══════════════ 1. the guard — the reason this module exists ═════════ */
 
-describe('the surface guard', () => {
-  it('🔴 REFUSES a surface=tickets mailbox, and never opens a connection to it', async () => {
-    // The connector has never written an IMAP flag, deliberately: a customer's
-    // mailbox stays visually untouched. The inbox trial narrows that for ONE
-    // surface. Everything else keeps the original promise, and "keeps it"
-    // means the socket is never even opened.
-    const db = makeDb({ mailbox: mailboxRow({ surface: 'tickets' }) })
-    const { client, deps } = fakeImap()
+describe('the source guard', () => {
+  // (RETIRE-TICKETS.1 — the surface refusal that led this block is gone with
+  // the surface split, mig 578. The guard's remaining axes — ingress, active,
+  // existence, readability — are pinned below, and the re-read property is
+  // pinned on the ingress axis.)
 
-    const out = await markSeen(db, MAILBOX_ID, { uid: 7, now: NOW, deps })
-
-    expect(out).toMatchObject({ ok: false, reason: 'not_inbox_surface' })
-    expect(out.error).toMatch(/ticketing surface/i)
-    expect(client.calls).toEqual([])
-  })
-
-  it('🔴 refuses archive on a tickets mailbox too — both doors, one guard', async () => {
-    const db = makeDb({ mailbox: mailboxRow({ surface: 'tickets' }) })
-    const { client, deps } = fakeImap()
-
-    const out = await archiveMessage(db, MAILBOX_ID, { uid: 7, now: NOW, deps })
-
-    expect(out).toMatchObject({ ok: false, reason: 'not_inbox_surface' })
-    expect(client.calls).toEqual([])
-  })
-
-  it('🔴 a refusal is LOUD — a caller that reaches it is a bug, and a silent refusal hides it', async () => {
-    const db = makeDb({ mailbox: mailboxRow({ surface: 'tickets' }) })
-    const { deps } = fakeImap()
-
-    await markSeen(db, MAILBOX_ID, { uid: 7, now: NOW, deps })
-
-    expect(logWarn).toHaveBeenCalledWith(
-      'imap-writeback',
-      expect.stringMatching(/not on the inbox surface/i),
-      expect.objectContaining({ mailboxId: MAILBOX_ID, surface: 'tickets' }),
-    )
-  })
-
-  it('🔴 RE-READS the surface from the database — a caller cannot hand one in', async () => {
+  it('🔴 RE-READS the mailbox from the database — a caller cannot hand one in', async () => {
     // The whole point of a source-side guard: a future caller must not be able
     // to talk its way past it with a hand-built object or a row it read five
-    // minutes ago.
-    const db = makeDb({ mailbox: mailboxRow({ surface: 'tickets' }) })
+    // minutes ago. The DB row says postmark; the forged object claims imap —
+    // the DB must win.
+    const db = makeDb({ mailbox: mailboxRow({ ingress: 'postmark' }) })
     const { client, deps } = fakeImap()
 
-    const forged = { id: MAILBOX_ID, surface: INBOX_SURFACE, ingress: 'imap', active: true }
+    const forged = { id: MAILBOX_ID, ingress: 'imap', active: true }
     const out = await markSeen(db, forged, { uid: 7, now: NOW, deps })
 
-    expect(out).toMatchObject({ ok: false, reason: 'not_inbox_surface' })
+    expect(out).toMatchObject({ ok: false, reason: 'not_imap' })
     expect(client.calls).toEqual([])
   })
 
@@ -262,7 +228,7 @@ describe('the surface guard', () => {
     expect(client.calls).toEqual([])
   })
 
-  it('🔴 an UNREADABLE mailbox row refuses too — it is not the same as "not on the surface"', async () => {
+  it('🔴 an UNREADABLE mailbox row refuses too — it is not the same as a policy refusal', async () => {
     // Collapsing the two would make a database outage look like a policy
     // decision, and the operator would go looking at the wrong setting.
     const db = makeDb({ errors: { mailbox: { message: 'connection reset' } } })
@@ -366,13 +332,13 @@ describe('markSeen', () => {
     expect(names(client)).not.toContain('messageMove')
   })
 
-  it('🔴 markUnseen obeys the SAME surface guard — it is not a back door', async () => {
-    const db = makeDb({ mailbox: mailboxRow({ surface: 'tickets' }) })
+  it('🔴 markUnseen obeys the SAME source guard — it is not a back door', async () => {
+    const db = makeDb({ mailbox: mailboxRow({ ingress: 'postmark' }) })
     const { client, deps } = fakeImap()
 
     const out = await markUnseen(db, MAILBOX_ID, { uid: 7, now: NOW, deps })
 
-    expect(out).toMatchObject({ ok: false, reason: 'not_inbox_surface' })
+    expect(out).toMatchObject({ ok: false, reason: 'not_imap' })
     expect(client.calls).toEqual([])
   })
 

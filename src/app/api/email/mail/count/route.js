@@ -1,37 +1,21 @@
-// GET /api/email/mail/count — the Mail surface's OWN nav badge (INBOX-SURFACE.C).
+// GET /api/email/mail/count — the Mail nav badge (INBOX-SURFACE.C, sole email
+// badge since RETIRE-TICKETS.1).
 //
 // THE ONE PRINCIPLE THIS FILE EXISTS FOR: "each badge counts exactly the rows
-// its own queue lists" (MAIL-TRIAL.B). The ticket surface already has
-// /api/email/tickets/count; this is its mirror image for the OTHER half of
-// the head-to-head trial, so the same reasoning about WHAT the number means —
-// `open` AND an inbound last message, not the whole live queue, not
-// `unread_count>0`, not `unassigned` — applies here unchanged. See that
-// route's own header for the full case against each rejected alternative; it
-// is not restated here.
+// its own queue lists" (MAIL-TRIAL.B). The reasoning about WHAT the number
+// means — `open` AND an inbound last message, not the whole live queue, not
+// `unread_count>0`, not `unassigned` — was argued in full on the ticket
+// badge's header (now a deprecated shim next door); it applies unchanged.
 //
 // TWO GATES, same as every route on this surface. `email_inbox` gates the
-// screen (resolved AT the active location, exactly like the ticket badge —
-// this endpoint is parameterless, so there is no OTHER location to resolve
-// against), and a row in email_mailbox_access gates each account.
+// screen (resolved AT the active location — this endpoint is parameterless,
+// so there is no OTHER location to resolve against), and a row in
+// email_mailbox_access gates each account.
 //
-// 🔴 INBOX-SURFACE.C — AND IT COUNTS ONLY THIS SURFACE'S MAILBOXES, THE OTHER
-// WAY ROUND FROM THE TICKET BADGE. A studio mid-trial has studio@ on Mail and
-// accounts@ still on tickets; an unanswered accounts@ ticket is real work, but
-// it is the OTHER badge's job to say so. Narrowing here is what keeps this
-// badge and the tab it sits on always meaning the same rows — a badge
-// counting mail this list refuses to render is the red dot an operator
-// clicks, finds nothing behind, and learns to ignore.
-//
-// 🔴 NO ORPHAN WIDENING, UNLIKE THE TICKET BADGE'S ELEVATED PATH. There
-// email_tickets.mailbox_id is ON DELETE SET NULL (mig 484 also predates the
-// column), and a NULL-mailbox ticket has no `surface` to read — 'tickets' is
-// both the column's own DEFAULT and the ticket surface's own reasoning for
-// claiming it (mailboxesForSurface falls back to SURFACE_TICKETS for exactly
-// that row). That makes an orphan the TICKET surface's mail, never this one's,
-// so this route's scope is the mail LIST route's own plain
-// `.in('mailbox_id', ids)` (route.js: no `.or(mailbox_id.is.null)` branch) —
-// never scopeToVisibleMailboxes, whose elevated branch would silently
-// re-admit orphans through the `.or()` it built for the OTHER surface.
+// RETIRE-TICKETS.1 — the surface narrowing that used to sit here is gone with
+// the surface itself (mig 578), and the orphan `.or` branch is now IN, not
+// out: NULL-mailbox conversations live on this surface since the queue was
+// deleted, so the badge scopes with the same shared helper as the list.
 //
 // Shape and posture otherwise follow the ticket badge exactly: parameterless,
 // count 0 (not an error) for a session that is not eligible at all, and a
@@ -43,8 +27,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import {
-  loadVisibleMailboxes, scopeToNeedsReply, scopeToUnmerged,
-  mailboxesForSurface, SURFACE_INBOX,
+  loadVisibleMailboxes, scopeToVisibleMailboxes, scopeToNeedsReply, scopeToUnmerged,
 } from '../../tickets/_helpers'
 
 export const runtime = 'nodejs'
@@ -70,26 +53,22 @@ export async function GET() {
   // response and keeps the last good count, so a blip shows a slightly stale
   // number rather than a confident, wrong "nothing to do".
   if (visibility.response) return visibility.response
-  const { mailboxes: visible } = visibility
+  const { elevated, mailboxes: visible } = visibility
 
-  // INBOX-SURFACE.C — narrow to THIS surface, and stop here rather than run a
-  // query that can only return 0. Unlike the ticket badge's early-out (which
-  // is keyed on the PRE-surface set, because an orphan still needs the widened
-  // query even when the tab strip is empty), there is nothing this route could
-  // widen to — no orphan ever belongs here — so the narrowed set alone decides.
-  const mailboxes = mailboxesForSurface(visible, SURFACE_INBOX)
-  if (mailboxes.length === 0) return zero()
-
-  const ids = mailboxes.map(m => m.id)
+  // Genuinely nothing visible → zero, and skip a query that would return it
+  // anyway. An elevated caller at a studio with mailboxes always has a
+  // non-empty visible set, so no orphan is dropped by this early-out.
+  if (visible.length === 0) return zero()
 
   // head: true — the badge wants a number, never the rows.
   let query = db.from('email_tickets')
     .select('*', { count: 'exact', head: true })
     .eq('location_id', locationId)
-    // The mail LIST route's own scope (route.js), verbatim — plain `.in()`,
-    // deliberately not scopeToVisibleMailboxes: see the header for why an
-    // orphan must never ride back in through its elevated `.or()` branch.
-    .in('mailbox_id', ids)
+  // RETIRE-TICKETS.1 — the mail LIST route's own scope, verbatim: all visible
+  // mailboxes, orphan `.or` branch for elevated callers. The surface split is
+  // gone (mig 578) and orphans live on this surface now, so the badge counts
+  // exactly the rows the list shows.
+  query = scopeToVisibleMailboxes(query, { mailboxes: visible, elevated })
   query = scopeToNeedsReply(query)
   // EMAIL-MERGE.3 — never a tombstone, by the same scope the list uses.
   query = scopeToUnmerged(query)

@@ -409,16 +409,6 @@ const MAX_BODY_PART_BYTES = 1_000_000
  */
 const MAX_TEXT_BODY_CHARS = HTML_BODY_MAX_CHARS
 
-/**
- * The email_mailboxes.surface value that gets the \Seen mirror (mig 575).
- *
- * Deliberately a local constant rather than an import from imap-writeback.js:
- * that module is request-scoped and pulls in ImapFlow for its writable open,
- * and the poller has no business depending on the write path to read a
- * presentation flag. The value is pinned against the writeback module's own
- * export by a test, so the two cannot drift.
- */
-const INBOX_SURFACE = 'inbox'
 
 /**
  * 🔴 HOW FAR BACK THE \Seen MIRROR LOOKS — AND WHY THERE IS A CEILING AT ALL.
@@ -550,13 +540,7 @@ const INGRESS_COLUMNS = [
  * phases and select for other purposes. `address` is the load-bearing one: it
  * becomes OriginalRecipient, which is what routes the mail.
  */
-// `surface` (mig 575) gates the \Seen mirror. A mailbox row that arrives here
-// WITHOUT it — a direct caller passing a partial row — simply gets no mirror,
-// which is the fail-closed direction: the mirror is an addition to a surface
-// that does not exist yet, and not running it costs a badge, where running it
-// on a mailbox whose surface we could not read writes a column that surface's
-// UI never asked for.
-const POLL_MAILBOX_COLUMNS = 'id, location_id, address, label, active, ingress, surface'
+const POLL_MAILBOX_COLUMNS = 'id, location_id, address, label, active, ingress'
 
 /* ─────────────────────────── small pure helpers ───────────────────────── */
 
@@ -1288,36 +1272,32 @@ async function writeIngress(db, mailboxId, folder, patch, nowIso) {
 /**
  * Should this tick run the \Seen mirror at all? PURE.
  *
- * Six conditions, and every one of them is a way the mirror would otherwise be
- * wasted work or the wrong work:
+ * Five conditions, and every one of them is a way the mirror would otherwise
+ * be wasted work or the wrong work (a sixth — the mig-575 surface gate — was
+ * retired with the surface itself, RETIRE-TICKETS.1 / mig 578: every mailbox
+ * is on the mail surface now, so it excluded nothing):
  *
  *   1. THE INBOX LANE ONLY. The Sent folder's read state describes what a
  *      colleague has re-read of their own outbox, which is nothing anybody
  *      triages. And the Sent lane's rows are OUTBOUND, so an unread badge on
  *      one would be meaningless in any surface.
- *   2. THE INBOX SURFACE ONLY. This is what makes mig 575 true when it says
- *      applying it changes nothing: every mailbox in prod is 'tickets', the
- *      ticketing surface has no unread model, and a mailbox whose `surface` we
- *      could not read (a partial row from a direct caller) gets no mirror
- *      rather than a guess.
- *   3. NOT ON A COLD START OR A RE-ANCHOR. Both anchor the watermark without
+ *   2. NOT ON A COLD START OR A RE-ANCHOR. Both anchor the watermark without
  *      ingesting anything, so every UID in the window belongs to a message
  *      that was never filed and has no row to reconcile against. The whole run
  *      would be a fetch that matched nothing.
- *   4. THE CADENCE. See SEEN_SYNC_MIN_INTERVAL_MS. NULL/unparseable reads as
+ *   3. THE CADENCE. See SEEN_SYNC_MIN_INTERVAL_MS. NULL/unparseable reads as
  *      due, which is right for a mailbox just moved onto the surface and is
  *      also the harmless direction for a corrupt value.
- *   5. THE WALL-CLOCK BUDGET. Checked here as well as inside the message loop:
+ *   4. THE WALL-CLOCK BUDGET. Checked here as well as inside the message loop:
  *      the mirror is the LAST thing a tick does, so it is exactly the work
  *      that must give way when the budget is gone. Skipping it costs a stale
  *      badge for one cadence; overrunning costs every other tenant their tick.
- *   6. A WATERMARK TO ANCHOR THE WINDOW ON. Handled inside syncSeenFlags too;
+ *   5. A WATERMARK TO ANCHOR THE WINDOW ON. Handled inside syncSeenFlags too;
  *      checked here as well so a mailbox that has ingested nothing does not
  *      even open the question.
  */
-function shouldSyncSeen({ folder, mailbox, cursor, outcome, now, deadlineAt, clock }) {
+function shouldSyncSeen({ folder, cursor, outcome, now, deadlineAt, clock }) {
   if (folder !== DEFAULT_FOLDER) return false
-  if (mailbox?.surface !== INBOX_SURFACE) return false
   if (outcome?.reason === 'cold_start' || outcome?.reason === 'uidvalidity_changed') return false
   if (deadlineAt != null && clock() >= deadlineAt) return false
 

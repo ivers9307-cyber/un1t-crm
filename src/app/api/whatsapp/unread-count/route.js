@@ -50,7 +50,7 @@ export async function GET() {
     // Inbox is WhatsApp + Instagram only now, so a badge counting email
     // pointed at work that isn't reachable from the surface it badges —
     // which is exactly why it sat on 1 with an empty-looking queue. Email
-    // is worked at /communications/tickets and counts itself there.
+    // is worked at /communications/mail and counts itself there.
     const [wa, ig] = await Promise.all([
       db.from('whatsapp_conversations').select(cols)
         .eq('location_id', locationId).is('resolved_at', null),

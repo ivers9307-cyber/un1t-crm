@@ -5,7 +5,7 @@
 // "Needs attention" triage feed rendering above the personal roster,
 // each row deep-linking into its full surface.
 //
-// HOME.3 replaced the count-level rows for approvals / email tickets /
+// HOME.3 replaced the count-level rows for approvals / email /
 // unified inbox with assembleHomeQueue's item-level merged queue (src/
 // lib/home-queue.js) — one row per approval / ticket / conversation,
 // not one row per source count. The today-feed rows that are NOT queue
@@ -19,7 +19,7 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import {
   Calendar, AlertCircle, AlertTriangle, ClipboardCheck, Inbox, MessagesSquare,
-  Radar, CheckSquare, Flag, Ticket, Receipt, FileText, Wallet, Zap,
+  Radar, CheckSquare, Flag, Mail, Receipt, FileText, Wallet, Zap,
   ArrowLeftRight, Users, Handshake, ShoppingBag,
 } from 'lucide-react'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
@@ -87,7 +87,7 @@ function feedSubtitle(row) {
   return [row.detail, ...items].filter(Boolean).join(' · ') || undefined
 }
 
-// Icon per home-queue row source. Tickets and inbox map directly; every
+// Icon per home-queue row source. Mail and inbox map directly; every
 // approvals provider key (src/lib/approvals/providers/*.js) gets its own
 // icon so the flat/grouped queue list doesn't render one generic glyph
 // for eleven very different kinds of approval. Falls back to the generic
@@ -104,7 +104,7 @@ const QUEUE_SOURCE_ICONS = {
   hyrox_sessions: <Users size={16} />,
   host_events: <Handshake size={16} />,
   offer_purchases: <ShoppingBag size={16} />,
-  tickets: <Ticket size={16} />,
+  mail: <Mail size={16} />,
   inbox: <MessagesSquare size={16} />,
 }
 const DEFAULT_QUEUE_ICON = <ClipboardCheck size={16} />
@@ -240,7 +240,7 @@ export default async function PersonalDashboardPage() {
     <>
       {/* HOME.3 — the needs-attention queue. First thing on the page:
           the merged, item-level list from assembleHomeQueue (approvals,
-          email tickets, unified WhatsApp/Instagram inbox), one row per
+          email, unified WhatsApp/Instagram inbox), one row per
           item rather than one row per source-count — each deep-links
           straight into its own surface. Always rendered (unlike the old
           count-level feed, which hid itself entirely when empty) so an
@@ -248,11 +248,11 @@ export default async function PersonalDashboardPage() {
           section a viewer can't tell from a loading gap. */}
       <div className="mb-4 max-w-5xl">
         <SectionHeader title="Needs attention" count={queueCountLabel(queue.total, queue.rows.length)} />
-        {queue.counts.tickets === null && (
+        {queue.counts.mail === null && (
           // EMAIL-TICKET-CLEANUP.2 — a failed mailbox-visibility lookup
           // is "we don't know", never a confident zero; say so instead
-          // of silently omitting the tickets source.
-          <p className="px-1 mb-2 text-xs text-un1t-subtle">Email tickets unavailable right now</p>
+          // of silently omitting the mail source.
+          <p className="px-1 mb-2 text-xs text-un1t-subtle">Email unavailable right now</p>
         )}
         {queueRowsDelayed && (
           <p className="px-1 mb-2 text-xs text-un1t-subtle">Some sources may be delayed</p>

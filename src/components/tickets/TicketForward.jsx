@@ -40,7 +40,7 @@
 // operator is looking at in the thread, so it is stated here rather than
 // discovered by the recipient.
 //
-// Mounted only while open (see TicketInbox), so state resets per open and the
+// Mounted only while open (see MailSurface), so state resets per open and the
 // thread's background re-read cannot wipe a half-typed forward.
 
 import { useState } from 'react'

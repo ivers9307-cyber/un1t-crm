@@ -33,7 +33,6 @@ import {
   THREAD_STEADY_MS,
   THREAD_SETTLE_WINDOW_MS,
   NO_MAILBOX_EMPTY,
-  MAILBOXES_ON_MAIL_EMPTY,
   relativeTime,
   messageTimestamp,
 } from './ticket-display'
@@ -249,46 +248,6 @@ describe('labels', () => {
     }
   })
 
-  // INBOX-SURFACE.E — when a studio's mailbox MOVED to Mail rather than
-  // genuinely having none, NO_MAILBOX_EMPTY's "no access granted" copy is
-  // simply false and reads as a revoked grant. MAILBOXES_ON_MAIL_EMPTY names
-  // what actually happened instead.
-  describe('MAILBOXES_ON_MAIL_EMPTY', () => {
-    it('is a different situation from NO_MAILBOX_EMPTY and says so', () => {
-      const copy = MAILBOXES_ON_MAIL_EMPTY(['Accounts'])
-      expect(copy.title).not.toBe(NO_MAILBOX_EMPTY.title)
-      expect(copy.description).not.toBe(NO_MAILBOX_EMPTY.description)
-      // The whole point: never suggest access was revoked — NO_MAILBOX_EMPTY's
-      // "you have not been given access" framing must not leak in here.
-      expect(copy.description.toLowerCase()).not.toContain('have not been given')
-      expect(copy.description.toLowerCase()).not.toContain('grant')
-    })
-
-    it('names the single moved account and points at Mail', () => {
-      const copy = MAILBOXES_ON_MAIL_EMPTY(['accounts@hatchstreetfitness.com'])
-      expect(copy.description).toContain('accounts@hatchstreetfitness.com')
-      expect(copy.description).toMatch(/Mail/)
-    })
-
-    it('names every moved account when there is more than one', () => {
-      const copy = MAILBOXES_ON_MAIL_EMPTY(['Accounts', 'Sales'])
-      expect(copy.description).toContain('Accounts')
-      expect(copy.description).toContain('Sales')
-    })
-
-    it('never crashes and still points at Mail when handed an empty list', () => {
-      const copy = MAILBOXES_ON_MAIL_EMPTY([])
-      expect(typeof copy.title).toBe('string')
-      expect(copy.title.length).toBeGreaterThan(0)
-      expect(copy.description).toMatch(/Mail/)
-    })
-
-    it('never crashes when handed undefined (absent-flag defensive call)', () => {
-      const copy = MAILBOXES_ON_MAIL_EMPTY(undefined)
-      expect(typeof copy.title).toBe('string')
-      expect(copy.description).toMatch(/Mail/)
-    })
-  })
 })
 
 describe('time', () => {

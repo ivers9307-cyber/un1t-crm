@@ -19,7 +19,7 @@
 //
 // INBOX-SPLIT.1 (2026-08-07) — `email_conversations` dropped: the inbox is
 // WhatsApp + Instagram only, so there is no email fan-out left to build an
-// OR-filter for. Email search belongs to /communications/tickets, which has
+// OR-filter for. Email search belongs to /communications/mail, which has
 // its own query path over `email_tickets`. `buildInboxSearchOr` throws on an
 // unknown table by design, so re-adding a caller here has to be deliberate.
 export const INBOX_SEARCH_FIELDS = Object.freeze({

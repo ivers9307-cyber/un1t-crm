@@ -12,9 +12,8 @@
 // descriptions say so. WhatsApp inbox stays outright (Messages
 // territory); Sequences stays outright too (an /automations cross-link
 // that predates this PR and isn't part of the campaign-lifecycle move).
-// The Email inbox card is NEW — the ticket queue had a CommunicationsTabs
-// tab but no card here, so "inbox/tickets cards" (the landing's stated
-// job) was actually only half true before this.
+// The Mail card (né "Email inbox", RETIRE-TICKETS.1) deep-links the email
+// surface.
 
 import Link from 'next/link'
 import { getCurrentUser } from '@/lib/auth'
@@ -219,11 +218,11 @@ export default async function CommunicationsHub() {
             tab but no landing card until now. */}
         {canEmailInbox && (
           <ActionCard
-            href="/communications/tickets"
+            href="/communications/mail"
             icon={Mail}
             color="bg-blue-500/20 text-blue-700"
-            title="Email inbox"
-            desc="Answer studio email tickets (accounts@, sales@…)"
+            title="Mail"
+            desc="Read and answer studio email (accounts@, sales@…)"
           />
         )}
         {canEmail && (
