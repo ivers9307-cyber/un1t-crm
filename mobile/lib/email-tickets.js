@@ -37,40 +37,37 @@
 // (background, on the chip View) and `text` (foreground, on the Text) because
 // RN does not inherit text colour through a View — the same shape
 // contact-command-centre.js uses.
-export const TICKET_STATUS_META = Object.freeze({
-  open: { label: 'Open', cls: 'bg-blue-500/10', text: 'text-blue-700', hint: 'Needs the studio' },
-  pending: { label: 'Pending', cls: 'bg-amber-500/10', text: 'text-amber-700', hint: 'Replied — waiting on the member' },
-  solved: { label: 'Solved', cls: 'bg-green-500/10', text: 'text-green-700', hint: 'Handled — a member reply reopens it' },
-  closed: { label: 'Closed', cls: 'bg-slate-500/10', text: 'text-slate-700', hint: 'Done — a member reply starts a new ticket' },
-})
-
-// The lifecycle in the order an operator walks it. All four are rendered on
-// the thread: NOTHING in this system closes itself (Richard, 2026-08-06), so
-// closing has to be reachable in one tap rather than buried.
-export const TICKET_STATUS_ORDER = Object.freeze(['open', 'pending', 'solved', 'closed'])
-
-export function ticketStatusMeta(status) {
-  return TICKET_STATUS_META[status]
-    || { label: status || 'Unknown', cls: 'bg-slate-500/10', text: 'text-slate-700', hint: '' }
+// RETIRE-TICKETS.1 — the four-state lifecycle left with the ticket queue.
+// On Mail a conversation is in the inbox or it is Archived; the one other
+// fact worth a chip is Needs reply. Same vocabulary as the web surface
+// (src/components/mail/mail-display.js), restated for the file-header reason.
+export function mailStatusChip(row) {
+  if (isArchivedStatus(row?.status)) {
+    return { label: 'Archived', cls: 'bg-slate-500/10', text: 'text-slate-700' }
+  }
+  if (row?.status === 'open' && row?.last_message_direction === 'inbound') {
+    return { label: 'Needs reply', cls: 'bg-amber-500/10', text: 'text-amber-700' }
+  }
+  return null
 }
 
-/** Solved and closed are the archived half of the lifecycle. */
+/** Solved and closed are the archived half of the (retired) lifecycle —
+ * kept because historic rows still carry 'solved', and both read as
+ * Archived on this surface. */
 export function isArchivedStatus(status) {
   return status === 'solved' || status === 'closed'
 }
 
 // ── Views ────────────────────────────────────────────────────────────
 //
-// The Email tab's queue chips, and — just as load-bearing — what each one
-// should say when it is EMPTY. A single "No tickets" for every filter tells
+// The Mail tab's view chips, and — just as load-bearing — what each one
+// should say when it is EMPTY. A single "No mail" for every filter tells
 // an operator nothing about whether the studio is on top of its mail or
 // looking at the wrong queue.
 //
-// `wire` is the ?view= value. NULL MEANS SEND NO PARAM: the route reads an
-// absent view as the live queue (open + pending), which is what the tab lands
-// on. The four non-null values are exactly the ones the route whitelists —
-// anything else is a 400 — and `closed` is the wire word that returns solved
-// AND closed, while the chip says the shorter "Closed" an operator looks for.
+// `wire` is the ?view= value. NULL MEANS SEND NO PARAM: the mail route reads
+// an absent view as the inbox, which is what the tab lands on. The non-null
+// values are exactly the ones the route whitelists — anything else is a 400.
 //
 // Vocabulary matches the web (src/lib/ticket-display.js) on purpose: the same
 // person works this queue on a phone and at the desk, and a queue that is
@@ -78,33 +75,23 @@ export function isArchivedStatus(status) {
 // re-statement rather than an import for the reason in the file header.
 export const TICKET_VIEW_TABS = Object.freeze([
   {
-    id: 'open', label: 'Open', wire: null,
-    emptyTitle: 'Queue clear',
-    emptyBody: 'Nothing is open or waiting on a member reply right now.',
-  },
-  {
-    id: 'unassigned', label: 'Unassigned', wire: 'unassigned',
-    emptyTitle: 'Nothing unassigned',
-    emptyBody: 'Every open ticket here already has someone on it.',
-  },
-  {
-    id: 'mine', label: 'Mine', wire: 'mine',
-    emptyTitle: 'Nothing assigned to you',
-    emptyBody: 'Tickets assigned to you will show up here.',
+    id: 'inbox', label: 'Inbox', wire: null,
+    emptyTitle: 'Inbox zero',
+    emptyBody: 'Nothing here — new mail lands in this list as it arrives.',
   },
   {
     id: 'needs_reply', label: 'Needs reply', wire: 'needs_reply',
     emptyTitle: 'Nobody is waiting on us',
-    emptyBody: 'Every open ticket has been answered — the ball is with the member.',
+    emptyBody: 'Every conversation has been answered — the ball is with the member.',
   },
   {
-    id: 'closed', label: 'Closed', wire: 'closed',
-    emptyTitle: 'Nothing closed yet',
-    emptyBody: 'Nothing auto-closes here, so this fills up only as people solve or close tickets.',
+    id: 'archived', label: 'Archived', wire: 'archived',
+    emptyTitle: 'Nothing archived yet',
+    emptyBody: 'Archive a conversation when it is dealt with — a new reply from the member brings it back.',
   },
 ])
 
-export const DEFAULT_TICKET_VIEW = 'open'
+export const DEFAULT_TICKET_VIEW = 'inbox'
 
 // Having no mailbox to look at is NOT an empty queue — it is a different
 // situation with a different fix, and conflating them tells someone whose
@@ -686,7 +673,14 @@ export function ticketToInboxRow(ticket, { mailboxById = {}, showMailbox = false
     last_message_at: t.last_message_at || t.created_at || null,
     last_message_direction: t.last_message_direction || null,
     last_message_preview: t.last_message_preview || null,
-    unread_count: t.unread_count || 0,
+    // MOBILE-MAIL.1 — the mail list's own read model: per-message seen_at,
+    // mirrored from IMAP \Seen where an account is connected. The ticket-era
+    // unread_count column rides as the fallback for any caller still shaping
+    // ticket rows through this.
+    unread_count: t.unread_count_messages ?? t.unread_count ?? 0,
+    unread: t.unread === true,
+    needs_reply: t.needs_reply === true,
+    has_attachments: t.has_attachments === true,
     mailbox_id: t.mailbox_id || null,
     // Null when there is only one account to see — a chip naming the only
     // mailbox in existence is noise on a phone-width row.

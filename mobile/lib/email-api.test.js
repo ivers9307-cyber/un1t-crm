@@ -1,4 +1,5 @@
-// The mobile wire layer for email tickets — until now the one untested module
+// The mobile wire layer for the Mail surface — historically the one untested
+// module
 // in the email footprint (2026-08-08 audit). The case that forced the file:
 // GET /api/email/tickets/[id] returns `attachments_unavailable: true` when the
 // attachment lookup failed, precisely so a client can say "attachments
@@ -15,7 +16,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 vi.mock('./api', () => ({ api: vi.fn() }))
 
 import { api } from './api'
-import { getTicket, getTicketCount } from './email-api'
+import { getTicket, getMailCount, listMail, archiveConversation, setConversationSeen } from './email-api'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -81,47 +82,78 @@ describe('getTicket', () => {
 
 // EMAIL-ASSIGN.1 — the mobile claim path. Mirrors the web contract exactly:
 // 'me' | null | <profile id>, the route decides.
-describe('assignTicket', () => {
-  it("posts the assignee and passes the route's ticket + name back", async () => {
+// MOBILE-MAIL.1 — the mail list + the surface's two verbs.
+describe('listMail', () => {
+  it('asks /api/email/mail and shapes conversations into rows', async () => {
     api.mockResolvedValue({
       success: true,
-      data: { ticket: { id: 'T-1', assigned_to: 'p-1' }, assignee_name: 'Casey' },
+      data: {
+        mailboxes: [{ id: 'mb-1', label: 'Accounts', address: 'a@x.com' }],
+        conversations: [{
+          id: 'T-1', status: 'open', last_message_direction: 'inbound',
+          unread: true, unread_count_messages: 2, has_attachments: true,
+          needs_reply: true, archived: false,
+        }],
+        needs_reply_count: 1,
+      },
     })
-    const { assignTicket } = await import('./email-api')
-    const res = await assignTicket('T-1', 'me', { locationId: 'loc-1' })
+    const res = await listMail('loc-1', {})
+    expect(api).toHaveBeenCalledWith('/api/email/mail?location_id=loc-1', { locationId: 'loc-1' })
     expect(res.success).toBe(true)
-    expect(res.ticket.assigned_to).toBe('p-1')
-    expect(res.assigneeName).toBe('Casey')
-    expect(api).toHaveBeenCalledWith('/api/email/tickets/T-1/assign', expect.objectContaining({
-      method: 'POST', locationId: 'loc-1', body: { assignee: 'me' },
-    }))
+    expect(res.needsReplyCount).toBe(1)
+    const [row] = res.data
+    expect(row.unread).toBe(true)
+    expect(row.unread_count).toBe(2)
+    expect(row.has_attachments).toBe(true)
+    expect(row.needs_reply).toBe(true)
   })
 
-  it('surfaces a refusal as a failure with the code intact', async () => {
-    api.mockResolvedValue({ success: false, error: 'already_assigned' })
-    const { assignTicket } = await import('./email-api')
-    const res = await assignTicket('T-1', 'me', { locationId: 'loc-1' })
+  it('sends the view on the wire when one is chosen', async () => {
+    api.mockResolvedValue({ success: true, data: { mailboxes: [], conversations: [] } })
+    await listMail('loc-1', { view: 'archived' })
+    expect(api).toHaveBeenCalledWith('/api/email/mail?location_id=loc-1&view=archived', { locationId: 'loc-1' })
+  })
+
+  it('refuses locally without a location — the route would 400 anyway', async () => {
+    const res = await listMail(null, {})
     expect(res.success).toBe(false)
-    expect(res.error).toBe('already_assigned')
+    expect(api).not.toHaveBeenCalled()
   })
 })
 
-// EMAIL-BADGE-M.1 — the Email tab badge count. The endpoint exists precisely
-// so this surface never polls the whole 200-row queue for a number
-// (EMAIL-TICKET-CLEANUP.3); the wrapper's job is the right path + the
-// location header, and passing failure through so the poller can keep its
-// last-known count instead of flashing a confident zero.
-describe('getTicketCount', () => {
+describe('archiveConversation / setConversationSeen', () => {
+  it('posts archive to the mail route with a boolean', async () => {
+    api.mockResolvedValue({ success: true, data: {} })
+    await archiveConversation('T-1', 1, 'loc-1')
+    expect(api).toHaveBeenCalledWith('/api/email/mail/T-1/archive', {
+      method: 'POST', body: { archived: true }, locationId: 'loc-1',
+    })
+  })
+
+  it('posts seen to the mail route with a boolean', async () => {
+    api.mockResolvedValue({ success: true, data: {} })
+    await setConversationSeen('T-1', 0, 'loc-1')
+    expect(api).toHaveBeenCalledWith('/api/email/mail/T-1/seen', {
+      method: 'POST', body: { seen: false }, locationId: 'loc-1',
+    })
+  })
+})
+
+// The Mail tab badge count. The endpoint exists precisely so this surface
+// never polls the whole conversation list for a number; the wrapper's job is
+// the right path + the location header, and passing failure through so the
+// poller can keep its last-known count instead of flashing a confident zero.
+describe('getMailCount', () => {
   it('asks the cheap count route, location-scoped', async () => {
     api.mockResolvedValue({ success: true, data: { count: 4 } })
-    const res = await getTicketCount('loc-1')
-    expect(api).toHaveBeenCalledWith('/api/email/tickets/count', { locationId: 'loc-1' })
+    const res = await getMailCount('loc-1')
+    expect(api).toHaveBeenCalledWith('/api/email/mail/count', { locationId: 'loc-1' })
     expect(res).toEqual({ success: true, data: { count: 4 } })
   })
 
   it('passes a failure through untouched — the poller keeps its last count', async () => {
     api.mockResolvedValue({ success: false, error: 'blip' })
-    const res = await getTicketCount('loc-1')
+    const res = await getMailCount('loc-1')
     expect(res.success).toBe(false)
   })
 })

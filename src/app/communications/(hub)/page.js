@@ -61,8 +61,8 @@ export default async function CommunicationsHub() {
   const canEmail = hasPermission(user, 'email')
   const canWhatsapp = hasPermission(user, 'whatsapp')
   const canSms = hasPermission(user, 'sms')
-  // EMAIL-TICKET.4 key — the studio email queue, not the marketing `email`
-  // one. Powers the new Email inbox card below.
+  // EMAIL-TICKET.4 key — the studio email surface, not the marketing `email`
+  // one. Powers the Mail card below.
   const canEmailInbox = hasPermission(user, 'email_inbox')
 
   const db = createServerClient()

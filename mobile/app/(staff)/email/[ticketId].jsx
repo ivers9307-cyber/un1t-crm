@@ -72,12 +72,12 @@ import { useHeaderHeight } from 'expo-router/react-navigation'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../../lib/auth-context'
 import {
-  getTicket, replyToTicket, setTicketStatus, markTicketRead, assignTicket, emailDisplayName,
+  getTicket, replyToTicket, archiveConversation, setConversationSeen, emailDisplayName,
   previewTicketAttachment, downloadTicketAttachment,
 } from '../../../lib/email-api'
 import {
-  ticketMessageKind, ticketStatusMeta, mailboxLabel, ticketDeliveryMeta,
-  ticketMessageRecipients, sentToLabel, isArchivedStatus, TICKET_STATUS_ORDER,
+  ticketMessageKind, mailStatusChip, mailboxLabel, ticketDeliveryMeta,
+  ticketMessageRecipients, sentToLabel, isArchivedStatus,
   formatAttachmentSize, ticketAttachmentSkippedLabel, ticketAttachmentIcon,
   threadRefreshMs, ticketReplyAudienceMeta, ticketReplyPlaceholder,
   ticketThreadAudienceLines, ticketSendOriginMeta,
@@ -434,7 +434,7 @@ function MessageBubble({ msg, ticketId, locationId, onViewImage }) {
 
 export default function EmailTicket() {
   const { ticketId } = useLocalSearchParams()
-  const { activeLocation, profile } = useAuth()
+  const { activeLocation } = useAuth()
   const headerHeight = useHeaderHeight()
   const insets = useSafeAreaInsets()
   const [ticket, setTicket] = useState(null)
@@ -444,8 +444,7 @@ export default function EmailTicket() {
   const [text, setText] = useState('')
   const [isNote, setIsNote] = useState(false)
   const [sending, setSending] = useState(false)
-  const [savingStatus, setSavingStatus] = useState(false)
-  const [savingAssign, setSavingAssign] = useState(false)
+  const [savingAction, setSavingAction] = useState(false)
   // The route sets this when the ATTACHMENT lookup failed (2026-08-08 audit):
   // the messages below are real, but their files are unknown — which must be
   // said, or a blipped lookup reads as "the member sent no files". Web renders
@@ -481,12 +480,14 @@ export default function EmailTicket() {
     setAttachmentsUnavailable(!!res.attachmentsUnavailable)
     setReplyRecipients(res.reply_recipients || null)
 
-    // Clearing the badge is its own call now. Fire-and-forget and once
-    // per screen: it is idempotent, and a failure here must never look
-    // like the thread failed to open.
+    // Read state is its own call. Fire-and-forget and once per screen: it is
+    // idempotent, and a failure here must never look like the thread failed
+    // to open. Unlike the ticket-era /read this also mirrors \Seen into a
+    // connected real mailbox, so opening it here marks it read at the desk
+    // and in the operator's own mail app too.
     if (!readMarked.current) {
       readMarked.current = true
-      markTicketRead(ticketId, activeLocation?.id).catch(() => {})
+      setConversationSeen(ticketId, true, activeLocation?.id).catch(() => {})
     }
   }, [ticketId, activeLocation])
 
@@ -558,50 +559,57 @@ export default function EmailTicket() {
     refresh()
   }
 
-  // Nothing in this system closes itself (Richard, 2026-08-06) — every
-  // ticket is answered or closed by a person, so closing has to be
-  // reachable from the thread rather than desktop-only.
-  // EMAIL-ASSIGN.1 — claim or release from the phone. Reassign-to-anyone
-  // stays a desk task (the picker enumerates colleagues' access); claim is
-  // the on-the-floor action this screen exists for.
-  async function changeAssignee(next) {
-    if (savingAssign) return
-    setSavingAssign(true)
-    const res = await assignTicket(ticketId, next, { locationId: activeLocation?.id })
-    setSavingAssign(false)
+  // RETIRE-TICKETS.1 — assignment and the four-state lifecycle left with the
+  // ticket queue. The two verbs of this surface:
+
+  // Archive / bring back. The response's ticket row is a bare status write —
+  // merge, never replace (the EMAIL-MOPUP.4 lesson: the enriched mailbox and
+  // contact fields must survive).
+  async function toggleArchive() {
+    if (savingAction) return
+    const next = !isArchivedStatus(ticket?.status)
+    setSavingAction(true)
+    const res = await archiveConversation(ticketId, next, activeLocation?.id)
+    setSavingAction(false)
     if (!res.success) {
-      Alert.alert('Couldn’t update owner',
-        res.error === 'already_assigned'
-          ? 'Somebody claimed this ticket just now.'
-          : res.error || 'Unknown error')
-      // Their claim beat ours — show the truth.
-      refresh({ quiet: true })
+      Alert.alert(next ? 'Couldn’t archive' : 'Couldn’t bring it back', res.error || 'Unknown error')
       return
     }
-    // The route's row lacks the mailbox/contact enrichment — merge, never
-    // replace (the EMAIL-MOPUP.4 lesson).
-    if (res.ticket) {
-      setTicket(prev => (prev ? { ...prev, ...res.ticket, assignee_name: res.assigneeName } : prev))
+    if (res.data?.conversation) {
+      setTicket(prev => (prev ? { ...prev, ...res.data.conversation } : prev))
+    } else {
+      refresh({ quiet: true })
+    }
+    // The mailbox half (moving the real message in a connected account) can
+    // refuse independently; the DB half above stands either way.
+    if (res.data?.writeback?.notice) {
+      Alert.alert('Archived here', res.data.writeback.notice)
     }
   }
 
-  async function changeStatus(next) {
-    if (savingStatus || next === ticket?.status) return
-    setSavingStatus(true)
-    const res = await setTicketStatus(ticketId, next, activeLocation?.id)
-    setSavingStatus(false)
+  // Mark as unread — the mail-app gesture for "deal with this later". The
+  // screen's own open-marking already ran, so this flips it back and the row
+  // regains its weight when the list refreshes on focus.
+  async function markUnread() {
+    if (savingAction) return
+    setSavingAction(true)
+    const res = await setConversationSeen(ticketId, false, activeLocation?.id)
+    setSavingAction(false)
     if (!res.success) {
-      Alert.alert('Couldn’t update status', res.error || 'Unknown error')
+      Alert.alert('Couldn’t mark as unread', res.error || 'Unknown error')
       return
     }
-    setTicket(res.data?.ticket || ticket)
+    // Un-arm the open-marking so the poll's refresh doesn't silently re-read
+    // it while the operator is still looking at the screen.
+    readMarked.current = true
   }
 
   // 'Email' rather than the display helper's "Unknown sender" fallback while
   // the thread is still loading — a header that briefly accuses us of not
   // knowing who wrote in reads as a bug.
   const name = ticket ? emailDisplayName(ticket) : 'Email'
-  const status = ticketStatusMeta(ticket?.status)
+  const chip = mailStatusChip(ticket)
+  const archived = isArchivedStatus(ticket?.status)
 
   return (
     <KeyboardAvoidingView
@@ -612,10 +620,10 @@ export default function EmailTicket() {
       <Stack.Screen
         options={{
           title: name,
-          // INBOX-SPLIT.M1 — back goes to the Email tab, not Messages: email
-          // is its own surface now (and a cold-start deep link from a push
-          // must not land someone in the chat inbox).
-          headerLeft: () => <BackHeaderLeft label="Email" fallbackHref="/(tabs)/email" />,
+          // INBOX-SPLIT.M1 — back goes to the Mail tab, not Messages: email
+          // is its own surface (and a cold-start deep link from a push must
+          // not land someone in the chat inbox).
+          headerLeft: () => <BackHeaderLeft label="Mail" fallbackHref="/(tabs)/email" />,
         }}
       />
 
@@ -647,9 +655,11 @@ export default function EmailTicket() {
               <Text className="text-xs text-un1t-subtle flex-1" numberOfLines={1}>
                 {threadLines.primary}
               </Text>
-              <View className={`ml-2 px-1.5 py-0.5 rounded ${status.cls}`}>
-                <Text className={`text-[10px] font-semibold ${status.text}`}>{status.label}</Text>
-              </View>
+              {chip ? (
+                <View className={`ml-2 px-1.5 py-0.5 rounded ${chip.cls}`}>
+                  <Text className={`text-[10px] font-semibold ${chip.text}`}>{chip.label}</Text>
+                </View>
+              ) : null}
             </View>
             {threadLines.opener ? (
               <Text className="text-[11px] text-un1t-muted mt-0.5" numberOfLines={1}>
@@ -667,57 +677,34 @@ export default function EmailTicket() {
               {ticket?.mailbox ? `To ${mailboxLabel(ticket.mailbox)}` : 'No mailbox on this ticket'}
             </Text>
 
-            {/* Ownership (EMAIL-ASSIGN.1): who's on it, and one-tap claim /
-                release. Names resolve server-side; 'you' beats the name. */}
-            <View className="flex-row items-center mt-0.5">
-              <Text className="text-[11px] text-un1t-subtle flex-1" numberOfLines={1}>
-                {!ticket?.assigned_to
-                  ? 'Unassigned'
-                  : ticket.assigned_to === profile?.id
-                    ? 'Assigned to you'
-                    : ticket.assignee_name
-                      ? `Assigned to ${ticket.assignee_name}`
-                      : 'Assigned'}
-              </Text>
-              {!ticket?.assigned_to && (
-                <Pressable
-                  onPress={() => changeAssignee('me')}
-                  disabled={savingAssign}
-                  className={`ml-2 rounded border border-un1t-border px-2 py-0.5 ${savingAssign ? 'opacity-50' : ''}`}
-                >
-                  <Text className="text-[11px] text-un1t-text">Claim</Text>
-                </Pressable>
-              )}
-              {ticket?.assigned_to === profile?.id && (
-                <Pressable
-                  onPress={() => changeAssignee(null)}
-                  disabled={savingAssign}
-                  className={`ml-2 rounded border border-un1t-border px-2 py-0.5 ${savingAssign ? 'opacity-50' : ''}`}
-                >
-                  <Text className="text-[11px] text-un1t-subtle">Release</Text>
-                </Pressable>
-              )}
-            </View>
-
+            {/* The verbs, and nothing else (RETIRE-TICKETS.1): Archive — the
+                primary action of this surface — and Mark as unread. The
+                claim/release row and the four-state segmented control that
+                sat here retired with the ticket queue. */}
             <View className="flex-row items-center mt-2">
-              {TICKET_STATUS_ORDER.map(s => {
-                const m = ticketStatusMeta(s)
-                const active = ticket?.status === s
-                return (
-                  <Pressable
-                    key={s}
-                    onPress={() => changeStatus(s)}
-                    disabled={savingStatus || active}
-                    className={`px-2.5 py-1 rounded-lg mr-1.5 border ${
-                      active ? 'bg-un1t-text border-un1t-text' : 'bg-un1t-bg border-un1t-border'
-                    } ${savingStatus && !active ? 'opacity-50' : ''}`}
-                  >
-                    <Text className={`text-xs ${active ? 'text-white font-semibold' : 'text-un1t-subtle'}`}>
-                      {m.label}
-                    </Text>
-                  </Pressable>
-                )
-              })}
+              <Pressable
+                onPress={toggleArchive}
+                disabled={savingAction}
+                className={`flex-row items-center px-2.5 py-1 rounded-lg mr-1.5 border bg-un1t-text border-un1t-text ${savingAction ? 'opacity-50' : ''}`}
+              >
+                <Ionicons
+                  name={archived ? 'arrow-undo-outline' : 'archive-outline'}
+                  size={13}
+                  color="#FFFFFF"
+                  style={{ marginRight: 4 }}
+                />
+                <Text className="text-xs text-white font-semibold">
+                  {archived ? 'Bring back' : 'Archive'}
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={markUnread}
+                disabled={savingAction}
+                className={`flex-row items-center px-2.5 py-1 rounded-lg mr-1.5 border bg-un1t-bg border-un1t-border ${savingAction ? 'opacity-50' : ''}`}
+              >
+                <Ionicons name="mail-unread-outline" size={13} color="#64748B" style={{ marginRight: 4 }} />
+                <Text className="text-xs text-un1t-subtle">Mark unread</Text>
+              </Pressable>
             </View>
           </View>
 
@@ -832,9 +819,9 @@ export default function EmailTicket() {
                 ? `Staff only — written to the ticket and NOT sent to ${ticket?.requester_email || 'the member'}.`
                 : audience.text}
             </Text>
-            {!isNote && isArchivedStatus(ticket?.status) && (
+            {!isNote && archived && (
               <Text className="text-[11px] text-un1t-subtle mt-1">
-                This ticket is {status.label.toLowerCase()} — sending a reply moves it back to pending.
+                This conversation is archived — replying brings it back to the inbox.
               </Text>
             )}
           </View>

@@ -1,9 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
-  TICKET_STATUS_ORDER,
   TICKET_VIEW_TABS,
   DEFAULT_TICKET_VIEW,
-  ticketStatusMeta,
+  mailStatusChip,
   ticketViewTab,
   ticketViewWire,
   isArchivedStatus,
@@ -110,23 +109,29 @@ describe('ticketSendOriginMeta (MAILBOX-COEXIST.1)', () => {
   })
 })
 
-describe('status', () => {
-  it('keeps all four lifecycle states, closing included', () => {
-    expect(TICKET_STATUS_ORDER).toEqual(['open', 'pending', 'solved', 'closed'])
+describe('mail status (RETIRE-TICKETS.1 — the lifecycle chips left with the queue)', () => {
+  it('chips Archived for solved AND closed — historic rows still carry solved', () => {
+    expect(mailStatusChip({ status: 'closed' }).label).toBe('Archived')
+    expect(mailStatusChip({ status: 'solved' }).label).toBe('Archived')
   })
 
-  it('uses the light-theme chip recipe on every known status', () => {
-    for (const s of TICKET_STATUS_ORDER) {
-      const { cls, text } = ticketStatusMeta(s)
+  it('chips Needs reply only when their word was last on an open conversation', () => {
+    expect(mailStatusChip({ status: 'open', last_message_direction: 'inbound' }).label).toBe('Needs reply')
+    expect(mailStatusChip({ status: 'open', last_message_direction: 'outbound' })).toBeNull()
+    expect(mailStatusChip({ status: 'pending', last_message_direction: 'inbound' })).toBeNull()
+  })
+
+  it('uses the light-theme chip recipe on both chips', () => {
+    for (const row of [{ status: 'closed' }, { status: 'open', last_message_direction: 'inbound' }]) {
+      const { cls, text } = mailStatusChip(row)
       expect(cls).toMatch(/^bg-[a-z]+-500\/10$/)
       expect(text).toMatch(/^text-[a-z]+-700$/)
     }
   })
 
-  it('falls back readably on an unknown status', () => {
-    expect(ticketStatusMeta('exploded').label).toBe('exploded')
-    expect(ticketStatusMeta('exploded').text).toBe('text-slate-700')
-    expect(ticketStatusMeta(undefined).label).toBe('Unknown')
+  it('chips nothing for the quiet case — an inbox row needs no label', () => {
+    expect(mailStatusChip(null)).toBeNull()
+    expect(mailStatusChip({ status: 'open', last_message_direction: null })).toBeNull()
   })
 
   it('treats solved and closed as archived', () => {
@@ -138,9 +143,9 @@ describe('status', () => {
 })
 
 describe('views', () => {
-  // The route 400s on anything outside this set, and an absent param is the
-  // live queue — so the default view MUST send no param at all.
-  const WIRE_WHITELIST = ['unassigned', 'mine', 'needs_reply', 'closed']
+  // The mail route 400s on anything outside this set, and an absent param is
+  // the inbox — so the default view MUST send no param at all.
+  const WIRE_WHITELIST = ['inbox', 'needs_reply', 'archived']
 
   it('only ever puts a route-whitelisted value on the wire', () => {
     for (const v of TICKET_VIEW_TABS) {
@@ -149,13 +154,13 @@ describe('views', () => {
     }
   })
 
-  it('sends no view param for the default (live) queue', () => {
-    expect(DEFAULT_TICKET_VIEW).toBe('open')
+  it('sends no view param for the default (inbox) view', () => {
+    expect(DEFAULT_TICKET_VIEW).toBe('inbox')
     expect(ticketViewWire(DEFAULT_TICKET_VIEW)).toBeNull()
     expect(TICKET_VIEW_TABS.filter(v => v.wire === null)).toHaveLength(1)
   })
 
-  it('gives every view its own empty copy — an empty queue must say which one', () => {
+  it('gives every view its own empty copy — an empty list must say which one', () => {
     const titles = TICKET_VIEW_TABS.map(v => v.emptyTitle)
     expect(new Set(titles).size).toBe(titles.length)
     for (const v of TICKET_VIEW_TABS) {
@@ -164,14 +169,9 @@ describe('views', () => {
     }
   })
 
-  it('falls back to the live queue rather than undefined on a junk id', () => {
-    expect(ticketViewTab('nonsense').id).toBe('open')
+  it('falls back to the inbox rather than undefined on a junk id', () => {
+    expect(ticketViewTab('nonsense').id).toBe('inbox')
     expect(ticketViewWire(undefined)).toBeNull()
-  })
-
-  it('labels the archive "Closed" while the wire word covers solved too', () => {
-    expect(ticketViewTab('closed').wire).toBe('closed')
-    expect(ticketViewTab('closed').label).toBe('Closed')
   })
 })
 
@@ -249,6 +249,32 @@ describe('ticketToInboxRow', () => {
 
   it('survives a null ticket rather than throwing in a list render', () => {
     expect(ticketToInboxRow(null).channel).toBe('email')
+  })
+
+  // MOBILE-MAIL.1 — the mail list's own facts ride the row, strictly typed:
+  // only a literal true reads as true, so an absent field (a ticket-era
+  // response, or a counts-unavailable page) can never claim unread mail or a
+  // phantom paperclip.
+  it('carries the mail fields — unread, needs_reply, has_attachments — as strict booleans', () => {
+    const mailRow = ticketToInboxRow({
+      ...base, unread: true, needs_reply: true, has_attachments: true,
+    })
+    expect(mailRow.unread).toBe(true)
+    expect(mailRow.needs_reply).toBe(true)
+    expect(mailRow.has_attachments).toBe(true)
+
+    const bare = ticketToInboxRow(base)
+    expect(bare.unread).toBe(false)
+    expect(bare.needs_reply).toBe(false)
+    expect(bare.has_attachments).toBe(false)
+  })
+
+  it('prefers the mail response\'s per-message unread count over the ticket-era column', () => {
+    expect(ticketToInboxRow({ ...base, unread_count_messages: 5 }).unread_count).toBe(5)
+    // 0 is a real answer, not an absence — ?? not ||.
+    expect(ticketToInboxRow({ ...base, unread_count_messages: 0 }).unread_count).toBe(0)
+    // Absent → the ticket-era fallback.
+    expect(ticketToInboxRow(base).unread_count).toBe(2)
   })
 })
 

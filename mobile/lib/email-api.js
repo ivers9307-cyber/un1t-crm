@@ -1,16 +1,20 @@
-// Email TICKET API helpers for mobile (EMAIL-TICKET-M.1, was INBOX-EMAIL-M.1).
+// Mail API helpers for mobile (MOBILE-MAIL.1; was the ticket-queue client,
+// EMAIL-TICKET-M.1).
 //
-// The CRM's email channel is a ticket system now (/communications/tickets on
-// web). Mobile keeps email — backed by tickets, not the deprecated
-// email_conversations rows this file used to read.
+// The CRM's email surface is Mail (/communications/mail on web —
+// RETIRE-TICKETS.1 retired the ticket queue and mig 578 the surface split).
+// The LIST and the two verbs (archive, read state) ride /api/email/mail*;
+// the thread, reply and attachments stay on the shared /api/email/tickets/[id]
+// detail routes, which are NOT deprecated — only the old list/count/assign/
+// status routes are, kept alive solely for bundles older than this one.
 //
 // Same posture as before: the email_* tables carry a RESTRICTIVE deny-all
 // policy for authenticated/anon, so mobile never reads them direct. Every call
-// rides the /api/email/tickets* routes via the api() helper, which carries the
-// Bearer token + x-active-location + x-impersonate-target headers. Those routes
-// are service-role (no RLS), and they gate on the top-level `email_inbox`
+// rides /api/* via the api() helper, which carries the Bearer token +
+// x-active-location + x-impersonate-target headers. Those routes are
+// service-role (no RLS), and they gate on the top-level `email_inbox`
 // permission plus a per-account email_mailbox_access grant — the SAME two
-// levels the web inbox is behind. Screens must gate on `email_inbox` too
+// levels the web surface is behind. Screens must gate on `email_inbox` too
 // (canMobile routes it through CROSS_PLATFORM_KEYS to the top-level key), or
 // the UI offers something every call refuses.
 //
@@ -26,8 +30,8 @@
 //   • the list route returns { mailboxes, tickets }, NOT a flat list — the
 //     mailboxes are the access model made visible and are what lets a row say
 //     which account it arrived at.
-//   • reading a ticket no longer clears its unread badge as a side effect;
-//     markTicketRead() is its own call, so a GET stays a GET.
+//   • reading a conversation does not clear its unread state as a side
+//     effect; setConversationSeen() is its own call, so a GET stays a GET.
 
 import { api } from './api'
 import { ticketsToInboxRows } from './email-tickets'
@@ -37,14 +41,13 @@ import { ticketsToInboxRows } from './email-tickets'
 // precedence: requester_name → requester_email.
 export { requesterLabel as emailDisplayName } from './email-tickets'
 
-// The four the route whitelists. Anything else is a 400, and omitting the
-// param entirely is the live queue (open + pending) — which is what the Email
-// tab lands on, so nothing here sends one by default. The screen's chips map
-// their id onto these via ticketViewWire() in ./email-tickets.
-export const TICKET_VIEWS = Object.freeze(['unassigned', 'mine', 'needs_reply', 'closed'])
+// The three views the mail route whitelists. Anything else is a 400, and
+// omitting the param entirely is the inbox (live conversations). The screen's
+// chips map their id onto these via ticketViewWire() in ./email-tickets.
+export const MAIL_VIEWS = Object.freeze(['inbox', 'needs_reply', 'archived'])
 
 /**
- * The studio's ticket queue, shaped into rows for the Email tab's list.
+ * The studio's mail, shaped into rows for the Mail tab's list.
  *
  * A caller with no visible mailboxes gets an empty list, not an error — a
  * studio that does not do email and a coach with no account grants are both
@@ -52,29 +55,62 @@ export const TICKET_VIEWS = Object.freeze(['unassigned', 'mine', 'needs_reply', 
  *
  * @param {string} locationId  required by the route (400 without it)
  * @param {object} [opts]
- * @param {'unassigned'|'mine'|'needs_reply'|'closed'} [opts.view]
- * @returns {Promise<{success: boolean, data?: object[], mailboxes?: object[], error?: string}>}
+ * @param {'inbox'|'needs_reply'|'archived'} [opts.view]
+ * @returns {Promise<{success: boolean, data?: object[], mailboxes?: object[],
+ *                    needsReplyCount?: number, error?: string}>}
  */
-export async function listTickets(locationId, { view } = {}) {
+export async function listMail(locationId, { view } = {}) {
   if (!locationId) return { success: false, error: 'No active location' }
   const params = new URLSearchParams({ location_id: locationId })
   if (view) params.set('view', view)
 
-  const res = await api(`/api/email/tickets?${params.toString()}`, { locationId })
+  const res = await api(`/api/email/mail?${params.toString()}`, { locationId })
   if (!res.success) return { success: false, error: res.error || 'Failed to load email' }
 
   const mailboxes = res.data?.mailboxes || []
   return {
     success: true,
-    data: ticketsToInboxRows({ tickets: res.data?.tickets || [], mailboxes }),
+    data: ticketsToInboxRows({ tickets: res.data?.conversations || [], mailboxes }),
     mailboxes,
+    needsReplyCount: res.data?.needs_reply_count ?? 0,
   }
+}
+
+/**
+ * Archive (or bring back) one conversation. Archive IS status='closed'
+ * wearing a different word — one lifecycle, two vocabularies.
+ *
+ * For an IMAP-connected account the server also MOVEs the real messages to
+ * the provider's Archive folder; the response's `writeback` notice says when
+ * that half could not land. For Postmark accounts and orphans that half is a
+ * silent no-op — there is no mailbox to change.
+ */
+export function archiveConversation(ticketId, archived, locationId) {
+  return api(`/api/email/mail/${ticketId}/archive`, {
+    method: 'POST',
+    body: { archived: !!archived },
+    locationId,
+  })
+}
+
+/**
+ * Read state, both directions. seen=true stamps every unread inbound message
+ * (fire on open — replaces the ticket-era /read call, and unlike it also
+ * mirrors \Seen into a connected real mailbox); seen=false is Mark as
+ * unread, the mail-app gesture for "deal with this later".
+ */
+export function setConversationSeen(ticketId, seen, locationId) {
+  return api(`/api/email/mail/${ticketId}/seen`, {
+    method: 'POST',
+    body: { seen: !!seen },
+    locationId,
+  })
 }
 
 /**
  * One ticket and its thread, oldest message first.
  *
- * Does NOT clear the unread badge — call markTicketRead() for that.
+ * Does NOT clear the unread state — call setConversationSeen() for that.
  * 404s (not 403s) for a ticket the caller may not see, so an id can't be
  * probed; surface it as a plain "not found" rather than a permission story.
  */
@@ -122,56 +158,23 @@ export function replyToTicket(ticketId, text, { internal = false, locationId } =
   })
 }
 
-/**
- * Claim ('me'), release (null) or reassign (a profile id) — EMAIL-ASSIGN.1.
- * Same contract as web; the route enforces who may do which (claim = anyone
- * who can see the ticket, reassign = elevated) and answers 409 when somebody
- * else claimed it first.
- */
-export async function assignTicket(ticketId, assignee, { locationId } = {}) {
-  const res = await api(`/api/email/tickets/${ticketId}/assign`, {
-    method: 'POST',
-    locationId,
-    body: { assignee },
-  })
-  if (!res.success) return { success: false, error: res.error || 'Failed to change assignee' }
-  return {
-    success: true,
-    ticket: res.data?.ticket || null,
-    assigneeName: res.data?.assignee_name || null,
-  }
-}
+// RETIRE-TICKETS.1 removed assignTicket + setTicketStatus + markTicketRead:
+// assignment and the four-state lifecycle are not on the Mail surface (zero
+// tickets were ever assigned in the queue's whole life), and read state is
+// setConversationSeen above — which, unlike the old /read call, also mirrors
+// \Seen into a connected real mailbox. The old routes live on as deprecated
+// shims for bundles older than this one; nothing here may call them.
 
 /**
- * Move a ticket through its lifecycle: open | pending | solved | closed.
- *
- * This is the ONLY way a ticket leaves the queue — nothing auto-closes
- * anywhere in this feature by design, so a surface that hides this leaves
- * tickets to age forever.
+ * The Mail tab badge number: conversations somebody wrote to us that nobody
+ * has answered yet, at the caller's active location, counting ONLY mailboxes
+ * they can open — the same predicate, from the same cheap count route, as
+ * the web Mail badge. The response is passed through untouched so a polling
+ * caller can keep its last-known count on failure rather than flashing a
+ * confident zero.
  */
-export function setTicketStatus(ticketId, status, locationId) {
-  return api(`/api/email/tickets/${ticketId}/status`, {
-    method: 'POST',
-    locationId,
-    body: { status },
-  })
-}
-
-/** Zero the unread badge. Idempotent; safe to fire on open. */
-export function markTicketRead(ticketId, locationId) {
-  return api(`/api/email/tickets/${ticketId}/read`, { method: 'POST', locationId })
-}
-
-/**
- * The Email tab badge number (EMAIL-BADGE-M.1): tickets somebody wrote to us
- * that nobody has answered yet, at the given location, counting ONLY
- * mailboxes this caller can open — the same predicate and gates as the web
- * sidebar badge, from the same cheap count route (EMAIL-TICKET-CLEANUP.3).
- * The response is passed through untouched so a polling caller can keep its
- * last-known count on failure rather than flashing a confident zero.
- */
-export function getTicketCount(locationId) {
-  return api('/api/email/tickets/count', { locationId })
+export function getMailCount(locationId) {
+  return api('/api/email/mail/count', { locationId })
 }
 
 // ── Attachments (EMAIL-ATTACH-PREVIEW.1) ────────────────────────────
