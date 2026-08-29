@@ -34,6 +34,8 @@
 //     effect; setConversationSeen() is its own call, so a GET stays a GET.
 
 import { api } from './api'
+import { supabase } from './supabase'
+import { readFileAsArrayBuffer } from './upload-bytes'
 import { ticketsToInboxRows } from './email-tickets'
 
 // Re-exported so screens that already import their display helper from here
@@ -53,16 +55,38 @@ export const MAIL_VIEWS = Object.freeze(['inbox', 'needs_reply', 'archived'])
  * studio that does not do email and a coach with no account grants are both
  * normal states.
  *
+ * MOBILE-MAIL-A.1 grew the three list refinements the redesign needs, all
+ * pass-throughs to params the route already whitelists:
+ *   • `q`         — websearch text; the route searches across ALL views (its
+ *                   deliberate q-overrides-view rule) and sets search_partial
+ *                   when it stopped at the most recent matches.
+ *   • `before`    — keyset cursor on last_message_at, INCLUSIVE: the boundary
+ *                   row comes back again on the next page, on purpose (a
+ *                   timestamp is not unique). CALLERS MUST DEDUPE appended
+ *                   pages by row id, or every page seam shows one row twice.
+ *   • `mailboxId` — one account's tab. An id outside the caller's visible set
+ *                   answers EMPTY, not an error (the route refuses to leak
+ *                   which addresses a studio runs), so a stale chip reads as
+ *                   an empty inbox rather than a crash.
+ *
  * @param {string} locationId  required by the route (400 without it)
  * @param {object} [opts]
  * @param {'inbox'|'needs_reply'|'archived'} [opts.view]
+ * @param {string} [opts.q]         search text (omit/empty = no search)
+ * @param {string} [opts.before]    next_before from the previous page
+ * @param {string} [opts.mailboxId] restrict to one visible account
  * @returns {Promise<{success: boolean, data?: object[], mailboxes?: object[],
- *                    needsReplyCount?: number, error?: string}>}
+ *                    needsReplyCount?: number, nextBefore?: string|null,
+ *                    searchPartial?: boolean, error?: string}>}
+ *   nextBefore is null on the last page; feed it back as `before` otherwise.
  */
-export async function listMail(locationId, { view } = {}) {
+export async function listMail(locationId, { view, q, before, mailboxId } = {}) {
   if (!locationId) return { success: false, error: 'No active location' }
   const params = new URLSearchParams({ location_id: locationId })
   if (view) params.set('view', view)
+  if (mailboxId) params.set('mailbox_id', mailboxId)
+  if (q) params.set('q', q)
+  if (before) params.set('before', before)
 
   const res = await api(`/api/email/mail?${params.toString()}`, { locationId })
   if (!res.success) return { success: false, error: res.error || 'Failed to load email' }
@@ -73,6 +97,8 @@ export async function listMail(locationId, { view } = {}) {
     data: ticketsToInboxRows({ tickets: res.data?.conversations || [], mailboxes }),
     mailboxes,
     needsReplyCount: res.data?.needs_reply_count ?? 0,
+    nextBefore: res.data?.next_before ?? null,
+    searchPartial: !!res.data?.search_partial,
   }
 }
 
@@ -149,13 +175,66 @@ export async function getTicket(ticketId, locationId) {
  *
  * A real reply rides Postmark's transactional stream with threading headers
  * and the sender's signature, all server-side.
+ *
+ * MOBILE-MAIL-A.1 — `attachments` carries draft refs from the two helpers
+ * below (sign → upload → the ref), the same body field the route's
+ * ReplySchema names. Omitted entirely when there are none, so a plain reply's
+ * wire shape stays byte-identical to every reply this app has ever sent.
+ * NEVER sent on an internal note: the route sends nothing for a note, and a
+ * body claiming files rode a message that never left would be refused — or
+ * worse, silently ignored — either way a chip lying about what the member got.
  */
-export function replyToTicket(ticketId, text, { internal = false, locationId } = {}) {
+export function replyToTicket(ticketId, text, { internal = false, locationId, attachments } = {}) {
+  const body = { text, internal: !!internal }
+  if (!internal && Array.isArray(attachments) && attachments.length > 0) {
+    body.attachments = attachments
+  }
   return api(`/api/email/tickets/${ticketId}/reply`, {
     method: 'POST',
     locationId,
-    body: { text, internal: !!internal },
+    body,
   })
+}
+
+/**
+ * Start a conversation — a new email FROM one of the studio's mailboxes
+ * (MOBILE-MAIL-A.1; POST /api/email/tickets/compose).
+ *
+ * THE ENVELOPE PASSES THROUGH UNTOUCHED, refusals included. The route owns
+ * every rule — the 25-recipient cap + dedupe, the mailbox gate (a mailbox the
+ * caller may not send as is a 404, indistinguishable from "no such mailbox"),
+ * the attachment ceiling re-measured on real bytes — and its error strings
+ * are operator-facing sentences that name the limit. Re-implementing any of
+ * them here would be a second answer that drifts; re-wording them would hide
+ * the number the operator needs.
+ *
+ * The send happens FIRST server-side: a failed send writes nothing, so
+ * success:false with no `data.sent` marker always means "safe to retry".
+ * (The route's rare sent-but-unfiled branch answers success:false WITH
+ * `data.sent: true` — surface that one as "do not resend", exactly as its
+ * error text says.)
+ *
+ * @param {object} args
+ * @param {string}   args.mailboxId  the From account (must be in the caller's
+ *   visible set — listMail's `mailboxes` is where pickers get it)
+ * @param {string[]} args.to         at least one address
+ * @param {string[]} [args.cc]
+ * @param {string[]} [args.bcc]
+ * @param {string}   args.subject
+ * @param {string}   args.text
+ * @param {Array}    [args.attachments] draft refs from the helpers below
+ * @param {string}   [args.locationId]
+ */
+export function composeEmail({
+  mailboxId, to, cc, bcc, subject, text, attachments, locationId,
+} = {}) {
+  const body = { mailbox_id: mailboxId, to, subject, text }
+  // Empty lists stay off the wire — the route defaults them, and the smallest
+  // body is the one oldest-bundle-compatible shape nothing can misread.
+  if (Array.isArray(cc) && cc.length > 0) body.cc = cc
+  if (Array.isArray(bcc) && bcc.length > 0) body.bcc = bcc
+  if (Array.isArray(attachments) && attachments.length > 0) body.attachments = attachments
+  return api('/api/email/tickets/compose', { method: 'POST', body, locationId })
 }
 
 // RETIRE-TICKETS.1 removed assignTicket + setTicketStatus + markTicketRead:
@@ -221,4 +300,169 @@ export async function downloadTicketAttachment(ticketId, attachmentId, locationI
     return { success: false, error: res.error || 'That file could not be opened.' }
   }
   return { success: true, url: res.data.url }
+}
+
+// ── Outbound attachments (MOBILE-MAIL-A.1) ──────────────────────────
+//
+// Files STAFF send, on a reply or a new email. The bytes NEVER ride an /api
+// body — Vercel 413s a request over ~4.5MB before any route runs, in plain
+// text no client can parse — so this is the repo's standard three-step
+// direct-to-storage flow (same shape as card receipts and invoices):
+//
+//   1. signOutboundAttachment() — POST /api/email/attachments/upload-sign.
+//      The server authorises against the SEND'S OWN gate (the ticket a reply
+//      belongs to, or the mailbox a new email leaves from) and mints a signed
+//      token for a path IT built from the caller's own profile id. The phone
+//      never proposes a path and can only ever address its own drafts.
+//   2. uploadSignedAttachment() — device → private email-attachments bucket
+//      directly, authorised by the token alone.
+//   3. The reply/compose body carries the returned DRAFT REF
+//      ({ draft_id, index, filename, mime }) on `attachments`. The send route
+//      REBUILDS the identical key, re-measures the REAL downloaded bytes
+//      against the 7MiB ceiling, and refuses BEFORE sending — so a draft that
+//      never finished uploading refuses the send rather than sending without
+//      the file.
+//
+// Sizing is the SCREENS' job before send (red chip, not a failed send —
+// mail-compose.js owns the maths against the constants below); the server
+// re-measures regardless, so these numbers are a courtesy, never the gate.
+
+/**
+ * The private bucket the drafts upload into. Mirrors EMAIL_ATTACHMENT_BUCKET
+ * in src/lib/email-attachment-quota.js, which mobile cannot import — the
+ * pinning test is what holds the two together.
+ */
+export const EMAIL_ATTACHMENT_BUCKET = 'email-attachments'
+
+/**
+ * The most RAW file bytes one email may carry across all its attachments
+ * (7MiB — chosen server-side from Postmark's 10MB post-base64 ceiling) and
+ * how many files. Both mirror src/lib/email-outbound-attachments.js.
+ */
+export const MAX_OUTBOUND_ATTACHMENT_TOTAL_BYTES = 7 * 1024 * 1024
+export const MAX_OUTBOUND_ATTACHMENTS = 10
+
+/**
+ * A v4-SHAPED uuid for a draft slot — the sign route pins draft_id with the
+ * uuidLike regex, so the shape is load-bearing; the VALUE carries no
+ * authority (the caller's profile id, read from the session server-side, is
+ * the key's security segment). That is why a Math.random fallback is
+ * acceptable here: Hermes ships no crypto global, and the worst a collision
+ * can do is overwrite the caller's OWN other draft.
+ */
+export function draftUuid() {
+  const c = globalThis.crypto
+  if (c?.randomUUID) return c.randomUUID()
+  const bytes = new Uint8Array(16)
+  if (c?.getRandomValues) {
+    c.getRandomValues(bytes)
+  } else {
+    for (let i = 0; i < 16; i += 1) bytes[i] = Math.floor(Math.random() * 256)
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40 // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80 // RFC variant
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+/**
+ * Step 1 — authorise one file and get its signed upload slot.
+ *
+ * EXACTLY ONE of ticketId / mailboxId, the same rule the route 400s on:
+ * a reply's file is authorised against its ticket, a new email's against the
+ * mailbox it will leave from. Refused locally so a coding error surfaces on
+ * the first tap rather than as a route sentence written for another case.
+ *
+ * Each call defaults to a FRESH draft uuid at index 0 — one file, one draft,
+ * no shared state — which always yields distinct (draft_id, index) pairs, the
+ * only thing the send's duplicate rule checks. A composer that prefers the
+ * web picker's one-session-uuid + monotonic-slots scheme passes draftId +
+ * index itself (index must stay < MAX_OUTBOUND_ATTACHMENTS; slots are never
+ * reused after a remove).
+ *
+ * @param {object} args
+ * @param {string} args.filename  display name (route bounds it at 255)
+ * @param {number} args.size      the picker's byte count — used by the route
+ *   only to refuse early with a useful sentence; the send re-measures
+ * @param {string} [args.mime]    falls back to application/octet-stream; it
+ *   must MATCH what uploadSignedAttachment stores, or the send route
+ *   re-derives a different extension and refuses (deliberately)
+ * @param {string} [args.ticketId]  authorise against an existing ticket
+ * @param {string} [args.mailboxId] authorise against a sending mailbox
+ * @param {string} [args.draftId]   see above; default = fresh uuid
+ * @param {number} [args.index]     see above; default = 0
+ * @param {string} [args.locationId]
+ * @returns {Promise<{success: true, path: string, token: string,
+ *                    draft: {draft_id: string, index: number,
+ *                            filename: string, mime: string}}
+ *                  |{success: false, error: string}>}
+ *   `draft` is the ref the send body carries, verbatim.
+ */
+export async function signOutboundAttachment({
+  filename, size, mime, ticketId, mailboxId, draftId, index = 0, locationId,
+} = {}) {
+  // Both or neither is a bug in the caller, not a request worth sending —
+  // mirrors the route's own exactly-one rule.
+  if (!ticketId === !mailboxId) {
+    return { success: false, error: 'Attach a file to either an existing ticket or a mailbox, not both.' }
+  }
+
+  const draft = {
+    draft_id: draftId || draftUuid(),
+    index,
+    filename,
+    mime: mime || 'application/octet-stream',
+  }
+  const body = { ...draft, size }
+  if (ticketId) body.ticket_id = ticketId
+  else body.mailbox_id = mailboxId
+
+  const res = await api('/api/email/attachments/upload-sign', { method: 'POST', body, locationId })
+  if (!res.success || !res.data?.token || !res.data?.path) {
+    return { success: false, error: res.error || 'Could not start that upload — try again.' }
+  }
+  return { success: true, path: res.data.path, token: res.data.token, draft }
+}
+
+/**
+ * Step 2 — the bytes, device → bucket, authorised by the token alone.
+ *
+ * Reads the picked file into an ArrayBuffer first (upload-bytes.js — an RN
+ * Blob from fetch(uri) does NOT transmit through uploadToSignedUrl and
+ * stores a 0-byte object, the documented 2026-06-13 gotcha), and refuses an
+ * empty read outright: a blank object would pass the sign, pass the upload,
+ * and go out as a "sent" file with nothing in it.
+ *
+ * @param {object} signed  the whole success result of signOutboundAttachment
+ * @param {string} fileUri expo-document-picker / expo-image-picker cache URI
+ * @returns {Promise<{success: true, draft: object}|{success: false, error: string}>}
+ *   `draft` is the same ref sign returned — handed back here so a picker can
+ *   thread ONE object through both steps and keep only the final answer.
+ */
+export async function uploadSignedAttachment(signed, fileUri) {
+  if (!signed?.path || !signed?.token || !signed?.draft) {
+    return { success: false, error: 'That upload was not authorised — attach the file again.' }
+  }
+
+  let bytes
+  try {
+    bytes = await readFileAsArrayBuffer(fileUri)
+  } catch (err) {
+    return { success: false, error: `Could not read the selected file: ${err?.message || err}` }
+  }
+  if (!bytes || bytes.byteLength === 0) {
+    return { success: false, error: 'The selected file appears to be empty — try picking it again.' }
+  }
+
+  try {
+    const { error } = await supabase.storage
+      .from(EMAIL_ATTACHMENT_BUCKET)
+      .uploadToSignedUrl(signed.path, signed.token, bytes, { contentType: signed.draft.mime })
+    if (error) {
+      return { success: false, error: `Upload failed: ${error.message}` }
+    }
+  } catch (err) {
+    return { success: false, error: `Upload failed: ${err?.message || err}` }
+  }
+  return { success: true, draft: signed.draft }
 }

@@ -685,6 +685,13 @@ export function ticketToInboxRow(ticket, { mailboxById = {}, showMailbox = false
     // Null when there is only one account to see — a chip naming the only
     // mailbox in existence is noise on a phone-width row.
     mailbox_label: showMailbox ? mailboxLabel(mailbox) : null,
+    // MOBILE-MAIL-REDESIGN.B — the swipe verb and its undo read this off the
+    // row. The mail route sends the flag; the status fallback covers historic
+    // solved/closed rows and any caller still shaping raw tickets through
+    // this. Before it existed the screen read `row.archived` (always
+    // undefined) and the Archived view's toggle re-archived instead of
+    // bringing back.
+    archived: t.archived === true || isArchivedStatus(t.status),
     resolved_at: isArchivedStatus(t.status)
       ? (t.solved_at || t.closed_at || t.updated_at || null)
       : null,
@@ -818,4 +825,196 @@ export function threadRefreshMs(messages = [], now = Date.now()) {
   const age = now - newest
   if (age < 0) return THREAD_SETTLE_MS
   return age < THREAD_SETTLE_WINDOW_MS ? THREAD_SETTLE_MS : THREAD_STEADY_MS
+}
+
+// ═══ MOBILE-MAIL-REDESIGN.B — the inbox list's own mechanics ═════════
+//
+// The redesigned Mail tab (approved mockup §01 triage rows, §02 swipe/undo/
+// paging, §06 honest states). Screens have no render harness, so every
+// branchable decision the tab makes lives here where vitest can reach it;
+// the screen reads verdicts.
+
+// ── Paging (mockup §02 note 3) ───────────────────────────────────────
+/**
+ * Append the next page of conversations onto the rows already on screen.
+ *
+ * THE CURSOR IS INCLUSIVE ON PURPOSE (the mail route's `before` is <= on
+ * last_message_at, so ties can never fall between pages) — which means every
+ * page repeats the previous page's boundary row, and the client MUST dedupe
+ * by id. The copy already on screen wins: the repeat is the same row, and
+ * keeping the rendered one means no visible flicker mid-scroll.
+ *
+ * Rows without an id are skipped — they cannot be deduped or FlatList-keyed,
+ * and a row the server sent without one is a row we cannot act on anyway.
+ * Pure: neither input is mutated.
+ */
+export function mergeMailPages(existing = [], incoming = []) {
+  const seen = new Set()
+  const out = []
+  for (const r of existing || []) {
+    if (!r?.id || seen.has(r.id)) continue
+    seen.add(r.id)
+    out.push(r)
+  }
+  for (const r of incoming || []) {
+    if (!r?.id || seen.has(r.id)) continue
+    seen.add(r.id)
+    out.push(r)
+  }
+  return out
+}
+
+// ── Row timestamp (mockup §01 — 10:42 / Yest / Tue / 12 Aug) ─────────
+/**
+ * The row's trailing time, at mail-client granularity: time-of-day today,
+ * "Yest", the weekday inside a week, then day-month (with the year only once
+ * it is not this year — a mail list that stamps ", 2026" on every row spends
+ * its narrowest column saying nothing).
+ *
+ * Judged by CALENDAR DAY, not 24-hour windows — 23:55 yesterday is "Yest"
+ * even though it is minutes old, because the question a mail row answers is
+ * "which day", not "how long ago". A future timestamp (clock skew between
+ * the phone and the server) counts as today: showing a time is at worst
+ * slightly odd, showing tomorrow's date is visibly broken.
+ */
+export function mailRowTime(iso, now = new Date()) {
+  const d = new Date(iso ?? NaN)
+  if (!iso || Number.isNaN(d.getTime())) return ''
+  const dayStart = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  const days = Math.round((dayStart(now) - dayStart(d)) / 86_400_000)
+  if (days <= 0) return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  if (days === 1) return 'Yest'
+  if (days < 7) return d.toLocaleDateString(undefined, { weekday: 'short' })
+  if (d.getFullYear() === now.getFullYear()) {
+    return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+  }
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+// ── Account filter chips (mockup §01 — All accounts / accounts@) ─────
+/**
+ * The account filter row: "All accounts" plus one chip per visible mailbox,
+ * or NOTHING when the caller can see fewer than two — a filter over one
+ * mailbox is noise, the same rule mailbox_label already follows on rows.
+ *
+ * `id: null` on the lead chip means "send no mailbox_id param"; the others
+ * carry the id the list call filters on. Labels are the address cut after
+ * its @ ("accounts@") — on a phone-width strip the local part IS the
+ * identity, and every studio address shares the domain anyway. A mailbox
+ * with no usable address falls back to its label, then a plain word.
+ */
+export function mailboxFilterChips(mailboxes = []) {
+  const real = (mailboxes || []).filter(m => m?.id)
+  if (real.length < 2) return []
+  return [
+    { id: null, label: 'All accounts' },
+    ...real.map(m => ({ id: m.id, label: mailboxChipLabel(m) })),
+  ]
+}
+
+function mailboxChipLabel(m) {
+  const addr = String(m.address || '')
+  const at = addr.indexOf('@')
+  if (at > 0) return addr.slice(0, at + 1)
+  return m.label || 'Mailbox'
+}
+
+// ── Row marks (mockup §01 note 4) ────────────────────────────────────
+/**
+ * The two glyphs before a row's preview. The ✓ means "our word was last" —
+ * answered mail visibly rests — so it demands direction === 'outbound'
+ * exactly: a NULL direction (no messages yet, or a row written before the
+ * column) must not claim the member was answered. The paperclip mirrors the
+ * server's has_attachments verdict (real stored files only), strictly ===
+ * true so a truthy accident cannot promise a file the thread won't show.
+ */
+export function mailRowMarks(row) {
+  return {
+    showCheck: row?.last_message_direction === 'outbound',
+    showClip: row?.has_attachments === true,
+  }
+}
+
+// ── Swipe verbs (mockup §02) ─────────────────────────────────────────
+
+/** How long the archive snackbar offers UNDO — the approved five seconds. */
+export const ARCHIVE_UNDO_MS = 5000
+
+/**
+ * Everything the archive swipe needs to know about one row: the value to
+ * send now (`next`), the value UNDO sends to put things back (`undoTo` —
+ * always the row's current state), the snackbar sentence, and the word on
+ * the swipe underlay. One derivation so the gesture, the snackbar and the
+ * undo can never disagree about which direction a row moved.
+ *
+ * Junk counts as a live row: `next: true` (archive) is the recoverable
+ * direction — it comes with the undo snackbar.
+ */
+export function archiveToggleMeta(row) {
+  const archived = row?.archived === true || isArchivedStatus(row?.status)
+  return archived
+    ? { next: false, undoTo: true, snack: 'Moved to inbox', underlay: 'INBOX' }
+    : { next: true, undoTo: false, snack: 'Conversation archived', underlay: 'ARCHIVE' }
+}
+
+/**
+ * The read-state swipe (left): an unread row gets marked read, a read row
+ * gets marked unread — the mail-app gesture for "deal with this later".
+ * `seen` is the wire value for setConversationSeen; `label` is the underlay
+ * word, naming the state the swipe moves TO.
+ */
+export function readToggleMeta(row) {
+  return row?.unread === true
+    ? { seen: true, label: 'READ' }
+    : { seen: false, label: 'UNREAD' }
+}
+
+// ── The honest states (mockup §06) ───────────────────────────────────
+/**
+ * Which of the list's four states to render, in the ORDER that keeps them
+ * honest: rows always render (an error alongside rows is a banner, not an
+ * empty state); an empty failed fetch is an ERROR — it also leaves zero
+ * mailboxes, and calling it "no accounts" (or worse, "inbox zero") is how a
+ * studio stops answering its mail without noticing. Only a clean empty
+ * answer gets to distinguish "no accounts here" from a genuinely empty view.
+ */
+export function mailListState({ error, rows, mailboxes }) {
+  if ((rows || []).length > 0) return 'list'
+  if (error) return 'error'
+  if ((mailboxes || []).length === 0) return 'no_mailboxes'
+  return 'empty'
+}
+
+/** The failed-load empty state — a failure never wears an empty state's clothes. */
+export const MAIL_ERROR_STATE = Object.freeze({
+  title: "Couldn't load your mail",
+  body: 'This is a connection problem, not an empty inbox. Pull down to try again.',
+})
+
+/** Foot of the Archived list — why archiving is safe to do freely. */
+export const ARCHIVED_FOOTNOTE =
+  "A member's reply brings a conversation back to the inbox on its own."
+
+/**
+ * The count pill on the Needs reply seg. Null at zero (a "0" pill is noise),
+ * capped at 99+ like the tab badge and the web sidebar badge.
+ */
+export function segCountLabel(n) {
+  const v = Number(n)
+  if (!Number.isFinite(v) || v <= 0) return null
+  return v > 99 ? '99+' : String(v)
+}
+
+/**
+ * Put an undone row back where it was. The index was remembered when the row
+ * left; the list may have changed since (a focus refresh, another archive),
+ * so the index is clamped, a negative one means append, and a row the list
+ * already holds again is left alone rather than duplicated — FlatList throws
+ * on a duplicate key, which would turn an undo into a crash. Pure.
+ */
+export function insertRowAt(rows = [], row, index) {
+  const rs = rows || []
+  if (!row || rs.some(r => r?.id === row.id)) return rs.slice()
+  const i = index < 0 ? rs.length : Math.min(index, rs.length)
+  return [...rs.slice(0, i), row, ...rs.slice(i)]
 }
