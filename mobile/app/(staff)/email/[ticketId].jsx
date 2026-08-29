@@ -1,18 +1,35 @@
-// Email ticket thread — message list, lifecycle control, and a composer
-// that can either reply to the member or leave a staff-only note
-// (EMAIL-TICKET-M.1; replaces the INBOX-EMAIL-M.1 conversation screen).
-// Pushed from the Email tab (app/(tabs)/email.jsx) since INBOX-SPLIT.M1.
+// Email thread + reply — MOBILE-MAIL-THREAD.1, the approved mockup's §04
+// (was EMAIL-TICKET-M.1's queue-era screen; same file, new shape).
+//
+// WHAT CHANGED IN THE REDESIGN, and what deliberately did not:
+//   • The verbs ride the native header now (mark-unread, archive, an
+//     overflow reserved for forward later) — the in-strip button row is gone.
+//   • The header strip leads with the SUBJECT, then the status + account
+//     chips, then the server's own audience derivation ("On this thread: …").
+//   • Older messages COLLAPSE to one-line rows: everything but the newest two
+//     folds until tapped (threadDisplayPlan in lib/mail-drafts.js — a
+//     six-message thread opens at the newest word, not a scroll marathon).
+//   • The composer is a card: a full-width Reply / Internal-note segmented
+//     toggle above it, the audience sentence and a "Draft saved" caption
+//     inside it, a paperclip + photo picker for OUTBOUND attachments, and an
+//     ink-square send. Note mode re-skins the whole card amber.
+//   • Drafts persist per user + account + ticket over AsyncStorage
+//     (lib/mail-drafts.js — the web store's semantics: fail closed with no
+//     user id, 14-day TTL, 30-entry eviction, live-typing-wins hydration).
+//   • UNCHANGED: every safety rule this screen already carried. Note-first
+//     rendering (ticketMessageKind), plain text only, delivery panels,
+//     recipient lines, the attachment preview/download split, the settle/
+//     steady poll, and the GET-stays-a-GET read marking.
 //
 // THE ONE THING THIS FILE MUST NEVER GET WRONG
 // An internal note is stored with direction='outbound' — same as a real sent
 // reply. ticketMessageKind() (lib/email-tickets.js) tests is_internal_note
-// FIRST and this file only paints what it decides. A note renders as a
-// full-width amber dashed panel headed "Internal note — not sent to the
-// member"; a reply renders as an accent bubble headed "Sent to <address>".
-// Nobody must ever be able to think a note went to the member, or that a
-// reply stayed private. The composer states its mode three times over for
-// the same reason: the selected pill, the colour of the box, and the
-// sentence naming exactly who receives what.
+// FIRST and this file only paints what it decides — collapsed rows included
+// (collapsedRowMeta applies the same ordering, so a folded note keeps its
+// amber). Nobody must ever be able to think a note went to the member, or
+// that a reply stayed private. The composer states its mode three times over:
+// the selected segment, the colour of the card, and the sentence naming
+// exactly who receives what.
 //
 // PLAIN TEXT ONLY. Messages render `text_body`. `html_body` never leaves the
 // server, and the sanitised `html_document` the web thread renders is
@@ -20,48 +37,32 @@
 // React Native has no equivalent of. Raw email HTML is hostile input from an
 // unauthenticated stranger — on mobile it simply is not rendered.
 //
-// ATTACHMENTS (EMAIL-ATTACH-PREVIEW.1)
-// A message's files render as tappable chips. Tapping one asks the server for
-// a short-lived signed URL: an allow-listed image opens in the in-app viewer,
-// and EVERY other type — PDF, Office, HEIC, SVG, unknown — is handed to the OS
-// as a DOWNLOAD, which is both the safe disposition and the better phone
-// experience. Which types may be previewed is the server's decision
-// (`preview_kind` on the row); this file never forms that judgement, so the
-// allow-list cannot drift between the two platforms.
+// OUTBOUND ATTACHMENTS (MOBILE-MAIL-THREAD.1) ride the repo's standard
+// three-step direct-to-storage flow via lib/email-api.js's helpers: sign
+// (authorised against THIS ticket), upload the bytes device→bucket, then the
+// reply body carries the returned draft refs. Every size/count decision is
+// lib maths (admitPickedFile / attachmentBudget / composerSendState), so an
+// oversize pick is a refusal sentence BEFORE any upload — a red chip, never a
+// failed send. A removed chip's already-uploaded object is accepted residue
+// (one unmetered draft object; quota is charged only when a message files —
+// the same trade the web picker documents on its discard race).
 //
 // Reads no longer clear the badge as a side effect (the GET is a GET), so the
-// screen posts …/read itself once the thread loads.
-// Replies ride Postmark's transactional stream with threading headers and the
-// sender's signature — all server-side in the reply route.
+// screen posts …/seen itself once the thread loads.
 //
 // RECIPIENTS (EMAIL-CC.1) ARE SHOWN HERE BUT NOT EDITED. To/Cc/Bcc render
 // under each message; Bcc is marked staff-only in words as well as an icon.
-// The composer sends `{ text, internal }` and nothing else, which is not a
-// gap: the reply route derives everybody on the thread server-side and always
-// includes them, so a mobile reply on a multi-party thread IS a reply-all,
-// identically to web. What mobile does not get is the ADD side — a chip input
-// with a Cc/Bcc toggle is a confidentiality control that wants real device QA,
-// and this is the quick-answer surface. Scoped out deliberately, not missed.
-// Until EMAIL-PARTICIPANTS.9 the composer footer did not say any of this —
-// it named only the requester, unconditionally, so a multi-party thread had
-// the operator believing a reply-all was a reply to one person (2026-08-09
-// audit). The footer now reads reply_recipients (ticketReplyAudienceMeta in
-// lib/email-tickets.js) and REMOVAL STAYS WEB-ONLY: this screen only
-// describes the audience the server settled on, same as the recipient lines
-// above — it never offers a way to change it.
-//
-// THE OTHER TWO PLACES A NAME APPEARS (EMAIL-PARTICIPANTS.12) went the same
-// way, because .9 fixed the footer and left them reading requester_email raw:
-// the header line under the subject, and the composer's own placeholder. On
-// the 2026-08-12 ticket that had the box an operator types into saying "Reply
-// to ratesoffice@dublincity.ie" one line above a footer saying the mail goes
-// to Eleanor and one other — the composer contradicting itself. All three now
-// come from ONE derivation (ticketReplyAudience in lib/email-tickets.js), so
-// this screen cannot say three things about who a reply reaches, and an
-// emptied audience names nobody rather than resurrecting the person a web
-// operator removed.
+// The composer sends `{ text, internal, attachments }` and nothing else,
+// which is not a gap: the reply route derives everybody on the thread
+// server-side and always includes them, so a mobile reply on a multi-party
+// thread IS a reply-all, identically to web. The ADD side (chip input,
+// Cc/Bcc) stays web-only — a confidentiality control that wants real device
+// QA. All three places a name appears (header line, placeholder, audience
+// sentence) come from ONE derivation (ticketReplyAudience in
+// lib/email-tickets.js), so this screen cannot say three things about who a
+// reply reaches.
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import {
   View, Text, ScrollView, Pressable, TextInput, ActivityIndicator,
   Alert, KeyboardAvoidingView, Platform, Modal, Image, Linking,
@@ -70,10 +71,13 @@ import { useLocalSearchParams, Stack } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useHeaderHeight } from 'expo-router/react-navigation'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import * as DocumentPicker from 'expo-document-picker'
+import * as ImagePicker from 'expo-image-picker'
 import { useAuth } from '../../../lib/auth-context'
 import {
   getTicket, replyToTicket, archiveConversation, setConversationSeen, emailDisplayName,
   previewTicketAttachment, downloadTicketAttachment,
+  signOutboundAttachment, uploadSignedAttachment,
 } from '../../../lib/email-api'
 import {
   ticketMessageKind, mailStatusChip, mailboxLabel, ticketDeliveryMeta,
@@ -82,6 +86,11 @@ import {
   threadRefreshMs, ticketReplyAudienceMeta, ticketReplyPlaceholder,
   ticketThreadAudienceLines, ticketSendOriginMeta,
 } from '../../../lib/email-tickets'
+import {
+  readReplyDraft, writeReplyDraft, clearReplyDraft, resolveDraftHydration,
+  threadDisplayPlan, collapsedRowMeta,
+  attachmentBudget, readyAttachmentRefs, admitPickedFile, composerSendState,
+} from '../../../lib/mail-drafts'
 import BackHeaderLeft from '../../../components/BackHeaderLeft'
 
 function formatTime(iso) {
@@ -96,6 +105,11 @@ function formatTime(iso) {
     ...(sameDay ? {} : { month: 'short', day: 'numeric' }),
   })
 }
+
+// How long the "Draft saved" caption waits after the last keystroke before
+// the write lands. Short enough that leaving the screen rarely beats it,
+// long enough not to hammer AsyncStorage per keystroke.
+const DRAFT_WRITE_DEBOUNCE_MS = 600
 
 /**
  * The To / Cc / Bcc lines under a message (EMAIL-CC.1).
@@ -143,16 +157,13 @@ function RecipientLines({ msg, onAccent = false, toShownInHeader = false }) {
 /**
  * A message's files, as chips (EMAIL-ATTACH-PREVIEW.1).
  *
- * MOBILE USED TO SHOW NOTHING HERE — a member's photo email rendered as an
- * empty bubble, which is the same "the operator saw nothing" bug the web thread
- * had, one platform over.
- *
  * Tapping a chip asks the server for a preview URL. `preview_kind: 'image'`
  * opens the viewer below; ANYTHING ELSE — a PDF, a Word document, a HEIC photo,
  * an SVG — is handed to the OS via Linking with a DOWNLOAD url, which on a
  * phone is the better answer anyway: iOS and Android both have real viewers for
  * those, and an in-app frame for a stranger's document would need a WebView
- * this app deliberately does not carry.
+ * this app deliberately does not carry. Which types may be previewed is the
+ * SERVER's decision (`preview_kind` on the row) — one allow-list, no drift.
  *
  * A not-stored attachment shows its reason and is not tappable. There are no
  * bytes, and a spinner that ended in an error would bury the one sentence staff
@@ -285,6 +296,40 @@ function ImageViewer({ image, onClose }) {
         </Pressable>
       </View>
     </Modal>
+  )
+}
+
+/**
+ * One folded message — mockup §04's one-line row. WHO in bold, what happened
+ * and when on the right, tap to unfold. The meta (who/what/when/tone) is lib
+ * maths (collapsedRowMeta), and tone 'note' keeps the amber skin: a folded
+ * staff-only note must be as unmistakable as an open one.
+ */
+function CollapsedRow({ msg, isFirst, fallbackName, onExpand }) {
+  const meta = collapsedRowMeta(msg, { isFirst, fallbackName })
+  const isNoteRow = meta.tone === 'note'
+  return (
+    <Pressable
+      onPress={onExpand}
+      accessibilityLabel={`Expand message: ${meta.who}, ${meta.what}`}
+      className={`flex-row items-center rounded-xl border px-3 py-2.5 mb-2 ${
+        isNoteRow ? 'border-amber-500/60 bg-amber-500/10' : 'border-un1t-border bg-un1t-surface'
+      }`}
+    >
+      {isNoteRow ? (
+        <Ionicons name="lock-closed" size={11} color="#B45309" style={{ marginRight: 5 }} />
+      ) : null}
+      <Text
+        className={`text-xs font-bold flex-1 ${isNoteRow ? 'text-amber-700' : 'text-un1t-text'}`}
+        numberOfLines={1}
+      >
+        {meta.who}
+      </Text>
+      <Text className="text-xs text-un1t-subtle ml-2">
+        {meta.what}{meta.when ? ` · ${meta.when}` : ''}
+      </Text>
+      <Ionicons name="chevron-down" size={13} color="#94A3B8" style={{ marginLeft: 4 }} />
+    </Pressable>
   )
 }
 
@@ -434,7 +479,7 @@ function MessageBubble({ msg, ticketId, locationId, onViewImage }) {
 
 export default function EmailTicket() {
   const { ticketId } = useLocalSearchParams()
-  const { activeLocation } = useAuth()
+  const { profile, activeLocation } = useAuth()
   const headerHeight = useHeaderHeight()
   const insets = useSafeAreaInsets()
   const [ticket, setTicket] = useState(null)
@@ -445,6 +490,31 @@ export default function EmailTicket() {
   const [isNote, setIsNote] = useState(false)
   const [sending, setSending] = useState(false)
   const [savingAction, setSavingAction] = useState(false)
+  // Which folded messages the operator has tapped open. Only ever grows —
+  // re-folding is a gesture nobody asked for, and a poll that re-collapsed a
+  // message somebody just opened would read as the screen fighting them.
+  const [expandedIds, setExpandedIds] = useState(() => new Set())
+  // Audit F6 — expanding a folded message grows the content, and the
+  // auto-scroll-to-end below would immediately yank the viewport AWAY from
+  // the message the operator just opened, down to the composer. One-shot
+  // suppression, armed by the expand tap, consumed by the next size change.
+  const suppressAutoScrollRef = useRef(false)
+  // Outbound files on the reply being written: { key, filename, size, mime,
+  // uri, status: 'uploading'|'ready'|'failed', ref, error }. `ref` is the
+  // draft ref uploadSignedAttachment answered — the thing the reply body
+  // carries. NEVER persisted with the draft (recipients/files are derived or
+  // re-picked per session; the web store's header explains the leak that rule
+  // prevents).
+  const [files, setFiles] = useState([])
+  // "Draft saved" is STATED, NOT HOPED: true only after a write actually
+  // landed (writeReplyDraft's return value), cleared on every keystroke.
+  const [draftSaved, setDraftSaved] = useState(false)
+  // Gates the write-through: false until the stored draft has been read and
+  // the hydration decision applied. Without it the debounced writer could
+  // fire with the pre-hydration blank text and CLEAR the very draft the read
+  // is about to restore — the web composer's skipNextWriteRef trap, one
+  // storage API over.
+  const [draftReady, setDraftReady] = useState(false)
   // The route sets this when the ATTACHMENT lookup failed (2026-08-08 audit):
   // the messages below are real, but their files are unknown — which must be
   // said, or a blipped lookup reads as "the member sent no files". Web renders
@@ -452,17 +522,32 @@ export default function EmailTicket() {
   const [attachmentsUnavailable, setAttachmentsUnavailable] = useState(false)
   // EMAIL-PARTICIPANTS.9 — { to, mode, over_cap, empty } | null, straight off
   // getTicket(). Kept alongside `ticket` rather than folded into it: it comes
-  // back from the SAME response but is answered as its own top-level field
-  // (see getTicket's doc), and the assign-route merge below only ever spreads
-  // `ticket` fields back in, which must not clobber this.
+  // back from the SAME response but is answered as its own top-level field.
   const [replyRecipients, setReplyRecipients] = useState(null)
-  // EMAIL-ATTACH-PREVIEW.1 — the one image being looked at, if any. Held here
-  // rather than in a bubble so the viewer covers the screen, and so switching
-  // tickets cannot leave a stale one open. The signed URL lives only as long as
-  // this state does.
+  // EMAIL-ATTACH-PREVIEW.1 — the one image being looked at, if any.
   const [viewingImage, setViewingImage] = useState(null)
   const scrollRef = useRef(null)
   const readMarked = useRef(false)
+  const hydrationStarted = useRef(false)
+  const fileSeq = useRef(0)
+  // What the composer holds RIGHT NOW, readable from the async hydration
+  // callback without widening its deps to per-keystroke. Refreshed every
+  // render in an effect (never during render); cheap.
+  const liveRef = useRef({ text: '', isNote: false })
+  useEffect(() => { liveRef.current = { text, isNote } })
+  // files, readable from the picker handlers without a stale closure —
+  // uploads finish out of order and picks can arrive in bursts.
+  const filesRef = useRef(files)
+  useEffect(() => { filesRef.current = files })
+
+  // The draft's identity: per USER (fail closed without one — lib rule), per
+  // EMAIL ACCOUNT (the ticket's mailbox; orphans use the lib's 'none'
+  // sentinel), per ticket. mailbox_id only exists once the ticket has loaded,
+  // which is why hydration below waits for it.
+  const draftScope = useMemo(
+    () => ({ userId: profile?.id, mailboxId: ticket?.mailbox_id, ticketId }),
+    [profile?.id, ticket?.mailbox_id, ticketId]
+  )
 
   // `quiet` is a background re-read of a thread already on screen (the poll
   // below), as opposed to opening one. It never paints an error: a blip on a
@@ -496,20 +581,75 @@ export default function EmailTicket() {
     refresh().finally(() => setLoading(false))
   }, [refresh])
 
+  // DRAFT HYDRATION — once, after BOTH the viewer and the ticket are known
+  // (the key needs profile.id and the ticket's mailbox_id; reading under a
+  // wrong 'none' segment before the ticket lands would look up — and later
+  // write — a different key than the one this conversation saves under).
+  //
+  // 🔴 LIVE TYPING OUTRANKS THE STORED DRAFT (resolveDraftHydration, tested in
+  // lib/mail-drafts.test.js): the read is async, and an operator can be
+  // mid-sentence by the time it resolves. If anything has been typed, their
+  // words stand and are persisted now that the scope exists; the stored draft
+  // is only restored into a composer that is still blank.
+  useEffect(() => {
+    if (hydrationStarted.current) return
+    if (!profile?.id || !ticket) return
+    hydrationStarted.current = true
+    const scope = { userId: profile.id, mailboxId: ticket.mailbox_id, ticketId }
+    readReplyDraft(scope).then((draft) => {
+      const decision = resolveDraftHydration({ liveText: liveRef.current.text, draft })
+      if (decision.action === 'hydrate') {
+        setText(decision.text)
+        setIsNote(decision.mode === 'note')
+        setDraftSaved(true)
+      } else if (decision.action === 'keep-live') {
+        writeReplyDraft(scope, {
+          text: liveRef.current.text,
+          mode: liveRef.current.isNote ? 'note' : 'reply',
+        }).then((saved) => { if (saved) setDraftSaved(true) })
+      }
+      // Only now may the write-through below run — see draftReady's comment.
+      setDraftReady(true)
+    })
+  }, [profile?.id, ticket, ticketId])
+
+  // DRAFT WRITE-THROUGH — debounced, gated on hydration having settled. Only
+  // { text, mode } are ever persisted (never recipients or files — the web
+  // store's header explains the leak that rule closes). Cleanup cancels the
+  // pending timer on every keystroke, so at most one write per pause; the
+  // empty-text branch inside writeReplyDraft is what clears the entry when
+  // the operator deletes their words.
+  useEffect(() => {
+    if (!draftReady) return undefined
+    setDraftSaved(false)
+    const timer = setTimeout(() => {
+      writeReplyDraft(draftScope, { text, mode: isNote ? 'note' : 'reply' })
+        .then((saved) => setDraftSaved(saved))
+    }, DRAFT_WRITE_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [draftReady, draftScope, text, isNote])
+
+  // Audit F4 — FLUSH ON UNMOUNT. The web store writes every keystroke; the
+  // debounce above means backing out within 600ms of the last keystroke
+  // would silently lose those words. Refs, not state, so this effect runs
+  // exactly once and its teardown sees the latest values without re-running
+  // per keystroke (which would write stale text on every cleanup).
+  const draftFlushRef = useRef(null)
+  useEffect(() => {
+    draftFlushRef.current = draftReady
+      ? { scope: draftScope, draft: { text, mode: isNote ? 'note' : 'reply' } }
+      : null
+  })
+  useEffect(() => () => {
+    const f = draftFlushRef.current
+    if (f) writeReplyDraft(f.scope, f.draft).catch(() => {})
+  }, [])
+
   // EMAIL-ATTACH-RACE.1 — the thread re-reads itself while it is open.
-  //
-  // It used to load once on mount and never again, so anything written after
-  // that first read stayed invisible for the life of the screen. The inbound
-  // webhook writes email_ticket_attachments AFTER the message row they hang
-  // off, so a ticket opened inside that window showed a member's photo as no
-  // attachment at all, and a file that could not be stored showed neither the
-  // file nor the reason.
-  //
   // Cadence comes from the thread itself (threadRefreshMs): fast while its
   // newest message is young enough that rows may still be arriving, 60s
-  // otherwise. It is a primitive, so a poll that changes nothing does not
-  // restart the interval — and the interval is torn down with the screen, so
-  // a backgrounded thread costs nothing.
+  // otherwise. Torn down with the screen, so a backgrounded thread costs
+  // nothing.
   const threadPollMs = threadRefreshMs(messages)
   useEffect(() => {
     if (!ticketId) return undefined
@@ -524,31 +664,133 @@ export default function EmailTicket() {
   }, [messages.length])
 
   const canReply = !!ticket?.requester_email
-  // EMAIL-PARTICIPANTS.9 — the footer's real audience, and whether Send must
-  // be blocked. `audience.disabled` already covers "no requester address"
-  // (ticketReplyAudienceMeta checks that first), so it alone gates Send;
-  // `canReply` above stays scoped to the text input, which keeps taking a
-  // draft even on a thread nobody can currently be sent to — the route 400s,
-  // not the keyboard.
+  // EMAIL-PARTICIPANTS.9 — the audience sentence and whether a reply is even
+  // possible. `audience.disabled` covers "no requester", "everyone removed"
+  // and over_cap; composerSendState folds it into the one send gate.
   const audience = ticketReplyAudienceMeta(ticket, replyRecipients)
-  const sendBlocked = !isNote && audience.disabled
-  // EMAIL-PARTICIPANTS.12 — the OTHER two strings that named the requester
-  // raw: the header line under the subject, and the composer's placeholder.
-  // Both derive from the same audience the footer does (one derivation, in
-  // lib/email-tickets.js), so this screen cannot say three different things
-  // about who a reply reaches. STILL READ-ONLY — describing the set, never
-  // editing it.
+  // EMAIL-PARTICIPANTS.12 — one derivation for every string that names the
+  // audience (lib/email-tickets.js), so this screen cannot say three things
+  // about who a reply reaches.
   const threadLines = ticketThreadAudienceLines(ticket, replyRecipients)
   const replyPlaceholder = ticketReplyPlaceholder(ticket, replyRecipients)
 
+  // THE send gate — one lib answer read by the button AND the submit guard,
+  // so they cannot disagree (lib/mail-drafts.js).
+  const sendState = composerSendState({
+    text, isNote, files, audienceDisabled: audience.disabled, sending,
+  })
+  const budget = attachmentBudget(files)
+
+  function patchFile(key, patch) {
+    setFiles(prev => prev.map(f => (f.key === key ? { ...f, ...patch } : f)))
+  }
+
+  // Sign → upload → hold the draft ref. Both steps are lib/email-api.js's
+  // helpers; a reply's file authorises against THIS ticket (the sign route's
+  // exactly-one-of rule — ticketId, never mailboxId, for replies).
+  async function uploadOne(entry) {
+    try {
+      const sign = await signOutboundAttachment({
+        filename: entry.filename,
+        size: entry.size,
+        mime: entry.mime,
+        ticketId,
+        locationId: activeLocation?.id,
+      })
+      if (!sign.success) {
+        patchFile(entry.key, { status: 'failed', error: sign.error || 'Could not start that upload.' })
+        return
+      }
+      const up = await uploadSignedAttachment(sign, entry.uri)
+      if (!up.success) {
+        patchFile(entry.key, { status: 'failed', error: up.error || 'Upload failed.' })
+        return
+      }
+      patchFile(entry.key, { status: 'ready', ref: up.draft, error: null })
+    } catch {
+      patchFile(entry.key, { status: 'failed', error: 'Upload failed — check your connection.' })
+    }
+  }
+
+  // One admission decision per file, against the list AS IT GROWS (a burst of
+  // picks must not each be measured against the pre-burst list) — the maths
+  // is admitPickedFile in lib/mail-drafts.js: count cap, byte ceiling,
+  // unreadable-size refusal. A refused file is a SENTENCE before any upload
+  // starts — the red-chip-not-failed-send rule.
+  function addPicked(assets) {
+    let current = filesRef.current
+    const admitted = []
+    for (const a of assets || []) {
+      const filename = a.name || a.fileName || 'file'
+      const size = Number(a.size ?? a.fileSize)
+      const refusal = admitPickedFile(current, { name: filename, size })
+      if (refusal) {
+        Alert.alert('Can’t attach that', refusal)
+        continue
+      }
+      const entry = {
+        key: `f${fileSeq.current++}`,
+        filename,
+        size,
+        mime: a.mimeType || 'application/octet-stream',
+        uri: a.uri,
+        status: 'uploading',
+        ref: null,
+        error: null,
+      }
+      current = [...current, entry]
+      admitted.push(entry)
+    }
+    if (admitted.length === 0) return
+    setFiles(prev => [...prev, ...admitted])
+    // Uploads start the moment a file is chosen (the web picker's rule): the
+    // waiting happens while the operator types, and Send can be honestly
+    // disabled while anything is still moving.
+    for (const entry of admitted) uploadOne(entry)
+  }
+
+  async function pickDocuments() {
+    try {
+      const res = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true })
+      if (res.canceled) return
+      addPicked(res.assets)
+    } catch {
+      Alert.alert('Couldn’t open files', 'The file picker could not be opened on this device.')
+    }
+  }
+
+  async function pickImages() {
+    try {
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsMultipleSelection: true,
+        quality: 0.8,
+      })
+      if (res.canceled) return
+      addPicked(res.assets)
+    } catch {
+      Alert.alert('Couldn’t open photos', 'The photo library could not be opened on this device.')
+    }
+  }
+
+  // Remove = forget the chip. The already-uploaded object is accepted residue
+  // (one unmetered draft under the caller's own prefix; quota is charged only
+  // when a message files) — the same trade the web picker takes on its
+  // discard race, minus the discard call this surface does not carry.
+  function removeFile(entry) {
+    setFiles(prev => prev.filter(f => f.key !== entry.key))
+  }
+
   async function send() {
+    if (!sendState.canSend) return
     const body = text.trim()
-    if (!body || sending) return
-    if (sendBlocked) return
     setSending(true)
     const res = await replyToTicket(ticketId, body, {
       internal: isNote,
       locationId: activeLocation?.id,
+      // Ready refs only (lib rule: STATUS gates, not the ref's presence) —
+      // and replyToTicket itself refuses to put attachments on a note.
+      attachments: readyAttachmentRefs(files),
     })
     setSending(false)
     if (!res.success) {
@@ -556,11 +798,17 @@ export default function EmailTicket() {
       return
     }
     setText('')
+    setFiles([])
+    // Cleared explicitly rather than left to the debounced writer's
+    // empty-text branch: a successful send is the one moment this draft is
+    // DEFINITELY done, and saying so must not depend on a timer firing.
+    clearReplyDraft(draftScope)
+    setDraftSaved(false)
     refresh()
   }
 
   // RETIRE-TICKETS.1 — assignment and the four-state lifecycle left with the
-  // ticket queue. The two verbs of this surface:
+  // ticket queue. The two verbs of this surface, now riding the header:
 
   // Archive / bring back. The response's ticket row is a bare status write —
   // merge, never replace (the EMAIL-MOPUP.4 lesson: the enriched mailbox and
@@ -582,8 +830,12 @@ export default function EmailTicket() {
     }
     // The mailbox half (moving the real message in a connected account) can
     // refuse independently; the DB half above stands either way.
-    if (res.data?.writeback?.notice) {
-      Alert.alert('Archived here', res.data.writeback.notice)
+    // Audit F1 — the route answers `writeback_notice` (a string), and this
+    // read had said `writeback.notice` since the ticket era: the "the mailbox
+    // move failed" valve could never fire, anywhere, while nothing ever
+    // reconciles archive state after the fact.
+    if (res.data?.writeback_notice) {
+      Alert.alert('Archived here', res.data.writeback_notice)
     }
   }
 
@@ -611,6 +863,11 @@ export default function EmailTicket() {
   const chip = mailStatusChip(ticket)
   const archived = isArchivedStatus(ticket?.status)
 
+  // The folded/unfolded plan for the thread (lib/mail-drafts.js): everything
+  // but the newest two collapses until tapped.
+  const plan = threadDisplayPlan(messages, expandedIds)
+  const failedFiles = files.some(f => f.status === 'failed')
+
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -624,6 +881,40 @@ export default function EmailTicket() {
           // is its own surface (and a cold-start deep link from a push must
           // not land someone in the chat inbox).
           headerLeft: () => <BackHeaderLeft label="Mail" fallbackHref="/(tabs)/email" />,
+          // THE VERBS RIDE THE HEADER (mockup §04 note 1): mark-unread,
+          // archive, and an overflow that is the reserved seat for forward —
+          // drawn but honest about being empty, so its arrival later is not a
+          // layout change.
+          headerRight: () => (
+            <View className="flex-row items-center">
+              <Pressable
+                onPress={markUnread}
+                disabled={savingAction || !ticket}
+                hitSlop={6}
+                accessibilityLabel="Mark as unread"
+                className={`px-2 py-1 ${savingAction ? 'opacity-50' : ''}`}
+              >
+                <Ionicons name="mail-unread-outline" size={19} color="#111827" />
+              </Pressable>
+              <Pressable
+                onPress={toggleArchive}
+                disabled={savingAction || !ticket}
+                hitSlop={6}
+                accessibilityLabel={archived ? 'Bring back to inbox' : 'Archive'}
+                className={`px-2 py-1 ${savingAction ? 'opacity-50' : ''}`}
+              >
+                <Ionicons name={archived ? 'arrow-undo-outline' : 'archive-outline'} size={19} color="#111827" />
+              </Pressable>
+              <Pressable
+                onPress={() => Alert.alert('More actions', 'Nothing lives here yet — forwarding will.')}
+                hitSlop={6}
+                accessibilityLabel="More actions"
+                className="pl-2 py-1"
+              >
+                <Ionicons name="ellipsis-vertical" size={17} color="#111827" />
+              </Pressable>
+            </View>
+          ),
         }}
       />
 
@@ -638,81 +929,57 @@ export default function EmailTicket() {
         </View>
       ) : (
         <>
-          {/* Header strip — the native header holds the requester's name;
-              this carries WHO THE TICKET IS WITH, the subject, which account
-              it came in to, and the lifecycle control.
-
-              EMAIL-PARTICIPANTS.12 — that first line was requester_email
-              raw, i.e. the address the FIRST message arrived from. Once a
-              shared mailbox hands a thread to a named person it is the wrong
-              name in the most prominent place on the screen, which is the
-              2026-08-12 incident exactly. It is the LIVE audience now,
-              straight off the server's own derivation, with the requester
-              demoted to an "Opened by" line that appears only when the two
-              have actually diverged. */}
-          <View className="border-b border-un1t-border bg-un1t-surface px-4 py-2">
-            <View className="flex-row items-center">
-              <Text className="text-xs text-un1t-subtle flex-1" numberOfLines={1}>
-                {threadLines.primary}
+          {/* Header strip (mockup §04): the SUBJECT leads, then the status +
+              account chips, then the server's own audience derivation.
+              EMAIL-PARTICIPANTS.12 — the audience line is the LIVE set off
+              the server, with the requester demoted to "Opened by" only when
+              the two have actually diverged. */}
+          <View className="border-b border-un1t-border bg-un1t-surface px-4 pt-2.5 pb-3">
+            {ticket?.subject ? (
+              <Text className="text-[17px] font-extrabold text-un1t-text leading-snug" numberOfLines={2}>
+                {ticket.subject}
               </Text>
+            ) : (
+              <Text className="text-[17px] font-extrabold text-un1t-subtle leading-snug">
+                (no subject)
+              </Text>
+            )}
+            <View className="flex-row items-center flex-wrap mt-1.5">
               {chip ? (
-                <View className={`ml-2 px-1.5 py-0.5 rounded ${chip.cls}`}>
+                <View className={`px-1.5 py-0.5 rounded mr-1.5 ${chip.cls}`}>
                   <Text className={`text-[10px] font-semibold ${chip.text}`}>{chip.label}</Text>
                 </View>
               ) : null}
+              {/* Which account it arrived at. mailbox_id is ON DELETE SET
+                  NULL, so a deleted address orphans its correspondence rather
+                  than hiding it — the no-mailbox case is said in words. */}
+              <View className="px-1.5 py-0.5 rounded bg-slate-500/10">
+                <Text className="text-[10px] font-semibold text-slate-700" numberOfLines={1}>
+                  {ticket?.mailbox ? `@ ${mailboxLabel(ticket.mailbox)}` : 'No mailbox on this ticket'}
+                </Text>
+              </View>
             </View>
+            <Text className="text-[11px] text-un1t-subtle mt-1.5" numberOfLines={1}>
+              {threadLines.primary}
+            </Text>
             {threadLines.opener ? (
               <Text className="text-[11px] text-un1t-muted mt-0.5" numberOfLines={1}>
                 {threadLines.opener}
               </Text>
             ) : null}
-            {ticket?.subject ? (
-              <Text className="text-sm font-medium text-un1t-text mt-0.5" numberOfLines={2}>
-                {ticket.subject}
-              </Text>
-            ) : null}
-            <Text className="text-[11px] text-un1t-subtle mt-0.5" numberOfLines={1}>
-              {/* mailbox_id is ON DELETE SET NULL, so a deleted address
-                  orphans its correspondence rather than hiding it. */}
-              {ticket?.mailbox ? `To ${mailboxLabel(ticket.mailbox)}` : 'No mailbox on this ticket'}
-            </Text>
-
-            {/* The verbs, and nothing else (RETIRE-TICKETS.1): Archive — the
-                primary action of this surface — and Mark as unread. The
-                claim/release row and the four-state segmented control that
-                sat here retired with the ticket queue. */}
-            <View className="flex-row items-center mt-2">
-              <Pressable
-                onPress={toggleArchive}
-                disabled={savingAction}
-                className={`flex-row items-center px-2.5 py-1 rounded-lg mr-1.5 border bg-un1t-text border-un1t-text ${savingAction ? 'opacity-50' : ''}`}
-              >
-                <Ionicons
-                  name={archived ? 'arrow-undo-outline' : 'archive-outline'}
-                  size={13}
-                  color="#FFFFFF"
-                  style={{ marginRight: 4 }}
-                />
-                <Text className="text-xs text-white font-semibold">
-                  {archived ? 'Bring back' : 'Archive'}
-                </Text>
-              </Pressable>
-              <Pressable
-                onPress={markUnread}
-                disabled={savingAction}
-                className={`flex-row items-center px-2.5 py-1 rounded-lg mr-1.5 border bg-un1t-bg border-un1t-border ${savingAction ? 'opacity-50' : ''}`}
-              >
-                <Ionicons name="mail-unread-outline" size={13} color="#64748B" style={{ marginRight: 4 }} />
-                <Text className="text-xs text-un1t-subtle">Mark unread</Text>
-              </Pressable>
-            </View>
           </View>
 
           <ScrollView
             ref={scrollRef}
             className="flex-1"
             contentContainerClassName="p-4"
-            onContentSizeChange={() => scrollRef.current?.scrollToEnd?.({ animated: false })}
+            onContentSizeChange={() => {
+              if (suppressAutoScrollRef.current) {
+                suppressAutoScrollRef.current = false
+                return
+              }
+              scrollRef.current?.scrollToEnd?.({ animated: false })
+            }}
           >
             {attachmentsUnavailable && (
               <View className="mb-3 rounded-xl border border-amber-500/60 bg-amber-500/10 px-3.5 py-2.5">
@@ -722,105 +989,231 @@ export default function EmailTicket() {
                 </Text>
               </View>
             )}
-            {messages.length === 0 ? (
+            {plan.length === 0 ? (
               <Text className="text-xs text-un1t-subtle text-center py-6">
                 No messages on this ticket yet.
               </Text>
             ) : (
-              messages.map(m => (
-                <MessageBubble
-                  key={m.id}
-                  msg={m}
-                  ticketId={ticketId}
-                  locationId={activeLocation?.id}
-                  onViewImage={setViewingImage}
-                />
+              plan.map(({ message: m, collapsed }, i) => (
+                collapsed ? (
+                  <CollapsedRow
+                    key={m.id}
+                    msg={m}
+                    isFirst={i === 0}
+                    fallbackName={ticket?.requester_name || ''}
+                    onExpand={() => {
+                      suppressAutoScrollRef.current = true
+                      setExpandedIds(prev => new Set(prev).add(m.id))
+                    }}
+                  />
+                ) : (
+                  <MessageBubble
+                    key={m.id}
+                    msg={m}
+                    ticketId={ticketId}
+                    locationId={activeLocation?.id}
+                    onViewImage={setViewingImage}
+                  />
+                )
               ))
             )}
           </ScrollView>
 
-          {/* Composer. The whole box turns amber in note mode — the mode is
-              never something you have to remember, it is something you can
-              see. */}
+          {/* Composer (mockup §04 "Reply, expanded"). The mode is stated
+              three times over: the selected segment, the colour of the card,
+              and the sentence naming exactly who receives what. */}
           <View
-            className={`border-t px-3 pt-2 ${
-              isNote ? 'border-amber-500/40 bg-amber-500/10' : 'border-un1t-border bg-un1t-bg'
-            }`}
+            className="border-t border-un1t-border bg-un1t-bg px-3 pt-2.5"
             style={{ paddingBottom: Math.max(insets.bottom, 8) }}
           >
-            <View className="flex-row items-center mb-2">
+            {/* Reply / Internal note — a full-width segmented toggle. */}
+            <View className="flex-row rounded-xl border border-un1t-border bg-un1t-bg p-0.5 mb-2">
               <Pressable
                 onPress={() => setIsNote(false)}
-                className={`flex-row items-center px-2.5 py-1 rounded-full mr-1.5 border ${
-                  !isNote ? 'bg-un1t-text border-un1t-text' : 'bg-un1t-surface border-un1t-border'
+                accessibilityLabel="Reply mode"
+                className={`flex-1 flex-row items-center justify-center py-1.5 rounded-[10px] ${
+                  !isNote ? 'bg-un1t-text' : ''
                 }`}
               >
-                <Ionicons name="send" size={11} color={!isNote ? '#FFFFFF' : '#64748B'} style={{ marginRight: 4 }} />
-                <Text className={`text-xs ${!isNote ? 'text-white font-semibold' : 'text-un1t-subtle'}`}>
-                  Reply to member
+                <Ionicons name="send" size={11} color={!isNote ? '#FFFFFF' : '#64748B'} style={{ marginRight: 5 }} />
+                <Text className={`text-xs ${!isNote ? 'text-white font-bold' : 'text-un1t-subtle font-semibold'}`}>
+                  Reply
                 </Text>
               </Pressable>
               <Pressable
                 onPress={() => setIsNote(true)}
-                className={`flex-row items-center px-2.5 py-1 rounded-full border ${
-                  isNote ? 'bg-amber-500/10 border-amber-600' : 'bg-un1t-surface border-un1t-border'
+                accessibilityLabel="Internal note mode"
+                className={`flex-1 flex-row items-center justify-center py-1.5 rounded-[10px] ${
+                  isNote ? 'bg-amber-500/10' : ''
                 }`}
               >
-                <Ionicons name="lock-closed" size={11} color={isNote ? '#B45309' : '#64748B'} style={{ marginRight: 4 }} />
-                <Text className={`text-xs ${isNote ? 'text-amber-700 font-bold' : 'text-un1t-subtle'}`}>
+                <Ionicons name="lock-closed" size={11} color={isNote ? '#B45309' : '#64748B'} style={{ marginRight: 5 }} />
+                <Text className={`text-xs ${isNote ? 'text-amber-700 font-bold' : 'text-un1t-subtle font-semibold'}`}>
                   Internal note
                 </Text>
               </Pressable>
             </View>
 
-            <View className="flex-row items-end">
+            {/* The card. Note mode re-skins the WHOLE thing amber — the mode
+                is something you can see, never something you must remember. */}
+            <View
+              className={`rounded-2xl border-[1.5px] px-3 pt-2 pb-2.5 ${
+                isNote ? 'border-amber-600 bg-amber-500/10' : 'border-un1t-text bg-un1t-surface'
+              }`}
+            >
+              {/* The audience, named BEFORE a word is typed — and "Draft
+                  saved" stated, not hoped (true only after the write landed). */}
+              <View className="flex-row items-center mb-1">
+                <Text
+                  className={`text-[11px] flex-1 ${isNote ? 'text-amber-700' : 'text-un1t-subtle'}`}
+                  numberOfLines={2}
+                >
+                  {isNote
+                    ? `Staff only — written to the ticket and NOT sent to ${ticket?.requester_email || 'the member'}.`
+                    : audience.text}
+                </Text>
+                {draftSaved && text.trim() ? (
+                  <Text className="text-[11px] text-un1t-muted ml-2">Draft saved</Text>
+                ) : null}
+              </View>
+
               <TextInput
                 value={text}
                 onChangeText={setText}
                 multiline
                 editable={isNote || canReply}
-                // EMAIL-PARTICIPANTS.12 — the real audience, not the
-                // requester. It said "Reply to <requester>" while the footer
-                // one line below named somebody else entirely; see
-                // ticketReplyPlaceholder, which also carries the no-requester
-                // wording this used to spell out inline.
                 placeholder={isNote ? 'Staff-only note. Nothing is sent.' : replyPlaceholder}
                 placeholderTextColor="#94A3B8"
                 maxLength={10000}
-                className={`flex-1 border rounded-2xl px-4 py-2.5 text-base text-un1t-text max-h-32 ${
-                  isNote ? 'bg-un1t-bg border-amber-500/50' : 'bg-un1t-surface border-un1t-border'
-                }`}
+                className="text-base text-un1t-text max-h-32 p-0"
+                style={{ minHeight: 56 }}
                 textAlignVertical="top"
               />
-              <Pressable
-                onPress={send}
-                disabled={!text.trim() || sending || sendBlocked}
-                className={`w-10 h-10 rounded-full ml-2 items-center justify-center ${
-                  text.trim() && !sending && !sendBlocked
-                    ? (isNote ? 'bg-amber-600' : 'bg-blue-500')
-                    : 'bg-un1t-border'
-                }`}
-              >
-                {sending ? (
-                  <ActivityIndicator color="#FFFFFF" />
-                ) : (
-                  <Ionicons name={isNote ? 'lock-closed' : 'arrow-up'} size={18} color="#FFFFFF" />
-                )}
-              </Pressable>
+
+              {/* The outbound files. Visible in note mode too — switching to
+                  a note must never silently drop what was attached; the send
+                  gate blocks the note instead and the sentence below says
+                  why. */}
+              {files.length > 0 && (
+                <View className="mt-2">
+                  {files.map(f => (
+                    <View
+                      key={f.key}
+                      className={`flex-row items-center rounded-lg border px-2 py-1.5 mt-1 ${
+                        f.status === 'failed'
+                          ? 'border-red-500/60 bg-red-500/10'
+                          : 'border-un1t-border bg-un1t-bg'
+                      }`}
+                    >
+                      {f.status === 'uploading' ? (
+                        <ActivityIndicator size="small" style={{ marginRight: 6, transform: [{ scale: 0.7 }] }} />
+                      ) : (
+                        <Ionicons
+                          name={f.status === 'failed' ? 'alert-circle-outline' : ticketAttachmentIcon(f.mime, f.filename)}
+                          size={14}
+                          color={f.status === 'failed' ? '#B91C1C' : '#64748B'}
+                          style={{ marginRight: 6 }}
+                        />
+                      )}
+                      <Text
+                        className={`text-xs flex-1 ${f.status === 'failed' ? 'text-red-700' : 'text-un1t-text'}`}
+                        numberOfLines={1}
+                      >
+                        {f.filename}
+                      </Text>
+                      <Text className={`text-[11px] ml-2 ${f.status === 'failed' ? 'text-red-700' : 'text-un1t-subtle'}`}>
+                        {f.status === 'uploading'
+                          ? 'Uploading…'
+                          : f.status === 'failed'
+                            ? 'Failed'
+                            : formatAttachmentSize(f.size)}
+                      </Text>
+                      <Pressable
+                        onPress={() => removeFile(f)}
+                        hitSlop={8}
+                        accessibilityLabel={`Remove ${f.filename}`}
+                        className="ml-2"
+                      >
+                        <Ionicons name="close" size={14} color="#64748B" />
+                      </Pressable>
+                    </View>
+                  ))}
+                  <Text className={`text-[11px] mt-1 ${budget.over ? 'text-red-700' : 'text-un1t-muted'}`}>
+                    {formatAttachmentSize(budget.used)} of {formatAttachmentSize(budget.limit)}
+                    {budget.over ? ' — over the limit, remove a file' : ''}
+                  </Text>
+                </View>
+              )}
+
+              {/* Tools: the pickers (reply mode only — a note is sent to
+                  nobody, so there is nothing for a file to ride on) and the
+                  one ink square that sends. */}
+              <View className="flex-row items-center justify-between mt-2">
+                <View className="flex-row items-center">
+                  {!isNote && (
+                    <>
+                      <Pressable
+                        onPress={pickDocuments}
+                        disabled={sending}
+                        hitSlop={6}
+                        accessibilityLabel="Attach a file"
+                        className={`mr-4 ${sending ? 'opacity-50' : ''}`}
+                      >
+                        <Ionicons name="attach-outline" size={20} color="#64748B" />
+                      </Pressable>
+                      <Pressable
+                        onPress={pickImages}
+                        disabled={sending}
+                        hitSlop={6}
+                        accessibilityLabel="Attach a photo"
+                        className={sending ? 'opacity-50' : ''}
+                      >
+                        <Ionicons name="image-outline" size={19} color="#64748B" />
+                      </Pressable>
+                    </>
+                  )}
+                </View>
+                <Pressable
+                  onPress={send}
+                  disabled={!sendState.canSend}
+                  accessibilityLabel={isNote ? 'Add internal note' : 'Send reply'}
+                  className={`w-10 h-10 rounded-xl items-center justify-center ${
+                    sendState.canSend
+                      ? (isNote ? 'bg-amber-600' : 'bg-un1t-text')
+                      : 'bg-un1t-border'
+                  }`}
+                >
+                  {sending ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <Ionicons name={isNote ? 'lock-closed' : 'send'} size={16} color="#FFFFFF" />
+                  )}
+                </Pressable>
+              </View>
             </View>
 
-            {/* Said in words as well as in colour: whoever is about to press
-                send must be told, in the same glance, who receives this.
-                EMAIL-PARTICIPANTS.9 — audience.text is the real, WHOLE-thread
-                audience (one name, or the first plus a count), not the
-                requester alone; see ticketReplyAudienceMeta. */}
-            <Text className={`text-[11px] mt-1.5 ${isNote ? 'text-amber-700' : 'text-un1t-subtle'}`}>
-              {isNote
-                ? `Staff only — written to the ticket and NOT sent to ${ticket?.requester_email || 'the member'}.`
-                : audience.text}
-            </Text>
+            {/* The sentences under the card — each states a rule the send
+                gate is enforcing, so a disabled button is never mute. */}
+            {sendState.reason === 'note_has_files' && (
+              <Text className="text-[11px] text-amber-700 mt-1.5">
+                {files.length === 1 ? 'A file is' : `${files.length} files are`} attached, and an
+                internal note is not sent to anyone. Switch back to Reply to send
+                {files.length === 1 ? ' it' : ' them'}, or remove
+                {files.length === 1 ? ' it' : ' them'} first.
+              </Text>
+            )}
+            {sendState.reason === 'uploading' && (
+              <Text className="text-[11px] text-un1t-subtle mt-1.5">
+                Waiting for files to finish uploading…
+              </Text>
+            )}
+            {failedFiles && !isNote && (
+              <Text className="text-[11px] text-red-700 mt-1.5">
+                A file did not upload. Remove it and try again — it will not be sent.
+              </Text>
+            )}
             {!isNote && archived && (
-              <Text className="text-[11px] text-un1t-subtle mt-1">
+              <Text className="text-[11px] text-un1t-subtle mt-1.5">
                 This conversation is archived — replying brings it back to the inbox.
               </Text>
             )}

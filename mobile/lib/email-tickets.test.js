@@ -134,6 +134,16 @@ describe('mail status (RETIRE-TICKETS.1 — the lifecycle chips left with the qu
     expect(mailStatusChip({ status: 'open', last_message_direction: null })).toBeNull()
   })
 
+  it('honours server-stamped flags over re-derivation (audit F2 class)', () => {
+    // A solved row the server calls LIVE must not wear an Archived chip…
+    expect(mailStatusChip({ status: 'solved', archived: false, needs_reply: false })).toBeNull()
+    // …and a stamped needs_reply outranks the status/direction derivation.
+    expect(mailStatusChip({ status: 'open', last_message_direction: 'outbound', needs_reply: true }).label)
+      .toBe('Needs reply')
+    expect(mailStatusChip({ status: 'open', last_message_direction: 'inbound', needs_reply: false }))
+      .toBeNull()
+  })
+
   it('treats solved and closed as archived', () => {
     expect(isArchivedStatus('solved')).toBe(true)
     expect(isArchivedStatus('closed')).toBe(true)
@@ -267,6 +277,20 @@ describe('ticketToInboxRow', () => {
     expect(bare.unread).toBe(false)
     expect(bare.needs_reply).toBe(false)
     expect(bare.has_attachments).toBe(false)
+  })
+
+  // Audit F2 — the server counts legacy `solved` rows as LIVE (they list in
+  // the Inbox, stamped archived:false). The stamp must WIN over the status
+  // fallback, or the swipe verb inverts: "archive" sends {archived:false}
+  // and reopens a resolved conversation.
+  it('honours a server-stamped archived:false over the solved-status fallback', () => {
+    const row = ticketToInboxRow({ ...base, status: 'solved', archived: false })
+    expect(row.archived).toBe(false)
+  })
+
+  it('falls back to status only when the stamp is absent', () => {
+    expect(ticketToInboxRow({ ...base, status: 'solved' }).archived).toBe(true)
+    expect(ticketToInboxRow({ ...base, status: 'closed', archived: true }).archived).toBe(true)
   })
 
   it('prefers the mail response\'s per-message unread count over the ticket-era column', () => {
@@ -825,5 +849,292 @@ describe('threadRefreshMs', () => {
   it('agrees with the web constants', () => {
     expect([THREAD_SETTLE_MS, THREAD_STEADY_MS, THREAD_SETTLE_WINDOW_MS])
       .toEqual([5_000, 60_000, 120_000])
+  })
+})
+
+// ═══ MOBILE-MAIL-REDESIGN.B — the inbox list's own mechanics ═══════════
+//
+// The redesigned Mail tab (mockup §01/§02/§06) keeps every branchable
+// decision here, per the house rule: screens have no render harness, so the
+// screen stays thin and these carry the behaviour.
+
+import {
+  mergeMailPages,
+  mailRowTime,
+  mailboxFilterChips,
+  mailRowMarks,
+  archiveToggleMeta,
+  readToggleMeta,
+  mailListState,
+  segCountLabel,
+  ARCHIVE_UNDO_MS,
+  MAIL_ERROR_STATE,
+  ARCHIVED_FOOTNOTE,
+} from './email-tickets'
+
+describe('mergeMailPages (keyset paging, INCLUSIVE cursor)', () => {
+  const r = (id) => ({ id, subject: `s-${id}` })
+
+  it('appends the next page after the rows already loaded', () => {
+    expect(mergeMailPages([r('a'), r('b')], [r('c'), r('d')]).map(x => x.id))
+      .toEqual(['a', 'b', 'c', 'd'])
+  })
+
+  // THE reason this function exists: `before` is inclusive on last_message_at,
+  // so every page repeats the previous page's boundary row — deliberately
+  // (established fact in the contract). Without the dedupe the same
+  // conversation renders twice and FlatList throws duplicate-key warnings.
+  it('drops the repeated boundary row, keeping the copy already on screen', () => {
+    const merged = mergeMailPages([r('a'), r('b')], [r('b'), r('c')])
+    expect(merged.map(x => x.id)).toEqual(['a', 'b', 'c'])
+    expect(merged[1].subject).toBe('s-b')
+  })
+
+  it('drops a dupe anywhere in the incoming page, not just at its head', () => {
+    expect(mergeMailPages([r('a'), r('b')], [r('c'), r('a'), r('d')]).map(x => x.id))
+      .toEqual(['a', 'b', 'c', 'd'])
+  })
+
+  it('dedupes within the incoming page too — one server hiccup must not crash FlatList', () => {
+    expect(mergeMailPages([r('a')], [r('b'), r('b')]).map(x => x.id)).toEqual(['a', 'b'])
+  })
+
+  it('skips incoming rows with no id — they cannot be deduped or keyed', () => {
+    expect(mergeMailPages([r('a')], [{ subject: 'ghost' }, null, r('b')]).map(x => x.id))
+      .toEqual(['a', 'b'])
+  })
+
+  it('handles missing halves and never mutates its inputs', () => {
+    expect(mergeMailPages(undefined, [r('a')]).map(x => x.id)).toEqual(['a'])
+    expect(mergeMailPages([r('a')], undefined).map(x => x.id)).toEqual(['a'])
+    const existing = [r('a')]
+    const incoming = [r('b')]
+    mergeMailPages(existing, incoming)
+    expect(existing).toHaveLength(1)
+    expect(incoming).toHaveLength(1)
+  })
+})
+
+describe('mailRowTime (mockup §01 — 10:42 / Yest / Tue / 12 Aug)', () => {
+  // Local wall-clock "now", Saturday 29 Aug 2026 midday.
+  const NOW = new Date(2026, 7, 29, 12, 0, 0)
+  const local = (...args) => new Date(...args).toISOString()
+
+  it('is empty for nothing and for garbage', () => {
+    expect(mailRowTime(null, NOW)).toBe('')
+    expect(mailRowTime(undefined, NOW)).toBe('')
+    expect(mailRowTime('not a date', NOW)).toBe('')
+  })
+
+  it('shows the time of day for today', () => {
+    const s = mailRowTime(local(2026, 7, 29, 10, 42), NOW)
+    expect(s).toMatch(/:\d{2}/)
+    expect(s).not.toMatch(/Aug/)
+  })
+
+  it('treats a future timestamp (clock skew) as today, not as a date', () => {
+    expect(mailRowTime(local(2026, 7, 29, 13, 5), NOW)).toMatch(/:\d{2}/)
+    // Even a future DAY — a phone clock a day behind the server must see a
+    // slightly odd time, never tomorrow's weekday.
+    expect(mailRowTime(local(2026, 7, 30, 9, 0), NOW)).toMatch(/:\d{2}/)
+  })
+
+  it('says Yest for yesterday — by calendar day, not by 24 hours', () => {
+    expect(mailRowTime(local(2026, 7, 28, 23, 55), NOW)).toBe('Yest')
+    // 23.9h ago but the same calendar day as yesterday? No — 12:06 on the
+    // 28th is still yesterday even though it is >24h before NOW's evening
+    // reads; and 00:05 on the 29th is today even though it is <13h away.
+    expect(mailRowTime(local(2026, 7, 28, 12, 6), NOW)).toBe('Yest')
+    expect(mailRowTime(local(2026, 7, 29, 0, 5), NOW)).toMatch(/:\d{2}/)
+  })
+
+  it('shows the weekday inside the last week', () => {
+    const d = new Date(2026, 7, 25, 9, 0) // Tuesday, 4 days back
+    expect(mailRowTime(d.toISOString(), NOW))
+      .toBe(d.toLocaleDateString(undefined, { weekday: 'short' }))
+  })
+
+  it('falls to day-month at exactly a week, and never wears a weekday there', () => {
+    const d = new Date(2026, 7, 22, 9, 0) // Saturday, 7 days back — same weekday as NOW
+    expect(mailRowTime(d.toISOString(), NOW))
+      .toBe(d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }))
+  })
+
+  it('adds the year once it is not this year', () => {
+    const d = new Date(2025, 11, 20, 9, 0)
+    expect(mailRowTime(d.toISOString(), NOW))
+      .toBe(d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }))
+  })
+})
+
+describe('mailboxFilterChips (mockup §01 — All accounts / accounts@ / stillorgan@)', () => {
+  it('renders nothing for zero or one account — a filter over one mailbox is noise', () => {
+    expect(mailboxFilterChips([])).toEqual([])
+    expect(mailboxFilterChips(undefined)).toEqual([])
+    expect(mailboxFilterChips([{ id: 'm1', address: 'a@x.com' }])).toEqual([])
+  })
+
+  it('leads with All accounts (id null = no filter param), then one chip per mailbox in order', () => {
+    const chips = mailboxFilterChips([
+      { id: 'm1', address: 'accounts@hatchstreetfitness.com' },
+      { id: 'm2', address: 'stillorgan@un1t.com' },
+    ])
+    expect(chips).toEqual([
+      { id: null, label: 'All accounts' },
+      { id: 'm1', label: 'accounts@' },
+      { id: 'm2', label: 'stillorgan@' },
+    ])
+  })
+
+  it('falls back to the label, then a plain word, when the address cannot be shortened', () => {
+    const chips = mailboxFilterChips([
+      { id: 'm1', label: 'Front desk' },
+      { id: 'm2' },
+      { id: 'm3', address: '@broken' },
+    ])
+    expect(chips.map(c => c.label)).toEqual(['All accounts', 'Front desk', 'Mailbox', 'Mailbox'])
+  })
+
+  it('ignores holes and mailboxes without an id — and hides the row if that leaves one', () => {
+    expect(mailboxFilterChips([null, { address: 'x@y.com' }, { id: 'm1', address: 'a@b.com' }]))
+      .toEqual([])
+  })
+})
+
+describe('mailRowMarks (mockup §01 note 4 — ✓ means "our word was last")', () => {
+  it('shows the check only for outbound-last — a null direction must not claim we answered', () => {
+    expect(mailRowMarks({ last_message_direction: 'outbound' }).showCheck).toBe(true)
+    expect(mailRowMarks({ last_message_direction: 'inbound' }).showCheck).toBe(false)
+    expect(mailRowMarks({ last_message_direction: null }).showCheck).toBe(false)
+    expect(mailRowMarks({}).showCheck).toBe(false)
+  })
+
+  it('shows the paperclip only for a stored real attachment', () => {
+    expect(mailRowMarks({ has_attachments: true }).showClip).toBe(true)
+    expect(mailRowMarks({ has_attachments: false }).showClip).toBe(false)
+    expect(mailRowMarks({ has_attachments: 1 }).showClip).toBe(false)
+  })
+
+  it('is safe on junk', () => {
+    expect(mailRowMarks(null)).toEqual({ showCheck: false, showClip: false })
+  })
+})
+
+describe('archiveToggleMeta (mockup §02 — swipe right, five-second undo)', () => {
+  it('archives a live row, and undo puts it back to not-archived', () => {
+    expect(archiveToggleMeta({ status: 'open', archived: false })).toEqual({
+      next: true, undoTo: false, snack: 'Conversation archived', underlay: 'ARCHIVE',
+    })
+  })
+
+  it('brings an archived row back, and undo re-archives it', () => {
+    expect(archiveToggleMeta({ status: 'closed', archived: true })).toEqual({
+      next: false, undoTo: true, snack: 'Moved to inbox', underlay: 'INBOX',
+    })
+  })
+
+  it('reads archived off the status when the flag is absent (historic solved rows)', () => {
+    expect(archiveToggleMeta({ status: 'solved' }).next).toBe(false)
+  })
+
+  it('treats junk as a live row — the common case, and the safe direction', () => {
+    expect(archiveToggleMeta(null).next).toBe(true)
+  })
+})
+
+describe('readToggleMeta (mockup §02 note 1 — left swipe toggles read state)', () => {
+  it('marks an unread row read (seen=true is the wire value)', () => {
+    expect(readToggleMeta({ unread: true })).toEqual({ seen: true, label: 'READ' })
+  })
+
+  it('marks a read row unread — the "deal with this later" gesture', () => {
+    expect(readToggleMeta({ unread: false })).toEqual({ seen: false, label: 'UNREAD' })
+    expect(readToggleMeta({})).toEqual({ seen: false, label: 'UNREAD' })
+    expect(readToggleMeta(null)).toEqual({ seen: false, label: 'UNREAD' })
+  })
+})
+
+describe('mailListState (mockup §06 — the honest states, in the honest ORDER)', () => {
+  it('renders the list whenever there are rows, even alongside an error banner', () => {
+    expect(mailListState({ error: 'boom', rows: [{ id: 'a' }], mailboxes: [] })).toBe('list')
+  })
+
+  // The documented ordering: a failed fetch also leaves zero mailboxes, and
+  // that has nothing to do with access — so error is judged BEFORE the
+  // no-mailbox state. A failure must never wear an empty state's clothes.
+  it('calls a failed empty fetch an error, never "no accounts" and never "inbox zero"', () => {
+    expect(mailListState({ error: 'boom', rows: [], mailboxes: [] })).toBe('error')
+    expect(mailListState({ error: 'boom', rows: [], mailboxes: [{ id: 'm' }] })).toBe('error')
+  })
+
+  it('separates "no accounts here" from a genuinely empty view', () => {
+    expect(mailListState({ error: null, rows: [], mailboxes: [] })).toBe('no_mailboxes')
+    expect(mailListState({ error: null, rows: [], mailboxes: [{ id: 'm' }] })).toBe('empty')
+  })
+})
+
+describe('segCountLabel (the Needs reply count on the view strip)', () => {
+  it('renders nothing at zero or below, or for junk — a "0" pill is noise', () => {
+    expect(segCountLabel(0)).toBeNull()
+    expect(segCountLabel(-2)).toBeNull()
+    expect(segCountLabel(undefined)).toBeNull()
+    expect(segCountLabel(NaN)).toBeNull()
+  })
+
+  it('caps at 99+ like every badge in the app', () => {
+    expect(segCountLabel(3)).toBe('3')
+    expect(segCountLabel(99)).toBe('99')
+    expect(segCountLabel(100)).toBe('99+')
+  })
+})
+
+describe('ticketToInboxRow.archived (the swipe verb reads it, so the row must carry it)', () => {
+  it('is true for the server flag and for archived statuses, false for live rows', () => {
+    expect(ticketToInboxRow({ id: 't', archived: true, status: 'open' }).archived).toBe(true)
+    expect(ticketToInboxRow({ id: 't', status: 'closed' }).archived).toBe(true)
+    expect(ticketToInboxRow({ id: 't', status: 'solved' }).archived).toBe(true)
+    expect(ticketToInboxRow({ id: 't', status: 'open' }).archived).toBe(false)
+    expect(ticketToInboxRow({ id: 't', status: 'pending' }).archived).toBe(false)
+  })
+})
+
+describe('redesign constants', () => {
+  it('gives undo the approved five seconds', () => {
+    expect(ARCHIVE_UNDO_MS).toBe(5000)
+  })
+
+  it('says a failure is a failure, in the approved words', () => {
+    expect(MAIL_ERROR_STATE.title).toBe("Couldn't load your mail")
+    expect(MAIL_ERROR_STATE.body).toMatch(/connection problem, not an empty inbox/)
+  })
+
+  it('explains the archived list refills itself', () => {
+    expect(ARCHIVED_FOOTNOTE).toMatch(/reply brings a conversation back/)
+  })
+})
+
+import { insertRowAt } from './email-tickets'
+
+describe('insertRowAt (undo puts the row back where it was)', () => {
+  const r = (id) => ({ id })
+
+  it('re-inserts at the remembered index', () => {
+    expect(insertRowAt([r('a'), r('c')], r('b'), 1).map(x => x.id)).toEqual(['a', 'b', 'c'])
+    expect(insertRowAt([r('b'), r('c')], r('a'), 0).map(x => x.id)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('clamps an index the shrunken list no longer has, and treats -1 as "append"', () => {
+    expect(insertRowAt([r('a')], r('z'), 9).map(x => x.id)).toEqual(['a', 'z'])
+    expect(insertRowAt([r('a')], r('z'), -1).map(x => x.id)).toEqual(['a', 'z'])
+  })
+
+  it('does not duplicate a row the list already has (a focus refresh raced the undo)', () => {
+    expect(insertRowAt([r('a'), r('b')], r('b'), 0).map(x => x.id)).toEqual(['a', 'b'])
+  })
+
+  it('does not mutate the input', () => {
+    const rows = [r('a')]
+    insertRowAt(rows, r('b'), 0)
+    expect(rows.map(x => x.id)).toEqual(['a'])
   })
 })
