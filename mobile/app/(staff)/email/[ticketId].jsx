@@ -2,8 +2,13 @@
 // (was EMAIL-TICKET-M.1's queue-era screen; same file, new shape).
 //
 // WHAT CHANGED IN THE REDESIGN, and what deliberately did not:
-//   • The verbs ride the native header now (mark-unread, archive, an
-//     overflow reserved for forward later) — the in-strip button row is gone.
+//   • The verbs ride the native header now (mark-unread, archive, and a ⋮
+//     overflow whose one action is Forward, acting on the NEWEST forwardable
+//     message) — the in-strip button row is gone. Forward also rides each
+//     expanded non-note message as a small per-message icon: the ⋮ is the
+//     discoverable affordance, the icon is the precise one (MOBILE-MAIL-
+//     FORWARD.1). Internal notes offer neither — lib/mail-forward.js's
+//     canForwardMessage is the rule, and the route 400s it besides.
 //   • The header strip leads with the SUBJECT, then the status + account
 //     chips, then the server's own audience derivation ("On this thread: …").
 //   • Older messages COLLAPSE to one-line rows: everything but the newest two
@@ -67,7 +72,7 @@ import {
   View, Text, ScrollView, Pressable, TextInput, ActivityIndicator,
   Alert, KeyboardAvoidingView, Platform, Modal, Image, Linking,
 } from 'react-native'
-import { useLocalSearchParams, Stack } from 'expo-router'
+import { router, useLocalSearchParams, Stack } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useHeaderHeight } from 'expo-router/react-navigation'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -91,6 +96,7 @@ import {
   threadDisplayPlan, collapsedRowMeta,
   attachmentBudget, readyAttachmentRefs, admitPickedFile, composerSendState,
 } from '../../../lib/mail-drafts'
+import { canForwardMessage, newestForwardableMessage } from '../../../lib/mail-forward'
 import BackHeaderLeft from '../../../components/BackHeaderLeft'
 
 function formatTime(iso) {
@@ -333,7 +339,32 @@ function CollapsedRow({ msg, isFirst, fallbackName, onExpand }) {
   )
 }
 
-function MessageBubble({ msg, ticketId, locationId, onViewImage }) {
+/**
+ * The small per-message forward affordance (MOBILE-MAIL-FORWARD.1) — the
+ * PRECISE one, on every expanded non-note message; the header's ⋮ is the
+ * discoverable one and acts on the newest. Never rendered on a note:
+ * canForwardMessage gates at the call sites, and a note has no envelope to
+ * pass on.
+ */
+function ForwardIcon({ onForward, onAccent = false, label }) {
+  if (!onForward) return null
+  return (
+    <Pressable
+      onPress={onForward}
+      hitSlop={8}
+      accessibilityLabel={label}
+      className="ml-2"
+    >
+      <Ionicons
+        name="arrow-redo-outline"
+        size={13}
+        color={onAccent ? 'rgba(255,255,255,0.6)' : '#64748B'}
+      />
+    </Pressable>
+  )
+}
+
+function MessageBubble({ msg, ticketId, locationId, onViewImage, onForward }) {
   const kind = ticketMessageKind(msg)
   const stamp = formatTime(msg.sent_at || msg.created_at)
   const body = msg.text_body || '(no text content)'
@@ -407,19 +438,22 @@ function MessageBubble({ msg, ticketId, locationId, onViewImage }) {
               onViewImage={onViewImage}
               onAccent
             />
-            <Text className="text-[10px] text-white/60 mt-1 text-right">
-              {msg.author_name ? `${msg.author_name} · ` : ''}{stamp}
-              {/* The QUIET half: a short phrase in the line that is already
-                  there. Confirming the normal case must not compete with the
-                  panel below, which is the entire point of the feature.
-                  🔴 IT PRINTS delivery.label AND USED TO PRINT "Delivered".
-                  That was true while `delivered` was the only quiet outcome;
-                  "Not tracked" is a second one, and printing "Delivered" for
-                  it made the rows that can NEVER be confirmed the ones
-                  asserting confirmation hardest. The lib was careful and this
-                  line threw the care away. Read the label. */}
-              {delivery?.tone === 'quiet' ? ` · ${delivery.label}` : ''}
-            </Text>
+            <View className="flex-row items-center justify-end mt-1">
+              <Text className="text-[10px] text-white/60 text-right">
+                {msg.author_name ? `${msg.author_name} · ` : ''}{stamp}
+                {/* The QUIET half: a short phrase in the line that is already
+                    there. Confirming the normal case must not compete with the
+                    panel below, which is the entire point of the feature.
+                    🔴 IT PRINTS delivery.label AND USED TO PRINT "Delivered".
+                    That was true while `delivered` was the only quiet outcome;
+                    "Not tracked" is a second one, and printing "Delivered" for
+                    it made the rows that can NEVER be confirmed the ones
+                    asserting confirmation hardest. The lib was careful and this
+                    line threw the care away. Read the label. */}
+                {delivery?.tone === 'quiet' ? ` · ${delivery.label}` : ''}
+              </Text>
+              <ForwardIcon onForward={onForward} onAccent label="Forward this reply" />
+            </View>
           </View>
         </View>
         {/* The LOUD half. Full width and outside the bubble, because the
@@ -471,7 +505,10 @@ function MessageBubble({ msg, ticketId, locationId, onViewImage }) {
           attachments={msg.attachments}
           onViewImage={onViewImage}
         />
-        <Text className="text-[10px] text-un1t-subtle mt-1 text-right">{stamp}</Text>
+        <View className="flex-row items-center justify-end mt-1">
+          <Text className="text-[10px] text-un1t-subtle text-right">{stamp}</Text>
+          <ForwardIcon onForward={onForward} label="Forward this message" />
+        </View>
       </View>
     </View>
   )
@@ -856,6 +893,31 @@ export default function EmailTicket() {
     readMarked.current = true
   }
 
+  // MOBILE-MAIL-FORWARD.1 — push the forward sheet for one message. Both
+  // affordances land here: the header ⋮ (with the newest forwardable message)
+  // and the per-message icon (with its own).
+  function pushForward(messageId) {
+    router.push({ pathname: '/email/forward', params: { ticketId, messageId } })
+  }
+
+  // The ⋮ overflow — one action, acting on the NEWEST forwardable message
+  // (lib rule: trailing internal notes are skipped; "forward" from the menu
+  // means the correspondence on top, not the staff commentary about it).
+  function openOverflow() {
+    const target = newestForwardableMessage(messages)
+    if (!target) {
+      Alert.alert(
+        'Forward',
+        'There’s nothing on this conversation that can be forwarded — internal notes are staff-only.',
+      )
+      return
+    }
+    Alert.alert('More actions', null, [
+      { text: 'Forward…', onPress: () => pushForward(target.id) },
+      { text: 'Cancel', style: 'cancel' },
+    ])
+  }
+
   // 'Email' rather than the display helper's "Unknown sender" fallback while
   // the thread is still loading — a header that briefly accuses us of not
   // knowing who wrote in reads as a bug.
@@ -866,7 +928,9 @@ export default function EmailTicket() {
   // The folded/unfolded plan for the thread (lib/mail-drafts.js): everything
   // but the newest two collapses until tapped.
   const plan = threadDisplayPlan(messages, expandedIds)
-  const failedFiles = files.some(f => f.status === 'failed')
+  // Audit S-2 — the caption must key on the SAME set the send gate blocks
+  // on (failed OR oversize), or a future oversize chip greys Send silently.
+  const failedFiles = files.some(f => f.status === 'failed' || f.status === 'oversize')
 
   return (
     <KeyboardAvoidingView
@@ -882,9 +946,7 @@ export default function EmailTicket() {
           // not land someone in the chat inbox).
           headerLeft: () => <BackHeaderLeft label="Mail" fallbackHref="/(tabs)/email" />,
           // THE VERBS RIDE THE HEADER (mockup §04 note 1): mark-unread,
-          // archive, and an overflow that is the reserved seat for forward —
-          // drawn but honest about being empty, so its arrival later is not a
-          // layout change.
+          // archive, and the ⋮ overflow whose one action is Forward.
           headerRight: () => (
             <View className="flex-row items-center">
               <Pressable
@@ -906,10 +968,11 @@ export default function EmailTicket() {
                 <Ionicons name={archived ? 'arrow-undo-outline' : 'archive-outline'} size={19} color="#111827" />
               </Pressable>
               <Pressable
-                onPress={() => Alert.alert('More actions', 'Nothing lives here yet — forwarding will.')}
+                onPress={openOverflow}
+                disabled={savingAction || !ticket}
                 hitSlop={6}
                 accessibilityLabel="More actions"
-                className="pl-2 py-1"
+                className={`pl-2 py-1 ${savingAction ? 'opacity-50' : ''}`}
               >
                 <Ionicons name="ellipsis-vertical" size={17} color="#111827" />
               </Pressable>
@@ -1013,6 +1076,10 @@ export default function EmailTicket() {
                     ticketId={ticketId}
                     locationId={activeLocation?.id}
                     onViewImage={setViewingImage}
+                    // The precise affordance — expanded non-note messages
+                    // only. A note gets nothing: canForwardMessage is the
+                    // rule, stated once in the lib.
+                    onForward={canForwardMessage(m) ? () => pushForward(m.id) : null}
                   />
                 )
               ))
@@ -1207,9 +1274,15 @@ export default function EmailTicket() {
                 Waiting for files to finish uploading…
               </Text>
             )}
+            {/* Round-2 polish: a failed chip now BLOCKS the send (the
+                composerSendState 'blocked_files' reason — a deliberate
+                divergence from web's red-caption-only posture, documented in
+                lib/mail-drafts.js), so this sentence names the block and the
+                way out rather than promising a silent exclusion. */}
             {failedFiles && !isNote && (
               <Text className="text-[11px] text-red-700 mt-1.5">
-                A file did not upload. Remove it and try again — it will not be sent.
+                A file did not upload, so this reply can’t be sent yet. Remove the failed file,
+                then attach it again.
               </Text>
             )}
             {!isNote && archived && (
