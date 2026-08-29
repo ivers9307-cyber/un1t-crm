@@ -1,29 +1,13 @@
-// MAIL-TRIAL.B — the two things in _helpers.js that a route test cannot reach.
+// MAIL-TRIAL.B — the things in _helpers.js that a route test cannot reach.
+// (RETIRE-TICKETS.1 removed the INBOX_SURFACE cross-module pin that lived
+// here — both constants are gone with the surface split, mig 578, and the
+// assertion had silently become `undefined === undefined`.)
 
 import { describe, it, expect } from 'vitest'
-import { INBOX_SURFACE as WRITEBACK_INBOX_SURFACE } from '@/lib/mail/imap-writeback'
 import {
-  INBOX_SURFACE, isNeedsReply, isArchived,
+  isNeedsReply, isArchived,
   loadConversationCounts, MESSAGE_SCAN_LIMIT,
 } from './_helpers'
-
-// 🔴 ONE CONSTANT, TWO FILES THAT MUST NOT IMPORT EACH OTHER.
-//
-// imap-writeback.js re-reads the mailbox row and refuses any write for a
-// mailbox whose `surface` is not its own INBOX_SURFACE. This surface decides
-// what to LIST with its own copy — deliberately its own, because importing the
-// write-back module would pull imapflow into the list route's cold start for
-// no reason at all.
-//
-// The two must agree or the surface is incoherent: a list showing a mailbox the
-// write helper then refuses is an Archive button that 404s on the row it just
-// drew. Nothing structural can enforce that across the boundary, so this
-// assertion does.
-describe('the surface flag', () => {
-  it('matches the value the IMAP write guard refuses on', () => {
-    expect(INBOX_SURFACE).toBe(WRITEBACK_INBOX_SURFACE)
-  })
-})
 
 describe('the two predicates the list stamps on every row', () => {
   it('needs-reply is open AND their word was last', () => {

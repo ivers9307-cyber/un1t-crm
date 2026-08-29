@@ -1,13 +1,11 @@
-// /communications/mail — MAIL-TRIAL.B, the inbox-shaped alternative to the
-// ticket queue.
+// /communications/mail — THE email surface (MAIL-TRIAL.B; sole surface since
+// RETIRE-TICKETS.1).
 //
-// WHAT THIS IS. Richard is running a head-to-head trial rather than a
-// migration: `accounts@hatchstreetfitness.com` stays on /communications/tickets
-// and `hatchstreet@un1t.com` runs here, and he picks one. Which mailbox appears
-// on which screen is `email_mailboxes.surface` (mig 575) — a data flag, set in
-// Settings → Locations → studio → Email. Every existing mailbox defaults to
-// 'tickets', so turning this page on changes nothing until somebody moves an
-// address onto it.
+// WHAT THIS IS. Mail began as one half of a head-to-head trial against the
+// ticket queue (mig 575's per-mailbox `surface` flag was the switch). The
+// trial ended 2026-08-29: Mail won, the queue UI was deleted, and every
+// account lists here (mig 578 retired the flag). /communications/tickets
+// redirects here for everything that still points at it.
 //
 // 🔴 WHY THE ROUTE IS /mail AND NOT /inbox. `/communications/inbox` is already
 // THE unified inbox — WhatsApp + Instagram in one queue (UIX-P1b) — and its

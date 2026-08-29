@@ -27,7 +27,7 @@
 //   • A FAILED SEND MUST NOT COST THEM THE DRAFT. Errors render inline and the
 //     modal stays exactly as it was, with every field intact.
 //
-// Mounted only while open (see TicketInbox), so state resets per open and the
+// Mounted only while open (see MailSurface), so state resets per open and the
 // inbox's 60s poll re-creating `mailboxes` can never wipe a half-typed email.
 
 import { useState } from 'react'

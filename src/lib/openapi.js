@@ -1258,8 +1258,8 @@ registry.registerPath({
   path: '/api/email/tickets',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'List email tickets + the caller’s visible mailboxes',
-  description: 'The studio ticket queue at one location, plus the mailboxes this caller may see (already in tab order). Filtered to those mailboxes and capped at 200, newest activity first. No visible mailboxes = an empty list, not an error. INBOX-SURFACE.C: mailboxes whose `surface` is \'inbox\' (mig 575) are EXCLUDED from both the tab strip and the query — they are worked on /communications/mail instead, and each account belongs to exactly one surface. Tickets with a NULL mailbox_id (ON DELETE SET NULL, plus mig 484\'s backfill) stay on THIS surface and are visible to elevated callers only: they carry no mailbox, so they carry no surface, and \'tickets\' is both the column\'s default and the only surface that exists at every location. MAIL-WEEKONE.2: `mailboxes_on_mail` is the OTHER half of that same split, surfaced rather than discarded — the labels (or, lacking one, the address) of the caller\'s VISIBLE mailboxes that moved to the mail surface, so this screen can say some of your mail moved instead of just going quiet about an account it no longer lists. ALWAYS present (possibly `[]`), including on the empty-list and mailbox-not-found responses — there is exactly one shape for this payload, not one with the field and one without.',
+  summary: 'DEPRECATED shim for the shipped staff app — use /api/email/mail',
+  description: '🔴 DEPRECATED SHIM (RETIRE-TICKETS.1) — the ticket queue UI is deleted; use GET /api/email/mail. Kept ONLY for the staff app\'s shipped bundle (an OTA reaches a phone on next launch, not on deploy); deleted in a later sweep once the mobile Mail port has landed. Now lists ALL visible mailboxes (the mig-575 surface split is retired, mig 578) with the response shape frozen as the bundle expects it — `mailboxes_on_mail` is constant []. Tickets with a NULL mailbox_id remain visible to elevated callers.',
   request: {
     query: z.object({
       location_id: uuidLike,
@@ -1275,29 +1275,27 @@ registry.registerPath({
   },
 })
 
-// ══ MAIL-TRIAL.B — the second email surface ═══════════════════════════════
-// The SAME data model as the ticket queue above, presented as a mail client
-// rather than a ticketing system: read/unread weight, archive as the primary
-// verb, no assignment and no four-state lifecycle. `email_mailboxes.surface`
-// (mig 575) decides which of the two lists a mailbox, and it lists in EXACTLY
-// ONE — that exclusivity is what makes the head-to-head trial a comparison
-// rather than one pile of mail shown twice.
+// ══ MAIL-TRIAL.B — THE email surface (sole surface since RETIRE-TICKETS.1) ══
+// The SAME data model as the old ticket queue, presented as a mail client:
+// read/unread weight, archive as the primary verb, no assignment and no
+// four-state lifecycle. The mig-575 surface split that once divided mailboxes
+// between two screens is retired (mig 578) — every account lists here.
 //
 // 🔴 THESE ARE THE ONLY ROUTES IN THE ESTATE THAT WRITE TO A CUSTOMER'S REAL
 // MAILBOX. Marking read/unread sets or clears IMAP \Seen and archiving MOVEs
 // the message, both via src/lib/mail/imap-writeback.js, which re-reads the
-// mailbox row and refuses anything not on the inbox surface. There is no
-// delete, no expunge and no trash on any path, and archiving REFUSES outright
-// on a server that does not advertise RFC 6851 MOVE rather than let the client
-// library emulate it as copy-then-delete.
+// mailbox row and refuses anything that is not an active IMAP-connected
+// account. There is no delete, no expunge and no trash on any path, and
+// archiving REFUSES outright on a server that does not advertise RFC 6851
+// MOVE rather than let the client library emulate it as copy-then-delete.
 registry.registerPath({
   method: 'get',
   path: '/api/email/mail',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'List mail-surface conversations (the A/B alternative to the ticket queue)',
+  summary: 'List mail conversations (THE email surface)',
   description:
-    'Conversations for mailboxes whose `surface` is \'inbox\', at one location, newest activity first. Gated exactly like the ticket queue (location access, `email_inbox`, per-mailbox grant), then narrowed to this surface. A ticket with a NULL mailbox_id has no surface and therefore never appears here — it stays on the ticket queue, where elevated callers can still reach it; widening it would put one conversation on both screens. `before` is a KEYSET cursor on last_message_at and is INCLUSIVE: that column is neither unique nor NOT NULL, so a strict comparison dropped both halves of a tie at a page boundary and the second was unreachable for good. The client de-duplicates appended pages by id, so the repeated boundary row costs a duplicate rather than a loss. Per-conversation read counts come off one bounded scan: `counts_partial` (page bigger than one scan) and `counts_unavailable` (scan failed) stay distinct on the wire because neither may render as "all read". MAIL-SEARCH.6: `q` matches by CONTENT and by SENDER, unioned — full-text over subject, sender (raw AND @-split, because the default parser treats an address as ONE token so a name search would otherwise never match it) and the first 100,000 characters of the plain-text body, using Postgres `websearch` syntax — quoted phrases, OR, a leading minus to exclude. It INTERSECTS the scope query rather than replacing it, so it can only ever REMOVE conversations from what the caller may already see, and it OVERRIDES `view` so an archived conversation stays findable — a folder is not a filing cabinet. `search_partial` is true when the scan hit its 1,000-row cap; the scan is ordered newest-first so a truncation drops the OLDEST matches rather than an arbitrary set. 🔴 A FAILED search is a 500, never an empty list: reporting it as "no results" would tell an operator a member\'s mail does not exist. Sender matching is escaped ILIKE over email_tickets.requester_name/requester_email (two SEPARATE queries, never a raw .or() — operator text inside one can rewrite the filter), which finds people the tsvector never could: requester_name is not indexed at all, and stopword names ("Will", "Don") are discarded by websearch_to_tsquery into an empty query. Sender matches are placed ahead of content matches under the id cap, so the person searched for is never the id dropped to fit the URL. Residual gap, documented not hidden: a PROSE search whose every term is a stopword still never really runs on the content leg, and the surface echoes the typed query back in its empty state.',
+    'Conversations for every mailbox the caller may see, at one location, newest activity first (RETIRE-TICKETS.1: the mig-575 surface split is retired — this is the only email surface). Gated by location access, `email_inbox` and the per-mailbox grant. A ticket with a NULL mailbox_id (ON DELETE SET NULL, plus mig 484’s backfill) IS listed, to elevated callers only, through the same shared scope the old queue used — the queue was its only other home, and a vanishing record is the one outcome retirement must never produce. A mailbox_id filter never includes orphans (they belong to no account’s tab). `before` is a KEYSET cursor on last_message_at and is INCLUSIVE: that column is neither unique nor NOT NULL, so a strict comparison dropped both halves of a tie at a page boundary and the second was unreachable for good. The client de-duplicates appended pages by id, so the repeated boundary row costs a duplicate rather than a loss. Per-conversation read counts come off one bounded scan: `counts_partial` (page bigger than one scan) and `counts_unavailable` (scan failed) stay distinct on the wire because neither may render as "all read". MAIL-SEARCH.6: `q` matches by CONTENT and by SENDER, unioned — full-text over subject, sender (raw AND @-split, because the default parser treats an address as ONE token so a name search would otherwise never match it) and the first 100,000 characters of the plain-text body, using Postgres `websearch` syntax — quoted phrases, OR, a leading minus to exclude. It INTERSECTS the scope query rather than replacing it, so it can only ever REMOVE conversations from what the caller may already see, and it OVERRIDES `view` so an archived conversation stays findable — a folder is not a filing cabinet. `search_partial` is true when the scan hit its 1,000-row cap; the scan is ordered newest-first so a truncation drops the OLDEST matches rather than an arbitrary set. 🔴 A FAILED search is a 500, never an empty list: reporting it as "no results" would tell an operator a member\'s mail does not exist. Sender matching is escaped ILIKE over email_tickets.requester_name/requester_email (two SEPARATE queries, never a raw .or() — operator text inside one can rewrite the filter), which finds people the tsvector never could: requester_name is not indexed at all, and stopword names ("Will", "Don") are discarded by websearch_to_tsquery into an empty query. Sender matches are placed ahead of content matches under the id cap, so the person searched for is never the id dropped to fit the URL. Residual gap, documented not hidden: a PROSE search whose every term is a stopword still never really runs on the content leg, and the surface echoes the typed query back in its empty state.',
   request: {
     query: z.object({
       location_id: uuidLike,
@@ -1330,7 +1328,7 @@ registry.registerPath({
   responses: {
     200: { description: '{ id, unread, changed, writeback_notice }' },
     400: { description: 'Invalid body', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'No such conversation, not yours, or not on the mail surface', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such conversation, or not yours', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'Read-state write failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -1350,7 +1348,7 @@ registry.registerPath({
   responses: {
     200: { description: '{ conversation, writeback_notice }' },
     400: { description: 'Invalid body', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'No such conversation, not yours, or not on the mail surface', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such conversation, or not yours', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'Status write failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -1364,7 +1362,7 @@ registry.registerPath({
   security: [{ CookieAuth: [] }],
   summary: 'Count email tickets awaiting a reply (nav badge)',
   description:
-    'Tickets at the caller’s ACTIVE location, on a mailbox they may see AND on the ticket surface (INBOX-SURFACE.C — mailboxes moved to `surface` \'inbox\' are counted by the mail surface instead, so this badge and the tab it sits on always hold the same rows), that are `open` with an inbound last message — i.e. mail nobody has answered yet. The same predicate as the list route’s `needs_reply` view, so the badge and that tab always agree. Not the whole live queue: nothing in this feature auto-closes, so counting tickets already waiting on the member would never come down. Returns count 0 (not an error) for a session without the permission or without an active location.',
+    '🔴 DEPRECATED SHIM (RETIRE-TICKETS.1) — web badges poll /api/email/mail/count. Kept only for old shipped bundles; deleted in a later sweep. Surface narrowing removed (mig 578), so it counts the same rows as the mail badge: conversations on a visible mailbox that are `open` with an inbound last message, at the caller’s ACTIVE location. Returns count 0 (not an error) for a session without the permission or without an active location.',
   responses: {
     200: { description: '{ count }', content: { 'application/json': { schema: SuccessResponse(z.object({ count: z.number() })) } } },
     401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },
@@ -1387,9 +1385,9 @@ registry.registerPath({
   path: '/api/email/mail/count',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Count mail-surface conversations awaiting a reply (nav badge)',
+  summary: 'Count mail conversations awaiting a reply (nav badge)',
   description:
-    'Conversations at the caller’s ACTIVE location, on a mailbox they may see AND on the MAIL surface (INBOX-SURFACE.C — the mirror image of /api/email/tickets/count, which counts the ticket surface instead so the two badges never disagree about who owns a given mailbox’s unanswered mail), that are `open` with an inbound last message. The same predicate as the mail list route’s `needs_reply` view and `needs_reply_count`, so this badge and that tab always agree. Unlike the ticket badge, there is NO orphan widening: a ticket with a NULL mailbox_id has no surface to read and is counted on the ticket surface only (its own schema default), never here — mirrors the mail LIST route’s own `.in(\'mailbox_id\', ids)` scope exactly, with no `.or(mailbox_id.is.null)` branch. An empty narrowed mailbox set answers 0 without running a query. Returns count 0 (not an error) for a session without the permission or without an active location.',
+    'Conversations at the caller’s ACTIVE location, on a mailbox they may see, that are `open` with an inbound last message. The same predicate and the same scope as the mail list route — orphan `.or` branch included for elevated callers (RETIRE-TICKETS.1: orphans live on this surface now) — so this badge and that tab always agree. An empty visible set answers 0 without running a query. Returns count 0 (not an error) for a session without the permission or without an active location.',
   responses: {
     200: { description: '{ count }', content: { 'application/json': { schema: SuccessResponse(z.object({ count: z.number() })) } } },
     401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },
@@ -1775,7 +1773,7 @@ registry.registerPath({
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'The studio’s email accounts and who may read each',
-  description: "Returns { mailboxes, staff }. Unlike the inbox this INCLUDES deactivated accounts — managing them is the point of the surface. Each mailbox carries an `access` array listing every active staff member at the location tagged implicit (owner-at-location or master — no grant row exists and none can be created), granted (a row in email_mailbox_access) or none. INBOX-SURFACE.C: each mailbox also carries `surface` ('tickets' | 'inbox', mig 575) — which of the two screens its mail is worked on. Master or owner-at-location only.",
+  description: "Returns { mailboxes, staff }. Unlike the inbox this INCLUDES deactivated accounts — managing them is the point of the surface. Each mailbox carries an `access` array listing every active staff member at the location tagged implicit (owner-at-location or master — no grant row exists and none can be created), granted (a row in email_mailbox_access) or none. Master or owner-at-location only. (RETIRE-TICKETS.1: the mig-575 `surface` field left this payload when the split retired — mig 578.)",
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: '{ mailboxes, staff }' },
@@ -1811,15 +1809,14 @@ registry.registerPath({
   path: '/api/locations/{id}/email/mailboxes/{mailboxId}',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Rename, re-default, deactivate, reactivate or move an account between surfaces',
-  description: "THERE IS NO DELETE: email_tickets.mailbox_id is ON DELETE SET NULL, so deleting would strip historic tickets of the address they arrived at. active=false is the removal path — it stops inbound routing and hides the tab from everyone including owners, keeping the row and its history — and it CLEARS is_default so a studio never defaults to an undeliverable address. The address itself is immutable (editing it would reattribute history). is_default=true clears the incumbent first and is refused for a deactivated account. INBOX-SURFACE.C: `surface` ('tickets' | 'inbox', mig 575) chooses WHICH SCREEN this account's mail is worked on — the ticket queue at /communications/tickets or the mail surface at /communications/mail — and an account appears on exactly one of them, which is what makes the head-to-head trial a comparison rather than one pile shown twice. Moving COPIES AND DELETES NOTHING: the column is read when a queue lists, so the move is instant, reversible, and leaves every ticket, message, attachment and access grant untouched; only the queue that lists it changes. A move is audit-logged as its own action (email_mailbox.surface_changed) so \"where did our mail go\" has one greppable answer. Master or owner-at-location only; another studio's mailbox id is 404, never 403.",
+  summary: 'Rename, re-default, deactivate or reactivate an account',
+  description: "THERE IS NO DELETE: email_tickets.mailbox_id is ON DELETE SET NULL, so deleting would strip historic tickets of the address they arrived at. active=false is the removal path — it stops inbound routing and hides the tab from everyone including owners, keeping the row and its history — and it CLEARS is_default so a studio never defaults to an undeliverable address. The address itself is immutable (editing it would reattribute history). is_default=true clears the incumbent first and is refused for a deactivated account. (RETIRE-TICKETS.1: the mig-575 `surface` switch left this body when the split retired; the email_mailbox.surface_changed audit rows remain the record of the trial's moves.) Master or owner-at-location only; another studio's mailbox id is 404, never 403.",
   request: {
     params: z.object({ id: uuidLike, mailboxId: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({
       label: z.string().min(1).max(40).optional(),
       is_default: z.boolean().optional(),
       active: z.boolean().optional(),
-      surface: z.enum(['tickets', 'inbox']).optional(),
     }).openapi('EmailMailboxPatch') } } },
   },
   responses: {

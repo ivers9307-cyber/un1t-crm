@@ -22,10 +22,9 @@ export default function CommsShell({ children }) {
   // INBOX-SURFACE.C — /communications/mail is the same shape again (list +
   // reading pane, full height), so it takes the full width for the same
   // reason. Left out, it would be the one three-pane tool in this hub boxed
-  // into max-w-7xl, and the toolbar would jump horizontally when an operator
-  // moved between it and the ticket queue.
+  // into max-w-7xl. (/communications/tickets is gone — RETIRE-TICKETS.1; the
+  // stub there redirects before this shell ever renders it.)
   const fullWidth = pathname.startsWith('/communications/inbox')
-    || pathname.startsWith('/communications/tickets')
     || pathname.startsWith('/communications/mail')
   return (
     <div className={fullWidth ? 'p-6' : 'p-6 max-w-7xl'}>

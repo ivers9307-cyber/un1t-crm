@@ -22,23 +22,15 @@
 // grants an operator would try to revoke one, watch nothing change, and stop
 // trusting the screen.
 //
-// INBOX-SURFACE.C — WHERE THIS ACCOUNT'S MAIL APPEARS.
-// Richard is running a head-to-head between two ways of working the same mail:
-// the ticket queue (/communications/tickets) and the newer Mail surface
-// (/communications/mail). Each account lives on exactly ONE of them, chosen per
-// account here, and that is what makes the comparison mean anything.
-//
-// THE CONTROL HAS TO SAY WHERE THE MAIL WENT. A toggle that silently empties a
-// tab is indistinguishable from mail going missing, and the operator's first
-// move would be to check DNS, then Postmark, then ring us. So the row names
-// both surfaces, links the one the account is on, and states the consequence
-// in the confirm before anything is written. Nothing is copied or deleted:
-// `surface` is read when a queue lists, so the move is instant and reversible.
+// (RETIRE-TICKETS.1 — the per-account "Move to Mail / Move to Email inbox"
+// control lived here during the mig-575 surface A/B. The trial ended
+// 2026-08-29: Mail is the only email surface, so there is nowhere to move an
+// account to and the row, its chip and its confirm are gone.)
 
 import { useCallback, useEffect, useState } from 'react'
 import {
   Mail, Loader2, Plus, Star, EyeOff, Eye, Check, AlertTriangle, Users,
-  HardDrive, Trash2, RefreshCw, ArrowLeftRight, Inbox,
+  HardDrive, Trash2, RefreshCw,
 } from 'lucide-react'
 import { Button, Card } from '@/components/ui'
 // MAILBOX-CONNECT.6 — the per-account IMAP connection panel. Its own file
@@ -86,108 +78,6 @@ function ReachabilityNotice({ notice }) {
         <span className="mt-1 block">{notice.detail}</span>
         {notice.remedy && <span className="mt-1 block">{notice.remedy}</span>}
       </span>
-    </div>
-  )
-}
-
-// INBOX-SURFACE.C — the two surfaces, in the operator's words.
-//
-// `key` is the value stored in email_mailboxes.surface (mig 575) and is NOT the
-// route: the data flag is 'inbox' while the page is /communications/mail, and
-// they are deliberately allowed to differ — renaming a column to match a URL is
-// a migration, and the URL moved because /communications/inbox was already the
-// WhatsApp + Instagram queue.
-//
-// `name` matches the tab label exactly. An operator told their mail is "on
-// Mail" has to be able to find a tab called Mail; a synonym here would be a
-// treasure hunt.
-const SURFACE_TICKETS = 'tickets'
-const SURFACE_INBOX = 'inbox'
-const SURFACES = {
-  [SURFACE_TICKETS]: {
-    key: SURFACE_TICKETS,
-    name: 'Email inbox',
-    href: '/communications/tickets',
-    blurb: 'The ticket queue — statuses, assignment, and the needs-reply view.',
-  },
-  [SURFACE_INBOX]: {
-    key: SURFACE_INBOX,
-    name: 'Mail',
-    href: '/communications/mail',
-    blurb: 'The mail-client style surface — read/unread, archive, no ticket ceremony.',
-  },
-}
-
-/** The stored value, defaulted the same way the column's own DEFAULT does. */
-function surfaceOf(mailbox) {
-  return mailbox?.surface === SURFACE_INBOX ? SURFACE_INBOX : SURFACE_TICKETS
-}
-
-/**
- * INBOX-SURFACE.C — which surface this account's mail appears on, and the one
- * control that moves it.
- *
- * SHOWN ON EVERY ACCOUNT, not only the moved ones. The question this answers is
- * "where do I go to answer this address", which an operator has just as often
- * about an account nobody has touched — and a control that only appears once
- * something is already unusual is a control nobody has seen before they need
- * it (the same argument the storage valve makes above).
- *
- * The confirm names BOTH surfaces because the destructive-feeling half of this
- * is the disappearance, not the arrival.
- */
-function SurfaceRow({ mailbox, onMove, busy }) {
-  const current = SURFACES[surfaceOf(mailbox)]
-  const other = SURFACES[current.key === SURFACE_TICKETS ? SURFACE_INBOX : SURFACE_TICKETS]
-  const connected = mailbox?.ingress === 'imap'
-
-  return (
-    <div className="mt-3 border-t border-un1t-border pt-3" data-testid={`surface-${mailbox?.id}`}>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="inline-flex flex-wrap items-center gap-2 text-xs text-un1t-subtle">
-          <Inbox className="h-3.5 w-3.5" aria-hidden="true" />
-          Mail for this account appears in
-          <a href={current.href} className="underline font-medium text-un1t-text">{current.name}</a>
-        </span>
-        <Button
-          type="button"
-          size="sm"
-          variant="secondary"
-          icon={ArrowLeftRight}
-          loading={busy}
-          onClick={() => onMove(mailbox, other.key)}
-        >
-          Move to {other.name}
-        </Button>
-      </div>
-      <p className="mt-1 text-[11px] text-un1t-muted">
-        {current.blurb} Each account is worked in one place only, so moving it to{' '}
-        {other.name} takes it out of {current.name}. Nothing is deleted and moving it back
-        restores it exactly.
-        {other.key === SURFACE_INBOX && (
-          <>
-            {' '}
-            {/* MAILBOX-SURFACE.1 — the consequence an operator would otherwise
-                only discover from their phone, with no way to guess the cause.
-                The staff app reads the ticket queue; there is no Mail screen on
-                it, so a moved account is not "harder to find" there, it is gone.
-                Said on the way IN only: moving BACK restores it, which is the
-                reassuring direction and needs no warning. */}
-            <strong className="font-medium text-un1t-text">
-              Mail is on the web only
-            </strong>{' '}
-            — while an account is there, its mail does not appear in the staff phone app
-            at all. Moving it back to {SURFACES[SURFACE_TICKETS].name} brings it back there.
-          </>
-        )}
-        {connected && other.key === SURFACE_INBOX && (
-          <>
-            {' '}Because this account is connected over IMAP, {other.name} also writes back:
-            reading a message marks it read in the real mailbox, and archiving moves it to the
-            provider&rsquo;s Archive folder. Nothing is ever deleted there.
-          </>
-        )}
-      </p>
     </div>
   )
 }
@@ -379,25 +269,6 @@ export default function EmailMailboxesCard({ locationId }) {
     return true
   }
 
-  // INBOX-SURFACE.C — move one account between the two surfaces.
-  //
-  // CONFIRMS FIRST, even though nothing is destroyed. The visible effect is a
-  // tab this operator's colleagues use going empty, and "are you sure" is the
-  // only place we get to name where the mail went BEFORE they go looking for
-  // it. Uses window.confirm for the same reason prune does: a bespoke modal
-  // here would be the only one of its kind on the settings surface.
-  async function moveSurface(mailbox, next) {
-    const to = SURFACES[next]
-    const from = SURFACES[surfaceOf(mailbox)]
-    if (!window.confirm(
-      `Move ${mailbox.label} <${mailbox.address}> to ${to.name}?\n\n` +
-      `Everything for this account is answered in ${to.name} from now on, and it stops ` +
-      `appearing in ${from.name}. No tickets, messages or attachments are deleted, and ` +
-      'moving it back puts it exactly where it was.'
-    )) return
-    await patchMailbox(mailbox.id, { surface: next }, 'surface')
-  }
-
   // Attachments are a member's correspondence and the bytes do not come back,
   // so this confirms before it acts. `confirm` matches the rest of the settings
   // surface; a bespoke modal here would be the only one of its kind.
@@ -468,13 +339,10 @@ export default function EmailMailboxesCard({ locationId }) {
       <Card title="Email accounts">
         <p className="text-xs text-un1t-muted">
           Each account is an address this studio receives mail at. Everything sent to one lands in
-          its own tab on whichever surface that account is set to — the{' '}
-          <a href="/communications/tickets" className="underline text-un1t-subtle">Email inbox</a>{' '}
-          ticket queue or{' '}
-          <a href="/communications/mail" className="underline text-un1t-subtle">Mail</a> — and
-          replies go back out from the same address. Each account appears on one of them, never
-          both. The <strong>default</strong> account is the one stamped as Reply-To on campaign and
-          marketing sends.
+          its own account filter in{' '}
+          <a href="/communications/mail" className="underline text-un1t-subtle">Mail</a>, and
+          replies go back out from the same address. The <strong>default</strong> account is the
+          one stamped as Reply-To on campaign and marketing sends.
         </p>
         <p className="mt-2 text-xs text-un1t-muted">
           An address can belong to only one account across the whole estate — inbound mail has to
@@ -540,15 +408,6 @@ export default function EmailMailboxesCard({ locationId }) {
                         {!m.active && (
                           <span className={`${CHIP} bg-amber-500/10 text-amber-700`}>Deactivated</span>
                         )}
-                        {/* INBOX-SURFACE.C — only the MOVED accounts carry a
-                            chip. A chip on every row would be noise on the
-                            common case; the surface row below states it in
-                            words for every account either way. */}
-                        {surfaceOf(m) === SURFACE_INBOX && (
-                          <span className={`${CHIP} bg-indigo-500/10 text-indigo-700`}>
-                            <Inbox className="h-3 w-3" aria-hidden="true" /> {SURFACES[SURFACE_INBOX].name}
-                          </span>
-                        )}
                         {/* Next to Default on purpose. "Default" and "Cannot
                             receive" on the same line is the sentence an owner
                             needs to read in one glance — it is the pairing,
@@ -609,12 +468,6 @@ export default function EmailMailboxesCard({ locationId }) {
                     reactivating restores them exactly.
                   </p>
                 )}
-
-                <SurfaceRow
-                  mailbox={m}
-                  onMove={moveSurface}
-                  busy={busy === `${m.id}:surface`}
-                />
 
                 <div className="mt-3 border-t border-un1t-border pt-3">
                   <button

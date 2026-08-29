@@ -21,20 +21,26 @@
 // pins the tab-label list (`['Send', 'Sent', 'Inbox', 'Email inbox',
 // 'Templates', 'Segments']`) with `canEmailInbox` gating it. So this file's
 // remaining guarantee is narrower but still real: the ⌘K palette command
-// (a separate deep link, independent of the sidebar) keeps its label + href.
+// (a separate deep link, independent of the sidebar) stays coherent.
+// RETIRE-TICKETS.1 then renamed it again: the ticket queue is deleted, the
+// palette's email entry is "Mail" and points at /communications/mail.
 import { describe, it, expect } from 'vitest'
 import { NAV_COMMANDS } from './command-palette.js'
 
 const byHref = (list, href) => list.find((i) => i.href === href)
 
-describe('COMMS-IA.3 — the email ticket queue is labelled "Email inbox"', () => {
+describe('RETIRE-TICKETS.1 — the email surface is "Mail" at /communications/mail', () => {
   it('command palette entry', () => {
-    expect(byHref(NAV_COMMANDS, '/communications/tickets')?.label).toBe('Email inbox')
+    expect(byHref(NAV_COMMANDS, '/communications/mail')?.label).toBe('Mail')
   })
 
-  it('leaves the route, permission and id alone — labels only', () => {
-    const cmd = byHref(NAV_COMMANDS, '/communications/tickets')
+  it('keeps the permission and id — the deep link moved, its gate did not', () => {
+    const cmd = byHref(NAV_COMMANDS, '/communications/mail')
     expect(cmd.permission).toBe('email_inbox')
     expect(cmd.id).toBe('email-tickets')
+  })
+
+  it('offers NO palette command for the retired ticket queue', () => {
+    expect(byHref(NAV_COMMANDS, '/communications/tickets')).toBeUndefined()
   })
 })

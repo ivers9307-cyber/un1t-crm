@@ -28,7 +28,7 @@ import { usePathname } from 'next/navigation'
 import clsx from 'clsx'
 import { usePolledCount } from '../use-polled-count'
 
-export default function CommunicationsTabs({ canWhatsapp, canEmailInbox, canMail = false }) {
+export default function CommunicationsTabs({ canWhatsapp, canMail = false }) {
   const pathname = usePathname()
   const activeRef = useRef(null)
   const scrollerRef = useRef(null)
@@ -43,22 +43,10 @@ export default function CommunicationsTabs({ canWhatsapp, canEmailInbox, canMail
     url: '/api/whatsapp/unread-count',
   })
 
-  // EMAIL-TICKET-CLEANUP.3 — same endpoint + poller as the sidebar Email badge,
-  // for the same reason: two numbers for one queue that could disagree is worse
-  // than one number.
-  const emailNeedsReplyCount = usePolledCount({
-    enabled: !!canEmailInbox,
-    url: '/api/email/tickets/count',
-  })
-
-  // INBOX-SURFACE.E — the Mail tab's own needs-reply count. This is the
-  // number the header comment below used to say did not exist yet: GET
-  // /api/email/mail/count mirrors /api/email/tickets/count exactly (same
-  // predicate, same shape) but scopes to MAIL-surface mailboxes, so it can
-  // never be the ticket queue's count wearing this tab's badge — it is
-  // genuinely this surface's own outstanding count. `enabled: !!canMail`
-  // matters: a studio with nothing routed to Mail has nothing to poll for,
-  // and polling anyway would be a request with no possible answer.
+  // INBOX-SURFACE.E — the Mail tab's needs-reply count (the only email badge
+  // since RETIRE-TICKETS.1 deleted the ticket queue and its tab).
+  // `enabled: !!canMail` matters: a studio with no mailboxes has nothing to
+  // poll for, and polling anyway would be a request with no possible answer.
   const mailNeedsReplyCount = usePolledCount({
     enabled: !!canMail,
     url: '/api/email/mail/count',
@@ -68,32 +56,14 @@ export default function CommunicationsTabs({ canWhatsapp, canEmailInbox, canMail
     // UIX-P1b: one unified WhatsApp + Instagram queue — the separate
     // Instagram tab retired (/communications/instagram redirects here).
     canWhatsapp && { id: 'inbox',      label: 'WhatsApp & Instagram inbox', href: '/communications/inbox', badge: inboxActionCount },
-    // EMAIL-TICKET.4 — the studio email queue. Its own key (`email_inbox`),
-    // not the marketing `email` one, so it appears for the people who
-    // actually answer accounts@/sales@ and for nobody else.
-    //
-    // INBOX-SPLIT.1 chose "Email" over "Tickets" on the grounds that operators
-    // think in channels. COMMS-IA.3 REVERSES the label (not the reasoning):
-    // "Email inbox" keeps the channel word operators look for and adds the
-    // thing that distinguishes it. "Tickets" is still rejected for the original
-    // reason, and "Ticket" still stays the name of the DATA MODEL — the route,
-    // the API and the `email_tickets` table are deliberately unchanged.
-    canEmailInbox && { id: 'tickets',  label: 'Email inbox', href: '/communications/tickets', badge: emailNeedsReplyCount },
-    // INBOX-SURFACE.C — the mail surface. Labelled "Mail", NOT "Inbox": the
+    // RETIRE-TICKETS.1 — the "Email inbox" ticket-queue tab that sat here is
+    // gone; Mail is the email surface. Labelled "Mail", NOT "Inbox": the
     // first tab is already an inbox, and two tabs called Inbox is an operator
     // guessing which queue they are opening. The route is /communications/mail
     // for the same reason — /communications/inbox has been the unified
-    // WhatsApp + Instagram queue since UIX-P1b and still redirects ?ch=em
-    // callers to tickets.
-    //
-    // INBOX-SURFACE.E — badge added. This tab shipped with NO badge on
-    // purpose: the only needs-reply count that existed was the ticket
-    // surface's, scoped to ticket-surface mailboxes, and pointing that
-    // number at this tab would have put one count on two tabs holding
-    // different mail — the objection was to a WRONG number, never to a
-    // badge existing at all. `mailNeedsReplyCount` is now this surface's
-    // own count (GET /api/email/mail/count, scoped to mail-surface
-    // mailboxes), so the reason to withhold it is gone.
+    // WhatsApp + Instagram queue since UIX-P1b. "Ticket" stays the name of
+    // the DATA MODEL only — the API and the `email_tickets` table are
+    // deliberately unchanged.
     canMail && { id: 'mail', label: 'Mail', href: '/communications/mail', badge: mailNeedsReplyCount },
   ].filter(Boolean)
 

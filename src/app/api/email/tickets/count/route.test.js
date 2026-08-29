@@ -285,45 +285,24 @@ describe('GET /api/email/tickets/count — cheapness and failure', () => {
   })
 })
 
-// INBOX-SURFACE.C — the badge counts THIS surface's mailboxes only.
-//
-// The badge sits on the tab the list route backs, so it has to be narrowed the
-// same way. A badge counting mail that surface refuses to show is the red dot
-// an operator clicks, finds nothing behind, and learns to ignore — the same
-// argument the tombstone scope above makes. The moved account's unanswered mail
-// is still real work; it is just counted by the other surface, which IS the
-// comparison being run.
-describe('GET /api/email/tickets/count — mailbox surface', () => {
-  const MOVED = { ...MB_ACCOUNTS, surface: 'inbox' }
-  const STAYS = { ...MB_STUDIO, surface: 'tickets' }
-
-  it('does not count tickets on a mailbox moved to the mail surface', async () => {
+// RETIRE-TICKETS.1 — the surface narrowing is gone (mig 578): this shim
+// counts every visible mailbox, exactly like /api/email/mail/count, so an
+// old shipped bundle's badge and a new one's can never disagree.
+describe('GET /api/email/tickets/count — shim counts all visible mailboxes', () => {
+  it('counts tickets on BOTH of a studio\'s accounts for an owner', async () => {
     getCurrentUser.mockResolvedValue(at(OWNER))
-    setupDb(baseState({
-      mailboxes: [STAYS, MOVED, MB_OTHER_LOCATION],
-      tickets: NEEDS_REPLY_BOTH,
-      grants: [],
-    }))
-    // An owner is elevated, so without the surface narrowing this is 2.
-    expect((await count()).body.data.count).toBe(1)
+    setupDb(baseState({ tickets: NEEDS_REPLY_BOTH, grants: [] }))
+    expect((await count()).body.data.count).toBe(2)
   })
 
-  it('still counts an ORPHAN when every account has moved', async () => {
-    // The tab strip is empty in this world but the queue is not: an orphan has
-    // no mailbox, so no surface, and it stays on the ticket surface. A badge of
-    // 0 here would say "nothing to answer" about mail nobody can see anywhere
-    // else.
+  it('still counts an ORPHAN for an elevated caller', async () => {
     const orphan = {
       ...T_STUDIO, id: 'aaaaaaa8-0000-4000-8000-000000000008',
       mailbox_id: null, status: 'open', last_message_direction: 'inbound',
     }
     getCurrentUser.mockResolvedValue(at(OWNER))
-    setupDb(baseState({
-      mailboxes: [{ ...MB_STUDIO, surface: 'inbox' }, MOVED, MB_OTHER_LOCATION],
-      tickets: [...NEEDS_REPLY_BOTH, orphan],
-      grants: [],
-    }))
-    expect((await count()).body.data.count).toBe(1)
+    setupDb(baseState({ tickets: [...NEEDS_REPLY_BOTH, orphan], grants: [] }))
+    expect((await count()).body.data.count).toBe(3)
   })
 })
 
@@ -352,30 +331,24 @@ describe('GET /api/email/tickets/count — agrees with the queue it badges', () 
     expect(badge).toBe(1)
   })
 
-  it('still agrees once an account has been MOVED to the other surface', async () => {
-    // INBOX-SURFACE.C — the agreement has to survive the split, or the trial
-    // ships a badge and a tab that disagree from day one. Same world, same
-    // caller, elevated so neither side is being narrowed by grants.
+  it('still agrees for an ELEVATED caller across every visible mailbox', async () => {
+    // Same world, same caller, elevated so neither side is being narrowed by
+    // grants — the badge and the tab it links must count the same rows.
     const { GET: LIST } = await import('../route')
-    const mailboxes = [
-      { ...MB_STUDIO, surface: 'tickets' },
-      { ...MB_ACCOUNTS, surface: 'inbox' },
-      MB_OTHER_LOCATION,
-    ]
     const world = [
       { ...T_STUDIO, status: 'open', last_message_direction: 'inbound' },
       { ...T_ACCOUNTS, status: 'open', last_message_direction: 'inbound' },
     ]
     getCurrentUser.mockResolvedValue(at(OWNER))
 
-    setupDb(baseState({ mailboxes, tickets: world, grants: [] }))
+    setupDb(baseState({ tickets: world, grants: [] }))
     const badge = (await count()).body.data.count
 
-    setupDb(baseState({ mailboxes, tickets: world, grants: [] }))
+    setupDb(baseState({ tickets: world, grants: [] }))
     const listed = await LIST(new Request(`http://x/api/email/tickets?location_id=${LOC_A}&view=needs_reply`))
     const rows = (await listed.json()).data.tickets
 
     expect(badge).toBe(rows.length)
-    expect(badge).toBe(1)
+    expect(badge).toBe(2)
   })
 })

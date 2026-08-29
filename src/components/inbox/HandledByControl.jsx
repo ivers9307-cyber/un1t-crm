@@ -14,7 +14,7 @@
 // against double-clicks and an onChanged() ping so the parent thread
 // re-fetches the fresh row. WA/IG are the only channels — email has no
 // customer agent, and since INBOX-SPLIT.1 it is not an inbox channel at
-// all (its surface is /communications/tickets).
+// all (its surface is /communications/mail).
 
 import { useState } from 'react'
 import { Sparkles, UserCheck } from 'lucide-react'

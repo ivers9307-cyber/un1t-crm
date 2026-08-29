@@ -31,25 +31,10 @@ import { assertLocationAccess, guardMasterOrOwner } from '@/lib/auth'
 // card renders the connection state chip straight off the mailbox list rather
 // than firing a second request per account. Leaving them out is this repo's
 // "the column exists and nothing reads it" outcome.
-// INBOX-SURFACE.C — `surface` ('tickets' | 'inbox', mig 575) joins them, and
-// this is the list the settings card renders from. Without it the card cannot
-// show which surface an account is on and the switch would have nothing to
-// read back after it writes — an operator flipping a control that appears not
-// to change anything. It is also the SECOND explicit list: the read side has
-// its own in src/app/api/email/tickets/_helpers.js, and a column added to one
-// and not the other is invisible on whichever side was missed.
-//
-// 🔴 DEPLOY ORDER, same as every column before it: mig 575 must be applied
-// before this deploys, or the whole select is a 42703 and the settings card
-// 500s.
+// (RETIRE-TICKETS.1 — `surface` and MAILBOX_SURFACES left this list when the
+// mig-575 A/B ended; mig 578 deprecated the column and nothing reads it.)
 export const MAILBOX_COLUMNS =
-  'id, location_id, address, label, is_default, active, created_at, ingress, egress, surface'
-
-// The two values `surface` may take. Restated here rather than imported from
-// the ticket routes' helpers: those pull in NextResponse and the whole auth
-// stack, and this module is imported by the write routes, which validate
-// against exactly this list before the row is touched.
-export const MAILBOX_SURFACES = Object.freeze(['tickets', 'inbox'])
+  'id, location_id, address, label, is_default, active, created_at, ingress, egress'
 
 // A studio runs a handful of accounts and employs a few dozen people, but
 // every .select() caps at 1,000 rows whatever the caller asks for — so the

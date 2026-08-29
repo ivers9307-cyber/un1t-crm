@@ -1,20 +1,17 @@
-// MAIL-TRIAL.B — fixtures for the Mail surface routes.
+// MAIL-TRIAL.B → RETIRE-TICKETS.1 — fixtures for the Mail surface routes.
 //
-// LAYERED ON THE TICKET SURFACE'S OWN, NEVER RESTATED. The access model is
+// LAYERED ON THE TICKET-ERA FIXTURES, NEVER RESTATED. The access model is
 // shared verbatim (see _helpers.js), so its fixtures are too: a second set of
-// users, grants and locations would drift from the ones the ticket route tests
-// exercise, and the whole point of importing loadVisibleMailboxes rather than
-// re-implementing it is that both surfaces are proven by the same world.
+// users, grants and locations would drift from the ones the (now shimmed)
+// ticket route tests exercise, and the whole point of importing
+// loadVisibleMailboxes rather than re-implementing it is that both are proven
+// by the same world.
 //
-// WHAT THIS FILE ADDS is one column: `surface` (mig 575).
-//
-// 🔴 THE SPLIT IS THE FIXTURE. studio@ is on the mail surface and accounts@ is
-// on the ticket surface — deliberately the shape of the real trial, where
-// `hatchstreet@un1t.com` runs on Mail and `accounts@hatchstreetfitness.com`
-// stays on tickets. Both mailboxes sit at the SAME location and the elevated
-// caller can see both, so any test that finds an accounts@ conversation on
-// this surface has caught the exclusivity failure that would make the trial
-// meaningless.
+// The per-mailbox `surface` flag this file used to add is RETIRED (mig 578):
+// Mail lists every visible mailbox. TWO accounts at the same studio remain
+// the load-bearing shape — studio@ (COACH holds a grant) and accounts@
+// (COACH does not) — because the per-account access gate is what the tests
+// must keep proving now that the surface split no longer narrows anything.
 
 import {
   LOC_A, LOC_B, MB_STUDIO, MB_ACCOUNTS, MB_OTHER_LOCATION,
@@ -29,15 +26,17 @@ export {
   GRANT_STUDIO, GRANT_MULTI_OTHER_LOCATION, GRANT_MULTI_STUDIO,
 }
 
-/** studio@ — the address running the Mail trial. */
-export const MB_MAIL = { ...MB_STUDIO, surface: 'inbox' }
-/** accounts@ — the same studio, the OTHER screen. Must never appear here. */
-export const MB_TICKETS = { ...MB_ACCOUNTS, surface: 'tickets' }
-/** The other studio's address, also on tickets — the default every row gets. */
-export const MB_OTHER = { ...MB_OTHER_LOCATION, surface: 'tickets' }
+/** studio@ — the account COACH holds a grant on. */
+export const MB_MAIL = { ...MB_STUDIO }
+/** accounts@ — same studio, NO coach grant. (Historic name: it sat on the
+ * retired ticket surface. Kept because renaming it across every mail test
+ * buys nothing — the access split it now stands for is real.) */
+export const MB_TICKETS = { ...MB_ACCOUNTS }
+/** The other studio's address. */
+export const MB_OTHER = { ...MB_OTHER_LOCATION }
 
 /**
- * Both mailboxes at LOC_A with the surfaces split, plus their conversations.
+ * Both mailboxes at LOC_A plus their conversations.
  *
  * `messages` is empty by default: the per-conversation counts are a separate
  * read, and a test that does not care about read state should not have to

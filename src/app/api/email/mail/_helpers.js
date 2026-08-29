@@ -1,32 +1,29 @@
-// MAIL-TRIAL.B — shared resolution for the /api/email/mail routes.
+// MAIL-TRIAL.B → RETIRE-TICKETS.1 — shared resolution for /api/email/mail.
 //
 // WHY THIS FILE IS THIN, AND DELIBERATELY SO
-// The Mail surface is the OTHER HALF of a head-to-head trial against the
-// ticket surface: `accounts@hatchstreetfitness.com` stays on ticketing,
-// `hatchstreet@un1t.com` runs here, and Richard picks one. Two surfaces means
-// two chances for the access model to diverge — and the access model is the
-// one thing that must NOT be re-implemented, because a second definition of
-// "which mailboxes may this person read" is a second chance to hand a coach
-// the studio's billing correspondence.
+// Mail started as one half of a head-to-head trial against the ticket queue.
+// The trial is over (mig 578: Mail won, the queue UI is deleted, every
+// mailbox is on this surface) — but the reason this file stays thin outlived
+// it: the access model must NOT be re-implemented here, because a second
+// definition of "which mailboxes may this person read" is a second chance to
+// hand a coach the studio's billing correspondence.
 //
-// So every gate here is the ticket surface's own, imported verbatim:
+// So every gate here is the original email access model, imported verbatim:
 //   • loadVisibleMailboxes  — the email_inbox key + per-mailbox grants
 //   • loadTicketForUser     — the same, resolved at the TICKET's location
+//     (and the orphan rule: a NULL-mailbox ticket is visible to ELEVATED
+//     callers only — mailbox_id is ON DELETE SET NULL and mig 484's backfill
+//     predates the column, so orphans genuinely exist)
 //   • scopeToNeedsReply     — the ONE definition of "they wrote, nobody answered"
-//   • scopeToUnmerged       — merged tickets are tombstones on every surface
+//   • scopeToUnmerged       — merged tickets are tombstones everywhere
 //   • statusTimestamps      — solved_at/closed_at, one implementation
 //
-// WHAT IS GENUINELY NEW is one filter: `email_mailboxes.surface` (mig 575).
-// It decides which UI a mailbox appears in, and it is layered ON TOP of the
-// access model rather than mixed into it. Access answers "may you read this";
-// surface answers "which of the two screens shows it". Keeping them separate is
-// what lets the trial be a routing change rather than a security change.
-//
-// 🔴 EACH MAILBOX APPEARS IN EXACTLY ONE SURFACE. If both screens showed
-// everything there would be no trial to run. This file owns the inbox half of
-// that split; the tickets list route owns the other.
+// The `surface` filter that used to be layered on top is GONE — mig 578
+// deprecated the column and nothing reads it. This surface now shows
+// everything the caller may see, orphans included (they lost their only other
+// home when the queue was deleted; a visible record silently disappearing is
+// the one outcome that retirement must never produce).
 
-import { NextResponse } from 'next/server'
 import {
   loadVisibleMailboxes, scopeToNeedsReply, scopeToUnmerged, statusTimestamps,
   loadTicketForUser, ticketNotFound,
@@ -37,120 +34,18 @@ import {
 export { scopeToNeedsReply, scopeToUnmerged, statusTimestamps, loadTicketForUser, ticketNotFound }
 
 /**
- * The only value of `email_mailboxes.surface` this surface will show.
+ * The mailboxes this caller may see at this location, in tab order.
  *
- * imap-writeback.js exports the same constant for its own source-side guard,
- * and the two MUST agree — a list that shows a mailbox the write helper then
- * refuses is an Archive button that 404s. It is deliberately not imported from
- * there: that module pulls in imapflow, and the LIST route has no business
- * paying that cold start to show somebody their mail. The drift is pinned by a
- * test instead (`_helpers.test.js`), which is this repo's own answer to a
- * constant that must match across a boundary it should not import.
- */
-export const INBOX_SURFACE = 'inbox'
-
-// Two mailboxes at a studio today, a handful at most ever. Stated anyway
-// because every .select() caps at 1,000 rows whatever the caller asks for.
-const MAILBOX_LIMIT = 200
-
-/**
- * 500 for a surface lookup that FAILED, as opposed to one that legitimately
- * found no inbox mailboxes.
+ * RETIRE-TICKETS.1 — this used to layer a `surface` read on top and keep only
+ * the mail half of the mig-575 split. The split is gone (mig 578), so this is
+ * now a passthrough of the ONE access model. The name survives because five
+ * routes and their tests call it, and the seam is still the right place for a
+ * mail-side filter if one ever returns.
  *
- * The two are opposite answers and must not collapse into one. `data` is null
- * on a PostgREST error, so a `|| []` here would turn "we could not find out
- * which mailboxes belong to this screen" into "none of them do" — which this
- * surface renders as the calm "no mail accounts on this screen yet" empty
- * state. An operator reads that as "no mail", stops looking, and nobody ever
- * learns the query failed. Same shape, same reasoning and deliberately the
- * same posture as mailboxesUnavailable() next door (EMAIL-TICKET-CLEANUP.2).
- *
- * Failing CLOSED is safe here and only here: nothing has been sent, nothing
- * has been written, and the alternative is not "show a bit less" but "show the
- * ticket surface's correspondence on the inbox surface", which would silently
- * end the trial's exclusivity.
- */
-export function surfaceUnavailable() {
-  return NextResponse.json({
-    success: false,
-    error: 'Could not check which mail accounts belong to this screen. Nothing was changed — try again.',
-  }, { status: 500 })
-}
-
-/**
- * The mailboxes this caller may see at this location AND that belong to the
- * mail surface, in tab order.
- *
- * Two steps, on purpose:
- *   1. loadVisibleMailboxes — the WHOLE access model, unchanged and unforked.
- *   2. a `surface` read over exactly those ids — the presentation split.
- *
- * Step 2 is its own query rather than a column added to step 1's select
- * because that select belongs to the ticket surface: widening it from here
- * would make the mail trial an edit to the queue every other operator uses.
- *
- * @returns {Promise<{ response: NextResponse } | { elevated: boolean, mailboxes: object[] }>}
+ * @returns {Promise<{ response: import('next/server').NextResponse } | { elevated: boolean, mailboxes: object[] }>}
  */
 export async function loadInboxMailboxes(db, user, locationId) {
-  const visibility = await loadVisibleMailboxes(db, user, locationId)
-  // A failed visibility lookup is NOT an empty visible set — its own refusal,
-  // already shaped by the ticket helpers. Passed straight through.
-  if (visibility.response) return visibility
-  const { elevated, mailboxes } = visibility
-
-  if (mailboxes.length === 0) return { elevated, mailboxes: [] }
-
-  const ids = mailboxes.map(m => m.id)
-  const { data, error } = await db.from('email_mailboxes')
-    .select('id, surface')
-    .in('id', ids)
-    .limit(MAILBOX_LIMIT)
-  if (error) {
-    console.error('[email/mail] mailbox surface lookup failed:', error.message)
-    return { response: surfaceUnavailable() }
-  }
-
-  // A row missing from the answer is NOT treated as an inbox mailbox. mig 575
-  // gives every existing row the default 'tickets', so the only way to be
-  // absent is a race with a deletion — and guessing 'inbox' there would put a
-  // mailbox on this screen on the strength of a row nobody can read.
-  const onSurface = new Set(
-    (data || []).filter(r => r?.surface === INBOX_SURFACE).map(r => r.id)
-  )
-  return { elevated, mailboxes: mailboxes.filter(m => onSurface.has(m.id)) }
-}
-
-/**
- * Is this ONE mailbox on the mail surface?
- *
- * The mutation routes' half of the split, and the mirror of the write helper
- * guard on the IMAP side: a mail-surface verb must never be able to reach a
- * ticketing mailbox, however the caller got hold of the id. Returns a verdict
- * rather than a boolean because "we could not tell" is a third answer and the
- * routes must not read it as "no" or as "yes".
- *
- * @returns {Promise<{ ok: true } | { response: NextResponse }>}
- */
-export async function assertInboxSurface(db, mailboxId) {
-  // A ticket with NO mailbox cannot be on any surface. It is reachable only by
-  // elevated callers on the ticket surface (mailbox_id is ON DELETE SET NULL),
-  // and it is deliberately not reachable here: 404, like every other refusal.
-  if (!mailboxId) return { response: ticketNotFound() }
-
-  const { data, error } = await db.from('email_mailboxes')
-    .select('id, surface')
-    .eq('id', mailboxId)
-    .maybeSingle()
-  if (error) {
-    console.error('[email/mail] mailbox surface check failed BEFORE writing:', error.message)
-    return { response: surfaceUnavailable() }
-  }
-  // 404 rather than 403 for the same reason every refusal on this family of
-  // routes is a 404: the caller must not learn whether an id exists, and "that
-  // ticket is on the other screen" is exactly the kind of thing an id probe
-  // would like to be told.
-  if (!data || data.surface !== INBOX_SURFACE) return { response: ticketNotFound() }
-  return { ok: true }
+  return loadVisibleMailboxes(db, user, locationId)
 }
 
 /**

@@ -4,7 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import {
-  loadTicketForUser, assertInboxSurface, statusTimestamps, isNeedsReply, isArchived,
+  loadTicketForUser, statusTimestamps, isNeedsReply, isArchived,
 } from '../../_helpers'
 import { applyWriteback, writebackNotice } from '../../_writeback'
 
@@ -64,8 +64,10 @@ const ArchiveSchema = z.object({
 //
 // ALL THREE GATES: loadTicketForUser carries the location access, the
 // `email_inbox` key resolved at the TICKET's location, and the per-mailbox
-// grant. assertInboxSurface adds the fourth — this screen's own — and every
-// refusal is the same 404, so an id cannot be probed for which screen it is on.
+// grant. Every refusal is the same 404, so an id cannot be probed.
+// (RETIRE-TICKETS.1 removed the fourth, surface, gate along with the surface
+// itself — mig 578. Orphans archive here now: the DB half applies and
+// applyWriteback short-circuits on the null mailbox.)
 export async function POST(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
@@ -79,9 +81,6 @@ export async function POST(request, props) {
   const loaded = await loadTicketForUser(db, user, params.id)
   if (loaded.response) return loaded.response
   const { ticket } = loaded
-
-  const onSurface = await assertInboxSurface(db, ticket.mailbox_id)
-  if (onSurface.response) return onSurface.response
 
   const status = archived ? 'closed' : 'open'
   const now = new Date().toISOString()

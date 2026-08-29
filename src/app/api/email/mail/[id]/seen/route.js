@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { loadTicketForUser, assertInboxSurface } from '../../_helpers'
+import { loadTicketForUser } from '../../_helpers'
 import { applyWriteback, writebackNotice } from '../../_writeback'
 
 const SeenSchema = z.object({
@@ -51,12 +51,12 @@ const SeenSchema = z.object({
 // nobody uses for this mailbox, and refusing the request over it would cost
 // the operator the read state they asked for.
 //
-// ALL FOUR GATES: loadTicketForUser carries location access, the `email_inbox`
-// key at the TICKET's location and the per-mailbox grant; assertInboxSurface
-// adds this screen's own. Every refusal is the same 404. The write-back module
-// then re-reads the mailbox row and applies the surface guard AGAIN at the
-// source, which is not redundant — it is what stops a future caller mutating a
-// ticketing mailbox by handing over a stale row.
+// ALL THE GATES ARE loadTicketForUser's: location access, the `email_inbox`
+// key at the TICKET's location, and the per-mailbox grant. Every refusal is
+// the same 404. (RETIRE-TICKETS.1 removed the fourth, surface, gate along
+// with the surface itself — mig 578. Orphan conversations are writable here
+// now: their DB half applies and applyWriteback short-circuits on the null
+// mailbox, the same silent no-op as a Postmark account.)
 
 export async function POST(request, props) {
   const params = await props.params
@@ -70,9 +70,6 @@ export async function POST(request, props) {
   const loaded = await loadTicketForUser(db, user, params.id)
   if (loaded.response) return loaded.response
   const { ticket } = loaded
-
-  const onSurface = await assertInboxSurface(db, ticket.mailbox_id)
-  if (onSurface.response) return onSurface.response
 
   const { seen } = validation.data
   const now = new Date().toISOString()

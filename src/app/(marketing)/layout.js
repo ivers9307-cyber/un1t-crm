@@ -34,7 +34,7 @@
 // — this is a genuine ownership move, not just a discovery link, so the
 // sidebar should highlight Marketing on those pages, not Messages
 // (which still owns bare /communications, /communications/inbox and
-// /communications/tickets).
+// /communications/mail).
 //
 // Segments carries `roles: MANAGER_ROLES` alongside its `perms` — the
 // `roles` field is a small extension to this file's own tab-filter

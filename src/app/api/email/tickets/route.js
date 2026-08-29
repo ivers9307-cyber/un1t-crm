@@ -4,10 +4,26 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import {
   loadVisibleMailboxes, scopeToVisibleMailboxes, scopeToNeedsReply, scopeToUnmerged,
-  mailboxesForSurface, SURFACE_TICKETS, SURFACE_INBOX,
 } from './_helpers'
 
-// GET /api/email/tickets — the studio's ticket queue (EMAIL-TICKET.4).
+// GET /api/email/tickets — 🔴 DEPRECATED SHIM (RETIRE-TICKETS.1).
+//
+// The ticket queue UI is deleted — Mail (/communications/mail, backed by
+// /api/email/mail) is the email surface, and the mig-575 surface A/B is over
+// (mig 578: every mailbox is 'inbox' and the column is deprecated). This
+// route survives for ONE caller: the staff app's SHIPPED bundle
+// (mobile/lib/email-api.js). An OTA reaches a phone on next launch, not on
+// deploy, so deleting this route in the same merge as the mobile Mail port
+// would break every phone that had not relaunched yet. Delete it — with
+// /count, /[id]/assign and /[id]/status — in a later sweep, once the mobile
+// port's OTA has had time to land. Do NOT point new web code here.
+//
+// It now lists ALL visible mailboxes (surface narrowing removed — there is
+// only one surface), so the shipped app keeps seeing the studio's mail. The
+// response shape is frozen exactly as the bundle expects it, including
+// `mailboxes_on_mail`, which is now constant [] (the split it described no
+// longer exists; mobile never read it, but a frozen shape is a frozen shape).
+//
 // Spec: docs/superpowers/specs/2026-08-05-email-ticketing-design.md
 //
 // Returns BOTH halves of the surface in one round-trip:
@@ -42,16 +58,6 @@ import {
 // permission at the target location binds capability and tenant together.
 // (Same reasoning as hasPermissionInOrganization; see src/lib/permissions.js.)
 //
-// INBOX-SURFACE.C — THIS QUEUE IS ONE SIDE OF AN A/B, NOT THE WHOLE PILE.
-// A mailbox carries `surface` (mig 575, default 'tickets'). Anything moved to
-// 'inbox' is answered on the inbox surface instead and is EXCLUDED here — both
-// from the tab strip and from the query behind it. If both surfaces listed
-// every mailbox the trial would compare nothing, and the same member could be
-// answered twice from two screens.
-//
-// NULL-MAILBOX TICKETS STAY HERE. See the comment on the query below: a ticket
-// with no mailbox has no `surface` to read, so it cannot be routed by data, and
-// it must not fall between the two surfaces.
 export const VIEWS = Object.freeze(['unassigned', 'mine', 'needs_reply', 'closed'])
 
 // One screen of queue. Well under the 1,000-row select cap; the operator
@@ -110,42 +116,20 @@ export async function GET(request) {
   // (EMAIL-TICKET-CLEANUP.2). Collapsed into one, the branch below served it as
   // 200 `{ mailboxes: [], tickets: [] }` — which the inbox renders as the calm
   // "no email accounts here yet" empty state. An operator reads that as "no
-  // mail" and stops looking. The 500 lands in TicketInbox's own error state
+  // mail" and stops looking. The 500 lands in the surface's own error state
   // ("Could not load the ticket inbox" + Try again), which is the whole point:
   // the two outcomes now look different to the person reading them.
   if (visibility.response) return visibility.response
   const { elevated, mailboxes: visible } = visibility
 
-  // INBOX-SURFACE.C — this surface's half of the trial, applied BEFORE the tab
-  // strip is built so the tabs and the query can never disagree about which
-  // accounts belong here. An account moved to the inbox is not "hidden" from
-  // this operator — it is being worked somewhere else, which is the point.
-  const mailboxes = mailboxesForSurface(visible, SURFACE_TICKETS)
+  // RETIRE-TICKETS.1 — surface narrowing removed with the surface itself:
+  // this shim lists every mailbox the caller may see, same as /api/email/mail.
+  const mailboxes = visible
 
-  // INBOX-SURFACE.C — the OTHER half of the split, surfaced rather than
-  // thrown away. `visible` already answers "which accounts moved to Mail" —
-  // it is exactly what `mailboxes` above excludes — so this is a read over a
-  // value already in hand, never a second query. Labels rather than ids: the
-  // banner this backs names an account for an operator, and an id would mean
-  // a second round trip just to say which one moved. Falls back to the
-  // address when a mailbox carries no label, the same rule the tab strip
-  // itself follows (orderMailboxTabs). ALWAYS present, including when
-  // `visible` is empty (then correctly `[]`) — a field that only sometimes
-  // exists is a field every consumer has to guard defensively, and a consumer
-  // cannot tell "nothing moved" from "the field was dropped" if it is ever
-  // simply absent.
-  const mailboxesOnMail = mailboxesForSurface(visible, SURFACE_INBOX)
-    .map(m => m.label || m.address)
+  // Frozen response shape (see header) — the split this described is gone.
+  const mailboxesOnMail = []
 
   // Nothing visible AT ALL → nothing to show. Not an error.
-  //
-  // Deliberately keyed on the PRE-surface set. A studio that has moved every
-  // one of its accounts to the inbox has an empty tab strip here but may still
-  // hold NULL-mailbox tickets, and returning early on the narrowed set would
-  // drop those for an elevated caller — see scopeToVisibleMailboxes. A caller
-  // with no visible mailboxes whatsoever has no orphans to see either (the
-  // orphan fallback is elevation, and an elevated caller at a studio with
-  // mailboxes always has a non-empty `visible`).
   if (visible.length === 0) {
     return NextResponse.json({
       success: true,
@@ -181,24 +165,12 @@ export async function GET(request) {
   // visible set, via the shared scope the count endpoint also uses, so the
   // badge and this list can never disagree about what a person can see.
   //
-  // INBOX-SURFACE.C — `mailboxes` here is already narrowed to this surface, so
-  // a ticket on an inbox-surface account is out of the `.in()` and out of the
-  // `.or()` branch alike.
-  //
-  // 🔴 WHERE A NULL-MAILBOX TICKET LIVES, AND WHY. email_tickets.mailbox_id is
-  // ON DELETE SET NULL — deliberately, so removing an address never deletes a
-  // member's correspondence — and mig 484's backfill predates the column, so
-  // orphans genuinely exist. An orphan has no mailbox, therefore no `surface`,
-  // therefore nothing to route on. It stays on THE TICKETS SURFACE, for three
-  // reasons: (1) `surface` DEFAULTS to 'tickets', so "tickets is where mail
-  // lives until somebody says otherwise" is already the rule the schema states
-  // — an orphan is the case where nobody ever said otherwise; (2) this surface
-  // exists at every location, whereas the inbox surface only exists where a
-  // mailbox has been moved to it, so putting orphans there would make them
-  // invisible at every studio not in the trial; (3) it is where they have
-  // always been shown, to elevated callers only, so nothing an owner can see
-  // today moves out from under them. The inbox side excludes them (Phase B), so
-  // they appear on exactly one surface and never on none.
+  // 🔴 NULL-MAILBOX TICKETS. email_tickets.mailbox_id is ON DELETE SET NULL —
+  // deliberately, so removing an address never deletes a member's
+  // correspondence — and mig 484's backfill predates the column, so orphans
+  // genuinely exist. Elevated callers see them here (scopeToVisibleMailboxes'
+  // .or branch), and since RETIRE-TICKETS.1 the mail surface shows them too —
+  // one pile now, not a split.
   query = mailboxId
     ? query.eq('mailbox_id', mailboxId)
     : scopeToVisibleMailboxes(query, { mailboxes, elevated })

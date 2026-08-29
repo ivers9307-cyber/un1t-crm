@@ -14,25 +14,24 @@
 // tab; `canSegments`/`canEmail`/`canSms` are no longer computed here.
 //
 // INBOX-SURFACE.C — THE MAIL TAB IS DATA-GATED, NOT PERMISSION-GATED.
-// /communications/mail is the second half of the ticketing A/B: it lists the
-// accounts whose email_mailboxes.surface is 'inbox' (mig 575) and nothing else.
-// A studio that has moved no account there has NOTHING for that tab to show, so
-// the tab does not appear — an empty surface in the nav is worse than no
-// surface, because the operator clicks it, finds a blank page, and concludes
-// their mail is missing rather than that the trial is not on for them.
+// /communications/mail is the email surface (the only one, since
+// RETIRE-TICKETS.1): the tab shows wherever the studio has an active email
+// account, and a studio with none has NOTHING for it to show, so the tab does
+// not appear — an empty surface in the nav is worse than no surface, because
+// the operator clicks it, finds a blank page, and concludes their mail is
+// missing.
 //
 // That means one small extra read per hub render, and it is done HERE rather
 // than in the client strip because the answer has to be present on first paint:
 // a tab that pops in after a fetch is a tab that shifts the row under a cursor
 // already moving towards it.
 //
-// 🔴 IT FAILS TO THE PRE-TRIAL STATE. An unreadable answer — a blipped query,
-// or mig 575 not yet applied, which is a 42703 on the whole select — hides the
-// Mail tab and leaves everything else exactly as it was. That is the only safe
+// 🔴 IT FAILS TO TAB-HIDDEN. An unreadable answer — a blipped query — hides
+// the Mail tab and leaves everything else exactly as it was. That is the safe
 // direction: showing the tab on a guess risks the empty surface this gate
-// exists to prevent, while hiding it costs a URL that still works if typed, and
-// nothing about a studio's mail changes either way. It is deliberately NOT
-// treated as an error the way a mailbox-visibility failure is on the ticket
+// exists to prevent, while hiding it costs a URL that still works if typed,
+// and nothing about a studio's mail changes either way. It is deliberately NOT
+// treated as an error the way a mailbox-visibility failure is on the mail
 // routes — this is chrome, and a blank hub is a worse answer than a missing tab.
 //
 // DEEP.4 final review — Messages' entry gate is the wider (canEmail ||
@@ -61,17 +60,20 @@ export default async function CommunicationsHubLayout({ children }) {
   const canWhatsapp = hasPermission(user, 'whatsapp')
   const canEmailInbox = hasPermission(user, 'email_inbox')
 
-  // INBOX-SURFACE.C — see the header. Scoped to the ACTIVE location, which is
-  // the only studio this hub ever shows; `active` because a deactivated account
-  // is hidden from every inbox, so one sitting on the mail surface is not a
-  // reason to put the tab in the nav.
-  const canMail = canEmailInbox && await locationHasMailSurface(user.activeLocation?.id)
+  // INBOX-SURFACE.C / RETIRE-TICKETS.1 — still data-gated, but the question
+  // simplified with the surface split's retirement (mig 578): "does this
+  // studio have any ACTIVE email account at all". Scoped to the ACTIVE
+  // location, the only studio this hub ever shows; `active` because a
+  // deactivated account is hidden from every inbox. An empty tab in the nav
+  // is worse than no tab — the operator clicks it, finds a blank page, and
+  // concludes email is broken.
+  const canMail = canEmailInbox && await locationHasMailbox(user.activeLocation?.id)
 
   // DEEP.4 final review — fallback keeps the subtitle from reading as
   // "for <location>" with no channel word when neither key is held.
   const channelWords = [
     canWhatsapp && 'WhatsApp',
-    canEmailInbox && 'email inbox',
+    canEmailInbox && 'email',
   ].filter(Boolean).join(' + ') || 'messages'
 
   return (
@@ -86,7 +88,6 @@ export default async function CommunicationsHubLayout({ children }) {
       {(canWhatsapp || canEmailInbox) && (
         <CommunicationsTabs
           canWhatsapp={canWhatsapp}
-          canEmailInbox={canEmailInbox}
           canMail={canMail}
         />
       )}
@@ -96,24 +97,24 @@ export default async function CommunicationsHubLayout({ children }) {
 }
 
 /**
- * INBOX-SURFACE.C — does this studio have at least one ACTIVE account on the
- * mail surface?
+ * Does this studio have at least one ACTIVE email account?
  *
  * Service-role read, scoped by location_id in the query itself — this is a
  * layout, so RLS does nothing for it, exactly as on an /api route. It reads no
- * credential and no address: two enum-ish columns and a location filter.
+ * credential and no address: one boolean column and a location filter.
+ * (RETIRE-TICKETS.1 dropped the `.eq('surface', …)` half — mig 578 retired
+ * the column and nothing reads it.)
  *
- * Never throws and never surfaces an error. False on anything unexpected — see
- * the header for why hiding the tab is the safe direction.
+ * Never throws and never surfaces an error. False on anything unexpected —
+ * hiding the tab is the safe direction.
  */
-async function locationHasMailSurface(locationId) {
+async function locationHasMailbox(locationId) {
   if (!locationId) return false
   try {
     const db = createServerClient()
     const { data, error } = await db.from('email_mailboxes')
       .select('id')
       .eq('location_id', locationId)
-      .eq('surface', 'inbox')
       .eq('active', true)
       .limit(1)
     if (error) return false

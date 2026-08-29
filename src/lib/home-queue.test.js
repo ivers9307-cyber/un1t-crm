@@ -25,20 +25,10 @@ vi.mock('@/app/api/email/tickets/_helpers', () => ({
   scopeToVisibleMailboxes: vi.fn((q) => q),
   scopeToNeedsReply: vi.fn((q) => q),
   scopeToUnmerged: vi.fn((q) => q),
-  // The surface vocabulary is mocked with its REAL values, not placeholders.
-  // A factory mock replaces the whole module, so an export missing here is not
-  // `undefined` — vitest THROWS on the import, the ticket source lands in
-  // Promise.allSettled's rejected half, and the lane silently reads as an empty
-  // queue instead of a failing test. That is how this file first reacted to
-  // MAILBOX-SURFACE.1, and it is worth knowing: five assertions went red for a
-  // reason that had nothing to do with what any of them were testing.
-  SURFACE_TICKETS: 'tickets',
-  SURFACE_INBOX: 'inbox',
-  // The real implementation, not a stub: which surface a mailbox belongs to is
-  // the thing these tests are about, and a mock that always answered the same
-  // way would make every routing assertion below vacuous.
-  mailboxesForSurface: (mailboxes, surface) =>
-    (Array.isArray(mailboxes) ? mailboxes : []).filter(m => (m?.surface || 'tickets') === surface),
+  // NOTE (learned under MAILBOX-SURFACE.1): a factory mock replaces the whole
+  // module, so an export missing here is not `undefined` — vitest THROWS on
+  // the import, the mail source lands in Promise.allSettled's rejected half,
+  // and the lane silently reads as an empty queue instead of a failing test.
 }))
 
 import {
@@ -67,24 +57,16 @@ function makeDb(tables = {}) {
     from(table) {
       const t = tables[table] || { rows: [], count: 0 }
       let wantsCount = false
-      // MAILBOX-SURFACE.1 — the tickets lane now issues TWO count queries, one
-      // per surface, and a double that answered both with the same number would
-      // make the split untestable AND silently double `total`. They are told
-      // apart by the only thing that differs: the mail count scopes itself with
-      // `.in('mailbox_id', …)`, while the ticket count's scoping is the mocked
-      // identity helper. `mailCount` is the fixture's answer for that one.
-      let scopedToMailboxIds = false
       const b = {
         select(_cols, opts) { if (opts?.count) wantsCount = true; return b },
         eq() { return b },
         is() { return b },
-        in(column) { if (column === 'mailbox_id') scopedToMailboxIds = true; return b },
+        in() { return b },
         order() { return b },
         limit() { return b },
         then(resolve, reject) {
-          const count = scopedToMailboxIds ? (t.mailCount ?? 0) : (t.count ?? 0)
           const out = wantsCount
-            ? { data: null, count, error: t.error || null }
+            ? { data: null, count: t.count ?? 0, error: t.error || null }
             : { data: t.rows ?? [], error: t.error || null }
           return Promise.resolve(out).then(resolve, reject)
         },
@@ -106,7 +88,7 @@ beforeEach(() => {
 describe('assembleHomeQueue — no active location', () => {
   it('returns an all-empty result without touching any source', async () => {
     const result = await assembleHomeQueue(makeDb(), { id: 'u1', activeLocation: null })
-    expect(result).toEqual({ rows: [], counts: { approvals: 0, tickets: 0, mail: 0, inbox: 0 }, total: 0 })
+    expect(result).toEqual({ rows: [], counts: { approvals: 0, mail: 0, inbox: 0 }, total: 0 })
     expect(getPendingApprovals).not.toHaveBeenCalled()
   })
 })
@@ -171,12 +153,12 @@ describe('assembleHomeQueue — approvals source', () => {
   })
 })
 
-describe('assembleHomeQueue — tickets source', () => {
+describe('assembleHomeQueue — mail source', () => {
   it('gates on email_inbox at the active location before touching the db', async () => {
     hasPermissionForLocation.mockReturnValue(false)
     const result = await assembleHomeQueue(makeDb(), userAt())
-    expect(result.rows.filter((r) => r.source === 'tickets')).toEqual([])
-    expect(result.counts.tickets).toBe(0)
+    expect(result.rows.filter((r) => r.source === 'mail')).toEqual([])
+    expect(result.counts.mail).toBe(0)
     expect(loadVisibleMailboxes).not.toHaveBeenCalled()
   })
 
@@ -185,7 +167,7 @@ describe('assembleHomeQueue — tickets source', () => {
     loadVisibleMailboxes.mockResolvedValue({ elevated: false, mailboxes: [] })
     const db = makeDb({ email_tickets: { rows: [{ id: 't1' }], count: 1 } })
     const result = await assembleHomeQueue(db, userAt())
-    expect(result.counts.tickets).toBe(0)
+    expect(result.counts.mail).toBe(0)
   })
 
   it('builds rows from needs-reply unmerged tickets', async () => {
@@ -202,10 +184,10 @@ describe('assembleHomeQueue — tickets source', () => {
     })
     const result = await assembleHomeQueue(db, userAt())
     expect(result.rows).toContainEqual({
-      source: 'tickets', sourceLabel: 'Tickets', id: 't1', title: 'Billing', subtitle: 'Bob',
-      occurredAt: '2026-08-10T09:00:00Z', href: '/communications/tickets',
+      source: 'mail', sourceLabel: 'Mail', id: 't1', title: 'Billing', subtitle: 'Bob',
+      occurredAt: '2026-08-10T09:00:00Z', href: '/communications/mail?c=t1',
     })
-    expect(result.counts.tickets).toBe(1)
+    expect(result.counts.mail).toBe(1)
   })
 
   it('falls back to requester email when the ticket has no subject or name', async () => {
@@ -331,9 +313,9 @@ describe('assembleHomeQueue — merge, sort and caps', () => {
     }))
     const db = makeDb({ email_tickets: { rows, count: 25 } })
     const result = await assembleHomeQueue(db, userAt())
-    expect(result.rows.filter((r) => r.source === 'tickets')).toHaveLength(SOURCE_PRE_CAP)
+    expect(result.rows.filter((r) => r.source === 'mail')).toHaveLength(SOURCE_PRE_CAP)
     // TRUE count is uncapped even though the row list was pre-capped.
-    expect(result.counts.tickets).toBe(25)
+    expect(result.counts.mail).toBe(25)
   })
 
   it('caps the merged total at GLOBAL_CAP, keeping the most recent rows', async () => {
@@ -357,9 +339,9 @@ describe('assembleHomeQueue — merge, sort and caps', () => {
     // All 20 WA rows are newer than every ticket row, so the 30-cap should
     // keep all 20 WA rows plus the 10 most recent tickets.
     expect(result.rows.filter((r) => r.source === 'inbox')).toHaveLength(20)
-    expect(result.rows.filter((r) => r.source === 'tickets')).toHaveLength(10)
+    expect(result.rows.filter((r) => r.source === 'mail')).toHaveLength(10)
     // TRUE counts are unaffected by the global cap.
-    expect(result.counts.tickets).toBe(20)
+    expect(result.counts.mail).toBe(20)
   })
 })
 
@@ -422,22 +404,22 @@ describe('getHomeQueueCount', () => {
 // mailboxes": collapsing the two into the same 0 is exactly the silent
 // wrong-answer shape that invariant exists to prevent (src/app/api/email/
 // tickets/_helpers.js's loadVisibleMailboxes / mailboxesUnavailable). The
-// generic degraded-source path (any other tickets failure — a query error,
-// say) still folds to counts.tickets = 0, proven below alongside it so the
+// generic degraded-source path (any other mail failure — a query error,
+// say) still folds to counts.mail = 0, proven below alongside it so the
 // distinction is pinned, not assumed.
-describe('assembleHomeQueue — tickets visibility-lookup failure (EMAIL-TICKET-CLEANUP.2)', () => {
+describe('assembleHomeQueue — mail visibility-lookup failure (EMAIL-TICKET-CLEANUP.2)', () => {
   beforeEach(() => {
     hasPermissionForLocation.mockReturnValue(true)
   })
 
-  it('sets counts.tickets to null, not 0, and keeps tickets in degraded', async () => {
+  it('sets counts.mail to null, not 0, and keeps mail in degraded', async () => {
     // The real shape from loadVisibleMailboxes on a FAILED lookup —
     // { response: <NextResponse> } — as opposed to a successful empty set
     // ({ elevated, mailboxes: [] }).
     loadVisibleMailboxes.mockResolvedValue({ response: 'mailboxes-unavailable' })
     const result = await assembleHomeQueue(makeDb(), userAt())
-    expect(result.counts.tickets).toBeNull()
-    expect(result.degraded).toEqual(['tickets'])
+    expect(result.counts.mail).toBeNull()
+    expect(result.degraded).toEqual(['mail'])
   })
 
   it('does not poison the other two sources or turn total into NaN', async () => {
@@ -453,27 +435,24 @@ describe('assembleHomeQueue — tickets visibility-lookup failure (EMAIL-TICKET-
       },
     })
     const result = await assembleHomeQueue(db, userAt())
-    // `mail` degrades to null alongside `tickets`: both read through the SAME
-    // visibility lookup, so when it fails neither number is known, and an
-    // unknown must never render as a confident 0.
-    expect(result.counts).toEqual({ approvals: 2, tickets: null, mail: null, inbox: 1 })
+    expect(result.counts).toEqual({ approvals: 2, mail: null, inbox: 1 })
     expect(Number.isNaN(result.total)).toBe(false)
-    expect(result.total).toBe(3) // 2 + 1, the unknown tickets count excluded rather than treated as 0
+    expect(result.total).toBe(3) // 2 + 1, the unknown mail count excluded rather than treated as 0
   })
 
   it('a genuinely empty visible-mailbox set (not a failure) still reads as a confident 0', async () => {
     loadVisibleMailboxes.mockResolvedValue({ elevated: false, mailboxes: [] })
     const result = await assembleHomeQueue(makeDb(), userAt())
-    expect(result.counts.tickets).toBe(0)
+    expect(result.counts.mail).toBe(0)
     expect(result.degraded).toBeUndefined()
   })
 
-  it('a non-visibility tickets failure (e.g. the row/count query erroring) still folds to counts.tickets = 0', async () => {
+  it('a non-visibility mail failure (e.g. the row/count query erroring) still folds to counts.mail = 0', async () => {
     loadVisibleMailboxes.mockResolvedValue({ elevated: true, mailboxes: [{ id: 'mb1' }] })
     const db = makeDb({ email_tickets: { rows: [], count: 0, error: { message: 'boom' } } })
     const result = await assembleHomeQueue(db, userAt())
-    expect(result.counts.tickets).toBe(0)
-    expect(result.degraded).toEqual(['tickets'])
+    expect(result.counts.mail).toBe(0)
+    expect(result.degraded).toEqual(['mail'])
   })
 })
 
@@ -508,8 +487,8 @@ describe('queueCountLabel', () => {
 })
 
 describe('queueRowGroup', () => {
-  it('groups tickets and inbox rows by their literal source', () => {
-    expect(queueRowGroup({ source: 'tickets' })).toBe('tickets')
+  it('groups mail and inbox rows by their literal source', () => {
+    expect(queueRowGroup({ source: 'mail' })).toBe('mail')
     expect(queueRowGroup({ source: 'inbox' })).toBe('inbox')
   })
 
@@ -529,28 +508,28 @@ describe('groupQueueRows', () => {
   })
 
   it('returns null (flat list) when only 2 groups are present', () => {
-    const rows = [row('issues', 'a1'), row('tickets', 't1')]
-    expect(groupQueueRows(rows, { approvals: 1, tickets: 1 })).toBeNull()
+    const rows = [row('issues', 'a1'), row('mail', 't1')]
+    expect(groupQueueRows(rows, { approvals: 1, mail: 1 })).toBeNull()
   })
 
   it('splits into 3 sections, ordered by first appearance, when all 3 groups are present', () => {
-    const rows = [row('tickets', 't1'), row('issues', 'a1'), row('inbox', 'i1'), row('tickets', 't2')]
-    const groups = groupQueueRows(rows, { approvals: 1, tickets: 2, inbox: 1 })
-    expect(groups.map((g) => g.key)).toEqual(['tickets', 'approvals', 'inbox'])
-    expect(groups.find((g) => g.key === 'tickets').rows).toHaveLength(2)
-    expect(groups.find((g) => g.key === 'tickets').href).toBe('/communications/tickets')
+    const rows = [row('mail', 't1'), row('issues', 'a1'), row('inbox', 'i1'), row('mail', 't2')]
+    const groups = groupQueueRows(rows, { approvals: 1, mail: 2, inbox: 1 })
+    expect(groups.map((g) => g.key)).toEqual(['mail', 'approvals', 'inbox'])
+    expect(groups.find((g) => g.key === 'mail').rows).toHaveLength(2)
+    expect(groups.find((g) => g.key === 'mail').href).toBe('/communications/mail')
     expect(groups.find((g) => g.key === 'approvals').href).toBe('/approvals')
     expect(groups.find((g) => g.key === 'inbox').href).toBe('/communications/inbox')
   })
 
   it('uses the TRUE count from `counts`, not the visible row count, for each section badge', () => {
-    const rows = [row('tickets', 't1'), row('issues', 'a1'), row('inbox', 'i1')]
-    const groups = groupQueueRows(rows, { approvals: 57, tickets: 1, inbox: 1 })
+    const rows = [row('mail', 't1'), row('issues', 'a1'), row('inbox', 'i1')]
+    const groups = groupQueueRows(rows, { approvals: 57, mail: 1, inbox: 1 })
     expect(groups.find((g) => g.key === 'approvals').count).toBe(57)
   })
 
   it('falls back to the visible row count when `counts` is missing a key', () => {
-    const rows = [row('tickets', 't1'), row('issues', 'a1'), row('inbox', 'i1')]
+    const rows = [row('mail', 't1'), row('issues', 'a1'), row('inbox', 'i1')]
     const groups = groupQueueRows(rows, {})
     expect(groups.find((g) => g.key === 'approvals').count).toBe(1)
   })
@@ -560,7 +539,7 @@ describe('groupQueueRows', () => {
   })
 })
 
-describe('getHomeQueueCount — tickets visibility-lookup failure (EMAIL-TICKET-CLEANUP.2)', () => {
+describe('getHomeQueueCount — mail visibility-lookup failure (EMAIL-TICKET-CLEANUP.2)', () => {
   it('rejects (mirrors /api/email/tickets/count returning 500) rather than answering a confident number', async () => {
     hasPermissionForLocation.mockReturnValue(true)
     loadVisibleMailboxes.mockResolvedValue({ response: 'mailboxes-unavailable' })
@@ -569,7 +548,7 @@ describe('getHomeQueueCount — tickets visibility-lookup failure (EMAIL-TICKET-
     await expect(getHomeQueueCount(makeDb(), userAt())).rejects.toThrow()
   })
 
-  it('still answers a plain number when tickets is genuinely empty (not a failure)', async () => {
+  it('still answers a plain number when mail is genuinely empty (not a failure)', async () => {
     hasPermissionForLocation.mockReturnValue(true)
     loadVisibleMailboxes.mockResolvedValue({ elevated: false, mailboxes: [] })
     getPendingApprovalsCount.mockResolvedValue(2)
@@ -578,11 +557,10 @@ describe('getHomeQueueCount — tickets visibility-lookup failure (EMAIL-TICKET-
   })
 })
 
-// MAILBOX-SURFACE.1 — a needs-reply row must link to the surface that LISTS
-// its mail. Both surfaces share this lane (the needs-reply predicate is the
-// same on each), so the routing is the only thing keeping a moved account's
-// row from dead-ending on a queue that no longer shows it.
-describe('assembleHomeQueue — tickets routed by mailbox surface', () => {
+// RETIRE-TICKETS.1 — every email row is a Mail row, always deep-linked.
+// The per-mailbox surface routing that lived here (MAILBOX-SURFACE.1)
+// retired with the ticket queue.
+describe('assembleHomeQueue — every email row is a Mail row', () => {
   const ticket = (over = {}) => ({
     id: 't1', subject: 'Billing', requester_name: 'Bob', requester_email: 'bob@x.com',
     last_message_at: '2026-08-10T09:00:00Z', mailbox_id: 'mb1', ...over,
@@ -597,88 +575,30 @@ describe('assembleHomeQueue — tickets routed by mailbox surface', () => {
   }
 
   // MAIL-DEEPLINK.1 — the Mail surface reads `?c=<id>` on mount and selects
-  // that conversation, even off page 1 (MailSurface.jsx). A mail row must
-  // carry it, or the operator lands on the top of the list rather than on the
-  // conversation this row named — the exact "where did my mail go" failure
-  // MAILBOX-SURFACE.1 already fixed for which SURFACE the link goes to.
-  it('links a ticket on an inbox-surface mailbox to Mail WITH a deep link to it, and labels it Mail', async () => {
-    const r = await rowFor({
-      mailboxes: [{ id: 'mb1', surface: 'inbox' }],
-      row: ticket(),
-    })
+  // that conversation, even off page 1 (MailSurface.jsx). Every row carries
+  // it, or the operator lands on the top of the list rather than on the
+  // conversation this row named.
+  it('links every row to Mail with a deep link, labelled Mail', async () => {
+    const r = await rowFor({ mailboxes: [{ id: 'mb1' }], row: ticket() })
     expect(r.href).toBe('/communications/mail?c=t1')
     expect(r.source).toBe('mail')
     expect(r.sourceLabel).toBe('Mail')
   })
 
-  it('leaves a ticket on a ticketing mailbox pointed at Tickets, with NO deep link (TicketInbox has none)', async () => {
-    const r = await rowFor({
-      mailboxes: [{ id: 'mb1', surface: 'tickets' }],
-      row: ticket(),
-    })
-    expect(r.href).toBe('/communications/tickets')
-    expect(r.source).toBe('tickets')
-  })
-
   // The `?c=` value must be THIS ticket's own id, not a fixed string — a
   // second fixture with a different id catches a hard-coded '?c=t1'.
   it('carries the SPECIFIC ticket id in the deep link, not a fixed value', async () => {
-    const r = await rowFor({
-      mailboxes: [{ id: 'mb1', surface: 'inbox' }],
-      row: ticket({ id: 't-other' }),
-    })
+    const r = await rowFor({ mailboxes: [{ id: 'mb1' }], row: ticket({ id: 't-other' }) })
     expect(r.href).toBe('/communications/mail?c=t-other')
   })
 
-  // The two "nobody said otherwise" cases. Both must land somewhere REAL —
-  // a row that routes nowhere is worse than one that routes to the default.
-  it('routes a ticket with no mailbox to Tickets', async () => {
-    const r = await rowFor({
-      mailboxes: [{ id: 'mb1', surface: 'inbox' }],
-      row: ticket({ mailbox_id: null }),
-    })
-    expect(r.href).toBe('/communications/tickets')
-    expect(r.source).toBe('tickets')
-  })
-
-  it('routes a ticket whose mailbox is not in the visible set to Tickets', async () => {
-    const r = await rowFor({
-      mailboxes: [{ id: 'mb1', surface: 'inbox' }],
-      row: ticket({ mailbox_id: 'mb-unknown' }),
-    })
-    expect(r.href).toBe('/communications/tickets')
-  })
-
-  // A mailbox row that predates mig 575 (or a select that forgot the column)
-  // has no `surface` at all. It must read as ticketing — the migration's own
-  // default — never as the surface the operator has not opted into.
-  it('treats a mailbox with no surface value as ticketing', async () => {
-    const r = await rowFor({
-      mailboxes: [{ id: 'mb1' }],
-      row: ticket(),
-    })
-    expect(r.href).toBe('/communications/tickets')
-  })
-
-  // 🔴 A HEADING MUST NOT PROMISE MORE THAN THE LIST UNDER IT HOLDS. The lane
-  // spans both surfaces, so one combined count put the mail rows' total on the
-  // Tickets heading — a badge an operator clicks, finds nothing behind, and
-  // afterwards stops trusting.
-  it('counts each surface separately, so neither heading borrows the other\'s rows', async () => {
-    hasPermissionForLocation.mockReturnValue(true)
-    loadVisibleMailboxes.mockResolvedValue({
-      elevated: true,
-      mailboxes: [{ id: 'mb1', surface: 'tickets' }, { id: 'mb2', surface: 'inbox' }],
-    })
-    const db = makeDb({ email_tickets: { rows: [], count: 4, mailCount: 3 } })
-
-    const result = await assembleHomeQueue(db, userAt())
-
-    expect(result.counts.tickets).toBe(4)
-    expect(result.counts.mail).toBe(3)
-    // Both contribute to the queue total — the split is about attribution, not
-    // about hiding work.
-    expect(result.total).toBe(7)
+  // An ORPHAN (mailbox deleted → ON DELETE SET NULL, or pre-mig-484) must
+  // still land somewhere real — Mail shows it to elevated callers now that
+  // the ticket queue, its old home, is gone.
+  it('routes a ticket with no mailbox to Mail too', async () => {
+    const r = await rowFor({ mailboxes: [{ id: 'mb1' }], row: ticket({ mailbox_id: null }) })
+    expect(r.href).toBe('/communications/mail?c=t1')
+    expect(r.source).toBe('mail')
   })
 
   it('groups a mail row under its own group, NOT the unified inbox', () => {
@@ -687,7 +607,7 @@ describe('assembleHomeQueue — tickets routed by mailbox surface', () => {
     const groups = groupQueueRows([
       { source: 'mail', id: 'm1', occurredAt: '2026-08-10T09:00:00Z' },
       { source: 'inbox', id: 'i1', occurredAt: '2026-08-10T08:00:00Z' },
-      { source: 'tickets', id: 't1', occurredAt: '2026-08-10T07:00:00Z' },
+      { source: 'issues', id: 'a1', occurredAt: '2026-08-10T07:00:00Z' },
     ])
     const mail = groups.find(g => g.key === 'mail')
     expect(mail.label).toBe('Mail')

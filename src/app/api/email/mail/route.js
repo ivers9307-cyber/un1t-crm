@@ -6,21 +6,20 @@ import {
   loadInboxMailboxes, loadConversationCounts,
   scopeToNeedsReply, scopeToUnmerged, isNeedsReply, isArchived,
 } from './_helpers'
+import { scopeToVisibleMailboxes } from '../tickets/_helpers'
 import { searchTicketIds } from './_search'
 
-// GET /api/email/mail — the Mail surface's conversation list (MAIL-TRIAL.B).
+// GET /api/email/mail — THE email surface's conversation list (MAIL-TRIAL.B,
+// sole surface since RETIRE-TICKETS.1).
 //
-// The inbox half of a head-to-head trial against /communications/tickets. It
-// answers with BOTH halves of the screen in one round-trip, exactly as the
-// ticket queue does — the mailbox strip (the access model made visible) and
-// the conversations themselves.
+// Mail started as one half of a head-to-head trial against the ticket queue;
+// the trial ended 2026-08-29 with Mail the winner, the queue UI deleted and
+// the mig-575 `surface` split retired (mig 578). This route answers with BOTH
+// halves of the screen in one round-trip — the mailbox strip (the access
+// model made visible) and the conversations themselves — and it now lists
+// every mailbox the caller may see.
 //
-// 🔴 IT SHOWS `surface='inbox'` MAILBOXES AND NOTHING ELSE. That exclusivity is
-// the trial: a mailbox that appeared on both screens would be worked on both,
-// and the comparison would answer nothing. The tickets list route owns the
-// mirror-image filter.
-//
-// WHAT IT DELIBERATELY DOES NOT HAVE, measured against the ticket queue:
+// WHAT IT DELIBERATELY DOES NOT HAVE, kept from the old ticket queue:
 //   • no `unassigned` / `mine` views — assignment is not on this surface at
 //     all (0 tickets assigned in 17 days of the ticket surface being live)
 //   • no four-state lifecycle. There are two places a conversation can be:
@@ -106,7 +105,7 @@ export async function GET(request) {
   // or surface). Both refuse loudly rather than answering with a calm empty
   // inbox nobody would question.
   if (visibility.response) return visibility.response
-  const { mailboxes } = visibility
+  const { elevated, mailboxes } = visibility
 
   const emptyPayload = {
     mailboxes: [],
@@ -117,25 +116,20 @@ export async function GET(request) {
     counts_partial: false,
   }
 
-  // No mail-surface mailboxes here is a NORMAL state, not an error: a studio
-  // running entirely on the ticket surface is the default for every existing
-  // row (mig 575 defaults `surface` to 'tickets'), and a 403 there would look
-  // like a bug to whoever hit it.
+  // No visible mailboxes is a NORMAL state, not an error: a studio that does
+  // not do email and a coach with no account grants are both ordinary, and a
+  // 403 there would look like a bug to whoever hit it.
   if (mailboxes.length === 0) {
     return NextResponse.json({ success: true, data: emptyPayload })
   }
 
-  // Asking for an account that is not on this screen is empty rather than an
-  // error, for the same reason the ticket queue answers that way: the id came
-  // from the caller, and a different answer for "exists but not here" would
-  // leak which addresses the studio runs and which screen each one is on.
+  // Asking for an account you cannot see is empty rather than an error: the
+  // id came from the caller, and a different answer for "exists but not
+  // yours" would leak which addresses the studio runs.
   const mailboxId = searchParams.get('mailbox_id')
   if (mailboxId && !mailboxes.some(m => m.id === mailboxId)) {
     return NextResponse.json({ success: true, data: { ...emptyPayload, mailboxes } })
   }
-
-  const mailboxIds = mailboxes.map(m => m.id)
-  const scopeIds = mailboxId ? [mailboxId] : mailboxIds
 
   // `before` is a keyset cursor on the column the list is ordered by, not an
   // offset. An offset re-reads rows that may have moved between pages — and on
@@ -161,12 +155,20 @@ export async function GET(request) {
   // exactly where one would resurface looking like ordinary history.
   query = scopeToUnmerged(query)
 
-  // NO `.or(mailbox_id.is.null)` HERE, unlike the ticket queue's elevated
-  // path. A ticket with no mailbox has no surface, so it cannot belong to this
-  // one — and the ticket queue still shows it to elevated callers, which is
-  // what keeps that correspondence reachable. Widening it here would put the
-  // same conversation on both screens and end the trial's exclusivity.
-  query = query.in('mailbox_id', scopeIds)
+  // 🔴 ORPHANS LIVE HERE NOW (RETIRE-TICKETS.1). A NULL-mailbox conversation
+  // (mailbox_id is ON DELETE SET NULL; mig 484's backfill predates the
+  // column) used to be shown only on the ticket queue, to elevated callers.
+  // That queue is deleted — if this surface excluded them too, deleting a
+  // mailbox would silently disappear a member's correspondence, the one
+  // outcome the retirement must never produce. So the unfiltered list uses
+  // the SAME shared scope the queue used (elevated callers get the `.or`
+  // orphan branch, everyone else a plain `.in`), one implementation deciding
+  // visibility on every surface it ever applied to. A mailbox TAB stays a
+  // plain `.eq` — an orphan belongs to no account, so no account's tab
+  // claims it.
+  query = mailboxId
+    ? query.eq('mailbox_id', mailboxId)
+    : scopeToVisibleMailboxes(query, { mailboxes, elevated })
 
   // ══ SEARCH ═══════════════════════════════════════════════════════════════
   // 🔴 INTERSECTED WITH THE SCOPE QUERY, NEVER SUBSTITUTED FOR IT. Everything
@@ -264,7 +266,11 @@ export async function GET(request) {
     let countQuery = db.from('email_tickets')
       .select('id', { count: 'exact', head: true })
       .eq('location_id', locationId)
-      .in('mailbox_id', scopeIds)
+    // Scoped EXACTLY like the list above — orphan branch included — so the
+    // badge can never offer a number the list refuses to show.
+    countQuery = mailboxId
+      ? countQuery.eq('mailbox_id', mailboxId)
+      : scopeToVisibleMailboxes(countQuery, { mailboxes, elevated })
     countQuery = scopeToUnmerged(countQuery)
     const { count, error: countErr } = await scopeToNeedsReply(countQuery)
     // Cosmetic. A badge that could not be counted shows zero rather than

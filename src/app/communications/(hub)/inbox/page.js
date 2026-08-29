@@ -4,7 +4,7 @@
 // pre-existing WhatsApp deep link working).
 //
 // INBOX-SPLIT.1 (Richard, 2026-08-07) — email left this queue for its own
-// surface at /communications/tickets. ?ch=em was a live deep link (agent
+// surface at /communications/mail. ?ch=em was a live deep link (agent
 // handoff notifications, saved links, the mobile app's older builds), so
 // it REDIRECTS there rather than silently falling back to WhatsApp and
 // showing the operator someone else's thread. It cannot carry ?c= across:
@@ -26,7 +26,7 @@ export default async function InboxPage(props) {
   if (!user) redirect('/login')
   // Before the whatsapp gate on purpose: someone holding only `email_inbox`
   // must still land on tickets rather than be bounced to /communications.
-  if (searchParams?.ch === 'em') redirect('/communications/tickets')
+  if (searchParams?.ch === 'em') redirect('/communications/mail')
   if (!hasPermission(user, 'whatsapp')) redirect('/communications')
 
   return (

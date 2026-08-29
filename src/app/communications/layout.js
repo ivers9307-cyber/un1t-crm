@@ -20,7 +20,7 @@ export default async function CommunicationsLayout({ children }) {
   const canEmail = hasPermission(user, 'email')
   const canWhatsapp = hasPermission(user, 'whatsapp')
   const canSms = hasPermission(user, 'sms')
-  // EMAIL-TICKET.4 — the ticket inbox lives at /communications/tickets and is
+  // EMAIL-TICKET.4 — the email surface lives at /communications/mail and is
   // gated on `email_inbox`, a DIFFERENT key from the marketing `email` one.
   // Without it in this OR, someone granted only the ticket surface gets
   // bounced off their own page by this layout before it ever renders.
