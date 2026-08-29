@@ -16,16 +16,23 @@
 // server truncated its scan, and the scope line says so instead of pretending
 // completeness.
 //
+// MAIL-ALLLOC.1: the Mail tab hands its LOCATION scope over as route params.
+// All mode fans one listMail({ q }) out per readable studio client-side
+// (mail-search.js createFanOutSearch) and renders results grouped by studio
+// — a failed studio's section shows the error state, the others still
+// render. A studio scope, or absent/broken params (a deep link), is exactly
+// today's single-location search.
+//
 // THE ERROR STATE IS NOT AN EMPTY STATE (mockup §06, the house rule): a
 // failed search keeps whatever results were already showing, paints the
 // failure as a failure, and offers a retry. "No mail matches" renders only
 // when the server actually answered.
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import {
-  View, Text, TextInput, FlatList, Pressable, ActivityIndicator,
+  View, Text, TextInput, FlatList, SectionList, Pressable, ActivityIndicator,
 } from 'react-native'
-import { Stack, useRouter } from 'expo-router'
+import { Stack, useRouter, useLocalSearchParams } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../../lib/auth-context'
@@ -35,11 +42,14 @@ import MailRow from '../../../components/MailRow'
 import {
   initialSearchState, createMailSearchController,
   searchScopeLine, noMatchesCopy, SEARCH_ERROR_COPY,
+  createFanOutSearch, groupedSearchDisplay, groupedScopeLine, searchSectionHeader,
 } from '../../../lib/mail-search'
+import { parseScopeParams, sectionUnavailableCopy } from '../../../lib/mail-digest'
 
 export default function MailSearch() {
   const { profile, activeLocation } = useAuth()
   const router = useRouter()
+  const params = useLocalSearchParams()
   // The raw text is the input's own; the controller trims/debounces its copy.
   const [text, setText] = useState('')
   const [state, setState] = useState(initialSearchState())
@@ -49,12 +59,33 @@ export default function MailSearch() {
   // screen, but a stale deep link must read as "not enabled", not as a
   // search box where every request 403s.
   const canEmail = canMobile(profile, 'email_inbox', activeLocation)
-  const locationId = activeLocation?.id
+
+  // MAIL-ALLLOC.1 — the Mail tab hands its scope over as route params
+  // (mail-digest.js buildScopeParams). All mode fans one listMail({ q }) out
+  // per readable studio and groups the results; a studio scope (or no/broken
+  // params — the deep-link case) is exactly today's single-location search.
+  // Memoised on the raw strings so the controller effect below sees a stable
+  // scope object rather than re-arming per render.
+  const scopeRaw = typeof params?.scope === 'string' ? params.scope : ''
+  const locsRaw = typeof params?.locs === 'string' ? params.locs : ''
+  const activeLocationId = activeLocation?.id
+  const scope = useMemo(
+    () => parseScopeParams({ scope: scopeRaw, locs: locsRaw }, activeLocationId),
+    [scopeRaw, locsRaw, activeLocationId],
+  )
+  const grouped = scope.mode === 'all'
+  const locationId = grouped ? null : scope.locationId
+  const scopeLocations = scope.locations || null
 
   useEffect(() => {
-    if (!locationId || !canEmail) return undefined
+    if (!canEmail || (!grouped && !locationId)) return undefined
     const controller = createMailSearchController({
-      search: (q) => listMail(locationId, { q }),
+      search: grouped
+        ? createFanOutSearch({
+            locations: scopeLocations,
+            searchOne: (id, q) => listMail(id, { q }),
+          })
+        : (q) => listMail(locationId, { q }),
       onState: setState,
     })
     controllerRef.current = controller
@@ -62,7 +93,7 @@ export default function MailSearch() {
       controller.dispose()
       controllerRef.current = null
     }
-  }, [locationId, canEmail])
+  }, [grouped, locationId, scopeLocations, canEmail])
 
   const onChangeText = useCallback((t) => {
     setText(t)
@@ -74,8 +105,12 @@ export default function MailSearch() {
     controllerRef.current?.retry()
   }, [])
 
-  const scopeLine = searchScopeLine(state)
-  const showEmpty = state.phase === 'results' && state.rows.length === 0
+  // Grouped mode reads state.rows as SECTIONS (the fan-out's data shape);
+  // both verdicts come from the lib so the two modes cannot drift.
+  const display = grouped ? groupedSearchDisplay(state) : null
+  const scopeLine = grouped ? groupedScopeLine(state) : searchScopeLine(state)
+  const showEmpty = state.phase === 'results'
+    && (grouped ? (display.allEmpty && !display.anyFailed) : state.rows.length === 0)
   const empty = showEmpty ? noMatchesCopy(state.query) : null
 
   return (
@@ -165,6 +200,61 @@ export default function MailSearch() {
                 {empty.body}
               </Text>
             </View>
+          ) : grouped ? (
+            /* MAIL-ALLLOC.1 — All-mode results, grouped by studio under the
+               same section furniture as the All-mode inbox, uncapped per
+               section. A failed studio's section shows the error state (and
+               a retry); the others still render. A healthy studio with no
+               matches drops out (groupedSearchDisplay) — unlike the inbox
+               digest, an empty search section says nothing worth a header. */
+            <SectionList
+              sections={display.sections.map(s => ({ ...s, key: s.location_id, data: s.rows }))}
+              keyExtractor={(row) => String(row.id)}
+              stickySectionHeadersEnabled
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+              contentContainerClassName="pb-16"
+              renderSectionHeader={({ section }) => {
+                const header = searchSectionHeader(section)
+                return (
+                  <View className="bg-un1t-surface border-b border-un1t-border px-4 py-1.5 flex-row items-center justify-between">
+                    <Text
+                      className="text-[10px] font-extrabold text-un1t-subtle uppercase"
+                      style={{ letterSpacing: 1 }}
+                      numberOfLines={1}
+                    >
+                      {header.title}
+                    </Text>
+                    {header.detail ? (
+                      <Text className="text-[10px] font-extrabold text-un1t-subtle">{header.detail}</Text>
+                    ) : null}
+                  </View>
+                )
+              }}
+              renderSectionFooter={({ section }) => {
+                if (!section.failed) return null
+                const copy = sectionUnavailableCopy(section.name)
+                return (
+                  <View className="px-4 py-3 border-b border-un1t-border bg-red-500/10 flex-row items-center">
+                    <Text className="text-xs text-red-700 flex-1">{copy.text}</Text>
+                    <Pressable
+                      onPress={() => controllerRef.current?.retry()}
+                      hitSlop={8}
+                      accessibilityRole="button"
+                    >
+                      <Text className="text-xs font-extrabold text-red-700 underline ml-3">{copy.retry}</Text>
+                    </Pressable>
+                  </View>
+                )
+              }}
+              renderItem={({ item }) => (
+                <MailRow
+                  row={item}
+                  highlight={state.query}
+                  onPress={() => router.push(`/email/${item.id}`)}
+                />
+              )}
+            />
           ) : (
             <FlatList
               data={state.rows}

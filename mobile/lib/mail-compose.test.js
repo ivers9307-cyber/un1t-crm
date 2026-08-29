@@ -32,6 +32,9 @@ import {
   composeCloseAction,
   MAX_ATTACHMENT_TOTAL_BYTES,
   MAX_ATTACHMENTS,
+  groupMailboxesByLocation,
+  groupedDefaultMailboxId,
+  mailboxLocationId,
 } from './mail-compose'
 
 // ── normalizeAddress ─────────────────────────────────────────────────
@@ -484,5 +487,88 @@ describe('composeCloseAction', () => {
 
   it('a pristine sheet closes silently', () => {
     expect(composeCloseAction({ sending: false, sent: false, ...empty })).toBe('close')
+  })
+})
+
+// ═══ MAIL-ALLLOC.1 — the grouped From picker ═════════════════════════
+//
+// A caller with 2+ readable studios gets mailbox options grouped by studio
+// name. The data is each location's OWN listMail mailboxes (fetched by the
+// screen in one parallel round off the locs param the Mail tab's FAB hands
+// over — documented in compose.jsx); this module owns the grouping, the
+// default, and the mailbox → location mapping the send headers ride on.
+
+describe('groupMailboxesByLocation', () => {
+  const mb = (id, address, over = {}) => ({ id, address, label: null, ...over })
+  const perLocation = [
+    { locationId: 'loc-a', name: 'Hatch Street', mailboxes: [mb('mb-1', 'accounts@hatch.com')], failed: false },
+    { locationId: 'loc-b', name: 'Stillorgan', mailboxes: [mb('mb-2', 'info@still.com'), mb('mb-3', 'hello@still.com', { is_default: true })], failed: false },
+  ]
+
+  it('groups per studio and stamps every flat mailbox with its location', () => {
+    const g = groupMailboxesByLocation(perLocation)
+    expect(g.groups.map(x => x.name)).toEqual(['Hatch Street', 'Stillorgan'])
+    expect(g.groups[1].mailboxes.map(m => m.id)).toEqual(['mb-2', 'mb-3'])
+    expect(g.multi).toBe(true)
+    expect(g.anyFailed).toBe(false)
+    expect(g.flat.map(m => m.id)).toEqual(['mb-1', 'mb-2', 'mb-3'])
+    expect(g.flat[0].location_id).toBe('loc-a')
+    expect(g.flat[0].location_name).toBe('Hatch Street')
+    expect(g.flat[2].location_id).toBe('loc-b')
+  })
+
+  it('drops a studio with no sendable account, and multi means 2+ GROUPS, not 2+ inputs', () => {
+    const g = groupMailboxesByLocation([
+      perLocation[0],
+      { locationId: 'loc-b', name: 'Stillorgan', mailboxes: [], failed: false },
+    ])
+    expect(g.groups).toHaveLength(1)
+    expect(g.multi).toBe(false)
+  })
+
+  it('a failed studio is dropped from the picker but flagged — a From list must never invent accounts', () => {
+    const g = groupMailboxesByLocation([
+      perLocation[0],
+      { locationId: 'loc-b', name: 'Stillorgan', mailboxes: [], failed: true },
+    ])
+    expect(g.groups).toHaveLength(1)
+    expect(g.anyFailed).toBe(true)
+  })
+
+  it('handles nothing at all without guards', () => {
+    expect(groupMailboxesByLocation(null)).toEqual({ groups: [], flat: [], multi: false, anyFailed: false })
+  })
+})
+
+describe('groupedDefaultMailboxId', () => {
+  const groups = [
+    { locationId: 'loc-a', name: 'A', mailboxes: [{ id: 'mb-1' }, { id: 'mb-2', is_default: true }] },
+    { locationId: 'loc-b', name: 'B', mailboxes: [{ id: 'mb-3', is_default: true }] },
+  ]
+
+  it('keeps an initial id still in the set — a re-fetch must not steal the operator’s choice', () => {
+    expect(groupedDefaultMailboxId(groups, { preferredLocationId: 'loc-b', initialId: 'mb-1' })).toBe('mb-1')
+  })
+
+  it('defaults to the preferred (scoped/active) studio’s default account', () => {
+    expect(groupedDefaultMailboxId(groups, { preferredLocationId: 'loc-b' })).toBe('mb-3')
+    expect(groupedDefaultMailboxId(groups, { preferredLocationId: 'loc-a' })).toBe('mb-2')
+  })
+
+  it('falls back to the first group’s default, then null with nothing to send from', () => {
+    expect(groupedDefaultMailboxId(groups, { preferredLocationId: 'loc-gone' })).toBe('mb-2')
+    expect(groupedDefaultMailboxId([], {})).toBe(null)
+  })
+})
+
+describe('mailboxLocationId', () => {
+  it('answers the stamped location for the send/sign headers, null when unknown', () => {
+    const flat = [{ id: 'mb-1', location_id: 'loc-a' }, { id: 'mb-2', location_id: 'loc-b' }]
+    expect(mailboxLocationId(flat, 'mb-2')).toBe('loc-b')
+    expect(mailboxLocationId(flat, 'mb-9')).toBe(null)
+    expect(mailboxLocationId(flat, null)).toBe(null)
+    // Single-location path: mailboxes carry no stamp; the caller falls back
+    // to its own locationId off this null.
+    expect(mailboxLocationId([{ id: 'mb-1' }], 'mb-1')).toBe(null)
   })
 })

@@ -110,6 +110,43 @@ export async function listMail(locationId, { view, q, before, mailboxId } = {}) 
 }
 
 /**
+ * Every readable studio's Mail in one answer — the endpoint behind the
+ * location tiles and All mode (MAIL-ALLLOC.1; GET /api/email/mail/digest).
+ *
+ * A PASSTHROUGH ON PURPOSE. The route already returns locations name-sorted
+ * with rows stamped exactly like list rows (needs_reply, archived, unread,
+ * unread_count_messages, has_attachments), locations the caller can't read
+ * or that have no visible mailboxes absent, and a location that FAILED
+ * reported as `unavailable: true` rather than dropped. mail-digest.js owns
+ * every rendering decision over this shape; re-deriving any of it here is a
+ * second answer that drifts.
+ *
+ * Deliberately NO location header: eligibility is resolved per location
+ * server-side (the same email_inbox key each scoped route gates on), and the
+ * answer is the whole estate whatever studio the session is parked at.
+ *
+ * 🔴 `needsReplyTotal` null means the digest was PARTIAL — the summed badge
+ * keeps its LAST GOOD number off exactly that distinction, so null must
+ * never collapse to 0 here. A failure (or a success with no body) answers
+ * `{ success: false }` and the poller keeps its last state.
+ *
+ * @param {'inbox'|'needs_reply'|'archived'|null} [view] null/omitted = inbox
+ *   (send no param), mirroring listMail's absent-view rule.
+ */
+export async function fetchMailDigest(view) {
+  const res = await api(`/api/email/mail/digest${view ? `?view=${encodeURIComponent(view)}` : ''}`)
+  if (!res.success || !res.data) {
+    return { success: false, error: res.error || 'Failed to load your mail' }
+  }
+  return {
+    success: true,
+    locations: res.data.locations || [],
+    needsReplyTotal: res.data.needs_reply_total ?? null,
+    partial: !!res.data.partial,
+  }
+}
+
+/**
  * Archive (or bring back) one conversation. Archive IS status='closed'
  * wearing a different word — one lifecycle, two vocabularies.
  *

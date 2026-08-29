@@ -381,6 +381,89 @@ export function mailboxDisplay(mailbox) {
   return mailbox.address || mailbox.label || 'Mailbox'
 }
 
+// ═══ MAIL-ALLLOC.1 — the grouped From picker ═════════════════════════
+//
+// A caller with 2+ readable studios gets the From options grouped by studio
+// name (locked design); sending is unchanged — compose already takes
+// mailbox_id, and the mailbox's own location rides the request headers via
+// mailboxLocationId below. The DATA is each studio's own listMail mailboxes,
+// fetched by the screen in one parallel round off the locs param the Mail
+// tab's FAB hands over (documented in compose.jsx — no digest call from
+// compose, and a deep link with no param stays today's single-location
+// sheet). This module owns the grouping, the default, and the mapping.
+
+/**
+ * Per-location mailbox answers → the grouped picker's shape.
+ *
+ * `groups` drops a studio with nothing sendable (no accounts, or its fetch
+ * failed — a From list must never invent accounts) and `anyFailed` says a
+ * studio is missing for the failure reason. `flat` is every option with its
+ * location stamped (`location_id`/`location_name`) — the array the screen
+ * keeps where it kept `mailboxes`, so everything reading a flat list
+ * (attachment gating, the From row, defaultMailboxId) works unchanged.
+ * `multi` means 2+ GROUPS survived: one studio's accounts need no grouping
+ * however many there are.
+ *
+ * @param {{locationId: string, name: string, mailboxes: object[],
+ *          failed?: boolean}[]} perLocation
+ */
+export function groupMailboxesByLocation(perLocation) {
+  const groups = []
+  const flat = []
+  let anyFailed = false
+  for (const entry of perLocation || []) {
+    if (entry?.failed) {
+      anyFailed = true
+      continue
+    }
+    const mailboxes = (entry?.mailboxes || []).filter(m => m?.id)
+    if (mailboxes.length === 0) continue
+    const stamped = mailboxes.map(m => ({
+      ...m,
+      location_id: entry.locationId,
+      location_name: entry.name || null,
+    }))
+    groups.push({ locationId: entry.locationId, name: entry.name || 'Studio', mailboxes: stamped })
+    flat.push(...stamped)
+  }
+  return { groups, flat, multi: groups.length >= 2, anyFailed }
+}
+
+/**
+ * Which account the grouped sheet opens on. Same precedence idea as
+ * defaultMailboxId, one level up: an initial id still in the set wins (a
+ * re-fetch must not steal the operator's choice), then the PREFERRED
+ * studio's default account (the scoped location when the Mail tab is scoped,
+ * else the active one — the approved mockup's "defaulting to the scoped
+ * location's default account"), then the first group's default, then null.
+ */
+export function groupedDefaultMailboxId(groups, { preferredLocationId, initialId } = {}) {
+  const list = groups || []
+  // The initial id is checked against the WHOLE set first — it may live in
+  // any studio, and the preference ordering below must not steal it.
+  if (initialId && list.some(g => (g.mailboxes || []).some(m => m?.id === initialId))) {
+    return initialId
+  }
+  const preferred = list.find(g => g.locationId === preferredLocationId)
+  const ordered = preferred ? [preferred, ...list.filter(g => g !== preferred)] : list
+  for (const group of ordered) {
+    const id = defaultMailboxId(group.mailboxes)
+    if (id) return id
+  }
+  return null
+}
+
+/**
+ * The location a chosen mailbox belongs to — what the sign/send calls carry
+ * as their location header, so a cross-studio From authorises where the
+ * mailbox lives. Null for an unstamped mailbox (the single-location path) or
+ * an unknown id; the caller falls back to its own location off that.
+ */
+export function mailboxLocationId(mailboxes, mailboxId) {
+  if (!mailboxId) return null
+  return (mailboxes || []).find(m => m?.id === mailboxId)?.location_id || null
+}
+
 // ── Dirty state ──────────────────────────────────────────────────────
 
 /**

@@ -23,7 +23,8 @@ import { api } from './api'
 import { supabase } from './supabase'
 import { readFileAsArrayBuffer } from './upload-bytes'
 import {
-  getTicket, getMailCount, listMail, archiveConversation, setConversationSeen,
+  getTicket, getMailCount, listMail, fetchMailDigest,
+  archiveConversation, setConversationSeen,
   replyToTicket, composeEmail, forwardMessage, draftUuid,
   signOutboundAttachment, uploadSignedAttachment,
   EMAIL_ATTACHMENT_BUCKET, MAX_OUTBOUND_ATTACHMENT_TOTAL_BYTES, MAX_OUTBOUND_ATTACHMENTS,
@@ -195,6 +196,62 @@ describe('listMail', () => {
     api.mockResolvedValue({ success: false, error: 'blip' })
     const res = await listMail('loc-1', {})
     expect(res).toEqual({ success: false, error: 'blip' })
+  })
+})
+
+// MAIL-ALLLOC.1 — the estate digest behind the location tiles and All mode.
+// A passthrough on purpose: the route already stamps rows like list rows and
+// sorts locations by name; re-deriving anything here is a second answer that
+// drifts. What the wrapper OWNS is the null discipline — needs_reply_total
+// null (partial) must survive to the caller as null, never collapse to 0,
+// because the tile keeps its last good number off exactly that distinction.
+describe('fetchMailDigest', () => {
+  it('asks the digest route bare for the inbox (null view = no param, like the list)', async () => {
+    api.mockResolvedValue({ success: true, data: { locations: [], needs_reply_total: 0, partial: false } })
+    await fetchMailDigest(null)
+    expect(api).toHaveBeenCalledWith('/api/email/mail/digest')
+  })
+
+  it('sends the view on the wire when one is chosen', async () => {
+    api.mockResolvedValue({ success: true, data: { locations: [], needs_reply_total: 0, partial: false } })
+    await fetchMailDigest('archived')
+    expect(api).toHaveBeenCalledWith('/api/email/mail/digest?view=archived')
+  })
+
+  it('passes locations, total and partial through untouched', async () => {
+    const locations = [{ location_id: 'loc-a', name: 'Hatch Street', needs_reply_count: 3, view_total: 8, conversations: [] }]
+    api.mockResolvedValue({ success: true, data: { locations, needs_reply_total: 3, partial: false } })
+    const res = await fetchMailDigest(null)
+    expect(res.success).toBe(true)
+    expect(res.locations).toEqual(locations)
+    expect(res.needsReplyTotal).toBe(3)
+    expect(res.partial).toBe(false)
+  })
+
+  it('keeps a null total NULL — a partial digest must never sum as 0', async () => {
+    api.mockResolvedValue({ success: true, data: { locations: [], needs_reply_total: null, partial: true } })
+    const res = await fetchMailDigest(null)
+    expect(res.needsReplyTotal).toBe(null)
+    expect(res.partial).toBe(true)
+  })
+
+  it('keeps a genuine 0 total as 0 — zero is an answer, not an absence', async () => {
+    api.mockResolvedValue({ success: true, data: { locations: [], needs_reply_total: 0, partial: false } })
+    const res = await fetchMailDigest(null)
+    expect(res.needsReplyTotal).toBe(0)
+  })
+
+  it('passes a failure through as a failure — the poller keeps its last state', async () => {
+    api.mockResolvedValue({ success: false, error: 'blip' })
+    const res = await fetchMailDigest(null)
+    expect(res.success).toBe(false)
+    expect(res.error).toBe('blip')
+  })
+
+  it('treats a success with no data as a failure, not an empty estate', async () => {
+    api.mockResolvedValue({ success: true })
+    const res = await fetchMailDigest(null)
+    expect(res.success).toBe(false)
   })
 })
 
