@@ -403,6 +403,17 @@ describe('attachmentBudget', () => {
     expect(attachmentBudget([]).used).toBe(0)
     expect(attachmentBudget(null).used).toBe(0)
   })
+
+  it('🔴 a FAILED file’s bytes do not count — a failed 4 MB must not block a ready 4 MB (mail-compose alignment)', () => {
+    const four = 4 * 1024 * 1024
+    const at = attachmentBudget([file({ size: four, status: 'failed' }), file({ size: four })])
+    expect(at.used).toBe(four)
+    expect(at.over).toBe(false)
+  })
+
+  it('uploading files still count — their bytes are on their way to the wire', () => {
+    expect(attachmentBudget([file({ size: 300, status: 'uploading' }), file({ size: 200 })]).used).toBe(500)
+  })
 })
 
 describe('hasPendingUploads / readyAttachmentRefs', () => {
@@ -447,6 +458,15 @@ describe('admitPickedFile', () => {
   it('an unreadable size is refused rather than admitted blind', () => {
     expect(admitPickedFile([], { name: 'x.bin', size: NaN })).not.toBeNull()
   })
+
+  it('🔴 an EMPTY file (size 0 or negative) is refused with a friendly sentence — the sign route would 400 it opaquely', () => {
+    const zero = admitPickedFile([], { name: 'blank.pdf', size: 0 })
+    expect(zero).toMatch('blank.pdf')
+    expect(zero).toMatch(/empty/i)
+    expect(admitPickedFile([], { name: 'neg.bin', size: -5 })).not.toBeNull()
+    // One real byte is still a file.
+    expect(admitPickedFile([], { name: 'tiny.txt', size: 1 })).toBeNull()
+  })
 })
 
 describe('composerSendState', () => {
@@ -490,7 +510,23 @@ describe('composerSendState', () => {
       .toEqual({ canSend: false, reason: 'over_budget' })
   })
 
-  it('a FAILED file does not block send — it is excluded and the chip says so', () => {
-    expect(composerSendState({ ...base, files: [file(), file({ status: 'failed' })] }).canSend).toBe(true)
+  it('🔴 a FAILED chip on screen BLOCKS send — the old red-caption-only posture let a reply leave without a file whose chip was still visible', () => {
+    expect(composerSendState({ ...base, files: [file(), file({ status: 'failed' })] }))
+      .toEqual({ canSend: false, reason: 'blocked_files' })
+  })
+
+  it('an oversize chip blocks the same way (compose alignment; the thread refuses oversize at the door, but the gate must not depend on that)', () => {
+    expect(composerSendState({ ...base, files: [file({ status: 'oversize' })] }))
+      .toEqual({ canSend: false, reason: 'blocked_files' })
+  })
+
+  it('an uploading chip outranks a failed one — transient first, same order as compose', () => {
+    expect(composerSendState({ ...base, files: [file({ status: 'uploading' }), file({ status: 'failed' })] }))
+      .toEqual({ canSend: false, reason: 'uploading' })
+  })
+
+  it('a NOTE with only a failed chip is still told about the files, not sent', () => {
+    expect(composerSendState({ ...base, isNote: true, files: [file({ status: 'failed' })] }))
+      .toEqual({ canSend: false, reason: 'note_has_files' })
   })
 })
