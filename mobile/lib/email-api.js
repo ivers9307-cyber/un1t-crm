@@ -99,6 +99,13 @@ export async function listMail(locationId, { view, q, before, mailboxId } = {}) 
     needsReplyCount: res.data?.needs_reply_count ?? 0,
     nextBefore: res.data?.next_before ?? null,
     searchPartial: !!res.data?.search_partial,
+    // 🔴 Neither count flag may be dropped: the route's own comment says
+    // neither is allowed to render as "all read". `countsUnavailable` means
+    // the per-message scan FAILED (every row then claims unread:false);
+    // `countsPartial` means the page outgrew one scan. Screens must render
+    // a notice rather than a fully-triaged-looking inbox.
+    countsUnavailable: !!res.data?.counts_unavailable,
+    countsPartial: !!res.data?.counts_partial,
   }
 }
 

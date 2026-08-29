@@ -40,6 +40,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as DocumentPicker from 'expo-document-picker'
 import * as ImagePicker from 'expo-image-picker'
 import { useAuth } from '../../../lib/auth-context'
+import { canMobile } from '../../../lib/permissions'
 import {
   listMail, composeEmail, signOutboundAttachment, uploadSignedAttachment,
 } from '../../../lib/email-api'
@@ -67,9 +68,16 @@ function tagChip(contact) {
 }
 
 export default function ComposeEmail() {
-  const { activeLocation } = useAuth()
+  const { profile, activeLocation } = useAuth()
   const insets = useSafeAreaInsets()
   const locationId = activeLocation?.id
+
+  // Audit C1 — same re-check as the Mail tab and search. Without it, a
+  // stale deep link (or a revoked key) landed on a live form whose contact
+  // autocomplete still answered — searchContacts is gated by location
+  // membership, not by the email key, so this screen's gate is the only
+  // thing keeping the member directory behind the permission it belongs to.
+  const canEmail = canMobile(profile, 'email_inbox', activeLocation)
 
   // From — the caller's visible mailboxes, off the same list call as the
   // inbox. A caller with none gets the honest refusal below, not a form that
@@ -103,7 +111,7 @@ export default function ComposeEmail() {
   const suggestSeq = useRef(0)
 
   useEffect(() => {
-    if (!locationId) return
+    if (!locationId || !canEmail) return
     let alive = true
     setMailboxesLoading(true)
     listMail(locationId).then(res => {
@@ -119,7 +127,7 @@ export default function ComposeEmail() {
       setMailboxId(prev => defaultMailboxId(boxes, prev))
     })
     return () => { alive = false }
-  }, [locationId])
+  }, [locationId, canEmail])
 
   // Contact autocomplete — debounced, stale responses dropped. Filtering
   // against the current pills happens at render time so a just-added pill
@@ -154,8 +162,14 @@ export default function ComposeEmail() {
 
   function onPendingChange(value) {
     setInputError(null)
-    // A trailing space or comma is the "make it a pill" gesture.
-    if (/[\s,;]$/.test(value)) {
+    // A trailing comma/semicolon is the "make it a pill" gesture — NOT a
+    // space (audit F3): "john s…" is how an operator reaches the contact
+    // suggestions for a two-word name, and committing on space turned every
+    // such search into "Not a valid email address: john" with the input
+    // wiped. Web's RecipientEditor draws the same line (Enter/comma/semicolon
+    // commit; whitespace only splits PASTES — addRecipients still handles
+    // that, since a paste lands here as one multi-token value).
+    if (/[,;]$/.test(value)) {
       commitPending(value)
       return
     }
@@ -342,6 +356,17 @@ export default function ComposeEmail() {
 
   const mailbox = mailboxes.find(m => m.id === mailboxId) || null
   const budget = attachmentBudget(files)
+
+  if (!canEmail) {
+    return (
+      <View className="flex-1 bg-un1t-bg items-center justify-center px-8">
+        <Ionicons name="mail-outline" size={32} color="#94A3B8" />
+        <Text className="text-sm text-un1t-subtle mt-2 text-center">
+          Mail isn’t enabled for you at this location.
+        </Text>
+      </View>
+    )
+  }
 
   return (
     <KeyboardAvoidingView

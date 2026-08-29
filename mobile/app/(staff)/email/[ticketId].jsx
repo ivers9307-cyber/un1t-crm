@@ -494,6 +494,11 @@ export default function EmailTicket() {
   // re-folding is a gesture nobody asked for, and a poll that re-collapsed a
   // message somebody just opened would read as the screen fighting them.
   const [expandedIds, setExpandedIds] = useState(() => new Set())
+  // Audit F6 — expanding a folded message grows the content, and the
+  // auto-scroll-to-end below would immediately yank the viewport AWAY from
+  // the message the operator just opened, down to the composer. One-shot
+  // suppression, armed by the expand tap, consumed by the next size change.
+  const suppressAutoScrollRef = useRef(false)
   // Outbound files on the reply being written: { key, filename, size, mime,
   // uri, status: 'uploading'|'ready'|'failed', ref, error }. `ref` is the
   // draft ref uploadSignedAttachment answered — the thing the reply body
@@ -623,6 +628,22 @@ export default function EmailTicket() {
     }, DRAFT_WRITE_DEBOUNCE_MS)
     return () => clearTimeout(timer)
   }, [draftReady, draftScope, text, isNote])
+
+  // Audit F4 — FLUSH ON UNMOUNT. The web store writes every keystroke; the
+  // debounce above means backing out within 600ms of the last keystroke
+  // would silently lose those words. Refs, not state, so this effect runs
+  // exactly once and its teardown sees the latest values without re-running
+  // per keystroke (which would write stale text on every cleanup).
+  const draftFlushRef = useRef(null)
+  useEffect(() => {
+    draftFlushRef.current = draftReady
+      ? { scope: draftScope, draft: { text, mode: isNote ? 'note' : 'reply' } }
+      : null
+  })
+  useEffect(() => () => {
+    const f = draftFlushRef.current
+    if (f) writeReplyDraft(f.scope, f.draft).catch(() => {})
+  }, [])
 
   // EMAIL-ATTACH-RACE.1 — the thread re-reads itself while it is open.
   // Cadence comes from the thread itself (threadRefreshMs): fast while its
@@ -809,8 +830,12 @@ export default function EmailTicket() {
     }
     // The mailbox half (moving the real message in a connected account) can
     // refuse independently; the DB half above stands either way.
-    if (res.data?.writeback?.notice) {
-      Alert.alert('Archived here', res.data.writeback.notice)
+    // Audit F1 — the route answers `writeback_notice` (a string), and this
+    // read had said `writeback.notice` since the ticket era: the "the mailbox
+    // move failed" valve could never fire, anywhere, while nothing ever
+    // reconciles archive state after the fact.
+    if (res.data?.writeback_notice) {
+      Alert.alert('Archived here', res.data.writeback_notice)
     }
   }
 
@@ -948,7 +973,13 @@ export default function EmailTicket() {
             ref={scrollRef}
             className="flex-1"
             contentContainerClassName="p-4"
-            onContentSizeChange={() => scrollRef.current?.scrollToEnd?.({ animated: false })}
+            onContentSizeChange={() => {
+              if (suppressAutoScrollRef.current) {
+                suppressAutoScrollRef.current = false
+                return
+              }
+              scrollRef.current?.scrollToEnd?.({ animated: false })
+            }}
           >
             {attachmentsUnavailable && (
               <View className="mb-3 rounded-xl border border-amber-500/60 bg-amber-500/10 px-3.5 py-2.5">
@@ -970,7 +1001,10 @@ export default function EmailTicket() {
                     msg={m}
                     isFirst={i === 0}
                     fallbackName={ticket?.requester_name || ''}
-                    onExpand={() => setExpandedIds(prev => new Set(prev).add(m.id))}
+                    onExpand={() => {
+                      suppressAutoScrollRef.current = true
+                      setExpandedIds(prev => new Set(prev).add(m.id))
+                    }}
                   />
                 ) : (
                   <MessageBubble

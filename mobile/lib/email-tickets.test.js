@@ -134,6 +134,16 @@ describe('mail status (RETIRE-TICKETS.1 — the lifecycle chips left with the qu
     expect(mailStatusChip({ status: 'open', last_message_direction: null })).toBeNull()
   })
 
+  it('honours server-stamped flags over re-derivation (audit F2 class)', () => {
+    // A solved row the server calls LIVE must not wear an Archived chip…
+    expect(mailStatusChip({ status: 'solved', archived: false, needs_reply: false })).toBeNull()
+    // …and a stamped needs_reply outranks the status/direction derivation.
+    expect(mailStatusChip({ status: 'open', last_message_direction: 'outbound', needs_reply: true }).label)
+      .toBe('Needs reply')
+    expect(mailStatusChip({ status: 'open', last_message_direction: 'inbound', needs_reply: false }))
+      .toBeNull()
+  })
+
   it('treats solved and closed as archived', () => {
     expect(isArchivedStatus('solved')).toBe(true)
     expect(isArchivedStatus('closed')).toBe(true)
@@ -267,6 +277,20 @@ describe('ticketToInboxRow', () => {
     expect(bare.unread).toBe(false)
     expect(bare.needs_reply).toBe(false)
     expect(bare.has_attachments).toBe(false)
+  })
+
+  // Audit F2 — the server counts legacy `solved` rows as LIVE (they list in
+  // the Inbox, stamped archived:false). The stamp must WIN over the status
+  // fallback, or the swipe verb inverts: "archive" sends {archived:false}
+  // and reopens a resolved conversation.
+  it('honours a server-stamped archived:false over the solved-status fallback', () => {
+    const row = ticketToInboxRow({ ...base, status: 'solved', archived: false })
+    expect(row.archived).toBe(false)
+  })
+
+  it('falls back to status only when the stamp is absent', () => {
+    expect(ticketToInboxRow({ ...base, status: 'solved' }).archived).toBe(true)
+    expect(ticketToInboxRow({ ...base, status: 'closed', archived: true }).archived).toBe(true)
   })
 
   it('prefers the mail response\'s per-message unread count over the ticket-era column', () => {

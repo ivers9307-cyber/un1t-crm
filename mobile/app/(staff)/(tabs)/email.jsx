@@ -176,6 +176,7 @@ export default function Email() {
   const [error, setError] = useState(null)
   // { row, index, meta } — the archive UNDO offer (mockup §02).
   const [snack, setSnack] = useState(null)
+  const [countsNotice, setCountsNotice] = useState(null)
 
   // Paging cursor lives in a ref, not state: only loadMore reads it, and as
   // a dependency it would re-arm the focus effect after every page and
@@ -221,23 +222,53 @@ export default function Email() {
   // the cursor — the deliberate paging posture: a re-load (view change,
   // focus, pull) starts from the top rather than trying to patch three
   // loaded pages in place and getting the order subtly wrong.
+  // Which (view, account-filter) the rows on screen actually belong to —
+  // audit finding S1: keeping the last list on a failed refresh is right for
+  // the SAME view ("never a confident zero"), but after a seg switch the
+  // kept rows belong to the OLD view and would stand mislabeled under the
+  // new tab. A failed load for a DIFFERENT key clears them, so the error
+  // empty state renders instead of a quiet lie.
+  const rowsKeyRef = useRef(null)
+
   const load = useCallback(async () => {
     if (!activeLocation || !canEmail) return
     const seq = ++loadSeqRef.current
+    const key = `${viewId}|${mailboxId || ''}`
+    if (rowsKeyRef.current !== key) {
+      // Audit F5 — a view/filter switch invalidates the OLD view's cursor
+      // BEFORE the fetch, not after it succeeds: on a failed switch the
+      // stale cursor otherwise stayed live under the new tab, and the next
+      // scroll merged an archived page into the inbox rows.
+      nextBeforeRef.current = null
+      setHasMore(false)
+    }
     const res = await listMail(activeLocation.id, {
       view: ticketViewWire(viewId),
       ...(mailboxId ? { mailboxId } : {}),
     })
     if (seq !== loadSeqRef.current) return // a newer view/filter answered
     if (!res.success) {
-      // Keep the last list on a failed refresh — never a confident zero.
       setError(res.error || 'Failed to load your mail')
+      if (rowsKeyRef.current !== key) {
+        // The rows on screen are another view's — see rowsKeyRef.
+        setRows([])
+        rowsKeyRef.current = key
+      }
       return
     }
     setError(null)
     setRows(res.data || [])
+    rowsKeyRef.current = key
     setMailboxes(res.mailboxes || [])
     setNeedsReplyCount(res.needsReplyCount ?? 0)
+    // Audit finding C2 — the route forbids either flag to render as "all
+    // read"; a failed scan makes every row claim unread:false, so the screen
+    // says so instead of looking fully triaged.
+    setCountsNotice(res.countsUnavailable
+      ? 'Couldn\u2019t check read state \u2014 unread marks may be missing.'
+      : res.countsPartial
+        ? 'Read state is incomplete on this page.'
+        : null)
     nextBeforeRef.current = res.nextBefore ?? null
     setHasMore(res.nextBefore != null)
   }, [activeLocation, canEmail, viewId, mailboxId])
@@ -264,6 +295,7 @@ export default function Email() {
       setError(res.error || 'Could not load older conversations')
       return
     }
+    setError(null) // an earlier failed page's banner must not outlive a working scroll
     setRows(rs => mergeMailPages(rs, res.data || []))
     nextBeforeRef.current = res.nextBefore ?? null
     setHasMore(res.nextBefore != null)
@@ -313,9 +345,17 @@ export default function Email() {
       snackTimerRef.current = null
       setSnack(null)
     }, ARCHIVE_UNDO_MS)
-    const res = await archiveConversation(row.id, meta.next, activeLocation?.id)
+    const writePromise = archiveConversation(row.id, meta.next, activeLocation?.id)
+    // Audit F7 — the snack carries the in-flight write so UNDO can queue
+    // BEHIND it: two independent POSTs can reorder on a flaky link, ending
+    // server-archived while the UI shows the row restored.
+    setSnack(s => (s?.row.id === row.id ? { ...s, writePromise } : s))
+    const res = await writePromise
     if (!res.success) {
-      clearSnack()
+      // Withdraw the undo offer only if it is still THIS row's — audit
+      // finding S3: archive A then B quickly, and A's late failure must not
+      // steal B's live 5-second undo.
+      setSnack(s => (s?.row.id === row.id ? null : s))
       setRows(rs => insertRowAt(rs, row, index))
       setError(res.error || (meta.next ? 'Could not archive that' : 'Could not bring that back'))
     }
@@ -330,6 +370,9 @@ export default function Email() {
     if (!s) return
     clearSnack()
     setRows(rs => insertRowAt(rs, s.row, s.index))
+    // Audit F7 — serialise behind the original write (a failed original is
+    // fine: the undo write states the desired end state either way).
+    if (s.writePromise) await s.writePromise.catch(() => {})
     const res = await archiveConversation(s.row.id, s.meta.undoTo, activeLocation?.id)
     if (!res.success) {
       // The undo write failed, so the archive stands — take the row back out
@@ -465,6 +508,15 @@ export default function Email() {
       {error && rows.length > 0 && (
         <View className="bg-red-500/10 border-b border-red-500/30 px-4 py-2">
           <Text className="text-red-700 text-xs">{error}</Text>
+        </View>
+      )}
+
+      {/* Audit C2 — a failed/truncated read-state scan must never render as
+          "all read": without this line every row quietly loses its unread
+          weight and the inbox looks fully triaged. */}
+      {countsNotice && !error && (
+        <View className="bg-amber-500/10 border-b border-amber-500/30 px-4 py-1.5">
+          <Text className="text-amber-700 text-[11px]">{countsNotice}</Text>
         </View>
       )}
 

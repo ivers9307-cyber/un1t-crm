@@ -131,6 +131,29 @@ describe('listMail', () => {
     expect(api).not.toHaveBeenCalled()
   })
 
+  // Audit C2 — the route forbids either count flag to render as "all read";
+  // dropping them here is exactly how a failed read-state scan became a
+  // fully-triaged-looking inbox on the phone.
+  it('passes counts_unavailable and counts_partial through', async () => {
+    api.mockResolvedValue({
+      success: true,
+      data: {
+        mailboxes: [], conversations: [],
+        counts_unavailable: true, counts_partial: false,
+      },
+    })
+    const res = await listMail('loc-1', {})
+    expect(res.countsUnavailable).toBe(true)
+    expect(res.countsPartial).toBe(false)
+  })
+
+  it('defaults both count flags to false when the route omits them', async () => {
+    api.mockResolvedValue({ success: true, data: { mailboxes: [], conversations: [] } })
+    const res = await listMail('loc-1', {})
+    expect(res.countsUnavailable).toBe(false)
+    expect(res.countsPartial).toBe(false)
+  })
+
   // MOBILE-MAIL-A.1 — the richer list: search, keyset paging, per-account tab.
   it('sends q, before and mailbox_id on the wire when given', async () => {
     api.mockResolvedValue({ success: true, data: { mailboxes: [], conversations: [] } })

@@ -42,10 +42,20 @@
 // fact worth a chip is Needs reply. Same vocabulary as the web surface
 // (src/components/mail/mail-display.js), restated for the file-header reason.
 export function mailStatusChip(row) {
-  if (isArchivedStatus(row?.status)) {
+  // The server-stamped flags outrank re-derivation when present (the route
+  // stamps `archived` + `needs_reply` on every mail row precisely so no
+  // client re-derives the one predicate the surface exists to keep); the
+  // status/direction fallbacks cover ticket-shaped callers with no stamps.
+  const archived = typeof row?.archived === 'boolean'
+    ? row.archived
+    : isArchivedStatus(row?.status)
+  if (archived) {
     return { label: 'Archived', cls: 'bg-slate-500/10', text: 'text-slate-700' }
   }
-  if (row?.status === 'open' && row?.last_message_direction === 'inbound') {
+  const needsReply = typeof row?.needs_reply === 'boolean'
+    ? row.needs_reply
+    : (row?.status === 'open' && row?.last_message_direction === 'inbound')
+  if (needsReply) {
     return { label: 'Needs reply', cls: 'bg-amber-500/10', text: 'text-amber-700' }
   }
   return null
@@ -685,13 +695,16 @@ export function ticketToInboxRow(ticket, { mailboxById = {}, showMailbox = false
     // Null when there is only one account to see — a chip naming the only
     // mailbox in existence is noise on a phone-width row.
     mailbox_label: showMailbox ? mailboxLabel(mailbox) : null,
-    // MOBILE-MAIL-REDESIGN.B — the swipe verb and its undo read this off the
-    // row. The mail route sends the flag; the status fallback covers historic
-    // solved/closed rows and any caller still shaping raw tickets through
-    // this. Before it existed the screen read `row.archived` (always
-    // undefined) and the Archived view's toggle re-archived instead of
-    // bringing back.
-    archived: t.archived === true || isArchivedStatus(t.status),
+    // MOBILE-MAIL-REDESIGN.B / audit F2 — the swipe verb and its undo read
+    // this off the row, and THE SERVER'S STAMP WINS when present: the mail
+    // route counts legacy `solved` rows as LIVE (`archived:false`, they list
+    // in the Inbox), and an OR over isArchivedStatus overrode that explicit
+    // false — so swiping one sent `{archived:false}` and REOPENED a resolved
+    // conversation instead of archiving it. The status fallback now applies
+    // only when the flag is absent (a ticket-era caller shaping raw rows).
+    archived: typeof t.archived === 'boolean'
+      ? t.archived
+      : isArchivedStatus(t.status),
     resolved_at: isArchivedStatus(t.status)
       ? (t.solved_at || t.closed_at || t.updated_at || null)
       : null,
