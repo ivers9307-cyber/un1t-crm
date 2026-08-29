@@ -36,6 +36,35 @@ const IG_ATTACHMENT_TYPE_TO_MESSAGE_TYPE = {
   file: 'document',
 }
 
+// IG-LOWSIG.1 — attachment kinds that are ambient social signals rather than
+// conversation: a story mention (someone tagged the gym in their story) or a
+// post/reel shared into the DM thread. These arrive constantly and almost
+// never need a human, so the inbound handler records them as thread history
+// but does not escalate. share/reel/ig_reel cover the observed vocabulary for
+// shared feed content across the two webhook flavors.
+const LOW_SIGNAL_IG_TYPES = new Set(['story_mention', 'share', 'reel', 'ig_reel'])
+
+/**
+ * Is this inbound event ambient social noise (a story mention, a shared
+ * post/reel, or an emoji-only story reaction) rather than a message that
+ * needs a human? Pure. Any real words attached — a caption on a share, a
+ * typed story reply — make it a genuine message again, because "saw your
+ * post, is this class on tonight?" arrives exactly this way. Echoes are
+ * never low-signal (they're our own outbound, handled elsewhere).
+ */
+export function isLowSignalInstagramEvent(event) {
+  if (!event || event.isEcho) return false
+  const text = (event.text || '').trim()
+  // Letters or digits in any script = the customer typed something.
+  const hasWords = /[\p{L}\p{N}]/u.test(text)
+  if (LOW_SIGNAL_IG_TYPES.has(event.type)) return !hasWords
+  // A quick-reaction to a story lands as a story reply whose text is just the
+  // emoji. An emoji-only message OUTSIDE a story reply stays escalated — a
+  // bare "👍" mid-conversation can be a real answer to a real question.
+  if (event.isStoryReply && text && !hasWords) return true
+  return false
+}
+
 
 /**
  * Normalise a Meta Instagram webhook body into a flat list of message
@@ -45,7 +74,7 @@ const IG_ATTACHMENT_TYPE_TO_MESSAGE_TYPE = {
  * receipts, and events with no `message`.
  *
  * @param {object} body  the parsed webhook JSON
- * @returns {Array<{accountId:string, customerId:string, messageId:string|null, text:string, type:string, mediaUrl:string|null, timestamp:number|null, isEcho:boolean}>}
+ * @returns {Array<{accountId:string, customerId:string, messageId:string|null, text:string, type:string, mediaUrl:string|null, timestamp:number|null, isEcho:boolean, isStoryReply:boolean}>}
  */
 export function parseInstagramEvents(body) {
   const out = []
@@ -85,6 +114,10 @@ export function parseInstagramEvents(body) {
         mediaUrl,
         timestamp: ev.timestamp || null,
         isEcho,
+        // A reply to (or quick-reaction on) one of our stories carries the
+        // story under message.reply_to — the signal isLowSignalInstagramEvent
+        // needs to tell an emoji-only story reaction from a real emoji answer.
+        isStoryReply: !!msg.reply_to?.story,
       })
     }
   }
@@ -455,15 +488,31 @@ export async function handleInstagramInbound(db, event) {
   // Best-effort; never blocks the inbound path.
   await stampConnectionOk(db, connection?.id)
 
-  // Bump conversation summary + unread.
-  await db.from('instagram_conversations').update({
-    last_message_at: ts,
-    last_message_direction: 'inbound',
-    resolved_at: null,
-    last_message_preview: previewText,
-  }).eq('id', conversationId)
+  // IG-LOWSIG.1 — story mentions, shared posts/reels and emoji-only story
+  // reactions are recorded (above) but never escalated: no auto-unresolve, no
+  // needs-reply flip, no unread bump, no agent turn, no staff push. Opening
+  // the thread still shows them; they just don't demand anyone's attention.
+  const lowSignal = isLowSignalInstagramEvent(event)
+
+  // Bump conversation summary + unread. A low-signal event bumps only the
+  // timestamp + preview (so the thread list stays truthful) — leaving
+  // resolved_at and last_message_direction alone keeps an answered thread
+  // answered and out of the needs-action queues (src/lib/inbox-queues.js).
+  await db.from('instagram_conversations').update(lowSignal
+    ? {
+        last_message_at: ts,
+        last_message_preview: previewText,
+      }
+    : {
+        last_message_at: ts,
+        last_message_direction: 'inbound',
+        resolved_at: null,
+        last_message_preview: previewText,
+      }).eq('id', conversationId)
   // Atomic unread bump (best-effort) — replaces the read-modify-write above.
-  try { await db.rpc('increment_instagram_conversation_unread', { p_conversation_id: conversationId }) } catch {}
+  if (!lowSignal) {
+    try { await db.rpc('increment_instagram_conversation_unread', { p_conversation_id: conversationId }) } catch {}
+  }
 
   // Trigger the agent (shared brain) FIRST so we know whether it engaged this
   // message before deciding the inbound push. Best-effort. IG-DM.3 — gated
@@ -476,7 +525,7 @@ export async function handleInstagramInbound(db, event) {
   // channels, and test_mode's allowlist is phone-based (IG senders have
   // IGSIDs), so the connection row is the right per-channel switch.
   let agentResult = null
-  if (isAgentEnabledForConnection(connection) && !inboundInsertError) {
+  if (isAgentEnabledForConnection(connection) && !inboundInsertError && !lowSignal) {
     try {
       agentResult = await runChannelAgent(db, instagramAdapter, {
         conversationId,
@@ -502,7 +551,7 @@ export async function handleInstagramInbound(db, event) {
   // generic per-message manager push to avoid double-notifying.
   const agentEngaged = agentResult?.handled === true &&
     ['reply', 'handoff', 'soft_handoff'].includes(agentResult.action)
-  if (!agentEngaged) {
+  if (!agentEngaged && !lowSignal) {
     try {
       const { data: convMeta } = await db.from('instagram_conversations')
         .select('assigned_to, customer_name, ig_username, contacts!contact_id(name, first_name)')
@@ -532,5 +581,5 @@ export async function handleInstagramInbound(db, event) {
     }
   }
 
-  return { handled: true, conversationId }
+  return { handled: true, conversationId, lowSignal }
 }

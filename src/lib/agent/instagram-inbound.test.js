@@ -22,6 +22,7 @@ vi.mock('@/lib/instagram-media-server', () => ({ ensureInstagramMediaRehosted: v
 import { handleInstagramInbound } from './instagram'
 import { resolveLocationByExternalAccount } from './channels'
 import { runChannelAgent } from './auto-reply'
+import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
 import { ensureInstagramMediaRehosted } from '@/lib/instagram-media-server'
 
 // Chainable stub. `conv` decides what the find-or-create lookups return (an
@@ -115,6 +116,57 @@ describe('handleInstagramInbound — unchecked inbound insert', () => {
       expect.stringContaining('message insert failed'),
       'violates check constraint',
     )
+  })
+})
+
+// IG-LOWSIG.1 — story mentions / shared posts / emoji-only story reactions are
+// recorded as thread history but never escalated: no needs-action flip, no
+// unread bump, no agent turn, no staff push.
+describe('handleInstagramInbound — low-signal events (story mention / share)', () => {
+  const STORY_MENTION = {
+    accountId: 'IGBIZ1', customerId: 'CUST1', messageId: 'mid-sm',
+    text: '', type: 'story_mention', mediaUrl: 'https://cdn.ig/story.jpg',
+    isEcho: false, isStoryReply: false,
+  }
+
+  it('persists + re-hosts the story frame, but neither notifies nor escalates', async () => {
+    const db = igDb({ convLookups: [{ id: 'conv-1' }] })
+
+    const result = await handleInstagramInbound(db, STORY_MENTION)
+
+    expect(result).toMatchObject({ handled: true, conversationId: 'conv-1', lowSignal: true })
+    // Recorded in the thread, media saved before the IG CDN url expires…
+    const row = db.inserts.find((i) => i.table === 'instagram_messages').row
+    expect(row).toMatchObject({ direction: 'inbound', message_type: 'story_mention' })
+    expect(ensureInstagramMediaRehosted).toHaveBeenCalled()
+    // …but nothing that demands a human: no unread bump, no agent, no push.
+    expect(db.rpc).not.toHaveBeenCalled()
+    expect(runChannelAgent).not.toHaveBeenCalled()
+    expect(sendPush).not.toHaveBeenCalled()
+    expect(sendPushToRolesAtLocation).not.toHaveBeenCalled()
+    // The thread list stays truthful (timestamp + preview) without flipping
+    // the conversation into the needs-action queues: an answered thread keeps
+    // its resolved_at and its outbound last_message_direction.
+    const convUpdate = db.updates.find((u) => u.table === 'instagram_conversations')
+    expect(convUpdate.row).toHaveProperty('last_message_at')
+    expect(convUpdate.row).toHaveProperty('last_message_preview')
+    expect(convUpdate.row).not.toHaveProperty('resolved_at')
+    expect(convUpdate.row).not.toHaveProperty('last_message_direction')
+  })
+
+  it('a share WITH a typed caption escalates like any other message', async () => {
+    const db = igDb({ convLookups: [{ id: 'conv-1' }] })
+
+    const result = await handleInstagramInbound(db, {
+      ...STORY_MENTION, messageId: 'mid-share', type: 'share',
+      mediaUrl: 'https://cdn.ig/post.jpg', text: 'is this class still on tonight?',
+    })
+
+    expect(result).toMatchObject({ handled: true, lowSignal: false })
+    expect(db.rpc).toHaveBeenCalled()
+    expect(runChannelAgent).toHaveBeenCalled()
+    const convUpdate = db.updates.find((u) => u.table === 'instagram_conversations')
+    expect(convUpdate.row).toMatchObject({ last_message_direction: 'inbound', resolved_at: null })
   })
 })
 
