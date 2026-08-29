@@ -928,7 +928,9 @@ export default function EmailTicket() {
   // The folded/unfolded plan for the thread (lib/mail-drafts.js): everything
   // but the newest two collapses until tapped.
   const plan = threadDisplayPlan(messages, expandedIds)
-  const failedFiles = files.some(f => f.status === 'failed')
+  // Audit S-2 — the caption must key on the SAME set the send gate blocks
+  // on (failed OR oversize), or a future oversize chip greys Send silently.
+  const failedFiles = files.some(f => f.status === 'failed' || f.status === 'oversize')
 
   return (
     <KeyboardAvoidingView

@@ -102,6 +102,12 @@ export default function ForwardMessage() {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState(null)
   const [sent, setSent] = useState(false)
+  // Audit C-2 — the detail route degrades a failed attachment lookup to
+  // attachments_unavailable rather than a 500, precisely so no screen reads
+  // the blip as "this message had no files". Dropping the flag here made the
+  // Files section silently vanish — the operator forwards an invoice email
+  // and the recipient gets no invoice, with nobody told anything.
+  const [attachmentsUnavailable, setAttachmentsUnavailable] = useState(false)
 
   const toInputRef = useRef(null)
   // Suggestion requests can resolve out of order — only the newest may paint.
@@ -124,6 +130,7 @@ export default function ForwardMessage() {
         setLoadError(res.error || 'Could not load that message.')
         return
       }
+      setAttachmentsUnavailable(res.attachmentsUnavailable === true)
       const m = (res.messages || []).find(x => x?.id === messageId) || null
       setMessage(m)
       // The pre-tick decision is the lib's (everything when everything fits,
@@ -136,7 +143,7 @@ export default function ForwardMessage() {
 
   // Contact autocomplete — debounced, stale responses dropped (compose's rule).
   useEffect(() => {
-    if (!locationId || !shouldSearchContacts(pending)) {
+    if (!locationId || !canEmail || !shouldSearchContacts(pending)) {
       setSuggestions([])
       return
     }
@@ -148,7 +155,7 @@ export default function ForwardMessage() {
       })
     }, SUGGEST_DEBOUNCE_MS)
     return () => clearTimeout(timer)
-  }, [pending, locationId])
+  }, [pending, locationId, canEmail])
 
   const visibleSuggestions = filterContactSuggestions(suggestions, { pills })
 
@@ -230,10 +237,15 @@ export default function ForwardMessage() {
     setSending(false)
     if (!res?.success) {
       // The route's sentences render verbatim (sendFailureMessage — Zod
-      // issues first, else the error). That includes the sent-but-unfiled
-      // "Do not resend…" 500: the note stays on screen as the only record of
-      // what the recipient got, and the sentence itself is the instruction.
+      // issues first, else the error).
       setError(sendFailureMessage(res))
+      // Audit C-1 — sent-but-unfiled is NOT retryable, structurally: the
+      // route sends FIRST, so `data.sent === true` means the third party
+      // already has the mail and a second tap would mail them twice. "Do
+      // not resend" was only prose while the Send button stayed live; this
+      // makes the button obey the sentence. The note stays on screen as
+      // the only record of what the recipient got.
+      if (res?.data?.sent === true) setSent(true)
       return
     }
     // Toast, then back to the thread — the forward is already filed on it.
@@ -434,6 +446,18 @@ export default function ForwardMessage() {
               </Text>
             ) : null}
           </View>
+
+          {/* Audit C-2 — a failed attachment lookup must never wear "no
+              files"'s clothes. Loud, amber, and it says what to do; the
+              text-only forward stays possible on purpose. */}
+          {attachmentsUnavailable && (
+            <View className="mx-4 mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+              <Text className="text-[11px] text-amber-700">
+                Couldn’t check this message’s files — any attachments it carried can’t be
+                forwarded right now. The text still can; try again later for the files.
+              </Text>
+            </View>
+          )}
 
           {/* ── WHICH files go — checkboxes + running total; skipped ones
               listed disabled with the reason, never hidden. ────────────── */}

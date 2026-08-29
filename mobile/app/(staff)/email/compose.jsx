@@ -133,7 +133,7 @@ export default function ComposeEmail() {
   // against the current pills happens at render time so a just-added pill
   // vanishes from the list without another round trip.
   useEffect(() => {
-    if (!locationId || !shouldSearchContacts(pending)) {
+    if (!locationId || !canEmail || !shouldSearchContacts(pending)) {
       setSuggestions([])
       return
     }
@@ -145,7 +145,7 @@ export default function ComposeEmail() {
       })
     }, SUGGEST_DEBOUNCE_MS)
     return () => clearTimeout(timer)
-  }, [pending, locationId])
+  }, [pending, locationId, canEmail])
 
   const visibleSuggestions = filterContactSuggestions(suggestions, { pills })
 
@@ -326,9 +326,12 @@ export default function ComposeEmail() {
     })
     setSending(false)
     if (!res?.success) {
-      // Includes the sent-but-unfiled 500 ("Do not resend…") — the draft is
-      // the only remaining record of what the recipient got, so it stays.
       setError(sendFailureMessage(res))
+      // Audit C-1 — sent-but-unfiled: the recipient already has the mail
+      // (the route sends first), so Send must die with the sentence rather
+      // than invite the double-mail it warns about. The draft stays on
+      // screen as the only record of what went out.
+      if (res?.data?.sent === true) setSent(true)
       return
     }
     // Dismiss + toast: the overlay confirms, then the sheet leaves. The new
