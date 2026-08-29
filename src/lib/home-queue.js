@@ -35,7 +35,7 @@
 //     tickets   → hasPermissionForLocation(user, activeLocationId,
 //                 'email_inbox') + per-account mailbox visibility
 //                 (src/app/api/email/tickets/_helpers.js), same as
-//                 /api/email/tickets/count.
+//                 the mail count route.
 //     inbox     → hasPermission(user, 'whatsapp'), same as
 //                 /api/whatsapp/unread-count (one permission gates both
 //                 WhatsApp and Instagram, as it does there).
@@ -139,7 +139,7 @@ async function ticketsVisibility(db, user, locationId) {
 }
 
 // Same three-scope stack (visible mailboxes → needs-reply → unmerged) as
-// /api/email/tickets/count, applied in the same order, so the row list, the
+// /api/email/mail/count, applied in the same order, so the row list, the
 // count and the nav badge can never disagree about which tickets qualify.
 function applyTicketScope(query, vis) {
   return scopeToUnmerged(scopeToNeedsReply(scopeToVisibleMailboxes(query, vis)))
@@ -349,7 +349,7 @@ export async function assembleHomeQueue(db, user) {
  * for a per-source `degraded` flag the way assembleHomeQueue has, so a
  * failed mailbox-visibility lookup can't be folded into the sum as a
  * confident 0 the way a generic source failure is: it REJECTS instead,
- * mirroring /api/email/tickets/count's own 500 on the identical failure.
+ * mirroring /api/email/mail/count's own 500 on the identical failure.
  * The route this feeds is expected to answer 500 on that rejection so its
  * poller keeps its last good number rather than overwriting it with a
  * wrong "nothing to do" (see src/app/api/home-queue/count/route.js).

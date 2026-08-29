@@ -1191,7 +1191,7 @@ registry.registerPath({
 const GoneOnly = {
   401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
   403: { description: 'Missing the email_inbox permission', content: { 'application/json': { schema: ErrorResponse } } },
-  410: { description: 'Gone — retired, use /api/email/tickets*', content: { 'application/json': { schema: ErrorResponse } } },
+  410: { description: 'Gone — retired, use /api/email/mail*', content: { 'application/json': { schema: ErrorResponse } } },
 }
 
 registry.registerPath({
@@ -1200,7 +1200,7 @@ registry.registerPath({
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'RETIRED — list email inbox conversations (410 Gone)',
-  description: 'Retired by EMAIL-CONV-STOP.1. Was the operator inbox list for the email channel; now returns 410 Gone and reads nothing. Use GET /api/email/tickets.',
+  description: 'Retired by EMAIL-CONV-STOP.1. Was the operator inbox list for the email channel; now returns 410 Gone and reads nothing. Use GET /api/email/mail.',
   request: {
     query: z.object({ location_id: uuidLike.optional() }),
   },
@@ -1226,7 +1226,7 @@ registry.registerPath({
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'RETIRED — resolve / reopen an email conversation (410 Gone)',
-  description: 'Retired by EMAIL-CONV-STOP.1. Was the resolved_at stamp (UIX-P1 queue semantics); now returns 410 Gone and writes nothing. Use PATCH /api/email/tickets/{id}/status.',
+  description: 'Retired by EMAIL-CONV-STOP.1. Was the resolved_at stamp (UIX-P1 queue semantics); now returns 410 Gone and writes nothing. Archive via POST /api/email/mail/{id}/archive.',
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({ resolved: z.boolean() }).openapi('EmailConversationPatch') } } },
@@ -1248,32 +1248,6 @@ registry.registerPath({
   responses: { ...GoneOnly },
 })
 
-// Email tickets (cookie auth) — EMAIL-TICKET.4.
-// TWO GATES on every route below: the `email_inbox` permission gates the
-// surface (NOT the older `email` key, which gates marketing mail), and a row
-// in email_mailbox_access gates each individual account. A ticket on a mailbox
-// the caller cannot see is a 404, never a 403.
-registry.registerPath({
-  method: 'get',
-  path: '/api/email/tickets',
-  tags: ['Email'],
-  security: [{ CookieAuth: [] }],
-  summary: 'DEPRECATED shim for the shipped staff app — use /api/email/mail',
-  description: '🔴 DEPRECATED SHIM (RETIRE-TICKETS.1) — the ticket queue UI is deleted; use GET /api/email/mail. Kept ONLY for the staff app\'s shipped bundle (an OTA reaches a phone on next launch, not on deploy); deleted in a later sweep once the mobile Mail port has landed. Now lists ALL visible mailboxes (the mig-575 surface split is retired, mig 578) with the response shape frozen as the bundle expects it — `mailboxes_on_mail` is constant []. Tickets with a NULL mailbox_id remain visible to elevated callers.',
-  request: {
-    query: z.object({
-      location_id: uuidLike,
-      mailbox_id: uuidLike.optional(),
-      view: z.enum(['unassigned', 'mine', 'needs_reply', 'closed']).optional(),
-    }),
-  },
-  responses: {
-    200: { description: '{ mailboxes, tickets, viewer_is_elevated, mailboxes_on_mail }' },
-    400: { description: 'Missing location_id / unknown view', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Missing email_inbox permission or foreign location', content: { 'application/json': { schema: ErrorResponse } } },
-    500: { description: 'Mailbox visibility lookup failed — NOT an empty inbox', content: { 'application/json': { schema: ErrorResponse } } },
-  },
-})
 
 // ══ MAIL-TRIAL.B — THE email surface (sole surface since RETIRE-TICKETS.1) ══
 // The SAME data model as the old ticket queue, presented as a mail client:
@@ -1353,22 +1327,6 @@ registry.registerPath({
   },
 })
 
-// EMAIL-TICKET-CLEANUP.3 — the Email nav badge. Deliberately parameterless
-// (location comes off the session), like every other badge count endpoint.
-registry.registerPath({
-  method: 'get',
-  path: '/api/email/tickets/count',
-  tags: ['Email'],
-  security: [{ CookieAuth: [] }],
-  summary: 'Count email tickets awaiting a reply (nav badge)',
-  description:
-    '🔴 DEPRECATED SHIM (RETIRE-TICKETS.1) — web badges poll /api/email/mail/count. Kept only for old shipped bundles; deleted in a later sweep. Surface narrowing removed (mig 578), so it counts the same rows as the mail badge: conversations on a visible mailbox that are `open` with an inbound last message, at the caller’s ACTIVE location. Returns count 0 (not an error) for a session without the permission or without an active location.',
-  responses: {
-    200: { description: '{ count }', content: { 'application/json': { schema: SuccessResponse(z.object({ count: z.number() })) } } },
-    401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },
-    500: { description: 'Mailbox visibility or count query failed — NOT a zero', content: { 'application/json': { schema: ErrorResponse } } },
-  },
-})
 
 // INBOX-SURFACE.C — the Mail surface's OWN nav badge, the mirror image of the
 // ticket count above. TWO badges exist rather than one shared count because
@@ -1483,60 +1441,8 @@ registry.registerPath({
   },
 })
 
-registry.registerPath({
-  method: 'post',
-  path: '/api/email/tickets/{id}/status',
-  tags: ['Email'],
-  security: [{ CookieAuth: [] }],
-  summary: 'Move a ticket through its lifecycle',
-  description: 'Sets solved_at / closed_at moving into those states and clears them moving out. Nothing auto-closes anywhere in this feature — this route is the only way a ticket leaves the queue.',
-  request: {
-    params: z.object({ id: uuidLike }),
-    body: { content: { 'application/json': { schema: z.object({ status: z.enum(['open', 'pending', 'solved', 'closed']) }).openapi('EmailTicketStatus') } } },
-  },
-  responses: {
-    200: { description: 'Updated ticket' },
-    400: { description: 'Invalid status', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
-  },
-})
 
-registry.registerPath({
-  method: 'post',
-  path: '/api/email/tickets/{id}/assign',
-  tags: ['Email'],
-  security: [{ CookieAuth: [] }],
-  summary: 'Claim, release or reassign a ticket',
-  description: "EMAIL-ASSIGN.1 — who owns this ticket. assignee 'me' CLAIMS an unassigned ticket (conditional on assigned_to IS NULL, so simultaneous claims race in Postgres and the loser gets 409 already_assigned; a ticket somebody else holds is a 409 outright — taking over is an explicit elevated reassign). assignee null RELEASES your own ticket, or anybody's when elevated at the ticket's location. Any other string is a profile id: elevated-only, and the TARGET must be able to SEE the ticket (a grant on its mailbox, owner at its location, or master) — 400 assignee_cannot_see otherwise. Gated through loadTicketForUser like every ticket write: 404, never 403, for tickets outside the caller's visible set.",
-  request: {
-    params: z.object({ id: uuidLike }),
-    body: { content: { 'application/json': { schema: z.object({
-      assignee: z.union([z.literal('me'), z.null(), z.string().min(1).max(64)]),
-    }).openapi('EmailTicketAssign') } } },
-  },
-  responses: {
-    200: { description: 'Updated ticket + resolved assignee_name' },
-    400: { description: 'Invalid body, or the target cannot see the ticket', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Releasing another’s ticket, or reassigning, without elevation', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'Somebody else already holds it', content: { 'application/json': { schema: ErrorResponse } } },
-  },
-})
 
-registry.registerPath({
-  method: 'get',
-  path: '/api/email/tickets/{id}/assignees',
-  tags: ['Email'],
-  security: [{ CookieAuth: [] }],
-  summary: 'Who a ticket can be assigned to',
-  description: 'EMAIL-ASSIGN.1 — feeds the elevated reassign picker: holders of a grant on the ticket’s mailbox plus owners at its location, named. Elevated-only (403) because the list enumerates colleagues’ mailbox access; sits behind loadTicketForUser’s 404 so it reveals nothing about tickets the caller cannot already see.',
-  request: { params: z.object({ id: uuidLike }) },
-  responses: {
-    200: { description: '{ assignees: [{ id, full_name }] }' },
-    403: { description: 'Not elevated at the ticket’s location', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
-  },
-})
 
 registry.registerPath({
   method: 'patch',
@@ -6366,7 +6272,7 @@ registry.registerPath({
   tags: ['Dashboard'],
   security: [{ CookieAuth: [] }],
   summary: 'Count of needs-attention items across approvals + tickets + inbox (nav badge)',
-  description: 'Cheap sum of the same three TRUE counts GET /api/home-queue reports — no approval items, ticket subjects or conversation contacts are ever fetched. Every per-source gate mirrors the equivalent count route exactly; a session ineligible for a source contributes 0 for it, the same posture as /api/whatsapp/unread-count. HOME.3\'s sidebar retirement task made this the ONE count endpoint Sidebar.jsx polls (the per-source badge routes it used to poll — /api/approvals/count, /api/issues/count, /api/churn-radar/count, /api/lead-radar/count, /api/hosts/pending-events/count — are deleted). EMAIL-TICKET-CLEANUP.2 is the one exception to "always 200 with a number": a FAILED tickets mailbox-visibility lookup 500s rather than silently answering a lower, confidently-wrong number — the same posture /api/email/tickets/count takes on the identical failure, so the badge poller keeps its last good number instead of overwriting it with a wrong "nothing to do".',
+  description: 'Cheap sum of the same three TRUE counts GET /api/home-queue reports — no approval items, ticket subjects or conversation contacts are ever fetched. Every per-source gate mirrors the equivalent count route exactly; a session ineligible for a source contributes 0 for it, the same posture as /api/whatsapp/unread-count. HOME.3\'s sidebar retirement task made this the ONE count endpoint Sidebar.jsx polls (the per-source badge routes it used to poll — /api/approvals/count, /api/issues/count, /api/churn-radar/count, /api/lead-radar/count, /api/hosts/pending-events/count — are deleted). EMAIL-TICKET-CLEANUP.2 is the one exception to "always 200 with a number": a FAILED tickets mailbox-visibility lookup 500s rather than silently answering a lower, confidently-wrong number — the same posture /api/email/mail/count takes on the identical failure, so the badge poller keeps its last good number instead of overwriting it with a wrong "nothing to do".',
   responses: {
     200: { description: '{ count }', content: { 'application/json': { schema: SuccessResponse(z.object({ count: z.number() })) } } },
     401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },

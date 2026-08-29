@@ -22,84 +22,10 @@
 // Pure: no DOM, no fetch, no clock (callers pass `now`). Tested in
 // ticket-display.test.js.
 
-// ── Views ────────────────────────────────────────────────────────────
-//
-// `wire` is what goes in ?view=. null means "send no view param" — the route
-// treats an absent view as the live queue (open + pending), which is the
-// default the operator lands on. Every other value here is one of the four
-// the route whitelists; anything else is a 400.
-export const TICKET_VIEWS = Object.freeze([
-  {
-    id: 'open',
-    label: 'Open',
-    wire: null,
-    hint: 'Open and pending — the live queue',
-    emptyTitle: 'Queue clear',
-    emptyDescription: 'Nothing is open or waiting on a member reply right now.',
-  },
-  {
-    id: 'unassigned',
-    label: 'Unassigned',
-    wire: 'unassigned',
-    hint: 'Open tickets nobody has picked up',
-    emptyTitle: 'Nothing unassigned',
-    emptyDescription: 'Every open ticket here already has someone on it.',
-  },
-  {
-    id: 'mine',
-    label: 'Mine',
-    wire: 'mine',
-    hint: 'Open and pending tickets assigned to you',
-    emptyTitle: 'Nothing assigned to you',
-    emptyDescription: 'Tickets assigned to you will show up here.',
-  },
-  {
-    id: 'needs_reply',
-    label: 'Needs reply',
-    wire: 'needs_reply',
-    hint: 'Open, and the last word was theirs',
-    emptyTitle: 'Nobody is waiting on us',
-    emptyDescription: 'Every open ticket has been answered — the ball is with the member.',
-  },
-  {
-    // Labelled "Closed" but the wire word returns solved AND closed. The
-    // label is deliberately the shorter of the two: an operator looking for
-    // "the archive" looks for Closed.
-    id: 'closed',
-    label: 'Closed',
-    wire: 'closed',
-    hint: 'Solved and closed tickets',
-    emptyTitle: 'Nothing closed yet',
-    emptyDescription: 'Tickets you solve or close are archived here.',
-  },
-])
-
-export const DEFAULT_VIEW_ID = 'open'
-
-/** The view descriptor for an id, falling back to the default rather than undefined. */
-export function ticketView(id) {
-  return TICKET_VIEWS.find(v => v.id === id) || TICKET_VIEWS[0]
-}
-
-/** The ?view= value for a view id — null when the param must be omitted. */
-export function viewWireValue(id) {
-  return ticketView(id).wire
-}
-
-/**
- * The queue URL for a (location, mailbox, view) triple.
- *
- * Centralised so the "omit `view` for the default" rule and the encoding live
- * in one tested place instead of a template literal in a component.
- */
-export function buildTicketsUrl({ locationId, mailboxId, viewId } = {}) {
-  const params = new URLSearchParams()
-  if (locationId) params.set('location_id', locationId)
-  if (mailboxId) params.set('mailbox_id', mailboxId)
-  const wire = viewWireValue(viewId)
-  if (wire) params.set('view', wire)
-  return `/api/email/tickets?${params.toString()}`
-}
+// (RETIRE-TICKETS.2 — the Views block that lived here — TICKET_VIEWS,
+// DEFAULT_VIEW_ID, ticketView, viewWireValue, buildTicketsUrl — went with the
+// deleted list-route shim. The mobile Mail surface keeps its own view tabs in
+// mobile/lib/email-tickets.js.)
 
 // ── Status + priority ────────────────────────────────────────────────
 //
