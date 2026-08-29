@@ -238,17 +238,28 @@ export function classifyPickedFiles(existing, picked, nextIndex) {
     }
     const size = Number(asset?.size)
     const filename = asset?.name || 'file'
+    // A file that REPORTS zero (or negative) bytes is born failed — never
+    // uploaded: the sign route refuses size < 1 with a field-less "Invalid
+    // request body" (its schema is z.number().int().positive()), so without
+    // this chip the operator's first news of an empty file is an opaque 400
+    // after typing the email. Distinct from an UNREADABLE size (NaN), which
+    // stays an oversize chip below — "empty" would be a guess there.
+    const emptyFile = Number.isFinite(size) && size <= 0
     // An unreadable size refuses (oversize), never rides free — the same
     // direction the web's exceedsOutboundTotal fails in.
-    const fits = Number.isFinite(size) && size >= 0 && running + size <= MAX_ATTACHMENT_TOTAL_BYTES
+    const fits = !emptyFile && Number.isFinite(size) && running + size <= MAX_ATTACHMENT_TOTAL_BYTES
     const entry = {
       key: `att-${index}`,
       uri: asset?.uri || null,
       filename,
       mime: asset?.mimeType || 'application/octet-stream',
-      size: Number.isFinite(size) ? size : 0,
-      status: fits ? 'uploading' : 'oversize',
-      error: fits ? null : oversizeChipError(filename, size),
+      size: Number.isFinite(size) && size > 0 ? size : 0,
+      status: fits ? 'uploading' : emptyFile ? 'failed' : 'oversize',
+      error: fits
+        ? null
+        : emptyFile
+          ? 'That file appears to be empty — pick it again.'
+          : oversizeChipError(filename, size),
       ref: null,
     }
     if (fits) running += size
@@ -385,4 +396,27 @@ export function composeIsDirty({ pills, pending, subject, text, files } = {}) {
     || String(text || '').trim()
     || (files || []).length,
   )
+}
+
+/**
+ * What the Cancel affordance (and the hardware back) does — ONE derivation so
+ * the button and the confirm can never disagree about what closing costs:
+ *
+ *   'block'   — a send is on the wire; the result decides what closing means.
+ *   'confirm' — pre-send with content: discarding costs the operator the
+ *               draft, so ask first.
+ *   'close'   — nothing to lose. That includes the ~900ms post-send toast
+ *               window: the fields still hold the email, but it has been SENT
+ *               — "Discard this email? Nothing has been sent" would be a lie
+ *               twice over, and there is nothing left to discard.
+ *
+ * @param {{ sending?: boolean, sent?: boolean, pills?: object[],
+ *           pending?: string, subject?: string, text?: string,
+ *           files?: object[] }} state
+ * @returns {'block'|'confirm'|'close'}
+ */
+export function composeCloseAction({ sending, sent, pills, pending, subject, text, files } = {}) {
+  if (sending) return 'block'
+  if (sent) return 'close'
+  return composeIsDirty({ pills, pending, subject, text, files }) ? 'confirm' : 'close'
 }

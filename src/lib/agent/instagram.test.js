@@ -1,6 +1,6 @@
-// RADAR-AGENT — unit tests for the Instagram pure helper.
+// RADAR-AGENT — unit tests for the Instagram pure helpers.
 import { describe, it, expect } from 'vitest'
-import { parseInstagramEvents } from './instagram'
+import { parseInstagramEvents, isLowSignalInstagramEvent } from './instagram'
 import { mediaRenderKind } from '@shared/whatsapp-media'
 
 const baseEntry = (messaging) => ({ object: 'instagram', entry: [{ id: 'IGBIZ1', messaging }] })
@@ -134,6 +134,22 @@ describe('parseInstagramEvents', () => {
     expect(parseInstagramEvents(body)[0]).toMatchObject({ type: 'text', mediaUrl: null })
   })
 
+  // IG-LOWSIG.1 — a reply to (or quick-reaction on) one of our stories
+  // carries the story under message.reply_to; the low-signal predicate needs
+  // the flag to tell an emoji-only story reaction from a real emoji answer.
+  it('flags a story reply via message.reply_to.story', () => {
+    const body = baseEntry([{
+      sender: { id: 'C' }, recipient: { id: 'IGBIZ1' },
+      message: { mid: 'm8', text: '🔥', reply_to: { story: { id: 's1', url: 'https://cdn.ig/story.jpg' } } },
+    }])
+    expect(parseInstagramEvents(body)[0]).toMatchObject({ type: 'text', text: '🔥', isStoryReply: true })
+  })
+
+  it('ordinary messages are not story replies', () => {
+    const body = baseEntry([{ sender: { id: 'C' }, recipient: { id: 'IGBIZ1' }, message: { mid: 'm9', text: 'hi' } }])
+    expect(parseInstagramEvents(body)[0].isStoryReply).toBe(false)
+  })
+
   it('handles multiple entries and events in order', () => {
     const body = {
       object: 'instagram',
@@ -145,5 +161,54 @@ describe('parseInstagramEvents', () => {
     const out = parseInstagramEvents(body)
     expect(out.map(e => e.text)).toEqual(['one', 'two'])
     expect(out.map(e => e.accountId)).toEqual(['A', 'B'])
+  })
+})
+
+// IG-LOWSIG.1 — what counts as ambient social noise (recorded, never
+// escalated) vs a genuine message. The load-bearing edge: any real words make
+// it a genuine message again, because "saw your post, is this class on
+// tonight?" arrives as a share + caption.
+describe('isLowSignalInstagramEvent', () => {
+  const ev = (over) => ({ accountId: 'A', customerId: 'C', messageId: 'm', text: '', type: 'text', mediaUrl: null, isEcho: false, isStoryReply: false, ...over })
+
+  it('story mention with no text → low-signal', () => {
+    expect(isLowSignalInstagramEvent(ev({ type: 'story_mention', mediaUrl: 'sm' }))).toBe(true)
+  })
+
+  it('shared post / reel with no caption → low-signal', () => {
+    expect(isLowSignalInstagramEvent(ev({ type: 'share', mediaUrl: 'sh' }))).toBe(true)
+    expect(isLowSignalInstagramEvent(ev({ type: 'reel', mediaUrl: 'r' }))).toBe(true)
+    expect(isLowSignalInstagramEvent(ev({ type: 'ig_reel', mediaUrl: 'r' }))).toBe(true)
+  })
+
+  it('a share with real words attached is a genuine message', () => {
+    expect(isLowSignalInstagramEvent(ev({ type: 'share', text: 'is this class still on tonight?' }))).toBe(false)
+  })
+
+  it('an emoji-only caption on a share stays low-signal', () => {
+    expect(isLowSignalInstagramEvent(ev({ type: 'share', text: '🔥🔥' }))).toBe(true)
+  })
+
+  it('emoji-only story reply (quick reaction) → low-signal', () => {
+    expect(isLowSignalInstagramEvent(ev({ isStoryReply: true, text: '❤️' }))).toBe(true)
+  })
+
+  it('story reply with typed words is a genuine message', () => {
+    expect(isLowSignalInstagramEvent(ev({ isStoryReply: true, text: 'love this! when is the next one?' }))).toBe(false)
+  })
+
+  it('an emoji-only DM outside a story reply is NOT low-signal (can be a real answer)', () => {
+    expect(isLowSignalInstagramEvent(ev({ text: '👍' }))).toBe(false)
+  })
+
+  it('plain text messages and echoes are never low-signal', () => {
+    expect(isLowSignalInstagramEvent(ev({ text: 'how much is membership?' }))).toBe(false)
+    expect(isLowSignalInstagramEvent(ev({ type: 'story_mention', isEcho: true }))).toBe(false)
+    expect(isLowSignalInstagramEvent(null)).toBe(false)
+  })
+
+  it('non-Latin words count as words (digits too)', () => {
+    expect(isLowSignalInstagramEvent(ev({ type: 'share', text: 'об этом' }))).toBe(false)
+    expect(isLowSignalInstagramEvent(ev({ isStoryReply: true, text: '10' }))).toBe(false)
   })
 })

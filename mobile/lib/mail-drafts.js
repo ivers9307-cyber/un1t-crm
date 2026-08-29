@@ -34,7 +34,11 @@
 //      the courtesy that turns an oversize pick into a red chip instead of a
 //      failed send), the 10-file cap, and composerSendState — the ONE
 //      answer to "is Send live", so the button and the submit guard cannot
-//      disagree.
+//      disagree. 🔴 ONE DELIBERATE DIVERGENCE FROM WEB (round-2 polish): a
+//      failed/oversize chip BLOCKS send here, where web's TicketReplyBox only
+//      shows a red caption and lets the reply leave without the file whose
+//      chip is still on screen. Mobile aligns with mail-compose's posture
+//      instead — see composerSendState's comment.
 //
 // AsyncStorage, not SecureStore: drafts are neither tokens nor customer data
 // (the words a staffer typed, at most), SecureStore has a ~2 KB per-value
@@ -332,11 +336,19 @@ export function collapsedRowMeta(message, { isFirst = false, fallbackName = '', 
 export const MAX_REPLY_ATTACHMENTS = 10
 export const MAX_REPLY_ATTACHMENT_TOTAL_BYTES = 7 * 1024 * 1024
 
-/** How much of the byte budget the chosen files spend. Unreadable sizes
- * count as 0 here (display maths); admitPickedFile refuses them at the door. */
+/** How much of the byte budget the SENDABLE files spend — uploading + ready
+ * only, aligned with mail-compose's attachmentBudget (round-2 polish): a
+ * FAILED chip will never leave the phone, so its bytes must not block a later
+ * file that genuinely fits (a failed 4 MB pick used to block a ready 4 MB
+ * one). Unreadable sizes count as 0 here (display maths); admitPickedFile
+ * refuses them at the door. */
 export function attachmentBudget(files) {
   const used = (Array.isArray(files) ? files : [])
-    .reduce((sum, f) => sum + (Number.isFinite(Number(f?.size)) ? Number(f.size) : 0), 0)
+    .reduce((sum, f) => (
+      (f?.status === 'uploading' || f?.status === 'ready') && Number.isFinite(Number(f.size))
+        ? sum + Number(f.size)
+        : sum
+    ), 0)
   return {
     used,
     limit: MAX_REPLY_ATTACHMENT_TOTAL_BYTES,
@@ -373,11 +385,18 @@ export function admitPickedFile(files, { name, size } = {}) {
     return `You can attach up to ${MAX_REPLY_ATTACHMENTS} files to one email.`
   }
   const n = Number(size)
-  if (!Number.isFinite(n) || n < 0) {
+  if (!Number.isFinite(n)) {
     // An unreadable size cannot be budgeted, so it is refused rather than
     // admitted blind and discovered at send time — same fail direction as
     // the web module's exceedsOutboundTotal.
     return `${name || 'That file'} has no readable size, so it can’t be attached here.`
+  }
+  if (n <= 0) {
+    // Round-2 polish: the sign route 400s a size of 0 with an opaque schema
+    // sentence — this is the friendly version, at the door, before any
+    // upload starts. (A picker can genuinely report 0 for a cloud file that
+    // never downloaded.)
+    return `${name || 'That file'} appears to be empty — pick it again.`
   }
   if (attachmentBudget(list).used + n > MAX_REPLY_ATTACHMENT_TOTAL_BYTES) {
     return `${name || 'That file'} would push this reply over 7 MB of attachments — send it in its own email instead.`
@@ -406,6 +425,18 @@ export function composerSendState({ text, isNote = false, files = [], audienceDi
   }
   if (audienceDisabled) return { canSend: false, reason: 'no_audience' }
   if (hasPendingUploads(files)) return { canSend: false, reason: 'uploading' }
+  // 🔴 A failed (or oversize) chip on screen BLOCKS the send — a DELIBERATE
+  // DIVERGENCE FROM WEB (round-2 polish, aligning with mail-compose's
+  // hasBlockedAttachments posture instead): web's TicketReplyBox lets a reply
+  // leave while a failed chip shows only a red caption, which means a reply
+  // can go out WITHOUT a file whose chip is still visible on screen — the
+  // email-shaped version of the silent-subset lie. Remove the chip or retry;
+  // the screen's red caption names the way out. ('oversize' never occurs on
+  // the thread today — admitPickedFile refuses at the door — but the gate
+  // must not depend on that staying true.)
+  if ((Array.isArray(files) ? files : []).some(f => f?.status === 'failed' || f?.status === 'oversize')) {
+    return { canSend: false, reason: 'blocked_files' }
+  }
   if (attachmentBudget(files).over) return { canSend: false, reason: 'over_budget' }
   return { canSend: true, reason: null }
 }

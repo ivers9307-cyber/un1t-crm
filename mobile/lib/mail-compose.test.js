@@ -29,6 +29,7 @@ import {
   defaultMailboxId,
   mailboxDisplay,
   composeIsDirty,
+  composeCloseAction,
   MAX_ATTACHMENT_TOTAL_BYTES,
   MAX_ATTACHMENTS,
 } from './mail-compose'
@@ -267,6 +268,39 @@ describe('classifyPickedFiles', () => {
     const { entries } = classifyPickedFiles([], [{ uri: 'u', name: 'mystery.bin', size: undefined }], 0)
     expect(entries[0].status).toBe('oversize')
   })
+
+  it('a 0-byte file is refused as a red chip with the empty-file sentence — the sign route would 400 it opaquely', () => {
+    const { entries } = classifyPickedFiles([], [
+      { uri: 'u', name: 'empty.txt', size: 0, mimeType: 'text/plain' },
+    ], 0)
+    expect(entries[0].status).toBe('failed')
+    expect(entries[0].error).toBe('That file appears to be empty — pick it again.')
+  })
+
+  it('a NON-FINITE negative size is an unknown-size oversize chip, not a false "empty"', () => {
+    // Guards the Number.isFinite half of the empty check: -Infinity satisfies
+    // size <= 0 but "empty" would be a guess — the honest chip is the
+    // unreadable-size one.
+    const { entries } = classifyPickedFiles([], [{ uri: 'u', name: 'garbled.bin', size: -Infinity }], 0)
+    expect(entries[0].status).toBe('oversize')
+    expect(entries[0].error).toMatch(/unknown size/)
+  })
+
+  it('a negative reported size is the same refusal, and the stored size clamps to 0', () => {
+    const { entries } = classifyPickedFiles([], [{ uri: 'u', name: 'weird.bin', size: -5 }], 0)
+    expect(entries[0].status).toBe('failed')
+    expect(entries[0].error).toMatch(/empty/)
+    expect(entries[0].size).toBe(0)
+  })
+
+  it('an empty chip never spends the budget or the key sequence oddly — a real file after it still uploads', () => {
+    const { entries } = classifyPickedFiles([], [
+      { uri: 'u1', name: 'empty.txt', size: 0 },
+      { uri: 'u2', name: 'real.pdf', size: 1 * MB, mimeType: 'application/pdf' },
+    ], 0)
+    expect(entries.map(e => e.status)).toEqual(['failed', 'uploading'])
+    expect(entries.map(e => e.key)).toEqual(['att-0', 'att-1'])
+  })
 })
 
 describe('attachmentBudget', () => {
@@ -417,5 +451,38 @@ describe('composeIsDirty', () => {
 
   it('whitespace-only subject/body is still pristine', () => {
     expect(composeIsDirty({ pills: [], pending: '  ', subject: ' ', text: '\n', files: [] })).toBe(false)
+  })
+})
+
+// ── close affordance ─────────────────────────────────────────────────
+
+describe('composeCloseAction', () => {
+  // A sheet full of content — exactly what the screen still holds during the
+  // post-send toast window.
+  const full = {
+    pills: [{ address: 'a@x.com', name: null, tag: null }],
+    pending: '',
+    subject: 'Hello',
+    text: 'Body',
+    files: [],
+  }
+  const empty = { pills: [], pending: '', subject: '', text: '', files: [] }
+
+  it('blocks close while a send is on the wire', () => {
+    expect(composeCloseAction({ sending: true, sent: false, ...full })).toBe('block')
+  })
+
+  it('once sent, closes WITHOUT the discard confirm even though the fields still hold the email', () => {
+    // The ~900ms toast window: fields untouched, but "Nothing has been sent"
+    // would be a lie and there is nothing left to discard.
+    expect(composeCloseAction({ sending: false, sent: true, ...full })).toBe('close')
+  })
+
+  it('a dirty pre-send sheet asks before discarding', () => {
+    expect(composeCloseAction({ sending: false, sent: false, ...full })).toBe('confirm')
+  })
+
+  it('a pristine sheet closes silently', () => {
+    expect(composeCloseAction({ sending: false, sent: false, ...empty })).toBe('close')
   })
 })

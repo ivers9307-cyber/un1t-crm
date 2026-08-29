@@ -244,6 +244,47 @@ export function composeEmail({
   return api('/api/email/tickets/compose', { method: 'POST', body, locationId })
 }
 
+/**
+ * Pass one message on the ticket to somebody else (MOBILE-MAIL-FORWARD.1;
+ * POST /api/email/tickets/[id]/forward — the same non-deprecated per-ticket
+ * family as reply).
+ *
+ * THE ENVELOPE PASSES THROUGH UNTOUCHED, refusals included — the route owns
+ * every rule (internal notes are 400d, unstored attachment ids refused, the
+ * recipient cap, the 7 MiB ceiling re-measured on real bytes) and its error
+ * strings are operator-facing sentences. lib/mail-forward.js is the screen's
+ * courtesy copy of the predictable half; this wrapper re-implements none of
+ * it.
+ *
+ * Send happens FIRST server-side and the ticket is deliberately not touched
+ * (a forward is not an answer to the member — the thread stays in
+ * needs-reply). The rare sent-but-unfiled branch answers success:false WITH
+ * `data.sent: true` — surface it as "do not resend", exactly like compose.
+ *
+ * @param {object} args
+ * @param {string}   args.ticketId      the ticket the message lives on
+ * @param {string}   args.messageId     the ONE message being forwarded
+ * @param {string[]} args.to            typed by the operator; at least one
+ * @param {string[]} [args.cc]
+ * @param {string[]} [args.bcc]
+ * @param {string}   [args.note]        the covering note; optional by design
+ * @param {string[]} [args.attachmentIds] ids of the ORIGINAL message's stored
+ *   attachment rows (never paths, never bytes); default NONE
+ * @param {string}   [args.locationId]
+ */
+export function forwardMessage({
+  ticketId, messageId, to, cc, bcc, note, attachmentIds, locationId,
+} = {}) {
+  const body = { message_id: messageId, to }
+  // Empty lists and a blank note stay off the wire — the route defaults them,
+  // and the smallest body is the one shape nothing can misread.
+  if (Array.isArray(cc) && cc.length > 0) body.cc = cc
+  if (Array.isArray(bcc) && bcc.length > 0) body.bcc = bcc
+  if (typeof note === 'string' && note.trim()) body.note = note
+  if (Array.isArray(attachmentIds) && attachmentIds.length > 0) body.attachment_ids = attachmentIds
+  return api(`/api/email/tickets/${ticketId}/forward`, { method: 'POST', body, locationId })
+}
+
 // RETIRE-TICKETS.1 removed assignTicket + setTicketStatus + markTicketRead:
 // assignment and the four-state lifecycle are not on the Mail surface (zero
 // tickets were ever assigned in the queue's whole life), and read state is
