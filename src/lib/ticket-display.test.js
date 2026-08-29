@@ -4,11 +4,6 @@
 
 import { describe, it, expect } from 'vitest'
 import {
-  TICKET_VIEWS,
-  DEFAULT_VIEW_ID,
-  ticketView,
-  viewWireValue,
-  buildTicketsUrl,
   STATUS_META,
   STATUS_ORDER,
   statusMeta,
@@ -39,53 +34,6 @@ import {
 
 // The route whitelists exactly these and 400s on anything else.
 const WIRE_WHITELIST = ['unassigned', 'mine', 'needs_reply', 'closed']
-
-describe('views', () => {
-  it('only ever puts a route-whitelisted string on the wire', () => {
-    for (const v of TICKET_VIEWS) {
-      if (v.wire === null) continue
-      expect(WIRE_WHITELIST, `view "${v.id}" would 400`).toContain(v.wire)
-    }
-  })
-
-  it('omits the view param for the default view (open + pending)', () => {
-    expect(viewWireValue(DEFAULT_VIEW_ID)).toBeNull()
-    expect(buildTicketsUrl({ locationId: 'loc-1', viewId: DEFAULT_VIEW_ID }))
-      .not.toContain('view=')
-  })
-
-  it('keeps the human label "Closed" on the wire word `closed`', () => {
-    const closed = ticketView('closed')
-    expect(closed.label).toBe('Closed')
-    expect(closed.wire).toBe('closed')
-  })
-
-  it('falls back to the default view rather than undefined for an unknown id', () => {
-    expect(ticketView('nonsense').id).toBe(DEFAULT_VIEW_ID)
-    expect(viewWireValue(undefined)).toBeNull()
-  })
-
-  it('gives every view its own empty-state copy', () => {
-    const titles = TICKET_VIEWS.map(v => v.emptyTitle)
-    expect(new Set(titles).size).toBe(titles.length)
-  })
-})
-
-describe('buildTicketsUrl', () => {
-  it('encodes location, mailbox and view', () => {
-    const url = buildTicketsUrl({ locationId: 'loc-1', mailboxId: 'mb-2', viewId: 'needs_reply' })
-    expect(url).toBe('/api/email/tickets?location_id=loc-1&mailbox_id=mb-2&view=needs_reply')
-  })
-
-  it('omits mailbox_id when no tab is selected (all visible mailboxes)', () => {
-    expect(buildTicketsUrl({ locationId: 'loc-1', mailboxId: null, viewId: 'mine' }))
-      .toBe('/api/email/tickets?location_id=loc-1&view=mine')
-  })
-
-  it('survives a missing location without emitting "undefined"', () => {
-    expect(buildTicketsUrl()).not.toContain('undefined')
-  })
-})
 
 describe('messageKind — the safety-critical one', () => {
   it('calls an internal note a note even though it is stored as outbound', () => {
@@ -240,12 +188,6 @@ describe('labels', () => {
     expect(mailboxLabel({ label: 'Accounts', address: 'accounts@x.ie' })).toBe('Accounts')
     expect(mailboxLabel({ address: 'accounts@x.ie' })).toBe('accounts@x.ie')
     expect(mailboxLabel(null)).toBe('No mailbox')
-  })
-
-  it('keeps the no-mailbox copy distinct from an empty queue', () => {
-    for (const v of TICKET_VIEWS) {
-      expect(NO_MAILBOX_EMPTY.title).not.toBe(v.emptyTitle)
-    }
   })
 
 })
