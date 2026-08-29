@@ -168,6 +168,19 @@ afterEach(() => {
 const renderSurface = () =>
   render(<MailSurface locationId={LOC} locationName="UN1T Hatch Street" userId="me-1" />)
 
+// DEFLAKE (CI run 33270835641, 2026-08-29) — the surface's j/k/e handler is a
+// WINDOW listener re-attached in a passive effect, closing over
+// conversations/selectedId/composeOpen. A findBy*/waitFor resolves on the DOM
+// COMMIT, which can land before that effect flush — so a keydown fired
+// straight after an await could still hit the PREVIOUS closure: an empty list
+// makes j a silent no-op (the flake — neighbourId([]) is null), and a stale
+// composeOpen=false would let `e` archive behind an open modal. A real user
+// cannot type inside a microsecond effect-flush window, so the component is
+// fine; the test must flush pending effects before pressing, which is exactly
+// what an empty async act() does. Every keydown that relies on state an
+// earlier await established goes through this.
+const flushEffects = () => act(async () => {})
+
 const listCalls = () => calls.filter(c => c.url.startsWith('/api/email/mail?'))
 // The filter strip is named, because "Needs reply" is also a chip on the rows
 // below it — without the name they are two identical strings to anyone
@@ -267,8 +280,10 @@ describe('MailSurface — keyboard', () => {
   it('j moves to the next conversation and opens it', async () => {
     renderSurface()
     await screen.findByText('Membership freeze')
+    await flushEffects()
     fireEvent.keyDown(document.body, { key: 'j' })
     await screen.findByText('Message on Membership freeze')
+    await flushEffects()
     fireEvent.keyDown(document.body, { key: 'j' })
     await screen.findByText('Message on Class times')
   })
@@ -276,10 +291,12 @@ describe('MailSurface — keyboard', () => {
   it('k moves back, and does not wrap off the top', async () => {
     renderSurface()
     await screen.findByText('Membership freeze')
+    await flushEffects()
     fireEvent.keyDown(document.body, { key: 'j' })
     await screen.findByText('Message on Membership freeze')
     // Already on the first conversation — k must do nothing rather than jump
     // to the oldest one with no visible cause.
+    await flushEffects()
     fireEvent.keyDown(document.body, { key: 'k' })
     await screen.findByText('Message on Membership freeze')
   })
@@ -288,6 +305,7 @@ describe('MailSurface — keyboard', () => {
     renderSurface()
     fireEvent.click(await screen.findByText('Membership freeze'))
     await screen.findByText('Message on Membership freeze')
+    await flushEffects()
     fireEvent.keyDown(document.body, { key: 'e' })
     await waitFor(() => expect(postsTo('/archive')).toHaveLength(1))
   })
@@ -300,6 +318,10 @@ describe('MailSurface — keyboard', () => {
 
     const composer = document.getElementById('ticket-composer')
     expect(composer).toBeTruthy()
+    // Flushed so the listener provably holds the OPEN selection — otherwise a
+    // stale closure with no selectedId makes this pass vacuously (e would
+    // no-op for the wrong reason and the typing guard would go untested).
+    await flushEffects()
     fireEvent.keyDown(composer, { key: 'e' })
     fireEvent.keyDown(composer, { key: 'j' })
     fireEvent.keyDown(composer, { key: 'u' })
@@ -323,6 +345,10 @@ describe('MailSurface — keyboard', () => {
 
     // Typing a recipient that starts with 'e' — the exact keystroke that used
     // to archive the conversation behind the modal and move the real message.
+    // Flushed so the listener provably knows composeOpen=true: a stale
+    // closure here (fresh selectedId, composeOpen still false) would archive
+    // behind the modal — the very bug this test pins — as a flake.
+    await flushEffects()
     fireEvent.keyDown(dialog, { key: 'e' })
     fireEvent.keyDown(dialog, { key: 'j' })
     fireEvent.keyDown(dialog, { key: 'k' })
@@ -345,6 +371,8 @@ describe('MailSurface — keyboard', () => {
     fireEvent.click(screen.getByRole('button', { name: /New email/i }))
     await screen.findByRole('dialog')
 
+    // Same flush reasoning as the dialog-focused variant above.
+    await flushEffects()
     fireEvent.keyDown(document.body, { key: 'e' })
     fireEvent.keyDown(document.body, { key: 'u' })
 
@@ -357,6 +385,7 @@ describe('MailSurface — keyboard', () => {
     fireEvent.click(await screen.findByText('Membership freeze'))
     await screen.findByText('Message on Membership freeze')
 
+    await flushEffects()
     fireEvent.keyDown(document.body, { key: 'e' })
     fireEvent.keyDown(document.body, { key: 'e', repeat: true })
     fireEvent.keyDown(document.body, { key: 'e', repeat: true })
