@@ -359,7 +359,7 @@ export default function EmailMailboxesCard({ locationId }) {
         {mailboxes.length === 0 && (
           <p className="mt-4 rounded-lg border border-un1t-border bg-un1t-bg/60 p-4 text-sm text-un1t-subtle">
             This studio has no email accounts yet. Add one below — until then, nothing routes into
-            the Email inbox for this location.
+            Mail for this location.
           </p>
         )}
 

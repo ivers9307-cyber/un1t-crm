@@ -20,11 +20,11 @@ export const MOBILE_NAV_FEATURES = Object.freeze([
   { key: 'schedule', label: 'Schedule',  permKeys: ['schedule'],                   barEligible: true },
   { key: 'whatsapp', label: 'WhatsApp',  permKeys: ['whatsapp'],                   barEligible: true },
   // INBOX-SPLIT.M1 — email is its OWN surface, not a channel inside Messages,
-  // exactly as on web (the unified inbox is WhatsApp + Instagram; email is
+  // exactly as on web (the unified inbox is WhatsApp + Instagram; mail is
   // worked at /communications/tickets). Its permKey is the top-level
-  // `email_inbox` — the same key the /api/email/tickets* routes enforce — so
+  // `email_inbox` — the same key the /api/email/* routes enforce — so
   // the gate that places the tab is the gate that lets its calls through.
-  { key: 'email',    label: 'Email',     permKeys: ['email_inbox'],                barEligible: true },
+  { key: 'email',    label: 'Mail',      permKeys: ['email_inbox'],                barEligible: true },
   // SONOSMOB.2 — device_control added: a user holding only live music
   // control still needs the Studio hub to reach /sonos.
   { key: 'studio',   label: 'Studio',    permKeys: ['studio_management', 'class_timer', 'tv_displays', 'device_control'], barEligible: true },

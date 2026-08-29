@@ -1,31 +1,27 @@
-// Email tab — the studio's ticket queue (INBOX-SPLIT.M1).
+// Mail tab — the studio's email, mail-client shaped (MOBILE-MAIL.1).
 //
-// EMAIL IS ITS OWN SURFACE, exactly as on web. The unified inbox
-// (/communications/inbox, and the mobile Messages tab) is WhatsApp +
-// Instagram; email is worked at /communications/tickets there and here.
-// It used to ride along as a third channel inside Messages — a queue with a
-// lifecycle, a subject line, per-account access and nothing that auto-closes
-// does not belong interleaved with chat threads, and burying it there meant
-// the studio's mail was triaged by whoever happened to scroll past it.
+// EMAIL IS ITS OWN SURFACE, exactly as on web: /communications/mail there,
+// this tab here (RETIRE-TICKETS.1 — the ticket queue this screen used to
+// mirror is deleted; Mail won the mig-575 A/B). The unified Messages tab
+// stays WhatsApp + Instagram.
 //
 // GATED ON `email_inbox`, the TOP-LEVEL key (cross-platform — see
 // CROSS_PLATFORM_KEYS in shared/permissions.js). That is the same key every
-// /api/email/tickets* route enforces, so the gate that places this tab is the
-// gate that lets its calls through; a mobile-namespaced key could drift and
+// /api/email/* route enforces, so the gate that places this tab is the gate
+// that lets its calls through; a mobile-namespaced key could drift and
 // render an inbox where every request 403s. Per-account visibility is a
 // second, separate gate (email_mailbox_access), resolved server-side — which
 // is why "no mailboxes" is a normal, non-error state here.
 //
 // Rows carry what a phone actually needs to triage: who wrote in, what about
-// (the subject — chat has no equivalent), the last line, an unread count,
-// which account it arrived at (accounts@ and sales@ are otherwise
-// indistinguishable) and where it is in the lifecycle. Tapping opens the
-// existing thread screen at /email/[ticketId], which owns replying, internal
-// notes and the status control.
+// (the subject — chat has no equivalent), the last line, unread weight, a
+// paperclip when a real file rode along, which account it arrived at, and
+// Archived / Needs reply. Tapping opens the thread at /email/[ticketId];
+// ARCHIVE — the surface's primary verb — is the row's trailing button, with
+// the whole lifecycle ceremony (assignment, four states) gone.
 //
-// NOTHING AUTO-CLOSES anywhere in this feature by design, so the queue only
-// shrinks when a person solves or closes a ticket. The view chips exist so
-// that is visible rather than implied.
+// Nothing auto-closes: the inbox only shrinks when a person archives, and a
+// member's reply brings an archived conversation straight back.
 
 import { useState, useEffect, useCallback } from 'react'
 import {
@@ -36,9 +32,9 @@ import { useRouter, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../../lib/auth-context'
 import { canMobile } from '../../../lib/permissions'
-import { listTickets, emailDisplayName } from '../../../lib/email-api'
+import { listMail, archiveConversation, emailDisplayName } from '../../../lib/email-api'
 import {
-  ticketStatusMeta, ticketViewTab, ticketViewWire,
+  mailStatusChip, ticketViewTab, ticketViewWire,
   TICKET_VIEW_TABS, DEFAULT_TICKET_VIEW, NO_MAILBOX_EMPTY,
 } from '../../../lib/email-tickets'
 
@@ -50,7 +46,7 @@ function isToday(iso) {
     && d.getDate() === now.getDate()
 }
 
-function TicketRow({ row, onPress }) {
+function MailRow({ row, onPress, onArchiveToggle, archiving }) {
   const name = emailDisplayName(row)
   const isInbound = row.last_message_direction === 'inbound'
   const time = row.last_message_at
@@ -59,14 +55,17 @@ function TicketRow({ row, onPress }) {
         ...(isToday(row.last_message_at) ? {} : { month: 'short', day: 'numeric' }),
       })
     : ''
-  // Open is the overwhelming majority of the live queue, so chipping every
-  // row with it would be noise — only a status that changes what you do next
-  // gets one. Same rule as the web list. `mailbox_label` is already null
+  // Only a fact that changes what you do next gets a chip — Archived, or
+  // Needs reply. Same rule as the web list. `mailbox_label` is already null
   // unless the caller can see more than one account (ticketsToInboxRows).
-  const status = row.status && row.status !== 'open' ? ticketStatusMeta(row.status) : null
+  const chip = mailStatusChip(row)
   // Boolean on purpose: a bare '' leaking into JSX is a hard RN crash
   // ("Text strings must be rendered within a <Text> component").
-  const showChips = !!(row.mailbox_label || status)
+  const showChips = !!(row.mailbox_label || chip)
+  // Unread carries WEIGHT, like every mail client: the row's facts go bold
+  // rather than growing a counter pill. `unread` mirrors per-message seen_at
+  // (IMAP \Seen where connected), so mail read at the desk reads here too.
+  const weight = row.unread ? 'font-bold' : 'font-semibold'
 
   return (
     <Pressable
@@ -80,7 +79,10 @@ function TicketRow({ row, onPress }) {
       </View>
       <View className="flex-1">
         <View className="flex-row items-center">
-          <Text className="text-base font-semibold text-un1t-text flex-1" numberOfLines={1}>
+          {row.unread ? (
+            <View className="w-2 h-2 rounded-full bg-blue-500 mr-1.5" />
+          ) : null}
+          <Text className={`text-base ${weight} text-un1t-text flex-1`} numberOfLines={1}>
             {name}
           </Text>
           <Text className="text-xs text-un1t-subtle ml-2">{time}</Text>
@@ -88,7 +90,7 @@ function TicketRow({ row, onPress }) {
         {/* The subject — what the enquiry is ABOUT, above what was last said
             about it. This is the line email has and chat does not. */}
         {row.subject ? (
-          <Text className="text-xs text-un1t-text mt-0.5" numberOfLines={1}>
+          <Text className={`text-xs text-un1t-text mt-0.5 ${row.unread ? 'font-semibold' : ''}`} numberOfLines={1}>
             {row.subject}
           </Text>
         ) : null}
@@ -96,14 +98,17 @@ function TicketRow({ row, onPress }) {
           {isInbound ? null : (
             <Ionicons name="checkmark" size={12} color="#94A3B8" style={{ marginRight: 4 }} />
           )}
+          {row.has_attachments ? (
+            <Ionicons name="attach-outline" size={12} color="#64748B" style={{ marginRight: 4 }} />
+          ) : null}
           <Text className="text-sm text-un1t-subtle flex-1" numberOfLines={1}>
             {row.last_message_preview || '—'}
           </Text>
         </View>
-        {/* Which account it arrived at, and where it is in the lifecycle. Own
-            row rather than crowding the preview: on a phone the mailbox name
-            is the difference between a billing query and a sales enquiry, so
-            it must not be the thing that truncates. */}
+        {/* Which account it arrived at, and Archived / Needs reply. Own row
+            rather than crowding the preview: on a phone the mailbox name is
+            the difference between a billing query and a sales enquiry, so it
+            must not be the thing that truncates. */}
         {showChips && (
           <View className="flex-row items-center mt-1">
             {row.mailbox_label ? (
@@ -114,19 +119,33 @@ function TicketRow({ row, onPress }) {
                 </Text>
               </View>
             ) : null}
-            {status ? (
-              <View className={`px-1.5 py-0.5 rounded ${status.cls}`}>
-                <Text className={`text-[10px] font-semibold ${status.text}`}>{status.label}</Text>
+            {chip ? (
+              <View className={`px-1.5 py-0.5 rounded ${chip.cls}`}>
+                <Text className={`text-[10px] font-semibold ${chip.text}`}>{chip.label}</Text>
               </View>
             ) : null}
           </View>
         )}
       </View>
-      {row.unread_count > 0 && (
-        <View className="ml-2 min-w-[20px] h-5 px-1.5 rounded-full bg-green-500 items-center justify-center">
-          <Text className="text-[11px] text-white font-semibold">{row.unread_count}</Text>
-        </View>
-      )}
+      {/* Archive — THE verb of this surface, one tap from the list. hitSlop
+          keeps the target finger-sized without growing the row. */}
+      <Pressable
+        onPress={onArchiveToggle}
+        disabled={archiving}
+        hitSlop={10}
+        className="ml-2 w-9 h-9 rounded-full items-center justify-center active:opacity-60"
+        accessibilityLabel={row.archived ? 'Bring back to inbox' : 'Archive'}
+      >
+        {archiving ? (
+          <ActivityIndicator size="small" />
+        ) : (
+          <Ionicons
+            name={row.archived ? 'arrow-undo-outline' : 'archive-outline'}
+            size={18}
+            color="#64748B"
+          />
+        )}
+      </Pressable>
     </Pressable>
   )
 }
@@ -155,7 +174,7 @@ export default function Email() {
 
   const load = useCallback(async () => {
     if (!activeLocation || !canEmail) return
-    const res = await listTickets(activeLocation.id, { view: ticketViewWire(viewId) })
+    const res = await listMail(activeLocation.id, { view: ticketViewWire(viewId) })
     if (!res.success) {
       setError(res.error || 'Failed to load email')
       return
@@ -164,6 +183,32 @@ export default function Email() {
     setRows(res.data || [])
     setMailboxes(res.mailboxes || [])
   }, [activeLocation, canEmail, viewId])
+
+  // Archive / bring back, straight off the row. OPTIMISTIC: the row leaves
+  // (or changes) immediately and comes back with an alert if the write
+  // failed — a mail app that spins per archive is a mail app nobody triages
+  // on. `archivingId` still disables the tapped button so a double-tap can't
+  // fire twice.
+  const [archivingId, setArchivingId] = useState(null)
+  async function toggleArchive(row) {
+    const next = !row.archived
+    setArchivingId(row.id)
+    const prevRows = rows
+    // In the inbox/needs-reply views an archived row disappears; in the
+    // Archived view an un-archived one does. Either direction: drop the row.
+    setRows(rs => rs.filter(r => r.id !== row.id))
+    const res = await archiveConversation(row.id, next, activeLocation?.id)
+    setArchivingId(null)
+    if (!res.success) {
+      setRows(prevRows)
+      setError(res.error || (next ? 'Could not archive that' : 'Could not bring that back'))
+      return
+    }
+    // The write-back half (moving the real message in a connected mailbox)
+    // can lag or refuse independently — the server says so in `writeback`,
+    // and the DB half above already stands either way. Silent here: the
+    // thread screen is where that notice belongs.
+  }
 
   useEffect(() => {
     setLoading(true)
@@ -190,7 +235,7 @@ export default function Email() {
       <View className="flex-1 bg-un1t-bg items-center justify-center px-8">
         <Ionicons name="mail-outline" size={32} color="#94A3B8" />
         <Text className="text-sm text-un1t-subtle mt-2 text-center">
-          The studio email inbox isn’t enabled for you at this location.
+          Mail isn’t enabled for you at this location.
         </Text>
       </View>
     )
@@ -222,8 +267,8 @@ export default function Email() {
         </View>
       )}
 
-      {/* View chips — the same queues, in the same words, as the web ticket
-          inbox. Horizontal scroll: five chips overflow narrow phones. */}
+      {/* View chips — the same views, in the same words, as the web Mail
+          surface: Inbox / Needs reply / Archived. */}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -285,9 +330,11 @@ export default function Email() {
         </View>
       ) : (
         rows.map(r => (
-          <TicketRow
+          <MailRow
             key={r.id}
             row={r}
+            archiving={archivingId === r.id}
+            onArchiveToggle={() => toggleArchive(r)}
             onPress={() => router.push(`/email/${r.id}`)}
           />
         ))

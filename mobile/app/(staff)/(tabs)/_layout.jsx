@@ -19,7 +19,7 @@ import { canMobile, canDashboard, CROSS_PLATFORM_DASHBOARD_KEYS } from '../../..
 import { registerForPushNotifications } from '../../../lib/push-register'
 import { resolveLayoutForUser } from '../../../lib/mobile-layout'
 import { getNeedsActionCount } from '../../../lib/whatsapp-api'
-import { getTicketCount } from '../../../lib/email-api'
+import { getMailCount } from '../../../lib/email-api'
 import ImpersonateBanner from '../../../components/ImpersonateBanner'
 import PendingContractsBanner from '../../../components/PendingContractsBanner'
 import IdentitySwitcher from '../../../components/IdentitySwitcher'
@@ -90,7 +90,7 @@ export default function TabsLayout() {
     }
     let cancelled = false
     async function poll() {
-      const res = await getTicketCount(activeLocation.id)
+      const res = await getMailCount(activeLocation.id)
       if (!cancelled && res?.success) setEmailNeedsReplyCount(res.data?.count || 0)
     }
     poll()
@@ -120,9 +120,9 @@ export default function TabsLayout() {
     // but the screen is the unified WhatsApp + Instagram inbox (M2/M3).
     whatsapp: { title: 'Messages', icon: 'chatbubbles-outline' },
     // INBOX-SPLIT.M1 — email is its own surface, not a channel inside
-    // Messages, matching web (sidebar entry "Email", Mail icon). Gated on
+    // Messages, matching web (the "Mail" tab). Gated on
     // `email_inbox` via shared/mobile-nav → resolveLayoutForUser.
-    email:    { title: 'Email',    icon: 'mail-outline' },
+    email:    { title: 'Mail',     icon: 'mail-outline' },
     studio:   { title: 'Studio',   icon: 'business-outline' },
     pipeline: { title: 'Pipeline', icon: 'trending-up-outline' },
     bookings: { title: 'Bookings', icon: 'calendar-clear-outline' },

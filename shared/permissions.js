@@ -218,7 +218,7 @@ export const WEB_PERMISSIONS = Object.freeze([
   // gates the surface, and a row in email_mailbox_access (mig 485) gates each
   // individual account within it. Holding this key alone shows nothing — a
   // studio with no mailboxes, or a person with no grants, gets no inbox.
-  { key: 'email_inbox', label: 'Email inbox',
+  { key: 'email_inbox', label: 'Mail',
     hint: 'Ticketed inbox for the studio email accounts (accounts@, sales@, studio@). Access to each individual account is granted separately per person. Master + owner + manager by default.' },
   // EQUIP-MAINT.1 — equipment maintenance. Two keys, deliberately
   // split: `equipment_admin` is the setup surface (register, types,
@@ -1097,7 +1097,7 @@ export const CROSS_PLATFORM_KEYS = Object.freeze([
   // send-to-Xero step stay web-only.
   'bookkeeper',
   // EMAIL-TICKET-M.1 — the mobile email surface now rides
-  // /api/email/tickets*, and EVERY one of those routes gates on the
+  // /api/email/*, and EVERY one of those routes gates on the
   // top-level `email_inbox` key (hasPermission / hasPermissionForLocation
   // — they are service-role routes, so that check IS the gate). A
   // separate mobile-namespaced key would let the UI gate and the server

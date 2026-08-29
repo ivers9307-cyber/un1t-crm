@@ -16,7 +16,7 @@
 // /communications/tickets. A queue with a lifecycle, a subject line,
 // per-account access and nothing that auto-closes does not belong
 // interleaved with chat threads. Nothing on this screen should reach for
-// /api/email/tickets*, the `email_inbox` permission, or a ticket id.
+// /api/email/*, the `email_inbox` permission, or a conversation id.
 //
 // pending_approval: the web /api/whatsapp/conversations route annotates
 // it server-side, but mobile WA reads go direct to Supabase — so we
