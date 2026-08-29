@@ -212,73 +212,78 @@ describe('density preference', () => {
 // so member A's half-written reply cannot end up addressed to member B. A
 // draft store that did not key on the ticket id would reopen that leak by a
 // different door — restoring A's words into B's box the moment B is opened.
-describe('reply drafts — per-ticket persistence', () => {
+// MAIL-DRAFTSCOPE.1 — drafts are keyed per USER and per EMAIL ACCOUNT as well
+// as per ticket (Richard's call). S() builds a scope with stable defaults so
+// the pre-existing per-ticket assertions keep their meaning unchanged.
+const S = (ticketId, userId = 'user-1', mailboxId = 'mb-1') => ({ userId, mailboxId, ticketId })
+
+describe('reply drafts — scoped persistence', () => {
   beforeEach(() => { window.localStorage.clear() })
 
   it('returns null for a ticket with nothing saved', () => {
-    expect(readReplyDraft('ticket-1')).toBeNull()
+    expect(readReplyDraft(S('ticket-1'))).toBeNull()
   })
 
   it('round-trips a write', () => {
-    writeReplyDraft('ticket-1', { text: 'Sorry for the delay', mode: 'reply' })
-    expect(readReplyDraft('ticket-1')).toEqual({ text: 'Sorry for the delay', mode: 'reply' })
+    writeReplyDraft(S('ticket-1'), { text: 'Sorry for the delay', mode: 'reply' })
+    expect(readReplyDraft(S('ticket-1'))).toEqual({ text: 'Sorry for the delay', mode: 'reply' })
   })
 
   it('keeps note mode distinct from reply mode', () => {
-    writeReplyDraft('ticket-1', { text: 'staff-only', mode: 'note' })
-    expect(readReplyDraft('ticket-1')).toEqual({ text: 'staff-only', mode: 'note' })
+    writeReplyDraft(S('ticket-1'), { text: 'staff-only', mode: 'note' })
+    expect(readReplyDraft(S('ticket-1'))).toEqual({ text: 'staff-only', mode: 'note' })
   })
 
   it('falls back to reply mode for anything it does not recognise', () => {
-    writeReplyDraft('ticket-1', { text: 'hi', mode: 'bogus' })
-    expect(readReplyDraft('ticket-1').mode).toBe('reply')
+    writeReplyDraft(S('ticket-1'), { text: 'hi', mode: 'bogus' })
+    expect(readReplyDraft(S('ticket-1')).mode).toBe('reply')
   })
 
   // 🔴 THE ISOLATION GUARANTEE. A shared key here is the same class of bug
   // TICKET-COMPOSER-LEAK.1 already fixed once, one layer up.
   it('never lets one ticket read another ticket’s draft', () => {
-    writeReplyDraft('ticket-A', { text: 'For A only', mode: 'reply' })
-    expect(readReplyDraft('ticket-B')).toBeNull()
-    writeReplyDraft('ticket-B', { text: 'For B only', mode: 'reply' })
-    expect(readReplyDraft('ticket-A')).toEqual({ text: 'For A only', mode: 'reply' })
-    expect(readReplyDraft('ticket-B')).toEqual({ text: 'For B only', mode: 'reply' })
+    writeReplyDraft(S('ticket-A'), { text: 'For A only', mode: 'reply' })
+    expect(readReplyDraft(S('ticket-B'))).toBeNull()
+    writeReplyDraft(S('ticket-B'), { text: 'For B only', mode: 'reply' })
+    expect(readReplyDraft(S('ticket-A'))).toEqual({ text: 'For A only', mode: 'reply' })
+    expect(readReplyDraft(S('ticket-B'))).toEqual({ text: 'For B only', mode: 'reply' })
   })
 
   it('writing empty text clears rather than storing a blank draft', () => {
-    writeReplyDraft('ticket-1', { text: 'something', mode: 'reply' })
-    expect(readReplyDraft('ticket-1')).not.toBeNull()
-    writeReplyDraft('ticket-1', { text: '', mode: 'reply' })
-    expect(readReplyDraft('ticket-1')).toBeNull()
+    writeReplyDraft(S('ticket-1'), { text: 'something', mode: 'reply' })
+    expect(readReplyDraft(S('ticket-1'))).not.toBeNull()
+    writeReplyDraft(S('ticket-1'), { text: '', mode: 'reply' })
+    expect(readReplyDraft(S('ticket-1'))).toBeNull()
   })
 
   it('whitespace-only text also clears — there is nothing an operator would want restored', () => {
-    writeReplyDraft('ticket-1', { text: 'something', mode: 'reply' })
-    writeReplyDraft('ticket-1', { text: '   ', mode: 'reply' })
-    expect(readReplyDraft('ticket-1')).toBeNull()
+    writeReplyDraft(S('ticket-1'), { text: 'something', mode: 'reply' })
+    writeReplyDraft(S('ticket-1'), { text: '   ', mode: 'reply' })
+    expect(readReplyDraft(S('ticket-1'))).toBeNull()
   })
 
   it('clearReplyDraft removes a stored draft directly', () => {
-    writeReplyDraft('ticket-1', { text: 'discard me', mode: 'reply' })
-    clearReplyDraft('ticket-1')
-    expect(readReplyDraft('ticket-1')).toBeNull()
+    writeReplyDraft(S('ticket-1'), { text: 'discard me', mode: 'reply' })
+    clearReplyDraft(S('ticket-1'))
+    expect(readReplyDraft(S('ticket-1'))).toBeNull()
   })
 
   it('caps stored draft length so one runaway paste cannot grow storage unboundedly', () => {
     const huge = 'x'.repeat(REPLY_DRAFT_MAX_LENGTH + 500)
-    writeReplyDraft('ticket-1', { text: huge, mode: 'reply' })
-    expect(readReplyDraft('ticket-1').text.length).toBe(REPLY_DRAFT_MAX_LENGTH)
+    writeReplyDraft(S('ticket-1'), { text: huge, mode: 'reply' })
+    expect(readReplyDraft(S('ticket-1')).text.length).toBe(REPLY_DRAFT_MAX_LENGTH)
   })
 
   it('does nothing for a falsy ticket id, in every direction', () => {
-    expect(readReplyDraft(null)).toBeNull()
-    expect(() => writeReplyDraft(null, { text: 'x', mode: 'reply' })).not.toThrow()
-    expect(() => clearReplyDraft(null)).not.toThrow()
-    expect(readReplyDraft(undefined)).toBeNull()
+    expect(readReplyDraft(S(null))).toBeNull()
+    expect(() => writeReplyDraft(S(null), { text: 'x', mode: 'reply' })).not.toThrow()
+    expect(() => clearReplyDraft(S(null))).not.toThrow()
+    expect(readReplyDraft(S(undefined))).toBeNull()
   })
 
   it('treats corrupt stored JSON as no draft rather than throwing', () => {
     window.localStorage.setItem('un1t.email.reply-draft.ticket-1', '{not json')
-    expect(readReplyDraft('ticket-1')).toBeNull()
+    expect(readReplyDraft(S('ticket-1'))).toBeNull()
   })
 
   // Storage throws outright in a locked-down browser or a private window — a
@@ -287,9 +292,9 @@ describe('reply drafts — per-ticket persistence', () => {
     const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('denied') })
     const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('denied') })
     const remove = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => { throw new Error('denied') })
-    expect(readReplyDraft('ticket-1')).toBeNull()
-    expect(() => writeReplyDraft('ticket-1', { text: 'x', mode: 'reply' })).not.toThrow()
-    expect(() => clearReplyDraft('ticket-1')).not.toThrow()
+    expect(readReplyDraft(S('ticket-1'))).toBeNull()
+    expect(() => writeReplyDraft(S('ticket-1'), { text: 'x', mode: 'reply' })).not.toThrow()
+    expect(() => clearReplyDraft(S('ticket-1'))).not.toThrow()
     get.mockRestore(); set.mockRestore(); remove.mockRestore()
   })
 })
@@ -302,28 +307,72 @@ describe('reply drafts — per-ticket persistence', () => {
 // (breaking studio device pairing, sidebar state, the command palette too,
 // not just drafts). These pin the TTL and the max-entry prune, and that
 // both stay scoped to this store's own prefix.
+describe('reply drafts — user and mailbox scoping (MAIL-DRAFTSCOPE.1)', () => {
+  beforeEach(() => { window.localStorage.clear() })
+
+  // 🔴 The reason the scope exists: on a shared front-desk browser, staff-A's
+  // half-written reply must never hydrate into staff-B's composer. Same
+  // ticket, different user → different key → no bleed.
+  it('never lets one USER read another user\'s draft on the same ticket', () => {
+    writeReplyDraft(S('ticket-1', 'staff-a'), { text: 'A\'s words', mode: 'reply' })
+    expect(readReplyDraft(S('ticket-1', 'staff-b'))).toBeNull()
+    expect(readReplyDraft(S('ticket-1', 'staff-a'))).toEqual({ text: 'A\'s words', mode: 'reply' })
+  })
+
+  it('scopes by email account: same ticket id under two mailboxes are two drafts', () => {
+    writeReplyDraft(S('ticket-1', 'user-1', 'mb-accounts'), { text: 'for accounts@', mode: 'reply' })
+    expect(readReplyDraft(S('ticket-1', 'user-1', 'mb-sales'))).toBeNull()
+  })
+
+  // 🔴 FAIL CLOSED. An unscoped draft is a draft some other signed-in user
+  // could hydrate; a broken-session edge case loses persistence, not privacy.
+  it('refuses to persist anything without a user id', () => {
+    writeReplyDraft({ userId: null, mailboxId: 'mb-1', ticketId: 'ticket-1' }, { text: 'orphaned', mode: 'reply' })
+    expect(window.localStorage.length).toBe(0)
+    expect(readReplyDraft({ userId: null, mailboxId: 'mb-1', ticketId: 'ticket-1' })).toBeNull()
+  })
+
+  it('an orphan ticket (no mailbox) still persists, per user, under the none sentinel', () => {
+    writeReplyDraft(S('ticket-1', 'user-1', null), { text: 'orphan draft', mode: 'reply' })
+    expect(readReplyDraft(S('ticket-1', 'user-1', null))).toEqual({ text: 'orphan draft', mode: 'reply' })
+    expect(readReplyDraft(S('ticket-1', 'user-1', 'mb-1'))).toBeNull()
+    const key = Object.keys(window.localStorage).find(k => k.includes('.none.'))
+    expect(key).toBeTruthy()
+  })
+
+  // Keys written by the pre-scope release (bare ticket id) are never read by
+  // the new code, but they still match the prefix, so the TTL prune retires
+  // them — no migration needed, asserted so nobody writes one.
+  it('legacy single-segment keys are still pruned by prefix', () => {
+    window.localStorage.setItem('un1t.email.reply-draft.old-ticket',
+      JSON.stringify({ text: 'stale', mode: 'reply', savedAt: Date.now() - (15 * 24 * 60 * 60 * 1000) }))
+    writeReplyDraft(S('ticket-new'), { text: 'fresh', mode: 'reply' })
+    expect(window.localStorage.getItem('un1t.email.reply-draft.old-ticket')).toBeNull()
+  })
+})
+
 describe('reply drafts — eviction', () => {
   beforeEach(() => { window.localStorage.clear() })
 
   it('treats an entry past the TTL as absent, and clears it on read', () => {
     const stale = Date.now() - (REPLY_DRAFT_TTL_MS + 1000)
     window.localStorage.setItem(
-      `${REPLY_DRAFT_PREFIX}ticket-old`,
+      `${REPLY_DRAFT_PREFIX}user-1.mb-1.ticket-old`,
       JSON.stringify({ text: 'ancient', mode: 'reply', savedAt: stale })
     )
-    expect(readReplyDraft('ticket-old')).toBeNull()
+    expect(readReplyDraft(S('ticket-old'))).toBeNull()
     // Cleared on the way out, not just hidden — a dead key must not sit
     // there for the next prune to rediscover.
-    expect(window.localStorage.getItem(`${REPLY_DRAFT_PREFIX}ticket-old`)).toBeNull()
+    expect(window.localStorage.getItem(`${REPLY_DRAFT_PREFIX}user-1.mb-1.ticket-old`)).toBeNull()
   })
 
   it('keeps an entry comfortably inside the TTL', () => {
     const fresh = Date.now() - 1000
     window.localStorage.setItem(
-      `${REPLY_DRAFT_PREFIX}ticket-fresh`,
+      `${REPLY_DRAFT_PREFIX}user-1.mb-1.ticket-fresh`,
       JSON.stringify({ text: 'still good', mode: 'reply', savedAt: fresh })
     )
-    expect(readReplyDraft('ticket-fresh')).toEqual({ text: 'still good', mode: 'reply' })
+    expect(readReplyDraft(S('ticket-fresh'))).toEqual({ text: 'still good', mode: 'reply' })
   })
 
   it('treats a draft with no readable savedAt at all as expired', () => {
@@ -331,10 +380,10 @@ describe('reply drafts — eviction', () => {
     // writeReplyDraft) has no timestamp — fail-safe is to evict it, not to
     // assume it is fine.
     window.localStorage.setItem(
-      `${REPLY_DRAFT_PREFIX}ticket-untimed`,
+      `${REPLY_DRAFT_PREFIX}user-1.mb-1.ticket-untimed`,
       JSON.stringify({ text: 'no timestamp', mode: 'reply' })
     )
-    expect(readReplyDraft('ticket-untimed')).toBeNull()
+    expect(readReplyDraft(S('ticket-untimed'))).toBeNull()
   })
 
   it('a write past the max-entry count evicts the oldest survivor, by savedAt', () => {
@@ -343,27 +392,27 @@ describe('reply drafts — eviction', () => {
     // deterministic savedAt — oldest first — all comfortably inside the TTL.
     for (let i = 0; i < REPLY_DRAFT_MAX_ENTRIES; i++) {
       window.localStorage.setItem(
-        `${REPLY_DRAFT_PREFIX}ticket-seed-${i}`,
+        `${REPLY_DRAFT_PREFIX}user-1.mb-1.ticket-seed-${i}`,
         JSON.stringify({ text: `seed ${i}`, mode: 'reply', savedAt: now - (REPLY_DRAFT_MAX_ENTRIES - i) * 1000 })
       )
     }
     // One more real draft over the top, through the real write path — the
     // one that actually triggers the prune.
-    writeReplyDraft('ticket-new', { text: 'the newest one', mode: 'reply' })
+    writeReplyDraft(S('ticket-new'), { text: 'the newest one', mode: 'reply' })
 
     // The very oldest seed (index 0) is gone…
-    expect(readReplyDraft('ticket-seed-0')).toBeNull()
+    expect(readReplyDraft(S('ticket-seed-0'))).toBeNull()
     // …the newest seed survived…
-    expect(readReplyDraft(`ticket-seed-${REPLY_DRAFT_MAX_ENTRIES - 1}`)).not.toBeNull()
+    expect(readReplyDraft(S(`ticket-seed-${REPLY_DRAFT_MAX_ENTRIES - 1}`))).not.toBeNull()
     // …and so did the draft that triggered the prune in the first place.
-    expect(readReplyDraft('ticket-new')).toEqual({ text: 'the newest one', mode: 'reply' })
+    expect(readReplyDraft(S('ticket-new'))).toEqual({ text: 'the newest one', mode: 'reply' })
   })
 
   it('does not prune anything while under the max-entry count', () => {
-    writeReplyDraft('ticket-a', { text: 'a', mode: 'reply' })
-    writeReplyDraft('ticket-b', { text: 'b', mode: 'reply' })
-    expect(readReplyDraft('ticket-a')).not.toBeNull()
-    expect(readReplyDraft('ticket-b')).not.toBeNull()
+    writeReplyDraft(S('ticket-a'), { text: 'a', mode: 'reply' })
+    writeReplyDraft(S('ticket-b'), { text: 'b', mode: 'reply' })
+    expect(readReplyDraft(S('ticket-a'))).not.toBeNull()
+    expect(readReplyDraft(S('ticket-b'))).not.toBeNull()
   })
 
   it('a prune never touches a key outside its own prefix', () => {
@@ -372,11 +421,11 @@ describe('reply drafts — eviction', () => {
     const now = Date.now()
     for (let i = 0; i < REPLY_DRAFT_MAX_ENTRIES; i++) {
       window.localStorage.setItem(
-        `${REPLY_DRAFT_PREFIX}ticket-seed-${i}`,
+        `${REPLY_DRAFT_PREFIX}user-1.mb-1.ticket-seed-${i}`,
         JSON.stringify({ text: `seed ${i}`, mode: 'reply', savedAt: now - (REPLY_DRAFT_MAX_ENTRIES - i) * 1000 })
       )
     }
-    writeReplyDraft('ticket-new', { text: 'triggers a prune', mode: 'reply' })
+    writeReplyDraft(S('ticket-new'), { text: 'triggers a prune', mode: 'reply' })
     expect(window.localStorage.getItem('un1t.mail.density')).toBe('comfortable')
     expect(window.localStorage.getItem('some-other-consumer.state')).toBe('{"x":1}')
   })
@@ -392,20 +441,20 @@ describe('clearAllReplyDrafts', () => {
   beforeEach(() => { window.localStorage.clear() })
 
   it('removes every draft this store holds, and reports how many', () => {
-    writeReplyDraft('ticket-a', { text: 'a', mode: 'reply' })
-    writeReplyDraft('ticket-b', { text: 'b', mode: 'reply' })
-    writeReplyDraft('ticket-c', { text: 'c', mode: 'note' })
+    writeReplyDraft(S('ticket-a'), { text: 'a', mode: 'reply' })
+    writeReplyDraft(S('ticket-b'), { text: 'b', mode: 'reply' })
+    writeReplyDraft(S('ticket-c'), { text: 'c', mode: 'note' })
     expect(clearAllReplyDrafts()).toBe(3)
-    expect(readReplyDraft('ticket-a')).toBeNull()
-    expect(readReplyDraft('ticket-b')).toBeNull()
-    expect(readReplyDraft('ticket-c')).toBeNull()
+    expect(readReplyDraft(S('ticket-a'))).toBeNull()
+    expect(readReplyDraft(S('ticket-b'))).toBeNull()
+    expect(readReplyDraft(S('ticket-c'))).toBeNull()
   })
 
   it('leaves every OTHER consumer’s key on the origin untouched', () => {
     window.localStorage.setItem('un1t.mail.density', 'comfortable')
     window.localStorage.setItem('un1t.studio.device-pairing', '{"paired":true}')
     window.localStorage.setItem('un1t.sidebar.collapsed', 'true')
-    writeReplyDraft('ticket-a', { text: 'a', mode: 'reply' })
+    writeReplyDraft(S('ticket-a'), { text: 'a', mode: 'reply' })
 
     clearAllReplyDrafts()
 
@@ -426,7 +475,7 @@ describe('clearAllReplyDrafts', () => {
   })
 
   it('survives a throwing removeItem mid-clear rather than throwing at sign-out', () => {
-    writeReplyDraft('ticket-a', { text: 'a', mode: 'reply' })
+    writeReplyDraft(S('ticket-a'), { text: 'a', mode: 'reply' })
     const remove = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => { throw new Error('denied') })
     expect(() => clearAllReplyDrafts()).not.toThrow()
     remove.mockRestore()

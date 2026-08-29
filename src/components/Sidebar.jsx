@@ -5,7 +5,6 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { LogOut, Activity, ExternalLink, X, ChevronDown, ChevronRight as ChevronRightIcon, Store, Search } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
-import { clearAllReplyDrafts } from '@/components/mail/mail-display'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
 import clsx from 'clsx'
@@ -222,13 +221,15 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
         // ignore — the close-stale-impersonations cron is the backstop
       }
     }
-    // MAIL-WEEKONE.M2 — reply drafts live in localStorage keyed per TICKET,
-    // not per user, so on a shared front-desk browser the next person to sign
-    // in would otherwise inherit this person's half-written replies — one Send
-    // from a mis-send under the wrong identity. Best-effort by design: the
-    // helper try/catches every storage access and returns a count, and a
-    // hostile localStorage must never be able to block a sign-out.
-    clearAllReplyDrafts()
+    // MAIL-DRAFTSCOPE.2 — reply drafts used to be wiped here, because their
+    // keys were per-TICKET and the next person to sign in on this browser
+    // would have inherited them. The keys are now scoped per USER (and per
+    // email account), which removes the reason: another login structurally
+    // cannot hydrate this person's drafts, and NOT wiping is the point — a
+    // returning operator finds their half-written reply where they left it,
+    // bounded by the store's own 14-day TTL. clearAllReplyDrafts() still
+    // exists in mail-display.js for a future explicit "clear drafts on this
+    // device" affordance.
     const supabase = createBrowserClient()
     // scope:'local' — sign out THIS browser only. The supabase-js default
     // (scope:'global') revokes every session the user holds, so signing out

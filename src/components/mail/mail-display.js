@@ -306,8 +306,32 @@ export const REPLY_DRAFT_MAX_LENGTH = 10000
 export const REPLY_DRAFT_TTL_MS = 14 * 24 * 60 * 60 * 1000 // 14 days
 export const REPLY_DRAFT_MAX_ENTRIES = 30
 
-function replyDraftKey(ticketId) {
-  return `${REPLY_DRAFT_PREFIX}${ticketId}`
+/**
+ * MAIL-DRAFTSCOPE.1 — the key is `<prefix><userId>.<mailboxId|none>.<ticketId>`.
+ *
+ * 🔴 PER USER AND PER EMAIL ACCOUNT, BY RICHARD'S CALL (2026-08-29). The
+ * original per-ticket key made cross-TICKET and cross-LOCATION leakage
+ * structurally impossible (ticket ids are globally-unique uuids) but was
+ * per-BROWSER: on a shared front-desk machine, staff-A's half-written reply
+ * hydrated into staff-B's composer under B's identity. Scoping the key by the
+ * signed-in user makes that impossible too — and it is what lets drafts
+ * SURVIVE sign-out (the previous wipe-on-sign-out existed only because the
+ * next person could inherit them; per-user keys remove the reason, so a
+ * returning operator finds their draft where they left it, bounded by the TTL).
+ *
+ * The mailbox segment scopes drafts to the email ACCOUNT the conversation
+ * belongs to; an orphan ticket (mailbox deleted → NULL) uses the 'none'
+ * sentinel so it still persists, per-user. All three segments are uuids or
+ * 'none', so the '.' separator can never be ambiguous.
+ *
+ * 🔴 FAIL CLOSED: no userId → NO key → no persistence. An unscoped draft is a
+ * draft some other signed-in user could hydrate; losing persistence in a
+ * broken-session edge case is the cheaper failure by far.
+ */
+function replyDraftKey(scope) {
+  const { userId, mailboxId, ticketId } = scope || {}
+  if (!userId || !ticketId) return null
+  return `${REPLY_DRAFT_PREFIX}${userId}.${mailboxId || 'none'}.${ticketId}`
 }
 
 /** Every key this store owns, in whatever order localStorage happens to hold them. */
@@ -383,18 +407,19 @@ function pruneReplyDrafts() {
  * collapse to the same "start blank" answer, because none of them is a
  * distinction the composer can act on differently.
  */
-export function readReplyDraft(ticketId) {
-  if (!ticketId) return null
+export function readReplyDraft(scope) {
   try {
     if (typeof window === 'undefined') return null
-    const raw = window.localStorage.getItem(replyDraftKey(ticketId))
+    const key = replyDraftKey(scope)
+    if (!key) return null
+    const raw = window.localStorage.getItem(key)
     if (!raw) return null
     const parsed = JSON.parse(raw)
     if (!parsed || typeof parsed.text !== 'string' || !parsed.text.trim()) return null
     if (isExpiredSavedAt(parsed.savedAt)) {
       // Dead weight the next prune would remove anyway — cleared here too so
       // a read-only caller never has to wait for a write to reclaim it.
-      clearReplyDraft(ticketId)
+      clearReplyDraft(scope)
       return null
     }
     return {
@@ -415,18 +440,19 @@ export function readReplyDraft(ticketId) {
  * into is exactly the unbounded growth this function exists to avoid — so
  * whitespace-only text takes the same branch as none at all.
  */
-export function writeReplyDraft(ticketId, draft) {
-  if (!ticketId) return
+export function writeReplyDraft(scope, draft) {
+  const key = replyDraftKey(scope)
+  if (!key) return
   const text = typeof draft?.text === 'string' ? draft.text : ''
   if (!text.trim()) {
-    clearReplyDraft(ticketId)
+    clearReplyDraft(scope)
     return
   }
   const mode = REPLY_DRAFT_MODES.includes(draft?.mode) ? draft.mode : 'reply'
   try {
     if (typeof window === 'undefined') return
     window.localStorage.setItem(
-      replyDraftKey(ticketId),
+      key,
       JSON.stringify({ text: text.slice(0, REPLY_DRAFT_MAX_LENGTH), mode, savedAt: Date.now() })
     )
     // Every successful write is the eviction checkpoint — see pruneReplyDrafts.
@@ -438,26 +464,27 @@ export function writeReplyDraft(ticketId, draft) {
 }
 
 /** Remove a ticket's saved draft outright (send succeeded; there is nothing left to restore). */
-export function clearReplyDraft(ticketId) {
-  if (!ticketId) return
+export function clearReplyDraft(scope) {
+  const key = replyDraftKey(scope)
+  if (!key) return
   try {
     if (typeof window === 'undefined') return
-    window.localStorage.removeItem(replyDraftKey(ticketId))
+    window.localStorage.removeItem(key)
   } catch {
     // Same posture as the read/write paths above.
   }
 }
 
 /**
- * M2 — every draft this store holds, across every ticket, gone. The
- * sign-out button is the intended caller (see the module header's cross-user
- * paragraph): wiring it there is explicitly NOT this file's job, so nothing
- * here calls it. Returns how many keys it actually removed, so the caller
- * can log or assert on it rather than trusting a void return.
+ * Remove EVERY user's reply drafts on this device.
  *
- * Scoped to `REPLY_DRAFT_PREFIX` the same way `pruneReplyDrafts` is — a
- * sign-out that wiped every localStorage key on the origin, not just this
- * store's, would take the device's other consumers down with it.
+ * MAIL-DRAFTSCOPE.2 — deliberately UNWIRED since drafts became per-user: the
+ * sign-out wipe existed only because per-ticket keys let the next login
+ * inherit them, and per-user keys remove the reason (a returning operator now
+ * finds their draft where they left it, bounded by the TTL). Kept exported
+ * for a future explicit "clear drafts on this device" affordance and for
+ * support use; safe to call unconditionally — every access is try/caught and
+ * a hostile localStorage cannot make it throw.
  */
 export function clearAllReplyDrafts() {
   let cleared = 0

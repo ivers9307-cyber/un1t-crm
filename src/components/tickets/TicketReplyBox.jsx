@@ -88,6 +88,7 @@ import AttachmentPicker, { readyDrafts, hasPendingUploads } from './AttachmentPi
 // cross-ticket send, and this store rides on exactly that key rather than
 // creating a second one.
 import { readReplyDraft, writeReplyDraft, clearReplyDraft } from '@/components/mail/mail-display'
+import { resolveViewerId } from '@/components/mail/viewer-id'
 
 const MAX_LENGTH = 10000
 
@@ -130,25 +131,89 @@ export default function TicketReplyBox({
   // ticket — read here, spent by the write-through effect's first run for
   // this ticket — and reset whenever the ticket id changes again.
   const skipNextWriteRef = useRef(true)
+
+  // MAIL-DRAFTSCOPE.2 — drafts are keyed per USER and per EMAIL ACCOUNT as
+  // well as per ticket (Richard's call), so hydration has to know who is
+  // signed in. `undefined` = still resolving (persist nothing yet, hydrate
+  // nothing yet); `null` = resolution failed, and the store fails CLOSED — no
+  // key, no persistence — rather than writing a draft some other signed-in
+  // user could hydrate. resolveViewerId is module-cached, so this is one
+  // getSession per page load, not per mount.
+  const [viewerId, setViewerId] = useState(undefined)
   useEffect(() => {
-    skipNextWriteRef.current = true
-    const draft = readReplyDraft(ticketId)
-    setText(draft ? draft.text : '')
-    setMode(draft ? draft.mode : 'reply')
+    let cancelled = false
+    resolveViewerId().then((id) => { if (!cancelled) setViewerId(id) })
+    return () => { cancelled = true }
+  }, [])
+
+  // The mailbox segment comes off the ticket itself (loadTicketForUser
+  // selects *, so mailbox_id rides along); an orphan ticket's NULL becomes
+  // the 'none' sentinel inside replyDraftKey.
+  const draftScope = { userId: viewerId, mailboxId: ticket?.mailbox_id, ticketId }
+
+  // What the composer holds RIGHT NOW, readable from the async hydration
+  // effect below without widening its deps (deps of [text] would re-run
+  // hydration per keystroke). Refreshed every render; cheap.
+  const latestRef = useRef({ text: '', mode: 'reply' })
+  // Updated in an effect, not during render (react-hooks/refs). Declared
+  // BEFORE the hydration effect: effects run in declaration order within a
+  // commit, so by the time hydration fires on viewer resolution this ref
+  // already holds the same commit's text/mode.
+  useEffect(() => {
+    latestRef.current = { text, mode }
+  })
+
+  useEffect(() => {
+    // Until the viewer resolves there is nothing safe to read: hydrating an
+    // unscoped draft is exactly the cross-user bleed the scope exists to
+    // prevent.
+    if (viewerId === undefined) return
+    const scope = { userId: viewerId, mailboxId: ticket?.mailbox_id, ticketId }
+
+    // 🔴 LIVE TYPING OUTRANKS THE STORED DRAFT. Hydration is now async (it
+    // waits on the session), and an operator can start typing before it
+    // lands — the first cut called setText('') here and ERASED their words
+    // mid-sentence. If anything has been typed, keep it, and persist it now
+    // that the scope finally exists (writes before this point were no-ops:
+    // no user id, no key — fail closed).
+    const current = latestRef.current
+    if (current.text.trim()) {
+      skipNextWriteRef.current = false
+      writeReplyDraft(scope, current)
+      return
+    }
+
+    const draft = readReplyDraft(scope)
+    // Arm the skip for the write-through pass this resolution triggers.
+    // `!!draft` and a plain `true` are provably equivalent here — viewerId is
+    // in the write effect's deps, so the viewer-resolution render always runs
+    // that effect once and consumes whatever is armed, draft or no draft,
+    // before any keystroke can be swallowed (mutation-tested: flipping this
+    // to `true` changes nothing observable). `!!draft` is kept because it
+    // states the INTENT — skip exactly the restore's own echo — and stays
+    // correct if viewerId ever leaves those deps.
+    skipNextWriteRef.current = !!draft
+    if (draft) {
+      setText(draft.text)
+      setMode(draft.mode)
+    }
     // Recipients/files are never restored — see mail-display.js's header
     // comment on why only { text, mode } are ever persisted.
-  }, [ticketId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ticketId, viewerId])
 
   // Write-through: every change to the words or the mode is saved, so a row
   // switch, an `e`, a refresh or a crash can never destroy them again. Never
   // recipients, files, or anything else derived per ticket — same reason.
+  // With no resolved viewer the store's own null-key guard makes this a no-op.
   useEffect(() => {
     if (skipNextWriteRef.current) {
       skipNextWriteRef.current = false
       return
     }
-    writeReplyDraft(ticketId, { text, mode })
-  }, [ticketId, text, mode])
+    writeReplyDraft(draftScope, { text, mode })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ticketId, viewerId, text, mode])
 
   const isNote = mode === 'note'
   // The reply route 400s without a requester address. Say so up front rather
@@ -248,7 +313,7 @@ export default function TicketReplyBox({
       // own empty-text branch: a successful send is the one moment this
       // draft is DEFINITELY done, and saying so here does not depend on the
       // effect having run yet.
-      clearReplyDraft(ticketId)
+      clearReplyDraft(draftScope)
     }
     // Anything else keeps the draft — INCLUDING `result.sent`, the
     // delivered-but-unfiled case (EMAIL-REPLY-UNFILED.1): the mail went out
