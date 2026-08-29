@@ -1288,6 +1288,26 @@ registry.registerPath({
 })
 
 registry.registerPath({
+  method: 'get',
+  path: '/api/email/mail/digest',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Multi-location Mail digest — every readable studio in one answer',
+  description:
+    'MAIL-ALLLOC.1: one request behind Mail\'s location tiles and the All-locations view. For every location where the caller holds `email_inbox` (resolved AT that location) AND sees at least one mailbox under the scoped list\'s exact access model (per-mailbox grants; elevated callers see all + NULL-mailbox orphans), the digest returns the tile facts (name, needs-reply count) and the section list: the newest 5 conversations for the requested `view` plus `view_total`, the view\'s true count, so the "View all N" row never lies. The per-section cap is deliberate — this is a triage surface with one scroll, never a list inside a list; past the cap the client scopes into the studio, where GET /api/email/mail owns real keyset paging (there is no cursor here on purpose). Rows carry the same stamps as the scoped list (`needs_reply`, `archived`, `unread`, `has_attachments`) so a digest row and a list row can never disagree. The tile count is ALWAYS needs-reply regardless of `view`. 🔴 A location whose lookup FAILED is reported `unavailable: true` with null counts, never silently dropped — a digest omitting a studio reads as "that studio has no mail" to the person responsible for it — and any unavailable location flips `partial` and nulls `needs_reply_total`, because an unknown contributor must never be summed as zero. A location where the caller simply sees no mailboxes is skipped (nothing exists to be unavailable). No new access rule exists on this route.',
+  request: {
+    query: z.object({
+      view: z.enum(['inbox', 'needs_reply', 'archived']).optional(),
+    }),
+  },
+  responses: {
+    200: { description: '{ locations: [{ location_id, name, unavailable, needs_reply_count, view_total, conversations, counts_partial?, counts_unavailable? }], needs_reply_total, partial }' },
+    400: { description: 'Unknown view', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
   method: 'post',
   path: '/api/email/mail/{id}/seen',
   tags: ['Email'],

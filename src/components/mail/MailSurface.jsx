@@ -43,6 +43,12 @@ import {
   isArchived, isUnread, isTypingTarget, neighbourId,
   DENSITIES, DEFAULT_DENSITY, readDensity, writeDensity,
 } from './mail-display'
+import {
+  MAIL_SCOPE_ALL, isUuidShaped, readMailScope, writeMailScope, resolveMailScope,
+  buildDigestSections, flattenSectionRows, resolveNeedsReplyTotal,
+  buildLocationTiles, withLocationNeedsReply, buildSearchSections,
+  groupMailboxesByStudio,
+} from './mail-digest'
 
 const POLL_MS = 60_000
 // 🔴 DEBOUNCED. Every keystroke is otherwise a full-text scan plus a
@@ -62,9 +68,31 @@ const SEARCH_DEBOUNCE_MS = 350
 // exporting it is a change to a file this surface does not own.
 const UUID_SHAPE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
 
-export default function MailSurface({ locationId, locationName }) {
+// MAIL-ALLLOC.1 — `locations` is the page-resolved eligible set ({id, name},
+// name-sorted): every studio where the caller holds `email_inbox`. With 2+
+// entries this surface runs in MULTI mode — location tiles, an All-locations
+// grouped digest, a per-user persisted scope. With one (or none, the legacy
+// prop shape), everything below the scope block is byte-for-byte today's
+// single-location surface: `scope` stays null and no multi path ever runs.
+export default function MailSurface({ locationId, locationName, userId, locations }) {
   const router = useRouter()
   const searchParams = useSearchParams()
+
+  // Audit F1 — keyed on CONTENT, not the array. page.js rebuilds `locations`
+  // on every server render and this page is force-dynamic, so every
+  // router.replace (each selection, each j/k step) delivers a fresh array;
+  // an identity-keyed memo would cascade through searchFanout → refreshList
+  // and re-fire a non-quiet fetch + poll reset per keystroke.
+  const eligibleKey = Array.isArray(locations)
+    ? locations.map(l => `${l.id}\u0000${l.name ?? ''}`).join('\u0001')
+    : ''
+  const eligible = useMemo(() => (
+    Array.isArray(locations) && locations.length > 0
+      ? locations
+      : (locationId ? [{ id: locationId, name: locationName }] : [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `locations` is represented by eligibleKey (see above)
+  ), [eligibleKey, locationId, locationName])
+  const multi = eligible.length >= 2
 
   const [mailboxes, setMailboxes] = useState([])
   const [conversations, setConversations] = useState([])
@@ -80,6 +108,53 @@ export default function MailSurface({ locationId, locationName }) {
 
   const [mailboxId, setMailboxId] = useState(null)
   const [viewId, setViewId] = useState(DEFAULT_MAIL_VIEW)
+
+  // ── MAIL-ALLLOC.1 scope ──────────────────────────────────────────────
+  //
+  // `scope` is MAIL_SCOPE_ALL or a location id; null in single-location mode,
+  // where none of this runs. All is the multi-location default, but the
+  // chosen scope persists per user (localStorage, hydrated AFTER mount for
+  // the same SSR reason as density) and `?loc=` — validated like `?c=`, uuid
+  // shape or ignored — wins over the stored value for a shared deep link.
+  // `scopeReady` holds the FIRST fetch until that hydration has settled, so
+  // a persisted studio scope costs one fetch, not a discarded All fetch
+  // followed by the real one.
+  const [scope, setScope] = useState(multi ? MAIL_SCOPE_ALL : null)
+  const [scopeReady, setScopeReady] = useState(!multi)
+
+  // The last digest answer: tiles + All-mode sections come from it. The ref
+  // mirrors the state so callbacks (the search fan-out) can read the CURRENT
+  // locations without depending on the object's identity — a state dep there
+  // would re-create the refresh callback on every digest poll and turn the
+  // "refetch on scope/view change" effect into a self-feeding loop.
+  const [digest, setDigest] = useState(null)
+  const digestRef = useRef(null)
+  const applyDigest = useCallback((updater) => {
+    setDigest(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater
+      digestRef.current = next
+      return next
+    })
+  }, [])
+
+  // The summed badge. resolveNeedsReplyTotal keeps the LAST GOOD number when
+  // a partial digest answers null — an unknown must never render as 0 — and
+  // null only before anything was ever known (the rail omits it entirely).
+  const [allTotal, setAllTotal] = useState(null)
+
+  // All-mode section metadata (digest sections, or search fan-out sections
+  // while a query is active); null whenever the flat single-studio list is
+  // what is on screen.
+  const [sections, setSections] = useState(null)
+
+  const allMode = multi && scope === MAIL_SCOPE_ALL
+  // The location the EXISTING single-studio paths run against. In multi mode
+  // it is the scoped studio (null in All mode — those paths idle); otherwise
+  // it is exactly the prop it always was.
+  const scopedId = multi ? (allMode ? null : scope) : (locationId || null)
+  const scopedName = multi
+    ? (allMode ? null : (eligible.find(l => l.id === scope)?.name || null))
+    : (locationName || null)
 
   // MAIL-DENSITY.1 — the row layout preference. Starts at the DEFAULT (never
   // read from storage in the initial useState: the server renders with no
@@ -118,7 +193,7 @@ export default function MailSurface({ locationId, locationName }) {
   const [forwarding, setForwarding] = useState(null)
 
   const view = mailView(viewId)
-  const listUrl = buildMailUrl({ locationId, mailboxId, viewId, q: debouncedQuery })
+  const listUrl = buildMailUrl({ locationId: scopedId, mailboxId, viewId, q: debouncedQuery })
 
   // Hydrate the density preference AFTER mount, never during render — the
   // server has no localStorage, so reading it in the initial useState would
@@ -129,6 +204,55 @@ export default function MailSurface({ locationId, locationName }) {
     setDensity(next)
     writeDensity(next)
   }
+
+  // MAIL-ALLLOC.1 — scope hydration, once, after mount (localStorage does not
+  // exist during SSR, exactly the density story). `?loc=` beats the stored
+  // value — a pasted link should land where it points — and either source is
+  // resolved against the ELIGIBLE set: a studio the caller can no longer read
+  // falls back to All rather than to a blank screen scoped to nothing. (The
+  // digest applies the same rule again once it answers, below — eligibility
+  // is permission-shaped, the digest is mailbox-shaped, and both can shrink.)
+  useEffect(() => {
+    if (!multi) return
+    const locParam = searchParams.get('loc')
+    const candidate = isUuidShaped(locParam) ? locParam : readMailScope(userId)
+    setScope(resolveMailScope(candidate, eligible.map(l => l.id)))
+    setScopeReady(true)
+    // Mount-only, same contract as the ?c= read: after this, the tiles own
+    // the scope and the URL is written TO, not synced FROM.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // A persisted/deep-linked scope can name a studio the DIGEST no longer
+  // answers for (mailboxes removed since last visit); and a digest that
+  // answers exactly one studio means this caller is not meaningfully
+  // multi-location today — collapse to that studio so they see the plain
+  // single-studio surface rather than a one-section "All". Neither move is
+  // persisted: the operator did not choose it, and their stored preference
+  // should win again the day the second studio comes back.
+  useEffect(() => {
+    if (!multi || !digest) return
+    const locs = Array.isArray(digest.locations) ? digest.locations : []
+    const fallbackTo = scope === MAIL_SCOPE_ALL
+      ? (locs.length === 1 ? locs[0].location_id : null)
+      : (scope && !locs.some(l => l.location_id === scope) ? MAIL_SCOPE_ALL : null)
+    if (!fallbackTo) return
+    setScope(fallbackTo)
+    // Audit F2 — a fallback is still a scope change, so it clears the same
+    // context changeScope clears: the account filter belongs to the studio
+    // that vanished (left in place it would dress the next studio's mail in
+    // a calm empty list), a live search must not silently widen into a
+    // fan-out, and a stale ?loc= would make a shared link lie. Only the
+    // PERSISTENCE is skipped — the operator did not choose this.
+    setMailboxId(null)
+    setQueryText('')
+    setDebouncedQuery('')
+    const params = new URLSearchParams(searchParams.toString())
+    if (fallbackTo === MAIL_SCOPE_ALL) params.delete('loc')
+    else params.set('loc', fallbackTo)
+    const qs = params.toString()
+    router.replace(qs ? `/communications/mail?${qs}` : '/communications/mail', { scroll: false })
+  }, [multi, digest, scope, searchParams, router])
 
   // The debounce: `debouncedQuery` only moves SEARCH_DEBOUNCE_MS after the
   // last keystroke, and that value alone feeds `listUrl` above — never
@@ -245,7 +369,7 @@ export default function MailSurface({ locationId, locationName }) {
 
   // ── List ───────────────────────────────────────────────────────────
   const loadList = useCallback(async (quiet = false) => {
-    if (!locationId) { setLoading(false); return }
+    if (!scopedId) { setLoading(false); return }
     const url = listUrl
     listRequest.current = url
     if (!quiet) setLoading(true)
@@ -260,8 +384,20 @@ export default function MailSurface({ locationId, locationName }) {
       setListError(null)
       setMailboxes(body.data?.mailboxes || [])
       setConversations(body.data?.conversations || [])
+      // A scoped list never renders sections — and a stale sections array
+      // left behind by a scope switch would keep grouping the flat list.
+      setSections(null)
       setNextBefore(body.data?.next_before || null)
       setNeedsReplyCount(body.data?.needs_reply_count || 0)
+      // MAIL-ALLLOC.1 — the tile count is ALWAYS needs-reply, and a scoped
+      // refresh knows its own studio's fresh number; fold it into the last
+      // digest answer so this studio's tile stays honest between digest
+      // polls. withLocationNeedsReply no-ops on a non-number.
+      if (multi) {
+        applyDigest(prev => (prev
+          ? { ...prev, locations: withLocationNeedsReply(prev.locations, scopedId, body.data?.needs_reply_count) }
+          : prev))
+      }
       // Two different failures, one operator-visible consequence: either way
       // the read state on this page is not to be trusted, and the list says so
       // rather than rendering every row as read.
@@ -279,19 +415,150 @@ export default function MailSurface({ locationId, locationName }) {
     } finally {
       if (listRequest.current === url) setLoading(false)
     }
-  }, [locationId, listUrl])
+  }, [scopedId, listUrl, multi, applyDigest])
 
-  useEffect(() => { loadList() }, [loadList])
+  // ── MAIL-ALLLOC.1: the digest (All mode's list, every mode's tiles) ──
+  //
+  // Same poller slot as the scoped list — in All mode the digest is polled
+  // INSTEAD of the list, same cadence, via the dispatcher below. The
+  // `listRequest` superseding guard is shared with loadList on purpose: a
+  // scope flip mid-flight makes whichever request lost the race drop its
+  // own repaint, exactly as a mailbox flip always has.
+  const loadDigest = useCallback(async (quiet = false) => {
+    const url = viewId && viewId !== DEFAULT_MAIL_VIEW
+      ? `/api/email/mail/digest?view=${encodeURIComponent(viewId)}`
+      : '/api/email/mail/digest'
+    listRequest.current = url
+    if (!quiet) setLoading(true)
+    try {
+      const res = await fetch(url, { cache: 'no-store' })
+      const body = await res.json()
+      if (listRequest.current !== url) return // superseded — a newer scope owns the list
+      if (!body?.success) {
+        setListError(body?.error || 'Could not load your mail')
+        return
+      }
+      const data = body.data || {}
+      setListError(null)
+      applyDigest(data)
+      // Partial digest → null total → keep the last good number, never 0.
+      setAllTotal(prev => resolveNeedsReplyTotal(data.needs_reply_total, prev))
+      const built = buildDigestSections(data)
+      setSections(built)
+      // The flat, section-ordered row list: what j/k walks, what the archive
+      // successor is computed against, what every mutation updates — the
+      // sections only GROUP it, so there is no second row state to drift.
+      setConversations(flattenSectionRows(built))
+      setNextBefore(null) // the digest pages by scoping into a studio, never by cursor
+      setCountsUnavailable(built.some(s => s.countsPartial))
+      setSearchPartial(false)
+    } catch {
+      if (listRequest.current !== url) return
+      setListError('Could not reach the server — showing the last loaded list')
+    } finally {
+      if (listRequest.current === url) setLoading(false)
+    }
+  }, [viewId, applyDigest])
+
+  // Scoped multi-location callers still need tile counts once — fetched
+  // quietly, feeding ONLY the digest/tiles, never the list on screen.
+  const loadTileDigest = useCallback(async () => {
+    try {
+      const res = await fetch('/api/email/mail/digest', { cache: 'no-store' })
+      const body = await res.json()
+      if (!body?.success) return
+      applyDigest(body.data || null)
+      setAllTotal(prev => resolveNeedsReplyTotal(body.data?.needs_reply_total, prev))
+    } catch {
+      // Tiles keep their unknown (chip-less) counts — never an error banner
+      // over chrome.
+    }
+  }, [applyDigest])
+
+  const tileDigestFiredRef = useRef(false)
+  useEffect(() => {
+    if (!multi || !scopeReady || tileDigestFiredRef.current) return
+    tileDigestFiredRef.current = true
+    // In All mode the very first loadDigest covers the tiles already.
+    if (!allMode) loadTileDigest()
+  }, [multi, scopeReady, allMode, loadTileDigest])
+
+  // Audit F3 — scoped multi mode: the scoped studio's own tile follows its
+  // list poll, but every OTHER studio's tile (and All's sum) would otherwise
+  // freeze at mount value for the session — a stale number worn as a
+  // confident one on the tile whose job is "where is work". Same 60s
+  // cadence, quiet, list path untouched.
+  useEffect(() => {
+    if (!multi || !scopeReady || allMode) return undefined
+    const timer = setInterval(() => loadTileDigest(), POLL_MS)
+    return () => clearInterval(timer)
+  }, [multi, scopeReady, allMode, loadTileDigest])
+
+  // ── MAIL-ALLLOC.1: All-mode search — a client-side fan-out ───────────
+  //
+  // One scoped-list request per digest location, merged into the same
+  // grouped sections. A failed studio becomes an inline error section while
+  // the others render; results are grouped, uncapped, per studio. Reads the
+  // digest's location set through the REF so this callback's identity does
+  // not churn with every digest poll (see digestRef's own comment).
+  const searchFanout = useCallback(async (quiet = false) => {
+    const q = debouncedQuery
+    const key = `digest-search:${q}`
+    listRequest.current = key
+    if (!quiet) setLoading(true)
+    const targets = (digestRef.current?.locations?.length
+      ? digestRef.current.locations.map(l => ({ locationId: l.location_id, name: l.name }))
+      : eligible.map(l => ({ locationId: l.id, name: l.name })))
+    try {
+      const settled = await Promise.all(targets.map(async (l) => {
+        try {
+          const res = await fetch(buildMailUrl({ locationId: l.locationId, q }), { cache: 'no-store' })
+          const body = await res.json()
+          if (!body?.success) return [l.locationId, { ok: false }]
+          return [l.locationId, {
+            ok: true,
+            conversations: body.data?.conversations || [],
+            searchPartial: !!body.data?.search_partial,
+          }]
+        } catch {
+          return [l.locationId, { ok: false }]
+        }
+      }))
+      if (listRequest.current !== key) return
+      const built = buildSearchSections(targets, Object.fromEntries(settled))
+      setListError(null)
+      setSections(built)
+      setConversations(flattenSectionRows(built))
+      setNextBefore(null)
+      setCountsUnavailable(false)
+      // Truncation is said PER SECTION in All mode — the global banner would
+      // blame every studio for one studio's partial scan.
+      setSearchPartial(false)
+    } finally {
+      if (listRequest.current === key) setLoading(false)
+    }
+  }, [debouncedQuery, eligible])
+
+  // The dispatcher every existing "refresh the list" site now goes through:
+  // All mode polls the digest (or fans a search out); scoped/single mode is
+  // today's list path, untouched.
+  const refreshList = useCallback((quiet = false) => {
+    if (allMode) return debouncedQuery ? searchFanout(quiet) : loadDigest(quiet)
+    return loadList(quiet)
+  }, [allMode, debouncedQuery, searchFanout, loadDigest, loadList])
+
+  useEffect(() => { if (scopeReady) refreshList() }, [refreshList, scopeReady])
 
   useEffect(() => {
-    const timer = setInterval(() => loadList(true), POLL_MS)
-    const onFocus = () => loadList(true)
+    if (!scopeReady) return undefined
+    const timer = setInterval(() => refreshList(true), POLL_MS)
+    const onFocus = () => refreshList(true)
     window.addEventListener('focus', onFocus)
     return () => {
       clearInterval(timer)
       window.removeEventListener('focus', onFocus)
     }
-  }, [loadList])
+  }, [refreshList, scopeReady])
 
   // "Older" — a keyset cursor, appended. It deliberately does NOT touch
   // `listRequest`: a page-2 read is not a new scope, and stamping it as one
@@ -312,7 +579,7 @@ export default function MailSurface({ locationId, locationName }) {
     setLoadingMore(true)
     try {
       const res = await fetch(
-        buildMailUrl({ locationId, mailboxId, viewId, before: nextBefore, q: debouncedQuery }),
+        buildMailUrl({ locationId: scopedId, mailboxId, viewId, before: nextBefore, q: debouncedQuery }),
         { cache: 'no-store' }
       )
       const body = await res.json()
@@ -529,10 +796,14 @@ export default function MailSurface({ locationId, locationName }) {
   // switch of context is a genuinely fresh one, same reasoning as the notice
   // above), so the param drops for free there too. The id in the URL names a
   // SELECTION; whenever there is none, the URL should stop claiming otherwise.
-  function clearSelection({ keepNotice = false } = {}) {
+  // MAIL-ALLLOC.1 — `skipUrl` is for changeScope, which writes ?loc= and
+  // clears ?c= in ONE router.replace of its own: two replaces in one handler
+  // would each build from the same stale searchParams and the second would
+  // silently undo the first's param.
+  function clearSelection({ keepNotice = false, skipUrl = false } = {}) {
     threadFor.current = null
     setSelectedId(null)
-    writeSelectedParam(null)
+    if (!skipUrl) writeSelectedParam(null)
     // Same reasoning as selectConversation's own disarm, above.
     deepLinkReconcileRef.current = null
     deepLinkMarkReadRef.current = null
@@ -546,6 +817,35 @@ export default function MailSurface({ locationId, locationName }) {
   }
 
   function changeMailbox(id) { setMailboxId(id); clearSelection() }
+
+  // ── MAIL-ALLLOC.1: the scope switch — a tile, a View-all row, or the
+  // digest's own fallback all land here ─────────────────────────────────
+  //
+  // A scope change is a genuinely fresh context, exactly like a mailbox or
+  // view switch: selection cleared, search cleared (the same honesty rule as
+  // changeView — a search kept across a scope flip would silently rescope
+  // its results), account filter reset (it belongs to ONE studio), cursor
+  // dropped. The choice persists per user, and `?loc=` mirrors it so the URL
+  // stays shareable — written in the SAME replace that drops `?c=`, because
+  // two replaces built from one stale searchParams would fight.
+  function changeScope(next) {
+    if (!multi || next === scope) return
+    setScope(next)
+    writeMailScope(userId, next)
+    const params = new URLSearchParams(searchParams.toString())
+    params.delete('c')
+    if (next === MAIL_SCOPE_ALL) params.delete('loc')
+    else params.set('loc', next)
+    const qs = params.toString()
+    router.replace(qs ? `/communications/mail?${qs}` : '/communications/mail', { scroll: false })
+    setMailboxId(null)
+    setQueryText('')
+    setDebouncedQuery('')
+    setSections(null)
+    setConversations([])
+    setNextBefore(null)
+    clearSelection({ skipUrl: true })
+  }
 
   // 🔴 A VIEW CLICK DURING A SEARCH MUST DO SOMETHING, NOT LOOK LIKE IT DID.
   // The route ignores `view` entirely while `q` is present (search spans
@@ -637,8 +937,10 @@ export default function MailSurface({ locationId, locationName }) {
         }
       }
       // Quietly, so a refresh hiccup cannot repaint the surface as an error
-      // over an action that succeeded.
-      if (mountedRef.current) await loadList(true)
+      // over an action that succeeded. Through the dispatcher: in All mode
+      // the row came from a digest section, so the digest is what must
+      // re-answer (its per-section counts and View-all totals just changed).
+      if (mountedRef.current) await refreshList(true)
     } catch {
       if (!mountedRef.current) return
       setThreadError('Could not reach the server — nothing was changed')
@@ -647,7 +949,7 @@ export default function MailSurface({ locationId, locationName }) {
     // in the dependency list even though the callback is only ever invoked
     // from the queue worker below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversations, selectedId, viewId, debouncedQuery, loadList])
+  }, [conversations, selectedId, viewId, debouncedQuery, refreshList])
 
   // The defer verb. Paired with markUnseen() over IMAP by the route, so it
   // survives the poller's convergence — see the seen route's header.
@@ -829,7 +1131,7 @@ export default function MailSurface({ locationId, locationName }) {
         // the words in the box are the only surviving copy of what was sent.
         if (body?.data?.sent) {
           await loadThread(selectedId, { quiet: true })
-          await loadList(true)
+          await refreshList(true)
           return { ok: false, sent: true }
         }
         return { ok: false }
@@ -837,7 +1139,7 @@ export default function MailSurface({ locationId, locationName }) {
       await loadThread(selectedId)
       // A note changes nothing about the row (deliberately — it must not
       // re-describe the conversation or bump it up the list).
-      if (!internal) await loadList(true)
+      if (!internal) await refreshList(true)
       return { ok: true }
     } catch {
       setThreadError('Could not send that — check your connection and try again')
@@ -881,8 +1183,69 @@ export default function MailSurface({ locationId, locationName }) {
 
   function handleComposed(newTicket) {
     setComposeOpen(false)
-    loadList(true)
+    refreshList(true)
     if (newTicket?.id) selectConversation(newTicket)
+  }
+
+  // ── MAIL-ALLLOC.1: compose from All mode ─────────────────────────────
+  //
+  // The digest carries no mailboxes (it is a triage payload), so the From
+  // options are gathered on FIRST compose-open by asking each digest studio's
+  // own list route — the exact payload the scoped surface would have had —
+  // then grouped by studio name (groupMailboxesByStudio; TicketCompose
+  // renders a flat select, and that file is not this task's to change, so
+  // "grouped" is the studio name leading each option's label). Cached in a
+  // ref for the session: mailbox sets change on an admin's timescale, not a
+  // compose's. Scoped/single mode never comes here — compose opens with the
+  // list's own mailboxes, exactly as before.
+  //
+  // A studio that fails the gather contributes no options rather than
+  // blocking the composer — losing one studio's From addresses to a blip is
+  // recoverable (retry by reopening), an unopenable composer is not. Only
+  // when NOTHING loads does the surface refuse, out loud.
+  //
+  // State, not a ref, because TicketCompose renders from it (react-hooks/refs
+  // forbids a `.current` read during render — and rightly: a ref write does
+  // not re-render, so the composer could open against a stale value).
+  const [composeMailboxes, setComposeMailboxes] = useState(null)
+  const [composeLoading, setComposeLoading] = useState(false)
+
+  async function openCompose() {
+    if (!allMode) { setComposeOpen(true); return }
+    if (composeMailboxes?.length) { setComposeOpen(true); return }
+    setComposeLoading(true)
+    try {
+      // Audit F4 — same fallback as searchFanout: with no digest answer yet
+      // (first seconds of All mode, or a failed digest) the eligible set is
+      // still known from the server render, and "could not load" must mean
+      // TRIED, not skipped.
+      const targets = (digestRef.current?.locations?.length
+        ? digestRef.current.locations
+        : eligible.map(l => ({ location_id: l.id, name: l.name })))
+      const perLocation = await Promise.all(targets.map(async (l) => {
+        try {
+          const res = await fetch(buildMailUrl({ locationId: l.location_id }), { cache: 'no-store' })
+          const body = await res.json()
+          return {
+            locationId: l.location_id,
+            name: l.name,
+            mailboxes: body?.success ? (body.data?.mailboxes || []) : [],
+          }
+        } catch {
+          return { locationId: l.location_id, name: l.name, mailboxes: [] }
+        }
+      }))
+      const grouped = groupMailboxesByStudio(perLocation)
+      if (!mountedRef.current) return
+      if (grouped.length === 0) {
+        setListError('Could not load the accounts you can send from — try again')
+        return
+      }
+      setComposeMailboxes(grouped)
+      setComposeOpen(true)
+    } finally {
+      if (mountedRef.current) setComposeLoading(false)
+    }
   }
 
   // ── Keyboard ───────────────────────────────────────────────────────
@@ -946,7 +1309,7 @@ export default function MailSurface({ locationId, locationName }) {
   const shellClasses =
     'flex flex-col h-[calc(100vh-13rem)] min-h-[32rem] rounded-xl border border-un1t-border bg-un1t-bg overflow-hidden'
 
-  if (!locationId) {
+  if (!multi && !scopedId) {
     return (
       <div className={shellClasses}>
         <EmptyState
@@ -958,10 +1321,19 @@ export default function MailSurface({ locationId, locationName }) {
     )
   }
 
+  // MAIL-ALLLOC.1 — "have we anything to show" is mode-shaped: the scoped
+  // list's tell is its mailboxes, All mode's is whether any digest ever
+  // answered (sections). Both feed the same two guards below.
+  const noContentYet = allMode ? sections === null : mailboxes.length === 0
+  // No digest locations at all = no studio with a visible mailbox anywhere
+  // the caller can read — the same "normal, explained" empty as a single
+  // studio with no accounts.
+  const noMailboxesAnywhere = allMode ? (sections !== null && sections.length === 0) : mailboxes.length === 0
+
   // A failed first load leaves us with zero mailboxes for a reason that has
   // nothing to do with access — say THAT, rather than telling an operator
   // their studio has no mail accounts because a fetch blipped.
-  if (!loading && listError && mailboxes.length === 0) {
+  if (!loading && listError && noContentYet) {
     return (
       <div className={shellClasses}>
         <EmptyState
@@ -971,7 +1343,7 @@ export default function MailSurface({ locationId, locationName }) {
           action={
             <button
               type="button"
-              onClick={() => loadList()}
+              onClick={() => refreshList()}
               className="inline-flex items-center gap-1.5 rounded-md border border-un1t-border px-2.5 py-1.5 text-xs text-un1t-subtle transition-colors hover:text-un1t-text"
             >
               <RefreshCw size={13} />
@@ -986,7 +1358,7 @@ export default function MailSurface({ locationId, locationName }) {
   // No mail-surface mailboxes is a NORMAL state — every existing mailbox
   // defaults to the ticket surface, so this is what a studio that has not
   // opted into the trial sees.
-  if (!loading && mailboxes.length === 0) {
+  if (!loading && noMailboxesAnywhere) {
     return (
       <div className={shellClasses}>
         <EmptyState
@@ -1007,18 +1379,28 @@ export default function MailSurface({ locationId, locationName }) {
   const railViews = MAIL_VIEWS.map(v => ({
     id: v.id,
     label: v.label,
-    count: v.id === 'needs_reply' ? needsReplyCount : null,
+    // All mode's number is the digest's summed total, last-good under a
+    // partial answer and null before anything was ever known (the rail
+    // omits null — never a fabricated 0).
+    count: v.id === 'needs_reply' ? (allMode ? allTotal : needsReplyCount) : null,
   }))
+
+  // MAIL-ALLLOC.1 — the tile row: eligible names immediately (no flash while
+  // the digest is in flight, counts unknown), the digest's own set once it
+  // answers. MailRail hides the block below 2 studios.
+  const tiles = multi
+    ? buildLocationTiles({ eligible, digestLocations: digest?.locations || null, allCount: allTotal })
+    : null
 
   return (
     <div className={shellClasses}>
       <div className="flex items-center justify-end gap-2 border-b border-un1t-border px-3 py-2">
-        <Button type="button" size="sm" variant="secondary" icon={Plus} onClick={() => setComposeOpen(true)}>
+        <Button type="button" size="sm" variant="secondary" icon={Plus} loading={composeLoading} onClick={openCompose}>
           New email
         </Button>
         <button
           type="button"
-          onClick={() => loadList()}
+          onClick={() => refreshList()}
           className="inline-flex items-center gap-1.5 rounded-md border border-un1t-border px-2 py-1 text-xs text-un1t-subtle transition-colors hover:text-un1t-text"
         >
           <RefreshCw size={13} className={loading ? 'animate-spin' : undefined} />
@@ -1066,10 +1448,15 @@ export default function MailSurface({ locationId, locationName }) {
             views={railViews}
             viewId={viewId}
             onView={changeView}
-            mailboxes={mailboxes}
+            // All mode never enumerates accounts — the filter belongs to ONE
+            // studio (the rail shows its disclosure line instead).
+            mailboxes={allMode ? [] : mailboxes}
             mailboxId={mailboxId}
             onMailbox={changeMailbox}
-            locationLabel={locationName}
+            locationLabel={scopedName}
+            tiles={tiles}
+            scope={scope}
+            onScope={changeScope}
           />
         </div>
 
@@ -1116,8 +1503,8 @@ export default function MailSurface({ locationId, locationName }) {
             onMarkUnread={markUnreadAction}
             busyId={busyId}
             view={view}
-            locationName={locationName}
-            showMailbox={mailboxes.length > 1}
+            locationName={allMode ? 'All locations' : scopedName}
+            showMailbox={!allMode && mailboxes.length > 1}
             mailboxById={mailboxById}
             hasMore={!!nextBefore}
             onLoadMore={loadMore}
@@ -1127,6 +1514,9 @@ export default function MailSurface({ locationId, locationName }) {
             searchActive={!!debouncedQuery}
             searchQuery={debouncedQuery}
             searchPartial={searchPartial}
+            sections={allMode ? sections : null}
+            onScopeLocation={changeScope}
+            onRetrySection={() => refreshList()}
           />
         </div>
 
@@ -1165,11 +1555,15 @@ export default function MailSurface({ locationId, locationName }) {
           half-typed email. */}
       {composeOpen && (
         <TicketCompose
-          mailboxes={mailboxes}
-          initialMailboxId={mailboxId}
+          // All mode: the lazily-gathered, studio-labelled union (see
+          // openCompose); scoped/single mode: the list's own mailboxes,
+          // exactly as before. Sending is unchanged either way — compose
+          // takes mailbox_id, and the mailbox carries its own location.
+          mailboxes={allMode ? (composeMailboxes || []) : mailboxes}
+          initialMailboxId={allMode ? null : mailboxId}
           onClose={() => setComposeOpen(false)}
           onSent={handleComposed}
-          onSentUnfiled={() => loadList(true)}
+          onSentUnfiled={() => refreshList(true)}
         />
       )}
 

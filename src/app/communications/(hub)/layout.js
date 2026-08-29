@@ -45,9 +45,9 @@
 // hide-when-empty behaviour elsewhere in the app.
 
 import { redirect } from 'next/navigation'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermission, hasPermissionForLocation } from '@/lib/permissions'
 import CommunicationsTabs from '@/components/communications/CommunicationsTabs'
 import CommsShell from '@/components/communications/CommsShell'
 
@@ -58,7 +58,13 @@ export default async function CommunicationsHubLayout({ children }) {
   if (!user) redirect('/login') // parent layout already gates; defensive for render-order edge cases
 
   const canWhatsapp = hasPermission(user, 'whatsapp')
-  const canEmailInbox = hasPermission(user, 'email_inbox')
+  // MAIL-ALLLOC.1 — resolved across EVERY location, not just the active one:
+  // a multi-location person whose active studio happens to lack the key (or
+  // a mailbox) still reads Mail for the studios that have both, so the tab
+  // must not vanish with the session's location picker.
+  const mailLocationIds = getUserLocationIds(user)
+    .filter(id => hasPermissionForLocation(user, id, 'email_inbox'))
+  const canEmailInbox = mailLocationIds.length > 0
 
   // INBOX-SURFACE.C / RETIRE-TICKETS.1 — still data-gated, but the question
   // simplified with the surface split's retirement (mig 578): "does this
@@ -67,7 +73,7 @@ export default async function CommunicationsHubLayout({ children }) {
   // deactivated account is hidden from every inbox. An empty tab in the nav
   // is worse than no tab — the operator clicks it, finds a blank page, and
   // concludes email is broken.
-  const canMail = canEmailInbox && await locationHasMailbox(user.activeLocation?.id)
+  const canMail = canEmailInbox && await anyLocationHasMailbox(mailLocationIds)
 
   // DEEP.4 final review — fallback keeps the subtitle from reading as
   // "for <location>" with no channel word when neither key is held.
@@ -108,13 +114,13 @@ export default async function CommunicationsHubLayout({ children }) {
  * Never throws and never surfaces an error. False on anything unexpected —
  * hiding the tab is the safe direction.
  */
-async function locationHasMailbox(locationId) {
-  if (!locationId) return false
+async function anyLocationHasMailbox(locationIds) {
+  if (!Array.isArray(locationIds) || locationIds.length === 0) return false
   try {
     const db = createServerClient()
     const { data, error } = await db.from('email_mailboxes')
       .select('id')
-      .eq('location_id', locationId)
+      .in('location_id', locationIds)
       .eq('active', true)
       .limit(1)
     if (error) return false

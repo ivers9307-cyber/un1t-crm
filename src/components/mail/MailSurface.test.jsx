@@ -1323,3 +1323,293 @@ describe('MailSurface — the archive queue', () => {
     expect(archiveUrls).toEqual(['/api/email/mail/conv-a/archive'])
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════
+// MAIL-ALLLOC.1 — the multi-location surface: tiles, All mode, scope.
+// ═══════════════════════════════════════════════════════════════════════
+
+const LOC_A = 'a0000000-0000-4000-8000-00000000000a'
+const LOC_B = 'b0000000-0000-4000-8000-00000000000b'
+const ELIGIBLE = [
+  { id: LOC_A, name: 'Hatch Street' },
+  { id: LOC_B, name: 'Stillorgan' },
+]
+
+const rowFor = (id, locationId, over = {}) => ({
+  ...CONV_A,
+  id,
+  location_id: locationId,
+  requester_name: `Person ${id}`,
+  subject: `Subject ${id}`,
+  ...over,
+})
+
+// The multi-location stub: a digest endpoint plus per-location scoped lists.
+// `state` is mutable so a test can archive a row or blip a studio and let the
+// next (re)fetch answer differently — the same honesty as stubNetwork above.
+function stubMultiNetwork(state) {
+  calls = []
+  const digestPayload = () => {
+    const locations = state.locations
+      .filter(l => !state.droppedFromDigest?.includes(l.id))
+      .map(l => (state.unavailable?.includes(l.id)
+        ? {
+            location_id: l.id, name: l.name, unavailable: true,
+            needs_reply_count: null, view_total: null, conversations: [],
+          }
+        : {
+            location_id: l.id, name: l.name, unavailable: false,
+            needs_reply_count: l.needsReply ?? 0,
+            view_total: l.viewTotal ?? (l.rows || []).length,
+            conversations: (l.rows || []).filter(r => !state.archived?.has(r.id)),
+          }))
+    const partial = locations.some(l => l.unavailable)
+    return {
+      locations,
+      needs_reply_total: partial ? null : locations.reduce((s, l) => s + (l.needs_reply_count || 0), 0),
+      partial,
+    }
+  }
+  vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+    calls.push({ url: String(url), method: init?.method || 'GET', body: init?.body ? JSON.parse(init.body) : null })
+    const u = String(url)
+    if (u.startsWith('/api/email/mail/digest')) {
+      return json({ success: true, data: digestPayload() })
+    }
+    if (u.startsWith('/api/email/mail?')) {
+      const params = new URLSearchParams(u.split('?')[1])
+      const locId = params.get('location_id')
+      const loc = state.locations.find(l => l.id === locId)
+      if (params.get('q') && state.failSearchFor?.includes(locId)) {
+        return json({ success: false, error: 'search blew up' })
+      }
+      return json({
+        success: true,
+        data: {
+          mailboxes: loc?.mailboxes || [],
+          conversations: (loc?.rows || []).filter(r => !state.archived?.has(r.id)),
+          next_before: null,
+          needs_reply_count: loc?.needsReply ?? 0,
+          counts_unavailable: false,
+          counts_partial: false,
+        },
+      })
+    }
+    if (u.includes('/archive')) {
+      const id = u.split('/')[4]
+      state.archived = state.archived || new Set()
+      if (init?.body && JSON.parse(init.body).archived) state.archived.add(id)
+      else state.archived.delete(id)
+      const all = state.locations.flatMap(l => l.rows || [])
+      return json({
+        success: true,
+        data: {
+          conversation: { ...(all.find(r => r.id === id) || {}), status: 'closed', archived: true },
+          writeback_notice: null,
+        },
+      })
+    }
+    if (u.includes('/seen')) return json({ success: true, data: { unread: 0, writeback_notice: null } })
+    if (u.startsWith('/api/email/tickets/')) {
+      const id = u.split('/')[4]
+      const all = state.locations.flatMap(l => l.rows || [])
+      const row = all.find(r => r.id === id) || CONV_A
+      return json({
+        success: true,
+        data: {
+          ticket: { ...row },
+          messages: [],
+          reply_recipients: { to: [row.requester_email], mode: 'reply' },
+        },
+      })
+    }
+    return json({ success: true, data: {} })
+  }))
+  return state
+}
+
+const defaultMultiState = () => ({
+  locations: [
+    {
+      id: LOC_A, name: 'Hatch Street', needsReply: 3, viewTotal: 38,
+      rows: [rowFor('ha-1', LOC_A), rowFor('ha-2', LOC_A)],
+      mailboxes: [{ id: 'mb-a', label: null, address: 'accounts@hatch.ie', is_default: true, active: true }],
+    },
+    {
+      id: LOC_B, name: 'Stillorgan', needsReply: 1, viewTotal: 1,
+      rows: [rowFor('st-1', LOC_B)],
+      mailboxes: [{ id: 'mb-b', label: 'Info', address: 'info@still.ie', is_default: true, active: true }],
+    },
+  ],
+})
+
+const renderMulti = (props = {}) =>
+  render(
+    <MailSurface
+      locationId={LOC_A}
+      locationName="Hatch Street"
+      userId="me-1"
+      locations={ELIGIBLE}
+      {...props}
+    />
+  )
+
+const digestCalls = () => calls.filter(c => c.url.startsWith('/api/email/mail/digest'))
+const scopedListCalls = (locId) =>
+  calls.filter(c => c.url.startsWith('/api/email/mail?') && c.url.includes(`location_id=${locId}`))
+
+describe('MailSurface — multi-location (MAIL-ALLLOC.1)', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+  })
+
+  it('a single-location caller never sees a tile and never fetches the digest', async () => {
+    renderSurface() // the file-wide single-location render
+    await screen.findByText('Membership freeze')
+    expect(screen.queryByText('All locations')).toBeNull()
+    expect(digestCalls()).toHaveLength(0)
+  })
+
+  it('defaults to All: fetches the digest, renders tiles and grouped sticky sections', async () => {
+    stubMultiNetwork(defaultMultiState())
+    renderMulti()
+    await screen.findByText('Subject ha-1')
+    // Tiles: All + both studios, needs-reply chips from the digest.
+    const allTile = screen.getByRole('button', { name: /All locations/ })
+    expect(allTile.getAttribute('aria-pressed')).toBe('true')
+    expect(allTile.textContent).toContain('4') // 3 + 1 summed
+    expect(screen.getByRole('button', { name: /Hatch Street.*3/s })).toBeTruthy()
+    // Sections group the rows under studio headers.
+    const hatch = screen.getByRole('region', { name: 'Hatch Street' })
+    expect(within(hatch).getByText('Subject ha-1')).toBeTruthy()
+    const still = screen.getByRole('region', { name: 'Stillorgan' })
+    expect(within(still).getByText('Subject st-1')).toBeTruthy()
+    // No scoped list fetch happened — All mode IS the digest.
+    expect(scopedListCalls(LOC_A)).toHaveLength(0)
+  })
+
+  it('the View-all row scopes into the studio, persists the choice, and loads its full list', async () => {
+    stubMultiNetwork(defaultMultiState())
+    renderMulti()
+    await screen.findByText('Subject ha-1')
+    fireEvent.click(screen.getByRole('button', { name: 'View all 38 in Hatch Street →' }))
+    await waitFor(() => expect(scopedListCalls(LOC_A).length).toBeGreaterThan(0))
+    expect(window.localStorage.getItem('un1t.mail.scope.me-1')).toBe(LOC_A)
+    // Scoped: sections gone, account filter idiom back (single studio label).
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Stillorgan' })).toBeNull())
+  })
+
+  it('a persisted studio scope is honoured on mount — scoped list, no All flash', async () => {
+    window.localStorage.setItem('un1t.mail.scope.me-1', LOC_B)
+    stubMultiNetwork(defaultMultiState())
+    renderMulti()
+    await screen.findByText('Subject st-1')
+    expect(screen.queryByText('Subject ha-1')).toBeNull()
+    expect(scopedListCalls(LOC_B).length).toBeGreaterThan(0)
+    // The Stillorgan tile is pressed, and tiles still render (scope switcher).
+    expect(screen.getByRole('button', { name: /Stillorgan/ }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('a persisted scope naming a studio the caller can no longer read falls back to All', async () => {
+    window.localStorage.setItem('un1t.mail.scope.me-1', 'c0000000-0000-4000-8000-00000000000c')
+    stubMultiNetwork(defaultMultiState())
+    renderMulti()
+    await screen.findByText('Subject ha-1') // All mode's digest sections
+    expect(screen.getByRole('button', { name: /All locations/ }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('?loc= wins over the stored scope, validated like ?c=', async () => {
+    window.localStorage.setItem('un1t.mail.scope.me-1', LOC_A)
+    currentSearchParams = new URLSearchParams(`loc=${LOC_B}`)
+    stubMultiNetwork(defaultMultiState())
+    renderMulti()
+    await screen.findByText('Subject st-1')
+    expect(scopedListCalls(LOC_B).length).toBeGreaterThan(0)
+    expect(scopedListCalls(LOC_A)).toHaveLength(0)
+  })
+
+  it('a garbage ?loc= is ignored outright', async () => {
+    currentSearchParams = new URLSearchParams('loc=..%2F..%2Fetc')
+    stubMultiNetwork(defaultMultiState())
+    renderMulti()
+    await screen.findByText('Subject ha-1') // fell through to the default: All
+    expect(calls.every(c => !c.url.includes('..'))).toBe(true)
+  })
+
+  it('keeps the LAST GOOD needs-reply total when a partial digest answers null', async () => {
+    const state = stubMultiNetwork(defaultMultiState())
+    renderMulti()
+    await screen.findByText('Subject ha-1')
+    expect(screen.getByRole('button', { name: /All locations/ }).textContent).toContain('4')
+    // Stillorgan blips: the digest goes partial, total null.
+    state.unavailable = [LOC_B]
+    await act(async () => { window.dispatchEvent(new Event('focus')) })
+    await screen.findByText(/couldn’t be reached/)
+    // The badge still says 4 — never 0, never blank, while a studio is dark.
+    expect(screen.getByRole('button', { name: /All locations/ }).textContent).toContain('4')
+    // And the dark studio's own tile shows NO count at all.
+    const stillTile = screen.getByRole('button', { name: /^Stillorgan$/ })
+    expect(stillTile.textContent).toBe('Stillorgan')
+  })
+
+  it('an unavailable studio renders an inline error whose retry refetches the digest', async () => {
+    const state = stubMultiNetwork(defaultMultiState())
+    state.unavailable = [LOC_B]
+    renderMulti()
+    await screen.findByText(/couldn’t be reached/)
+    const before = digestCalls().length
+    state.unavailable = []
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await screen.findByText('Subject st-1')
+    expect(digestCalls().length).toBeGreaterThan(before)
+  })
+
+  it('search in All mode fans out per studio and groups the results; one failed studio does not sink the rest', async () => {
+    const state = stubMultiNetwork(defaultMultiState())
+    state.failSearchFor = [LOC_A]
+    renderMulti()
+    await screen.findByText('Subject ha-1')
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'freeze' } })
+    await waitFor(() => {
+      expect(calls.some(c => c.url.includes(`location_id=${LOC_A}`) && c.url.includes('q=freeze'))).toBe(true)
+      expect(calls.some(c => c.url.includes(`location_id=${LOC_B}`) && c.url.includes('q=freeze'))).toBe(true)
+    })
+    // Stillorgan's matches render under its header; Hatch shows the error.
+    await screen.findByText(/couldn’t be reached/)
+    const still = screen.getByRole('region', { name: 'Stillorgan' })
+    expect(within(still).getByText('Subject st-1')).toBeTruthy()
+  })
+
+  it('j walks the flat order ACROSS sections, and e archives via the row-id route', async () => {
+    stubMultiNetwork(defaultMultiState())
+    renderMulti()
+    await screen.findByText('Subject ha-1')
+    await flushEffects()
+    fireEvent.keyDown(window, { key: 'j' }) // → ha-1
+    await flushEffects()
+    fireEvent.keyDown(window, { key: 'j' }) // → ha-2
+    await flushEffects()
+    fireEvent.keyDown(window, { key: 'j' }) // crosses the section boundary → st-1
+    await flushEffects()
+    fireEvent.keyDown(window, { key: 'e' })
+    await waitFor(() => expect(postsTo('/api/email/mail/st-1/archive')).toHaveLength(1))
+    // The archived row leaves its section on the digest refetch.
+    await waitFor(() => expect(screen.queryByText('Subject st-1')).toBeNull())
+  })
+
+  it('compose from All mode gathers every studio’s accounts and labels them by studio', async () => {
+    stubMultiNetwork(defaultMultiState())
+    renderMulti()
+    await screen.findByText('Subject ha-1')
+    fireEvent.click(screen.getByRole('button', { name: /New email/i }))
+    // The gather: one scoped list call per studio (no q, no view).
+    await waitFor(() => {
+      expect(scopedListCalls(LOC_A).length).toBeGreaterThan(0)
+      expect(scopedListCalls(LOC_B).length).toBeGreaterThan(0)
+    })
+    const fromSelect = await screen.findByLabelText(/From/)
+    const labels = within(fromSelect).getAllByRole('option').map(o => o.textContent)
+    expect(labels.some(l => l.startsWith('Hatch Street · accounts@hatch.ie'))).toBe(true)
+    expect(labels.some(l => l.startsWith('Stillorgan · Info'))).toBe(true)
+  })
+})

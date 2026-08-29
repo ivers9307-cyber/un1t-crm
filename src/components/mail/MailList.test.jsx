@@ -427,3 +427,120 @@ describe('MailList — search state', () => {
     expect(screen.queryByText(/scanned only part/)).toBeNull()
   })
 })
+
+// MAIL-ALLLOC.1 — the All-mode grouped list.
+describe('MailList — All-mode sections', () => {
+  const LOC_A = 'a0000000-0000-4000-8000-000000000001'
+  const LOC_B = 'b0000000-0000-4000-8000-000000000002'
+
+  const section = (over = {}) => ({
+    locationId: LOC_A,
+    name: 'Hatch Street',
+    unavailable: false,
+    needsReplyCount: 0,
+    viewTotal: 1,
+    conversations: [],
+    hasMore: false,
+    countsPartial: false,
+    searchPartial: false,
+    ...over,
+  })
+
+  it('groups rows under their own studio header, in section order', () => {
+    renderList({
+      sections: [
+        section({ needsReplyCount: 3 }),
+        section({ locationId: LOC_B, name: 'Stillorgan' }),
+      ],
+      conversations: [
+        conv({ id: 'c-b', location_id: LOC_B, requester_name: 'Stillorgan Person' }),
+        conv({ id: 'c-a', location_id: LOC_A, requester_name: 'Hatch Person' }),
+      ],
+    })
+    const hatch = screen.getByRole('region', { name: 'Hatch Street' })
+    const still = screen.getByRole('region', { name: 'Stillorgan' })
+    expect(within(hatch).getByText('Hatch Person')).toBeTruthy()
+    expect(within(hatch).queryByText('Stillorgan Person')).toBeNull()
+    expect(within(still).getByText('Stillorgan Person')).toBeTruthy()
+    // The header carries the studio's needs-reply count.
+    expect(within(hatch).getByText('3 need reply')).toBeTruthy()
+  })
+
+  it('offers "View all N" only past the cap, and it scopes to that studio', () => {
+    const onScopeLocation = vi.fn()
+    renderList({
+      sections: [
+        section({ hasMore: true, viewTotal: 38 }),
+        section({ locationId: LOC_B, name: 'Stillorgan', hasMore: false, viewTotal: 1 }),
+      ],
+      conversations: [
+        conv({ id: 'c-a', location_id: LOC_A }),
+        conv({ id: 'c-b', location_id: LOC_B }),
+      ],
+      onScopeLocation,
+    })
+    const viewAll = screen.getByRole('button', { name: 'View all 38 in Hatch Street →' })
+    viewAll.click()
+    expect(onScopeLocation).toHaveBeenCalledWith(LOC_A)
+    expect(screen.queryByText(/View all 1 in Stillorgan/)).toBeNull()
+  })
+
+  it('keeps an empty section visible with a quiet empty — hiding reads as missing mail', () => {
+    renderList({
+      sections: [section({ viewTotal: 0 })],
+      conversations: [],
+    })
+    const hatch = screen.getByRole('region', { name: 'Hatch Street' })
+    expect(within(hatch).getByText('Nothing here')).toBeTruthy()
+  })
+
+  it('renders an unreachable studio as an inline error with a retry, not an empty', () => {
+    const onRetrySection = vi.fn()
+    renderList({
+      sections: [
+        section({ unavailable: true, needsReplyCount: null, viewTotal: null }),
+        section({ locationId: LOC_B, name: 'Stillorgan' }),
+      ],
+      conversations: [conv({ id: 'c-b', location_id: LOC_B, requester_name: 'Still Person' })],
+      onRetrySection,
+    })
+    const hatch = screen.getByRole('region', { name: 'Hatch Street' })
+    expect(within(hatch).getByText(/couldn’t be reached/)).toBeTruthy()
+    expect(within(hatch).queryByText('Nothing here')).toBeNull()
+    within(hatch).getByRole('button', { name: 'Retry' }).click()
+    expect(onRetrySection).toHaveBeenCalledWith(LOC_A)
+    // The other studio still renders its mail.
+    expect(screen.getByText('Still Person')).toBeTruthy()
+  })
+
+  it('never renders a location pill on a row — provenance lives in the header', () => {
+    renderList({
+      sections: [section()],
+      conversations: [conv({ id: 'c-a', location_id: LOC_A })],
+      // Even if a caller passes the single-scope mailbox props, section rows
+      // stay clean.
+      showMailbox: true,
+      mailboxById: { 'mb-1': { id: 'mb-1', label: 'Studio', address: 's@x.ie' } },
+    })
+    expect(screen.queryByText('Hatch Street', { selector: 'li *' })).toBeNull()
+    expect(screen.queryByText('Studio')).toBeNull()
+  })
+
+  it('says a search-empty section differently, and carries a per-studio truncation note', () => {
+    renderList({
+      sections: [
+        section({ searchPartial: false }),
+        section({
+          locationId: LOC_B, name: 'Stillorgan', searchPartial: true,
+          conversations: [conv({ id: 'c-b', location_id: LOC_B })],
+        }),
+      ],
+      conversations: [conv({ id: 'c-b', location_id: LOC_B })],
+      searchActive: true,
+    })
+    const hatch = screen.getByRole('region', { name: 'Hatch Street' })
+    expect(within(hatch).getByText('No matches here')).toBeTruthy()
+    const still = screen.getByRole('region', { name: 'Stillorgan' })
+    expect(within(still).getByText(/scanned only part of Stillorgan/)).toBeTruthy()
+  })
+})

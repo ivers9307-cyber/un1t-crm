@@ -32,7 +32,7 @@
 // avatar is gone: at one line there is no room for a 32px tile, and initials
 // were never the thing an operator scanned for anyway (the sender NAME was).
 
-import { Inbox, Search, Archive, ArchiveRestore, Mail, MailOpen, Paperclip } from 'lucide-react'
+import { Inbox, Search, Archive, ArchiveRestore, Mail, MailOpen, Paperclip, AlertCircle } from 'lucide-react'
 import { EmptyState, Loading } from '@/components/ui'
 import { requesterLabel, relativeTime, mailboxLabel } from '@/lib/ticket-display'
 import { isArchived, needsReply, isUnread, DEFAULT_DENSITY } from './mail-display'
@@ -82,6 +82,20 @@ export default function MailList({
   // ALL of them — worth saying, because "not here" and "not found yet" are
   // different claims to make to an operator triaging an inbox.
   searchPartial = false,
+  // MAIL-ALLLOC.1 — All-mode section metadata (buildDigestSections /
+  // buildSearchSections). When present, the list renders GROUPED: one sticky
+  // studio header per section, that studio's rows underneath (filtered from
+  // the same flat `conversations` array every mutation already updates, so
+  // archive/read state needs no second code path), a "View all N" row past
+  // the digest cap, a quiet empty for a clear studio and an inline error +
+  // retry for an unreachable one. Absent for single-location callers, whose
+  // list stays exactly as it was.
+  sections = null,
+  // A View-all row (or its section header, conceptually a tile) scopes into
+  // that studio — the same move as clicking its tile.
+  onScopeLocation,
+  // The retry on an unavailable section refetches the whole digest.
+  onRetrySection,
 }) {
   return (
     <>
@@ -110,7 +124,39 @@ export default function MailList({
       )}
 
       <div className="flex-1 overflow-y-auto">
-        {loading && conversations.length === 0 ? (
+        {Array.isArray(sections) ? (
+          // MAIL-ALLLOC.1 — All mode. ONE scroll (this container), never a
+          // list inside a list: the sections are plain blocks whose headers
+          // stick to the top of this same scroll.
+          <div>
+            {sections.map(s => (
+              <MailSection
+                key={s.locationId}
+                section={s}
+                // Rows come from the SAME flat array the keyboard walks and
+                // every mutation updates — the sections only group them, so
+                // an archived row leaves its section the moment it leaves
+                // the list, with no second removal path to drift.
+                rows={conversations.filter(c => c.location_id === s.locationId)}
+                selectedId={selectedId}
+                busyId={busyId}
+                onSelect={onSelect}
+                onArchive={onArchive}
+                onMarkRead={onMarkRead}
+                onMarkUnread={onMarkUnread}
+                // Audit F5 — the per-section signal, not the global OR: one
+                // studio's count trouble must not mark every studio's rows
+                // untrustworthy (the list-level banner still says SOME read
+                // state is missing).
+                countsUnavailable={Boolean(s.countsPartial)}
+                density={density}
+                searchActive={searchActive}
+                onScopeLocation={onScopeLocation}
+                onRetrySection={onRetrySection}
+              />
+            ))}
+          </div>
+        ) : loading && conversations.length === 0 ? (
           <Loading label="Loading mail…" />
         ) : conversations.length === 0 ? (
           searchActive ? (
@@ -165,6 +211,99 @@ export default function MailList({
         )}
       </div>
     </>
+  )
+}
+
+/**
+ * MAIL-ALLLOC.1 — one studio's block of the All-mode list.
+ *
+ * The header sticks (to the ONE outer scroll — the section itself never
+ * scrolls), names the studio and says how much of it needs a reply. Under
+ * it, in order of what is true:
+ *   • unreachable → an inline error with a retry that refetches the digest —
+ *     a failure must never wear an empty state's clothes, least of all here,
+ *     where "no rows" reads as "that studio has no mail";
+ *   • rows → exactly the same MailRow as everywhere else (no location pill —
+ *     provenance lives in the header, the locked design's rule), then a
+ *     "View all N →" row past the digest cap, which scopes into the studio;
+ *   • nothing → a QUIET one-liner. The section is never hidden: a clear
+ *     studio saying so is information, a missing section is a bug report.
+ */
+function MailSection({
+  section, rows, selectedId, busyId, onSelect, onArchive, onMarkRead,
+  onMarkUnread, countsUnavailable, density, searchActive,
+  onScopeLocation, onRetrySection,
+}) {
+  const name = section.name || 'Unnamed studio'
+  return (
+    <section aria-label={name}>
+      <div className="sticky top-0 z-10 flex items-baseline justify-between gap-2 border-b border-un1t-border bg-un1t-surface px-3 py-1">
+        <span className="truncate text-[10px] font-bold uppercase tracking-widest text-un1t-subtle">
+          {name}
+        </span>
+        {typeof section.needsReplyCount === 'number' && section.needsReplyCount > 0 && (
+          <span className="shrink-0 text-[10px] font-semibold tabular-nums text-amber-700">
+            {section.needsReplyCount} need{section.needsReplyCount === 1 ? 's' : ''} reply
+          </span>
+        )}
+      </div>
+
+      {section.unavailable ? (
+        <div className="flex items-center justify-between gap-2 border-b border-un1t-border/60 bg-amber-500/10 px-3 py-2">
+          <span className="flex min-w-0 items-center gap-1.5 text-xs text-amber-700">
+            <AlertCircle size={12} className="shrink-0" />
+            <span className="truncate">{name} couldn’t be reached</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => onRetrySection?.(section.locationId)}
+            className="shrink-0 rounded-md border border-un1t-border bg-un1t-bg px-2 py-0.5 text-[11px] text-un1t-subtle transition-colors hover:text-un1t-text"
+          >
+            Retry
+          </button>
+        </div>
+      ) : rows.length > 0 ? (
+        <>
+          <ul>
+            {rows.map(c => (
+              <li key={c.id}>
+                <MailRow
+                  conversation={c}
+                  selected={selectedId === c.id}
+                  busy={busyId === c.id}
+                  onSelect={onSelect}
+                  onArchive={onArchive}
+                  onMarkRead={onMarkRead}
+                  onMarkUnread={onMarkUnread}
+                  showMailbox={false}
+                  mailbox={null}
+                  countsUnavailable={countsUnavailable}
+                  density={density}
+                />
+              </li>
+            ))}
+          </ul>
+          {section.searchPartial && (
+            <p className="border-b border-un1t-border/60 bg-amber-500/10 px-3 py-1 text-[11px] text-amber-700" role="status">
+              This search scanned only part of {name} — narrow it to see everything that matches.
+            </p>
+          )}
+          {section.hasMore && (
+            <button
+              type="button"
+              onClick={() => onScopeLocation?.(section.locationId)}
+              className="w-full border-b border-un1t-border/60 px-3 py-1.5 text-center text-xs font-medium text-un1t-subtle transition-colors hover:text-un1t-text"
+            >
+              View all {section.viewTotal} in {name} →
+            </button>
+          )}
+        </>
+      ) : (
+        <p className="border-b border-un1t-border/60 px-3 py-2 text-xs text-un1t-muted">
+          {searchActive ? 'No matches here' : 'Nothing here'}
+        </p>
+      )}
+    </section>
   )
 }
 
