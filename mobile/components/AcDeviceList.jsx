@@ -8,7 +8,7 @@
 // this just renders what /devices returns. Each card polls its own /devices/[id].
 
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { View, Text, Pressable, ActivityIndicator, Alert } from 'react-native'
+import { View, Text, Pressable, ActivityIndicator, Alert, AppState } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useFocusEffect } from 'expo-router'
 import {
@@ -21,11 +21,57 @@ import {
 
 const POLL_INTERVAL_MS = 30_000
 
+/**
+ * Poll on an interval, but only while the app is FOREGROUNDED, and
+ * re-fetch immediately on returning to the foreground.
+ *
+ * SENSIBO-RATE.1 follow-up. Until mig 580 each of these polls was a
+ * LIVE vendor call, so a backgrounded phone left on this screen kept
+ * burning Sensibo's burst budget indefinitely — which is how the AC
+ * crons found nothing left when they needed to act. It reads the DB
+ * now, so this is no longer load-bearing for the vendor; it is just
+ * correct, and it stops a pocketed phone doing work nobody can see.
+ *
+ * Complementary to useFocusEffect: that fires on SCREEN focus within
+ * the app, this one on APP foreground/background.
+ */
+function useForegroundPoll(load, deps) {
+  const ref = useRef(load)
+  // Assigned in an effect, not during render — writing a ref during
+  // render is a React Compiler violation ("Cannot access refs during
+  // render") and eslint fails the build on it.
+  useEffect(() => { ref.current = load })
+  useEffect(() => {
+    const run = () => { if (AppState.currentState === 'active') ref.current() }
+    run()
+    const timer = setInterval(run, POLL_INTERVAL_MS)
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') ref.current()
+    })
+    return () => { clearInterval(timer); sub.remove() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps)
+}
+
+/**
+ * "as of HH:MM" for a cached vendor reading. The state shown here
+ * comes from ac_devices.last_state — refreshed by the
+ * ac-external-rule cron every 5 min and written immediately on every
+ * CRM-initiated change — so it must not be labelled "Live".
+ */
+function asOfLabel(iso) {
+  if (!iso) return null
+  const t = new Date(iso)
+  if (Number.isNaN(t.getTime())) return null
+  return t.toLocaleTimeString('en-IE', {
+    hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Dublin',
+  })
+}
+
 export default function AcDeviceList({ locationId }) {
   const [devices, setDevices] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(true)
-  const pollRef = useRef(null)
 
   const load = useCallback(async () => {
     if (!locationId) return
@@ -41,11 +87,12 @@ export default function AcDeviceList({ locationId }) {
   useEffect(() => {
     setLoading(true)
     load().finally(() => setLoading(false))
-    // Re-fetch the list every 30s in case a master enables / disables a device
-    // while the screen is mounted. Individual cards drive their own state polls.
-    pollRef.current = setInterval(load, POLL_INTERVAL_MS)
-    return () => clearInterval(pollRef.current)
   }, [load])
+
+  // Re-fetch the list every 30s in case a master enables / disables a device
+  // while the screen is mounted. Individual cards drive their own state polls.
+  // Paused while the app is backgrounded.
+  useForegroundPoll(load, [load])
 
   useFocusEffect(useCallback(() => { load() }, [load]))
 
@@ -124,7 +171,6 @@ function DeviceCard({ device, locationId }) {
   const [stateError, setStateError] = useState(null)
   const [busy, setBusy] = useState(null)       // 'on' | 'off' | 'extend'
   const [tick, setTick] = useState(0)
-  const pollRef = useRef(null)
 
   const load = useCallback(async () => {
     const r = await getAcDevice(device.id, locationId)
@@ -136,11 +182,7 @@ function DeviceCard({ device, locationId }) {
     setState(r.data)
   }, [device.id, locationId])
 
-  useEffect(() => {
-    load()
-    pollRef.current = setInterval(load, POLL_INTERVAL_MS)
-    return () => clearInterval(pollRef.current)
-  }, [load])
+  useForegroundPoll(load, [load])
 
   // Re-render every second when active so the countdown updates without polling.
   // Either source — app-session auto_off_at or the cron-set expected_off_at on
@@ -307,10 +349,14 @@ function DeviceCard({ device, locationId }) {
           {state?.state && (
             <View className="bg-un1t-bg/40 rounded-md px-3 py-1.5">
               <Text className="text-[11px] text-un1t-subtle">
-                Live: {state.state.on ? 'on' : 'off'}
+                {state.state.on ? 'on' : 'off'}
                 {state.state.mode ? ` · ${state.state.mode}` : ''}
                 {state.state.target_temp_c != null ? ` · ${state.state.target_temp_c}°C` : ''}
                 {state.state.fan ? ` · fan ${state.state.fan}` : ''}
+                {/* Not "Live" — the last observed reading, not a fresh
+                    vendor call. When it was taken is the difference
+                    between "the AC is off" and "it was off 5 min ago". */}
+                {asOfLabel(state.state_as_of) ? ` · as of ${asOfLabel(state.state_as_of)}` : ''}
               </Text>
             </View>
           )}
