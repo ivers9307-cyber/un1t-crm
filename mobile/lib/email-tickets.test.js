@@ -26,6 +26,9 @@ import {
   THREAD_SETTLE_MS,
   THREAD_STEADY_MS,
   THREAD_SETTLE_WINDOW_MS,
+  mailRowDisplay,
+  flatThreadPlan,
+  flatMessageMeta,
 } from './email-tickets'
 
 describe('ticketMessageKind', () => {
@@ -1136,5 +1139,147 @@ describe('insertRowAt (undo puts the row back where it was)', () => {
     const rows = [r('a')]
     insertRowAt(rows, r('b'), 0)
     expect(rows.map(x => x.id)).toEqual(['a'])
+  })
+})
+
+// ═══ MAIL-REFINE.1 — the redesigned row + the flat thread ═══════════════
+
+describe('mailRowDisplay', () => {
+  it('needs reply = the amber rail ONLY — the chip is gone from live rows', () => {
+    const d = mailRowDisplay({ archived: false, needs_reply: true, unread: false })
+    expect(d.rail).toBe(true)
+    expect(d.chip).toBeNull()
+  })
+
+  it('an answered live row shows neither rail nor chip', () => {
+    const d = mailRowDisplay({ archived: false, needs_reply: false })
+    expect(d.rail).toBe(false)
+    expect(d.chip).toBeNull()
+  })
+
+  it('archived keeps its chip and never a rail, whatever needs_reply says', () => {
+    const d = mailRowDisplay({ archived: true, needs_reply: true })
+    expect(d.rail).toBe(false)
+    expect(d.chip).toEqual({ label: 'Archived', cls: 'bg-slate-500/10', text: 'text-slate-700' })
+  })
+
+  it('the server stamp outranks status re-derivation — a solved row stamped live IS live', () => {
+    // The inbox-vs-ticketing lesson: legacy `solved` rows are live on the
+    // wire; the route stamps archived:false and re-derivation must not
+    // override it.
+    const d = mailRowDisplay({ archived: false, status: 'solved', needs_reply: true })
+    expect(d.rail).toBe(true)
+    expect(d.chip).toBeNull()
+  })
+
+  it('falls back to status/direction for ticket-shaped callers with no stamps', () => {
+    expect(mailRowDisplay({ status: 'open', last_message_direction: 'inbound' }).rail).toBe(true)
+    expect(mailRowDisplay({ status: 'open', last_message_direction: 'outbound' }).rail).toBe(false)
+    expect(mailRowDisplay({ status: 'closed' }).chip?.label).toBe('Archived')
+  })
+
+  it('unread demands === true — a truthy accident is not a blue dot', () => {
+    expect(mailRowDisplay({ unread: true }).unread).toBe(true)
+    expect(mailRowDisplay({ unread: 1 }).unread).toBe(false)
+    expect(mailRowDisplay({}).unread).toBe(false)
+  })
+
+  it('the account tag is the row mailbox_label (null when only one mailbox is visible)', () => {
+    expect(mailRowDisplay({ mailbox_label: 'accounts@' }).accountTag).toBe('accounts@')
+    expect(mailRowDisplay({ mailbox_label: null }).accountTag).toBeNull()
+  })
+})
+
+describe('flatThreadPlan', () => {
+  const msgs = [{ id: 'm1' }, { id: 'm2' }, { id: 'm3' }]
+
+  it('expands ONLY the newest by default — a long thread stops being a wall', () => {
+    expect(flatThreadPlan(msgs).map(p => p.collapsed)).toEqual([true, true, false])
+  })
+
+  it('a single-message thread renders expanded', () => {
+    expect(flatThreadPlan([{ id: 'only' }])[0].collapsed).toBe(false)
+  })
+
+  it('a tap-open override expands an older message; tapping again collapses it', () => {
+    const open = new Map([['m1', true]])
+    expect(flatThreadPlan(msgs, open).map(p => p.collapsed)).toEqual([false, true, false])
+    const closed = new Map([['m1', false]])
+    expect(flatThreadPlan(msgs, closed).map(p => p.collapsed)).toEqual([true, true, false])
+  })
+
+  it('the newest can be collapsed by its own override', () => {
+    const o = new Map([['m3', false]])
+    expect(flatThreadPlan(msgs, o).map(p => p.collapsed)).toEqual([true, true, true])
+  })
+
+  it('tolerates garbage', () => {
+    expect(flatThreadPlan(null)).toEqual([])
+    expect(flatThreadPlan(undefined, null)).toEqual([])
+  })
+})
+
+describe('flatMessageMeta', () => {
+  const now = new Date('2026-08-31T12:00:00Z')
+
+  it('a note is a note FIRST, even though it is stored outbound — the one mistake', () => {
+    const m = flatMessageMeta(
+      { direction: 'outbound', is_internal_note: true, author_name: 'Dean', text_body: 'call them' },
+      { now },
+    )
+    expect(m.tone).toBe('note')
+    expect(m.who).toBe('Dean')
+  })
+
+  it('outbound gets the dark "me" avatar and never right-alignment cues', () => {
+    const m = flatMessageMeta(
+      { direction: 'outbound', author_name: 'Richard Ivers', from_email: 'accounts@x.ie', text_body: 'Hi' },
+      { now },
+    )
+    expect(m.tone).toBe('out')
+    expect(m.dark).toBe(true)
+    expect(m.initials).toBe('RI')
+    expect(m.who).toBe('Richard Ivers')
+  })
+
+  it('an outbound row with no author still says You (mail-client reads have no author)', () => {
+    const m = flatMessageMeta({ direction: 'outbound', text_body: 'x' }, { now })
+    expect(m.who).toBe('You')
+  })
+
+  it('inbound leads with the requester name, address alongside, light avatar', () => {
+    const m = flatMessageMeta(
+      { direction: 'inbound', from_email: 'caitlin.thornton@flogas.ie', text_body: 'Hi there' },
+      { fallbackName: 'Caitlin Thornton', now },
+    )
+    expect(m.tone).toBe('in')
+    expect(m.dark).toBe(false)
+    expect(m.initials).toBe('CT')
+    expect(m.who).toBe('Caitlin Thornton')
+    expect(m.address).toBe('caitlin.thornton@flogas.ie')
+  })
+
+  it('with no name at all the address carries the row, first letter as the avatar', () => {
+    const m = flatMessageMeta(
+      { direction: 'inbound', from_email: 'eleanor@dublincity.ie', text_body: 'x' },
+      { now },
+    )
+    expect(m.who).toBe('eleanor@dublincity.ie')
+    expect(m.initials).toBe('E')
+  })
+
+  it('the snippet is the body with whitespace collapsed — one line, no newlines', () => {
+    const m = flatMessageMeta(
+      { direction: 'inbound', text_body: '  Hi,\n\n  our records   show…  ' },
+      { now },
+    )
+    expect(m.snippet).toBe('Hi, our records show…')
+  })
+
+  it('garbage never renders "Invalid Date" or undefined', () => {
+    const m = flatMessageMeta({ direction: 'inbound' }, { now })
+    expect(m.when).toBe('')
+    expect(m.snippet).toBe('')
+    expect(m.initials).toBe('?')
   })
 })

@@ -1018,6 +1018,134 @@ export function segCountLabel(n) {
   return v > 99 ? '99+' : String(v)
 }
 
+// ═══ MAIL-REFINE.1 — the subject-first row + the flat thread ═════════
+//
+// The approved 31 Aug mockup (§01 row, §02 thread). Same posture as the rest
+// of this file: every branchable decision lives here where vitest reaches it;
+// MailRow.jsx and [ticketId].jsx lay the verdicts out.
+
+// ── §01 — what the redesigned row shows ──────────────────────────────
+/**
+ * One derivation for the row's four signals, so the rail, the dot, the chip
+ * and the account tag can never disagree about one conversation:
+ *
+ *   • `rail`  — needs reply = the AMBER left rail ONLY. The "Needs reply"
+ *     chip is REMOVED (the rail already said it); an archived row never
+ *     shows a rail, whatever needs_reply claims.
+ *   • `unread` — darker ink + the blue dot. Strictly === true: a truthy
+ *     accident must not paint a triaged row unread.
+ *   • `chip`  — ARCHIVED only now (via mailStatusChip, which already returns
+ *     exactly that for archived rows). Live rows carry no chip at all.
+ *   • `accountTag` — the small muted mailbox label ("accounts@"), non-null
+ *     only when the caller can see 2+ mailboxes (ticketToInboxRow already
+ *     nulls it otherwise — this passes that verdict through).
+ *
+ * THE SERVER STAMP OUTRANKS RE-DERIVATION, same as mailStatusChip and the
+ * archive swipe: legacy `solved` rows are LIVE on the wire (archived:false),
+ * and a status fallback may only run when the stamp is absent.
+ */
+export function mailRowDisplay(row) {
+  const archived = typeof row?.archived === 'boolean'
+    ? row.archived
+    : isArchivedStatus(row?.status)
+  const needsReply = typeof row?.needs_reply === 'boolean'
+    ? row.needs_reply
+    : (row?.status === 'open' && row?.last_message_direction === 'inbound')
+  return {
+    rail: !archived && needsReply,
+    unread: row?.unread === true,
+    chip: archived ? mailStatusChip(row) : null,
+    accountTag: row?.mailbox_label || null,
+  }
+}
+
+// ── §02 — the flat thread plan ───────────────────────────────────────
+/**
+ * The thread as flat full-width messages: ONLY the newest renders expanded
+ * by default; everything older collapses to a single line until tapped, and
+ * a tap on an expanded one folds it again.
+ *
+ * `overrides` is a Map id → boolean (true = expanded, false = collapsed) —
+ * an explicit per-message verdict rather than a toggle set, so a poll that
+ * appends a new message (moving the "newest" default off a row somebody
+ * collapsed) cannot silently flip their choice back open.
+ *
+ * Messages arrive oldest-first from getTicket; trusted, not re-sorted (the
+ * threadDisplayPlan rule — re-sorting here and not on screen would make the
+ * plan disagree with what is painted).
+ */
+export function flatThreadPlan(messages, overrides) {
+  const list = Array.isArray(messages) ? messages : []
+  const newestIdx = list.length - 1
+  return list.map((message, i) => {
+    const override = overrides?.get?.(message?.id)
+    const expanded = typeof override === 'boolean' ? override : i === newestIdx
+    return { message, collapsed: !expanded }
+  })
+}
+
+/** Avatar initials: two words → two letters ("Caitlin Thornton" → CT); an
+ * address → its first letter; nothing → '?'. Cosmetic only. */
+function avatarInitials(nameOrEmail) {
+  const s = String(nameOrEmail || '').trim()
+  if (!s) return '?'
+  if (s.includes('@')) return s[0].toUpperCase()
+  const parts = s.split(/\s+/).filter(Boolean)
+  const two = `${parts[0]?.[0] || ''}${parts[1]?.[0] || ''}`.toUpperCase()
+  return two || '?'
+}
+
+/**
+ * Everything a flat message row needs said about its sender — expanded
+ * header and collapsed line both read this, so they cannot name different
+ * people for one message.
+ *
+ * NOTE-FIRST, ALWAYS (the file-header rule): a staff-only note keeps tone
+ * 'note' whatever its stored direction, so a folded note stays amber and an
+ * expanded one keeps its STAFF-ONLY label. Outbound rows get the dark "me"
+ * avatar (`dark: true`) and no right-alignment — flat is the design.
+ *
+ * @param {object|null} message
+ * @param {{ fallbackName?: string, now?: Date }} [opts] fallbackName is the
+ *   requester's display name for inbound rows (their address is often all a
+ *   message row carries)
+ * @returns {{ tone: 'note'|'out'|'in', dark: boolean, initials: string,
+ *   who: string, address: string|null, snippet: string, when: string }}
+ */
+export function flatMessageMeta(message, { fallbackName = '', now = new Date() } = {}) {
+  const m = message || {}
+  const snippet = String(m.text_body || '').replace(/\s+/g, ' ').trim()
+  const when = mailRowTime(m.sent_at || m.created_at, now)
+  if (m.is_internal_note) {
+    const who = m.author_name || 'Staff'
+    return { tone: 'note', dark: false, initials: avatarInitials(who), who, address: null, snippet, when }
+  }
+  if (m.direction === 'outbound') {
+    const who = m.author_name || 'You'
+    return {
+      tone: 'out',
+      dark: true,
+      initials: m.author_name ? avatarInitials(m.author_name) : 'ME',
+      who,
+      address: m.from_email || null,
+      snippet,
+      when,
+    }
+  }
+  const who = fallbackName || m.from_email || 'Member'
+  return {
+    tone: 'in',
+    dark: false,
+    // Initials come from a REAL identity only — the 'Member' placeholder must
+    // not mint a confident-looking 'M' avatar for a sender we cannot name.
+    initials: avatarInitials(fallbackName || m.from_email),
+    who,
+    address: m.from_email || null,
+    snippet,
+    when,
+  }
+}
+
 /**
  * Put an undone row back where it was. The index was remembered when the row
  * left; the list may have changed since (a focus refresh, another archive),

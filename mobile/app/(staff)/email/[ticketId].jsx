@@ -11,9 +11,19 @@
 //     canForwardMessage is the rule, and the route 400s it besides.
 //   • The header strip leads with the SUBJECT, then the status + account
 //     chips, then the server's own audience derivation ("On this thread: …").
-//   • Older messages COLLAPSE to one-line rows: everything but the newest two
-//     folds until tapped (threadDisplayPlan in lib/mail-drafts.js — a
-//     six-message thread opens at the newest word, not a scroll marathon).
+//   • MAIL-REFINE.1 §02 — the thread is FLAT EMAIL, not chat: full-width
+//     messages with hairlines, one header row (avatar · sender · address ·
+//     time), no bubbles and no right-alignment (outbound = the dark "me"
+//     avatar). ONLY the newest message opens by default; every other folds
+//     to a one-line row (avatar, sender, snippet, time) until tapped, and an
+//     open header taps closed again (flatThreadPlan/flatMessageMeta in
+//     lib/email-tickets.js).
+//   • MAIL-REFINE.1 §03 — a nudge banner under the header when the same
+//     requester has other OPEN conversations here (relatedNudge over the
+//     related endpoint — an unknown count shows NOTHING, never 0), a
+//     bottom-sheet merge picker (sequential merges, stop on first failure —
+//     a failed merge must never look merged), Undo on the success notice
+//     only, and a read-only pointer on tombstone threads.
 //   • The composer is a card: a full-width Reply / Internal-note segmented
 //     toggle above it, the audience sentence and a "Draft saved" caption
 //     inside it, a paperclip + photo picker for OUTBOUND attachments, and an
@@ -30,8 +40,8 @@
 // An internal note is stored with direction='outbound' — same as a real sent
 // reply. ticketMessageKind() (lib/email-tickets.js) tests is_internal_note
 // FIRST and this file only paints what it decides — collapsed rows included
-// (collapsedRowMeta applies the same ordering, so a folded note keeps its
-// amber). Nobody must ever be able to think a note went to the member, or
+// (flatMessageMeta applies the same ordering, so a folded note keeps its
+// amber and its lock). Nobody must ever be able to think a note went to the member, or
 // that a reply stayed private. The composer states its mode three times over:
 // the selected segment, the colour of the card, and the sentence naming
 // exactly who receives what.
@@ -83,6 +93,7 @@ import {
   getTicket, replyToTicket, archiveConversation, setConversationSeen, emailDisplayName,
   previewTicketAttachment, downloadTicketAttachment,
   signOutboundAttachment, uploadSignedAttachment,
+  fetchRelatedConversations, mergeConversation, unmergeConversation,
 } from '../../../lib/email-api'
 import {
   ticketMessageKind, mailStatusChip, mailboxLabel, ticketDeliveryMeta,
@@ -90,12 +101,15 @@ import {
   formatAttachmentSize, ticketAttachmentSkippedLabel, ticketAttachmentIcon,
   threadRefreshMs, ticketReplyAudienceMeta, ticketReplyPlaceholder,
   ticketThreadAudienceLines, ticketSendOriginMeta,
+  flatThreadPlan, flatMessageMeta,
 } from '../../../lib/email-tickets'
 import {
   readReplyDraft, writeReplyDraft, clearReplyDraft, resolveDraftHydration,
-  threadDisplayPlan, collapsedRowMeta,
   attachmentBudget, readyAttachmentRefs, admitPickedFile, composerSendState,
 } from '../../../lib/mail-drafts'
+import {
+  relatedNudge, mergePickerRows, mergeButtonLabel, toggleId, runMerges, mergeUndoNotice,
+} from '../../../lib/mail-relate'
 import { canForwardMessage, newestForwardableMessage } from '../../../lib/mail-forward'
 import BackHeaderLeft from '../../../components/BackHeaderLeft'
 
@@ -122,21 +136,18 @@ const DRAFT_WRITE_DEBOUNCE_MS = 600
  *
  * BCC CARRIES A LOCK AND A SENTENCE, not just a label. The whole risk of
  * showing it is somebody reading the line as though the other recipients could
- * see it too; they could not, and never will. `onAccent` because the muted
- * ramp is unreadable on the blue outbound bubble.
+ * see it too; they could not, and never will.
  *
- * `toShownInHeader` is DELIBERATELY NOT DERIVED FROM `onAccent`, even though
- * today only the accent bubble sets both. Reusing "is this the blue bubble?"
- * to mean "does the header name the recipients?" is how the single-To rule got
- * this wrong in the first place — it was written for the outbound bubble's
- * "Sent to …" line and then applied to the inbound one, whose header is
- * "From …" and names nobody on our side. Two questions, two props.
+ * `toShownInHeader` is true only for outbound messages, whose "Sent to …"
+ * line names the recipient in full when there is one (and the first of
+ * several otherwise). The inbound header names the SENDER and nobody on our
+ * side, so there a single To must carry itself — deriving this from "which
+ * kind of row am I on?" is exactly how the single-To rule got it wrong the
+ * first time. Two questions, two props.
  */
-function RecipientLines({ msg, onAccent = false, toShownInHeader = false }) {
+function RecipientLines({ msg, toShownInHeader = false }) {
   const lines = ticketMessageRecipients(msg, { toShownInHeader })
   if (lines.length === 0) return null
-  const label = onAccent ? 'text-white/60' : 'text-un1t-subtle'
-  const body = onAccent ? 'text-white/85' : 'text-un1t-text'
   return (
     <View className="mb-1">
       {lines.map(line => (
@@ -145,12 +156,12 @@ function RecipientLines({ msg, onAccent = false, toShownInHeader = false }) {
             <Ionicons
               name="lock-closed"
               size={9}
-              color={onAccent ? 'rgba(255,255,255,0.6)' : '#64748B'}
+              color="#64748B"
               style={{ marginRight: 3, marginTop: 3 }}
             />
           ) : null}
-          <Text className={`text-[11px] ${label}`}>{line.label} </Text>
-          <Text className={`text-[11px] flex-1 ${body}`}>
+          <Text className="text-[11px] text-un1t-subtle">{line.label} </Text>
+          <Text className="text-[11px] flex-1 text-un1t-text">
             {line.addresses.join(', ')}
             {line.staffOnly ? ' — staff only; no recipient of the email can see this' : ''}
           </Text>
@@ -175,7 +186,7 @@ function RecipientLines({ msg, onAccent = false, toShownInHeader = false }) {
  * bytes, and a spinner that ended in an error would bury the one sentence staff
  * act on.
  */
-function Attachments({ ticketId, locationId, attachments, onAccent = false, onViewImage }) {
+function Attachments({ ticketId, locationId, attachments, onViewImage }) {
   const [busy, setBusy] = useState(null)
   if (!attachments || attachments.length === 0) return null
 
@@ -218,49 +229,45 @@ function Attachments({ ticketId, locationId, attachments, onAccent = false, onVi
             key={att.id}
             onPress={() => open(att)}
             disabled={busy === att.id}
-            className={`flex-row items-center rounded-lg border px-2 py-1.5 mt-1 ${
-              onAccent ? 'border-white/30 bg-white/10' : 'border-un1t-border bg-un1t-bg'
-            } ${busy === att.id ? 'opacity-60' : ''}`}
+            className={`flex-row items-center rounded-lg border border-un1t-border bg-un1t-bg px-2 py-1.5 mt-1 ${busy === att.id ? 'opacity-60' : ''}`}
           >
             <Ionicons
               name={ticketAttachmentIcon(att.mime_type, att.filename)}
               size={14}
-              color={onAccent ? 'rgba(255,255,255,0.9)' : '#64748B'}
+              color="#64748B"
               style={{ marginRight: 6 }}
             />
             <Text
-              className={`text-xs flex-1 ${onAccent ? 'text-white' : 'text-un1t-text'}`}
+              className={"text-xs flex-1 text-un1t-text"}
               numberOfLines={1}
             >
               {att.filename}
             </Text>
-            <Text className={`text-[11px] ml-2 ${onAccent ? 'text-white/70' : 'text-un1t-subtle'}`}>
+            <Text className={"text-[11px] ml-2 text-un1t-subtle"}>
               {formatAttachmentSize(att.size_bytes)}
             </Text>
           </Pressable>
         ) : (
           <View
             key={att.id}
-            className={`flex-row items-center rounded-lg border border-dashed px-2 py-1.5 mt-1 ${
-              onAccent ? 'border-white/30' : 'border-amber-500/60'
-            }`}
+            className={"flex-row items-center rounded-lg border border-dashed border-amber-500/60 px-2 py-1.5 mt-1"}
           >
             <Ionicons
               name="alert-circle-outline"
               size={14}
-              color={onAccent ? 'rgba(255,255,255,0.8)' : '#B45309'}
+              color="#B45309"
               style={{ marginRight: 6 }}
             />
             <View className="flex-1">
               <Text
-                className={`text-xs ${onAccent ? 'text-white/80' : 'text-un1t-text'}`}
+                className={"text-xs text-un1t-text"}
                 numberOfLines={1}
               >
                 {att.filename}
               </Text>
               {/* Kept in words, on the chip. Staff ACT on this text — it is the
                   difference between "ask them to resend" and "we lost it". */}
-              <Text className={`text-[11px] ${onAccent ? 'text-white/70' : 'text-amber-700'}`}>
+              <Text className={"text-[11px] text-amber-700"}>
                 {ticketAttachmentSkippedLabel(att.skipped_reason)} · {formatAttachmentSize(att.size_bytes)}
               </Text>
             </View>
@@ -305,36 +312,56 @@ function ImageViewer({ image, onClose }) {
   )
 }
 
+/** The initial avatar every flat message row leads with — dark for "us"
+ * (outbound), light for the correspondent. Lib maths (flatMessageMeta)
+ * decides both the letters and the shade. */
+function Avatar({ meta }) {
+  return (
+    <View
+      className={`w-6 h-6 rounded-full items-center justify-center ${
+        meta.dark ? 'bg-un1t-text' : 'bg-un1t-border/60'
+      }`}
+    >
+      <Text className={`text-[10px] font-bold ${meta.dark ? 'text-white' : 'text-un1t-text'}`}>
+        {meta.initials}
+      </Text>
+    </View>
+  )
+}
+
 /**
- * One folded message — mockup §04's one-line row. WHO in bold, what happened
- * and when on the right, tap to unfold. The meta (who/what/when/tone) is lib
- * maths (collapsedRowMeta), and tone 'note' keeps the amber skin: a folded
- * staff-only note must be as unmistakable as an open one.
+ * One folded message — MAIL-REFINE.1 §02's one-line row: avatar, sender in
+ * bold, the snippet in grey, the time on the right, on light un1t-bg with a
+ * hairline under it. Tap to unfold. Tone 'note' keeps the amber skin and the
+ * lock: a folded staff-only note must be as unmistakable as an open one.
  */
-function CollapsedRow({ msg, isFirst, fallbackName, onExpand }) {
-  const meta = collapsedRowMeta(msg, { isFirst, fallbackName })
+function FlatCollapsedRow({ msg, fallbackName, onExpand }) {
+  const meta = flatMessageMeta(msg, { fallbackName })
   const isNoteRow = meta.tone === 'note'
   return (
     <Pressable
       onPress={onExpand}
-      accessibilityLabel={`Expand message: ${meta.who}, ${meta.what}`}
-      className={`flex-row items-center rounded-xl border px-3 py-2.5 mb-2 ${
-        isNoteRow ? 'border-amber-500/60 bg-amber-500/10' : 'border-un1t-border bg-un1t-surface'
+      accessibilityLabel={`Expand message from ${meta.who}`}
+      className={`flex-row items-center border-b px-4 py-2.5 ${
+        isNoteRow ? 'border-amber-500/30 bg-amber-500/10' : 'border-un1t-border bg-un1t-bg'
       }`}
     >
       {isNoteRow ? (
-        <Ionicons name="lock-closed" size={11} color="#B45309" style={{ marginRight: 5 }} />
-      ) : null}
+        <Ionicons name="lock-closed" size={12} color="#B45309" style={{ marginRight: 6 }} />
+      ) : (
+        <Avatar meta={meta} />
+      )}
       <Text
-        className={`text-xs font-bold flex-1 ${isNoteRow ? 'text-amber-700' : 'text-un1t-text'}`}
+        className={`text-xs font-bold ml-2 ${isNoteRow ? 'text-amber-700' : 'text-un1t-text'}`}
         numberOfLines={1}
+        style={{ flexShrink: 1 }}
       >
         {meta.who}
       </Text>
-      <Text className="text-xs text-un1t-subtle ml-2">
-        {meta.what}{meta.when ? ` · ${meta.when}` : ''}
+      <Text className="text-xs text-un1t-subtle flex-1 ml-1.5" numberOfLines={1}>
+        {isNoteRow ? `Internal note — ${meta.snippet}` : meta.snippet}
       </Text>
-      <Ionicons name="chevron-down" size={13} color="#94A3B8" style={{ marginLeft: 4 }} />
+      <Text className="text-[11px] text-un1t-muted ml-2">{meta.when}</Text>
     </Pressable>
   )
 }
@@ -364,152 +391,157 @@ function ForwardIcon({ onForward, onAccent = false, label }) {
   )
 }
 
-function MessageBubble({ msg, ticketId, locationId, onViewImage, onForward }) {
+/**
+ * One EXPANDED message — MAIL-REFINE.1 §02: flat and full-width, a hairline
+ * under it, one header row (initial avatar · sender · address · time) above
+ * the body. NO bubbles, NO right-alignment: outbound rows keep the same flat
+ * layout and are told apart by the dark "me" avatar — plus everything the
+ * bubble era already said about them (Sent to …, the mail-client origin,
+ * recipient lines, and the delivery verdicts, quiet and loud). Tapping the
+ * header folds the message back to its one-line row.
+ */
+function FlatMessage({ msg, ticketId, locationId, fallbackName, onViewImage, onForward, onCollapse }) {
   const kind = ticketMessageKind(msg)
+  const meta = flatMessageMeta(msg, { fallbackName })
   const stamp = formatTime(msg.sent_at || msg.created_at)
   const body = msg.text_body || '(no text content)'
 
   // ── Internal note: staff only, nothing was sent ───────────────────
-  // Full width and a different shape from every other bubble on the
-  // screen, so it cannot be skim-read as correspondence.
+  // Keeps its amber styling as a flat block — full width, hairline, and the
+  // STAFF-ONLY label — so it cannot be skim-read as correspondence.
   if (kind === 'note') {
     return (
-      <View className="mb-2 rounded-xl border border-dashed border-amber-500/60 bg-amber-500/10 px-3.5 py-3">
-        <View className="flex-row items-center mb-1.5">
+      <View className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-3">
+        <Pressable
+          onPress={onCollapse}
+          accessibilityLabel="Collapse this note"
+          className="flex-row items-center mb-1.5"
+        >
           <Ionicons name="lock-closed" size={12} color="#B45309" style={{ marginRight: 5 }} />
-          <Text className="text-[11px] font-bold uppercase text-amber-700">
+          <Text className="text-[11px] font-bold uppercase text-amber-700 flex-1">
             Internal note — not sent to the member
           </Text>
-        </View>
+          <Text className="text-[11px] text-un1t-muted ml-2">{stamp}</Text>
+        </Pressable>
         <Text className="text-sm text-un1t-text">{body}</Text>
         <Text className="text-[11px] text-un1t-subtle mt-1.5">
           {/* Who left it. On a shared queue an anonymous note is a note you
               cannot ask anyone about. author_name is NULL for anything
               written before mig 493, so the address is still the fallback. */}
           {msg.author_name ? `Note by ${msg.author_name}` : (msg.from_email || 'Staff')}
-          {stamp ? ` · ${stamp}` : ''}
         </Text>
       </View>
     )
   }
 
-  // ── A reply that actually went to the member ──────────────────────
-  if (kind === 'outbound') {
-    // EMAIL-DELIVERY.1 — null for "sent, no event yet", which is most messages
-    // and every message written before mig 498. Nothing is rendered for it, so
-    // the bubble makes no claim it cannot back up.
-    const delivery = ticketDeliveryMeta(msg)
-    // MAILBOX-COEXIST.1 — null for everything composed in the CRM, which is
-    // every outbound row this thread had before Phase 8 polled a Sent folder.
-    const origin = ticketSendOriginMeta(msg)
-    return (
-      <View className="mb-1.5">
-        <View className="flex-row justify-end">
-          <View className="max-w-[85%] px-3.5 py-2 rounded-2xl bg-blue-500">
-            <View className="flex-row items-center mb-1">
-              <Ionicons name="mail-open-outline" size={11} color="rgba(255,255,255,0.75)" style={{ marginRight: 4 }} />
-              <Text className="text-[11px] text-white/75 flex-1" numberOfLines={1}>
-                Sent to {sentToLabel(msg)}
-              </Text>
-            </View>
-            {/* WHERE IT WAS SENT FROM, when that was not the CRM. Its own row,
-                not a clause on the footer below, because it changes how the
-                whole bubble reads: nobody here typed it, so there is no author
-                to ask and no delivery to chase. The footer's author slot is
-                empty for these rows, and without this line that gap reads as
-                missing data rather than as a fact. */}
-            {origin ? (
-              <View className="flex-row items-center mb-1">
-                <Ionicons name={origin.icon} size={11} color="rgba(255,255,255,0.75)" style={{ marginRight: 4 }} />
-                <Text className="text-[11px] text-white/75 flex-1" numberOfLines={1}>
-                  {origin.label}
-                </Text>
-              </View>
-            ) : null}
-            {/* toShownInHeader: the "Sent to" header above names the recipient
-                in full when there is one, and the first of several otherwise —
-                so a lone To here would just repeat it. */}
-            <RecipientLines msg={msg} onAccent toShownInHeader />
-            <Text className="text-base text-white">{body}</Text>
-            <Attachments
-              ticketId={ticketId}
-              locationId={locationId}
-              attachments={msg.attachments}
-              onViewImage={onViewImage}
-              onAccent
-            />
-            <View className="flex-row items-center justify-end mt-1">
-              <Text className="text-[10px] text-white/60 text-right">
-                {msg.author_name ? `${msg.author_name} · ` : ''}{stamp}
-                {/* The QUIET half: a short phrase in the line that is already
-                    there. Confirming the normal case must not compete with the
-                    panel below, which is the entire point of the feature.
-                    🔴 IT PRINTS delivery.label AND USED TO PRINT "Delivered".
-                    That was true while `delivered` was the only quiet outcome;
-                    "Not tracked" is a second one, and printing "Delivered" for
-                    it made the rows that can NEVER be confirmed the ones
-                    asserting confirmation hardest. The lib was careful and this
-                    line threw the care away. Read the label. */}
-                {delivery?.tone === 'quiet' ? ` · ${delivery.label}` : ''}
-              </Text>
-              <ForwardIcon onForward={onForward} onAccent label="Forward this reply" />
-            </View>
-          </View>
-        </View>
-        {/* The LOUD half. Full width and outside the bubble, because the
-            bubble's whole visual language says "we answered them" — and that
-            belief is exactly what is wrong when a reply bounced. */}
-        {delivery && delivery.tone !== 'quiet' && (
-          <View className={`mt-1.5 rounded-xl border px-3.5 py-3 ${delivery.cls}`}>
-            <View className="flex-row items-center mb-1">
-              <Ionicons name={delivery.icon} size={12} color={delivery.iconColor} style={{ marginRight: 5 }} />
-              <Text className={`text-[11px] font-bold uppercase flex-1 ${delivery.text}`}>
-                {delivery.headline}
-              </Text>
-            </View>
-            <Text className={`text-xs ${delivery.text}`}>{delivery.advice}</Text>
-            {/* The provider's exact words — this is where "mailbox full" and
-                "no such address" actually differ. */}
-            {delivery.detail ? (
-              <Text className={`text-[11px] mt-1.5 ${delivery.text}`}>{delivery.detail}</Text>
-            ) : null}
-            {delivery.status && formatTime(msg.delivery_status_at) ? (
-              <Text className={`text-[11px] mt-1.5 ${delivery.text}`}>
-                Reported {formatTime(msg.delivery_status_at)}
-              </Text>
-            ) : null}
-          </View>
-        )}
-      </View>
-    )
-  }
+  // EMAIL-DELIVERY.1 — null for "sent, no event yet", which is most messages
+  // and every message written before mig 498. Nothing is rendered for it, so
+  // the row makes no claim it cannot back up. MAILBOX-COEXIST.1 — origin is
+  // null for everything composed in the CRM.
+  const delivery = kind === 'outbound' ? ticketDeliveryMeta(msg) : null
+  const origin = kind === 'outbound' ? ticketSendOriginMeta(msg) : null
 
-  // ── The member wrote in ───────────────────────────────────────────
   return (
-    <View className="flex-row mb-1.5 justify-start">
-      <View className="max-w-[85%] px-3.5 py-2 rounded-2xl bg-un1t-surface border border-un1t-border">
-        <Text className="text-[11px] text-un1t-subtle mb-1" numberOfLines={1}>
-          From {msg.from_email || 'the member'}
+    <View className="border-b border-un1t-border bg-un1t-bg px-4 py-3">
+      {/* The one header row. Tap folds the message again. */}
+      <Pressable
+        onPress={onCollapse}
+        accessibilityLabel={`Collapse message from ${meta.who}`}
+        className="flex-row items-center"
+      >
+        <Avatar meta={meta} />
+        <Text
+          className="text-[13px] font-semibold text-un1t-text ml-2"
+          numberOfLines={1}
+          style={{ flexShrink: 1 }}
+        >
+          {meta.who}
         </Text>
-        {/* THE MEMBER'S OWN To and Cc. Captured inbound since EMAIL-CC.1 —
-            without the Cc a staffer cannot tell that two colleagues are on the
-            thread, and a reply from this screen reaches them without anyone
-            knowing why. No toShownInHeader here on purpose: the header above
-            is "From …", so it names the sender and nobody we were written to,
-            and the To has to carry itself however short it is. */}
-        <RecipientLines msg={msg} />
-        <Text className="text-base text-un1t-text">{body}</Text>
-        <Attachments
-          ticketId={ticketId}
-          locationId={locationId}
-          attachments={msg.attachments}
-          onViewImage={onViewImage}
-        />
-        <View className="flex-row items-center justify-end mt-1">
-          <Text className="text-[10px] text-un1t-subtle text-right">{stamp}</Text>
-          <ForwardIcon onForward={onForward} label="Forward this message" />
+        {meta.address ? (
+          <Text className="text-[11px] text-un1t-muted flex-1 ml-1.5" numberOfLines={1}>
+            {meta.address}
+          </Text>
+        ) : (
+          <View className="flex-1" />
+        )}
+        <Text className="text-[11px] text-un1t-muted ml-2">{stamp}</Text>
+      </Pressable>
+
+      {kind === 'outbound' ? (
+        <View className="flex-row items-center mt-1.5">
+          <Ionicons name="mail-open-outline" size={11} color="#64748B" style={{ marginRight: 4 }} />
+          <Text className="text-[11px] text-un1t-subtle flex-1" numberOfLines={1}>
+            Sent to {sentToLabel(msg)}
+          </Text>
         </View>
+      ) : null}
+      {/* WHERE IT WAS SENT FROM, when that was not the CRM (MAILBOX-
+          COEXIST.1). Its own row: nobody here typed it, so there is no author
+          to ask and no delivery to chase. */}
+      {origin ? (
+        <View className="flex-row items-center mt-1">
+          <Ionicons name={origin.icon} size={11} color="#64748B" style={{ marginRight: 4 }} />
+          <Text className="text-[11px] text-un1t-subtle flex-1" numberOfLines={1}>
+            {origin.label}
+          </Text>
+        </View>
+      ) : null}
+
+      {/* To / Cc / Bcc (EMAIL-CC.1). toShownInHeader only for outbound: its
+          "Sent to …" line above names the recipient in full when there is
+          one, so a lone To would repeat it. The inbound header names the
+          SENDER and nobody on our side, so there the To carries itself. */}
+      <View className="mt-1.5">
+        <RecipientLines msg={msg} toShownInHeader={kind === 'outbound'} />
       </View>
+
+      <Text className="text-base text-un1t-text">{body}</Text>
+      <Attachments
+        ticketId={ticketId}
+        locationId={locationId}
+        attachments={msg.attachments}
+        onViewImage={onViewImage}
+      />
+
+      <View className="flex-row items-center justify-end mt-1">
+        {/* The QUIET delivery half: one word, in a line already there.
+            🔴 IT PRINTS delivery.label AND USED TO PRINT "Delivered" — "Not
+            tracked" is a second quiet outcome, and printing "Delivered" for
+            it made the rows that can NEVER be confirmed the ones asserting
+            confirmation hardest. Read the label. */}
+        {delivery?.tone === 'quiet' ? (
+          <Text className="text-[10px] text-un1t-muted">{delivery.label}</Text>
+        ) : null}
+        <ForwardIcon
+          onForward={onForward}
+          label={kind === 'outbound' ? 'Forward this reply' : 'Forward this message'}
+        />
+      </View>
+
+      {/* The LOUD half. Full width, because the flat row's calm reads as "we
+          answered them" — and that belief is exactly what is wrong when a
+          reply bounced. */}
+      {delivery && delivery.tone !== 'quiet' && (
+        <View className={`mt-1.5 rounded-xl border px-3.5 py-3 ${delivery.cls}`}>
+          <View className="flex-row items-center mb-1">
+            <Ionicons name={delivery.icon} size={12} color={delivery.iconColor} style={{ marginRight: 5 }} />
+            <Text className={`text-[11px] font-bold uppercase flex-1 ${delivery.text}`}>
+              {delivery.headline}
+            </Text>
+          </View>
+          <Text className={`text-xs ${delivery.text}`}>{delivery.advice}</Text>
+          {/* The provider's exact words — this is where "mailbox full" and
+              "no such address" actually differ. */}
+          {delivery.detail ? (
+            <Text className={`text-[11px] mt-1.5 ${delivery.text}`}>{delivery.detail}</Text>
+          ) : null}
+          {delivery.status && formatTime(msg.delivery_status_at) ? (
+            <Text className={`text-[11px] mt-1.5 ${delivery.text}`}>
+              Reported {formatTime(msg.delivery_status_at)}
+            </Text>
+          ) : null}
+        </View>
+      )}
     </View>
   )
 }
@@ -527,10 +559,19 @@ export default function EmailTicket() {
   const [isNote, setIsNote] = useState(false)
   const [sending, setSending] = useState(false)
   const [savingAction, setSavingAction] = useState(false)
-  // Which folded messages the operator has tapped open. Only ever grows —
-  // re-folding is a gesture nobody asked for, and a poll that re-collapsed a
-  // message somebody just opened would read as the screen fighting them.
-  const [expandedIds, setExpandedIds] = useState(() => new Set())
+  // Per-message fold overrides: id → true (expanded) / false (collapsed).
+  // Explicit verdicts, not a toggle set, so the poll appending a new message
+  // (which moves the newest-expanded default) can never flip a choice the
+  // operator already made. Tap a folded row to open it, tap an open header
+  // to fold it again (MAIL-REFINE.1 §02).
+  const [foldOverrides, setFoldOverrides] = useState(() => new Map())
+  // §03 — the requester's other conversations here, off the related
+  // endpoint. Null until (and unless) a good answer lands: a failed read
+  // shows NO banner rather than a confident "nothing related".
+  const [related, setRelated] = useState(null)
+  const [mergeOpen, setMergeOpen] = useState(false)
+  const [mergeSelected, setMergeSelected] = useState(() => new Set())
+  const [merging, setMerging] = useState(false)
   // Audit F6 — expanding a folded message grows the content, and the
   // auto-scroll-to-end below would immediately yank the viewport AWAY from
   // the message the operator just opened, down to the composer. One-shot
@@ -598,7 +639,24 @@ export default function EmailTicket() {
     }
     setError(null)
     setTicket(res.ticket)
-    setMessages(res.messages || [])
+    // Audit A2 — a poll appending a new message re-points the newest-expanded
+    // default at the arrival, silently folding the message being READ. Seed an
+    // explicit keep-open override for the previous newest before the list
+    // grows, so only a tap ever folds it. (Manual overrides are untouched —
+    // Map.has guards the seed.)
+    setMessages((prev) => {
+      const next = res.messages || []
+      const prevNewest = prev[prev.length - 1]
+      if (prevNewest && next.length > prev.length && next.some(m => m.id === prevNewest.id)) {
+        setFoldOverrides((fo) => {
+          if (fo.has(prevNewest.id)) return fo
+          const copy = new Map(fo)
+          copy.set(prevNewest.id, true)
+          return copy
+        })
+      }
+      return next
+    })
     setAttachmentsUnavailable(!!res.attachmentsUnavailable)
     setReplyRecipients(res.reply_recipients || null)
 
@@ -617,6 +675,22 @@ export default function EmailTicket() {
     setLoading(true)
     refresh().finally(() => setLoading(false))
   }, [refresh])
+
+  // §03 — does this requester have other conversations here? Best-effort and
+  // quiet: a failed read clears the banner (null) rather than painting an
+  // error over a thread that loaded fine — the nudge is an extra, never a
+  // claim. Re-run after every merge/undo so the banner and picker stay true.
+  const relatedSeqRef = useRef(0)
+  const loadRelated = useCallback(async () => {
+    // Audit A4 — last-write-wins raced a post-merge reload against a slow
+    // initial fetch and could resurrect a just-merged row in the picker.
+    const seq = ++relatedSeqRef.current
+    const res = await fetchRelatedConversations(ticketId, activeLocation?.id)
+    if (seq !== relatedSeqRef.current) return
+    setRelated(res.success ? res : null)
+  }, [ticketId, activeLocation?.id])
+
+  useEffect(() => { loadRelated() }, [loadRelated])
 
   // DRAFT HYDRATION — once, after BOTH the viewer and the ticket are known
   // (the key needs profile.id and the ticket's mailbox_id; reading under a
@@ -893,6 +967,65 @@ export default function EmailTicket() {
     readMarked.current = true
   }
 
+  // ── §03 — merging the requester's other conversations into this one ──
+
+  // Sequential, stop on the first failure, surface it — a failed merge must
+  // never look merged (runMerges, lib/mail-relate.js). Whatever DID merge is
+  // real either way: refresh the thread and the related answer for both
+  // outcomes (the list screen re-reads itself on focus, so it catches up the
+  // moment the operator goes back).
+  async function confirmMerge() {
+    const rows = mergePickerRows(related?.related)
+    const ids = rows.map(r => r.id).filter(id => mergeSelected.has(id))
+    if (merging || ids.length === 0) return
+    setMerging(true)
+    const out = await runMerges(ids, (id) => mergeConversation(id, ticketId, activeLocation?.id))
+    setMerging(false)
+    if (out.merged.length > 0) {
+      setMergeSelected(new Set())
+      refresh({ quiet: true })
+      loadRelated()
+    }
+    if (out.failed) {
+      // The sheet stays open: the operator can see what is left and retry.
+      Alert.alert(
+        'Couldn’t merge',
+        `${out.failed.error}${out.merged.length > 0
+          ? ` ${out.merged.length} of ${ids.length} had already merged before the failure.`
+          : ''}`,
+      )
+      return
+    }
+    setMergeOpen(false)
+    // Undo rides the success notice ONLY — no persistent un-merge UI.
+    const notice = mergeUndoNotice(out.merged.length)
+    Alert.alert(notice.title, notice.message, [
+      { text: 'Undo', onPress: () => undoMerge(out.merged) },
+      { text: 'OK', style: 'cancel' },
+    ])
+  }
+
+  // Undo attempts EVERY un-merge rather than stopping at the first failure
+  // (the attempt-all-then-judge rule): stopping early would strand the rest
+  // merged with the notice gone and no other door back.
+  async function undoMerge(ids) {
+    const failures = []
+    for (const id of ids) {
+      const res = await unmergeConversation(id, activeLocation?.id)
+      if (!res?.success) failures.push(res?.error || 'That conversation could not be un-merged.')
+    }
+    refresh({ quiet: true })
+    loadRelated()
+    if (failures.length > 0) {
+      Alert.alert(
+        'Couldn’t undo',
+        failures.length === ids.length
+          ? failures[0]
+          : `${failures.length} of ${ids.length} could not be un-merged: ${failures[0]}`,
+      )
+    }
+  }
+
   // MOBILE-MAIL-FORWARD.1 — push the forward sheet for one message. Both
   // affordances land here: the header ⋮ (with the newest forwardable message)
   // and the per-message icon (with its own).
@@ -925,9 +1058,29 @@ export default function EmailTicket() {
   const chip = mailStatusChip(ticket)
   const archived = isArchivedStatus(ticket?.status)
 
-  // The folded/unfolded plan for the thread (lib/mail-drafts.js): everything
-  // but the newest two collapses until tapped.
-  const plan = threadDisplayPlan(messages, expandedIds)
+  // The folded/unfolded plan (MAIL-REFINE.1 §02, flatThreadPlan in
+  // lib/email-tickets.js): ONLY the newest opens by default; taps override
+  // per message, both directions.
+  const plan = flatThreadPlan(messages, foldOverrides)
+  // Audit A1 — merged-away = read-only everywhere, not just banner'd.
+  const tombstone = !!ticket?.merged_into_id
+  function setFolded(id, expanded) {
+    // Growing content would yank the viewport to the composer (audit F6) —
+    // and so would shrinking it back. One-shot suppression either way.
+    suppressAutoScrollRef.current = true
+    setFoldOverrides(prev => {
+      const next = new Map(prev)
+      next.set(id, expanded)
+      return next
+    })
+  }
+
+  // §03 — the nudge banner's verdict. Null hides the banner: nothing open,
+  // an unknown count, or no related answer at all (never a confident zero).
+  // A tombstone thread gets no nudge — it is a pointer, not a workspace.
+  const nudge = related ? relatedNudge({ related: related.related, open_count: related.openCount }) : null
+  const mergeRows = mergePickerRows(related?.related)
+  const mergeButton = mergeButtonLabel(mergeSelected.size)
   // Audit S-2 — the caption must key on the SAME set the send gate blocks
   // on (failed OR oversize), or a future oversize chip greys Send silently.
   const failedFiles = files.some(f => f.status === 'failed' || f.status === 'oversize')
@@ -951,7 +1104,7 @@ export default function EmailTicket() {
             <View className="flex-row items-center">
               <Pressable
                 onPress={markUnread}
-                disabled={savingAction || !ticket}
+                disabled={savingAction || !ticket || tombstone}
                 hitSlop={6}
                 accessibilityLabel="Mark as unread"
                 className={`px-2 py-1 ${savingAction ? 'opacity-50' : ''}`}
@@ -960,7 +1113,7 @@ export default function EmailTicket() {
               </Pressable>
               <Pressable
                 onPress={toggleArchive}
-                disabled={savingAction || !ticket}
+                disabled={savingAction || !ticket || tombstone}
                 hitSlop={6}
                 accessibilityLabel={archived ? 'Bring back to inbox' : 'Archive'}
                 className={`px-2 py-1 ${savingAction ? 'opacity-50' : ''}`}
@@ -969,7 +1122,7 @@ export default function EmailTicket() {
               </Pressable>
               <Pressable
                 onPress={openOverflow}
-                disabled={savingAction || !ticket}
+                disabled={savingAction || !ticket || tombstone}
                 hitSlop={6}
                 accessibilityLabel="More actions"
                 className={`pl-2 py-1 ${savingAction ? 'opacity-50' : ''}`}
@@ -1032,10 +1185,55 @@ export default function EmailTicket() {
             ) : null}
           </View>
 
+          {/* §03 — a MERGED-AWAY thread is a tombstone: its messages live on
+              the target now. Keep it reachable — one pointer, no rebuild. */}
+          {ticket?.merged_into_id ? (
+            <Pressable
+              onPress={() => router.push(`/email/${ticket.merged_into_id}`)}
+              accessibilityRole="button"
+              accessibilityLabel="Open the conversation this one was merged into"
+              className="flex-row items-center border-b border-un1t-border bg-un1t-surface px-4 py-2.5 active:opacity-70"
+            >
+              <Ionicons name="link-outline" size={14} color="#64748B" style={{ marginRight: 6 }} />
+              <Text className="text-[12px] text-un1t-subtle flex-1">
+                This conversation was merged into another — its messages live there now.
+              </Text>
+              <Text className="text-[12px] font-bold text-un1t-text ml-2">Open</Text>
+            </Pressable>
+          ) : null}
+
+          {/* §03 A — the nudge: the same requester has other OPEN
+              conversations here. Shown off the related endpoint's verdict
+              only (relatedNudge — an unknown count shows nothing). */}
+          {nudge && !ticket?.merged_into_id ? (
+            <View className="flex-row items-center border-b border-blue-500/20 bg-blue-500/10 px-4 py-2">
+              <Ionicons name="link-outline" size={13} color="#1D4ED8" style={{ marginRight: 6 }} />
+              <Text className="text-[12px] text-blue-700 flex-1" numberOfLines={2}>
+                {nudge.text}
+              </Text>
+              {nudge.viewId ? (
+                <Pressable
+                  onPress={() => router.push(`/email/${nudge.viewId}`)}
+                  hitSlop={6}
+                  accessibilityLabel="View the newest related conversation"
+                >
+                  <Text className="text-[12px] font-bold text-blue-700 underline ml-2">View</Text>
+                </Pressable>
+              ) : null}
+              <Pressable
+                onPress={() => setMergeOpen(true)}
+                hitSlop={6}
+                accessibilityLabel="Merge related conversations into this one"
+              >
+                <Text className="text-[12px] font-bold text-blue-700 underline ml-3">Merge</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
           <ScrollView
             ref={scrollRef}
             className="flex-1"
-            contentContainerClassName="p-4"
+            contentContainerClassName="pb-3"
             onContentSizeChange={() => {
               if (suppressAutoScrollRef.current) {
                 suppressAutoScrollRef.current = false
@@ -1045,7 +1243,7 @@ export default function EmailTicket() {
             }}
           >
             {attachmentsUnavailable && (
-              <View className="mb-3 rounded-xl border border-amber-500/60 bg-amber-500/10 px-3.5 py-2.5">
+              <View className="mx-4 mt-3 mb-1 rounded-xl border border-amber-500/60 bg-amber-500/10 px-3.5 py-2.5">
                 <Text className="text-[11px] text-amber-700">
                   Attachments could not be loaded for this ticket. Messages sent with files may
                   look as though they had none.
@@ -1057,25 +1255,23 @@ export default function EmailTicket() {
                 No messages on this ticket yet.
               </Text>
             ) : (
-              plan.map(({ message: m, collapsed }, i) => (
+              plan.map(({ message: m, collapsed }) => (
                 collapsed ? (
-                  <CollapsedRow
+                  <FlatCollapsedRow
                     key={m.id}
                     msg={m}
-                    isFirst={i === 0}
                     fallbackName={ticket?.requester_name || ''}
-                    onExpand={() => {
-                      suppressAutoScrollRef.current = true
-                      setExpandedIds(prev => new Set(prev).add(m.id))
-                    }}
+                    onExpand={() => setFolded(m.id, true)}
                   />
                 ) : (
-                  <MessageBubble
+                  <FlatMessage
                     key={m.id}
                     msg={m}
                     ticketId={ticketId}
                     locationId={activeLocation?.id}
+                    fallbackName={ticket?.requester_name || ''}
                     onViewImage={setViewingImage}
+                    onCollapse={() => setFolded(m.id, false)}
                     // The precise affordance — expanded non-note messages
                     // only. A note gets nothing: canForwardMessage is the
                     // rule, stated once in the lib.
@@ -1088,7 +1284,12 @@ export default function EmailTicket() {
 
           {/* Composer (mockup §04 "Reply, expanded"). The mode is stated
               three times over: the selected segment, the colour of the card,
-              and the sentence naming exactly who receives what. */}
+              and the sentence naming exactly who receives what.
+              Audit A1 — a MERGED-AWAY thread is read-only: its messages live
+              on the target now, so offering a composer here invites typing a
+              reply the server will 409 (ticketMergedAway). The pointer banner
+              above is the way forward. */}
+          {tombstone ? null : (
           <View
             className="border-t border-un1t-border bg-un1t-bg px-3 pt-2.5"
             style={{ paddingBottom: Math.max(insets.bottom, 8) }}
@@ -1291,8 +1492,95 @@ export default function EmailTicket() {
               </Text>
             )}
           </View>
+          )}
         </>
       )}
+      {/* §03 B — the merge picker, a bottom sheet. ALL related conversations
+          list here (open + archived), checkboxes; the confirm names its count
+          and stays disabled at zero (mergeButtonLabel). While a run is in
+          flight the sheet locks — a half-finished merge must not be
+          re-submitted or dismissed into ambiguity. */}
+      <Modal
+        visible={mergeOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => { if (!merging) setMergeOpen(false) }}
+      >
+        <View className="flex-1 justify-end bg-black/40">
+          <Pressable
+            className="flex-1"
+            accessibilityLabel="Close merge picker"
+            onPress={() => { if (!merging) setMergeOpen(false) }}
+          />
+          <View
+            className="bg-un1t-bg rounded-t-2xl px-4 pt-4"
+            style={{ paddingBottom: Math.max(insets.bottom, 16) }}
+          >
+            <Text className="text-[15px] font-bold text-un1t-text">Merge conversations</Text>
+            <Text className="text-[12px] text-un1t-subtle mt-1 mb-2">
+              Their messages move into “{ticket?.subject || 'this conversation'}”. Each merged
+              conversation keeps a pointer here — nothing is deleted.
+            </Text>
+            <ScrollView style={{ maxHeight: 320 }}>
+              {mergeRows.map(row => (
+                <Pressable
+                  key={row.id}
+                  onPress={() => { if (!merging) setMergeSelected(prev => toggleId(prev, row.id)) }}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: mergeSelected.has(row.id) }}
+                  accessibilityLabel={`Merge ${row.subject}`}
+                  className="flex-row items-center border-b border-un1t-border py-2.5"
+                >
+                  <Ionicons
+                    name={mergeSelected.has(row.id) ? 'checkbox' : 'square-outline'}
+                    size={20}
+                    color={mergeSelected.has(row.id) ? '#0F172A' : '#94A3B8'}
+                    style={{ marginRight: 10 }}
+                  />
+                  <View className="flex-1">
+                    <Text className="text-[13px] font-semibold text-un1t-text" numberOfLines={1}>
+                      {row.subject}
+                    </Text>
+                    <Text className="text-[11px] text-un1t-subtle mt-0.5" numberOfLines={1}>
+                      {row.detail}
+                    </Text>
+                  </View>
+                </Pressable>
+              ))}
+              {mergeRows.length === 0 ? (
+                <Text className="text-xs text-un1t-subtle text-center py-5">
+                  Nothing related to merge.
+                </Text>
+              ) : null}
+            </ScrollView>
+            <View className="flex-row items-center justify-end mt-3">
+              <Pressable
+                onPress={() => { if (!merging) setMergeOpen(false) }}
+                disabled={merging}
+                accessibilityLabel="Cancel merge"
+                className={`px-4 py-2 rounded-xl border border-un1t-border mr-2 ${merging ? 'opacity-50' : ''}`}
+              >
+                <Text className="text-[13px] font-semibold text-un1t-text">Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={confirmMerge}
+                disabled={mergeButton.disabled || merging}
+                accessibilityLabel={mergeButton.label}
+                className={`px-4 py-2 rounded-xl ${
+                  mergeButton.disabled || merging ? 'bg-un1t-border' : 'bg-un1t-text'
+                }`}
+              >
+                {merging ? (
+                  <ActivityIndicator color="#FFFFFF" size="small" />
+                ) : (
+                  <Text className="text-[13px] font-bold text-white">{mergeButton.label}</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <ImageViewer image={viewingImage} onClose={() => setViewingImage(null)} />
     </KeyboardAvoidingView>
   )

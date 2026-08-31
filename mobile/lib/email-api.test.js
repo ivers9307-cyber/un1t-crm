@@ -27,6 +27,7 @@ import {
   archiveConversation, setConversationSeen,
   replyToTicket, composeEmail, forwardMessage, draftUuid,
   signOutboundAttachment, uploadSignedAttachment,
+  fetchRelatedConversations, mergeConversation, unmergeConversation,
   EMAIL_ATTACHMENT_BUCKET, MAX_OUTBOUND_ATTACHMENT_TOTAL_BYTES, MAX_OUTBOUND_ATTACHMENTS,
 } from './email-api'
 
@@ -663,5 +664,79 @@ describe('outbound attachment limits', () => {
     expect(MAX_OUTBOUND_ATTACHMENT_TOTAL_BYTES).toBe(7 * 1024 * 1024)
     expect(MAX_OUTBOUND_ATTACHMENTS).toBe(10)
     expect(EMAIL_ATTACHMENT_BUCKET).toBe('email-attachments')
+  })
+})
+
+// ═══ MAIL-REFINE.1 §03 — related conversations + merge wrappers ═════════
+//
+// Built against the pinned server contract (CONTRACTS-REFINE.md):
+//   GET  /api/email/mail/[id]/related → { success, data: { related, open_count } }
+//   POST /api/email/tickets/[id]/merge   body { into }
+//   DELETE /api/email/tickets/[id]/merge
+// The merge routes exist already; the related route may land after this
+// code — these tests pin the wire shape, not the server.
+
+describe('fetchRelatedConversations', () => {
+  it('passes the related list and open count through', async () => {
+    api.mockResolvedValue({
+      success: true,
+      data: { related: [{ id: 'R-1', status: 'open' }], open_count: 1 },
+    })
+    const res = await fetchRelatedConversations('T-1', 'loc-1')
+    expect(api).toHaveBeenCalledWith('/api/email/mail/T-1/related', { locationId: 'loc-1' })
+    expect(res).toEqual({ success: true, related: [{ id: 'R-1', status: 'open' }], openCount: 1 })
+  })
+
+  it('a missing open_count stays UNKNOWN (null) — never a confident 0', async () => {
+    api.mockResolvedValue({ success: true, data: { related: [] } })
+    const res = await fetchRelatedConversations('T-1', 'loc-1')
+    expect(res.success).toBe(true)
+    expect(res.openCount).toBeNull()
+  })
+
+  it('a real open_count of 0 survives as 0', async () => {
+    api.mockResolvedValue({ success: true, data: { related: [], open_count: 0 } })
+    const res = await fetchRelatedConversations('T-1', 'loc-1')
+    expect(res.openCount).toBe(0)
+  })
+
+  it('failure is a failure — the contract says never an empty list', async () => {
+    api.mockResolvedValue({ success: false, error: 'boom' })
+    const res = await fetchRelatedConversations('T-1', 'loc-1')
+    expect(res.success).toBe(false)
+    expect(res.error).toBe('boom')
+  })
+
+  it('a success with no body is malformed, not an empty answer', async () => {
+    api.mockResolvedValue({ success: true })
+    const res = await fetchRelatedConversations('T-1', 'loc-1')
+    expect(res.success).toBe(false)
+  })
+})
+
+describe('mergeConversation / unmergeConversation', () => {
+  it('POSTs { into: target } at the SOURCE ticket — R merges into the current one', async () => {
+    api.mockResolvedValue({ success: true })
+    await mergeConversation('R-1', 'T-current', 'loc-1')
+    expect(api).toHaveBeenCalledWith('/api/email/tickets/R-1/merge', {
+      method: 'POST',
+      body: { into: 'T-current' },
+      locationId: 'loc-1',
+    })
+  })
+
+  it('unmerge is a DELETE at the merged ticket, no body', async () => {
+    api.mockResolvedValue({ success: true })
+    await unmergeConversation('R-1', 'loc-1')
+    expect(api).toHaveBeenCalledWith('/api/email/tickets/R-1/merge', {
+      method: 'DELETE',
+      locationId: 'loc-1',
+    })
+  })
+
+  it('both pass the server envelope through untouched — refusals included', async () => {
+    api.mockResolvedValue({ success: false, error: 'already merged' })
+    expect(await mergeConversation('R-1', 'T-1', 'loc-1')).toEqual({ success: false, error: 'already merged' })
+    expect(await unmergeConversation('R-1', 'loc-1')).toEqual({ success: false, error: 'already merged' })
   })
 })
