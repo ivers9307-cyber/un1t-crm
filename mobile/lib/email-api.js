@@ -322,6 +322,62 @@ export function forwardMessage({
   return api(`/api/email/tickets/${ticketId}/forward`, { method: 'POST', body, locationId })
 }
 
+// ── Related conversations + merge (MAIL-REFINE.1 §03) ───────────────
+//
+// Built to the pinned contract (CONTRACTS-REFINE.md): the related route
+// answers same-requester, same-location, caller-visible, unmerged threads
+// newest first (capped at 10); the merge routes exist already and their
+// refusal sentences are operator-facing — both wrappers pass the envelope
+// through untouched.
+
+/**
+ * The requester's OTHER conversations at this location.
+ *
+ * `openCount` is null when the answer did not carry one — UNKNOWN, never 0:
+ * relatedNudge (lib/mail-relate.js) shows nothing for null, and a confident
+ * "no related conversations" off a malformed answer is exactly the silent
+ * wrong verdict that rule exists to prevent. A failed call is a failure
+ * (the route's own contract: failure is a real error, never an empty list).
+ *
+ * @returns {Promise<{success: true, related: object[], openCount: number|null}
+ *                  |{success: false, error: string}>}
+ */
+export async function fetchRelatedConversations(ticketId, locationId) {
+  const res = await api(`/api/email/mail/${ticketId}/related`, { locationId })
+  if (!res.success || !res.data) {
+    return { success: false, error: res.error || 'Could not check for related conversations' }
+  }
+  return {
+    success: true,
+    related: res.data.related || [],
+    openCount: typeof res.data.open_count === 'number' ? res.data.open_count : null,
+  }
+}
+
+/**
+ * Fold one related conversation INTO another: POST at the SOURCE (the thread
+ * being merged away), `into` naming the target being read. The server
+ * reparents the messages and leaves a read-only tombstone pointing at the
+ * target. Envelope passes through untouched — the picker runs these
+ * sequentially via runMerges and stops on the first failure.
+ */
+export function mergeConversation(ticketId, intoTicketId, locationId) {
+  return api(`/api/email/tickets/${ticketId}/merge`, {
+    method: 'POST',
+    body: { into: intoTicketId },
+    locationId,
+  })
+}
+
+/** Un-merge a conversation merged by the call above — the Undo on the
+ * success notice (and nothing else; there is no persistent un-merge UI). */
+export function unmergeConversation(ticketId, locationId) {
+  return api(`/api/email/tickets/${ticketId}/merge`, {
+    method: 'DELETE',
+    locationId,
+  })
+}
+
 // RETIRE-TICKETS.1 removed assignTicket + setTicketStatus + markTicketRead:
 // assignment and the four-state lifecycle are not on the Mail surface (zero
 // tickets were ever assigned in the queue's whole life), and read state is
