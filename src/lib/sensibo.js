@@ -10,12 +10,25 @@
 //   - setPodState(podId, partial)      patch acState (on/off, mode, etc.)
 //   - turnOff(podId)                   convenience wrapper around setPodState
 //
-// Every call carries an 8s timeout and surfaces the API's
+// Every call carries a timeout and surfaces the API's
 // status_code/message verbatim so the operator gets a clear
 // "Sensibo says: ..." error from the UI.
+//
+// SENSIBO-RATE.1 — every request goes through `sensiboLimiter`,
+// which spaces calls and retries 429s. Sensibo rate-limits on
+// BURSTS (~4 calls in 1.6s = 429, block >75s) rather than on
+// volume, and an unspaced client is what left the gym-floor AC
+// running past its auto-off from 2026-08-29. See sensibo-limiter.js
+// for the measurements and for why the cron stagger in vercel.json
+// is required alongside this.
+
+import { sensiboLimiter } from '@/lib/sensibo-limiter'
 
 const API_BASE = 'https://home.sensibo.com/api/v2'
-const REQUEST_TIMEOUT_MS = 8000
+// Raised from 8s: a Sensibo POST waits on the pod acknowledging the
+// IR command, and 8s was clipping slow-but-fine calls into what
+// looked like a network fault.
+const REQUEST_TIMEOUT_MS = 12000
 
 export class SensiboError extends Error {
   constructor(message, opts = {}) {
@@ -49,20 +62,30 @@ async function sensiboFetch(path, { apiKey, method = 'GET', body, query = {} } =
     init.headers['Content-Type'] = 'application/json'
     init.body = JSON.stringify(body)
   }
-  let resp
-  try {
-    resp = await fetch(url, init)
-  } catch (e) {
-    throw new SensiboError(`Sensibo network error: ${e?.message || 'unknown'}`, { status: 0 })
-  }
-  const text = await resp.text()
-  let json
-  try { json = text ? JSON.parse(text) : null } catch { json = null }
-  if (!resp.ok || (json && json.status === 'failure')) {
-    const msg = json?.message || json?.reason || `Sensibo ${resp.status}: ${text.slice(0, 200)}`
-    throw new SensiboError(msg, { status: resp.status, body: json ?? text })
-  }
-  return json
+  // Queued so two Sensibo calls never go out back-to-back, and so a
+  // 429 is retried with jittered backoff rather than surfacing as a
+  // dead AC. The whole request — including reading the body — sits
+  // inside the scheduled unit so a retry re-runs all of it.
+  return sensiboLimiter.schedule(async () => {
+    let resp, text
+    try {
+      resp = await fetch(url, init)
+      // Reading the body used to sit OUTSIDE this try, so an abort
+      // during the read escaped as a raw AbortError instead of a
+      // SensiboError — unclassifiable by the limiter and confusing
+      // in failure_reason. It's inside now.
+      text = await resp.text()
+    } catch (e) {
+      throw new SensiboError(`Sensibo network error: ${e?.message || 'unknown'}`, { status: 0 })
+    }
+    let json
+    try { json = text ? JSON.parse(text) : null } catch { json = null }
+    if (!resp.ok || (json && json.status === 'failure')) {
+      const msg = json?.message || json?.reason || `Sensibo ${resp.status}: ${text.slice(0, 200)}`
+      throw new SensiboError(msg, { status: resp.status, body: json ?? text })
+    }
+    return json
+  })
 }
 
 // ── Pods (devices) ───────────────────────────────────────────────
@@ -128,11 +151,25 @@ export async function setPodState(apiKey, podId, acState) {
 }
 
 /**
- * Convenience: turn the pod off. Reads the current state, flips
- * `on` to false, posts back. We preserve the rest so the next
- * "turn on" doesn't suddenly come up at the wrong target temp.
+ * Convenience: turn the pod off.
+ *
+ * SENSIBO-RATE.1 — pass `offState` (from buildTurnOffState) and this
+ * is ONE POST. Without it we fall back to the original read-then-
+ * write, which is two calls.
+ *
+ * Halving this matters: the auto-off cron loops expired sessions and
+ * did GET+POST per row, which is precisely the back-to-back pattern
+ * Sensibo's burst limiter punishes.
+ *
+ * Dropping the read costs nothing. Its stated purpose was to
+ * preserve mode/temp/fan "so the next turn on doesn't come up at the
+ * wrong target temp" — but `vendorTurnOn` always rebuilds the state
+ * from the device's stored defaults (ac_devices.default_*) and never
+ * reads what we preserved. The read was writing back a value nobody
+ * consumed.
  */
-export async function turnPodOff(apiKey, podId) {
+export async function turnPodOff(apiKey, podId, offState) {
+  if (offState) return setPodState(apiKey, podId, { ...offState, on: false })
   const current = await getPodState(apiKey, podId)
   const next = { ...(current || {}), on: false }
   return setPodState(apiKey, podId, next)
@@ -152,4 +189,15 @@ export function buildTurnOnState({ mode, temp, fan }) {
     fanLevel: fan || 'high',
     swing: 'stopped',
   }
+}
+
+/**
+ * The same full acState with the power off — Sensibo's POST
+ * /acStates wants a complete state object, not a partial patch, so
+ * we send the device's own defaults with `on: false` rather than
+ * reading the live state back first. Built from the same defaults
+ * `buildTurnOnState` uses, so on/off stay symmetric.
+ */
+export function buildTurnOffState({ mode, temp, fan }) {
+  return { ...buildTurnOnState({ mode, temp, fan }), on: false }
 }

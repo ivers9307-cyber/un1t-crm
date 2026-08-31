@@ -19,7 +19,7 @@ let queues = {}
 let builders = []
 function makeBuilder(table, rows) {
   const b = { table, ops: [] }
-  for (const m of ['select', 'eq', 'not', 'order', 'limit', 'in', 'lte', 'lt', 'update']) {
+  for (const m of ['select', 'eq', 'not', 'order', 'limit', 'in', 'lte', 'lt', 'gt', 'update']) {
     b[m] = (...args) => { b.ops.push([m, ...args]); return b }
   }
   b.maybeSingle = () => Promise.resolve({ data: rows[0] ?? null, error: null })
@@ -104,6 +104,33 @@ describe('GET /api/cron/ac-auto-off', () => {
     const cutoffMs = new Date(lt[2]).getTime()
     expect(before - cutoffMs).toBeGreaterThanOrEqual(FAILED_RETRY_BACKOFF_MS - 1000)
     expect(Date.now() - cutoffMs).toBeLessThanOrEqual(FAILED_RETRY_BACKOFF_MS + 1000)
+  })
+
+  it('SENSIBO-RATE.1: skips a row a NEWER active session has superseded — no vendor call', async () => {
+    // A failed row waits out an hour of backoff. By the time it is
+    // retried the device may legitimately be running again (a class
+    // fired it, or a staff member did). Turning off on the stale
+    // row's behalf would kill a live session mid-class. Exactly this
+    // was queued against a live session on 2026-08-31.
+    const stale = { ...SESSION, id: 'sess-stale', status: 'failed', started_at: '2026-08-04T07:00:00.000Z' }
+    queues = {
+      ac_sessions: [
+        [],           // live pickup: nothing
+        [stale],      // failed pickup: the stale row
+        [{ id: 'sess-newer' }],  // supersession probe: a newer active session exists
+      ],
+    }
+    const res = await GET(req())
+    const body = await res.json()
+
+    expect(vendorTurnOff).not.toHaveBeenCalled()
+    expect(body.stats).toMatchObject({ found: 1, off: 0, failed: 0, skipped: 1 })
+    // It must be CLOSED, not left to be retried forever.
+    const upd = sessionUpdates().at(-1)
+    const patch = upd.ops.find(([m]) => m === 'update')[1]
+    expect(patch.status).toBe('auto_off')
+    expect(patch.ended_at).toBeTruthy()
+    expect(patch.failure_reason).toMatch(/superseded/i)
   })
 
   it('still self-heals: a due failed row is retried and turned off', async () => {

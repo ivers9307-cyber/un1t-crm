@@ -40,6 +40,43 @@ import { resolveAcAllowlist, isAcDeviceAllowed } from '@shared/permissions'
 // ============================================================
 
 /**
+ * The vendor-specific "off" state for a device, built from its own
+ * stored defaults. Sensibo uses it to turn off in a single POST;
+ * adapters without a buildOffState (ThinQ) get undefined and ignore
+ * the argument.
+ */
+function offStateFor(adapter, device) {
+  return adapter.buildOffState?.({
+    mode: device.default_mode,
+    temp: device.default_temp_c,
+    tempC: device.default_temp_c,
+    fan: device.default_fan,
+  })
+}
+
+/**
+ * SENSIBO-RATE.1 — record the last observed vendor state for a device.
+ *
+ * Best-effort and deliberately silent: this is a cache, and failing
+ * to update it must never fail the AC operation the user actually
+ * asked for. A missed write just means the panel shows a slightly
+ * older reading until the next ac-external-rule tick.
+ *
+ * Written from every place we learn a device's real state — the
+ * external-rule poll, and every CRM-initiated power change — so the
+ * panel's 30s poll can read the DB instead of the vendor.
+ */
+export async function cacheDeviceState(db, deviceId, state) {
+  if (!db || !deviceId || state == null) return
+  try {
+    await db
+      .from('ac_devices')
+      .update({ last_state: state, last_state_at: new Date().toISOString() })
+      .eq('id', deviceId)
+  } catch { /* cache write — never surfaced */ }
+}
+
+/**
  * Load and authorise a device for the calling user.
  *
  * On success: { ok: true, device, location, role }.
@@ -56,7 +93,7 @@ export async function loadDeviceForUser(deviceId, { user, db } = {}) {
 
   const { data: device } = await db
     .from('ac_devices')
-    .select('id, location_id, label, provider, provider_device_id, default_mode, default_temp_c, default_fan, session_minutes, external_auto_off_minutes, enabled')
+    .select('id, location_id, label, provider, provider_device_id, default_mode, default_temp_c, default_fan, session_minutes, external_auto_off_minutes, enabled, last_state, last_state_at')
     .eq('id', deviceId)
     .single()
   if (!device) {
@@ -115,6 +152,9 @@ export async function getState(deviceId, ctx) {
 
   try {
     const state = await adapter.adapter.getState(device.provider_device_id, creds.creds)
+    // A live read is the freshest truth we'll get — bank it so the
+    // panel's next poll can be served from the DB.
+    await cacheDeviceState(ctx.db, device.id, state)
     return { ok: true, state, device }
   } catch (e) {
     return vendorError(e)
@@ -207,9 +247,16 @@ export async function turnOn(deviceId, ctx) {
   if (insErr) {
     // Roll back the vendor turn-on best-effort. Worst case the
     // auto-off cron picks it up at the configured session_minutes.
-    try { await adapter.adapter.turnOff(device.provider_device_id, creds.creds) } catch { /* best-effort */ }
+    try {
+      await adapter.adapter.turnOff(
+        device.provider_device_id, creds.creds, offStateFor(adapter.adapter, device))
+    } catch { /* best-effort */ }
     return { ok: false, status: 500, error: insErr.message, code: 'session_insert_failed' }
   }
+
+  // Panel reads state from the DB now, so reflect the change we just
+  // made immediately rather than waiting for the next cron poll.
+  await cacheDeviceState(db, device.id, observed)
 
   await logAuditEvent({
     category: 'business',
@@ -248,7 +295,8 @@ export async function turnOff(deviceId, ctx) {
   if (creds.error) return creds.error
 
   try {
-    await adapter.adapter.turnOff(device.provider_device_id, creds.creds)
+    await adapter.adapter.turnOff(
+      device.provider_device_id, creds.creds, offStateFor(adapter.adapter, device))
   } catch (e) {
     return vendorError(e)
   }
@@ -264,6 +312,11 @@ export async function turnOff(deviceId, ctx) {
     .eq('device_id', device.id)
     .in('status', AC_SESSION_ACTIVE_STATUSES)
     .select()
+
+  // Same as turn-on: record the state we just commanded. Cheaper and
+  // more immediate than a read-back, and the external-rule cron
+  // reconciles it against reality on its next tick anyway.
+  await cacheDeviceState(db, device.id, { ...(device.last_state || {}), on: false })
 
   await logAuditEvent({
     category: 'business',
@@ -389,7 +442,7 @@ export async function loadDeviceWithLocation(deviceId, db) {
   if (!deviceId) return { ok: false, status: 400, error: 'device_id is required.', code: 'missing_device_id' }
   const { data: device } = await db
     .from('ac_devices')
-    .select('id, location_id, label, provider, provider_device_id, default_mode, default_temp_c, default_fan, session_minutes, enabled')
+    .select('id, location_id, label, provider, provider_device_id, default_mode, default_temp_c, default_fan, session_minutes, enabled, last_state, last_state_at')
     .eq('id', deviceId)
     .single()
   if (!device) return { ok: false, status: 404, error: 'AC device not found.', code: 'device_not_found' }
@@ -418,7 +471,8 @@ export async function vendorTurnOff(device, location, { vendorAdapters } = {}) {
   const creds = resolveCredentials(device, location)
   if (creds.error) return creds.error
   try {
-    await adapter.adapter.turnOff(device.provider_device_id, creds.creds)
+    await adapter.adapter.turnOff(
+      device.provider_device_id, creds.creds, offStateFor(adapter.adapter, device))
     return { ok: true }
   } catch (e) {
     return vendorError(e)
@@ -489,7 +543,7 @@ export async function findDefaultDeviceForLocation(locationId, db) {
   if (!locationId) return null
   const { data: row } = await db
     .from('ac_devices')
-    .select('id, location_id, label, provider, provider_device_id, default_mode, default_temp_c, default_fan, session_minutes, enabled')
+    .select('id, location_id, label, provider, provider_device_id, default_mode, default_temp_c, default_fan, session_minutes, enabled, last_state, last_state_at')
     .eq('location_id', locationId)
     .eq('enabled', true)
     .order('created_at', { ascending: true })
@@ -562,13 +616,18 @@ function vendorError(e) {
 
 const sensiboAdapter = {
   buildTurnOnState: ({ mode, temp, fan }) => sensibo.buildTurnOnState({ mode, temp, fan }),
+  // SENSIBO-RATE.1 — supplying the off state lets turnPodOff skip its
+  // state read, making power-off ONE call instead of two.
+  buildOffState: ({ mode, temp, fan }) => sensibo.buildTurnOffState({ mode, temp, fan }),
   setState: (podId, body, { apiKey }) => sensibo.setPodState(apiKey, podId, body),
-  turnOff:  (podId, { apiKey }) => sensibo.turnPodOff(apiKey, podId),
+  turnOff:  (podId, { apiKey }, offState) => sensibo.turnPodOff(apiKey, podId, offState),
   getState: (podId, { apiKey }) => sensibo.getPodState(apiKey, podId),
 }
 
 const thinqAdapter = {
   buildTurnOnState: ({ mode, tempC, fan }) => thinq.buildTurnOnState({ mode, tempC, fan }),
+  // ThinQ's turnOff is already a single command and needs no desired
+  // state, so it has no buildOffState and ignores the extra arg.
   setState: (deviceId, body, creds) => thinq.setDeviceState(deviceId, body, creds),
   turnOff:  (deviceId, creds) => thinq.turnOff(deviceId, creds),
   getState: (deviceId, creds) => thinq.getDeviceState(deviceId, creds),

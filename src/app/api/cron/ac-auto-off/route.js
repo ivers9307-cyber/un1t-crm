@@ -43,6 +43,10 @@ const CRON_PICKUP_STATUSES = [
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
+// Stop taking on new rows past this point so the function finishes on
+// its own terms well inside maxDuration, even if the last row it
+// started burns a full vendor timeout plus a retry.
+const LOOP_BUDGET_MS = 40_000
 
 export async function GET(request) {
   const auth = request.headers.get('authorization') || ''
@@ -59,7 +63,7 @@ export async function GET(request) {
   // 'extended') are picked up every tick.
   const { data: liveRows, error } = await db
     .from('ac_sessions')
-    .select('id, location_id, device_id, sensibo_pod_id, auto_off_at, status')
+    .select('id, location_id, device_id, sensibo_pod_id, auto_off_at, status, started_at')
     .in('status', AC_SESSION_ACTIVE_STATUSES)
     .not('auto_off_at', 'is', null)
     .lte('auto_off_at', nowIso)
@@ -76,7 +80,7 @@ export async function GET(request) {
   // live pickup out of its limit.
   const { data: failedRows, error: failedErr } = await db
     .from('ac_sessions')
-    .select('id, location_id, device_id, sensibo_pod_id, auto_off_at, status')
+    .select('id, location_id, device_id, sensibo_pod_id, auto_off_at, status, started_at')
     .eq('status', AC_SESSION_STATUS.FAILED)
     .not('auto_off_at', 'is', null)
     .lte('auto_off_at', nowIso)
@@ -89,9 +93,23 @@ export async function GET(request) {
   }
 
   const expired = [...(liveRows || []), ...(failedRows || [])]
-  const stats = { found: expired.length, off: 0, failed: 0, skipped: 0 }
+  const stats = { found: expired.length, off: 0, failed: 0, skipped: 0, deferred: 0 }
 
   for (const row of expired) {
+    // SENSIBO-RATE.1 — vendor calls are now spaced (min 1.5s apart)
+    // and 429s are retried, so a long queue of rows takes real time.
+    // Stop cleanly before maxDuration rather than being killed
+    // mid-row: an untracked kill would leave a row neither turned
+    // off nor marked, and the count of what we skipped invisible.
+    // Whatever is left is still expired on the next tick 5 min later.
+    if (Date.now() - nowMs > LOOP_BUDGET_MS) {
+      stats.deferred = expired.length - (stats.off + stats.failed + stats.skipped)
+      logWarn('cron-ac-auto-off', 'loop budget reached — deferring the rest to the next tick', {
+        deferred: stats.deferred, processed: stats.off + stats.failed + stats.skipped,
+      })
+      break
+    }
+
     if (!row.device_id) {
       // Legacy session with no device link (pre-mig 210 and the
       // backfill didn't match — should be vanishingly rare). Mark
@@ -103,6 +121,37 @@ export async function GET(request) {
           status: AC_SESSION_STATUS.FAILED,
           failure_reason: 'No device_id linked — likely a legacy session that pre-dates mig 210.',
           ended_at: nowIso,
+        })
+        .eq('id', row.id)
+      stats.skipped++
+      continue
+    }
+
+    // SENSIBO-RATE.1 — never turn off a device a NEWER session owns.
+    //
+    // A row that failed its auto-off sticks around on the hourly
+    // retry backoff, so by the time it is retried the device may
+    // have been legitimately started again — by a class-climate
+    // fire or by a staff member. Turning off on this row's behalf
+    // would kill a session someone is actively relying on, mid-class.
+    // The vendor failures of 2026-08-29..31 left three such rows
+    // queued against a live session, which is how this surfaced.
+    const { data: newerRows } = await db
+      .from('ac_sessions')
+      .select('id')
+      .eq('device_id', row.device_id)
+      .in('status', AC_SESSION_ACTIVE_STATUSES)
+      .gt('started_at', row.started_at)
+      .limit(1)
+    if (newerRows?.length) {
+      // Close it out so it stops being retried. The newer session
+      // carries its own auto_off_at, so the device is still covered.
+      await db
+        .from('ac_sessions')
+        .update({
+          status: AC_SESSION_STATUS.AUTO_OFF,
+          ended_at: nowIso,
+          failure_reason: 'Superseded by a newer session for this device — closed without a vendor call.',
         })
         .eq('id', row.id)
       stats.skipped++
