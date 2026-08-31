@@ -5,15 +5,20 @@
 // incident). Two behaviours, one sweep:
 //   escalate — any pending row older than 24h re-alerts managers, once
 //   expire   — a pending class_booking whose class has started flips to
-//              'expired', tells the customer, and alerts staff
+//              'expired' and alerts STAFF ONLY
 // Cancellations and pauses NEVER expire — stale intent is still intent.
+//
+// MIA-EXPIRY-QUIET.1 (Richard, 2026-08-31) — a missed approval must never
+// message the member. An automated apology for a class we let slip lands as
+// a second failure; the team is told instead and follows up as a human.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/push', () => ({ sendPushToRolesAtLocation: vi.fn(async () => ({ sent: 1 })) }))
+// MIA-EXPIRY-QUIET.1 — the sweep no longer imports notify at all. The mock
+// stays so 'never messages the member' has a spy that would catch a
+// re-introduced customer send.
 vi.mock('./notify', () => ({
   sendAgentThreadMessage: vi.fn(async () => ({ sent: true })),
-  buildBookingExpiredText: vi.fn(() => 'Sorry, we missed it.'),
-  agentConfirmationTemplates: vi.fn(async () => ({ expired: null })),
 }))
 
 import { classifyApprovalAging, runApprovalsSlaSweep, APPROVAL_ESCALATE_AFTER_HOURS } from './approvals-sla'
@@ -96,15 +101,29 @@ describe('runApprovalsSlaSweep', () => {
 
   beforeEach(() => vi.clearAllMocks())
 
-  it('expires a past-start booking: atomic claim, customer message, staff push', async () => {
+  it('expires a past-start booking: atomic claim and a staff push', async () => {
     const { db, updates } = sweepDb({ rows: [expiredRow] })
     const out = await runApprovalsSlaSweep(db, { nowMs: NOW })
     expect(out.expired).toBe(1)
     const claim = updates.find(u => u.patch?.status === 'expired')
     expect(claim).toBeTruthy()
     expect(claim.patch.details.result).toMatchObject({ ok: false, reason: 'CLASS_ALREADY_STARTED' })
-    expect(sendAgentThreadMessage).toHaveBeenCalledTimes(1)
     expect(sendPushToRolesAtLocation).toHaveBeenCalledTimes(1)
+  })
+
+  // MIA-EXPIRY-QUIET.1 — the member hears nothing, even with a live thread.
+  it('never messages the member, even when the thread is open', async () => {
+    const { db } = sweepDb({ rows: [expiredRow] })
+    await runApprovalsSlaSweep(db, { nowMs: NOW })
+    expect(sendAgentThreadMessage).not.toHaveBeenCalled()
+  })
+
+  it('tells staff the member has not been contacted', async () => {
+    const { db } = sweepDb({ rows: [expiredRow] })
+    await runApprovalsSlaSweep(db, { nowMs: NOW })
+    const [, , payload] = sendPushToRolesAtLocation.mock.calls[0]
+    expect(payload.body).toMatch(/not been messaged/i)
+    expect(payload.body).not.toMatch(/has been told/i)
   })
 
   it('a lost claim race sends nothing', async () => {
@@ -115,7 +134,7 @@ describe('runApprovalsSlaSweep', () => {
     expect(sendPushToRolesAtLocation).not.toHaveBeenCalled()
   })
 
-  it('a funnel row with no conversation skips the thread message but still expires', async () => {
+  it('a funnel row with no conversation still expires and still alerts staff', async () => {
     const { db } = sweepDb({ rows: [{ ...expiredRow, conversation_id: null }] })
     const out = await runApprovalsSlaSweep(db, { nowMs: NOW })
     expect(out.expired).toBe(1)

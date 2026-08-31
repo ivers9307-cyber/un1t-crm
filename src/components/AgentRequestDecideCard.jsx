@@ -67,6 +67,13 @@ function outcomeLine(status, item, executed) {
     const explain = failureExplanation({ status: 'failed', details: { result: executed || {} } })
     return { tone: 'bad', failed: true, text: `${explain} The customer has NOT been confirmed.` }
   }
+  // MIA-EXPIRY-QUIET.1 — the past-start guard refused the execution. Nothing
+  // was booked and, by Richard's rule, the member was deliberately NOT
+  // messaged: an automated apology for a class we let slip is a second
+  // failure. The staffer holding the card is the one who follows up.
+  if (status === 'expired') {
+    return { tone: 'bad', text: 'Too late — that class had already started, so nothing was booked. The member has NOT been messaged; please follow up with them.' }
+  }
   if (status === 'approved') {
     return { tone: 'ok', text: 'Approved — now make the change in Glofox (this kind is not automated).' }
   }

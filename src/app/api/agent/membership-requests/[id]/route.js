@@ -249,7 +249,8 @@ export async function PATCH(request, { params }) {
   // expires instead of executing — regardless of how it dodged the sweep
   // (approved into the 15-minute gap, or a retry on an old failed row).
   // Only rows carrying a machine-readable details.starts_at are guardable;
-  // funnel rows always have one, legacy Mia-thread rows may not.
+  // funnel rows always have one, legacy Mia-thread rows may not. Expiring is
+  // SILENT to the member (MIA-EXPIRY-QUIET.1) — staff follow up by hand.
   let expiredBeforeExecution = false
   if (executing && row.kind === 'class_booking') {
     const startsAtMs = Date.parse(row.details?.starts_at || '')
@@ -258,24 +259,12 @@ export async function PATCH(request, { params }) {
       finalStatus = 'expired'
       details = { ...details, result: { ok: false, reason: 'CLASS_ALREADY_STARTED' } }
       executed = { ok: false, reason: 'CLASS_ALREADY_STARTED' }
-      // The customer hears the apology, not silence — best-effort, threaded
-      // requests only (funnel rows without a conversation have no window).
-      if (row.conversation_id) {
-        try {
-          const { sendAgentThreadMessage, buildBookingExpiredText } = await import('@/lib/agent/notify')
-          await sendAgentThreadMessage(db, {
-            channel: row.channel,
-            conversationId: row.conversation_id,
-            text: buildBookingExpiredText({
-              className: details.class_name,
-              classTime: details.class_time,
-              template: await confirmationTemplate('expired'),
-            }),
-          })
-        } catch (e) {
-          console.warn(`[agent-requests] expiry notice send error: ${e?.message || e}`)
-        }
-      }
+      // MIA-EXPIRY-QUIET.1 (Richard, 2026-08-31) — a missed booking is never
+      // announced to the member. This used to send an in-thread apology; an
+      // automated "sorry we missed it" is a second failure on top of the
+      // first. The deciding staffer is told inline instead (the card's
+      // 'expired' outcome line says the member has NOT been contacted) and
+      // follows up in their own words.
       if (details?.source === 'start_funnel') {
         try {
           await db.from('class_booking_requests')

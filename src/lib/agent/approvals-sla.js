@@ -11,8 +11,15 @@
 //   ESCALATE — any pending row older than APPROVAL_ESCALATE_AFTER_HOURS
 //     re-alerts managers, once (sla_escalated_at stamps it — mig 568).
 //   EXPIRE — a pending class_booking whose details.starts_at has passed
-//     flips to 'expired' (mig 568 extends the status CHECK), tells the
-//     customer (operator-editable booking_expired_text), and alerts staff.
+//     flips to 'expired' (mig 568 extends the status CHECK) and alerts
+//     STAFF ONLY.
+//
+// MIA-EXPIRY-QUIET.1 (Richard, 2026-08-31) — expiry is SILENT to the member.
+// The sweep used to send an operator-editable apology into the thread; an
+// automated "sorry we missed your booking" is a second failure on top of the
+// first, and it lands hours later with nobody behind it. The team gets the
+// push and follows up as a human, on their own words and timing. The
+// booking_expired_text setting went with it.
 //
 // Cancellations, pauses and every non-booking kind NEVER expire — a stale
 // cancellation is still live intent; it only escalates harder.
@@ -24,7 +31,6 @@
 
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
-import { sendAgentThreadMessage, buildBookingExpiredText, agentConfirmationTemplates } from './notify'
 
 export const APPROVAL_ESCALATE_AFTER_HOURS = 24
 const HOUR_MS = 3_600_000
@@ -112,27 +118,11 @@ export async function runApprovalsSlaSweep(db, { nowMs = Date.now() } = {}) {
           } catch (e) { console.warn(`[radar-agent] approvals-sla cbr sync error: ${e?.message || e}`) }
         }
 
-        // Tell the customer — the silence after a missed booking is the worst
-        // outcome of the three. Funnel rows without a thread have no window.
-        if (row.conversation_id) {
-          try {
-            const templates = await agentConfirmationTemplates(db, row.location_id)
-            await sendAgentThreadMessage(db, {
-              channel: row.channel,
-              conversationId: row.conversation_id,
-              text: buildBookingExpiredText({
-                className: row.details?.class_name,
-                classTime: row.details?.class_time,
-                template: templates.expired,
-              }),
-            })
-          } catch (e) { console.warn(`[radar-agent] approvals-sla expiry notice error: ${e?.message || e}`) }
-        }
-
+        // MIA-EXPIRY-QUIET.1 — no customer-bound send here, by design.
         try {
           await sendPushToRolesAtLocation(row.location_id, MANAGER_ROLES, {
             title: 'Booking request expired unactioned',
-            body: `A pending ${KIND_LABELS[row.kind] || row.kind} (${row.details?.class_name || 'class'}, ${row.details?.class_time || 'time unknown'}) outlived its class. The customer has been told; please follow up.`,
+            body: `A pending ${KIND_LABELS[row.kind] || row.kind} (${row.details?.class_name || 'class'}, ${row.details?.class_time || 'time unknown'}) outlived its class. The member has NOT been messaged; please follow up with them.`,
             data: { type: 'agent_request_expired', request_id: row.id },
           })
         } catch (e) { console.error(`[radar-agent] approvals-sla expire push failed: ${e?.message || e}`) }
