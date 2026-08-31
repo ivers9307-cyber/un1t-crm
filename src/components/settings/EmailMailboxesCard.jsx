@@ -16,7 +16,7 @@
 // They are one decision ("we're adding sales@ — the front desk handles it"),
 // and splitting them across two pages guarantees the second half is forgotten.
 //
-// ELEVATION IS SHOWN, NOT HIDDEN. Owners and masters read every account here
+// ELEVATION IS SHOWN, NOT HIDDEN. Owners and masters work every account here
 // with no grant row, and no row can be created or deleted for them. They are
 // listed with an "Always" chip and no toggle — if they appeared as ordinary
 // grants an operator would try to revoke one, watch nothing change, and stop
@@ -87,7 +87,11 @@ function AccessChip({ access }) {
     return <span className={`${CHIP} bg-purple-500/10 text-purple-700`}>Always</span>
   }
   if (access === 'granted') {
-    return <span className={`${CHIP} bg-green-500/10 text-green-700`}>Can read</span>
+    // "Full access", not "Can read" — a grant is the whole job (read, reply,
+    // compose from the address, archive). Operator-reported 2026-08-31: the
+    // old wording implied a read-only tier this surface has never had, and
+    // an owner went looking for the write toggle that doesn't exist.
+    return <span className={`${CHIP} bg-green-500/10 text-green-700`}>Full access</span>
   }
   return <span className={`${CHIP} bg-slate-500/10 text-slate-700`}>No access</span>
 }
@@ -477,7 +481,7 @@ export default function EmailMailboxesCard({ locationId }) {
                     className="inline-flex items-center gap-2 text-xs font-medium text-un1t-subtle hover:text-un1t-text"
                   >
                     <Users className="h-3.5 w-3.5" aria-hidden="true" />
-                    {isOpen ? 'Hide' : 'Who can read this'}
+                    {isOpen ? 'Hide' : 'Who can work this inbox'}
                     <span className="text-un1t-muted">({readers})</span>
                   </button>
 
@@ -503,7 +507,7 @@ export default function EmailMailboxesCard({ locationId }) {
                             {a.access === 'implicit' ? (
                               // No toggle, on purpose — see the file header.
                               <span className="text-[11px] text-un1t-muted">
-                                Owners and masters read every account here
+                                Owners and masters can work every account here
                               </span>
                             ) : (
                               <Button
