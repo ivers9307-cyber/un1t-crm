@@ -1308,6 +1308,22 @@ registry.registerPath({
 })
 
 registry.registerPath({
+  method: 'get',
+  path: '/api/email/mail/{id}/related',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Other conversations from the same sender',
+  description:
+    'MAIL-REFINE.1 — feeds the thread\u2019s "N other open conversations" nudge and the merge picker. Access is the detail route\u2019s then the list\u2019s: the anchor goes through loadTicketForUser (404 on every refusal) and candidates are scoped to the caller\u2019s visible mailboxes, so relatedness never widens access. Sender match is case-insensitive EQUALITY via escaped ilike (a stored `%` must not relate the whole domain). Returns up to 10 unmerged same-sender threads newest first, plus `open_count` — a TRUE uncapped count of the live ones, so the nudge never understates. `message_count` is best-effort (null when the bounded scan cannot say, never 0). \ud83d\udd34 A failed lookup is a 500, never an empty list \u2014 "no duplicates" is an answer the operator acts on. Merging itself is POST /api/email/tickets/{id}/merge (unchanged).',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ related: [{ id, subject, status, last_message_at, requester_name, message_count }], open_count }' },
+    404: { description: 'No such conversation, or not yours', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Related lookup failed — NOT an empty list', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
   method: 'post',
   path: '/api/email/mail/{id}/seen',
   tags: ['Email'],

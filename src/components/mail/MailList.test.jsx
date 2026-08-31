@@ -127,9 +127,20 @@ describe('MailList — archive is the primary verb, and it is on the row', () =>
 })
 
 describe('MailList — one status signal survives, and only one', () => {
-  it('chips a conversation that is waiting on a reply', () => {
+  // MAIL-REFINE.1 (01) — needs-reply is the amber RAIL, not a chip. The chip
+  // repeated what the rail already said and cost the subject its width; the
+  // words survive as sr-only text so the state is still announced.
+  it('rails a conversation that is waiting on a reply — no chip', () => {
     renderList({ conversations: [conv({ needs_reply: true })] })
-    expect(screen.getByText('Needs reply')).toBeTruthy()
+    expect(within(row()).getByTestId('mail-row-rail')).toBeTruthy()
+    const srOnly = within(row()).getByText('Needs reply')
+    expect(srOnly.className.split(/\s+/)).toContain('sr-only')
+  })
+
+  it('shows no rail when nobody is waiting', () => {
+    renderList({ conversations: [conv({ needs_reply: false, last_message_direction: 'outbound' })] })
+    expect(within(row()).queryByTestId('mail-row-rail')).toBeNull()
+    expect(within(row()).queryByText('Needs reply')).toBeNull()
   })
 
   it('chips an archived one', () => {
@@ -203,13 +214,27 @@ describe('MailList — paging', () => {
   })
 })
 
-describe('MailList — the mailbox chip', () => {
+// MAIL-REFINE.1 (01) — the mailbox chip became the small grey ACCOUNT TAG:
+// the address's local part plus @ ("studio@"), which is how two addresses at
+// one studio actually differ. Same gating as the chip it replaces — only when
+// the caller can see 2+ mailboxes at this studio (`showMailbox`).
+describe('MailList — the account tag', () => {
   it('appears only when more than one account is on this screen', () => {
     renderList({ showMailbox: true, mailboxById: { 'mb-1': { id: 'mb-1', label: 'Studio', address: 'studio@x.com' } } })
-    expect(screen.getByText('Studio')).toBeTruthy()
+    expect(screen.getByTestId('mail-row-account').textContent).toBe('studio@')
     cleanup()
-    renderList({ showMailbox: false })
-    expect(screen.queryByText('Studio')).toBeNull()
+    renderList({ showMailbox: false, mailboxById: { 'mb-1': { id: 'mb-1', label: 'Studio', address: 'studio@x.com' } } })
+    expect(screen.queryByTestId('mail-row-account')).toBeNull()
+  })
+
+  it('carries the full address as its title — the tag is deliberately short', () => {
+    renderList({ showMailbox: true, mailboxById: { 'mb-1': { id: 'mb-1', address: 'studio@x.com' } } })
+    expect(screen.getByTestId('mail-row-account').getAttribute('title')).toBe('studio@x.com')
+  })
+
+  it('renders no tag at all for a conversation with no mailbox, rather than a placeholder', () => {
+    renderList({ showMailbox: true, mailboxById: {} })
+    expect(screen.queryByTestId('mail-row-account')).toBeNull()
   })
 })
 
@@ -244,16 +269,62 @@ describe('MailList — one line, no avatar', () => {
     expect(screen.getByText(/Can I freeze from Monday\?/)).toBeTruthy()
   })
 
-  it('defaults to compact — hides the preview when no density prop is given at all', () => {
+  it('defaults to comfortable — the snippet renders when no density prop is given at all', () => {
+    // MAIL-REFINE.1 flipped the default: the approved two-line subject-first
+    // row IS comfortable, so out of the box the snippet is there.
     renderList()
-    expect(screen.queryByText(/Can I freeze from Monday\?/)).toBeNull()
+    expect(screen.getByText(/Can I freeze from Monday\?/)).toBeTruthy()
   })
 
-  it('renders needs-reply inline, ahead of the subject, on the same line', () => {
+  it('keeps the sr-only needs-reply words inside the select button, so the state is announced with the row', () => {
     renderList({ conversations: [conv({ needs_reply: true })] })
     const text = row().textContent
     expect(text).toContain('Needs reply')
     expect(text.indexOf('Needs reply')).toBeLessThan(text.indexOf('Membership freeze'))
+  })
+})
+
+// ── MAIL-REFINE.1 (01) — the two-line subject-first row ─────────────────
+describe('MailList — the comfortable two-line row', () => {
+  it('puts the sender on line 1 and the subject on line 2 — different parent elements', () => {
+    renderList({ density: 'comfortable' })
+    const sender = screen.getByTestId('mail-row-sender-name')
+    const subject = screen.getByTestId('mail-row-subject')
+    expect(sender.parentElement).not.toBe(subject.parentElement)
+  })
+
+  it('weights the subject like the sender — subject-first is the whole point', () => {
+    renderList({
+      density: 'comfortable',
+      conversations: [conv({ unread: true }), conv({ id: 'read-1', unread: false })],
+    })
+    const subjects = screen.getAllByTestId('mail-row-subject')
+    // Unread: semibold. Read: still the row's anchor weight, just not the
+    // unread step-up.
+    expect(subjects[0].className).toContain('font-semibold')
+    expect(subjects[1].className).toContain('font-medium')
+    expect(subjects[1].className).not.toContain('font-semibold')
+  })
+
+  it('marks our own last word on the SNIPPET — the subject names the thread, not the last message', () => {
+    renderList({
+      density: 'comfortable',
+      conversations: [conv({ last_message_direction: 'outbound', needs_reply: false })],
+    })
+    const preview = screen.getByTestId('mail-row-preview')
+    expect(preview.textContent).toMatch(/^You: /)
+    expect(screen.getByTestId('mail-row-subject').textContent).not.toContain('You:')
+  })
+
+  it('shows the account tag on line 1, beside the sender', () => {
+    renderList({
+      density: 'comfortable',
+      showMailbox: true,
+      mailboxById: { 'mb-1': { id: 'mb-1', address: 'accounts@hatch.ie' } },
+    })
+    const tag = screen.getByTestId('mail-row-account')
+    expect(tag.textContent).toBe('accounts@')
+    expect(tag.parentElement).toBe(screen.getByTestId('mail-row-sender-name').parentElement)
   })
 })
 
@@ -313,24 +384,25 @@ describe('MailList — row layout structure (LAYOUT-FIX.1)', () => {
     expect(screen.queryByTestId('mail-row-preview')).toBeNull()
   })
 
-  it('still renders the needs-reply chip, the mailbox chip AND the subject together when all three hold', () => {
+  it('still renders the needs-reply rail, the account tag AND the subject together when all three hold', () => {
     renderList({
       conversations: [conv({ needs_reply: true })],
       showMailbox: true,
       mailboxById: { 'mb-1': { id: 'mb-1', address: 'a-very-long-studio-mailbox-address@example.com' } },
     })
     const r = row()
-    expect(within(r).getByText('Needs reply')).toBeTruthy()
+    expect(within(r).getByTestId('mail-row-rail')).toBeTruthy()
+    expect(within(r).getByTestId('mail-row-account')).toBeTruthy()
     expect(within(r).getByTestId('mail-row-subject')).toBeTruthy()
   })
 
-  it('caps the mailbox chip so an unbounded address fallback cannot claim the whole track', () => {
+  it('caps the account tag so an unbounded local part cannot claim the whole track', () => {
     renderList({
       showMailbox: true,
       mailboxById: { 'mb-1': { id: 'mb-1', address: 'a-very-long-studio-mailbox-address@example.com' } },
     })
-    const chip = screen.getByTitle('a-very-long-studio-mailbox-address@example.com')
-    const classes = chip.className.split(/\s+/)
+    const tag = screen.getByTestId('mail-row-account')
+    const classes = tag.className.split(/\s+/)
     expect(classes.some(c => c.startsWith('max-w-'))).toBe(true)
     expect(classes).toContain('truncate')
   })

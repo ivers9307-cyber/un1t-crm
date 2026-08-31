@@ -303,3 +303,38 @@ describe('joinPointsByMessage', () => {
     expect(joinPointsByMessage([null, { id: 'm1' }, { id: 'm2', from_email: '' }])).toEqual(new Map())
   })
 })
+
+// ── MAIL-REFINE.1 — normalizedSubjectKey ──────────────────────────────
+// The auto-merge-at-ingest key: two fresh threads with the "same" subject
+// from the same sender are one conversation whose reply chain broke. The key
+// must be forgiving about reply-prefix noise and strict about everything
+// else — a false match files a stranger topic into the wrong thread.
+import { normalizedSubjectKey } from './email-tickets'
+
+describe('normalizedSubjectKey', () => {
+  it('lowercases, trims and collapses whitespace', () => {
+    expect(normalizedSubjectKey('  Flogas   Bill\tfor Hatch  ')).toBe('flogas bill for hatch')
+  })
+
+  it('strips reply/forward prefixes, repeatedly and case-insensitively', () => {
+    expect(normalizedSubjectKey('RE: Flogas bill')).toBe('flogas bill')
+    expect(normalizedSubjectKey('Re: FW: Fwd: Flogas bill')).toBe('flogas bill')
+    expect(normalizedSubjectKey('re[2]: Flogas bill')).toBe('flogas bill')
+  })
+
+  it('answers null when nothing meaningful remains — a null key never matches', () => {
+    expect(normalizedSubjectKey('')).toBeNull()
+    expect(normalizedSubjectKey('   ')).toBeNull()
+    expect(normalizedSubjectKey('Re:')).toBeNull()
+    expect(normalizedSubjectKey(null)).toBeNull()
+    expect(normalizedSubjectKey(undefined)).toBeNull()
+  })
+
+  it('does NOT equate genuinely different subjects', () => {
+    expect(normalizedSubjectKey('Flogas bill')).not.toBe(normalizedSubjectKey('Flogas account setup'))
+  })
+
+  it('leaves a subject that merely CONTAINS "re:" alone', () => {
+    expect(normalizedSubjectKey('More re: less')).toBe('more re: less')
+  })
+})

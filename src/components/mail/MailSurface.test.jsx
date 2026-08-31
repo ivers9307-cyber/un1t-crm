@@ -549,13 +549,13 @@ describe('MailSurface — rail, search and density', () => {
     })
   })
 
-  it('starts compact and remembers a switch to comfortable', async () => {
+  it('starts comfortable (the approved two-line row) and remembers a switch to compact', async () => {
     renderSurface()
     await screen.findByText('Membership freeze')
 
-    expect(screen.getByRole('button', { name: /^Compact$/i }).getAttribute('aria-pressed')).toBe('true')
-    fireEvent.click(screen.getByRole('button', { name: /^Comfortable$/i }))
-    expect(window.localStorage.getItem('un1t.mail.density')).toBe('comfortable')
+    expect(screen.getByRole('button', { name: /^Comfortable$/i }).getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: /^Compact$/i }))
+    expect(window.localStorage.getItem('un1t.mail.density')).toBe('compact')
   })
 
   // The search box is a typing target, so the shortcut guard has to cover it —

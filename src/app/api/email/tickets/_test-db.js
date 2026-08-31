@@ -76,6 +76,7 @@ function matches(row, f) {
     // route's contact lookup returned every contact whatever the pattern and
     // the fake could not tell an escaped query from an unescaped one. Model
     // the real thing (ILIKE-WILDCARD.1); see src/lib/like-escape.test-helpers.js.
+    case 'neq': return value !== a
     case 'ilike': return ilikeMatches(a, value)
     default: return true
   }
@@ -246,6 +247,7 @@ export function makeDb(state = {}) {
     b.eq = filter('eq')
     b.in = filter('in')
     b.is = filter('is')
+    b.neq = filter('neq')
     b.not = filter('not')
     b.or = filter('or')
     b.ilike = filter('ilike')

@@ -190,6 +190,10 @@ export default function MailSurface({ locationId, locationName, userId, location
   const [writebackNotice, setWritebackNotice] = useState(null)
 
   const [composeOpen, setComposeOpen] = useState(false)
+
+  // Audit M2 — MailThread's merge picker is a dialog the shortcut guard must respect.
+
+  const [threadModalOpen, setThreadModalOpen] = useState(false)
   const [forwarding, setForwarding] = useState(null)
 
   const view = mailView(viewId)
@@ -1275,7 +1279,7 @@ export default function MailSurface({ locationId, locationName, userId, location
       // out of INBOX, with the letter never reaching the box — and `j`/`k` called
       // selectConversation, which unmounts the forward form and discards a
       // half-written forward.
-      if (composeOpen || forwarding) return
+      if (composeOpen || forwarding || threadModalOpen) return
       if (isTypingTarget(e.target)) return
       const key = e.key
       if (key === 'j' || key === 'k') {
@@ -1303,7 +1307,7 @@ export default function MailSurface({ locationId, locationName, userId, location
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversationIds, conversations, selectedId, archive, composeOpen, forwarding])
+  }, [conversationIds, conversations, selectedId, archive, composeOpen, forwarding, threadModalOpen])
 
   // ── Render ─────────────────────────────────────────────────────────
   const shellClasses =
@@ -1523,6 +1527,15 @@ export default function MailSurface({ locationId, locationName, userId, location
         <div className={`${selectedId ? 'flex' : 'hidden md:flex'} min-w-0 flex-1 flex-col`}>
           <MailThread
             hasSelection={!!selectedId}
+            // MAIL-REFINE.1 — the related-nudge seam: View selects the related
+            // row like any list click, and a landed merge/undo re-reads the
+            // open thread + the list so nothing shows a state the server left.
+            onOpenConversation={(row) => selectConversation(row)}
+            onThreadChanged={async () => {
+              if (selectedId) await loadThread(selectedId, { quiet: true })
+              refreshList(true)
+            }}
+            onModalOpenChange={setThreadModalOpen}
             conversation={conversation}
             messages={messages}
             replyRecipients={replyRecipients}
