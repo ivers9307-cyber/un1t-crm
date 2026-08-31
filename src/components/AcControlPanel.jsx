@@ -17,13 +17,63 @@
 
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Snowflake, Loader2, AlertCircle, CheckCircle2, Power, Clock, Settings,
   Plus,
 } from 'lucide-react'
 
 const POLL_INTERVAL_MS = 30_000
+
+/**
+ * Poll on an interval, but only while the tab is actually visible,
+ * and re-fetch immediately on becoming visible again.
+ *
+ * SENSIBO-RATE.1 follow-up. Until mig 580 each of these polls was a
+ * LIVE vendor call, so a forgotten background tab sat there burning
+ * Sensibo's burst budget around the clock — which is how the AC
+ * crons found nothing left when they needed to act. It reads the DB
+ * now, so this is no longer load-bearing for the vendor; it is just
+ * correct — a hidden tab has nothing to render, and the refresh on
+ * return means the operator never looks at a stale card.
+ *
+ * `load` is held in a ref so a caller can pass a fresh closure every
+ * render without resetting the interval.
+ */
+function useVisiblePoll(load, deps) {
+  const ref = useRef(load)
+  // Assigned in an effect, not during render — writing a ref during
+  // render is a React Compiler violation ("Cannot access refs during
+  // render") and eslint fails the build on it.
+  useEffect(() => { ref.current = load })
+  useEffect(() => {
+    const run = () => { if (!document.hidden) ref.current() }
+    run()
+    const timer = setInterval(run, POLL_INTERVAL_MS)
+    const onVisibility = () => { if (!document.hidden) ref.current() }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps)
+}
+
+/**
+ * "as of HH:MM" for a cached vendor reading. The state shown in the
+ * panel comes from ac_devices.last_state — refreshed by the
+ * ac-external-rule cron every 5 min and written immediately on every
+ * CRM-initiated change — so it must not be labelled "Live".
+ */
+function asOfLabel(iso) {
+  if (!iso) return null
+  const t = new Date(iso)
+  if (Number.isNaN(t.getTime())) return null
+  return t.toLocaleTimeString('en-IE', {
+    hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Dublin',
+  })
+}
 
 export default function AcControlPanel() {
   const [devices, setDevices] = useState(null)
@@ -44,14 +94,10 @@ export default function AcControlPanel() {
     }
   }
 
-  useEffect(() => {
-    load()
-    // Re-fetch the LIST every 30s in case a master enables /
-    // disables a device while staff are on the page. Individual
-    // device cards drive their own state polls.
-    const t = setInterval(load, POLL_INTERVAL_MS)
-    return () => clearInterval(t)
-  }, [])
+  // Re-fetch the LIST every 30s in case a master enables / disables a
+  // device while staff are on the page. Individual device cards drive
+  // their own state polls. Paused while the tab is hidden.
+  useVisiblePoll(load, [])
 
   if (loadError) {
     return (
@@ -166,12 +212,7 @@ function DeviceCard({ device }) {
     }
   }
 
-  useEffect(() => {
-    load()
-    const t = setInterval(load, POLL_INTERVAL_MS)
-    return () => clearInterval(t)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [device.id])
+  useVisiblePoll(load, [device.id])
 
   // Local 1s ticker for the visible countdown. Either source —
   // app-session auto_off_at or the cron-set expected_off_at on the
@@ -303,10 +344,17 @@ function DeviceCard({ device }) {
           )}
           {state?.state && (
             <div className="text-[11px] text-un1t-subtle bg-un1t-bg/40 rounded px-3 py-1.5">
-              Live: {state.state.on ? 'on' : 'off'}
+              {state.state.on ? 'on' : 'off'}
               {state.state.mode ? ` · ${state.state.mode}` : ''}
               {state.state.target_temp_c != null ? ` · ${state.state.target_temp_c}°C` : ''}
               {state.state.fan ? ` · fan ${state.state.fan}` : ''}
+              {/* Not "Live" — this is the last observed reading, not a
+                  fresh vendor call. Saying when it was taken is the
+                  difference between "the AC is off" and "the AC was
+                  off five minutes ago". */}
+              {asOfLabel(state.state_as_of)
+                ? ` · as of ${asOfLabel(state.state_as_of)}`
+                : ''}
             </div>
           )}
           {/* Extend only makes sense when there's an app-started

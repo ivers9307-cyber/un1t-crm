@@ -14,13 +14,14 @@ import { withAuth } from '@/lib/with-auth'
 import { getPodState, SensiboError } from '@/lib/sensibo'
 import { AC_SESSION_STATUS, AC_SESSION_ACTIVE_STATUSES } from '@/lib/enums'
 import { overlayConnections } from '@/lib/connection-registry'
+import { canCloseStaleSession } from '@/lib/ac-state-cache'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export const GET = withAuth(
   { permission: 'studio_management' },
-  async ({ db, locationId }) => {
+  async ({ db, locationId, request }) => {
   const { data: locRow } = await db
     .from('locations')
     .select('id, name, sensibo_api_key, sensibo_pod_id, ac_default_mode, ac_default_temp, ac_default_fan, ac_session_minutes')
@@ -52,16 +53,41 @@ export const GET = withAuth(
     .limit(1)
   let session = activeRows?.[0] || null
 
-  // Live pod state from Sensibo. Best-effort — if we can't reach
-  // Sensibo we still return what we know from our own DB so the
-  // UI can render the timer.
+  // SENSIBO-RATE.1 — served from the ac_devices.last_state cache
+  // (mig 580) rather than a live vendor call on every request, the
+  // same treatment /ac/devices/[id] got. This route has no live
+  // caller today (mobile's getAcState wrapper is unused) and is kept
+  // only for old mobile bundles, but an old bundle polling it is
+  // still real vendor load against a limiter that punishes bursts.
+  //
+  // `?live=1` forces a real read, through the shared limiter.
+  const wantsLive = new URL(request.url).searchParams.get('live') === '1'
+  const { data: sensiboDevice } = await db
+    .from('ac_devices')
+    .select('id, last_state, last_state_at')
+    .eq('location_id', locationId)
+    .eq('provider', 'sensibo')
+    .eq('provider_device_id', loc.sensibo_pod_id)
+    .maybeSingle()
+
   let podState = null
   let podError = null
-  try {
-    podState = await getPodState(loc.sensibo_api_key, loc.sensibo_pod_id)
-  } catch (e) {
-    podError = e instanceof SensiboError ? e.message : `Sensibo: ${e?.message || String(e)}`
+  let podStateAsOf = null
+  if (wantsLive) {
+    try {
+      podState = await getPodState(loc.sensibo_api_key, loc.sensibo_pod_id)
+      podStateAsOf = new Date().toISOString()
+    } catch (e) {
+      podError = e instanceof SensiboError ? e.message : `Sensibo: ${e?.message || String(e)}`
+    }
+  } else {
+    podState = sensiboDevice?.last_state ?? null
+    podStateAsOf = sensiboDevice?.last_state_at ?? null
   }
+
+  // A cached reading is fine for DISPLAY but must not drive the
+  // destructive stale-session cleanup below. See ac-state-cache.js.
+  const podStateIsFresh = canCloseStaleSession({ wantsLive, observedAt: podStateAsOf })
 
   // Reconcile state. The pod state (Sensibo) is the ground truth
   // for whether the AC is physically on right now — staff can flip
@@ -87,7 +113,7 @@ export const GET = withAuth(
   // it ended outside the app. Status enum values from mig 103:
   // on / auto_off / manual_off / extended / failed.
   const podOn = podState?.on === true
-  if (session && podState && !podOn) {
+  if (session && podState && !podOn && podStateIsFresh) {
     await db
       .from('ac_sessions')
       .update({
@@ -129,6 +155,10 @@ export const GET = withAuth(
       },
       pod_id: loc.sensibo_pod_id,
       pod_state: podState,
+      // When pod_state was observed. null = never observed yet (the
+      // next ac-external-rule tick fills it in). Additive — old
+      // mobile bundles simply ignore the extra key.
+      pod_state_as_of: podStateAsOf,
       pod_state_error: podError,
       active_session: session,
       is_on: isOn,
