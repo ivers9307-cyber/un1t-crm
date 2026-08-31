@@ -112,6 +112,10 @@ function applyFilters(list, filters) {
     // Postgres does — and that gap is exactly how the wildcard bug below
     // survived a green suite. See src/lib/like-escape.test-helpers.js.
     if (f[0] === 'ilike') return ilikeMatches(f[2], row[f[1]])
+    // .is models SQL IS — null equality, which JS === happens to match for
+    // the null/boolean values it is used with here (MAIL-REFINE.1 needed
+    // merged tombstones to genuinely not match the subject fallback).
+    if (f[0] === 'is') return (row[f[1]] ?? null) === f[2]
     return true // order/limit/not/or are not modelled
   }))
 }
@@ -816,6 +820,105 @@ describe('threading', () => {
 
     const res = await post(reply())
     expect((await res.json()).ticket_id).toBe('T-live')
+  })
+})
+
+describe('MAIL-REFINE.1 — broken-chain subject fallback', () => {
+  // A fresh inbound with NO thread-header match but the same sender + same
+  // normalised subject as an OPEN thread of the same mailbox appends to it —
+  // some clients start a "reply" as a new email and the chain breaks while
+  // the subject survives. The fallback is strictly narrower than threading
+  // (open-only, same mailbox, exact key) and FAILS OPEN to create.
+  const T_SAME = {
+    id: 'T-same', location_id: 'loc-hatch', mailbox_id: 'mb-hatch',
+    requester_email: 'member@example.com', status: 'open', merged_into_id: null,
+    subject: 'Billing question', first_response_at: null, unread_count: 0,
+    last_message_at: '2026-08-30T09:00:00Z',
+  }
+  const freshWithSubject = (subject, over = {}) => inbound({
+    MessageID: 'pm-fresh-9', Subject: subject,
+    Headers: [{ Name: 'Message-ID', Value: '<fresh-9@mail.example.com>' }],
+    ...over,
+  })
+
+  it('appends a chain-broken "Re:" to the open thread with the same subject', async () => {
+    db = makeDb({ tickets: { 'T-same': { ...T_SAME } } })
+    createServerClient.mockImplementation(() => db)
+    const res = await post(freshWithSubject('RE: Billing question'))
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(0)
+    expect((await res.json()).ticket_id).toBe('T-same')
+    expect(insertsInto(db, 'email_inbox_messages')[0].payload.ticket_id).toBe('T-same')
+  })
+
+  it('a genuinely different subject still forks a fresh ticket', async () => {
+    db = makeDb({ tickets: { 'T-same': { ...T_SAME } } })
+    createServerClient.mockImplementation(() => db)
+    await post(freshWithSubject('Opening hours over the bank holiday'))
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(1)
+  })
+
+  it('a CLOSED thread is never resurrected by subject alone', async () => {
+    // Only real RFC threading may reopen a closed ticket — a subject match is
+    // circumstantial evidence, and "Re: Membership" months later is routinely
+    // a new question wearing an old subject.
+    db = makeDb({ tickets: { 'T-same': { ...T_SAME, status: 'closed' } } })
+    createServerClient.mockImplementation(() => db)
+    await post(freshWithSubject('Re: Billing question'))
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(1)
+  })
+
+  it('another sender with the same subject is a different conversation', async () => {
+    db = makeDb({ tickets: { 'T-same': { ...T_SAME, requester_email: 'someone.else@example.com' } } })
+    createServerClient.mockImplementation(() => db)
+    await post(freshWithSubject('Re: Billing question'))
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(1)
+  })
+
+  it('a merged tombstone never absorbs new mail', async () => {
+    db = makeDb({ tickets: { 'T-same': { ...T_SAME, merged_into_id: 'T-other' } } })
+    createServerClient.mockImplementation(() => db)
+    await post(freshWithSubject('Re: Billing question'))
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(1)
+  })
+
+  it('the newest same-key thread wins when several are open', async () => {
+    db = makeDb({ tickets: {
+      'T-old2': { ...T_SAME, id: 'T-old2', last_message_at: '2026-08-01T09:00:00Z' },
+      'T-new2': { ...T_SAME, id: 'T-new2', last_message_at: '2026-08-30T10:00:00Z' },
+    } })
+    createServerClient.mockImplementation(() => db)
+    const res = await post(freshWithSubject('Re: Billing question'))
+    expect((await res.json()).ticket_id).toBe('T-new2')
+  })
+
+  it('another mailbox\u2019s thread never absorbs this one, even at the same studio', async () => {
+    db = makeDb({ tickets: { 'T-same': { ...T_SAME, mailbox_id: 'mb-other' } } })
+    createServerClient.mockImplementation(() => db)
+    await post(freshWithSubject('Re: Billing question'))
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(1)
+  })
+
+  it('a wildcard in the SENDER address stays a literal, never a pattern', async () => {
+    // fromEmail is attacker-controlled; unescaped ilike would let
+    // a_b@example.com absorb axb@example.com's open thread.
+    db = makeDb({ tickets: { 'T-same': { ...T_SAME, requester_email: 'axb@example.com' } } })
+    createServerClient.mockImplementation(() => db)
+    await post(freshWithSubject('Re: Billing question', {
+      From: 'a_b@example.com',
+      FromFull: { Email: 'a_b@example.com', Name: 'Wild Card' },
+    }))
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(1)
+  })
+
+  it('FAILS OPEN — a broken lookup creates a fresh ticket, never a 5xx', async () => {
+    db = makeDb({
+      tickets: { 'T-same': { ...T_SAME } },
+      fail: { 'email_tickets:select': { code: '08006', message: 'reset' } },
+    })
+    createServerClient.mockImplementation(() => db)
+    const res = await post(freshWithSubject('Re: Billing question'))
+    expect(res.status).toBe(200)
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(1)
   })
 })
 

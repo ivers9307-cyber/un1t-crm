@@ -24,18 +24,25 @@
 //
 // Presentational: every action is a callback up to MailSurface.
 
-// TASK 6 — the one-line row. A conversation used to spend ~88px on a 32px
-// avatar tile plus three stacked text lines; about six fit on screen. It is
-// now a single ~31px line — sender in a fixed column, subject and preview
-// sharing the rest, date right-aligned and tabular — so eighteen fit. That
-// density change is the entire point of this pass, and it is the reason the
-// avatar is gone: at one line there is no room for a 32px tile, and initials
-// were never the thing an operator scanned for anyway (the sender NAME was).
+// MAIL-REFINE.1 (01) — the subject-first row. Task 6's one-line pass bought
+// density but read like a texting app: sender + latest-message snippet, with
+// two chips squeezing the subject out entirely. Email is filed by subject, so
+// the row now leads with it:
+//   • 'comfortable' = TWO lines — line 1 sender (semibold) + small muted
+//     account tag + time; line 2 subject (semibold, truncates) + snippet in
+//     subtle grey + 📎 when the conversation has files;
+//   • 'compact'     = ONE line — sender · subject · time, no snippet.
+// The chips are GONE: needs-reply is the amber left rail alone (the chip
+// repeated it — the rail already said it), and the mailbox chip shrank to the
+// small account tag ("accounts@"), rendered only when the caller can see 2+
+// mailboxes at this studio. Unread = darker ink + a blue dot, like any mail
+// client. No avatar, same as Task 6 — the sender NAME is what an operator
+// scans for.
 
 import { Inbox, Search, Archive, ArchiveRestore, Mail, MailOpen, Paperclip, AlertCircle } from 'lucide-react'
 import { EmptyState, Loading } from '@/components/ui'
-import { requesterLabel, relativeTime, mailboxLabel } from '@/lib/ticket-display'
-import { isArchived, needsReply, isUnread, DEFAULT_DENSITY } from './mail-display'
+import { requesterLabel, relativeTime } from '@/lib/ticket-display'
+import { isArchived, needsReply, isUnread, DEFAULT_DENSITY, mailboxShortTag } from './mail-display'
 
 export default function MailList({
   conversations = [],
@@ -308,9 +315,17 @@ function MailSection({
 }
 
 /**
- * One conversation, ONE LINE: [unread dot] [sender, fixed] [subject +
- * preview, flex] [date, right] — a 4-column grid, not the old flex column of
- * three stacked text lines behind a 32px avatar.
+ * One conversation (MAIL-REFINE.1 design 01).
+ *
+ * comfortable — TWO LINES:
+ *   line 1: [dot] sender (semibold) · count · account tag …… time
+ *   line 2: subject (semibold, truncates) · 📎 · snippet (subtle grey)
+ * compact — ONE LINE (the Task 6 grid, minus the chips):
+ *   [dot] [sender, fixed] [subject] [time]
+ *
+ * NEEDS-REPLY IS THE AMBER RAIL, NOT A CHIP. The rail on the row's left edge
+ * already said it; the chip repeated it and cost the subject its width. The
+ * words survive as sr-only text so a screen reader still hears the state.
  *
  * THE ROW IS A BUTTON WITH SIBLINGS, NOT A BUTTON CONTAINING BUTTONS. Archive
  * has to be reachable without opening the conversation — that is the whole
@@ -333,10 +348,55 @@ function MailRow({
   const waiting = needsReply(conversation)
   const count = conversation.message_count
   const outbound = conversation.last_message_direction === 'outbound'
-  // 'compact' drops the preview outright to hold one line; 'comfortable'
-  // keeps it, after the subject, behind an em-dash.
+  // 'compact' is one line with no snippet; 'comfortable' is the two-line
+  // subject-first row of the approved design.
   const comfortable = density !== 'compact'
   const preview = conversation.last_message_preview
+  // The account tag renders ONLY when the caller can see 2+ mailboxes at this
+  // studio — that decision is `showMailbox`, made by the surface, exactly as
+  // it was for the chip this tag replaces.
+  const accountTag = showMailbox ? mailboxShortTag(mailbox) : null
+  const time = relativeTime(conversation.last_message_at || conversation.created_at)
+  // Unread = darker ink. Read rows keep a medium weight (the sender/subject
+  // are still the row's anchors); unread steps up to semibold + the blue dot.
+  const ink = unread ? 'font-semibold' : 'font-medium'
+
+  // Shared fragments so the two densities cannot drift apart on the facts
+  // they both show.
+  const countNode = !countsUnavailable && count > 1 && (
+    <span data-testid="mail-row-count" className="shrink-0 text-[11px] font-normal text-un1t-muted">
+      {count}
+    </span>
+  )
+  const accountNode = accountTag && (
+    <span
+      data-testid="mail-row-account"
+      className="max-w-[80px] shrink-0 truncate text-[10px] text-un1t-muted"
+      title={mailbox?.address || undefined}
+    >
+      {accountTag}
+    </span>
+  )
+  const archivedNode = archived && (
+    <span className="shrink-0 rounded-full bg-slate-500/10 px-1.5 py-0.5 text-[10px] font-medium text-slate-700">
+      Archived
+    </span>
+  )
+  /* MAIL-ATTACH.1 — the paperclip. `has_attachments` is stamped by the list
+     route off loadConversationCounts' one message scan (a skipped-but-
+     unstorable attachment still counts: the email genuinely arrived with a
+     file). Always a `shrink-0` SIBLING of the truncating spans — never nested
+     inside one, which is the LAYOUT-FIX.1 defect one element wide of here. */
+  const clipNode = conversation.has_attachments && (
+    <span
+      data-testid="mail-row-attachment"
+      className="inline-flex shrink-0 items-center text-un1t-muted"
+      title="Has attachments"
+    >
+      <Paperclip size={12} aria-hidden="true" />
+      <span className="sr-only">Has attachments</span>
+    </span>
+  )
 
   return (
     <div
@@ -344,142 +404,128 @@ function MailRow({
         selected ? 'bg-un1t-surface' : ''
       }`}
     >
-      <button
-        type="button"
-        onClick={() => onSelect?.(conversation)}
-        aria-current={selected ? 'true' : undefined}
-        className="grid w-full grid-cols-[auto_7rem_1fr_auto] items-center gap-x-2.5 px-3 py-1.5 pr-16 text-left"
-      >
-        {/* Unread is a dot AND weight. The old row also spent a solid accent
-            edge and a whole second line on it; at one line the dot plus the
-            sender's font-weight carries the whole signal. */}
+      {/* Needs-reply = the amber rail, ONLY. It hugs the row's left edge so a
+          column of waiting conversations reads as one amber spine. Decorative
+          to a screen reader (the sr-only text inside the button carries the
+          words). */}
+      {waiting && (
         <span
-          className={`h-2 w-2 shrink-0 rounded-full ${unread ? 'bg-channel-em' : 'bg-transparent'}`}
+          data-testid="mail-row-rail"
+          className="absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-r-full bg-amber-500"
           aria-hidden="true"
         />
+      )}
 
-        {/* Sender: a FIXED column, not a share of the flex row — so a page of
-            names lines up on one edge and the eye scans straight down it
-            instead of re-finding the start of every row.
-            LAYOUT-FIX.1 — the count used to sit INSIDE this truncating span,
-            so a name alone (no count needed) could already fill all 112px
-            and the count was clipped away by the very `truncate` meant for
-            the name ("Elizabeth Fitzgerald" needs ~133px on its own). The
-            fix is a small flex row: the name gets its own truncating child
-            (`min-w-0` — a flex child's default min-width is its content
-            width, so without this it never shrinks and `truncate` never
-            fires) and the count is a SEPARATE `shrink-0` sibling, so it is
-            never a candidate for the name's own clipping. */}
-        <span className="flex min-w-0 items-center gap-1">
+      {comfortable ? (
+        <button
+          type="button"
+          onClick={() => onSelect?.(conversation)}
+          aria-current={selected ? 'true' : undefined}
+          className="flex w-full items-start gap-2.5 px-3 py-1.5 pr-16 text-left"
+        >
+          {/* The blue dot — unread's second half beside the darker ink. */}
           <span
-            data-testid="mail-row-sender-name"
-            className={`min-w-0 truncate text-sm text-un1t-text ${unread ? 'font-semibold' : 'font-normal'}`}
-          >
-            {name}
+            className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${unread ? 'bg-channel-em' : 'bg-transparent'}`}
+            aria-hidden="true"
+          />
+          <span className="min-w-0 flex-1">
+            {/* Line 1: sender · count · account tag …… time. The name is the
+                only child allowed to shrink (min-w-0 + truncate — a flex
+                child's default min-width is its content width, LAYOUT-FIX.1);
+                everything else is short and shrink-0. */}
+            <span className="flex items-baseline gap-1.5">
+              {waiting && <span className="sr-only">Needs reply</span>}
+              <span
+                data-testid="mail-row-sender-name"
+                className={`min-w-0 truncate text-sm text-un1t-text ${ink}`}
+              >
+                {name}
+              </span>
+              {countNode}
+              {accountNode}
+              {archivedNode}
+              <span className="ml-auto shrink-0 pl-2 text-right text-[11px] tabular-nums text-un1t-muted">
+                {time}
+              </span>
+            </span>
+            {/* Line 2: subject leads in the row's own weight; the snippet
+                trails in subtle grey and is the first thing to give
+                (shrink-[6] vs the subject's default shrink of 1 — the same
+                LAYOUT-FIX.1 priority mechanics as the one-line row). SIBLINGS
+                with their own min-w-0 each, never nested. */}
+            <span className="flex min-w-0 items-baseline gap-1.5">
+              <span
+                data-testid="mail-row-subject"
+                className={`min-w-0 shrink truncate text-sm text-un1t-text ${ink}`}
+              >
+                {conversation.subject || '(no subject)'}
+              </span>
+              {clipNode}
+              {preview && (
+                <span
+                  data-testid="mail-row-preview"
+                  className="min-w-0 shrink-[6] truncate text-sm text-un1t-subtle"
+                >
+                  {/* Our own last word is marked on the SNIPPET here — the
+                      subject is the thread's name, not the last message's. */}
+                  {outbound && <span className="text-un1t-muted">You: </span>}
+                  {preview}
+                </span>
+              )}
+            </span>
           </span>
-          {/* The count is what makes this a conversation rather than a
-              message. Hidden at 1 — "1" on every row is noise, and a thread
-              of one is just an email. `shrink-0` so it is never the thing
-              that gives when the name is long — it is short and load-bearing,
-              same reasoning as the chips below. */}
-          {!countsUnavailable && count > 1 && (
-            <span data-testid="mail-row-count" className="shrink-0 text-[11px] font-normal text-un1t-muted">
-              {count}
-            </span>
-          )}
-        </span>
-
-        {/* Subject + preview share the rest of the line, in priority order:
-            chips (short, load-bearing, `shrink-0`) > subject (the next claim
-            on space, truncates rather than vanishing) > preview (only what
-            is left, first to disappear under pressure).
-            LAYOUT-FIX.1 — this used to be ONE flex row holding the chips
-            plus a SINGLE nested span with the subject text and the preview
-            span both inside it. That inner span had `truncate` but no
-            `min-w-0`, so as a flex item its default `min-width: auto` meant
-            it would never shrink below its own (subject + preview) content
-            width — the surrounding `overflow-hidden` then just clipped the
-            whole thing, chips-and-all, at whatever the track happened to be.
-            Two structural changes fix it: (1) the mailbox chip's label can
-            fall back to `mailbox.address`, up to ~124px against a ~119px
-            track on its own — `max-w-[70px] truncate` caps how much of the
-            track any one chip can claim; (2) subject and preview are now
-            SIBLINGS, each with its own `min-w-0` so each can genuinely
-            shrink independently. Priority between the two is a `shrink`
-            differential, not equal shrinking: preview's `shrink-[6]` against
-            subject's default `shrink` (1) means the standard CSS flex-shrink
-            resolution (weighted by shrink-factor × basis, re-run against
-            whatever is left each time a item freezes at its own floor)
-            drains preview toward zero long before subject gives up any
-            meaningful width, and only spills into subject once preview has
-            nothing left to give. Below `lg` there usually isn't a spare
-            pixel for it at all (~87px measured at `md`), so it is `hidden`
-            below that breakpoint rather than rendering an unreadable sliver. */}
-        <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-          {waiting && (
-            <span className="shrink-0 rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
-              Needs reply
-            </span>
-          )}
-          {archived && (
-            <span className="shrink-0 rounded-full bg-slate-500/10 px-1.5 py-0.5 text-[10px] font-medium text-slate-700">
-              Archived
-            </span>
-          )}
-          {showMailbox && (
-            <span
-              className="max-w-[70px] shrink-0 truncate rounded-full bg-un1t-surface px-1.5 py-0.5 text-[10px] text-un1t-subtle ring-1 ring-inset ring-un1t-border"
-              title={mailbox?.address || 'No mail account on this conversation'}
-            >
-              {mailboxLabel(mailbox)}
-            </span>
-          )}
-          {/* MAIL-ATTACH.1 — the paperclip. `has_attachments` is stamped by
-              the list route off loadConversationCounts' one message scan (a
-              skipped-but-unstorable attachment still counts: the email
-              genuinely arrived with a file). A `shrink-0` sibling of subject
-              and preview, same as the chips above — never nested inside
-              either truncating span, which is the LAYOUT-FIX.1 defect one
-              component wide of here. */}
-          {conversation.has_attachments && (
-            <span
-              data-testid="mail-row-attachment"
-              className="inline-flex shrink-0 items-center text-un1t-muted"
-              title="Has attachments"
-            >
-              <Paperclip size={12} aria-hidden="true" />
-              <span className="sr-only">Has attachments</span>
-            </span>
-          )}
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() => onSelect?.(conversation)}
+          aria-current={selected ? 'true' : undefined}
+          className="grid w-full grid-cols-[auto_7rem_1fr_auto] items-center gap-x-2.5 px-3 py-1.5 pr-16 text-left"
+        >
           <span
-            data-testid="mail-row-subject"
-            className={`min-w-0 shrink truncate text-sm text-un1t-text ${unread ? 'font-medium' : 'font-normal'}`}
-          >
-            {outbound && <span className="text-un1t-muted">You: </span>}
-            {conversation.subject || '(no subject)'}
-          </span>
-          {/* comfortable keeps the preview after an em-dash, as its own
-              sibling element; compact drops it entirely — that IS the
-              density difference (see DENSITIES' doc comment in
-              mail-display.js). It must be a sibling of the subject, not
-              nested inside it, or it is back to competing for the same
-              `min-width: auto` floor that caused LAYOUT-FIX.1. */}
-          {comfortable && preview && (
-            <span
-              data-testid="mail-row-preview"
-              className="hidden min-w-0 shrink-[6] truncate text-sm text-un1t-subtle lg:inline-block"
-            >
-              {' '}— {preview}
-            </span>
-          )}
-        </span>
+            className={`h-2 w-2 shrink-0 rounded-full ${unread ? 'bg-channel-em' : 'bg-transparent'}`}
+            aria-hidden="true"
+          />
 
-        {/* Date: right-aligned and tabular, so a column of them lines up
-            digit-on-digit instead of each width drifting with its text. */}
-        <span className="text-right text-[11px] tabular-nums text-un1t-muted">
-          {relativeTime(conversation.last_message_at || conversation.created_at)}
-        </span>
-      </button>
+          {/* Sender: a FIXED column so a page of names lines up on one edge.
+              LAYOUT-FIX.1 — the count and tag are `shrink-0` SIBLINGS of the
+              truncating name span, never inside it. */}
+          <span className="flex min-w-0 items-center gap-1">
+            {waiting && <span className="sr-only">Needs reply</span>}
+            <span
+              data-testid="mail-row-sender-name"
+              className={`min-w-0 truncate text-sm text-un1t-text ${ink}`}
+            >
+              {name}
+            </span>
+            {countNode}
+          </span>
+
+          {/* Subject owns the middle track; no snippet at this density — that
+              IS the density difference (DENSITIES' doc comment). */}
+          <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+            {accountNode}
+            {archivedNode}
+            {clipNode}
+            <span
+              data-testid="mail-row-subject"
+              className={`min-w-0 shrink truncate text-sm text-un1t-text ${ink}`}
+            >
+              {/* With no snippet to carry it, the outbound marker rides the
+                  subject so a row can still never look like it is waiting on
+                  us. */}
+              {outbound && <span className="text-un1t-muted">You: </span>}
+              {conversation.subject || '(no subject)'}
+            </span>
+          </span>
+
+          {/* Date: right-aligned and tabular, so a column of them lines up
+              digit-on-digit instead of each width drifting with its text. */}
+          <span className="text-right text-[11px] tabular-nums text-un1t-muted">
+            {time}
+          </span>
+        </button>
+      )}
 
       {/* Row actions. Archive first because it is the primary verb of this
           surface — the thing an operator does dozens of times a day and the

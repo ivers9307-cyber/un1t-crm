@@ -207,7 +207,7 @@ import { logError } from '@/lib/log'
 import { recordErrorEvent } from '@/lib/error-events'
 import { inboundAddresses } from '@/lib/email-recipients'
 import { resolveMailboxByRecipient } from '@/lib/email-mailboxes'
-import { resolveTicketAction, ticketSubject, pickThreadedTicket } from '@/lib/email-tickets'
+import { resolveTicketAction, ticketSubject, pickThreadedTicket, normalizedSubjectKey } from '@/lib/email-tickets'
 import { statusTimestamps } from '@/app/api/email/tickets/_helpers'
 import { escapeLikePattern } from '@/lib/like-escape'
 import { storeInboundAttachments, discardStagedAttachments } from '@/lib/email-attachments-server'
@@ -855,6 +855,45 @@ async function processInboundEmail(db, body, messageId) {
       threadedTicket = found || null
     }
   }
+  // MAIL-REFINE.1 — the broken-chain fallback, tried only when RFC threading
+  // found NOTHING: same mailbox, same sender, same normalised subject, on an
+  // OPEN unmerged thread → this is the conversation whose reply chain a mail
+  // client broke, so append rather than fork. Strictly narrower than
+  // threading (open-only, same-mailbox-only, exact key) because a false match
+  // files a stranger topic into the wrong thread — and it FAILS OPEN: any
+  // error here means "create a fresh ticket", exactly what happened before
+  // this existed. Never a reason to lose or 5xx the message.
+  if (!threadedTicket) {
+    // Audit M5 — key the SANITIZED subject: the stored ticket subject went
+    // through sanitizeDbText, so a poison byte in the raw Subject would
+    // otherwise make the two keys unequal forever (fail-open fork, no harm —
+    // but the append this fallback exists for would never happen).
+    const subjectKey = normalizedSubjectKey(sanitizeDbText(body.Subject))
+    if (subjectKey) {
+      try {
+        const { data: sameSender, error: sameErr } = await db.from('email_tickets')
+          .select('id, status, subject, first_response_at, mailbox_id, unread_count, assigned_to')
+          .eq('location_id', locationId)
+          .eq('mailbox_id', mailbox.id)
+          // escapeLikePattern: the sender is attacker-controlled and stored
+          // mixed-case — case-insensitive EQUALITY, never a pattern.
+          .ilike('requester_email', escapeLikePattern(fromEmail))
+          .eq('status', 'open')
+          .is('merged_into_id', null)
+          .order('last_message_at', { ascending: false, nullsFirst: false })
+          .limit(20)
+        if (!sameErr) {
+          threadedTicket = (sameSender || [])
+            .find(t => normalizedSubjectKey(t.subject) === subjectKey) || null
+        } else {
+          console.error('[postmark-inbound] subject-fallback lookup failed:', sameErr.message)
+        }
+      } catch (e) {
+        console.error('[postmark-inbound] subject-fallback lookup threw:', e?.message)
+      }
+    }
+  }
+
   const action = resolveTicketAction(threadedTicket)
 
   // EMAIL-INBOUND-POISON.1 — every attacker-suppliable string is stripped of

@@ -197,7 +197,10 @@ export function neighbourId(ids, currentId, delta) {
  * reading one thread, and it is two lines of state to keep.
  */
 export const DENSITIES = ['compact', 'comfortable']
-export const DEFAULT_DENSITY = 'compact'
+// MAIL-REFINE.1 — the approved subject-first two-line row is the
+// 'comfortable' layout, and it is what Richard approved as THE row, so it is
+// the default; 'compact' survives as the one-line toggle for dense triage.
+export const DEFAULT_DENSITY = 'comfortable'
 export const MAIL_DENSITY_KEY = 'un1t.mail.density'
 
 /**
@@ -227,6 +230,72 @@ export function writeDensity(density) {
     // A preference that could not be saved is a preference that resets next
     // visit. Never worth an error on screen.
   }
+}
+
+/* ── MAIL-REFINE.1 — row + flat-thread display helpers ─────────────── */
+
+/**
+ * The small account tag on a row's first line (design 01): the mailbox's
+ * local part plus the @ — "accounts@" — which is how an operator actually
+ * distinguishes two addresses at one studio (the domain is the same on both).
+ * Falls back to the label when the address has no local part to offer, and to
+ * null when there is nothing honest to show: the row renders no tag for null,
+ * never a placeholder.
+ */
+export function mailboxShortTag(mailbox) {
+  const address = typeof mailbox?.address === 'string' ? mailbox.address : ''
+  const at = address.indexOf('@')
+  if (at > 0) return `${address.slice(0, at)}@`
+  return mailbox?.label || null
+}
+
+/**
+ * Which message a freshly-opened thread shows expanded (design 02): the
+ * NEWEST one, i.e. the last in render order — the thread renders
+ * oldest-to-newest, which is also the order the route answers in. Everything
+ * before it collapses to a single line until tapped.
+ */
+export function defaultExpandedMessageId(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return null
+  return messages[messages.length - 1]?.id ?? null
+}
+
+// A collapsed line is ONE line; anything longer than this is CSS-truncated
+// anyway, so carrying more text into the DOM buys nothing.
+const SNIPPET_MAX = 140
+
+/**
+ * A message's one-line stand-in while collapsed. Whitespace (including the
+ * newlines every real email is full of) collapses to single spaces; empty in,
+ * empty out — the component decides what an empty snippet renders as.
+ */
+export function messageSnippet(message) {
+  const text = typeof message?.text_body === 'string' ? message.text_body : ''
+  return text.replace(/\s+/g, ' ').trim().slice(0, SNIPPET_MAX)
+}
+
+/**
+ * Who a collapsed line says wrote the message.
+ *
+ * Notes first (they are outbound rows — the same note-first ordering safety
+ * property as messageKind): the author's name, because an anonymous note is a
+ * note nobody can ask about. Our replies say "You". Inbound mail wears the
+ * requester's NAME only when it genuinely came from the requester's address
+ * (compared case-insensitively — addresses arrive from strangers' mail
+ * clients); anyone else shows as the address they wrote from, because a
+ * different person at the same organisation must never wear the requester's
+ * name — that is EMAIL-PARTICIPANTS.8's incident in one line.
+ */
+export function collapsedSenderLabel(message, conversation) {
+  if (message?.is_internal_note) return message.author_name || 'Staff'
+  if (message?.direction === 'outbound') return 'You'
+  const from = String(message?.from_email || '').trim()
+  if (!from) return 'Unknown sender'
+  const requester = String(conversation?.requester_email || '').trim()
+  if (requester && from.toLowerCase() === requester.toLowerCase() && conversation?.requester_name) {
+    return conversation.requester_name
+  }
+  return from
 }
 
 /* ─────────────────────────── reply drafts ─────────────────────────── */

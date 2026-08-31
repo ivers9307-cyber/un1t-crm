@@ -56,7 +56,7 @@ import Link from 'next/link'
 import {
   ArrowLeft, Lock, Mail, AlertCircle, MailCheck, ImageOff, Maximize2, Minimize2,
   ShieldAlert, Download, FileWarning, Check, MailX, ShieldX, Forward, UserPlus,
-  ExternalLink,
+  ExternalLink, Paperclip,
 } from 'lucide-react'
 import { EmptyState, Loading } from '@/components/ui'
 import { formatBytes, SKIPPED_REASON_LABEL } from '@/lib/email-attachment-quota'
@@ -68,6 +68,7 @@ import {
   priorityMeta,
   messageKind,
   messageTimestamp,
+  relativeTime,
   deliveryMeta,
   deliveryTimestamp,
   mailboxLabel,
@@ -77,6 +78,15 @@ import {
   forwardedMarker,
   sendOriginMeta,
 } from '@/lib/ticket-display'
+// MAIL-REFINE.1 (02) — the flat-thread helpers live beside the rest of the
+// Mail vocabulary. Pure module (no 'use client', no DOM) so this import adds
+// no weight; the layering is fine because Mail is the only surface that
+// mounts this pane (RETIRE-TICKETS.1).
+import {
+  defaultExpandedMessageId,
+  messageSnippet,
+  collapsedSenderLabel,
+} from '@/components/mail/mail-display'
 import { joinPointsByMessage } from '@/lib/email-tickets'
 // EMAIL-CONTACT-CHIP.1 — the house funnel/off-funnel taxonomy (FUNNEL.1),
 // reused ONLY for the chip's colour/intent grouping. There is no single
@@ -182,6 +192,11 @@ export default function TicketThread({
   // this file must not learn which screen is asking.
   statusChip,   // beside the subject: the lifecycle chip, or the caller's own
   controls,     // under the header: status + owner + duplicate rows
+  // MAIL-REFINE.1 (03) — between the header and the correspondence: the
+  // caller's own notice strip (Mail puts its related-conversations nudge
+  // here). Same undefined/null/node contract as the other slots; the ticket
+  // chrome never had anything in this position, so undefined renders nothing.
+  banner,
   emptyState,   // with no selection: "Select a ticket", or the caller's own
   // Forwarded verbatim to the composer — the one sentence in there written in
   // the ticket lifecycle's vocabulary. See TicketReplyBox.jsx.
@@ -204,6 +219,21 @@ export default function TicketThread({
   const [openAttachment, setOpenAttachment] = useState(null)
   const ticketId = ticket?.id
   useEffect(() => { setOpenAttachment(null) }, [ticketId])
+
+  // MAIL-REFINE.1 (02) — which messages are open. Only the NEWEST message
+  // expands by default (defaultExpandedMessageId); everything older collapses
+  // to a single line until tapped. `overrides` holds only what the operator
+  // has explicitly toggled, keyed by message id, so a poll delivering a new
+  // message naturally collapses the previous newest (it loses its default)
+  // without touching anything the operator opened by hand. Reset on ticket
+  // switch — message ids are globally unique, but a stale map is still a
+  // stale map.
+  const [expandOverrides, setExpandOverrides] = useState({})
+  useEffect(() => { setExpandOverrides({}) }, [ticketId])
+  const newestId = defaultExpandedMessageId(messages)
+  const isMessageExpanded = (id) => expandOverrides[id] ?? (id === newestId)
+  const toggleMessage = (id) =>
+    setExpandOverrides(prev => ({ ...prev, [id]: !(prev[id] ?? (id === newestId)) }))
 
   // EMAIL-CONTACT-CHIP.2 — "Add to contacts" on an unlinked thread. Every
   // other mutation on this pane (status, assign, merge, participants) is a
@@ -367,8 +397,14 @@ export default function TicketThread({
         {controls}
       </div>
 
-      {/* Thread */}
-      <div className="flex-1 space-y-3 overflow-y-auto bg-un1t-bg px-4 py-4">
+      {/* The caller's notice strip (Mail's related-conversations nudge) —
+          between the header and the correspondence, never inside either. */}
+      {banner}
+
+      {/* Thread — MAIL-REFINE.1 (02): flat full-width messages separated by
+          hairlines, not chat bubbles. Each message owns its padding and its
+          bottom border; the container only scrolls. */}
+      <div className="flex-1 overflow-y-auto bg-un1t-bg">
         {loading && messages.length === 0 ? (
           <Loading label="Loading thread…" />
         ) : messages.length === 0 ? (
@@ -381,15 +417,18 @@ export default function TicketThread({
           )
         ) : (
           messages.map(m => (
-            // The marker is a sibling of the bubble, not part of it: someone
+            // The marker is a sibling of the message, not part of it: someone
             // joining is a fact about the THREAD that happens to be datable to
-            // a message, and putting it inside the bubble would attribute it to
-            // whoever wrote that message.
+            // a message, and putting it inside the message would attribute it
+            // to whoever wrote that message.
             <Fragment key={m.id}>
               <JoinMarkers addresses={joinPoints.get(m.id)} />
               <ThreadMessage
                 message={m}
+                ticket={ticket}
                 ticketId={ticketId}
+                expanded={isMessageExpanded(m.id)}
+                onToggle={() => toggleMessage(m.id)}
                 onOpenAttachment={setOpenAttachment}
                 onForward={onForward}
                 messagesById={messagesById}
@@ -894,7 +933,7 @@ function ThreadParticipants({ ticket, name, replyRecipients }) {
 function JoinMarkers({ addresses }) {
   if (!addresses || addresses.length === 0) return null
   return (
-    <div className="space-y-1">
+    <div className="space-y-1 px-4 py-1.5">
       {addresses.map(address => (
         <p
           key={address}
@@ -1042,7 +1081,42 @@ function ForwardedMarker({ label, onAccent = false }) {
   )
 }
 
-function ThreadMessage({ message, ticketId, onOpenAttachment, onForward, messagesById }) {
+/**
+ * The initial avatar on a flat message's header row (MAIL-REFINE.1 02). Staff
+ * side (replies, notes) is the dark "me" tile; the counterparty is light with
+ * a hairline ring. Decorative — the sender's name is always beside it.
+ */
+function MessageAvatar({ me, label }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-[10px] font-bold ${
+        me ? 'bg-un1t-accent text-white' : 'bg-un1t-surface text-un1t-subtle ring-1 ring-inset ring-un1t-border'
+      }`}
+    >
+      {initialsOf(label)}
+    </span>
+  )
+}
+
+/**
+ * One message, flattened (MAIL-REFINE.1 02): full width, a one-line header
+ * (avatar · sender · address · time), hairline underneath — email, not chat.
+ * No right-alignment and no bubble for outbound; the dark avatar and the
+ * "Sent to …" meta line carry "we said this".
+ *
+ * ALL BUT THE NEWEST MESSAGE ARRIVE COLLAPSED (`expanded` is decided by the
+ * parent): a single line — avatar, sender, snippet, time — on the un1t-surface
+ * tint, expanding (and collapsing again) on click. Two things deliberately
+ * refuse to collapse away:
+ *   • an internal note keeps its amber styling in BOTH states, so a private
+ *     line can never be skimmed as correspondence (the one thing this file
+ *     must never get wrong — see the file header);
+ *   • a delivery FAILURE renders even when its message is collapsed. The loud
+ *     panel exists because "I replied, that's done" is exactly the wrong
+ *     mental model, and a collapsed row must not make it quietly right again.
+ */
+function ThreadMessage({ message, ticket, ticketId, expanded, onToggle, onOpenAttachment, onForward, messagesById }) {
   const kind = messageKind(message)
   const stamp = messageTimestamp(message.sent_at || message.created_at)
   const body = message.text_body || '(no text content)'
@@ -1050,14 +1124,67 @@ function ThreadMessage({ message, ticketId, onOpenAttachment, onForward, message
   // does not emit a document for them, and this guard says so twice.
   const html = kind === 'note' ? null : message.html_document || null
   const forwarded = forwardedMarker(message, messagesById)
+  const isNote = kind === 'note'
+  const me = kind !== 'inbound'
+  const senderLabel = collapsedSenderLabel(message, ticket)
+  const avatarLabel = kind === 'outbound' ? (message.author_name || 'Me') : senderLabel
+  // EMAIL-DELIVERY.1 — null for "sent, no event yet", which is most messages
+  // and every message written before mig 498. Nothing is rendered for it.
+  const delivery = kind === 'outbound' ? deliveryMeta(message) : null
+  const failure = delivery && delivery.tone !== 'quiet' && (
+    <div className="border-b border-un1t-border/60 px-4 py-2">
+      <DeliveryFailureNotice delivery={delivery} stamp={deliveryTimestamp(message)} />
+    </div>
+  )
 
-  if (kind === 'note') {
+  if (!expanded) {
+    const snippet = messageSnippet(message)
     return (
-      <div className="rounded-xl border border-dashed border-amber-500/60 bg-amber-500/10 px-4 py-3">
-        <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-700">
+      <>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded="false"
+          aria-label={`Expand the message from ${senderLabel}${stamp ? `, ${stamp}` : ''}`}
+          className={`flex w-full items-center gap-2.5 border-b border-un1t-border px-4 py-2 text-left ${
+            isNote ? 'bg-amber-500/10' : 'bg-un1t-surface'
+          }`}
+        >
+          <MessageAvatar me={me} label={avatarLabel} />
+          {isNote && <Lock size={11} className="shrink-0 text-amber-700" aria-hidden="true" />}
+          <span className={`min-w-0 flex-1 truncate text-xs ${isNote ? 'text-amber-700' : 'text-un1t-subtle'}`}>
+            <span className={`font-semibold ${isNote ? 'text-amber-700' : 'text-un1t-text'}`}>{senderLabel}</span>
+            {isNote && <span className="font-semibold"> · STAFF-ONLY</span>}
+            {snippet && <> — {snippet}</>}
+          </span>
+          {(message.attachments?.length > 0) && (
+            <Paperclip size={11} className="shrink-0 text-un1t-muted" aria-hidden="true" />
+          )}
+          <span className="shrink-0 text-[11px] tabular-nums text-un1t-muted">
+            {relativeTime(message.sent_at || message.created_at)}
+          </span>
+        </button>
+        {failure}
+      </>
+    )
+  }
+
+  if (isNote) {
+    return (
+      <div className="border-b border-un1t-border bg-amber-500/10 px-4 py-3">
+        {/* The label line doubles as the collapse control — same click that
+            opened it. It stays the first thing on the block either way. */}
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded="true"
+          aria-label={`Collapse the note by ${senderLabel}${stamp ? `, ${stamp}` : ''}`}
+          className="mb-1.5 flex w-full items-center gap-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-amber-700"
+        >
           <Lock size={12} className="shrink-0" aria-hidden="true" />
           Internal note — not sent to the member
-        </p>
+          <span className="ml-auto shrink-0 font-normal normal-case tracking-normal">{stamp}</span>
+        </button>
         <p className="whitespace-pre-wrap break-words text-sm text-un1t-text">{body}</p>
         <p className="mt-1.5 text-[11px] text-un1t-subtle">
           {/* Who left it. On a shared queue an anonymous note is a note you
@@ -1066,71 +1193,91 @@ function ThreadMessage({ message, ticketId, onOpenAttachment, onForward, message
           {message.author_name
             ? `Note by ${message.author_name}`
             : (message.from_email || 'Staff')}
-          {stamp && ` · ${stamp}`}
         </p>
       </div>
     )
   }
 
   if (kind === 'outbound') {
-    // EMAIL-DELIVERY.1 — null for "sent, no event yet", which is most messages
-    // and every message written before mig 498. Nothing is rendered for it.
-    const delivery = deliveryMeta(message)
     // MAILBOX-COEXIST.1 — null for everything composed in the CRM, which is
     // every outbound row this thread had before Phase 8 polled a Sent folder.
     const origin = sendOriginMeta(message)
     return (
-      <div className="space-y-1.5">
-        <div className="flex justify-end">
-          <div className={`rounded-2xl rounded-tr-sm bg-un1t-accent px-4 py-3 text-white ${html ? 'w-full' : 'max-w-[85%]'}`}>
-            <p className="mb-1 flex items-center gap-1.5 text-[11px] text-white/75">
-              <MailCheck size={12} className="shrink-0" aria-hidden="true" />
-              Sent to {message.to_email || 'the member'}
-              {message.author_name && ` · Replied by ${message.author_name}`}
-              {stamp && ` · ${stamp}`}
-              {delivery?.tone === 'quiet' && <>{' · '}<DeliveryMarker delivery={delivery} message={message} /></>}
-            </p>
-            {/* Above the recipients, because "this was a forward" changes how
-                the To line reads: those addresses are a third party, not the
-                member. Origin above both: it changes how EVERYTHING under it
-                reads, including the absent "Replied by" in the line above —
-                a mail-client reply has no CRM author to name, and without this
-                marker that gap looks like missing data rather than a fact. */}
-            <SendOriginMarker origin={origin} onAccent />
-            <ForwardedMarker label={forwarded} onAccent />
-            <MessageEnvelope message={message} onAccent />
+      <>
+        <div className="border-b border-un1t-border px-4 py-3">
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded="true"
+            aria-label={`Collapse the reply from ${message.author_name || 'the studio'}${stamp ? `, ${stamp}` : ''}`}
+            className="flex w-full items-center gap-2 text-left"
+          >
+            <MessageAvatar me label={avatarLabel} />
+            <span className="min-w-0 truncate text-[13px] font-semibold text-un1t-text">
+              {message.author_name || 'You'}
+            </span>
+            {message.from_email && (
+              <span className="min-w-0 truncate text-[11px] text-un1t-muted">{message.from_email}</span>
+            )}
+            <span className="ml-auto shrink-0 text-[11px] text-un1t-muted">{stamp}</span>
+          </button>
+          {/* The recipient + delivery facts, quiet, directly under the header
+              — the flat layout's replacement for the bubble's meta line. */}
+          <p className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-un1t-muted">
+            <MailCheck size={12} className="shrink-0" aria-hidden="true" />
+            Sent to {message.to_email || 'the member'}
+            {message.author_name && ` · Replied by ${message.author_name}`}
+            {delivery?.tone === 'quiet' && <>{' · '}<DeliveryMarker delivery={delivery} message={message} /></>}
+          </p>
+          {/* Above the recipients, because "this was a forward" changes how
+              the To line reads: those addresses are a third party, not the
+              member. Origin above both: it changes how EVERYTHING under it
+              reads, including the absent "Replied by" in the line above —
+              a mail-client reply has no CRM author to name, and without this
+              marker that gap looks like missing data rather than a fact. */}
+          <div className="mt-1.5">
+            <SendOriginMarker origin={origin} />
+            <ForwardedMarker label={forwarded} />
+            <MessageEnvelope message={message} />
             {html ? (
               <EmailFrame
                 html={html}
                 blockedImages={message.html_blocked_images}
                 label={`Reply sent to ${message.to_email || 'the member'}`}
-                onAccent
               />
             ) : (
-              <p className="whitespace-pre-wrap break-words text-sm">{body}</p>
+              <p className="whitespace-pre-wrap break-words text-sm text-un1t-text">{body}</p>
             )}
             {message.html_unsafe && <UnsafeHtmlNotice />}
             {message.html_omitted && <HtmlOmittedNotice />}
-            <Attachments ticketId={ticketId} attachments={message.attachments} onOpen={onOpenAttachment} onAccent />
+            <Attachments ticketId={ticketId} attachments={message.attachments} onOpen={onOpenAttachment} />
             <div className="mt-1.5">
-              <ForwardAction message={message} onForward={onForward} onAccent />
+              <ForwardAction message={message} onForward={onForward} />
             </div>
           </div>
         </div>
-        {delivery && delivery.tone !== 'quiet' && (
-          <DeliveryFailureNotice delivery={delivery} stamp={deliveryTimestamp(message)} />
-        )}
-      </div>
+        {failure}
+      </>
     )
   }
 
   return (
-    <div className="flex justify-start">
-      <div className={`rounded-2xl rounded-tl-sm border border-un1t-border bg-un1t-surface px-4 py-3 ${html ? 'w-full' : 'max-w-[85%]'}`}>
-        <p className="mb-1 text-[11px] text-un1t-subtle">
-          From {message.from_email || 'the member'}
-          {stamp && ` · ${stamp}`}
-        </p>
+    <div className="border-b border-un1t-border px-4 py-3">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded="true"
+        aria-label={`Collapse the message from ${message.from_email || 'the member'}${stamp ? `, ${stamp}` : ''}`}
+        className="flex w-full items-center gap-2 text-left"
+      >
+        <MessageAvatar me={false} label={senderLabel} />
+        <span className="min-w-0 truncate text-[13px] font-semibold text-un1t-text">{senderLabel}</span>
+        {message.from_email && senderLabel !== message.from_email && (
+          <span className="min-w-0 truncate text-[11px] text-un1t-muted">{message.from_email}</span>
+        )}
+        <span className="ml-auto shrink-0 text-[11px] text-un1t-muted">{stamp}</span>
+      </button>
+      <div className="mt-1.5">
         {/* THE MEMBER'S OWN Cc. This is the point of capturing it inbound: a
             reply that reaches only the sender, when they copied two
             colleagues, drops those colleagues out of their own conversation. */}

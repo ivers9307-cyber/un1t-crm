@@ -268,7 +268,9 @@ describe('TicketThread — a message\'s own envelope', () => {
     // One click and it is the header a mail client would show. The From line
     // is the half that was missing: without it a reply from a different person
     // at the same organisation looked exactly like one from the requester.
-    expect(screen.getByText('eleanor@council.ie')).toBeTruthy()
+    // (MAIL-REFINE.1 02 — the flat message header now ALSO names the sender's
+    // address, so the open envelope makes it two on-screen occurrences.)
+    expect(screen.getAllByText('eleanor@council.ie').length).toBeGreaterThan(1)
     expect(screen.getByText('studio@x.com')).toBeTruthy()
     expect(screen.getByText('clerk@council.ie')).toBeTruthy()
 

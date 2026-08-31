@@ -73,7 +73,11 @@ describe('MailThread — the shared half is genuinely reused', () => {
   it('renders the correspondence through TicketThread, not a copy of it', () => {
     renderThread()
     expect(screen.getByText('Can I freeze my membership from Monday?')).toBeTruthy()
-    expect(screen.getByText(/From ella@member\.ie/)).toBeTruthy()
+    // MAIL-REFINE.1 (02) — the flat message header names the sender and their
+    // address on one line (the old bubble said "From <address>"). The header's
+    // participant line also names the requester, hence AllBy for the name.
+    expect(screen.getAllByText('Ella Byrne').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('ella@member.ie').length).toBeGreaterThan(0)
   })
 
   it('keeps the composer, with its reply/note modes', () => {

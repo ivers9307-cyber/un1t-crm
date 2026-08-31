@@ -180,3 +180,30 @@ export function pickThreadedTicket(rows) {
   }
   return bestId
 }
+
+// ── MAIL-REFINE.1 — the auto-merge-at-ingest subject key ─────────────────
+// A fresh inbound with no RFC thread match can still be the same conversation:
+// some clients (and some people) start a "reply" as a new email, so the chain
+// breaks while the subject survives as "RE: <original>". Same sender + same
+// key on an OPEN thread of the same mailbox → the webhook appends instead of
+// forking. The key errs strict: prefix noise is forgiven, nothing else is —
+// a false match would file a stranger topic into the wrong thread, which is
+// worse than the duplicate it prevents.
+
+const REPLY_PREFIX = /^(re|fwd?|fw)(\[\d+\])?:\s*/i
+
+/**
+ * @param {string|null|undefined} subject
+ * @returns {string|null} the comparison key, or null when nothing meaningful
+ *   remains — and a null key must never be treated as a match.
+ */
+export function normalizedSubjectKey(subject) {
+  if (typeof subject !== 'string') return null
+  let s = subject.trim()
+  // Strip repeated reply/forward prefixes ("Re: FW: x", "re[2]: x").
+  for (let guard = 0; guard < 10 && REPLY_PREFIX.test(s); guard++) {
+    s = s.replace(REPLY_PREFIX, '').trim()
+  }
+  s = s.replace(/\s+/g, ' ').toLowerCase()
+  return s || null
+}

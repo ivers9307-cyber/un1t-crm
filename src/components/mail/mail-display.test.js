@@ -21,6 +21,7 @@ import {
   DENSITIES, DEFAULT_DENSITY, readDensity, writeDensity, MAIL_DENSITY_KEY,
   readReplyDraft, writeReplyDraft, clearReplyDraft, clearAllReplyDrafts,
   REPLY_DRAFT_MAX_LENGTH, REPLY_DRAFT_TTL_MS, REPLY_DRAFT_MAX_ENTRIES, REPLY_DRAFT_PREFIX,
+  mailboxShortTag, defaultExpandedMessageId, messageSnippet, collapsedSenderLabel,
 } from './mail-display'
 
 describe('the two states a conversation can be in', () => {
@@ -170,7 +171,7 @@ describe('density preference', () => {
   beforeEach(() => { window.localStorage.clear() })
 
   it('defaults to compact — the density Richard asked for', () => {
-    expect(DEFAULT_DENSITY).toBe('compact')
+    expect(DEFAULT_DENSITY).toBe('comfortable')
     expect(DENSITIES).toEqual(['compact', 'comfortable'])
   })
 
@@ -181,12 +182,12 @@ describe('density preference', () => {
 
   it('falls back to the default for anything it does not recognise', () => {
     window.localStorage.setItem(MAIL_DENSITY_KEY, 'enormous')
-    expect(readDensity()).toBe('compact')
+    expect(readDensity()).toBe('comfortable')
   })
 
   it('round-trips a write', () => {
-    writeDensity('comfortable')
-    expect(readDensity()).toBe('comfortable')
+    writeDensity('compact')
+    expect(readDensity()).toBe('compact')
   })
 
   it('refuses to store a value that is not a density', () => {
@@ -199,8 +200,8 @@ describe('density preference', () => {
   it('survives storage being unavailable, in both directions', () => {
     const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('denied') })
     const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('denied') })
-    expect(readDensity()).toBe('compact')
-    expect(() => writeDensity('comfortable')).not.toThrow()
+    expect(readDensity()).toBe('comfortable')
+    expect(() => writeDensity('compact')).not.toThrow()
     get.mockRestore(); set.mockRestore()
   })
 })
@@ -479,5 +480,87 @@ describe('clearAllReplyDrafts', () => {
     const remove = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => { throw new Error('denied') })
     expect(() => clearAllReplyDrafts()).not.toThrow()
     remove.mockRestore()
+  })
+})
+
+/* ── MAIL-REFINE.1 — row + flat-thread display helpers ─────────────── */
+
+describe('mailboxShortTag — the small account tag (01)', () => {
+  it('shortens an address to its local part plus @ — the mockup’s "accounts@"', () => {
+    expect(mailboxShortTag({ address: 'accounts@hatchstreetfitness.com' })).toBe('accounts@')
+  })
+
+  it('falls back to the label when the address has no @ to shorten on', () => {
+    expect(mailboxShortTag({ label: 'Studio', address: 'not-an-address' })).toBe('Studio')
+    expect(mailboxShortTag({ label: 'Studio' })).toBe('Studio')
+  })
+
+  it('answers null with nothing to say — the row renders no tag rather than a placeholder', () => {
+    expect(mailboxShortTag(null)).toBeNull()
+    expect(mailboxShortTag({})).toBeNull()
+    // An address that is ONLY an @-domain has no local part worth showing.
+    expect(mailboxShortTag({ address: '@x.com' })).toBeNull()
+  })
+})
+
+describe('defaultExpandedMessageId — only the newest message opens (02)', () => {
+  it('is the last message in render order', () => {
+    expect(defaultExpandedMessageId([{ id: 'a' }, { id: 'b' }, { id: 'c' }])).toBe('c')
+  })
+
+  it('is null for an empty or absent thread', () => {
+    expect(defaultExpandedMessageId([])).toBeNull()
+    expect(defaultExpandedMessageId(undefined)).toBeNull()
+  })
+})
+
+describe('messageSnippet — the collapsed line’s one-line body', () => {
+  it('collapses whitespace and newlines to one line', () => {
+    expect(messageSnippet({ text_body: 'Hi,\n\nour records   show\tthe read…' }))
+      .toBe('Hi, our records show the read…')
+  })
+
+  it('caps the length — a collapsed line must stay a line', () => {
+    const long = 'x'.repeat(500)
+    expect(messageSnippet({ text_body: long }).length).toBeLessThanOrEqual(140)
+  })
+
+  it('answers empty for nothing readable, never a placeholder the row must special-case', () => {
+    expect(messageSnippet({})).toBe('')
+    expect(messageSnippet(null)).toBe('')
+    expect(messageSnippet({ text_body: '   ' })).toBe('')
+  })
+})
+
+describe('collapsedSenderLabel — who a collapsed line says wrote it', () => {
+  const TICKET = { requester_email: 'Caitlin.Thornton@flogas.ie', requester_name: 'Caitlin Thornton' }
+
+  it('says You for our own replies — same word the row’s outbound marker uses', () => {
+    expect(collapsedSenderLabel({ direction: 'outbound' }, TICKET)).toBe('You')
+  })
+
+  it('names the requester when the mail came from them, compared case-insensitively', () => {
+    expect(collapsedSenderLabel(
+      { direction: 'inbound', from_email: 'caitlin.thornton@flogas.ie' }, TICKET
+    )).toBe('Caitlin Thornton')
+  })
+
+  it('shows the raw address for anyone else — a different person must never wear the requester’s name', () => {
+    expect(collapsedSenderLabel(
+      { direction: 'inbound', from_email: 'eleanor@council.ie' }, TICKET
+    )).toBe('eleanor@council.ie')
+  })
+
+  it('names a note’s author — notes are outbound rows but not replies', () => {
+    expect(collapsedSenderLabel(
+      { direction: 'outbound', is_internal_note: true, author_name: 'Dean Kelly' }, TICKET
+    )).toBe('Dean Kelly')
+    expect(collapsedSenderLabel(
+      { direction: 'outbound', is_internal_note: true }, TICKET
+    )).toBe('Staff')
+  })
+
+  it('degrades to Unknown sender rather than blank', () => {
+    expect(collapsedSenderLabel({ direction: 'inbound' }, TICKET)).toBe('Unknown sender')
   })
 })
