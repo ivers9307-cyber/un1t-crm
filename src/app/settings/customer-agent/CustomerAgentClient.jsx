@@ -68,7 +68,6 @@ export default function CustomerAgentClient() {
         booking_issue_handoff_text: settings.booking_issue_handoff_text || null,
         no_credits_handoff_text: settings.no_credits_handoff_text || null,
         account_conflict_handoff_text: settings.account_conflict_handoff_text || null,
-        booking_expired_text: settings.booking_expired_text || null,
         approval_decline_text: settings.approval_decline_text || null,
         welcome_greeting: settings.welcome_greeting || null,
         link_button_text: (settings.link_button_text || '').trim() || null,
@@ -462,15 +461,9 @@ export default function CustomerAgentClient() {
           <p className="text-xs text-un1t-muted mt-1">Sent word-for-word when a customer has more than one account holding a live membership or credits, so the agent will not guess which one to book. The conversation is handed to the team and the booking request appears in Approvals with the accounts listed. Leave blank to use the default shown.</p>
         </div>
 
-        {/* MIA-BOARD.2 — sent when a pending booking outlives its class.
-            Default mirrors DEFAULT_BOOKING_EXPIRED_TEXT in notify.js. */}
-        <div>
-          <label className="block text-sm font-medium text-un1t-text mb-1">Missed-booking apology</label>
-          <input className={inputCls} maxLength={500} value={settings.booking_expired_text || ''}
-            onChange={e => setField('booking_expired_text', e.target.value)}
-            placeholder="Sorry, we didn't get to confirm your booking for {class} in time. That one's on us. The team will be in touch to make it right." />
-          <p className="text-xs text-un1t-muted mt-1">Sent if a booking request was still waiting for approval when the class started. {'{class}'} renders the class name and time. Leave blank to use the default shown.</p>
-        </div>
+        {/* MIA-EXPIRY-QUIET.1 — the "Missed-booking apology" field lived here
+            until 2026-08-31. A booking that outlives its class is now silent to
+            the member and only alerts staff, so there is no copy to edit. */}
 
         {/* APPROVALS-STUDIO.1 — sent in-thread when staff decline a customer
             request, so a decline is never silence. Default mirrors

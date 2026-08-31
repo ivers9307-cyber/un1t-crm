@@ -22,7 +22,6 @@ vi.mock('@/lib/agent/notify', () => ({
   buildBookingConfirmationText: vi.fn(() => 'Booked!'),
   buildCancellationConfirmationText: vi.fn(() => 'Cancelled.'),
   buildDeclineNoticeText: vi.fn(() => "Sorry, we couldn't complete that request this time."),
-  buildBookingExpiredText: vi.fn(() => 'Sorry, we missed it.'),
   agentConfirmationTemplates: vi.fn(async () => ({})),
 }))
 
@@ -237,6 +236,9 @@ describe('PATCH failed-execution retry', () => {
 // approved at 8:26pm for classes that ran that morning; the executor booked
 // them into Glofox anyway and CONFIRMED them to the customer. An approval
 // whose class has already started must expire, never execute.
+//
+// MIA-EXPIRY-QUIET.1 (Richard, 2026-08-31) — and it must do so QUIETLY: the
+// member is never messaged about a booking we missed, the team is.
 describe('PATCH class_booking approval — past-start guard', () => {
   const pastRow = () => ({
     ...ROW,
@@ -256,8 +258,8 @@ describe('PATCH class_booking approval — past-start guard', () => {
     const final = updates.at(-1)
     expect(final.patch.status).toBe('expired')
     expect(final.patch.details.result).toMatchObject({ ok: false, reason: 'CLASS_ALREADY_STARTED' })
-    // The customer hears the apology, not a confirmation.
-    expect(sendAgentThreadMessage).toHaveBeenCalledTimes(1)
+    // MIA-EXPIRY-QUIET.1 — the member hears nothing; staff follow up.
+    expect(sendAgentThreadMessage).not.toHaveBeenCalled()
   })
 
   it('a booking with a future start executes normally', async () => {
