@@ -34,16 +34,41 @@ export const dynamic = 'force-dynamic'
 
 export const GET = withAuth(
   { permission: 'studio_management' },
-  async ({ user, db, params }) => {
-    // dispatchGetState runs loadDeviceForUser internally, so the
-    // permission gate is enforced before we touch the vendor.
-    const out = await dispatchGetState(params?.id, { user, db })
+  async ({ user, db, params, request }) => {
+    // SENSIBO-RATE.1 — served from ac_devices.last_state by default.
+    //
+    // This route used to hit the vendor LIVE on every request, and
+    // both AcControlPanel.jsx and mobile's AcDeviceList.jsx poll it
+    // every 30s per device card with no visibility gating — so every
+    // open panel was a permanent 2 vendor calls/minute. Sensibo
+    // rate-limits on bursts (~4 calls in 1.6s = 429, block >75s), so
+    // that background load left no budget for the crons that
+    // actually need to act, and the gym-floor unit stopped
+    // auto-offing from 2026-08-29.
+    //
+    // The cache is refreshed by the ac-external-rule cron (which
+    // already polls every device every 5 min) and written
+    // immediately by every CRM-initiated power change, so an action
+    // taken here shows up at once. Only a change made on the wall
+    // panel or in the vendor's own app lags, by at most one tick.
+    //
+    // `?live=1` forces a real vendor read for a deliberate operator
+    // refresh. It goes through the same limiter as everything else.
+    const wantsLive = new URL(request.url).searchParams.get('live') === '1'
+
+    // Either path runs loadDeviceForUser first, so the per-device
+    // permission gate is enforced before anything else happens.
+    const out = wantsLive
+      ? await dispatchGetState(params?.id, { user, db })
+      : await loadDeviceForUser(params?.id, { user, db })
     if (!out.ok) {
       return NextResponse.json(
         { success: false, error: out.error, code: out.code },
         { status: out.status || 500 }
       )
     }
+    const state = wantsLive ? out.state : (out.device.last_state ?? null)
+    const stateAsOf = wantsLive ? new Date().toISOString() : (out.device.last_state_at ?? null)
 
     // Active session for this device, if any. The panel uses it to
     // render the countdown timer + "started by X" line. We do this
@@ -74,7 +99,11 @@ export const GET = withAuth(
       success: true,
       data: {
         device: out.device,
-        state: out.state,
+        state,
+        // When the reading was taken. null = never observed yet (the
+        // next ac-external-rule tick fills it in). The panel can use
+        // this to say "as of HH:MM" rather than implying it's live.
+        state_as_of: stateAsOf,
         active_session: activeSession,
         external_start: externalStartRow || null,
       },

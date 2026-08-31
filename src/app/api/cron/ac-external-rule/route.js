@@ -24,7 +24,7 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { vendorGetState, vendorTurnOff, loadDeviceWithLocation } from '@/lib/ac-devices'
+import { vendorGetState, vendorTurnOff, loadDeviceWithLocation, cacheDeviceState } from '@/lib/ac-devices'
 import { AC_SESSION_ACTIVE_STATUSES } from '@/lib/enums'
 import {
   planExternalRule,
@@ -95,6 +95,13 @@ export async function GET(request) {
       continue
     }
     const vendorOn = stateOut.state?.on === true
+
+    // SENSIBO-RATE.1 — this cron is the ONLY thing that needs to poll
+    // the vendor on a schedule, so it is also the natural place to
+    // refresh the cache the AC panel reads. Before this, the panel
+    // polled the vendor itself every 30s per open card and the
+    // reading taken here was discarded.
+    await cacheDeviceState(db, device.id, stateOut.state)
 
     // Active CRM session?
     const { data: sessRows } = await db

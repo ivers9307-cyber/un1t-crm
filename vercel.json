@@ -34,7 +34,7 @@
     },
     {
       "path": "/api/cron/ac-external-rule",
-      "schedule": "*/5 * * * *"
+      "schedule": "1-56/5 * * * *"
     },
     {
       "path": "/api/cron/checklist-sweep",
@@ -142,7 +142,7 @@
     },
     {
       "path": "/api/cron/class-climate",
-      "schedule": "*/5 * * * *"
+      "schedule": "2-57/5 * * * *"
     },
     {
       "path": "/api/cron/bathroom-climate",

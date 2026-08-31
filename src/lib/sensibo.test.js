@@ -17,6 +17,7 @@ import {
   getPodState,
   setPodState,
   turnPodOff,
+  buildTurnOffState,
 } from './sensibo.js'
 
 // Helpers --------------------------------------------------------
@@ -226,7 +227,36 @@ describe('setPodState', () => {
 // ----------------------------------------------------------------
 
 describe('turnPodOff', () => {
-  it('reads current state then writes back with on:false (preserving the rest)', async () => {
+  it('SENSIBO-RATE.1: with an offState it is ONE call — no state read', async () => {
+    // This is the whole point of the change. The auto-off cron loops
+    // expired sessions, and a GET+POST per row is exactly the
+    // back-to-back pattern Sensibo's burst limiter punishes.
+    const offState = buildTurnOffState({ mode: 'cool', temp: 18, fan: 'high' })
+    global.fetch = vi.fn().mockResolvedValueOnce(
+      jsonResponse({ status: 'success', result: { acState: offState } })
+    )
+
+    const out = await turnPodOff('key', 'pod-1', offState)
+
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+    const [url, init] = global.fetch.mock.calls[0]
+    expect(init.method).toBe('POST')
+    expect(String(url)).toContain('/pods/pod-1/acStates')
+    expect(JSON.parse(init.body).acState).toMatchObject({
+      on: false, mode: 'cool', targetTemperature: 18, fanLevel: 'high',
+    })
+    expect(out.on).toBe(false)
+  })
+
+  it('SENSIBO-RATE.1: forces on:false even if the caller passes a state that says on:true', async () => {
+    global.fetch = vi.fn().mockResolvedValueOnce(
+      jsonResponse({ status: 'success', result: { acState: { on: false } } })
+    )
+    await turnPodOff('key', 'pod-1', { on: true, mode: 'heat', targetTemperature: 25 })
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body).acState.on).toBe(false)
+  })
+
+  it('falls back to read-then-write when no offState is supplied', async () => {
     const current = { on: true, mode: 'cool', targetTemperature: 18, fanLevel: 'high' }
     global.fetch = vi.fn()
       // first call: getPodState → returns current

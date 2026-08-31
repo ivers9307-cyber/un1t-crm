@@ -110,6 +110,10 @@ function makeAdapters() {
   return {
     sensibo: {
       buildTurnOnState: vi.fn(({ mode, temp, fan }) => ({ on: true, mode, targetTemperature: temp, fanLevel: fan })),
+      // SENSIBO-RATE.1 — the real adapter exposes this so turnOff can
+      // be ONE POST instead of a read-then-write. ThinQ deliberately
+      // has no counterpart, so it receives undefined and ignores it.
+      buildOffState: vi.fn(({ mode, temp, fan }) => ({ on: false, mode, targetTemperature: temp, fanLevel: fan })),
       setState:  vi.fn(async () => ({ on: true })),
       turnOff:   vi.fn(async () => ({ on: false })),
       getState:  vi.fn(async () => ({ on: true })),
@@ -430,7 +434,9 @@ describe('turnOff', () => {
     const out = await turnOff('dev-sensibo', { user: MASTER_USER, db, vendorAdapters })
     expect(out.ok).toBe(true)
     expect(out.sessions_closed).toBe(1)
-    expect(vendorAdapters.sensibo.turnOff).toHaveBeenCalledWith('pod-aaa', { apiKey: 'sens-k' })
+    expect(vendorAdapters.sensibo.turnOff).toHaveBeenCalledWith(
+      'pod-aaa', { apiKey: 'sens-k' },
+      { on: false, mode: 'cool', targetTemperature: 18, fanLevel: 'high' })
     expect(logAuditEvent).toHaveBeenCalledWith(expect.objectContaining({
       action: 'ac.turn_off',
       target: expect.objectContaining({ label: 'Studio Floor', resource: 'ac_device/dev-sensibo' }),
@@ -541,9 +547,11 @@ describe('vendorTurnOff', () => {
     const vendorAdapters = makeAdapters()
     const out = await vendorTurnOff(THINQ_DEVICE, LOCATION_FULL, { vendorAdapters })
     expect(out.ok).toBe(true)
+    // Third arg is the desired off state — undefined for ThinQ, which
+    // exposes no buildOffState because its power-off is already one call.
     expect(vendorAdapters.thinq.turnOff).toHaveBeenCalledWith('lg-aaa', {
       pat: 'pat-x', clientId: 'cli-x', countryCode: 'IE',
-    })
+    }, undefined)
     expect(vendorAdapters.sensibo.turnOff).not.toHaveBeenCalled()
     // No audit row for cron-initiated turn-offs.
     expect(logAuditEvent).not.toHaveBeenCalled()

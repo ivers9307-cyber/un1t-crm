@@ -32,6 +32,10 @@ vi.mock('@/lib/ac-devices', () => ({
   loadDeviceWithLocation: vi.fn(),
   vendorGetState: vi.fn(),
   vendorTurnOff: vi.fn(),
+  // SENSIBO-RATE.1 — this cron now banks each poll into
+  // ac_devices.last_state so the AC panel can read the DB instead of
+  // polling the vendor every 30s per open card.
+  cacheDeviceState: vi.fn(async () => {}),
 }))
 vi.mock('@/lib/ac-external-rule', async (importOriginal) => {
   const actual = await importOriginal()
