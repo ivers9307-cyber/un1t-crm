@@ -196,6 +196,8 @@ export async function getTicket(ticketId, locationId) {
     // attachment chips and no warning, which reads as "the member sent no
     // files": the silent wrong answer the route exists to prevent.
     attachmentsUnavailable: !!res.data?.attachments_unavailable,
+    // MAIL-REFINE.2 — provenance for the Merged-in dividers; [] when none.
+    mergedSources: res.data?.merged_sources || [],
     // EMAIL-PARTICIPANTS.9 — { to, mode, over_cap, empty } | null, derived from
     // the WHOLE thread server-side. This used to be dropped here, so the
     // composer footer fell back to a hard-coded "Sends an email to

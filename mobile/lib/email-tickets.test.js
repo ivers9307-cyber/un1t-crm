@@ -1283,3 +1283,28 @@ describe('flatMessageMeta', () => {
     expect(m.initials).toBe('?')
   })
 })
+
+// ── MAIL-REFINE.2 — merged-in provenance dividers ───────────────────────
+import { mergedInDividers } from './email-tickets'
+
+describe('mergedInDividers', () => {
+  const msgs = [
+    { id: 'm1', created_at: '1' },
+    { id: 'a1', merged_from_ticket_id: 'T-src', created_at: '2' },
+    { id: 'a2', merged_from_ticket_id: 'T-src', created_at: '3' },
+    { id: 'b1', merged_from_ticket_id: 'T-other', created_at: '4' },
+  ]
+
+  it('marks the FIRST message of each absorbed group with subject + count', () => {
+    const map = mergedInDividers(msgs, [{ id: 'T-src', subject: 'RE: Meter reading' }])
+    expect(map.get('a1')).toEqual({ subject: 'RE: Meter reading', count: 2 })
+    expect(map.get('a2')).toBeUndefined()
+    expect(map.get('b1')).toEqual({ subject: null, count: 1 })
+    expect(map.get('m1')).toBeUndefined()
+  })
+
+  it('answers an empty map for an unmerged thread and survives garbage', () => {
+    expect(mergedInDividers([{ id: 'x' }], []).size).toBe(0)
+    expect(mergedInDividers(null, null).size).toBe(0)
+  })
+})

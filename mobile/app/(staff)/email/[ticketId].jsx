@@ -77,7 +77,7 @@
 // lib/email-tickets.js), so this screen cannot say three things about who a
 // reply reaches.
 
-import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import {
   View, Text, ScrollView, Pressable, TextInput, ActivityIndicator,
   Alert, KeyboardAvoidingView, Platform, Modal, Image, Linking,
@@ -101,7 +101,7 @@ import {
   formatAttachmentSize, ticketAttachmentSkippedLabel, ticketAttachmentIcon,
   threadRefreshMs, ticketReplyAudienceMeta, ticketReplyPlaceholder,
   ticketThreadAudienceLines, ticketSendOriginMeta,
-  flatThreadPlan, flatMessageMeta,
+  flatThreadPlan, flatMessageMeta, mergedInDividers,
 } from '../../../lib/email-tickets'
 import {
   readReplyDraft, writeReplyDraft, clearReplyDraft, resolveDraftHydration,
@@ -598,6 +598,8 @@ export default function EmailTicket() {
   // said, or a blipped lookup reads as "the member sent no files". Web renders
   // the same warning (AttachmentsUnavailableNotice).
   const [attachmentsUnavailable, setAttachmentsUnavailable] = useState(false)
+  // MAIL-REFINE.2 — provenance for the Merged-in dividers.
+  const [mergedSources, setMergedSources] = useState([])
   // EMAIL-PARTICIPANTS.9 — { to, mode, over_cap, empty } | null, straight off
   // getTicket(). Kept alongside `ticket` rather than folded into it: it comes
   // back from the SAME response but is answered as its own top-level field.
@@ -658,6 +660,7 @@ export default function EmailTicket() {
       return next
     })
     setAttachmentsUnavailable(!!res.attachmentsUnavailable)
+    setMergedSources(res.mergedSources || [])
     setReplyRecipients(res.reply_recipients || null)
 
     // Read state is its own call. Fire-and-forget and once per screen: it is
@@ -1062,6 +1065,7 @@ export default function EmailTicket() {
   // lib/email-tickets.js): ONLY the newest opens by default; taps override
   // per message, both directions.
   const plan = flatThreadPlan(messages, foldOverrides)
+  const mergedDividers = mergedInDividers(messages, mergedSources)
   // Audit A1 — merged-away = read-only everywhere, not just banner'd.
   const tombstone = !!ticket?.merged_into_id
   function setFolded(id, expanded) {
@@ -1256,16 +1260,27 @@ export default function EmailTicket() {
               </Text>
             ) : (
               plan.map(({ message: m, collapsed }) => (
-                collapsed ? (
+                <React.Fragment key={m.id}>
+                {mergedDividers.has(m.id) ? (
+                  <View className="flex-row items-center border-b border-un1t-border bg-un1t-surface px-4 py-2">
+                    <Ionicons name="git-merge-outline" size={12} color="#64748B" style={{ marginRight: 6 }} />
+                    <Text className="text-[11px] text-un1t-subtle flex-1" numberOfLines={1}>
+                      {mergedDividers.get(m.id).subject
+                        ? <>Merged in: <Text className="font-semibold text-un1t-text">“{mergedDividers.get(m.id).subject}”</Text></>
+                        : 'Merged in from another conversation'}
+                      {' · '}
+                      {mergedDividers.get(m.id).count} message{mergedDividers.get(m.id).count === 1 ? '' : 's'}
+                    </Text>
+                  </View>
+                ) : null}
+                {collapsed ? (
                   <FlatCollapsedRow
-                    key={m.id}
                     msg={m}
                     fallbackName={ticket?.requester_name || ''}
                     onExpand={() => setFolded(m.id, true)}
                   />
                 ) : (
                   <FlatMessage
-                    key={m.id}
                     msg={m}
                     ticketId={ticketId}
                     locationId={activeLocation?.id}
@@ -1277,7 +1292,8 @@ export default function EmailTicket() {
                     // rule, stated once in the lib.
                     onForward={canForwardMessage(m) ? () => pushForward(m.id) : null}
                   />
-                )
+                )}
+                </React.Fragment>
               ))
             )}
           </ScrollView>
