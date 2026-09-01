@@ -57,6 +57,9 @@ const MESSAGE_COLUMNS = [
   'from_email', 'to_email', 'to_emails', 'cc_emails', 'bcc_emails',
   'subject', 'text_body', 'html_body',
   'is_internal_note', 'author_profile_id',
+  // MAIL-REFINE.2 — which conversation a message was MERGED IN from (mig
+  // 536); the thread renders a provenance divider above each absorbed group.
+  'merged_from_ticket_id',
   // EMAIL-FORWARD.1 (mig 501) — set on an outbound message that is a FORWARD,
   // naming the message on this same ticket whose content it passed on. NULL on
   // everything else. The thread renders its marker off this rather than off the
@@ -168,6 +171,27 @@ export async function GET(request, props) {
     })
   }
 
+  // MAIL-REFINE.2 — the "Merged in" provenance divider's subjects. Messages
+  // carry merged_from_ticket_id (mig 536); the divider needs the ABSORBED
+  // conversation's subject, which lives on its tombstone row. Best-effort and
+  // location-scoped: an unreadable tombstone degrades the divider to its
+  // generic wording, never the thread to an error.
+  let mergedSources = []
+  const mergedFromIds = [...new Set(
+    (messagesDesc || []).map(m => m.merged_from_ticket_id).filter(Boolean)
+  )]
+  if (mergedFromIds.length > 0) {
+    try {
+      const { data: sources } = await db.from('email_tickets')
+        .select('id, subject, merged_at')
+        .eq('location_id', ticket.location_id)
+        .in('id', mergedFromIds)
+      // Explicit shape, not a projected row — nothing beyond these three
+      // fields belongs on the wire.
+      mergedSources = (sources || []).map(t => ({ id: t.id, subject: t.subject, merged_at: t.merged_at }))
+    } catch { /* divider degrades to generic wording */ }
+  }
+
   // EMAIL-ASSIGN.1 — assignee display name, best-effort: `profiles` has no
   // grant for `authenticated`, so the name resolves here or nowhere. An
   // unresolved name degrades to null ('Assigned'), never a failure.
@@ -188,6 +212,9 @@ export async function GET(request, props) {
       // reply goes back out from.
       ticket: { ...ticket, mailbox, contact: contact || null, assignee_name: assigneeName },
       messages,
+      // MAIL-REFINE.2 — [{ id, subject, merged_at }] for each conversation
+      // whose messages were merged into this one; [] when none were.
+      merged_sources: mergedSources,
       // EMAIL-ASSIGN.1 — the reassign control gates on this; claiming needs
       // no elevation, assigning somebody ELSE does.
       viewer_is_elevated: isElevatedAtLocation(user, ticket.location_id),

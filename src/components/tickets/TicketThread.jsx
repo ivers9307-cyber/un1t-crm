@@ -139,6 +139,10 @@ export default function TicketThread({
   hasSelection,
   ticket,
   messages = [],
+  // MAIL-REFINE.2 — [{id, subject, merged_at}] per conversation merged into
+  // this one; the divider above each absorbed group is keyed off it.
+  mergedSources = [],
+  onOpenMergedInto,
   // EMAIL-CC.1 — { to, mode } as the server derived it, or null. Handed
   // straight to the composer, which must never re-derive it from `messages`:
   // a second implementation is a second chance to include a bcc address.
@@ -294,6 +298,23 @@ export default function TicketThread({
   // Built once per render rather than inside the map, which would be quadratic
   // on a thread at the 200-message cap.
   const messagesById = new Map(messages.map(m => [m.id, m]))
+  // MAIL-REFINE.2 — the "Merged in" divider renders ONCE per absorbed
+  // conversation, above its first message in display order. Provenance is on
+  // the rows (merged_from_ticket_id, mig 536); the subject comes from
+  // mergedSources and degrades to generic wording when unresolvable.
+  const mergedSubjectById = new Map((mergedSources || []).map(t => [t.id, t.subject]))
+  const mergedDividerAt = new Map()
+  for (const m of messages) {
+    const from = m.merged_from_ticket_id
+    if (from && !mergedDividerAt.has(from)) mergedDividerAt.set(from, m.id)
+  }
+  const mergedCountBySource = new Map()
+  for (const m of messages) {
+    if (m.merged_from_ticket_id) {
+      mergedCountBySource.set(m.merged_from_ticket_id,
+        (mergedCountBySource.get(m.merged_from_ticket_id) || 0) + 1)
+    }
+  }
   // EMAIL-PARTICIPANTS.8 — message id → the addresses first seen on it. Pure,
   // derived, and computed once per render for the same reason as the map above.
   const joinPoints = joinPointsByMessage(messages)
@@ -422,6 +443,24 @@ export default function TicketThread({
             // a message, and putting it inside the message would attribute it
             // to whoever wrote that message.
             <Fragment key={m.id}>
+              {[...mergedDividerAt.entries()]
+                .filter(([, firstId]) => firstId === m.id)
+                .map(([sourceId]) => (
+                  <div
+                    key={`merged-${sourceId}`}
+                    data-testid="merged-in-divider"
+                    className="flex items-center gap-2 border-b border-un1t-border bg-un1t-surface px-4 py-2 text-[11px] text-un1t-subtle"
+                  >
+                    <span aria-hidden="true">⛓</span>
+                    <span className="min-w-0 truncate">
+                      Merged in{mergedSubjectById.get(sourceId)
+                        ? <>: <span className="font-semibold text-un1t-text">“{mergedSubjectById.get(sourceId)}”</span></>
+                        : ' from another conversation'}
+                      {' · '}
+                      {mergedCountBySource.get(sourceId)} message{mergedCountBySource.get(sourceId) === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                ))}
               <JoinMarkers addresses={joinPoints.get(m.id)} />
               <ThreadMessage
                 message={m}
@@ -468,7 +507,20 @@ export default function TicketThread({
           The correspondence lives on the survivor; so does replying to it. */}
       {ticket?.merged_into_id ? (
         <p className="border-t border-un1t-border px-4 py-3 text-xs text-un1t-muted">
-          This ticket was merged, so it is read-only. Open the ticket it was merged into to reply.
+          This ticket was merged, so it is read-only.{' '}
+          {onOpenMergedInto ? (
+            // MAIL-REFINE.2 — the pointer is a VERB, not a sentence: mobile
+            // got a tappable banner, web's dead-end text was the gap.
+            <button
+              type="button"
+              className="font-semibold text-un1t-text underline"
+              onClick={() => onOpenMergedInto(ticket.merged_into_id)}
+            >
+              Open the conversation it lives in now →
+            </button>
+          ) : (
+            'Open the ticket it was merged into to reply.'
+          )}
         </p>
       ) : (
         /* Keyed on the ticket so switching tickets REMOUNTS the composer.

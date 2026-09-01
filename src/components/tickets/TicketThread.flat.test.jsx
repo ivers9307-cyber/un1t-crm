@@ -174,3 +174,47 @@ describe('TicketThread — the banner slot', () => {
     expect(screen.queryByTestId('the-banner')).toBeNull()
   })
 })
+
+// ── MAIL-REFINE.2 — the "Merged in" divider + the tombstone's pointer ───
+describe('merged-in provenance', () => {
+  const ABSORBED_A = {
+    ...OLDEST,
+    id: 'ma1',
+    merged_from_ticket_id: 'T-src',
+    text_body: 'The reading is 048122.' + pad,
+    created_at: '2026-08-28T10:00:00Z',
+  }
+  const ABSORBED_B = { ...ABSORBED_A, id: 'ma2', created_at: '2026-08-28T11:00:00Z' }
+
+  it('renders ONE divider per absorbed conversation, naming its subject and count', () => {
+    renderThread({
+      messages: [OLDEST, ABSORBED_A, ABSORBED_B, NEWEST],
+      mergedSources: [{ id: 'T-src', subject: 'RE: Meter reading — urgent', merged_at: '2026-08-31T20:00:00Z' }],
+    })
+    const dividers = screen.getAllByTestId('merged-in-divider')
+    expect(dividers).toHaveLength(1)
+    expect(dividers[0].textContent).toContain('RE: Meter reading — urgent')
+    expect(dividers[0].textContent).toContain('2 messages')
+  })
+
+  it('degrades to generic wording when the source subject is unresolvable — never hides the fact', () => {
+    renderThread({ messages: [ABSORBED_A, NEWEST], mergedSources: [] })
+    expect(screen.getByTestId('merged-in-divider').textContent)
+      .toContain('Merged in from another conversation')
+  })
+
+  it('renders no divider on an unmerged thread', () => {
+    renderThread()
+    expect(screen.queryByTestId('merged-in-divider')).toBeNull()
+  })
+
+  it('the tombstone pointer is a working verb when the surface can navigate', () => {
+    const onOpenMergedInto = vi.fn()
+    renderThread({
+      ticket: { ...TICKET, merged_into_id: 'T-target' },
+      onOpenMergedInto,
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Open the conversation it lives in now/ }))
+    expect(onOpenMergedInto).toHaveBeenCalledWith('T-target')
+  })
+})

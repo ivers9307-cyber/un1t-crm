@@ -172,6 +172,8 @@ export default function MailSurface({ locationId, locationName, userId, location
   const [selectedId, setSelectedId] = useState(null)
   const [conversation, setConversation] = useState(null)
   const [messages, setMessages] = useState([])
+  // MAIL-REFINE.2 — provenance for the thread's Merged-in dividers.
+  const [mergedSources, setMergedSources] = useState([])
   const [attachmentsUnavailable, setAttachmentsUnavailable] = useState(false)
   const [replyRecipients, setReplyRecipients] = useState(null)
   const [threadLoading, setThreadLoading] = useState(false)
@@ -689,6 +691,7 @@ export default function MailSurface({ locationId, locationName, userId, location
       // flags so neither loses to the other.
       setConversation(prev => ({ ...(prev || {}), ...(body.data?.ticket || {}) }))
       setMessages(body.data?.messages || [])
+      setMergedSources(body.data?.merged_sources || [])
       setAttachmentsUnavailable(!!body.data?.attachments_unavailable)
       setReplyRecipients(body.data?.reply_recipients || null)
       // CONTRACTS finding 1+2 — the deep-link mark-read belongs HERE, keyed
@@ -1527,6 +1530,7 @@ export default function MailSurface({ locationId, locationName, userId, location
         <div className={`${selectedId ? 'flex' : 'hidden md:flex'} min-w-0 flex-1 flex-col`}>
           <MailThread
             hasSelection={!!selectedId}
+            mergedSources={mergedSources}
             // MAIL-REFINE.1 — the related-nudge seam: View selects the related
             // row like any list click, and a landed merge/undo re-reads the
             // open thread + the list so nothing shows a state the server left.

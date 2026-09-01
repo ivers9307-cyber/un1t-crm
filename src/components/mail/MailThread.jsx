@@ -73,6 +73,7 @@ export default function MailThread({
   //   onThreadChanged={async () => { await loadThread(selectedId, { quiet: true }); refreshList(true) }}
   onOpenConversation,
   onThreadChanged,
+  mergedSources,
   // Audit M2 — the house Modal has no focus trap, so MailSurface's e/j/k
   // guard must know when THIS pane's picker is open; without it an escaped
   // keypress archives the conversation behind the modal.
@@ -238,6 +239,8 @@ export default function MailThread({
       hasSelection={hasSelection}
       ticket={conversation}
       messages={messages}
+      mergedSources={mergedSources}
+      onOpenMergedInto={onOpenConversation ? (id) => onOpenConversation({ id }) : undefined}
       replyRecipients={replyRecipients}
       attachmentsUnavailable={attachmentsUnavailable}
       loading={loading}
