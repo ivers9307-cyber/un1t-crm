@@ -1159,3 +1159,26 @@ export function insertRowAt(rows = [], row, index) {
   const i = index < 0 ? rs.length : Math.min(index, rs.length)
   return [...rs.slice(0, i), row, ...rs.slice(i)]
 }
+
+// ── MAIL-REFINE.2 — merged-in provenance dividers ─────────────────────────
+// The thread renders one "Merged in" divider above the FIRST message of each
+// absorbed conversation (rows carry merged_from_ticket_id, mig 536). Subject
+// null = the source tombstone was unresolvable; the divider degrades to
+// generic wording, never disappears — the merge FACT must survive a blip.
+export function mergedInDividers(messages, mergedSources) {
+  const subjects = new Map((Array.isArray(mergedSources) ? mergedSources : [])
+    .map(t => [t?.id, t?.subject ?? null]))
+  const firstOf = new Map()
+  const counts = new Map()
+  for (const m of (Array.isArray(messages) ? messages : [])) {
+    const from = m?.merged_from_ticket_id
+    if (!from) continue
+    if (!firstOf.has(from)) firstOf.set(from, m.id)
+    counts.set(from, (counts.get(from) || 0) + 1)
+  }
+  const out = new Map()
+  for (const [from, firstId] of firstOf) {
+    out.set(firstId, { subject: subjects.get(from) ?? null, count: counts.get(from) })
+  }
+  return out
+}

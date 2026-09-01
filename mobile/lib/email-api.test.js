@@ -740,3 +740,21 @@ describe('mergeConversation / unmergeConversation', () => {
     expect(await unmergeConversation('R-1', 'loc-1')).toEqual({ success: false, error: 'already merged' })
   })
 })
+
+
+// MAIL-REFINE.2 — dropping this passthrough would silently kill the thread's
+// Merged-in dividers (the screen would render an unmarked interleave).
+describe('getTicket merged_sources passthrough', () => {
+  it('carries merged_sources through, [] when absent', async () => {
+    const { api } = await import('./api')
+    api.mockResolvedValueOnce({
+      success: true,
+      data: { ticket: { id: 't1' }, messages: [], merged_sources: [{ id: 's1', subject: 'RE: x' }] },
+    })
+    const { getTicket } = await import('./email-api')
+    const res = await getTicket('t1', 'loc-1')
+    expect(res.mergedSources).toEqual([{ id: 's1', subject: 'RE: x' }])
+    api.mockResolvedValueOnce({ success: true, data: { ticket: { id: 't1' }, messages: [] } })
+    expect((await getTicket('t1', 'loc-1')).mergedSources).toEqual([])
+  })
+})
