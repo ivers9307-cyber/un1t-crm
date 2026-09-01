@@ -18,7 +18,7 @@
 // the source of truth, so a window_expired response flips the WhatsApp
 // view to the template picker.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { MessageCircle, MessageSquare, Send, StickyNote, Mail } from 'lucide-react'
 
@@ -53,6 +53,12 @@ function ChannelPill({ active, onClick, icon: Icon, label }) {
 export default function ContactComposer({
   contactId,
   contactName,
+  // PROFILE-MAIL.1 — the Mail-backed email path needs the contact's own
+  // location (to load the caller's visible accounts there) and address (the
+  // compose route takes recipients, not a contact id). Absent props degrade
+  // to the company-sender path, so older render sites keep working.
+  contactLocationId = null,
+  contactEmail = null,
   canWhatsApp = false,
   canSms = false,
   canEmail = false,
@@ -99,6 +105,34 @@ export default function ContactComposer({
     if (onSaved) onSaved()
     else router.refresh()
   }
+
+  // PROFILE-MAIL.1 — the caller's visible email accounts at the CONTACT'S
+  // studio. null = not yet answered (footer keeps the company wording, and a
+  // send in that window deliberately takes the company path — what the
+  // footer says at click time is what happens); [] = none usable (no
+  // connected account, or the caller lacks email_inbox / a grant there) —
+  // the company path, permanently, exactly as before this feature.
+  const [mailboxes, setMailboxes] = useState(null)
+  const [mailboxId, setMailboxId] = useState(null)
+  useEffect(() => {
+    if (!emailAvailable || !contactLocationId || !contactEmail) return
+    let alive = true
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/email/mail?location_id=${encodeURIComponent(contactLocationId)}`, { cache: 'no-store' })
+        const j = await res.json().catch(() => null)
+        if (!alive) return
+        const boxes = (res.ok && j?.success && Array.isArray(j.data?.mailboxes)) ? j.data.mailboxes : []
+        setMailboxes(boxes)
+        // Default = the account starred Default on the studio's Email
+        // settings card (is_default), else the first visible one.
+        setMailboxId(boxes.find(m => m.is_default)?.id || boxes[0]?.id || null)
+      } catch {
+        if (alive) setMailboxes([])
+      }
+    })()
+    return () => { alive = false }
+  }, [emailAvailable, contactLocationId, contactEmail])
 
   async function post(urlPath, payload) {
     setSending(true)
@@ -149,6 +183,19 @@ export default function ContactComposer({
 
   async function sendEmail() {
     if (!text.trim() || !subject.trim()) return
+    // PROFILE-MAIL.1 — with a usable account, the send IS a Mail compose:
+    // it goes out from that address and files a conversation the reply
+    // threads back into. Without one, the company-sender path is unchanged.
+    if (mailboxId && contactEmail) {
+      const ok = await post('/api/email/tickets/compose', {
+        mailbox_id: mailboxId,
+        to: [contactEmail],
+        subject: subject.trim(),
+        text: text.trim(),
+      })
+      if (ok) { setText(''); setSubject(''); showFlash('Email sent — the conversation is in Mail'); afterSave() }
+      return
+    }
     const ok = await post(`/api/contacts/${contactId}/email`, { subject: subject.trim(), body: text.trim() })
     if (ok) { setText(''); setSubject(''); showFlash('Email sent'); afterSave() }
   }
@@ -335,8 +382,25 @@ export default function ContactComposer({
                 placeholder={`Email ${contactName || 'the customer'}…`}
                 className="w-full bg-un1t-bg border border-un1t-border rounded p-2 text-sm text-un1t-text placeholder:text-un1t-muted resize-none focus:outline-none focus:border-un1t-muted"
               />
-              <div className="flex items-center justify-between mt-2">
-                <span className="text-[11px] text-un1t-muted">Sent from the company address</span>
+              <div className="flex items-center justify-between mt-2 gap-2">
+                {mailboxes?.length ? (
+                  <label className="flex min-w-0 items-center gap-1.5 text-[11px] text-un1t-muted">
+                    From
+                    <select
+                      value={mailboxId || ''}
+                      onChange={(e) => setMailboxId(e.target.value)}
+                      className="min-w-0 max-w-[240px] truncate rounded border border-un1t-border bg-un1t-bg px-1.5 py-1 text-[11px] text-un1t-text focus:outline-none focus:border-un1t-muted"
+                    >
+                      {mailboxes.map(m => (
+                        <option key={m.id} value={m.id}>
+                          {m.label ? `${m.label} — ${m.address}` : m.address}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  <span className="text-[11px] text-un1t-muted">Sent from the company address</span>
+                )}
                 <button
                   type="button"
                   disabled={sending || !text.trim() || !subject.trim()}

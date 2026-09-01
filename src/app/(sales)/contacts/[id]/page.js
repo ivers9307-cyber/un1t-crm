@@ -377,6 +377,8 @@ export default async function ContactDetailPage(props) {
             <ContactComposer
               contactId={contact.id}
               contactName={contact.first_name || contact.name}
+              contactLocationId={contact.location_id}
+              contactEmail={contact.email || null}
               canWhatsApp={canWhatsApp}
               canSms={canSms}
               canEmail={canEmail}
