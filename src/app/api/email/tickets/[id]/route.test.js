@@ -511,3 +511,42 @@ describe('a merged ticket keeps pointing at its survivor', () => {
     expect(data.ticket.merged_into_id ?? null).toBeNull()
   })
 })
+
+// ── MAIL-REFINE.2 — merged-in provenance for the thread divider ─────────
+describe('merged_sources', () => {
+  const TOMBSTONE = {
+    id: 'aaaaaaa7-0000-4000-8000-000000000007',
+    location_id: T_STUDIO.location_id, mailbox_id: T_STUDIO.mailbox_id,
+    requester_email: T_STUDIO.requester_email, status: 'open',
+    subject: 'RE: Meter reading — urgent',
+    merged_into_id: T_STUDIO.id, merged_at: '2026-08-31T20:00:00Z',
+  }
+  const ABSORBED = {
+    id: 'm-merged-1', ticket_id: T_STUDIO.id, location_id: T_STUDIO.location_id,
+    direction: 'inbound', from_email: T_STUDIO.requester_email,
+    text_body: 'The reading is 048122.', created_at: '2026-08-28T10:00:00Z',
+    merged_from_ticket_id: TOMBSTONE.id,
+  }
+
+  it('names each absorbed conversation once, subject included', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      tickets: [{ ...T_STUDIO }, TOMBSTONE],
+      messages: [...MESSAGES, ABSORBED, { ...ABSORBED, id: 'm-merged-2' }],
+    }))
+    const res = await get(T_STUDIO.id)
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.data.merged_sources).toEqual([
+      { id: TOMBSTONE.id, subject: 'RE: Meter reading — urgent', merged_at: '2026-08-31T20:00:00Z' },
+    ])
+    // …and the messages themselves carry the stamp the divider keys on.
+    const absorbed = body.data.messages.filter(m => m.merged_from_ticket_id === TOMBSTONE.id)
+    expect(absorbed).toHaveLength(2)
+  })
+
+  it('is [] when nothing was ever merged in', async () => {
+    const res = await get(T_STUDIO.id)
+    expect((await res.json()).data.merged_sources).toEqual([])
+  })
+})
