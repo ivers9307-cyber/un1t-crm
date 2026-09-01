@@ -213,6 +213,8 @@ export default function ContactDrawer({ contactId, columnContactIds = [], locati
               <ContactComposer
                 contactId={contact.id}
                 contactName={contact.first_name || contact.name}
+                contactLocationId={contact.location_id}
+                contactEmail={contact.email || null}
                 canWhatsApp={bundle.permissions?.whatsapp}
                 canSms={bundle.permissions?.sms}
                 canEmail={bundle.permissions?.email}
