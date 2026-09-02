@@ -371,6 +371,20 @@ describe('POST …/forward — the mail', () => {
     expect(textBody.indexOf('Sarah')).toBeLessThan(textBody.indexOf('Forwarded message'))
   })
 
+  it('MAIL-SIG.1 — a rich signature lands BELOW the forward in text, and as the html block', async () => {
+    getCurrentUser.mockResolvedValue({
+      ...COACH,
+      email_signature: 'plain fallback',
+      email_signature_rich: { enabled: true, name: 'Garrett Ivers', links: [{ label: 'IG', url: 'https://instagram.com/un1t' }] },
+    })
+    await post(T_STUDIO.id, GOOD)
+    const { textBody, htmlBody } = sentPayload()
+    // Gmail's placement: sign-off under the whole forwarded block.
+    expect(textBody.indexOf('Garrett Ivers')).toBeGreaterThan(textBody.indexOf('Forwarded message'))
+    expect(textBody).not.toContain('plain fallback')
+    expect(htmlBody).toContain('href="https://instagram.com/un1t"')
+  })
+
   // No threading headers: In-Reply-To pointing at the member's Message-ID would
   // file our forward inside a thread the recipient has never seen.
   it('carries no threading headers', async () => {

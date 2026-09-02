@@ -817,3 +817,36 @@ it('a composed conversation is born has_inbound: false', async () => {
   const [insert] = insertsInto(db, 'email_tickets')
   expect(insert.payload.has_inbound).toBe(false)
 })
+
+// ── MAIL-SIG.1 — the rich signature rides every send ────────────────────
+it('an enabled rich signature lands in BOTH parts — html block appended after conversion, text under the separator', async () => {
+  getCurrentUser.mockResolvedValue({
+    ...COACH,
+    email_signature: 'old plain sig',
+    email_signature_rich: {
+      enabled: true, name: 'Garrett Ivers', title: 'GM',
+      links: [{ label: 'IG', url: 'https://instagram.com/un1t' }],
+    },
+  })
+  setupDb(baseState({ grants: [GRANT_STUDIO] }))
+  const res = await post(VALID)
+  expect(res.status).toBe(200)
+  const sent = sendEmail.mock.calls[0][0]
+  expect(sent.textBody).toContain('-- \nGarrett Ivers')
+  expect(sent.textBody).not.toContain('old plain sig') // rich outranks plain
+  expect(sent.htmlBody).toContain('href="https://instagram.com/un1t"')
+  expect(sent.htmlBody).toContain('Garrett Ivers')
+})
+
+it('a DISABLED rich signature keeps the plain path byte-for-byte', async () => {
+  getCurrentUser.mockResolvedValue({
+    ...COACH,
+    email_signature: 'Plain sign-off',
+    email_signature_rich: { enabled: false, name: 'Nope' },
+  })
+  setupDb(baseState({ grants: [GRANT_STUDIO] }))
+  await post(VALID)
+  const sent = sendEmail.mock.calls[0][0]
+  expect(sent.textBody).toContain('Plain sign-off')
+  expect(sent.htmlBody).not.toContain('Nope')
+})

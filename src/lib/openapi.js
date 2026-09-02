@@ -6321,6 +6321,20 @@ registry.registerPath({
 // ============================================================================
 
 registry.registerPath({
+  method: 'post',
+  path: '/api/me/signature-photo',
+  tags: ['Me'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Upload the caller\u2019s own signature headshot',
+  description:
+    'MAIL-SIG.1 \u2014 multipart {file}: JPEG/PNG/WebP \u2264 2MB, written to the public branding bucket under signatures/{profile.id}/ (own slot only \u2014 no id parameter exists). Returns the public URL, which is the ONLY value /api/me/preferences accepts as email_signature_rich.photo_url (prefix-validated at save AND at render, so outbound mail can never embed a foreign image).',
+  responses: {
+    200: { description: '{ url }' },
+    400: { description: 'Missing/oversized/wrong-type file', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
   method: 'get',
   path: '/api/me/journey',
   tags: ['Me'],

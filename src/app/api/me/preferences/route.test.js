@@ -94,6 +94,7 @@ describe('PATCH /api/me/preferences — email_signature', () => {
       setupDb()
       await patch({ email_signature: value })
       expect(db.updates[0].payload).toEqual({ email_signature: null })
+        email_signature_rich: null,
     }
   })
 

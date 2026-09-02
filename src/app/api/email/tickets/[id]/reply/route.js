@@ -6,7 +6,7 @@ import { validateBody } from '@/lib/validate'
 import { sendTicketEmail, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
 import { replySubject, buildReplyHeaders, inboundPreview } from '@/lib/email-inbox'
 import { shouldStampFirstResponse } from '@/lib/email-tickets'
-import { appendSignature } from '@/lib/email-signature'
+import { appendSignature, richSignatureFromProfile, renderRichSignature } from '@/lib/email-signature'
 import { logAuditEvent } from '@/lib/audit'
 import { email as emailAddress } from '@/lib/schemas'
 import {
@@ -350,7 +350,15 @@ export async function POST(request, props) {
   //
   // Built BEFORE the HTML conversion so textToHtml escapes body and signature
   // in one pass — see the note on textToHtml.
-  const outboundText = appendSignature(text, user.email_signature)
+  // MAIL-SIG.1 — the rich signature outranks the plain column when enabled.
+  // The TEXT part rides through appendSignature (same separator, same
+  // normalisation); the HTML part is OUR generated block appended AFTER the
+  // textToHtml conversion — the user authored fields, never markup, so this
+  // is not the un-sanitised path the mig-493 header forbids.
+  const richSig = richSignatureFromProfile(user) ? renderRichSignature(user.email_signature_rich) : null
+  const outboundText = richSig
+    ? appendSignature(text, richSig.text)
+    : appendSignature(text, user.email_signature)
 
   // EMAIL-OUTBOUND-ATTACH.1 — read the draft objects back out of Storage and
   // turn them into Postmark's array. BEFORE THE SEND, deliberately: every way
@@ -397,7 +405,7 @@ export async function POST(request, props) {
     cc: wire.cc,
     bcc: wire.bcc,
     subject,
-    htmlBody: textToHtml(outboundText),
+    htmlBody: richSig ? textToHtml(text) + richSig.html : textToHtml(outboundText),
     textBody: outboundText,
     tag: 'ticket-reply',
     // POSTMARK-RACE.1 — marked iff `sendLogRow` will be built (same
