@@ -95,6 +95,13 @@ export const TICKET_VIEW_TABS = Object.freeze([
     emptyBody: 'Every conversation has been answered — the ball is with the member.',
   },
   {
+    // MAIL-SENT.1 — the traditional split: outbound-only threads live here
+    // until a reply arrives, then move to Inbox.
+    id: 'sent', label: 'Sent', wire: 'sent',
+    emptyTitle: 'Nothing waiting on a reply',
+    emptyBody: 'Outbound-only conversations live here. The moment someone replies, the thread moves to Inbox.',
+  },
+  {
     id: 'archived', label: 'Archived', wire: 'archived',
     emptyTitle: 'Nothing archived yet',
     emptyBody: 'Archive a conversation when it is dealt with — a new reply from the member brings it back.',

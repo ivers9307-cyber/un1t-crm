@@ -158,7 +158,7 @@ describe('mail status (RETIRE-TICKETS.1 — the lifecycle chips left with the qu
 describe('views', () => {
   // The mail route 400s on anything outside this set, and an absent param is
   // the inbox — so the default view MUST send no param at all.
-  const WIRE_WHITELIST = ['inbox', 'needs_reply', 'archived']
+  const WIRE_WHITELIST = ['inbox', 'needs_reply', 'archived', 'sent']
 
   it('only ever puts a route-whitelisted value on the wire', () => {
     for (const v of TICKET_VIEW_TABS) {
