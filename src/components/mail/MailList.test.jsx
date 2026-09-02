@@ -616,3 +616,20 @@ describe('MailList — All-mode sections', () => {
     expect(within(still).getByText(/scanned only part of Stillorgan/)).toBeTruthy()
   })
 })
+
+// MAIL-UNREAD.1 — the unread wash, catchable at a glance.
+describe('unread highlight', () => {
+  it('an unread row carries the blue wash; a read one does not; selection wins', () => {
+    renderList({ conversations: [
+      conv({ id: 'c-un', unread: true }),
+      conv({ id: 'c-rd', unread: false }),
+    ] })
+    const rows = document.querySelectorAll('[data-unread]')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].className).toContain('bg-blue-500/[0.06]')
+    renderList({ conversations: [conv({ id: 'c-sel', unread: true })], selectedId: 'c-sel' })
+    const sel = document.querySelectorAll('[data-unread]')
+    expect(sel[sel.length - 1].className).toContain('bg-un1t-surface')
+    expect(sel[sel.length - 1].className).not.toContain('bg-blue-500/[0.06]')
+  })
+})

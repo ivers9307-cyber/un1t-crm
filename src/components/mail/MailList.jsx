@@ -400,9 +400,14 @@ function MailRow({
 
   return (
     <div
+      // MAIL-UNREAD.1 (Richard, 2 Sep: "highlight unopened emails") — an
+      // unread row carries a faint blue wash on top of the bold + dot, the
+      // Outlook treatment: catchable at a glance across a long list.
+      // Selection/hover greys win over it, so the open row still reads open.
       className={`group relative border-b border-un1t-border/60 transition-colors hover:bg-un1t-surface focus-within:bg-un1t-surface ${
-        selected ? 'bg-un1t-surface' : ''
+        selected ? 'bg-un1t-surface' : unread ? 'bg-blue-500/[0.06]' : ''
       }`}
+      data-unread={unread || undefined}
     >
       {/* Needs-reply = the amber rail, ONLY. It hugs the row's left edge so a
           column of waiting conversations reads as one amber spine. Decorative

@@ -51,7 +51,9 @@ export default function MailRow({ row, onPress, onArchiveToggle, archiving = fal
       onAccessibilityAction={onArchiveToggle
         ? (e) => { if (e.nativeEvent.actionName === 'archive') onArchiveToggle() }
         : undefined}
-      className={`bg-un1t-bg border-b border-un1t-border pl-4 pr-3.5 py-3 active:opacity-70 ${archiving ? 'opacity-50' : ''}`}
+      // MAIL-UNREAD.1 — unread rows carry a faint blue wash (the Outlook
+      // treatment) on top of the bold + dot; mirrors web's MailList tint.
+      className={`${unread ? 'bg-blue-500/5' : 'bg-un1t-bg'} border-b border-un1t-border pl-4 pr-3.5 py-3 active:opacity-70 ${archiving ? 'opacity-50' : ''}`}
     >
       {/* Needs reply — the amber rail, same inset geometry as the old ink
           rail, recoloured. The ONLY needs-reply signal on the row now. */}
