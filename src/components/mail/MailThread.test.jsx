@@ -17,7 +17,7 @@
 // A reskin would pass the first half and fail the second.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, cleanup, screen } from '@testing-library/react'
+import { render, cleanup, screen, fireEvent } from '@testing-library/react'
 import MailThread from './MailThread.jsx'
 
 beforeEach(() => {
@@ -80,8 +80,12 @@ describe('MailThread — the shared half is genuinely reused', () => {
     expect(screen.getAllByText('ella@member.ie').length).toBeGreaterThan(0)
   })
 
-  it('keeps the composer, with its reply/note modes', () => {
+  it('keeps the composer, with its reply/note modes, behind the dock’s slim pill', () => {
+    // MAIL-DOCK.1 — this surface now opens the composer COLLAPSED (the
+    // mockup's pill). The pill names the requester by first name; clicking
+    // it expands the same two-mode composer as ever.
     renderThread()
+    fireEvent.click(screen.getByRole('button', { name: 'Reply to Ella…' }))
     expect(screen.getByText('Reply to member')).toBeTruthy()
     expect(screen.getByText('Internal note')).toBeTruthy()
   })
@@ -148,6 +152,9 @@ describe('MailThread — archive is the verb, in this surface’s own words', ()
 
   it('tells the operator that replying brings an archived conversation back — in inbox words', () => {
     renderThread({ conversation: { ...CONVERSATION, status: 'closed', archived: true } })
+    // MAIL-DOCK.1 — the sentence lives on the EXPANDED composer; the pill is
+    // what an archived conversation shows first, same as a live one.
+    fireEvent.click(screen.getByRole('button', { name: 'Reply to Ella…' }))
     expect(screen.getByText(/replying brings it back to the inbox/)).toBeTruthy()
     // The composer's own default sentence is the ticket lifecycle's. On this
     // screen it would contradict the chip six lines above it.

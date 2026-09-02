@@ -38,10 +38,13 @@ import TicketForward from '@/components/tickets/TicketForward'
 import MailList from './MailList'
 import MailRail from './MailRail'
 import MailThread from './MailThread'
+import MailDock from './MailDock'
 import {
   MAIL_VIEWS, DEFAULT_MAIL_VIEW, mailView, buildMailUrl,
   isArchived, isUnread, isTypingTarget, neighbourId,
   DENSITIES, DEFAULT_DENSITY, readDensity, writeDensity,
+  READER_MODE_MIN, DEFAULT_READER_MODE, readReaderMode, writeReaderMode,
+  escTarget, restoreTarget, needsReply,
 } from './mail-display'
 import {
   MAIL_SCOPE_ALL, isUuidShaped, readMailScope, writeMailScope, resolveMailScope,
@@ -162,6 +165,32 @@ export default function MailSurface({ locationId, locationName, userId, location
   // HTML) and is hydrated once, after mount, below.
   const [density, setDensity] = useState(DEFAULT_DENSITY)
 
+  // ── MAIL-DOCK.1 — which shape the open conversation's card takes ─────
+  //
+  // 'dock' (the default), 'full' (the takeover) or 'min' (title bar only).
+  // Hydrated from storage after mount exactly like density — and ONLY the
+  // two persistable modes can come back from readReaderMode, so a reload
+  // never opens minimised. `prevModeRef` is what a minimised card restores
+  // to; it is a ref because it is a fact about the NEXT restore, not
+  // something whose change should repaint anything now.
+  const [readerMode, setReaderMode] = useState(DEFAULT_READER_MODE)
+  const prevModeRef = useRef(DEFAULT_READER_MODE)
+
+  // ⤢/⤡ — the operator's explicit choice, and the ONLY writes to storage:
+  // Esc stepping full down to dock is a dismissal, not a preference, so it
+  // changes the card without touching what next session opens with.
+  function chooseReaderMode(next) {
+    setReaderMode(next)
+    writeReaderMode(next)
+  }
+  function minimiseReader() {
+    prevModeRef.current = restoreTarget(readerMode)
+    setReaderMode(READER_MODE_MIN)
+  }
+  function restoreReader() {
+    setReaderMode(restoreTarget(prevModeRef.current))
+  }
+
   // MAIL-SEARCH — the raw box value, and the value that actually drives the
   // request. `queryText` updates on every keystroke; `debouncedQuery` lags it
   // by DEBOUNCE_MS so a fast typist does not queue a full-text scan plus a
@@ -203,8 +232,16 @@ export default function MailSurface({ locationId, locationName, userId, location
 
   // Hydrate the density preference AFTER mount, never during render — the
   // server has no localStorage, so reading it in the initial useState would
-  // mismatch the server's own HTML.
-  useEffect(() => { setDensity(readDensity()) }, [])
+  // mismatch the server's own HTML. The reader mode rides the same effect:
+  // same storage, same SSR reasoning, same once-only cadence — and it lands
+  // before any conversation can be open, so a `?c=` deep link opens in the
+  // stored mode as the contract asks.
+  useEffect(() => {
+    setDensity(readDensity())
+    const stored = readReaderMode()
+    setReaderMode(stored)
+    prevModeRef.current = stored
+  }, [])
 
   function chooseDensity(next) {
     setDensity(next)
@@ -821,6 +858,10 @@ export default function MailSurface({ locationId, locationName, userId, location
     setReplyRecipients(null)
     setThreadError(null)
     if (!keepNotice) setWritebackNotice(null)
+    // MAIL-DOCK.1 — `min` is a transient state of an OPEN card. A close from
+    // it must hand the NEXT open back to the real mode underneath, or the
+    // next conversation would open as a bare title bar nobody asked for.
+    setReaderMode(m => (m === READER_MODE_MIN ? restoreTarget(prevModeRef.current) : m))
   }
 
   function changeMailbox(id) { setMailboxId(id); clearSelection() }
@@ -1305,16 +1346,36 @@ export default function MailSurface({ locationId, locationName, userId, location
         if (!row) return
         e.preventDefault()
         archive(row, !isArchived(row))
+        return
+      }
+      // MAIL-DOCK.1 — the Esc ladder: full → dock, dock → close, min → close.
+      // The guards above are the whole reason Esc can live here at all: while
+      // the operator is typing, or while a modal owns the keyboard, this
+      // handler already returned — Esc in a compose window is the MODAL's
+      // Esc, and stealing it to close the card underneath would throw away a
+      // half-written email. Stepping down from full deliberately does NOT
+      // persist (see chooseReaderMode): Esc is how the operator LEAVES, and
+      // it must not overwrite how they like to read.
+      if (key === 'Escape') {
+        if (!selectedId) return
+        e.preventDefault()
+        const target = escTarget(readerMode)
+        if (target) setReaderMode(target)
+        else clearSelection()
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversationIds, conversations, selectedId, archive, composeOpen, forwarding, threadModalOpen])
+  }, [conversationIds, conversations, selectedId, archive, composeOpen, forwarding, threadModalOpen, readerMode])
 
   // ── Render ─────────────────────────────────────────────────────────
+  // MAIL-DOCK.1 — `relative`, because the dock is an ABSOLUTE card pinned to
+  // this shell's bottom-right corner (full mode is viewport-fixed instead and
+  // ignores it). The shell's overflow-hidden is what keeps the docked card
+  // inside the Mail pane rather than over the sidebar.
   const shellClasses =
-    'flex flex-col h-[calc(100vh-13rem)] min-h-[32rem] rounded-xl border border-un1t-border bg-un1t-bg overflow-hidden'
+    'relative flex flex-col h-[calc(100vh-13rem)] min-h-[32rem] rounded-xl border border-un1t-border bg-un1t-bg overflow-hidden'
 
   if (!multi && !scopedId) {
     return (
@@ -1467,8 +1528,13 @@ export default function MailSurface({ locationId, locationName, userId, location
           />
         </div>
 
+        {/* MAIL-DOCK.1 — the list takes the FULL remaining width: the split
+            pane is gone, so the comfortable two-line row finally has room
+            (flex gives the snippet the space; MailList needed no change).
+            Below `md` the selected conversation is still the takeover it
+            always was, so the list steps aside exactly as before. */}
         <div
-          className={`${selectedId ? 'hidden md:flex' : 'flex'} w-full shrink-0 flex-col border-r border-un1t-border md:w-[22rem] lg:w-[24rem]`}
+          className={`${selectedId ? 'hidden md:flex' : 'flex'} w-full min-w-0 flex-col`}
         >
           <div className="flex items-center gap-2 border-b border-un1t-border px-2 py-1.5">
             <input
@@ -1527,9 +1593,25 @@ export default function MailSurface({ locationId, locationName, userId, location
           />
         </div>
 
-        <div className={`${selectedId ? 'flex' : 'hidden md:flex'} min-w-0 flex-1 flex-col`}>
+        {/* MAIL-DOCK.1 — the conversation is a CARD over the list, not a
+            pane beside it: mounted only while something is selected, so the
+            old "Select a conversation" empty pane has nothing to render on.
+            Below `md` MailDock degrades to the plain full-pane thread this
+            div always was — mobile is untouched. */}
+        {selectedId && (
+          <MailDock
+            mode={readerMode}
+            subject={conversation?.subject}
+            needsReply={needsReply(conversation)}
+            onMinimise={minimiseReader}
+            onRestore={restoreReader}
+            onExpand={() => chooseReaderMode('full')}
+            onContract={() => chooseReaderMode('dock')}
+            onClose={() => clearSelection()}
+          >
           <MailThread
             hasSelection={!!selectedId}
+            frameSize={readerMode === 'full' ? 'full' : 'dock'}
             mergedSources={mergedSources}
             // MAIL-REFINE.1 — the related-nudge seam: View selects the related
             // row like any list click, and a landed merge/undo re-reads the
@@ -1564,7 +1646,8 @@ export default function MailSurface({ locationId, locationName, userId, location
             onMarkUnread={() => markUnreadAction(conversation)}
             actionSaving={actionSaving}
           />
-        </div>
+          </MailDock>
+        )}
       </div>
 
       {/* Mounted only while open, so a fresh compose never inherits the last

@@ -78,6 +78,11 @@ export default function MailThread({
   // guard must know when THIS pane's picker is open; without it an escaped
   // keypress archives the conversation behind the modal.
   onModalOpenChange,
+  // MAIL-DOCK.1 — which card the thread is living in ('dock' | 'full'),
+  // forwarded verbatim so the sandboxed frames size to their window. Absent
+  // (a caller that never heard of the dock) TicketThread keeps its pre-dock
+  // heights.
+  frameSize,
 }) {
   const archived = isArchived(conversation)
   const waiting = needsReply(conversation)
@@ -239,6 +244,12 @@ export default function MailThread({
       hasSelection={hasSelection}
       ticket={conversation}
       messages={messages}
+      // MAIL-DOCK.1 — the card is a smaller window than the old pane, so the
+      // frames size to it, and the composer opens as the mockup's slim pill
+      // in BOTH dock and full (a saved draft auto-expands it; see
+      // TicketReplyBox's startCollapsed).
+      frameSize={frameSize}
+      replyStartCollapsed
       mergedSources={mergedSources}
       onOpenMergedInto={onOpenConversation ? (id) => onOpenConversation({ id }) : undefined}
       replyRecipients={replyRecipients}

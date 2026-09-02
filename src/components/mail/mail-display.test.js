@@ -22,6 +22,10 @@ import {
   readReplyDraft, writeReplyDraft, clearReplyDraft, clearAllReplyDrafts,
   REPLY_DRAFT_MAX_LENGTH, REPLY_DRAFT_TTL_MS, REPLY_DRAFT_MAX_ENTRIES, REPLY_DRAFT_PREFIX,
   mailboxShortTag, defaultExpandedMessageId, messageSnippet, collapsedSenderLabel,
+  READER_MODES, READER_MODE_MIN, DEFAULT_READER_MODE, READER_MODE_KEY,
+  readReaderMode, writeReaderMode, escTarget, restoreTarget,
+  BODY_EXPANDED_KEY, readBodyExpanded, writeBodyExpanded,
+  frameHeightClass, replyPillLabel,
 } from './mail-display'
 
 describe('the two states a conversation can be in', () => {
@@ -562,5 +566,148 @@ describe('collapsedSenderLabel — who a collapsed line says wrote it', () => {
 
   it('degrades to Unknown sender rather than blank', () => {
     expect(collapsedSenderLabel({ direction: 'inbound' }, TICKET)).toBe('Unknown sender')
+  })
+})
+
+/* ── MAIL-DOCK.1 — the docked reader ─────────────────────────────────── */
+
+describe('reader mode — dock by default, full by choice, min never stored', () => {
+  beforeEach(() => window.localStorage.clear())
+
+  it('defaults to dock with nothing stored', () => {
+    expect(readReaderMode()).toBe('dock')
+    expect(DEFAULT_READER_MODE).toBe('dock')
+  })
+
+  it('round-trips the two persistable modes', () => {
+    writeReaderMode('full')
+    expect(readReaderMode()).toBe('full')
+    writeReaderMode('dock')
+    expect(readReaderMode()).toBe('dock')
+    expect(READER_MODES).toEqual(['dock', 'full'])
+  })
+
+  it('validates on read — a garbage stored value fails safe to dock', () => {
+    window.localStorage.setItem(READER_MODE_KEY, 'sideways')
+    expect(readReaderMode()).toBe('dock')
+  })
+
+  it('🔴 min NEVER persists — writeReaderMode refuses it outright', () => {
+    writeReaderMode('full')
+    writeReaderMode(READER_MODE_MIN)
+    expect(window.localStorage.getItem(READER_MODE_KEY)).toBe('full')
+    // …and even a hand-planted min is refused on the way back out.
+    window.localStorage.setItem(READER_MODE_KEY, 'min')
+    expect(readReaderMode()).toBe('dock')
+  })
+
+  it('survives a hostile localStorage without throwing', () => {
+    const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked') })
+    expect(readReaderMode()).toBe('dock')
+    spy.mockRestore()
+    const setSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked') })
+    expect(() => writeReaderMode('full')).not.toThrow()
+    setSpy.mockRestore()
+  })
+})
+
+describe('escTarget — the Esc ladder', () => {
+  it('steps full down to dock', () => {
+    expect(escTarget('full')).toBe('dock')
+  })
+
+  it('closes from dock — null means clearSelection', () => {
+    expect(escTarget('dock')).toBeNull()
+  })
+
+  it('closes from min — a bar the operator is dismissing, not restoring', () => {
+    expect(escTarget(READER_MODE_MIN)).toBeNull()
+  })
+
+  it('closes for anything unrecognised — never an undefined branch', () => {
+    expect(escTarget(undefined)).toBeNull()
+    expect(escTarget('sideways')).toBeNull()
+  })
+})
+
+describe('restoreTarget — where minimise/close hand the card back to', () => {
+  it('returns a persistable previous mode as it is', () => {
+    expect(restoreTarget('full')).toBe('full')
+    expect(restoreTarget('dock')).toBe('dock')
+  })
+
+  it('never answers min, and falls back to the default for garbage', () => {
+    expect(restoreTarget(READER_MODE_MIN)).toBe('dock')
+    expect(restoreTarget(undefined)).toBe('dock')
+  })
+})
+
+describe('body-expanded — the operator’s Expand choice, remembered', () => {
+  beforeEach(() => window.localStorage.clear())
+
+  it('defaults to collapsed with nothing stored', () => {
+    expect(readBodyExpanded()).toBe(false)
+  })
+
+  it('round-trips both directions as 1/0', () => {
+    writeBodyExpanded(true)
+    expect(window.localStorage.getItem(BODY_EXPANDED_KEY)).toBe('1')
+    expect(readBodyExpanded()).toBe(true)
+    writeBodyExpanded(false)
+    expect(window.localStorage.getItem(BODY_EXPANDED_KEY)).toBe('0')
+    expect(readBodyExpanded()).toBe(false)
+  })
+
+  it('treats garbage as collapsed — only the exact 1 expands', () => {
+    window.localStorage.setItem(BODY_EXPANDED_KEY, 'true')
+    expect(readBodyExpanded()).toBe(false)
+  })
+
+  it('is try/caught in BOTH directions', () => {
+    const getSpy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked') })
+    expect(readBodyExpanded()).toBe(false)
+    getSpy.mockRestore()
+    const setSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked') })
+    expect(() => writeBodyExpanded(true)).not.toThrow()
+    setSpy.mockRestore()
+  })
+})
+
+describe('frameHeightClass — context-sized message frames', () => {
+  it('keeps the pre-dock values for any render without the prop', () => {
+    expect(frameHeightClass(undefined, false)).toBe('h-[420px]')
+    expect(frameHeightClass(undefined, true)).toBe('h-[70vh]')
+  })
+
+  it('sizes the dock’s frames to the card', () => {
+    expect(frameHeightClass('dock', false)).toBe('h-[38vh]')
+    expect(frameHeightClass('dock', true)).toBe('h-[52vh]')
+  })
+
+  it('gives the takeover the reading height', () => {
+    expect(frameHeightClass('full', false)).toBe('h-[65vh]')
+    expect(frameHeightClass('full', true)).toBe('h-[80vh]')
+  })
+
+  it('falls back to the defaults for an unknown size, never an undefined class', () => {
+    expect(frameHeightClass('sideways', false)).toBe('h-[420px]')
+    expect(frameHeightClass('sideways', true)).toBe('h-[70vh]')
+  })
+})
+
+describe('replyPillLabel — the collapsed composer’s one line', () => {
+  it('names the requester by FIRST name, the mockup’s measure', () => {
+    expect(replyPillLabel({ requester_name: 'Helen Lawlor', requester_email: 'h@x.com' }))
+      .toBe('Reply to Helen…')
+  })
+
+  it('falls back to the address when there is no name', () => {
+    expect(replyPillLabel({ requester_email: 'helen@x.com' })).toBe('Reply to helen@x.com…')
+  })
+
+  it('degrades to a bare Reply… rather than naming nobody awkwardly', () => {
+    expect(replyPillLabel({})).toBe('Reply…')
+    expect(replyPillLabel(null)).toBe('Reply…')
+    expect(replyPillLabel({ requester_name: '   ' })).toBe('Reply…')
   })
 })
