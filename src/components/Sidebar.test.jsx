@@ -124,3 +124,37 @@ describe('Sidebar — Platform links (FU-PLATFORM-LINK)', () => {
     expect(screen.queryByRole('link', { name: /Legacy platform/ })).toBeNull()
   })
 })
+
+// ── MAIL-BADGE.1 — the Messages row's outstanding-items badge ───────────
+describe('Messages badge', () => {
+  it('sums the two hub counts onto the Messages row, estate mail included', () => {
+    usePolledCount.mockImplementation(({ url }) => {
+      if (url === '/api/whatsapp/unread-count') return 3
+      if (url === '/api/email/mail/count?scope=all') return 14
+      return 0
+    })
+    render(<Sidebar user={USER} />)
+    const badge = screen.getByTestId('nav-badge')
+    expect(badge.textContent).toBe('17')
+    expect(badge.closest('a')?.textContent).toContain('Messages')
+  })
+
+  it('renders NO badge at zero — an empty pill is noise', () => {
+    usePolledCount.mockReturnValue(0)
+    render(<Sidebar user={USER} />)
+    expect(screen.queryByTestId('nav-badge')).toBeNull()
+  })
+
+  it('polls mail with scope=all — the estate, not the active studio', () => {
+    render(<Sidebar user={USER} />)
+    const urls = usePolledCount.mock.calls.map(([a]) => a?.url)
+    expect(urls).toContain('/api/email/mail/count?scope=all')
+  })
+
+  it('caps the render at 99+', () => {
+    usePolledCount.mockImplementation(({ url }) =>
+      url === '/api/email/mail/count?scope=all' ? 250 : 0)
+    render(<Sidebar user={USER} />)
+    expect(screen.getByTestId('nav-badge').textContent).toBe('99+')
+  })
+})

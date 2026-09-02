@@ -1381,7 +1381,7 @@ registry.registerPath({
   security: [{ CookieAuth: [] }],
   summary: 'Count mail conversations awaiting a reply (nav badge)',
   description:
-    'Conversations at the caller’s ACTIVE location, on a mailbox they may see, that are `open` with an inbound last message. The same predicate and the same scope as the mail list route — orphan `.or` branch included for elevated callers (RETIRE-TICKETS.1: orphans live on this surface now) — so this badge and that tab always agree. An empty visible set answers 0 without running a query. Returns count 0 (not an error) for a session without the permission or without an active location.',
+    'MAIL-BADGE.1: `?scope=all` answers the ESTATE sum instead — per-location email_inbox eligibility + the same mailbox scope, summed; one unanswerable studio refuses the WHOLE response (500) rather than summing a confidently smaller number. Otherwise: Conversations at the caller’s ACTIVE location, on a mailbox they may see, that are `open` with an inbound last message. The same predicate and the same scope as the mail list route — orphan `.or` branch included for elevated callers (RETIRE-TICKETS.1: orphans live on this surface now) — so this badge and that tab always agree. An empty visible set answers 0 without running a query. Returns count 0 (not an error) for a session without the permission or without an active location.',
   responses: {
     200: { description: '{ count }', content: { 'application/json': { schema: SuccessResponse(z.object({ count: z.number() })) } } },
     401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },
