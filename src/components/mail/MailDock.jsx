@@ -29,15 +29,18 @@ import { READER_MODE_MIN } from './mail-display'
 // The container per mode. Base classes are the MOBILE pane (a plain flex
 // child of the surface's row); everything dock-shaped is md:-prefixed.
 const CONTAINER = {
-  dock: 'flex w-full min-w-0 flex-1 flex-col bg-un1t-bg md:absolute md:bottom-0 md:right-4 md:z-30 md:h-[78vh] md:max-h-[calc(100%-0.5rem)] md:w-[min(560px,calc(100vw-2rem))] md:flex-none md:overflow-hidden md:rounded-t-xl md:border md:border-b-0 md:border-un1t-border md:shadow-2xl',
+  // Width 1120px (Richard, 2 Sep: "twice the width") — wide enough to read
+  // real HTML mail without the inner scroll dominating; still leaves the
+  // list visible on a 27" screen, and the viewport clamp owns laptops.
+  dock: 'flex w-full min-w-0 flex-1 flex-col bg-un1t-bg md:absolute md:bottom-0 md:right-4 md:z-30 md:h-[78vh] md:max-h-[calc(100%-0.5rem)] md:w-[min(1120px,calc(100vw-2rem))] md:flex-none md:overflow-hidden md:rounded-t-xl md:border md:border-b-0 md:border-un1t-border md:shadow-2xl',
   full: 'flex w-full min-w-0 flex-1 flex-col bg-un1t-bg md:fixed md:inset-4 md:z-50 md:h-auto md:w-auto md:flex-none md:overflow-hidden md:rounded-xl md:border md:border-un1t-border md:shadow-2xl',
   min: 'flex w-full min-w-0 flex-1 flex-col bg-un1t-bg md:absolute md:bottom-0 md:right-4 md:z-30 md:h-auto md:w-[min(360px,calc(100vw-2rem))] md:flex-none md:overflow-hidden md:rounded-t-xl md:border md:border-b-0 md:border-un1t-border md:shadow-2xl',
   // MAIL-DOCK.2 — the same bar, stepped LEFT of the compose CARD (which owns
-  // right-4 while it is a card, at the reader card's own 560px measure). Only
+  // right-4 while it is a card, at the reader card's own 1120px measure). Only
   // `min` ever shifts: the reader's dock/full cards cannot coexist with a
   // compose card (one bottom-right slot — MailSurface auto-minimises one
   // before the other opens).
-  minShifted: 'flex w-full min-w-0 flex-1 flex-col bg-un1t-bg md:absolute md:bottom-0 md:right-[calc(1.5rem+min(560px,calc(100vw-2rem)))] md:z-30 md:h-auto md:w-[min(360px,calc(100vw-2rem))] md:flex-none md:overflow-hidden md:rounded-t-xl md:border md:border-b-0 md:border-un1t-border md:shadow-2xl',
+  minShifted: 'flex w-full min-w-0 flex-1 flex-col bg-un1t-bg md:absolute md:bottom-0 md:right-[calc(1.5rem+min(1120px,calc(100vw-2rem)))] md:z-30 md:h-auto md:w-[min(360px,calc(100vw-2rem))] md:flex-none md:overflow-hidden md:rounded-t-xl md:border md:border-b-0 md:border-un1t-border md:shadow-2xl',
 }
 
 export default function MailDock({

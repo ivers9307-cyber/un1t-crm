@@ -33,7 +33,7 @@ describe('ComposeDock — one card, three shapes, the reader’s geometry', () =
     expect(el.className).toContain('md:bottom-0')
     expect(el.className).toContain('md:right-4')
     expect(el.className).toContain('md:h-[78vh]')
-    expect(el.className).toContain('md:w-[min(560px,calc(100vw-2rem))]')
+    expect(el.className).toContain('md:w-[min(1120px,calc(100vw-2rem))]')
     // The house ink title bar — MAIL-DOCK.1's vocabulary, verbatim.
     expect(el.firstElementChild.className).toContain('bg-un1t-text')
     expect(el.firstElementChild.className).toContain('text-un1t-bg')
@@ -82,9 +82,9 @@ describe('ComposeDock — the minimised bar stacks around the reader', () => {
     expect(card().className).toContain('md:right-[calc(1.5rem+min(360px,calc(100vw-2rem)))]')
   })
 
-  it('steps left of the reader’s 560px docked card', () => {
+  it('steps left of the reader’s 1120px docked card', () => {
     renderCard({ mode: 'min', readerOccupancy: 'card' })
-    expect(card().className).toContain('md:right-[calc(1.5rem+min(560px,calc(100vw-2rem)))]')
+    expect(card().className).toContain('md:right-[calc(1.5rem+min(1120px,calc(100vw-2rem)))]')
   })
 
   it('an unknown occupancy fails safe to the free corner', () => {
