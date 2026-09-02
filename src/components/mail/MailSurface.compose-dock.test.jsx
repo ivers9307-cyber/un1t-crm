@@ -299,7 +299,7 @@ describe('MailSurface — one bottom-right slot', () => {
     // The conversation stays warm — mounted, its subject on the bar.
     expect(readerCard().firstElementChild.textContent).toContain('Membership freeze')
     // The reader's bar steps LEFT of the compose card, which owns right-4.
-    expect(readerCard().className).toContain('md:right-[calc(1.5rem+min(560px,calc(100vw-2rem)))]')
+    expect(readerCard().className).toContain('md:right-[calc(1.5rem+min(1120px,calc(100vw-2rem)))]')
     expect(composeCard().className).toContain('md:right-4')
   })
 
@@ -315,7 +315,7 @@ describe('MailSurface — one bottom-right slot', () => {
     expect(composeCard().getAttribute('data-compose-mode')).toBe('min')
     expect(bodyField().value).toContain('Half a reply')
     // …and the compose bar now stacks left of the reader CARD.
-    expect(composeCard().className).toContain('md:right-[calc(1.5rem+min(560px,calc(100vw-2rem)))]')
+    expect(composeCard().className).toContain('md:right-[calc(1.5rem+min(1120px,calc(100vw-2rem)))]')
   })
 
   it('restoring COMPOSE from its bar takes the slot back — the reader card yields to min', async () => {

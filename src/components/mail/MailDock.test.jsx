@@ -36,7 +36,7 @@ describe('MailDock — one card, three shapes', () => {
     expect(el.className).toContain('md:bottom-0')
     expect(el.className).toContain('md:right-4')
     expect(el.className).toContain('md:h-[78vh]')
-    expect(el.className).toContain('md:w-[min(560px,calc(100vw-2rem))]')
+    expect(el.className).toContain('md:w-[min(1120px,calc(100vw-2rem))]')
   })
 
   it('full: the SAME card at fixed inset-4, body centred at reading measure', () => {

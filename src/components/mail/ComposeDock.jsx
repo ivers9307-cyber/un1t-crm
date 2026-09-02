@@ -40,14 +40,14 @@ import { COMPOSE_MODE_MIN, composeCardTitle } from './mail-display'
 // The card per mode. Base classes are the resize safety net (a full-screen
 // card); everything dock-shaped is md:-prefixed, mirroring MailDock's map.
 const CONTAINER = {
-  dock: 'fixed inset-0 z-50 flex flex-col bg-un1t-bg md:absolute md:inset-auto md:bottom-0 md:right-4 md:z-30 md:h-[78vh] md:max-h-[calc(100%-0.5rem)] md:w-[min(560px,calc(100vw-2rem))] md:overflow-hidden md:rounded-t-xl md:border md:border-b-0 md:border-un1t-border md:shadow-2xl',
+  dock: 'fixed inset-0 z-50 flex flex-col bg-un1t-bg md:absolute md:inset-auto md:bottom-0 md:right-4 md:z-30 md:h-[78vh] md:max-h-[calc(100%-0.5rem)] md:w-[min(1120px,calc(100vw-2rem))] md:overflow-hidden md:rounded-t-xl md:border md:border-b-0 md:border-un1t-border md:shadow-2xl',
   full: 'fixed inset-0 z-50 flex flex-col bg-un1t-bg md:inset-4 md:overflow-hidden md:rounded-xl md:border md:border-un1t-border md:shadow-2xl',
 }
 
 // The minimised bar, positioned around whatever the READER currently shows
 // as: right-4 when the corner is free (or the reader is the full-screen
 // overlay, which holds no corner), left of the reader's 360px bar, left of
-// its 560px docked card. Full literal strings so Tailwind's scanner sees
+// its 1120px docked card. Full literal strings so Tailwind's scanner sees
 // every class; the widths are MailDock's own, quoted not derived.
 // Audit F5 — below md the min shape is a BOTTOM BAR, never the full-sheet
 // safety net (dock/full degrade to a full-screen FORM, which makes sense;
@@ -56,7 +56,7 @@ const CONTAINER = {
 const MIN_BY_READER = {
   none: 'fixed bottom-0 inset-x-0 z-50 flex flex-col bg-un1t-bg border-t border-un1t-border md:absolute md:inset-auto md:bottom-0 md:right-4 md:z-30 md:h-auto md:w-[min(360px,calc(100vw-2rem))] md:overflow-hidden md:rounded-t-xl md:border md:border-b-0 md:border-un1t-border md:shadow-2xl',
   bar: 'fixed bottom-0 inset-x-0 z-50 flex flex-col bg-un1t-bg border-t border-un1t-border md:absolute md:inset-auto md:bottom-0 md:right-[calc(1.5rem+min(360px,calc(100vw-2rem)))] md:z-30 md:h-auto md:w-[min(360px,calc(100vw-2rem))] md:overflow-hidden md:rounded-t-xl md:border md:border-b-0 md:border-un1t-border md:shadow-2xl',
-  card: 'fixed bottom-0 inset-x-0 z-50 flex flex-col bg-un1t-bg border-t border-un1t-border md:absolute md:inset-auto md:bottom-0 md:right-[calc(1.5rem+min(560px,calc(100vw-2rem)))] md:z-30 md:h-auto md:w-[min(360px,calc(100vw-2rem))] md:overflow-hidden md:rounded-t-xl md:border md:border-b-0 md:border-un1t-border md:shadow-2xl',
+  card: 'fixed bottom-0 inset-x-0 z-50 flex flex-col bg-un1t-bg border-t border-un1t-border md:absolute md:inset-auto md:bottom-0 md:right-[calc(1.5rem+min(1120px,calc(100vw-2rem)))] md:z-30 md:h-auto md:w-[min(360px,calc(100vw-2rem))] md:overflow-hidden md:rounded-t-xl md:border md:border-b-0 md:border-un1t-border md:shadow-2xl',
 }
 
 export default function ComposeDock({
