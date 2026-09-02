@@ -5,7 +5,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, email as emailAddress } from '@/lib/schemas'
 import { sendTicketEmail, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
-import { appendSignature } from '@/lib/email-signature'
+import { appendSignature, richSignatureFromProfile, renderRichSignature } from '@/lib/email-signature'
 import { normalizeEmail, pickContact, inboundPreview } from '@/lib/email-inbox'
 import { ticketSubject } from '@/lib/email-tickets'
 import { escapeLikePattern } from '@/lib/like-escape'
@@ -231,7 +231,15 @@ export async function POST(request) {
   // pass, and stored below so the row records what was actually sent. A
   // composed email is a ticket whose first message is outbound — not a second
   // concept — so it does not get a second signature rule either.
-  const outboundText = appendSignature(text, user.email_signature)
+  // MAIL-SIG.1 — the rich signature outranks the plain column when enabled.
+  // The TEXT part rides through appendSignature (same separator, same
+  // normalisation); the HTML part is OUR generated block appended AFTER the
+  // textToHtml conversion — the user authored fields, never markup, so this
+  // is not the un-sanitised path the mig-493 header forbids.
+  const richSig = richSignatureFromProfile(user) ? renderRichSignature(user.email_signature_rich) : null
+  const outboundText = richSig
+    ? appendSignature(text, richSig.text)
+    : appendSignature(text, user.email_signature)
 
   const send = await sendTicketEmail({
     mailboxAddress: mailbox.address,
@@ -246,7 +254,7 @@ export async function POST(request) {
     cc: wire.cc,
     bcc: wire.bcc,
     subject,
-    htmlBody: textToHtml(outboundText),
+    htmlBody: richSig ? textToHtml(text) + richSig.html : textToHtml(outboundText),
     textBody: outboundText,
     tag: 'ticket-compose',
     // POSTMARK-RACE.1 — marked iff `sendLogRow` will be built, which is the

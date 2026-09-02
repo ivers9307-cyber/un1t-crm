@@ -21,8 +21,16 @@
 import { useState } from 'react'
 import { Check, AlertCircle, Loader2 } from 'lucide-react'
 import { MAX_SIGNATURE_LENGTH, SIGNATURE_SEPARATOR, normalizeSignature } from '@/lib/email-signature'
+import RichSignatureEditor from '@/components/account/RichSignatureEditor'
 
-export default function EmailSignatureForm({ initialSignature = '' }) {
+// MAIL-SIG.1 adds the structured rich signature as a section of this card
+// (RichSignatureEditor — toggle, fields, photo, links, sandboxed preview).
+// The plain-text editor above it is UNCHANGED on purpose: it is the fallback
+// whenever the rich signature is off or can't render, and it is what the
+// mobile app edits. The two sections save independently — the plain path's
+// behaviour is byte-for-byte what shipped with EMAIL-TICKET.5.
+
+export default function EmailSignatureForm({ initialSignature = '', initialRich = null }) {
   const [signature, setSignature] = useState(initialSignature || '')
   const [saved, setSaved] = useState(normalizeSignature(initialSignature))
   const [saving, setSaving] = useState(false)
@@ -122,6 +130,8 @@ export default function EmailSignatureForm({ initialSignature = '' }) {
           ) : 'Save'}
         </button>
       </div>
+
+      <RichSignatureEditor initialRich={initialRich} />
     </div>
   )
 }

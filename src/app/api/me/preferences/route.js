@@ -38,7 +38,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { LANDING_PREFERENCE_VALUES } from '@shared/permissions'
-import { MAX_SIGNATURE_LENGTH, normalizeSignature } from '@/lib/email-signature'
+import { MAX_SIGNATURE_LENGTH, normalizeSignature, MAX_SIGNATURE_LINKS, isAllowedSignaturePhotoUrl } from '@/lib/email-signature'
 
 export const runtime = 'nodejs'
 
@@ -48,6 +48,27 @@ const PreferencesSchema = z.object({
   // long paste is a 400 here rather than a Postgres constraint violation.
   // Nullable so the editor can clear it back to "no signature".
   email_signature: z.string().max(MAX_SIGNATURE_LENGTH).nullable().optional(),
+  // MAIL-SIG.1 — the structured rich signature. FIELDS, never markup: the
+  // renderer escapes every value at send time, and the photo may only point
+  // into our public branding bucket (checked HERE as well as at render, so a
+  // rejected row never even exists). Nullable clears it.
+  email_signature_rich: z.object({
+    enabled: z.boolean(),
+    name: z.string().max(120).optional().default(''),
+    title: z.string().max(120).optional().default(''),
+    phone: z.string().max(60).optional().default(''),
+    note: z.string().max(200).optional().default(''),
+    photo_url: z.string().url().max(500)
+      // The RENDERER'S own normalized check (audit #1): one rule, two gates —
+      // a dot-segment path that would normalize outside the branding bucket
+      // is refused here exactly as the render would refuse to embed it.
+      .refine(isAllowedSignaturePhotoUrl, 'Photo must be uploaded through the signature editor')
+      .nullable().optional(),
+    links: z.array(z.object({
+      label: z.string().max(40),
+      url: z.string().url().max(300).refine(u => /^https?:\/\//i.test(u), 'http(s) links only'),
+    })).max(MAX_SIGNATURE_LINKS).optional().default([]),
+  }).strict().nullable().optional(),
 }).strict()
 
 // GET /api/me/preferences — the caller's OWN preferences.
@@ -64,7 +85,7 @@ export async function GET() {
   const db = createServerClient()
   const { data, error } = await db
     .from('profiles')
-    .select('permissions, email_signature')
+    .select('permissions, email_signature, email_signature_rich')
     .eq('id', user.id)
     .single()
   if (error) {
@@ -76,6 +97,7 @@ export async function GET() {
     data: {
       landing_preference: data?.permissions?.landing_preference || 'auto',
       email_signature: data?.email_signature || '',
+      email_signature_rich: data?.email_signature_rich || null,
     },
   })
 }
@@ -104,6 +126,9 @@ export async function PATCH(request) {
   const columnPatch = {}
   if (body.email_signature !== undefined) {
     columnPatch.email_signature = normalizeSignature(body.email_signature) || null
+  }
+  if (body.email_signature_rich !== undefined) {
+    columnPatch.email_signature_rich = body.email_signature_rich
   }
 
   if (Object.keys(patch).length === 0 && Object.keys(columnPatch).length === 0) {
@@ -149,6 +174,7 @@ export async function PATCH(request) {
     data: {
       ...(merged ? { permissions: merged } : {}),
       ...(body.email_signature !== undefined ? { email_signature: update.email_signature } : {}),
+      ...(body.email_signature_rich !== undefined ? { email_signature_rich: update.email_signature_rich } : {}),
     },
   })
 }

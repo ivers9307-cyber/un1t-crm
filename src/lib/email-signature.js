@@ -79,3 +79,117 @@ export function appendSignature(body, signature) {
   if (!trimmed) return `${SIGNATURE_SEPARATOR}\n${sig}`
   return `${trimmed}\n\n${SIGNATURE_SEPARATOR}\n${sig}`
 }
+
+// ── MAIL-SIG.1 — the structured rich signature ──────────────────────────
+//
+// The mig-493 invariant above survives INTACT: the user still never authors
+// markup. profiles.email_signature_rich holds FIELDS; this renderer escapes
+// every value and assembles the one email-safe HTML block outbound mail may
+// carry beyond textToHtml's own output. Callers append `html` AFTER their
+// textToHtml conversion (this block is generated here, not user input) and
+// `text` under the RFC separator for the plain part.
+
+/** Escape for HTML text/attribute positions. */
+function esc(v) {
+  return String(v ?? '')
+    .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;').replaceAll("'", '&#39;')
+}
+
+/**
+ * The ONLY origins a signature photo may load from — our public branding
+ * bucket. Both the write side (/api/me/preferences) and this renderer check
+ * it, so a hand-written row cannot point outbound mail at a foreign pixel.
+ */
+export const SIGNATURE_PHOTO_URL_PREFIXES = Object.freeze([
+  'https://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/',
+])
+
+export const MAX_SIGNATURE_LINKS = 5
+
+const httpUrl = (u) => typeof u === 'string' && /^https?:\/\//i.test(u.trim()) ? u.trim() : null
+
+/**
+ * Audit MAIL-SIG.1 #1 — the prefix is compared on the NORMALIZED URL, so a
+ * crafted `/branding/../other-bucket/...` (which the recipient's client
+ * normalizes before requesting) cannot slip past a raw startsWith. Exported
+ * so the write-side zod refine uses the SAME check — one rule, two gates.
+ */
+export function isAllowedSignaturePhotoUrl(url) {
+  const u = httpUrl(url)
+  if (!u) return false
+  let normalized
+  try { normalized = new URL(u).href } catch { return false }
+  return SIGNATURE_PHOTO_URL_PREFIXES.some(p => normalized.startsWith(p))
+}
+
+function allowedPhoto(url) {
+  return isAllowedSignaturePhotoUrl(url) ? String(url).trim() : null
+}
+
+/**
+ * The enabled, non-empty rich signature off a profile row — or null, in
+ * which case callers keep the legacy plain-text path byte-for-byte.
+ */
+export function richSignatureFromProfile(profile) {
+  const rich = profile?.email_signature_rich
+  if (!rich || rich.enabled !== true) return null
+  return renderRichSignature(rich) ? rich : null
+}
+
+/**
+ * Render {text, html} from the structured fields, or null when there is
+ * nothing to render. Every value escaped; links http(s)-or-dropped and
+ * capped; the photo restricted to our public branding bucket.
+ */
+export function renderRichSignature(rich) {
+  if (!rich || rich.enabled !== true) return null
+  const name = String(rich.name ?? '').trim()
+  const title = String(rich.title ?? '').trim()
+  const phone = String(rich.phone ?? '').trim()
+  const note = String(rich.note ?? '').trim()
+  const photo = allowedPhoto(rich.photo_url)
+  const links = (Array.isArray(rich.links) ? rich.links : [])
+    .map(l => ({ label: String(l?.label ?? '').trim(), url: httpUrl(l?.url) }))
+    .filter(l => l.url)
+    .slice(0, MAX_SIGNATURE_LINKS)
+
+  if (!name && !title && !phone && !note && !photo && links.length === 0) return null
+
+  const textLines = [
+    name, [title, note].filter(Boolean).join(' · '), phone,
+    ...links.map(l => (l.label ? `${l.label}: ${l.url}` : l.url)),
+  ].filter(Boolean)
+  const text = textLines.join('\n')
+
+  // ── Design A, "The rule" (Richard's pick, 2 Sep) ─────────────────────
+  // Heavy black rule; the name bold, uppercase and letter-spaced like the
+  // UN1T wordmark; details in quiet grey; the link row in small caps. The
+  // avatar cell shows the profile photo when uploaded, else an INITIALS
+  // block — a table cell, not an image, so it renders with zero requests
+  // in every client (rounded corners degrade to square in old Outlook,
+  // acceptable). Email-safe throughout: one table, inline styles only.
+  const initials = name
+    ? name.trim().split(/\s+/).slice(0, 2).map(w => w[0].toUpperCase()).join('')
+    : ''
+  const detail = [title, note].filter(Boolean).join(' · ')
+
+  const rows = []
+  if (name) rows.push(`<div style="font-weight:800;font-size:14px;letter-spacing:.08em;text-transform:uppercase;color:#0f172a">${esc(name)}</div>`)
+  if (detail) rows.push(`<div style="color:#64748b;font-size:12.5px">${esc(detail)}</div>`)
+  if (phone) rows.push(`<div style="color:#64748b;font-size:12.5px">${esc(phone)}</div>`)
+  if (links.length) {
+    rows.push(`<div style="margin-top:7px;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase">${links.map(l =>
+      `<a href="${esc(l.url)}" style="color:#0f172a;font-weight:700;text-decoration:none">${esc(l.label || l.url)}</a>`
+    ).join('<span style="color:#cbd5e1"> &nbsp;|&nbsp; </span>')}</div>`)
+  }
+  const avatarCell = photo
+    ? `<td style="vertical-align:top;padding:14px 14px 0 0"><img src="${esc(photo)}" width="56" height="56" alt="" style="border-radius:50%;display:block;object-fit:cover" /></td>`
+    : (initials
+      ? `<td style="vertical-align:top;padding:14px 14px 0 0"><table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="width:56px;height:56px;border-radius:50%;background:#0f172a;color:#ffffff;font-weight:800;font-size:18px;letter-spacing:.03em;text-align:center;vertical-align:middle">${esc(initials)}</td></tr></table></td>`
+      : '')
+  const html =
+    `<table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:18px;border-top:3px solid #0f172a;font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:13px;line-height:1.5"><tr>${avatarCell}<td style="vertical-align:top;padding-top:14px">${rows.join('')}</td></tr></table>`
+
+  return { text, html }
+}

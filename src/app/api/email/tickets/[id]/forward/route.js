@@ -4,7 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { sendTicketEmail } from '@/lib/email-inbox-send'
-import { appendSignature } from '@/lib/email-signature'
+import { appendSignature, richSignatureFromProfile, renderRichSignature } from '@/lib/email-signature'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 import { logAuditEvent } from '@/lib/audit'
 import { uuidLike, email as emailAddress } from '@/lib/schemas'
@@ -279,8 +279,15 @@ export async function POST(request, props) {
   // mail client puts it: after our own words and before the quoted message.
   // appendSignature returns the note unchanged when the sender has none, which
   // is most people.
-  const signedNote = appendSignature(note, user.email_signature)
-  const outboundText = buildForwardText({ note: signedNote, message: source })
+  // MAIL-SIG.1 — with a rich signature the sign-off moves BELOW the whole
+  // forward (Gmail's own placement) so the photo/link block never splits the
+  // note from the forwarded content; the plain-text fallback keeps its old
+  // in-note position byte-for-byte.
+  const richSig = richSignatureFromProfile(user) ? renderRichSignature(user.email_signature_rich) : null
+  const unsignedText = buildForwardText({ note, message: source })
+  const outboundText = richSig
+    ? appendSignature(unsignedText, richSig.text)
+    : buildForwardText({ note: appendSignature(note, user.email_signature), message: source })
   const subject = forwardSubject(source.subject || ticket.subject)
 
   // No threading headers, deliberately. In-Reply-To pointing at the member's
@@ -296,7 +303,7 @@ export async function POST(request, props) {
     cc: wire.cc,
     bcc: wire.bcc,
     subject,
-    htmlBody: textToHtml(outboundText),
+    htmlBody: richSig ? textToHtml(unsignedText) + richSig.html : textToHtml(outboundText),
     textBody: outboundText,
     tag: 'ticket-forward',
     metadata: { ticket_id: ticket.id, contact_id: ticket.contact_id || '' },

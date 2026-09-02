@@ -102,3 +102,116 @@ describe('MAX_SIGNATURE_LENGTH', () => {
     expect(MAX_SIGNATURE_LENGTH).toBe(2000)
   })
 })
+
+// ── MAIL-SIG.1 — the rich signature renderer ────────────────────────────
+// The user authors FIELDS, never markup: every value is escaped into the
+// generated HTML, links are http(s)-or-dropped, and the photo may only be
+// one of OUR public branding URLs. The renderer answering null means "no
+// rich signature" and every caller falls back to the plain-text column.
+import { renderRichSignature, richSignatureFromProfile, SIGNATURE_PHOTO_URL_PREFIXES } from './email-signature'
+
+const RICH = {
+  enabled: true,
+  name: 'Garrett Ivers',
+  title: 'General Manager',
+  phone: '(01) 574 1871',
+  note: 'UN1T Hatch Street',
+  photo_url: 'https://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/signatures/u1/1.jpg',
+  links: [
+    { label: 'Instagram', url: 'https://instagram.com/un1t' },
+    { label: 'Book a class', url: 'https://un1t.online/book' },
+  ],
+}
+
+describe('renderRichSignature', () => {
+  it('renders every field, escaped, with the RFC separator on the text part', () => {
+    const out = renderRichSignature(RICH)
+    expect(out.text).toContain('Garrett Ivers')
+    expect(out.text).toContain('General Manager')
+    expect(out.text).toContain('(01) 574 1871')
+    expect(out.text).toContain('https://instagram.com/un1t')
+    expect(out.html).toContain('Garrett Ivers')
+    expect(out.html).toContain('href="https://instagram.com/un1t"')
+    expect(out.html).toContain(RICH.photo_url)
+  })
+
+  it('ESCAPES field values — a name cannot smuggle markup into outbound mail', () => {
+    const out = renderRichSignature({ ...RICH, name: '<img src=x onerror=alert(1)>' })
+    expect(out.html).not.toContain('<img src=x')
+    expect(out.html).toContain('&lt;img')
+  })
+
+  it('drops a non-http(s) link outright — javascript: never reaches an href', () => {
+    const out = renderRichSignature({ ...RICH, links: [{ label: 'x', url: 'javascript:alert(1)' }] })
+    expect(out.html).not.toContain('javascript:')
+  })
+
+  it('refuses a photo outside our public branding prefix', () => {
+    const out = renderRichSignature({ ...RICH, photo_url: 'https://evil.example/pixel.png' })
+    expect(out.html).not.toContain('evil.example')
+    // …but the rest of the signature still renders.
+    expect(out.html).toContain('Garrett Ivers')
+  })
+
+  it('answers null when disabled, absent, or empty of content', () => {
+    expect(renderRichSignature(null)).toBeNull()
+    expect(renderRichSignature({ ...RICH, enabled: false })).toBeNull()
+    expect(renderRichSignature({ enabled: true, name: ' ', links: [] })).toBeNull()
+  })
+
+  it('caps links at five — the write side validates, the renderer still guards', () => {
+    const many = Array.from({ length: 9 }, (_, i) => ({ label: `L${i}`, url: `https://x.ie/${i}` }))
+    const out = renderRichSignature({ ...RICH, links: many })
+    expect((out.html.match(/href=/g) || []).length).toBe(5)
+  })
+})
+
+describe('richSignatureFromProfile', () => {
+  it('prefers the enabled rich signature; falls back to the plain column; null when neither', () => {
+    expect(richSignatureFromProfile({ email_signature_rich: RICH, email_signature: 'old' })).not.toBeNull()
+    const plain = richSignatureFromProfile({ email_signature_rich: { enabled: false }, email_signature: 'Old sign-off' })
+    expect(plain).toBeNull() // callers then use appendSignature(text, email_signature) as before
+    expect(richSignatureFromProfile({})).toBeNull()
+  })
+})
+
+describe('SIGNATURE_PHOTO_URL_PREFIXES', () => {
+  it('only ever allows our public branding storage', () => {
+    for (const p of SIGNATURE_PHOTO_URL_PREFIXES) {
+      expect(p).toMatch(/^https:\/\/.*\/storage\/v1\/object\/public\/branding\//)
+    }
+  })
+})
+
+// ── Design A pins (Richard's pick + follow-ups, 2 Sep) ──────────────────
+describe('renderRichSignature — design A', () => {
+  it('renders the initials block when no photo is uploaded — never an empty avatar slot', () => {
+    const out = renderRichSignature({ ...RICH, photo_url: null })
+    expect(out.html).toContain('>GI<') // Garrett Ivers → GI
+    expect(out.html).not.toContain('<img')
+  })
+
+  it('the photo replaces the initials, round, from our bucket only', () => {
+    const out = renderRichSignature(RICH)
+    expect(out.html).toContain('<img')
+    expect(out.html).not.toContain('>GI<')
+  })
+
+  it('initials are escaped like everything else', () => {
+    const out = renderRichSignature({ ...RICH, name: '<b>x</b> y', photo_url: null })
+    expect(out.html).not.toContain('<b>')
+  })
+
+  it('carries the black rule and the uppercase name treatment', () => {
+    const out = renderRichSignature(RICH)
+    expect(out.html).toContain('border-top:3px solid #0f172a')
+    expect(out.html).toContain('text-transform:uppercase')
+  })
+})
+
+describe('isAllowedSignaturePhotoUrl — the normalized check (audit #1)', () => {
+  it('refuses a dot-segment path that normalizes outside the branding bucket', () => {
+    const sneaky = 'https://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/../secrets/x.png'
+    expect(renderRichSignature({ ...RICH, photo_url: sneaky }).html).not.toContain('secrets')
+  })
+})
