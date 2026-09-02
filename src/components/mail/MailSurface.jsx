@@ -39,12 +39,16 @@ import MailList from './MailList'
 import MailRail from './MailRail'
 import MailThread from './MailThread'
 import MailDock from './MailDock'
+import ComposeDock from './ComposeDock'
 import {
   MAIL_VIEWS, DEFAULT_MAIL_VIEW, mailView, buildMailUrl,
   isArchived, isUnread, isTypingTarget, neighbourId,
   DENSITIES, DEFAULT_DENSITY, readDensity, writeDensity,
   READER_MODE_MIN, DEFAULT_READER_MODE, readReaderMode, writeReaderMode,
   escTarget, restoreTarget, needsReply,
+  COMPOSE_MODE_MIN, DEFAULT_COMPOSE_MODE, readComposeMode, writeComposeMode,
+  composeRestoreTarget, composeEscTarget, composeBlocksKeys,
+  slotYieldTarget, slotOccupancy, isMdUp,
 } from './mail-display'
 import {
   MAIL_SCOPE_ALL, isUuidShaped, readMailScope, writeMailScope, resolveMailScope,
@@ -176,6 +180,20 @@ export default function MailSurface({ locationId, locationName, userId, location
   const [readerMode, setReaderMode] = useState(DEFAULT_READER_MODE)
   const prevModeRef = useRef(DEFAULT_READER_MODE)
 
+  // ── MAIL-DOCK.2 — the compose card's own mode, variant and slot ──────
+  //
+  // Same three shapes as the reader, its own key, hydrated in the same
+  // mount effect below. `composeVariant` is which SHELL this compose session
+  // uses — 'dock' (the md+ machinery) or 'modal' (below md, byte-for-byte
+  // today's composer) — decided by isMdUp() AT OPEN and frozen for the life
+  // of that compose, so a mid-draft window resize can never remount the form
+  // and lose the words. `composePrevModeRef` mirrors prevModeRef: what the
+  // minimised bar restores to.
+  const [composeOpen, setComposeOpen] = useState(false)
+  const [composeMode, setComposeMode] = useState(DEFAULT_COMPOSE_MODE)
+  const [composeVariant, setComposeVariant] = useState('modal')
+  const composePrevModeRef = useRef(DEFAULT_COMPOSE_MODE)
+
   // ⤢/⤡ — the operator's explicit choice, and the ONLY writes to storage:
   // Esc stepping full down to dock is a dismissal, not a preference, so it
   // changes the card without touching what next session opens with.
@@ -188,7 +206,43 @@ export default function MailSurface({ locationId, locationName, userId, location
     setReaderMode(READER_MODE_MIN)
   }
   function restoreReader() {
+    // ONE SLOT — the reader's card coming back is what sends an open compose
+    // card to its bar (the typed draft survives there, mounted).
+    if (slotYieldTarget(composeOpen, composeMode)) minimiseCompose()
     setReaderMode(restoreTarget(prevModeRef.current))
+  }
+
+  function chooseComposeMode(next) {
+    setComposeMode(next)
+    writeComposeMode(next)
+  }
+  function minimiseCompose() {
+    composePrevModeRef.current = composeRestoreTarget(composeMode)
+    setComposeMode(COMPOSE_MODE_MIN)
+  }
+  function restoreCompose() {
+    // The mirror of restoreReader's yield: compose taking the slot back
+    // minimises the reader's card (its bar survives, the polls keep running).
+    if (slotYieldTarget(!!selectedId, readerMode)) minimiseReader()
+    setComposeMode(composeRestoreTarget(composePrevModeRef.current))
+  }
+  // `min` is a transient state of an OPEN compose. A close from it must hand
+  // the NEXT open back to the real mode underneath — clearSelection's rule,
+  // applied to the second occupant of the slot.
+  function closeCompose() {
+    setComposeOpen(false)
+    setComposeMode(m => (m === COMPOSE_MODE_MIN ? composeRestoreTarget(composePrevModeRef.current) : m))
+  }
+  // The compose Esc ladder — dirty-aware, routed from ComposeDock's scoped
+  // keydown. `dirty` and `requestClose` are TicketCompose's own (the shell
+  // hands them through), so "pristine closes silently" and "✕ confirms" are
+  // the same code paths the Modal always had.
+  function handleComposeEscape(dirty, requestClose) {
+    const target = composeEscTarget(composeMode, dirty)
+    if (target === null) { requestClose(); return }
+    if (target === composeMode) return // the bar is the floor for a dirty draft
+    if (target === COMPOSE_MODE_MIN) minimiseCompose()
+    else setComposeMode(target) // full → dock: a dismissal, never persisted
   }
 
   // MAIL-SEARCH — the raw box value, and the value that actually drives the
@@ -220,8 +274,6 @@ export default function MailSurface({ locationId, locationName, userId, location
   // thing it describes.
   const [writebackNotice, setWritebackNotice] = useState(null)
 
-  const [composeOpen, setComposeOpen] = useState(false)
-
   // Audit M2 — MailThread's merge picker is a dialog the shortcut guard must respect.
 
   const [threadModalOpen, setThreadModalOpen] = useState(false)
@@ -241,6 +293,12 @@ export default function MailSurface({ locationId, locationName, userId, location
     const stored = readReaderMode()
     setReaderMode(stored)
     prevModeRef.current = stored
+    // MAIL-DOCK.2 — the compose mode rides the same once-only hydration:
+    // same storage, same SSR reasoning, and it lands before any compose can
+    // be open (opening takes a click).
+    const storedCompose = readComposeMode()
+    setComposeMode(storedCompose)
+    composePrevModeRef.current = storedCompose
   }, [])
 
   function chooseDensity(next) {
@@ -1230,9 +1288,15 @@ export default function MailSurface({ locationId, locationName, userId, location
   }
 
   function handleComposed(newTicket) {
-    setComposeOpen(false)
+    closeCompose()
     refreshList(true)
-    if (newTicket?.id) selectConversation(newTicket)
+    // MAIL-DOCK.2 — the send frees the slot, and opening the new ticket is a
+    // deliberate open: restore the reader's CARD if compose had minimised it,
+    // or the fresh conversation would appear as a bare bar nobody asked for.
+    if (newTicket?.id) {
+      setReaderMode(m => (m === READER_MODE_MIN ? restoreTarget(prevModeRef.current) : m))
+      selectConversation(newTicket)
+    }
   }
 
   // ── MAIL-ALLLOC.1: compose from All mode ─────────────────────────────
@@ -1258,9 +1322,24 @@ export default function MailSurface({ locationId, locationName, userId, location
   const [composeMailboxes, setComposeMailboxes] = useState(null)
   const [composeLoading, setComposeLoading] = useState(false)
 
+  // MAIL-DOCK.2 — every compose entry lands here. The shell variant is
+  // decided NOW and frozen for this compose session (see composeVariant's
+  // comment); a dock-variant open is also the moment the reader's card
+  // yields the bottom-right slot — auto-minimised, bar surviving, polls
+  // running. The Modal variant overlays everything and takes no slot.
+  function openComposeCard() {
+    const dockVariant = isMdUp()
+    setComposeVariant(dockVariant ? 'dock' : 'modal')
+    if (dockVariant && slotYieldTarget(!!selectedId, readerMode)) minimiseReader()
+    // Belt and braces — closeCompose already resets a leftover min, but a
+    // compose must never OPEN as a bare title bar.
+    setComposeMode(m => (m === COMPOSE_MODE_MIN ? composeRestoreTarget(composePrevModeRef.current) : m))
+    setComposeOpen(true)
+  }
+
   async function openCompose() {
-    if (!allMode) { setComposeOpen(true); return }
-    if (composeMailboxes?.length) { setComposeOpen(true); return }
+    if (!allMode) { openComposeCard(); return }
+    if (composeMailboxes?.length) { openComposeCard(); return }
     setComposeLoading(true)
     try {
       // Audit F4 — same fallback as searchFanout: with no digest answer yet
@@ -1290,7 +1369,7 @@ export default function MailSurface({ locationId, locationName, userId, location
         return
       }
       setComposeMailboxes(grouped)
-      setComposeOpen(true)
+      openComposeCard()
     } finally {
       if (mountedRef.current) setComposeLoading(false)
     }
@@ -1323,7 +1402,13 @@ export default function MailSurface({ locationId, locationName, userId, location
       // out of INBOX, with the letter never reaching the box — and `j`/`k` called
       // selectConversation, which unmounts the forward form and discards a
       // half-written forward.
-      if (composeOpen || forwarding || threadModalOpen) return
+      // MAIL-DOCK.2 — the compose guard is now MODE-AWARE: an open compose
+      // CARD (dock, full, or the below-md Modal, which never reaches min)
+      // keeps every key inert exactly as before, but a compose MINIMISED to
+      // its bar lifts the guard — j/k/e/u flow to the reader again while the
+      // draft waits, and Esc inside the card never gets here at all
+      // (ComposeDock stops its propagation).
+      if (composeBlocksKeys(composeOpen, composeMode) || forwarding || threadModalOpen) return
       if (isTypingTarget(e.target)) return
       const key = e.key
       if (key === 'j' || key === 'k') {
@@ -1367,7 +1452,7 @@ export default function MailSurface({ locationId, locationName, userId, location
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversationIds, conversations, selectedId, archive, composeOpen, forwarding, threadModalOpen, readerMode])
+  }, [conversationIds, conversations, selectedId, archive, composeOpen, composeMode, forwarding, threadModalOpen, readerMode])
 
   // ── Render ─────────────────────────────────────────────────────────
   // MAIL-DOCK.1 — `relative`, because the dock is an ABSOLUTE card pinned to
@@ -1576,6 +1661,11 @@ export default function MailSurface({ locationId, locationName, userId, location
             // retarget-without-restoring behaviour — they go through
             // selectConversation directly.
             onSelect={(row) => {
+              // MAIL-DOCK.2 — a click ends with the reader as a CARD either
+              // way, so an open compose card yields the slot first (its
+              // typed draft survives in the bar). j/k stay bar-retargeting
+              // and never come through here.
+              if (slotYieldTarget(composeOpen, composeMode)) minimiseCompose()
               setReaderMode(m => (m === READER_MODE_MIN ? restoreTarget(prevModeRef.current) : m))
               selectConversation(row)
             }}
@@ -1609,6 +1699,10 @@ export default function MailSurface({ locationId, locationName, userId, location
         {selectedId && (
           <MailDock
             mode={readerMode}
+            // MAIL-DOCK.2 — the compose CARD owns right-4 while it is a card;
+            // the reader's minimised bar steps left of it so both stay
+            // visible and clickable (j/k must still retarget the bar).
+            shifted={slotOccupancy(composeOpen, composeMode) === 'card'}
             subject={conversation?.subject}
             needsReply={needsReply(conversation)}
             onMinimise={minimiseReader}
@@ -1669,9 +1763,31 @@ export default function MailSurface({ locationId, locationName, userId, location
           // takes mailbox_id, and the mailbox carries its own location.
           mailboxes={allMode ? (composeMailboxes || []) : mailboxes}
           initialMailboxId={allMode ? null : mailboxId}
-          onClose={() => setComposeOpen(false)}
+          onClose={closeCompose}
           onSent={handleComposed}
           onSentUnfiled={() => refreshList(true)}
+          // MAIL-DOCK.2 — the dock shell, only for a session opened at md+
+          // (the variant froze at open, so a resize cannot remount the form
+          // mid-draft). Below md there is no shell and TicketCompose renders
+          // its Modal byte-for-byte. `dirty` and `requestClose` are the
+          // component's own — the card's ✕ and Esc ladder reuse the exact
+          // confirm the Modal always had.
+          shell={composeVariant === 'dock' ? ({ subject, dirty, requestClose, body, footer }) => (
+            <ComposeDock
+              mode={composeMode}
+              subject={subject}
+              readerOccupancy={slotOccupancy(!!selectedId, readerMode)}
+              onMinimise={minimiseCompose}
+              onRestore={restoreCompose}
+              onExpand={() => chooseComposeMode('full')}
+              onContract={() => chooseComposeMode('dock')}
+              onClose={requestClose}
+              onEscape={() => handleComposeEscape(dirty, requestClose)}
+              footer={footer}
+            >
+              {body}
+            </ComposeDock>
+          ) : undefined}
         />
       )}
 

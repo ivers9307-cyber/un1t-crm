@@ -14,7 +14,7 @@
 // provide — this file now opts into jsdom the same way its siblings
 // (MailThread/MailSurface/MailList.test.jsx) already do.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   MAIL_VIEWS, DEFAULT_MAIL_VIEW, mailView, buildMailUrl,
   isArchived, needsReply, isUnread, isTypingTarget, neighbourId,
@@ -26,6 +26,10 @@ import {
   readReaderMode, writeReaderMode, escTarget, restoreTarget,
   BODY_EXPANDED_KEY, readBodyExpanded, writeBodyExpanded,
   frameHeightClass, replyPillLabel,
+  COMPOSE_MODES, COMPOSE_MODE_MIN, DEFAULT_COMPOSE_MODE, COMPOSE_MODE_KEY,
+  readComposeMode, writeComposeMode, composeRestoreTarget,
+  composeEscTarget, composeBlocksKeys, slotYieldTarget, slotOccupancy,
+  composeCardTitle, isMdUp,
 } from './mail-display'
 
 describe('the two states a conversation can be in', () => {
@@ -709,5 +713,181 @@ describe('replyPillLabel — the collapsed composer’s one line', () => {
     expect(replyPillLabel({})).toBe('Reply…')
     expect(replyPillLabel(null)).toBe('Reply…')
     expect(replyPillLabel({ requester_name: '   ' })).toBe('Reply…')
+  })
+})
+
+/* ── MAIL-DOCK.2 — compose joins the dock ────────────────────────────── */
+
+describe('compose mode — its OWN key, the reader-mode discipline cloned', () => {
+  beforeEach(() => window.localStorage.clear())
+
+  it('defaults to dock with nothing stored, under its own key', () => {
+    expect(readComposeMode()).toBe('dock')
+    expect(DEFAULT_COMPOSE_MODE).toBe('dock')
+    expect(COMPOSE_MODE_KEY).toBe('un1t.mail.compose-mode')
+  })
+
+  it('round-trips the two persistable modes', () => {
+    writeComposeMode('full')
+    expect(readComposeMode()).toBe('full')
+    writeComposeMode('dock')
+    expect(readComposeMode()).toBe('dock')
+    expect(COMPOSE_MODES).toEqual(['dock', 'full'])
+  })
+
+  it('never touches the READER key — the two preferences are independent', () => {
+    writeReaderMode('full')
+    writeComposeMode('dock')
+    expect(readReaderMode()).toBe('full')
+    writeComposeMode('full')
+    expect(window.localStorage.getItem(READER_MODE_KEY)).toBe('full')
+    expect(window.localStorage.getItem(COMPOSE_MODE_KEY)).toBe('full')
+    writeReaderMode('dock')
+    expect(readComposeMode()).toBe('full')
+  })
+
+  it('validates on read — a garbage stored value fails safe to dock', () => {
+    window.localStorage.setItem(COMPOSE_MODE_KEY, 'sideways')
+    expect(readComposeMode()).toBe('dock')
+  })
+
+  it('🔴 min NEVER persists — writeComposeMode refuses it outright', () => {
+    writeComposeMode('full')
+    writeComposeMode(COMPOSE_MODE_MIN)
+    expect(window.localStorage.getItem(COMPOSE_MODE_KEY)).toBe('full')
+    // …and even a hand-planted min is refused on the way back out.
+    window.localStorage.setItem(COMPOSE_MODE_KEY, 'min')
+    expect(readComposeMode()).toBe('dock')
+  })
+
+  it('survives a hostile localStorage without throwing', () => {
+    const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked') })
+    expect(readComposeMode()).toBe('dock')
+    spy.mockRestore()
+    const setSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked') })
+    expect(() => writeComposeMode('full')).not.toThrow()
+    setSpy.mockRestore()
+  })
+})
+
+describe('composeRestoreTarget — where the compose bar restores to', () => {
+  it('returns a persistable previous mode as it is', () => {
+    expect(composeRestoreTarget('full')).toBe('full')
+    expect(composeRestoreTarget('dock')).toBe('dock')
+  })
+
+  it('never answers min, and falls back to the default for garbage', () => {
+    expect(composeRestoreTarget(COMPOSE_MODE_MIN)).toBe('dock')
+    expect(composeRestoreTarget(undefined)).toBe('dock')
+  })
+})
+
+describe('composeEscTarget — the compose Esc ladder is DIRTY-AWARE', () => {
+  it('🔴 a dirty compose NEVER discards: full → dock → min, and min is the floor', () => {
+    expect(composeEscTarget('full', true)).toBe('dock')
+    expect(composeEscTarget('dock', true)).toBe(COMPOSE_MODE_MIN)
+    // Esc on the minimised bar with a dirty draft does nothing further —
+    // answering the SAME mode is how "nothing" is spelled, so the caller can
+    // compare rather than branch on a third sentinel.
+    expect(composeEscTarget(COMPOSE_MODE_MIN, true)).toBe(COMPOSE_MODE_MIN)
+  })
+
+  it('a pristine compose closes from every shape — null means requestClose', () => {
+    expect(composeEscTarget('full', false)).toBeNull()
+    expect(composeEscTarget('dock', false)).toBeNull()
+    expect(composeEscTarget(COMPOSE_MODE_MIN, false)).toBeNull()
+  })
+
+  it('an unknown mode fails toward the draft: dirty parks at min, pristine closes', () => {
+    expect(composeEscTarget('sideways', true)).toBe(COMPOSE_MODE_MIN)
+    expect(composeEscTarget(undefined, true)).toBe(COMPOSE_MODE_MIN)
+    expect(composeEscTarget('sideways', false)).toBeNull()
+  })
+})
+
+describe('composeBlocksKeys — the guard lifts ONLY while compose is a bar', () => {
+  it('an open compose CARD keeps j/k/e/u inert (dock and full alike)', () => {
+    expect(composeBlocksKeys(true, 'dock')).toBe(true)
+    expect(composeBlocksKeys(true, 'full')).toBe(true)
+  })
+
+  it('a MINIMISED compose lifts the guard — the reader flows again', () => {
+    expect(composeBlocksKeys(true, COMPOSE_MODE_MIN)).toBe(false)
+  })
+
+  it('no compose, no guard — whatever the leftover mode says', () => {
+    expect(composeBlocksKeys(false, 'dock')).toBe(false)
+    expect(composeBlocksKeys(false, COMPOSE_MODE_MIN)).toBe(false)
+  })
+})
+
+describe('slotYieldTarget — one bottom-right slot, auto-minimise both ways', () => {
+  it('an open CARD yields to min when the other occupant takes the slot', () => {
+    expect(slotYieldTarget(true, 'dock')).toBe('min')
+    expect(slotYieldTarget(true, 'full')).toBe('min')
+  })
+
+  it('an already-minimised occupant stays put — its bar survives', () => {
+    expect(slotYieldTarget(true, 'min')).toBeNull()
+  })
+
+  it('an absent occupant needs no yielding', () => {
+    expect(slotYieldTarget(false, 'dock')).toBeNull()
+    expect(slotYieldTarget(false, 'min')).toBeNull()
+  })
+})
+
+describe('slotOccupancy — what one occupant shows as, for the other’s offset', () => {
+  it('closed holds no ground', () => {
+    expect(slotOccupancy(false, 'dock')).toBe('none')
+  })
+
+  it('a bar is a bar, a docked card is a card', () => {
+    expect(slotOccupancy(true, 'min')).toBe('bar')
+    expect(slotOccupancy(true, 'dock')).toBe('card')
+  })
+
+  it('full is an OVERLAY — it holds no bottom-right ground', () => {
+    expect(slotOccupancy(true, 'full')).toBe('none')
+  })
+
+  it('an unknown mode reads as the default card rather than vanishing', () => {
+    expect(slotOccupancy(true, 'sideways')).toBe('card')
+  })
+})
+
+describe('composeCardTitle — the typed subject, live, else New email', () => {
+  it('shows the subject as typed', () => {
+    expect(composeCardTitle('Re: your trial')).toBe('Re: your trial')
+  })
+
+  it('falls back for empty and whitespace-only subjects', () => {
+    expect(composeCardTitle('')).toBe('New email')
+    expect(composeCardTitle('   ')).toBe('New email')
+    expect(composeCardTitle(undefined)).toBe('New email')
+  })
+})
+
+describe('isMdUp — which composer shell a fresh open gets', () => {
+  const realMatchMedia = window.matchMedia
+
+  afterEach(() => {
+    // jsdom has no matchMedia of its own — restore whatever was there.
+    window.matchMedia = realMatchMedia
+  })
+
+  it('true at md+ (the dock machinery), false below (the Modal, byte-for-byte)', () => {
+    window.matchMedia = vi.fn(() => ({ matches: true }))
+    expect(isMdUp()).toBe(true)
+    expect(window.matchMedia).toHaveBeenCalledWith('(min-width: 768px)')
+    window.matchMedia = vi.fn(() => ({ matches: false }))
+    expect(isMdUp()).toBe(false)
+  })
+
+  it('fails safe to the Modal when matchMedia is missing or hostile', () => {
+    window.matchMedia = undefined
+    expect(isMdUp()).toBe(false)
+    window.matchMedia = () => { throw new Error('blocked') }
+    expect(isMdUp()).toBe(false)
   })
 })

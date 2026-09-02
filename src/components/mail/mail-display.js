@@ -428,6 +428,142 @@ export function replyPillLabel(ticket) {
   return 'Reply…'
 }
 
+/* ── MAIL-DOCK.2 — compose joins the dock ──────────────────────────── */
+//
+// The new-email composer takes the SAME three shapes as the reader — dock,
+// full, min — in MAIL-DOCK.1's exact vocabulary, and this block owns every
+// branchable decision about them so ComposeDock stays as thin as MailDock.
+//
+// TWO RULES SET IT APART FROM THE READER, both because a compose card holds
+// words nobody else has a copy of:
+//   • 🔴 THE ESC LADDER IS DIRTY-AWARE. Esc on a dirty compose MINIMISES,
+//     never discards (full → dock → min, and min is the floor); only ✕ —
+//     with TicketCompose's own confirm — can throw a typed draft away. A
+//     pristine compose closes on Esc from any shape, exactly like the reader.
+//   • ONE BOTTOM-RIGHT SLOT. Compose and the reader share the corner: at
+//     most one of them is a CARD at a time. Opening/restoring one card
+//     auto-minimises the other (its bar survives; state stays mounted);
+//     closing either restores nothing automatically.
+//
+// Mode persists per user under its OWN key ('dock'|'full' only, min never
+// stored) — the same read/write discipline as readReaderMode above, cloned
+// rather than shared so the two preferences can never overwrite each other.
+
+/** The two persistable compose modes. `min` is deliberately not in this list. */
+export const COMPOSE_MODES = ['dock', 'full']
+export const COMPOSE_MODE_MIN = 'min'
+export const DEFAULT_COMPOSE_MODE = 'dock'
+export const COMPOSE_MODE_KEY = 'un1t.mail.compose-mode'
+
+/** The stored compose mode, or the default — validated, SSR-safe, throw-safe. */
+export function readComposeMode() {
+  try {
+    if (typeof window === 'undefined') return DEFAULT_COMPOSE_MODE
+    const stored = window.localStorage.getItem(COMPOSE_MODE_KEY)
+    return COMPOSE_MODES.includes(stored) ? stored : DEFAULT_COMPOSE_MODE
+  } catch {
+    return DEFAULT_COMPOSE_MODE
+  }
+}
+
+/** Persist a compose mode. Silently refuses `min` and anything unrecognised. */
+export function writeComposeMode(mode) {
+  if (!COMPOSE_MODES.includes(mode)) return
+  try {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(COMPOSE_MODE_KEY, mode)
+  } catch {
+    // A preference that could not be saved resets next visit. Never an error.
+  }
+}
+
+/**
+ * Where a minimised compose restores to, and what a close resets the next
+ * open to. Only a persistable mode is a legitimate answer — min restoring to
+ * min would be a card that can never come back.
+ */
+export function composeRestoreTarget(prevMode) {
+  return COMPOSE_MODES.includes(prevMode) ? prevMode : DEFAULT_COMPOSE_MODE
+}
+
+/**
+ * The compose Esc ladder — dirty-aware, which is the whole point.
+ *
+ * Dirty: `full → dock → min`, and min answers ITSELF (the bar is the floor —
+ * the caller compares and does nothing). Pristine: null from every shape,
+ * meaning requestClose — which closes silently, because the same dirty flag
+ * that routed here is the one TicketCompose's confirm checks.
+ *
+ * An UNKNOWN mode fails toward the draft: dirty parks at min rather than
+ * closing, because the cost of being wrong is somebody's typed email.
+ */
+export function composeEscTarget(mode, dirty) {
+  if (!dirty) return null
+  if (mode === 'full') return 'dock'
+  return COMPOSE_MODE_MIN
+}
+
+/**
+ * 🔴 Does the compose window own the keyboard? True while the CARD is open
+ * (dock or full — a stray `j` must not archive under a composer, unchanged
+ * posture from the modal days); false while it is MINIMISED, which is what
+ * lets j/k/e flow to the reader again while the draft waits in the bar.
+ * The Modal variant (below md) never reaches `min`, so this answers true
+ * for it exactly as the old bare `composeOpen` guard did.
+ */
+export function composeBlocksKeys(composeOpen, composeMode) {
+  return !!composeOpen && composeMode !== COMPOSE_MODE_MIN
+}
+
+/**
+ * One bottom-right slot: the mode the OTHER occupant should step to when a
+ * card opens or restores — `min` when it is currently a card (dock or full),
+ * null when nothing need change (absent, or already a bar). Used in BOTH
+ * directions: opening compose minimises the reader, restoring the reader
+ * minimises compose.
+ */
+export function slotYieldTarget(otherOpen, otherMode) {
+  if (!otherOpen) return null
+  if (otherMode === COMPOSE_MODE_MIN) return null
+  return COMPOSE_MODE_MIN
+}
+
+/**
+ * What one occupant currently shows as at md+, so the other can offset its
+ * own bar around it: 'none' (closed — or FULL, which is an inset-4 overlay
+ * and holds no bottom-right ground), 'bar' (minimised), 'card' (docked).
+ */
+export function slotOccupancy(open, mode) {
+  if (!open) return 'none'
+  if (mode === COMPOSE_MODE_MIN) return 'bar'
+  if (mode === 'full') return 'none'
+  return 'card'
+}
+
+/** The compose title bar's text: the typed subject, live, else "New email". */
+export function composeCardTitle(subject) {
+  const s = typeof subject === 'string' ? subject.trim() : ''
+  return s || 'New email'
+}
+
+/**
+ * Which composer shell a FRESH open gets: the dock machinery at md+ (768px,
+ * Tailwind's md — the same breakpoint every md: class in MailDock answers
+ * to), the full-screen Modal below it, byte-for-byte today's mobile
+ * behaviour. Decided AT OPEN and frozen for that compose session (see
+ * MailSurface), so a mid-compose window resize can never remount the form
+ * and lose the draft. Fails safe to the Modal: jsdom, SSR and a hostile
+ * matchMedia all answer false, which is the path that existed before.
+ */
+export function isMdUp() {
+  try {
+    if (typeof window === 'undefined') return false
+    return !!window.matchMedia?.('(min-width: 768px)')?.matches
+  } catch {
+    return false
+  }
+}
+
 /* ─────────────────────────── reply drafts ─────────────────────────── */
 
 /**
