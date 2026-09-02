@@ -45,6 +45,16 @@ export async function POST(request) {
   const db = createServerClient()
   const filePath = `signatures/${user.id}/photo.${ext}`
   const buffer = Buffer.from(await file.arrayBuffer())
+  // Audit MAIL-SIG.1 #2 — file.type is client-asserted: sniff the magic
+  // bytes so arbitrary payloads can't be parked on our public host wearing
+  // an image content-type.
+  const sniffOk =
+    (file.type === 'image/jpeg' && buffer.length > 3 && buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) ||
+    (file.type === 'image/png' && buffer.length > 8 && buffer.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4E, 0x47]))) ||
+    (file.type === 'image/webp' && buffer.length > 12 && buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP')
+  if (!sniffOk) {
+    return NextResponse.json({ success: false, error: 'That file does not look like a JPEG, PNG or WebP image' }, { status: 400 })
+  }
   const { error: uploadError } = await db.storage
     .from('branding')
     .upload(filePath, buffer, { contentType: file.type, upsert: true })

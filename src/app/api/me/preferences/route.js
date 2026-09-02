@@ -38,7 +38,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { LANDING_PREFERENCE_VALUES } from '@shared/permissions'
-import { MAX_SIGNATURE_LENGTH, normalizeSignature, MAX_SIGNATURE_LINKS, SIGNATURE_PHOTO_URL_PREFIXES } from '@/lib/email-signature'
+import { MAX_SIGNATURE_LENGTH, normalizeSignature, MAX_SIGNATURE_LINKS, isAllowedSignaturePhotoUrl } from '@/lib/email-signature'
 
 export const runtime = 'nodejs'
 
@@ -59,8 +59,10 @@ const PreferencesSchema = z.object({
     phone: z.string().max(60).optional().default(''),
     note: z.string().max(200).optional().default(''),
     photo_url: z.string().url().max(500)
-      .refine(u => SIGNATURE_PHOTO_URL_PREFIXES.some(p => u.startsWith(p)),
-        'Photo must be uploaded through the signature editor')
+      // The RENDERER'S own normalized check (audit #1): one rule, two gates —
+      // a dot-segment path that would normalize outside the branding bucket
+      // is refused here exactly as the render would refuse to embed it.
+      .refine(isAllowedSignaturePhotoUrl, 'Photo must be uploaded through the signature editor')
       .nullable().optional(),
     links: z.array(z.object({
       label: z.string().max(40),

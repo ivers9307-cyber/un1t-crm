@@ -109,10 +109,22 @@ export const MAX_SIGNATURE_LINKS = 5
 
 const httpUrl = (u) => typeof u === 'string' && /^https?:\/\//i.test(u.trim()) ? u.trim() : null
 
-function allowedPhoto(url) {
+/**
+ * Audit MAIL-SIG.1 #1 — the prefix is compared on the NORMALIZED URL, so a
+ * crafted `/branding/../other-bucket/...` (which the recipient's client
+ * normalizes before requesting) cannot slip past a raw startsWith. Exported
+ * so the write-side zod refine uses the SAME check — one rule, two gates.
+ */
+export function isAllowedSignaturePhotoUrl(url) {
   const u = httpUrl(url)
-  if (!u) return null
-  return SIGNATURE_PHOTO_URL_PREFIXES.some(p => u.startsWith(p)) ? u : null
+  if (!u) return false
+  let normalized
+  try { normalized = new URL(u).href } catch { return false }
+  return SIGNATURE_PHOTO_URL_PREFIXES.some(p => normalized.startsWith(p))
+}
+
+function allowedPhoto(url) {
+  return isAllowedSignaturePhotoUrl(url) ? String(url).trim() : null
 }
 
 /**
@@ -145,27 +157,39 @@ export function renderRichSignature(rich) {
   if (!name && !title && !phone && !note && !photo && links.length === 0) return null
 
   const textLines = [
-    name, title, note, phone,
+    name, [title, note].filter(Boolean).join(' · '), phone,
     ...links.map(l => (l.label ? `${l.label}: ${l.url}` : l.url)),
   ].filter(Boolean)
   const text = textLines.join('\n')
 
-  // Email-safe markup: a single table, inline styles only, no classes.
-  const rows = []
-  if (name) rows.push(`<div style="font-weight:600;color:#0f172a">${esc(name)}</div>`)
-  if (title) rows.push(`<div style="color:#475569">${esc(title)}</div>`)
-  if (note) rows.push(`<div style="color:#475569">${esc(note)}</div>`)
-  if (phone) rows.push(`<div style="color:#475569">${esc(phone)}</div>`)
-  if (links.length) {
-    rows.push(`<div style="margin-top:4px">${links.map(l =>
-      `<a href="${esc(l.url)}" style="color:#2563eb;text-decoration:none">${esc(l.label || l.url)}</a>`
-    ).join('<span style="color:#94a3b8"> · </span>')}</div>`)
-  }
-  const photoCell = photo
-    ? `<td style="vertical-align:top;padding-right:12px"><img src="${esc(photo)}" width="56" height="56" alt="" style="border-radius:50%;display:block;object-fit:cover" /></td>`
+  // ── Design A, "The rule" (Richard's pick, 2 Sep) ─────────────────────
+  // Heavy black rule; the name bold, uppercase and letter-spaced like the
+  // UN1T wordmark; details in quiet grey; the link row in small caps. The
+  // avatar cell shows the profile photo when uploaded, else an INITIALS
+  // block — a table cell, not an image, so it renders with zero requests
+  // in every client (rounded corners degrade to square in old Outlook,
+  // acceptable). Email-safe throughout: one table, inline styles only.
+  const initials = name
+    ? name.trim().split(/\s+/).slice(0, 2).map(w => w[0].toUpperCase()).join('')
     : ''
+  const detail = [title, note].filter(Boolean).join(' · ')
+
+  const rows = []
+  if (name) rows.push(`<div style="font-weight:800;font-size:14px;letter-spacing:.08em;text-transform:uppercase;color:#0f172a">${esc(name)}</div>`)
+  if (detail) rows.push(`<div style="color:#64748b;font-size:12.5px">${esc(detail)}</div>`)
+  if (phone) rows.push(`<div style="color:#64748b;font-size:12.5px">${esc(phone)}</div>`)
+  if (links.length) {
+    rows.push(`<div style="margin-top:7px;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase">${links.map(l =>
+      `<a href="${esc(l.url)}" style="color:#0f172a;font-weight:700;text-decoration:none">${esc(l.label || l.url)}</a>`
+    ).join('<span style="color:#cbd5e1"> &nbsp;|&nbsp; </span>')}</div>`)
+  }
+  const avatarCell = photo
+    ? `<td style="vertical-align:top;padding:14px 14px 0 0"><img src="${esc(photo)}" width="56" height="56" alt="" style="border-radius:50%;display:block;object-fit:cover" /></td>`
+    : (initials
+      ? `<td style="vertical-align:top;padding:14px 14px 0 0"><table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="width:56px;height:56px;border-radius:50%;background:#0f172a;color:#ffffff;font-weight:800;font-size:18px;letter-spacing:.03em;text-align:center;vertical-align:middle">${esc(initials)}</td></tr></table></td>`
+      : '')
   const html =
-    `<table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:16px;border-top:1px solid #e2e8f0;padding-top:12px;font-family:-apple-system,'Segoe UI',sans-serif;font-size:13px;line-height:1.5"><tr>${photoCell}<td style="vertical-align:top;padding-top:${photo ? '0' : '0'}px">${rows.join('')}</td></tr></table>`
+    `<table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:18px;border-top:3px solid #0f172a;font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:13px;line-height:1.5"><tr>${avatarCell}<td style="vertical-align:top;padding-top:14px">${rows.join('')}</td></tr></table>`
 
   return { text, html }
 }

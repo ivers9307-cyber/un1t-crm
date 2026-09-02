@@ -1338,3 +1338,25 @@ describe('a merged ticket cannot be replied from', () => {
     expect(sendEmail).toHaveBeenCalledTimes(1)
   })
 })
+
+// MAIL-SIG.1 — the reply route (the highest-traffic send path) carries the
+// rich signature exactly as compose does; audit #3 flagged it untested.
+it('a rich signature rides the reply in both parts; disabled keeps plain byte-for-byte', async () => {
+  getCurrentUser.mockResolvedValue({
+    ...COACH,
+    email_signature: 'plain fallback',
+    email_signature_rich: { enabled: true, name: 'Dean Nolan', title: 'Head Coach' },
+  })
+  setupDb(baseState({
+    grants: [GRANT_STUDIO],
+    tickets: [{ ...T_STUDIO }],
+    messages: [{ id: 'm-in', ticket_id: T_STUDIO.id, location_id: T_STUDIO.location_id, direction: 'inbound', from_email: T_STUDIO.requester_email, text_body: 'hi', created_at: '2026-08-06T09:00:00Z' }],
+  }))
+  const res = await post(T_STUDIO.id, { text: 'Reply body' })
+  expect(res.status).toBe(200)
+  const sent = sendEmail.mock.calls[0][0]
+  expect(sent.textBody).toContain('-- \nDean Nolan')
+  expect(sent.textBody).not.toContain('plain fallback')
+  expect(sent.htmlBody).toContain('DEAN NOLAN'.length ? 'Dean Nolan' : '')
+  expect(sent.htmlBody).toContain('border-top:3px solid #0f172a')
+})

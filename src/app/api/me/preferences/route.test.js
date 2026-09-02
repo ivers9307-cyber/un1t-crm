@@ -146,3 +146,43 @@ describe('GET /api/me/preferences', () => {
     expect(body.data).toEqual({ landing_preference: 'auto', email_signature: '', email_signature_rich: null })
   })
 })
+
+// ── MAIL-SIG.1 audit #3 — the rich schema's refusals, as tests not comments ──
+describe('PATCH email_signature_rich — the write-side gates', () => {
+  const GOOD = {
+    enabled: true, name: 'X', links: [],
+    photo_url: 'https://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/signatures/u/p.jpg',
+  }
+
+  it('accepts the shape and writes ONLY that column', async () => {
+    setupDb()
+    const res = await patch({ email_signature_rich: GOOD })
+    expect(res.status).toBe(200)
+    // zod's .default('') fills the optional strings — the WRITTEN row is the
+    // parsed shape, which is exactly what the renderer expects to read back.
+    expect(db.updates[0].payload).toEqual({
+      email_signature_rich: { ...GOOD, title: '', phone: '', note: '' },
+    })
+  })
+
+  it('400s a foreign photo_url — including a dot-segment escape', async () => {
+    for (const url of [
+      'https://evil.example/x.jpg',
+      'https://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/../other/x.jpg',
+    ]) {
+      setupDb()
+      const res = await patch({ email_signature_rich: { ...GOOD, photo_url: url } })
+      expect(res.status).toBe(400)
+    }
+  })
+
+  it('400s unknown keys (strict), a sixth link, and a javascript: link', async () => {
+    setupDb()
+    expect((await patch({ email_signature_rich: { ...GOOD, sneaky: 1 } })).status).toBe(400)
+    setupDb()
+    const six = Array.from({ length: 6 }, (_, i) => ({ label: `L${i}`, url: `https://x.ie/${i}` }))
+    expect((await patch({ email_signature_rich: { ...GOOD, links: six } })).status).toBe(400)
+    setupDb()
+    expect((await patch({ email_signature_rich: { ...GOOD, links: [{ label: 'x', url: 'javascript:alert(1)' }] } })).status).toBe(400)
+  })
+})

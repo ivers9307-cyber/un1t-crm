@@ -182,3 +182,36 @@ describe('SIGNATURE_PHOTO_URL_PREFIXES', () => {
     }
   })
 })
+
+// ── Design A pins (Richard's pick + follow-ups, 2 Sep) ──────────────────
+describe('renderRichSignature — design A', () => {
+  it('renders the initials block when no photo is uploaded — never an empty avatar slot', () => {
+    const out = renderRichSignature({ ...RICH, photo_url: null })
+    expect(out.html).toContain('>GI<') // Garrett Ivers → GI
+    expect(out.html).not.toContain('<img')
+  })
+
+  it('the photo replaces the initials, round, from our bucket only', () => {
+    const out = renderRichSignature(RICH)
+    expect(out.html).toContain('<img')
+    expect(out.html).not.toContain('>GI<')
+  })
+
+  it('initials are escaped like everything else', () => {
+    const out = renderRichSignature({ ...RICH, name: '<b>x</b> y', photo_url: null })
+    expect(out.html).not.toContain('<b>')
+  })
+
+  it('carries the black rule and the uppercase name treatment', () => {
+    const out = renderRichSignature(RICH)
+    expect(out.html).toContain('border-top:3px solid #0f172a')
+    expect(out.html).toContain('text-transform:uppercase')
+  })
+})
+
+describe('isAllowedSignaturePhotoUrl — the normalized check (audit #1)', () => {
+  it('refuses a dot-segment path that normalizes outside the branding bucket', () => {
+    const sneaky = 'https://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/../secrets/x.png'
+    expect(renderRichSignature({ ...RICH, photo_url: sneaky }).html).not.toContain('secrets')
+  })
+})
