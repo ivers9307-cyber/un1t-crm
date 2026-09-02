@@ -31,6 +31,7 @@
 // is not a ticketing problem.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Archive, ArchiveRestore, Link2, Mail, MailOpen, X } from 'lucide-react'
 import { EmptyState, Modal } from '@/components/ui'
 import TicketThread from '@/components/tickets/TicketThread'
@@ -78,6 +79,11 @@ export default function MailThread({
   // guard must know when THIS pane's picker is open; without it an escaped
   // keypress archives the conversation behind the modal.
   onModalOpenChange,
+  // MAIL-DOCK.1 — which card the thread is living in ('dock' | 'full'),
+  // forwarded verbatim so the sandboxed frames size to their window. Absent
+  // (a caller that never heard of the dock) TicketThread keeps its pre-dock
+  // heights.
+  frameSize,
 }) {
   const archived = isArchived(conversation)
   const waiting = needsReply(conversation)
@@ -92,6 +98,9 @@ export default function MailThread({
   // be worse than none.
   const [related, setRelated] = useState(null)
   const [pickerOpen, setPickerOpen] = useState(false)
+  // Audit A1 — the attachment preview is the second overlay that owns
+  // Escape; the guard hears the OR of both.
+  const [attachmentOverlayOpen, setAttachmentOverlayOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [merging, setMerging] = useState(false)
   const [mergeError, setMergeError] = useState(null)
@@ -126,10 +135,10 @@ export default function MailThread({
   }, [])
 
   useEffect(() => {
-    onModalOpenChange?.(pickerOpen)
+    onModalOpenChange?.(pickerOpen || attachmentOverlayOpen)
     return () => onModalOpenChange?.(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- notify on open-state changes only
-  }, [pickerOpen])
+  }, [pickerOpen, attachmentOverlayOpen])
 
   useEffect(() => {
     setRelated(null)
@@ -239,7 +248,14 @@ export default function MailThread({
       hasSelection={hasSelection}
       ticket={conversation}
       messages={messages}
+      // MAIL-DOCK.1 — the card is a smaller window than the old pane, so the
+      // frames size to it, and the composer opens as the mockup's slim pill
+      // in BOTH dock and full (a saved draft auto-expands it; see
+      // TicketReplyBox's startCollapsed).
+      frameSize={frameSize}
+      replyStartCollapsed
       mergedSources={mergedSources}
+      onOverlayOpenChange={setAttachmentOverlayOpen}
       onOpenMergedInto={onOpenConversation ? (id) => onOpenConversation({ id }) : undefined}
       replyRecipients={replyRecipients}
       attachmentsUnavailable={attachmentsUnavailable}
@@ -410,7 +426,11 @@ export default function MailThread({
 
     {/* The success toast — the ONLY place Undo lives (no persistent UI).
         Dismisses itself after a few seconds; an in-flight undo holds it. */}
-    {mergeToast && mergeToast.ids.length > 0 && (
+    {/* Audit A3 — PORTALLED: the toast carries the only Undo, and rendered
+        inside the dock's subtree a minimise (md:hidden on an ancestor) would
+        silently kill a live Undo affordance. On document.body it survives
+        minimise and never overlaps the reply pill. */}
+    {mergeToast && mergeToast.ids.length > 0 && typeof document !== 'undefined' && createPortal(
       <div
         role="status"
         className="fixed bottom-4 right-4 z-50 flex max-w-sm flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-black px-4 py-2.5 text-xs text-white shadow-lg"
@@ -439,7 +459,8 @@ export default function MailThread({
         {toastError && (
           <span className="w-full bg-black text-red-300" role="alert">{toastError}</span>
         )}
-      </div>
+      </div>,
+      document.body
     )}
     </>
   )

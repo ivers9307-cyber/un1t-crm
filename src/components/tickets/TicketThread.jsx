@@ -86,6 +86,12 @@ import {
   defaultExpandedMessageId,
   messageSnippet,
   collapsedSenderLabel,
+  // MAIL-DOCK.1 — the frame's height is context-sized now (dock/full/legacy
+  // default), and the operator's Expand choice persists. Both decisions live
+  // in the pure module; this file only reads them.
+  frameHeightClass,
+  readBodyExpanded,
+  writeBodyExpanded,
 } from '@/components/mail/mail-display'
 import { joinPointsByMessage } from '@/lib/email-tickets'
 // EMAIL-CONTACT-CHIP.1 — the house funnel/off-funnel taxonomy (FUNNEL.1),
@@ -205,6 +211,20 @@ export default function TicketThread({
   // Forwarded verbatim to the composer — the one sentence in there written in
   // the ticket lifecycle's vocabulary. See TicketReplyBox.jsx.
   archivedHint,
+  // MAIL-DOCK.1 — which window the thread is rendering into ('dock' |
+  // 'full'). Only the email frames read it (via frameHeightClass); absent,
+  // they keep the exact heights they had before the dock existed, which is
+  // what every render without the prop still gets.
+  frameSize,
+  // MAIL-DOCK.1 — the composer opens as a slim pill until clicked (or until
+  // a saved draft auto-expands it). Default false: every pre-dock caller and
+  // test keeps the always-open composer byte-for-byte.
+  replyStartCollapsed = false,
+  // MAIL-DOCK.1 audit A1 — any overlay that owns Escape must be visible to
+  // MailSurface's keyboard guard, or the same keydown that closes the
+  // attachment preview also closes the whole reader card (the house Modal
+  // has no focus trap and stops no propagation).
+  onOverlayOpenChange,
 }) {
   const endRef = useRef(null)
   // EMAIL-ATTACH-RACE.1 — scroll on a NEW message, not on every re-read.
@@ -221,6 +241,11 @@ export default function TicketThread({
   // close it. Only the row is held; the signed URL is minted by the overlay
   // when it opens and lives no longer than it does.
   const [openAttachment, setOpenAttachment] = useState(null)
+  useEffect(() => {
+    onOverlayOpenChange?.(!!openAttachment)
+    return () => onOverlayOpenChange?.(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- report open-state changes only
+  }, [openAttachment])
   const ticketId = ticket?.id
   useEffect(() => { setOpenAttachment(null) }, [ticketId])
 
@@ -471,6 +496,7 @@ export default function TicketThread({
                 onOpenAttachment={setOpenAttachment}
                 onForward={onForward}
                 messagesById={messagesById}
+                frameSize={frameSize}
               />
             </Fragment>
           ))
@@ -533,6 +559,7 @@ export default function TicketThread({
         <TicketReplyBox
           key={ticketId}
           ticket={ticket}
+          startCollapsed={replyStartCollapsed}
           replyRecipients={replyRecipients}
           onSend={onSend}
           onRemoveRecipient={onRemoveRecipient}
@@ -579,10 +606,27 @@ function showImagesIn(doc) {
  * height, so it gets a fixed box that scrolls — vertically, and horizontally
  * for the 600px-wide tables marketing email is built from. The email scrolls
  * inside its box; it never widens the CRM.
+ *
+ * MAIL-DOCK.1 — the box is sized to the WINDOW it renders in (`frameSize`:
+ * dock/full, absent = the pre-dock heights), and the operator's Expand choice
+ * persists across messages and sessions (readBodyExpanded/writeBodyExpanded —
+ * try/caught both directions in the lib). The lazy initial state is safe
+ * because this frame only ever mounts after a client-side fetch delivers a
+ * message; nothing about the SANDBOX changes, and nothing here may ever
+ * change it — heights move, the sandbox never (email-html.test.js reads the
+ * attribute below as code).
  */
-function EmailFrame({ html, blockedImages = 0, label, onAccent = false }) {
+function EmailFrame({ html, blockedImages = 0, label, onAccent = false, frameSize }) {
   const [showImages, setShowImages] = useState(false)
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useState(() => readBodyExpanded())
+
+  function toggleExpanded() {
+    // Audit A6 — the storage write stays OUTSIDE the updater: StrictMode
+    // re-invokes updaters, and a side effect inside one runs twice.
+    const next = !expanded
+    setExpanded(next)
+    writeBodyExpanded(next)
+  }
 
   // An outbound message's controls sit on the accent bubble, where the
   // subtle-grey idiom is unreadable.
@@ -605,7 +649,7 @@ function EmailFrame({ html, blockedImages = 0, label, onAccent = false }) {
         )}
         <button
           type="button"
-          onClick={() => setExpanded(v => !v)}
+          onClick={toggleExpanded}
           className={`flex items-center gap-1 text-[11px] ${quietClass}`}
         >
           {expanded
@@ -626,7 +670,7 @@ function EmailFrame({ html, blockedImages = 0, label, onAccent = false }) {
         sandbox="allow-popups allow-popups-to-escape-sandbox"
         loading="lazy"
         title={label}
-        className={`w-full rounded-lg border border-un1t-border bg-white ${expanded ? 'h-[70vh]' : 'h-[420px]'}`}
+        className={`w-full rounded-lg border border-un1t-border bg-white ${frameHeightClass(frameSize, expanded)}`}
       />
     </div>
   )
@@ -1168,7 +1212,7 @@ function MessageAvatar({ me, label }) {
  *     panel exists because "I replied, that's done" is exactly the wrong
  *     mental model, and a collapsed row must not make it quietly right again.
  */
-function ThreadMessage({ message, ticket, ticketId, expanded, onToggle, onOpenAttachment, onForward, messagesById }) {
+function ThreadMessage({ message, ticket, ticketId, expanded, onToggle, onOpenAttachment, onForward, messagesById, frameSize }) {
   const kind = messageKind(message)
   const stamp = messageTimestamp(message.sent_at || message.created_at)
   const body = message.text_body || '(no text content)'
@@ -1296,6 +1340,7 @@ function ThreadMessage({ message, ticket, ticketId, expanded, onToggle, onOpenAt
                 html={html}
                 blockedImages={message.html_blocked_images}
                 label={`Reply sent to ${message.to_email || 'the member'}`}
+                frameSize={frameSize}
               />
             ) : (
               <p className="whitespace-pre-wrap break-words text-sm text-un1t-text">{body}</p>
@@ -1339,6 +1384,7 @@ function ThreadMessage({ message, ticket, ticketId, expanded, onToggle, onOpenAt
             html={html}
             blockedImages={message.html_blocked_images}
             label={`Email from ${message.from_email || 'the member'}`}
+            frameSize={frameSize}
           />
         ) : (
           <p className="whitespace-pre-wrap break-words text-sm text-un1t-text">{body}</p>

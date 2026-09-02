@@ -316,6 +316,9 @@ describe('MailSurface — keyboard', () => {
     fireEvent.click(await screen.findByText('Membership freeze'))
     await screen.findByText('Message on Membership freeze')
 
+    // MAIL-DOCK.1 — the dock opens the composer as the slim pill; typing
+    // means expanding it first, which is exactly what an operator does.
+    fireEvent.click(screen.getByRole('button', { name: 'Reply ↵' }))
     const composer = document.getElementById('ticket-composer')
     expect(composer).toBeTruthy()
     // Flushed so the listener provably holds the OPEN selection — otherwise a
@@ -423,6 +426,184 @@ describe('MailSurface — keyboard', () => {
     await screen.findByText('Message on Membership freeze')
     fireEvent.keyDown(document.body, { key: 'e', metaKey: true })
     expect(postsTo('/archive')).toHaveLength(0)
+  })
+})
+
+// MAIL-DOCK.1 — the docked reader. jsdom has no layout engine, so mode is
+// asserted through `data-reader-mode` and the classes that produce each shape
+// (the same structural stand-in the rail-below-md test uses), while the
+// BEHAVIOUR — Esc ladder, persistence, min restore, retargeting — is real.
+describe('MailSurface — the dock', () => {
+  const dock = () => document.querySelector('[data-reader-mode]')
+  const openFirst = async () => {
+    renderSurface()
+    fireEvent.click(await screen.findByText('Membership freeze'))
+    await screen.findByText('Message on Membership freeze')
+    await flushEffects()
+  }
+
+  beforeEach(() => window.localStorage.clear())
+  afterEach(() => window.localStorage.clear())
+
+  it('nothing selected: a full-width list, no card, no "Select a conversation" pane', async () => {
+    renderSurface()
+    await screen.findByText('Membership freeze')
+    expect(dock()).toBeNull()
+    expect(screen.queryByText('Select a conversation')).toBeNull()
+  })
+
+  it('selecting a conversation opens the card in dock mode, wearing its title and controls', async () => {
+    await openFirst()
+    expect(dock().getAttribute('data-reader-mode')).toBe('dock')
+    // The dark bar names the conversation; the subject is also the list row
+    // and the thread heading, hence at least 3.
+    expect(screen.getAllByText('Membership freeze').length).toBeGreaterThanOrEqual(3)
+    expect(screen.getByRole('button', { name: 'Minimise the conversation' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Expand to full screen' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Close the conversation' })).toBeTruthy()
+  })
+
+  it('chips Needs reply on the bar only while the conversation needs one', async () => {
+    await openFirst()
+    // CONV_A needs a reply — the bar carries the chip beside the thread's own.
+    expect(screen.getAllByText('Needs reply').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('✕ closes: selection cleared, ?c= dropped, the card unmounts', async () => {
+    await openFirst()
+    fireEvent.click(screen.getByRole('button', { name: 'Close the conversation' }))
+    expect(dock()).toBeNull()
+    expect(screen.queryByText('Message on Membership freeze')).toBeNull()
+    expect(routerReplace).toHaveBeenLastCalledWith('/communications/mail', { scroll: false })
+  })
+
+  it('⤢ expands to full and PERSISTS the choice; ⤡ restores to dock and persists that', async () => {
+    await openFirst()
+    fireEvent.click(screen.getByRole('button', { name: 'Expand to full screen' }))
+    expect(dock().getAttribute('data-reader-mode')).toBe('full')
+    expect(window.localStorage.getItem('un1t.mail.reader-mode')).toBe('full')
+    fireEvent.click(screen.getByRole('button', { name: 'Restore to docked size' }))
+    expect(dock().getAttribute('data-reader-mode')).toBe('dock')
+    expect(window.localStorage.getItem('un1t.mail.reader-mode')).toBe('dock')
+  })
+
+  it('a stored full-screen preference opens the NEXT conversation full-screen', async () => {
+    window.localStorage.setItem('un1t.mail.reader-mode', 'full')
+    await openFirst()
+    expect(dock().getAttribute('data-reader-mode')).toBe('full')
+  })
+
+  it('a garbage stored mode fails safe to dock', async () => {
+    window.localStorage.setItem('un1t.mail.reader-mode', 'sideways')
+    await openFirst()
+    expect(dock().getAttribute('data-reader-mode')).toBe('dock')
+  })
+
+  it('Esc steps full down to dock WITHOUT overwriting the stored preference, then closes', async () => {
+    window.localStorage.setItem('un1t.mail.reader-mode', 'full')
+    await openFirst()
+    expect(dock().getAttribute('data-reader-mode')).toBe('full')
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(dock().getAttribute('data-reader-mode')).toBe('dock')
+    // Esc is a dismissal, not a preference — full-screen next time too.
+    expect(window.localStorage.getItem('un1t.mail.reader-mode')).toBe('full')
+    await flushEffects()
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(dock()).toBeNull()
+  })
+
+  it('Esc does NOT fire while the operator is typing', async () => {
+    await openFirst()
+    fireEvent.click(screen.getByRole('button', { name: 'Reply ↵' }))
+    const composer = document.getElementById('ticket-composer')
+    await flushEffects()
+    fireEvent.keyDown(composer, { key: 'Escape' })
+    // Still open, still reading the same conversation.
+    expect(dock()).toBeTruthy()
+    expect(screen.getByText('Message on Membership freeze')).toBeTruthy()
+  })
+
+  it('Esc does NOT close the card while a modal owns the keyboard', async () => {
+    await openFirst()
+    fireEvent.click(screen.getByRole('button', { name: /New email/i }))
+    await screen.findByRole('dialog')
+    await flushEffects()
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    // The modal's own Esc handling may close the MODAL; the conversation
+    // underneath must survive it.
+    expect(dock()).toBeTruthy()
+    expect(screen.getByText('Message on Membership freeze')).toBeTruthy()
+  })
+
+  it('─ minimises to the bar: thread hidden (not unmounted), min NEVER stored; the bar restores', async () => {
+    await openFirst()
+    fireEvent.click(screen.getByRole('button', { name: 'Minimise the conversation' }))
+    expect(dock().getAttribute('data-reader-mode')).toBe('min')
+    // Hidden at md+ by class, still MOUNTED — polls keep running.
+    const body = dock().lastElementChild
+    expect(body.className).toMatch(/(?:^|\s)md:hidden(?:\s|$)/)
+    expect(screen.getByText('Message on Membership freeze')).toBeTruthy()
+    // The transient state never reaches disk.
+    expect(window.localStorage.getItem('un1t.mail.reader-mode')).toBeNull()
+    // ─ again restores to the mode it came from.
+    fireEvent.click(screen.getByRole('button', { name: 'Restore the conversation' }))
+    expect(dock().getAttribute('data-reader-mode')).toBe('dock')
+  })
+
+  it('a card minimised from FULL restores to full', async () => {
+    await openFirst()
+    fireEvent.click(screen.getByRole('button', { name: 'Expand to full screen' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Minimise the conversation' }))
+    expect(dock().getAttribute('data-reader-mode')).toBe('min')
+    fireEvent.click(screen.getByRole('button', { name: 'Restore the conversation' }))
+    expect(dock().getAttribute('data-reader-mode')).toBe('full')
+  })
+
+  it('Esc closes a minimised card outright', async () => {
+    await openFirst()
+    fireEvent.click(screen.getByRole('button', { name: 'Minimise the conversation' }))
+    await flushEffects()
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(dock()).toBeNull()
+  })
+
+  it('closing from min does not leak min into the next open — it reopens as a real card', async () => {
+    await openFirst()
+    fireEvent.click(screen.getByRole('button', { name: 'Minimise the conversation' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close the conversation' }))
+    expect(dock()).toBeNull()
+    fireEvent.click(screen.getByText('Class times'))
+    await screen.findByText('Message on Class times')
+    expect(dock().getAttribute('data-reader-mode')).toBe('dock')
+  })
+
+  it('j/k retarget the open card to the next conversation without closing or changing mode', async () => {
+    window.localStorage.setItem('un1t.mail.reader-mode', 'full')
+    await openFirst()
+    expect(dock().getAttribute('data-reader-mode')).toBe('full')
+    fireEvent.keyDown(document.body, { key: 'j' })
+    await screen.findByText('Message on Class times')
+    expect(dock().getAttribute('data-reader-mode')).toBe('full')
+  })
+
+  it('j while minimised retargets the bar without popping it open', async () => {
+    await openFirst()
+    fireEvent.click(screen.getByRole('button', { name: 'Minimise the conversation' }))
+    await flushEffects()
+    fireEvent.keyDown(document.body, { key: 'j' })
+    await screen.findByText('Message on Class times')
+    expect(dock().getAttribute('data-reader-mode')).toBe('min')
+  })
+
+  it('a mouse CLICK on a row restores a minimised card — a click means "open this"', async () => {
+    // Audit A2 — j/k retarget the contracted bar (pinned above); a click is
+    // a different intent, and retitling an invisible bar reads as broken.
+    await openFirst()
+    fireEvent.click(screen.getByRole('button', { name: 'Minimise the conversation' }))
+    await flushEffects()
+    fireEvent.click(screen.getAllByText('Class times')[0]) // the other row
+    await flushEffects()
+    expect(dock().getAttribute('data-reader-mode')).toBe('dock')
   })
 })
 
@@ -732,10 +913,11 @@ describe('MailSurface — archiving during a search', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Archive$/ }))
 
     // The row survives IN THE LIST — a search hit, archived or not — as well
-    // as in the thread heading: two instances of the subject on screen, not
-    // one. The old behaviour would drop to one (list row gone) for a moment
-    // and then bounce back once the quiet refetch below landed.
-    await waitFor(() => expect(screen.getAllByText('Membership freeze')).toHaveLength(2))
+    // as in the thread heading and the dock's title bar (MAIL-DOCK.1 added
+    // the third): three instances of the subject on screen, not two. The old
+    // behaviour would drop the list row for a moment and then bounce it back
+    // once the quiet refetch below landed.
+    await waitFor(() => expect(screen.getAllByText('Membership freeze')).toHaveLength(3))
     // …and the operator is left reading the same conversation, not bounced
     // off it onto a successor.
     expect(screen.getByText('Message on Membership freeze')).toBeTruthy()

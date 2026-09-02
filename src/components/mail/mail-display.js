@@ -298,6 +298,136 @@ export function collapsedSenderLabel(message, conversation) {
   return from
 }
 
+/* ── MAIL-DOCK.1 — the docked reader ───────────────────────────────── */
+//
+// The split pane is gone: a selected conversation opens as a CARD over the
+// full-width list. The card has three modes and this module owns every
+// branchable decision about them, so the components stay thin and the rules
+// stay unit-tested:
+//
+//   dock — the default: a Gmail-compose-shaped card, bottom-right.
+//   full — the SAME card at near-fullscreen (the takeover), via ⤢.
+//   min  — only the title bar remains. A transient state of an OPEN card:
+//          it is NEVER persisted, and a close from min hands the next open
+//          back to the real mode underneath it.
+//
+// 🔴 MODE PERSISTS PER USER ('dock'|'full' only), validated on read exactly
+// like density: an operator who reads full-screen gets full-screen next time,
+// and a hand-planted or corrupt value fails safe to 'dock' rather than to a
+// mode the surface cannot render. The write REFUSES anything that is not one
+// of the two persistable modes, so 'min' cannot reach disk even through a
+// future caller that forgets the rule.
+
+/** The two persistable modes. `min` is deliberately not in this list. */
+export const READER_MODES = ['dock', 'full']
+export const READER_MODE_MIN = 'min'
+export const DEFAULT_READER_MODE = 'dock'
+export const READER_MODE_KEY = 'un1t.mail.reader-mode'
+
+/** The stored mode, or the default — validated, SSR-safe, throw-safe. */
+export function readReaderMode() {
+  try {
+    if (typeof window === 'undefined') return DEFAULT_READER_MODE
+    const stored = window.localStorage.getItem(READER_MODE_KEY)
+    return READER_MODES.includes(stored) ? stored : DEFAULT_READER_MODE
+  } catch {
+    return DEFAULT_READER_MODE
+  }
+}
+
+/** Persist a mode. Silently refuses `min` and anything else unrecognised. */
+export function writeReaderMode(mode) {
+  if (!READER_MODES.includes(mode)) return
+  try {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(READER_MODE_KEY, mode)
+  } catch {
+    // A preference that could not be saved resets next visit. Never an error.
+  }
+}
+
+/**
+ * The Esc ladder: `full → dock`, `dock → close`, `min → close`.
+ *
+ * Returns the mode Esc steps DOWN to, or null when Esc means close
+ * (clearSelection). Anything unrecognised closes too — Esc is a dismissal
+ * gesture, and an unknown mode must dismiss rather than dead-end.
+ */
+export function escTarget(mode) {
+  return mode === 'full' ? 'dock' : null
+}
+
+/**
+ * Where a minimised card restores to, and what a close from `min` resets the
+ * next open to. Only a persistable mode is a legitimate answer — `min`
+ * restoring to `min` would be a card that can never come back.
+ */
+export function restoreTarget(prevMode) {
+  return READER_MODES.includes(prevMode) ? prevMode : DEFAULT_READER_MODE
+}
+
+/* ── MAIL-DOCK.1 — message-frame heights & the Expand memory ───────── */
+//
+// The sandboxed email iframe cannot report its own height (no scripts — see
+// TicketThread's EmailFrame header), so it gets a fixed box. That box used to
+// be one size for one layout; the dock gives the thread two very different
+// windows, so the height is now CONTEXT-SIZED via a `frameSize` prop threaded
+// MailSurface → MailThread → TicketThread → EmailFrame. The defaults preserve
+// the pre-dock values for any render without the prop — the ticket surface's
+// tests pin those, and a caller that never heard of the dock must not move.
+const FRAME_HEIGHTS = {
+  dock: { collapsed: 'h-[38vh]', expanded: 'h-[52vh]' },
+  full: { collapsed: 'h-[65vh]', expanded: 'h-[80vh]' },
+}
+const DEFAULT_FRAME_HEIGHTS = { collapsed: 'h-[420px]', expanded: 'h-[70vh]' }
+
+/** The frame's Tailwind height class. Unknown/absent frameSize → the defaults. */
+export function frameHeightClass(frameSize, expanded) {
+  const sizes = FRAME_HEIGHTS[frameSize] || DEFAULT_FRAME_HEIGHTS
+  return expanded ? sizes.expanded : sizes.collapsed
+}
+
+// The operator's Expand choice persists ('1'/'0'): somebody who always wants
+// the taller frame should not re-click it on every message. Same storage
+// posture as everything else here — try/caught BOTH directions, garbage reads
+// as the default (collapsed).
+export const BODY_EXPANDED_KEY = 'un1t.mail.body-expanded'
+
+export function readBodyExpanded() {
+  try {
+    if (typeof window === 'undefined') return false
+    return window.localStorage.getItem(BODY_EXPANDED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function writeBodyExpanded(expanded) {
+  try {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(BODY_EXPANDED_KEY, expanded ? '1' : '0')
+  } catch {
+    // Same posture as writeDensity above.
+  }
+}
+
+/**
+ * MAIL-DOCK.1 — the collapsed composer's one line: "Reply to Helen…".
+ *
+ * FIRST name, per the approved mockup — the pill is a slim bar, and the full
+ * "Reply to Helen Lawlor <helenlawlor992@gmail.com>…" treatment already lives
+ * on the expanded composer's placeholder and audience sentence. Falls back to
+ * the address, then to a bare "Reply…" — never "Reply to undefined".
+ */
+export function replyPillLabel(ticket) {
+  const name = String(ticket?.requester_name || '').trim()
+  const first = name.split(/\s+/)[0]
+  if (first) return `Reply to ${first}…`
+  const email = String(ticket?.requester_email || '').trim()
+  if (email) return `Reply to ${email}…`
+  return 'Reply…'
+}
+
 /* ─────────────────────────── reply drafts ─────────────────────────── */
 
 /**

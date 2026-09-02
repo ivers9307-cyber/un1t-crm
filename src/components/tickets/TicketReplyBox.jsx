@@ -87,7 +87,7 @@ import AttachmentPicker, { readyDrafts, hasPendingUploads } from './AttachmentPi
 // `key={ticketId}` remount is TICKET-COMPOSER-LEAK.1's guard against a
 // cross-ticket send, and this store rides on exactly that key rather than
 // creating a second one.
-import { readReplyDraft, writeReplyDraft, clearReplyDraft } from '@/components/mail/mail-display'
+import { readReplyDraft, writeReplyDraft, clearReplyDraft, replyPillLabel } from '@/components/mail/mail-display'
 import { resolveViewerId } from '@/components/mail/viewer-id'
 
 const MAX_LENGTH = 10000
@@ -111,11 +111,42 @@ export default function TicketReplyBox({
   // `undefined` keeps the sentence exactly as it was; a node replaces it;
   // `null` drops it.
   archivedHint,
+  // MAIL-DOCK.1 — start as the mockup's slim pill ("Reply to Helen…" · Note ·
+  // Reply ↵) instead of the full form, until (a) the operator clicks it, or
+  // (b) draft hydration finds a non-empty draft, which auto-expands. Default
+  // false: every existing caller keeps the always-open composer unchanged.
+  // Collapse state is component-local and resets per ticket via the
+  // `key={ticketId}` remount TicketThread already does — the same remount
+  // that is TICKET-COMPOSER-LEAK.1's guard, which this must never weaken.
+  startCollapsed = false,
 }) {
   const [mode, setMode] = useState('reply')
   const [text, setText] = useState('')
   const [recipients, setRecipients] = useState(EMPTY_RECIPIENTS)
   const [files, setFiles] = useState([])
+
+  // The pill. A CLICKED expansion focuses the textarea (via the effect
+  // below) — a click that opens a composer and leaves focus on a vanished
+  // button strands the next keystroke on the body, where the surface's
+  // single-letter shortcuts live. A DRAFT's auto-expand deliberately does
+  // NOT focus: it fires on every j/k step onto a conversation with a saved
+  // draft, and stealing focus there would turn the very next j into a letter
+  // typed into somebody's half-written reply — the exact class of bug
+  // isTypingTarget exists to prevent, manufactured from the inside.
+  const [collapsed, setCollapsed] = useState(startCollapsed)
+  const textareaRef = useRef(null)
+  const focusOnExpandRef = useRef(false)
+  function expand(nextMode) {
+    if (nextMode) setMode(nextMode)
+    focusOnExpandRef.current = true
+    setCollapsed(false)
+  }
+  useEffect(() => {
+    if (!collapsed && focusOnExpandRef.current) {
+      focusOnExpandRef.current = false
+      textareaRef.current?.focus()
+    }
+  }, [collapsed])
 
   const ticketId = ticket?.id
 
@@ -184,6 +215,10 @@ export default function TicketReplyBox({
     }
 
     const draft = readReplyDraft(scope)
+    // MAIL-DOCK.1 — a non-empty draft auto-expands the pill: words the
+    // operator already wrote must never hide behind a bar that looks blank.
+    // Without focus — see the pill comment above.
+    if (draft) setCollapsed(false)
     // Arm the skip for the write-through pass this resolution triggers.
     // `!!draft` and a plain `true` are provably equivalent here — viewerId is
     // in the write effect's deps, so the viewer-resolution render always runs
@@ -323,6 +358,40 @@ export default function TicketReplyBox({
     // like a clean success.
   }
 
+  // MAIL-DOCK.1 — the slim pill (mockup D's bar): who the reply reaches, a
+  // Note entry and a dark Reply ↵, nothing else. Every hook above has already
+  // run — hydration, write-through and the viewer resolution are exactly the
+  // same whether the form is showing or not, so a draft keeps persisting and
+  // restoring across the collapsed state. The buttons carry type="button" by
+  // convention even though no <form> wraps them here.
+  if (collapsed) {
+    return (
+      <div className="flex items-center gap-2 border-t border-un1t-border bg-un1t-surface px-4 py-2">
+        <button
+          type="button"
+          onClick={() => expand('reply')}
+          className="min-w-0 flex-1 truncate text-left text-xs text-un1t-subtle transition-colors hover:text-un1t-text"
+        >
+          {replyPillLabel(ticket)}
+        </button>
+        <button
+          type="button"
+          onClick={() => expand('note')}
+          className="shrink-0 rounded-md border border-un1t-border bg-un1t-bg px-2.5 py-1 text-xs font-medium text-un1t-text transition-colors hover:bg-un1t-surface"
+        >
+          Note
+        </button>
+        <button
+          type="button"
+          onClick={() => expand('reply')}
+          className="shrink-0 rounded-md bg-un1t-text px-2.5 py-1 text-xs font-semibold text-un1t-bg transition-opacity hover:opacity-90"
+        >
+          Reply ↵
+        </button>
+      </div>
+    )
+  }
+
   return (
     <form
       onSubmit={handleSubmit}
@@ -441,6 +510,7 @@ export default function TicketReplyBox({
       </label>
       <textarea
         id="ticket-composer"
+        ref={textareaRef}
         value={text}
         onChange={(e) => setText(e.target.value)}
         rows={3}
