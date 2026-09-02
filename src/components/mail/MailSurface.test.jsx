@@ -594,6 +594,17 @@ describe('MailSurface — the dock', () => {
     await screen.findByText('Message on Class times')
     expect(dock().getAttribute('data-reader-mode')).toBe('min')
   })
+
+  it('a mouse CLICK on a row restores a minimised card — a click means "open this"', async () => {
+    // Audit A2 — j/k retarget the contracted bar (pinned above); a click is
+    // a different intent, and retitling an invisible bar reads as broken.
+    await openFirst()
+    fireEvent.click(screen.getByRole('button', { name: 'Minimise the conversation' }))
+    await flushEffects()
+    fireEvent.click(screen.getAllByText('Class times')[0]) // the other row
+    await flushEffects()
+    expect(dock().getAttribute('data-reader-mode')).toBe('dock')
+  })
 })
 
 describe('MailSurface — a mailbox half that did not land', () => {

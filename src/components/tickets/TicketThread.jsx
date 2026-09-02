@@ -220,6 +220,11 @@ export default function TicketThread({
   // a saved draft auto-expands it). Default false: every pre-dock caller and
   // test keeps the always-open composer byte-for-byte.
   replyStartCollapsed = false,
+  // MAIL-DOCK.1 audit A1 — any overlay that owns Escape must be visible to
+  // MailSurface's keyboard guard, or the same keydown that closes the
+  // attachment preview also closes the whole reader card (the house Modal
+  // has no focus trap and stops no propagation).
+  onOverlayOpenChange,
 }) {
   const endRef = useRef(null)
   // EMAIL-ATTACH-RACE.1 — scroll on a NEW message, not on every re-read.
@@ -236,6 +241,11 @@ export default function TicketThread({
   // close it. Only the row is held; the signed URL is minted by the overlay
   // when it opens and lives no longer than it does.
   const [openAttachment, setOpenAttachment] = useState(null)
+  useEffect(() => {
+    onOverlayOpenChange?.(!!openAttachment)
+    return () => onOverlayOpenChange?.(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- report open-state changes only
+  }, [openAttachment])
   const ticketId = ticket?.id
   useEffect(() => { setOpenAttachment(null) }, [ticketId])
 
@@ -611,11 +621,11 @@ function EmailFrame({ html, blockedImages = 0, label, onAccent = false, frameSiz
   const [expanded, setExpanded] = useState(() => readBodyExpanded())
 
   function toggleExpanded() {
-    setExpanded(v => {
-      const next = !v
-      writeBodyExpanded(next)
-      return next
-    })
+    // Audit A6 — the storage write stays OUTSIDE the updater: StrictMode
+    // re-invokes updaters, and a side effect inside one runs twice.
+    const next = !expanded
+    setExpanded(next)
+    writeBodyExpanded(next)
   }
 
   // An outbound message's controls sit on the accent bubble, where the

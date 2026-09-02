@@ -118,3 +118,24 @@ describe('EmailFrame — the Expand choice persists', () => {
     expect(frame().className).toContain('h-[420px]')
   })
 })
+
+// ── MAIL-DOCK.1 audit A1 — the attachment preview must be VISIBLE to the
+// surface's keyboard guard: the house Modal stops no propagation, so the Esc
+// that closes the preview also reaches MailSurface's window listener. The
+// guard only holds if this callback reports the overlay's open state.
+describe('attachment preview reports itself to the overlay guard', () => {
+  it('fires onOverlayOpenChange(true) on open and (false) on close', () => {
+    const onOverlayOpenChange = vi.fn()
+    renderThread({
+      onOverlayOpenChange,
+      messages: [{
+        ...HTML_MESSAGE,
+        attachments: [{ id: 'att-1', filename: 'invoice.pdf', mime_type: 'application/pdf', size_bytes: 1000, stored: true }],
+      }],
+    })
+    fireEvent.click(screen.getAllByRole('button', { name: /invoice\.pdf/ })[0])
+    expect(onOverlayOpenChange).toHaveBeenLastCalledWith(true)
+    fireEvent.click(screen.getAllByRole('button', { name: /^Close$/ })[0])
+    expect(onOverlayOpenChange).toHaveBeenLastCalledWith(false)
+  })
+})

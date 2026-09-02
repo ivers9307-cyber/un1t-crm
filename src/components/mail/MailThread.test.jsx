@@ -207,3 +207,24 @@ describe('MailThread — with nothing selected', () => {
     expect(screen.getByText(/j and k move between conversations/)).toBeTruthy()
   })
 })
+
+// MAIL-DOCK.1 audit A1 — the guard hears the OR of BOTH overlays: the merge
+// picker (already pinned) and the attachment preview. If the OR degrades to
+// pickerOpen alone, the Esc that closes a lightbox also closes the card.
+describe('overlay guard hears the attachment preview', () => {
+  it('reports open/closed through onModalOpenChange', async () => {
+    const onModalOpenChange = vi.fn()
+    renderThread({
+      onModalOpenChange,
+      messages: [{
+        id: 'm-att', direction: 'inbound', from_email: 'x@y.z',
+        text_body: 'file attached', created_at: '2026-08-31T09:00:00Z',
+        attachments: [{ id: 'att-9', filename: 'plan.pdf', mime_type: 'application/pdf', size_bytes: 900, stored: true }],
+      }],
+    })
+    fireEvent.click(screen.getAllByRole('button', { name: /plan\.pdf/ })[0])
+    expect(onModalOpenChange).toHaveBeenLastCalledWith(true)
+    fireEvent.click(screen.getAllByRole('button', { name: /^Close$/ })[0])
+    expect(onModalOpenChange).toHaveBeenLastCalledWith(false)
+  })
+})

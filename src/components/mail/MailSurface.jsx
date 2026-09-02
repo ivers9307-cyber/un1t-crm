@@ -1570,7 +1570,15 @@ export default function MailSurface({ locationId, locationName, userId, location
             conversations={conversations}
             loading={loading}
             selectedId={selectedId}
-            onSelect={selectConversation}
+            // Audit A2 — a mouse CLICK on a row is "open this": it restores a
+            // minimised card (else the click retitles an invisible bar and
+            // Mail reads as broken). j/k deliberately keep the contracted
+            // retarget-without-restoring behaviour — they go through
+            // selectConversation directly.
+            onSelect={(row) => {
+              setReaderMode(m => (m === READER_MODE_MIN ? restoreTarget(prevModeRef.current) : m))
+              selectConversation(row)
+            }}
             onArchive={archive}
             onMarkRead={markReadAction}
             onMarkUnread={markUnreadAction}
