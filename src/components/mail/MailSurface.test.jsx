@@ -956,8 +956,15 @@ describe('MailSurface — deep link (?c=)', () => {
   it('j/k walking the list keeps REPLACING as it moves — no history spam', async () => {
     renderSurface()
     await screen.findByText('Membership freeze')
+    // MAILKEY-DEFLAKE.1's rule, applied here too (this test predates it and
+    // flaked in CI run 33656349165 the same way): the j/k handler is a
+    // window listener re-attached in a passive effect, and findBy resolves
+    // on the DOM commit — a keydown fired straight after the await can hit
+    // the mount closure and silently no-op. Flush effects first.
+    await flushEffects()
     fireEvent.keyDown(document.body, { key: 'j' })
     await screen.findByText('Message on Membership freeze')
+    await flushEffects()
     fireEvent.keyDown(document.body, { key: 'j' })
     await screen.findByText('Message on Class times')
 
