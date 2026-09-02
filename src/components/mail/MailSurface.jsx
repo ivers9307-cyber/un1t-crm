@@ -190,6 +190,8 @@ export default function MailSurface({ locationId, locationName, userId, location
   // and lose the words. `composePrevModeRef` mirrors prevModeRef: what the
   // minimised bar restores to.
   const [composeOpen, setComposeOpen] = useState(false)
+  // Audit F3 — the From options frozen at open (see the compose render).
+  const [composeBoxesAtOpen, setComposeBoxesAtOpen] = useState([])
   const [composeMode, setComposeMode] = useState(DEFAULT_COMPOSE_MODE)
   const [composeVariant, setComposeVariant] = useState('modal')
   const composePrevModeRef = useRef(DEFAULT_COMPOSE_MODE)
@@ -1327,7 +1329,12 @@ export default function MailSurface({ locationId, locationName, userId, location
   // comment); a dock-variant open is also the moment the reader's card
   // yields the bottom-right slot — auto-minimised, bar surviving, polls
   // running. The Modal variant overlays everything and takes no slot.
-  function openComposeCard() {
+  function openComposeCard(boxesOverride) {
+    // Audit F3 — freeze the From options NOW: the picker must show exactly
+    // the list the send will draw from, whatever the rail does mid-draft.
+    // The All path passes its freshly-gathered union explicitly because its
+    // setComposeMailboxes has not flushed by the time this runs.
+    setComposeBoxesAtOpen(boxesOverride ?? (allMode ? (composeMailboxes || []) : mailboxes))
     const dockVariant = isMdUp()
     setComposeVariant(dockVariant ? 'dock' : 'modal')
     if (dockVariant && slotYieldTarget(!!selectedId, readerMode)) minimiseReader()
@@ -1369,7 +1376,7 @@ export default function MailSurface({ locationId, locationName, userId, location
         return
       }
       setComposeMailboxes(grouped)
-      openComposeCard()
+      openComposeCard(grouped)
     } finally {
       if (mountedRef.current) setComposeLoading(false)
     }
@@ -1459,11 +1466,61 @@ export default function MailSurface({ locationId, locationName, userId, location
   // this shell's bottom-right corner (full mode is viewport-fixed instead and
   // ignores it). The shell's overflow-hidden is what keeps the docked card
   // inside the Mail pane rather than over the sidebar.
+  // MAIL-DOCK.2 audit F1 (BLOCKER) — the compose element renders on EVERY
+  // return path. Three early returns below swap the whole tree for an
+  // EmptyState, and the dock (unlike the old Modal) leaves the rail and
+  // tiles clickable mid-draft — a scope switch onto a mailbox-less studio,
+  // or a failed digest, would have UNMOUNTED a dirty compose with no
+  // confirm. The card is fixed/absolute, so it overlays an EmptyState fine.
+  // (Mounted only while open, so a fresh compose never inherits the last
+  // one's draft.)
+  const composeEl = composeOpen ? (
+        <TicketCompose
+          key="compose-dock"
+          // All mode: the lazily-gathered, studio-labelled union (see
+          // openCompose); scoped/single mode: the list's own mailboxes,
+          // exactly as before. Sending is unchanged either way — compose
+          // takes mailbox_id, and the mailbox carries its own location.
+          // Audit F3 — SNAPSHOT at open, never the live list: the dock leaves
+          // the rail clickable mid-draft, and a scope switch swapping the
+          // prop made the From picker render blank while the send posted the
+          // frozen (correct) mailbox_id. What the picker shows is what sends.
+          mailboxes={composeBoxesAtOpen}
+          initialMailboxId={allMode ? null : mailboxId}
+          onClose={closeCompose}
+          onSent={handleComposed}
+          onSentUnfiled={() => refreshList(true)}
+          // MAIL-DOCK.2 — the dock shell, only for a session opened at md+
+          // (the variant froze at open, so a resize cannot remount the form
+          // mid-draft). Below md there is no shell and TicketCompose renders
+          // its Modal byte-for-byte. `dirty` and `requestClose` are the
+          // component's own — the card's ✕ and Esc ladder reuse the exact
+          // confirm the Modal always had.
+          shell={composeVariant === 'dock' ? ({ subject, dirty, requestClose, body, footer }) => (
+            <ComposeDock
+              mode={composeMode}
+              subject={subject}
+              readerOccupancy={slotOccupancy(!!selectedId, readerMode)}
+              onMinimise={minimiseCompose}
+              onRestore={restoreCompose}
+              onExpand={() => chooseComposeMode('full')}
+              onContract={() => chooseComposeMode('dock')}
+              onClose={requestClose}
+              onEscape={() => handleComposeEscape(dirty, requestClose)}
+              footer={footer}
+            >
+              {body}
+            </ComposeDock>
+          ) : undefined}
+        />
+  ) : null
+
   const shellClasses =
     'relative flex flex-col h-[calc(100vh-13rem)] min-h-[32rem] rounded-xl border border-un1t-border bg-un1t-bg overflow-hidden'
 
   if (!multi && !scopedId) {
     return (
+      <>
       <div className={shellClasses}>
         <EmptyState
           icon={<Mail size={28} />}
@@ -1471,6 +1528,8 @@ export default function MailSurface({ locationId, locationName, userId, location
           description="Pick a location in the sidebar to see its mail."
         />
       </div>
+      {composeEl}
+      </>
     )
   }
 
@@ -1488,6 +1547,7 @@ export default function MailSurface({ locationId, locationName, userId, location
   // their studio has no mail accounts because a fetch blipped.
   if (!loading && listError && noContentYet) {
     return (
+      <>
       <div className={shellClasses}>
         <EmptyState
           icon={<AlertCircle size={28} />}
@@ -1505,6 +1565,8 @@ export default function MailSurface({ locationId, locationName, userId, location
           }
         />
       </div>
+      {composeEl}
+      </>
     )
   }
 
@@ -1513,6 +1575,7 @@ export default function MailSurface({ locationId, locationName, userId, location
   // opted into the trial sees.
   if (!loading && noMailboxesAnywhere) {
     return (
+      <>
       <div className={shellClasses}>
         <EmptyState
           icon={<Mail size={28} />}
@@ -1520,6 +1583,8 @@ export default function MailSurface({ locationId, locationName, userId, location
           description={NO_MAILBOX_EMPTY.description}
         />
       </div>
+      {composeEl}
+      </>
     )
   }
 
@@ -1546,6 +1611,7 @@ export default function MailSurface({ locationId, locationName, userId, location
     : null
 
   return (
+    <>
     <div className={shellClasses}>
       <div className="flex items-center justify-end gap-2 border-b border-un1t-border px-3 py-2">
         <Button type="button" size="sm" variant="secondary" icon={Plus} loading={composeLoading} onClick={openCompose}>
@@ -1752,45 +1818,6 @@ export default function MailSurface({ locationId, locationName, userId, location
         )}
       </div>
 
-      {/* Mounted only while open, so a fresh compose never inherits the last
-          one's draft AND the 60s poll re-creating `mailboxes` cannot reset a
-          half-typed email. */}
-      {composeOpen && (
-        <TicketCompose
-          // All mode: the lazily-gathered, studio-labelled union (see
-          // openCompose); scoped/single mode: the list's own mailboxes,
-          // exactly as before. Sending is unchanged either way — compose
-          // takes mailbox_id, and the mailbox carries its own location.
-          mailboxes={allMode ? (composeMailboxes || []) : mailboxes}
-          initialMailboxId={allMode ? null : mailboxId}
-          onClose={closeCompose}
-          onSent={handleComposed}
-          onSentUnfiled={() => refreshList(true)}
-          // MAIL-DOCK.2 — the dock shell, only for a session opened at md+
-          // (the variant froze at open, so a resize cannot remount the form
-          // mid-draft). Below md there is no shell and TicketCompose renders
-          // its Modal byte-for-byte. `dirty` and `requestClose` are the
-          // component's own — the card's ✕ and Esc ladder reuse the exact
-          // confirm the Modal always had.
-          shell={composeVariant === 'dock' ? ({ subject, dirty, requestClose, body, footer }) => (
-            <ComposeDock
-              mode={composeMode}
-              subject={subject}
-              readerOccupancy={slotOccupancy(!!selectedId, readerMode)}
-              onMinimise={minimiseCompose}
-              onRestore={restoreCompose}
-              onExpand={() => chooseComposeMode('full')}
-              onContract={() => chooseComposeMode('dock')}
-              onClose={requestClose}
-              onEscape={() => handleComposeEscape(dirty, requestClose)}
-              footer={footer}
-            >
-              {body}
-            </ComposeDock>
-          ) : undefined}
-        />
-      )}
-
       {forwarding && conversation && (
         <TicketForward
           ticket={conversation}
@@ -1800,5 +1827,11 @@ export default function MailSurface({ locationId, locationName, userId, location
         />
       )}
     </div>
+    {/* Audit F1 — composeEl is the fragment's SECOND CHILD on every return
+        path (the empty-state returns share this exact shape): position
+        identity is what keeps React from remounting — and blanking — a
+        dirty draft when the tree swaps between the list and an EmptyState. */}
+    {composeEl}
+    </>
   )
 }

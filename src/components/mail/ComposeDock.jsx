@@ -49,10 +49,14 @@ const CONTAINER = {
 // overlay, which holds no corner), left of the reader's 360px bar, left of
 // its 560px docked card. Full literal strings so Tailwind's scanner sees
 // every class; the widths are MailDock's own, quoted not derived.
+// Audit F5 — below md the min shape is a BOTTOM BAR, never the full-sheet
+// safety net (dock/full degrade to a full-screen FORM, which makes sense;
+// a minimised card's body is hidden, so a full sheet was an opaque blank
+// page with a title bar). The bar keeps the whole-bar restore target.
 const MIN_BY_READER = {
-  none: 'fixed inset-0 z-50 flex flex-col bg-un1t-bg md:absolute md:inset-auto md:bottom-0 md:right-4 md:z-30 md:h-auto md:w-[min(360px,calc(100vw-2rem))] md:overflow-hidden md:rounded-t-xl md:border md:border-b-0 md:border-un1t-border md:shadow-2xl',
-  bar: 'fixed inset-0 z-50 flex flex-col bg-un1t-bg md:absolute md:inset-auto md:bottom-0 md:right-[calc(1.5rem+min(360px,calc(100vw-2rem)))] md:z-30 md:h-auto md:w-[min(360px,calc(100vw-2rem))] md:overflow-hidden md:rounded-t-xl md:border md:border-b-0 md:border-un1t-border md:shadow-2xl',
-  card: 'fixed inset-0 z-50 flex flex-col bg-un1t-bg md:absolute md:inset-auto md:bottom-0 md:right-[calc(1.5rem+min(560px,calc(100vw-2rem)))] md:z-30 md:h-auto md:w-[min(360px,calc(100vw-2rem))] md:overflow-hidden md:rounded-t-xl md:border md:border-b-0 md:border-un1t-border md:shadow-2xl',
+  none: 'fixed bottom-0 inset-x-0 z-50 flex flex-col bg-un1t-bg border-t border-un1t-border md:absolute md:inset-auto md:bottom-0 md:right-4 md:z-30 md:h-auto md:w-[min(360px,calc(100vw-2rem))] md:overflow-hidden md:rounded-t-xl md:border md:border-b-0 md:border-un1t-border md:shadow-2xl',
+  bar: 'fixed bottom-0 inset-x-0 z-50 flex flex-col bg-un1t-bg border-t border-un1t-border md:absolute md:inset-auto md:bottom-0 md:right-[calc(1.5rem+min(360px,calc(100vw-2rem)))] md:z-30 md:h-auto md:w-[min(360px,calc(100vw-2rem))] md:overflow-hidden md:rounded-t-xl md:border md:border-b-0 md:border-un1t-border md:shadow-2xl',
+  card: 'fixed bottom-0 inset-x-0 z-50 flex flex-col bg-un1t-bg border-t border-un1t-border md:absolute md:inset-auto md:bottom-0 md:right-[calc(1.5rem+min(560px,calc(100vw-2rem)))] md:z-30 md:h-auto md:w-[min(360px,calc(100vw-2rem))] md:overflow-hidden md:rounded-t-xl md:border md:border-b-0 md:border-un1t-border md:shadow-2xl',
 }
 
 export default function ComposeDock({
@@ -91,6 +95,9 @@ export default function ComposeDock({
       // OUTSIDE the card changes nothing about a draft it was not aimed at.
       onKeyDown={(e) => {
         if (e.key !== 'Escape') return
+        // Audit F4 — an Esc cancelling an IME composition (CJK input) is not
+        // a dismissal; yanking the card to its bar mid-word is jarring.
+        if (e.isComposing || e.keyCode === 229) return
         e.stopPropagation()
         onEscape?.()
       }}

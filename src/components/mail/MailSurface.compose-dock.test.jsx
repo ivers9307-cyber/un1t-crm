@@ -399,3 +399,35 @@ describe('MailSurface — below md the Modal composer is byte-for-byte', () => {
     expect(postsTo('/archive')).toHaveLength(0)
   })
 })
+
+// ── Audit F1 (BLOCKER pin) — the empty-state early returns must not unmount
+// a dirty compose. The dock leaves the rail clickable mid-draft, so a
+// refresh that comes back mailbox-less swaps the tree for an EmptyState —
+// the draft has to ride along onto that return path too.
+describe('a dirty compose survives the tree collapsing to an empty state', () => {
+  it('keeps the typed draft mounted when a refresh answers zero mailboxes', async () => {
+    await openList()
+    await openComposeDock()
+    dirtyCompose()
+
+    // The studio's mailboxes vanish out from under the surface (an admin
+    // deactivating the last account) — the next quiet refresh lands it.
+    const realFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+      if (String(url).startsWith('/api/email/mail?')) {
+        return json({
+          success: true,
+          data: { mailboxes: [], conversations: [], next_before: null, needs_reply_count: 0 },
+        })
+      }
+      return realFetch(url, init)
+    }))
+    fireEvent(window, new Event('focus'))
+    await flushEffects()
+
+    // The tree is now the no-mailboxes EmptyState…
+    expect(await screen.findByText(/no email account|not been set up|No email/i)).toBeTruthy()
+    // …and the draft is still on screen, word for word.
+    expect(bodyField().value).toBe('Half a reply nobody else has a copy of.')
+  })
+})
