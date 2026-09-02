@@ -28,6 +28,7 @@ import OrgBrandingSettings from '@/components/OrgBrandingSettings'
 import LocationIntegrations from '@/components/settings/LocationIntegrations'
 import NotificationConfigCard from '@/components/settings/NotificationConfigCard'
 import EmailMailboxesCard from '@/components/settings/EmailMailboxesCard'
+import SignatureLinksCard from '@/components/settings/SignatureLinksCard'
 import CommsFrequencyCapCard from '@/components/settings/CommsFrequencyCapCard'
 import GeofenceAttendanceCard from '@/components/settings/GeofenceAttendanceCard'
 import SendQuietHoursCard from '@/components/settings/SendQuietHoursCard'
@@ -214,6 +215,9 @@ export default async function EditLocationPage(props) {
             <h3 className="text-lg font-semibold">Email accounts</h3>
           </div>
           <EmailMailboxesCard locationId={location.id} />
+          {/* MAIL-SIG.2 — the studio half of the email signature lives with
+              the studio's email accounts: same page, same owner gate. */}
+          <SignatureLinksCard locationId={location.id} />
         </section>
       )}
 

@@ -850,3 +850,32 @@ it('a DISABLED rich signature keeps the plain path byte-for-byte', async () => {
   expect(sent.textBody).toContain('Plain sign-off')
   expect(sent.htmlBody).not.toContain('Nope')
 })
+
+// MAIL-SIG.2 — the SENDING studio's signature parts outrank the personal ones.
+it('the sending studio supplies the signature line, phone and links', async () => {
+  getCurrentUser.mockResolvedValue({
+    ...COACH,
+    email_signature_rich: {
+      enabled: true, name: 'Richard Ivers', note: 'UN1T Dublin',
+      phone: '+353 1 578 9401',
+      links: [{ label: 'personal', url: 'https://richardivers.com' }],
+    },
+  })
+  setupDb(baseState({
+    grants: [GRANT_STUDIO],
+    locations: [{ id: LOC_A, name: 'UN1T Hatch Street' }],
+    companySettings: [{
+      location_id: LOC_A,
+      email_signature: {
+        phone: '(01) 574 1871',
+        links: [{ label: 'Book a class', url: 'https://un1tdublin.com/welcome/hatch-street#start' }],
+      },
+    }],
+  }))
+  await post(VALID)
+  const sent = sendEmail.mock.calls[0][0]
+  expect(sent.htmlBody).toContain('UN1T Hatch Street')
+  expect(sent.htmlBody).toContain('(01) 574 1871')
+  expect(sent.htmlBody).toContain('href="https://un1tdublin.com/welcome/hatch-street#start"')
+  expect(sent.htmlBody).not.toContain('richardivers.com')
+})

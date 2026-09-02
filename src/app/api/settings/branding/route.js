@@ -9,6 +9,16 @@ const BrandingSchema = z.object({
   logo_url: z.string().url().max(2000).nullable().optional(),
   favicon_url: z.string().url().max(2000).nullable().optional(),
   company_name: z.string().max(200).nullable().optional(),
+  // MAIL-SIG.2 — the studio half of the email signature: phone + the link
+  // row every send FROM this studio carries. Same field discipline as the
+  // person-level schema; nullable clears it back to personal fallbacks.
+  email_signature: z.object({
+    phone: z.string().max(60).optional().default(''),
+    links: z.array(z.object({
+      label: z.string().max(40),
+      url: z.string().url().max(300).refine(u => /^https?:\/\//i.test(u), 'http(s) links only'),
+    })).max(5).optional().default([]),
+  }).strict().nullable().optional(),
 })
 
 // GET /api/settings/branding?location_id=xxx — Get branding for a location
@@ -73,7 +83,7 @@ export async function PUT(request) {
     updated_at: new Date().toISOString(),
     updated_by: user.id,
   }
-  for (const field of ['logo_url', 'favicon_url', 'company_name']) {
+  for (const field of ['logo_url', 'favicon_url', 'company_name', 'email_signature']) {
     if (field in body) record[field] = body[field]
   }
 

@@ -193,3 +193,31 @@ export function renderRichSignature(rich) {
 
   return { text, html }
 }
+
+// ── MAIL-SIG.2 — the studio half of the signature ────────────────────────
+//
+// The studio-dependent parts follow the account the email LEAVES FROM
+// (Richard, 2 Sep: sending from Hatch shows Hatch's links, from Stillorgan
+// Stillorgan's). The person always supplies name + photo; the sending
+// studio supplies the studio line, and its phone/links when it defines them
+// (company_settings.email_signature — the portal-editable home), else the
+// person's own profile values stand as the fallback.
+
+/**
+ * @param {object|null} personRich  profiles.email_signature_rich
+ * @param {{locationName?: string|null, locationSignature?: {phone?, links?}|null}} [ctx]
+ * @returns {object|null} the rich signature to render, or null (disabled).
+ */
+export function effectiveRichSignature(personRich, ctx) {
+  if (!personRich || personRich.enabled !== true) return null
+  if (!ctx || (!ctx.locationName && !ctx.locationSignature)) return personRich
+  const loc = ctx.locationSignature || null
+  const locLinks = Array.isArray(loc?.links) ? loc.links.filter(l => l?.url) : []
+  const locPhone = typeof loc?.phone === 'string' ? loc.phone.trim() : ''
+  return {
+    ...personRich,
+    note: ctx.locationName || personRich.note,
+    phone: locPhone || personRich.phone,
+    links: locLinks.length ? locLinks : personRich.links,
+  }
+}

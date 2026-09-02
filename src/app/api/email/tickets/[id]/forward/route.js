@@ -4,7 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { sendTicketEmail } from '@/lib/email-inbox-send'
-import { appendSignature, richSignatureFromProfile, renderRichSignature } from '@/lib/email-signature'
+import { appendSignature, richSignatureFromProfile, renderRichSignature, effectiveRichSignature } from '@/lib/email-signature'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 import { logAuditEvent } from '@/lib/audit'
 import { uuidLike, email as emailAddress } from '@/lib/schemas'
@@ -25,7 +25,7 @@ import {
   fileForwardedAttachments,
 } from '@/lib/email-forward-server'
 import { MAX_OUTBOUND_ATTACHMENTS } from '@/lib/email-outbound-attachments'
-import { loadTicketForUser, loadOwnAddresses, ticketMergedAway } from '../../_helpers'
+import { loadTicketForUser, loadOwnAddresses, ticketMergedAway , loadSignatureContext } from '../../_helpers'
 
 // POST /api/email/tickets/[id]/forward — pass one message on the ticket to
 // somebody else (EMAIL-FORWARD.1, mig 501).
@@ -283,7 +283,10 @@ export async function POST(request, props) {
   // forward (Gmail's own placement) so the photo/link block never splits the
   // note from the forwarded content; the plain-text fallback keeps its old
   // in-note position byte-for-byte.
-  const richSig = richSignatureFromProfile(user) ? renderRichSignature(user.email_signature_rich) : null
+  const sigCtx = await loadSignatureContext(db, ticket.location_id)
+  const richSig = richSignatureFromProfile(user)
+    ? renderRichSignature(effectiveRichSignature(user.email_signature_rich, sigCtx))
+    : null
   const unsignedText = buildForwardText({ note, message: source })
   const outboundText = richSig
     ? appendSignature(unsignedText, richSig.text)

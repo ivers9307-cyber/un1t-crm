@@ -550,3 +550,26 @@ export function resolveReplyAudience({ messages, ticket, ownAddresses }) {
     empty: to.length === 0,
   }
 }
+
+
+/**
+ * MAIL-SIG.2 — the sending studio's signature context, best-effort: the
+ * studio-dependent parts of a signature follow the account the email leaves
+ * from, and a blipped read must degrade to the person's own fallback values,
+ * never block or fail a send.
+ */
+export async function loadSignatureContext(db, locationId) {
+  if (!locationId) return { locationName: null, locationSignature: null }
+  try {
+    const [locRes, csRes] = await Promise.all([
+      db.from('locations').select('name').eq('id', locationId).maybeSingle(),
+      db.from('company_settings').select('email_signature').eq('location_id', locationId).maybeSingle(),
+    ])
+    return {
+      locationName: locRes?.data?.name || null,
+      locationSignature: csRes?.data?.email_signature || null,
+    }
+  } catch {
+    return { locationName: null, locationSignature: null }
+  }
+}

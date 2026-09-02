@@ -94,6 +94,8 @@ const TABLE_KEYS = {
   // on db.inserts/db.updates before the key is consulted, which is what lets
   // `updatesTo(db, 'email_conversations')` prove a reintroduced write.
   locations: 'locations',
+  // MAIL-SIG.2 — the studio half of the signature reads this per send.
+  company_settings: 'companySettings',
   // EMAIL-MAILBOX-ADMIN.1 — the mailbox/grant editor lists the studio's staff,
   // so its tests need the roster the routes actually read.
   profile_locations: 'profileLocations',
@@ -121,7 +123,7 @@ const UNIQUE_KEYS = {
 export function makeDb(state = {}) {
   const s = {
     mailboxes: [], grants: [], tickets: [], messages: [], sends: [], contacts: [],
-    locations: [], profileLocations: [], profiles: [],
+    locations: [], profileLocations: [], profiles: [], companySettings: [],
     // EMAIL-ATTACH.1
     attachments: [], storageUsage: [], objects: new Map(), storageErrors: {},
     errors: {},

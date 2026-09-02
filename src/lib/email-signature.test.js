@@ -215,3 +215,46 @@ describe('isAllowedSignaturePhotoUrl — the normalized check (audit #1)', () =>
     expect(renderRichSignature({ ...RICH, photo_url: sneaky }).html).not.toContain('secrets')
   })
 })
+
+// ── MAIL-SIG.2 — the studio half outranks the personal fallback ─────────
+import { effectiveRichSignature } from './email-signature'
+
+describe('effectiveRichSignature', () => {
+  const PERSON = {
+    enabled: true, name: 'Richard Ivers', note: 'UN1T Dublin',
+    phone: '+353 1 578 9401',
+    links: [{ label: 'personal', url: 'https://richardivers.com' }],
+  }
+  const HATCH = {
+    phone: '(01) 574 1871',
+    links: [
+      { label: 'Book a class', url: 'https://un1tdublin.com/welcome/hatch-street#start' },
+      { label: 'Membership options', url: 'https://un1tdublin.com/welcome/hatch-street' },
+    ],
+  }
+
+  it('the SENDING studio supplies studio line, phone and links; the person keeps name', () => {
+    const eff = effectiveRichSignature(PERSON, { locationName: 'UN1T Hatch Street', locationSignature: HATCH })
+    expect(eff.name).toBe('Richard Ivers')
+    expect(eff.note).toBe('UN1T Hatch Street')
+    expect(eff.phone).toBe('(01) 574 1871')
+    expect(eff.links.map(l => l.label)).toEqual(['Book a class', 'Membership options'])
+  })
+
+  it('a studio with NO signature settings falls back to the person’s own values', () => {
+    const eff = effectiveRichSignature(PERSON, { locationName: 'UN1T Stillorgan', locationSignature: null })
+    expect(eff.note).toBe('UN1T Stillorgan') // the studio line still follows the send
+    expect(eff.phone).toBe('+353 1 578 9401')
+    expect(eff.links.map(l => l.label)).toEqual(['personal'])
+  })
+
+  it('no location context at all leaves the personal signature untouched', () => {
+    expect(effectiveRichSignature(PERSON, {})).toEqual(PERSON)
+    expect(effectiveRichSignature(PERSON, undefined)).toEqual(PERSON)
+  })
+
+  it('a disabled/absent personal signature stays null-rendered whatever the studio holds', () => {
+    expect(effectiveRichSignature(null, { locationSignature: HATCH })).toBeNull()
+    expect(effectiveRichSignature({ enabled: false }, { locationSignature: HATCH })).toBeNull()
+  })
+})
