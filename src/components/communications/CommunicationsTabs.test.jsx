@@ -232,14 +232,14 @@ describe('CommunicationsTabs — the Mail tab (INBOX-SURFACE.C / RETIRE-TICKETS.
   })
 
   it('polls its own endpoint and renders the count as a badge', () => {
-    polled.mockImplementation(({ url }) => (url === '/api/email/mail/count' ? 4 : 0))
+    polled.mockImplementation(({ url }) => (url === '/api/email/mail/count?scope=all' ? 4 : 0))
     render(<CommunicationsTabs canWhatsapp={false} canMail />)
     expect(screen.getByRole('link', { name: /Mail/ }).textContent).toContain('4')
   })
 
   it('does not poll the mail count when canMail is false — nothing to act on', () => {
     render(<CommunicationsTabs canWhatsapp={false} canMail={false} />)
-    const mailCountCalls = polled.mock.calls.filter(([opts]) => opts.url === '/api/email/mail/count')
+    const mailCountCalls = polled.mock.calls.filter(([opts]) => opts.url === '/api/email/mail/count?scope=all')
     expect(mailCountCalls.length).toBeGreaterThan(0)
     for (const [opts] of mailCountCalls) {
       expect(opts.enabled).toBe(false)
@@ -248,7 +248,7 @@ describe('CommunicationsTabs — the Mail tab (INBOX-SURFACE.C / RETIRE-TICKETS.
 
   it('enables the mail-count poll once canMail is true', () => {
     render(<CommunicationsTabs canWhatsapp={false} canMail />)
-    const mailCountCalls = polled.mock.calls.filter(([opts]) => opts.url === '/api/email/mail/count')
+    const mailCountCalls = polled.mock.calls.filter(([opts]) => opts.url === '/api/email/mail/count?scope=all')
     expect(mailCountCalls.length).toBeGreaterThan(0)
     for (const [opts] of mailCountCalls) {
       expect(opts.enabled).toBe(true)

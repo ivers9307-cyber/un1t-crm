@@ -46,7 +46,15 @@ const FORM_ID = 'ticket-compose-form'
 const INPUT_CLASSES =
   'w-full rounded-md border border-un1t-border bg-un1t-bg px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-subtle/60 focus:outline-none focus:ring-1 focus:ring-un1t-text/30'
 
-export default function TicketCompose({ mailboxes = [], initialMailboxId = null, onClose, onSent, onSentUnfiled }) {
+// MAIL-DOCK.2 — `shell` lets a caller replace the Modal WRAPPER without
+// touching the fields or the send: a function of
+//   { subject, dirty, sending, requestClose, body, footer }
+// that returns what to render around them. The fields, validation, send logic
+// and dirty-confirm are IDENTICAL on both paths — `body` is the same <form>,
+// `footer` the same Cancel/Send pair, and `requestClose` the same
+// confirm-guarded close. With no shell (every pre-existing call site, and
+// every below-md compose), the Modal renders byte-for-byte as it always has.
+export default function TicketCompose({ mailboxes = [], initialMailboxId = null, onClose, onSent, onSentUnfiled, shell }) {
   // The queue route already orders the tabs default-first, but say it out loud
   // rather than leaning on that ordering from another file.
   const [mailboxId, setMailboxId] = useState(() => (
@@ -142,24 +150,21 @@ export default function TicketCompose({ mailboxes = [], initialMailboxId = null,
     }
   }
 
-  return (
-    <Modal
-      open
-      onClose={requestClose}
-      title="New email"
-      size="lg"
-      footer={
-        <>
-          <Button type="button" variant="secondary" onClick={requestClose} disabled={sending}>
-            Cancel
-          </Button>
-          <Button type="submit" form={FORM_ID} variant="primary" loading={sending} disabled={!canSend}>
-            {uploading ? 'Waiting for files…' : 'Send'}
-          </Button>
-        </>
-      }
-    >
-      <form id={FORM_ID} onSubmit={handleSubmit} className="space-y-3">
+  // Both paths share these verbatim — the footer is wired to the form by id,
+  // so it works as a Modal sibling and inside a dock card's bottom alike.
+  const footer = (
+    <>
+      <Button type="button" variant="secondary" onClick={requestClose} disabled={sending}>
+        Cancel
+      </Button>
+      <Button type="submit" form={FORM_ID} variant="primary" loading={sending} disabled={!canSend}>
+        {uploading ? 'Waiting for files…' : 'Send'}
+      </Button>
+    </>
+  )
+
+  const body = (
+    <form id={FORM_ID} onSubmit={handleSubmit} className="space-y-3">
         {/* A picker only when there is a real choice. One mailbox needs no
             decision — but the operator still has to know which address the
             reply will come back to, so it is stated rather than hidden. */}
@@ -249,6 +254,16 @@ export default function TicketCompose({ mailboxes = [], initialMailboxId = null,
           </p>
         )}
       </form>
+  )
+
+  // The dock shell (MAIL-DOCK.2). `subject` and `dirty` flow live per render,
+  // which is what makes the card's title bar and its dirty-aware Esc ladder
+  // possible without lifting any of this component's state.
+  if (shell) return shell({ subject, dirty, sending, requestClose, body, footer })
+
+  return (
+    <Modal open onClose={requestClose} title="New email" size="lg" footer={footer}>
+      {body}
     </Modal>
   )
 }

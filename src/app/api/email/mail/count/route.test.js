@@ -36,8 +36,8 @@ import { getCurrentUser } from '@/lib/auth'
 import { makeDb, selectsFrom } from '../../tickets/_test-db'
 import {
   LOC_A, LOC_B, MB_MAIL, MB_TICKETS, MB_OTHER, T_STUDIO, T_ACCOUNTS, T_OTHER_LOCATION,
-  COACH, COACH_NO_INBOX, OWNER, MULTI_LOCATION,
-  GRANT_STUDIO, GRANT_MULTI_OTHER_LOCATION, mailState,
+  COACH, COACH_NO_INBOX, OWNER, MASTER, MULTI_LOCATION,
+  GRANT_STUDIO, GRANT_MULTI_STUDIO, GRANT_MULTI_OTHER_LOCATION, mailState,
 } from '../_test-fixtures'
 
 const at = (user, locationId = LOC_A) => ({ ...user, activeLocation: { id: locationId } })
@@ -259,3 +259,73 @@ describe('GET /api/email/mail/count — agrees with the list it badges', () => {
     expect(badge).toBe(1)
   })
 })
+
+// ── MAIL-BADGE.1 — ?scope=all: the estate sum for the sidebar badge ─────
+describe('GET /api/email/mail/count?scope=all', () => {
+  const req = () => new Request('http://x/api/email/mail/count?scope=all')
+
+  it('sums needs-reply across every location the caller may read', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    setupDb(mailState({ tickets: [
+      { ...T_STUDIO, status: 'open', last_message_direction: 'inbound' },
+      { ...T_OTHER_LOCATION, status: 'open', last_message_direction: 'inbound' },
+    ] }))
+    const res = await GET(req())
+    expect((await res.json()).data.count).toBe(2)
+  })
+
+  it('a location the caller lacks the key at contributes nothing', async () => {
+    getCurrentUser.mockResolvedValue(MULTI_LOCATION) // staff at LOC_B: no email_inbox
+    setupDb(mailState({
+      tickets: [
+        { ...T_STUDIO, status: 'open', last_message_direction: 'inbound' },
+        { ...T_OTHER_LOCATION, status: 'open', last_message_direction: 'inbound' },
+      ],
+      grants: [GRANT_MULTI_STUDIO, GRANT_MULTI_OTHER_LOCATION],
+    }))
+    const res = await GET(req())
+    expect((await res.json()).data.count).toBe(1)
+  })
+
+  it('🔴 one unanswerable studio refuses the whole sum — never a confidently smaller number', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    setupDb(mailState({ errors: { email_mailboxes: { code: '08006', message: 'reset' } } }))
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+  })
+
+  it('answers 0 for a caller with no eligible location', async () => {
+    getCurrentUser.mockResolvedValue(COACH_NO_INBOX)
+    setupDb(mailState())
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.count).toBe(0)
+  })
+})
+
+  it('🔴 refuses when only ONE studio is unanswerable — a partial sum is the lie', async () => {
+    // Audit F2 — the all-fail case above cannot kill a some→every mutant.
+    getCurrentUser.mockResolvedValue(MASTER)
+    const db = setupDb(mailState({ tickets: [
+      { ...T_STUDIO, status: 'open', last_message_direction: 'inbound' },
+      { ...T_OTHER_LOCATION, status: 'open', last_message_direction: 'inbound' },
+    ] }))
+    // Fail ONLY LOC_B's ticket count; LOC_A answers normally.
+    const realFrom = db.from
+    db.from = (table) => {
+      const b = realFrom(table)
+      if (table === 'email_tickets') {
+        const failure = { data: null, count: null, error: { code: '08006', message: 'reset' } }
+        const origThen = b.then
+        b.then = (res, rej) => {
+          if (b._filters?.some(f => f[0] === 'eq' && f[1] === 'location_id' && f[2] === LOC_B)) {
+            return Promise.resolve(failure).then(res, rej)
+          }
+          return origThen(res, rej)
+        }
+      }
+      return b
+    }
+    const res = await GET(new Request('http://x/api/email/mail/count?scope=all'))
+    expect(res.status).toBe(500)
+  })

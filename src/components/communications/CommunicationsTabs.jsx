@@ -49,7 +49,10 @@ export default function CommunicationsTabs({ canWhatsapp, canMail = false }) {
   // poll for, and polling anyway would be a request with no possible answer.
   const mailNeedsReplyCount = usePolledCount({
     enabled: !!canMail,
-    url: '/api/email/mail/count',
+    // MAIL-BADGE.1 — the ESTATE count, matching the sidebar badge and the
+    // All-locations tile: the tab opens a multi-location surface, so a
+    // Hatch needs-reply must show here while the session sits on Stillorgan.
+    url: '/api/email/mail/count?scope=all',
   })
 
   const tabs = [

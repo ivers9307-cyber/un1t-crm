@@ -91,6 +91,26 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
     url: '/api/home-queue/count',
   })
 
+  // MAIL-BADGE.1 (Richard, 2 Sep) — the Messages row gets its badge back,
+  // deliberately narrower than the HOME.3 apparatus this replaces a corner
+  // of: ONE row, TWO pollers, and the numbers are exactly the hub's own
+  // (WhatsApp unread + Mail needs-reply) so the sidebar and the tabs it
+  // opens can never disagree. Mail counts the ESTATE (?scope=all — the
+  // multi-location surface), not just the active studio: a Hatch
+  // needs-reply must badge while the session sits on Stillorgan. The mail
+  // poller is enabled whenever a user exists because the estate-wide
+  // eligibility cannot be resolved client-side (hasPermission reads the
+  // ACTIVE location only) — the endpoint self-gates and answers 0 cheaply.
+  const waBadgeCount = usePolledCount({
+    enabled: !!user && hasPermission(user, 'whatsapp'),
+    url: '/api/whatsapp/unread-count',
+  })
+  const mailBadgeCount = usePolledCount({
+    enabled: !!user,
+    url: '/api/email/mail/count?scope=all',
+  })
+  const messagesBadge = (waBadgeCount || 0) + (mailBadgeCount || 0)
+
   // Browser tab title prefix — surfaces the pending count even when the
   // operator is on a different tab. Format: "(3) Repset · …". Restores
   // the original title on cleanup so a stale "(3)" doesn't survive a
@@ -207,6 +227,7 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
         key={item.href}
         item={item}
         active={active}
+        badge={item.href === '/communications' ? messagesBadge : 0}
       />
     )
 
@@ -442,7 +463,7 @@ function leafClassName(active, isChild = false) {
   )
 }
 
-function SidebarItem({ item, active, isChild = false }) {
+function SidebarItem({ item, active, isChild = false, badge = 0 }) {
   const { href, label, icon: Icon, openInNewTab } = item
   // HUBS.2e Task 4 — ONE winner, longest match. A top-level item tints
   // when it IS the winning entry (active.itemHref); a child row tints
@@ -482,6 +503,17 @@ function SidebarItem({ item, active, isChild = false }) {
     <Link href={href} className={className} aria-current={isAriaCurrent ? 'page' : undefined}>
       <Icon size={isChild ? 14 : 18} />
       {label}
+      {/* MAIL-BADGE.1 — outstanding items in this section (today: Messages
+          only). Hidden at zero; a failed poll keeps the last good number
+          upstream, so this never renders a confident 0 off a blip. */}
+      {badge > 0 && (
+        <span
+          data-testid="nav-badge"
+          className="ml-auto rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-amber-700"
+        >
+          {badge > 99 ? '99+' : badge}
+        </span>
+      )}
     </Link>
   )
 }
