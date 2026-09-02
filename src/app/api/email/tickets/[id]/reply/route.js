@@ -6,7 +6,7 @@ import { validateBody } from '@/lib/validate'
 import { sendTicketEmail, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
 import { replySubject, buildReplyHeaders, inboundPreview } from '@/lib/email-inbox'
 import { shouldStampFirstResponse } from '@/lib/email-tickets'
-import { appendSignature, richSignatureFromProfile, renderRichSignature } from '@/lib/email-signature'
+import { appendSignature, richSignatureFromProfile, renderRichSignature, effectiveRichSignature } from '@/lib/email-signature'
 import { logAuditEvent } from '@/lib/audit'
 import { email as emailAddress } from '@/lib/schemas'
 import {
@@ -26,6 +26,7 @@ import { withSendMarker } from '@/lib/postmark-send-marker'
 import {
   loadTicketForUser, loadOwnAddresses, statusTimestamps,
   loadParticipantMessages, resolveReplyAudience, ticketMergedAway,
+  loadSignatureContext,
 } from '../../_helpers'
 
 // EMAIL-CC.1 — an ADDITIONAL address list, on top of the thread's own
@@ -355,7 +356,13 @@ export async function POST(request, props) {
   // normalisation); the HTML part is OUR generated block appended AFTER the
   // textToHtml conversion — the user authored fields, never markup, so this
   // is not the un-sanitised path the mig-493 header forbids.
-  const richSig = richSignatureFromProfile(user) ? renderRichSignature(user.email_signature_rich) : null
+  // MAIL-SIG.2 — resolved against the SENDING studio: its line, phone and
+  // links; the person's own values as fallback (loadSignatureContext is
+  // best-effort and degrades, never blocks the send).
+  const sigCtx = await loadSignatureContext(db, ticket.location_id)
+  const richSig = richSignatureFromProfile(user)
+    ? renderRichSignature(effectiveRichSignature(user.email_signature_rich, sigCtx))
+    : null
   const outboundText = richSig
     ? appendSignature(text, richSig.text)
     : appendSignature(text, user.email_signature)
