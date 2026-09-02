@@ -808,3 +808,12 @@ describe('sender signature', () => {
     errors.mockRestore()
   })
 })
+
+// MAIL-SENT.1 — outbound-born: the ticket starts in Sent, not Inbox.
+it('a composed conversation is born has_inbound: false', async () => {
+  setupDb(baseState({ grants: [GRANT_STUDIO] }))
+  const res = await post(VALID)
+  expect(res.status).toBe(200)
+  const [insert] = insertsInto(db, 'email_tickets')
+  expect(insert.payload.has_inbound).toBe(false)
+})

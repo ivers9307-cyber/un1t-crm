@@ -67,7 +67,13 @@ export function isNeedsReply(row) {
 // ── Views (hoisted from route.js for MAIL-ALLLOC.1, so the scoped list and
 // the multi-location digest share ONE definition of every view) ──────────
 
-export const MAIL_VIEWS = Object.freeze(['inbox', 'needs_reply', 'archived'])
+// MAIL-SENT.1 — the traditional split (Richard, 2 Sep: "Outlook, Google was
+// the directive"): Inbox = live conversations that have RECEIVED something;
+// Sent = live outbound-only threads (a campaign offer nobody answered yet);
+// the moment a reply arrives has_inbound flips and the thread moves to
+// Inbox. Needs-reply is unchanged and remains a subset of Inbox (an
+// outbound-only thread cannot be awaiting our answer).
+export const MAIL_VIEWS = Object.freeze(['inbox', 'needs_reply', 'sent', 'archived'])
 
 // Legacy `solved` — a status this surface never writes but old rows carry —
 // deserves an explicit decision rather than falling out of a negation. It is
@@ -81,7 +87,11 @@ export function applyView(query, view) {
     case 'needs_reply': return scopeToNeedsReply(query)
     // "Archived" is the word on screen; `closed` is the word on disk.
     case 'archived': return query.eq('status', 'closed')
-    default: return query.in('status', LIVE_STATUSES)
+    // Outbound-only, still live — the mail-client Sent folder (MAIL-SENT.1).
+    case 'sent': return query.in('status', LIVE_STATUSES).eq('has_inbound', false)
+    // Inbox proper: live AND has received something. NOT a negation of
+    // sent-by-position — stated explicitly so the two can never overlap.
+    default: return query.in('status', LIVE_STATUSES).eq('has_inbound', true)
   }
 }
 

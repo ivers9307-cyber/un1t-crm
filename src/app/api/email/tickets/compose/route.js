@@ -349,6 +349,8 @@ export async function POST(request) {
     // ticket they opened. This also keeps it out of the needs_reply view,
     // which filters on an INBOUND last message.
     status: 'open',
+    // MAIL-SENT.1 — outbound-born: lives in Sent until a reply arrives.
+    has_inbound: false,
     last_message_at: now,
     last_message_direction: 'outbound',
     last_message_preview: inboundPreview(text),

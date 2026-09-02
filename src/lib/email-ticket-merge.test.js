@@ -144,3 +144,16 @@ describe('ticketFieldsFromMessages', () => {
     expect(ticketFieldsFromMessages(null).last_message_at).toBeNull()
   })
 })
+
+// MAIL-SENT.1 — a survivor that absorbed ANY received mail has received mail.
+describe('mergedTicketFields — has_inbound ORs', () => {
+  it.each([
+    [true,  true,  true],
+    [true,  false, true],
+    [false, true,  true],
+    [false, false, false],
+  ])('source %s + target %s → %s', (a, b, expected) => {
+    const fields = mergedTicketFields({ has_inbound: a }, { has_inbound: b })
+    expect(fields.has_inbound).toBe(expected)
+  })
+})
