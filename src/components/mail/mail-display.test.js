@@ -82,8 +82,8 @@ describe('unread', () => {
 })
 
 describe('views', () => {
-  it('has three, and no assignment views', () => {
-    expect(MAIL_VIEWS.map(v => v.id)).toEqual(['inbox', 'needs_reply', 'archived'])
+  it('has four (MAIL-SENT.1 added Sent), and no assignment views', () => {
+    expect(MAIL_VIEWS.map(v => v.id)).toEqual(['inbox', 'needs_reply', 'sent', 'archived'])
     expect(MAIL_VIEWS.map(v => v.id)).not.toContain('mine')
     expect(MAIL_VIEWS.map(v => v.id)).not.toContain('unassigned')
   })

@@ -1892,3 +1892,26 @@ describe('push fan-out (EMAIL-INBOUND-PUSH.1)', () => {
     expect(maybeNotifyInboundEmail).not.toHaveBeenCalled()
   })
 })
+
+// ── MAIL-SENT.1 — has_inbound is stamped at exactly the inbound writes ───
+describe('MAIL-SENT.1 — has_inbound stamps', () => {
+  it('a fresh inbound ticket is born has_inbound: true', async () => {
+    db = makeDb({})
+    createServerClient.mockImplementation(() => db)
+    await post(inbound())
+    expect(insertsInto(db, 'email_tickets')[0].payload.has_inbound).toBe(true)
+  })
+
+  it('the first reply to a compose thread flips it to Inbox on the bump', async () => {
+    // An outbound-born (Sent) thread receives its reply via RFC threading —
+    // the bump update is the write that moves it from Sent to Inbox.
+    db = makeDb({
+      threadRows: [{ ticket_id: 'T-sent', created_at: '2026-08-06T08:00:00Z', location_id: 'loc-hatch', rfc_message_id: 'ours-1@mtasv.net' }],
+      tickets: { 'T-sent': { id: 'T-sent', location_id: 'loc-hatch', status: 'open', subject: 'Corporate offer', first_response_at: null, has_inbound: false } },
+    })
+    createServerClient.mockImplementation(() => db)
+    await post(reply())
+    const update = updatesTo(db, 'email_tickets')[0]
+    expect(update.payload.has_inbound).toBe(true)
+  })
+})

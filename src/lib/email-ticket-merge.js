@@ -106,5 +106,9 @@ export function mergedTicketFields(source, target) {
     last_message_at: newest?.last_message_at ?? null,
     last_message_direction: newest?.last_message_direction ?? null,
     last_message_preview: newest?.last_message_preview ?? null,
+    // MAIL-SENT.1 — a survivor that absorbed ANY received mail has received
+    // mail: OR, never newest-wins (merging an inbound thread into an
+    // outbound-only one must move the survivor to Inbox).
+    has_inbound: Boolean(source?.has_inbound || target?.has_inbound),
   }
 }

@@ -414,3 +414,47 @@ describe('GET /api/email/mail — search', () => {
     expect(searchTicketIds).not.toHaveBeenCalled()
   })
 })
+
+// ── MAIL-SENT.1 — the Inbox/Sent split (the traditional mail-client rule) ──
+describe('GET /api/email/mail — the Sent view', () => {
+  const T_SENT_ONLY = {
+    ...T_STUDIO,
+    id: 'aaaaaaa8-0000-4000-8000-000000000008',
+    subject: 'UN1T - Corporate offer',
+    has_inbound: false,
+    status: 'open',
+    last_message_direction: 'outbound',
+  }
+
+  it('view=sent lists outbound-only live conversations — and inbox does NOT', async () => {
+    setupDb(mailState({ tickets: [
+      { ...T_STUDIO, status: 'open' },
+      T_SENT_ONLY,
+    ] }))
+    const inbox = await list(`?location_id=${LOC_A}`)
+    const inboxIds = inbox.body.data.conversations.map(c => c.id)
+    expect(inboxIds).toContain(T_STUDIO.id)
+    expect(inboxIds).not.toContain(T_SENT_ONLY.id)
+
+    const sent = await list(`?location_id=${LOC_A}&view=sent`)
+    const sentIds = sent.body.data.conversations.map(c => c.id)
+    expect(sentIds).toEqual([T_SENT_ONLY.id])
+  })
+
+  it('a Sent thread that received a reply lives in Inbox — has_inbound is the whole rule', async () => {
+    setupDb(mailState({ tickets: [{ ...T_SENT_ONLY, has_inbound: true }] }))
+    const inbox = await list(`?location_id=${LOC_A}`)
+    expect(inbox.body.data.conversations.map(c => c.id)).toEqual([T_SENT_ONLY.id])
+    const sent = await list(`?location_id=${LOC_A}&view=sent`)
+    expect(sent.body.data.conversations).toEqual([])
+  })
+
+  it('archived holds closed conversations of BOTH kinds — the split is a live-mail concept', async () => {
+    setupDb(mailState({ tickets: [
+      { ...T_STUDIO, status: 'closed' },
+      { ...T_SENT_ONLY, status: 'closed' },
+    ] }))
+    const res = await list(`?location_id=${LOC_A}&view=archived`)
+    expect(res.body.data.conversations).toHaveLength(2)
+  })
+})

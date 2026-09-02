@@ -66,9 +66,12 @@ export const MAIL_VIEWS = Object.freeze([
   {
     id: 'inbox',
     label: 'Inbox',
-    hint: 'Everything that has not been archived',
+    // MAIL-SENT.1 — the traditional split: Inbox holds conversations that
+    // have RECEIVED something; outbound-only threads live on Sent until a
+    // reply arrives.
+    hint: 'Conversations that have received mail',
     emptyTitle: 'Inbox zero',
-    emptyDescription: 'Nothing is waiting here. Archived conversations are still on the Archived tab.',
+    emptyDescription: 'Nothing is waiting here. Outbound-only conversations are on the Sent tab; archived ones on Archived.',
   },
   {
     id: 'needs_reply',
@@ -76,6 +79,13 @@ export const MAIL_VIEWS = Object.freeze([
     hint: 'They wrote to us and nobody has answered yet',
     emptyTitle: 'Everyone has been answered',
     emptyDescription: 'No conversation is waiting on a reply from the studio.',
+  },
+  {
+    id: 'sent',
+    label: 'Sent',
+    hint: 'Sent by the studio, no reply yet — a reply moves the conversation to Inbox',
+    emptyTitle: 'Nothing waiting on a reply',
+    emptyDescription: 'Outbound-only conversations live here. The moment someone replies, the thread moves to Inbox.',
   },
   {
     id: 'archived',

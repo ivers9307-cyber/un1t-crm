@@ -932,6 +932,8 @@ async function processInboundEmail(db, body, messageId) {
         contact_id: contactId,
         requester_email: fromEmail,
         requester_name: counterpartName,
+        // MAIL-SENT.1 — born of a received message.
+        has_inbound: true,
         subject: ticketSubject(null, subject),
         status: 'open',
         // Set only when this reply threaded to a CLOSED ticket. That ticket
@@ -1133,6 +1135,9 @@ async function bumpTicketForInbound(db, ticketId, { now, preview }) {
     // stamp as though the member's reply never happened.
     ...statusTimestamps('open', null, now),
     last_message_at: now,
+    // MAIL-SENT.1 — the first reply to a compose thread lands here: the
+    // thread moves from Sent to Inbox on this very write.
+    has_inbound: true,
     last_message_direction: 'inbound',
     last_message_preview: preview,
     updated_at: now,

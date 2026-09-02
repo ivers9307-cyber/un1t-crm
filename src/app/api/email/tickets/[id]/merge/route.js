@@ -338,9 +338,33 @@ export async function DELETE(request, props) {
   // count. Clamped at zero, because somebody may have opened the survivor since
   // the merge and cleared the badge; subtracting into the negative would then
   // invent headroom on the next inbound.
+  // MAIL-SENT.1 — has_inbound is recomputed EXACTLY, not from the bounded
+  // message window above (newest-first, so a windowed derivation could
+  // "prove" absence on a long thread and silently bounce a real Inbox
+  // conversation to Sent). Two head-counts answer presence outright; a
+  // failed count leaves the column untouched — wrongly-in-Inbox is the
+  // visible direction, wrongly-in-Sent is the buried one.
+  const hasInboundOf = async (ticketId) => {
+    const { count, error } = await db.from('email_inbox_messages')
+      .select('*', { count: 'exact', head: true })
+      .eq('ticket_id', ticketId)
+      .eq('direction', 'inbound')
+      .eq('is_internal_note', false)
+    if (error) {
+      console.error('[tickets/:id/merge] has_inbound recount failed:', error.message)
+      return null
+    }
+    return (count || 0) > 0
+  }
+  const [targetHasInbound, sourceHasInbound] = await Promise.all([
+    hasInboundOf(targetId),
+    hasInboundOf(ticket.id),
+  ])
+
   const { error: targetError } = await db.from('email_tickets')
     .update({
       ...ticketFieldsFromMessages(targetMessages.data),
+      ...(targetHasInbound === null ? {} : { has_inbound: targetHasInbound }),
       unread_count: Math.max(0, (target.unread_count || 0) - (ticket.unread_count || 0)),
       updated_at: new Date().toISOString(),
     })
@@ -356,6 +380,7 @@ export async function DELETE(request, props) {
   const { error: clearError } = await db.from('email_tickets')
     .update({
       ...ticketFieldsFromMessages(sourceMessages.data),
+      ...(sourceHasInbound === null ? {} : { has_inbound: sourceHasInbound }),
       merged_into_id: null,
       merged_at: null,
       merged_by: null,
