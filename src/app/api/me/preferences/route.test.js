@@ -93,8 +93,9 @@ describe('PATCH /api/me/preferences — email_signature', () => {
     for (const value of ['', '   \n  ', null]) {
       setupDb()
       await patch({ email_signature: value })
+      // Clearing the PLAIN signature writes only that key — the route never
+      // touches email_signature_rich unless the caller sent it.
       expect(db.updates[0].payload).toEqual({ email_signature: null })
-        email_signature_rich: null,
     }
   })
 
@@ -134,7 +135,7 @@ describe('GET /api/me/preferences', () => {
     const body = await res.json()
     expect(body).toEqual({
       success: true,
-      data: { landing_preference: 'studio', email_signature: 'Sarah' },
+      data: { landing_preference: 'studio', email_signature: 'Sarah', email_signature_rich: null },
     })
     expect(db.selects[0].filters).toEqual([['id', ME.id]])
   })
@@ -142,6 +143,6 @@ describe('GET /api/me/preferences', () => {
   it('reports an unset signature as an empty string', async () => {
     setupDb({ permissions: {}, email_signature: null })
     const body = await (await GET()).json()
-    expect(body.data).toEqual({ landing_preference: 'auto', email_signature: '' })
+    expect(body.data).toEqual({ landing_preference: 'auto', email_signature: '', email_signature_rich: null })
   })
 })

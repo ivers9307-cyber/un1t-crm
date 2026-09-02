@@ -79,9 +79,13 @@ export default async function AccountPage() {
 
       {worksAQueue && (
         <div className="mt-8">
-          {/* getCurrentUser() spreads the whole profiles row, so the current
-              value is already loaded — no extra read. */}
-          <EmailSignatureForm initialSignature={user.email_signature || ''} />
+          {/* getCurrentUser() spreads the whole profiles row, so both the
+              plain column and the MAIL-SIG.1 rich JSONB are already loaded —
+              no extra read. */}
+          <EmailSignatureForm
+            initialSignature={user.email_signature || ''}
+            initialRich={user.email_signature_rich || null}
+          />
         </div>
       )}
 
