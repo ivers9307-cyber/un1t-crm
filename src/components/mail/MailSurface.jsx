@@ -44,12 +44,10 @@ import {
   MAIL_VIEWS, DEFAULT_MAIL_VIEW, mailView, buildMailUrl,
   isArchived, isUnread, isTypingTarget, neighbourId,
   DENSITIES, DEFAULT_DENSITY, readDensity, writeDensity,
-  READER_MODE_MIN, DEFAULT_READER_MODE, readReaderMode, writeReaderMode,
-  escTarget, restoreTarget, needsReply,
-  COMPOSE_MODE_MIN, DEFAULT_COMPOSE_MODE, readComposeMode, writeComposeMode,
-  composeRestoreTarget, composeEscTarget, composeBlocksKeys,
-  slotYieldTarget, slotOccupancy, isMdUp,
+  needsReply, composeBlocksKeys, slotOccupancy,
 } from './mail-display'
+import { useActionQueue } from './use-action-queue'
+import { useDockSlot } from './use-dock-slot'
 import {
   MAIL_SCOPE_ALL, isUuidShaped, readMailScope, writeMailScope, resolveMailScope,
   buildDigestSections, flattenSectionRows, resolveNeedsReplyTotal,
@@ -169,83 +167,12 @@ export default function MailSurface({ locationId, locationName, userId, location
   // HTML) and is hydrated once, after mount, below.
   const [density, setDensity] = useState(DEFAULT_DENSITY)
 
-  // ── MAIL-DOCK.1 — which shape the open conversation's card takes ─────
-  //
-  // 'dock' (the default), 'full' (the takeover) or 'min' (title bar only).
-  // Hydrated from storage after mount exactly like density — and ONLY the
-  // two persistable modes can come back from readReaderMode, so a reload
-  // never opens minimised. `prevModeRef` is what a minimised card restores
-  // to; it is a ref because it is a fact about the NEXT restore, not
-  // something whose change should repaint anything now.
-  const [readerMode, setReaderMode] = useState(DEFAULT_READER_MODE)
-  const prevModeRef = useRef(DEFAULT_READER_MODE)
-
-  // ── MAIL-DOCK.2 — the compose card's own mode, variant and slot ──────
-  //
-  // Same three shapes as the reader, its own key, hydrated in the same
-  // mount effect below. `composeVariant` is which SHELL this compose session
-  // uses — 'dock' (the md+ machinery) or 'modal' (below md, byte-for-byte
-  // today's composer) — decided by isMdUp() AT OPEN and frozen for the life
-  // of that compose, so a mid-draft window resize can never remount the form
-  // and lose the words. `composePrevModeRef` mirrors prevModeRef: what the
-  // minimised bar restores to.
-  const [composeOpen, setComposeOpen] = useState(false)
+  // ── MAIL-DOCK.1/.2 — the reader/compose slot machine lives in
+  // use-dock-slot.js (MAIL-HOOKS.1); the hook is called below, once
+  // `selectedId` exists to feed its `hasReader` input. What stays here is
+  // the one compose input that is NOT slot machinery:
   // Audit F3 — the From options frozen at open (see the compose render).
   const [composeBoxesAtOpen, setComposeBoxesAtOpen] = useState([])
-  const [composeMode, setComposeMode] = useState(DEFAULT_COMPOSE_MODE)
-  const [composeVariant, setComposeVariant] = useState('modal')
-  const composePrevModeRef = useRef(DEFAULT_COMPOSE_MODE)
-
-  // ⤢/⤡ — the operator's explicit choice, and the ONLY writes to storage:
-  // Esc stepping full down to dock is a dismissal, not a preference, so it
-  // changes the card without touching what next session opens with.
-  function chooseReaderMode(next) {
-    setReaderMode(next)
-    writeReaderMode(next)
-  }
-  function minimiseReader() {
-    prevModeRef.current = restoreTarget(readerMode)
-    setReaderMode(READER_MODE_MIN)
-  }
-  function restoreReader() {
-    // ONE SLOT — the reader's card coming back is what sends an open compose
-    // card to its bar (the typed draft survives there, mounted).
-    if (slotYieldTarget(composeOpen, composeMode)) minimiseCompose()
-    setReaderMode(restoreTarget(prevModeRef.current))
-  }
-
-  function chooseComposeMode(next) {
-    setComposeMode(next)
-    writeComposeMode(next)
-  }
-  function minimiseCompose() {
-    composePrevModeRef.current = composeRestoreTarget(composeMode)
-    setComposeMode(COMPOSE_MODE_MIN)
-  }
-  function restoreCompose() {
-    // The mirror of restoreReader's yield: compose taking the slot back
-    // minimises the reader's card (its bar survives, the polls keep running).
-    if (slotYieldTarget(!!selectedId, readerMode)) minimiseReader()
-    setComposeMode(composeRestoreTarget(composePrevModeRef.current))
-  }
-  // `min` is a transient state of an OPEN compose. A close from it must hand
-  // the NEXT open back to the real mode underneath — clearSelection's rule,
-  // applied to the second occupant of the slot.
-  function closeCompose() {
-    setComposeOpen(false)
-    setComposeMode(m => (m === COMPOSE_MODE_MIN ? composeRestoreTarget(composePrevModeRef.current) : m))
-  }
-  // The compose Esc ladder — dirty-aware, routed from ComposeDock's scoped
-  // keydown. `dirty` and `requestClose` are TicketCompose's own (the shell
-  // hands them through), so "pristine closes silently" and "✕ confirms" are
-  // the same code paths the Modal always had.
-  function handleComposeEscape(dirty, requestClose) {
-    const target = composeEscTarget(composeMode, dirty)
-    if (target === null) { requestClose(); return }
-    if (target === composeMode) return // the bar is the floor for a dirty draft
-    if (target === COMPOSE_MODE_MIN) minimiseCompose()
-    else setComposeMode(target) // full → dock: a dismissal, never persisted
-  }
 
   // MAIL-SEARCH — the raw box value, and the value that actually drives the
   // request. `queryText` updates on every keystroke; `debouncedQuery` lags it
@@ -281,26 +208,28 @@ export default function MailSurface({ locationId, locationName, userId, location
   const [threadModalOpen, setThreadModalOpen] = useState(false)
   const [forwarding, setForwarding] = useState(null)
 
+  // ── MAIL-DOCK.1/.2 — reader + compose modes, and the ONE bottom-right
+  // slot they share (use-dock-slot.js). Reader occupancy is `!!selectedId`;
+  // compose occupancy is the hook's own `composeOpen`. Unconditional, above
+  // every early return, so hook order is stable across renders.
+  const {
+    readerMode, chooseReaderMode, minimiseReader, restoreReader,
+    unminimiseReader, readerEscStep, claimReaderSlot,
+    composeOpen, composeMode, composeVariant,
+    chooseComposeMode, minimiseCompose, restoreCompose, closeCompose,
+    handleComposeEscape, openComposeSlot,
+  } = useDockSlot({ hasReader: !!selectedId })
+
   const view = mailView(viewId)
   const listUrl = buildMailUrl({ locationId: scopedId, mailboxId, viewId, q: debouncedQuery })
 
   // Hydrate the density preference AFTER mount, never during render — the
   // server has no localStorage, so reading it in the initial useState would
-  // mismatch the server's own HTML. The reader mode rides the same effect:
-  // same storage, same SSR reasoning, same once-only cadence — and it lands
-  // before any conversation can be open, so a `?c=` deep link opens in the
-  // stored mode as the contract asks.
+  // mismatch the server's own HTML. The reader/compose modes hydrate the
+  // same way in use-dock-slot's own mount effect — same storage, same SSR
+  // reasoning, same once-only cadence, same commit.
   useEffect(() => {
     setDensity(readDensity())
-    const stored = readReaderMode()
-    setReaderMode(stored)
-    prevModeRef.current = stored
-    // MAIL-DOCK.2 — the compose mode rides the same once-only hydration:
-    // same storage, same SSR reasoning, and it lands before any compose can
-    // be open (opening takes a click).
-    const storedCompose = readComposeMode()
-    setComposeMode(storedCompose)
-    composePrevModeRef.current = storedCompose
   }, [])
 
   function chooseDensity(next) {
@@ -921,7 +850,7 @@ export default function MailSurface({ locationId, locationName, userId, location
     // MAIL-DOCK.1 — `min` is a transient state of an OPEN card. A close from
     // it must hand the NEXT open back to the real mode underneath, or the
     // next conversation would open as a bare title bar nobody asked for.
-    setReaderMode(m => (m === READER_MODE_MIN ? restoreTarget(prevModeRef.current) : m))
+    unminimiseReader()
   }
 
   function changeMailbox(id) { setMailboxId(id); clearSelection() }
@@ -1097,120 +1026,20 @@ export default function MailSurface({ locationId, locationName, userId, location
 
   // ── Action queue ───────────────────────────────────────────────────
   //
-  // TASK 2 — RAPID SINGLE ARCHIVES MUST NOT VANISH. The recorded decision
-  // against a multi-select/bulk toolbar stands — this only makes the single
-  // verb honest about what a rapid run of it does. Every click below
-  // ENQUEUES; a single worker (the effect further down) drains the queue in
-  // order, one write at a time — click 5 fires exactly as reliably as click
-  // 1, it just waits its turn. Serial on purpose, not merely as a side effect
-  // of the fix: the IMAP write-back on the server is per-request sequential
-  // anyway, so two archives in flight at once would only risk the same
-  // overlapping-write-against-one-row hazard `actionSaving` always existed to
-  // prevent for a SINGLE row — queuing preserves that per row while no longer
-  // punishing every OTHER row for it.
-  //
-  // The queue's CONTENTS live in a ref (`actionQueueRef`), not state —
-  // pushing onto it must not itself trigger a render, the same reasoning as
-  // `listRequest`/`threadFor` above. `queueTick` is a bare counter that exists
-  // solely to nudge the drain effect after an enqueue or a completed item.
-  const actionQueueRef = useRef([])
-  const queueRunningRef = useRef(false)
-  const [queueTick, setQueueTick] = useState(0)
-
-  // CONTRACTS finding M3 — a per-row PENDING target, separate from the queue
-  // itself. `archive(row, archived)` is always called with a boolean computed
-  // by the CALLER from CURRENT list/pane state (`!isArchived(row)`), but that
-  // state does not update until the archive's response returns — a
-  // multi-second, sequential IMAP write. Two rapid `e` presses (or a keyboard
-  // `e` racing a hover click on the same row) therefore both read the SAME
-  // stale "not archived yet", both compute `true`, and the queue used to
-  // faithfully execute "archive" twice — where the second keystroke plainly
-  // MEANT "undo". This map holds what the row's target ALREADY IS once
-  // something is pending/queued for it, so a second archive on the same row
-  // toggles relative to THAT, not to stale list state — `e` `e` becomes a
-  // real archive-then-unarchive. Cleared once nothing archive-shaped remains
-  // queued for that row (see the drain effect's `finally`, below) — a click
-  // AFTER everything has settled goes back to reading real list state, which
-  // is correct again by then.
-  const pendingArchiveRef = useRef(new Map())
-
-  const enqueueAction = useCallback((type, row, args = {}) => {
-    if (!row?.id) return
-    actionQueueRef.current.push({ type, row, args })
-    setQueueTick(t => t + 1)
-  }, [])
-
-  // The worker. Deliberately an EFFECT keyed on the perform* callbacks rather
-  // than one long-lived async loop started on the first click: those
-  // callbacks close over conversations/selectedId/viewId/debouncedQuery, and
-  // a loop started on click 1 would keep running clicks 2 through 5 against
-  // click 1's SNAPSHOT of that state — resolving conv-3's successor, say,
-  // against a list that no longer has conv-1 or conv-2 in it. Re-deriving the
-  // worker from the CURRENT render on every item instead means each queued
-  // write sees the state as it stands right before its own turn, same as if
-  // it had been clicked (and run immediately) at that moment.
-  useEffect(() => {
-    if (queueRunningRef.current) return
-    const item = actionQueueRef.current[0]
-    if (!item) return
-    queueRunningRef.current = true
-    setActionSaving(true)
-    setBusyId(item.row.id)
-    ;(async () => {
-      try {
-        if (item.type === 'archive') await performArchive(item.row, item.args.archived)
-        else if (item.type === 'markUnread') await performMarkUnread(item.row)
-        else if (item.type === 'markRead') await performMarkRead(item.row)
-      } finally {
-        // Popped either way — the array is a ref, not component state, so
-        // mutating it after unmount is harmless; it is the setState calls
-        // right below that must not run against a dead component.
-        actionQueueRef.current.shift()
-        queueRunningRef.current = false
-        // CONTRACTS finding M3 — the pending-target map entry for THIS row
-        // only clears once nothing archive-shaped remains queued for it. A
-        // third rapid `e` (while the first is still in flight) enqueues a
-        // second archive item before this one finishes — clearing here
-        // unconditionally would let that second item's toggle read stale
-        // list state again, the exact bug this map exists to prevent.
-        if (item.type === 'archive' && item.row?.id) {
-          const stillQueued = actionQueueRef.current.some(
-            q => q.type === 'archive' && q.row?.id === item.row.id
-          )
-          if (!stillQueued) pendingArchiveRef.current.delete(item.row.id)
-        }
-        if (mountedRef.current) {
-          setActionSaving(false)
-          setBusyId(null)
-          // Nudges this effect to check for a next item. Also covers the
-          // "queue drains on unmount safely" requirement's other half: if the
-          // component is gone, this never fires, so item 2 is never started
-          // against it — see the queue-stops-on-unmount test.
-          setQueueTick(t => t + 1)
-        }
-      }
-    })()
-  }, [queueTick, performArchive, performMarkUnread, performMarkRead])
-
-  const archive = useCallback((row, requestedArchived) => {
-    if (!row?.id) return
-    // CONTRACTS finding M3 — ignore the caller's boolean once something is
-    // already pending/queued for this row; toggle relative to THAT instead.
-    // See pendingArchiveRef's own comment, above.
-    const target = pendingArchiveRef.current.has(row.id)
-      ? !pendingArchiveRef.current.get(row.id)
-      : requestedArchived
-    pendingArchiveRef.current.set(row.id, target)
-    enqueueAction('archive', row, { archived: target })
-  }, [enqueueAction])
-
-  const markUnreadAction = useCallback((row) => {
-    enqueueAction('markUnread', row)
-  }, [enqueueAction])
-
-  const markReadAction = useCallback((row) => {
-    enqueueAction('markRead', row)
-  }, [enqueueAction])
+  // TASK 2 / MAIL-HOOKS.1 — rapid single archives must not vanish; the
+  // serial queue that guarantees it (ref + tick, one write at a time,
+  // pending-target toggle map, unmount stop) lives in use-action-queue.js.
+  // The perform* callbacks stay HERE because they close over
+  // conversations/selectedId/view state — the hook's drain effect is keyed
+  // on them so each queued item runs against the CURRENT render's state.
+  const { archive, markUnreadAction, markReadAction } = useActionQueue({
+    performArchive,
+    performMarkUnread,
+    performMarkRead,
+    setActionSaving,
+    setBusyId,
+    mountedRef,
+  })
 
   // ── Send / participants ────────────────────────────────────────────
   // Both are the ticket surface's routes, unchanged — see the header.
@@ -1296,7 +1125,7 @@ export default function MailSurface({ locationId, locationName, userId, location
     // deliberate open: restore the reader's CARD if compose had minimised it,
     // or the fresh conversation would appear as a bare bar nobody asked for.
     if (newTicket?.id) {
-      setReaderMode(m => (m === READER_MODE_MIN ? restoreTarget(prevModeRef.current) : m))
+      unminimiseReader()
       selectConversation(newTicket)
     }
   }
@@ -1324,24 +1153,17 @@ export default function MailSurface({ locationId, locationName, userId, location
   const [composeMailboxes, setComposeMailboxes] = useState(null)
   const [composeLoading, setComposeLoading] = useState(false)
 
-  // MAIL-DOCK.2 — every compose entry lands here. The shell variant is
-  // decided NOW and frozen for this compose session (see composeVariant's
-  // comment); a dock-variant open is also the moment the reader's card
-  // yields the bottom-right slot — auto-minimised, bar surviving, polls
-  // running. The Modal variant overlays everything and takes no slot.
+  // MAIL-DOCK.2 — every compose entry lands here. The slot half (variant
+  // frozen at open, the reader's card yielding the corner, never opening as
+  // a bare title bar) is use-dock-slot's openComposeSlot; what stays here is
+  // the freeze of the From options, which is list data, not slot machinery.
   function openComposeCard(boxesOverride) {
     // Audit F3 — freeze the From options NOW: the picker must show exactly
     // the list the send will draw from, whatever the rail does mid-draft.
     // The All path passes its freshly-gathered union explicitly because its
     // setComposeMailboxes has not flushed by the time this runs.
     setComposeBoxesAtOpen(boxesOverride ?? (allMode ? (composeMailboxes || []) : mailboxes))
-    const dockVariant = isMdUp()
-    setComposeVariant(dockVariant ? 'dock' : 'modal')
-    if (dockVariant && slotYieldTarget(!!selectedId, readerMode)) minimiseReader()
-    // Belt and braces — closeCompose already resets a leftover min, but a
-    // compose must never OPEN as a bare title bar.
-    setComposeMode(m => (m === COMPOSE_MODE_MIN ? composeRestoreTarget(composePrevModeRef.current) : m))
-    setComposeOpen(true)
+    openComposeSlot()
   }
 
   async function openCompose() {
@@ -1445,19 +1267,21 @@ export default function MailSurface({ locationId, locationName, userId, location
       // the operator is typing, or while a modal owns the keyboard, this
       // handler already returned — Esc in a compose window is the MODAL's
       // Esc, and stealing it to close the card underneath would throw away a
-      // half-written email. Stepping down from full deliberately does NOT
-      // persist (see chooseReaderMode): Esc is how the operator LEAVES, and
-      // it must not overwrite how they like to read.
+      // half-written email. The step down (and its never-persist rule) is
+      // use-dock-slot's readerEscStep; false means the ladder is exhausted
+      // and Esc means close.
       if (key === 'Escape') {
         if (!selectedId) return
         e.preventDefault()
-        const target = escTarget(readerMode)
-        if (target) setReaderMode(target)
-        else clearSelection()
+        if (!readerEscStep()) clearSelection()
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
+    // `readerMode` stays in the deps even though nothing here reads it
+    // directly any more: the handler reads it only THROUGH readerEscStep,
+    // whose closure this dep keeps fresh — drop it and Esc in `full` runs a
+    // stale step that returns false and CLOSES the conversation instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationIds, conversations, selectedId, archive, composeOpen, composeMode, forwarding, threadModalOpen, readerMode])
 
@@ -1728,11 +1552,10 @@ export default function MailSurface({ locationId, locationName, userId, location
             // selectConversation directly.
             onSelect={(row) => {
               // MAIL-DOCK.2 — a click ends with the reader as a CARD either
-              // way, so an open compose card yields the slot first (its
-              // typed draft survives in the bar). j/k stay bar-retargeting
+              // way (claimReaderSlot: an open compose card yields the slot,
+              // a minimised reader comes back). j/k stay bar-retargeting
               // and never come through here.
-              if (slotYieldTarget(composeOpen, composeMode)) minimiseCompose()
-              setReaderMode(m => (m === READER_MODE_MIN ? restoreTarget(prevModeRef.current) : m))
+              claimReaderSlot()
               selectConversation(row)
             }}
             onArchive={archive}
