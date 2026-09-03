@@ -233,6 +233,18 @@ doing it shifts placement for the rest.
       Promotions for branded — Promotions is fine for branded, the
       goal is to land in the *expected* tab, not always Primary)
 
+## Inbound: recovering mail missed while the webhook was down
+
+Postmark keeps inbound messages it could not deliver to our webhook —
+errored, rejected, retries exhausted — for roughly **45 days**, and each
+one can be re-pushed by hand from **Activity → Inbound** on the inbound
+server (open the message, hit Retry). So an inbound outage (a
+half-rotated webhook token, a broken deploy, the shim down) is
+recoverable well after the fact: fix the cause, then replay the affected
+window from the Activity page. Don't sit on it, though — the ~45-day
+retention is the hard limit, and the `token_mismatch` / `missing_secret`
+rows in `error_events` are what tell you the outage happened at all.
+
 ## Open follow-ups
 
 - [ ] Confirm which sending domain n8n / ManyChat / Klaviyo are

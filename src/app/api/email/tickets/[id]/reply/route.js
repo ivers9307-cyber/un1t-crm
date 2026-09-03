@@ -23,6 +23,7 @@ import {
 } from '@/lib/email-outbound-attachments-server'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 import { withSendMarker } from '@/lib/postmark-send-marker'
+import { logError } from '@/lib/log'
 import {
   loadTicketForUser, loadOwnAddresses, statusTimestamps,
   loadParticipantMessages, resolveReplyAudience, ticketMergedAway,
@@ -585,8 +586,33 @@ export async function POST(request, props) {
       // the contact's history + delivery-webhook correlation, and the queue
       // moving to pending so it stops saying "needs reply" about a member who
       // has one. Attachment filing is NOT here — its rows hang off message.id.
-      if (sendLogRow) await db.from('email_sends').insert(sendLogRow)
-      await db.from('email_tickets').update(patch).eq('id', ticket.id)
+      //
+      // MAILFIX-GUARDRAILS.1 — both of these were BARE awaits inside this try,
+      // whose catch cannot fire for them: a supabase builder RESOLVES with
+      // `{ error }`, so a lost breadcrumb reported nothing at all. Each is now
+      // judged and LOGGED, then execution continues — this branch is already
+      // the "do not resend" 500, and nothing here may change that answer.
+      if (sendLogRow) {
+        const { error: sendLogErr } = await db.from('email_sends').insert(sendLogRow)
+        if (sendLogErr) {
+          logError('tickets/reply', 'email_sends log failed after an unfiled send (mail already sent)', {
+            ticketId: ticket.id, messageId: result.messageId, error: sendLogErr,
+          })
+        }
+      }
+      // The ticket was loaded by id above, so it MUST exist — judge the rows
+      // touched too, because PostgREST reports NO error for a zero-row UPDATE.
+      const { data: patched, error: patchErr } = await db.from('email_tickets')
+        .update(patch).eq('id', ticket.id).select('id')
+      if (patchErr) {
+        logError('tickets/reply', 'ticket patch failed after an unfiled send (mail already sent)', {
+          ticketId: ticket.id, messageId: result.messageId, error: patchErr,
+        })
+      } else if (!patched?.length) {
+        logError('tickets/reply', 'ticket patch matched no row after an unfiled send (mail already sent)', {
+          ticketId: ticket.id, messageId: result.messageId, rows: 0,
+        })
+      }
     } catch (e) {
       // Best-effort by construction: a DB bad enough to fail four writes must
       // still not turn "already sent" back into a retryable-looking error.
@@ -617,7 +643,16 @@ export async function POST(request, props) {
   // Log to email_sends — the row was built above, before the filing insert;
   // see the sendLogRow comment for everything it is and is not.
   if (sendLogRow) {
-    await db.from('email_sends').insert(sendLogRow)
+    // MAILFIX-GUARDRAILS.1 — was a bare await: a lost row silently dropped the
+    // contact's history entry and the delivery-webhook correlation for this
+    // send. Logged, never surfaced — the reply is with the member, and a 500
+    // here reads as "try again", which is a real second email in a real inbox.
+    const { error: sendLogErr } = await db.from('email_sends').insert(sendLogRow)
+    if (sendLogErr) {
+      logError('tickets/reply', 'email_sends log failed (mail already sent)', {
+        ticketId: ticket.id, messageId: result.messageId, error: sendLogErr,
+      })
+    }
   }
 
   // ── Attribution for anyone the operator ADDED (EMAIL-CC.1) ────────
@@ -647,7 +682,25 @@ export async function POST(request, props) {
   }
 
   // Advance the queue — the patch was built above, before the filing insert.
-  await db.from('email_tickets').update(patch).eq('id', ticket.id)
+  //
+  // MAILFIX-GUARDRAILS.1 — this was a bare await with the result discarded,
+  // not even logged: if it blipped, the member had the reply and the thread
+  // kept saying needs-reply, with no line anywhere to explain the stuck flag.
+  // The ticket was loaded by id above, so it MUST exist — judge the rows
+  // touched too, because PostgREST reports NO error for an UPDATE that matches
+  // nothing. Log and CONTINUE either way: the send already earned this
+  // success, and a 500 here reads as "try again" — a real second email.
+  const { data: patched, error: patchErr } = await db.from('email_tickets')
+    .update(patch).eq('id', ticket.id).select('id')
+  if (patchErr) {
+    logError('tickets/reply', 'ticket patch failed after a successful send (thread may still read needs-reply)', {
+      ticketId: ticket.id, messageId: result.messageId, error: patchErr,
+    })
+  } else if (!patched?.length) {
+    logError('tickets/reply', 'ticket patch matched no row after a successful send', {
+      ticketId: ticket.id, messageId: result.messageId, rows: 0,
+    })
+  }
 
   return NextResponse.json({
     success: true,

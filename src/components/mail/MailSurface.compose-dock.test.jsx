@@ -299,8 +299,14 @@ describe('MailSurface — one bottom-right slot', () => {
     // The conversation stays warm — mounted, its subject on the bar.
     expect(readerCard().firstElementChild.textContent).toContain('Membership freeze')
     // The reader's bar steps LEFT of the compose card, which owns right-4.
-    expect(readerCard().className).toContain('md:right-[calc(1.5rem+min(1120px,calc(100vw-2rem)))]')
+    // MAILFIX-DOCK.1 — the step quotes the COMPOSE card's own width term
+    // (dock-geometry.test.js pins the equality), so the bar stays inside
+    // the pane at every width instead of vanishing left of it.
+    expect(readerCard().className).toContain('md:right-[calc(1.5rem+min(1120px,calc(100vw-672px)))]')
     expect(composeCard().className).toContain('md:right-4')
+    // …and the compose card, seeing the parked bar, takes the RESERVED width
+    // — the same 672 term the bar's step quotes. This is the live pairing.
+    expect(composeCard().className).toContain('md:w-[min(1120px,calc(100vw-672px))]')
   })
 
   it('restoring the reader auto-minimises compose — the typed draft waits in the bar', async () => {
@@ -314,8 +320,10 @@ describe('MailSurface — one bottom-right slot', () => {
     expect(readerCard().getAttribute('data-reader-mode')).toBe('dock')
     expect(composeCard().getAttribute('data-compose-mode')).toBe('min')
     expect(bodyField().value).toContain('Half a reply')
-    // …and the compose bar now stacks left of the reader CARD.
-    expect(composeCard().className).toContain('md:right-[calc(1.5rem+min(1120px,calc(100vw-2rem)))]')
+    // …and the compose bar now stacks left of the reader CARD — clamped to
+    // the pane's left margin so the parked draft never leaves the viewport
+    // and never sits over the sidebar (MAILFIX-DOCK.1).
+    expect(composeCard().className).toContain('md:right-[min(calc(4.5rem+1120px),calc(100vw-624px))]')
   })
 
   it('restoring COMPOSE from its bar takes the slot back — the reader card yields to min', async () => {

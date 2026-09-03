@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, guardMasterOrOwner } from '@/lib/auth'
 import { validateBody, uuidLike } from '@/lib/validate'
 
 const BrandingSchema = z.object({
@@ -43,20 +43,42 @@ export async function GET(request) {
   return NextResponse.json({ success: true, data: data || null })
 }
 
-// PUT /api/settings/branding — Update branding (owner or master)
+// PUT /api/settings/branding — Update branding (owner or master AT THE TARGET)
 export async function PUT(request) {
   const user = await getCurrentUser()
-  if (!user || (user.role !== 'owner' && user.role !== 'master')) {
-    return NextResponse.json({ success: false, error: 'Only owners or master can update branding' }, { status: 403 })
-  }
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
   const validation = await validateBody(request, BrandingSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
   const locationId = body.location_id || user.activeLocation?.id
 
-  const guard = assertLocationAccess(user, locationId)
-  if (guard) return guard
+  // No target, no write: a caller with no active location and no explicit
+  // location_id would otherwise reach the upsert with location_id undefined
+  // (a DB refusal for masters, a confusing role 403 for everyone else).
+  // Also keeps the caller×target matrix total.
+  if (!locationId) {
+    return NextResponse.json({ success: false, error: 'location_id is required' }, { status: 400 })
+  }
+
+  // MAILFIX-BRANDGATE.1 — gate on the role AT THE TARGET STUDIO, never on
+  // `user.role`. That field resolves at the caller's ACTIVE location (with a
+  // highest-role-anywhere fallback), while this write lands on the
+  // caller-named body.location_id — so the old `user.role` check let an owner
+  // at studio A who is plain STAFF at studio B set B's email_signature (the
+  // phone + link row MAIL-SIG.2 injects into every customer email B sends),
+  // logo and company name. Same shape and order as guardMailboxAdmin:
+  // membership first, so an owner of a DIFFERENT studio is told "not one of
+  // your locations" rather than a role complaint that confirms the studio
+  // exists — guardMasterOrOwner does not check membership (a master belongs
+  // nowhere), so assertLocationAccess is kept, not subsumed. Role miss keeps
+  // this route's own copy over the guard's generic one.
+  const locationGuard = assertLocationAccess(user, locationId)
+  if (locationGuard) return locationGuard
+  const roleGuard = guardMasterOrOwner(user, locationId)
+  if (roleGuard) {
+    return NextResponse.json({ success: false, error: 'Only owners or master can update branding' }, { status: 403 })
+  }
 
   const db = createServerClient()
 
