@@ -293,7 +293,7 @@ export default async function EditLocationPage(props) {
             <Bell size={16} className="text-un1t-subtle" />
             <h3 className="text-lg font-semibold">Push notifications</h3>
           </div>
-          <NotificationConfigCard locationId={location.id} callerRole={user.role} />
+          <NotificationConfigCard locationId={location.id} />
         </section>
       )}
 
