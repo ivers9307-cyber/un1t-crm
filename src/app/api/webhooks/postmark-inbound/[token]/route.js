@@ -324,6 +324,46 @@ async function recordInboundFailure(code, err, { message } = {}) {
   } catch { /* recordErrorEvent already swallows; belt and braces */ }
 }
 
+// MAILFIX-WEBHOOK.1 (review round 2) — the auth-reject recording latch.
+// The token-mismatch branch is UNAUTHENTICATED and the repo is public, so
+// anyone can hit it at will — and recordErrorEvent's storm guard is ONE
+// shared per-instance budget (30 rows/min) with no per-name coalescing,
+// shared with the genuine mail-loss alarms (dedupe_release_failed,
+// message_insert_failed, …) and the unhandled-error producer. Recording
+// every junk-token probe would let 30 requests/min saturate that budget and
+// a REAL failure in the same minute would record nothing — the Sentinel
+// trail going dark on exactly the rows it exists to surface. So auth rejects
+// get their own tiny latch: at most AUTH_REJECT_ROWS_PER_MIN error_events
+// rows per latch window (the window re-anchors on the first reject after
+// expiry, so a rolling minute can hold at most twice that — 26 of the 30
+// shared rows stay free for the genuine doors). Sentinel needs PRESENCE,
+// not volume — a genuine half-rotation produces a steady stream across
+// minutes and instances, so the alarm still fires — and the per-request
+// console.warn below stays unconditional either way.
+// Lives HERE, not in src/lib/error-events.js: that helper serves every other
+// producer, whose budgets must not change under this route's threat model.
+const AUTH_REJECT_ROWS_PER_MIN = 2
+let authRejectWindowStart = 0
+let authRejectCount = 0
+
+function mayRecordAuthReject() {
+  const now = Date.now()
+  if (now - authRejectWindowStart > 60_000) {
+    authRejectWindowStart = now
+    authRejectCount = 0
+  }
+  if (authRejectCount >= AUTH_REJECT_ROWS_PER_MIN) return false
+  authRejectCount += 1
+  return true
+}
+
+// Test seam only — the latch is module-level state (same reasoning as
+// _resetStormGuardForTests in src/lib/error-events.js). Not for production.
+export function _resetAuthRejectLatchForTests() {
+  authRejectWindowStart = 0
+  authRejectCount = 0
+}
+
 /**
  * What does a held dedupe claim actually mean? See the POST comment for the
  * three verdicts. Errors resolve to 'in_flight' — the safe answer, because a
@@ -394,6 +434,33 @@ export async function POST(request, { params }) {
         'POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN not set — refusing inbound email webhook. ' +
         'THE historic failure mode: every delivery 500s and the queue just looks quiet.')
     } else {
+      // MAILFIX-WEBHOOK.1 — a rejected token is a STRUCTURAL failure, not
+      // noise. After a half-finished rotation (Postmark still POSTing the old
+      // token, or the env var updated without the Postmark URL) EVERY inbound
+      // email lands on this branch, and a console.warn in Vercel logs is
+      // indistinguishable from a quiet mailbox — the Sentinel crm-errors
+      // check never fired. Record it through the same error_events trail as
+      // every other failure door (name = the auth reason, 'token_mismatch' /
+      // 'missing_token') so a half-rotated token alarms. The RESPONSE is
+      // UNCHANGED: still 404, not 403, so the URL pattern cannot be probed.
+      // LATCHED, not per-request (see mayRecordAuthReject): this branch is
+      // unauthenticated, and unlatched it would let junk-token probes eat the
+      // SHARED 30/min error_events budget out from under the real mail-loss
+      // alarms. Recovery path for the mail itself: Postmark retains
+      // undelivered inbound ~45 days, replayable from its Activity page —
+      // docs/EMAIL_DELIVERABILITY.md.
+      if (mayRecordAuthReject()) {
+        await recordInboundFailure(auth.reason,
+          `inbound email webhook rejected: ${auth.reason} — if Postmark is still POSTing, ` +
+          'the inbound URL and POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN have drifted apart; ' +
+          'finish the rotation, then replay missed mail from Postmark Activity → Inbound ' +
+          '(retained ~45 days).')
+      }
+      // Latched rejections get ONLY this warn: an error-level structured line
+      // per unauthenticated request would feed Sentinel's error cadence at
+      // probe rate — the same crowd-out the latch exists to prevent, one
+      // channel over. The ≤2 recorded ones already log at error level via
+      // recordInboundFailure.
       console.warn(`[security] Inbound email webhook rejected: ${auth.reason}`)
     }
     return NextResponse.json({ success: false, error: auth.reason }, { status: auth.status })
@@ -1240,6 +1307,46 @@ async function finishDedupedDelivery(db, { body, messageId, locationId, mailboxI
         })
       } catch (err) {
         console.error('[postmark-inbound] finish-up push failed (email still filed)', err?.message)
+      }
+    } else {
+      // MAILFIX-WEBHOOK.1 — the has_inbound backstop. The guard above judges
+      // the SORT KEY: written before MAIL-SENT.1 gave tickets the has_inbound
+      // FACT, "last_message_at already covers the winning message" only
+      // proves that SOMETHING advanced the ticket — a staff reply or the
+      // sent-lane bookkeeping moves last_message_at too. So when the dead
+      // attempt died between its message insert and its bump, and anything
+      // else advanced the ticket in between, the retry lands here, skips the
+      // bump, and a real customer reply stays filed in Sent forever: unread
+      // never incremented, no push, has_inbound never flipped. Stamp the FACT
+      // and only the fact — no reopen, no unread, no push, so a stray
+      // re-delivery of old mail still wakes nobody. Idempotent by the
+      // .eq('has_inbound', false) filter: already-true matches zero rows.
+      // CHECKED from birth (BAREWRITE — this path is armed by the guardrails
+      // PR next), and log-and-continue on failure: the message is already
+      // filed, and failing the response would burn the provider retry this
+      // 200 `deduped` exists to answer.
+      // try/catch mirrors releaseDedupeClaim's tolerance: supabase-js
+      // builders are thenables with NO .catch, and a builder can THROW
+      // (network layer dying mid-call) as well as resolve { error }. An
+      // uncaught throw here would escape into POST's catch-all, turn the
+      // owed 200 `deduped` into a 500, release the claim, and burn
+      // Postmark's retry schedule on a write the response does not depend on.
+      try {
+        const { error: backstopErr } = await db.from('email_tickets')
+          .update({ has_inbound: true })
+          .eq('id', winner.ticket_id)
+          .eq('has_inbound', false)
+        if (backstopErr) {
+          await recordInboundFailure('has_inbound_backstop_failed', backstopErr, {
+            message: `has_inbound backstop failed — ticket ${winner.ticket_id} may keep ` +
+              'rendering in Sent with an unseen inbound reply until a later inbound bumps it.',
+          })
+        }
+      } catch (err) {
+        await recordInboundFailure('has_inbound_backstop_failed', err, {
+          message: `has_inbound backstop THREW — ticket ${winner.ticket_id} may keep ` +
+            'rendering in Sent with an unseen inbound reply until a later inbound bumps it.',
+        })
       }
     }
   }
