@@ -28,19 +28,59 @@ import { READER_MODE_MIN } from './mail-display'
 
 // The container per mode. Base classes are the MOBILE pane (a plain flex
 // child of the surface's row); everything dock-shaped is md:-prefixed.
-const CONTAINER = {
+//
+// Exported for dock-geometry.test.js, which regex-extracts the width terms
+// and pins the cross-file agreements (MAILFIX-DOCK.1) — the strings stay
+// full literals because Tailwind's scanner cannot see an interpolation.
+export const CONTAINER = {
   // Width 1120px (Richard, 2 Sep: "twice the width") — wide enough to read
   // real HTML mail without the inner scroll dominating; still leaves the
-  // list visible on a 27" screen, and the viewport clamp owns laptops.
-  dock: 'flex w-full min-w-0 flex-1 flex-col bg-un1t-bg md:absolute md:bottom-0 md:right-4 md:z-30 md:h-[78vh] md:max-h-[calc(100%-0.5rem)] md:w-[min(1120px,calc(100vw-2rem))] md:flex-none md:overflow-hidden md:rounded-t-xl md:border md:border-b-0 md:border-un1t-border md:shadow-2xl',
+  // list visible on a 27" screen. MAILFIX-DOCK.1 — the clamp is `100%`, not
+  // `100vw`: this card is absolute inside the pane's relative shell, so `%`
+  // resolves against the PANE's padding box (viewport minus the 224px
+  // sidebar, the hub's p-6 and the shell's 1px borders — exactly how the
+  // max-h already works). The old viewport clamp overflowed the pane by
+  // ~130px at a 1,280px window and the shell's overflow-hidden cropped the
+  // card's LEFT edge with no scrollbar. Assumed: an overlay scrollbar on
+  // <main> (a classic one narrows the pane 15–17px, out of the 2rem margin);
+  // the shell's border and the card's own make the visible margin ~14px.
+  dock: 'flex w-full min-w-0 flex-1 flex-col bg-un1t-bg md:absolute md:bottom-0 md:right-4 md:z-30 md:h-[78vh] md:max-h-[calc(100%-0.5rem)] md:w-[min(1120px,calc(100%-2rem))] md:flex-none md:overflow-hidden md:rounded-t-xl md:border md:border-b-0 md:border-un1t-border md:shadow-2xl',
   full: 'flex w-full min-w-0 flex-1 flex-col bg-un1t-bg md:fixed md:inset-4 md:z-50 md:h-auto md:w-auto md:flex-none md:overflow-hidden md:rounded-xl md:border md:border-un1t-border md:shadow-2xl',
-  min: 'flex w-full min-w-0 flex-1 flex-col bg-un1t-bg md:absolute md:bottom-0 md:right-4 md:z-30 md:h-auto md:w-[min(360px,calc(100vw-2rem))] md:flex-none md:overflow-hidden md:rounded-t-xl md:border md:border-b-0 md:border-un1t-border md:shadow-2xl',
+  min: 'flex w-full min-w-0 flex-1 flex-col bg-un1t-bg md:absolute md:bottom-0 md:right-4 md:z-30 md:h-auto md:w-[min(360px,calc(100%-2rem))] md:flex-none md:overflow-hidden md:rounded-t-xl md:border md:border-b-0 md:border-un1t-border md:shadow-2xl',
   // MAIL-DOCK.2 — the same bar, stepped LEFT of the compose CARD (which owns
-  // right-4 while it is a card, at the reader card's own 1120px measure). Only
-  // `min` ever shifts: the reader's dock/full cards cannot coexist with a
-  // compose card (one bottom-right slot — MailSurface auto-minimises one
-  // before the other opens).
-  minShifted: 'flex w-full min-w-0 flex-1 flex-col bg-un1t-bg md:absolute md:bottom-0 md:right-[calc(1.5rem+min(1120px,calc(100vw-2rem)))] md:z-30 md:h-auto md:w-[min(360px,calc(100vw-2rem))] md:flex-none md:overflow-hidden md:rounded-t-xl md:border md:border-b-0 md:border-un1t-border md:shadow-2xl',
+  // right-4 while it is a card). Only `min` ever shifts: the reader's
+  // dock/full cards cannot coexist with a compose card (one bottom-right
+  // slot — MailSurface auto-minimises one before the other opens).
+  // MAILFIX-DOCK.1 — the step quotes the COMPOSE card's RESERVED width term
+  // (min(1120px,calc(100vw-672px)); the 672 is derived and documented at
+  // ComposeDock's DOCK_BY_READER, where the number lives), not this card's
+  // own: the thing beside this bar is the compose card, and the compose
+  // card is viewport-anchored, so its vocabulary is `100vw`. TWO FRAMES: the
+  // pane's right-4 edge sits 41px inside the viewport's (24 hub pad + 1
+  // shell border + 16), the compose card's 16 — which is why THIS step is
+  // 1.5rem (pane frame, landing a ~33px gap to the card) while the
+  // compose-side steps in ComposeDock are 4.5rem (viewport frame). Because
+  // the two width terms are identical (dock-geometry.test.js pins the
+  // equality), the bar's left edge lands a constant ~14px inside the pane
+  // wherever the compose term binds, and never leaves the pane at all. The
+  // old reader-width-based step (1.5rem + 1120) left this bar PARTLY
+  // off-canvas in any pane under ~1,504px and WHOLLY off (invisible,
+  // unclickable) under ~1,144px — a 13.6" Air's pane is ~1,006.
+  //
+  // 🔴 THE SCROLLBAR CAVEAT IS SPECIFICALLY WORSE HERE, and the blanket
+  // "the 2rem margins absorb it" written above and in ComposeDock does NOT
+  // cover this one offset. Every %-clamped CARD absorbs a classic scrollbar
+  // because % resolves against the pane's padding box, which shrinks with
+  // it. THIS OFFSET DOES NOT: it is a 100vw term (the compose card's), and
+  // 100vw includes the scrollbar, measured from the pane's right edge,
+  // which the scrollbar has moved. With a 17px classic scrollbar on <main>
+  // the pane's padding box becomes [249, 100vw-42] instead of
+  // [249, 100vw-25], so this bar's left edge lands at ~246 — about 3px LEFT
+  // of the padding box, where the shell's overflow-hidden crops it (the
+  // rounded corner and the border, not the controls), and the gap to the
+  // compose card grows from ~33px to ~50px. Cosmetic, accepted, and worth
+  // knowing before anyone "fixes" a 3px crop by moving the 672.
+  minShifted: 'flex w-full min-w-0 flex-1 flex-col bg-un1t-bg md:absolute md:bottom-0 md:right-[calc(1.5rem+min(1120px,calc(100vw-672px)))] md:z-30 md:h-auto md:w-[min(360px,calc(100%-2rem))] md:flex-none md:overflow-hidden md:rounded-t-xl md:border md:border-b-0 md:border-un1t-border md:shadow-2xl',
 }
 
 export default function MailDock({

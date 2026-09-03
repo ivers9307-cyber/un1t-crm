@@ -24,8 +24,8 @@ function renderCard(props = {}) {
   )
 }
 
-describe('ComposeDock — one card, three shapes, the reader’s geometry', () => {
-  it('dock: bottom-right absolute card at md, the reader card’s exact measure', () => {
+describe('ComposeDock — one card, three shapes, its own viewport geometry', () => {
+  it('dock with the corner free: bottom-right absolute card at md, filling the pane like the reader card', () => {
     renderCard({ mode: 'dock' })
     const el = card()
     expect(el.getAttribute('data-compose-mode')).toBe('dock')
@@ -33,7 +33,29 @@ describe('ComposeDock — one card, three shapes, the reader’s geometry', () =
     expect(el.className).toContain('md:bottom-0')
     expect(el.className).toContain('md:right-4')
     expect(el.className).toContain('md:h-[78vh]')
-    expect(el.className).toContain('md:w-[min(1120px,calc(100vw-2rem))]')
+    // MAILFIX-DOCK.1 — fragment-level, so the containing block is the
+    // VIEWPORT; 288 = sidebar + hub padding + margin (derivation at
+    // ComposeDock's DOCK_BY_READER) — never touches the sidebar.
+    expect(el.className).toContain('md:w-[min(1120px,calc(100vw-288px))]')
+  })
+
+  it('dock beside a PARKED reader bar reserves the bar’s room — the only state minShifted is in play', () => {
+    renderCard({ mode: 'dock', readerOccupancy: 'bar' })
+    const el = card()
+    // 672 = 288 + the 1.5rem step + the 360px bar; MailDock.minShifted
+    // quotes this exact term (dock-geometry.test.js pins the equality).
+    expect(el.className).toContain('md:w-[min(1120px,calc(100vw-672px))]')
+    expect(el.className).toContain('md:right-4')
+  })
+
+  it('dock with an unknown occupancy falls back to the RESERVED width — the one that cannot overlap', () => {
+    renderCard({ mode: 'dock', readerOccupancy: 'sideways' })
+    expect(card().className).toContain('md:w-[min(1120px,calc(100vw-672px))]')
+  })
+
+  it('dock: the title bar is the house ink', () => {
+    renderCard({ mode: 'dock' })
+    const el = card()
     // The house ink title bar — MAIL-DOCK.1's vocabulary, verbatim.
     expect(el.firstElementChild.className).toContain('bg-un1t-text')
     expect(el.firstElementChild.className).toContain('text-un1t-bg')
@@ -77,14 +99,25 @@ describe('ComposeDock — the minimised bar stacks around the reader', () => {
     expect(card().className).toContain('md:right-4')
   })
 
-  it('steps left of the reader’s 360px bar', () => {
+  it('steps left of the reader’s 360px bar in the VIEWPORT frame — 4.5rem, clamped to the PANE’s left margin', () => {
     renderCard({ mode: 'min', readerOccupancy: 'bar' })
-    expect(card().className).toContain('md:right-[calc(1.5rem+min(360px,calc(100vw-2rem)))]')
+    // MAILFIX-DOCK.1 — the reader bar's right edge is 41px inside the
+    // viewport's, this bar's 16; a 1.5rem viewport step overlapped the
+    // reader bar's left 17px. 4.5rem = hub pad + right-4 + a 32px gap.
+    // The clamp is the same 624 the step over the reader CARD uses: an
+    // unclamped 4.5rem+360 is a constant 432 offset, putting this bar's
+    // left edge at 100vw-792 — over the sidebar's Sign-out footer below
+    // 1,016px and off the viewport below 792px.
+    expect(card().className).toContain('md:right-[min(calc(4.5rem+360px),calc(100vw-624px))]')
   })
 
-  it('steps left of the reader’s 1120px docked card', () => {
+  it('steps left of the reader’s docked card, clamped to the PANE’s left margin', () => {
     renderCard({ mode: 'min', readerOccupancy: 'card' })
-    expect(card().className).toContain('md:right-[calc(1.5rem+min(1120px,calc(100vw-2rem)))]')
+    // MAILFIX-DOCK.1 — the reader card fills the pane at laptop widths, so
+    // the unclamped step pushed this bar (holding a parked draft) off the
+    // viewport's left edge; the clamp floors it at the pane's left margin
+    // (624 = sidebar + hub pad + margin + the bar), never over the sidebar.
+    expect(card().className).toContain('md:right-[min(calc(4.5rem+1120px),calc(100vw-624px))]')
   })
 
   it('an unknown occupancy fails safe to the free corner', () => {
