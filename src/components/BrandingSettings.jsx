@@ -5,12 +5,12 @@ import { useState, useEffect, useRef } from 'react'
 // confuse it with an HTML <img> element and demand an alt prop.
 import { Image as ImageIcon, Upload, Trash2, Check } from 'lucide-react'
 
-// `locationId` is optional. When omitted, falls back to the user's
-// active location — the existing /settings page passes the user
-// only and uses the active location. The /settings/locations/[id]
-// page passes the explicit id of the location being edited so a
-// master can upload, e.g. CCF Autos branding while their active
-// location is UN1T Stillorgan.
+// `locationId` is optional and falls back to the user's active location,
+// but the only mounter today is /settings/locations/[id], which passes the
+// explicit id of the location being edited so a master can upload, e.g.
+// CCF Autos branding while their active location is UN1T Stillorgan. The
+// routes gate on master-or-owner AT THAT location; a refusal surfaces as an
+// alert rather than a button that quietly returns to "Save".
 export default function BrandingSettings({ user, locationId: propLocationId }) {
   const [settings, setSettings] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -102,6 +102,8 @@ export default function BrandingSettings({ user, locationId: propLocationId }) {
       if (type === 'favicon' && locationId === user.activeLocation?.id) {
         updateBrowserFavicon(null)
       }
+    } else {
+      alert(data.error || 'Remove failed')
     }
     setSaving(false)
   }
@@ -123,6 +125,8 @@ export default function BrandingSettings({ user, locationId: propLocationId }) {
       setSettings(data.data)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
+    } else {
+      alert(data.error || 'Save failed')
     }
     setSaving(false)
   }
