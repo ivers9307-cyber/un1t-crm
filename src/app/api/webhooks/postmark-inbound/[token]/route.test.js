@@ -45,9 +45,18 @@ vi.mock('@/lib/webhook-events', async () => {
 // here it is mocked so these tests assert WHAT the route hands it and that a
 // push failure can never fail the webhook.
 vi.mock('@/lib/email-inbound-push', () => ({ maybeNotifyInboundEmail: vi.fn() }))
+// MAILFIX-GUARDRAILS.1 — logError is a CALL-THROUGH spy: the real line still
+// reaches console.error (every `errSpy` assertion in this file stays honest)
+// and the new tests can assert the structural call itself, not a prose
+// substring.
+vi.mock('@/lib/log', async () => {
+  const actual = await vi.importActual('@/lib/log')
+  return { ...actual, logError: vi.fn((...args) => actual.logError(...args)) }
+})
 
 import { POST, maxDuration, _resetAuthRejectLatchForTests } from './route'
 import { maybeNotifyInboundEmail } from '@/lib/email-inbound-push'
+import { logError } from '@/lib/log'
 import { createServerClient } from '@/lib/supabase'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 import { recordWebhookEvent } from '@/lib/webhook-events'
@@ -319,10 +328,17 @@ function makeDb(state = {}) {
   }
   db.rpc = (fn, args) => {
     db.rpcs.push({ fn, args })
+    // MAILFIX-GUARDRAILS.1 — rpc faults are injectable under the SAME two keys
+    // the table ops use, keyed by function name: `fail[fn]` RESOLVES
+    // { data: null, error } (PostgREST refusing), `throwOn[fn]` REJECTS (the
+    // network layer dying). Before this only add_email_storage_bytes could
+    // fail at all, so a route that discarded an rpc result and one that read
+    // it were indistinguishable here — the permissive-fake trap this file's
+    // header warns about.
+    const thrown = s.throwOn[fn]
+    if (thrown) return Promise.reject(thrown instanceof Error ? thrown : new Error(String(thrown)))
+    if (s.fail[fn]) return Promise.resolve({ data: null, error: s.fail[fn] })
     if (fn === 'add_email_storage_bytes') {
-      if (s.fail['add_email_storage_bytes']) {
-        return Promise.resolve({ data: null, error: s.fail['add_email_storage_bytes'] })
-      }
       const mailboxId = args.p_mailbox_id ?? null
       let row = s.usage.find(u => u.location_id === args.p_location_id && (u.mailbox_id ?? null) === mailboxId)
       if (!row) {
@@ -1633,6 +1649,100 @@ describe('ticket bump failure → retry finishes the job', () => {
     const bumps = updatesTo(db, 'email_tickets').filter(u => u.filters.some(f => f[2] === 'T-open'))
     expect(bumps.length).toBeGreaterThanOrEqual(1)
     expect(db.rpcs.filter(r => r.fn === 'increment_email_ticket_unread')).toHaveLength(1)
+  })
+})
+
+// ── MAILFIX-GUARDRAILS.1 — a lost unread increment is LOGGED, never surfaced ──
+//
+// Both `increment_email_ticket_unread` calls — the first-attempt one and the
+// finish-up one — were `try { await db.rpc(…) } catch {}`: the result was
+// discarded, and the catch cannot fire for a RESOLVED { error }, so a refused
+// increment left the badge under-counting with no line to say so. The fix is
+// log-and-continue ONLY: the message is filed, and Postmark disables a hook
+// that stops answering 2xx, so the response must be exactly the success it
+// already was. These pin both halves.
+describe('MAILFIX-GUARDRAILS.1 — a lost unread increment is logged, never surfaced', () => {
+  const THREADED = {
+    threadRows: [{ ticket_id: 'T-open', created_at: '2026-08-06T08:00:00Z', location_id: 'loc-hatch', rfc_message_id: 'ours-1@mtasv.net' }],
+    tickets: { 'T-open': { id: 'T-open', location_id: 'loc-hatch', status: 'open', subject: 'Billing question', first_response_at: null } },
+  }
+  const REFUSED = { code: 'P0001', message: 'increment refused' }
+  let errSpy
+  beforeEach(() => {
+    errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    _resetStormGuardForTests()
+  })
+  afterEach(() => { errSpy.mockRestore() })
+
+  it('fresh inbound: the rpc RESOLVES { error } → 200 unchanged, ticket + message filed, one structural line', async () => {
+    db = makeDb({ fail: { increment_email_ticket_unread: REFUSED } })
+    createServerClient.mockImplementation(() => db)
+
+    const res = await post(inbound())
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ success: true, ticket_id: 'new-ticket', mailbox_id: 'mb-hatch' })
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(1)
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
+    // Attempted exactly once — logging is not a retry.
+    expect(db.rpcs.filter(r => r.fn === 'increment_email_ticket_unread')).toHaveLength(1)
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith(
+      'postmark-inbound',
+      'unread increment failed (email still filed)',
+      expect.objectContaining({ ticketId: 'new-ticket', error: REFUSED }),
+    )
+  })
+
+  it('fresh inbound: the rpc THROWS → 200 unchanged, logged too (the old `catch {}` swallowed this)', async () => {
+    db = makeDb({ throwOn: { increment_email_ticket_unread: new Error('socket hang up') } })
+    createServerClient.mockImplementation(() => db)
+
+    const res = await post(inbound())
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ success: true, ticket_id: 'new-ticket' })
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith(
+      'postmark-inbound',
+      'unread increment threw (email still filed)',
+      expect.objectContaining({ ticketId: 'new-ticket', err: expect.any(Error) }),
+    )
+  })
+
+  it('finish-up path: the rpc RESOLVES { error } → 200 deduped unchanged, the bump landed, logged against the winner', async () => {
+    db = makeDb({ ...THREADED, fail: { 'email_tickets:update': { message: 'update refused' } } })
+    createServerClient.mockImplementation(() => db)
+    bindDedupeLedger(db)
+
+    // Attempt 1: message filed, bump refused → 500, claim released, no rpc.
+    const first = await post(reply())
+    expect(first.status).toBe(500)
+    expect(db.rpcs.map(r => r.fn)).not.toContain('increment_email_ticket_unread')
+
+    // The bump fault clears; the increment now refuses instead. Postmark
+    // retries → 23505 → the finish-up re-runs bump + increment on the winner.
+    db._state.fail = { increment_email_ticket_unread: REFUSED }
+    const second = await post(reply())
+
+    expect(second.status).toBe(200)
+    expect((await second.json()).deduped).toBe(true)
+    const bumps = updatesTo(db, 'email_tickets').filter(u => u.filters.some(f => f[2] === 'T-open'))
+    expect(bumps.length).toBeGreaterThanOrEqual(1)
+    expect(db.rpcs.filter(r => r.fn === 'increment_email_ticket_unread')).toHaveLength(1)
+    expect(logError).toHaveBeenCalledWith(
+      'postmark-inbound',
+      'unread increment failed (email still filed)',
+      expect.objectContaining({ ticketId: 'T-open', error: REFUSED }),
+    )
+  })
+
+  it('logs NOTHING about the increment when it lands', async () => {
+    const res = await post(inbound())
+    expect(res.status).toBe(200)
+    expect(db.rpcs.filter(r => r.fn === 'increment_email_ticket_unread')).toHaveLength(1)
+    expect(logError).not.toHaveBeenCalled()
   })
 })
 

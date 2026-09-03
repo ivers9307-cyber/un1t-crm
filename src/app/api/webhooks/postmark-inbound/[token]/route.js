@@ -1142,7 +1142,20 @@ async function processInboundEmail(db, body, messageId) {
   }
   // supabase-js builders are thenables with no .catch — try/catch, not
   // .catch(), or the rpc never fires.
-  try { await db.rpc('increment_email_ticket_unread', { p_ticket_id: ticketId }) } catch {}
+  //
+  // MAILFIX-GUARDRAILS.1 — the rpc was a BARE await whose result was discarded,
+  // and this catch cannot fire for a RESOLVED `{ error }`: a refused increment
+  // left the unread badge under-counting with no line anywhere to say so. Both
+  // shapes (resolved error, thrown) are logged and the handler continues — the
+  // message is filed, and Postmark disables a hook that stops answering 2xx.
+  try {
+    const { error: unreadErr } = await db.rpc('increment_email_ticket_unread', { p_ticket_id: ticketId })
+    if (unreadErr) {
+      logError('postmark-inbound', 'unread increment failed (email still filed)', { ticketId, error: unreadErr })
+    }
+  } catch (err) {
+    logError('postmark-inbound', 'unread increment threw (email still filed)', { ticketId, err })
+  }
 
   // ── Tell the staff (EMAIL-INBOUND-PUSH.1) ─────────────────────────
   // Last, and subordinate to everything above: the mail is filed whether or
@@ -1289,7 +1302,16 @@ async function finishDedupedDelivery(db, { body, messageId, locationId, mailboxI
       if (!bumped) {
         return NextResponse.json({ success: false, error: 'ticket_bump_failed' }, { status: 500 })
       }
-      try { await db.rpc('increment_email_ticket_unread', { p_ticket_id: winner.ticket_id }) } catch {}
+      // MAILFIX-GUARDRAILS.1 — same shape as the first-attempt increment
+      // above: judged and logged, never surfaced.
+      try {
+        const { error: unreadErr } = await db.rpc('increment_email_ticket_unread', { p_ticket_id: winner.ticket_id })
+        if (unreadErr) {
+          logError('postmark-inbound', 'unread increment failed (email still filed)', { ticketId: winner.ticket_id, error: unreadErr })
+        }
+      } catch (err) {
+        logError('postmark-inbound', 'unread increment threw (email still filed)', { ticketId: winner.ticket_id, err })
+      }
       // The dead attempt's push runs AFTER its bump, so a missing bump proves
       // the push never fired either — the finish-up owes staff the ping too
       // (EMAIL-INBOUND-PUSH.1). Guarded by the SAME state check as the bump:

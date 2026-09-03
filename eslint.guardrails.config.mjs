@@ -220,6 +220,39 @@ const config = [
       // preview offered a body and a Flow button months out of date while the
       // approved template said otherwise. Driven to zero here, so armed.
       'src/app/api/whatsapp/templates/route.js',
+      // MAILFIX-GUARDRAILS.1 — the Mail area. It absorbed 17 write-heavy PRs
+      // with nothing under it armed, and its writes are mostly BOOKKEEPING
+      // AFTER A CUSTOMER-FACING SEND (reply/compose/forward file the message,
+      // stamp the ticket, log the send) — exactly the shape where a bare write
+      // leaves the member with the mail and the thread saying needs-reply,
+      // with no log line to explain the stuck flag. Every fix here is
+      // log-and-continue: the send already happened, so nothing below may
+      // refuse, throw or return early for it (CLAUDE.md, BAREWRITE doctrine).
+      // Every /api/email route: tickets (reply/compose/forward/merge/read/
+      // participants/link-contact), the mail lane (seen/archive/_writeback),
+      // attachments, oauth callback, and the conversations 410-Gone shims
+      // (EMAIL-CONV-STOP.1 — no writes, armed by the glob, listed so the next
+      // reader does not assume the glob was narrowed).
+      'src/app/api/email/**',
+      // The inbound webhook. Postmark disables a hook that stops answering
+      // 2xx, so nothing here may refuse either — a lost write here loses a
+      // record (a thread stamp, a participant row), never the message.
+      'src/app/api/webhooks/postmark-inbound/**',
+      // IMAP poll/writeback, the sent lane, OAuth token refresh: the ingest
+      // side files rows and stamps cursors — a silently failed cursor stamp
+      // re-ingests the same mail every tick.
+      'src/lib/mail/**',
+      // Top-level lib modules that WRITE mail-area tables (email_tickets,
+      // email_inbox_messages, email_ticket_attachments, email_storage_usage),
+      // found by grep: attachment storage/prune accounting, the delivery
+      // status writeback, outbound + forwarded attachment rows. Read-only mail
+      // helpers (email-tickets, email-recipients, email-inbox, …) have no
+      // writes and are not listed; postmark.js and the postmark-webhook
+      // processor are the campaign transport, not this area.
+      'src/lib/email-attachments-server.js',
+      'src/lib/email-delivery-status.js',
+      'src/lib/email-outbound-attachments-server.js',
+      'src/lib/email-forward-server.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },
