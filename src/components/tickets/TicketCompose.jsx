@@ -228,8 +228,13 @@ export default function TicketCompose({ mailboxes = [], initialMailboxId = null,
 
         {/* The sign-off the route now appends (EMAIL-TICKET.5 follow-up) —
             same shared hint as the reply box, so the preview cannot disagree
-            with what the member receives. */}
-        <SignatureHint />
+            with what the member receives. MAILFIX-SIGTRUTH.1: the selected
+            From account's location IS the sending context (the send resolves
+            the studio half of the signature off the mailbox's own location),
+            so switching From re-resolves the hint to that studio. With NO
+            From account nothing can send, so there is no sending context to
+            preview — the hint is not mounted rather than shown unresolved. */}
+        {mailbox && <SignatureHint locationId={mailbox.location_id || null} />}
 
         {/* Files survive a change of From address, and that is safe rather than
             merely convenient: the draft key is derived from the SENDER'S profile

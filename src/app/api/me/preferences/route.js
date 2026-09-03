@@ -39,6 +39,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { LANDING_PREFERENCE_VALUES } from '@shared/permissions'
 import { MAX_SIGNATURE_LENGTH, normalizeSignature, MAX_SIGNATURE_LINKS, isAllowedSignaturePhotoUrl } from '@/lib/email-signature'
+import { loadSignatureContexts, withEffectiveText } from '@/lib/signature-context'
 
 export const runtime = 'nodejs'
 
@@ -76,6 +77,21 @@ const PreferencesSchema = z.object({
 // Exists so a client surface can show what it is about to do on the user's
 // behalf — the ticket composer renders the signature it is going to append.
 // Same scoping as PATCH: profiles.id = user.id, no id parameter.
+//
+// MAILFIX-SIGTRUTH.1 also rides the caller's SIGNATURE CONTEXT along: one
+// entry per location where they hold email_inbox (EVERY permitted studio —
+// a send at a mailbox-less studio still resolves it), each flagged
+// has_mailbox for the editor's chips, carrying BOTH halves of the truth:
+//   • the INPUTS — studio name + the studio's own signature card, exactly
+//     what the send routes feed effectiveRichSignature(). The web /account
+//     preview and every composer's hint resolve over these CLIENT-SIDE (live
+//     typing, From switching) with the same exported resolver the sends use;
+//   • the RENDERED answer — effective_text / rich / has_photo / has_links,
+//     resolved HERE through that same function. This is what mobile reads,
+//     verbatim: it cannot import src/lib, so it must never resolve anything.
+//     ('' + rich = an HTML-only block, no text part; null = nothing appends.)
+// Best-effort by contract: a blipped context read degrades to nulls / an
+// empty list and NEVER errors this GET — the send re-resolves for itself.
 export async function GET() {
   const user = await getCurrentUser()
   if (!user) {
@@ -92,12 +108,31 @@ export async function GET() {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   }
 
+  // loadSignatureContexts never throws (it degrades internally), but the
+  // belt matches the braces: nothing about the context may ever take this
+  // GET down — the plain preferences half must survive any blip whole.
+  let signatureContexts = []
+  try {
+    // Inputs from the estate, then the rendered answer per entry against
+    // THIS profile row — the same `data` the plain fields above come from.
+    signatureContexts = withEffectiveText(await loadSignatureContexts(db, user), data)
+  } catch {
+    signatureContexts = []
+  }
+
   return NextResponse.json({
     success: true,
     data: {
       landing_preference: data?.permissions?.landing_preference || 'auto',
       email_signature: data?.email_signature || '',
       email_signature_rich: data?.email_signature_rich || null,
+      // The studio the caller's session points at — the /account preview's
+      // default. Null for a session with no active location; clients fall
+      // back to the first context entry.
+      active_location_id: user.activeLocation?.id || null,
+      // [{ location_id, location_name, studio_signature, has_mailbox, ← inputs (web)
+      //    effective_text, rich, has_photo, has_links }]             ← rendered (mobile)
+      signature_contexts: signatureContexts,
     },
   })
 }
