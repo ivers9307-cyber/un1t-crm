@@ -106,7 +106,10 @@ export default async function EditLocationPage(props) {
     ...(showFeatures ? [{ key: 'features', label: 'Features' }] : []),
     ...(showRoles ? [{ key: 'roles', label: 'Roles' }] : []),
     ...(showEmail ? [{ key: 'email', label: 'Email' }] : []),
-    { key: 'branding', label: 'Branding' },
+    // MAILFIX-BRANDGATE.1 — same master-or-owner-AT-THIS-LOCATION rule the
+    // branding routes now enforce; an owner elsewhere used to see a tab whose
+    // every save 403s.
+    ...(showRoles ? [{ key: 'branding', label: 'Branding' }] : []),
     ...(showDeposits ? [{ key: 'deposits', label: 'Deposits' }] : []),
     { key: 'schedule', label: 'Schedule' },
     { key: 'notifications', label: 'Notifications' },
@@ -223,7 +226,7 @@ export default async function EditLocationPage(props) {
 
       {/* Branding — logo + favicon + company name. Drives buyer-facing
           surfaces (deposit page, BCA download page, etc). */}
-      {active === 'branding' && (
+      {active === 'branding' && showRoles && (
         <section>
           <div className="flex items-center gap-2 mb-3">
             <ImageIcon size={16} className="text-un1t-subtle" />
