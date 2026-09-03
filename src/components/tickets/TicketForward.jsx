@@ -56,6 +56,7 @@ import {
   forwardSizeError,
 } from '@/lib/email-forward'
 import RecipientEditor, { EMPTY_RECIPIENTS } from './RecipientEditor'
+import SignatureHint from './SignatureHint'
 
 // The submit button lives in the Modal's footer, a SIBLING of the form, so it
 // is wired by id. Only one forward modal exists at a time.
@@ -174,6 +175,13 @@ export default function TicketForward({ ticket, message, onClose, onSent }) {
             />
           )}
         </Field>
+
+        {/* MAILFIX-SIGTRUTH.1 — the forward route appends the sender's
+            effective signature (resolved for the TICKET'S studio) under the
+            note, above the forwarded block; this is the third send path and
+            it had no hint. Same shared component as the reply box and the
+            composer, so the three cannot disagree. */}
+        <SignatureHint locationId={ticket?.location_id || null} />
 
         {/* WHAT THEY WILL BE ABLE TO READ. Shown as plain text, because plain
             text is exactly what goes out — the preview and the mail are the

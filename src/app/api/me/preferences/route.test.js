@@ -135,7 +135,15 @@ describe('GET /api/me/preferences', () => {
     const body = await res.json()
     expect(body).toEqual({
       success: true,
-      data: { landing_preference: 'studio', email_signature: 'Sarah', email_signature_rich: null },
+      data: {
+        landing_preference: 'studio',
+        email_signature: 'Sarah',
+        email_signature_rich: null,
+        // MAILFIX-SIGTRUTH.1 — a caller with no queue anywhere carries an
+        // empty context, not an error and not a missing key.
+        active_location_id: null,
+        signature_contexts: [],
+      },
     })
     expect(db.selects[0].filters).toEqual([['id', ME.id]])
   })
@@ -143,7 +151,122 @@ describe('GET /api/me/preferences', () => {
   it('reports an unset signature as an empty string', async () => {
     setupDb({ permissions: {}, email_signature: null })
     const body = await (await GET()).json()
-    expect(body.data).toEqual({ landing_preference: 'auto', email_signature: '', email_signature_rich: null })
+    expect(body.data).toEqual({
+      landing_preference: 'auto',
+      email_signature: '',
+      email_signature_rich: null,
+      active_location_id: null,
+      signature_contexts: [],
+    })
+  })
+})
+
+// ── MAILFIX-SIGTRUTH.1 — the signature context rides the GET ──────────────
+describe('GET /api/me/preferences — signature_contexts', () => {
+  // A caller who works a queue at one studio, shaped the way getCurrentUser
+  // shapes one (per-location role via assignmentsByLocation; owner holds
+  // email_inbox by code default).
+  const QUEUE_WORKER = {
+    ...ME,
+    role: 'owner',
+    locations: [{ id: 'loc-still', name: 'UN1T Stillorgan' }],
+    assignmentsByLocation: { 'loc-still': { role: 'owner', permissions: {} } },
+    activeLocation: { id: 'loc-still' },
+  }
+
+  const RICH = {
+    enabled: true, name: 'Dean Nolan', title: 'Head Coach', phone: '087 111 2222', note: '', photo_url: null,
+    links: [],
+  }
+  const STILL_CARD = { phone: '01 555 0001', links: [{ label: 'Book', url: 'https://un1t.ie/book' }] }
+
+  // The profiles read keeps the flat builder; the two estate tables answer
+  // the batched chains the loader issues (select → [eq] → in → limit).
+  function answerEstate(db, { mailboxes, cards }) {
+    const flatFrom = db.from
+    db.from = (table) => {
+      if (table !== 'company_settings' && table !== 'email_mailboxes') return flatFrom(table)
+      const r = table === 'email_mailboxes' ? mailboxes : cards
+      if (r instanceof Error) throw r
+      const c = {}
+      c.select = () => c
+      c.eq = () => c
+      c.in = () => c
+      c.limit = () => Promise.resolve({ data: r, error: null })
+      return c
+    }
+  }
+
+  it('carries one entry per eligible location — inputs for the web, RENDERED text/flags for mobile', async () => {
+    getCurrentUser.mockResolvedValue(QUEUE_WORKER)
+    setupDb({ permissions: {}, email_signature: '', email_signature_rich: RICH })
+    answerEstate(db, {
+      mailboxes: [{ location_id: 'loc-still' }],
+      cards: [{ location_id: 'loc-still', email_signature: STILL_CARD }],
+    })
+    const body = await (await GET()).json()
+    expect(body.success).toBe(true)
+    expect(body.data.active_location_id).toBe('loc-still')
+    expect(body.data.signature_contexts).toHaveLength(1)
+    const [entry] = body.data.signature_contexts
+    // Inputs, verbatim — plus the editor's has_mailbox flag.
+    expect(entry).toMatchObject({ location_id: 'loc-still', location_name: 'UN1T Stillorgan', studio_signature: STILL_CARD, has_mailbox: true })
+    // Rendered: the studio's phone and link applied over the person's own,
+    // the studio name on the detail line — what mobile shows verbatim.
+    expect(entry.rich).toBe(true)
+    expect(entry.has_photo).toBe(false)
+    expect(entry.has_links).toBe(true)
+    expect(entry.effective_text).toContain('Dean Nolan')
+    expect(entry.effective_text).toContain('UN1T Stillorgan')
+    expect(entry.effective_text).toContain('01 555 0001')
+    expect(entry.effective_text).toContain('Book: https://un1t.ie/book')
+    expect(entry.effective_text).not.toContain('087 111 2222')
+  })
+
+  it('effective_text is null (flags false) when nothing would append', async () => {
+    getCurrentUser.mockResolvedValue(QUEUE_WORKER)
+    setupDb({ permissions: {}, email_signature: null, email_signature_rich: null })
+    answerEstate(db, { mailboxes: [{ location_id: 'loc-still' }], cards: [] })
+    const body = await (await GET()).json()
+    expect(body.data.signature_contexts).toEqual([
+      {
+        location_id: 'loc-still', location_name: 'UN1T Stillorgan', studio_signature: null, has_mailbox: true,
+        effective_text: null, rich: false, has_photo: false, has_links: false,
+      },
+    ])
+  })
+
+  it('a permitted studio with no mailbox is still an entry — has_mailbox:false, still rendered', async () => {
+    getCurrentUser.mockResolvedValue(QUEUE_WORKER)
+    setupDb({ permissions: {}, email_signature: '', email_signature_rich: RICH })
+    answerEstate(db, { mailboxes: [], cards: [] })
+    const body = await (await GET()).json()
+    const [entry] = body.data.signature_contexts
+    expect(entry.has_mailbox).toBe(false)
+    // An orphan ticket at this studio sends with its studio line — so the
+    // rendered text carries it too.
+    expect(entry.effective_text).toBe('Dean Nolan\nHead Coach · UN1T Stillorgan\n087 111 2222')
+  })
+
+  it('degrades gracefully on a blipped context read — 200, preferences intact, entry kept with null card', async () => {
+    getCurrentUser.mockResolvedValue(QUEUE_WORKER)
+    setupDb()
+    answerEstate(db, { mailboxes: new Error('connection blip'), cards: new Error('connection blip') })
+    const res = await GET()
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    // The plain preferences half survives whole…
+    expect(body.data.email_signature).toBe('Sarah')
+    // …and the context entry survives with its card degraded to null and the
+    // studio still OFFERED (unknown mailbox state → offer, never hide). The
+    // studio line still resolves off user.locations; the rendered half still
+    // answers: the plain column appends.
+    expect(body.data.signature_contexts).toEqual([
+      {
+        location_id: 'loc-still', location_name: 'UN1T Stillorgan', studio_signature: null, has_mailbox: true,
+        effective_text: 'Sarah', rich: false, has_photo: false, has_links: false,
+      },
+    ])
   })
 })
 

@@ -52,7 +52,6 @@ function renderBox(props = {}) {
       ticket={ticket()}
       replyRecipients={{ to: ['a@x.com'], mode: 'reply', over_cap: false, empty: false }}
       onSend={vi.fn()}
-      signature=""
       onRemoveRecipient={vi.fn()}
       onRestoreRecipient={vi.fn()}
       {...props}
@@ -141,7 +140,6 @@ describe('TicketReplyBox — draft persistence', () => {
         ticket={ticket({ id: 'ticket-A' })}
         replyRecipients={{ to: ['a@x.com'], mode: 'reply', over_cap: false, empty: false }}
         onSend={vi.fn()}
-        signature=""
       />
     )
     await waitFor(() => expect(screen.getByLabelText('Reply to the member').value).toBe('For A only'))
@@ -155,7 +153,6 @@ describe('TicketReplyBox — draft persistence', () => {
         ticket={ticket({ id: 'ticket-B' })}
         replyRecipients={{ to: ['b@y.com'], mode: 'reply', over_cap: false, empty: false }}
         onSend={vi.fn()}
-        signature=""
       />
     )
     await waitFor(() => expect(screen.getByLabelText('Reply to the member').value).toBe('For B only'))
@@ -187,7 +184,6 @@ describe('TicketReplyBox — draft scoping (MAIL-DRAFTSCOPE.2)', () => {
       ticket={{ id: 'ticket-1', subject: 'S', requester_email: 'a@x.com', status: 'open', mailbox_id: 'mb-1' }}
       replyRecipients={{ to: ['a@x.com'], mode: 'reply', over_cap: false, empty: false }}
       onSend={vi.fn()}
-      signature=""
       {...over}
     />
   )

@@ -10,8 +10,8 @@
 // company-sender path byte-for-byte, footer wording included. What the
 // footer says at click time is what happens.
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react'
+import { describe, it, expect, afterEach, vi } from 'vitest'
+import { render, cleanup, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import ContactComposer from './ContactComposer.jsx'
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }) }))
@@ -21,12 +21,28 @@ const MAILBOXES = [
   { id: 'mb-accounts', address: 'accounts@hatch.ie', label: 'Accounts', is_default: true },
 ]
 
+// MAILFIX-SIGTRUTH.1 — the Mail path's hint resolves off the chosen account's
+// location, so these carry it (the list route's mailbox rows always do).
+const LOCATED_MAILBOXES = MAILBOXES.map(m => ({ ...m, location_id: 'loc-hatch' }))
+const RICH_PREFS = {
+  landing_preference: 'auto',
+  email_signature: '',
+  email_signature_rich: { enabled: true, name: 'Dean Nolan', title: 'Head Coach', phone: '087 111 2222', note: '', photo_url: null, links: [] },
+  active_location_id: 'loc-hatch',
+  signature_contexts: [
+    { location_id: 'loc-hatch', location_name: 'UN1T Hatch Street', studio_signature: { phone: '01 555 0002', links: [] }, has_mailbox: true },
+  ],
+}
+
 let calls
-function stubFetch({ mailboxes = 'none', composeOk = true } = {}) {
+function stubFetch({ mailboxes = 'none', composeOk = true, prefs = null } = {}) {
   calls = []
   vi.stubGlobal('fetch', vi.fn(async (url, init) => {
     const u = String(url)
     calls.push({ url: u, method: init?.method || 'GET', body: init?.body ? JSON.parse(init.body) : null })
+    if (prefs && u.includes('/api/me/preferences')) {
+      return { ok: true, status: 200, json: async () => ({ success: true, data: prefs }) }
+    }
     if (u.startsWith('/api/email/mail?')) {
       if (mailboxes === 'fail') return { ok: false, status: 403, json: async () => ({ success: false, error: 'no' }) }
       return { ok: true, status: 200, json: async () => ({ success: true, data: { mailboxes: mailboxes === 'none' ? [] : mailboxes, conversations: [] } }) }
@@ -56,6 +72,30 @@ function renderComposer(props = {}) {
 }
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+
+// ── MAILFIX-SIGTRUTH.1 — the Mail path appends a signature, so it says so ──
+describe('ContactComposer — signature hint', () => {
+  it('shows the auto-appended signature on the Mail path, resolved for the chosen account’s studio', async () => {
+    stubFetch({ mailboxes: LOCATED_MAILBOXES, prefs: RICH_PREFS })
+    renderComposer()
+    await screen.findByRole('combobox')
+    expect(await screen.findByText(/added automatically/i)).toBeTruthy()
+    const pre = screen.getByText(/UN1T Hatch Street/, { selector: 'pre' })
+    expect(pre.textContent).toContain('Dean Nolan')
+    expect(pre.textContent).toContain('01 555 0002') // Hatch's card phone over the person's
+    expect(pre.textContent).not.toContain('087 111 2222')
+  })
+
+  it('shows NO hint on the company-sender path — that route appends nothing, so absence is the truth', async () => {
+    stubFetch({ mailboxes: 'none', prefs: RICH_PREFS })
+    renderComposer()
+    await screen.findByText('Sent from the company address')
+    await act(async () => {})
+    expect(screen.queryByText(/added automatically/i)).toBeNull()
+    // The hint never mounted, so the preferences GET never fired.
+    expect(calls.some(c => c.url.includes('/api/me/preferences'))).toBe(false)
+  })
+})
 
 describe('ContactComposer — Email via Mail', () => {
   it('offers the visible accounts, defaulting to the starred one', async () => {

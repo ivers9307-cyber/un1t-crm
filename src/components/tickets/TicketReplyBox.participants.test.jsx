@@ -21,8 +21,9 @@ import TicketReplyBox from './TicketReplyBox.jsx'
 
 beforeEach(() => {
   // Nothing in these tests wants the network. A never-resolving fetch is the
-  // quiet stub the sibling composer tests use — the signature preview treats a
-  // missing signature as cosmetic, and no other request is made on mount.
+  // quiet stub the sibling composer tests use — the signature hint's own
+  // preferences GET simply never settles, so the hint stays hidden
+  // (cosmetic; SignatureHint.test.jsx is where it is exercised).
   vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
   // Every case here mounts ticket-1. Since the composer now hydrates a
   // per-ticket draft from localStorage on mount (see TicketReplyBox.draft
@@ -60,9 +61,6 @@ function renderBox(props = {}) {
       ticket={TICKET}
       replyRecipients={audience(['a@x.com'])}
       onSend={vi.fn()}
-      // Supplied so the signature preview does not fetch — it is not what any
-      // of this is about.
-      signature=""
       onRemoveRecipient={vi.fn()}
       onRestoreRecipient={vi.fn()}
       {...props}

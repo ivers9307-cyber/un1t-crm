@@ -21,6 +21,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { MessageCircle, MessageSquare, Send, StickyNote, Mail } from 'lucide-react'
+import SignatureHint from '@/components/tickets/SignatureHint'
 
 // SMS segment counter — single-segment GSM-7 fits 160 chars;
 // concatenated multi-segment messages count 153 chars per segment.
@@ -382,6 +383,16 @@ export default function ContactComposer({
                 placeholder={`Email ${contactName || 'the customer'}…`}
                 className="w-full bg-un1t-bg border border-un1t-border rounded p-2 text-sm text-un1t-text placeholder:text-un1t-muted resize-none focus:outline-none focus:border-un1t-muted"
               />
+              {/* MAILFIX-SIGTRUTH.1 — the Mail path rides /compose, which
+                  appends the sender's effective signature for the chosen
+                  account's studio, so it gets the same hint every ticket
+                  composer has. ONLY on that path: the company-sender
+                  fallback appends nothing, and absence is the truth there. */}
+              {mailboxId && contactEmail && (
+                <SignatureHint
+                  locationId={mailboxes?.find(m => m.id === mailboxId)?.location_id || null}
+                />
+              )}
               <div className="flex items-center justify-between mt-2 gap-2">
                 {mailboxes?.length ? (
                   <label className="flex min-w-0 items-center gap-1.5 text-[11px] text-un1t-muted">

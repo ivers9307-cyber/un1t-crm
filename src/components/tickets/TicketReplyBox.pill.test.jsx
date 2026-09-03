@@ -59,7 +59,6 @@ function renderBox(props = {}) {
       ticket={ticket()}
       replyRecipients={{ to: ['helen@member.ie'], mode: 'reply', over_cap: false, empty: false }}
       onSend={vi.fn()}
-      signature=""
       onRemoveRecipient={vi.fn()}
       onRestoreRecipient={vi.fn()}
       {...props}

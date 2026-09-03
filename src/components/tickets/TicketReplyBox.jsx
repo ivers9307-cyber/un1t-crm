@@ -102,7 +102,6 @@ export default function TicketReplyBox({
   // a different, much smaller thing: the chip buttons, and nothing else.
   participantSaving = false,
   sending = false,
-  signature,
   // MAIL-TRIAL.B — the ONE sentence in this composer written in the ticket
   // lifecycle's own vocabulary. The Mail surface reuses this box whole (see
   // TicketThread.jsx's slot comment for why forking it is not an option) and
@@ -526,8 +525,11 @@ export default function TicketReplyBox({
 
       {/* Auto-appended sign-off — the shared hint, so the reply box and the
           composer can never disagree about what the server adds. Never shown
-          on a note: a note is sent to nobody. */}
-      {!isNote && <SignatureHint signature={signature} />}
+          on a note: a note is sent to nobody. MAILFIX-SIGTRUTH.1: the
+          ticket's location IS the sending context for a reply (the send
+          resolves the studio half of the signature off ticket.location_id),
+          so the hint resolves against the same studio. */}
+      {!isNote && <SignatureHint locationId={ticket?.location_id || null} />}
 
       {/* Files ride on a reply only. In note mode the picker is gone but any
           already-attached files stay visible in the notice below — dropping

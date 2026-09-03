@@ -22,13 +22,19 @@ import { useState } from 'react'
 import { Check, AlertCircle, Loader2 } from 'lucide-react'
 import { MAX_SIGNATURE_LENGTH, SIGNATURE_SEPARATOR, normalizeSignature } from '@/lib/email-signature'
 import RichSignatureEditor from '@/components/account/RichSignatureEditor'
+import { markSignatureUpdated } from '@/components/tickets/SignatureHint'
 
 // MAIL-SIG.1 adds the structured rich signature as a section of this card
 // (RichSignatureEditor — toggle, fields, photo, links, sandboxed preview).
 // The plain-text editor above it is UNCHANGED on purpose: it is the fallback
-// whenever the rich signature is off or can't render, and it is what the
-// mobile app edits. The two sections save independently — the plain path's
-// behaviour is byte-for-byte what shipped with EMAIL-TICKET.5.
+// whenever the rich signature is off or can't render. The two sections save
+// independently — the plain path's behaviour is byte-for-byte what shipped
+// with EMAIL-TICKET.5.
+//
+// MAILFIX-SIGTRUTH.1 — this card is the ONLY editor for both signatures.
+// There is no mobile editor (an earlier comment here claimed the mobile app
+// edited the plain column — it never did); on a phone, this same page at
+// crm.repset.ie/account is the way to change either one.
 
 export default function EmailSignatureForm({ initialSignature = '', initialRich = null }) {
   const [signature, setSignature] = useState(initialSignature || '')
@@ -51,6 +57,9 @@ export default function EmailSignatureForm({ initialSignature = '', initialRich 
       const j = await res.json()
       if (!j.success) throw new Error(j.error || 'Failed to save')
       setSaved(normalized)
+      // A composer left open in another tab refetches on this signal
+      // (SignatureHint listens for the storage event).
+      markSignatureUpdated()
       setStatus('saved')
       setTimeout(() => setStatus(null), 2500)
     } catch (e) {
