@@ -36,7 +36,9 @@ describe('MailDock — one card, three shapes', () => {
     expect(el.className).toContain('md:bottom-0')
     expect(el.className).toContain('md:right-4')
     expect(el.className).toContain('md:h-[78vh]')
-    expect(el.className).toContain('md:w-[min(1120px,calc(100vw-2rem))]')
+    // MAILFIX-DOCK.1 — %-clamped: the card is absolute inside the pane's
+    // relative shell, so 100% is the PANE, and the card can never outgrow it.
+    expect(el.className).toContain('md:w-[min(1120px,calc(100%-2rem))]')
   })
 
   it('full: the SAME card at fixed inset-4, body centred at reading measure', () => {
