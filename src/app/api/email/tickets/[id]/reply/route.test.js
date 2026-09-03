@@ -28,11 +28,19 @@ vi.mock('@/lib/auth', async () => {
   return { ...actual, getCurrentUser: vi.fn() }
 })
 vi.mock('@/lib/postmark', () => ({ sendEmail: vi.fn() }))
+// MAILFIX-GUARDRAILS.1 — logError is a CALL-THROUGH spy: the real line still
+// reaches console.error (the existing `errors` spies stay honest) and the new
+// tests can assert the structural call itself rather than a prose substring.
+vi.mock('@/lib/log', async () => {
+  const actual = await vi.importActual('@/lib/log')
+  return { ...actual, logError: vi.fn((...args) => actual.logError(...args)) }
+})
 
 import { POST } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { sendEmail } from '@/lib/postmark'
+import { logError } from '@/lib/log'
 import { _resetInboxSenderCache, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
 import { EMAIL_ATTACHMENT_BUCKET } from '@/lib/email-attachment-quota'
 import { outboundDraftPath } from '@/lib/email-outbound-attachments'
@@ -1262,6 +1270,124 @@ describe('POST …/reply — filing fails AFTER the send (EMAIL-REPLY-UNFILED.1)
     expect(body.data).toBeUndefined()
     expect(sendEmail).not.toHaveBeenCalled()
     expect(insertsInto(db, 'webhook_dead_letter')).toHaveLength(0)
+  })
+})
+
+// ── MAILFIX-GUARDRAILS.1 — bookkeeping AFTER the send is LOGGED, never failed on ──
+//
+// Every write below the send is about a reply the member already has. Four of
+// them were bare awaits — the email_sends log and the ticket patch, on BOTH
+// the success path and the unfiled-send breadcrumb path — and a supabase
+// builder RESOLVES with { error }, so a blip reported nothing: the member had
+// the reply and the thread kept saying needs-reply with no line to explain the
+// stuck flag. The fix is log-and-continue ONLY. These pin both halves: the
+// response is exactly the one the send earned, AND a structural logError line
+// names the ticket. A route that started failing the response on one of these
+// writes fails the first assertion — that is the point (CLAUDE.md: removing a
+// silent failure must never create a louder one).
+describe('POST …/reply — a lost bookkeeping write after the send is LOGGED, never surfaced (MAILFIX-GUARDRAILS.1)', () => {
+  let errors
+  beforeEach(() => {
+    errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+  afterEach(() => errors.mockRestore())
+
+  it('email_sends insert fails on the SUCCESS path → 200 unchanged, one structural log line', async () => {
+    failWrites(db, ['email_sends'])
+    const res = await post(T_STUDIO.id, { text: 'We open at 6.' })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.data).toMatchObject({ status: 'pending', message_id: 'pm-out-1' })
+    // The message row and the queue advance still landed; only the log row is gone.
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
+    expect(updatesTo(db, 'email_tickets')).toHaveLength(1)
+    expect(insertsInto(db, 'email_sends')).toHaveLength(0)
+    expect(sendEmail).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith(
+      'tickets/reply',
+      'email_sends log failed (mail already sent)',
+      expect.objectContaining({ ticketId: T_STUDIO.id, messageId: 'pm-out-1', error: expect.objectContaining({ code: 'XX000' }) }),
+    )
+  })
+
+  it('ticket patch fails on the SUCCESS path → 200 unchanged, one structural log line naming the ticket', async () => {
+    failWrites(db, ['email_tickets'])
+    const res = await post(T_STUDIO.id, { text: 'We open at 6.' })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.data).toMatchObject({ status: 'pending', message_id: 'pm-out-1' })
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
+    expect(insertsInto(db, 'email_sends')).toHaveLength(1)
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith(
+      'tickets/reply',
+      expect.stringMatching(/^ticket patch failed after a successful send/),
+      expect.objectContaining({ ticketId: T_STUDIO.id, messageId: 'pm-out-1', error: expect.objectContaining({ code: 'XX000' }) }),
+    )
+  })
+
+  it('ticket patch matches NO row (the ticket vanished between read and write) → 200 unchanged, logged as zero rows', async () => {
+    // PostgREST reports NO error for a zero-row UPDATE, so `{ error }` alone
+    // would miss this. The ticket exists for the read at the top of the route;
+    // a concurrent delete removes it just before the patch.
+    const realFrom = db.from
+    db.from = (table) => {
+      const b = realFrom(table)
+      if (table !== 'email_tickets') return b
+      const origUpdate = b.update
+      b.update = (payload) => {
+        const rows = db._state.tickets
+        const i = rows.findIndex(t => t.id === T_STUDIO.id)
+        if (i >= 0) rows.splice(i, 1)
+        return origUpdate(payload)
+      }
+      return b
+    }
+    const res = await post(T_STUDIO.id, { text: 'We open at 6.' })
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).success).toBe(true)
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith(
+      'tickets/reply',
+      'ticket patch matched no row after a successful send',
+      expect.objectContaining({ ticketId: T_STUDIO.id, rows: 0 }),
+    )
+  })
+
+  it('both breadcrumbs fail after an UNFILED send → the "do not resend" 500 is unchanged, both are logged', async () => {
+    failWrites(db, ['email_inbox_messages', 'email_sends', 'email_tickets'])
+    const res = await post(T_STUDIO.id, { text: 'We open at 6.' })
+
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.error).toMatch(/do not resend/i)
+    expect(body.data).toMatchObject({ sent: true, message_id: 'pm-out-1' })
+    // The dead letter still landed first — the breadcrumb ORDER is unchanged.
+    expect(insertsInto(db, 'webhook_dead_letter')).toHaveLength(1)
+    expect(sendEmail).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledTimes(2)
+    expect(logError).toHaveBeenCalledWith(
+      'tickets/reply',
+      'email_sends log failed after an unfiled send (mail already sent)',
+      expect.objectContaining({ ticketId: T_STUDIO.id, messageId: 'pm-out-1' }),
+    )
+    expect(logError).toHaveBeenCalledWith(
+      'tickets/reply',
+      'ticket patch failed after an unfiled send (mail already sent)',
+      expect.objectContaining({ ticketId: T_STUDIO.id, messageId: 'pm-out-1' }),
+    )
+  })
+
+  it('logs NOTHING when every write lands', async () => {
+    const res = await post(T_STUDIO.id, { text: 'We open at 6.' })
+    expect(res.status).toBe(200)
+    expect(logError).not.toHaveBeenCalled()
   })
 })
 

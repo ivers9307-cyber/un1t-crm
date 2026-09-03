@@ -37,19 +37,19 @@ const ROLE_LABELS = {
   staff: 'Staff (all on-shift)',
 }
 
-function canEdit(callerRole) {
-  return callerRole === 'master' || callerRole === 'owner'
-}
-
-export default function NotificationConfigCard({ locationId, callerRole }) {
+export default function NotificationConfigCard({ locationId }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [effective, setEffective] = useState(null)
   // Working draft. Shape mirrors `effective` so each category's
   // sub-card can mutate its own slice without touching siblings.
   const [draft, setDraft] = useState(null)
-
-  const editable = canEdit(callerRole)
+  // MAILFIX-BRANDGATE.2 — the SERVER decides, and it decides against the
+  // location being edited. This used to key off the caller's ACTIVE-location
+  // role, which is exactly what the route stopped trusting: an owner at
+  // Stillorgan who is plain staff at Hatch got an enabled editor here and a
+  // 403 on Save. Same rule as the sibling cards on this page.
+  const [editable, setEditable] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -64,6 +64,7 @@ export default function NotificationConfigCard({ locationId, callerRole }) {
         } else {
           setEffective(j.data.effective)
           setDraft(deepClone(j.data.effective))
+          setEditable(!!j.data.can_edit)
         }
       } catch (e) {
         if (!cancelled) setError(e.message || 'Network error')

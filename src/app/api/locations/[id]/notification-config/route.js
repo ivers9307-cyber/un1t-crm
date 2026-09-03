@@ -6,10 +6,25 @@
 // booking reminders.
 //
 // Auth: any authenticated user at the location can READ. owner +
-// master can WRITE — lead times affect every staff member at the
-// location, so it's an operator-level decision (matches the trust
-// model for shift templates + location features that owners already
+// master AT THE TARGET LOCATION can WRITE — lead times affect every staff
+// member at the location, so it's an operator-level decision (matches the
+// trust model for shift templates + location features that owners already
 // edit). canEditLocationFeatures is master-only and overkill here.
+//
+// MAILFIX-BRANDGATE.2 — the role is judged AT params.id, never via
+// `user.role`. That field resolves at the caller's ACTIVE location (with a
+// highest-role-anywhere fallback in auth.js), while this write lands on the
+// path-param location — so the old `user.role === 'owner'` check let an
+// owner at studio A who is plain STAFF at studio B PUT
+// /api/locations/<B>/notification-config and rewrite B's reminder config
+// with a 200. Same shape and order as the #1586 branding routes /
+// guardMailboxAdmin: membership first (assertLocationAccess —
+// guardMasterOrOwner never checks membership, a master belongs nowhere), so
+// an owner of a DIFFERENT studio is told "not one of your locations" rather
+// than a role complaint that confirms the studio exists; then owner-or-master
+// at the target. Both run before the row is fetched, so a non-member never
+// reaches the database. Role miss keeps this route's own copy over the
+// guard's generic one.
 //
 // PUT body shape:
 //   {
@@ -24,7 +39,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, guardMasterOrOwner } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import {
   getEffectiveConfig, validateConfig,
@@ -39,10 +54,13 @@ const NotificationConfigSchema = z.object({
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-function canEditNotificationConfig(user) {
+// Thin wrapper over the REAL guard, so GET's `can_edit` and PUT's gate cannot
+// drift apart: the card never offers a Save the server will refuse, and never
+// hides the editor from the target studio's actual owner. No second role
+// predicate lives in this file.
+function canEditNotificationConfig(user, locationId) {
   if (!user) return false
-  if (user.isMaster || user.role === 'master') return true
-  return user.role === 'owner'
+  return guardMasterOrOwner(user, locationId) === null
 }
 
 export async function GET(_request, props) {
@@ -70,7 +88,7 @@ export async function GET(_request, props) {
       // unset categories.
       stored: location.notification_config,
       effective: getEffectiveConfig(location.notification_config),
-      can_edit: canEditNotificationConfig(user),
+      can_edit: canEditNotificationConfig(user, location.id),
     },
   })
 }
@@ -79,7 +97,15 @@ export async function PUT(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!canEditNotificationConfig(user)) {
+
+  // Target FIRST — the id is already on the path — then membership, then the
+  // role AT THAT TARGET (see the header for why not `user.role`). Both gates
+  // precede validation and the row fetch, so a refused caller learns nothing
+  // about the schema and a non-member cannot tell 403 from 404.
+  const locationId = params.id
+  const guard = assertLocationAccess(user, locationId)
+  if (guard) return guard
+  if (!canEditNotificationConfig(user, locationId)) {
     return NextResponse.json({
       success: false,
       error: 'Only owners and masters can edit notification config.',
@@ -95,17 +121,17 @@ export async function PUT(request, props) {
     return NextResponse.json({ success: false, error: 'Validation failed', errors: v.errors }, { status: 400 })
   }
 
+  // Existence check only; membership was already judged on the same id
+  // above (the query pins `id = locationId`), so no second check.
   const db = createServerClient()
   const { data: location, error: locErr } = await db
     .from('locations')
     .select('id')
-    .eq('id', params.id)
+    .eq('id', locationId)
     .single()
   if (locErr || !location) {
     return NextResponse.json({ success: false, error: 'Location not found' }, { status: 404 })
   }
-  const guard = assertLocationAccess(user, location.id)
-  if (guard) return guard
 
   const { data, error } = await db
     .from('locations')
@@ -113,7 +139,7 @@ export async function PUT(request, props) {
       notification_config: v.value,
       updated_at: new Date().toISOString(),
     })
-    .eq('id', params.id)
+    .eq('id', locationId)
     .select('id, notification_config')
     .single()
   if (error) {

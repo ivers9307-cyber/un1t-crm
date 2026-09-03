@@ -45,9 +45,18 @@ vi.mock('@/lib/webhook-events', async () => {
 // here it is mocked so these tests assert WHAT the route hands it and that a
 // push failure can never fail the webhook.
 vi.mock('@/lib/email-inbound-push', () => ({ maybeNotifyInboundEmail: vi.fn() }))
+// MAILFIX-GUARDRAILS.1 — logError is a CALL-THROUGH spy: the real line still
+// reaches console.error (every `errSpy` assertion in this file stays honest)
+// and the new tests can assert the structural call itself, not a prose
+// substring.
+vi.mock('@/lib/log', async () => {
+  const actual = await vi.importActual('@/lib/log')
+  return { ...actual, logError: vi.fn((...args) => actual.logError(...args)) }
+})
 
-import { POST, maxDuration } from './route'
+import { POST, maxDuration, _resetAuthRejectLatchForTests } from './route'
 import { maybeNotifyInboundEmail } from '@/lib/email-inbound-push'
+import { logError } from '@/lib/log'
 import { createServerClient } from '@/lib/supabase'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 import { recordWebhookEvent } from '@/lib/webhook-events'
@@ -146,8 +155,20 @@ function makeDb(state = {}) {
     // break ONE query the way a real DB fault would. Mutable between requests
     // so a fault can be transient (fail the first attempt, not the retry).
     fail: {},
+    // MAILFIX-WEBHOOK.1 (review round 2) — the OTHER failure shape, beside
+    // `fail`: `fail` models PostgREST RESOLVING { error }, `throwOn` models
+    // the builder itself THROWING (the network layer dying mid-call). Same
+    // `${table}:${op}` key; the injected value is thrown from settle, so the
+    // awaited chain rejects exactly as supabase-js would. Explicit per key —
+    // an op nobody injected never throws, and an op nobody modelled still
+    // fails loud through the existing rowsFor/settle guards.
+    throwOn: {},
     ...state,
   }
+  // Updates now MUTATE ticket rows (see settle's update branch), and several
+  // fixtures are shared consts — copy each row so one test's write can never
+  // leak into the next test's fixture, exactly as a real DB would isolate them.
+  s.tickets = Object.fromEntries(Object.entries(s.tickets).map(([id, row]) => [id, { ...row }]))
 
   const db = { inserts: [], updates: [], deletes: [], rpcs: [], _state: s }
 
@@ -176,6 +197,8 @@ function makeDb(state = {}) {
   }
 
   function settle(b, shape) {
+    const thrown = s.throwOn[`${b._table}:${b._op}`]
+    if (thrown) throw thrown instanceof Error ? thrown : new Error(String(thrown))
     const fault = s.fail[`${b._table}:${b._op}`]
     if (fault) return { data: null, error: fault }
 
@@ -212,7 +235,20 @@ function makeDb(state = {}) {
       return { data: { id }, error: null }
     }
     if (b._op === 'update') {
-      db.updates.push({ table: b._table, payload: b._payload, filters: b._filters })
+      // MAILFIX-WEBHOOK.1 — email_tickets updates are MODELLED, not merely
+      // recorded: the filters are applied to the state rows, matching rows
+      // are mutated, and the matched ids ride along on the recorded write.
+      // The has_inbound backstop's whole contract is its
+      // `.eq('has_inbound', false)` filter — a fake that ignores update
+      // filters cannot tell the idempotent write from an unconditional one,
+      // so `matched: []` is how a test asserts the real no-op.
+      let matched = []
+      if (b._table === 'email_tickets') {
+        const rows = applyFilters(Object.values(s.tickets), b._filters)
+        for (const row of rows) Object.assign(row, b._payload)
+        matched = rows.map(r => r.id)
+      }
+      db.updates.push({ table: b._table, payload: b._payload, filters: b._filters, matched })
       return { data: null, error: null }
     }
     if (b._op === 'delete') {
@@ -292,10 +328,17 @@ function makeDb(state = {}) {
   }
   db.rpc = (fn, args) => {
     db.rpcs.push({ fn, args })
+    // MAILFIX-GUARDRAILS.1 — rpc faults are injectable under the SAME two keys
+    // the table ops use, keyed by function name: `fail[fn]` RESOLVES
+    // { data: null, error } (PostgREST refusing), `throwOn[fn]` REJECTS (the
+    // network layer dying). Before this only add_email_storage_bytes could
+    // fail at all, so a route that discarded an rpc result and one that read
+    // it were indistinguishable here — the permissive-fake trap this file's
+    // header warns about.
+    const thrown = s.throwOn[fn]
+    if (thrown) return Promise.reject(thrown instanceof Error ? thrown : new Error(String(thrown)))
+    if (s.fail[fn]) return Promise.resolve({ data: null, error: s.fail[fn] })
     if (fn === 'add_email_storage_bytes') {
-      if (s.fail['add_email_storage_bytes']) {
-        return Promise.resolve({ data: null, error: s.fail['add_email_storage_bytes'] })
-      }
       const mailboxId = args.p_mailbox_id ?? null
       let row = s.usage.find(u => u.location_id === args.p_location_id && (u.mailbox_id ?? null) === mailboxId)
       if (!row) {
@@ -1375,6 +1418,7 @@ describe('crash window: a seen claim is classified, not blindly trusted', () => 
           id: 'T-closed', location_id: 'loc-hatch', status: 'closed',
           subject: 'Billing question', first_response_at: null,
           last_message_at: msgAt, // the bump landed back then
+          has_inbound: true,      // …and so did its has_inbound stamp
         },
       },
     })
@@ -1384,7 +1428,15 @@ describe('crash window: a seen claim is classified, not blindly trusted', () => 
 
     expect(res.status).toBe(200)
     expect((await res.json()).deduped).toBe(true)
-    expect(updatesTo(db, 'email_tickets')).toHaveLength(0)
+    // MAILFIX-WEBHOOK.1 — the skip path now carries exactly ONE write: the
+    // has_inbound backstop, which stamps the fact and nothing else. Here the
+    // stamp already landed, so its .eq('has_inbound', false) filter matches
+    // zero rows — the closed ticket is untouched, exactly as before.
+    const updates = updatesTo(db, 'email_tickets')
+    expect(updates).toHaveLength(1)
+    expect(updates[0].payload).toEqual({ has_inbound: true })
+    expect(updates[0].matched).toEqual([])
+    expect(db._state.tickets['T-closed'].status).toBe('closed')
     expect(db.rpcs.map(r => r.fn)).not.toContain('increment_email_ticket_unread')
   })
 
@@ -1600,6 +1652,100 @@ describe('ticket bump failure → retry finishes the job', () => {
   })
 })
 
+// ── MAILFIX-GUARDRAILS.1 — a lost unread increment is LOGGED, never surfaced ──
+//
+// Both `increment_email_ticket_unread` calls — the first-attempt one and the
+// finish-up one — were `try { await db.rpc(…) } catch {}`: the result was
+// discarded, and the catch cannot fire for a RESOLVED { error }, so a refused
+// increment left the badge under-counting with no line to say so. The fix is
+// log-and-continue ONLY: the message is filed, and Postmark disables a hook
+// that stops answering 2xx, so the response must be exactly the success it
+// already was. These pin both halves.
+describe('MAILFIX-GUARDRAILS.1 — a lost unread increment is logged, never surfaced', () => {
+  const THREADED = {
+    threadRows: [{ ticket_id: 'T-open', created_at: '2026-08-06T08:00:00Z', location_id: 'loc-hatch', rfc_message_id: 'ours-1@mtasv.net' }],
+    tickets: { 'T-open': { id: 'T-open', location_id: 'loc-hatch', status: 'open', subject: 'Billing question', first_response_at: null } },
+  }
+  const REFUSED = { code: 'P0001', message: 'increment refused' }
+  let errSpy
+  beforeEach(() => {
+    errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    _resetStormGuardForTests()
+  })
+  afterEach(() => { errSpy.mockRestore() })
+
+  it('fresh inbound: the rpc RESOLVES { error } → 200 unchanged, ticket + message filed, one structural line', async () => {
+    db = makeDb({ fail: { increment_email_ticket_unread: REFUSED } })
+    createServerClient.mockImplementation(() => db)
+
+    const res = await post(inbound())
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ success: true, ticket_id: 'new-ticket', mailbox_id: 'mb-hatch' })
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(1)
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
+    // Attempted exactly once — logging is not a retry.
+    expect(db.rpcs.filter(r => r.fn === 'increment_email_ticket_unread')).toHaveLength(1)
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith(
+      'postmark-inbound',
+      'unread increment failed (email still filed)',
+      expect.objectContaining({ ticketId: 'new-ticket', error: REFUSED }),
+    )
+  })
+
+  it('fresh inbound: the rpc THROWS → 200 unchanged, logged too (the old `catch {}` swallowed this)', async () => {
+    db = makeDb({ throwOn: { increment_email_ticket_unread: new Error('socket hang up') } })
+    createServerClient.mockImplementation(() => db)
+
+    const res = await post(inbound())
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ success: true, ticket_id: 'new-ticket' })
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith(
+      'postmark-inbound',
+      'unread increment threw (email still filed)',
+      expect.objectContaining({ ticketId: 'new-ticket', err: expect.any(Error) }),
+    )
+  })
+
+  it('finish-up path: the rpc RESOLVES { error } → 200 deduped unchanged, the bump landed, logged against the winner', async () => {
+    db = makeDb({ ...THREADED, fail: { 'email_tickets:update': { message: 'update refused' } } })
+    createServerClient.mockImplementation(() => db)
+    bindDedupeLedger(db)
+
+    // Attempt 1: message filed, bump refused → 500, claim released, no rpc.
+    const first = await post(reply())
+    expect(first.status).toBe(500)
+    expect(db.rpcs.map(r => r.fn)).not.toContain('increment_email_ticket_unread')
+
+    // The bump fault clears; the increment now refuses instead. Postmark
+    // retries → 23505 → the finish-up re-runs bump + increment on the winner.
+    db._state.fail = { increment_email_ticket_unread: REFUSED }
+    const second = await post(reply())
+
+    expect(second.status).toBe(200)
+    expect((await second.json()).deduped).toBe(true)
+    const bumps = updatesTo(db, 'email_tickets').filter(u => u.filters.some(f => f[2] === 'T-open'))
+    expect(bumps.length).toBeGreaterThanOrEqual(1)
+    expect(db.rpcs.filter(r => r.fn === 'increment_email_ticket_unread')).toHaveLength(1)
+    expect(logError).toHaveBeenCalledWith(
+      'postmark-inbound',
+      'unread increment failed (email still filed)',
+      expect.objectContaining({ ticketId: 'T-open', error: REFUSED }),
+    )
+  })
+
+  it('logs NOTHING about the increment when it lands', async () => {
+    const res = await post(inbound())
+    expect(res.status).toBe(200)
+    expect(db.rpcs.filter(r => r.fn === 'increment_email_ticket_unread')).toHaveLength(1)
+    expect(logError).not.toHaveBeenCalled()
+  })
+})
+
 // ── EMAIL-INBOUND-SHIM.1 — the staged wiring, route-level ───────────
 // The shim swaps each attachment's base64 `Content` for a `_un1t_staged`
 // marker naming the object it already uploaded. This was the one load-bearing
@@ -1652,10 +1798,14 @@ describe('shim-staged attachments', () => {
 })
 
 describe('preserved gates', () => {
-  it('404s a wrong token without touching the database', async () => {
+  it('404s a wrong token without touching the mail tables', async () => {
     const res = await post(inbound(), 'not-the-token')
     expect(res.status).toBe(404)
-    expect(db.inserts).toHaveLength(0)
+    // MAILFIX-WEBHOOK.1 — the rejection now records itself in error_events
+    // (see the dedicated describe below); everything else stays untouched.
+    expect(db.inserts.filter(i => i.table !== 'error_events')).toHaveLength(0)
+    expect(db.updates).toHaveLength(0)
+    expect(db.rpcs).toHaveLength(0)
   })
 
   it('400s an unparseable body', async () => {
@@ -1913,5 +2063,280 @@ describe('MAIL-SENT.1 — has_inbound stamps', () => {
     await post(reply())
     const update = updatesTo(db, 'email_tickets')[0]
     expect(update.payload.has_inbound).toBe(true)
+  })
+})
+
+// ── MAILFIX-WEBHOOK.1 — the silence alarm ───────────────────────────
+// A webhook call with a WRONG/rotated token used to be answered 404 with only
+// a console.warn — no error_events row, so the Sentinel crm-errors check
+// never fired and a half-rotated Postmark token was indistinguishable from a
+// quiet mailbox. The rejection now records itself through the route's own
+// recordInboundFailure like every other failure door, while the response
+// stays byte-identical: 404, not 403 (the enumeration rule).
+describe('MAILFIX-WEBHOOK.1 — token mismatch records a structural failure', () => {
+  let warnSpy
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // recordErrorEvent is storm-guarded per instance (30/min) — start clean
+    // so the row this describe exists to assert cannot be silently skipped.
+    _resetStormGuardForTests()
+    // …and so is the route's own auth-reject latch (2/min): the preserved-
+    // gates junk-token test above already spent one of its two slots.
+    _resetAuthRejectLatchForTests()
+  })
+  afterEach(() => {
+    warnSpy.mockRestore()
+    delete process.env.POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN_PREVIOUS
+  })
+
+  it('records token_mismatch in error_events AND still answers the unchanged 404', async () => {
+    const res = await post(inbound(), 'not-the-token')
+
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ success: false, error: 'token_mismatch' })
+
+    const evts = insertsInto(db, 'error_events')
+    expect(evts).toHaveLength(1)
+    expect(evts[0].payload).toMatchObject({
+      name: 'token_mismatch',
+      route_type: 'handled',
+      route_path: '/api/webhooks/postmark-inbound',
+    })
+    // Nothing else moved: no dedupe claim, no ticket, no message, no capture.
+    expect(db.inserts.filter(i => i.table !== 'error_events')).toHaveLength(0)
+    expect(recordWebhookEvent).not.toHaveBeenCalled()
+    expect(deadLetterWebhook).not.toHaveBeenCalled()
+  })
+
+  it('a valid token records nothing new', async () => {
+    const res = await post(inbound())
+    expect(res.status).toBe(200)
+    expect(insertsInto(db, 'error_events')).toHaveLength(0)
+  })
+
+  it('the PREVIOUS rotation token is a valid token — it records nothing either', async () => {
+    process.env.POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN_PREVIOUS = 'old-secret'
+    const res = await post(inbound(), 'old-secret')
+    expect(res.status).toBe(200)
+    expect(insertsInto(db, 'error_events')).toHaveLength(0)
+  })
+})
+
+// ── MAILFIX-WEBHOOK.1 — the has_inbound backstop ────────────────────
+// finishDedupedDelivery's bump guard judges the SORT KEY (last_message_at),
+// which anything can advance — a staff reply, the sent lane. So a dead
+// attempt that filed the message but died before its bump, followed by ANY
+// other write advancing the ticket, left the retry skipping the bump
+// entirely: the customer's reply stayed filed in Sent forever, has_inbound
+// never flipped. The skip branch now stamps has_inbound: true idempotently —
+// the FACT only: no reopen, no unread increment, no push, and a failed
+// stamp can never fail the 200 `deduped` the provider retry is owed.
+describe('MAILFIX-WEBHOOK.1 — has_inbound backstop on the skipped bump', () => {
+  const CLAIM = 'inbound-email:pm-inbound-1'
+  // The dead attempt filed the winner an hour ago; a staff reply advanced
+  // last_message_at a minute ago, so the guard sees "already bumped" and
+  // skips — the exact scenario that stranded a real reply in Sent.
+  const skipState = (hasInbound) => ({
+    threadRows: [{
+      id: 'msg-orphan', ticket_id: 'T-sent', location_id: 'loc-hatch',
+      postmark_message_id: 'pm-inbound-1',
+      created_at: new Date(Date.now() - 3600_000).toISOString(),
+    }],
+    tickets: {
+      'T-sent': {
+        id: 'T-sent', location_id: 'loc-hatch', status: 'open',
+        subject: 'Corporate offer', requester_email: 'member@example.com',
+        first_response_at: null, mailbox_id: 'mb-hatch', unread_count: 0,
+        has_inbound: hasInbound,
+        // AFTER the winner's created_at → the guard SKIPS the bump.
+        last_message_at: new Date(Date.now() - 60_000).toISOString(),
+      },
+    },
+  })
+
+  let errSpy
+  beforeEach(() => {
+    errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    _resetStormGuardForTests()
+  })
+  afterEach(() => { errSpy.mockRestore() })
+
+  function withSkipDb(state) {
+    db = makeDb(state)
+    createServerClient.mockImplementation(() => db)
+    bindDedupeLedger(db)
+    holdClaim(db, CLAIM, 120_000) // stale → reprocess → 23505 → finish-up
+    return db
+  }
+
+  it('flips has_inbound false→true when the guard skips the bump — and ONLY that', async () => {
+    withSkipDb(skipState(false))
+
+    const res = await post(inbound())
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).deduped).toBe(true)
+
+    // The stamp landed on the winner's ticket…
+    expect(db._state.tickets['T-sent'].has_inbound).toBe(true)
+    // …via exactly one write carrying the fact and the idempotency filter —
+    // the payload holds NOTHING but has_inbound, which is what "no reopen"
+    // means structurally.
+    const updates = updatesTo(db, 'email_tickets')
+    expect(updates).toHaveLength(1)
+    expect(updates[0].payload).toEqual({ has_inbound: true })
+    expect(updates[0].filters).toContainEqual(['eq', 'id', 'T-sent'])
+    expect(updates[0].filters).toContainEqual(['eq', 'has_inbound', false])
+    expect(updates[0].matched).toEqual(['T-sent'])
+    // No unread increment, no push — the skip's other semantics are untouched.
+    expect(db.rpcs.map(r => r.fn)).not.toContain('increment_email_ticket_unread')
+    expect(maybeNotifyInboundEmail).not.toHaveBeenCalled()
+  })
+
+  it('is a zero-row no-op when has_inbound is already true (the .eq filter)', async () => {
+    withSkipDb(skipState(true))
+
+    const res = await post(inbound())
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).deduped).toBe(true)
+    // The write is issued but its filter matches nothing — a genuine no-op,
+    // which is what makes the backstop idempotent across re-deliveries.
+    const updates = updatesTo(db, 'email_tickets')
+    expect(updates).toHaveLength(1)
+    expect(updates[0].matched).toEqual([])
+    expect(db.rpcs.map(r => r.fn)).not.toContain('increment_email_ticket_unread')
+    expect(maybeNotifyInboundEmail).not.toHaveBeenCalled()
+  })
+
+  it('a failed backstop write is logged structurally and NEVER fails the response', async () => {
+    withSkipDb({ ...skipState(false), fail: { 'email_tickets:update': { message: 'update refused' } } })
+
+    const res = await post(inbound())
+
+    // Byte-identical to a healthy skip: the message is already filed, and a
+    // 5xx here would burn the provider retry on a write we can live without.
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, deduped: true })
+    // …but the failure is structurally visible, not console-only.
+    const evts = insertsInto(db, 'error_events').map(i => i.payload)
+    expect(evts.some(e => e.name === 'has_inbound_backstop_failed')).toBe(true)
+    // Honest about the state: the stamp genuinely did not land.
+    expect(db._state.tickets['T-sent'].has_inbound).toBe(false)
+  })
+
+  it('the normal re-bump path is unchanged: bump only, no separate backstop write', async () => {
+    // last_message_at BEFORE the winner → the guard re-runs the bump, which
+    // itself stamps has_inbound — the backstop must not double up beside it.
+    const state = skipState(false)
+    state.tickets['T-sent'].last_message_at = '2026-08-01T00:00:00Z'
+    withSkipDb(state)
+
+    const res = await post(inbound())
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).deduped).toBe(true)
+    const updates = updatesTo(db, 'email_tickets')
+    expect(updates).toHaveLength(1)          // the bump alone
+    expect(updates[0].payload.status).toBe('open')
+    expect(updates[0].payload.has_inbound).toBe(true)
+    expect(db._state.tickets['T-sent'].has_inbound).toBe(true)
+    expect(db.rpcs.filter(r => r.fn === 'increment_email_ticket_unread')).toHaveLength(1)
+    expect(maybeNotifyInboundEmail).toHaveBeenCalledTimes(1)
+  })
+
+  it('a THROWN backstop write is tolerated the same way — 200 deduped, failure logged', async () => {
+    // releaseDedupeClaim's idiom, applied here: supabase-js builders are
+    // thenables with no .catch, and the network layer can THROW as well as
+    // resolve { error }. Un-caught, the throw would ride POST's catch-all
+    // into a 500 `unhandled_error`, release the claim, and burn Postmark's
+    // retry schedule — on a write the response never depended on.
+    withSkipDb({ ...skipState(false), throwOn: { 'email_tickets:update': new Error('socket hang up') } })
+
+    const res = await post(inbound())
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, deduped: true })
+    const evts = insertsInto(db, 'error_events').map(i => i.payload)
+    expect(evts.some(e => e.name === 'has_inbound_backstop_failed')).toBe(true)
+    expect(evts.some(e => e.name === 'unhandled_error')).toBe(false)
+    // The 200 stands, so the claim is KEPT — Postmark is done with this message.
+    expect(db.deletes).toHaveLength(0)
+    expect(db._state.tickets['T-sent'].has_inbound).toBe(false)
+  })
+})
+
+// ── MAILFIX-WEBHOOK.1 (review round 2) — the auth-reject recording latch ─
+// recordErrorEvent's storm guard is ONE shared per-instance budget (30/min)
+// with no per-name coalescing — shared with the genuine mail-loss alarms
+// (dedupe_release_failed, message_insert_failed, …) and the unhandled-error
+// producer. The token-mismatch branch is unauthenticated and the repo is
+// public, so without its own latch 30 junk-token POSTs/min would saturate
+// the shared budget and a REAL failure in the same minute would record
+// nothing — the Sentinel trail going dark on exactly the rows it exists to
+// surface. The latch caps auth-reject ROWS at 2 per instance-minute; every
+// request still 404s, still warns, and the other failure doors are untouched.
+describe('MAILFIX-WEBHOOK.1 — auth-reject recording latch', () => {
+  let warnSpy, errSpy
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    _resetStormGuardForTests()
+    _resetAuthRejectLatchForTests()
+  })
+  afterEach(() => {
+    warnSpy.mockRestore()
+    errSpy.mockRestore()
+    vi.useRealTimers()
+  })
+
+  it('30 rapid junk-token requests record at most 2 rows — and every one still 404s', async () => {
+    for (let i = 0; i < 30; i++) {
+      const res = await post(inbound(), `junk-${i}`)
+      expect(res.status).toBe(404)
+      expect(await res.json()).toEqual({ success: false, error: 'token_mismatch' })
+    }
+    const evts = insertsInto(db, 'error_events').map(i => i.payload)
+    expect(evts).toHaveLength(2)
+    expect(evts.every(e => e.name === 'token_mismatch')).toBe(true)
+    // Every rejection still warns (an operator tailing logs sees all 30), but
+    // only the 2 RECORDED ones reach error level — latched requests must not
+    // feed the error channel at probe rate.
+    expect(warnSpy.mock.calls.length).toBeGreaterThanOrEqual(30)
+    expect(errSpy.mock.calls.length).toBeLessThan(30)
+  })
+
+  it('the latch never suppresses the OTHER failure doors in the same minute', async () => {
+    // Saturate the auth-reject latch…
+    for (let i = 0; i < 5; i++) await post(inbound(), 'junk')
+    expect(insertsInto(db, 'error_events')).toHaveLength(2)
+
+    // …then a REAL failure door in the same minute still records: the latch
+    // is scoped to auth rejects, and the shared budget it protects still has
+    // 28 rows of headroom — which is the whole point.
+    db._state.fail['email_inbox_messages:insert'] = { message: 'insert exploded' }
+    const res = await post(inbound())
+    expect(res.status).toBe(500)
+    const names = insertsInto(db, 'error_events').map(i => i.payload.name)
+    expect(names).toContain('message_insert_failed')
+  })
+
+  it('a fresh minute records again — presence every minute, never volume', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    for (let i = 0; i < 5; i++) await post(inbound(), 'junk')
+    expect(insertsInto(db, 'error_events')).toHaveLength(2)
+
+    // The HOLD half: inside the window the latch stays shut — a 1s or 30s
+    // window would pass the reset assertion below while letting probes
+    // re-saturate the shared budget in seconds.
+    vi.setSystemTime(Date.now() + 30_000)
+    await post(inbound(), 'junk')
+    expect(insertsInto(db, 'error_events')).toHaveLength(2)
+
+    // A real half-rotation is a steady stream: the NEXT minute must record
+    // again, or Sentinel would see one blip and then silence.
+    vi.setSystemTime(Date.now() + 31_000)
+    await post(inbound(), 'junk')
+    expect(insertsInto(db, 'error_events')).toHaveLength(3)
   })
 })

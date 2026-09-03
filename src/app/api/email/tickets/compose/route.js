@@ -23,6 +23,7 @@ import {
 } from '@/lib/email-outbound-attachments-server'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 import { withSendMarker } from '@/lib/postmark-send-marker'
+import { logError } from '@/lib/log'
 import { loadSendingMailbox, loadOwnAddresses , loadSignatureContext } from '../_helpers'
 
 // POST /api/email/tickets/compose — start a conversation (EMAIL-TICKET.5).
@@ -345,7 +346,18 @@ export async function POST(request) {
         error,
         locationId,
       })
-      if (sendLogRow) await db.from('email_sends').insert(sendLogRow)
+      // MAILFIX-GUARDRAILS.1 — was a bare await inside this try, whose catch
+      // cannot fire for it (a supabase builder RESOLVES with `{ error }`), so a
+      // lost breadcrumb reported nothing. Logged and continued: this branch is
+      // already the "do not resend" answer and nothing here may change it.
+      if (sendLogRow) {
+        const { error: sendLogErr } = await db.from('email_sends').insert(sendLogRow)
+        if (sendLogErr) {
+          logError('tickets/compose', 'email_sends log failed after an unfiled send (mail already sent)', {
+            ticketId, messageId: result.messageId, error: sendLogErr,
+          })
+        }
+      }
     } catch (e) {
       console.error('[tickets/compose] breadcrumbs after the unfiled send also failed:', e?.message)
     }
@@ -457,7 +469,16 @@ export async function POST(request) {
   // Log to email_sends — the row was built above, before the filing inserts;
   // see the sendLogRow comment for everything it is and is not.
   if (sendLogRow) {
-    await db.from('email_sends').insert(sendLogRow)
+    // MAILFIX-GUARDRAILS.1 — was a bare await: a lost row silently dropped the
+    // contact's history entry and the delivery-webhook correlation for this
+    // send. Logged, never surfaced — the email is with the recipient, and a
+    // 500 here reads as "try again", which is a real second email.
+    const { error: sendLogErr } = await db.from('email_sends').insert(sendLogRow)
+    if (sendLogErr) {
+      logError('tickets/compose', 'email_sends log failed (mail already sent)', {
+        ticketId: ticket.id, messageId: result.messageId, error: sendLogErr,
+      })
+    }
   }
 
   // ── Attribution (EMAIL-CC.1) ──────────────────────────────────────

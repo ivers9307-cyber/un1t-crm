@@ -18,11 +18,19 @@ vi.mock('@/lib/auth', async () => {
   return { ...actual, getCurrentUser: vi.fn() }
 })
 vi.mock('@/lib/postmark', () => ({ sendEmail: vi.fn() }))
+// MAILFIX-GUARDRAILS.1 — logError is a CALL-THROUGH spy: the real line still
+// reaches console.error (the existing `errors` spies stay honest) and the new
+// tests can assert the structural call itself rather than a prose substring.
+vi.mock('@/lib/log', async () => {
+  const actual = await vi.importActual('@/lib/log')
+  return { ...actual, logError: vi.fn((...args) => actual.logError(...args)) }
+})
 
 import { POST } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { sendEmail } from '@/lib/postmark'
+import { logError } from '@/lib/log'
 import { _resetInboxSenderCache, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
 import { EMAIL_ATTACHMENT_BUCKET } from '@/lib/email-attachment-quota'
 import { outboundDraftPath } from '@/lib/email-outbound-attachments'
@@ -732,6 +740,71 @@ describe('POST /api/email/tickets/compose — filing fails AFTER the send (EMAIL
     expect(body.error).toMatch(/do not resend/i)
     expect(body.data).toMatchObject({ sent: true })
     warns.mockRestore()
+  })
+})
+
+// ── MAILFIX-GUARDRAILS.1 — the email_sends log after the send is LOGGED, never failed on ──
+//
+// Both email_sends inserts in this route — the success-path log and the
+// breadcrumb inside recordUnfiledSend — were bare awaits, and the breadcrumb
+// sat inside a try whose catch cannot fire for a RESOLVED { error }. The fix
+// is log-and-continue ONLY; these pin that the response is exactly what the
+// send already earned AND that a structural line names the ticket.
+describe('POST /api/email/tickets/compose — a lost email_sends log after the send is LOGGED, never surfaced (MAILFIX-GUARDRAILS.1)', () => {
+  let errors
+  beforeEach(() => {
+    // A linked contact, or there is no email_sends row to lose.
+    setupDb(baseState({ grants: [GRANT_STUDIO], contacts: [MEMBER_CONTACT] }))
+    errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+  afterEach(() => errors.mockRestore())
+
+  it('email_sends insert fails on the SUCCESS path → 200 unchanged, one structural log line', async () => {
+    failWrites(db, ['email_sends'])
+    const res = await post(VALID)
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.data.ticket_id).toBeTruthy()
+    expect(body.data.message_id).toBe('pm-compose-1')
+    // The ticket and the message still landed; only the log row is gone.
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(1)
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
+    expect(insertsInto(db, 'email_sends')).toHaveLength(0)
+    expect(sendEmail).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith(
+      'tickets/compose',
+      'email_sends log failed (mail already sent)',
+      expect.objectContaining({ ticketId: body.data.ticket_id, messageId: 'pm-compose-1', error: expect.objectContaining({ code: 'XX000' }) }),
+    )
+  })
+
+  it('email_sends breadcrumb fails after an UNFILED send → the "do not resend" 500 is unchanged, and it is logged', async () => {
+    failWrites(db, ['email_inbox_messages', 'email_sends'])
+    const res = await post(VALID)
+
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.error).toMatch(/do not resend/i)
+    expect(body.data).toMatchObject({ sent: true, message_id: 'pm-compose-1' })
+    expect(body.data.ticket_id).toBeTruthy()
+    // The dead letter still landed first — the breadcrumb ORDER is unchanged.
+    expect(insertsInto(db, 'webhook_dead_letter')).toHaveLength(1)
+    expect(sendEmail).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith(
+      'tickets/compose',
+      'email_sends log failed after an unfiled send (mail already sent)',
+      expect.objectContaining({ ticketId: body.data.ticket_id, messageId: 'pm-compose-1', error: expect.objectContaining({ code: 'XX000' }) }),
+    )
+  })
+
+  it('logs NOTHING when every write lands', async () => {
+    const res = await post(VALID)
+    expect(res.status).toBe(200)
+    expect(logError).not.toHaveBeenCalled()
   })
 })
 
