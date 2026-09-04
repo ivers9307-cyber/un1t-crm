@@ -272,3 +272,22 @@ function normalisePanelCount(count) {
   if (!Number.isFinite(n) || n <= 0) return 0
   return n
 }
+
+/**
+ * Can this registration's race clock actually be started?
+ *
+ * Mirrors the server rule in POST /api/registrations/[id]/race-start, which
+ * refuses anything but `confirmed` with a 409 ("Cannot start race for a
+ * pending_payment registration"). classifyBookingState only diverts no_show
+ * and cancelled, so every other non-confirmed status lands in Next Up — where
+ * an armed Start button would be a promise the server always breaks.
+ *
+ * Kept here rather than in the board so the rule is unit-tested and so the
+ * two surfaces that render Next Up cannot drift from the route.
+ *
+ * @param {{status?: string}|null|undefined} registration
+ * @returns {boolean}
+ */
+export function canStartRace(registration) {
+  return registration?.status === 'confirmed'
+}

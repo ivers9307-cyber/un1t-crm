@@ -28,7 +28,8 @@ export async function GET(_request, props) {
     .from('race_events')
     .select(`
       id, name, location_id, race_date, kind, allowed_team_sizes,
-      waves:race_waves ( id, start_time, capacity, label, display_order )
+      waves:race_waves ( id, start_time, capacity, label, display_order ),
+      location:locations ( name )
     `)
     .eq('id', params.id)
     .single()

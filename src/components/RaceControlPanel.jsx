@@ -25,7 +25,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Play, Square, RotateCcw, Loader2, Trophy, Clock, Users, AlertCircle, BadgeCheck, Filter, SlidersHorizontal } from 'lucide-react'
-import { formatElapsed, classifyBookingState, penaltySumSeconds, elapsedWithPenalties } from '@/lib/race-control'
+import { formatElapsed, classifyBookingState, penaltySumSeconds, elapsedWithPenalties, canStartRace } from '@/lib/race-control'
 import RaceAdjustModal from './RaceAdjustModal'
 
 const COMPOSITION_FILTERS = [
@@ -332,20 +332,37 @@ function AdjustButton({ onAdjust }) {
   )
 }
 
+// RACEDAY.3 — a Start button the server can only refuse is worse than no
+// button. race-start 409s anything but `confirmed`, and classifyBookingState
+// only diverts no_show/cancelled, so a pending_payment registration sits in
+// Next Up looking startable. Live in the 5 Sep field (registration 8f714b71,
+// "Allen Thomson", 11:12 wave), and the operator would only discover it with
+// a competitor already on the line. Show WHY instead — the row stays, because
+// the team is really there and somebody has to sort the payment out.
 function NextUpRow({ registration, wave, busy, onStart, onAdjust }) {
+  const startable = canStartRace(registration)
   return (
     <div className="flex items-stretch gap-2">
       <TeamHeader registration={registration} wave={wave} />
       <div className="flex flex-col items-end justify-center gap-1 min-w-[110px]">
-        <button
-          type="button"
-          onClick={onStart}
-          disabled={busy}
-          className="bg-emerald-500 hover:bg-emerald-600 text-white font-semibold px-4 py-3 rounded-md inline-flex items-center gap-1.5 disabled:opacity-40 text-sm"
-        >
-          {busy ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
-          {busy ? 'Starting…' : 'Start'}
-        </button>
+        {startable ? (
+          <button
+            type="button"
+            onClick={onStart}
+            disabled={busy}
+            className="bg-emerald-500 hover:bg-emerald-600 text-white font-semibold px-4 py-3 rounded-md inline-flex items-center gap-1.5 disabled:opacity-40 text-sm"
+          >
+            {busy ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+            {busy ? 'Starting…' : 'Start'}
+          </button>
+        ) : (
+          <span
+            className="bg-rose-500/10 text-rose-700 text-xs font-semibold px-2.5 py-2 rounded-md text-center"
+            title="This registration can't be started until its status is confirmed."
+          >
+            {String(registration?.status || 'not confirmed').replace(/_/g, ' ')}
+          </span>
+        )}
         <AdjustButton onAdjust={onAdjust} />
       </div>
     </div>

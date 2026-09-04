@@ -46,12 +46,18 @@ export async function getControlBoard(eventId, { locationId } = {}) {
  * @param {string} action  'race-start' | 'race-finish' | 'race-reset'
  * @param {object} [opts]
  * @param {string} [opts.locationId] x-active-location override for this call
- * @param {boolean} [opts.override]  push the action through a server-side
- *   guard the operator has consciously chosen to overrule (finishing a team
- *   the board would otherwise refuse, say). The body key is sent ONLY when
- *   the flag is truthy — an explicit `override: false` on every ordinary
- *   start/finish would turn a deliberate escape hatch into background noise
- *   in the request log, which is the one place it needs to stand out.
+ * @param {boolean} [opts.override]  a NOTE, not a bypass. It records that the
+ *   operator reached this button through the board's offsite unlock — their
+ *   phone placed them away from the studio and they tapped "I'm at the gym".
+ *   The routes only LOG it (logWarn 'race-control' / 'offsite override');
+ *   they run no position check, so sending it changes nothing about what is
+ *   allowed and omitting it withholds no permission. Do not grow a
+ *   server-side guard out of this flag — a client-asserted position is not
+ *   something to gate writes on, and the decision to keep the boundary at
+ *   the races-permission + location checks is deliberate.
+ *   The key is sent ONLY when truthy: an explicit `override: false` on every
+ *   ordinary start/finish would turn a rare, deliberate signal into
+ *   background noise in the one log where it needs to stand out.
  */
 export async function raceAction(registrationId, action, { locationId, override } = {}) {
   return api(`/api/registrations/${registrationId}/${action}`, {

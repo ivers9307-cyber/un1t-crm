@@ -25,6 +25,7 @@ import { logWarn } from './log'
 export {
   formatElapsed,
   classifyBookingState,
+  canStartRace,
   elapsedSecondsBetween,
   penaltySumSeconds,
   elapsedWithPenalties,

@@ -28,6 +28,7 @@ import {
   waveSortKey,
   participantNames,
   shouldShowParticipants,
+  canStartRace,
 } from 'shared/race-control'
 import { getControlBoard, raceAction } from '../lib/races-api'
 
@@ -37,6 +38,36 @@ const TICK_MS = 1000
 // One trailing bucket for every registration whose wave is missing, rather
 // than one bucket per orphaned wave_id — see nextUpWaves below.
 const NO_WAVE_KEY = '__no_wave__'
+
+// RACEDAY.3 — can this row's clock actually be started?
+//
+// race-start refuses anything but `confirmed` with a 409 ("Cannot start race
+// for a pending_payment registration"). classifyBookingState only diverts
+// no_show and cancelled, so every OTHER non-confirmed status lands in Next Up
+// — and the old flat list armed a Start button on it that could never work.
+//
+// Live tomorrow: registration 8f714b71 ("Allen Thomson", 11:12 wave) is
+// pending_payment. Wave grouping is what turns that from a stray dud row into
+// a trap, because the heading now says "11:12 · 2 teams" and invites the
+// operator to start BOTH. Better they see, before the wave goes off, that one
+// of them cannot be timed and why — a 409 banner mid-wave tells them nothing
+// actionable while a competitor is standing on the line.
+//
+// The button is withheld, NOT the row: the team is really there, and the
+// operator needs to see them to sort the payment out.
+// (the rule itself is canStartRace in shared/race-control.js)
+
+// Operator-facing wording for a status that blocks the start.
+const BLOCKED_STATUS_LABEL = {
+  pending_payment: 'Payment pending',
+  pending: 'Not confirmed',
+  refunded: 'Refunded',
+  waitlisted: 'Waitlisted',
+}
+function blockedStatusLabel(status) {
+  if (!status) return null
+  return BLOCKED_STATUS_LABEL[status] || String(status).replace(/_/g, ' ')
+}
 
 /**
  * @param {object}   props
@@ -77,6 +108,41 @@ export default function RaceControlBoard({ eventId, headerRight, onRaceName }) {
     setBoard(res)
   }, [eventId, activeLocation?.id])
 
+  // RACEDAY.3 — a NEW race means none of the old race's state is true any
+  // more, and this component is reused rather than remounted when the race
+  // changes: (tabs)/race.jsx renders it at the same position for whichever
+  // pill is selected, so React updates props and keeps state. Without this,
+  // tapping the 14:00 pill leaves the 10:00 heat's rows on screen — with
+  // ARMED Start buttons — until the first poll returns, because the loading
+  // branch is `loading && !board` and `board` is still the old race's. A tap
+  // in that window starts a team from the other heat: the route checks the
+  // races permission and the race's location, both of which pass.
+  //
+  // Deliberately NOT solved with `key={raceId}` in race.jsx. A key remount
+  // would also reset `unlocked`, forcing an offsite operator to re-tap the
+  // unlock every time they switch pills. Same lesson as the studio switch in
+  // sonos/index.jsx: new target -> spinner, not the previous target's list.
+  useEffect(() => {
+    setBoard(null)
+    setError(null)
+    setActionError(null)
+    setBusyId(null)
+  }, [eventId])
+
+  // RACEDAY.3 — drop the unlock whenever the screen stops being looked at.
+  //
+  // The spec leaned on "component state dies with the screen", which is true
+  // for races/[id].jsx (a pushed screen that unmounts on pop) and FALSE for
+  // the new bottom-tab surface: React Navigation keeps tab screens mounted,
+  // this layout sets no unmountOnBlur, and `activeRace` never goes null
+  // during a race day — so the board is never unmounted and `unlocked`
+  // latched for the life of the JS runtime. A coach who unlocked from the
+  // car park to peek at the roster would find live Start/Finish buttons on
+  // every later visit, that afternoon and next weekend, which is precisely
+  // what the gate exists to prevent. Blur is the honest boundary: it ends
+  // "this visit" on both surfaces.
+  useFocusEffect(useCallback(() => () => setUnlocked(false), []))
+
   // Poll the board + tick a clock for live elapsed, only while focused.
   useFocusEffect(useCallback(() => {
     if (!canView) { setLoading(false); return undefined }
@@ -108,10 +174,34 @@ export default function RaceControlBoard({ eventId, headerRight, onRaceName }) {
   // coach thumbing "Finish" on a race that is still running. The actual
   // boundary stays where it always was: the route's own races-permission and
   // assertLocationAccess checks, which run regardless of anything here.
-  const offsite = phys.status === 'offsite' || phys.status === 'unknown'
+  // RACEDAY.3 — "at THIS race's studio", not "at A studio". usePhysicalLocation
+  // resolves WHICH site the phone is standing in and returns it alongside the
+  // status (control-location.js is the established consumer of that pair); the
+  // first cut read only `status`, so a coach standing in Hatch Street had full
+  // Start/Finish control of the Stillorgan race, with no banner — the exact
+  // offsite write this is here to stop, from inside another building.
+  //
+  // The race's own location_id is the thing to match against, not
+  // activeLocation: the operator's active studio is a UI preference that can
+  // lag, while the board is unambiguously for one race at one site.
+  //
+  // Ordering matters. Until the first poll lands we do not KNOW the race's
+  // location, so a positive match is impossible and requiring one would flash
+  // the banner on every load. While it is unknown we fall back to the status
+  // alone; once known, being at a different site reads as offsite.
+  const raceLocationId = board?.race?.location_id || null
+  const atWrongStudio = Boolean(
+    raceLocationId &&
+    phys.status === 'at_studio' &&
+    phys.location?.id &&
+    phys.location.id !== raceLocationId
+  )
+  const offsite = phys.status === 'offsite' || phys.status === 'unknown' || atWrongStudio
   const readOnly = offsite && !unlocked
   const usingOverride = offsite && unlocked
-  const siteName = activeLocation?.name || 'the studio'
+  // Name the studio the operator needs to BE at, falling back to their active
+  // one only while the race's own name is still loading.
+  const siteName = board?.race?.location?.name || activeLocation?.name || 'the studio'
 
   async function fireAction(registrationId, action) {
     setBusyId(registrationId); setActionError(null)
@@ -276,8 +366,9 @@ export default function RaceControlBoard({ eventId, headerRight, onRaceName }) {
                             name={r.teams?.name}
                             members={r.teams?.team_members}
                             waveLabel={group.label}
+                            blockedStatus={canStartRace(r) ? null : r.status}
                             busy={busyId === r.id}
-                            action={readOnly ? null : { label: 'Start', tone: 'blue', icon: 'play', onPress: () => fireAction(r.id, 'race-start') }}
+                            action={(readOnly || !canStartRace(r)) ? null : { label: 'Start', tone: 'blue', icon: 'play', onPress: () => fireAction(r.id, 'race-start') }}
                           />
                         ))}
                       </View>
@@ -345,6 +436,16 @@ function WaveHeading({ label, count }) {
 // as "loading", while the operator needs to see that this team has nowhere to
 // start from. Amber on the mobile light theme is bg-amber-500/15 with the text
 // colour on the inner <Text> — a React Native <View> cannot take a text colour.
+// RACEDAY.3 — says why a Next Up row has no Start button. Without it the row
+// reads as a rendering bug rather than "this entry needs sorting out".
+function BlockedChip({ status }) {
+  return (
+    <View className="self-start rounded-full px-2 py-0.5 mb-1 ml-1.5 bg-rose-500/15">
+      <Text className="text-[11px] font-semibold text-rose-700">{blockedStatusLabel(status)}</Text>
+    </View>
+  )
+}
+
 function WaveChip({ label }) {
   const missing = !label
   return (
@@ -371,7 +472,7 @@ const BTN_TEXT = { green: 'text-white', blue: 'text-white', slate: 'text-slate-7
 // `action` is null when the board is read-only (offsite, not unlocked): the
 // banner above the sections stands in for every button rather than each row
 // growing a disabled one.
-function RaceRow({ rank, name, members, waveLabel, time, timeTone, busy, action }) {
+function RaceRow({ rank, name, members, waveLabel, blockedStatus, time, timeTone, busy, action }) {
   const names = participantNames(members)
   // A solo entry whose one member IS the team ("John O'Kane" / "John") would
   // otherwise print the same person twice down the card.
@@ -384,7 +485,10 @@ function RaceRow({ rank, name, members, waveLabel, time, timeTone, busy, action 
         </View>
       ) : null}
       <View className="flex-1">
-        <WaveChip label={waveLabel} />
+        <View className="flex-row items-center flex-wrap">
+          <WaveChip label={waveLabel} />
+          {blockedStatus ? <BlockedChip status={blockedStatus} /> : null}
+        </View>
         <Text className="text-base font-semibold text-un1t-text" numberOfLines={1}>{name || 'Team'}</Text>
         {showNames ? (
           <Text className="text-xs text-un1t-subtle mt-0.5" numberOfLines={2}>{names.join(DOT)}</Text>

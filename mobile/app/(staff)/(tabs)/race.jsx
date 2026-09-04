@@ -126,6 +126,21 @@ export default function RaceTab() {
   // A pick only survives while the race it names is still on today's list
   // (a studio switch replaces the list wholesale).
   const activeId = races.some(r => r.id === pickedId) ? pickedId : defaultId
+
+  // RACEDAY.3 — PIN the first default, so the board cannot change race under
+  // the operator's thumb.
+  //
+  // `defaultId` re-reads the wall clock, and `races` is a NEW array from every
+  // focus poll, so the memo recomputed on each return to the tab. On a
+  // two-heat day that means the board silently stops controlling the 10:00
+  // heat and starts controlling the 14:00 one the moment "nearest to now"
+  // tips over — no tap, no visible change but the pill highlight, and the
+  // operator is one press away from starting a team in the wrong heat.
+  // Promoting the resolved default to an explicit pick freezes it; a studio
+  // switch drops the pick (its id is gone from the list) and re-pins.
+  useEffect(() => {
+    if (!pickedId && defaultId) setPickedId(defaultId)
+  }, [pickedId, defaultId])
   const activeRace = races.find(r => r.id === activeId) || null
 
   // A switch invalidates the board's name until its first poll for the new

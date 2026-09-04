@@ -17,6 +17,7 @@ import {
   participantNames,
   shouldShowParticipants,
   portraitPanelFlex,
+  canStartRace,
 } from './race-control.js'
 
 describe('waveDisplayLabel', () => {
@@ -301,5 +302,28 @@ describe('portraitPanelFlex', () => {
 
   it('accepts numeric strings the way a count off a payload arrives', () => {
     expect(portraitPanelFlex('3', '3')).toEqual({ active: 0.5, completed: 0.5 })
+  })
+})
+
+describe('canStartRace', () => {
+  // Mirrors POST /api/registrations/[id]/race-start, which 409s on anything
+  // but `confirmed`. Live case this exists for: registration 8f714b71
+  // ("Allen Thomson", 11:12 wave) was pending_payment in the 5 Sep field,
+  // and the old flat Next Up list armed a Start button on it that the
+  // server could only ever refuse.
+  it('allows a confirmed registration', () => {
+    expect(canStartRace({ status: 'confirmed' })).toBe(true)
+  })
+
+  it('refuses every status the route 409s on', () => {
+    for (const status of ['pending_payment', 'pending', 'refunded', 'waitlisted', 'cancelled', 'no_show']) {
+      expect(canStartRace({ status })).toBe(false)
+    }
+  })
+
+  it('refuses a missing registration or a missing status rather than assuming', () => {
+    expect(canStartRace(null)).toBe(false)
+    expect(canStartRace(undefined)).toBe(false)
+    expect(canStartRace({})).toBe(false)
   })
 })
