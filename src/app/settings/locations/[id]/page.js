@@ -13,7 +13,7 @@
 // location identity + Twilio alpha + contractor budget.
 
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
 import Link from 'next/link'
 import { ToggleRight, Image as ImageIcon, Clock, CalendarDays, ChevronRight, Bell, Mail } from 'lucide-react'
@@ -40,10 +40,28 @@ export default async function EditLocationPage(props) {
   const params = await props.params
   const searchParams = (await props.searchParams) || {}
   const user = await getCurrentUser()
-  // Master OR owner can edit existing locations. Master sees every
-  // location automatically; owners see locations they're members of
-  // (RLS already enforces row visibility).
+  // Master OR owner can edit existing locations.
   if (!user || (user.role !== 'master' && user.role !== 'owner')) redirect('/')
+
+  // …but ROLE is not ACCESS. `user.role` is the caller's role at their
+  // ACTIVE location, so an owner anywhere was an owner everywhere here,
+  // and every read below uses the SERVICE-ROLE client, which bypasses RLS
+  // entirely. Nothing else filtered this page: any owner-role caller could
+  // open ANY location id — another organisation's included — and have its
+  // full row server-rendered. This gate is what makes `params.id` a
+  // location the caller actually belongs to, so the reads that key off it
+  // (and every card below that takes `location.id`) are scoped by
+  // construction. Masters keep access: getCurrentUser gives them every
+  // active location.
+  //
+  // 404, not 403, so a stranger cannot use the response to learn which
+  // location ids exist (the house detail-route rule).
+  //
+  // The comment this replaced claimed "RLS already enforces row
+  // visibility". It does not for a service-role read — that belief is how
+  // this shipped. Same active-role-vs-target class as #1586/#1589; this is
+  // the PAGE half.
+  if (assertLocationAccess(user, params.id)) notFound()
 
   const db = createServerClient()
   const [{ data: location }, { data: organizations }] = await Promise.all([
