@@ -1016,3 +1016,56 @@ export function guardMasterOrOwner(user, locationId) {
   if (role === 'owner') return null
   return NextResponse.json({ success: false, error: 'Master or owner role required.' }, { status: 403 })
 }
+
+/**
+ * Is the caller's role AT `locationId` one of `allowedRoles`?
+ *
+ * LOCFIX-ROLEGATE.1 — a PREDICATE, not a guard, deliberately. Every route
+ * that gates on a role tier has its own status code and its own copy (403
+ * "Unauthorized", 403 "Forbidden", 403 "Manager+ required"), and a guard
+ * would have had to flatten those. It also lets a route reuse the same
+ * answer for a `can_edit` flag on its GET without a second predicate
+ * drifting out of step with the write gate.
+ *
+ * WHY IT EXISTS: `user.role` is resolved at the caller's ACTIVE location
+ * (resolveActiveLocationRole, with a highest-role-anywhere fallback), so a
+ * `MANAGER_ROLES.includes(user.role)` check on a route that writes to a
+ * PATH-PARAM location judges the wrong studio — a manager at Stillorgan who
+ * is plain staff at Hatch passed it while acting on Hatch. Pass the target
+ * id, never `user.activeLocation?.id`.
+ *
+ * Master bypass reads `profileRole` (the estate-level role on `profiles`),
+ * NOT `user.role` — the same bypass `guardMasterOrOwner` uses. `user.role`
+ * can read 'master' by fallback resolution, and a per-location row is not
+ * where mastership lives; masters have no `rolesByLocation` entries at all.
+ *
+ * Fails CLOSED: a null user, a missing/blank locationId, or no per-location
+ * role at the target all answer false. Note this differs from
+ * assertLocationAccess, where a null locationId means "no specific location"
+ * and passes — here a missing target means the caller's role cannot be
+ * judged, which must never read as permission.
+ *
+ * MEMBERSHIP IS A SEPARATE QUESTION. Run assertLocationAccess (or
+ * assertLocationAccessOr404 on a detail route) FIRST, so a caller who is not
+ * at the location at all is told that, rather than getting a role complaint
+ * that confirms the location exists.
+ *
+ * Usage:
+ *   const guard = assertLocationAccess(user, locationId)
+ *   if (guard) return guard
+ *   if (!hasRoleAtLocation(user, locationId, MANAGER_ROLES)) {
+ *     return NextResponse.json({ success: false, error: '…' }, { status: 403 })
+ *   }
+ *
+ * @param {{ profileRole?: string, rolesByLocation?: Record<string,string> } | null} user
+ * @param {string | null | undefined} locationId  the TARGET location
+ * @param {readonly string[]} allowedRoles
+ * @returns {boolean}
+ */
+export function hasRoleAtLocation(user, locationId, allowedRoles) {
+  if (!user || !locationId) return false
+  if (user.profileRole === 'master') return true
+  const role = user.rolesByLocation?.[locationId]
+  if (!role) return false
+  return (allowedRoles || []).includes(role)
+}

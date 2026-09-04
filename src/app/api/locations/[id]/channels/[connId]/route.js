@@ -1,7 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { maskConnectionRow, buildConnectionPatch } from '@/lib/agent/channels'
 import { validateBody } from '@/lib/validate'
@@ -16,6 +16,24 @@ const ChannelPatchSchema = z.object({
   agent_enabled: z.boolean().optional(),
 }).passthrough()
 
+// LOCFIX-ROLEGATE.1 — both handlers judge the role AT params.id, never via
+// `user.role`. That field resolves at the caller's ACTIVE location (with a
+// highest-role-anywhere fallback in auth.js), while these writes land on the
+// path-param location — so the old single `allowed` boolean
+// (`user.role === 'master' || (MANAGER_ROLES.includes(user.role) && member)`)
+// let a manager at studio A who is plain STAFF at studio B repoint B's
+// connection at their own IG account, flip `agent_enabled`, or delete the row
+// outright and silence B's DMs, with a 200: membership was judged at the
+// target but the ROLE was judged at A.
+//
+// The boolean is split into the two questions it was conflating, in the #1589
+// email-copy order: MEMBERSHIP (assertLocationAccess) then the role AT THAT
+// TARGET. The membership half now answers the guard's own copy — "Forbidden —
+// location not in your assignments" instead of the generic "Forbidden" — an
+// intended, more informative change; the ROLE miss keeps this route's
+// "Forbidden". Tier is MANAGER_ROLES (head_coach INCLUDED), deliberately wider
+// than the ['master','owner','manager'] the stripe-connect routes use.
+
 // PATCH /api/locations/[id]/channels/[connId] — update a connection.
 // Secrets are only overwritten when a fresh value is supplied (a masked
 // echo or blank leaves the stored secret untouched).
@@ -25,8 +43,11 @@ export async function PATCH(request, props) {
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
   const { id: locationId, connId } = params
-  const allowed = user.role === 'master' || (MANAGER_ROLES.includes(user.role) && (user.locations || []).some(l => l.id === locationId))
-  if (!allowed) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  const guard = assertLocationAccess(user, locationId)
+  if (guard) return guard
+  if (!hasRoleAtLocation(user, locationId, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
 
   const validation = await validateBody(request, ChannelPatchSchema)
   if (!validation.ok) return validation.response
@@ -75,8 +96,11 @@ export async function DELETE(request, props) {
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
   const { id: locationId, connId } = params
-  const allowed = user.role === 'master' || (MANAGER_ROLES.includes(user.role) && (user.locations || []).some(l => l.id === locationId))
-  if (!allowed) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  const guard = assertLocationAccess(user, locationId)
+  if (guard) return guard
+  if (!hasRoleAtLocation(user, locationId, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
 
   const db = createServerClient()
   const { error } = await db.from('channel_connections')
