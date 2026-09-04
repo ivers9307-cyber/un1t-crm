@@ -23,13 +23,23 @@ export async function GET(_request, props) {
     return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
+  // RACEDAY.3 — the location embed is pinned to a NAMED fk on purpose.
+  // race_events has TWO foreign keys to locations (location_id and
+  // sending_location_id), so a bare `locations ( name )` is ambiguous and
+  // PostgREST answers PGRST201/300 — which would take the WHOLE race-day
+  // control board down, not merely the studio name it was added for. Nothing
+  // local catches that: the tests run on mocked supabase, and lint and the
+  // build never see PostgREST's resolution rules.
+  //
+  // The name feeds the mobile board's offsite banner, which has to say which
+  // studio the operator needs to be standing in.
   const db = createServerClient()
   const { data: race, error: raceErr } = await db
     .from('race_events')
     .select(`
       id, name, location_id, race_date, kind, allowed_team_sizes,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
-      location:locations ( name )
+      location:locations!race_events_location_id_fkey ( name )
     `)
     .eq('id', params.id)
     .single()
