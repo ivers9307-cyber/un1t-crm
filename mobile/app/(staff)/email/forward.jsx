@@ -43,7 +43,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../../lib/auth-context'
 import { canMobile } from '../../../lib/permissions'
-import { getTicket, forwardMessage } from '../../../lib/email-api'
+import { getTicket, forwardMessage, fetchSignatureContexts } from '../../../lib/email-api'
 import { searchContacts, contactDisplayName } from '../../../lib/contacts-api'
 import {
   addRecipients, addContactPill, removePill, popPill, pillInitials, contactTag,
@@ -58,6 +58,7 @@ import {
 import {
   formatAttachmentSize, ticketAttachmentSkippedLabel, ticketAttachmentIcon,
 } from '../../../lib/email-tickets'
+import { resolveSignatureHint } from '../../../lib/signature-hint'
 
 // Same cadence as the compose sheet's autocomplete.
 const SUGGEST_DEBOUNCE_MS = 250
@@ -108,6 +109,13 @@ export default function ForwardMessage() {
   // Files section silently vanish — the operator forwards an invoice email
   // and the recipient gets no invoice, with nobody told anything.
   const [attachmentsUnavailable, setAttachmentsUnavailable] = useState(false)
+  // MOBILE-SIGHINT.1 — the forward route appends the sender's signature the
+  // same way reply and compose do, so this screen owes the same preview. The
+  // studio is the TICKET'S, not this phone's active location: `locationId`
+  // above is only the request-scoping header, while the route resolves the
+  // signature against the conversation's own location.
+  const [ticketLocationId, setTicketLocationId] = useState(null)
+  const [signatureContexts, setSignatureContexts] = useState([])
 
   const toInputRef = useRef(null)
   // Suggestion requests can resolve out of order — only the newest may paint.
@@ -131,6 +139,7 @@ export default function ForwardMessage() {
         return
       }
       setAttachmentsUnavailable(res.attachmentsUnavailable === true)
+      setTicketLocationId(res.ticket?.location_id || null)
       const m = (res.messages || []).find(x => x?.id === messageId) || null
       setMessage(m)
       // The pre-tick decision is the lib's (everything when everything fits,
@@ -140,6 +149,18 @@ export default function ForwardMessage() {
     })
     return () => { alive = false }
   }, [ticketId, messageId, locationId, canEmail])
+
+  // The viewer's per-studio signature contexts. Fetched per mount and NEVER
+  // cached at module level: on a shared front-desk phone a cache outlives the
+  // signed-in person, which is exactly why the web one was removed on review.
+  useEffect(() => {
+    if (!canEmail) return
+    let cancelled = false
+    fetchSignatureContexts().then(rows => { if (!cancelled) setSignatureContexts(rows) })
+    return () => { cancelled = true }
+  }, [canEmail])
+
+  const signatureHint = resolveSignatureHint(signatureContexts, ticketLocationId)
 
   // Contact autocomplete — debounced, stale responses dropped (compose's rule).
   useEffect(() => {
@@ -416,6 +437,32 @@ export default function ForwardMessage() {
             textAlignVertical="top"
             className="px-4 py-3 text-[14px] text-un1t-text min-h-[88px] bg-un1t-surface border-b border-un1t-border"
           />
+
+          {/* MOBILE-SIGHINT.1 — what the route is about to append. The web
+              forward composer shows the same thing (TicketForward.jsx); this
+              screen was the last composer on either platform still signing
+              invisibly. Placed under the note because that is where the
+              signature lands: BELOW the note and below the forwarded block.
+              No "Edit signature" link — that editor is the web /account page
+              and the phone has no screen for it. */}
+          {signatureHint ? (
+            <View className="mx-4 mt-2 rounded-lg border border-dashed border-un1t-border bg-un1t-surface px-3 py-2">
+              <View className="flex-row items-center">
+                <Ionicons name="create-outline" size={11} color="#64748B" style={{ marginRight: 5 }} />
+                <Text className="text-[10px] font-bold uppercase tracking-wider text-un1t-muted">
+                  Added automatically
+                </Text>
+              </View>
+              {/* No text part (a photo-only rich signature) → no separator:
+                  the send appends none either. The lib decides. */}
+              {signatureHint.body ? (
+                <Text className="mt-1 text-xs text-un1t-subtle">{signatureHint.body}</Text>
+              ) : null}
+              {signatureHint.suffix ? (
+                <Text className="mt-1 text-[10px] text-un1t-muted">{signatureHint.suffix}</Text>
+              ) : null}
+            </View>
+          ) : null}
 
           {/* ── WHAT they will be able to read — shown as plain text,
               because plain text is exactly what goes out. ──────────────── */}

@@ -28,6 +28,7 @@ import {
   replyToTicket, composeEmail, forwardMessage, draftUuid,
   signOutboundAttachment, uploadSignedAttachment,
   fetchRelatedConversations, mergeConversation, unmergeConversation,
+  fetchSignatureContexts,
   EMAIL_ATTACHMENT_BUCKET, MAX_OUTBOUND_ATTACHMENT_TOTAL_BYTES, MAX_OUTBOUND_ATTACHMENTS,
 } from './email-api'
 
@@ -290,6 +291,33 @@ describe('getMailCount', () => {
     api.mockResolvedValue({ success: false, error: 'blip' })
     const res = await getMailCount('loc-1')
     expect(res.success).toBe(false)
+  })
+})
+
+// MOBILE-SIGHINT.1 — the composers' signature hint reads this. The failure
+// posture is the opposite of getMailCount's: there is nothing a caller can do
+// with the error but hide a cosmetic preview, and the signature is appended
+// server-side regardless, so a blip answers [] rather than an envelope.
+describe('fetchSignatureContexts', () => {
+  it('asks /api/me/preferences through api() — never a hand-rolled Bearer', async () => {
+    api.mockResolvedValue({ success: true, data: { signature_contexts: [{ location_id: 'loc-1' }] } })
+    const rows = await fetchSignatureContexts()
+    expect(api).toHaveBeenCalledWith('/api/me/preferences')
+    expect(rows).toEqual([{ location_id: 'loc-1' }])
+  })
+
+  it('answers [] on a failure — a blipped read costs the hint, never the screen', async () => {
+    api.mockResolvedValue({ success: false, error: 'blip' })
+    expect(await fetchSignatureContexts()).toEqual([])
+  })
+
+  it('answers [] when the payload carries no contexts, or a non-array', async () => {
+    api.mockResolvedValue({ success: true, data: {} })
+    expect(await fetchSignatureContexts()).toEqual([])
+    api.mockResolvedValue({ success: true, data: { signature_contexts: null } })
+    expect(await fetchSignatureContexts()).toEqual([])
+    api.mockResolvedValue({ success: true })
+    expect(await fetchSignatureContexts()).toEqual([])
   })
 })
 
