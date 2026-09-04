@@ -138,15 +138,17 @@ describe('/settings/staff/[id] — the target must be the caller’s to see', ()
     expect(db.touched).not.toContain('profile_locations')
   })
 
-  it('allows any owner to open a profile assigned NOWHERE — otherwise the last removal locks everyone out', async () => {
+  it('refuses a profile assigned NOWHERE — the PUT refuses it too, so the form would be a lie', async () => {
+    // STAFF-EDIT-RULE.1 reversed this: assertOwnerAssignmentScope has
+    // always 403'd an owner's PUT when there is no overlap, zero
+    // assignments included, so opening the editor only offered a form the
+    // server rejects. Master still reaches it (covered above).
     db = makeDb({ targetLocationIds: [] })
     createServerClient.mockReturnValue(db)
     getCurrentUser.mockResolvedValue(user({ role: 'owner', rolesByLocation: { [LOC_MINE]: 'owner' } }))
 
-    await call()
-
-    expect(notFound).not.toHaveBeenCalled()
-    expect(db.touched).toContain('profiles')
+    await expect(call()).rejects.toThrow('NEXT_NOT_FOUND')
+    expect(db.touched).not.toContain('profiles')
   })
 
   it('treats an unreadable assignment list as refusal, not permission', async () => {

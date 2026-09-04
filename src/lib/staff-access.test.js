@@ -83,11 +83,17 @@ describe('mapProfileLocationToAssignment — preserves permissions', () => {
 })
 
 describe('canEditStaffMember — owner cannot edit themselves or peers', () => {
+  // STAFF-EDIT-RULE.1 — the rule is per-LOCATION now, so the fixtures carry
+  // locations: `rolesByLocation` for the caller (the per-location truth) and
+  // `locationIds` for the target. `role` stays on the caller because it is
+  // still the ACTIVE-location role the rest of getCurrentUser exposes — and
+  // several cases below exist precisely to prove it is no longer what
+  // decides the answer.
   const master   = { id: 'u1', role: 'master', isMaster: true }
-  const ownerA   = { id: 'u2', role: 'owner' }
-  const ownerB   = { id: 'u3', role: 'owner' }
-  const manager  = { id: 'u4', role: 'manager' }
-  const staffer  = { id: 'u5', role: 'staff' }
+  const ownerA   = { id: 'u2', role: 'owner', rolesByLocation: { A: 'owner' } }
+  const ownerB   = { id: 'u3', role: 'owner', rolesByLocation: { B: 'owner' }, locationIds: ['B'] }
+  const manager  = { id: 'u4', role: 'manager', locationIds: ['A'] }
+  const staffer  = { id: 'u5', role: 'staff', locationIds: ['A'] }
 
   it('master can edit anyone (including themselves)', () => {
     expect(canEditStaffMember(master, master)).toBe(true)
@@ -104,10 +110,47 @@ describe('canEditStaffMember — owner cannot edit themselves or peers', () => {
     expect(canEditStaffMember(ownerA, ownerB)).toBe(false)
   })
 
-  it('owner CAN edit manager / head_coach / staff', () => {
+  it('owner CAN edit manager / head_coach / staff at a location they own', () => {
     expect(canEditStaffMember(ownerA, manager)).toBe(true)
-    expect(canEditStaffMember(ownerA, { id: 'hc', role: 'head_coach' })).toBe(true)
+    expect(canEditStaffMember(ownerA, { id: 'hc', role: 'head_coach', locationIds: ['A'] })).toBe(true)
     expect(canEditStaffMember(ownerA, staffer)).toBe(true)
+  })
+
+  // ── STAFF-EDIT-RULE.1: the location half the doc always claimed ──────
+  it('owner CANNOT edit someone who works only where the caller is NOT owner', () => {
+    // The cross-org shape: a real owner, a target at another studio. The
+    // write was already refused deeper (assertOwnerAssignmentScope); the
+    // helper used to say yes and let the page render the form.
+    expect(canEditStaffMember(ownerA, { id: 'x', role: 'staff', locationIds: ['B'] })).toBe(false)
+  })
+
+  it('owner CAN edit at their own studio even when their ACTIVE role is not owner', () => {
+    // The mirror-image false refusal: `role` is the ACTIVE-location role, so
+    // an owner at A whose active studio is elsewhere used to be refused a
+    // record entirely theirs.
+    const ownerAtAButActiveStaff = {
+      id: 'u9', role: 'staff', rolesByLocation: { Z: 'staff', A: 'owner' },
+    }
+    expect(canEditStaffMember(ownerAtAButActiveStaff, staffer)).toBe(true)
+  })
+
+  it('owner CANNOT edit a target assigned nowhere — the PUT refuses it too', () => {
+    expect(canEditStaffMember(ownerA, { id: 'orphan', role: 'staff', locationIds: [] })).toBe(false)
+  })
+
+  it('a target with NO locationIds denies — the rule fails closed, never open', () => {
+    // A call site that forgets to pass them must lose access, not gain it.
+    expect(canEditStaffMember(ownerA, { id: 'x', role: 'staff' })).toBe(false)
+  })
+
+  it('an ACTIVE-role owner who owns NO location cannot edit anyone', () => {
+    const ownerNowhere = { id: 'u8', role: 'owner', rolesByLocation: { A: 'manager' } }
+    expect(canEditStaffMember(ownerNowhere, staffer)).toBe(false)
+  })
+
+  it('master is still exempt from every location rule', () => {
+    expect(canEditStaffMember(master, { id: 'x', role: 'staff', locationIds: [] })).toBe(true)
+    expect(canEditStaffMember(master, { id: 'y', role: 'staff', locationIds: ['Z'] })).toBe(true)
   })
 
   it('non-owner / non-master cannot use the editor at all', () => {
@@ -125,7 +168,12 @@ describe('canEditStaffMember — owner cannot edit themselves or peers', () => {
 describe('canOverrideStaffPassword — AUTH.1 cross-org takeover guard', () => {
   const master = { id: 'm1', role: 'master', isMaster: true }
   // Owner of locations A + B.
-  const ownerAB = { id: 'o1', role: 'owner', locations: [{ id: 'A' }, { id: 'B' }] }
+  const ownerAB = {
+    id: 'o1', role: 'owner', locations: [{ id: 'A' }, { id: 'B' }],
+    // STAFF-EDIT-RULE.1 — canEditStaffMember (which this reuses) now reads
+    // the per-location roles, so "owner of A + B" has to say so.
+    rolesByLocation: { A: 'owner', B: 'owner' },
+  }
 
   it('master can reset anyone, regardless of location', () => {
     expect(canOverrideStaffPassword(master, { id: 's', role: 'staff', locationIds: ['Z'] })).toBe(true)

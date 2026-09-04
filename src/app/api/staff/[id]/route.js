@@ -110,8 +110,14 @@ export async function PUT(request, props) {
   // renders, but a hand-crafted PUT (n8n script, curl, etc.)
   // would otherwise bypass the rule.
   if (!canEditStaffMember(
-    { id: user.id, role: user.role, isMaster: user.isMaster },
-    { id: targetBefore.id, role: targetBefore.role },
+    { id: user.id, role: user.role, isMaster: user.isMaster, rolesByLocation: user.rolesByLocation },
+    {
+      id: targetBefore.id,
+      role: targetBefore.role,
+      // STAFF-EDIT-RULE.1 — the helper now asks the question its doc always
+      // claimed (owner AT one of the target's locations), so it needs them.
+      locationIds: (targetBefore.profile_locations || []).map(l => l.location_id),
+    },
   )) {
     return NextResponse.json({
       success: false,
