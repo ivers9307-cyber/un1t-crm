@@ -14,6 +14,26 @@ export async function listRaces({ locationId } = {}) {
   return api(`/api/races${qs}`, { locationId })
 }
 
+/**
+ * GET /api/races/today?location_id= → { success, data: races[] }
+ *
+ * RACE-TAB.1 — races RUNNING TODAY at one studio, newest-first-irrelevant:
+ * the array comes back in running order, empty when there is no race. Used
+ * by (tabs)/_layout.jsx to decide whether to surface a contextual Race tab,
+ * and by (tabs)/race.jsx to pick which board to show.
+ *
+ * Deliberately NOT listRaces() + a client-side date filter: "today" is a
+ * Europe/Dublin boundary and the route computes it server-side, so a phone
+ * on holiday time or a tablet stuck on UTC cannot disagree with the person
+ * standing next to it about what day the studio is having. It is also a far
+ * smaller payload — listRaces embeds every wave and every registration for
+ * every race the studio has ever run.
+ */
+export async function listTodaysRaces({ locationId } = {}) {
+  const qs = locationId ? `?location_id=${encodeURIComponent(locationId)}` : ''
+  return api(`/api/races/today${qs}`, { locationId })
+}
+
 /** GET /api/events/[id]/control-board → { success, race:{...,waves}, registrations } */
 export async function getControlBoard(eventId, { locationId } = {}) {
   return api(`/api/events/${eventId}/control-board`, { locationId })
@@ -21,10 +41,24 @@ export async function getControlBoard(eventId, { locationId } = {}) {
 
 /**
  * POST /api/registrations/[id]/race-{start,finish,reset}
- * @param {string} action 'race-start' | 'race-finish' | 'race-reset'
+ *
+ * @param {string} registrationId
+ * @param {string} action  'race-start' | 'race-finish' | 'race-reset'
+ * @param {object} [opts]
+ * @param {string} [opts.locationId] x-active-location override for this call
+ * @param {boolean} [opts.override]  push the action through a server-side
+ *   guard the operator has consciously chosen to overrule (finishing a team
+ *   the board would otherwise refuse, say). The body key is sent ONLY when
+ *   the flag is truthy — an explicit `override: false` on every ordinary
+ *   start/finish would turn a deliberate escape hatch into background noise
+ *   in the request log, which is the one place it needs to stand out.
  */
-export async function raceAction(registrationId, action, { locationId } = {}) {
-  return api(`/api/registrations/${registrationId}/${action}`, { method: 'POST', locationId })
+export async function raceAction(registrationId, action, { locationId, override } = {}) {
+  return api(`/api/registrations/${registrationId}/${action}`, {
+    method: 'POST',
+    locationId,
+    ...(override ? { body: { override: true } } : {}),
+  })
 }
 
 // ── Pure presentation helpers ──────────────────────────────────────
