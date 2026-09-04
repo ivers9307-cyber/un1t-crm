@@ -8,13 +8,36 @@
 // (which authorises by the caller's GLOBAL role, not membership in THIS location).
 // Also enforces server-side that Stripe can only be selected once the account is
 // charges-enabled — the client guard alone is bypassable.
+//
+// LOCFIX-ROLEGATE.1 — the role is judged AT params.id, never via `user.role`.
+// That field resolves at the caller's ACTIVE location (with a
+// highest-role-anywhere fallback in auth.js), so the location-scoped guard
+// this header describes was only half present: MEMBERSHIP was judged at the
+// target, but the ROLE was judged at the caller's active studio. A manager at
+// studio A who is plain staff at studio B could POST
+// /api/locations/<B>/stripe-connect/select and move where B's class-funnel
+// money lands, with a 200.
+//
+// Order (the #1589 email-copy shape, with this route's own membership helper):
+// target from the path, then MEMBERSHIP via assertLocationAccessOr404 — this
+// is a DETAIL route and the 404 is deliberate — then the role AT THAT TARGET,
+// then the provider parse, the fetch and the Stripe status call. BOTH GUARDS
+// RUN BEFORE ANY STRIPE CALL (retrieveAccountStatus).
+//
+// TIER: ['master','owner','manager'], deliberately EXCLUDING head_coach —
+// narrower than the MANAGER_ROLES used by the holidays/channels routes,
+// because this switches the live payment provider. Do not widen it.
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
 import { retrieveAccountStatus } from '@/lib/payments/stripe-connect'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+
+// Money-adjacent tier — NOT MANAGER_ROLES. head_coach is excluded on purpose
+// (see the header): this handler switches the LIVE payment provider.
+const STRIPE_SELECT_ROLES = Object.freeze(['master', 'owner', 'manager'])
 
 const PROVIDERS = new Set(['revolut', 'stripe_connect'])
 
@@ -22,11 +45,11 @@ export async function POST(request, props) {
   const { id: locationId } = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!['master', 'owner', 'manager'].includes(user.role)) {
-    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
-  }
   const denied = assertLocationAccessOr404(user, locationId)
   if (denied) return denied
+  if (!hasRoleAtLocation(user, locationId, STRIPE_SELECT_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  }
 
   let body = {}
   try { body = await request.json() } catch { /* empty */ }

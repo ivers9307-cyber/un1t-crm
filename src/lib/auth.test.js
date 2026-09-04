@@ -11,6 +11,7 @@ import {
   getUserLocationIds,
   getOwnerOrganizationIds,
   requireInboxPermission,
+  hasRoleAtLocation,
 } from './auth.js'
 
 // Per-location roles landed in mig 051. The IO-heavy getCurrentUser()
@@ -669,5 +670,96 @@ describe('requireInboxPermission', () => {
     const master = { role: 'master', activeLocation: { id: 'loc-1', features: {} }, activeAssignment: null }
     expect(requireInboxPermission(master, 'sms')?.status).toBe(403)
     expect(requireInboxPermission(master, undefined)?.status).toBe(403)
+  })
+})
+
+// ─── hasRoleAtLocation (LOCFIX-ROLEGATE.1) ──────────────────────────────
+// The predicate behind the last of the active-role-vs-target class. Routes
+// that write to a PATH-PARAM location used to ask
+// `MANAGER_ROLES.includes(user.role)` — but `user.role` resolves at the
+// caller's ACTIVE location (with the highest-role-anywhere fallback above),
+// so a manager at Stillorgan who is plain staff at Hatch passed it while
+// acting on Hatch. This asks the question about the TARGET.
+//
+// It is a predicate rather than a guard on purpose: the seven call sites keep
+// three different 403 messages between them, and two different role tiers
+// (MANAGER_ROLES for holidays/channels; ['master','owner','manager'] — no
+// head_coach — for the money-adjacent stripe-connect routes).
+
+describe('hasRoleAtLocation', () => {
+  const A = 'loc-a'
+  const B = 'loc-b'
+  const MANAGER_ROLES = ['master', 'owner', 'manager', 'head_coach']
+  const MONEY_ROLES = ['master', 'owner', 'manager']
+
+  // The audit cast: manager at their ACTIVE studio A, plain staff at B.
+  // `role` is what the OLD checks read — it must not be consulted.
+  const managerAStaffB = {
+    role: 'manager', profileRole: 'manager', isMaster: false,
+    activeLocation: { id: A },
+    rolesByLocation: { [A]: 'manager', [B]: 'staff' },
+  }
+
+  it('answers about the TARGET, not the active location', () => {
+    expect(hasRoleAtLocation(managerAStaffB, A, MANAGER_ROLES)).toBe(true)
+    expect(hasRoleAtLocation(managerAStaffB, B, MANAGER_ROLES)).toBe(false)
+  })
+
+  it('reads the per-location role even when the active-location role is lower', () => {
+    const staffAManagerB = { role: 'staff', profileRole: 'staff', rolesByLocation: { [A]: 'staff', [B]: 'manager' } }
+    expect(hasRoleAtLocation(staffAManagerB, B, MANAGER_ROLES)).toBe(true)
+    expect(hasRoleAtLocation(staffAManagerB, A, MANAGER_ROLES)).toBe(false)
+  })
+
+  // THE TWO TIERS. The same person, the same target, two different answers —
+  // this is what stops the stripe-connect routes being widened by accident.
+  it('separates the two tiers: head_coach passes MANAGER_ROLES and fails the money list', () => {
+    const headCoachB = { role: 'staff', profileRole: 'staff', rolesByLocation: { [B]: 'head_coach' } }
+    expect(hasRoleAtLocation(headCoachB, B, MANAGER_ROLES)).toBe(true)
+    expect(hasRoleAtLocation(headCoachB, B, MONEY_ROLES)).toBe(false)
+  })
+
+  // The master bypass reads profileRole — the estate role on `profiles` —
+  // NOT user.role, which can read 'master' by the active/fallback resolver.
+  // Masters carry no rolesByLocation entries at all, so nothing else can
+  // carry them.
+  it('a master passes on profileRole alone, with no per-location rows', () => {
+    const master = { role: 'master', profileRole: 'master', isMaster: true, rolesByLocation: {} }
+    expect(hasRoleAtLocation(master, A, MANAGER_ROLES)).toBe(true)
+    expect(hasRoleAtLocation(master, B, MONEY_ROLES)).toBe(true)
+  })
+
+  it('does NOT bypass on user.role === "master" when profileRole is not master', () => {
+    // The fallback resolver can hand `role` a value the caller does not hold
+    // at the target. Only profiles.role may bypass the per-location check.
+    const fake = { role: 'master', isMaster: true, profileRole: 'manager', rolesByLocation: { [B]: 'staff' } }
+    expect(hasRoleAtLocation(fake, B, MANAGER_ROLES)).toBe(false)
+    expect(hasRoleAtLocation(fake, B, MONEY_ROLES)).toBe(false)
+  })
+
+  it('does NOT let an estate-level owner/manager profileRole stand in for a per-location role', () => {
+    const ownerElsewhere = { role: 'owner', profileRole: 'owner', rolesByLocation: { [A]: 'owner' } }
+    expect(hasRoleAtLocation(ownerElsewhere, B, MANAGER_ROLES)).toBe(false)
+  })
+
+  it('fails CLOSED on a null user, a missing target, or an empty role map', () => {
+    expect(hasRoleAtLocation(null, A, MANAGER_ROLES)).toBe(false)
+    expect(hasRoleAtLocation(undefined, A, MANAGER_ROLES)).toBe(false)
+    expect(hasRoleAtLocation(managerAStaffB, null, MANAGER_ROLES)).toBe(false)
+    expect(hasRoleAtLocation(managerAStaffB, undefined, MANAGER_ROLES)).toBe(false)
+    expect(hasRoleAtLocation(managerAStaffB, '', MANAGER_ROLES)).toBe(false)
+    expect(hasRoleAtLocation({ profileRole: 'manager' }, A, MANAGER_ROLES)).toBe(false)
+  })
+
+  // A null target passing would be the difference between "no location
+  // claimed" (assertLocationAccess's meaning) and "cannot judge the role" —
+  // and here the second reading is the only safe one.
+  it('a null target does NOT pass even for a master-less caller with a wide role map', () => {
+    expect(hasRoleAtLocation({ profileRole: 'owner', rolesByLocation: { [A]: 'owner' } }, null, MANAGER_ROLES)).toBe(false)
+  })
+
+  it('fails CLOSED on a missing or empty allowedRoles list', () => {
+    expect(hasRoleAtLocation(managerAStaffB, A, undefined)).toBe(false)
+    expect(hasRoleAtLocation(managerAStaffB, A, [])).toBe(false)
   })
 })
