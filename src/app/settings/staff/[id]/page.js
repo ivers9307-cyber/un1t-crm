@@ -11,7 +11,59 @@ export default async function EditStaffPage(props) {
   const user = await getCurrentUser()
   if (!user || (!user.isMaster && user.role !== 'owner')) redirect('/')
 
+  // The locations this caller is OWNER at — the page's own definition of
+  // what an owner may administer (it already used this below to decide
+  // which cards StaffForm may edit). Derived from rolesByLocation, so no
+  // query. Master is unrestricted and skips all of this.
+  const ownedByCaller = Object.entries(user.rolesByLocation || {})
+    .filter(([, r]) => r === 'owner')
+    .map(([loc]) => loc)
+
   const db = createServerClient()
+
+  // 🔴 SECURITY — WHOSE record is this? The role gate above says the caller
+  // is an owner SOMEWHERE; it says nothing about whether this PROFILE is
+  // theirs to see. Every read below uses the service-role client, which
+  // bypasses RLS, so nothing else scoped them: any owner-role user could
+  // open /settings/staff/<any profile id> and receive that person's full
+  // profiles row plus EVERY profile_locations assignment — including staff
+  // in another organisation (UN1T Group vs CCF Autos). Personal data, so
+  // the check runs BEFORE the profile is read, not after: a refused caller
+  // reads location ids and nothing about the person.
+  //
+  // The rule: the target must work somewhere this caller OWNS. Sharing a
+  // location is not enough — an owner may only administer their own
+  // studios, so a record they could not edit is a record they should not
+  // read either.
+  //
+  // Deliberately NOT narrowing the profile read itself to those locations
+  // (the obvious alternative): the `*, profile_locations(*)` select below
+  // is load-bearing, and its own comment records TWICE that a narrowed
+  // list silently dropped a column and the form then saved defaults back
+  // over the operator's real values. A filtered read would hide
+  // assignments the form still POSTs, which is that bug with a security
+  // rationale attached. Pre-check, then read whole.
+  //
+  // 404, not 403, so profile ids cannot be enumerated.
+  if (!user.isMaster) {
+    if (ownedByCaller.length === 0) notFound()
+    const { data: targetLocs, error: targetLocsErr } = await db
+      .from('profile_locations')
+      .select('location_id')
+      .eq('profile_id', params.id)
+    // An unreadable answer is not permission. A blip costs an owner a
+    // retry; guessing costs somebody else's record.
+    if (targetLocsErr) notFound()
+    const targetLocationIds = (targetLocs || []).map(r => r.location_id)
+    // A profile assigned NOWHERE belongs to no studio and no org, so any
+    // owner may open it — otherwise removing someone's last assignment
+    // would lock every owner out of the page that re-adds one.
+    if (targetLocationIds.length > 0
+      && !targetLocationIds.some(id => ownedByCaller.includes(id))) {
+      notFound()
+    }
+  }
+
   const [profileRes, locationsRes, templatesRes, orgsRes, orgGrantsRes] = await Promise.all([
     // CRITICAL: select profile_locations(*) — EVERY column — so
     // mapProfileLocationToAssignment() always receives the full row.
@@ -66,9 +118,7 @@ export default async function EditStaffPage(props) {
   // the form can add/remove/edit.
   const callerOwnerLocationIds = user.isMaster
     ? (locationsRes.data || []).map(l => l.id)
-    : Object.entries(user.rolesByLocation || {})
-        .filter(([, r]) => r === 'owner')
-        .map(([loc]) => loc)
+    : ownedByCaller
 
   const staff = {
     ...profileRes.data,
