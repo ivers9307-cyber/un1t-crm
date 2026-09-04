@@ -13,7 +13,7 @@
 // location identity + Twilio alpha + contractor budget.
 
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, guardMasterOrOwner } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
 import Link from 'next/link'
 import { ToggleRight, Image as ImageIcon, Clock, CalendarDays, ChevronRight, Bell, Mail } from 'lucide-react'
@@ -40,11 +40,11 @@ export default async function EditLocationPage(props) {
   const params = await props.params
   const searchParams = (await props.searchParams) || {}
   const user = await getCurrentUser()
-  // Master OR owner can edit existing locations.
-  if (!user || (user.role !== 'master' && user.role !== 'owner')) redirect('/')
+  if (!user) redirect('/')
 
-  // …but ROLE is not ACCESS. `user.role` is the caller's role at their
-  // ACTIVE location, so an owner anywhere was an owner everywhere here,
+  // ACCESS is membership, not role. `user.role` is the caller's role at
+  // their ACTIVE location, so an owner anywhere was an owner everywhere
+  // here,
   // and every read below uses the SERVICE-ROLE client, which bypasses RLS
   // entirely. Nothing else filtered this page: any owner-role caller could
   // open ANY location id — another organisation's included — and have its
@@ -63,22 +63,39 @@ export default async function EditLocationPage(props) {
   // the PAGE half.
   if (assertLocationAccess(user, params.id)) notFound()
 
+  // …and ROLE, judged AT THE TARGET too, which is the other half of the
+  // same defect. `user.role` is the caller's ACTIVE-location role, so it
+  // used to answer both directions wrongly: an owner at Stillorgan who is
+  // plain STAFF at Hatch got this page for Hatch (and every Save on it
+  // 403s since #1589), while an owner AT Hatch whose active studio is
+  // Stillorgan was bounced from a page that is entirely theirs. Same rule
+  // and same helper the routes behind every card now use, so the page and
+  // the server can no longer disagree.
+  //
+  // redirect, not 404: membership already passed, so the caller works
+  // here and the id is no secret from them — only the edit rights are.
+  if (guardMasterOrOwner(user, params.id)) redirect('/')
+
   const db = createServerClient()
-  const [{ data: location }, { data: organizations }] = await Promise.all([
-    db.from('locations').select('*').eq('id', params.id).single(),
-    // Orgs powers the read-only org display in LocationForm (mig 079).
-    db.from('organizations').select('*').eq('active', true).order('name'),
-  ])
+  const { data: location } = await db.from('locations').select('*').eq('id', params.id).single()
 
   if (!location) notFound()
 
-  // The org this location belongs to (mig 079) — powers the org-level branding
-  // defaults shown above the per-location branding (mig 317).
-  const org = (organizations || []).find((o) => o.id === location.organization_id) || null
-
+  // This location's OWN organisation (mig 079) — powers the read-only org
+  // line in LocationForm and the org-level branding defaults above the
+  // per-location ones (mig 317). It used to be every active organisation
+  // in the estate, of which this route renders exactly one: the location
+  // is fetched first now so the read can be keyed, which costs no extra
+  // round-trip (it just moves into the batch below). maybeSingle, not
+  // single: a location with no org, or one pointing at an inactive org,
+  // is a legitimate "no org line", not an error.
+  //
   // Pull the Xero connection row (if any) and a sample car for the BCA
   // template preview. Both feed into LocationIntegrations.
-  const [{ data: xeroConnection }, { data: sampleBcaCar }] = await Promise.all([
+  const [{ data: org }, { data: xeroConnection }, { data: sampleBcaCar }] = await Promise.all([
+    location.organization_id
+      ? db.from('organizations').select('*').eq('id', location.organization_id).maybeSingle()
+      : Promise.resolve({ data: null }),
     db.from('xero_connections')
       .select(`
         location_id, tenant_id, tenant_name, tenant_type,
@@ -112,12 +129,14 @@ export default async function EditLocationPage(props) {
     || user.rolesByLocation?.[location.id] === 'owner'
   const showDeposits = isFeatureEnabledAtLocation(location, 'car_processing')
   // EMAIL-MAILBOX-ADMIN.1 — the mailbox + per-account grant editor. SAME gate
-  // as Roles: master, or owner AT THIS LOCATION. It must NOT follow the page's
-  // outer `user.role === 'owner'` check, which reads the caller's ACTIVE
-  // location's role — an owner elsewhere would see the tab for a studio they
-  // may not administer. The API routes enforce the same rule with
-  // guardMasterOrOwner and are the real boundary; this only decides whether
-  // the tab is worth rendering.
+  // as Roles: master, or owner AT THIS LOCATION. That used to differ from the
+  // page's own gate, which read the caller's ACTIVE-location role; since the
+  // page itself now demands master-or-owner AT THIS LOCATION these are
+  // implied, and they are kept because they are the honest statement of what
+  // these tabs require — if the page gate is ever loosened (a read-only view
+  // for managers, say), the sensitive tabs must not come with it. The API
+  // routes enforce the same rule with guardMasterOrOwner and remain the real
+  // boundary; this only decides whether the tab is worth rendering.
   const showEmail = showRoles
   const tabs = [
     { key: 'details', label: 'Details' },
@@ -151,10 +170,10 @@ export default async function EditLocationPage(props) {
   // ?section=integrations&tab=xero — is the hub's OWN connect/disconnect
   // target and the only management surface, so it MUST keep rendering the
   // Edit-Location Integrations tab exactly as before and never redirects.
-  // The page is already master/owner-only (gate above), so this only ever
-  // fires for the hub's audience.
-  if (active === 'integrations' && !searchParams.tab
-    && (user.role === 'master' || user.role === 'owner')) {
+  // The gate above already guarantees master-or-owner AT THIS location, so
+  // this only ever fires for the hub's audience — it does NOT re-check the
+  // ACTIVE-location role, which was the stale half of that guarantee.
+  if (active === 'integrations' && !searchParams.tab) {
     redirect('/settings/integrations-hub')
   }
 
@@ -184,7 +203,7 @@ export default async function EditLocationPage(props) {
 
       {active === 'details' && (
         <>
-          <LocationForm location={location} callerRole={user.role} organizations={organizations || []} showEmailTab={showEmail} />
+          <LocationForm location={location} organizations={org ? [org] : []} showEmailTab={showEmail} />
           {/* FREQ-CAP.1 — cross-channel marketing frequency cap. Lives on
               Details (not Integrations — it carries no credentials and
               spans email + WhatsApp, so no single integration tab fits). */}

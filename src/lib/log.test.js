@@ -81,6 +81,18 @@ describe('logger', () => {
       expect(meta.err.message).toBe('boom')
       expect(typeof meta.err.stack).toBe('string')
     })
+
+    it('adds no undefined code/details/hint keys for a plain Error', async () => {
+      // Dev prints the meta bag as a LIVE object, so an unconditional
+      // `code: undefined` would show up in the terminal as a key. (Prod
+      // cannot catch this: JSON.stringify silently drops undefined
+      // values, so the guard is invisible there — this is the test that
+      // makes the conditional spread in flattenError load-bearing.)
+      const { logWarn } = await import('./log.js')
+      logWarn('sequences', 'caught', { err: new Error('boom') })
+      const [, meta] = warnSpy.mock.calls[0]
+      expect(Object.keys(meta.err).sort()).toEqual(['message', 'name', 'stack'])
+    })
   })
 
   // Production mode emits structured JSON lines.
@@ -118,6 +130,47 @@ describe('logger', () => {
       expect(parsed.error.name).toBe('Error')
       expect(parsed.error.message).toBe('boom')
       expect(typeof parsed.error.stack).toBe('string')
+    })
+
+    it('keeps a PostgrestError identifiable — code, details and hint survive', async () => {
+      // The real one EXTENDS Error, so it takes the Error branch and used
+      // to arrive as name/message/stack only: a 23505 (duplicate key) was
+      // indistinguishable from a 42703 (undefined column) in production.
+      // Modelled as a subclass carrying the same own properties the
+      // installed @supabase/postgrest-js sets.
+      class PostgrestError extends Error {
+        constructor({ message, code, details, hint }) {
+          super(message)
+          this.name = 'PostgrestError'
+          this.code = code
+          this.details = details
+          this.hint = hint
+        }
+      }
+      const { logError } = await import('./log.js')
+      logError('tickets/reply', 'ticket patch failed after a successful send', {
+        error: new PostgrestError({
+          message: 'duplicate key value violates unique constraint',
+          code: '23505',
+          details: 'Key (id)=(1) already exists.',
+          hint: 'use upsert',
+        }),
+      })
+      const parsed = JSON.parse(errorSpy.mock.calls[0][0])
+      expect(parsed.error.code).toBe('23505')
+      expect(parsed.error.details).toBe('Key (id)=(1) already exists.')
+      expect(parsed.error.hint).toBe('use upsert')
+      // …without losing what was already there.
+      expect(parsed.error.name).toBe('PostgrestError')
+      expect(parsed.error.message).toBe('duplicate key value violates unique constraint')
+      expect(typeof parsed.error.stack).toBe('string')
+    })
+
+    it('leaves a plain Error exactly as it was — no empty code/details/hint keys', async () => {
+      const { logWarn } = await import('./log.js')
+      logWarn('sequences', 'caught', { error: new Error('boom') })
+      const parsed = JSON.parse(warnSpy.mock.calls[0][0])
+      expect(Object.keys(parsed.error).sort()).toEqual(['message', 'name', 'stack'])
     })
 
     it('preserves Supabase-shaped error objects as-is', async () => {
