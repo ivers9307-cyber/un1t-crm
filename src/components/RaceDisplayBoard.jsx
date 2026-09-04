@@ -35,7 +35,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { Activity, Trophy, Loader2, Users, User } from 'lucide-react'
-import { formatElapsed, elapsedWithPenalties, waveDisplayLabel, portraitPanelFlex } from '@/lib/race-control'
+import { formatElapsed, elapsedWithPenalties, waveDisplayLabel, portraitPanelFlex, shouldShowParticipants } from '@/lib/race-control'
 
 // The display API (mig 124) ships penalty_total_seconds per row
 // instead of the full penalties[] array — operator reasons are
@@ -601,6 +601,17 @@ function RowNames({ row, rank, nameMode, rankClass }) {
   const hasNames = names.length > 0
   const showCompetitorsHeadline = nameMode === NAME_MODE_COMPETITORS && hasNames
 
+  // RACEDAY.1 — a solo entry is usually named after the person, so the team
+  // headline and the one competitor underneath are the same string and the
+  // row printed it TWICE. Observed on the preview against the real May race:
+  // 7 of 15 finishers stuttered ("Alanna Quinn" over "Alanna Quinn", "Colm"
+  // over "Colm"). Same rule the mobile board uses, so the two surfaces agree
+  // about when a sub-line earns its space.
+  //
+  // Only the TEAM-headline mode is affected: in competitor mode the names ARE
+  // the headline and there is no sub-line to suppress.
+  const showMemberSubline = shouldShowParticipants(row.team_name, names)
+
   // Build the comma-separated names string with a "+N more" overflow
   // hint past 4 names so the row never wraps and ruins the grid.
   const visible = names.slice(0, 4)
@@ -634,7 +645,7 @@ function RowNames({ row, rank, nameMode, rankClass }) {
           </span>
         )}
       </div>
-      {nameMode === NAME_MODE_TEAM && hasNames && (
+      {nameMode === NAME_MODE_TEAM && hasNames && showMemberSubline && (
         <div className="ml-[3.25rem] mt-1 text-lg opacity-70 truncate">
           {headlineNames}
           {overflow > 0 && <span className="opacity-60"> · +{overflow} more</span>}
