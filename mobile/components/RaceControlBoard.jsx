@@ -13,7 +13,7 @@
 // through each other) and ticks a 1s clock so on-course elapsed times run
 // live. WRITE surface: the action routes re-check the races permission and
 // location access server-side.
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { View, Text, ScrollView, Pressable, ActivityIndicator, Alert } from 'react-native'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
@@ -81,7 +81,7 @@ function blockedStatusLabel(status) {
  *   same endpoint a second time. MUST be identity-stable (useCallback) — it
  *   is an effect dependency.
  */
-export default function RaceControlBoard({ eventId, headerRight, onRaceName }) {
+export default function RaceControlBoard({ eventId, headerRight, onRaceName, clearUnlockOnBlur = false }) {
   const { profile, activeLocation } = useAuth()
   const router = useRouter()
   const canView = canMobile(profile, 'races', activeLocation)
@@ -101,8 +101,23 @@ export default function RaceControlBoard({ eventId, headerRight, onRaceName }) {
   // it into a persisted flag.
   const [unlocked, setUnlocked] = useState(false)
 
+  // RACEDAY.5 — which race this board is CURRENTLY for, readable from inside
+  // an async callback that was created for a previous one. Clearing the poll
+  // interval does not abort a request already in flight, and `load` closes
+  // over the eventId it was built with, so comparing against that closure
+  // proves nothing — the stale response would match its own stale id.
+  const currentEventIdRef = useRef(eventId)
+
   const load = useCallback(async () => {
     const res = await getControlBoard(eventId, { locationId: activeLocation?.id })
+    // RACEDAY.5 — drop a reply for a race we have since navigated away from.
+    // Resetting state on the pill switch (below) does not help on its own: a
+    // control-board request fired for the 10:00 heat can resolve seconds
+    // later on trackside cellular, AFTER the 14:00 payload has landed, and
+    // repaint the old heat's rows — with armed Start buttons — under the new
+    // heat's pill. A tap there starts a team from the wrong heat, and the
+    // route cannot tell: the races permission and the location both pass.
+    if (res?.race?.id && res.race.id !== currentEventIdRef.current) return
     if (res.success === false) { setError(res.error || 'Failed to load'); return }
     setError(null)
     setBoard(res)
@@ -123,6 +138,7 @@ export default function RaceControlBoard({ eventId, headerRight, onRaceName }) {
   // unlock every time they switch pills. Same lesson as the studio switch in
   // sonos/index.jsx: new target -> spinner, not the previous target's list.
   useEffect(() => {
+    currentEventIdRef.current = eventId
     setBoard(null)
     setError(null)
     setActionError(null)
@@ -141,7 +157,15 @@ export default function RaceControlBoard({ eventId, headerRight, onRaceName }) {
   // every later visit, that afternoon and next weekend, which is precisely
   // what the gate exists to prevent. Blur is the honest boundary: it ends
   // "this visit" on both surfaces.
-  useFocusEffect(useCallback(() => () => setUnlocked(false), []))
+  // RACEDAY.5 — scoped to the caller that needs it. On the TAB surface the
+  // screen is never unmounted, so blur is the only honest end of a visit. On
+  // the pushed races/[id] screen it unmounts on pop already, and clearing on
+  // blur there would drop the unlock on a normal in-flow trip to Check in and
+  // back — making an offsite operator re-tap mid-race, which is a regression,
+  // not a safeguard.
+  useFocusEffect(useCallback(() => () => {
+    if (clearUnlockOnBlur) setUnlocked(false)
+  }, [clearUnlockOnBlur]))
 
   // Poll the board + tick a clock for live elapsed, only while focused.
   useFocusEffect(useCallback(() => {

@@ -138,9 +138,19 @@ export default function RaceTab() {
   // operator is one press away from starting a team in the wrong heat.
   // Promoting the resolved default to an explicit pick freezes it; a studio
   // switch drops the pick (its id is gone from the list) and re-pins.
+  // Pin the RESOLVED id, not "pin once if nothing is pinned". The earlier
+  // `!pickedId` guard could only ever fire once per session: `pickedId` is
+  // never cleared when its race leaves the list (line above drops a stale
+  // pick for DISPLAY only), so after a studio switch it stayed truthy, the
+  // effect never re-armed, and activeId fell through to `defaultId` — which
+  // re-reads the wall clock on every focus poll. That is exactly the
+  // heat-switching-under-the-operator bug this was meant to remove, just
+  // moved one step further along. nearestRaceId only ever returns an id
+  // drawn from `races`, so activeId === pickedId on the next render and this
+  // settles in a single pass.
   useEffect(() => {
-    if (!pickedId && defaultId) setPickedId(defaultId)
-  }, [pickedId, defaultId])
+    if (activeId && activeId !== pickedId) setPickedId(activeId)
+  }, [activeId, pickedId])
   const activeRace = races.find(r => r.id === activeId) || null
 
   // A switch invalidates the board's name until its first poll for the new
@@ -260,7 +270,7 @@ export default function RaceTab() {
 
       {activeRace ? (
         <View className="flex-1">
-          <RaceControlBoard eventId={activeRace.id} onRaceName={handleRaceName} />
+          <RaceControlBoard eventId={activeRace.id} onRaceName={handleRaceName} clearUnlockOnBlur />
         </View>
       ) : null}
     </View>
