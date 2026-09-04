@@ -20,7 +20,9 @@
 //     module, so don't free-form it.
 //   • message — human prose; keep short, no PII.
 //   • meta    — any JSON-serialisable object. Errors are flattened
-//     to { name, message, stack } so they survive JSON.stringify.
+//     to { name, message, stack } so they survive JSON.stringify,
+//     plus code/details/hint when the error carries them (a
+//     PostgrestError does — see flattenError).
 //
 // In dev (NODE_ENV !== 'production'): emits exactly what
 // console.warn would have, so existing terminal flow is unchanged.
@@ -35,9 +37,25 @@ const IS_PROD = process.env.NODE_ENV === 'production'
 function flattenError(err) {
   if (!err) return undefined
   if (err instanceof Error) {
-    return { name: err.name, message: err.message, stack: err.stack }
+    // supabase-js's PostgrestError EXTENDS Error, so it lands HERE, not in
+    // the flat-object branch below — and this used to reduce it to
+    // name/message/stack, throwing away the only fields that say WHICH
+    // failure it was. In production a 23505 (duplicate key) was
+    // indistinguishable from a 42703 (undefined column), which matters now
+    // that MAILFIX-GUARDRAILS.1 (#1588) turned eight silent mail writes
+    // into log-and-continue sites where this line is the only signal.
+    // Carried only when present, so a plain Error's shape is unchanged and
+    // anything parsing these lines keeps working.
+    return {
+      name: err.name,
+      message: err.message,
+      stack: err.stack,
+      ...(err.code ? { code: err.code } : {}),
+      ...(err.details ? { details: err.details } : {}),
+      ...(err.hint ? { hint: err.hint } : {}),
+    }
   }
-  // Already-flat shapes (e.g. Supabase {code, message}) survive as-is.
+  // Already-flat shapes (e.g. a hand-built {code, message}) survive as-is.
   if (typeof err === 'object') return err
   return { message: String(err) }
 }
