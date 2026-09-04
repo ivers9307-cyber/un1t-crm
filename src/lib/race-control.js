@@ -15,12 +15,25 @@ import { logWarn } from './log'
 // exact same source. Re-exported here so every web caller — and
 // race-control.test.js — keeps importing them from '@/lib/race-control'
 // unchanged. The IO helper ensureTeamForBooking stays web-only below.
+//
+// RACEDAY.1 added the wave/participant/layout helpers below the timing ones.
+// EVERY pure export of shared/race-control.js must be listed here: web
+// callers import from '@/lib/race-control', so a shared export missing from
+// this list resolves to `undefined` at the call site with no build error, and
+// tests/shared-pair-sync.test.js holds this pair in mode `reexport` (runtime
+// identity), which fails if the two surfaces drift.
 export {
   formatElapsed,
   classifyBookingState,
+  canStartRace,
   elapsedSecondsBetween,
   penaltySumSeconds,
   elapsedWithPenalties,
+  waveDisplayLabel,
+  waveSortKey,
+  participantNames,
+  shouldShowParticipants,
+  portraitPanelFlex,
 } from '../../shared/race-control'
 
 /**

@@ -30,6 +30,16 @@ export const MOBILE_NAV_FEATURES = Object.freeze([
   { key: 'studio',   label: 'Studio',    permKeys: ['studio_management', 'class_timer', 'tv_displays', 'device_control'], barEligible: true },
   { key: 'pipeline', label: 'Pipeline',  permKeys: ['pipeline'],                   barEligible: true },
   { key: 'bookings', label: 'Bookings',  permKeys: ['bookings'],                   barEligible: true },
+  // RACE-TAB.1 — trackside race-day control. Bar-ELIGIBLE (so it shows up in
+  // the admin's MobileBarPlanner and in the staff member's own
+  // /customise-bar for free) but deliberately absent from every
+  // DEFAULT_MOBILE_LAYOUT template below: a race is a handful of days a
+  // year, so nobody should find it permanently parked on their bar without
+  // having asked for it. It reaches the bar two ways, both deliberate acts —
+  // an operator pins it, or (tabs)/_layout.jsx inserts it CONTEXTUALLY on a
+  // day this studio actually has a race, which costs none of the three
+  // resolved bar slots.
+  { key: 'race',     label: 'Race day',  permKeys: ['races'],                      barEligible: true },
   { key: 'invoices', label: 'Invoices',  permKeys: ['invoices'], employmentType: 'contractor', barEligible: true },
   { key: 'expenses', label: 'Expenses',  permKeys: ['expenses'], employmentType: 'fte',        barEligible: true },
   // More-only in Phase 1 (pushed routes outside the (tabs) group).

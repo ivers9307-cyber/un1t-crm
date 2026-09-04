@@ -16,7 +16,7 @@ describe('mobile-nav registry', () => {
 
   it('BAR_ELIGIBLE is exactly the bar-eligible keys', () => {
     expect([...BAR_ELIGIBLE].sort()).toEqual(
-      ['bookings', 'email', 'expenses', 'invoices', 'pipeline', 'schedule', 'studio', 'whatsapp'].sort()
+      ['bookings', 'email', 'expenses', 'invoices', 'pipeline', 'race', 'schedule', 'studio', 'whatsapp'].sort()
     )
   })
 
@@ -203,5 +203,61 @@ describe('resolveMobileLayout staffBar', () => {
   it('allowed still comes from the admin layer, not staffBar', () => {
     const r = resolveMobileLayout({ ...base, override: null, staffBar: ['pipeline'] })
     expect(r.allowed).toEqual(expect.arrayContaining(['schedule', 'whatsapp', 'studio', 'pipeline', 'bookings']))
+  })
+})
+
+// RACE-TAB.1 — the Race day surface. Bar-eligible so both planners offer it,
+// but templated to nobody: pinning it is always a deliberate act, and the
+// automatic race-day placement is a CONTEXTUAL tab (tabs)/_layout.jsx inserts
+// outside the three resolved slots, not a layout change.
+describe('race as a nav feature', () => {
+  it('is registered, bar-eligible, and gated on the races permission', () => {
+    const race = MOBILE_NAV_FEATURES.find(f => f.key === 'race')
+    expect(race).toBeTruthy()
+    expect(race.barEligible).toBe(true)
+    expect(race.permKeys).toEqual(['races'])
+    expect(BAR_ELIGIBLE).toContain('race')
+  })
+
+  it('appears in NO default template, for any role or employment type', () => {
+    for (const role of Object.keys(DEFAULT_MOBILE_LAYOUT)) {
+      for (const type of ['fte', 'contractor']) {
+        const t = DEFAULT_MOBILE_LAYOUT[role][type]
+        expect(t.bar).not.toContain('race')
+        expect(t.allowed).not.toContain('race')
+      }
+    }
+  })
+
+  it('a races-holding manager reaches it via More but cannot pin it by default', () => {
+    const r = resolveMobileLayout({
+      role: 'manager', employmentType: 'fte',
+      enabledKeys: [...ALL, 'race'], override: null, staffBar: ['race', 'schedule'],
+    })
+    expect(r.more).toContain('race')
+    expect(r.allowed).not.toContain('race')
+    expect(r.bar).toEqual(['schedule']) // 'race' clamped out — not admin-allowed
+  })
+
+  it('becomes pinnable once an admin lists it in the override allowed set', () => {
+    const r = resolveMobileLayout({
+      role: 'manager', employmentType: 'fte',
+      enabledKeys: [...ALL, 'race'],
+      override: { bar: ['schedule', 'whatsapp', 'studio'], allowed: ['schedule', 'whatsapp', 'studio', 'race'] },
+      staffBar: ['race', 'schedule'],
+    })
+    expect(r.allowed).toContain('race')
+    expect(r.bar).toEqual(['race', 'schedule'])
+    expect(r.more).not.toContain('race')
+  })
+
+  it('stays invisible to a user without the races permission', () => {
+    const r = resolveMobileLayout({
+      role: 'manager', employmentType: 'fte', enabledKeys: ALL, // no 'race'
+      override: { bar: ['race', 'schedule'], allowed: ['race', 'schedule'] },
+    })
+    expect(r.bar).toEqual(['schedule'])
+    expect(r.more).not.toContain('race')
+    expect(r.allowed).not.toContain('race')
   })
 })

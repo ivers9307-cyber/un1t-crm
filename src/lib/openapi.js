@@ -601,6 +601,47 @@ registry.registerPath({
   },
 })
 
+// RACE-TAB.1 — the race-day tab probe. Sits alongside the public race
+// signup below because it is the other half of the same feature's HTTP
+// surface; everything else about races is authored on the web.
+registry.registerPath({
+  method: 'get',
+  path: '/api/races/today',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Races running TODAY at a location (Europe/Dublin), for the mobile race-day tab",
+  description:
+    'Answers "is there a race on here today?" — the question the mobile bottom bar asks to decide whether to surface a contextual Race tab. ' +
+    'The "today" boundary is computed SERVER-side in Europe/Dublin, so a device on the wrong clock or timezone cannot get a different answer about the studio\'s day. ' +
+    'Only `kind=race`, `active`, `status=published` events qualify — a workshop, a paused race or a draft has no race-day control board. ' +
+    '`start_time` is the FIRST WAVE\'s start (race_waves.start_time; the race-level column is deprecated per mig 083) and is null for a race with no timed wave. ' +
+    'Always an array, empty when there is no race: two races in one day at one location is a normal shape.',
+  request: {
+    query: z.object({
+      location_id: uuidLike.optional().openapi({ description: "Defaults to the caller's active location" }),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Today's races at the location, in running order (untimed races last)",
+      content: {
+        'application/json': {
+          schema: SuccessResponse(z.array(z.object({
+            id: uuidLike,
+            name: z.string(),
+            slug: z.string(),
+            race_date: isoDate,
+            start_time: timeOfDay.nullable().openapi({ description: 'First wave start, HH:MM:SS' }),
+          })).openapi('RacesToday')),
+        },
+      },
+    },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Races feature is disabled at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/public/races/{slug}/register',
