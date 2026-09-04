@@ -20,6 +20,16 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+/**
+ * Request body for a test send. A blank or cancelled prompt yields {} so the
+ * route falls back to the host session's own email; an empty `to` would 400.
+ * @param {string|null} answer  raw window.prompt result
+ */
+export function buildTestSendBody(answer) {
+  const trimmed = (answer || '').trim()
+  return trimmed ? { to: trimmed } : {}
+}
+
 const STATUS_CHIP = {
   draft: 'bg-white/10 text-white/70',
   sending: 'bg-amber-500/15 text-amber-300',
@@ -49,6 +59,8 @@ export default function HostEmails() {
   const [unlayerReady, setUnlayerReady] = useState(false)
   const [busy, setBusy] = useState(false)
   const [sendingId, setSendingId] = useState(null)
+  const [testingId, setTestingId] = useState(null)
+  const [lastTestEmail, setLastTestEmail] = useState('')
   const [loadingDraftId, setLoadingDraftId] = useState(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -232,6 +244,39 @@ export default function HostEmails() {
     }
     const ev = audiences.events.find((x) => x.id === id)
     return ev ? `attendees of ${ev.name} (${ev.race_date})` : 'the selected event’s attendees'
+  }
+
+  // HOST-EMAIL.10 — a blank prompt must post {} and NOT { to: '' }: the route
+  // reads a missing `to` as "the host's own email" but 400s an empty string,
+  // so this is what makes "just send it to me" work. Exported for its test.
+  async function sendTest(id) {
+    const answer = window.prompt(
+      'Send a test copy of this email to which address?\n\nLeave blank to send it to your own host email.',
+      lastTestEmail,
+    )
+    if (answer === null) return // cancelled
+    setError('')
+    setNotice('')
+    setTestingId(id)
+    try {
+      const res = await fetch(`/api/host/emails/${id}/send-test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildTestSendBody(answer)),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.success) {
+        setError(json.error || 'Could not send the test email.')
+        return
+      }
+      const to = json.data?.to || ''
+      setLastTestEmail(to)
+      setNotice(`Test sent to ${to}. This draft is unchanged and nobody on your list was emailed.`)
+    } catch {
+      setError('Could not send the test email.')
+    } finally {
+      setTestingId(null)
+    }
   }
 
   async function send(id, campaignAudienceId, campaignType) {
@@ -453,6 +498,14 @@ export default function HostEmails() {
                         className="rounded-lg border border-white/20 text-white/80 text-xs font-semibold px-3 py-1.5 hover:text-white hover:border-white/40 disabled:opacity-50"
                       >
                         {loadingDraftId === c.id ? 'Opening…' : 'Edit'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => sendTest(c.id)}
+                        disabled={testingId === c.id}
+                        className="rounded-lg border border-white/20 text-white/80 text-xs font-semibold px-3 py-1.5 hover:text-white hover:border-white/40 disabled:opacity-50"
+                      >
+                        {testingId === c.id ? 'Sending…' : 'Test'}
                       </button>
                       <button
                         type="button"
