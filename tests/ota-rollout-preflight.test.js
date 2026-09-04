@@ -90,17 +90,38 @@ const APP_CONFIG_WITH_RUNTIME = [
 let script
 let root
 
-/** Run the pre-flight with a stub `eas` that prints `easStdout`. */
-function runPreflight({ easStdout = '', easExit = 0, appConfig = APP_CONFIG_WITH_RUNTIME } = {}) {
+/**
+ * Run the pre-flight with a stub `eas` that prints `easStdout` on stdout and
+ * `easStderr` on stderr.
+ *
+ * The two streams are separate on purpose. eas-cli splits its output across
+ * both under `--json`, and WHICH stream carries the error depends on how far
+ * the command got — that split is exactly what hid the real failure for three
+ * publishes (see the OTAPREFLIGHT.2 cases below), so the harness has to be
+ * able to model it.
+ */
+function runPreflight({
+  easStdout = '',
+  easStderr = 'stub failure',
+  easExit = 0,
+  appConfig = APP_CONFIG_WITH_RUNTIME,
+} = {}) {
   const work = mkdtempSync(join(root, 'work-'))
   const bin = join(work, 'bin')
   mkdirSync(bin)
   const payload = join(work, 'eas-stdout.txt')
   writeFileSync(payload, easStdout)
+  const errPayload = join(work, 'eas-stderr.txt')
+  writeFileSync(errPayload, easStderr)
   const stub = join(bin, 'eas')
   writeFileSync(
     stub,
-    ['#!/bin/bash', `cat "${payload}"`, easExit === 0 ? 'exit 0' : 'echo "stub failure" >&2; exit 1', ''].join('\n'),
+    [
+      '#!/bin/bash',
+      `cat "${payload}"`,
+      ...(easExit === 0 ? ['exit 0'] : [`cat "${errPayload}" >&2`, 'exit 1']),
+      '',
+    ].join('\n'),
   )
   chmodSync(stub, 0o755)
 
@@ -224,7 +245,14 @@ describe('OTA pre-flight — the blocking case', () => {
       // Lines opening with a quote or a comment are JS string / comment
       // content inside the heredoc, not shell the runner will execute.
       .filter((l) => !l.startsWith("'") && !l.startsWith('//') && !l.startsWith('#'))
-      .filter((l) => /\beas(-cli\S*)?\s+\S/.test(l))
+      // COMMAND POSITION only: `eas` at the start of the line, or straight
+      // after a `;`/`&&`/`||`/`|`/`!`. It used to be a bare \beas\b, which also
+      // matched the word inside an `echo`/diagnostic string — so the moment
+      // OTAPREFLIGHT.2 added `echo "--- eas update:list stderr ---"` the count
+      // jumped to four and the test failed on prose. Narrowing it keeps the
+      // assertion aimed at what the runner EXECUTES, which is the thing that
+      // must stay read-only.
+      .filter((l) => /(^|[;&|]\s*|!\s*)eas(-cli\S*)?\s+\S/.test(l))
     expect(invocations).toHaveLength(1)
     expect(invocations[0]).toContain('update:list')
     expect(invocations[0]).not.toMatch(/update:(edit|delete|republish)|roll-back-to-embedded/)
@@ -298,18 +326,133 @@ describe('OTA pre-flight — the cases that must let the publish through', () =>
   })
 })
 
+// OTAPREFLIGHT.2 (2026-09-04) — the check above was INERT for every publish
+// from the day it landed, and this file is part of why.
+//
+// `eas update:list` resolves the EAS project id before anything else
+// (ProjectIdContextField → getPrivateExpoConfigAsync → @expo/config), which
+// EVALUATES mobile/app.config.js. That file imports `expo/config-plugins`, so
+// with no mobile/node_modules the command dies with `Cannot find package
+// 'expo'` — and the step used to run BEFORE `npm ci`. Fail-open then did its
+// job perfectly and skipped the check, silently, every time (runs
+// 33654760074, 33658923396, 33858570511).
+//
+// The old ordering test asserted `preflight < Install dependencies` and called
+// it "so a block costs no bundle". It was pinning the ordering that guaranteed
+// the guard could never run. It is replaced — not deleted — by a test of the
+// CAUSAL rule: the step may only precede the install if app.config.js can be
+// evaluated without one.
+describe('OTA pre-flight — it must run somewhere it can actually work', () => {
+  const at = (wf, name) => wf.indexOf(`- name: ${name}`)
+
+  it('runs AFTER the mobile install, because app.config.js needs node_modules', () => {
+    const wf = readFileSync(WORKFLOW, 'utf8')
+    const preflight = wf.indexOf('- name: Pre-flight')
+    expect(preflight).toBeGreaterThan(-1)
+    expect(preflight).toBeGreaterThan(at(wf, 'Install dependencies'))
+  })
+
+  it('still runs before the Babel parse, the root install and the publish', () => {
+    // The install is the only cost a blocked rollout now pays. Everything
+    // expensive — the Metro export and the ~6.6MB CDN upload in `Publish
+    // update`, plus the vitest gate — still sits after the check.
+    const wf = readFileSync(WORKFLOW, 'utf8')
+    const preflight = wf.indexOf('- name: Pre-flight')
+    expect(preflight).toBeLessThan(at(wf, 'Babel parse mobile JS/JSX'))
+    expect(preflight).toBeLessThan(at(wf, 'Install root dependencies'))
+    expect(preflight).toBeLessThan(at(wf, 'Publish update'))
+  })
+
+  // The rule, not the arrangement. If app.config.js is ever made
+  // self-contained, moving the pre-flight back above the install becomes
+  // legitimate and this test stops demanding the later position.
+  it('ties that ordering to the real cause: a bare import in app.config.js', () => {
+    const cfg = readFileSync(join(__dirname, '..', 'mobile', 'app.config.js'), 'utf8')
+    const bareImports = [...cfg.matchAll(/^\s*import\s[^'"]*from\s+['"]([^'"]+)['"]/gm)]
+      .map((m) => m[1])
+      .filter((spec) => !spec.startsWith('.') && !spec.startsWith('/') && !spec.startsWith('node:'))
+    if (bareImports.length === 0) return // config is self-contained; ordering is free
+    const wf = readFileSync(WORKFLOW, 'utf8')
+    expect(
+      wf.indexOf('- name: Pre-flight'),
+      `mobile/app.config.js imports ${bareImports.join(', ')} from node_modules, so ` +
+        '`eas update:list` cannot resolve the project before `npm ci`. Keep the pre-flight ' +
+        'after Install dependencies, or make app.config.js evaluable on its own.',
+    ).toBeGreaterThan(at(wf, 'Install dependencies'))
+  })
+})
+
+// The failure mode that made this invisible: under `--json` eas-cli swaps
+// stdout for stderr so the JSON is alone on stdout — but only INSIDE runAsync,
+// after the project-id/login context resolves. A context failure therefore
+// writes its one useful line to REAL stdout, which this step captured into
+// rollout-preflight.json and deleted unread. All anyone ever saw was oclif's
+// "update:list command failed.", which names no cause.
+describe('OTA pre-flight — a skipped check has to say why', () => {
+  const contextError = "Cannot find package 'expo' imported from /home/runner/work/mobile/app.config.js"
+
+  it('prints the CLI stdout capture, where a context error actually lands', () => {
+    const r = runPreflight({ easStdout: contextError, easStderr: 'Error: update:list command failed.', easExit: 1 })
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain(contextError)
+  })
+
+  it('prints the CLI stderr too — the two streams carry different halves', () => {
+    const r = runPreflight({ easStdout: contextError, easStderr: 'Error: update:list command failed.', easExit: 1 })
+    expect(r.stdout).toContain('Error: update:list command failed.')
+  })
+
+  it('records the skip in the JOB SUMMARY, where the OTA result is read', () => {
+    // A `::warning::` in a step log is precisely the signal that went unread
+    // for three publishes.
+    const r = runPreflight({ easStdout: contextError, easExit: 1 })
+    expect(r.summary).toContain('Rollout pre-flight SKIPPED')
+    expect(r.summary).toContain('mobile/docs/ota-rollout.md')
+  })
+
+  it('records the skip when runtimeVersion cannot be read', () => {
+    const r = runPreflight({
+      easStdout: JSON.stringify([{ group: 'g', runtimeVersion: '2.3.0', rolloutPercentage: 10 }]),
+      appConfig: "module.exports = { version: '2.3.0' }\n",
+    })
+    expect(r.status).toBe(0)
+    expect(r.summary).toContain('Rollout pre-flight SKIPPED')
+    expect(r.summary).toContain('runtimeVersion')
+  })
+
+  it('records the skip when the CLI prints something that is not JSON', () => {
+    const r = runPreflight({ easStdout: 'Checking for updates...\nnot json' })
+    expect(r.status).toBe(0)
+    expect(r.summary).toContain('Rollout pre-flight SKIPPED')
+  })
+
+  it('a skip is never a failure — fail-open survives all of it', () => {
+    for (const args of [
+      { easStdout: contextError, easExit: 1 },
+      { easStdout: 'not json' },
+      { easStdout: '[]', appConfig: "module.exports = { version: '1.0.0' }\n" },
+    ]) {
+      expect(runPreflight(args).status).toBe(0)
+    }
+  })
+
+  it('a CLEAN run writes no SKIPPED banner', () => {
+    const r = runPreflight({
+      easStdout: JSON.stringify({ currentPage: [{ group: 'g', runtimeVersion: '2.3.0', rolloutPercentage: 100 }] }),
+    })
+    expect(r.status).toBe(0)
+    expect(r.summary).not.toContain('SKIPPED')
+  })
+})
+
 describe('OTA pre-flight — hygiene', () => {
   it('leaves no scratch files behind in mobile/', () => {
     const r = runPreflight({ easStdout: JSON.stringify([{ group: 'g', runtimeVersion: '2.3.0', rolloutPercentage: 100 }]) })
     expect(r.leftovers).toEqual(['app.config.js'])
   })
 
-  it('runs BEFORE the install and the publish, so a block costs no bundle', () => {
-    const wf = readFileSync(WORKFLOW, 'utf8')
-    const at = (name) => wf.indexOf(`- name: ${name}`)
-    const preflight = wf.indexOf('- name: Pre-flight')
-    expect(preflight).toBeGreaterThan(-1)
-    expect(preflight).toBeLessThan(at('Install dependencies'))
-    expect(preflight).toBeLessThan(at('Publish update'))
+  it('leaves no scratch files behind on the fail-open paths either', () => {
+    expect(runPreflight({ easStdout: 'boom', easExit: 1 }).leftovers).toEqual(['app.config.js'])
+    expect(runPreflight({ easStdout: 'not json' }).leftovers).toEqual(['app.config.js'])
   })
 })
