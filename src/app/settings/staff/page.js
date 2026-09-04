@@ -62,8 +62,10 @@ export default async function StaffIndexPage() {
     staff.map(s => [
       s.id,
       canEditStaffMember(
-        { id: user.id, role: user.role, isMaster: user.isMaster },
-        { id: s.id, role: s.role },
+        { id: user.id, role: user.role, isMaster: user.isMaster, rolesByLocation: user.rolesByLocation },
+        // STAFF-EDIT-RULE.1 — the rule needs the target's locations: an
+        // owner may only edit staff at a studio THEY own.
+        { id: s.id, role: s.role, locationIds: (s.profile_locations || []).map(l => l.location_id) },
       ),
     ])
   )

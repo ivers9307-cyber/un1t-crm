@@ -55,13 +55,14 @@ export default async function EditStaffPage(props) {
     // retry; guessing costs somebody else's record.
     if (targetLocsErr) notFound()
     const targetLocationIds = (targetLocs || []).map(r => r.location_id)
-    // A profile assigned NOWHERE belongs to no studio and no org, so any
-    // owner may open it — otherwise removing someone's last assignment
-    // would lock every owner out of the page that re-adds one.
-    if (targetLocationIds.length > 0
-      && !targetLocationIds.some(id => ownedByCaller.includes(id))) {
-      notFound()
-    }
+    // STAFF-EDIT-RULE.1 corrects #1592's sibling: a profile assigned
+    // NOWHERE used to be opened by any owner here, on the reasoning that
+    // it belongs to no studio. But assertOwnerAssignmentScope
+    // (staff-write.js) has always REFUSED an owner's PUT when there is no
+    // overlap — zero assignments included — so that leniency only offered
+    // a form the server rejects. The page now matches the boundary. A
+    // master can still reach an unassigned profile and give it a home.
+    if (!targetLocationIds.some(id => ownedByCaller.includes(id))) notFound()
   }
 
   const [profileRes, locationsRes, templatesRes, orgsRes, orgGrantsRes] = await Promise.all([
@@ -103,8 +104,14 @@ export default async function EditStaffPage(props) {
   // is the UI gate that prevents the form from rendering at all,
   // not just a button hide.
   if (!canEditStaffMember(
-    { id: user.id, role: user.role, isMaster: user.isMaster },
-    { id: profileRes.data.id, role: profileRes.data.role },
+    { id: user.id, role: user.role, isMaster: user.isMaster, rolesByLocation: user.rolesByLocation },
+    {
+      id: profileRes.data.id,
+      role: profileRes.data.role,
+      // STAFF-EDIT-RULE.1 — the helper judges ownership at the target's
+      // locations now, so it needs them.
+      locationIds: (profileRes.data.profile_locations || []).map(l => l.location_id),
+    },
   )) {
     redirect('/settings')
   }

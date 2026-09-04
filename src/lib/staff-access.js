@@ -8,11 +8,25 @@
 //       - Master: can edit everyone (incl. other masters, themselves)
 //       - Owner:  can NOT edit themselves
 //                 can NOT edit any profile whose `role === 'owner'`
-//                 can edit manager / head_coach / staff at their
-//                 owner-locations
+//                 can edit manager / head_coach / staff AT A LOCATION
+//                 THE CALLER OWNS
 //       - Anyone else: cannot use the staff editor at all (the
 //                      page-level redirect catches this; the helper
 //                      returns false for completeness)
+//
+//     STAFF-EDIT-RULE.1 — that last clause used to be a LIE. The doc
+//     said "at their owner-locations" but the code only asked
+//     `caller.role === 'owner'`, which is the caller's role at their
+//     ACTIVE location, and never looked at locations at all. So it
+//     answered wrongly in both directions: an owner at Stillorgan who
+//     is plain staff at Hatch passed for a Hatch-only target (the
+//     write was then refused deeper, by assertOwnerAssignmentScope in
+//     staff-write.js — the real boundary), while an owner AT the
+//     target's studio whose ACTIVE studio was elsewhere was refused a
+//     record entirely theirs. It now asks the question the doc always
+//     claimed, so the helper agrees with the boundary instead of
+//     leaning on it. `target.locationIds` is therefore REQUIRED: a
+//     caller that omits it gets `false`, which fails closed.
 //
 //   canEditLocationFeatures(caller)
 //     Per-location feature toggles affect every user at the
@@ -79,22 +93,35 @@ export function mapProfileLocationToAssignment(pl) {
 }
 
 /**
- * @param {{ id, role, isMaster }} caller
- * @param {{ id, role }} target
+ * @param {{ id, role, isMaster, profileRole?, rolesByLocation? }} caller
+ * @param {{ id, role, locationIds?: string[] }} target — locationIds is every
+ *   location the target is assigned to. REQUIRED for a non-master caller;
+ *   omitting it denies (fail closed).
  * @returns {boolean}
  */
 export function canEditStaffMember(caller, target) {
   if (!caller || !target) return false
   // Master: full access.
-  if (caller.isMaster || caller.role === 'master') return true
-  // Non-owner: not in the editor at all.
-  if (caller.role !== 'owner') return false
+  if (caller.isMaster || caller.profileRole === 'master' || caller.role === 'master') return true
   // Owner editing themselves — denied.
   if (caller.id === target.id) return false
   // Owner editing another owner — denied. Master is the only role
   // that can promote/demote owner-level assignments.
   if (target.role === 'owner') return false
-  return true
+  // …and the caller must be an OWNER AT one of the target's locations —
+  // not merely an owner somewhere. rolesByLocation is the per-location
+  // truth; `caller.role` is the ACTIVE-location role and answers a
+  // different question (see the header).
+  const ownerLocationIds = Object.entries(caller.rolesByLocation || {})
+    .filter(([, r]) => r === 'owner')
+    .map(([loc]) => loc)
+  if (ownerLocationIds.length === 0) return false
+  const targetLocationIds = target.locationIds || []
+  // A target assigned NOWHERE is nobody's to edit: assertOwnerAssignmentScope
+  // (staff-write.js) already refuses that write for an owner, so answering
+  // true here would only offer a form the server rejects. Master can still
+  // reach an unassigned profile and give it a home.
+  return targetLocationIds.some(id => ownerLocationIds.includes(id))
 }
 
 /**
@@ -127,8 +154,12 @@ export function canOverrideStaffPassword(caller, target) {
   if (caller.role !== 'owner') return false
   // Only a master may reset another master's password.
   if (target.role === 'master') return false
-  // Reuse the staff-editor rule — blocks owner→self and owner→peer-owner.
-  if (!canEditStaffMember(caller, { id: target.id, role: target.role })) return false
+  // Reuse the staff-editor rule — blocks owner→self, owner→peer-owner, and
+  // (since STAFF-EDIT-RULE.1) any target the caller does not OWN a location
+  // with. locationIds must be forwarded or that last clause fails closed.
+  if (!canEditStaffMember(caller, {
+    id: target.id, role: target.role, locationIds: target.locationIds || [],
+  })) return false
   // Owner may only reset staff who share one of the owner's locations.
   const callerLocs = (caller.locations || []).map((l) => l.id)
   const targetLocs = target.locationIds || []
