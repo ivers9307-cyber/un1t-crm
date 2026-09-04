@@ -7045,6 +7045,28 @@ const HostListPageUpdate = z.object({
   list_success_message: z.string().max(500).optional(),
 }).openapi('HostListPageUpdate')
 
+const HostSendTestBody = z.object({
+  to: z.string().email().optional(),
+}).openapi('HostSendTestBody')
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/host/emails/{id}/send-test',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Send one test copy of a host campaign to a chosen address (HOST-EMAIL.10)',
+  description: "Host session; the campaign must belong to the session host (404 otherwise, so ids stay un-enumerable). Renders through the SAME renderHostCampaignHtml the real send uses — so the sanitizer and the injected unsubscribe footer are both exercised — and keeps the real From/Reply-To and the utility/marketing stream split. Differences: one recipient, subject prefixed '[TEST] ', sample merge-tag values, and an inert placeholder unsubscribe token so a forwarded test cannot opt a real contact out. Writes NOTHING: no host_campaign_sends rows, no status change, no daily-cap consumption. `to` defaults to the host session's own email when omitted.",
+  request: { body: { content: { 'application/json': { schema: HostSendTestBody } } } },
+  responses: {
+    200: { description: 'Test sent', content: { 'application/json': { schema: SuccessResponse(z.object({ to: z.string(), message_id: z.string().nullable() })) } } },
+    400: { description: 'Malformed address, or the draft has no subject/body', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized — no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or not this host\'s campaign', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Sending is not enabled for this host (sender domain unverified)', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Postmark rejected the send', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'get',
   path: '/api/host/list-page',
