@@ -24,11 +24,58 @@ export default async function StaffIndexPage() {
   if (!hasPermission(user, 'settings')) redirect('/')
 
   const db = createServerClient()
+
+  // 🔴 STAFF-LIST-SCOPE.1 — WHOSE roster is this, and WHAT of it may leave
+  // the server?
+  //
+  // (1) COLUMNS. This used to `select('*')` and hand the rows straight to a
+  // CLIENT component, so every field on `profiles` was serialised into the
+  // page. `profiles` still carries annual_salary, hourly_rate,
+  // contracted_hours_per_week, annual_leave_entitlement and overtime_rate,
+  // and mig 153 REVOKED those columns from authenticated+anon precisely so
+  // they cannot be read from the browser — "only service_role can read",
+  // says the column comment. This page reads with the service-role client,
+  // which walks around that revoke, and `settings` is held by manager, owner
+  // AND master, so every manager's browser received the whole estate's pay.
+  // The list is now an explicit column list holding exactly what the table
+  // renders. Narrowing is safe HERE (unlike the editor's deliberate `*`,
+  // whose comment records columns being dropped and then saved back as
+  // defaults) because nothing on this page writes.
+  //
+  // (2) ROWS. The roster was every profile in the estate — another
+  // organisation's staff included — for anyone with `settings`. A caller now
+  // sees the people they actually work with: master everyone, otherwise
+  // anyone assigned to a location the caller is assigned to.
+  const STAFF_COLUMNS = 'id, full_name, email, role, active, profile_locations(location_id, locations(name))'
+
+  let visibleIds = null // null = unrestricted (master)
+  if (!user.isMaster) {
+    const myLocationIds = (user.locations || []).map(l => l.id)
+    if (myLocationIds.length === 0) redirect('/')
+    const { data: peers, error: peersErr } = await db
+      .from('profile_locations')
+      .select('profile_id')
+      .in('location_id', myLocationIds)
+    // An unreadable answer is not a licence to show everybody.
+    if (peersErr) redirect('/')
+    visibleIds = [...new Set((peers || []).map(r => r.profile_id))]
+  }
+
   // STAFF-DEV.5 — devices ride along with the roster so the list can show
   // who is behind. Both sets are staff-sized; one round-trip each.
-  const [staffRes, devicesRes] = await Promise.all([
-    db.from('profiles').select('*, profile_locations(*, locations(*))').order('created_at'),
+  //
+  // The app-version baseline stays ESTATE-WIDE on purpose: "is this phone
+  // behind?" is a question about releases, not about who you manage, and
+  // deriving it from one studio would call a whole studio up to date merely
+  // because nobody there has updated. It needs no personal data — id and
+  // active only.
+  const rosterQuery = visibleIds === null
+    ? db.from('profiles').select(STAFF_COLUMNS).order('created_at')
+    : db.from('profiles').select(STAFF_COLUMNS).in('id', visibleIds).order('created_at')
+  const [staffRes, devicesRes, activeRes] = await Promise.all([
+    rosterQuery,
     db.from('device_tokens').select('id, user_id, app_version, last_seen_at, geofence_permission'),
+    db.from('profiles').select('id, active'),
   ])
   const staff = staffRes.data || []
   const devices = devicesRes.data || []
@@ -44,7 +91,7 @@ export default async function StaffIndexPage() {
     if (!devicesByUser.has(d.user_id)) devicesByUser.set(d.user_id, [])
     devicesByUser.get(d.user_id).push(d)
   }
-  const activeIds = new Set(staff.filter(s => s.active).map(s => s.id))
+  const activeIds = new Set((activeRes.data || []).filter(s => s.active).map(s => s.id))
   const targetVersion = deriveTargetVersion(devices.filter(d => activeIds.has(d.user_id)), now)
   const verdictsById = Object.fromEntries(
     staff.map(s => [s.id, deviceVerdict(devicesByUser.get(s.id) || [], targetVersion, now)]),
@@ -78,7 +125,8 @@ export default async function StaffIndexPage() {
             <Users size={20} className="text-un1t-subtle" /> Team Members
           </h2>
           <p className="text-sm text-un1t-subtle mt-1">
-            {staff.length} {staff.length === 1 ? 'member' : 'members'} across all locations.
+            {staff.length} {staff.length === 1 ? 'member' : 'members'}{' '}
+            {user.isMaster ? 'across all locations.' : 'at your locations.'}
           </p>
         </div>
         <Link
