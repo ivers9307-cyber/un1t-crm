@@ -14,7 +14,7 @@
 // live. WRITE surface: the action routes re-check the races permission and
 // location access server-side.
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
-import { View, Text, ScrollView, Pressable, ActivityIndicator, Alert } from 'react-native'
+import { View, Text, ScrollView, Pressable, ActivityIndicator, Alert, AppState } from 'react-native'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../lib/auth-context'
@@ -81,7 +81,7 @@ function blockedStatusLabel(status) {
  *   same endpoint a second time. MUST be identity-stable (useCallback) — it
  *   is an effect dependency.
  */
-export default function RaceControlBoard({ eventId, headerRight, onRaceName, clearUnlockOnBlur = false }) {
+export default function RaceControlBoard({ eventId, headerRight, onRaceName }) {
   const { profile, activeLocation } = useAuth()
   const router = useRouter()
   const canView = canMobile(profile, 'races', activeLocation)
@@ -93,6 +93,11 @@ export default function RaceControlBoard({ eventId, headerRight, onRaceName, cle
   const [error, setError] = useState(null)
   const [busyId, setBusyId] = useState(null)
   const [actionError, setActionError] = useState(null)
+  // RACEDAY.6 — when the board last actually heard from the server. A frozen
+  // board is indistinguishable from a live one otherwise: the 1s tick keeps
+  // counting off the stale race_started_at, so it looks MORE alive the longer
+  // it has been dead.
+  const [lastLoadedAt, setLastLoadedAt] = useState(null)
   // RACEDAY.1 — the offsite unlock, held in COMPONENT STATE on purpose. It
   // must die with the screen: a coach who unlocked from the car park on
   // Saturday must not find the controls already live next weekend, which is
@@ -121,6 +126,7 @@ export default function RaceControlBoard({ eventId, headerRight, onRaceName, cle
     if (res.success === false) { setError(res.error || 'Failed to load'); return }
     setError(null)
     setBoard(res)
+    setLastLoadedAt(Date.now())
   }, [eventId, activeLocation?.id])
 
   // RACEDAY.3 — a NEW race means none of the old race's state is true any
@@ -139,7 +145,9 @@ export default function RaceControlBoard({ eventId, headerRight, onRaceName, cle
   // sonos/index.jsx: new target -> spinner, not the previous target's list.
   useEffect(() => {
     currentEventIdRef.current = eventId
+    setUnlocked(false)
     setBoard(null)
+    setLastLoadedAt(null)
     setError(null)
     setActionError(null)
     setBusyId(null)
@@ -157,15 +165,28 @@ export default function RaceControlBoard({ eventId, headerRight, onRaceName, cle
   // every later visit, that afternoon and next weekend, which is precisely
   // what the gate exists to prevent. Blur is the honest boundary: it ends
   // "this visit" on both surfaces.
-  // RACEDAY.5 — scoped to the caller that needs it. On the TAB surface the
-  // screen is never unmounted, so blur is the only honest end of a visit. On
-  // the pushed races/[id] screen it unmounts on pop already, and clearing on
-  // blur there would drop the unlock on a normal in-flow trip to Check in and
-  // back — making an offsite operator re-tap mid-race, which is a regression,
-  // not a safeguard.
-  useFocusEffect(useCallback(() => () => {
-    if (clearUnlockOnBlur) setUnlocked(false)
-  }, [clearUnlockOnBlur]))
+  // RACEDAY.6 — the unlock ends when the APP is put away, not when the screen
+  // loses focus.
+  //
+  // Blur was the wrong boundary and cost more than it bought. On the tab it
+  // fires on every trip to Messages and back, and because 'loading' counts as
+  // on site (below), the board then repaints with every button ARMED for the
+  // second or two the GPS takes to resolve, before they all vanish under the
+  // operator's thumb. A tap re-paid on every tab switch for the whole race,
+  // plus a flicker, in exchange for very little — that same loading window
+  // means a blur-clear denies an offsite coach nothing for those seconds.
+  //
+  // Background -> active is the honest signal, and it is the one
+  // usePhysicalLocation itself treats as "the phone may have MOVED". It keeps
+  // the property the gate exists for (the controls are never still live next
+  // weekend, because the app is certainly backgrounded in between) without
+  // charging the on-site operator anything.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') setUnlocked(false)
+    })
+    return () => sub.remove()
+  }, [])
 
   // Poll the board + tick a clock for live elapsed, only while focused.
   useFocusEffect(useCallback(() => {
@@ -346,7 +367,26 @@ export default function RaceControlBoard({ eventId, headerRight, onRaceName, cle
           )}
 
           <ScrollView contentContainerClassName="px-4 py-3 pb-12">
-            {actionError && (
+            {/* RACEDAY.6 — a poll that fails once `board` exists used to set
+              `error` and render NOTHING: the full-screen error branch is
+              `error && !board`. Two operators keep in sync only through this
+              2s poll, so a start-line phone that loses cellular in the
+              warehouse kept showing teams the finish line had already
+              finished, under live Finish buttons, with the clock still
+              running. The race LIST one screen up already reports exactly
+              this for far less consequential data. */}
+          {error && board ? (
+            <View className="bg-amber-500/15 border border-amber-500/30 rounded-xl p-3 mb-3">
+              <Text className="text-amber-700 text-sm font-semibold">Not updating</Text>
+              <Text className="text-amber-700 text-xs mt-0.5">
+                {lastLoadedAt
+                  ? `Showing the board as of ${new Date(lastLoadedAt).toLocaleTimeString()}.`
+                  : 'Showing the last board we received.'}
+              </Text>
+            </View>
+          ) : null}
+
+          {actionError && (
               <View className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 mb-3">
                 <Text className="text-red-500 text-sm">{actionError}</Text>
               </View>

@@ -15,7 +15,7 @@
 // shows next month's race is a tab nobody trusts on the day.
 //
 // This screen owns its header; RaceControlBoard renders none of its own.
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import { View, Text, Pressable, ScrollView, ActivityIndicator } from 'react-native'
 import { Stack, useRouter, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
@@ -70,6 +70,9 @@ function startLabel(startTime) {
   return startTime ? String(startTime).slice(0, 5) : null
 }
 
+// Self-heal cadence for the race LIST (not a poll — see the focus effect).
+const RACES_RETRY_MS = 60 * 1000
+
 export default function RaceTab() {
   const { profile, activeLocation } = useAuth()
   const router = useRouter()
@@ -83,6 +86,10 @@ export default function RaceTab() {
   // every refresh, because re-deciding for them mid-race would be worse
   // than any default we could compute.
   const [pickedId, setPickedId] = useState(null)
+  // Always the CURRENT studio, readable from inside a request built for a
+  // previous one (see load below).
+  const activeLocationIdRef = useRef(activeLocation?.id || null)
+  useEffect(() => { activeLocationIdRef.current = activeLocation?.id || null }, [activeLocation?.id])
   // The race name as the BOARD sees it. RaceControlBoard hands it back
   // through onRaceName precisely so this screen — which owns the header —
   // does not have to poll /control-board a second time for a string. It is
@@ -92,7 +99,18 @@ export default function RaceTab() {
 
   const load = useCallback(async () => {
     if (!activeLocation?.id) { setRaces([]); return }
-    const res = await listTodaysRaces({ locationId: activeLocation.id })
+    const forLocation = activeLocation.id
+    const res = await listTodaysRaces({ locationId: forLocation })
+    // RACEDAY.6 — drop a reply for a studio we have since left. Without this
+    // a double location switch could land Hatch's empty list while the
+    // operator is back on Stillorgan: races becomes [], the "No race today"
+    // empty state renders, and RaceControlBoard UNMOUNTS mid-race, taking the
+    // wave groups and every Start button with it. Nothing recovered it —
+    // this screen has no interval, `load`'s identity had settled, and the tab
+    // was already focused so no focus event fired. The bar still showed the
+    // Race tab, because _layout.jsx's copy of this same fetch already carries
+    // the guard; the app contradicted itself.
+    if (forLocation !== activeLocationIdRef.current) return
     if (!res?.success) {
       // Keep whatever we already had on screen — losing the board to a
       // blip in a badly-covered warehouse is the failure that actually
@@ -105,11 +123,19 @@ export default function RaceTab() {
   }, [activeLocation?.id])
 
   useFocusEffect(useCallback(() => {
-    if (!canView) { setLoading(false); return }
+    if (!canView) { setLoading(false); return undefined }
     let alive = true
     setLoading(true)
     load().finally(() => { if (alive) setLoading(false) })
-    return () => { alive = false }
+    // RACEDAY.6 — a retry cadence, because this was the only surface in the
+    // feature with none. The board polls every 2s and the tab bar re-checks
+    // every 10 minutes, but the screen deciding WHICH race to control had a
+    // single shot on focus: one failed request and the operator sat on "Could
+    // not check for races" until they thought to switch tabs. Slow on
+    // purpose — whether a race is on today changes once a day; this is a
+    // self-heal, not a poll.
+    const retry = setInterval(() => { load() }, RACES_RETRY_MS)
+    return () => { alive = false; clearInterval(retry) }
   }, [canView, load]))
 
   // Device-local clock. The operator running this board is physically at the
@@ -270,7 +296,7 @@ export default function RaceTab() {
 
       {activeRace ? (
         <View className="flex-1">
-          <RaceControlBoard eventId={activeRace.id} onRaceName={handleRaceName} clearUnlockOnBlur />
+          <RaceControlBoard eventId={activeRace.id} onRaceName={handleRaceName} />
         </View>
       ) : null}
     </View>
