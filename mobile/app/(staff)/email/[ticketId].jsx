@@ -94,7 +94,9 @@ import {
   previewTicketAttachment, downloadTicketAttachment,
   signOutboundAttachment, uploadSignedAttachment,
   fetchRelatedConversations, mergeConversation, unmergeConversation,
+  fetchSignatureContexts,
 } from '../../../lib/email-api'
+import { resolveSignatureHint } from '../../../lib/signature-hint'
 import {
   ticketMessageKind, mailStatusChip, mailboxLabel, ticketDeliveryMeta,
   ticketMessageRecipients, sentToLabel, isArchivedStatus,
@@ -606,6 +608,13 @@ export default function EmailTicket() {
   const [replyRecipients, setReplyRecipients] = useState(null)
   // EMAIL-ATTACH-PREVIEW.1 — the one image being looked at, if any.
   const [viewingImage, setViewingImage] = useState(null)
+  // MOBILE-SIGHINT.1 — the viewer's per-studio signature contexts, already
+  // rendered server-side. FETCHED PER MOUNT and held in screen state: there
+  // is deliberately no module-level cache (web built one and removed it on
+  // review — a memo is per PROCESS, not per viewer, so on a shared front-desk
+  // phone the next operator would compose under the previous one's sign-off).
+  // [] until it lands, which resolves to no hint rather than a wrong one.
+  const [signatureContexts, setSignatureContexts] = useState([])
   const scrollRef = useRef(null)
   const readMarked = useRef(false)
   const hydrationStarted = useRef(false)
@@ -777,6 +786,18 @@ export default function EmailTicket() {
     }
   }, [messages.length])
 
+  // MOBILE-SIGHINT.1 — one read per mount, and none of it is polled: the
+  // signature belongs to the VIEWER, not the thread, and it changes about as
+  // often as a job title. A failure answers [] (email-api.js) and the hint
+  // simply does not appear — the route appends the signature server-side
+  // either way, so this whole feature is cosmetic and must never cost the
+  // screen anything.
+  useEffect(() => {
+    let cancelled = false
+    fetchSignatureContexts().then(rows => { if (!cancelled) setSignatureContexts(rows) })
+    return () => { cancelled = true }
+  }, [])
+
   const canReply = !!ticket?.requester_email
   // EMAIL-PARTICIPANTS.9 — the audience sentence and whether a reply is even
   // possible. `audience.disabled` covers "no requester", "everyone removed"
@@ -793,6 +814,14 @@ export default function EmailTicket() {
   const sendState = composerSendState({
     text, isNote, files, audienceDisabled: audience.disabled, sending,
   })
+
+  // MOBILE-SIGHINT.1 — what THIS reply will be signed with. The sending
+  // context is the TICKET's location (the reply route resolves the studio
+  // off the ticket, not off the phone's active location — a coach reading a
+  // Hatch thread while switched to Stillorgan still sends as Hatch), so that
+  // is what the hint resolves by. All the branching lives in the lib; null
+  // means the hint hides.
+  const signatureHint = resolveSignatureHint(signatureContexts, ticket?.location_id || null)
   const budget = attachmentBudget(files)
 
   function patchFile(key, patch) {
@@ -1507,6 +1536,34 @@ export default function EmailTicket() {
                 This conversation is archived — replying brings it back to the inbox.
               </Text>
             )}
+
+            {/* MOBILE-SIGHINT.1 — what the server is about to append, shown
+                BEFORE the send rather than discovered in the sent thread.
+                Reply mode only: an internal note is sent to nobody and the
+                route appends no signature to one (web's TicketReplyBox gates
+                the same way), so a sign-off here would be a third claim
+                contradicting the two the note card already makes.
+                No "Edit signature" affordance, unlike web: the editor lives
+                on the web /account page and the phone has no screen for it,
+                and a link to nowhere is worse than no link. */}
+            {!isNote && signatureHint ? (
+              <View className="mt-2 rounded-lg border border-dashed border-un1t-border bg-un1t-surface px-3 py-2">
+                <View className="flex-row items-center">
+                  <Ionicons name="create-outline" size={11} color="#64748B" style={{ marginRight: 5 }} />
+                  <Text className="text-[10px] font-bold uppercase tracking-wider text-un1t-muted">
+                    Added automatically
+                  </Text>
+                </View>
+                {/* No text part (a photo-only rich signature) → no separator:
+                    the send appends none either. The lib decides. */}
+                {signatureHint.body ? (
+                  <Text className="mt-1 text-xs text-un1t-subtle">{signatureHint.body}</Text>
+                ) : null}
+                {signatureHint.suffix ? (
+                  <Text className="mt-1 text-[10px] text-un1t-muted">{signatureHint.suffix}</Text>
+                ) : null}
+              </View>
+            ) : null}
           </View>
           )}
         </>

@@ -399,6 +399,41 @@ export function getMailCount(locationId) {
   return api('/api/email/mail/count', { locationId })
 }
 
+/**
+ * MOBILE-SIGHINT.1 — the viewer's per-studio signature contexts, for the
+ * composers' "Added automatically" hint (lib/signature-hint.js resolves the
+ * one that matters; this only fetches).
+ *
+ * It lives HERE rather than in a new me-preferences module because every
+ * caller is a mail composer: the reply screen and the compose sheet already
+ * take their whole wire surface from this file, and one more entry beats a
+ * second client module whose only consumer is the mail surface. Nothing
+ * else on the phone reads /api/me/preferences today.
+ *
+ * Each entry is ALREADY SERVER-RENDERED: `effective_text` is the exact text
+ * a send from that studio appends, resolved with the studio's own name,
+ * phone and links. Mobile cannot import `src/lib` and the renderer has no
+ * `shared/` twin (CLAUDE.md Web/mobile boundary), so this is the whole
+ * contract — render it verbatim, resolve nothing.
+ *
+ * 🔴 NO MODULE-LEVEL CACHE, deliberately. Web built one and removed it on
+ * review: a module memo is per TAB (here, per app process), not per VIEWER,
+ * so on a shared front-desk phone a sign-out and sign-in would show the next
+ * operator the previous one's signature under their composer. The screens
+ * fetch per mount instead.
+ *
+ * Failure is COSMETIC and answers []: the route appends the signature
+ * server-side either way, so a blip must cost the hint and never the screen.
+ * The plain envelope goes unread on purpose — there is nothing for a caller
+ * to do with the error but hide a preview, which [] already says.
+ */
+export async function fetchSignatureContexts() {
+  const res = await api('/api/me/preferences')
+  if (!res.success) return []
+  const contexts = res.data?.signature_contexts
+  return Array.isArray(contexts) ? contexts : []
+}
+
 // ── Attachments (EMAIL-ATTACH-PREVIEW.1) ────────────────────────────
 //
 // The `email-attachments` bucket is PRIVATE and mobile holds no service-role

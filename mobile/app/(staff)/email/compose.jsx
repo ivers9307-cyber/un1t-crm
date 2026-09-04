@@ -54,6 +54,7 @@ import { useAuth } from '../../../lib/auth-context'
 import { canMobile } from '../../../lib/permissions'
 import {
   listMail, composeEmail, signOutboundAttachment, uploadSignedAttachment,
+  fetchSignatureContexts,
 } from '../../../lib/email-api'
 import { searchContacts, contactDisplayName } from '../../../lib/contacts-api'
 import {
@@ -65,6 +66,7 @@ import {
   groupMailboxesByLocation, groupedDefaultMailboxId, mailboxLocationId,
 } from '../../../lib/mail-compose'
 import { ALL_SCOPE, parseLocationsParam } from '../../../lib/mail-digest'
+import { resolveSignatureHint } from '../../../lib/signature-hint'
 import { formatAttachmentSize } from '../../../lib/email-tickets'
 
 // How long a keystroke rests before the directory is asked. Matches the feel
@@ -138,6 +140,15 @@ export default function ComposeEmail() {
   const [error, setError] = useState(null)
   const [sent, setSent] = useState(false)
 
+  // MOBILE-SIGHINT.1 — the viewer's per-studio signature contexts, already
+  // rendered server-side. FETCHED PER MOUNT, held in screen state: there is
+  // deliberately NO module-level cache (web built one and removed it on
+  // review — a memo is per PROCESS, not per viewer, so on a shared
+  // front-desk phone the next operator would compose under the previous
+  // one's sign-off). [] until it lands, which resolves to no hint rather
+  // than a wrong one.
+  const [signatureContexts, setSignatureContexts] = useState([])
+
   const toInputRef = useRef(null)
   // Suggestion requests can resolve out of order — only the newest may paint.
   const suggestSeq = useRef(0)
@@ -200,6 +211,19 @@ export default function ComposeEmail() {
     })
     return () => { alive = false }
   }, [locationId, canEmail, multiStudio, paramLocations, preferredLocationId])
+
+  // MOBILE-SIGHINT.1 — one read per mount, unpolled: the signature belongs
+  // to the VIEWER, not the draft, and it changes about as often as a job
+  // title. Every From switch re-resolves against THIS payload client-side
+  // (no refetch). A failure answers [] (email-api.js) and the hint simply
+  // does not appear — the compose route appends the signature server-side
+  // either way, so this is cosmetic and must never cost the sheet anything.
+  useEffect(() => {
+    if (!canEmail) return undefined
+    let cancelled = false
+    fetchSignatureContexts().then(rows => { if (!cancelled) setSignatureContexts(rows) })
+    return () => { cancelled = true }
+  }, [canEmail])
 
   // Contact autocomplete — debounced, stale responses dropped. Filtering
   // against the current pills happens at render time so a just-added pill
@@ -445,6 +469,19 @@ export default function ComposeEmail() {
   const mailbox = mailboxes.find(m => m.id === mailboxId) || null
   const budget = attachmentBudget(files)
 
+  // MOBILE-SIGHINT.1 — what this email will be signed with. The sending
+  // context is the SELECTED From mailbox's studio, resolved by the SAME
+  // expression the send and the attachment-sign calls use
+  // (mailboxLocationId(...) || locationId — the fallback covers the
+  // single-location path, where mailbox rows carry no location stamp), so
+  // switching From re-resolves the hint exactly as switching From re-points
+  // the send. With NO From account chosen there is no sending context at
+  // all: nothing can send, so there is nothing truthful to preview and the
+  // hint stays away entirely.
+  const signatureHint = mailboxId
+    ? resolveSignatureHint(signatureContexts, mailboxLocationId(mailboxes, mailboxId) || locationId)
+    : null
+
   if (!canEmail) {
     return (
       <View className="flex-1 bg-un1t-bg items-center justify-center px-8">
@@ -623,6 +660,33 @@ export default function ComposeEmail() {
           textAlignVertical="top"
           className="px-4 py-3 text-[14px] text-un1t-text min-h-[160px] bg-un1t-surface"
         />
+
+        {/* MOBILE-SIGHINT.1 — what the server is about to append, shown
+            BEFORE the send rather than discovered in the sent thread. It
+            follows the From account: pick a different studio and this
+            re-renders with THAT studio's name, phone and links, exactly as
+            the send would resolve them.
+            No "Edit signature" affordance, unlike web: the editor lives on
+            the web /account page and the phone has no screen for it, and a
+            link to nowhere is worse than no link. */}
+        {signatureHint ? (
+          <View className="mx-4 mb-4 rounded-lg border border-dashed border-un1t-border bg-un1t-surface px-3 py-2">
+            <View className="flex-row items-center">
+              <Ionicons name="create-outline" size={11} color="#64748B" style={{ marginRight: 5 }} />
+              <Text className="text-[10px] font-bold uppercase tracking-wider text-un1t-muted">
+                Added automatically
+              </Text>
+            </View>
+            {/* No text part (a photo-only rich signature) → no separator: the
+                send appends none either. The lib decides. */}
+            {signatureHint.body ? (
+              <Text className="mt-1 text-xs text-un1t-subtle">{signatureHint.body}</Text>
+            ) : null}
+            {signatureHint.suffix ? (
+              <Text className="mt-1 text-[10px] text-un1t-muted">{signatureHint.suffix}</Text>
+            ) : null}
+          </View>
+        ) : null}
       </ScrollView>
 
       {/* ── Inline refusal — the draft stays exactly as it was ───────── */}
