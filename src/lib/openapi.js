@@ -1404,6 +1404,27 @@ registry.registerPath({
   },
 })
 
+// MAIL-SPAM.1 — the quarantine verbs.
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/mail/{id}/spam',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Mark one conversation as spam, or release it (Not spam)',
+  description:
+    'Flips `email_tickets.is_spam` (mig 584) — a flag ORTHOGONAL to `status`, never a fifth lifecycle value, so a quarantined conversation keeps whatever status the bump machinery gave it and is simply excluded from every Mail view but Spam. `{ spam: true }` quarantines: spam_flagged_at = now (the 30-day purge clock runs from the operator\u2019s decision), spam_verdict_source = operator, and NOBODY is notified. `{ spam: false }` RELEASES and fires what the webhook withheld at ingest — the staff push (maybeNotifyInboundEmail with the ticket\u2019s own facts, preUnreadCount 0) and the unread mirror (unread_count set to the number of unseen inbound messages, the seen route\u2019s own derivation) — both best-effort and logged, never failing the release. Idempotent by the UPDATE\u2019s own transition filter (`.eq(is_spam, !spam)`): a conversation already in the requested state, or one another operator just moved, is answered without a write and without a ping (`notified: false`). The spam_score recorded at ingest is never touched. Gates are loadTicketForUser\u2019s (location access, `email_inbox` at the TICKET\u2019s location, per-mailbox grant); every refusal is a 404.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ spam: z.boolean() }).openapi('MailSpamVerdict') } } },
+  },
+  responses: {
+    200: { description: '{ conversation (list-shaped: needs_reply, archived, is_spam, spam_score…), notified }' },
+    400: { description: 'Invalid body', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such conversation, or not yours', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Flag write failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 
 // INBOX-SURFACE.C — the Mail surface's OWN nav badge, the mirror image of the
 // ticket count above. TWO badges exist rather than one shared count because
@@ -3907,6 +3928,39 @@ registry.registerPath({
     200: { description: 'Email copy saved' },
     400: { description: 'A value is over its length cap', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — owner or master', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// Inbound spam filter (MAIL-SPAM.1, mig 584)
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/email-spam-filter',
+  tags: ['Communications'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Inbound spam threshold for a location',
+  description: 'Returns { enabled, threshold, default_threshold, can_edit } (company_settings.email_spam_filter_enabled / email_spam_threshold, mig 584; defaults enabled=true, 5.0 — SpamAssassin\u2019s own required_score). The inbound webhook quarantines an email whose Postmark SpamScore (fallback: the X-Spam-Score / X-Spam-Status headers) is AT OR ABOVE this threshold: the ticket is created but flagged is_spam — no staff push, no unread/badge count, shown only on Mail\u2019s Spam view — until Not spam releases it or the 30-day purge (/api/cron/purge-spam-tickets) deletes it. FAIL OPEN everywhere: no readable score is never spam, a disabled filter quarantines nothing (the score is still recorded), and an unreadable threshold falls back to the default rather than to 0. A location with no company_settings row returns the defaults rather than 404. can_edit is the PUT gate\u2019s own answer, so the card never offers a Save the server refuses.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Current spam-filter setting' },
+    403: { description: 'Forbidden — no access to this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/email-spam-filter',
+  tags: ['Communications'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Save the inbound spam threshold (owner or master AT THE TARGET location)',
+  description: 'threshold is 0-20 (the CHECK in mig 584). The role is judged at params.id via assertLocationAccess then guardMasterOrOwner — never `user.role`, which resolves at the caller\u2019s ACTIVE location: a manager at studio A who is plain staff at studio B is refused at B with no write. Upserts ONLY the two spam columns (plus updated_at/updated_by) keyed on location_id, so it can never clobber branding, quiet hours or email copy on the shared row.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ enabled: z.boolean(), threshold: z.number().min(0).max(20) }).openapi('EmailSpamFilterSave') } } },
+  },
+  responses: {
+    200: { description: 'Spam filter saved' },
+    400: { description: 'threshold out of range or not a number', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owner or master at this location', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

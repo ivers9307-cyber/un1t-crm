@@ -25,13 +25,13 @@
 // the one outcome that retirement must never produce).
 
 import {
-  loadVisibleMailboxes, scopeToNeedsReply, scopeToUnmerged, statusTimestamps,
+  loadVisibleMailboxes, scopeToNeedsReply, scopeToUnmerged, scopeToSpamView, statusTimestamps,
   loadTicketForUser, ticketNotFound,
 } from '../tickets/_helpers'
 
 // Re-exported so the routes in this tree import their gates from ONE place and
 // a reader can see, in one import line, that they are the ticket surface's.
-export { scopeToNeedsReply, scopeToUnmerged, statusTimestamps, loadTicketForUser, ticketNotFound }
+export { scopeToNeedsReply, scopeToUnmerged, scopeToSpamView, statusTimestamps, loadTicketForUser, ticketNotFound }
 
 /**
  * The mailboxes this caller may see at this location, in tab order.
@@ -61,7 +61,10 @@ export async function loadInboxMailboxes(db, user, locationId) {
  * else in the ticket lifecycle is dropped on this surface; this is not.
  */
 export function isNeedsReply(row) {
-  return row?.status === 'open' && row?.last_message_direction === 'inbound'
+  // `!== true` rather than `!row.is_spam`: a row from a fixture or an older
+  // response that never carried the column reads as live, matching the
+  // column's NOT NULL DEFAULT false.
+  return row?.status === 'open' && row?.last_message_direction === 'inbound' && row?.is_spam !== true
 }
 
 // ── Views (hoisted from route.js for MAIL-ALLLOC.1, so the scoped list and
@@ -73,7 +76,9 @@ export function isNeedsReply(row) {
 // the moment a reply arrives has_inbound flips and the thread moves to
 // Inbox. Needs-reply is unchanged and remains a subset of Inbox (an
 // outbound-only thread cannot be awaiting our answer).
-export const MAIL_VIEWS = Object.freeze(['inbox', 'needs_reply', 'sent', 'archived'])
+// MAIL-SPAM.1 — `spam` is the quarantine: rows flagged is_spam (mig 584), any
+// lifecycle status, and the ONLY view that shows them.
+export const MAIL_VIEWS = Object.freeze(['inbox', 'needs_reply', 'sent', 'archived', 'spam'])
 
 // Legacy `solved` — a status this surface never writes but old rows carry —
 // deserves an explicit decision rather than falling out of a negation. It is
@@ -81,7 +86,13 @@ export const MAIL_VIEWS = Object.freeze(['inbox', 'needs_reply', 'sent', 'archiv
 export const LIVE_STATUSES = Object.freeze(['open', 'pending', 'solved'])
 
 export function applyView(query, view) {
+  // MAIL-SPAM.1 — the quarantine is orthogonal to the lifecycle: every view
+  // below is additionally `is_spam = false`, and the spam view is
+  // `is_spam = true` with NO status filter (a quarantined thread keeps
+  // whatever status the bump machinery gave it; the flag alone decides).
+  query = scopeToSpamView(query, view)
   switch (view) {
+    case 'spam': return query
     // The one thing a mail client cannot tell you. Shared scope with the nav
     // badge, so the number and the list can never mean different things.
     case 'needs_reply': return scopeToNeedsReply(query)

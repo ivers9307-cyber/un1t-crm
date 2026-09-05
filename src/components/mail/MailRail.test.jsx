@@ -33,6 +33,26 @@ function renderRail(over = {}) {
 beforeEach(() => cleanup())
 
 describe('MailRail', () => {
+  // MAIL-SPAM.1 — every view has an icon. `sent` shipped without one (an
+  // audit item: VIEW_ICONS never learnt the view MAIL-SENT.1 added) and the
+  // new `spam` view must not repeat that. The icon is the one thing the rail
+  // renders per view that is not text, so its presence is asserted directly.
+  it('renders an icon for every view, sent and spam included', () => {
+    renderRail({
+      views: [
+        { id: 'inbox', label: 'Inbox', count: 18 },
+        { id: 'needs_reply', label: 'Needs reply', count: 1 },
+        { id: 'sent', label: 'Sent', count: null },
+        { id: 'archived', label: 'Archived', count: 11 },
+        { id: 'spam', label: 'Spam', count: null },
+      ],
+    })
+    for (const label of ['Inbox', 'Needs reply', 'Sent', 'Archived', 'Spam']) {
+      const btn = screen.getByRole('button', { name: new RegExp(`^${label}`) })
+      expect(btn.querySelector('svg'), `${label} has no icon`).toBeTruthy()
+    }
+  })
+
   it('lists every view with its count', () => {
     renderRail()
     expect(screen.getByRole('button', { name: /Inbox/ })).toBeTruthy()
