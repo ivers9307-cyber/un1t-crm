@@ -957,9 +957,9 @@ export default function EmailTicket() {
   // RETIRE-TICKETS.1 — assignment and the four-state lifecycle left with the
   // ticket queue. The two verbs of this surface, now riding the header:
 
-  // Archive / bring back. The response's ticket row is a bare status write —
-  // merge, never replace (the EMAIL-MOPUP.4 lesson: the enriched mailbox and
-  // contact fields must survive).
+  // Archive / bring back. The response's conversation row is stamped (MAIL-
+  // ARCH.2) but not enriched — no mailbox, no contact — so merge, never replace
+  // (the EMAIL-MOPUP.4 lesson: the enriched fields must survive).
   //
   // MAIL-ARCH.3 — `next` reads the server's `archived` stamp, not `status`.
   // Re-deriving from status read a legacy `solved` thread as archived while

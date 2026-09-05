@@ -211,7 +211,9 @@ describe('MAIL-ARCH.4 — isArchived is the ONE reading of the stamp, on every s
     for (const rel of ['mobile/lib/mail-relate.js', 'src/components/mail/mail-relate.js']) {
       const src = readFileSync(join(here, '..', rel), 'utf8')
       expect(src, rel).not.toMatch(/isArchivedStatus|archivedOrStatus\(/)
-      expect(src, rel).not.toMatch(/status\s*[!=]==?\s*'closed'/)
+      // Any spelling of a status-derived archive verdict: quoted closed/solved,
+      // the ARCHIVED_STATUS constant, or a bare 'solved' literal anywhere.
+      expect(src, rel).not.toMatch(/status\s*[!=]==?\s*['"](closed|solved)['"]|ARCHIVED_STATUS|['"]solved['"]/)
       expect(src, rel).toMatch(/isArchived\(/)
     }
   })
