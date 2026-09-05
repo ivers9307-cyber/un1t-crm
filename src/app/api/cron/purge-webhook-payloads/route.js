@@ -164,12 +164,19 @@ async function purgeTable(db, { table, clock, finished }) {
     if (ids.length === 0) break
     pages += 1
 
-    const { error: delErr } = await finished(db.from(table).delete()).in('id', ids)
+    // `.select('id')` so the count is rows REMOVED, not rows requested: the
+    // delete re-applies the finished predicate, so a row reopened between the
+    // scan and this statement survives and must not be counted — and a delete
+    // that removes nothing ends the loop instead of re-reading the same page
+    // MAX_PAGES times and reporting deletions that never happened (review nit).
+    const { data: gone, error: delErr } = await finished(db.from(table).delete()).in('id', ids).select('id')
     if (delErr) {
       logError('cron.purge-webhook-payloads', 'delete failed', { table, err: delErr.message, page: pages })
       return { deleted, pages, capReached, error: delErr.message }
     }
-    deleted += ids.length
+    const removed = Array.isArray(gone) ? gone.length : 0
+    deleted += removed
+    if (removed === 0) break
 
     if (ids.length < PURGE_PAGE_SIZE) break
   }
