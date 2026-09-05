@@ -5,7 +5,6 @@ import {
   mailStatusChip,
   ticketViewTab,
   ticketViewWire,
-  isArchivedStatus,
   ticketMessageKind,
   ticketMessageRecipients,
   sentToLabel,
@@ -147,11 +146,14 @@ describe('mail status (RETIRE-TICKETS.1 — the lifecycle chips left with the qu
       .toBeNull()
   })
 
-  it('treats solved and closed as archived', () => {
-    expect(isArchivedStatus('solved')).toBe(true)
-    expect(isArchivedStatus('closed')).toBe(true)
-    expect(isArchivedStatus('open')).toBe(false)
-    expect(isArchivedStatus('pending')).toBe(false)
+  // MAIL-ARCH.3 — `isArchivedStatus` is gone; the stampless solved||closed
+  // fallback lives in shared/mail-vocabulary's archivedOrStatus (tested there)
+  // and the chip reads it, so the fallback is pinned through the chip here.
+  it('with no stamp, a solved or closed row wears the Archived chip (the old-server fallback)', () => {
+    expect(mailStatusChip({ status: 'solved' })?.label).toBe('Archived')
+    expect(mailStatusChip({ status: 'closed' })?.label).toBe('Archived')
+    expect(mailStatusChip({ status: 'open', last_message_direction: 'outbound' })).toBeNull()
+    expect(mailStatusChip({ status: 'pending' })).toBeNull()
   })
 })
 

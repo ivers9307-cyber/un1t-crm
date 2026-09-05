@@ -550,3 +550,58 @@ describe('merged_sources', () => {
     expect((await res.json()).data.merged_sources).toEqual([])
   })
 })
+
+// ── MAIL-ARCH.3 — the thread row carries the SERVER'S `archived` stamp ────
+//
+// The list, digest, archive and spam routes have stamped `archived` +
+// `needs_reply` through stampMailRow since MAIL-ARCH.2; this route did not,
+// so the mobile thread screen re-derived archived from `status` — where
+// legacy `solved` read as archived while the server calls it LIVE. Opened
+// from the thread, a solved conversation showed "Bring back" and a tap wrote
+// status='open' over a row that was never closed. The stamp travels now, and
+// both clients read it instead of re-deriving.
+describe('GET …/[id] — the ticket is stamped through stampMailRow (MAIL-ARCH.3)', () => {
+  it('an open ticket carries archived:false and a truthful needs_reply', async () => {
+    const { data } = await (await get(T_STUDIO.id)).json()
+    expect(data.ticket.archived).toBe(false)
+    // T_STUDIO is open + last inbound + not spam: the one definition of
+    // "they wrote, nobody answered" says true.
+    expect(data.ticket.needs_reply).toBe(true)
+  })
+
+  it('🔴 a legacy solved ticket is stamped LIVE — archived:false, the same answer the list gives', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      tickets: [{ ...T_STUDIO, status: 'solved', solved_at: '2026-08-06T12:00:00Z' }],
+      messages: MESSAGES,
+    }))
+    const { data } = await (await get(T_STUDIO.id)).json()
+    expect(data.ticket.status).toBe('solved')
+    expect(data.ticket.archived).toBe(false)
+    // needs_reply is `status === 'open' && …`, so solved is not waiting.
+    expect(data.ticket.needs_reply).toBe(false)
+  })
+
+  it('a closed ticket is stamped archived:true', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      tickets: [{ ...T_STUDIO, status: 'closed', closed_at: '2026-08-06T12:00:00Z' }],
+      messages: MESSAGES,
+    }))
+    const { data } = await (await get(T_STUDIO.id)).json()
+    expect(data.ticket.archived).toBe(true)
+    expect(data.ticket.needs_reply).toBe(false)
+  })
+
+  it('the stamps ride beside the enrichment, replacing nothing', async () => {
+    const { data } = await (await get(T_STUDIO.id)).json()
+    // The three enrichments the route already added are still there…
+    expect(data.ticket.mailbox.address).toBe(MB_STUDIO.address)
+    // (baseState carries no contacts rows, so the lookup's honest answer is
+    // null — the point is that the key is still SET by the route, not lost.)
+    expect(data.ticket).toHaveProperty('contact', null)
+    expect(data.ticket.assignee_name).toBeNull()
+    // …and so is every raw column the row had.
+    expect(data.ticket).toEqual(expect.objectContaining({ ...T_STUDIO }))
+  })
+})

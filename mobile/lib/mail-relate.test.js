@@ -88,6 +88,27 @@ describe('relatedNudge', () => {
     expect(n).not.toBeNull()
     expect(n.viewId).toBeNull()
   })
+
+  // MAIL-ARCH.3 — the related route stamps `archived` now, and THE STAMP
+  // WINS. A legacy `solved` row the server stamped LIVE is an open thread on
+  // the web (its mail-relate says live is `!== 'closed'`); reading status here
+  // made the two apps label the same row differently and skipped it as the
+  // View target.
+  it('🔴 a solved row the server stamped LIVE is the View target — the stamp beats status', () => {
+    const n = relatedNudge({
+      related: [REL({ id: 'R-solved-live', status: 'solved', archived: false }), REL({ id: 'R-open' })],
+      open_count: 2,
+    })
+    expect(n.viewId).toBe('R-solved-live')
+  })
+
+  it('a row stamped archived is skipped whatever its status says', () => {
+    const n = relatedNudge({
+      related: [REL({ id: 'R-stamped-archived', status: 'open', archived: true }), REL({ id: 'R-live' })],
+      open_count: 1,
+    })
+    expect(n.viewId).toBe('R-live')
+  })
 })
 
 describe('mergePickerRows', () => {
@@ -111,6 +132,28 @@ describe('mergePickerRows', () => {
     const rows = mergePickerRows([REL({ status: 'solved', message_count: 1 })], now)
     expect(rows[0].detail).toContain('1 message')
     expect(rows[0].detail).not.toContain('1 messages')
+    expect(rows[0].detail).toContain('archived')
+  })
+
+  // MAIL-ARCH.3 — stamped rows read the stamp; the two tests above are the
+  // STAMPLESS fallback (an old server, or this fixture) and keep the old
+  // solved||closed reading so nothing is mislabelled in either direction.
+  it('🔴 a solved row the server stamped LIVE is active in the picker, not archived', () => {
+    const rows = mergePickerRows([REL({ status: 'solved', archived: false })], now)
+    expect(rows[0].archived).toBe(false)
+    expect(rows[0].detail).toContain('active')
+    expect(rows[0].detail).not.toContain('archived')
+  })
+
+  it('a row stamped archived is archived whatever its status says', () => {
+    const rows = mergePickerRows([REL({ status: 'open', archived: true })], now)
+    expect(rows[0].archived).toBe(true)
+    expect(rows[0].detail).toContain('archived')
+  })
+
+  it('a STAMPLESS closed row is still archived — the fallback covers the old-server window', () => {
+    const rows = mergePickerRows([REL({ status: 'closed' })], now)
+    expect(rows[0].archived).toBe(true)
     expect(rows[0].detail).toContain('archived')
   })
 

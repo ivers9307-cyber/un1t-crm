@@ -36,7 +36,7 @@
 // ticket-era status back into a decision the server's `archived` stamp had
 // already made, and a legacy `solved` row the server calls live was presented
 // as archived — the swipe then sent `{archived:false}`, reopening nothing.
-import { isArchived, needsReply } from 'shared/mail-vocabulary'
+import { isArchived, needsReply, archivedOrStatus } from 'shared/mail-vocabulary'
 
 // ── Status ───────────────────────────────────────────────────────────
 //
@@ -55,9 +55,8 @@ export function mailStatusChip(row) {
   // stamps `archived` + `needs_reply` on every mail row precisely so no
   // client re-derives the one predicate the surface exists to keep); the
   // status/direction fallbacks cover ticket-shaped callers with no stamps.
-  const archived = typeof row?.archived === 'boolean'
-    ? row.archived
-    : isArchivedStatus(row?.status)
+  // MAIL-ARCH.3 — that stamp-else-status reading IS shared's archivedOrStatus.
+  const archived = archivedOrStatus(row)
   if (archived) {
     return { label: 'Archived', cls: 'bg-slate-500/10', text: 'text-slate-700' }
   }
@@ -65,13 +64,6 @@ export function mailStatusChip(row) {
     return { label: 'Needs reply', cls: 'bg-amber-500/10', text: 'text-amber-700' }
   }
   return null
-}
-
-/** Solved and closed are the archived half of the (retired) lifecycle —
- * kept because historic rows still carry 'solved', and both read as
- * Archived on this surface. */
-export function isArchivedStatus(status) {
-  return status === 'solved' || status === 'closed'
 }
 
 // ── Views ────────────────────────────────────────────────────────────
@@ -714,11 +706,12 @@ export function ticketToInboxRow(ticket, { mailboxById = {}, showMailbox = false
     // in the Inbox), and an OR over isArchivedStatus overrode that explicit
     // false — so swiping one sent `{archived:false}` and REOPENED a resolved
     // conversation instead of archiving it. The status fallback now applies
-    // only when the flag is absent (a ticket-era caller shaping raw rows).
-    archived: typeof t.archived === 'boolean'
-      ? t.archived
-      : isArchivedStatus(t.status),
-    resolved_at: isArchivedStatus(t.status)
+    // only when the flag is absent (a ticket-era caller shaping raw rows) —
+    // MAIL-ARCH.3: that reading is shared's archivedOrStatus, and
+    // `resolved_at` follows the SAME verdict so a row the server calls live
+    // can never carry a resolution time (a stamped-live `solved` row used to).
+    archived: archivedOrStatus(t),
+    resolved_at: archivedOrStatus(t)
       ? (t.solved_at || t.closed_at || t.updated_at || null)
       : null,
     pending_approval: false,
@@ -1065,9 +1058,7 @@ export function segCountLabel(n) {
  * and a status fallback may only run when the stamp is absent.
  */
 export function mailRowDisplay(row) {
-  const archived = typeof row?.archived === 'boolean'
-    ? row.archived
-    : isArchivedStatus(row?.status)
+  const archived = archivedOrStatus(row)
   return {
     rail: !archived && needsReply(row),
     unread: row?.unread === true,

@@ -7,6 +7,7 @@ import {
   loadTicketForUser, loadOwnAddresses, isElevatedAtLocation,
   loadParticipantMessages, resolveReplyAudience,
 } from '../_helpers'
+import { stampMailRow } from '../../mail/_helpers'
 
 // GET /api/email/tickets/[id] — one ticket and its thread (EMAIL-TICKET.4).
 //
@@ -210,7 +211,18 @@ export async function GET(request, props) {
       // `mailbox` is the account this ticket arrived at, resolved through the
       // caller's visible set — so it is safe to render, and it is what the
       // reply goes back out from.
-      ticket: { ...ticket, mailbox, contact: contact || null, assignee_name: assigneeName },
+      //
+      // MAIL-ARCH.3 — stamped through the ONE row stamp (`archived` +
+      // `needs_reply`, src/app/api/email/mail/_helpers.js), the same as every
+      // list row. This route was the one conversation payload that carried no
+      // stamp, so the mobile thread screen re-derived archived from `status`
+      // and read legacy `solved` as archived while the list (and the server)
+      // call it LIVE: opened from the thread, a solved conversation showed
+      // "Bring back" and a tap wrote status='open'. The stamp travels now and
+      // both clients read it. loadTicketForUser selects `*`, so status /
+      // last_message_direction / is_spam are all on the row and the stamp is
+      // truthful.
+      ticket: stampMailRow({ ...ticket, mailbox, contact: contact || null, assignee_name: assigneeName }),
       messages,
       // MAIL-REFINE.2 — [{ id, subject, merged_at }] for each conversation
       // whose messages were merged into this one; [] when none were.

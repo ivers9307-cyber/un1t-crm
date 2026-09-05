@@ -32,7 +32,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { escapeLikePattern } from '@/lib/like-escape'
 import { loadTicketForUser, loadVisibleMailboxes, scopeToVisibleMailboxes } from '../../../tickets/_helpers'
-import { loadConversationCounts, LIVE_STATUSES } from '../../_helpers'
+import { loadConversationCounts, LIVE_STATUSES, stampMailRow } from '../../_helpers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -45,8 +45,10 @@ export const dynamic = 'force-dynamic'
  */
 export const RELATED_LIMIT = 10
 
+// last_message_direction is read by the `needs_reply` stamp (MAIL-ARCH.3) and
+// never leaves this route; without it the stamp would be a confident false.
 const RELATED_COLUMNS =
-  'id, subject, status, last_message_at, requester_name, merged_into_id, is_spam'
+  'id, subject, status, last_message_at, requester_name, merged_into_id, is_spam, last_message_direction'
 
 export async function GET(request, props) {
   const user = await getCurrentUser()
@@ -109,6 +111,15 @@ export async function GET(request, props) {
   const counts = await loadConversationCounts(db, rows.map(t => t.id))
   const related = rows.map(t => {
     const c = counts.counts.get(t.id) || null
+    // MAIL-ARCH.3 — each candidate carries the SERVER'S `archived` and
+    // `needs_reply`, computed by the ONE row stamp over the full DB row (it
+    // reads status, last_message_direction and is_spam) and then projected
+    // onto the wire shape. This route stamped nothing before, so
+    // mobile/lib/mail-relate.js re-derived archived from `status` and read
+    // legacy `solved` as archived while the web's mail-relate.js reads live
+    // as `!== 'closed'` — the two apps labelled the same related row
+    // differently. Both read the stamp now.
+    const { archived, needs_reply } = stampMailRow(t)
     return {
       id: t.id,
       subject: t.subject,
@@ -116,6 +127,8 @@ export async function GET(request, props) {
       last_message_at: t.last_message_at,
       requester_name: t.requester_name,
       message_count: c ? c.messages : null,
+      archived,
+      needs_reply,
     }
   })
 
