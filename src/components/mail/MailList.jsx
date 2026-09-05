@@ -42,7 +42,8 @@
 import { Inbox, Search, Archive, ArchiveRestore, Mail, MailOpen, Paperclip, AlertCircle } from 'lucide-react'
 import { EmptyState, Loading } from '@/components/ui'
 import { requesterLabel, relativeTime } from '@/lib/ticket-display'
-import { isArchived, needsReply, isUnread, DEFAULT_DENSITY, mailboxShortTag } from './mail-display'
+import { isArchived, needsReply, isUnread, mailboxShortTag } from './mail-vocabulary'
+import { DEFAULT_DENSITY } from './mail-preferences'
 
 export default function MailList({
   conversations = [],

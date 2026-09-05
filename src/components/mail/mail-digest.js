@@ -19,15 +19,17 @@ import { mailboxLabel } from '@/lib/ticket-display'
 /* ── scope ───────────────────────────────────────────────────────────── */
 
 /** The one non-location scope. Everything else a scope can hold is a location id. */
+import { UUID_SHAPE } from '@/lib/uuid-shape'
+
 export const MAIL_SCOPE_ALL = 'all'
 
 export const MAIL_SCOPE_KEY_PREFIX = 'un1t.mail.scope.'
 
 // The house id shape — the same expression MailSurface validates `?c=` with
-// (and the route helpers' UUID_SHAPE). `?loc=` and the persisted scope are
-// operator-editable strings, not server data, so anything that is not this
-// shape has no honest interpretation as a location and is ignored outright.
-const UUID_SHAPE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+// and the route helpers use (one home since MAIL-ARCH.2: @/lib/uuid-shape).
+// `?loc=` and the persisted scope are operator-editable strings, not server
+// data, so anything that is not this shape has no honest interpretation as a
+// location and is ignored outright.
 
 /** Is this string the house id shape? (The `?loc=` deep-link validator.) */
 export function isUuidShaped(value) {

@@ -45,6 +45,7 @@ import { visibleMailboxes, orderMailboxTabs } from '@/lib/email-mailboxes'
 import {
   ticketParticipants, normalizeAddressList, replyMode, MAX_RECIPIENTS,
 } from '@/lib/email-recipients'
+import { UUID_SHAPE } from '@/lib/uuid-shape'
 
 // MAILBOX-CONNECT.7 — `egress` ('postmark' | 'smtp', mig 572) rides along.
 // There is no select('*') on email_mailboxes anywhere in this repo, so a
@@ -218,7 +219,6 @@ export async function loadOwnAddresses(db) {
   return { addresses: valid }
 }
 
-const UUID_SHAPE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
 
 /**
  * Narrow an email_tickets query to the mailboxes this caller may see.

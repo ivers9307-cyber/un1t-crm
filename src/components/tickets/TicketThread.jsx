@@ -54,18 +54,16 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import {
-  ArrowLeft, Lock, Mail, AlertCircle, MailCheck, ImageOff, Maximize2, Minimize2,
+  ArrowLeft, Lock, AlertCircle, MailCheck, ImageOff, Maximize2, Minimize2,
   ShieldAlert, Download, FileWarning, Check, MailX, ShieldX, Forward, UserPlus,
   ExternalLink, Paperclip,
 } from 'lucide-react'
-import { EmptyState, Loading } from '@/components/ui'
+import { Loading } from '@/components/ui'
 import { formatBytes, SKIPPED_REASON_LABEL } from '@/lib/email-attachment-quota'
 import AttachmentPreview, { AttachmentIcon } from './AttachmentPreview'
 import {
   requesterLabel,
   initialsOf,
-  statusMeta,
-  priorityMeta,
   messageKind,
   messageTimestamp,
   relativeTime,
@@ -86,13 +84,15 @@ import {
   defaultExpandedMessageId,
   messageSnippet,
   collapsedSenderLabel,
-  // MAIL-DOCK.1 — the frame's height is context-sized now (dock/full/legacy
-  // default), and the operator's Expand choice persists. Both decisions live
-  // in the pure module; this file only reads them.
+} from '@/components/mail/mail-vocabulary'
+// MAIL-DOCK.1 — the frame's height is context-sized now (dock/full/legacy
+// default), and the operator's Expand choice persists. Both decisions live
+// in the pure preferences module; this file only reads them.
+import {
   frameHeightClass,
   readBodyExpanded,
   writeBodyExpanded,
-} from '@/components/mail/mail-display'
+} from '@/components/mail/mail-preferences'
 import { joinPointsByMessage } from '@/lib/email-tickets'
 // EMAIL-CONTACT-CHIP.1 — the house funnel/off-funnel taxonomy (FUNNEL.1),
 // reused ONLY for the chip's colour/intent grouping. There is no single
@@ -190,24 +190,25 @@ export default function TicketThread({
   // deliveryMeta drifted inside a week.)
   //
   // What genuinely differs is the ticket-only CHROME, so that is what became a
-  // slot. Each prop distinguishes three states, which is why they default to
-  // `undefined` rather than to a value:
-  //   undefined — render the ticket chrome, byte-for-byte as before
-  //   null      — render nothing
-  //   a node    — render that instead
-  // Passing nothing leaves this component exactly as it was; every existing
-  // ticket test pins that.
+  // slot. Each prop is a node to render in that position, or null/undefined
+  // for nothing. MAIL-ARCH.2 removed the last `undefined → ticket chrome`
+  // fallbacks (the statusMeta lifecycle chip, the priority chip, the "Select a
+  // ticket" empty state): MailThread is the only mounter and always passes
+  // its own node for every slot, the ticket queue that rendered the fallbacks
+  // is deleted (RETIRE-TICKETS.1), nothing writes `priority` (every row in
+  // prod is 'normal', which priorityMeta already mapped to no chip), and a
+  // fallback nobody can reach is the dead code this sweep exists to remove.
   //
   // The names are deliberately about POSITION, not about either surface —
   // this file must not learn which screen is asking.
-  statusChip,   // beside the subject: the lifecycle chip, or the caller's own
+  statusChip,   // beside the subject: the caller's own chip (Mail: Spam / Archived / Needs reply)
   controls,     // under the header: status + owner + duplicate rows
   // MAIL-REFINE.1 (03) — between the header and the correspondence: the
   // caller's own notice strip (Mail puts its related-conversations nudge
   // here). Same undefined/null/node contract as the other slots; the ticket
   // chrome never had anything in this position, so undefined renders nothing.
   banner,
-  emptyState,   // with no selection: "Select a ticket", or the caller's own
+  emptyState,   // with no selection: the caller's own empty state
   // Forwarded verbatim to the composer — the one sentence in there written in
   // the ticket lifecycle's vocabulary. See TicketReplyBox.jsx.
   archivedHint,
@@ -301,20 +302,9 @@ export default function TicketThread({
     }
   }
 
-  if (!hasSelection) {
-    if (emptyState !== undefined) return emptyState
-    return (
-      <EmptyState
-        icon={<Mail size={30} />}
-        title="Select a ticket"
-        description="Pick a ticket from the queue to read the thread and reply."
-      />
-    )
-  }
+  if (!hasSelection) return emptyState ?? null
 
   const name = requesterLabel(ticket)
-  const status = statusMeta(ticket?.status)
-  const priority = priorityMeta(ticket?.priority)
   // EMAIL-CONTACT-CHIP.2 — the ticket's own embed wins; local state only fills
   // in right after a successful link, before the next full fetch replaces
   // `ticket` with the server's own copy (which will carry `contact` too).
@@ -367,16 +357,7 @@ export default function TicketThread({
               <h2 className="truncate text-sm font-semibold text-un1t-text">
                 {ticket?.subject || '(no subject)'}
               </h2>
-              {statusChip !== undefined ? statusChip : (
-                <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${status.chip}`}>
-                  {status.label}
-                </span>
-              )}
-              {priority && (
-                <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${priority.chip}`}>
-                  {priority.label} priority
-                </span>
-              )}
+              {statusChip}
             </div>
 
             <ThreadParticipants

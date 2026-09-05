@@ -4,7 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import {
-  loadTicketForUser, statusTimestamps, isNeedsReply, isArchived,
+  loadTicketForUser, statusTimestamps, stampMailRow,
 } from '../../_helpers'
 import { applyWriteback, writebackNotice } from '../../_writeback'
 
@@ -128,13 +128,10 @@ export async function POST(request, props) {
   return NextResponse.json({
     success: true,
     data: {
-      // The same shape a list row carries, so the client can drop it straight
-      // in rather than re-deriving two predicates it was told once already.
-      conversation: {
-        ...updated,
-        needs_reply: isNeedsReply(updated),
-        archived: isArchived(updated),
-      },
+      // The same shape a list row carries (the list's own stamp helper), so the
+      // client can drop it straight in rather than re-deriving two predicates
+      // it was told once already.
+      conversation: stampMailRow(updated),
       // A note beside a SUCCESSFUL action, never an error in disguise.
       writeback_notice: writebackNotice(writeback, 'archive'),
     },

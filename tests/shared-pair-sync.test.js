@@ -131,6 +131,15 @@ const PAIRS = {
     webOnly: ['ensureTeamForBooking'],
     why: 'Pure timing helpers live in shared/; the one IO helper (ensureTeamForBooking) stays web-only in src/lib.',
   },
+  'mail-vocabulary.js': {
+    mode: 'reexport',
+    why:
+      'MAIL-ARCH.2 moved the Mail surface\'s archive / needs-reply / unread / spam predicates and its view list to ' +
+      'shared/ because mobile/lib/email-tickets.js had mirrored them by hand and DRIFTED (archiveToggleMeta OR-ed ' +
+      'the ticket-era status back over the server\'s `archived` stamp and reopened live `solved` rows). src/lib is an ' +
+      '`export * from` shim; src/components/mail/mail-vocabulary.js re-exports it for the web components and mobile ' +
+      "imports 'shared/mail-vocabulary' directly, so the two surfaces read the very same functions.",
+  },
   'sonos-playback.js': {
     mode: 'reexport',
     shared: 'shared/sonos-playback.js',
@@ -322,6 +331,11 @@ function driftedExports(sharedSrc, webSrc) {
 // modules. Nine allowlist entries is a reviewable amount of noise for a check
 // that forces every future cross-named duplicate to be classified.
 const COINCIDENTAL = {
+  'shared/mail-vocabulary.js::src/lib/inbox-queues.js':
+    '`needsReply` twice, over two different row shapes, and deliberately so: inbox-queues answers it for ' +
+    'WhatsApp/Instagram conversations (`!resolved_at && last inbound`, the sidebar badge + UnifiedInbox queue), ' +
+    'mail-vocabulary answers it for email_tickets rows (the server-stamped `needs_reply`, falling back to ' +
+    '`open` + last inbound). Different tables, different columns; unifying them would invent a column one side lacks.',
   'shared/approval-cards.js::src/lib/contact-view.js':
     'Both define a local `mergeTimeline`, over different row shapes: approval cards merge approval events, contact-view merges a contact drawer timeline. No shared vocabulary.',
   'shared/dashboard-metrics.js::src/lib/ads/funnel.js':

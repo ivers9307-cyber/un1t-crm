@@ -111,6 +111,24 @@ export function isArchived(row) {
   return row?.status === 'closed'
 }
 
+/**
+ * MAIL-ARCH.2 — the ONE row stamp. Every conversation this surface hands a
+ * client — the scoped list, the digest sections, the archive and spam
+ * responses — carries `needs_reply` and `archived` computed HERE, so a list row
+ * and an action response can never disagree about the same conversation and
+ * no client ever re-derives either predicate (the mobile swipe did, once, and
+ * reopened live rows — see shared/mail-vocabulary.js). Four routes used to
+ * spell this object literal out by hand; a fifth would have been the drift.
+ * Spreads `row` first so the stamps win over any stale column of the same name.
+ */
+export function stampMailRow(row) {
+  return {
+    ...row,
+    needs_reply: isNeedsReply(row),
+    archived: isArchived(row),
+  }
+}
+
 // How many message rows one list request will read to work out per-conversation
 // counts. A page is 50 conversations and a support thread is a handful of
 // messages, so this is far above any real page — and it is stated because every
