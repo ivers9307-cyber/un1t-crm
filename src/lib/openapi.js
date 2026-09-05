@@ -3244,13 +3244,13 @@ registry.registerPath({
   path: '/api/admin/webhook-dead-letter',
   tags: ['Admin'],
   security: [{ CookieAuth: [] }],
-  summary: 'List captured webhook dead-letter rows (master/owner only)',
-  description: 'Newest 200 webhook_dead_letter rows (mig 315): events that 200\'d their provider but failed to process — unroutable/unparseable inbound email, exhausted postmark_webhook_queue rows (bounces, complaints, RFC-8058 one-click unsubscribes), sent-but-unfiled ticket mail, and glofox/inbody capture failures. Each row is annotated `replayable` (does the provider have a registered idempotent re-driver — see src/lib/webhook-replay.js). Filter with ?provider= and ?status= (pending|resolved|failed|discarded). Consumed by /admin/webhook-dead-letter.',
+  summary: 'List captured webhook dead-letter rows (master sees all; owners see their own locations)',
+  description: 'Newest 200 webhook_dead_letter rows (mig 315): events that 200\'d their provider but failed to process — unroutable/unparseable inbound email, exhausted postmark_webhook_queue rows (bounces, complaints, RFC-8058 one-click unsubscribes), sent-but-unfiled ticket mail, and glofox/inbody capture failures. Each row is annotated `replayable` (does SOME replay path exist for the provider — the registry\'s automatic re-drivers or the operator-only postmark_inbound replay; see src/lib/webhook-replay.js). Filter with ?provider= and ?status= (pending|resolved|failed|discarded). Visibility (MAIL-DEADLETTER.1 review fix): master sees every row; anyone else sees only rows at locations where they are OWNER (judged per location via hasRoleAtLocation, never the active-studio role), bound in the query with .in(location_id) — so a NULL-location row is invisible to a non-master. Consumed by /admin/webhook-dead-letter.',
   request: { query: z.object({ provider: z.string().optional(), status: z.enum(['pending', 'resolved', 'failed', 'discarded']).optional() }) },
   responses: {
     200: { description: 'Dead-letter rows, newest first' },
     401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Forbidden — master or owner required', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — master, or owner at some location, required', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -3259,13 +3259,14 @@ registry.registerPath({
   path: '/api/admin/webhook-dead-letter/{id}/replay',
   tags: ['Admin'],
   security: [{ CookieAuth: [] }],
-  summary: 'Manually replay one dead-letter row (master/owner only)',
-  description: 'Re-drives the captured payload through the provider\'s registered idempotent re-driver. Only registry providers (inbody, postmark ingest failures) are accepted — postmark_queue, postmark_inbound and email_ticket_* are deliberately NOT replayable (re-queueing an exhausted row resets its retry budget; replaying a sent email double-sends it) and answer 400. Pending/failed rows only.',
+  summary: 'Replay one dead-letter row (master, or owner at the row\'s location)',
+  description: 'Re-drives the captured payload. Registry providers (inbody, postmark ingest failures) run their idempotent re-driver; postmark_inbound (MAIL-DEADLETTER.1) re-runs THE inbound email pipeline on the stored payload — claim classification (EMAIL-DEDUPE-STALE.1) plus the unique postmark_message_id index make a second press a no-op, never a duplicate; and the route first CLAIMS the row atomically (conditional UPDATE of last_attempt_at where NULL or older than 60s, judged by rows touched), so two operators inside the same minute cannot both re-drive it — the second answers 200 `recorded:false, reason:claim_in_flight` and runs nothing. A replayed message is filed as if it had just arrived, so staff receive the new-mail push even for days-old mail. Operator-only for inbound: never auto-replayed. postmark_queue and email_ticket_* stay deliberately unreplayable (an exhausted budget would reset; a sent email would double-send) and answer 400. The row is marked resolved ONLY when the re-driver recorded something; a clean run that filed nothing (mailbox still missing, no sender, claim in flight) answers 200 with `recorded:false` + `reason`, bumps attempts, writes the reason to the row\'s `error`, and leaves status untouched. Visibility: master, or owner at the row\'s location_id — for a NULL-location inbound row, the location its recipient address resolves to today; rows the caller cannot see answer 404. Pending/failed rows only.',
   request: { params: z.object({ id: z.string() }) },
   responses: {
-    200: { description: '{ success, status } — resolved on success' },
-    400: { description: 'Provider not auto-replayable, or row discarded', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'No such row', content: { 'application/json': { schema: ErrorResponse } } },
+    200: { description: '{ success, status, recorded, reason?, result?, error?, id, provider } — success mirrors "the row is now resolved"' },
+    400: { description: 'Provider not replayable, or row discarded', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such row, or not visible to the caller', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Row already resolved', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -3275,8 +3276,8 @@ registry.registerPath({
   path: '/api/admin/webhook-dead-letter/{id}/resolve',
   tags: ['Admin'],
   security: [{ CookieAuth: [] }],
-  summary: 'Acknowledge one dead-letter row as handled (master/owner only)',
-  description: 'The human path for the deliberately non-replayable sources (DEADLETTER-UI.1): records that the event was dealt with outside this table (resolved) or needs no action (discarded). Stamps resolved_at either way — that is what removes the row from the integration-health backlog count. Pending/failed rows only; no payload processing of any kind.',
+  summary: 'Acknowledge one dead-letter row as handled (master, or owner at the row\'s location)',
+  description: 'The human path for the deliberately non-replayable sources (DEADLETTER-UI.1): records that the event was dealt with outside this table (resolved) or needs no action (discarded). Stamps resolved_at either way — that is what removes the row from the integration-health backlog count. Pending/failed rows only; no payload processing of any kind. Visibility is the replay route\'s, through the same shared helper: master, or owner at the row\'s location_id (for a NULL-location inbound row, the location its recipient resolves to today); a row the caller cannot see answers 404, judged before the row-state answer.',
   request: {
     params: z.object({ id: z.string() }),
     body: { content: { 'application/json': { schema: z.object({ status: z.enum(['resolved', 'discarded']).optional().openapi({ description: 'Default resolved' }) }).openapi('DeadLetterResolve') } } },
@@ -3284,7 +3285,7 @@ registry.registerPath({
   responses: {
     200: { description: '{ success, data: { id, status } }' },
     400: { description: 'Invalid target status', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'No such row', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such row, or not visible to the caller', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Row already resolved/discarded', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -3294,8 +3295,8 @@ registry.registerPath({
   path: '/api/admin/webhook-dead-letter/bulk-resolve',
   tags: ['Admin'],
   security: [{ CookieAuth: [] }],
-  summary: 'Acknowledge every open dead-letter row of one provider (master/owner only)',
-  description: 'Bulk form of {id}/resolve, for a provider that can park a whole population behind a single cause (ZOOMSYNC.4): zoom_contact_sync parks a row per phone number, so an account-level Zoom refusal — a dropped scope, a lapsed plan, a quota — would otherwise take one click per number to clear after the credential is fixed. Updates pending/failed rows only and stamps resolved_at, exactly like the single-row route. `provider` is REQUIRED and there is no all-providers mode: a blanket clear would let a Zoom cleanup silently acknowledge an unread inbound email.',
+  summary: 'Acknowledge every open dead-letter row of one provider (master; owners within their own locations)',
+  description: 'Bulk form of {id}/resolve, for a provider that can park a whole population behind a single cause (ZOOMSYNC.4): zoom_contact_sync parks a row per phone number, so an account-level Zoom refusal — a dropped scope, a lapsed plan, a quota — would otherwise take one click per number to clear after the credential is fixed. Updates pending/failed rows only and stamps resolved_at, exactly like the single-row route. `provider` is REQUIRED and there is no all-providers mode: a blanket clear would let a Zoom cleanup silently acknowledge an unread inbound email. Master is unbounded; anyone else must be owner at some location (403 otherwise) and the UPDATE is bound with .in(location_id, <their owner locations>), so another org\'s rows and NULL-location rows are left untouched.',
   request: {
     body: { content: { 'application/json': { schema: z.object({
       provider: z.string().openapi({ description: 'webhook_dead_letter.provider key, e.g. zoom_contact_sync' }),

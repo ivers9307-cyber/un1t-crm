@@ -54,7 +54,7 @@ vi.mock('@/lib/log', async () => {
   return { ...actual, logError: vi.fn((...args) => actual.logError(...args)) }
 })
 
-import { POST, maxDuration, _resetAuthRejectLatchForTests } from './route'
+import { POST, maxDuration, _resetAuthRejectLatchForTests, replayInboundDeadLetter } from './route'
 import { maybeNotifyInboundEmail } from '@/lib/email-inbound-push'
 import { logError } from '@/lib/log'
 import { createServerClient } from '@/lib/supabase'
@@ -2338,5 +2338,165 @@ describe('MAILFIX-WEBHOOK.1 — auth-reject recording latch', () => {
     vi.setSystemTime(Date.now() + 31_000)
     await post(inbound(), 'junk')
     expect(insertsInto(db, 'error_events')).toHaveLength(3)
+  })
+})
+
+// ── MAIL-DEADLETTER.1 — operator replay of a dead-lettered inbound email ──
+// replayInboundDeadLetter(db, payload) re-runs THE SAME pipeline POST runs
+// (claim → classify → process → release), on the payload webhook_dead_letter
+// kept verbatim. Two things make it safe to press twice:
+//   • the dedupe claim is CLASSIFIED, not trusted — the original attempt
+//     answered 200 and kept its claim, so a replay always meets a held claim;
+//     it is stale by then (minutes to days old) and reprocesses, or the
+//     message row exists and the 23505 finish-up completes it idempotently;
+//   • in replay mode the pipeline REPORTS a dead-letter outcome instead of
+//     inserting a second morgue row — the row being replayed IS the record.
+describe('MAIL-DEADLETTER.1 — replayInboundDeadLetter', () => {
+  const CLAIM = 'inbound-email:pm-inbound-1'
+
+  function withLedgerDb(state) {
+    db = makeDb(state)
+    createServerClient.mockImplementation(() => db)
+    bindDedupeLedger(db)
+    return db
+  }
+
+  it('files a no_matching_mailbox payload once the mailbox exists — one ticket, one message, NO second morgue row', async () => {
+    // The primary use case: the row dead-lettered because accounts@hatch was
+    // not configured; the operator has since added it. The original 200 kept
+    // the dedupe claim, so the replay meets a stale one and reprocesses.
+    withLedgerDb()
+    holdClaim(db, CLAIM, 6 * 3600_000)
+
+    const out = await replayInboundDeadLetter(db, inbound())
+
+    expect(out).toMatchObject({ recorded: true, result: { ticket_id: 'new-ticket', mailbox_id: 'mb-hatch' } })
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(1)
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
+    expect(deadLetterWebhook).not.toHaveBeenCalled()
+    // A successful replay keeps its claim, like a successful POST: a stray
+    // re-delivery afterwards must still short-circuit.
+    expect(db._state.claims.has(CLAIM)).toBe(true)
+  })
+
+  it('reports recorded:false when the mailbox is STILL missing, and does not dead-letter a duplicate', async () => {
+    withLedgerDb({ mailboxes: [STILLORGAN] })
+    holdClaim(db, CLAIM, 6 * 3600_000)
+
+    const out = await replayInboundDeadLetter(db, inbound())
+
+    expect(out).toEqual({ recorded: false, reason: 'no_matching_mailbox' })
+    expect(db.inserts).toHaveLength(0)
+    expect(deadLetterWebhook).not.toHaveBeenCalled()
+  })
+
+  it('an unfixable payload (no sender) is a no-op with its reason, never a second row', async () => {
+    withLedgerDb()
+    holdClaim(db, CLAIM, 6 * 3600_000)
+    const out = await replayInboundDeadLetter(db, inbound({ From: '', FromFull: null }))
+    expect(out).toEqual({ recorded: false, reason: 'no_sender' })
+    expect(db.inserts).toHaveLength(0)
+    expect(deadLetterWebhook).not.toHaveBeenCalled()
+  })
+
+  it('a message that was ALREADY filed is reported already_filed — no duplicate ticket or message', async () => {
+    // The row describes a failure someone has since recovered from (a manual
+    // re-delivery from Postmark Activity, say). Nothing to file; the row can
+    // close as recorded, because the thing it exists to recover IS recorded.
+    const filedAt = new Date(Date.now() - 60_000).toISOString()
+    withLedgerDb({
+      threadRows: [{
+        id: 'msg-filed', ticket_id: 'T-open', location_id: 'loc-hatch',
+        postmark_message_id: 'pm-inbound-1', created_at: filedAt,
+      }],
+      tickets: {
+        // As the pipeline really files it: mailbox + requester stamped, so the
+        // stale-claim reprocess below resolves to APPEND via the subject
+        // fallback and never reaches the ticket insert. (A filed ticket that
+        // is closed/merged/renamed would take `create` and leave the orphan
+        // the route header already accepts for a Postmark re-delivery —
+        // pre-existing, not a replay behaviour.)
+        'T-open': {
+          id: 'T-open', location_id: 'loc-hatch', mailbox_id: 'mb-hatch',
+          requester_email: 'member@example.com', status: 'open', merged_into_id: null,
+          has_inbound: true, subject: 'Billing question', last_message_at: filedAt,
+        },
+      },
+    })
+
+    // Young claim → 'completed' verdict → deduped.
+    holdClaim(db, CLAIM, 5_000)
+    expect(await replayInboundDeadLetter(db, inbound())).toEqual({ recorded: true, result: { already_filed: true } })
+    // Stale claim → reprocess → 23505 on the unique index → finish-up → deduped.
+    holdClaim(db, CLAIM, 6 * 3600_000)
+    expect(await replayInboundDeadLetter(db, inbound())).toEqual({ recorded: true, result: { already_filed: true } })
+
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(0)
+    expect(db._state.threadRows.filter(r => r.postmark_message_id === 'pm-inbound-1')).toHaveLength(1)
+    // The finish-up judged the bump by state and found it done: no reopen of
+    // an already-current ticket on a replay of old mail.
+    expect(updatesTo(db, 'email_tickets').filter(u => u.payload.last_message_direction === 'inbound')).toHaveLength(0)
+  })
+
+  it('ticket exists but the message does not (died between the two inserts) → appends to that ticket; no second ticket', async () => {
+    // The orphan the route header accepts. Threading headers name no message
+    // of ours, but MAIL-REFINE.1's same-mailbox/same-sender/same-subject
+    // fallback finds the open orphan and the replay appends instead of
+    // forking. Exactly one message insert, zero ticket inserts.
+    withLedgerDb({
+      tickets: {
+        'T-orphan': {
+          id: 'T-orphan', location_id: 'loc-hatch', mailbox_id: 'mb-hatch',
+          requester_email: 'member@example.com', status: 'open', merged_into_id: null,
+          subject: 'Billing question', first_response_at: null, unread_count: 0,
+          last_message_at: '2026-08-01T00:00:00Z',
+        },
+      },
+    })
+    holdClaim(db, CLAIM, 6 * 3600_000)
+
+    const out = await replayInboundDeadLetter(db, inbound())
+
+    expect(out).toMatchObject({ recorded: true, result: { ticket_id: 'T-orphan' } })
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(0)
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
+    expect(insertsInto(db, 'email_inbox_messages')[0].payload.ticket_id).toBe('T-orphan')
+  })
+
+  it('a young in-flight claim is a no-op ("try again shortly"), not a failure, and the live owner keeps its claim', async () => {
+    withLedgerDb()
+    holdClaim(db, CLAIM, 5_000)
+    const out = await replayInboundDeadLetter(db, inbound())
+    expect(out).toEqual({ recorded: false, reason: 'claim_in_flight' })
+    expect(db.inserts).toHaveLength(0)
+    expect(db.deletes).toHaveLength(0)
+    expect(db._state.claims.has(CLAIM)).toBe(true)
+  })
+
+  it('a 5xx inside the pipeline THROWS (so the driver records a failed attempt) and gives the claim back', async () => {
+    withLedgerDb({ fail: { 'contacts:select': { message: 'db down' } } })
+    holdClaim(db, CLAIM, 6 * 3600_000)
+
+    await expect(replayInboundDeadLetter(db, inbound())).rejects.toThrow('contact_lookup_failed')
+
+    // Released, exactly as a POST 5xx releases: the next replay (or a
+    // Postmark re-delivery) genuinely re-processes.
+    expect(db._state.claims.has(CLAIM)).toBe(false)
+    // …and no dedupe_release_failed morgue row either — the row exists.
+    expect(deadLetterWebhook).not.toHaveBeenCalled()
+  })
+
+  it('a payload with no MessageID cannot be replayed (nothing to claim against)', async () => {
+    withLedgerDb()
+    const out = await replayInboundDeadLetter(db, { From: 'x@example.com' })
+    expect(out).toEqual({ recorded: false, reason: 'missing_message_id' })
+    expect(db.inserts).toHaveLength(0)
+  })
+
+  it('POST is unchanged: it still routes through the same pipeline (control)', async () => {
+    withLedgerDb()
+    const res = await post(inbound())
+    expect(res.status).toBe(200)
+    expect((await res.json()).ticket_id).toBe('new-ticket')
   })
 })

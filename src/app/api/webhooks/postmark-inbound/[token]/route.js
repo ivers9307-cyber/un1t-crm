@@ -485,6 +485,28 @@ export async function POST(request, { params }) {
   }
 
   const db = createServerClient()
+  return ingestInboundEmail(db, body)
+}
+
+/**
+ * The claim → classify → process → release cycle, on a payload that has
+ * already passed auth, JSON parsing and the MessageID check. Split out of
+ * POST (MAIL-DEADLETTER.1) so the operator replay of a dead-lettered inbound
+ * email runs THE SAME pipeline on the payload webhook_dead_letter kept — not a
+ * parallel one. Every branch below is exactly what POST used to do inline;
+ * `replay` changes two things and nothing else:
+ *
+ *   • the pipeline's dead-letter writes REPORT instead of INSERT — the row
+ *     being replayed is already the record, and a second `no_matching_mailbox`
+ *     row per Replay click would multiply the morgue;
+ *   • a failed claim release does not dead-letter either, for the same reason
+ *     (the 500 still propagates, so the driver records the failed attempt).
+ *
+ * Returns the NextResponse POST answers with. Exported for the re-driver and
+ * for tests.
+ */
+export async function ingestInboundEmail(db, body, { replay = false } = {}) {
+  const messageId = body.MessageID
 
   // Idempotency — Postmark retries on 5xx; don't double-thread.
   const eventId = dedupeEventId(messageId)
@@ -534,9 +556,15 @@ export async function POST(request, { params }) {
   // header makes `new Date(...).toISOString()` raise, and Next would answer
   // 500 with the claim still held). Status-gated release + a catch-all
   // covers both, and every non-5xx response passes through untouched.
+  // Replay mode: the morgue row already exists, so the pipeline reports the
+  // outcome through its response instead of inserting a second row.
+  const deadLetter = replay
+    ? async () => {}
+    : (args) => deadLetterWebhook(db, args)
+
   let res
   try {
-    res = await processInboundEmail(db, body, messageId)
+    res = await processInboundEmail(db, body, messageId, { deadLetter })
   } catch (err) {
     await recordInboundFailure('unhandled_error', err)
     res = NextResponse.json({ success: false, error: 'unhandled_error' }, { status: 500 })
@@ -547,13 +575,14 @@ export async function POST(request, { params }) {
     // is NOT proof the row failed to commit, and a DELETE matching nothing
     // costs one round trip on a path that is already failing.
     const released = await releaseDedupeClaim(db, eventId)
-    if (!released) {
+    if (!released && !replay) {
       // We know the retry will now be swallowed as `deduped`, so capture the
       // payload somewhere an operator can see it. deadLetterWebhook never
       // throws and never blocks. provider 'postmark_inbound', NOT
       // WEBHOOK_PROVIDERS.POSTMARK — same reason as the no_matching_mailbox
       // dead-letter below: that key is auto-replayable into the OUTBOUND
-      // queue, which is the wrong pipeline for an inbound email.
+      // queue, which is the wrong pipeline for an inbound email. (Not on a
+      // replay: the row being replayed is the capture.)
       await deadLetterWebhook(db, {
         provider: 'postmark_inbound',
         eventType: 'inbound_email',
@@ -662,8 +691,12 @@ async function loadActiveMailboxes(db) {
  * land in the right studio's integration-health count even when the mail
  * itself could not be filed. Never throws; null when no mailbox matches
  * (truly unroutable — exactly the rows that should stay NULL).
+ *
+ * Exported since MAIL-DEADLETTER.1: the admin replay route resolves a
+ * NULL-location inbound row to the location its recipient routes to TODAY, so
+ * an owner may replay it once they have configured the mailbox.
  */
-async function bestEffortInboundLocation(db, body) {
+export async function bestEffortInboundLocation(db, body) {
   try {
     // Best-effort by contract: a read failure or the scan ceiling both mean
     // "no location to claim", which is the same NULL this already returned for
@@ -683,7 +716,7 @@ async function bestEffortInboundLocation(db, body) {
  * the dedupe claim on the way out; every `return` below is the response POST
  * answers with, unchanged.
  */
-async function processInboundEmail(db, body, messageId) {
+async function processInboundEmail(db, body, messageId, { deadLetter = (args) => deadLetterWebhook(db, args) } = {}) {
   // ── The staged-bytes contract (EMAIL-INBOUND-SHIM.1) ──────────────
   // Wrap every exit that means "nothing here will ever reference the bytes the
   // shim put in the bucket". Written as a wrapper rather than a call at each
@@ -716,7 +749,7 @@ async function processInboundEmail(db, body, messageId) {
     // below. The staged bytes are still discarded (unfiled): the captured
     // payload keeps the slim marker shape for triage, nothing will ever
     // reference the objects.
-    await deadLetterWebhook(db, {
+    await deadLetter({
       provider: 'postmark_inbound',
       eventType: 'inbound_email',
       payload: body,
@@ -822,7 +855,7 @@ async function processInboundEmail(db, body, messageId) {
     // matched, so there is no location to claim — inventing one would repeat
     // the oldest-active-location bug this route exists to prevent. The
     // integration-health count is NULL-inclusive, so the row still surfaces.
-    await deadLetterWebhook(db, {
+    await deadLetter({
       provider: 'postmark_inbound',
       eventType: 'inbound_email',
       payload: body,
@@ -1374,4 +1407,64 @@ async function finishDedupedDelivery(db, { body, messageId, locationId, mailboxI
   }
 
   return NextResponse.json({ success: true, deduped: true })
+}
+
+/**
+ * MAIL-DEADLETTER.1 — the operator re-driver for a `postmark_inbound` row in
+ * webhook_dead_letter. Runs ingestInboundEmail in replay mode on the payload
+ * the row kept verbatim and translates the response into the re-driver
+ * contract in src/lib/webhook-replay.js:
+ *
+ *   200 { ticket_id, … }      → { recorded: true, result }   the row resolves
+ *   200 { deduped }           → { recorded: true, result: { already_filed } }
+ *       — the message row exists (classifySeenClaim's `completed`, or the
+ *       23505 finish-up). The thing the row exists to recover IS recorded;
+ *       nothing was written twice. A no-op, not a duplicate.
+ *   200 { dead_lettered: r }  → { recorded: false, reason: r }  row stays open
+ *       — the cause is still there (mailbox missing, no sender). No second
+ *       morgue row was written (replay mode); the reason lands on this one.
+ *   503 claim_in_flight       → { recorded: false, reason }      try again
+ *   any other 5xx             → throws — the driver records a failed attempt.
+ *
+ * WHY THIS IS SAFE TO PRESS TWICE. The original attempt answered 200 and KEPT
+ * its dedupe claim, so a replay always meets a held claim and classifies it
+ * (EMAIL-DEDUPE-STALE.1): the row is minutes-to-days old, so the claim is
+ * stale and the payload reprocesses; if a message row exists after all, the
+ * unique postmark_message_id index turns the insert into a 23505 and
+ * finishDedupedDelivery completes only what state says is missing. A ticket
+ * orphaned by a death between the two inserts is found by MAIL-REFINE.1's
+ * same-mailbox/same-sender/same-subject fallback and appended to, not forked.
+ *
+ * KNOWN LOSS, accepted: attachments the shim staged were DISCARDED when the
+ * mail first dead-lettered (`unfiled` — nothing would ever have referenced
+ * them). A replayed message therefore files with those attachments recorded
+ * as skipped (`rehost_failed`), never with wrong bytes.
+ *
+ * @param {object} db      service-role supabase client
+ * @param {object} payload the stored raw Postmark inbound body
+ */
+export async function replayInboundDeadLetter(db, payload) {
+  if (!payload || typeof payload !== 'object' || !payload.MessageID) {
+    return { recorded: false, reason: 'missing_message_id' }
+  }
+  const res = await ingestInboundEmail(db, payload, { replay: true })
+  let json = null
+  try { json = await res.json() } catch { /* a 5xx with no body is still a 5xx */ }
+
+  if (res.status === 503 && json?.error === 'claim_in_flight') {
+    return { recorded: false, reason: 'claim_in_flight' }
+  }
+  if (res.status >= 400) {
+    throw new Error(json?.error || `inbound pipeline answered ${res.status}`)
+  }
+  if (json?.dead_lettered) {
+    return { recorded: false, reason: String(json.dead_lettered) }
+  }
+  if (json?.deduped) {
+    return { recorded: true, result: { already_filed: true } }
+  }
+  return {
+    recorded: true,
+    result: { ticket_id: json?.ticket_id ?? null, mailbox_id: json?.mailbox_id ?? null, matched_via: json?.matched_via ?? null },
+  }
 }
