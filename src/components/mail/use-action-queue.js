@@ -30,6 +30,9 @@ export function useActionQueue({
   performArchive,
   performMarkUnread,
   performMarkRead,
+  // MAIL-SPAM.1 — Mark as spam / Not spam. Optional so the hook's older
+  // mounters (and their tests) need not know about the verb.
+  performSpam,
   setActionSaving,
   setBusyId,
   mountedRef,
@@ -86,6 +89,7 @@ export function useActionQueue({
         if (item.type === 'archive') await performArchive(item.row, item.args.archived)
         else if (item.type === 'markUnread') await performMarkUnread(item.row)
         else if (item.type === 'markRead') await performMarkRead(item.row)
+        else if (item.type === 'spam') await performSpam?.(item.row, item.args.spam)
       } finally {
         // Popped either way — the array is a ref, not component state, so
         // mutating it after unmount is harmless; it is the setState calls
@@ -115,7 +119,7 @@ export function useActionQueue({
         }
       }
     })()
-  }, [queueTick, performArchive, performMarkUnread, performMarkRead, setActionSaving, setBusyId, mountedRef])
+  }, [queueTick, performArchive, performMarkUnread, performMarkRead, performSpam, setActionSaving, setBusyId, mountedRef])
 
   const archive = useCallback((row, requestedArchived) => {
     if (!row?.id) return
@@ -137,5 +141,13 @@ export function useActionQueue({
     enqueueAction('markRead', row)
   }, [enqueueAction])
 
-  return { archive, markUnreadAction, markReadAction }
+  // MAIL-SPAM.1 — through the same serial queue as archive, so a spam click
+  // racing an archive on the same row cannot overlap writes. No pending-
+  // target map: the verb is rare and not on a key, so the double-`e` race
+  // that map exists for has no equivalent here.
+  const spamAction = useCallback((row, spam) => {
+    enqueueAction('spam', row, { spam })
+  }, [enqueueAction])
+
+  return { archive, markUnreadAction, markReadAction, spamAction }
 }

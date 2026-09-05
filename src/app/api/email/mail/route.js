@@ -4,7 +4,7 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import {
   loadInboxMailboxes, loadConversationCounts,
-  scopeToNeedsReply, scopeToUnmerged, isNeedsReply, isArchived,
+  scopeToNeedsReply, scopeToUnmerged, scopeToSpamView, isNeedsReply, isArchived,
   MAIL_VIEWS, applyView,
 } from './_helpers'
 import { scopeToVisibleMailboxes } from '../tickets/_helpers'
@@ -183,6 +183,11 @@ export async function GET(request) {
     if (!searched.skipped) {
       searchPartial = searched.partial
       query = query.in('id', searched.ids)
+      // MAIL-SPAM.1 — the view is overridden, the QUARANTINE is not. Search
+      // spans inbox and archive because those are two folders of the same
+      // mail; spam is a different bin. A search from the inbox never surfaces
+      // quarantined mail, and a search from the Spam view shows only that.
+      query = scopeToSpamView(query, view)
     } else {
       query = applyView(query, view)
     }

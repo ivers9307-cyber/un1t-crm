@@ -212,6 +212,7 @@ import { statusTimestamps } from '@/app/api/email/tickets/_helpers'
 import { escapeLikePattern } from '@/lib/like-escape'
 import { storeInboundAttachments, discardStagedAttachments } from '@/lib/email-attachments-server'
 import { maybeNotifyInboundEmail } from '@/lib/email-inbound-push'
+import { extractSpamScore, classifyInboundSpam, SPAM_SETTINGS_COLUMNS } from '@/lib/email-spam'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -944,7 +945,7 @@ async function processInboundEmail(db, body, messageId, { deadLetter = (args) =>
       // TICKET'S mailbox decides who may be told, and the PRE-increment unread
       // count is the one-ping-per-unseen-burst gate (EMAIL-INBOUND-PUSH.1).
       const { data: found, error: tErr } = await db.from('email_tickets')
-        .select('id, status, subject, first_response_at, mailbox_id, unread_count, assigned_to')
+        .select('id, status, subject, first_response_at, mailbox_id, unread_count, assigned_to, is_spam')
         .eq('id', threadedTicketId)
         .eq('location_id', locationId)
         .maybeSingle()
@@ -972,7 +973,7 @@ async function processInboundEmail(db, body, messageId, { deadLetter = (args) =>
     if (subjectKey) {
       try {
         const { data: sameSender, error: sameErr } = await db.from('email_tickets')
-          .select('id, status, subject, first_response_at, mailbox_id, unread_count, assigned_to')
+          .select('id, status, subject, first_response_at, mailbox_id, unread_count, assigned_to, is_spam')
           .eq('location_id', locationId)
           .eq('mailbox_id', mailbox.id)
           // escapeLikePattern: the sender is attacker-controlled and stored
@@ -995,6 +996,30 @@ async function processInboundEmail(db, body, messageId, { deadLetter = (args) =>
   }
 
   const action = resolveTicketAction(threadedTicket)
+
+  // ── Spam verdict (MAIL-SPAM.1) ─────────────────────────────────────
+  // Postmark's SpamAssassin score (SpamScore, else the X-Spam-* headers)
+  // against THIS location's threshold (company_settings.email_spam_threshold,
+  // default 5.0). Everything in src/lib/email-spam.js fails OPEN: no readable
+  // score, a disabled filter, or an unreadable threshold all mean "file it
+  // normally" — a lost lead is worse than a spam ticket. The settings read is
+  // best-effort for the same reason: a blipped company_settings query falls
+  // back to the defaults and can never 5xx the email.
+  //
+  // THE VERDICT IS MADE AT TICKET CREATION. An APPEND inherits the ticket's
+  // existing flag instead: a high-scoring reply onto a live member thread
+  // must not hide that whole conversation (the sender already threads into
+  // it, and the operator can Mark as spam by hand), and a low-scoring reply
+  // onto a quarantined thread stays quarantined (an operator who wants it
+  // releases the thread with Not spam). Either way `quarantined` is what
+  // decides the two bypasses below — the unread increment and the push.
+  const spam = classifyInboundSpam({
+    score: extractSpamScore(body),
+    settings: await loadSpamSettings(db, locationId),
+  })
+  const quarantined = action.action === 'append'
+    ? threadedTicket?.is_spam === true
+    : spam.isSpam
 
   // EMAIL-INBOUND-POISON.1 — every attacker-suppliable string is stripped of
   // what Postgres text cannot hold (NUL, lone surrogates) BEFORE the inserts.
@@ -1042,6 +1067,12 @@ async function processInboundEmail(db, body, messageId, { deadLetter = (args) =>
         last_message_at: now,
         last_message_direction: 'inbound',
         last_message_preview: preview,
+        // MAIL-SPAM.1 — written ONLY when a score was readable, so a payload
+        // with no verdict produces exactly the insert it always did. The score
+        // is kept whichever way the verdict went (audit: "why was this let
+        // through / caught"); the flag, the clock and the source only on spam.
+        ...(spam.score !== null ? { is_spam: spam.isSpam, spam_score: spam.score } : {}),
+        ...(spam.isSpam ? { spam_flagged_at: now, spam_verdict_source: 'ingest' } : {}),
       })
       .select('id')
       .single()
@@ -1173,6 +1204,24 @@ async function processInboundEmail(db, body, messageId, { deadLetter = (args) =>
       return NextResponse.json({ success: false, error: 'ticket_bump_failed' }, { status: 500 })
     }
   }
+  // ── Quarantine (MAIL-SPAM.1) ──────────────────────────────────────
+  // A quarantined message is FILED — ticket, message, attachments, bump, all
+  // of it — and then goes quiet: no unread increment (the badge/unseen path)
+  // and no staff push. Those two calls are the ONLY things the verdict
+  // suppresses in this route; the list scopes (scopeToSpamView) keep the row
+  // out of every view but Spam. There is no auto-reply on this channel to
+  // suppress. Releasing the ticket (POST /api/email/mail/[id]/spam
+  // { spam: false }) fires exactly these two, later.
+  if (quarantined) {
+    return NextResponse.json({
+      success: true,
+      ticket_id: ticketId,
+      mailbox_id: mailbox.id,
+      matched_via: matchedVia,
+      quarantined: true,
+    })
+  }
+
   // supabase-js builders are thenables with no .catch — try/catch, not
   // .catch(), or the rpc never fires.
   //
@@ -1230,6 +1279,32 @@ async function processInboundEmail(db, body, messageId, { deadLetter = (args) =>
     mailbox_id: mailbox.id,
     matched_via: matchedVia,
   })
+}
+
+/**
+ * MAIL-SPAM.1 — this location's spam-filter settings row, or null.
+ *
+ * Null is the NORMAL answer (most studios have never saved a company_settings
+ * row) and means "the defaults" to classifyInboundSpam. A read FAILURE also
+ * answers null, logged: the verdict then runs on the default threshold rather
+ * than 5xx-ing the email — a settings blip must never cost a member's message
+ * its filing, and a 5.0 default is a sound verdict on a real score.
+ */
+async function loadSpamSettings(db, locationId) {
+  try {
+    const { data, error } = await db.from('company_settings')
+      .select(`${SPAM_SETTINGS_COLUMNS.enabled}, ${SPAM_SETTINGS_COLUMNS.threshold}`)
+      .eq('location_id', locationId)
+      .limit(1)
+    if (error) {
+      logError('postmark-inbound', 'spam settings read failed — using the default threshold', { locationId, error })
+      return null
+    }
+    return Array.isArray(data) ? (data[0] || null) : null
+  } catch (err) {
+    logError('postmark-inbound', 'spam settings read threw — using the default threshold', { locationId, err })
+    return null
+  }
 }
 
 /**
@@ -1319,7 +1394,7 @@ async function finishDedupedDelivery(db, { body, messageId, locationId, mailboxI
   }
 
   const { data: tickets, error: tErr } = await db.from('email_tickets')
-    .select('id, last_message_at, mailbox_id, unread_count, assigned_to')
+    .select('id, last_message_at, mailbox_id, unread_count, assigned_to, is_spam')
     .eq('id', winner.ticket_id)
     .limit(1)
   if (tErr) {
@@ -1334,6 +1409,12 @@ async function finishDedupedDelivery(db, { body, messageId, locationId, mailboxI
       const bumped = await bumpTicketForInbound(db, winner.ticket_id, { now, preview })
       if (!bumped) {
         return NextResponse.json({ success: false, error: 'ticket_bump_failed' }, { status: 500 })
+      }
+      // MAIL-SPAM.1 — a quarantined ticket is bumped but stays quiet: the
+      // same two bypasses as the first attempt (no unread, no push). The flag
+      // on the winning ticket is the verdict the first attempt already made.
+      if (ticket.is_spam === true) {
+        return NextResponse.json({ success: true, deduped: true, quarantined: true })
       }
       // MAILFIX-GUARDRAILS.1 — same shape as the first-attempt increment
       // above: judged and logged, never surfaced.
