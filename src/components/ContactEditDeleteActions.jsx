@@ -16,6 +16,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Pencil, Trash2, Loader2, AlertTriangle, X } from 'lucide-react'
+import { summariseScrubWarnings } from '@/lib/scrub-warnings'
 
 export default function ContactEditDeleteActions({ contact, canEdit, canDelete }) {
   const router = useRouter()
@@ -31,6 +32,11 @@ export default function ContactEditDeleteActions({ contact, canEdit, canDelete }
   // a person_group), so this is a second, later answer, not a duplicate of
   // the "Blocking" section above — render it where the operator is looking.
   const [deleteBlockers, setDeleteBlockers] = useState([])
+  // MAIL-GDPR.1 — a SUCCESSFUL delete can carry `data.scrub_warnings`: the
+  // contact row is gone but a mail statement failed, so inbox rows still hold
+  // their details. Shown here, before navigating, because after the push
+  // there is no page to show it on. It never blocks: the delete has happened.
+  const [scrubSummary, setScrubSummary] = useState(null)
 
   const expected = (contact.first_name || contact.name?.split(' ')[0] || contact.email || '').trim()
 
@@ -70,12 +76,30 @@ export default function ContactEditDeleteActions({ contact, canEdit, canDelete }
         setDeleting(false)
         return
       }
-      router.push('/contacts')
-      router.refresh()
+      const summary = summariseScrubWarnings(j.data?.scrub_warnings)
+      if (summary) {
+        setScrubSummary(summary)
+        setDeleting(false)
+        return
+      }
+      leave()
     } catch (e) {
       setDeleteError(e.message || 'Network error')
       setDeleting(false)
     }
+  }
+
+  function leave() {
+    router.push('/contacts')
+    router.refresh()
+  }
+
+  // Once the row is gone this page is stale, so every way out of the dialog
+  // leaves it; before that, closing just closes.
+  function dismiss() {
+    if (deleting) return
+    if (scrubSummary) leave()
+    else setConfirming(false)
   }
 
   return (
@@ -101,7 +125,7 @@ export default function ContactEditDeleteActions({ contact, canEdit, canDelete }
       {confirming && (
         <div
           className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-          onClick={() => !deleting && setConfirming(false)}
+          onClick={dismiss}
         >
           <div
             className="bg-un1t-surface border border-un1t-border rounded-xl max-w-lg w-full p-6"
@@ -110,12 +134,14 @@ export default function ContactEditDeleteActions({ contact, canEdit, canDelete }
             <div className="flex items-start gap-3 mb-4">
               <AlertTriangle size={22} className="text-red-500 mt-0.5 shrink-0" />
               <div className="flex-1">
-                <h3 className="text-base font-semibold text-un1t-text">Delete {contact.name}?</h3>
-                <p className="text-xs text-un1t-subtle mt-1">This cannot be undone.</p>
+                <h3 className="text-base font-semibold text-un1t-text">
+                  {scrubSummary ? `${contact.name} deleted` : `Delete ${contact.name}?`}
+                </h3>
+                {!scrubSummary && <p className="text-xs text-un1t-subtle mt-1">This cannot be undone.</p>}
               </div>
               <button
                 type="button"
-                onClick={() => !deleting && setConfirming(false)}
+                onClick={dismiss}
                 className="text-un1t-subtle hover:text-un1t-text"
                 disabled={deleting}
               >
@@ -123,19 +149,38 @@ export default function ContactEditDeleteActions({ contact, canEdit, canDelete }
               </button>
             </div>
 
-            {impactError && (
+            {scrubSummary && (
+              <div className="space-y-3">
+                <div className="bg-amber-500/10 border border-amber-500/30 text-amber-700 text-xs rounded-md p-3 space-y-1">
+                  <p className="font-semibold">The contact was deleted, but the mail scrub was incomplete.</p>
+                  <p>
+                    {scrubSummary.text}. Those mail rows still carry the person&apos;s details — fix the cause
+                    and re-check the inbox by hand. The details are in the server log.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={leave}
+                  className="w-full inline-flex items-center justify-center text-sm bg-un1t-text text-un1t-bg font-medium py-2 rounded-md hover:bg-un1t-accent"
+                >
+                  Continue
+                </button>
+              </div>
+            )}
+
+            {!scrubSummary && impactError && (
               <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2 mb-3">
                 {impactError}
               </div>
             )}
 
-            {!impact && !impactError && (
+            {!scrubSummary && !impact && !impactError && (
               <div className="text-xs text-un1t-subtle inline-flex items-center gap-2 mb-3">
                 <Loader2 size={12} className="animate-spin" /> Calculating impact…
               </div>
             )}
 
-            {impact && (
+            {!scrubSummary && impact && (
               <div className="text-sm text-un1t-subtle space-y-3 mb-4">
                 {/* IMPACTCAT.1 — a preview that failed to look must not read as
                     a confident zero. Set when the catalog function is
@@ -214,7 +259,7 @@ export default function ContactEditDeleteActions({ contact, canEdit, canDelete }
               </div>
             )}
 
-            {impact && impact.block_delete?.length === 0 && (
+            {!scrubSummary && impact && impact.block_delete?.length === 0 && (
               <div className="space-y-3">
                 <div>
                   <label className="block text-xs text-un1t-subtle mb-1">

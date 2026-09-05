@@ -15,6 +15,13 @@
 // comparison is escapeLikePattern + ilike — the house rule that keeps a `%`
 // in a stored address from relating the whole domain.
 //
+// RELATEDNESS NEVER CROSSES THE QUARANTINE FLAG (MAIL-SPAM.1). The picker
+// merges related → current, so a live anchor offering a quarantined candidate
+// would fold spam into a member's thread, and a spam anchor offering the
+// sender's live thread would fold that thread into the spam ticket — where
+// the 30-day purge deletes it. Candidates carry the anchor's own is_spam, and
+// the nudge's open_count follows the same scope.
+//
 // 🔴 A FAILED LOOKUP IS A 500, NEVER AN EMPTY LIST. "No related threads" is
 // an answer the merge picker acts on (it hides the nudge); a blipped query
 // wearing that answer would hide a real duplicate exactly when the operator
@@ -39,7 +46,7 @@ export const dynamic = 'force-dynamic'
 export const RELATED_LIMIT = 10
 
 const RELATED_COLUMNS =
-  'id, subject, status, last_message_at, requester_name, merged_into_id'
+  'id, subject, status, last_message_at, requester_name, merged_into_id, is_spam'
 
 export async function GET(request, props) {
   const user = await getCurrentUser()
@@ -69,7 +76,10 @@ export async function GET(request, props) {
       .eq('location_id', ticket.location_id)
       .neq('id', ticket.id)
       .ilike('requester_email', escapeLikePattern(ticket.requester_email))
-      .is('merged_into_id', null),
+      .is('merged_into_id', null)
+      // The anchor's own side of the flag — see the header. `=== true` so a
+      // pre-mig-584 row (no column) anchors the live side, never both.
+      .eq('is_spam', ticket.is_spam === true),
     { mailboxes, elevated },
   )
 

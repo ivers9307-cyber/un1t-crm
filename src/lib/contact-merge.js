@@ -88,6 +88,19 @@ const REDACT_ON_DELETE_TABLES = Object.freeze([
   { table: 'whatsapp_messages',             column: 'contact_id', label: 'WhatsApp messages (body + media redacted, metadata preserved)' },
 ])
 
+// MAIL-GDPR.1 — the mail tables, scrubbed by redactMailForContact()
+// (src/lib/contact-mail-erasure.js) under the same doctrine. Both FKs are SET
+// NULL in the catalog (migs 482, 394), so without this override the dialog
+// truthfully said "kept, unlinked" — which was precisely the orphaned-PII bug.
+// email_ticket_attachments has no contact column and never appears in the
+// catalog; it is deleted via message_id and named in the messages label.
+// Kept as its own list so REDACT_ON_DELETE_TABLES stays exactly the WhatsApp
+// scrub's work list, which its tests pin.
+const REDACT_MAIL_TABLES = Object.freeze([
+  { table: 'email_tickets',        column: 'contact_id', label: 'email tickets (requester + subject redacted, thread preserved)' },
+  { table: 'email_inbox_messages', column: 'contact_id', label: 'email messages (addresses + body redacted, attachments deleted, metadata preserved)' },
+])
+
 // MERGE-TX.1 — dedupePreUpdate lived here. It deleted the loser's colliding
 // rows in contact_preferences, sequence_enrollments and contact_tags so the FK
 // re-points that followed could not hit a 23505. Those deletes were the first
@@ -107,7 +120,7 @@ const REDACT_ON_DELETE_TABLES = Object.freeze([
 // one place to edit, and applied as an OVERRIDE on top of the catalog: where
 // an override exists it wins, everything else gets humaniseRef().
 const LABEL_OVERRIDES = Object.freeze(Object.fromEntries(
-  [...CASCADE_TABLES, ...SET_NULL_TABLES, ...REDACT_ON_DELETE_TABLES]
+  [...CASCADE_TABLES, ...SET_NULL_TABLES, ...REDACT_ON_DELETE_TABLES, ...REDACT_MAIL_TABLES]
     .map(t => [`${t.table}.${t.column}`, t.label]),
 ))
 
@@ -116,7 +129,7 @@ const LABEL_OVERRIDES = Object.freeze(Object.fromEntries(
 // makes the kept rows GDPR-safe. So they are bucketed as `redact_on_delete`
 // regardless of what pg_constraint says, applied AFTER catalog bucketing.
 const REDACT_KEYS = Object.freeze(
-  REDACT_ON_DELETE_TABLES.map(t => `${t.table}.${t.column}`),
+  [...REDACT_ON_DELETE_TABLES, ...REDACT_MAIL_TABLES].map(t => `${t.table}.${t.column}`),
 )
 
 // confdeltype → bucket. 'r' (restrict) and 'a' (no action) both raise a
@@ -262,6 +275,7 @@ async function legacyImpact(db, contactId) {
     [CASCADE_TABLES, 'cascade_on_delete'],
     [SET_NULL_TABLES, 'keep_on_delete'],
     [REDACT_ON_DELETE_TABLES, 'redact_on_delete'],
+    [REDACT_MAIL_TABLES, 'redact_on_delete'],
   ]
   for (const [list, bucket] of passes) {
     for (const t of list) {

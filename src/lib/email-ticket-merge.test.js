@@ -42,6 +42,25 @@ describe('canMerge', () => {
     expect(canMerge(null, T())).toEqual({ ok: false, reason: 'missing_ticket' })
     expect(canMerge(T(), null)).toEqual({ ok: false, reason: 'missing_ticket' })
   })
+  // MAIL-SPAM.1 review — a merge across the quarantine flag is refused in BOTH
+  // directions. Live → spam is the dangerous one: the live row becomes a
+  // tombstone pointing at the spam ticket, vanishes from Inbox and the count,
+  // and the 30-day purge then deletes target AND tombstone — a member's
+  // thread destroyed by a merge. Spam → live is refused too, so a quarantined
+  // thread cannot be laundered into a live one without an explicit release.
+  it('refuses a LIVE source into a QUARANTINED target', () => {
+    expect(canMerge(T({ id: 'a', is_spam: false }), T({ id: 'b', is_spam: true })))
+      .toEqual({ ok: false, reason: 'spam_mismatch' })
+  })
+  it('refuses a QUARANTINED source into a LIVE target', () => {
+    expect(canMerge(T({ id: 'a', is_spam: true }), T({ id: 'b', is_spam: false })))
+      .toEqual({ ok: false, reason: 'spam_mismatch' })
+  })
+  it('allows two quarantined tickets to merge, and treats an absent flag as live', () => {
+    expect(canMerge(T({ id: 'a', is_spam: true }), T({ id: 'b', is_spam: true }))).toEqual({ ok: true })
+    // Rows read before mig 584 (or fixtures without the column) are live.
+    expect(canMerge(T({ id: 'a' }), T({ id: 'b', is_spam: false }))).toEqual({ ok: true })
+  })
 })
 
 describe('mergedTicketFields', () => {

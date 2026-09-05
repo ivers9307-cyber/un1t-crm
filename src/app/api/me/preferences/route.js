@@ -92,6 +92,12 @@ const PreferencesSchema = z.object({
 //     ('' + rich = an HTML-only block, no text part; null = nothing appends.)
 // Best-effort by contract: a blipped context read degrades to nulls / an
 // empty list and NEVER errors this GET — the send re-resolves for itself.
+//
+// MAIL-SIGDEFAULT.1 — the rendered half now carries the STUDIO block for a
+// person who never opted in (rich NULL/disabled) wherever the studio has
+// configured one, because that is what the send appends: the same
+// resolveSendSignature the routes call. The wire SHAPE is unchanged, so the
+// mobile hint (which renders effective_text verbatim) needs no change.
 export async function GET() {
   const user = await getCurrentUser()
   if (!user) {
