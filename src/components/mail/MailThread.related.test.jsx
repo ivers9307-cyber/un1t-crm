@@ -17,8 +17,8 @@ const CONVERSATION = {
   id: 'a0000000-0000-4000-8000-00000000000a',
   status: 'open',
   subject: 'Flogas bill for Hatch Street',
-  requester_email: 'caitlin.thornton@flogas.ie',
-  requester_name: 'Caitlin Thornton',
+  requester_email: 'jordan.sample@example.test',
+  requester_name: 'Jordan Sample',
   mailbox: { id: 'mb-1', label: 'Accounts', address: 'accounts@hatch.ie' },
   needs_reply: true,
   archived: false,
@@ -31,7 +31,7 @@ const OPEN_RELATED = {
   status: 'open',
   message_count: 2,
   last_message_at: '2026-08-28T12:00:00Z',
-  requester_name: 'Caitlin Thornton',
+  requester_name: 'Jordan Sample',
 }
 const ARCHIVED_RELATED = {
   id: 'r-arch-1',
@@ -39,13 +39,13 @@ const ARCHIVED_RELATED = {
   status: 'closed',
   message_count: 5,
   last_message_at: '2026-08-12T10:00:00Z',
-  requester_name: 'Caitlin Thornton',
+  requester_name: 'Jordan Sample',
 }
 
 const MESSAGE = {
   id: 'm-1',
   direction: 'inbound',
-  from_email: 'caitlin.thornton@flogas.ie',
+  from_email: 'jordan.sample@example.test',
   to_emails: ['accounts@hatch.ie'],
   text_body: 'Just following up on the meter read.',
   created_at: '2026-08-31T08:00:00Z',
@@ -109,7 +109,7 @@ describe('MailThread — the nudge banner', () => {
     renderThread()
     expect(await screen.findByText('1 other open conversation')).toBeTruthy()
     // The banner names the sender (the header names them too, hence AllBy).
-    expect(screen.getAllByText(/Caitlin Thornton/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Jordan Sample/).length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: 'Merge into this one' })).toBeTruthy()
   })
 

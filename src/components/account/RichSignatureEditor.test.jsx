@@ -359,7 +359,7 @@ describe('preview', () => {
 
 // ── MAILFIX-SIGTRUTH.1 — the preview is the EFFECTIVE signature ────────────
 describe('effective preview', () => {
-  const RICH = { enabled: true, name: 'Dean Nolan', title: 'Head Coach', phone: '087 111 2222', note: 'Legacy note', links: [] }
+  const RICH = { enabled: true, name: 'Alex Example', title: 'Head Coach', phone: '087 111 2222', note: 'Legacy note', links: [] }
   const UNAVAILABLE = /couldn.t resolve your studio — the preview is unavailable\. your saved signature still sends with the studio.s details\./i
 
   it('applies the studio context over the typed values — a stored note NEVER renders, the studio line does', async () => {
@@ -392,7 +392,7 @@ describe('effective preview', () => {
     expect(screen.getByText(/resolving your studio/i)).toBeTruthy()
     expect(container.querySelector('iframe')).toBeNull()
     expect(container.textContent).not.toContain('Legacy note')
-    expect(container.textContent).not.toContain('Dean Nolan')
+    expect(container.textContent).not.toContain('Alex Example')
   })
 
   it('a FAILED context GET renders NO frame and NO plain-text pane — one line, and neither the note nor the person’s phone', async () => {
@@ -405,7 +405,7 @@ describe('effective preview', () => {
     expect(container.textContent).not.toContain('087 111 2222')
     expect(screen.queryByText(/fill in a field/i)).toBeNull()
     // The fields themselves are still editable — only the PREVIEW is gone.
-    expect(screen.getByLabelText('Name').value).toBe('Dean Nolan')
+    expect(screen.getByLabelText('Name').value).toBe('Alex Example')
   })
 
   it('a settled GET that offers NO studio is the same one line — never a frame of the un-resolved draft', async () => {

@@ -1224,11 +1224,11 @@ describe('flatMessageMeta', () => {
 
   it('a note is a note FIRST, even though it is stored outbound — the one mistake', () => {
     const m = flatMessageMeta(
-      { direction: 'outbound', is_internal_note: true, author_name: 'Dean', text_body: 'call them' },
+      { direction: 'outbound', is_internal_note: true, author_name: 'Alex', text_body: 'call them' },
       { now },
     )
     expect(m.tone).toBe('note')
-    expect(m.who).toBe('Dean')
+    expect(m.who).toBe('Alex')
   })
 
   it('outbound gets the dark "me" avatar and never right-alignment cues', () => {
@@ -1249,14 +1249,14 @@ describe('flatMessageMeta', () => {
 
   it('inbound leads with the requester name, address alongside, light avatar', () => {
     const m = flatMessageMeta(
-      { direction: 'inbound', from_email: 'caitlin.thornton@flogas.ie', text_body: 'Hi there' },
-      { fallbackName: 'Caitlin Thornton', now },
+      { direction: 'inbound', from_email: 'jordan.sample@example.test', text_body: 'Hi there' },
+      { fallbackName: 'Jordan Sample', now },
     )
     expect(m.tone).toBe('in')
     expect(m.dark).toBe(false)
-    expect(m.initials).toBe('CT')
-    expect(m.who).toBe('Caitlin Thornton')
-    expect(m.address).toBe('caitlin.thornton@flogas.ie')
+    expect(m.initials).toBe('JS')
+    expect(m.who).toBe('Jordan Sample')
+    expect(m.address).toBe('jordan.sample@example.test')
   })
 
   it('with no name at all the address carries the row, first letter as the avatar', () => {

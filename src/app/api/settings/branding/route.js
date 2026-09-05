@@ -3,11 +3,13 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, guardMasterOrOwner } from '@/lib/auth'
 import { validateBody, uuidLike } from '@/lib/validate'
+import { httpUrl } from '@/lib/schemas'
 
 const BrandingSchema = z.object({
   location_id: uuidLike.optional(),
-  logo_url: z.string().url().max(2000).nullable().optional(),
-  favicon_url: z.string().url().max(2000).nullable().optional(),
+  // HYGIENE-PII.1 — http(s) only; these render into <img src> / <link rel=icon>.
+  logo_url: httpUrl.nullable().optional(),
+  favicon_url: httpUrl.nullable().optional(),
   company_name: z.string().max(200).nullable().optional(),
   // MAIL-SIG.2 — the studio half of the email signature: phone + the link
   // row every send FROM this studio carries. Same field discipline as the

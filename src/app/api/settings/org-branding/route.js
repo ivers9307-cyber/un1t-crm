@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
 import { validateBody, uuidLike } from '@/lib/validate'
+import { httpUrl } from '@/lib/schemas'
 
 // Organisation-level branding defaults (mig 317). Locations inherit these via
 // getLocationBranding when they have not set their own. Mirrors
@@ -10,8 +11,9 @@ import { validateBody, uuidLike } from '@/lib/validate'
 // org; an owner is limited to organisations they own.
 const OrgBrandingSchema = z.object({
   organization_id: uuidLike.optional(),
-  logo_url: z.string().url().max(2000).nullable().optional(),
-  favicon_url: z.string().url().max(2000).nullable().optional(),
+  // HYGIENE-PII.1 — http(s) only; these render into <img src> / <link rel=icon>.
+  logo_url: httpUrl.nullable().optional(),
+  favicon_url: httpUrl.nullable().optional(),
   company_name: z.string().max(200).nullable().optional(),
   // SAAS4-C2 — the tenant's legal identity for their privacy notice
   // (mig 425). Entity name + privacy email must BOTH be set before the

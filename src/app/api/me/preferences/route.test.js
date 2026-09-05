@@ -175,7 +175,7 @@ describe('GET /api/me/preferences — signature_contexts', () => {
   }
 
   const RICH = {
-    enabled: true, name: 'Dean Nolan', title: 'Head Coach', phone: '087 111 2222', note: '', photo_url: null,
+    enabled: true, name: 'Alex Example', title: 'Head Coach', phone: '087 111 2222', note: '', photo_url: null,
     links: [],
   }
   const STILL_CARD = { phone: '01 555 0001', links: [{ label: 'Book', url: 'https://un1t.ie/book' }] }
@@ -216,7 +216,7 @@ describe('GET /api/me/preferences — signature_contexts', () => {
     expect(entry.rich).toBe(true)
     expect(entry.has_photo).toBe(false)
     expect(entry.has_links).toBe(true)
-    expect(entry.effective_text).toContain('Dean Nolan')
+    expect(entry.effective_text).toContain('Alex Example')
     expect(entry.effective_text).toContain('UN1T Stillorgan')
     expect(entry.effective_text).toContain('01 555 0001')
     expect(entry.effective_text).toContain('Book: https://un1t.ie/book')
@@ -245,7 +245,7 @@ describe('GET /api/me/preferences — signature_contexts', () => {
     expect(entry.has_mailbox).toBe(false)
     // An orphan ticket at this studio sends with its studio line — so the
     // rendered text carries it too.
-    expect(entry.effective_text).toBe('Dean Nolan\nHead Coach · UN1T Stillorgan\n087 111 2222')
+    expect(entry.effective_text).toBe('Alex Example\nHead Coach · UN1T Stillorgan\n087 111 2222')
   })
 
   it('degrades gracefully on a blipped context read — 200, preferences intact, entry kept with null card', async () => {

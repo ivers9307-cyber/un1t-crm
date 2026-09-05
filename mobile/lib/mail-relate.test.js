@@ -28,7 +28,7 @@ const REL = (over = {}) => ({
   status: 'open',
   message_count: 2,
   last_message_at: '2026-08-28T10:00:00Z',
-  requester_name: 'Caitlin Thornton',
+  requester_name: 'Jordan Sample',
   ...over,
 })
 
@@ -49,13 +49,13 @@ describe('relatedNudge', () => {
 
   it('names the sender and counts, singular', () => {
     const n = relatedNudge({ related: [REL()], open_count: 1 })
-    expect(n.text).toBe('Caitlin Thornton has 1 other open conversation')
+    expect(n.text).toBe('Jordan Sample has 1 other open conversation')
     expect(n.count).toBe(1)
   })
 
   it('pluralises', () => {
     const n = relatedNudge({ related: [REL(), REL({ id: 'R-2' })], open_count: 2 })
-    expect(n.text).toBe('Caitlin Thornton has 2 other open conversations')
+    expect(n.text).toBe('Jordan Sample has 2 other open conversations')
   })
 
   it('falls back to a neutral name when the requester has none', () => {
@@ -102,7 +102,7 @@ describe('mergePickerRows', () => {
 
   it('builds the detail line: who · how many messages · state + when', () => {
     const rows = mergePickerRows([REL()], now)
-    expect(rows[0].detail).toContain('Caitlin Thornton')
+    expect(rows[0].detail).toContain('Jordan Sample')
     expect(rows[0].detail).toContain('2 messages')
     expect(rows[0].detail).toContain('active')
   })

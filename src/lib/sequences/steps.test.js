@@ -840,12 +840,12 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     await steps.sendEmailStep(db, {
       enrollment: { id: 'e9' },
       step,
-      sequence: { ...sequence, from_name: 'Dean Nolan', from_email: 'dean@un1tdublin.com', reply_to: 'dean@un1tdublin.com' },
+      sequence: { ...sequence, from_name: 'Alex Example', from_email: 'alex@example.test', reply_to: 'alex@example.test' },
       contact: consentedContact,
     })
     expect(pm.sendMarketingEmail).toHaveBeenCalledWith(expect.objectContaining({
-      from: 'Dean Nolan <dean@un1tdublin.com>',
-      replyTo: 'dean@un1tdublin.com',
+      from: 'Alex Example <alex@example.test>',
+      replyTo: 'alex@example.test',
     }))
   })
 
@@ -854,11 +854,11 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     await steps.sendEmailStep(db, {
       enrollment: { id: 'e9' },
       step,
-      sequence: { ...sequence, from_email: 'dean@un1tdublin.com' },
+      sequence: { ...sequence, from_email: 'alex@example.test' },
       contact: consentedContact,
     })
     expect(pm.sendMarketingEmail).toHaveBeenCalledWith(expect.objectContaining({
-      from: 'dean@un1tdublin.com',
+      from: 'alex@example.test',
     }))
   })
 
@@ -867,7 +867,7 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     await steps.sendEmailStep(db, {
       enrollment: { id: 'e9' },
       step,
-      sequence: { ...sequence, from_name: 'Dean Nolan' },
+      sequence: { ...sequence, from_name: 'Alex Example' },
       contact: consentedContact,
     })
     expect(pm.sendMarketingEmail.mock.calls[0][0].from).toBeUndefined()

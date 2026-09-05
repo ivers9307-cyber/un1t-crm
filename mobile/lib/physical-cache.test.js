@@ -114,7 +114,7 @@ describe('shifts cache', () => {
   const SHIFTS = [{ id: 'a', shift_date: '2026-08-24', shift_templates: { name: 'AM', start_time: '06:00', end_time: '14:00' } }]
 
   it('round-trips one profile\'s shifts, slimmed', async () => {
-    await mod.writeShiftsCache('p1', [{ ...SHIFTS[0], notes: 'x'.repeat(80), profiles: { full_name: 'Dean' } }], NOW)
+    await mod.writeShiftsCache('p1', [{ ...SHIFTS[0], notes: 'x'.repeat(80), profiles: { full_name: 'Alex' } }], NOW)
     expect(await mod.readShiftsCache('p1', NOW + 1000)).toEqual(SHIFTS)
   })
   it('refuses to hand one user another user\'s shifts', async () => {

@@ -29,8 +29,8 @@ const TICKET = {
   id: 'T-1',
   status: 'open',
   subject: 'Flogas bill for Hatch Street',
-  requester_email: 'caitlin.thornton@flogas.ie',
-  requester_name: 'Caitlin Thornton',
+  requester_email: 'jordan.sample@example.test',
+  requester_name: 'Jordan Sample',
   mailbox: { id: 'mb-1', label: 'Accounts', address: 'accounts@hatch.ie' },
 }
 const noop = () => {}
@@ -42,7 +42,7 @@ const pad = ' Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do ei
 const OLDEST = {
   id: 'm1',
   direction: 'inbound',
-  from_email: 'caitlin.thornton@flogas.ie',
+  from_email: 'jordan.sample@example.test',
   to_emails: ['accounts@hatch.ie'],
   text_body: 'Our records show the August meter read is outstanding.' + pad,
   created_at: '2026-08-28T09:00:00Z',
@@ -51,16 +51,16 @@ const MIDDLE = {
   id: 'm2',
   direction: 'outbound',
   from_email: 'accounts@hatch.ie',
-  to_email: 'caitlin.thornton@flogas.ie',
-  to_emails: ['caitlin.thornton@flogas.ie'],
-  author_name: 'Dean Kelly',
+  to_email: 'jordan.sample@example.test',
+  to_emails: ['jordan.sample@example.test'],
+  author_name: 'Alex Example',
   text_body: 'Thanks for the reminder, the reading goes over tomorrow morning.' + pad,
   created_at: '2026-08-29T09:00:00Z',
 }
 const NEWEST = {
   id: 'm3',
   direction: 'inbound',
-  from_email: 'caitlin.thornton@flogas.ie',
+  from_email: 'jordan.sample@example.test',
   to_emails: ['accounts@hatch.ie'],
   text_body: 'Just following up on the meter read, we need it before Friday.' + pad,
   created_at: '2026-08-31T09:00:00Z',
@@ -89,18 +89,18 @@ describe('TicketThread — only the newest message opens by default', () => {
     expect(screen.queryByText(OLDEST.text_body)).toBeNull()
     expect(screen.queryByText(MIDDLE.text_body)).toBeNull()
     // The collapsed lines are labelled expandable buttons.
-    expect(screen.getByRole('button', { name: /Expand the message from Caitlin Thornton/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Expand the message from Jordan Sample/ })).toBeTruthy()
     expect(screen.getByRole('button', { name: /Expand the message from You/ })).toBeTruthy()
   })
 
   it('expands a collapsed message on click, and collapses it again', () => {
     renderThread()
-    fireEvent.click(screen.getByRole('button', { name: /Expand the message from Caitlin Thornton/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Expand the message from Jordan Sample/ }))
     expect(screen.getByText(OLDEST.text_body)).toBeTruthy()
-    // The expanded header is the way back down. Two of Caitlin's messages are
+    // The expanded header is the way back down. Two of Jordan's messages are
     // open now (the labels differ only by their stamp) — the oldest is first
     // in the DOM.
-    fireEvent.click(screen.getAllByRole('button', { name: /Collapse the message from caitlin\.thornton@flogas\.ie/ })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: /Collapse the message from jordan\.sample@example\.test/ })[0])
     expect(screen.queryByText(OLDEST.text_body)).toBeNull()
   })
 
@@ -108,8 +108,8 @@ describe('TicketThread — only the newest message opens by default', () => {
     renderThread()
     fireEvent.click(screen.getByRole('button', { name: /Expand the message from You/ }))
     expect(screen.getByText(MIDDLE.text_body)).toBeTruthy()
-    expect(screen.getByText(/Sent to caitlin\.thornton@flogas\.ie/)).toBeTruthy()
-    expect(screen.getByText(/Replied by Dean Kelly/)).toBeTruthy()
+    expect(screen.getByText(/Sent to jordan\.sample@example\.test/)).toBeTruthy()
+    expect(screen.getByText(/Replied by Alex Example/)).toBeTruthy()
   })
 
   it('keeps a single-message thread fully open — there is nothing older to fold', () => {
@@ -124,14 +124,14 @@ describe('TicketThread — the note never loses its identity', () => {
     id: 'n1',
     direction: 'outbound',
     is_internal_note: true,
-    author_name: 'Dean Kelly',
+    author_name: 'Alex Example',
     text_body: 'She rang about this too, waiting on the meter photo from the coach.' + pad,
     created_at: '2026-08-27T09:00:00Z',
   }
 
   it('collapsed: amber, locked and marked STAFF-ONLY — never skimmable as correspondence', () => {
     renderThread({ messages: [NOTE, NEWEST] })
-    const line = screen.getByRole('button', { name: /Expand the message from Dean Kelly/ })
+    const line = screen.getByRole('button', { name: /Expand the message from Alex Example/ })
     expect(line.className).toContain('bg-amber-500/10')
     expect(line.textContent).toContain('STAFF-ONLY')
     expect(screen.queryByText(NOTE.text_body)).toBeNull()
@@ -141,7 +141,7 @@ describe('TicketThread — the note never loses its identity', () => {
     renderThread({ messages: [NEWEST, NOTE] }) // note newest → open by default
     expect(screen.getByText(/Internal note — not sent to the member/)).toBeTruthy()
     expect(screen.getByText(NOTE.text_body)).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: /Collapse the note by Dean Kelly/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Collapse the note by Alex Example/ }))
     expect(screen.queryByText(NOTE.text_body)).toBeNull()
     expect(screen.getByText(/STAFF-ONLY/)).toBeTruthy()
   })

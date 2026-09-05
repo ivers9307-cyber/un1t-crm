@@ -30,7 +30,7 @@ const HATCH_BOX = {
 }
 
 const RICH = {
-  enabled: true, name: 'Dean Nolan', title: 'Head Coach',
+  enabled: true, name: 'Alex Example', title: 'Head Coach',
   phone: '087 111 2222', note: '', photo_url: null, links: [],
 }
 
@@ -105,7 +105,7 @@ describe('TicketCompose — signature preview', () => {
 
     expect(await screen.findByText(/added automatically/i)).toBeTruthy()
     const pre = document.querySelector('pre')
-    expect(pre.textContent).toContain('Dean Nolan')
+    expect(pre.textContent).toContain('Alex Example')
     expect(pre.textContent).toContain('UN1T Stillorgan')
   })
 

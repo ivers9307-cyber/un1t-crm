@@ -76,7 +76,7 @@ const FROM_CRM = {
   to_email: 'ella@member.ie',
   to_emails: ['ella@member.ie'],
   text_body: 'No problem Ella, your freeze is on from Monday.',
-  author_name: 'Dean Kelly',
+  author_name: 'Alex Example',
   postmark_message_id: 'a8c1040e-db1c-4e18-ac79-bc5f64c7ce2c',
   rfc_message_id: null,
   delivery_status: null,
@@ -110,7 +110,7 @@ describe('TicketThread — a reply sent from the mail client', () => {
   it('does NOT say it about a reply composed in the CRM', () => {
     renderThread([FROM_CRM])
     expect(screen.queryByText('Sent from the mail client')).toBeNull()
-    expect(screen.getByText(/Replied by Dean Kelly/)).toBeTruthy()
+    expect(screen.getByText(/Replied by Alex Example/)).toBeTruthy()
   })
 
   it('does not say it about the member’s own mail', () => {

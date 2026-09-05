@@ -231,3 +231,39 @@ describe('PUT /api/settings/branding — the gate is the role AT THE TARGET stud
     expect(db.upserts).toEqual([])
   })
 })
+
+// HYGIENE-PII.1 — `logo_url`/`favicon_url` validated with Zod 4's `.url()`,
+// which is scheme-agnostic, so a `javascript:` or `data:` URL was accepted,
+// stored and rendered into `<img src>` / `<link rel=icon>`. The schema now
+// takes `httpUrl`. Every refusal asserts the standard 400 shape AND no write.
+describe('PUT /api/settings/branding — logo_url / favicon_url are http(s) only', () => {
+  const REFUSED = [
+    ['logo_url', 'javascript:alert(1)'],
+    ['favicon_url', 'javascript:alert(1)'],
+    ['logo_url', 'data:text/html,<script>alert(1)</script>'],
+    ['favicon_url', 'data:image/svg+xml;base64,PHN2Zy8+'],
+  ]
+  for (const [field, value] of REFUSED) {
+    it(`400s ${field} = ${value.split(':')[0]}: without writing`, async () => {
+      const res = await PUT(put({ location_id: LOC_A, [field]: value }))
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.success).toBe(false)
+      expect(body.error).toBe('Invalid request body')
+      expect(body.issues).toEqual([{ path: field, message: 'Must be an http(s) URL' }])
+      expect(db.upserts).toEqual([])
+    })
+  }
+
+  it('https and http URLs are stored exactly as before', async () => {
+    const res = await PUT(put({ location_id: LOC_A, logo_url: 'https://cdn.example/logo.png', favicon_url: 'http://cdn.example/fav.ico' }))
+    expect(res.status).toBe(200)
+    expect(db.upserts[0].payload).toMatchObject({ logo_url: 'https://cdn.example/logo.png', favicon_url: 'http://cdn.example/fav.ico' })
+  })
+
+  it('an explicit null still clears the field — the scheme check never sees a null', async () => {
+    const res = await PUT(put({ location_id: LOC_A, logo_url: null, favicon_url: null }))
+    expect(res.status).toBe(200)
+    expect(db.upserts[0].payload).toMatchObject({ logo_url: null, favicon_url: null })
+  })
+})

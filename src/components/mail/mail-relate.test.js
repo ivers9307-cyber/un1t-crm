@@ -34,7 +34,7 @@ const REL = (over = {}) => ({
   status: 'open',
   message_count: 2,
   last_message_at: '2026-08-28T12:00:00Z', // 3d before NOW
-  requester_name: 'Caitlin Thornton',
+  requester_name: 'Jordan Sample',
   ...over,
 })
 
@@ -111,8 +111,8 @@ describe('newestOpenRelated — where View goes', () => {
 describe('relatedNudge — when the banner earns its place', () => {
   it('nudges when at least one related conversation is open', () => {
     const parsed = { related: [REL()], openCount: 1 }
-    expect(relatedNudge(parsed, 'Caitlin Thornton')).toEqual({
-      name: 'Caitlin Thornton',
+    expect(relatedNudge(parsed, 'Jordan Sample')).toEqual({
+      name: 'Jordan Sample',
       count: 1,
       label: '1 other open conversation',
       viewId: 'r-1',
@@ -121,7 +121,7 @@ describe('relatedNudge — when the banner earns its place', () => {
 
   it('pluralises', () => {
     const parsed = { related: [REL({ id: 'a' }), REL({ id: 'b' })], openCount: 2 }
-    expect(relatedNudge(parsed, 'Caitlin Thornton').label).toBe('2 other open conversations')
+    expect(relatedNudge(parsed, 'Jordan Sample').label).toBe('2 other open conversations')
   })
 
   it('stays quiet with zero open — archived-only relatives are picker material, not a nudge', () => {
@@ -139,12 +139,12 @@ describe('relatedNudge — when the banner earns its place', () => {
 
 describe('candidateLine — the picker row description', () => {
   it('describes an open conversation', () => {
-    expect(candidateLine(REL(), NOW)).toBe('Caitlin Thornton · 2 messages · opened 3d')
+    expect(candidateLine(REL(), NOW)).toBe('Jordan Sample · 2 messages · opened 3d')
   })
 
   it('describes an archived one as archived — the surface never says closed', () => {
     expect(candidateLine(REL({ status: 'closed', message_count: 5, last_message_at: '2026-08-12T10:00:00Z' }), NOW))
-      .toBe('Caitlin Thornton · 5 messages · archived 12 Aug')
+      .toBe('Jordan Sample · 5 messages · archived 12 Aug')
   })
 
   it('singularises one message', () => {

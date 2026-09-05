@@ -31,7 +31,7 @@ vi.mock('@/components/mail/viewer-id', () => ({ resolveViewerId: vi.fn() }))
 const BUCKET_PHOTO = 'https://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/signatures/u/p.jpg'
 
 const RICH = {
-  enabled: true, name: 'Dean Nolan', title: 'Head Coach',
+  enabled: true, name: 'Alex Example', title: 'Head Coach',
   phone: '087 111 2222', note: 'typed note', photo_url: null, links: [],
 }
 
@@ -191,7 +191,7 @@ describe('SignatureHint — a mounted composer never goes stale', () => {
     const stub = stubPreferences({ email_signature: '', email_signature_rich: RICH })
     render(<SignatureHint locationId="loc-still" />)
     await screen.findByText(/added automatically/i)
-    expect(document.querySelector('pre').textContent).toContain('Dean Nolan')
+    expect(document.querySelector('pre').textContent).toContain('Alex Example')
     expect(prefsCalls()).toBe(1)
 
     // The other tab saved a new name — its editor writes the key, and the
@@ -201,7 +201,7 @@ describe('SignatureHint — a mounted composer never goes stale', () => {
       window.dispatchEvent(new StorageEvent('storage', { key: SIGNATURE_UPDATED_KEY, newValue: '1' }))
     })
     await waitFor(() => expect(document.querySelector('pre').textContent).toContain('Sarah Doyle'))
-    expect(document.querySelector('pre').textContent).not.toContain('Dean Nolan')
+    expect(document.querySelector('pre').textContent).not.toContain('Alex Example')
     expect(prefsCalls()).toBe(2)
   })
 
