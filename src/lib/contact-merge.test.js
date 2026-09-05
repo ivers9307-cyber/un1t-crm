@@ -456,6 +456,25 @@ describe('getContactImpact — buckets by the catalog delete rule', () => {
     expect(out.keep_on_delete).toEqual([])
   })
 
+  it('the mail redaction override does the same for email_tickets + email_inbox_messages (MAIL-GDPR.1)', async () => {
+    // Both are SET NULL in pg_constraint (migs 482, 394). Before MAIL-GDPR.1 the
+    // dialog truthfully said "kept, unlinked" — which was the orphaned-PII bug.
+    // Now the scrub anonymises them, so the dialog must say "redacted".
+    const db = makeImpactDb({
+      rows: [
+        row('email_tickets', 'contact_id', 'n', 2),
+        row('email_inbox_messages', 'contact_id', 'n', 9),
+      ],
+    })
+    const out = await getContactImpact(db, 'c-1')
+
+    expect(out.redact_on_delete.map(t => t.table)).toEqual(['email_tickets', 'email_inbox_messages'])
+    expect(out.redact_on_delete.map(t => t.label)).toEqual([
+      expect.stringMatching(/redacted/i), expect.stringMatching(/redacted/i),
+    ])
+    expect(out.keep_on_delete).toEqual([])
+  })
+
   it('uses the hand-written label where one exists, and a humanised table name otherwise', async () => {
     const db = makeImpactDb({
       rows: [
@@ -547,7 +566,8 @@ describe('getContactImpact — falls back when migration 538 is not applied', ()
   it('counts every hand-maintained pair with one request each', async () => {
     const db = makeImpactDb({ rpcThrows: true })
     await getContactImpact(db, 'c-1')
-    expect(db.countCalls).toHaveLength(21)
+    // 21 legacy pairs + the two mail tables MAIL-GDPR.1 added to the redact list.
+    expect(db.countCalls).toHaveLength(23)
     expect(db.countCalls.every(c => c.value === 'c-1')).toBe(true)
   })
 

@@ -19,14 +19,18 @@ const PAGE = 1000
 /**
  * Fetch every row matching the filters, paginated, bounded.
  * @param {object} db
- * @param {{ table: string, select: string, eq: Record<string, string>, orderCol: string }} q
+ * @param {{ table: string, select: string, eq?: Record<string, string>, inFilter?: [string, string[]], orderCol: string }} q
+ *   `inFilter` is `[column, values]` — MAIL-GDPR.1 added it for the rows that
+ *   hang off a parent set (messages by ticket, attachments by message). Callers
+ *   chunk `values`; this function does not.
  * @returns {Promise<{ rows: object[], truncated: boolean }>}
  */
-export async function fetchAllRows(db, { table, select, eq, orderCol }) {
+export async function fetchAllRows(db, { table, select, eq = {}, inFilter, orderCol }) {
   const rows = []
   for (let from = 0; rows.length < MAX_ROWS_PER_SECTION; from += PAGE) {
     let query = db.from(table).select(select)
     for (const [col, val] of Object.entries(eq)) query = query.eq(col, val)
+    if (inFilter) query = query.in(inFilter[0], inFilter[1])
     const { data, error } = await query.order(orderCol, { ascending: true }).range(from, from + PAGE - 1)
     // supabase-js RESOLVES with an error object — surface it: a DSAR
     // bundle must never silently render a broken section as "no rows".
@@ -40,6 +44,77 @@ export async function fetchAllRows(db, { table, select, eq, orderCol }) {
 async function section(db, q) {
   const { rows, truncated } = await fetchAllRows(db, q)
   return { count: rows.length, truncated, rows }
+}
+
+// PostgREST `in` filters ride on the URL; 200 ids per request is comfortable.
+const IN_CHUNK = 200
+
+/**
+ * Rows whose `inCol` is in `values`, chunked so the URL stays short, merged
+ * and bounded like any other section. Rows are deduped by `id` because the
+ * mail section unions two lookups (by contact_id and by ticket) that overlap.
+ */
+async function fetchAllRowsIn(db, { table, select, inCol, values, orderCol }) {
+  const byId = new Map()
+  let truncated = false
+  for (let i = 0; i < values.length; i += IN_CHUNK) {
+    const chunk = values.slice(i, i + IN_CHUNK)
+    const page = await fetchAllRows(db, { table, select, inFilter: [inCol, chunk], orderCol })
+    for (const r of page.rows) byId.set(r.id, r)
+    truncated = truncated || page.truncated
+  }
+  const rows = [...byId.values()]
+  if (rows.length > MAX_ROWS_PER_SECTION) return { rows: rows.slice(0, MAX_ROWS_PER_SECTION), truncated: true }
+  return { rows, truncated }
+}
+
+// MAIL-GDPR.1 — the mail section. The bundle had no mail at all, so a subject
+// access request was answered without the person's own correspondence.
+//
+// Tickets by contact_id. Messages by contact_id (the denormalised stamp the
+// webhook writes) UNION by ticket_id — an outbound staff reply filed before
+// link-contact backfilled the stamp carries contact_id NULL, and a message
+// stamped with the contact can sit on a ticket since re-linked to someone
+// else. Same two lookups the erasure scrub uses, so what is exported is what
+// would be erased. Attachments by message_id: FILENAMES ONLY — the WhatsApp
+// section exports bodies but never media bytes, and this mirrors it. Two
+// columns are deliberately left out: bcc_emails (audit-only per mig 482,
+// "MUST NEVER be rendered in any member-visible context") and html_body
+// (markup the inbox itself never renders; text_body is the content).
+const MAIL_TICKET_COLUMNS = 'id, subject, status, requester_email, requester_name, created_at, last_message_at, solved_at, closed_at'
+const MAIL_MESSAGE_COLUMNS = 'id, ticket_id, direction, from_email, to_email, to_emails, cc_emails, subject, text_body, is_internal_note, sent_at, created_at'
+const MAIL_ATTACHMENT_COLUMNS = 'id, message_id, filename, mime_type, size_bytes, skipped_reason, created_at'
+
+async function mailSection(db, contactId) {
+  const tickets = await section(db, {
+    table: 'email_tickets', select: MAIL_TICKET_COLUMNS, eq: { contact_id: contactId }, orderCol: 'created_at',
+  })
+
+  const stamped = await fetchAllRows(db, {
+    table: 'email_inbox_messages', select: MAIL_MESSAGE_COLUMNS, eq: { contact_id: contactId }, orderCol: 'created_at',
+  })
+  const onTickets = await fetchAllRowsIn(db, {
+    table: 'email_inbox_messages', select: MAIL_MESSAGE_COLUMNS,
+    inCol: 'ticket_id', values: tickets.rows.map(t => t.id), orderCol: 'created_at',
+  })
+  const messageById = new Map()
+  for (const m of [...stamped.rows, ...onTickets.rows]) messageById.set(m.id, m)
+  const messageRows = [...messageById.values()]
+    .sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')))
+  const messages = { count: messageRows.length, truncated: stamped.truncated || onTickets.truncated, rows: messageRows }
+
+  const attachmentsRaw = await fetchAllRowsIn(db, {
+    table: 'email_ticket_attachments', select: MAIL_ATTACHMENT_COLUMNS,
+    inCol: 'message_id', values: messageRows.map(m => m.id), orderCol: 'created_at',
+  })
+  const attachments = { count: attachmentsRaw.rows.length, truncated: attachmentsRaw.truncated, rows: attachmentsRaw.rows }
+
+  return {
+    tickets,
+    messages,
+    attachments,
+    truncated: tickets.truncated || messages.truncated || attachments.truncated,
+  }
 }
 
 /**
@@ -126,6 +201,16 @@ export async function buildContactExport(db, contact) {
     }
   }
 
+  // Same posture as the channel loop above: an explicit error marker, never a
+  // silent hole. The mail tables exist in every deployment since mig 482, so
+  // this branch is column drift or an outage, and the operator sees which.
+  let mail
+  try {
+    mail = await mailSection(db, contact.id)
+  } catch {
+    mail = { error: 'unavailable' }
+  }
+
   return {
     format: 'un1t-crm contact export v1',
     generated_at: new Date().toISOString(),
@@ -145,6 +230,7 @@ export async function buildContactExport(db, contact) {
       activities,
       notes,
       messages,
+      mail,
     },
   }
 }
