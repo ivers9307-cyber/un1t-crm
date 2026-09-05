@@ -94,8 +94,12 @@ describe('redactMailForContact — the WhatsApp doctrine, applied to mail', () =
     expect(t1.created_at).toBe('2026-08-01T10:00:00Z')
     // MAIL-GDPR.2 — the thread is filed away, not left open under a sentinel address.
     expect(t1.status).toBe('closed')
-    // Another person's ticket is untouched.
-    expect(db._state.tickets.find(t => t.id === 't2').requester_email).toBe('other@example.com')
+    // Another person's ticket is untouched — redaction AND archive. Drop the
+    // archive UPDATE's contact_id filter and this is the line that fails.
+    const t2 = db._state.tickets.find(t => t.id === 't2')
+    expect(t2.requester_email).toBe('other@example.com')
+    expect(t2.status).toBe('open')
+    expect(t2.closed_at ?? null).toBeNull()
     expect(out.failures).toEqual([])
     expect(out.tickets).toBe(1)
   })

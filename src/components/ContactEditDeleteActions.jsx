@@ -202,7 +202,7 @@ export default function ContactEditDeleteActions({ contact, canEdit, canDelete }
                       ))}
                     </ul>
                     <p className="text-[11px] text-un1t-muted mt-1">
-                      Phone, profile name, message bodies, and media URLs are wiped. Conversation thread + timestamps stay for audit (GDPR right-to-erasure). Redacted mail conversations are also archived, so they leave Inbox and Needs reply.
+                      Phone, profile name, message bodies, and media URLs are wiped. Conversation thread + timestamps stay for audit (GDPR right-to-erasure). Redacted mail conversations are also archived, so they leave Inbox, Sent and Needs reply.
                     </p>
                   </div>
                 )}

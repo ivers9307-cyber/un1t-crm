@@ -114,7 +114,7 @@ export default function ContactBulkDeleteModal({ contacts, onClose, onDeleted })
                   WhatsApp (contact-mail-erasure.js); MAIL-GDPR.2 also archives
                   the redacted tickets (status='closed'). Tickets + messages are
                   anonymised in place, attachments are hard-deleted. */}
-              <div><strong className="text-un1t-text">Will be redacted:</strong> WhatsApp conversations + messages, and mail (conversations, messages, attachments) — PII (phone, profile name, addresses, subject, message body, media, attachments) is wiped, conversation threads stay for audit (GDPR right-to-erasure). Redacted mail conversations are also archived, so they leave Inbox and Needs reply.</div>
+              <div><strong className="text-un1t-text">Will be redacted:</strong> WhatsApp conversations + messages, and mail (conversations, messages, attachments) — PII (phone, profile name, addresses, subject, message body, media, attachments) is wiped, conversation threads stay for audit (GDPR right-to-erasure). Redacted mail conversations are also archived, so they leave Inbox, Sent and Needs reply.</div>
             </div>
 
             <div className="space-y-3">

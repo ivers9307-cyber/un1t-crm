@@ -276,7 +276,9 @@ export async function redactMailForContact(db, contactId) {
       .update(mailTicketArchive())
       .eq('contact_id', contactId)
       .neq('status', 'closed')
-    if (archiveError) fail('email_tickets', 'update', archiveError.message, { step: 'archive' })
+    // A distinct op name so a failed redact and a failed archive read as two
+    // different warnings to the operator, not one repeated.
+    if (archiveError) fail('email_tickets', 'update:archive', archiveError.message, { step: 'archive' })
   }
 
   return {
