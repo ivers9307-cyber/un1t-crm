@@ -23,7 +23,7 @@ import { api } from './api'
 import { supabase } from './supabase'
 import { readFileAsArrayBuffer } from './upload-bytes'
 import {
-  getTicket, getMailCount, listMail, fetchMailDigest,
+  getTicket, getMailCount, getEstateMailCount, listMail, fetchMailDigest,
   archiveConversation, setConversationSeen,
   replyToTicket, composeEmail, forwardMessage, draftUuid,
   signOutboundAttachment, uploadSignedAttachment,
@@ -290,6 +290,28 @@ describe('getMailCount', () => {
   it('passes a failure through untouched — the poller keeps its last count', async () => {
     api.mockResolvedValue({ success: false, error: 'blip' })
     const res = await getMailCount('loc-1')
+    expect(res.success).toBe(false)
+  })
+})
+
+// MOBILE-MAILPARITY.1 — the Mail TAB badge asks the same question the web
+// sidebar asks (Sidebar.jsx, MAIL-BADGE.1): the ESTATE sum via ?scope=all,
+// with NO location header, so a coach at two studios sees one number on both
+// surfaces. The parameterless single-studio wrapper above stays for the tiles.
+describe('getEstateMailCount', () => {
+  it('asks the count route with scope=all and no location override — the estate, whatever studio the session is parked at', async () => {
+    api.mockResolvedValue({ success: true, data: { count: 7 } })
+    const res = await getEstateMailCount()
+    expect(api).toHaveBeenCalledTimes(1)
+    const [path, opts] = api.mock.calls[0]
+    expect(path).toBe('/api/email/mail/count?scope=all')
+    expect(opts?.locationId).toBeUndefined()
+    expect(res).toEqual({ success: true, data: { count: 7 } })
+  })
+
+  it('passes a failure through untouched — one unanswerable studio 500s the whole sum and the poller keeps its last count', async () => {
+    api.mockResolvedValue({ success: false, error: 'Could not count every studio' })
+    const res = await getEstateMailCount()
     expect(res.success).toBe(false)
   })
 })
