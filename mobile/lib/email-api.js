@@ -89,7 +89,9 @@ export async function listMail(locationId, { view, q, before, mailboxId } = {}) 
   if (before) params.set('before', before)
 
   const res = await api(`/api/email/mail?${params.toString()}`, { locationId })
-  if (!res.success) return { success: false, error: res.error || 'Failed to load email' }
+  // `status` rides along on failure so the contact composer can tell a 403
+  // (no Mail access at this studio — a state) from a fault — MAIL-403.1.
+  if (!res.success) return { success: false, status: res.status, error: res.error || 'Failed to load email' }
 
   const mailboxes = res.data?.mailboxes || []
   return {

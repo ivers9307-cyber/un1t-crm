@@ -30,6 +30,7 @@ import { describe, it, expect } from 'vitest'
 import {
   resolveContactEmailSend, contactEmailFooter, mailboxesFromListResult,
   COMPANY_SENDER_FOOTER, AWAITING_SENDER_FOOTER, UNAVAILABLE_SENDER_FOOTER, MAILBOXES_UNAVAILABLE,
+  MAILBOXES_FORBIDDEN, NO_ACCESS_SENDER_FOOTER,
 } from './mail-sender'
 
 const STILL = 'a0000000-0000-0000-0000-000000000001'
@@ -155,6 +156,15 @@ describe('mailboxesFromListResult — listMail\'s answer → the modal\'s mailbo
     expect(mailboxesFromListResult(null)).toBe(MAILBOXES_UNAVAILABLE)
   })
 
+  it('a 403 is FORBIDDEN, not unavailable — no Mail access at that studio is a state, not a fault (MAIL-403.1)', () => {
+    expect(mailboxesFromListResult({ success: false, status: 403, error: 'Forbidden' })).toBe(MAILBOXES_FORBIDDEN)
+    // Every other failure is still the generic one.
+    expect(mailboxesFromListResult({ success: false, status: 401, error: 'HTTP 401' })).toBe(MAILBOXES_UNAVAILABLE)
+    expect(mailboxesFromListResult({ success: false, status: 500, error: 'HTTP 500' })).toBe(MAILBOXES_UNAVAILABLE)
+    expect(mailboxesFromListResult({ success: false, transport: true, error: 'Network error' })).toBe(MAILBOXES_UNAVAILABLE)
+    expect(Array.isArray(MAILBOXES_FORBIDDEN)).toBe(false)
+  })
+
   it('unavailable is not an array — nothing downstream may .map or .find it', () => {
     expect(Array.isArray(MAILBOXES_UNAVAILABLE)).toBe(false)
   })
@@ -200,12 +210,19 @@ describe('contactEmailFooter — says which path the send will take', () => {
     expect(UNAVAILABLE_SENDER_FOOTER).toBe('Couldn’t load studio accounts — will send from the company address')
   })
 
+  it('says the caller has no Mail access at this studio on a 403 — and still sends from the company address (MAIL-403.1)', () => {
+    expect(resolveContactEmailSend({ mailboxes: MAILBOXES_FORBIDDEN, mailboxId: null, ...contact })).toEqual({ path: 'company', reason: 'forbidden' })
+    expect(contactEmailFooter({ mailboxes: MAILBOXES_FORBIDDEN, mailboxId: null, ...contact })).toBe(NO_ACCESS_SENDER_FOOTER)
+    expect(NO_ACCESS_SENDER_FOOTER).toBe('You don’t have Mail access at this studio — will send from the company address')
+  })
+
   it('footer and send agree on every input — the one claim this file exists to pin', () => {
     const cases = [
       { mailboxes: null, mailboxId: null, ...contact },
       { mailboxes: undefined, mailboxId: null, ...contact },
       { mailboxes: null, mailboxId: null, contactEmail: 'sarah@example.com', contactLocationId: null },
       { mailboxes: MAILBOXES_UNAVAILABLE, mailboxId: null, ...contact },
+      { mailboxes: MAILBOXES_FORBIDDEN, mailboxId: null, ...contact },
       { mailboxes: [], mailboxId: null, ...contact },
       { mailboxes: [box()], mailboxId: 'mb-1', ...contact },
       { mailboxes: [box()], mailboxId: 'mb-stale', ...contact },
@@ -220,7 +237,11 @@ describe('contactEmailFooter — says which path the send will take', () => {
         expect(footer).toBe(AWAITING_SENDER_FOOTER)
       } else {
         expect(send.path).toBe('company')
-        expect(footer).toBe(send.reason === 'unavailable' ? UNAVAILABLE_SENDER_FOOTER : COMPANY_SENDER_FOOTER)
+        expect(footer).toBe(
+          send.reason === 'unavailable' ? UNAVAILABLE_SENDER_FOOTER
+            : send.reason === 'forbidden' ? NO_ACCESS_SENDER_FOOTER
+              : COMPANY_SENDER_FOOTER
+        )
       }
     }
   })

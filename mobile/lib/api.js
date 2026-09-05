@@ -162,5 +162,17 @@ export async function api(path, options = {}) {
   // inference — and existing callers see exactly what they always saw,
   // because every pre-existing non-2xx either carries `success: false`
   // (unchanged path) or no boolean `success` at all (still synthesised).
+  //
+  // MAIL-403.1 — one ADDITIVE key on that unchanged path: a non-2xx envelope
+  // that says `success: false` also carries `status`, the way the synthesised
+  // and non-JSON branches above already do. Without it a caller could tell a
+  // 403 from a 500 only when the body was NOT ours — the contact composer's
+  // account list answers a 403 WITH our envelope, so "no Mail access at this
+  // studio" could never be told from "the list failed". The body's own
+  // fields win: a route that already sends `status` keeps it. A `success:
+  // true` non-2xx (the Shelly 429) is untouched, as is every 2xx.
+  if (!response.ok && json.success === false && json.status === undefined) {
+    return { ...json, status: response.status }
+  }
   return json
 }

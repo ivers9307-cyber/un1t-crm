@@ -37,19 +37,36 @@ export const UNAVAILABLE_SENDER_FOOTER = 'Couldn’t load studio accounts — wi
 export const MAILBOXES_UNAVAILABLE = 'unavailable'
 
 /**
+ * MAIL-403.1 — the list answered 403: the caller holds no Mail access at the
+ * contact's studio. That is a PERMANENT permission state, not a failure, so it
+ * gets its own footer — the generic "couldn't load" read as a fault to a coach
+ * who simply isn't on that studio's Mail. Still the company path (the send
+ * still goes out), still a string so no reader can .map it.
+ */
+export const MAILBOXES_FORBIDDEN = 'forbidden'
+
+/** No Mail access at the contact's studio: says so, and says what the send will do. */
+export const NO_ACCESS_SENDER_FOOTER = 'You don’t have Mail access at this studio — will send from the company address'
+
+/**
  * The fetch answer → the composer's mailbox state: the array on a 2xx
  * `{ success: true, data: { mailboxes } }` envelope (null-tolerant on the
  * field, so a route that omits it reads as none), MAILBOXES_UNAVAILABLE on
  * anything else — a non-2xx, `success: false`, an unparseable body, no answer.
  *
  * What counts as "genuinely none" is ONLY a successful empty list. A refused
- * list (403: the caller lacks email_inbox at that studio) and a route 500 both
- * land here as "unavailable", which is honest for both: the list was not
- * obtained, the send goes company either way, and the footer says why.
+ * list (403: the caller lacks email_inbox at that studio) is MAILBOXES_FORBIDDEN
+ * since MAIL-403.1 — a state with its own footer; a route 500 or any other
+ * failure is "unavailable". The send goes company either way, and the footer
+ * says why in each case.
  *
- * @param {{ ok: boolean, json: object|null } | null | undefined} res
+ * @param {{ ok: boolean, status?: number, json: object|null } | null | undefined} res
  */
 export function mailboxesFromListResponse(res) {
+  // 403 is judged BEFORE the generic failure: it is the one non-2xx that is a
+  // state rather than a fault, and the route answers it only for a caller
+  // with no `email_inbox` at that studio (never for a blip).
+  if (res?.status === 403) return MAILBOXES_FORBIDDEN
   if (!res?.ok || !res.json?.success) return MAILBOXES_UNAVAILABLE
   const boxes = res.json.data?.mailboxes
   return Array.isArray(boxes) ? boxes : []
@@ -111,6 +128,7 @@ function isAwaiting({ mailboxes, contactEmail, contactLocationId }) {
 export function resolveContactEmailSend({ mailboxes, mailboxId, contactEmail, contactLocationId } = {}) {
   if (isAwaiting({ mailboxes, contactEmail, contactLocationId })) return { path: 'awaiting' }
   if (mailboxes === MAILBOXES_UNAVAILABLE) return { path: 'company', reason: 'unavailable' }
+  if (mailboxes === MAILBOXES_FORBIDDEN) return { path: 'company', reason: 'forbidden' }
   const mailbox = chosenMailbox(mailboxes, mailboxId)
   if (!mailbox || !contactEmail) return { path: 'company' }
   return {
@@ -136,5 +154,7 @@ export function contactEmailFooter(args = {}) {
     const m = chosenMailbox(args.mailboxes, args.mailboxId)
     return m.address || m.label || ''
   }
-  return plan.reason === 'unavailable' ? UNAVAILABLE_SENDER_FOOTER : COMPANY_SENDER_FOOTER
+  if (plan.reason === 'unavailable') return UNAVAILABLE_SENDER_FOOTER
+  if (plan.reason === 'forbidden') return NO_ACCESS_SENDER_FOOTER
+  return COMPANY_SENDER_FOOTER
 }
