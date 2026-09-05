@@ -36,7 +36,7 @@
 // ticket-era status back into a decision the server's `archived` stamp had
 // already made, and a legacy `solved` row the server calls live was presented
 // as archived — the swipe then sent `{archived:false}`, reopening nothing.
-import { isArchived, needsReply, archivedOrStatus } from 'shared/mail-vocabulary'
+import { isArchived, needsReply } from 'shared/mail-vocabulary'
 
 // ── Status ───────────────────────────────────────────────────────────
 //
@@ -55,8 +55,9 @@ export function mailStatusChip(row) {
   // stamps `archived` + `needs_reply` on every mail row precisely so no
   // client re-derives the one predicate the surface exists to keep); the
   // status/direction fallbacks cover ticket-shaped callers with no stamps.
-  // MAIL-ARCH.3 — that stamp-else-status reading IS shared's archivedOrStatus.
-  const archived = archivedOrStatus(row)
+  // MAIL-ARCH.4 — that reading IS shared's isArchived, the only one left: a
+  // stampless legacy `solved` reads live, as the server stamps it.
+  const archived = isArchived(row)
   if (archived) {
     return { label: 'Archived', cls: 'bg-slate-500/10', text: 'text-slate-700' }
   }
@@ -707,11 +708,12 @@ export function ticketToInboxRow(ticket, { mailboxById = {}, showMailbox = false
     // false — so swiping one sent `{archived:false}` and REOPENED a resolved
     // conversation instead of archiving it. The status fallback now applies
     // only when the flag is absent (a ticket-era caller shaping raw rows) —
-    // MAIL-ARCH.3: that reading is shared's archivedOrStatus, and
-    // `resolved_at` follows the SAME verdict so a row the server calls live
-    // can never carry a resolution time (a stamped-live `solved` row used to).
-    archived: archivedOrStatus(t),
-    resolved_at: archivedOrStatus(t)
+    // MAIL-ARCH.4: that reading is shared's isArchived (archivedOrStatus and
+    // its `solved` fallback are gone), and `resolved_at` follows the SAME
+    // verdict so a row the server calls live can never carry a resolution
+    // time (a stamped-live `solved` row used to).
+    archived: isArchived(t),
+    resolved_at: isArchived(t)
       ? (t.solved_at || t.closed_at || t.updated_at || null)
       : null,
     pending_approval: false,
@@ -1058,7 +1060,7 @@ export function segCountLabel(n) {
  * and a status fallback may only run when the stamp is absent.
  */
 export function mailRowDisplay(row) {
-  const archived = archivedOrStatus(row)
+  const archived = isArchived(row)
   return {
     rail: !archived && needsReply(row),
     unread: row?.unread === true,

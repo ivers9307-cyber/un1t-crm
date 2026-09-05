@@ -106,9 +106,9 @@ import {
   flatThreadPlan, flatMessageMeta, mergedInDividers,
 } from '../../../lib/email-tickets'
 // MAIL-ARCH.3 — the thread route stamps `archived` now; read the stamp, never
-// `status` (legacy `solved` is LIVE on the wire). The helper keeps the old
-// status reading only for a stampless row — see shared/mail-vocabulary.js.
-import { archivedOrStatus } from 'shared/mail-vocabulary'
+// `status` (legacy `solved` is LIVE on the wire). MAIL-ARCH.4 — the one
+// reading is shared's isArchived; see shared/mail-vocabulary.js.
+import { isArchived } from 'shared/mail-vocabulary'
 import {
   readReplyDraft, writeReplyDraft, clearReplyDraft, resolveDraftHydration,
   attachmentBudget, readyAttachmentRefs, admitPickedFile, composerSendState,
@@ -968,7 +968,7 @@ export default function EmailTicket() {
   // thread-screen twin of the swipe-reopen bug #1618 killed on the list.
   async function toggleArchive() {
     if (savingAction) return
-    const next = !archivedOrStatus(ticket)
+    const next = !isArchived(ticket)
     setSavingAction(true)
     const res = await archiveConversation(ticketId, next, activeLocation?.id)
     setSavingAction(false)
@@ -1098,7 +1098,7 @@ export default function EmailTicket() {
   // knowing who wrote in reads as a bug.
   const name = ticket ? emailDisplayName(ticket) : 'Email'
   const chip = mailStatusChip(ticket)
-  const archived = archivedOrStatus(ticket)
+  const archived = isArchived(ticket)
 
   // The folded/unfolded plan (MAIL-REFINE.1 §02, flatThreadPlan in
   // lib/email-tickets.js): ONLY the newest opens by default; taps override

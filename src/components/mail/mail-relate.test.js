@@ -101,6 +101,18 @@ describe('newestOpenRelated — where View goes', () => {
     expect(isOpenRelated(open)).toBe(true)
   })
 
+  // MAIL-ARCH.4 — the related route stamps `archived` (MAIL-ARCH.3) and this
+  // file reads the stamp, not `status`. The two cases the phone's twin got
+  // wrong once: a legacy `solved` row the server stamps LIVE, and an `open`
+  // status row the server stamps archived.
+  it('🔴 reads the server stamp — a stamped-live solved row is open, a stamped-archived open row is not', () => {
+    const solvedLive = REL({ id: 'r-solved-live', status: 'solved', archived: false })
+    const openStampedArchived = REL({ id: 'r-open-archived', status: 'open', archived: true })
+    expect(isOpenRelated(solvedLive)).toBe(true)
+    expect(isOpenRelated(openStampedArchived)).toBe(false)
+    expect(newestOpenRelated([openStampedArchived, solvedLive])).toBe(solvedLive)
+  })
+
   it('answers null when nothing open is left', () => {
     expect(newestOpenRelated([REL({ status: 'closed' })])).toBeNull()
     expect(newestOpenRelated([])).toBeNull()
@@ -145,6 +157,13 @@ describe('candidateLine — the picker row description', () => {
   it('describes an archived one as archived — the surface never says closed', () => {
     expect(candidateLine(REL({ status: 'closed', message_count: 5, last_message_at: '2026-08-12T10:00:00Z' }), NOW))
       .toBe('Jordan Sample · 5 messages · archived 12 Aug')
+  })
+
+  it('the verb follows the STAMP, not the status (MAIL-ARCH.4)', () => {
+    expect(candidateLine(REL({ status: 'open', archived: true, message_count: 5, last_message_at: '2026-08-12T10:00:00Z' }), NOW))
+      .toBe('Jordan Sample · 5 messages · archived 12 Aug')
+    expect(candidateLine(REL({ status: 'solved', archived: false, message_count: 5, last_message_at: '2026-08-12T10:00:00Z' }), NOW))
+      .toBe('Jordan Sample · 5 messages · opened 12 Aug')
   })
 
   it('singularises one message', () => {

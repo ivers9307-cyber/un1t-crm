@@ -51,34 +51,19 @@ export function isArchived(conversation) {
   return conversation?.status === ARCHIVED_STATUS
 }
 
-/**
- * MAIL-ARCH.3 — `archived`, read the way a client that may be TALKING TO AN
- * OLDER SERVER has to read it.
- *
- * The stamp is the whole answer when it is a boolean — identical to
- * isArchived, and the reason both twins of the swipe-reopen bug (the mobile
- * thread screen's header chip + archive toggle, and mail-relate.js's nudge
- * target + merge picker) are dead: they read this instead of `status`.
- *
- * With NO stamp it falls back to the derivation those call sites had BEFORE
- * the thread and related routes stamped (`solved || closed`, the ticket-era
- * reading), NOT to isArchived's `closed`-only one. That is deliberate: web
- * deploys on Vercel and the mobile OTA lands minutes later, so for one window
- * a new client can read a stampless row from an old server — and a fixture
- * never stamps at all. In that window the OLD reading is the one that
- * mislabels nothing, because it is what the screen showed yesterday.
- *
- * 🔴 ON THE WIRE THIS FALLBACK IS DEAD CODE. Every route that hands a client
- * a conversation stamps it through stampMailRow (list, digest, archive, spam
- * since MAIL-ARCH.2; thread and related since MAIL-ARCH.3), so `archived` is
- * always a boolean there and the second line never runs. It stays for the
- * deploy window and for stampless callers; delete it only if you are sure
- * nothing shapes a raw ticket row through these helpers any more.
- */
-export function archivedOrStatus(conversation) {
-  if (typeof conversation?.archived === 'boolean') return conversation.archived
-  return conversation?.status === ARCHIVED_STATUS || conversation?.status === 'solved'
-}
+// MAIL-ARCH.4 — there is no second reading of `archived` any more.
+// MAIL-ARCH.3 carried a sibling, archivedOrStatus, whose only difference was a
+// stampless fallback of `solved || closed` (the ticket-era mobile derivation)
+// for the window between the Vercel deploy that taught the thread and related
+// routes to stamp and the OTA that taught the phone to read the stamp. That
+// window closed on 5 Sep 2026 (#1619 published, pre-flight green): every route
+// that hands a client a conversation stamps it through stampMailRow — list,
+// digest, archive, spam, thread (/api/email/tickets/[id]) and related — so the
+// stamp is always a boolean on the wire and a stampless row is a FIXTURE, not
+// a server. isArchived's own `closed`-only fallback is the one that agrees
+// with the server on the only row the two ever disagreed on: legacy `solved`
+// is LIVE (src/app/api/email/mail/_helpers.js isArchived), and a stampless
+// `solved` now reads live everywhere, the same as a stamped one does.
 
 /**
  * Has this member been answered?
