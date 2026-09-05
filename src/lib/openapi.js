@@ -1339,11 +1339,12 @@ registry.registerPath({
   request: {
     query: z.object({
       view: z.enum(['inbox', 'needs_reply', 'sent', 'archived']).optional(),
+      counts: z.literal('only').optional(),
     }),
   },
   responses: {
-    200: { description: '{ locations: [{ location_id, name, unavailable, needs_reply_count, view_total, conversations, counts_partial?, counts_unavailable? }], needs_reply_total, partial }' },
-    400: { description: 'Unknown view', content: { 'application/json': { schema: ErrorResponse } } },
+    200: { description: '{ locations: [{ location_id, name, unavailable, needs_reply_count, view_total, conversations, counts_partial?, counts_unavailable? }], needs_reply_total, partial, counts_only? }. MAIL-PERF.1: with `counts=only` (the location-tile poll) each location carries only the tile facts — `needs_reply_count` from ONE head-count, `view_total: null`, `conversations: []` — and the payload is stamped `counts_only: true`; the default answer is unchanged.' },
+    400: { description: 'Unknown view, or a `counts` value other than `only`', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })

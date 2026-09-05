@@ -50,8 +50,20 @@ export const dynamic = 'force-dynamic'
  */
 export const DIGEST_ROWS_PER_LOCATION = 5
 
-/** One location's digest entry, or its honest failure. */
-async function locationDigest(db, user, locationId, view) {
+/** The failure shape — null counts say "unknown", never zero. */
+const UNAVAILABLE = { unavailable: true, needs_reply_count: null, view_total: null, conversations: [] }
+
+/**
+ * One location's digest entry, or its honest failure.
+ *
+ * MAIL-PERF.1 — `countsOnly`: the tile poll (MailSurface.loadTileDigest) reads
+ * only the tile facts, so it asks for them alone: ONE head-count per location
+ * instead of three queries plus a per-row counts pass. The entry keeps the
+ * digest's field set (`view_total: null`, `conversations: []`) so every
+ * consumer iterates without guards; only the default response is the full
+ * digest, byte-identical to before.
+ */
+async function locationDigest(db, user, locationId, view, { countsOnly = false } = {}) {
   const visibility = await loadInboxMailboxes(db, user, locationId)
   if (visibility.response) {
     // The refusal response belongs to the scoped route's shape; here the
@@ -72,6 +84,15 @@ async function locationDigest(db, user, locationId, view) {
   const base = () => db.from('email_tickets').select('*').eq('location_id', locationId)
   const headCount = () =>
     db.from('email_tickets').select('*', { count: 'exact', head: true }).eq('location_id', locationId)
+
+  if (countsOnly) {
+    const needsReplyRes = await scopeToNeedsReply(scoped(headCount()))
+    if (needsReplyRes.error) {
+      console.error(`[email/mail/digest] location ${locationId} failed:`, needsReplyRes.error.message)
+      return { ...UNAVAILABLE }
+    }
+    return { unavailable: false, needs_reply_count: needsReplyRes.count || 0, view_total: null, conversations: [] }
+  }
 
   const [rowsRes, needsReplyRes, viewTotalRes] = await Promise.all([
     applyView(scoped(base()), view)
@@ -130,6 +151,17 @@ export async function GET(request) {
     )
   }
 
+  // MAIL-PERF.1 — `counts=only` is the tile poll's ask: tile facts, no rows.
+  // Anything but the one literal is a typo, not a request, and says so.
+  const counts = searchParams.get('counts')
+  if (counts !== null && counts !== 'only') {
+    return NextResponse.json(
+      { success: false, error: 'Unknown counts mode — expected counts=only' },
+      { status: 400 }
+    )
+  }
+  const countsOnly = counts === 'only'
+
   // Eligibility per location — the same key the scoped routes gate on,
   // resolved AT each location so a manager-here-staff-there answers
   // differently per studio, exactly like visiting each one directly would.
@@ -139,8 +171,19 @@ export async function GET(request) {
   const db = createServerClient()
   const nameOf = (id) => (user.locations || []).find(l => l.id === id)?.name || null
 
+  // PER-LOCATION FAN-OUT, DELIBERATELY. At two studios this is 2× (one
+  // visibility lookup + one head-count under counts=only; + rows + view_total
+  // + a per-row counts pass for the full digest), in parallel, and it stays
+  // readable. MAIL-PERF.1: at ~5+ locations the collapse goes HERE — one
+  // visibility resolution across the eligible set, then a single grouped
+  // count (`.in('location_id', eligible)` + a group-by on location_id, which
+  // PostgREST does not expose directly, so an RPC) in place of N head-counts.
+  // Not built: the mailbox-visibility model is per location (per-mailbox
+  // grants vs elevated-sees-all differ per studio), so the grouped query
+  // needs per-location predicates and is only worth its complexity once the
+  // estate is wide enough for the fan-out to show in the p95.
   const entries = await Promise.all(
-    eligible.map(async (id) => ({ id, digest: await locationDigest(db, user, id, view) }))
+    eligible.map(async (id) => ({ id, digest: await locationDigest(db, user, id, view, { countsOnly }) }))
   )
 
   const locations = entries
@@ -159,8 +202,13 @@ export async function GET(request) {
     ? null
     : locations.reduce((sum, l) => sum + (l.needs_reply_count || 0), 0)
 
+  // The default payload is byte-identical to before MAIL-PERF.1; only a
+  // counts-only answer carries the marker, so a consumer can tell "no rows
+  // were asked for" from "no rows exist".
   return NextResponse.json({
     success: true,
-    data: { locations, needs_reply_total: needsReplyTotal, partial },
+    data: countsOnly
+      ? { locations, needs_reply_total: needsReplyTotal, partial, counts_only: true }
+      : { locations, needs_reply_total: needsReplyTotal, partial },
   })
 }
