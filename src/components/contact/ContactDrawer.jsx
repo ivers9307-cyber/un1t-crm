@@ -129,7 +129,7 @@ export default function ContactDrawer({ contactId, columnContactIds = [], locati
                   <PersonActionBar
                     contactId={contact.id}
                     locationId={locationId}
-                    actions={['task', 'sequence', 'cold']}
+                    actions={['task', 'sequence', 'cancel_form', 'cold']}
                     isCold={contact.pipeline_stage_slug === 'cold_lead'}
                   />
                 </PersonHeader>

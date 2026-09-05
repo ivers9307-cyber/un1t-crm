@@ -24,6 +24,7 @@ import { aggregatePerson } from '@/lib/person-aggregate'
 // CC.2 — command-centre sections (shared with the pipeline drawer where
 // noted on each component).
 import ContactHeaderBand from '@/components/contact/ContactHeaderBand'
+import { latestLinkForContact } from '@/lib/cancellation-form/links'
 import ContactWhoRail from '@/components/contact/ContactWhoRail'
 import ContactNextRail from '@/components/contact/ContactNextRail'
 import ContactTimeline from '@/components/contact/ContactTimeline'
@@ -78,7 +79,7 @@ export default async function ContactDetailPage(props) {
     if (pg?.group?.id) person = await aggregatePerson(db, pg.group.id)
   } catch { person = null }
 
-  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes, eventTypesRes, contactArrears] = await Promise.all([
+  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes, eventTypesRes, contactArrears, cancellationLink] = await Promise.all([
     db.from('deals').select('*, pipeline_stages(name, color)').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('notes').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('activities').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
@@ -92,6 +93,8 @@ export default async function ContactDetailPage(props) {
     // arrears were only computed for grouped contacts, so an ungrouped member
     // in arrears showed "—" and the overdue pill never lit (no pastDueIds ctx).
     loadContactArrears(db, id),
+    // CANCEL-FORM.4 — latest issued cancellation-form link → header chip.
+    latestLinkForContact(db, id),
   ])
 
   // GLOFOX-CATALOG — resolve the member's plan description (pricing +
@@ -347,6 +350,7 @@ export default async function ContactDetailPage(props) {
         attention={attention}
         nextClassAt={nextClassAt}
         canToggleExempt={MANAGER_ROLES.includes(user?.role)}
+        cancellationLink={cancellationLink}
         metrics={{
           ltvCents,
           arrearsCents: metricArrearsCents,

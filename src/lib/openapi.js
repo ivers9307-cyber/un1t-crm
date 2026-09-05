@@ -2373,6 +2373,52 @@ registry.registerPath({
   },
 })
 
+// CANCEL-FORM.4 — staff send a member the single-use membership cancellation
+// form link (email or WhatsApp). Channel permission + contact location.
+registry.registerPath({
+  method: 'get',
+  path: '/api/contacts/{id}/cancellation-form',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Cancellation form: latest issued link, deliverable channels, rendered preview',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'State + preview', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({}).passthrough() }) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — email/whatsapp permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/contacts/{id}/cancellation-form',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Send the member a single-use cancellation form link by email or WhatsApp',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            channel: z.enum(['email', 'whatsapp']),
+            message: z.string().max(2000).optional(),
+          }).openapi('CancellationFormSendBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Sent', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ linkId: z.string(), channel: z.string(), expiresAt: z.string() }) }) } } },
+    400: { description: 'No address / phone, or address bounced', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — channel permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'WhatsApp window closed and no usable template (window_expired, needs_template)', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Delivery failed (link revoked)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // REPSET-P5 — admin app-account linking (contacts.user_id ↔ auth user).
 // Master/owner only; staff never self-link their member contact.
 registry.registerPath({

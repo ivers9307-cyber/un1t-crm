@@ -31,6 +31,21 @@ const PULSE_STATUS_LABEL = {
   expired:   'Window over',
 }
 
+// CANCEL-FORM.4 — the cancellation-form link chip. Hidden once the link is
+// revoked or expired; red once submitted (a request is waiting in Approvals).
+export function cancellationLinkChip(link) {
+  if (!link || link.revoked_at) return null
+  const via = link.channel === 'whatsapp' ? 'WhatsApp' : 'email'
+  if (link.used_at) {
+    return { label: 'Cancel form submitted', cls: 'bg-red-500/10 text-red-700', title: `Submitted ${new Date(link.used_at).toLocaleDateString('en-IE')} — see Approvals` }
+  }
+  if (Date.parse(link.expires_at || '') < Date.now()) return null
+  if (link.opened_at) {
+    return { label: 'Cancel form opened', cls: 'bg-amber-500/10 text-amber-700', title: `Opened ${new Date(link.opened_at).toLocaleDateString('en-IE')}, not submitted yet` }
+  }
+  return { label: `Cancel form sent`, cls: 'bg-gray-500/10 text-gray-600', title: `Sent by ${via} ${new Date(link.issued_at).toLocaleDateString('en-IE')}, not opened yet` }
+}
+
 const ATTENTION_CHIP = {
   danger: 'bg-red-500/10 text-red-700',
   warn: 'bg-amber-500/10 text-amber-700',
@@ -50,7 +65,9 @@ function StatTile({ label, value, tone = 'default' }) {
   )
 }
 
-export default function ContactHeaderBand({ contact, person, risk, journey, metrics, attention = [], nextClassAt = null, canToggleExempt = false }) {
+export default function ContactHeaderBand({ contact, person, risk, journey, metrics, attention = [], nextClassAt = null, canToggleExempt = false, cancellationLink = null }) {
+  // CANCEL-FORM.4 — latest issued form link → one chip (sent / opened / submitted).
+  const cancelChip = cancellationLinkChip(cancellationLink)
   const funnel = BADGE_SLUGS.has(contact.pipeline_stage_slug)
   const lastAttended = person?.lastAttendedAt || contact.last_attended_at
   // GLOFOX-REACTIVE (mig 428) — membership pause, surfaced prominently
@@ -103,7 +120,7 @@ export default function ContactHeaderBand({ contact, person, risk, journey, metr
             <PersonActionBar
               contactId={contact.id}
               locationId={contact.location_id}
-              actions={['message', 'task', 'sequence', 'cold']}
+              actions={['message', 'task', 'sequence', 'cancel_form', 'cold']}
               isCold={contact.pipeline_stage_slug === 'cold_lead'}
             />
           </PersonHeader>
@@ -150,6 +167,11 @@ export default function ContactHeaderBand({ contact, person, risk, journey, metr
             {journey?.inWindow && (
               <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${PULSE_STATUS_CHIP[journey.status] || 'bg-gray-500/10 text-gray-600'}`}>
                 First 90: {PULSE_STATUS_LABEL[journey.status] || journey.status}
+              </span>
+            )}
+            {cancelChip && (
+              <span title={cancelChip.title} className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${cancelChip.cls}`}>
+                {cancelChip.label}
               </span>
             )}
             {/* HOST-MASTER.6 — mig 464 flag on host-sourced contacts. Chip
