@@ -4,7 +4,7 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import {
   loadInboxMailboxes, loadConversationCounts,
-  scopeToNeedsReply, scopeToUnmerged, scopeToSpamView, isNeedsReply, isArchived,
+  scopeToNeedsReply, scopeToUnmerged, scopeToSpamView, stampMailRow,
   MAIL_VIEWS, applyView,
 } from './_helpers'
 import { scopeToVisibleMailboxes } from '../tickets/_helpers'
@@ -233,11 +233,9 @@ export async function GET(request) {
   const conversations = page.map(t => {
     const c = counts.counts.get(t.id) || null
     return {
-      ...t,
       // Stamped here so no client re-derives the one predicate this surface
-      // exists to keep — see isNeedsReply.
-      needs_reply: isNeedsReply(t),
-      archived: isArchived(t),
+      // exists to keep — see isNeedsReply / stampMailRow.
+      ...stampMailRow(t),
       message_count: c ? c.messages : null,
       unread_count_messages: c ? c.unread : null,
       unread: c ? c.unread > 0 : false,

@@ -43,9 +43,12 @@ import ComposeDock from './ComposeDock'
 import {
   MAIL_VIEWS, DEFAULT_MAIL_VIEW, mailView, buildMailUrl,
   isArchived, isUnread, isTypingTarget, neighbourId,
+  needsReply,
+} from './mail-vocabulary'
+import {
   DENSITIES, DEFAULT_DENSITY, readDensity, writeDensity,
-  needsReply, composeBlocksKeys, slotOccupancy,
-} from './mail-display'
+  composeBlocksKeys, slotOccupancy,
+} from './mail-preferences'
 import { useActionQueue } from './use-action-queue'
 import { useDockSlot } from './use-dock-slot'
 import {

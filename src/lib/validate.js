@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
+import { UUID_SHAPE } from './uuid-shape'
 
 /**
  * UUID-shaped string validator matching Postgres's `uuid` type behaviour.
@@ -12,7 +13,7 @@ import { z } from 'zod'
  * input that originates from our DB.
  */
 export const uuidLike = z.string().regex(
-  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/,
+  UUID_SHAPE,
   'Must be a 36-character UUID-shaped string'
 )
 

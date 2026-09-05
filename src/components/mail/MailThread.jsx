@@ -37,7 +37,7 @@ import { Archive, ArchiveRestore, Link2, Mail, MailOpen, ShieldAlert, ShieldChec
 import { EmptyState, Modal } from '@/components/ui'
 import TicketThread from '@/components/tickets/TicketThread'
 import { requesterLabel } from '@/lib/ticket-display'
-import { isArchived, needsReply, isUnread, isSpam, MAIL_SHORTCUTS } from './mail-display'
+import { isArchived, needsReply, isUnread, isSpam, MAIL_SHORTCUTS } from './mail-vocabulary'
 // MAIL-REFINE.1 (03) — relating conversations. All decisions are pure and live
 // in mail-relate.js; this file owns only the fetch lifecycle and the pixels.
 import {

@@ -87,7 +87,8 @@ import AttachmentPicker, { readyDrafts, hasPendingUploads } from './AttachmentPi
 // `key={ticketId}` remount is TICKET-COMPOSER-LEAK.1's guard against a
 // cross-ticket send, and this store rides on exactly that key rather than
 // creating a second one.
-import { readReplyDraft, writeReplyDraft, clearReplyDraft, replyPillLabel } from '@/components/mail/mail-display'
+import { readReplyDraft, writeReplyDraft, clearReplyDraft } from '@/components/mail/reply-drafts'
+import { replyPillLabel } from '@/components/mail/mail-vocabulary'
 import { resolveViewerId } from '@/components/mail/viewer-id'
 
 const MAX_LENGTH = 10000

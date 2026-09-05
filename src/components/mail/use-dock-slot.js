@@ -16,7 +16,7 @@ import {
   COMPOSE_MODE_MIN, DEFAULT_COMPOSE_MODE, readComposeMode, writeComposeMode,
   composeRestoreTarget, composeEscTarget,
   slotYieldTarget, isMdUp,
-} from './mail-display'
+} from './mail-preferences'
 
 export function useDockSlot({ hasReader }) {
   // ── MAIL-DOCK.1 — which shape the open conversation's card takes ─────

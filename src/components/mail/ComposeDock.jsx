@@ -35,7 +35,7 @@
 //     shifts instead — MailDock's `shifted`).
 
 import { Minus, Maximize2, Minimize2, X } from 'lucide-react'
-import { COMPOSE_MODE_MIN, composeCardTitle } from './mail-display'
+import { COMPOSE_MODE_MIN, composeCardTitle } from './mail-preferences'
 
 // The card per mode. Base classes are the resize safety net (a full-screen
 // card); everything dock-shaped is md:-prefixed, mirroring MailDock's map.

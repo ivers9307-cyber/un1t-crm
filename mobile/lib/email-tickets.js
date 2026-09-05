@@ -28,6 +28,15 @@
 //
 // No React-Native imports anywhere in this file: it runs under vitest's node
 // environment (see vitest.config.js include for mobile/lib).
+//
+// MAIL-ARCH.2 — the archive / needs-reply PREDICATES are no longer restated
+// here. They come from shared/mail-vocabulary.js, the same implementation the
+// web Mail surface reads (src/components/mail/mail-vocabulary.js re-exports
+// it), because the hand-mirrored copy HAD drifted: archiveToggleMeta OR-ed the
+// ticket-era status back into a decision the server's `archived` stamp had
+// already made, and a legacy `solved` row the server calls live was presented
+// as archived — the swipe then sent `{archived:false}`, reopening nothing.
+import { isArchived, needsReply } from 'shared/mail-vocabulary'
 
 // ── Status ───────────────────────────────────────────────────────────
 //
@@ -52,10 +61,7 @@ export function mailStatusChip(row) {
   if (archived) {
     return { label: 'Archived', cls: 'bg-slate-500/10', text: 'text-slate-700' }
   }
-  const needsReply = typeof row?.needs_reply === 'boolean'
-    ? row.needs_reply
-    : (row?.status === 'open' && row?.last_message_direction === 'inbound')
-  if (needsReply) {
+  if (needsReply(row)) {
     return { label: 'Needs reply', cls: 'bg-amber-500/10', text: 'text-amber-700' }
   }
   return null
@@ -971,8 +977,15 @@ export const ARCHIVE_UNDO_MS = 5000
  * direction — it comes with the undo snackbar.
  */
 export function archiveToggleMeta(row) {
-  const archived = row?.archived === true || isArchivedStatus(row?.status)
-  return archived
+  // MAIL-ARCH.2 — 🔴 THE SERVER STAMP IS THE WHOLE ANSWER. This used to read
+  // `row.archived === true || isArchivedStatus(row.status)`, and the OR was a
+  // live bug: the mail route stamps legacy `solved` rows `archived:false`
+  // (they are LIVE and list in the Inbox), so a swipe on one read "archived",
+  // painted INBOX on the underlay and sent `{archived:false}` — a reopen of a
+  // conversation that was never closed, while the operator believed they had
+  // archived it. shared/mail-vocabulary's isArchived is the web surface's own
+  // predicate: the boolean stamp when present, `closed`-only otherwise.
+  return isArchived(row)
     ? { next: false, undoTo: true, snack: 'Moved to inbox', underlay: 'INBOX' }
     : { next: true, undoTo: false, snack: 'Conversation archived', underlay: 'ARCHIVE' }
 }
@@ -1055,11 +1068,8 @@ export function mailRowDisplay(row) {
   const archived = typeof row?.archived === 'boolean'
     ? row.archived
     : isArchivedStatus(row?.status)
-  const needsReply = typeof row?.needs_reply === 'boolean'
-    ? row.needs_reply
-    : (row?.status === 'open' && row?.last_message_direction === 'inbound')
   return {
-    rail: !archived && needsReply,
+    rail: !archived && needsReply(row),
     unread: row?.unread === true,
     chip: archived ? mailStatusChip(row) : null,
     accountTag: row?.mailbox_label || null,

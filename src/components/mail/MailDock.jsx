@@ -24,7 +24,7 @@
 // a vanished conversation.
 
 import { Minus, Maximize2, Minimize2, X } from 'lucide-react'
-import { READER_MODE_MIN } from './mail-display'
+import { READER_MODE_MIN } from './mail-preferences'
 
 // The container per mode. Base classes are the MOBILE pane (a plain flex
 // child of the surface's row); everything dock-shaped is md:-prefixed.

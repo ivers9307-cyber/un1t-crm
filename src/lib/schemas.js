@@ -6,12 +6,13 @@
 
 import { z } from 'zod'
 import { sanitizePermissionsBlob } from '@shared/permissions'
+import { UUID_SHAPE } from './uuid-shape'
 
 // UUID-shaped string matching what Postgres's uuid type accepts. See
 // src/lib/validate.js for the rationale (Zod 4's .uuid() is RFC-strict
 // but the seeded location ID isn't RFC-compliant).
 export const uuidLike = z.string().regex(
-  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/,
+  UUID_SHAPE,
   'Must be a 36-character UUID-shaped string'
 )
 

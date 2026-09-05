@@ -35,7 +35,7 @@ import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import {
   loadInboxMailboxes, loadConversationCounts,
-  scopeToNeedsReply, scopeToUnmerged, isNeedsReply, isArchived,
+  scopeToNeedsReply, scopeToUnmerged, stampMailRow,
   MAIL_VIEWS, applyView,
 } from '../_helpers'
 import { scopeToVisibleMailboxes } from '../../tickets/_helpers'
@@ -97,11 +97,9 @@ async function locationDigest(db, user, locationId, view) {
   const conversations = page.map(t => {
     const c = counts.counts.get(t.id) || null
     return {
-      ...t,
-      // Stamped exactly as the scoped list stamps them, so a digest row and
-      // a list row can never disagree about the same conversation.
-      needs_reply: isNeedsReply(t),
-      archived: isArchived(t),
+      // Stamped exactly as the scoped list stamps them (the same helper), so a
+      // digest row and a list row can never disagree about the same conversation.
+      ...stampMailRow(t),
       message_count: c ? c.messages : null,
       unread_count_messages: c ? c.unread : null,
       unread: c ? c.unread > 0 : false,

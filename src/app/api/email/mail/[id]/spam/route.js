@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { loadTicketForUser, isNeedsReply, isArchived } from '../../_helpers'
+import { loadTicketForUser, stampMailRow } from '../../_helpers'
 import { loadOwnAddresses } from '../../../tickets/_helpers'
 import { maybeNotifyInboundEmail } from '@/lib/email-inbound-push'
 import { logError } from '@/lib/log'
@@ -110,13 +110,9 @@ export async function POST(request, props) {
   })
 }
 
-/** The same shape a list row carries, so the client can drop it straight in. */
+/** The same shape a list row carries (the list's own stamp helper), so the client can drop it straight in. */
 function shape(row) {
-  return {
-    ...row,
-    needs_reply: isNeedsReply(row),
-    archived: isArchived(row),
-  }
+  return stampMailRow(row)
 }
 
 /**

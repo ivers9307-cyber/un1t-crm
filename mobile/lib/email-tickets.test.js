@@ -1036,8 +1036,29 @@ describe('archiveToggleMeta (mockup §02 — swipe right, five-second undo)', ()
     })
   })
 
-  it('reads archived off the status when the flag is absent (historic solved rows)', () => {
-    expect(archiveToggleMeta({ status: 'solved' }).next).toBe(false)
+  // MAIL-ARCH.2 — 🔴 THE SWIPE-REOPEN BUG, pinned. The server counts legacy
+  // `solved` rows as LIVE and stamps them `archived:false` (they list in the
+  // Inbox). This derivation used to OR the status back in
+  // (`row.archived === true || isArchivedStatus(row.status)`), so a live
+  // solved row was presented as archived: the underlay said INBOX and the
+  // swipe sent `{archived:false}` — a "reopen" of a conversation that was
+  // never closed, while the operator believed they had archived it. The stamp
+  // is the whole answer; status is never OR-ed back in.
+  it('a solved row the server stamped LIVE archives on swipe — it is not presented as archived', () => {
+    expect(archiveToggleMeta({ status: 'solved', archived: false })).toEqual({
+      next: true, undoTo: false, snack: 'Conversation archived', underlay: 'ARCHIVE',
+    })
+    // …and needs_reply on the same row changes nothing about the verb.
+    expect(archiveToggleMeta({ status: 'solved', archived: false, needs_reply: true }).next).toBe(true)
+  })
+
+  it('with no stamp at all, only `closed` reads as archived — the same fallback the server and web use', () => {
+    // Unreachable from the Mail tab (ticketToInboxRow always stamps a
+    // boolean), pinned so the fallback agrees with shared/mail-vocabulary's
+    // isArchived rather than the ticket-era solved||closed reading.
+    expect(archiveToggleMeta({ status: 'closed' }).next).toBe(false)
+    expect(archiveToggleMeta({ status: 'solved' }).next).toBe(true)
+    expect(archiveToggleMeta({ status: 'open' }).next).toBe(true)
   })
 
   it('treats junk as a live row — the common case, and the safe direction', () => {
