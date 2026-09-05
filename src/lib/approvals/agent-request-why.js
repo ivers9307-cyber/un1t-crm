@@ -103,6 +103,11 @@ const FAILURE_EXPLANATIONS = {
   // booked (rather than booking on an account nobody picked).
   ACCOUNT_MISMATCH:
     'This booking was queued for a different Glofox account than the one the contact is linked to now, so it was not executed. Check which account is right in Glofox, then retry.',
+  // CANCEL-FORM.5 — membership cancellation execution (auto-cancel toggle on).
+  NO_END_DATE:
+    'No machine-readable end date on this request, so Glofox was not called. Set the end date on the card and approve again, or cancel in Glofox by hand.',
+  NO_USER_MEMBERSHIP:
+    'Glofox returned no active membership for this account, so there was nothing to cancel. Check the membership in Glofox (it may already be cancelled or on another account), then retry.',
 }
 
 /**
@@ -172,8 +177,10 @@ export function accountSummaryLine(contact) {
  * live Glofox call, so a stale election would book the wrong account
  * silently, and refusing is strictly safer than executing. Pause and
  * cancellation are NOT in EXECUTING_KINDS (request-recovery.js) — staff
- * make the actual Glofox change by hand after approving, so there is no
- * automated write for a block to protect against. Blocking the DECISION
+ * make the actual Glofox change by hand after approving (CANCEL-FORM.5:
+ * unless the location's auto-cancel toggle is on, in which case the
+ * executor itself honours details.elected_glofox_member_id, so a stale
+ * election cancels the elected account rather than a silently wrong one). Blocking the DECISION
  * itself (approve/decline/save) here would only strand a legitimate
  * request behind a mismatch that may already be moot by the time staff
  * look at it (the account could have been fixed, merged, or re-synced

@@ -17,7 +17,7 @@ import { Sparkles, Copy, Check } from 'lucide-react'
 import { DECLINE_REASONS, BOOKING_KINDS } from '@shared/approvals-next-steps'
 import { APPROVAL_KIND_LABELS } from '@shared/approval-cards'
 import { whyFlagged, customerWords, failureExplanation } from '@/lib/approvals/agent-request-why'
-import { EXECUTING_KINDS } from '@/lib/agent/request-recovery'
+import { RETRYABLE_KINDS } from '@/lib/agent/request-recovery'
 
 const KIND_CHIP = {
   cancellation: 'bg-red-500/10 text-red-700',
@@ -56,9 +56,25 @@ function CopyValue({ value }) {
   )
 }
 
+// CANCEL-FORM.5 — did the member hear about this decision? Rendered after the
+// PATCH for pause / cancellation from the route's customer_notified.
+function notifiedSentence(notified) {
+  if (!notified) return ''
+  if (notified.sent) return notified.channel === 'email' ? ' The member has been emailed.' : ' The member has been messaged.'
+  if (notified.reason === 'window_closed') return ' The member has NOT been told: their WhatsApp window is closed and no confirmation template is set. Please follow up.'
+  if (notified.reason === 'email_blocked' || notified.reason === 'no_email') return ' The member has NOT been emailed (no usable address). Please follow up.'
+  if (notified.reason === 'no_channel') return ' The member has NOT been told (no channel on this request). Please follow up.'
+  if (notified.reason === 'not_applicable' || notified.reason === 'not_executed') return ''
+  return ' The member may NOT have been told. Please follow up.'
+}
+
 // What actually happened, in the operator's terms, once the PATCH returns.
-function outcomeLine(status, item, executed) {
+function outcomeLine(status, item, executed, notified = null, plannedEndDate = null) {
   const hasThread = !!item.conversationId
+  const isMembership = item.kind === 'cancellation' || item.kind === 'pause'
+  if (status === 'actioned' && item.kind === 'cancellation') {
+    return { tone: 'ok', text: `Done. The cancellation was sent to Glofox${plannedEndDate ? ` (ends ${plannedEndDate})` : ''}.${notifiedSentence(notified)}` }
+  }
   if (status === 'actioned') {
     return { tone: 'ok', text: hasThread ? 'Done — executed in Glofox and the customer was told in-thread.' : 'Done — executed in Glofox and the customer was notified.' }
   }
@@ -74,6 +90,9 @@ function outcomeLine(status, item, executed) {
   if (status === 'expired') {
     return { tone: 'bad', text: 'Too late — that class had already started, so nothing was booked. The member has NOT been messaged; please follow up with them.' }
   }
+  if (status === 'approved' && isMembership) {
+    return { tone: 'ok', text: `Approved. Now make the change in Glofox${item.kind === 'cancellation' && plannedEndDate ? ` (ends ${plannedEndDate})` : ''}.${notifiedSentence(notified)}` }
+  }
   if (status === 'approved') {
     return { tone: 'ok', text: 'Approved — now make the change in Glofox (this kind is not automated).' }
   }
@@ -81,7 +100,10 @@ function outcomeLine(status, item, executed) {
     return { tone: 'neutral', text: hasThread ? 'Declined — the customer was told in-thread.' : 'Declined. This request has no conversation, so tell the customer yourself if needed.' }
   }
   if (status === 'saved') {
-    return { tone: 'ok', text: 'Marked as saved — the member stays.' }
+    return { tone: 'ok', text: `Marked as saved, the member stays.${notifiedSentence(notified)}` }
+  }
+  if (status === 'declined' && isMembership && !hasThread) {
+    return { tone: 'neutral', text: `Declined.${notifiedSentence(notified) || ' This request has no conversation, so tell the customer yourself if needed.'}` }
   }
   return { tone: 'neutral', text: status }
 }
@@ -91,6 +113,8 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
   const [declineOpen, setDeclineOpen] = useState(false)
   const [reason, setReason] = useState(BOOKING_KINDS.has(item.kind) ? 'class_full' : 'other')
   const [note, setNote] = useState('')
+  // CANCEL-FORM.5 — the end date staff confirm on a membership cancellation.
+  const [endDate, setEndDate] = useState(item.kind === 'cancellation' ? (item.details?.requested_end_date || '') : '')
   const [error, setError] = useState(null)
   const [outcome, setOutcome] = useState(null) // { tone, text, failed? } after a decision
   const [countedDecided, setCountedDecided] = useState(false)
@@ -126,7 +150,7 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
       const res = await fetch(`/api/agent/membership-requests/${item.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status, decision_note }),
+        body: JSON.stringify({ status, decision_note, ...(item.kind === 'cancellation' && endDate ? { end_date: endDate } : {}) }),
       })
       const data = await res.json()
       if (!data.success) {
@@ -134,7 +158,7 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
         return
       }
       setDeclineOpen(false)
-      setOutcome(outcomeLine(data.request?.status || status, item, data.executed))
+      setOutcome(outcomeLine(data.request?.status || status, item, data.executed, data.customer_notified, data.planned_end_date))
       // Only the FIRST decision moves the item out of the pending count —
       // a retry re-decides the same (already-counted) item.
       if (!countedDecided) {
@@ -242,7 +266,7 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
           the operator fixes the problem in Glofox, then re-runs the
           action. Reached from a just-failed approve (outcome.failed) OR
           from a provider-shipped failed item (isFailedItem). */}
-      {(outcome?.failed || (isFailedItem && !outcome)) && EXECUTING_KINDS.has(item.kind) && (
+      {(outcome?.failed || (isFailedItem && !outcome)) && RETRYABLE_KINDS.has(item.kind) && (
         <div className="flex items-center gap-2 flex-wrap mt-2">
           <button type="button" disabled={!!busy} onClick={() => decide('approved', { retry: true })}
             className="text-sm bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md font-medium disabled:opacity-50">
@@ -256,6 +280,19 @@ export default function AgentRequestDecideCard({ item, onDecided }) {
           <Link href={item.reviewUrl} className="text-xs text-un1t-muted underline hover:text-un1t-text">
             Full history
           </Link>
+        </div>
+      )}
+
+      {/* CANCEL-FORM.5 — the end date on a membership cancellation. Prefilled
+          from the form; Mia rows carry only free text, so staff type it. It
+          is what the confirmation quotes and what Glofox is told when the
+          location's auto-cancel toggle is on. */}
+      {!outcome && item.kind === 'cancellation' && (
+        <div className="flex items-center gap-2 flex-wrap mt-3 text-xs">
+          <label className="text-un1t-muted" htmlFor={`end-${item.id}`}>Membership ends</label>
+          <input id={`end-${item.id}`} type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)}
+            className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-xs text-un1t-text" />
+          {!endDate && <span className="text-amber-700">No date on this request. Set one before approving.</span>}
         </div>
       )}
 

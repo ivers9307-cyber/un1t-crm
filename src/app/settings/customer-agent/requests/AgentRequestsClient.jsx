@@ -227,6 +227,8 @@ function RequestCard({ r, busy, onDecide, focused = false, retryMode = false }) 
           <p>{d.start_date ? `From ${fmtDate(d.start_date)}` : ''}{d.end_date ? ` to ${fmtDate(d.end_date)}` : ''}</p>
         )}
         {isCancel && d.desired_date && <p>Requested date: {fmtDate(d.desired_date)}</p>}
+        {isCancel && d.requested_end_date && <p>Ends: {fmtDate(d.requested_end_date)}{d.result?.local_planned_end_date ? ` · Glofox: ${fmtDate(d.result.local_planned_end_date)}` : ''}</p>}
+        {d.source === 'cancellation_form' && <p className="text-un1t-muted">Submitted through the cancellation form{d.pause_taken ? ' (chose a pause instead)' : ''}.</p>}
         {(r.kind === 'class_booking' || r.kind === 'consultation') && (d.class_name || d.class_time) && (
           <p>{d.class_name || (r.kind === 'consultation' ? 'Consultation' : 'Class')}{d.class_time ? ` · ${d.class_time}` : ''}</p>
         )}

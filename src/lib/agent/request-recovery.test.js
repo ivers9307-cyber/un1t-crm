@@ -87,7 +87,8 @@ describe('isRetryableFailure', () => {
     expect(isRetryableFailure({ status: 'actioned', kind: 'class_booking' })).toBe(false)
     expect(isRetryableFailure({ status: 'pending', kind: 'class_booking' })).toBe(false)
     expect(isRetryableFailure({ status: 'failed', kind: 'pause' })).toBe(false)
-    expect(isRetryableFailure({ status: 'failed', kind: 'cancellation' })).toBe(false)
+    // CANCEL-FORM.5 — cancellation is now conditionally executing (retryable); membership_purchase never executes.
+    expect(isRetryableFailure({ status: 'failed', kind: 'membership_purchase' })).toBe(false)
     expect(isRetryableFailure(null)).toBe(false)
   })
 })
@@ -111,5 +112,36 @@ describe('retryOffered — the UI gate is stricter than the route gate', () => {
   it('never offers what isRetryableFailure refuses', () => {
     expect(retryOffered(failed({ kind: 'pause', decided_at: ago(1000) }), NOW)).toBe(false)
     expect(retryOffered(failed({ status: 'actioned', decided_at: ago(1000) }), NOW)).toBe(false)
+  })
+})
+
+// CANCEL-FORM.5 — membership cancellation is a CONDITIONALLY executing kind:
+// it runs the Glofox cancel only when the location's auto-cancel toggle is on.
+// The recovery + retry machinery must cover it either way.
+describe('CANCEL-FORM.5 — conditional executing kinds', () => {
+  it('exposes cancellation as conditional and retryable, without adding it to EXECUTING_KINDS', async () => {
+    const m = await import('./request-recovery.js')
+    expect(m.EXECUTING_KINDS.has('cancellation')).toBe(false)
+    expect(m.CONDITIONAL_EXECUTING_KINDS.has('cancellation')).toBe(true)
+    expect(m.RETRYABLE_KINDS.has('cancellation')).toBe(true)
+    expect(m.RETRYABLE_KINDS.has('class_booking')).toBe(true)
+    expect(m.RETRYABLE_KINDS.has('pause')).toBe(false)
+  })
+
+  it('a failed cancellation execution is retryable and offered within the recency window', async () => {
+    const { isRetryableFailure, retryOffered } = await import('./request-recovery.js')
+    const row = { status: 'failed', kind: 'cancellation', details: { result: { message_code: 'NO_USER_MEMBERSHIP' } }, decided_at: new Date().toISOString() }
+    expect(isRetryableFailure(row)).toBe(true)
+    expect(retryOffered(row)).toBe(true)
+    expect(isRetryableFailure({ ...row, kind: 'pause' })).toBe(false)
+  })
+
+  it('a cancellation stuck mid-execution is detected from the marker, not the kind list', async () => {
+    const { stuckExecutionStartedAt, EXECUTION_STALE_MS } = await import('./request-recovery.js')
+    const started = new Date(Date.now() - EXECUTION_STALE_MS - 1000).toISOString()
+    const row = { status: 'approved', kind: 'cancellation', details: { execution: { stage: 'executing', started_at: started } } }
+    expect(stuckExecutionStartedAt(row)).toBe(started)
+    // No marker (toggle was off, nothing executed) → never "stuck".
+    expect(stuckExecutionStartedAt({ status: 'approved', kind: 'cancellation', details: {} })).toBeNull()
   })
 })

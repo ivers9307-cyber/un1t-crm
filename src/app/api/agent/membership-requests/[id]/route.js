@@ -7,6 +7,7 @@ import { hasPermissionForLocation } from '@/lib/permissions'
 import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 import {
   EXECUTING_KINDS,
+  CONDITIONAL_EXECUTING_KINDS,
   stuckExecutionStartedAt,
   isRetryableFailure,
   executingMarker,
@@ -19,8 +20,17 @@ import {
 // 'approved' + 'declined' apply to every kind; 'saved' is the
 // retention outcome on a cancellation (member kept).
 //
-// Pause/cancel: the actual Glofox change is made by staff manually
-// after approving (the Glofox API can't fully automate those yet).
+// Pause: the actual Glofox change is made by staff manually after approving
+// (Glofox's pause route rejects the impersonation header it needs).
+//
+// CANCEL-FORM.5 — membership CANCELLATION executes in Glofox on approve ONLY
+// when the location opted in (locations.glofox_auto_cancel_memberships, mig
+// 584; default off → status write, staff cancel by hand as before). Either
+// way the member is now told: approve / actioned / saved confirm on the
+// channel the request arrived by (email for form-delivered rows, in-thread
+// otherwise), and an email-delivered row's decline goes by email too — a
+// decline is never silence. Staff may supply `end_date` on the card; it
+// overrides details.requested_end_date (Mia rows carry only free text).
 //
 // AGENT-HANDS.1 — class_booking: APPROVING EXECUTES. The route books
 // the class via the same live-probed createBooking the inbox Book tab
@@ -36,7 +46,11 @@ import {
 const DecisionSchema = z.object({
   status: z.enum(['approved', 'declined', 'saved']),
   decision_note: z.string().max(2000).nullable().optional(),
+  // CANCEL-FORM.5 — cancellation only: the end date staff confirm/set.
+  end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 })
+
+const MEMBERSHIP_KINDS = new Set(['cancellation', 'pause'])
 
 export async function PATCH(request, { params }) {
   const { id } = await params
@@ -58,6 +72,22 @@ export async function PATCH(request, { params }) {
 
   const v = await validateBody(request, DecisionSchema)
   if (!v.ok) return v.response
+
+  // CANCEL-FORM.5 — membership kinds read the location once: the auto-cancel
+  // toggle (a COLUMN, mig 585) and the operator's confirmation copy.
+  const isMembershipKind = MEMBERSHIP_KINDS.has(row.kind)
+  let locationRow = null
+  if (isMembershipKind) {
+    const { data } = await db.from('locations')
+      .select('name, glofox_auto_cancel_memberships, settings')
+      .eq('id', row.location_id)
+      .maybeSingle()
+    locationRow = data || null
+  }
+  const autoCancel = row.kind === 'cancellation'
+    && v.data.status === 'approved'
+    && CONDITIONAL_EXECUTING_KINDS.has(row.kind)
+    && locationRow?.glofox_auto_cancel_memberships === true
 
   // MIA-REVIEW.3 — a row stuck at 'approved' with details.execution.stage
   // 'executing' is a crashed approval (the process died between the claim and
@@ -88,7 +118,7 @@ export async function PATCH(request, { params }) {
   const nowIso = new Date().toISOString()
   // Executing kinds carry an intent marker for the duration of the side
   // effect, so a crash is visible (and retryable) rather than silent.
-  const executing = v.data.status === 'approved' && EXECUTING_KINDS.has(row.kind)
+  const executing = v.data.status === 'approved' && (EXECUTING_KINDS.has(row.kind) || autoCancel)
   const claimPatch = {
     status: v.data.status,
     decision_note: v.data.decision_note?.trim() || null,
@@ -96,7 +126,13 @@ export async function PATCH(request, { params }) {
     decided_at: nowIso,
     updated_at: nowIso,
   }
-  if (executing) claimPatch.details = executingMarker(row.details, { startedAt: nowIso, by: user.id })
+  // CANCEL-FORM.5 — a staff-supplied end date lands on the row with the claim
+  // (so a crash after this point still shows the date staff confirmed).
+  const baseDetails = row.kind === 'cancellation' && v.data.end_date
+    ? { ...(row.details || {}), requested_end_date: v.data.end_date }
+    : row.details
+  if (executing) claimPatch.details = executingMarker(baseDetails, { startedAt: nowIso, by: user.id })
+  else if (baseDetails !== row.details) claimPatch.details = baseDetails
 
   let claimQuery = db.from('agent_membership_requests').update(claimPatch).eq('id', id)
   // AGENT-RETRY.1 — a failed-retry claims on status='failed': two concurrent
@@ -388,6 +424,69 @@ export async function PATCH(request, { params }) {
     }
   }
 
+  // CANCEL-FORM.5 — approving a membership cancellation executes the Glofox
+  // cancel when the location opted in. Result codes are explained on the
+  // card (agent-request-why.js); a failure lands on 'failed' and rides the
+  // same fix-&-retry lane as bookings (RETRYABLE_KINDS).
+  let membershipContact = null
+  if (executing && row.kind === 'cancellation') {
+    const { executeMembershipCancellation } = await import('@/lib/agent/execute-membership-cancellation')
+    const { glofoxCredentialsForLocation } = await import('@/lib/glofox')
+    const { data: contact } = await db.from('contacts')
+      .select('id, first_name, name, email, email_status, glofox_member_id, glofox_user_membership_id, glofox_membership_plan')
+      .eq('id', row.contact_id)
+      .maybeSingle()
+    membershipContact = contact || null
+    const creds = await glofoxCredentialsForLocation(db, row.location_id)
+    const result = await executeMembershipCancellation(db, { ...row, details }, { contact: membershipContact, creds })
+    executed = {
+      ok: result.ok,
+      status: result.status ?? null,
+      message_code: result.message_code ?? null,
+      local_planned_end_date: result.local_planned_end_date ?? null,
+    }
+    details = { ...details, result: executed }
+    finalStatus = result.ok ? 'actioned' : 'failed'
+  }
+
+  // CANCEL-FORM.5 — tell the member what was decided, on the channel the
+  // request arrived by. Approve / actioned / saved always; declined only for
+  // an email-delivered row (thread rows keep the in-thread notice below).
+  // Best-effort: the decision is already recorded, and the card shows
+  // whether the member heard.
+  let customerNotified = null
+  const notifyMember = isMembershipKind && (
+    ['approved', 'actioned', 'saved'].includes(finalStatus)
+    || (finalStatus === 'declined' && !row.conversation_id && row.channel === 'email')
+  )
+  if (notifyMember) {
+    try {
+      const { sendMembershipOutcomeMessage } = await import('@/lib/cancellation-form/confirm')
+      const { resolveCancellationFormCopy } = await import('@/lib/cancellation-form/copy')
+      if (!membershipContact && row.contact_id) {
+        const { data: contact } = await db.from('contacts')
+          .select('id, first_name, name, email, email_status, glofox_member_id, glofox_user_membership_id, glofox_membership_plan')
+          .eq('id', row.contact_id)
+          .maybeSingle()
+        membershipContact = contact || null
+      }
+      customerNotified = await sendMembershipOutcomeMessage(db, {
+        row: { ...row, details },
+        finalStatus,
+        endDate: details?.result?.local_planned_end_date || details?.requested_end_date || null,
+        contact: membershipContact,
+        copy: resolveCancellationFormCopy(locationRow?.settings?.customer_agent?.cancellation_form),
+        locationName: locationRow?.name || '',
+        declineTemplate: finalStatus === 'declined' ? await confirmationTemplate('decline') : null,
+      })
+    } catch (e) {
+      console.warn(`[agent-requests] membership outcome message error: ${e?.message || e}`)
+      customerNotified = { sent: false, channel: row.channel || null, reason: 'send_error' }
+    }
+  } else if (isMembershipKind) {
+    customerNotified = { sent: false, channel: row.channel || null, reason: finalStatus === 'failed' ? 'not_executed' : 'not_applicable' }
+  }
+
   // APPROVALS-STUDIO.1 — a decline is never silence: tell the customer
   // in-thread (operator-editable approval_decline_text). Best-effort; only
   // for requests that came from a live conversation (funnel rows without a
@@ -417,5 +516,8 @@ export async function PATCH(request, { params }) {
     updated_at: finishedIso,
   }).eq('id', id).select('id, status, decided_at, decision_note, details').single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-  return NextResponse.json({ success: true, request: data, executed })
+  const plannedEndDate = isMembershipKind
+    ? (details?.result?.local_planned_end_date || details?.requested_end_date || details?.end_date || null)
+    : null
+  return NextResponse.json({ success: true, request: data, executed, customer_notified: customerNotified, planned_end_date: plannedEndDate })
 }
