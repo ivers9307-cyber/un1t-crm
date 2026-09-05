@@ -14,6 +14,10 @@ import { describe, it, expect } from 'vitest'
 import * as shared from '../shared/mail-vocabulary.js'
 import * as web from '../src/components/mail/mail-vocabulary.js'
 import * as mobile from '../mobile/lib/email-tickets.js'
+import * as mobileRelate from '../mobile/lib/mail-relate.js'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   isArchived as serverIsArchived,
   isNeedsReply as serverIsNeedsReply,
@@ -102,12 +106,15 @@ describe('mobile agrees with the shared predicates on every row', () => {
   })
 
   // The ONE residual, pinned so it stays a decision rather than a surprise.
-  // mailStatusChip / mailRowDisplay / ticketToInboxRow keep the ticket-era
-  // `solved || closed` fallback for rows with NO stamp, because the THREAD
-  // response (/api/email/tickets/[id], which the mobile thread screen renders
-  // mailStatusChip from) carries no `archived` stamp today, and flipping how a
-  // legacy solved thread's header chip reads is a second behaviour change this
-  // PR deliberately does not make. archiveToggleMeta does NOT share the
+  // mailStatusChip / mailRowDisplay / ticketToInboxRow (and, since
+  // MAIL-ARCH.3, the thread screen and mail-relate.js) read
+  // shared.archivedOrStatus, which keeps the ticket-era `solved || closed`
+  // fallback for rows with NO stamp. MAIL-ARCH.3 made every route that hands
+  // a client a conversation stamp it (thread + related joined list / digest /
+  // archive / spam), so on the wire this fallback is dead code: it exists for
+  // the old-server / new-client window (web deploys on Vercel, the mobile OTA
+  // lands minutes later) and for stampless fixtures, where the OLD reading is
+  // the one that mislabels nothing. archiveToggleMeta does NOT share the
   // residual — its rows always come through ticketToInboxRow, which stamps.
   it('unstamped rows: the mobile display helpers differ from shared ONLY on legacy `solved`', () => {
     for (const row of unstamped) {
@@ -121,7 +128,101 @@ describe('mobile agrees with the shared predicates on every row', () => {
         expect(chipSaysArchived, JSON.stringify(row)).toBe(shared.isArchived(row))
         expect(rowSaysArchived, JSON.stringify(row)).toBe(shared.isArchived(row))
       }
+      // …and that residual IS archivedOrStatus, not a third reading.
+      expect(chipSaysArchived, JSON.stringify(row)).toBe(shared.archivedOrStatus(row))
+      expect(rowSaysArchived, JSON.stringify(row)).toBe(shared.archivedOrStatus(row))
     }
+  })
+})
+
+// ── MAIL-ARCH.3 — the two twins of the swipe-reopen bug ─────────────────────
+//
+// The mobile THREAD screen (header chip + archive toggle) and mail-relate.js
+// (nudge View target, merge picker) re-derived `archived` from status because
+// the thread and related routes stamped nothing. Both routes stamp through
+// stampMailRow now, and both call sites read shared.archivedOrStatus: the
+// stamp when present, the OLD derivation otherwise.
+describe('MAIL-ARCH.3 — archivedOrStatus is the stamp on every stamped row', () => {
+  it('equals isArchived on every STAMPED row of the matrix', () => {
+    for (const row of stamped) {
+      expect(shared.archivedOrStatus(row), JSON.stringify(row)).toBe(shared.isArchived(row))
+    }
+  })
+
+  it('a row the server stamped reads back, through archivedOrStatus, as exactly what the server decided', () => {
+    for (const raw of ROWS) {
+      const dbRow = { ...raw }
+      delete dbRow.archived
+      delete dbRow.needs_reply
+      expect(shared.archivedOrStatus(stampMailRow(dbRow)), JSON.stringify(dbRow)).toBe(serverIsArchived(dbRow))
+    }
+  })
+
+  it('on UNSTAMPED rows it differs from isArchived only on legacy `solved` — the old-server fallback', () => {
+    for (const row of unstamped) {
+      if (row.status === 'solved') {
+        expect(shared.archivedOrStatus(row), JSON.stringify(row)).toBe(true)
+        expect(shared.isArchived(row), JSON.stringify(row)).toBe(false)
+      } else {
+        expect(shared.archivedOrStatus(row), JSON.stringify(row)).toBe(shared.isArchived(row))
+      }
+    }
+  })
+
+  // resolved_at follows the SAME verdict as `archived` (MAIL-ARCH.3): a row
+  // the server stamps LIVE carries no resolution time even if the ticket-era
+  // solved_at column is set — mobile/lib/inbox.js's needs-reply queue keys on
+  // it, and a stamped-live row with a resolved_at would be filed as resolved.
+  it('ticketToInboxRow.resolved_at is null exactly when the row is live — stamp first, status only as fallback', () => {
+    for (const row of ROWS) {
+      const shaped = mobile.ticketToInboxRow({ ...row, solved_at: '2026-08-06T12:00:00Z', closed_at: null, updated_at: null })
+      expect(shaped.resolved_at === null, JSON.stringify(row)).toBe(!shared.archivedOrStatus(row))
+    }
+    // The twin row, spelled out: solved on disk, LIVE on the wire, not resolved.
+    const live = mobile.ticketToInboxRow({ status: 'solved', archived: false, solved_at: '2026-08-06T12:00:00Z' })
+    expect(live.archived).toBe(false)
+    expect(live.resolved_at).toBeNull()
+  })
+
+  it('mail-relate agrees with the shared predicate on every stamped row (nudge target + picker)', () => {
+    const now = new Date('2026-09-05T12:00:00Z')
+    for (const row of stamped) {
+      const [picked] = mobileRelate.mergePickerRows([row], now)
+      expect(picked.archived, JSON.stringify(row)).toBe(shared.isArchived(row))
+      expect(picked.detail.includes('archived'), JSON.stringify(row)).toBe(shared.isArchived(row))
+      // The nudge's View target is the first row shared calls live.
+      const nudge = mobileRelate.relatedNudge({ related: [row], open_count: 1 })
+      expect(nudge.viewId, JSON.stringify(row)).toBe(shared.isArchived(row) ? null : row.id)
+    }
+  })
+
+  it('🔴 the twin rows: a solved conversation the server stamped LIVE is live in the picker and the nudge', () => {
+    const row = { id: 't-solved-live', status: 'solved', archived: false, needs_reply: false }
+    expect(mobileRelate.mergePickerRows([row])[0].archived).toBe(false)
+    expect(mobileRelate.relatedNudge({ related: [row], open_count: 1 }).viewId).toBe('t-solved-live')
+  })
+
+  // The thread screen is a React Native component vitest cannot mount; pin
+  // its two call sites at source level so the re-derivation cannot creep back
+  // under a different import.
+  it('the mobile thread screen reads archivedOrStatus(ticket) and no longer imports isArchivedStatus', () => {
+    const here = dirname(fileURLToPath(import.meta.url))
+    const src = readFileSync(join(here, '..', 'mobile/app/(staff)/email/[ticketId].jsx'), 'utf8')
+    expect(src).not.toMatch(/isArchivedStatus/)
+    expect(src).toMatch(/from 'shared\/mail-vocabulary'/)
+    // Both twins: the toggle's `next` and the header's `archived`.
+    expect(src.match(/archivedOrStatus\(ticket\)/g)?.length).toBe(2)
+  })
+
+  it('mobile/lib/mail-relate.js reads archivedOrStatus and no longer imports isArchivedStatus', () => {
+    const here = dirname(fileURLToPath(import.meta.url))
+    const src = readFileSync(join(here, '..', 'mobile/lib/mail-relate.js'), 'utf8')
+    expect(src).not.toMatch(/isArchivedStatus/)
+    expect(src).toMatch(/from 'shared\/mail-vocabulary'/)
+  })
+
+  it('isArchivedStatus is gone from mobile/lib/email-tickets.js — the fallback lives in shared now', () => {
+    expect(mobile.isArchivedStatus).toBeUndefined()
   })
 })
 

@@ -22,7 +22,8 @@
 // so the screen says nothing rather than something confident and wrong
 // (the MAIL-ALLLOC.1 rule, one surface over).
 
-import { isArchivedStatus, mailRowTime } from './email-tickets'
+import { archivedOrStatus } from 'shared/mail-vocabulary'
+import { mailRowTime } from './email-tickets'
 
 // ── The nudge (§03 A) ────────────────────────────────────────────────
 /**
@@ -32,8 +33,11 @@ import { isArchivedStatus, mailRowTime } from './email-tickets'
  * zero, and it is not a banner either), or open_count < 1.
  *
  * `viewId` is the id the View link opens: the NEWEST OPEN related thread
- * (the list is newest first; archived rows — `closed` and legacy `solved`
- * both — are skipped). It can be null while the banner still shows: the
+ * (the list is newest first; archived rows are skipped). MAIL-ARCH.3 —
+ * "archived" is the SERVER'S stamp on each candidate, read through
+ * archivedOrStatus: a legacy `solved` row the server stamps LIVE is open
+ * here exactly as it is on the web, where it used to be skipped because
+ * this file read `status`. It can be null while the banner still shows: the
  * list is capped, so the open rows may not all be on it. The screen hides
  * the View link then and keeps Merge.
  *
@@ -46,7 +50,7 @@ export function relatedNudge(data) {
   if (!Number.isFinite(count) || data.open_count == null || count < 1) return null
   const related = Array.isArray(data.related) ? data.related : []
   const name = related[0]?.requester_name || 'This sender'
-  const newestOpen = related.find(r => r?.id && !isArchivedStatus(r.status))
+  const newestOpen = related.find(r => r?.id && !archivedOrStatus(r))
   return {
     name,
     count,
@@ -71,7 +75,7 @@ export function mergePickerRows(related, now = new Date()) {
     .map(r => ({
       id: r.id,
       subject: r.subject || '(no subject)',
-      archived: isArchivedStatus(r.status),
+      archived: archivedOrStatus(r),
       detail: relatedRowDetail(r, now),
     }))
 }
@@ -82,7 +86,7 @@ function relatedRowDetail(r, now) {
     ? `${n} message${n === 1 ? '' : 's'}`
     : null
   const when = mailRowTime(r.last_message_at, now)
-  const state = isArchivedStatus(r.status) ? 'archived' : 'active'
+  const state = archivedOrStatus(r) ? 'archived' : 'active'
   return [
     r.requester_name || null,
     messages,

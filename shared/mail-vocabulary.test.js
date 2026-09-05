@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest'
 import {
   ARCHIVED_STATUS, isArchived, needsReply, isUnread, isSpam,
   MAIL_VIEWS, DEFAULT_MAIL_VIEW, mailView,
+  archivedOrStatus,
 } from './mail-vocabulary.js'
 
 describe('isArchived — the stamp is the whole answer', () => {
@@ -103,5 +104,68 @@ describe('the views', () => {
     expect(mailView('nope')).toBe(MAIL_VIEWS[0])
     expect(mailView(undefined)).toBe(MAIL_VIEWS[0])
     expect(mailView(null).id).toBe(DEFAULT_MAIL_VIEW)
+  })
+})
+
+// ── MAIL-ARCH.3 — archivedOrStatus, the compatibility reading of `archived` ──
+//
+// The thread route (/api/email/tickets/[id]) and the related route
+// (/api/email/mail/[id]/related) stamp `archived` since MAIL-ARCH.3; before
+// that the mobile thread screen and mail-relate.js re-derived it from the
+// ticket-era `status`, where legacy `solved` read as archived — the server
+// calls it LIVE. archivedOrStatus reads the stamp when it is there and keeps
+// the OLD derivation only when it is not, so an old server (or a fixture) can
+// never be mislabelled by a new client, and a stamped row is never
+// second-guessed.
+describe('archivedOrStatus', () => {
+  it('🔴 a boolean stamp is the whole answer — status is never OR-ed back in', () => {
+    // The twin of the swipe-reopen row: a solved conversation the server
+    // stamped LIVE. Old thread-screen code showed "Bring back" here and a tap
+    // wrote status='open' over a row that was never closed.
+    expect(archivedOrStatus({ status: 'solved', archived: false })).toBe(false)
+    expect(archivedOrStatus({ status: 'closed', archived: false })).toBe(false)
+    expect(archivedOrStatus({ status: 'open', archived: true })).toBe(true)
+    expect(archivedOrStatus({ status: undefined, archived: true })).toBe(true)
+  })
+
+  it('with no stamp, falls back to the OLD mobile derivation: solved OR closed', () => {
+    // The old-server / new-client window (web deploys on Vercel, mobile lands
+    // by OTA minutes later) and any stampless fixture. The fallback is the
+    // derivation these call sites had BEFORE the stamp, so a stampless row
+    // reads exactly as it always did — nothing is mislabelled either way.
+    expect(archivedOrStatus({ status: 'closed' })).toBe(true)
+    expect(archivedOrStatus({ status: 'solved' })).toBe(true)
+    expect(archivedOrStatus({ status: 'open' })).toBe(false)
+    expect(archivedOrStatus({ status: 'pending' })).toBe(false)
+    expect(archivedOrStatus({ status: undefined })).toBe(false)
+    expect(archivedOrStatus({ status: null })).toBe(false)
+  })
+
+  it('a non-boolean `archived` is NOT a stamp (a string "false" must not read as archived)', () => {
+    expect(archivedOrStatus({ status: 'open', archived: 'false' })).toBe(false)
+    expect(archivedOrStatus({ status: 'open', archived: 1 })).toBe(false)
+    expect(archivedOrStatus({ status: 'closed', archived: null })).toBe(true)
+  })
+
+  it('junk is live — the safe direction, same as isArchived', () => {
+    expect(archivedOrStatus(null)).toBe(false)
+    expect(archivedOrStatus(undefined)).toBe(false)
+    expect(archivedOrStatus({})).toBe(false)
+  })
+
+  it('agrees with isArchived on EVERY stamped row — the stamp is one reading, not two', () => {
+    for (const status of ['open', 'pending', 'solved', 'closed', undefined, 'junk']) {
+      for (const archived of [true, false]) {
+        expect(archivedOrStatus({ status, archived }), `${status}/${archived}`).toBe(isArchived({ status, archived }))
+      }
+    }
+  })
+
+  it('differs from isArchived on exactly one unstamped row: legacy `solved`', () => {
+    for (const status of ['open', 'pending', 'closed', undefined, null, 'junk']) {
+      expect(archivedOrStatus({ status }), String(status)).toBe(isArchived({ status }))
+    }
+    expect(archivedOrStatus({ status: 'solved' })).toBe(true)
+    expect(isArchived({ status: 'solved' })).toBe(false)
   })
 })

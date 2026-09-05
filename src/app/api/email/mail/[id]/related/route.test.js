@@ -205,3 +205,59 @@ describe('GET /api/email/mail/[id]/related', () => {
     expect(res.status).toBe(500)
   })
 })
+
+// ── MAIL-ARCH.3 — every candidate carries the SERVER'S `archived` stamp ───
+//
+// mobile/lib/mail-relate.js re-derived archived from `status` because this
+// route stamped nothing, and read legacy `solved` as archived — while the web
+// mail-relate.js reads live as `!== 'closed'`, so the two apps labelled the
+// same related row differently. The candidates now go through the same
+// stampMailRow as every list row, and both clients read the stamp.
+describe('GET …/related — candidates are stamped through stampMailRow (MAIL-ARCH.3)', () => {
+  it('stamps archived + needs_reply on every row: open → live, closed → archived, solved → LIVE', async () => {
+    setupDb(mailState({ tickets: [
+      { ...T_STUDIO },
+      related(),
+      related({ id: 'dddddddd-0000-4000-8000-000000000002', status: 'closed', last_message_at: '2026-08-12T10:00:00Z' }),
+      related({ id: 'dddddddd-0000-4000-8000-000000000003', status: 'solved', last_message_at: '2026-08-11T10:00:00Z' }),
+    ] }))
+    const { body } = await call()
+    const byId = Object.fromEntries(body.data.related.map(r => [r.id, r]))
+    expect(byId['dddddddd-0000-4000-8000-000000000001'].archived).toBe(false)
+    expect(byId['dddddddd-0000-4000-8000-000000000002'].archived).toBe(true)
+    // 🔴 the twin of the swipe-reopen row: solved is LIVE on the wire.
+    expect(byId['dddddddd-0000-4000-8000-000000000003'].archived).toBe(false)
+    // needs_reply is stamped too — from the row's own last_message_direction
+    // (T_STUDIO's is inbound), not defaulted.
+    expect(byId['dddddddd-0000-4000-8000-000000000001'].needs_reply).toBe(true)
+    expect(byId['dddddddd-0000-4000-8000-000000000002'].needs_reply).toBe(false)
+    expect(byId['dddddddd-0000-4000-8000-000000000003'].needs_reply).toBe(false)
+  })
+
+  it('needs_reply is TRUTHFUL: an open row whose last message was ours is not waiting', async () => {
+    setupDb(mailState({ tickets: [
+      { ...T_STUDIO },
+      related({ last_message_direction: 'outbound' }),
+    ] }))
+    const { body } = await call()
+    expect(body.data.related[0].needs_reply).toBe(false)
+    expect(body.data.related[0].archived).toBe(false)
+  })
+
+  it('ASKS for last_message_direction — the fake does not project, so the stamp above would lie without this', async () => {
+    setupDb(mailState({ tickets: [{ ...T_STUDIO }, related()] }))
+    await call()
+    const listRead = db.selects.find(s => s.table === 'email_tickets' && String(s.columns).includes('subject'))
+    expect(listRead).toBeTruthy()
+    expect(String(listRead.columns)).toContain('last_message_direction')
+    expect(String(listRead.columns)).toContain('is_spam')
+  })
+
+  it('the wire shape is the contract plus the two stamps, nothing else leaks', async () => {
+    setupDb(mailState({ tickets: [{ ...T_STUDIO }, related()] }))
+    const { body } = await call()
+    expect(Object.keys(body.data.related[0]).sort()).toEqual([
+      'archived', 'id', 'last_message_at', 'message_count', 'needs_reply', 'requester_name', 'status', 'subject',
+    ])
+  })
+})
