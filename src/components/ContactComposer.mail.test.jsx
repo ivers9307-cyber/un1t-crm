@@ -13,6 +13,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import ContactComposer from './ContactComposer.jsx'
+import { AWAITING_SENDER_FOOTER, UNAVAILABLE_SENDER_FOOTER, COMPANY_SENDER_FOOTER } from './contact-composer-send'
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }) }))
 
@@ -150,21 +151,98 @@ describe('ContactComposer — Email via Mail', () => {
     expect(calls.some(c => c.url === '/api/email/tickets/compose')).toBe(false)
   })
 
-  it('a FAILED account lookup is the company path too — never a dead Email tab', async () => {
+  // MAIL-FOLLOWUPS.1 — a failed list is the company path (never a dead Email
+  // tab) but it SAYS so: the footer used to claim "Sent from the company
+  // address" as if the studio had no accounts, when the truth was that we
+  // never found out. Send stays enabled — the operator is not blocked on a
+  // blip — and the send goes company.
+  it('a FAILED account lookup is the company path too — never a dead Email tab, and the footer names the failure', async () => {
     stubFetch({ mailboxes: 'fail' })
     renderComposer()
-    await screen.findByText('Sent from the company address')
+    await screen.findByText(UNAVAILABLE_SENDER_FOOTER)
     expect(screen.queryByRole('combobox')).toBeNull()
+    expect(screen.queryByText(COMPANY_SENDER_FOOTER)).toBeNull()
+    fireEvent.change(screen.getByPlaceholderText('Subject'), { target: { value: 'Hello' } })
+    fireEvent.change(screen.getByPlaceholderText(/Email John/), { target: { value: 'Hi.' } })
+    const send = screen.getByRole('button', { name: /Send email/ })
+    expect(send.disabled).toBe(false)
+    fireEvent.click(send)
+    await waitFor(() => {
+      expect(calls.some(c => c.url === '/api/contacts/c-1/email')).toBe(true)
+    })
+    expect(calls.some(c => c.url === '/api/email/tickets/compose')).toBe(false)
   })
 
-  it('a THROWN account lookup (network down) settles on the company path, not an undecided footer', async () => {
+  it('a THROWN account lookup (network down) settles on the company path and says the list could not load', async () => {
     calls = []
     vi.stubGlobal('fetch', vi.fn(async (url) => {
       if (String(url).startsWith('/api/email/mail?')) throw new Error('offline')
       return { ok: true, status: 200, json: async () => ({ success: true }) }
     }))
     renderComposer()
-    expect(await screen.findByText('Sent from the company address')).toBeTruthy()
+    expect(await screen.findByText(UNAVAILABLE_SENDER_FOOTER)).toBeTruthy()
+  })
+
+  it('a 2xx list whose body is not JSON is unavailable too — not a silent company send', async () => {
+    calls = []
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (String(url).startsWith('/api/email/mail?')) {
+        return { ok: true, status: 200, json: async () => { throw new SyntaxError('Unexpected token <') } }
+      }
+      return { ok: true, status: 200, json: async () => ({ success: true }) }
+    }))
+    renderComposer()
+    expect(await screen.findByText(UNAVAILABLE_SENDER_FOOTER)).toBeTruthy()
+  })
+
+  // MAIL-FOLLOWUPS.1 — THE race. Web was byte-identical to the old phone code:
+  // Send was disabled only on `!ready || sending`, and while the list was
+  // unanswered the resolver said "company", so a fast click went out as the
+  // company sender — the very bug PROFILE-MAIL.1 exists to fix, made
+  // timing-dependent. Now: Send is disabled and the footer reads "Checking
+  // studio accounts…" until the list lands; a click in that window sends
+  // NOTHING; and once the list answers, the send goes via Mail.
+  it('Send is disabled while the account list is unanswered — a click in that window sends nothing, and the settled send rides Mail', async () => {
+    calls = []
+    let resolveList
+    const listPromise = new Promise(r => { resolveList = r })
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+      const u = String(url)
+      calls.push({ url: u, method: init?.method || 'GET', body: init?.body ? JSON.parse(init.body) : null })
+      if (u.startsWith('/api/email/mail?')) return listPromise
+      if (u === '/api/email/tickets/compose') return { ok: true, status: 200, json: async () => ({ success: true, data: { ticket_id: 't-9' } }) }
+      return { ok: true, status: 200, json: async () => ({ success: true }) }
+    }))
+    renderComposer()
+    // Draft ready, list not — the button must be disabled and the footer honest.
+    fireEvent.change(screen.getByPlaceholderText('Subject'), { target: { value: 'Your programme' } })
+    fireEvent.change(screen.getByPlaceholderText(/Email John/), { target: { value: 'Hi John.' } })
+    expect(screen.getByText(AWAITING_SENDER_FOOTER)).toBeTruthy()
+    expect(screen.queryByText(COMPANY_SENDER_FOOTER)).toBeNull()
+    const send = screen.getByRole('button', { name: /Send email/ })
+    expect(send.disabled).toBe(true)
+    fireEvent.click(send)
+    await act(async () => {})
+    expect(calls.filter(c => c.method === 'POST')).toHaveLength(0)
+
+    // The list lands: Send enables, and the send goes out from the account.
+    await act(async () => {
+      resolveList({ ok: true, status: 200, json: async () => ({ success: true, data: { mailboxes: MAILBOXES, conversations: [] } }) })
+    })
+    await screen.findByRole('combobox')
+    expect(screen.queryByText(AWAITING_SENDER_FOOTER)).toBeNull()
+    expect(screen.getByRole('button', { name: /Send email/ }).disabled).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: /Send email/ }))
+    await waitFor(() => {
+      const compose = calls.find(c => c.url === '/api/email/tickets/compose')
+      expect(compose?.body).toEqual({
+        mailbox_id: 'mb-accounts',
+        to: ['john@example.com'],
+        subject: 'Your programme',
+        text: 'Hi John.',
+      })
+    })
+    expect(calls.some(c => c.url === '/api/contacts/c-1/email')).toBe(false)
   })
 
   it('a failed Mail send stays on screen with the server’s words — nothing claims sent', async () => {

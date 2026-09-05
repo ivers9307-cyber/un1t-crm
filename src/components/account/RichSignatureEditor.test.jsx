@@ -541,6 +541,21 @@ describe('default-on studio block (MAIL-SIGDEFAULT.1)', () => {
     expect(pres).toContain('Sarah\nHead Coach\n\nUN1T Stillorgan\n01 555 0001\nBook Stillorgan: https://un1t.ie/stillorgan')
   })
 
+  // MAIL-FOLLOWUPS.1 — the plain pane's own preview box previews the PERSON'S
+  // sign-off alone, while the frame below shows plain + studio block. Two
+  // boxes both labelled "How it lands" showed two different things; the
+  // plain one is now labelled for what it is.
+  it('the plain pane’s box is labelled "Your sign-off" — only the resolved frame claims "How it lands"', async () => {
+    mockFetchRoutes([], { contexts: [STILLORGAN_CTX], active: 'loc-still' })
+    const { container } = render(<EmailSignatureForm initialSignature={'Sarah\nHead Coach'} initialRich={null} />)
+    await findIframe(container)
+    expect(screen.getByText('Your sign-off')).toBeTruthy()
+    expect(screen.getAllByText('How it lands')).toHaveLength(1)
+    // The plain box still shows exactly the person's part, separator included.
+    const pres = [...container.querySelectorAll('pre')].map((p) => p.textContent)
+    expect(pres).toContain('…your reply\n\n-- \nSarah\nHead Coach')
+  })
+
   it('toggle OFF, live typing in the plain textarea updates the studio-block preview', async () => {
     mockFetchRoutes([], { contexts: [STILLORGAN_CTX], active: 'loc-still' })
     const { container } = render(<EmailSignatureForm initialSignature="" initialRich={null} />)

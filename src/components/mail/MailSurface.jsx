@@ -49,6 +49,7 @@ import {
   DENSITIES, DEFAULT_DENSITY, readDensity, writeDensity,
   composeBlocksKeys, slotOccupancy,
 } from './mail-preferences'
+import { UUID_SHAPE } from '@/lib/uuid-shape'
 import { useActionQueue } from './use-action-queue'
 import { useDockSlot } from './use-dock-slot'
 import { useVisibleInterval } from './use-visible-interval'
@@ -72,10 +73,9 @@ const SEARCH_DEBOUNCE_MS = 350
 // is validated against the house id shape before it is trusted with
 // anything — every id in this system is one, so a non-uuid `?c=` is not a
 // legitimate deep link and is ignored outright, the same as if it were
-// absent. Replicated, not imported: the source
-// (src/app/api/email/tickets/_helpers.js's UUID_SHAPE) is not exported, and
-// exporting it is a change to a file this surface does not own.
-const UUID_SHAPE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+// absent. The shape is the house one from `@/lib/uuid-shape` (homed there by
+// MAIL-ARCH.2, #1618) — it used to be replicated here because the tickets
+// route helper that owned it did not export it.
 
 // MAIL-ALLLOC.1 — `locations` is the page-resolved eligible set ({id, name},
 // name-sorted): every studio where the caller holds `email_inbox`. With 2+

@@ -111,8 +111,13 @@ export default function EmailSignatureForm({ initialSignature = '', initialRich 
 
         {normalized && (
           <div className="mt-3 rounded-lg border border-dashed border-un1t-border bg-un1t-bg px-3 py-2">
+            {/* MAIL-FOLLOWUPS.1 — "Your sign-off", not "How it lands": this
+                box previews the PERSON'S part alone, while the studio block
+                that goes out underneath it is shown in the rich editor's own
+                "How it lands" frame below. Two boxes with the same label
+                showed two different things. */}
             <div className="text-[10px] font-medium uppercase tracking-wider text-un1t-muted">
-              How it lands
+              Your sign-off
             </div>
             <pre className="mt-1 whitespace-pre-wrap break-words font-sans text-xs text-un1t-subtle">
               {`…your reply\n\n${SIGNATURE_SEPARATOR}\n${normalized}`}
