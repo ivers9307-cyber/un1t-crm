@@ -13,7 +13,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import ContactComposer from './ContactComposer.jsx'
-import { AWAITING_SENDER_FOOTER, UNAVAILABLE_SENDER_FOOTER, COMPANY_SENDER_FOOTER } from './contact-composer-send'
+import { AWAITING_SENDER_FOOTER, UNAVAILABLE_SENDER_FOOTER, COMPANY_SENDER_FOOTER, NO_ACCESS_SENDER_FOOTER } from './contact-composer-send'
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }) }))
 
@@ -45,7 +45,8 @@ function stubFetch({ mailboxes = 'none', composeOk = true, prefs = null } = {}) 
       return { ok: true, status: 200, json: async () => ({ success: true, data: prefs }) }
     }
     if (u.startsWith('/api/email/mail?')) {
-      if (mailboxes === 'fail') return { ok: false, status: 403, json: async () => ({ success: false, error: 'no' }) }
+      if (mailboxes === 'fail') return { ok: false, status: 500, json: async () => ({ success: false, error: 'no' }) }
+      if (mailboxes === 'forbidden') return { ok: false, status: 403, json: async () => ({ success: false, error: 'Forbidden' }) }
       return { ok: true, status: 200, json: async () => ({ success: true, data: { mailboxes: mailboxes === 'none' ? [] : mailboxes, conversations: [] } }) }
     }
     if (u === '/api/email/tickets/compose') {
@@ -156,6 +157,18 @@ describe('ContactComposer — Email via Mail', () => {
   // address" as if the studio had no accounts, when the truth was that we
   // never found out. Send stays enabled — the operator is not blocked on a
   // blip — and the send goes company.
+  // MAIL-403.1 — Richard's call: a coach who legitimately holds no Mail access
+  // at the contact's studio was told the accounts "couldn't load", which reads
+  // as a fault. A 403 is a state; it gets its own sentence and the same send.
+  it('a 403 account lookup says the caller has no Mail access at this studio — not that the list failed', async () => {
+    stubFetch({ mailboxes: 'forbidden' })
+    renderComposer()
+    await screen.findByText(NO_ACCESS_SENDER_FOOTER)
+    expect(screen.queryByText(UNAVAILABLE_SENDER_FOOTER)).toBeNull()
+    expect(screen.queryByText(COMPANY_SENDER_FOOTER)).toBeNull()
+    expect(screen.queryByRole('combobox')).toBeNull()
+  })
+
   it('a FAILED account lookup is the company path too — never a dead Email tab, and the footer names the failure', async () => {
     stubFetch({ mailboxes: 'fail' })
     renderComposer()

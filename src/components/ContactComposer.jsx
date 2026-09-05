@@ -122,9 +122,12 @@ export default function ContactComposer({
   //   []    = a successful empty list: none usable (no connected account) →
   //           the company path, permanently, exactly as before this feature.
   //   MAILBOXES_UNAVAILABLE = the list FAILED (transport blip, route 500, a
-  //           403, a non-JSON body) → still the company path, never blocking
-  //           the operator on a blip, but the footer names the failure
-  //           instead of claiming there are no accounts.
+  //           non-JSON body) → still the company path, never blocking the
+  //           operator on a blip, but the footer names the failure instead
+  //           of claiming there are no accounts.
+  //   MAILBOXES_FORBIDDEN = the list answered 403 (MAIL-403.1): the operator
+  //           holds no Mail access at the contact's studio. A state, not a
+  //           fault — company path, footer says so in those words.
   // Default From = the account starred Default on the studio's Email
   // settings card, else the first.
   const [mailboxes, setMailboxes] = useState(null)
@@ -137,7 +140,9 @@ export default function ContactComposer({
         const res = await fetch(`/api/email/mail?location_id=${encodeURIComponent(contactLocationId)}`, { cache: 'no-store' })
         const j = await res.json().catch(() => null)
         if (!alive) return
-        const boxes = mailboxesFromListResponse({ ok: res.ok, json: j })
+        // `status` rides along so a 403 (no Mail access at this studio) can be
+        // told apart from a failure — MAIL-403.1.
+        const boxes = mailboxesFromListResponse({ ok: res.ok, status: res.status, json: j })
         setMailboxes(boxes)
         setMailboxId(defaultMailboxId(boxes))
       } catch {

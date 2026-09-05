@@ -38,6 +38,18 @@ export const UNAVAILABLE_SENDER_FOOTER = 'Couldn’t load studio accounts — wi
 export const MAILBOXES_UNAVAILABLE = 'unavailable'
 
 /**
+ * MAIL-403.1 — the list answered 403: the caller holds no Mail access at the
+ * contact's studio. That is a PERMANENT permission state, not a failure, so it
+ * gets its own footer — the generic "couldn't load" read as a fault to a coach
+ * who simply isn't on that studio's Mail. Still the company path (the send
+ * still goes out), still a string so no reader can .map it.
+ */
+export const MAILBOXES_FORBIDDEN = 'forbidden'
+
+/** No Mail access at the contact's studio: says so, and says what the send will do. */
+export const NO_ACCESS_SENDER_FOOTER = 'You don’t have Mail access at this studio — will send from the company address'
+
+/**
  * listMail's answer → the modal's mailbox state: the array on success (null-
  * tolerant on the field, so a route that omits `mailboxes` reads as none),
  * MAILBOXES_UNAVAILABLE on any failure. Review fix: the effect used to map
@@ -52,6 +64,10 @@ export const MAILBOXES_UNAVAILABLE = 'unavailable'
  * the list was not obtained, the send goes company either way.
  */
 export function mailboxesFromListResult(res) {
+  // 403 is judged BEFORE the generic failure: it is the one failure that is a
+  // state rather than a fault — the route answers it only for a caller with
+  // no `email_inbox` at that studio. listMail passes api()'s `status` through.
+  if (res?.status === 403) return MAILBOXES_FORBIDDEN
   if (!res?.success) return MAILBOXES_UNAVAILABLE
   return Array.isArray(res.mailboxes) ? res.mailboxes : []
 }
@@ -105,6 +121,7 @@ function isAwaiting({ mailboxes, contactEmail, contactLocationId }) {
 export function resolveContactEmailSend({ mailboxes, mailboxId, contactEmail, contactLocationId } = {}) {
   if (isAwaiting({ mailboxes, contactEmail, contactLocationId })) return { path: 'awaiting' }
   if (mailboxes === MAILBOXES_UNAVAILABLE) return { path: 'company', reason: 'unavailable' }
+  if (mailboxes === MAILBOXES_FORBIDDEN) return { path: 'company', reason: 'forbidden' }
   const mailbox = chosenMailbox(mailboxes, mailboxId)
   if (!mailbox || !contactEmail) return { path: 'company' }
   return {
@@ -126,5 +143,7 @@ export function contactEmailFooter(args = {}) {
   const plan = resolveContactEmailSend(args)
   if (plan.path === 'awaiting') return AWAITING_SENDER_FOOTER
   if (plan.path === 'mail') return mailboxDisplay(chosenMailbox(args.mailboxes, args.mailboxId))
-  return plan.reason === 'unavailable' ? UNAVAILABLE_SENDER_FOOTER : COMPANY_SENDER_FOOTER
+  if (plan.reason === 'unavailable') return UNAVAILABLE_SENDER_FOOTER
+  if (plan.reason === 'forbidden') return NO_ACCESS_SENDER_FOOTER
+  return COMPANY_SENDER_FOOTER
 }

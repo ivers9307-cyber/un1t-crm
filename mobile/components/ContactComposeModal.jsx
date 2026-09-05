@@ -154,11 +154,14 @@ function EmailForm({ contactId, contactName, contactLocationId, contactEmail, on
   //           very bug this feature fixes, made timing-dependent.)
   //   []    = a successful empty list: none usable (no connected account) →
   //           the company path, permanently, exactly as before this feature.
-  //   MAILBOXES_UNAVAILABLE = the list FAILED (transport blip, route 500, or
-  //           a 403 — api() hands both back as the same envelope) → still the
-  //           company path, never blocking the operator on a blip, but the
-  //           footer names the failure instead of claiming there are no
-  //           accounts.
+  //   MAILBOXES_UNAVAILABLE = the list FAILED (transport blip, route 500,
+  //           non-JSON) → still the company path, never blocking the
+  //           operator on a blip, but the footer names the failure instead
+  //           of claiming there are no accounts.
+  //   MAILBOXES_FORBIDDEN = the list answered 403 (MAIL-403.1): the operator
+  //           holds no Mail access at the contact's studio. A state, not a
+  //           fault — company path, footer says so. listMail passes api()'s
+  //           `status` through so the two can be told apart.
   // Default From = the account starred Default on the studio's Email
   // settings card, else the first.
   const [mailboxes, setMailboxes] = useState(null)
