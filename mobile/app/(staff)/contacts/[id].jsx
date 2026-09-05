@@ -17,7 +17,7 @@
 // Editing contact fields stays on the web — this screen adds read
 // surfaces plus the note + kudos writes only.
 import { useState, useCallback, useMemo } from 'react'
-import { View, Text, ScrollView, ActivityIndicator, Pressable, Linking } from 'react-native'
+import { View, Text, ScrollView, ActivityIndicator, Pressable, Linking, Alert } from 'react-native'
 import { useLocalSearchParams, useFocusEffect, useRouter, Stack } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import {
@@ -32,6 +32,7 @@ import {
   glofoxStateMeta, glofoxPauseResumeLabel, splitCrmBookings, crmBookingStatusMeta, relativeTime,
 } from '../../../lib/contact-command-centre'
 import { formatBookingTime } from '../../../lib/bookings-api'
+import { sendCancellationForm } from '../../../lib/messaging-api'
 import BackHeaderLeft from '../../../components/BackHeaderLeft'
 import ContactComposeModal from '../../../components/ContactComposeModal'
 import ContactGlofoxCard from '../../../components/ContactGlofoxCard'
@@ -174,6 +175,29 @@ export default function ContactDetail() {
   // MOBILE-CONTACT-SEND.1 — which channel composer (if any) is open.
   const [composeChannel, setComposeChannel] = useState(null)
 
+  // CANCEL-FORM.6 — channel picker + send for the cancellation form link.
+  function offerCancellationForm() {
+    const options = []
+    if (contact?.email && canMobile(profile, 'email', activeLocation)) options.push({ text: 'Send by email', onPress: () => sendCancelForm('email') })
+    if ((contact?.wa_phone || contact?.phone) && canMobile(profile, 'whatsapp', activeLocation)) options.push({ text: 'Send by WhatsApp', onPress: () => sendCancelForm('whatsapp') })
+    options.push({ text: 'Cancel', style: 'cancel' })
+    Alert.alert('Send cancellation form', 'A private, single-use link where the member can pause or cancel. Their answer lands in Approvals.', options)
+  }
+  async function sendCancelForm(channel) {
+    const res = await sendCancellationForm(id, { channel })
+    if (res?.success) {
+      Alert.alert('Sent', `The form link was sent by ${channel === 'whatsapp' ? 'WhatsApp' : 'email'}. It works once, for 30 days.`)
+      load().catch(() => {})
+    } else if (res?.needs_template && contact?.email && canMobile(profile, 'email', activeLocation)) {
+      Alert.alert('WhatsApp window closed', 'No approved template is set up for this, so WhatsApp cannot carry it right now.', [
+        { text: 'Send by email instead', onPress: () => sendCancelForm('email') },
+        { text: 'Cancel', style: 'cancel' },
+      ])
+    } else {
+      Alert.alert('Could not send', res?.error || 'Please try again.')
+    }
+  }
+
   const canBookings = canMobile(profile, 'bookings', activeLocation)
   const canWhatsApp = canMobile(profile, 'whatsapp', activeLocation)
   // Kudos visibility mirrors the web SendKudosCard gate: the top-level
@@ -263,6 +287,12 @@ export default function ContactDetail() {
             {contact.phone && canMobile(profile, 'sms', activeLocation) && <ActionButton icon="chatbubble-outline" label="Text" onPress={() => setComposeChannel('sms')} />}
             {(contact.wa_phone || contact.phone) && canMobile(profile, 'whatsapp', activeLocation) && <ActionButton icon="logo-whatsapp" label="WhatsApp" onPress={() => setComposeChannel('whatsapp')} />}
             {contact.email && canMobile(profile, 'email', activeLocation) && <ActionButton icon="mail-outline" label="Email" onPress={() => setComposeChannel('email')} />}
+            {/* CANCEL-FORM.6 — hand the member a single-use pause/cancel form
+                link. Channel choice via a native sheet; the route does the
+                rest (mint, deliver, log). Web has the richer modal. */}
+            {(contact.email || contact.wa_phone || contact.phone) && (canMobile(profile, 'email', activeLocation) || canMobile(profile, 'whatsapp', activeLocation)) && (
+              <ActionButton icon="document-text-outline" label="Cancel form" onPress={() => offerCancellationForm()} />
+            )}
           </View>
 
           {/* Fields */}

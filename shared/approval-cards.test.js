@@ -57,3 +57,14 @@ describe('mergeTimeline', () => {
     expect(mergeTimeline([], [])).toEqual([])
   })
 })
+
+// CANCEL-FORM.6 — form-originated cancellations carry a structured end date.
+describe('CANCEL-FORM.6 — approvalCardSummary for form cancellations', () => {
+  it('shows the reason and the requested end date', () => {
+    expect(approvalCardSummary({ kind: 'cancellation', details: { reason: 'Too dear', requested_end_date: '2026-10-05' } }))
+      .toBe('Too dear · ends 2026-10-05')
+  })
+  it('a Mia row with only a reason is unchanged', () => {
+    expect(approvalCardSummary({ kind: 'cancellation', details: { reason: 'Moving away' } })).toBe('Moving away')
+  })
+})

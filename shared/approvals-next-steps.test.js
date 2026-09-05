@@ -67,3 +67,35 @@ describe('DECLINE_REASONS', () => {
     expect(DECLINE_REASONS.map(([k]) => k)).toContain('other')
   })
 })
+
+// CANCEL-FORM.6 — membership cancellations now confirm the member
+// automatically on decide (email or in-thread), so the farewell draft must
+// not promise a confirmation that already went, and no customer-bound draft
+// may carry an em dash (Richard's rule).
+describe('CANCEL-FORM.6 — membership drafts', () => {
+  it('the approved-cancellation farewell is a personal goodbye, not a promise to confirm later', () => {
+    const steps = getNextSteps('cancellation', 'approved', ctx)
+    const farewell = steps.find(s => s.id === 'farewell_message')
+    expect(farewell.draft).toContain('Aoife')
+    expect(farewell.draft).not.toMatch(/will confirm/i)
+    expect(farewell.draft).not.toMatch(/—/)
+  })
+
+  it('actioned cancellation (Glofox executed) offers the same follow-ups as approved', () => {
+    const steps = getNextSteps('cancellation', 'actioned', ctx)
+    expect(steps.map(s => s.id)).toEqual(['winback', 'farewell_consult', 'farewell_message'])
+  })
+
+  it('approved pause draft has no em dash and does not promise a later confirmation', () => {
+    const steps = getNextSteps('pause', 'approved', { firstName: 'Dan', details: { start_date: '2026-08-01', end_date: '2026-09-01' } })
+    expect(steps[0].draft).not.toMatch(/—/)
+    expect(steps[0].draft).not.toMatch(/confirm shortly/i)
+  })
+
+  it('no membership decline/saved draft carries an em dash', () => {
+    for (const kind of ['pause', 'cancellation']) {
+      expect(buildDeclineDraft(kind, 'other', ctx)).not.toMatch(/—/)
+    }
+    expect(getNextSteps('cancellation', 'saved', ctx)[0].draft).not.toMatch(/—/)
+  })
+})

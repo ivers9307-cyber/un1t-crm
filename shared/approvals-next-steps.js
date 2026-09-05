@@ -53,10 +53,10 @@ export function buildDeclineDraft(kind, reasonKey, ctx = {}) {
     return `Hi ${name}, we weren't able to cancel ${what || 'your booking'} this time. Reply here and we'll help.`
   }
   if (kind === 'pause') {
-    return `Hi ${name}, we couldn't set up that membership pause just yet — reply here and we'll look at what's possible.`
+    return `Hi ${name}, we couldn't set up that membership pause just yet. Reply here and we'll look at what's possible.`
   }
   if (kind === 'cancellation') {
-    return `Hi ${name}, thanks for reaching out — we'd love a quick chat before anything changes with your membership. When suits a call?`
+    return `Hi ${name}, thanks for reaching out. We'd love a quick chat before anything changes with your membership. When suits a call?`
   }
   return `Hi ${name}, we couldn't action that request this time — reply here and we'll sort it out.`
 }
@@ -93,19 +93,24 @@ export function getNextSteps(kind, outcome, ctx = {}) {
     return steps
   }
 
+  // CANCEL-FORM.6 — a membership cancellation now confirms the member
+  // automatically on approve (and on actioned, when the location's Glofox
+  // auto-cancel is on), so the farewell is a personal goodbye, not a second
+  // promise to confirm. Same follow-ups either way.
+  if ((outcome === 'approved' || outcome === 'actioned') && kind === 'cancellation') {
+    return [
+      { id: 'winback', label: 'Enrol in win-back sequence', type: 'sequence' },
+      { id: 'farewell_consult', label: 'Book a farewell consult', type: 'book' },
+      {
+        id: 'farewell_message',
+        label: 'Send farewell message',
+        type: 'composer',
+        draft: `Hi ${name}, sorry to see you go. Thanks for training with us, and you would be welcome back any time.`,
+      },
+    ]
+  }
+
   if (outcome === 'approved') {
-    if (kind === 'cancellation') {
-      return [
-        { id: 'winback', label: 'Enrol in win-back sequence', type: 'sequence' },
-        { id: 'farewell_consult', label: 'Book a farewell consult', type: 'book' },
-        {
-          id: 'farewell_message',
-          label: 'Send farewell message',
-          type: 'composer',
-          draft: `Hi ${name}, we've got your cancellation moving and will confirm once it's done. You'd be welcome back any time.`,
-        },
-      ]
-    }
     if (kind === 'pause') {
       const d = (ctx && ctx.details) || {}
       const span = [d.start_date, d.end_date].filter(Boolean).join(' to ')
@@ -113,7 +118,7 @@ export function getNextSteps(kind, outcome, ctx = {}) {
         id: 'pause_confirm',
         label: 'Confirm pause dates',
         type: 'composer',
-        draft: `Hi ${name}, your membership pause${span ? ` from ${span}` : ''} is approved — we're setting it up now and will confirm shortly.`,
+        draft: `Hi ${name}, your membership pause${span ? ` from ${span}` : ''} is approved. We're setting it up now.`,
       }]
     }
     return []
@@ -124,7 +129,7 @@ export function getNextSteps(kind, outcome, ctx = {}) {
       id: 'saved_thanks',
       label: 'Send a thank-you',
       type: 'composer',
-      draft: `Hi ${name}, great chatting — really glad you're staying with us! Any questions about what we discussed, just reply here.`,
+      draft: `Hi ${name}, great chatting, really glad you're staying with us. Any questions about what we discussed, just reply here.`,
     }]
   }
 
