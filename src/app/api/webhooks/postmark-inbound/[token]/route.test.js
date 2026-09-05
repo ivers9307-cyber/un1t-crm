@@ -1588,6 +1588,26 @@ describe('no parseable sender', () => {
     expect(deadLetterWebhook.mock.calls[0][1].locationId).toBeNull()
   })
 
+  it('still WRITES the row, location NULL, when the location resolver itself throws (MAIL-FOLLOWUPS.1 — fail open)', async () => {
+    // The stamp is best-effort by contract: a dead-letter write must never
+    // become less reliable because the mailbox scan died. Here the scan
+    // THROWS (the builder rejecting, not PostgREST resolving { error }) on the
+    // one path where the scan runs only inside bestEffortInboundLocation — so
+    // a resolver that let the throw escape would turn a captured no_sender
+    // payload into an unhandled_error 500 with nothing in the morgue.
+    db = makeDb({ throwOn: { 'email_mailboxes:select': new Error('connection pool exhausted') } })
+    createServerClient.mockImplementation(() => db)
+
+    const res = await post(inbound({ From: undefined, FromFull: undefined }))
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, dead_lettered: 'no_sender' })
+    expect(deadLetterWebhook).toHaveBeenCalledTimes(1)
+    expect(deadLetterWebhook.mock.calls[0][1]).toMatchObject({ provider: 'postmark_inbound', error: 'no_sender' })
+    expect(deadLetterWebhook.mock.calls[0][1].payload.MessageID).toBe('pm-inbound-1')
+    expect(deadLetterWebhook.mock.calls[0][1].locationId).toBeNull()
+  })
+
   it('keeps the claim on a no_sender dead-letter (2xx — the payload is captured)', async () => {
     bindDedupeLedger(db)
 

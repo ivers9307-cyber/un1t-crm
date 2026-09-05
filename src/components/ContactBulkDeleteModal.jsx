@@ -110,7 +110,10 @@ export default function ContactBulkDeleteModal({ contacts, onClose, onDeleted })
             <div className="bg-un1t-bg border border-un1t-border rounded-md p-3 mb-3 text-[11px] text-un1t-subtle space-y-1">
               <div><strong className="text-un1t-text">Will be deleted:</strong> deals, notes, activities, sequence enrolments, send history.</div>
               <div><strong className="text-un1t-text">Will stay (unlinked):</strong> bookings, orders, race registrations, race payments — revenue history is preserved.</div>
-              <div><strong className="text-un1t-text">Will be redacted:</strong> WhatsApp conversations + messages — PII (phone, profile name, message body, media) is wiped, conversation thread stays for audit (GDPR right-to-erasure).</div>
+              {/* MAIL-GDPR.1 / #1606 — mail is scrubbed on the same doctrine as
+                  WhatsApp (contact-mail-erasure.js): tickets + messages are
+                  anonymised in place, attachments are hard-deleted. */}
+              <div><strong className="text-un1t-text">Will be redacted:</strong> WhatsApp conversations + messages, and mail (conversations, messages, attachments) — PII (phone, profile name, addresses, subject, message body, media, attachments) is wiped, conversation threads stay for audit (GDPR right-to-erasure).</div>
             </div>
 
             <div className="space-y-3">

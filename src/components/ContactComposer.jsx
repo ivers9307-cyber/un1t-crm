@@ -22,6 +22,10 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { MessageCircle, MessageSquare, Send, StickyNote, Mail } from 'lucide-react'
 import SignatureHint from '@/components/tickets/SignatureHint'
+import {
+  resolveContactEmailSend, contactEmailFooter, mailboxesFromListResponse, defaultMailboxId,
+  MAILBOXES_UNAVAILABLE,
+} from './contact-composer-send'
 
 // SMS segment counter — single-segment GSM-7 fits 160 chars;
 // concatenated multi-segment messages count 153 chars per segment.
@@ -108,11 +112,21 @@ export default function ContactComposer({
   }
 
   // PROFILE-MAIL.1 — the caller's visible email accounts at the CONTACT'S
-  // studio. null = not yet answered (footer keeps the company wording, and a
-  // send in that window deliberately takes the company path — what the
-  // footer says at click time is what happens); [] = none usable (no
-  // connected account, or the caller lacks email_inbox / a grant there) —
-  // the company path, permanently, exactly as before this feature.
+  // studio. Three states, all decided by contact-composer-send.js off the
+  // same inputs the send uses (MAIL-FOLLOWUPS.1, the port of the phone's
+  // MOBILE-MAILPARITY.1 review fix):
+  //   null  = asked for, not yet answered → `awaiting`: Send is DISABLED and
+  //           the footer reads "Checking studio accounts…". (A click in this
+  //           window used to go out as the company sender — the very bug
+  //           this feature fixes, made timing-dependent.)
+  //   []    = a successful empty list: none usable (no connected account) →
+  //           the company path, permanently, exactly as before this feature.
+  //   MAILBOXES_UNAVAILABLE = the list FAILED (transport blip, route 500, a
+  //           403, a non-JSON body) → still the company path, never blocking
+  //           the operator on a blip, but the footer names the failure
+  //           instead of claiming there are no accounts.
+  // Default From = the account starred Default on the studio's Email
+  // settings card, else the first.
   const [mailboxes, setMailboxes] = useState(null)
   const [mailboxId, setMailboxId] = useState(null)
   useEffect(() => {
@@ -123,17 +137,27 @@ export default function ContactComposer({
         const res = await fetch(`/api/email/mail?location_id=${encodeURIComponent(contactLocationId)}`, { cache: 'no-store' })
         const j = await res.json().catch(() => null)
         if (!alive) return
-        const boxes = (res.ok && j?.success && Array.isArray(j.data?.mailboxes)) ? j.data.mailboxes : []
+        const boxes = mailboxesFromListResponse({ ok: res.ok, json: j })
         setMailboxes(boxes)
-        // Default = the account starred Default on the studio's Email
-        // settings card (is_default), else the first visible one.
-        setMailboxId(boxes.find(m => m.is_default)?.id || boxes[0]?.id || null)
+        setMailboxId(defaultMailboxId(boxes))
       } catch {
-        if (alive) setMailboxes([])
+        if (alive) { setMailboxes(MAILBOXES_UNAVAILABLE); setMailboxId(null) }
       }
     })()
     return () => { alive = false }
   }, [emailAvailable, contactLocationId, contactEmail])
+
+  // Resolved every render from the SAME inputs the send reads at click time,
+  // so the footer can never claim one path while the click takes another.
+  const sendArgs = { mailboxes, mailboxId, contactEmail, contactLocationId }
+  const emailPlan = resolveContactEmailSend(sendArgs)
+  const emailFooter = contactEmailFooter(sendArgs)
+  // The list is in flight: no send may leave until it answers, because the
+  // path it takes is not yet known. Never true when there is nothing to await.
+  const awaitingAccounts = emailPlan.path === 'awaiting'
+  const chosenMailbox = emailPlan.path === 'mail'
+    ? mailboxes.find(m => m.id === emailPlan.mailboxId) || null
+    : null
 
   async function post(urlPath, payload) {
     setSending(true)
@@ -187,10 +211,15 @@ export default function ContactComposer({
     // PROFILE-MAIL.1 — with a usable account, the send IS a Mail compose:
     // it goes out from that address and files a conversation the reply
     // threads back into. Without one, the company-sender path is unchanged.
-    if (mailboxId && contactEmail) {
+    // The path is re-resolved at click time from the same inputs the footer
+    // renders from — never a captured decision from an earlier render.
+    const plan = resolveContactEmailSend({ mailboxes, mailboxId, contactEmail, contactLocationId })
+    // Belt to the disabled-prop braces: an awaiting plan is not a send.
+    if (plan.path === 'awaiting') return
+    if (plan.path === 'mail') {
       const ok = await post('/api/email/tickets/compose', {
-        mailbox_id: mailboxId,
-        to: [contactEmail],
+        mailbox_id: plan.mailboxId,
+        to: plan.to,
         subject: subject.trim(),
         text: text.trim(),
       })
@@ -388,13 +417,11 @@ export default function ContactComposer({
                   account's studio, so it gets the same hint every ticket
                   composer has. ONLY on that path: the company-sender
                   fallback appends nothing, and absence is the truth there. */}
-              {mailboxId && contactEmail && (
-                <SignatureHint
-                  locationId={mailboxes?.find(m => m.id === mailboxId)?.location_id || null}
-                />
+              {emailPlan.path === 'mail' && (
+                <SignatureHint locationId={chosenMailbox?.location_id || null} />
               )}
               <div className="flex items-center justify-between mt-2 gap-2">
-                {mailboxes?.length ? (
+                {emailPlan.path === 'mail' ? (
                   <label className="flex min-w-0 items-center gap-1.5 text-[11px] text-un1t-muted">
                     From
                     <select
@@ -410,11 +437,13 @@ export default function ContactComposer({
                     </select>
                   </label>
                 ) : (
-                  <span className="text-[11px] text-un1t-muted">Sent from the company address</span>
+                  // Awaiting / unavailable / company wording — one string,
+                  // derived from the same inputs the click resolves.
+                  <span className="text-[11px] text-un1t-muted">{emailFooter}</span>
                 )}
                 <button
                   type="button"
-                  disabled={sending || !text.trim() || !subject.trim()}
+                  disabled={sending || awaitingAccounts || !text.trim() || !subject.trim()}
                   onClick={sendEmail}
                   className="inline-flex items-center gap-1 text-xs px-3 py-1 bg-un1t-text text-un1t-bg rounded font-medium hover:bg-un1t-accent disabled:opacity-50"
                 >
