@@ -52,6 +52,8 @@ export default function ThreadApprovalCard({ request, contactFirstName, onDecide
   // to the default — accepted tradeoff (mirrors web), don't re-parse decision_note.
   const ctx = { firstName: contactFirstName, details: request.details, reason }
 
+  const [notified, setNotified] = useState(null)
+
   async function decide(status) {
     if (busy) return
     setBusy(status)
@@ -67,6 +69,8 @@ export default function ThreadApprovalCard({ request, contactFirstName, onDecide
         return
       }
       onDecided?.({ ...request, ...res.request })
+      // CANCEL-FORM.6 — whether the member heard about a pause/cancellation decision.
+      if (res.customer_notified) setNotified(res.customer_notified)
       if (status === 'declined') {
         onPrefillComposer?.(buildDeclineDraft(request.kind, reason, ctx))
       }
@@ -207,6 +211,14 @@ export default function ThreadApprovalCard({ request, contactFirstName, onDecide
             ) : null}
           </View>
         )}
+
+        {notified && notified.reason !== 'not_applicable' && notified.reason !== 'not_executed' ? (
+          <Text className={`text-xs mt-1 ${notified.sent ? 'text-green-700' : 'text-amber-700'}`}>
+            {notified.sent
+              ? `Member ${notified.channel === 'email' ? 'emailed' : 'messaged'}.`
+              : 'Member NOT told, please follow up.'}
+          </Text>
+        ) : null}
 
         {steps.length > 0 && (
           <View className="flex-row flex-wrap items-center gap-1.5 mt-2 pt-2 border-t border-un1t-border/50">

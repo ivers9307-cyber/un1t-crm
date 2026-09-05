@@ -31,7 +31,8 @@ export function approvalCardSummary(row) {
     const span = [d.start_date, d.end_date].filter(Boolean).join(' → ')
     parts = [span || null, d.reason]
   } else if (kind === 'cancellation') {
-    parts = [d.reason]
+    // CANCEL-FORM.6 — form-originated rows carry a structured end date.
+    parts = [d.reason, d.requested_end_date ? `ends ${d.requested_end_date}` : null]
   }
   const line = parts.filter(Boolean).join(' · ')
   if (line) return line

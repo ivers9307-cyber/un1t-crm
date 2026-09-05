@@ -45,3 +45,13 @@ export function sendContactSms(contactId, { body } = {}) {
 export function sendContactEmail(contactId, { subject, body } = {}) {
   return api(`/api/contacts/${contactId}/email`, { method: 'POST', body: { subject, body } })
 }
+
+/**
+ * CANCEL-FORM.6 — send the member a single-use membership cancellation form
+ * link by 'email' or 'whatsapp' (staff action). The route mints the link,
+ * delivers it and logs the send; a closed WhatsApp window with no approved
+ * template answers 409 { window_expired, needs_template }.
+ */
+export function sendCancellationForm(contactId, { channel } = {}) {
+  return api(`/api/contacts/${contactId}/cancellation-form`, { method: 'POST', body: { channel } })
+}
