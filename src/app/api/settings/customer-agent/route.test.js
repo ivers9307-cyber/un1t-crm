@@ -78,3 +78,68 @@ describe('PUT /api/settings/customer-agent — CTA fields', () => {
     expect(written.settings.customer_agent.booking_issue_handoff_text).toBeNull()
   })
 })
+
+// CANCEL-FORM.2 — the cancellation-form block rides the blob; the Glofox
+// auto-cancel toggle is the locations.glofox_auto_cancel_memberships COLUMN.
+describe('PUT /api/settings/customer-agent — cancellation form', () => {
+  function dbCapturing() {
+    const written = { patch: null }
+    createServerClient.mockReturnValue({
+      from: () => ({
+        select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: { settings: { social_enabled: true } }, error: null }) }) }),
+        update: (patch) => { written.patch = patch; return { eq: () => ({ select: () => ({ single: () => Promise.resolve({ data: { id: 'loc1' }, error: null }) }) }) } },
+      }),
+    })
+    return written
+  }
+
+  it('persists cancellation_form inside the blob and writes the toggle to its own column', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u', role: 'manager', activeLocation: { id: 'loc1' } })
+    const written = dbCapturing()
+    const res = await PUT(putReq({
+      enabled: true,
+      glofox_auto_cancel: true,
+      cancellation_form: { form_intro: 'Hi {first_name}', notice_days: 30, reason_labels: { price: 'Too dear' } },
+    }))
+    expect(res.status).toBe(200)
+    expect(written.patch.settings.customer_agent.cancellation_form).toMatchObject({
+      form_intro: 'Hi {first_name}', notice_days: 30, reason_labels: { price: 'Too dear' },
+    })
+    expect(written.patch.settings.customer_agent).not.toHaveProperty('glofox_auto_cancel')
+    expect(written.patch.glofox_auto_cancel_memberships).toBe(true)
+  })
+
+  it('an omitted toggle writes false (never leaves a stale true behind), and an absent block writes null', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u', role: 'manager', activeLocation: { id: 'loc1' } })
+    const written = dbCapturing()
+    const res = await PUT(putReq({ enabled: true }))
+    expect(res.status).toBe(200)
+    expect(written.patch.glofox_auto_cancel_memberships).toBe(false)
+    expect(written.patch.settings.customer_agent.cancellation_form).toBeNull()
+  })
+})
+
+describe('GET /api/settings/customer-agent — cancellation form', () => {
+  it('surfaces glofox_auto_cancel from the locations column', async () => {
+    const { GET } = await import('./route')
+    getCurrentUser.mockResolvedValue({ id: 'u', role: 'manager', activeLocation: { id: 'loc1' } })
+    const locRow = { name: 'Stillorgan', settings: { customer_agent: { cancellation_form: { notice_days: 14 } } }, glofox_auto_cancel_memberships: true }
+    // Permissive chainable double: the locations read resolves to locRow,
+    // everything else (stats queries) to empty.
+    function chain(table) {
+      const result = table === 'locations' ? { data: locRow, error: null, count: 0 } : { data: [], error: null, count: 0 }
+      const c = {}
+      for (const m of ['select', 'eq', 'gte', 'not', 'order', 'limit']) c[m] = () => c
+      c.single = () => Promise.resolve(result)
+      c.maybeSingle = () => Promise.resolve({ data: null, error: null })
+      c.then = (res, rej) => Promise.resolve(result).then(res, rej)
+      return c
+    }
+    createServerClient.mockReturnValue({ from: (t) => chain(t) })
+    const res = await GET()
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.settings.glofox_auto_cancel).toBe(true)
+    expect(body.settings.cancellation_form).toEqual({ notice_days: 14 })
+  })
+})

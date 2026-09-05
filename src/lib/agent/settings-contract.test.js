@@ -10,7 +10,9 @@ import { SettingsSchema, DEFAULTS, buildCustomerAgentSettings } from './settings
 
 // social_enabled is a top-level sibling on locations.settings (written next to
 // customer_agent, not inside it) — the one documented exception.
-const SIBLING_KEYS = ['social_enabled']
+// CANCEL-FORM.2 — glofox_auto_cancel is the locations.glofox_auto_cancel_memberships
+// COLUMN, written by the route next to social_enabled.
+const SIBLING_KEYS = ['social_enabled', 'glofox_auto_cancel']
 
 describe('settings write-through contract', () => {
   it('every schema key except documented siblings survives into the written blob', () => {
@@ -59,6 +61,50 @@ describe('settings write-through contract', () => {
         .account_conflict_handoff_text,
     ).toBe(null)
     expect(DEFAULTS.account_conflict_handoff_text).toBe(null)
+  })
+
+  // CANCEL-FORM.2 — the cancellation-form copy block. Null = every code default
+  // (lib/cancellation-form/copy.js); an object round-trips with strings trimmed
+  // and blanks nulled so the resolver falls back per key.
+  it('cancellation_form round-trips as a nested block; absent → null', () => {
+    expect(buildCustomerAgentSettings(SettingsSchema.parse({ enabled: true })).cancellation_form).toBe(null)
+    const built = buildCustomerAgentSettings(SettingsSchema.parse({
+      enabled: true,
+      cancellation_form: {
+        form_intro: '  Hi {first_name}  ',
+        email_subject: '   ',
+        pause_max_weeks: 6,
+        notice_days: 14,
+        pause_offer_enabled: false,
+        reason_labels: { price: ' Too dear ' },
+        whatsapp_template_name: 'cancellation_form_link',
+        public_base_url: 'https://un1tdublin.com',
+      },
+    }))
+    expect(built.cancellation_form.form_intro).toBe('Hi {first_name}')
+    expect(built.cancellation_form.email_subject).toBe(null)
+    expect(built.cancellation_form.pause_max_weeks).toBe(6)
+    expect(built.cancellation_form.notice_days).toBe(14)
+    expect(built.cancellation_form.pause_offer_enabled).toBe(false)
+    expect(built.cancellation_form.reason_labels).toEqual({ price: 'Too dear' })
+    expect(built.cancellation_form.whatsapp_template_name).toBe('cancellation_form_link')
+    expect(built.cancellation_form.public_base_url).toBe('https://un1tdublin.com')
+    expect(DEFAULTS.cancellation_form).toBe(null)
+  })
+
+  it('cancellation_form rejects a non-URL base url and an out-of-range notice period; blank url → null', () => {
+    expect(SettingsSchema.safeParse({ enabled: true, cancellation_form: { public_base_url: 'not a url' } }).success).toBe(false)
+    expect(SettingsSchema.safeParse({ enabled: true, cancellation_form: { notice_days: 400 } }).success).toBe(false)
+    expect(SettingsSchema.safeParse({ enabled: true, cancellation_form: { whatsapp_button_text: 'x'.repeat(21) } }).success).toBe(false)
+    const parsed = SettingsSchema.parse({ enabled: true, cancellation_form: { public_base_url: '' } })
+    expect(buildCustomerAgentSettings(parsed).cancellation_form.public_base_url).toBe(null)
+  })
+
+  it('glofox_auto_cancel parses as a boolean sibling and is NOT written into the blob', () => {
+    const parsed = SettingsSchema.parse({ enabled: true, glofox_auto_cancel: true })
+    expect(parsed.glofox_auto_cancel).toBe(true)
+    expect(SettingsSchema.parse({ enabled: true }).glofox_auto_cancel).toBe(false)
+    expect('glofox_auto_cancel' in buildCustomerAgentSettings(parsed)).toBe(false)
   })
 
   it('existing transforms hold: trim-to-null, agent_name default, nested merges', () => {

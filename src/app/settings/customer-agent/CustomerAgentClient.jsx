@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { BarChart3 } from 'lucide-react'
+import { CANCELLATION_FORM_DEFAULTS, REASON_CODES } from '@/lib/cancellation-form/defaults'
 
 // RADAR-AGENT.0 — operator settings for the customer-facing WhatsApp /
 // Instagram agent. Manager+ only. Two parts: behaviour settings + the
@@ -11,6 +12,32 @@ import { BarChart3 } from 'lucide-react'
 // keeps the old path discoverable). Ships OFF by default.
 
 const CATEGORIES = ['sales', 'account', 'pause', 'cancellation', 'hours', 'general', 'faq']
+
+// CANCEL-FORM.2 — placeholders + reason codes come from the pure copy module
+// (no server-only imports), so the editor's defaults can never drift from
+// what the form actually renders.
+const CF_DEFAULTS = CANCELLATION_FORM_DEFAULTS
+const CF_REASON_CODES = REASON_CODES
+
+// Echo the whole block back exactly as edited: strings as typed (the contract
+// trims/nulls blanks), numbers as numbers, the toggle as a boolean, reason
+// labels per code. Null when the operator has never touched it.
+function buildCancellationFormPayload(cf) {
+  if (!cf || typeof cf !== 'object') return null
+  const out = {}
+  for (const [k, v] of Object.entries(cf)) {
+    if (k === 'reason_labels') {
+      out.reason_labels = Object.fromEntries(Object.entries(v || {}).filter(([, l]) => typeof l === 'string'))
+    } else if (k === 'pause_offer_enabled') {
+      out[k] = v !== false
+    } else if (k === 'pause_max_weeks' || k === 'notice_days') {
+      out[k] = v === '' || v == null || Number.isNaN(Number(v)) ? null : Number(v)
+    } else {
+      out[k] = typeof v === 'string' ? v : (v ?? null)
+    }
+  }
+  return out
+}
 
 export default function CustomerAgentClient() {
   const [settings, setSettings] = useState(null)
@@ -89,6 +116,11 @@ export default function CustomerAgentClient() {
         consultation_event_type_id: settings.consultation_event_type_id || null,
         monthly_points_target: settings.monthly_points_target ?? null,
         social_enabled: !!settings.social_enabled,
+        // CANCEL-FORM.2 — the toggle is a locations COLUMN (sibling, like
+        // social_enabled); the block MUST be echoed whole, because the PUT
+        // rebuilds the customer_agent blob and an omitted key resets it.
+        glofox_auto_cancel: !!settings.glofox_auto_cancel,
+        cancellation_form: buildCancellationFormPayload(settings.cancellation_form),
         followups: {
           enabled: !!settings.followups?.enabled,
           nudge_after_hours: Number(settings.followups?.nudge_after_hours) || 3,
@@ -133,6 +165,17 @@ export default function CustomerAgentClient() {
     setSettings(s => ({ ...s, first_class_checkin: { ...(s.first_class_checkin || {}), [key]: value } }))
   const setInlineSuggestion = (key, value) =>
     setSettings(s => ({ ...s, inline_suggestion: { ...(s.inline_suggestion || {}), [key]: value } }))
+  // CANCEL-FORM.2 — nested editors for the cancellation-form block.
+  const setCancelForm = (key, value) =>
+    setSettings(s => ({ ...s, cancellation_form: { ...(s.cancellation_form || {}), [key]: value } }))
+  const setCancelReason = (code, value) =>
+    setSettings(s => ({
+      ...s,
+      cancellation_form: {
+        ...(s.cancellation_form || {}),
+        reason_labels: { ...((s.cancellation_form || {}).reason_labels || {}), [code]: value },
+      },
+    }))
 
   const [importing, setImporting] = useState(false)
   const [importNote, setImportNote] = useState(null)
@@ -516,6 +559,213 @@ export default function CustomerAgentClient() {
 
         {error && <div className="text-sm text-red-600">{error}</div>}
         <div>
+          <button onClick={saveSettings} disabled={saving}
+            className="bg-un1t-text text-un1t-bg px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50">
+            {saving ? 'Saving…' : 'Save settings'}
+          </button>
+          {savedAt && <span className="ml-3 text-sm text-green-600">Saved ✓</span>}
+        </div>
+      </section>
+
+      {/* ── Membership cancellation form (CANCEL-FORM.2) ───── */}
+      <section className="border border-un1t-border rounded-lg p-5 mt-6">
+        <h2 className="text-base font-semibold text-un1t-text mb-1">Membership cancellation form</h2>
+        <p className="text-sm text-un1t-muted mb-4">
+          Staff send a member a private, single-use link (by email or WhatsApp) to pause or cancel
+          their membership. Submissions land in Approvals like any other request. Every word the member
+          sees is editable here; leave a field blank to use the default shown. Placeholders:{' '}
+          <code>{'{first_name}'}</code> <code>{'{plan}'}</code> <code>{'{location}'}</code>{' '}
+          <code>{'{link}'}</code> <code>{'{end_date}'}</code> <code>{'{start_date}'}</code>.
+        </p>
+
+        <label className="flex items-center gap-3 mb-1">
+          <input type="checkbox" className="h-4 w-4" checked={!!settings.glofox_auto_cancel}
+            onChange={e => setField('glofox_auto_cancel', e.target.checked)} />
+          <span className="text-sm text-un1t-text font-medium">Cancel memberships in Glofox automatically when a cancellation is approved</span>
+        </label>
+        <p className="text-xs text-un1t-muted mb-4 pl-7">
+          Off: approving marks the request approved and you make the change in Glofox by hand (today&apos;s behaviour).
+          On: approving calls Glofox to end the membership on the requested date, and the result shows on the card.
+          Glofox is connected at Stillorgan only.
+        </p>
+
+        <h3 className="text-sm font-semibold text-un1t-text mt-4 mb-2">The form page</h3>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-un1t-text mb-1">Intro</label>
+            <textarea className={inputCls} rows={2} maxLength={1000} value={settings.cancellation_form?.form_intro || ''}
+              onChange={e => setCancelForm('form_intro', e.target.value)}
+              placeholder={CF_DEFAULTS.form_intro} />
+          </div>
+          <label className="flex items-center gap-2 text-sm text-un1t-text">
+            <input type="checkbox" checked={settings.cancellation_form?.pause_offer_enabled !== false}
+              onChange={e => setCancelForm('pause_offer_enabled', e.target.checked)} />
+            Offer a pause before the cancel details
+          </label>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-un1t-text mb-1">Pause offer text</label>
+              <textarea className={inputCls} rows={2} maxLength={500} value={settings.cancellation_form?.pause_offer_text || ''}
+                onChange={e => setCancelForm('pause_offer_text', e.target.value)}
+                placeholder={CF_DEFAULTS.pause_offer_text} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-un1t-text mb-1">Longest pause (weeks)</label>
+              <input type="number" min={1} max={26} className={inputCls}
+                value={settings.cancellation_form?.pause_max_weeks ?? ''}
+                placeholder={String(CF_DEFAULTS.pause_max_weeks)}
+                onChange={e => setCancelForm('pause_max_weeks', e.target.value === '' ? null : Number(e.target.value))} />
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-un1t-text mb-1">Reason options (shown as the member&apos;s choices)</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {CF_REASON_CODES.map(code => (
+                <input key={code} className={inputCls} maxLength={80}
+                  value={settings.cancellation_form?.reason_labels?.[code] || ''}
+                  onChange={e => setCancelReason(code, e.target.value)}
+                  placeholder={CF_DEFAULTS.reason_labels[code]} />
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-un1t-text mb-1">End date help text</label>
+              <textarea className={inputCls} rows={2} maxLength={500} value={settings.cancellation_form?.end_date_help_text || ''}
+                onChange={e => setCancelForm('end_date_help_text', e.target.value)}
+                placeholder={CF_DEFAULTS.end_date_help_text} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-un1t-text mb-1">Notice period (days)</label>
+              <input type="number" min={0} max={90} className={inputCls}
+                value={settings.cancellation_form?.notice_days ?? ''}
+                placeholder={String(CF_DEFAULTS.notice_days)}
+                onChange={e => setCancelForm('notice_days', e.target.value === '' ? null : Number(e.target.value))} />
+              <p className="text-xs text-un1t-subtle mt-1">The earliest end date the member can pick is this many days from today.</p>
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-un1t-text mb-1">Review step text</label>
+            <input className={inputCls} maxLength={500} value={settings.cancellation_form?.confirm_text || ''}
+              onChange={e => setCancelForm('confirm_text', e.target.value)}
+              placeholder={CF_DEFAULTS.confirm_text} />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-un1t-text mb-1">Thanks (cancellation submitted)</label>
+              <textarea className={inputCls} rows={2} maxLength={500} value={settings.cancellation_form?.thanks_cancel_text || ''}
+                onChange={e => setCancelForm('thanks_cancel_text', e.target.value)}
+                placeholder={CF_DEFAULTS.thanks_cancel_text} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-un1t-text mb-1">Thanks (pause submitted)</label>
+              <textarea className={inputCls} rows={2} maxLength={500} value={settings.cancellation_form?.thanks_pause_text || ''}
+                onChange={e => setCancelForm('thanks_pause_text', e.target.value)}
+                placeholder={CF_DEFAULTS.thanks_pause_text} />
+            </div>
+          </div>
+        </div>
+
+        <h3 className="text-sm font-semibold text-un1t-text mt-6 mb-2">Sending the link</h3>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-un1t-text mb-1">Email subject</label>
+            <input className={inputCls} maxLength={200} value={settings.cancellation_form?.email_subject || ''}
+              onChange={e => setCancelForm('email_subject', e.target.value)}
+              placeholder={CF_DEFAULTS.email_subject} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-un1t-text mb-1">Email body (must include <code>{'{link}'}</code>)</label>
+            <textarea className={inputCls} rows={5} maxLength={4000} value={settings.cancellation_form?.email_body || ''}
+              onChange={e => setCancelForm('email_body', e.target.value)}
+              placeholder={CF_DEFAULTS.email_body} />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="sm:col-span-2">
+              <label className="block text-sm font-medium text-un1t-text mb-1">WhatsApp message (the link becomes a tappable button)</label>
+              <textarea className={inputCls} rows={3} maxLength={1024} value={settings.cancellation_form?.whatsapp_text || ''}
+                onChange={e => setCancelForm('whatsapp_text', e.target.value)}
+                placeholder={CF_DEFAULTS.whatsapp_text} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-un1t-text mb-1">Button label</label>
+              <input className={inputCls} maxLength={20} value={settings.cancellation_form?.whatsapp_button_text || ''}
+                onChange={e => setCancelForm('whatsapp_button_text', e.target.value)}
+                placeholder={CF_DEFAULTS.whatsapp_button_text} />
+              <p className="text-xs text-un1t-subtle mt-1">20 characters max (WhatsApp&apos;s limit).</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-un1t-text mb-1">Outside-window WhatsApp template</label>
+              <select className={inputCls}
+                value={settings.cancellation_form?.whatsapp_template_name || ''}
+                onChange={e => setCancelForm('whatsapp_template_name', e.target.value || null)}>
+                <option value="">— none (send by WhatsApp only inside the 24h window) —</option>
+                {templates.map(t => (
+                  <option key={`${t.name}:${t.language}`} value={t.name}>{t.name} ({t.language})</option>
+                ))}
+              </select>
+              <p className="text-xs text-un1t-subtle mt-1">
+                An approved UTILITY template whose URL button ends in <code>{'{{1}}'}</code> (the link token) —
+                lets staff send the form when the member has not messaged in 24 hours.
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-un1t-text mb-1">Link host (optional)</label>
+              <input className={inputCls} maxLength={512} value={settings.cancellation_form?.public_base_url || ''}
+                onChange={e => setCancelForm('public_base_url', e.target.value)}
+                placeholder="Default: this CRM's address" />
+              <p className="text-xs text-un1t-subtle mt-1">
+                e.g. <code>https://un1tdublin.com</code> to hand members a link on the marketing site instead of the CRM address.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <h3 className="text-sm font-semibold text-un1t-text mt-6 mb-2">After you decide</h3>
+        <p className="text-xs text-un1t-muted mb-3">Sent to the member on the channel the link went out on (email, or the WhatsApp thread).</p>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-un1t-text mb-1">Cancellation approved</label>
+            <textarea className={inputCls} rows={2} maxLength={500} value={settings.cancellation_form?.cancel_confirmation_text || ''}
+              onChange={e => setCancelForm('cancel_confirmation_text', e.target.value)}
+              placeholder={CF_DEFAULTS.cancel_confirmation_text} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-un1t-text mb-1">Pause approved</label>
+            <textarea className={inputCls} rows={2} maxLength={500} value={settings.cancellation_form?.pause_confirmation_text || ''}
+              onChange={e => setCancelForm('pause_confirmation_text', e.target.value)}
+              placeholder={CF_DEFAULTS.pause_confirmation_text} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-un1t-text mb-1">Marked as saved (member stays)</label>
+            <textarea className={inputCls} rows={2} maxLength={500} value={settings.cancellation_form?.saved_confirmation_text || ''}
+              onChange={e => setCancelForm('saved_confirmation_text', e.target.value)}
+              placeholder={CF_DEFAULTS.saved_confirmation_text} />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {[['confirmation_template_cancel', 'Cancellation template'], ['confirmation_template_pause', 'Pause template'], ['confirmation_template_saved', 'Saved template']].map(([key, label]) => (
+              <div key={key}>
+                <label className="block text-sm font-medium text-un1t-text mb-1">{label} (WhatsApp, window closed)</label>
+                <select className={inputCls}
+                  value={settings.cancellation_form?.[key] || ''}
+                  onChange={e => setCancelForm(key, e.target.value || null)}>
+                  <option value="">— none —</option>
+                  {templates.map(t => (
+                    <option key={`${t.name}:${t.language}`} value={t.name}>{t.name} ({t.language})</option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-un1t-subtle">
+            A WhatsApp-delivered form rarely reopens the 24h window, so without a template the card tells you the member has not been told and you follow up yourself.
+            Templates take <code>{'{{1}}'}</code> first name and <code>{'{{2}}'}</code> the date.
+          </p>
+        </div>
+
+        <div className="mt-5">
           <button onClick={saveSettings} disabled={saving}
             className="bg-un1t-text text-un1t-bg px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50">
             {saving ? 'Saving…' : 'Save settings'}

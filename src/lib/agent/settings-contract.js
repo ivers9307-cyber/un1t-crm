@@ -90,6 +90,11 @@ export const DEFAULTS = {
   // the constant in two places.
   effort: null,
   handoff_after_verify_failures: null,
+  // CANCEL-FORM.2 — the membership cancellation form's copy + options block.
+  // Null = every code default (lib/cancellation-form/copy.js
+  // CANCELLATION_FORM_DEFAULTS); the resolver merges per key so a partial
+  // object only overrides what the operator actually typed.
+  cancellation_form: null,
 }
 
 export const SettingsSchema = z.object({
@@ -152,15 +157,71 @@ export const SettingsSchema = z.object({
   // effectively disable the safety net by setting it to 500.
   handoff_after_verify_failures: z.number().int().min(1).max(5).nullable().optional(),
   social_enabled: z.boolean().optional().default(false),
+  // CANCEL-FORM.2 — SIBLING like social_enabled: this is the
+  // locations.glofox_auto_cancel_memberships COLUMN (mig 584), written by the
+  // route, never into the blob. When true, approving a membership cancellation
+  // executes the Glofox cancel. Ships false.
+  glofox_auto_cancel: z.boolean().optional().default(false),
+  cancellation_form: z.object({
+    form_intro: z.string().max(1000).nullable().optional(),
+    pause_offer_enabled: z.boolean().optional(),
+    pause_offer_text: z.string().max(500).nullable().optional(),
+    pause_max_weeks: z.number().int().min(1).max(26).nullable().optional(),
+    reason_labels: z.record(z.string().max(80)).nullable().optional(),
+    end_date_help_text: z.string().max(500).nullable().optional(),
+    notice_days: z.number().int().min(0).max(90).nullable().optional(),
+    confirm_text: z.string().max(500).nullable().optional(),
+    thanks_cancel_text: z.string().max(500).nullable().optional(),
+    thanks_pause_text: z.string().max(500).nullable().optional(),
+    email_subject: z.string().max(200).nullable().optional(),
+    email_body: z.string().max(4000).nullable().optional(),
+    whatsapp_text: z.string().max(1024).nullable().optional(),
+    // Meta caps cta_url display_text at 20 characters.
+    whatsapp_button_text: z.string().max(20).nullable().optional(),
+    whatsapp_template_name: z.string().max(512).nullable().optional(),
+    cancel_confirmation_text: z.string().max(500).nullable().optional(),
+    pause_confirmation_text: z.string().max(500).nullable().optional(),
+    saved_confirmation_text: z.string().max(500).nullable().optional(),
+    confirmation_template_cancel: z.string().max(512).nullable().optional(),
+    confirmation_template_pause: z.string().max(512).nullable().optional(),
+    confirmation_template_saved: z.string().max(512).nullable().optional(),
+    public_base_url: z.string().url().max(512).nullable().optional()
+      .or(z.literal('').transform(() => null)),
+  }).nullable().optional(),
 })
+
+// CANCEL-FORM.2 — trim every string in the cancellation_form block, null the
+// blanks, and drop reason labels that are blank (so the resolver falls back
+// per code). Numbers and booleans pass through as validated.
+function buildCancellationFormBlock(cf) {
+  if (!cf || typeof cf !== 'object') return null
+  const out = {}
+  for (const [k, v] of Object.entries(cf)) {
+    if (k === 'reason_labels') {
+      const labels = {}
+      for (const [code, label] of Object.entries(v || {})) {
+        const t = typeof label === 'string' ? label.trim() : ''
+        if (t) labels[code] = t
+      }
+      out.reason_labels = labels
+    } else if (typeof v === 'string') {
+      out[k] = v.trim() || null
+    } else {
+      out[k] = v ?? null
+    }
+  }
+  return out
+}
 
 /**
  * Build the object persisted at locations.settings.customer_agent from
  * validated PUT data. Pure — the route owns the DB read/merge/write.
  *
- * `social_enabled` is deliberately NOT here: it lives top-level on
- * locations.settings as a sibling of customer_agent, and the route writes it
- * separately. It is the only documented exception to schema⊆blob.
+ * `social_enabled` and `glofox_auto_cancel` are deliberately NOT here: the
+ * first lives top-level on locations.settings as a sibling of customer_agent,
+ * the second is the locations.glofox_auto_cancel_memberships column (mig 584).
+ * The route writes both separately; they are the only documented exceptions
+ * to schema⊆blob.
  *
  * @param {object} data  SettingsSchema-parsed body
  * @returns {object} the customer_agent blob
@@ -197,5 +258,6 @@ export function buildCustomerAgentSettings(data = {}) {
     monthly_points_target: data.monthly_points_target ?? null,
     effort: data.effort || null,
     handoff_after_verify_failures: data.handoff_after_verify_failures ?? null,
+    cancellation_form: buildCancellationFormBlock(data.cancellation_form),
   }
 }
