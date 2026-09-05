@@ -7,9 +7,10 @@ import { email, phone, leadSourceSchema, MANAGER_ROLES } from '@/lib/schemas'
 import { triggerSequencesForTagsAdded } from '@/lib/sequences'
 import { getCurrentUser } from '@/lib/auth'
 import { redactWhatsAppForContact, redactInBodyForContact, getContactImpact } from '@/lib/contact-merge'
+import { redactMailForContact } from '@/lib/contact-mail-erasure'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 import { emailStatusResetForAddressChange } from '@/lib/email-reputation'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
 
 const ContactUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -292,6 +293,22 @@ export async function DELETE(_request, props) {
   // be found by contact_id). Best-effort, same posture as the WA scrub.
   await redactInBodyForContact(db, params.id)
 
+  // MAIL-GDPR.1: the mail FKs (email_tickets, email_inbox_messages) are SET
+  // NULL too, so tickets kept the requester's name + address and every message
+  // kept its body — orphaned, unfindable once the FK nulled. Same doctrine as
+  // the two scrubs above (anonymise in place, best-effort, delete proceeds),
+  // with one difference: this scrub RETURNS its failures instead of losing
+  // them, and they go back to the operator as `scrub_warnings`. Failing closed
+  // was considered and rejected for consistency — see the PR — so a partial
+  // is reported, never a reason to refuse the erasure.
+  let mailScrub
+  try {
+    mailScrub = await redactMailForContact(db, params.id)
+  } catch (e) {
+    logError('contacts.DELETE', `mail scrub threw for ${params.id}`, { err: e })
+    mailScrub = { ok: false, failures: [{ table: 'mail', op: 'scrub', message: e?.message || String(e) }] }
+  }
+
   const { error } = await db.from('contacts').delete().eq('id', params.id)
   if (error) {
     // DELBLOCK.1 — KEPT as the backstop. The check above is a guard, not a
@@ -304,5 +321,10 @@ export async function DELETE(_request, props) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   }
 
+  // Byte-identical response on a clean scrub; the warnings key appears only
+  // when there is something for the operator to act on.
+  if (mailScrub.failures.length > 0) {
+    return NextResponse.json({ success: true, data: { scrub_warnings: mailScrub.failures } })
+  }
   return NextResponse.json({ success: true })
 }

@@ -33,6 +33,7 @@ import CommsFrequencyCapCard from '@/components/settings/CommsFrequencyCapCard'
 import GeofenceAttendanceCard from '@/components/settings/GeofenceAttendanceCard'
 import SendQuietHoursCard from '@/components/settings/SendQuietHoursCard'
 import EmailCopyCard from '@/components/settings/EmailCopyCard'
+import EmailSpamFilterCard from '@/components/settings/EmailSpamFilterCard'
 
 export const dynamic = 'force-dynamic'
 
@@ -214,6 +215,9 @@ export default async function EditLocationPage(props) {
           <SendQuietHoursCard locationId={location.id} />
           {/* K7 — recipient-facing broadcast copy, operator-editable. */}
           <EmailCopyCard locationId={location.id} />
+          {/* MAIL-SPAM.1 — inbound spam threshold (mig 584). Comms config
+              with no credentials, so Details rather than Integrations. */}
+          <EmailSpamFilterCard locationId={location.id} />
           {/* GEO-ATT.5 — mobile geofence attendance config (mig 463).
               Coordinates + radius + the permission-gate copy staff see
               in the mobile app. */}

@@ -130,6 +130,35 @@ describe('GET /api/email/mail/[id]/related', () => {
     expect(body.data.related).toEqual([])
   })
 
+  // MAIL-SPAM.1 review — relatedness never crosses the quarantine flag. The
+  // picker merges related → current, so a live anchor offering a quarantined
+  // candidate would let a merge fold spam INTO a member's thread, and a spam
+  // anchor offering the sender's live thread would fold that thread into the
+  // spam ticket — where the 30-day purge deletes it. The nudge's open_count
+  // follows the same scope, so "N other open conversations" never counts mail
+  // the operator cannot see from where they are standing.
+  it('a LIVE anchor never lists or counts the sender’s quarantined threads', async () => {
+    setupDb(mailState({ tickets: [
+      { ...T_STUDIO },
+      related(),
+      related({ id: 'dddddddd-0000-4000-8000-000000000005', is_spam: true, spam_flagged_at: '2026-08-28T10:00:00Z' }),
+    ] }))
+    const { body } = await call()
+    expect(body.data.related.map(r => r.id)).toEqual(['dddddddd-0000-4000-8000-000000000001'])
+    expect(body.data.open_count).toBe(1)
+  })
+
+  it('a QUARANTINED anchor lists only the sender’s other quarantined threads, never a live one', async () => {
+    setupDb(mailState({ tickets: [
+      { ...T_STUDIO, is_spam: true, spam_flagged_at: '2026-08-28T10:00:00Z' },
+      related(),
+      related({ id: 'dddddddd-0000-4000-8000-000000000005', is_spam: true, spam_flagged_at: '2026-08-28T10:00:00Z' }),
+    ] }))
+    const { body } = await call()
+    expect(body.data.related.map(r => r.id)).toEqual(['dddddddd-0000-4000-8000-000000000005'])
+    expect(body.data.open_count).toBe(1)
+  })
+
   it('respects the caller’s mailbox grants — an invisible mailbox’s thread never appears', async () => {
     // COACH is granted studio@ only; a same-sender thread on accounts@ exists
     // but must not leak into the related list.

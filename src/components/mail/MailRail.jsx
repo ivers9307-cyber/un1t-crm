@@ -20,10 +20,14 @@
 // as an amber chip when > 0; a null count (digest in flight, or that studio
 // unreachable) renders NO chip — an unknown must never dress up as 0.
 
-import { Inbox, Clock, Archive, Circle, CircleDot } from 'lucide-react'
+import { Inbox, Clock, Archive, Send, ShieldAlert, Circle, CircleDot } from 'lucide-react'
 import { MAIL_SCOPE_ALL } from './mail-digest'
 
-const VIEW_ICONS = { inbox: Inbox, needs_reply: Clock, archived: Archive }
+// Every view has an icon. `sent` shipped without one (MAIL-SENT.1 added the
+// view and this map never learnt it — an audit item MAIL-SPAM.1 closed while
+// adding `spam`); MailRail.test pins the full set so the next view cannot
+// repeat that.
+const VIEW_ICONS = { inbox: Inbox, needs_reply: Clock, sent: Send, archived: Archive, spam: ShieldAlert }
 
 /**
  * One location tile. `aria-pressed`, not `aria-current`, for the same reason

@@ -181,6 +181,42 @@ describe('POST …/merge', () => {
   // failWrites, not `errors`: the injected-error harness fails every operation
   // on the table, which would refuse at the absorbed-merge READ above and never
   // reach the reparent this test is about.
+  // MAIL-SPAM.1 review — the picker merges related → current, so from the Spam
+  // view a live thread could be folded INTO a quarantined ticket and purged
+  // with it 30 days later. Refused at the rule, in both directions, before any
+  // write; 404 like every other canMerge refusal (the reason goes to the log).
+  it('404s on merging a LIVE ticket into a QUARANTINED one, writing nothing', async () => {
+    setupDb({ tickets: [
+      { ...T_STUDIO, is_spam: true, spam_flagged_at: '2026-08-01T00:00:00Z' },
+      { ...T_ACCOUNTS },
+    ] })
+    const res = await post(T_ACCOUNTS.id, { into: T_STUDIO.id })
+    expect(res.status).toBe(404)
+    expect(writesTo(db)).toEqual([])
+    expect(messageRow('m-src').ticket_id).toBe(T_ACCOUNTS.id)
+    expect(ticketRow(T_ACCOUNTS.id).merged_into_id ?? null).toBeNull()
+  })
+
+  it('404s on merging a QUARANTINED ticket into a LIVE one, writing nothing', async () => {
+    setupDb({ tickets: [
+      { ...T_STUDIO },
+      { ...T_ACCOUNTS, is_spam: true, spam_flagged_at: '2026-08-01T00:00:00Z' },
+    ] })
+    const res = await post(T_ACCOUNTS.id, { into: T_STUDIO.id })
+    expect(res.status).toBe(404)
+    expect(writesTo(db)).toEqual([])
+    expect(ticketRow(T_ACCOUNTS.id).merged_into_id ?? null).toBeNull()
+  })
+
+  it('merges two QUARANTINED tickets — the flag must match, not be clear', async () => {
+    setupDb({ tickets: [
+      { ...T_STUDIO, is_spam: true, spam_flagged_at: '2026-08-01T00:00:00Z' },
+      { ...T_ACCOUNTS, is_spam: true, spam_flagged_at: '2026-08-01T00:00:00Z' },
+    ] })
+    expect((await post(T_ACCOUNTS.id, { into: T_STUDIO.id })).status).toBe(200)
+    expect(ticketRow(T_ACCOUNTS.id).merged_into_id).toBe(T_STUDIO.id)
+  })
+
   it('500s without tombstoning the source when the reparent fails', async () => {
     failWrites(db, ['email_inbox_messages'])
     expect((await post(T_ACCOUNTS.id, { into: T_STUDIO.id })).status).toBe(500)

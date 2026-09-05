@@ -952,3 +952,57 @@ it('the sending studio supplies the signature line, phone and links', async () =
   expect(sent.htmlBody).toContain('href="https://un1tdublin.com/welcome/hatch-street#start"')
   expect(sent.htmlBody).not.toContain('personal.example.test')
 })
+
+// MAIL-SIGDEFAULT.1 — the studio block goes out for everyone, opted in or not.
+// Resolved against the CHOSEN mailbox's studio, through the same function the
+// composer's hint runs (resolveSendSignature).
+describe('compose — the studio block for a person who never opted in (MAIL-SIGDEFAULT.1)', () => {
+  const HATCH_WORLD = (extra = {}) => baseState({
+    grants: [GRANT_STUDIO],
+    locations: [{ id: LOC_A, name: 'UN1T Hatch Street' }],
+    companySettings: [{
+      location_id: LOC_A,
+      email_signature: {
+        phone: '(01) 574 1871',
+        links: [{ label: 'Book a class', url: 'https://un1tdublin.com/welcome/hatch-street#start' }],
+      },
+    }],
+    ...extra,
+  })
+
+  it('rich NULL, plain NULL → the studio block in text (under the separator) and html', async () => {
+    getCurrentUser.mockResolvedValue({ ...COACH, email_signature: null, email_signature_rich: null })
+    setupDb(HATCH_WORLD())
+    const res = await post(VALID)
+    expect(res.status).toBe(200)
+    const sent = sendEmail.mock.calls[0][0]
+    expect(sent.textBody).toBe(
+      `${VALID.text}\n\n-- \nUN1T Hatch Street\n(01) 574 1871\nBook a class: https://un1tdublin.com/welcome/hatch-street#start`
+    )
+    expect(sent.htmlBody).toContain('href="https://un1tdublin.com/welcome/hatch-street#start"')
+    expect(sent.htmlBody).toContain('border-top:3px solid #0f172a')
+  })
+
+  it('rich DISABLED → the studio block; the disabled personal fields never leak', async () => {
+    getCurrentUser.mockResolvedValue({
+      ...COACH,
+      email_signature: null,
+      email_signature_rich: { enabled: false, name: 'Nope', links: [{ label: 'x', url: 'https://nope.example' }] },
+    })
+    setupDb(HATCH_WORLD())
+    await post(VALID)
+    const sent = sendEmail.mock.calls[0][0]
+    expect(sent.textBody).toContain('-- \nUN1T Hatch Street\n(01) 574 1871')
+    expect(sent.htmlBody).not.toContain('Nope')
+    expect(sent.htmlBody).not.toContain('nope.example')
+  })
+
+  it('the studio with NO card: rich NULL + plain NULL appends NOTHING — no stray separator', async () => {
+    getCurrentUser.mockResolvedValue({ ...COACH, email_signature: null, email_signature_rich: null })
+    setupDb(HATCH_WORLD({ companySettings: [] }))
+    await post(VALID)
+    const sent = sendEmail.mock.calls[0][0]
+    expect(sent.textBody).toBe(VALID.text)
+    expect(sent.htmlBody).not.toContain('border-top:3px solid #0f172a')
+  })
+})

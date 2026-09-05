@@ -13,11 +13,14 @@
 // reading only `email_signature`: with the rich signature enabled and the
 // plain box empty it HID while a full block still went out, and with both set
 // it previewed the wrong text. It now resolves through the same exported
-// functions the send routes run — richSignatureFromProfile gate, then
-// renderRichSignature(effectiveRichSignature(rich, ctx)) for the sending
-// location, else the plain column — via resolveSignatureHint
+// function the send routes run — resolveSendSignature (MAIL-SIGDEFAULT.1:
+// the personal rich block when enabled, else the STUDIO block wherever the
+// sending studio has configured one, with the plain column as the sign-off
+// above it), else the plain column — via resolveSignatureHint
 // (src/lib/signature-context.js), over the signature context the
-// preferences GET carries.
+// preferences GET carries. Since MAIL-SIGDEFAULT.1 the hint therefore shows
+// for a person with NOTHING of their own at a studio that has a card — the
+// new hire — because that studio's block goes out on their sends.
 //
 // `locationId` IS THE SENDING CONTEXT: the ticket's location on a reply or
 // forward, the selected From mailbox's location on a compose — so switching

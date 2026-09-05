@@ -162,6 +162,50 @@ describe('MailThread — archive is the verb, in this surface’s own words', ()
   })
 })
 
+// MAIL-SPAM.1 — the two spam verbs sit beside Archive on the thread header.
+// "Mark as spam" on a live conversation; "Not spam" on a quarantined one,
+// which also chips it as Spam so the operator can see WHY it is not in the
+// inbox. The flag is orthogonal to archive: a quarantined conversation still
+// offers Archive, and an archived one still offers Mark as spam.
+describe('MailThread — spam is a verb beside archive', () => {
+  it('offers Mark as spam on a live conversation, and no Spam chip', () => {
+    const onSpam = vi.fn()
+    renderThread({ onSpam })
+    expect(screen.queryByText('Spam')).toBeNull()
+    screen.getByRole('button', { name: /^Mark as spam$/ }).click()
+    expect(onSpam).toHaveBeenCalledWith(true)
+    // The other verb is not offered at the same time — two states, one button.
+    expect(screen.queryByRole('button', { name: /^Not spam$/ })).toBeNull()
+  })
+
+  it('offers Not spam on a quarantined one, chips it as Spam, and never as Needs reply', () => {
+    const onSpam = vi.fn()
+    renderThread({
+      conversation: { ...CONVERSATION, is_spam: true, spam_score: 7.2, needs_reply: false },
+      onSpam,
+    })
+    expect(screen.getByText('Spam')).toBeTruthy()
+    expect(screen.queryByText('Needs reply')).toBeNull()
+    screen.getByRole('button', { name: /^Not spam$/ }).click()
+    expect(onSpam).toHaveBeenCalledWith(false)
+    expect(screen.queryByRole('button', { name: /^Mark as spam$/ })).toBeNull()
+    // Archive is still there — the flag does not hide the lifecycle verb.
+    expect(screen.getByRole('button', { name: /^Archive$/ })).toBeTruthy()
+  })
+
+  it('is disabled while another action is saving, like archive', () => {
+    const onSpam = vi.fn()
+    renderThread({ onSpam, actionSaving: true })
+    const btn = screen.getByRole('button', { name: /^Mark as spam$/ })
+    expect(btn.disabled).toBe(true)
+  })
+
+  it('renders without onSpam (an older mounter) and the click is a no-op', () => {
+    renderThread({ onSpam: undefined })
+    expect(() => screen.getByRole('button', { name: /^Mark as spam$/ }).click()).not.toThrow()
+  })
+})
+
 describe('MailThread — read state', () => {
   it('offers Mark read while anything on the conversation is unread', () => {
     const onMarkRead = vi.fn()

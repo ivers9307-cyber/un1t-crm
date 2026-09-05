@@ -253,6 +253,9 @@ const config = [
       'src/lib/email-delivery-status.js',
       'src/lib/email-outbound-attachments-server.js',
       'src/lib/email-forward-server.js',
+      // MAIL-GDPR.1 — contact erasure's mail scrub. Writes all three mail
+      // tables + the storage counter; born clean, armed on arrival.
+      'src/lib/contact-mail-erasure.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },

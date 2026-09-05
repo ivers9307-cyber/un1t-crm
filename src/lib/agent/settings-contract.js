@@ -158,7 +158,7 @@ export const SettingsSchema = z.object({
   handoff_after_verify_failures: z.number().int().min(1).max(5).nullable().optional(),
   social_enabled: z.boolean().optional().default(false),
   // CANCEL-FORM.2 — SIBLING like social_enabled: this is the
-  // locations.glofox_auto_cancel_memberships COLUMN (mig 584), written by the
+  // locations.glofox_auto_cancel_memberships COLUMN (mig 585), written by the
   // route, never into the blob. When true, approving a membership cancellation
   // executes the Glofox cancel. Ships false.
   glofox_auto_cancel: z.boolean().optional().default(false),
@@ -219,7 +219,7 @@ function buildCancellationFormBlock(cf) {
  *
  * `social_enabled` and `glofox_auto_cancel` are deliberately NOT here: the
  * first lives top-level on locations.settings as a sibling of customer_agent,
- * the second is the locations.glofox_auto_cancel_memberships column (mig 584).
+ * the second is the locations.glofox_auto_cancel_memberships column (mig 585).
  * The route writes both separately; they are the only documented exceptions
  * to schema⊆blob.
  *

@@ -253,8 +253,161 @@ describe('effectiveRichSignature', () => {
     expect(effectiveRichSignature(PERSON, undefined)).toEqual(PERSON)
   })
 
-  it('a disabled/absent personal signature stays null-rendered whatever the studio holds', () => {
+  it('a disabled/absent personal signature is null HERE — this is the PERSONAL merge; the studio block is resolveSendSignature’s job', () => {
+    // MAIL-SIGDEFAULT.1: this helper still answers null for a non-opted-in
+    // person (it merges the studio INTO a personal signature). The studio
+    // block that now goes out regardless comes from studioRichSignature via
+    // resolveSendSignature below — never from here.
     expect(effectiveRichSignature(null, { locationSignature: HATCH })).toBeNull()
     expect(effectiveRichSignature({ enabled: false }, { locationSignature: HATCH })).toBeNull()
+  })
+})
+
+// ── MAIL-SIGDEFAULT.1 — the studio signature is on for everyone ─────────
+//
+// THE PROPERTY: resolveSendSignature is the ONE decision every send route and
+// every preview runs. The studio block renders whenever the sending studio has
+// configured one — the person's `enabled` flag governs only the PERSONAL part.
+import { resolveSendSignature, studioRichSignature } from './email-signature'
+
+describe('studioRichSignature — the studio block as a rich signature', () => {
+  const HATCH_CTX = {
+    locationName: 'UN1T Hatch Street',
+    locationSignature: {
+      phone: '(01) 574 1871',
+      links: [{ label: 'Book a class', url: 'https://un1tdublin.com/welcome/hatch-street#start' }],
+    },
+  }
+
+  it('shapes the studio card as a nameless, photo-less rich signature — studio name on the detail line', () => {
+    expect(studioRichSignature(HATCH_CTX)).toEqual({
+      enabled: true, name: '', title: '', photo_url: null,
+      note: 'UN1T Hatch Street',
+      phone: '(01) 574 1871',
+      links: [{ label: 'Book a class', url: 'https://un1tdublin.com/welcome/hatch-street#start' }],
+    })
+  })
+
+  it('phone-only and links-only cards are each "configured"', () => {
+    expect(studioRichSignature({ locationName: 'X', locationSignature: { phone: '01 1' } })?.phone).toBe('01 1')
+    expect(studioRichSignature({ locationName: 'X', locationSignature: { links: [{ label: 'a', url: 'https://a' }] } })?.links).toHaveLength(1)
+  })
+
+  it('a studio with a NAME but no card is NOT configured — null, so nothing studio-only goes out', () => {
+    expect(studioRichSignature({ locationName: 'UN1T Stillorgan', locationSignature: null })).toBeNull()
+    expect(studioRichSignature({ locationName: 'UN1T Stillorgan', locationSignature: {} })).toBeNull()
+    // A url-less link row and a whitespace phone are not a configuration.
+    expect(studioRichSignature({ locationName: 'X', locationSignature: { phone: '  ', links: [{ label: 'a', url: '' }] } })).toBeNull()
+    expect(studioRichSignature(null)).toBeNull()
+    expect(studioRichSignature(undefined)).toBeNull()
+  })
+})
+
+describe('resolveSendSignature — the one decision the sends and the previews share', () => {
+  const HATCH = {
+    phone: '(01) 574 1871',
+    links: [
+      { label: 'Book a class', url: 'https://un1tdublin.com/welcome/hatch-street#start' },
+      { label: 'Membership options', url: 'https://un1tdublin.com/welcome/hatch-street' },
+    ],
+  }
+  const HATCH_CTX = { locationName: 'UN1T Hatch Street', locationSignature: HATCH }
+  const NAMED_ONLY_CTX = { locationName: 'UN1T Stillorgan', locationSignature: null }
+  const PERSON = {
+    enabled: true, name: 'Alex Example', title: 'GM', note: 'typed',
+    phone: '+353 1 578 9401', photo_url: null,
+    links: [{ label: 'personal', url: 'https://personal.example.test' }],
+  }
+  const STUDIO_TEXT = 'UN1T Hatch Street\n(01) 574 1871\nBook a class: https://un1tdublin.com/welcome/hatch-street#start\nMembership options: https://un1tdublin.com/welcome/hatch-street'
+
+  it('a NEW HIRE (rich NULL, plain NULL) at a configured studio gets the studio block — the audit case', () => {
+    const out = resolveSendSignature({ email_signature: null, email_signature_rich: null }, HATCH_CTX)
+    expect(out).not.toBeNull()
+    expect(out.text).toBe(STUDIO_TEXT)
+    expect(out.html).toContain('border-top:3px solid #0f172a')
+    expect(out.html).toContain('(01) 574 1871')
+    expect(out.html).toContain('href="https://un1tdublin.com/welcome/hatch-street#start"')
+    // No person: no name row, no initials avatar cell.
+    expect(out.html).not.toContain('text-transform:uppercase;color:#0f172a">')
+    expect(out.html).not.toContain('background:#0f172a;color:#ffffff')
+    expect(out).toMatchObject({ hasPhoto: false, hasLinks: true })
+  })
+
+  it('personal DISABLED at a configured studio → the same studio block; the disabled fields never leak', () => {
+    const out = resolveSendSignature(
+      { email_signature: null, email_signature_rich: { ...PERSON, enabled: false } },
+      HATCH_CTX
+    )
+    expect(out.text).toBe(STUDIO_TEXT)
+    expect(out.html).not.toContain('Alex Example')
+    expect(out.html).not.toContain('personal.example.test')
+    expect(out.text).not.toContain('+353 1 578 9401')
+  })
+
+  it('personal disabled at a studio with NO card → null (the plain path / nothing) — hide still holds', () => {
+    expect(resolveSendSignature({ email_signature: null, email_signature_rich: null }, NAMED_ONLY_CTX)).toBeNull()
+    expect(resolveSendSignature({ email_signature: 'Sarah', email_signature_rich: null }, NAMED_ONLY_CTX)).toBeNull()
+    expect(resolveSendSignature({ email_signature: null, email_signature_rich: { ...PERSON, enabled: false } }, NAMED_ONLY_CTX)).toBeNull()
+  })
+
+  it('no context at all (blipped/absent location) → null for a non-opted-in person, personRich verbatim for an opted-in one', () => {
+    for (const ctx of [null, undefined, {}, { locationName: null, locationSignature: null }]) {
+      expect(resolveSendSignature({ email_signature: 'Sarah', email_signature_rich: null }, ctx)).toBeNull()
+      const own = resolveSendSignature({ email_signature: '', email_signature_rich: PERSON }, ctx)
+      expect(own.text).toBe(renderRichSignature(PERSON).text)
+    }
+  })
+
+  it('the PLAIN column is the personal sign-off ABOVE the studio block — kept, escaped, never dropped', () => {
+    const out = resolveSendSignature(
+      { email_signature: 'Sarah <Doyle>\r\nHead Coach', email_signature_rich: null },
+      HATCH_CTX
+    )
+    // Text: plain first (CRLF normalised), a blank line, then the studio lines.
+    expect(out.text).toBe(`Sarah <Doyle>\nHead Coach\n\n${STUDIO_TEXT}`)
+    // HTML: the plain sign-off escaped, BEFORE the studio table.
+    expect(out.html).toContain('Sarah &lt;Doyle&gt;')
+    expect(out.html).not.toContain('Sarah <Doyle>')
+    expect(out.html.indexOf('Sarah &lt;Doyle&gt;')).toBeLessThan(out.html.indexOf('border-top:3px solid #0f172a'))
+    // The plain block keeps its line breaks (pre-wrap), never a <br> path of its own.
+    expect(out.html).toContain('white-space:pre-wrap')
+    expect(out.html).not.toContain('<br')
+  })
+
+  it('an OPTED-IN person is byte-identical to MAIL-SIG.1/2 — and the plain column stays OUT of the rich block', () => {
+    const expected = renderRichSignature(effectiveRichSignature(PERSON, HATCH_CTX))
+    const out = resolveSendSignature({ email_signature: 'old plain', email_signature_rich: PERSON }, HATCH_CTX)
+    expect(out.text).toBe(expected.text)
+    expect(out.html).toBe(expected.html)
+    expect(out.text).not.toContain('old plain')
+    expect(out).toMatchObject({ hasPhoto: false, hasLinks: true })
+    // …and at a card-less studio the person's own phone/links stand, as before.
+    const own = resolveSendSignature({ email_signature: '', email_signature_rich: PERSON }, NAMED_ONLY_CTX)
+    expect(own.text).toBe(renderRichSignature(effectiveRichSignature(PERSON, NAMED_ONLY_CTX)).text)
+    expect(own.text).toContain('+353 1 578 9401')
+    expect(own.text).toContain('UN1T Stillorgan')
+  })
+
+  it('enabled-but-EMPTY personal rich is "no personal part": the studio block (with the plain column) goes out', () => {
+    const empty = { enabled: true, name: '', title: '', phone: '', note: '', photo_url: null, links: [] }
+    const out = resolveSendSignature({ email_signature: 'Plain Sarah', email_signature_rich: empty }, HATCH_CTX)
+    expect(out.text).toBe(`Plain Sarah\n\n${STUDIO_TEXT}`)
+    expect(resolveSendSignature({ email_signature: '', email_signature_rich: empty }, NAMED_ONLY_CTX)).toBeNull()
+  })
+
+  it('hasPhoto follows the renderer allow-list; hasLinks follows the EFFECTIVE list', () => {
+    const bucket = 'https://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/signatures/u/p.jpg'
+    expect(resolveSendSignature({ email_signature_rich: { ...PERSON, photo_url: bucket } }, HATCH_CTX).hasPhoto).toBe(true)
+    expect(resolveSendSignature({ email_signature_rich: { ...PERSON, photo_url: 'https://evil.example/x.jpg' } }, HATCH_CTX).hasPhoto).toBe(false)
+    // Studio phone only → no links anywhere.
+    const phoneOnly = { locationName: 'X', locationSignature: { phone: '01 1' } }
+    expect(resolveSendSignature({ email_signature_rich: null }, phoneOnly)).toMatchObject({ hasLinks: false, hasPhoto: false })
+    // Person opted in with no links, studio phone only → the person's (empty) list stands.
+    expect(resolveSendSignature({ email_signature_rich: { ...PERSON, links: [] } }, phoneOnly).hasLinks).toBe(false)
+  })
+
+  it('never throws on a null profile', () => {
+    expect(resolveSendSignature(null, HATCH_CTX).text).toBe(STUDIO_TEXT)
+    expect(resolveSendSignature(undefined, NAMED_ONLY_CTX)).toBeNull()
   })
 })
