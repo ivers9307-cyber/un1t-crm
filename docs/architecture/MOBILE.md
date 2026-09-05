@@ -60,6 +60,7 @@ Two distinct pipelines — **EAS Update** for JS-only changes (over-the-air, no 
 1. **EAS Workflow (recommended)** — `mobile/.eas/workflows/release.yml` defines a manually-triggered "Release" workflow that builds AND submits BOTH platforms in parallel: iOS to App Store Connect (Custom App / ABM) and Android to Google Play Internal Testing track. Trigger from expo.dev → Workflows → Run. Single click, no laptop needed, total wall-clock ~25 min (slower of the two builds). Each platform's submit job depends only on its own build so a failure on one doesn't block the other. This is the steady-state path for shipping new native releases.
 2. **CLI** — from `mobile/`:
    ```bash
+   export EXPO_APPLE_ID=<your Apple ID>   # not in eas.json (public repo, EAS-SECRET.1); without it `eas submit` prompts
    eas build --platform ios --profile production
    eas submit --platform ios --profile production --latest
    eas build --platform android --profile production
@@ -88,7 +89,7 @@ The two platforms have parallel-but-not-identical setup paths. iOS specifics fir
 - App Store Connect record created (ID `6770890839`, app name **Repset** (renamed from "CF Studio" with REBRAND.2, 2026-07-27) — the `REBRAND.1` record; the previous UN1T-CRM record `6766947870` was removed), distribution method set to **Custom App for Business or Education**, ABM org listed as recipient.
 - Privacy policy live at `crm.un1tdublin.com/privacy` (page lives at `src/app/privacy/page.js`).
 - App icons at `mobile/assets/icon.png` (iOS, 1024×1024 RGB no alpha), `adaptive-icon.png` (Android), `notification-icon.png`, `splash.png` — generated as a black/white wordmark using **Poppins Bold** as a SIL-licensed stand-in for NEXA.
-- `mobile/eas.json` `submit.production.ios` populated: `appleId`, `appleTeamId` (`535XMCT5PY`), `ascAppId` (`6770890839`).
+- `mobile/eas.json` `submit.production.ios` populated: `appleTeamId` (`535XMCT5PY`), `ascAppId` (`6770890839`). **No `appleId`** — the repo is public, so the Apple ID travels as the `EXPO_APPLE_ID` env var at submit time (eas.json schema: "Your Apple ID username (you can also set the `EXPO_APPLE_ID` env variable)"). Export it in the shell (or your shell profile / an EAS environment variable) before `eas submit`; without it the CLI prompts for it interactively, and `--non-interactive` errors. Only the local app-specific-password path reads it — the EAS Workflow submit job authenticates with the ASC API key held by the EAS credentials service and needs neither. `tests/fixture-pii.test.js` fails if the address comes back.
 
 **Per-version submission flow:**
 1. Bump `version` in `mobile/app.config.js` (semver). Use the helper:

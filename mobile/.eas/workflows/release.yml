@@ -18,6 +18,12 @@
 # whenever a NATIVE change has landed on main. JS-only changes do
 # NOT need this — they auto-ship via .github/workflows/eas-update.yml.
 #
+# Credentials note: mobile/eas.json carries NO `appleId` (EAS-SECRET.1 —
+# the repo is public). This submit job does not need one: it authenticates
+# with the ASC API key held by the EAS credentials service. A LOCAL
+# `eas submit` reads the `EXPO_APPLE_ID` env var instead and prompts if
+# it is unset — see mobile/docs/store-release-one-app.md §7.
+#
 # Pre-flight checklist:
 #   - Bump `version` in mobile/app.config.js (use `npm run version:patch`).
 #     That commit touches a PUBLISH path: mobile/app.config.js is in

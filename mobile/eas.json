@@ -41,7 +41,6 @@
   "submit": {
     "production": {
       "ios": {
-        "appleId": "richard@richardivers.com",
         "appleTeamId": "535XMCT5PY",
         "ascAppId": "6805082306"
       },
@@ -52,7 +51,6 @@
     },
     "production-legacy": {
       "ios": {
-        "appleId": "richard@richardivers.com",
         "appleTeamId": "535XMCT5PY",
         "ascAppId": "6770890839"
       }
