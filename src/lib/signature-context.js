@@ -63,14 +63,20 @@
 // resolvers are the send paths' own exported pure functions — imported, not
 // duplicated, so the preview and the send cannot drift.
 
+//
+// MAIL-SIGDEFAULT.1 — the studio signature is on for everyone. The decision
+// itself now lives in ONE exported function, resolveSendSignature
+// (email-signature.js), which the three send routes call directly and
+// resolveSignatureHint below calls for the previews: personal rich when
+// enabled, else the STUDIO block wherever the studio has configured one
+// (with the plain column as the person's sign-off above it), else the plain
+// column, else nothing. THE RULE widens accordingly: because every send may
+// now carry the studio's block, a location this module has NO entry for is
+// unresolved even for a plain-only person — null, hide — where it used to
+// show the plain column alone.
+
 import { hasPermissionForLocation } from '@/lib/permissions'
-import {
-  effectiveRichSignature,
-  renderRichSignature,
-  richSignatureFromProfile,
-  normalizeSignature,
-  isAllowedSignaturePhotoUrl,
-} from '@/lib/email-signature'
+import { resolveSendSignature, normalizeSignature } from '@/lib/email-signature'
 
 /**
  * The stated per-studio ceiling on email_mailboxes rows — mirrors
@@ -267,15 +273,17 @@ export function signatureContextFor(contexts, locationId) {
  * What a send from `locationId` would actually append for this person — the
  * composers' hint, as data.
  *
- * MIRRORS THE SEND ROUTES LINE FOR LINE (reply/compose/forward):
- *   1. richSignatureFromProfile gates on the RAW saved rich value — enabled
- *      AND renderable. An enabled-but-empty rich signature falls through to
- *      the plain column at send, so it must here too.
- *   2. The rendered text is renderRichSignature(effectiveRichSignature(
- *      rich, ctx)) — studio note/phone/links applied. With NO ctx for this
- *      location the answer is null, not personRich verbatim (THE RULE, file
- *      header): the send WILL resolve a studio, so an unresolved preview is
- *      a lie, and showing the plain column instead would be a different lie.
+ * IS THE SEND ROUTES' DECISION (reply/compose/forward), not a mirror of it:
+ *   1. With NO ctx for this location the answer is null (THE RULE, file
+ *      header): the send WILL resolve a studio there — and since
+ *      MAIL-SIGDEFAULT.1 that studio may add its own block to ANY send — so
+ *      neither personRich verbatim nor the plain column alone is a truthful
+ *      preview.
+ *   2. resolveSendSignature(prefs, ctx) — the very function the routes call
+ *      — answers the rich {text, html} block: the personal rich signature
+ *      when enabled and renderable (an enabled-but-empty one is "no personal
+ *      part", exactly as at send), else the STUDIO block wherever the studio
+ *      has configured one, with the plain column stacked above it.
  *   3. Otherwise the plain column, normalised; '' means NOTHING will be
  *      appended and the hint must not render.
  *
@@ -290,25 +298,14 @@ export function signatureContextFor(contexts, locationId) {
  */
 export function resolveSignatureHint(prefs, locationId) {
   if (!prefs) return null
-  const rich = prefs.email_signature_rich || null
-  if (richSignatureFromProfile({ email_signature_rich: rich })) {
-    const ctx = signatureContextFor(prefs.signature_contexts, locationId)
-    if (!ctx) return null
-    const effective = effectiveRichSignature(rich, ctx)
-    const rendered = renderRichSignature(effective)
-    if (rendered) {
-      return {
-        text: rendered.text,
-        rich: true,
-        // Same allow-list the renderer embeds with — a photo the renderer
-        // would refuse must not be promised by the hint.
-        hasPhoto: isAllowedSignaturePhotoUrl(effective?.photo_url),
-        // The EFFECTIVE list — the studio's links when its card defines
-        // them, else the person's own — so the suffix names what this
-        // studio's send carries, not what was typed.
-        hasLinks: (Array.isArray(effective?.links) ? effective.links : []).filter((l) => l?.url).length > 0,
-      }
-    }
+  const ctx = signatureContextFor(prefs.signature_contexts, locationId)
+  if (!ctx) return null
+  const block = resolveSendSignature(prefs, ctx)
+  if (block) {
+    // hasPhoto/hasLinks come off the same resolver — the photo only when the
+    // renderer would embed it, the links off the EFFECTIVE list — so the
+    // suffix names what this studio's send carries, not what was typed.
+    return { text: block.text, rich: true, hasPhoto: block.hasPhoto, hasLinks: block.hasLinks }
   }
   const plain = normalizeSignature(prefs.email_signature)
   return plain ? { text: plain, rich: false, hasPhoto: false, hasLinks: false } : null

@@ -5,7 +5,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, email as emailAddress } from '@/lib/schemas'
 import { sendTicketEmail, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
-import { appendSignature, richSignatureFromProfile, renderRichSignature, effectiveRichSignature } from '@/lib/email-signature'
+import { appendSignature, resolveSendSignature } from '@/lib/email-signature'
 import { normalizeEmail, pickContact, inboundPreview } from '@/lib/email-inbox'
 import { ticketSubject } from '@/lib/email-tickets'
 import { escapeLikePattern } from '@/lib/like-escape'
@@ -240,10 +240,12 @@ export async function POST(request) {
   // MAIL-SIG.2 — resolved against the SENDING studio: its line, phone and
   // links; the person's own values as fallback (loadSignatureContext is
   // best-effort and degrades, never blocks the send).
+  // MAIL-SIGDEFAULT.1 — resolveSendSignature is THE decision, shared with
+  // the /account preview and the composer hint: the personal rich block when
+  // enabled, else the STUDIO block wherever the studio has configured one
+  // (plain column above it), else null → the plain path below, unchanged.
   const sigCtx = await loadSignatureContext(db, mailbox.location_id)
-  const richSig = richSignatureFromProfile(user)
-    ? renderRichSignature(effectiveRichSignature(user.email_signature_rich, sigCtx))
-    : null
+  const richSig = resolveSendSignature(user, sigCtx)
   const outboundText = richSig
     ? appendSignature(text, richSig.text)
     : appendSignature(text, user.email_signature)
