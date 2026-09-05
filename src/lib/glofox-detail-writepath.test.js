@@ -119,6 +119,21 @@ describe('GLOFOX-DETAIL write-path — single-member payload', () => {
     expect(upd.payload.glofox_membership_type).toBe('num_classes')
   })
 
+  it('CANCEL-FORM.1: user_membership_id rides the detail write-path on create and update', async () => {
+    const db = makeDb()
+    await applyMemberSync(db, LOC, memberWithDetail({ membership: { ...memberWithDetail().membership, user_membership_id: '6a0219cfb4764c1cf687d640' } }))
+    expect(db._captured.inserts.contacts[0].glofox_user_membership_id).toBe('6a0219cfb4764c1cf687d640')
+
+    const existing = {
+      id: 'c-9', glofox_member_id: 'm-detail', email: 'detail@example.com', first_name: 'Det', last_name: 'Ail',
+      glofox_membership_status: 'credit_member', glofox_user_membership_id: null, trial_credits_remaining: null,
+    }
+    const db2 = makeDb({ existingContact: existing })
+    const res = await applyMemberSync(db2, LOC, memberWithDetail({ membership: { ...memberWithDetail().membership, user_membership_id: '6a0219cfb4764c1cf687d640' } }))
+    expect(res.changes.glofox_user_membership_id).toEqual({ from: null, to: '6a0219cfb4764c1cf687d640' })
+    expect(db2._captured.updates.find(u => u.table === 'contacts').payload.glofox_user_membership_id).toBe('6a0219cfb4764c1cf687d640')
+  })
+
   it('UPDATE: unchanged detail produces no detail diff (idempotent)', async () => {
     const existing = {
       id: 'c-2',
@@ -157,6 +172,7 @@ describe('GLOFOX-DETAIL write-path — bulk LIST payload (guard)', () => {
     expect('glofox_membership_state' in ins).toBe(false)
     expect('glofox_membership_type' in ins).toBe(false)
     expect('glofox_membership_price_cents' in ins).toBe(false)
+    expect('glofox_user_membership_id' in ins).toBe(false)
   })
 
   it('UPDATE: existing detail is preserved (no detail in changes or update)', async () => {

@@ -927,6 +927,15 @@ describe('extractMemberProfile', () => {
     expect(out.glofox_signup_answers).toEqual([{ q: 'Goal', a: 'Strength' }])
   })
 
+  it('CANCEL-FORM.1: captures the per-member user_membership_id (the id the v3.0 cancel endpoint needs)', () => {
+    expect(extractMemberProfile({ membership: { type: 'time', user_membership_id: '6a0219cfb4764c1cf687d640' } }).glofox_user_membership_id)
+      .toBe('6a0219cfb4764c1cf687d640')
+    expect(extractMemberProfile({ membership: { type: 'time' } }).glofox_user_membership_id).toBeNull()
+    expect(extractMemberProfile({ membership: { type: 'time', user_membership_id: '' } }).glofox_user_membership_id).toBeNull()
+    expect(extractMemberProfile({ membership: { type: 'time', user_membership_id: 42 } }).glofox_user_membership_id).toBeNull()
+    expect(extractMemberProfile(null).glofox_user_membership_id).toBeNull()
+  })
+
   it('falls back to catalog plan_price for a class pack (no subscription)', () => {
     const out = extractMemberProfile({ membership: { type: 'num_classes', plan_price: 20 } })
     expect(out.glofox_membership_price_cents).toBe(2000)

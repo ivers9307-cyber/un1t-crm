@@ -779,6 +779,10 @@ export function extractMemberProfile(member) {
     glofox_account_active: typeof m.active === 'boolean' ? m.active : null,
     glofox_source: typeof m.source === 'string' && m.source ? m.source : null,
     gympass_member_id: gympassMemberId,
+    // CANCEL-FORM.1 — the per-member membership INSTANCE id (distinct from
+    // the catalog membershipId); the v3.0 cancel endpoint is addressed by it.
+    glofox_user_membership_id: typeof mem.user_membership_id === 'string' && mem.user_membership_id
+      ? mem.user_membership_id : null,
   }
 }
 
@@ -1535,7 +1539,7 @@ const GLOFOX_DETAIL_KEYS = [
   'glofox_membership_expiry', 'glofox_membership_price_cents', 'glofox_billing_interval',
   'glofox_payment_method', 'glofox_account_active', 'glofox_source', 'glofox_image_url',
   'gender', 'emergency_contact', 'glofox_signup_answers', 'glofox_roaming_enabled',
-  'gympass_member_id',
+  'gympass_member_id', 'glofox_user_membership_id',
 ]
 
 // Detail keys the MEMBER owns via the champ-app profile wizard
