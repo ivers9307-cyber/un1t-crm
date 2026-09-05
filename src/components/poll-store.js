@@ -21,9 +21,25 @@
 // lives on. #1591 removed a per-tab signature memo for exactly this leak on
 // the shared front-desk Mac. A count is not per-viewer-secret the way a
 // signature is, but a signed-out screen must neither keep polling nor show
-// the previous user's number, so the store listens to the browser client's
-// `onAuthStateChange` (the event the app already emits — every sign-out path
-// goes through supabase.auth.signOut on the @supabase/ssr singleton) and:
+// the previous user's number. Two layers hold that, and it matters which one
+// is load-bearing:
+//
+// 1. THE INVARIANT — REFCOUNT TEARDOWN. `/login` and `/studio-login` are in
+//    AppShell's PUBLIC_PATHS, so AppShell renders BARE children there: the
+//    Sidebar, CommunicationsTabs and HubTabs unmount, every subscriber count
+//    hits 0, and `dropEntry` stops each clock and deletes the entry. This is
+//    what protects the shared Mac, and it holds for EVERY session kind —
+//    including PIN / `studio_session` kiosk sessions, where the browser
+//    Supabase client sees `INITIAL_SESSION` null and `signOut()` is a
+//    null→null no-op, so no auth event ever fires. Do not add a poller that
+//    outlives the shell (a root-layout badge, a portal kept mounted across
+//    /login) without re-deriving this.
+//
+// 2. BELT AND BRACES — AUTH EVICTION. For supabase-session sign-outs the
+//    store also listens to the browser client's `onAuthStateChange` (the
+//    event the app already emits — every sign-out path goes through
+//    supabase.auth.signOut on the @supabase/ssr singleton), so a component
+//    that DOES stay mounted across the sign-out still goes quiet at once:
 //   • user → null   (SIGNED_OUT)      halt every clock, drop every cached
 //                                     value and any in-flight answer, tell
 //                                     subscribers 0; keep the subscriber
@@ -35,6 +51,15 @@
 // The FIRST report only records the user: a store that treated "no session
 // yet" as a sign-out would never poll for a session the client is slow to
 // read.
+//
+// 🔴 A HALT NEVER BINDS A NEW ENTRY. A brand-new entry ALWAYS starts its
+// clock, halted or not, and a subscribe into an EMPTY Map clears the halt.
+// The halt exists for the signed-out screen's still-mounted readers; a fresh
+// mount under a server-rendered page IS a fresh viewer, and the only revival
+// the halt knows is auth-js `SIGNED_IN` — which the PIN kiosk never emits
+// (cookie-only, soft `router.replace`). Without this rule a SIGNED_OUT
+// followed by a PIN sign-in on the same tab mounted badges that read 0
+// forever. A halt with zero entries protects nothing.
 //
 // PURE FACTORY + ONE SINGLETON. createPollStore() takes its fetcher, clock and
 // visibility as inputs so poll-store.test.js can pin refcount + eviction with
@@ -137,9 +162,14 @@ export function createPollStore({
     subscribe(url, cb) {
       let entry = entries.get(url)
       if (!entry) {
+        // Every reader of the halted screen is gone — nothing left to protect.
+        if (entries.size === 0) halted = false
         entry = makeEntry(url)
         entries.set(url, entry)
-        if (!halted) entry.clock.start()
+        // A fresh entry is a fresh viewer: it polls even under a halt (header,
+        // "A HALT NEVER BINDS A NEW ENTRY"). Entries the halt stopped stay
+        // stopped until SIGNED_IN or a remount.
+        entry.clock.start()
       }
       entry.subscribers.add(cb)
       if (entry.lastValue !== undefined) cb(entry.lastValue)
@@ -184,6 +214,7 @@ export function createPollStore({
     isHalted() {
       return halted
     },
+    // test-only — never called from app code
     _resetForTests() {
       entries.forEach((entry) => entry.clock.stop())
       entries.clear()
@@ -204,10 +235,12 @@ function ensureWired() {
   document.addEventListener('visibilitychange', () => pollStore.onVisibilityChange())
   window.addEventListener('focus', () => pollStore.onFocus())
   // @supabase/ssr's createBrowserClient is a per-tab singleton, so this is
-  // the SAME client every sign-out path calls signOut() on — its SIGNED_OUT
-  // reaches here without any new event being invented. Best-effort: a
-  // context with no client (env missing, test) still polls; it just cannot
-  // evict on auth.
+  // the SAME client every supabase sign-out path calls signOut() on — its
+  // SIGNED_OUT reaches here without any new event being invented. This is
+  // the second layer only (header, "BELT AND BRACES"): a PIN kiosk session
+  // never produces an auth event here, and a context with no client (env
+  // missing, test) cannot either; both still poll, and both are still torn
+  // down by the refcount when AppShell drops the chrome on /login.
   try {
     createBrowserClient().auth.onAuthStateChange((_event, session) => {
       pollStore.setAuth(session?.user?.id ?? null)

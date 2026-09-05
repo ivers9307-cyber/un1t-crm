@@ -20,9 +20,11 @@ import clsx from 'clsx'
 import { usePolledCount } from './use-polled-count'
 
 // Hooks can't sit in the tabs.map loop, so each badge is its own component.
-// Soft convention: each badgeUrl is its own independent poller (own interval,
-// own focus listener) — keep badge tabs per hub to the few queues that
-// actually need a live count, not every tab that could theoretically have one.
+// Since MAIL-PERF.1 a badge is a subscriber on poll-store.js, not a poller:
+// badges sharing a URL (here, in the sidebar, in CommunicationsTabs) share ONE
+// visibility-gated request per cadence, and the badge unmounting is what
+// releases it. Still keep badge tabs per hub to the few queues that need a
+// live count — every distinct badgeUrl is still its own clock and request.
 function TabBadge({ url }) {
   const count = usePolledCount({ enabled: true, url })
   if (!(count > 0)) return null

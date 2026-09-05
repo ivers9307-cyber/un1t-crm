@@ -193,15 +193,54 @@ describe('createPollStore — eviction on auth change', () => {
     expect(store.isHalted()).toBe(true)
     await vi.advanceTimersByTimeAsync(10_000)
     expect(fetches).toHaveLength(1) // nothing polls for a signed-out screen
-    // A joiner while signed out is told nothing (no cached number) and
-    // starts no clock.
+    // A joiner of a HALTED entry while signed out is told nothing (no cached
+    // number) and wakes no clock — the entry's clock stays stopped. (A NEW
+    // url is a fresh viewer and does poll — pinned separately below.)
     const late = []
     store.subscribe('/a', (v) => late.push(v))
-    store.subscribe('/b', (v) => late.push(v))
     await vi.advanceTimersByTimeAsync(2000)
     expect(late).toEqual([])
     expect(fetches).toHaveLength(1)
     expect(store.subscriberCount('/a')).toBe(2)
+  })
+
+  it('a NEW url subscribed after a halt gets a running clock — a fresh mount is a fresh viewer', async () => {
+    // The kiosk shape: a supabase SIGNED_OUT halts the store, the operator
+    // walks to /studio-login, PINs in (cookie-only — the browser client
+    // never fires SIGNED_IN), and a server-rendered page for the new
+    // viewer mounts a badge. That badge must poll, not read 0 forever.
+    answers['/a'] = 2
+    store.subscribe('/a', () => {})
+    await flush()
+    store.setAuth('user-a')
+    store.setAuth(null)
+    answers['/b'] = 4
+    const seen = []
+    store.subscribe('/b', (v) => seen.push(v))
+    await flush()
+    expect(fetches.filter((u) => u === '/b')).toHaveLength(1)
+    expect(seen).toEqual([4])
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(fetches.filter((u) => u === '/b')).toHaveLength(2) // the clock is running
+    // …while the entry that was halted stays halted — its subscriber is the
+    // signed-out screen's, and only a SIGNED_IN (or a remount) revives it.
+    expect(fetches.filter((u) => u === '/a')).toHaveLength(1)
+  })
+
+  it('a halt with zero entries protects nothing: the first subscribe after every reader is gone clears it', async () => {
+    const off = store.subscribe('/a', () => {})
+    await flush()
+    store.setAuth('user-a')
+    store.setAuth(null)
+    off() // AppShell renders bare children on /login → every badge unmounts
+    expect(store.size()).toBe(0)
+    expect(store.isHalted()).toBe(true)
+    answers['/a'] = 9
+    const seen = []
+    store.subscribe('/a', (v) => seen.push(v))
+    await flush()
+    expect(store.isHalted()).toBe(false)
+    expect(seen).toEqual([9])
   })
 
   it('an in-flight answer for the signed-out user is dropped', async () => {

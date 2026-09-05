@@ -16,12 +16,22 @@
 // module is the state machine — every input (visibility, clock, timers) is
 // injected, so the tests pin the transitions rather than the DOM.
 //
-// FOCUS IS KEPT, AND DEDUPED. The old pollers refreshed on window `focus`;
-// that stays (a click back into the window is still "I'm looking now"). But
-// a tab switch fires BOTH `visibilitychange` and `focus` within the same
-// frame, which would be two fetches for one return — so a focus landing
-// within RESUME_DEDUPE_MS of a visibility resume is dropped. A focus with no
-// preceding resume (window-to-window, same tab) always ticks.
+// FOCUS IS KEPT, AND DEDUPED BOTH WAYS. The old pollers refreshed on window
+// `focus`; that stays (a click back into the window is still "I'm looking
+// now"). But a tab switch fires BOTH `visibilitychange` and `focus` within
+// the same frame, in EITHER order depending on the browser, which would be
+// two fetches for one return — so the two "return" paths share one stamp
+// (`lastReturnAt`): a focus within RESUME_DEDUPE_MS of a resume skips its
+// tick, and a resume within RESUME_DEDUPE_MS of a focus skips its immediate
+// tick (it still restarts the cadence from now). Cadence ticks do NOT stamp
+// it — a focus with no preceding return (window-to-window, same tab) always
+// ticks, however recently the clock fired.
+//
+// FOCUS RE-ARMS. fire() drops the clock when it finds the tab hidden with no
+// visibilitychange having arrived (the missed-event guard). If the return
+// then arrives as a `focus` only, onFocus re-arms the cadence as well as
+// ticking — otherwise a poller could be running with no clock until the
+// next visibilitychange.
 
 /** A focus this soon after a visibility resume is the same "return". */
 export const RESUME_DEDUPE_MS = 1000
@@ -59,7 +69,8 @@ export function createVisibleInterval({
   const cancel = (...a) => (clearI || globalThis.clearInterval)(...a)
   let timer = null
   let running = false
-  let lastResumeAt = -Infinity
+  /** When the last "return" (a visibility resume or a focus tick) landed. */
+  let lastReturnAt = -Infinity
 
   function arm() {
     if (timer === null) timer = schedule(fire, intervalMs)
@@ -78,11 +89,16 @@ export function createVisibleInterval({
     tick()
   }
 
-  /** Immediate tick, cadence restarts from now. */
+  /**
+   * Immediate tick (unless a focus just ticked for the same return), cadence
+   * restarts from now either way.
+   */
   function resume() {
-    lastResumeAt = now()
+    const t = now()
+    const sameReturn = t - lastReturnAt < RESUME_DEDUPE_MS
+    lastReturnAt = t
     disarm()
-    tick()
+    if (!sameReturn) tick()
     arm()
   }
 
@@ -105,7 +121,10 @@ export function createVisibleInterval({
     },
     onFocus() {
       if (!running || !isVisible()) return
-      if (now() - lastResumeAt < RESUME_DEDUPE_MS) return
+      arm() // no-op when armed; revives a clock fire() dropped while hidden
+      const t = now()
+      if (t - lastReturnAt < RESUME_DEDUPE_MS) return
+      lastReturnAt = t
       tick()
     },
     /** Test/inspection seam — is a clock armed right now? */

@@ -149,6 +149,39 @@ describe('createVisibleInterval — return', () => {
     expect(ticks).toBe(3)
   })
 
+  it('a visibility resume inside RESUME_DEDUPE_MS of a focus is the same return — one tick (dedupe runs both ways)', () => {
+    ctl = make()
+    ctl.start()
+    visible = false
+    ctl.onVisibilityChange()
+    visible = true
+    ctl.onFocus() // the browser delivered focus first this time
+    expect(ticks).toBe(1)
+    vi.advanceTimersByTime(RESUME_DEDUPE_MS - 1)
+    ctl.onVisibilityChange() // …and the resume lands inside the window
+    expect(ticks).toBe(1)
+    // The cadence still restarts from the resume, not from the focus.
+    vi.advanceTimersByTime(999)
+    expect(ticks).toBe(1)
+    vi.advanceTimersByTime(1)
+    expect(ticks).toBe(2)
+  })
+
+  it('a focus after the in-tick guard dropped the clock re-arms it', () => {
+    ctl = make()
+    ctl.start()
+    visible = false // visibilitychange missed…
+    vi.advanceTimersByTime(1000) // …so fire() saw hidden and disarmed
+    expect(ctl.isArmed()).toBe(false)
+    expect(ticks).toBe(0)
+    visible = true
+    ctl.onFocus() // the return arrived as a focus only
+    expect(ticks).toBe(1)
+    expect(ctl.isArmed()).toBe(true)
+    vi.advanceTimersByTime(1000)
+    expect(ticks).toBe(2)
+  })
+
   it('focus while hidden never ticks', () => {
     ctl = make()
     ctl.start()
