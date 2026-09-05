@@ -2502,6 +2502,9 @@ describe('MAIL-DEADLETTER.1 — replayInboundDeadLetter', () => {
     const res = await post(inbound())
     expect(res.status).toBe(200)
     expect((await res.json()).ticket_id).toBe('new-ticket')
+  })
+})
+
 // ═══════════════════════════════════════════════════════════════════════════
 // MAIL-SPAM.1 — spam quarantine at ingest.
 //
