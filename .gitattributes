@@ -1,0 +1,5 @@
+# docs/CHANGELOG.md: every PR inserts a row under the same table header. The
+# built-in union driver keeps both sides on a concurrent insert instead of
+# conflicting (CHANGELOG-PRKEY.1). It does NOT lift the branch-protection
+# "must be up to date" rule — that rebase + CI re-run still happens.
+docs/CHANGELOG.md merge=union
