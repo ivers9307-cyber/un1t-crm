@@ -388,27 +388,15 @@ export function unmergeConversation(ticketId, locationId) {
 // shims for bundles older than this one; nothing here may call them.
 
 /**
- * ONE studio's needs-reply count: conversations somebody wrote to us that
- * nobody has answered yet, at `locationId`, counting ONLY mailboxes the
- * caller can open — the same predicate, from the same cheap count route, as
- * the web Mail badge. The response is passed through untouched so a polling
- * caller can keep its last-known count on failure rather than flashing a
- * confident zero.
- *
- * MOBILE-MAILPARITY.1 — no longer the Mail TAB badge's source: that is the
- * estate sum below, because web's badge counts the estate. Kept as the
- * single-studio wrapper the route still answers.
- */
-export function getMailCount(locationId) {
-  return api('/api/email/mail/count', { locationId })
-}
-
-/**
- * MOBILE-MAILPARITY.1 — the Mail TAB badge's number: the ESTATE sum, via the
- * same `?scope=all` the web sidebar polls (Sidebar.jsx, MAIL-BADGE.1). Same
- * per-location email_inbox eligibility and mailbox scope as the digest,
- * summed server-side — a Hatch needs-reply badges while the phone sits on
- * Stillorgan, and a coach at two studios reads one number on both surfaces.
+ * MOBILE-MAILPARITY.1 — the Mail TAB badge's number: conversations somebody
+ * wrote to us that nobody has answered yet, counting ONLY mailboxes the
+ * caller can open, as the ESTATE sum via the same `?scope=all` the web
+ * sidebar polls (Sidebar.jsx, MAIL-BADGE.1). Same per-location email_inbox
+ * eligibility and mailbox scope as the digest, summed server-side — a Hatch
+ * needs-reply badges while the phone sits on Stillorgan, and a coach at two
+ * studios reads one number on both surfaces. (The single-studio wrapper this
+ * replaced, getMailCount(locationId), had no caller left and was removed;
+ * the per-studio tiles read fetchMailDigest.)
  *
  * Deliberately NO location header, like fetchMailDigest: scope=all resolves
  * eligibility per studio and ignores the active one. 🔴 One unanswerable

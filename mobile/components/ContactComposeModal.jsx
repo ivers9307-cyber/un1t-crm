@@ -28,7 +28,7 @@ import ContactComposer from './ContactComposer'
 import { sendContactSms, sendContactEmail } from '../lib/messaging-api'
 import { listMail, composeEmail, fetchSignatureContexts } from '../lib/email-api'
 import { defaultMailboxId, mailboxDisplay, mailboxLocationId } from '../lib/mail-compose'
-import { resolveContactEmailSend, contactEmailFooter } from '../lib/mail-sender'
+import { resolveContactEmailSend, contactEmailFooter, mailboxesFromListResult, MAILBOXES_UNAVAILABLE } from '../lib/mail-sender'
 import { resolveSignatureHint } from '../lib/signature-hint'
 
 const TITLES = { sms: 'Text', whatsapp: 'WhatsApp', email: 'Email' }
@@ -146,14 +146,21 @@ function EmailForm({ contactId, contactName, contactLocationId, contactEmail, on
   const [flash, setFlash] = useState(null)
 
   // MOBILE-MAILPARITY.1 — the caller's visible email accounts at the
-  // CONTACT'S studio, off the same list call the compose sheet uses. null =
-  // not yet answered (the footer keeps the company wording, and a send in
-  // that window deliberately takes the company path — what the footer says
-  // at tap time is what happens); [] = none usable (no connected account, or
-  // the caller lacks email_inbox / a grant there — listMail answers
-  // success:false on the 403 and that is [] here) — the company path,
-  // permanently, exactly as before this feature. Default From = the account
-  // starred Default on the studio's Email settings card, else the first.
+  // CONTACT'S studio, off the same list call the compose sheet uses. Three
+  // states, all decided by mail-sender.js off the same inputs the send uses:
+  //   null  = asked for, not yet answered → `awaiting`: Send is DISABLED and
+  //           the footer reads "Checking studio accounts…". (Review fix: a
+  //           tap in this window used to go out as the company sender — the
+  //           very bug this feature fixes, made timing-dependent.)
+  //   []    = a successful empty list: none usable (no connected account) →
+  //           the company path, permanently, exactly as before this feature.
+  //   MAILBOXES_UNAVAILABLE = the list FAILED (transport blip, route 500, or
+  //           a 403 — api() hands both back as the same envelope) → still the
+  //           company path, never blocking the operator on a blip, but the
+  //           footer names the failure instead of claiming there are no
+  //           accounts.
+  // Default From = the account starred Default on the studio's Email
+  // settings card, else the first.
   const [mailboxes, setMailboxes] = useState(null)
   const [mailboxId, setMailboxId] = useState(null)
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -163,19 +170,23 @@ function EmailForm({ contactId, contactName, contactLocationId, contactEmail, on
     let alive = true
     listMail(contactLocationId).then(res => {
       if (!alive) return
-      const boxes = res.success ? (res.mailboxes || []) : []
+      const boxes = mailboxesFromListResult(res)
       setMailboxes(boxes)
-      setMailboxId(defaultMailboxId(boxes))
-    }).catch(() => { if (alive) setMailboxes([]) })
+      setMailboxId(Array.isArray(boxes) ? defaultMailboxId(boxes) : null)
+    }).catch(() => { if (alive) setMailboxes(MAILBOXES_UNAVAILABLE) })
     // Cosmetic preview of the sign-off the compose route appends; [] on any
     // failure (fetchSignatureContexts' own posture), which simply hides it.
-    fetchSignatureContexts().then(rows => { if (alive) setSignatureContexts(rows) })
+    // api() cannot reject today; the catch is symmetry with the call above.
+    fetchSignatureContexts().then(rows => { if (alive) setSignatureContexts(rows) }).catch(() => {})
     return () => { alive = false }
   }, [contactLocationId, contactEmail])
 
   const ready = subject.trim() && text.trim()
   const route = resolveContactEmailSend({ mailboxes, mailboxId, contactEmail, contactLocationId })
-  const footer = contactEmailFooter({ mailboxes, mailboxId })
+  const footer = contactEmailFooter({ mailboxes, mailboxId, contactEmail, contactLocationId })
+  // The list is in flight: no send may leave until it answers, because the
+  // path it takes is not yet known. Never true when there is nothing to await.
+  const awaitingAccounts = route.path === 'awaiting'
   // Only on the Mail path: the company-sender fallback appends nothing, and
   // absence is the truth there (web MAILFIX-SIGTRUTH.1).
   const signatureHint = route.path === 'mail'
@@ -184,11 +195,13 @@ function EmailForm({ contactId, contactName, contactLocationId, contactEmail, on
 
   async function send() {
     if (!ready || sending) return
-    setSending(true)
-    setError(null)
     // The path is re-resolved at tap time from the same inputs the footer
     // renders from — never a captured decision from an earlier render.
     const plan = resolveContactEmailSend({ mailboxes, mailboxId, contactEmail, contactLocationId })
+    // Belt to the disabled-prop braces: an awaiting plan is not a send.
+    if (plan.path === 'awaiting') return
+    setSending(true)
+    setError(null)
     const res = plan.path === 'mail'
       ? await composeEmail({
           mailboxId: plan.mailboxId,
@@ -256,10 +269,10 @@ function EmailForm({ contactId, contactName, contactLocationId, contactEmail, on
       </Pressable>
       <Pressable
         onPress={send}
-        disabled={!ready || sending}
+        disabled={!ready || sending || awaitingAccounts}
         accessibilityRole="button"
         accessibilityLabel="Send email"
-        className={`mt-2 py-2.5 rounded-lg items-center ${ready && !sending ? 'bg-un1t-text' : 'bg-un1t-border'}`}
+        className={`mt-2 py-2.5 rounded-lg items-center ${ready && !sending && !awaitingAccounts ? 'bg-un1t-text' : 'bg-un1t-border'}`}
       >
         {sending ? <ActivityIndicator /> : <Text className="text-un1t-bg font-semibold text-sm">Send email</Text>}
       </Pressable>
@@ -271,7 +284,7 @@ function EmailForm({ contactId, contactName, contactLocationId, contactEmail, on
         <Pressable className="flex-1 bg-black/40 justify-end" onPress={() => setPickerOpen(false)}>
           <View className="bg-un1t-surface rounded-t-2xl px-4 pt-4 pb-6">
             <Text className="text-xs font-extrabold uppercase text-un1t-subtle mb-2">Send from</Text>
-            {(mailboxes || []).map(m => (
+            {(Array.isArray(mailboxes) ? mailboxes : []).filter(Boolean).map(m => (
               <Pressable
                 key={m.id}
                 onPress={() => { setMailboxId(m.id); setPickerOpen(false) }}

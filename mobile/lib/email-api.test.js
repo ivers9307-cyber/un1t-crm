@@ -23,7 +23,7 @@ import { api } from './api'
 import { supabase } from './supabase'
 import { readFileAsArrayBuffer } from './upload-bytes'
 import {
-  getTicket, getMailCount, getEstateMailCount, listMail, fetchMailDigest,
+  getTicket, getEstateMailCount, listMail, fetchMailDigest,
   archiveConversation, setConversationSeen,
   replyToTicket, composeEmail, forwardMessage, draftUuid,
   signOutboundAttachment, uploadSignedAttachment,
@@ -277,27 +277,14 @@ describe('archiveConversation / setConversationSeen', () => {
 
 // The Mail tab badge count. The endpoint exists precisely so this surface
 // never polls the whole conversation list for a number; the wrapper's job is
-// the right path + the location header, and passing failure through so the
-// poller can keep its last-known count instead of flashing a confident zero.
-describe('getMailCount', () => {
-  it('asks the cheap count route, location-scoped', async () => {
-    api.mockResolvedValue({ success: true, data: { count: 4 } })
-    const res = await getMailCount('loc-1')
-    expect(api).toHaveBeenCalledWith('/api/email/mail/count', { locationId: 'loc-1' })
-    expect(res).toEqual({ success: true, data: { count: 4 } })
-  })
-
-  it('passes a failure through untouched — the poller keeps its last count', async () => {
-    api.mockResolvedValue({ success: false, error: 'blip' })
-    const res = await getMailCount('loc-1')
-    expect(res.success).toBe(false)
-  })
-})
-
-// MOBILE-MAILPARITY.1 — the Mail TAB badge asks the same question the web
-// sidebar asks (Sidebar.jsx, MAIL-BADGE.1): the ESTATE sum via ?scope=all,
-// with NO location header, so a coach at two studios sees one number on both
-// surfaces. The parameterless single-studio wrapper above stays for the tiles.
+// the right path, and passing failure through so the poller can keep its
+// last-known count instead of flashing a confident zero.
+//
+// MOBILE-MAILPARITY.1 — it asks the same question the web sidebar asks
+// (Sidebar.jsx, MAIL-BADGE.1): the ESTATE sum via ?scope=all, with NO
+// location header, so a coach at two studios sees one number on both
+// surfaces. (The single-studio getMailCount(locationId) it replaced had no
+// caller left and was removed with its tests.)
 describe('getEstateMailCount', () => {
   it('asks the count route with scope=all and no location override — the estate, whatever studio the session is parked at', async () => {
     api.mockResolvedValue({ success: true, data: { count: 7 } })
@@ -317,7 +304,7 @@ describe('getEstateMailCount', () => {
 })
 
 // MOBILE-SIGHINT.1 — the composers' signature hint reads this. The failure
-// posture is the opposite of getMailCount's: there is nothing a caller can do
+// posture is the opposite of getEstateMailCount's: there is nothing a caller can do
 // with the error but hide a cosmetic preview, and the signature is appended
 // server-side regardless, so a blip answers [] rather than an envelope.
 describe('fetchSignatureContexts', () => {

@@ -8,17 +8,29 @@
 //   1. A usable studio account → the send IS a Mail compose: mailbox_id, the
 //      contact's address as the one recipient, the MAILBOX'S studio as the
 //      request's location. Never the company sender while an account exists.
-//   2. No account, no address, or a list not yet answered → the company path,
-//      exactly as before this feature. "Not yet answered" is null, and null
-//      must go company: what the footer says at click time is what happens.
+//   2. No account or no address → the company path, exactly as before this
+//      feature.
 //   3. A mailbox id that is NOT in the visible list never goes on the wire —
 //      the route would 404 it anyway; here it degrades to the company path
 //      rather than a refused send.
 //   4. The footer states the path truthfully: the address the member will
 //      hear from, or the company wording — never one while doing the other.
+//   5. (review fix) A list NOT YET ANSWERED is `awaiting`, not company: the
+//      modal disables Send on it, so a fast tap can never go out as the
+//      company sender because the network was slow — that timing-dependent
+//      send was the bug the feature exists to fix. Only when there is
+//      nothing to await (no contact studio or address, so the list is never
+//      asked for) does null mean company.
+//   6. (review fix) A list that FAILED to load is `unavailable`, distinct from
+//      "genuinely none" — the send still falls back to company (never block
+//      the operator on a blip) but the footer names the failure instead of
+//      claiming the studio has no accounts.
 
 import { describe, it, expect } from 'vitest'
-import { resolveContactEmailSend, contactEmailFooter, COMPANY_SENDER_FOOTER } from './mail-sender'
+import {
+  resolveContactEmailSend, contactEmailFooter, mailboxesFromListResult,
+  COMPANY_SENDER_FOOTER, AWAITING_SENDER_FOOTER, UNAVAILABLE_SENDER_FOOTER, MAILBOXES_UNAVAILABLE,
+} from './mail-sender'
 
 const STILL = 'a0000000-0000-0000-0000-000000000001'
 const HATCH = 'a0000000-0000-0000-0000-000000000002'
@@ -73,10 +85,19 @@ describe('resolveContactEmailSend — the Mail path when an account exists', () 
 })
 
 describe('resolveContactEmailSend — the company path, exactly as before', () => {
-  it('list not yet answered (null) → company; the footer said company, so the send must too', () => {
+  it('null with nothing to await (no contact studio, or no address) → company: the list is never asked for', () => {
     expect(resolveContactEmailSend({
-      mailboxes: null, mailboxId: null, contactEmail: 'sarah@example.com', contactLocationId: STILL,
+      mailboxes: null, mailboxId: null, contactEmail: 'sarah@example.com', contactLocationId: null,
     })).toEqual({ path: 'company' })
+    expect(resolveContactEmailSend({
+      mailboxes: null, mailboxId: null, contactEmail: null, contactLocationId: STILL,
+    })).toEqual({ path: 'company' })
+  })
+
+  it('the list FAILED to load → company, marked unavailable — the operator is never blocked on a blip', () => {
+    expect(resolveContactEmailSend({
+      mailboxes: MAILBOXES_UNAVAILABLE, mailboxId: null, contactEmail: 'sarah@example.com', contactLocationId: STILL,
+    })).toEqual({ path: 'company', reason: 'unavailable' })
   })
 
   it('no usable account ([]) → company', () => {
@@ -101,32 +122,106 @@ describe('resolveContactEmailSend — the company path, exactly as before', () =
   })
 })
 
+describe('resolveContactEmailSend — awaiting: the list is asked for and not yet answered', () => {
+  it('null with a contact studio AND address → awaiting, never company (the fast-tap race)', () => {
+    expect(resolveContactEmailSend({
+      mailboxes: null, mailboxId: null, contactEmail: 'sarah@example.com', contactLocationId: STILL,
+    })).toEqual({ path: 'awaiting' })
+  })
+
+  it('undefined reads as null — a modal that has not set state yet is still awaiting', () => {
+    expect(resolveContactEmailSend({
+      mailboxes: undefined, mailboxId: null, contactEmail: 'sarah@example.com', contactLocationId: STILL,
+    })).toEqual({ path: 'awaiting' })
+  })
+})
+
+describe('mailboxesFromListResult — listMail\'s answer → the modal\'s mailbox state', () => {
+  it('a successful list is the array, null-tolerant on the field', () => {
+    expect(mailboxesFromListResult({ success: true, mailboxes: [box()] })).toEqual([box()])
+    expect(mailboxesFromListResult({ success: true })).toEqual([])
+    expect(mailboxesFromListResult({ success: true, mailboxes: null })).toEqual([])
+  })
+
+  it('an empty successful list is GENUINELY none — [] and the plain company footer, not unavailable', () => {
+    expect(mailboxesFromListResult({ success: true, mailboxes: [] })).toEqual([])
+  })
+
+  it('a transport blip, a route failure, or no answer at all → unavailable, never a silent []', () => {
+    expect(mailboxesFromListResult({ success: false, transport: true, error: 'Network error: timeout' })).toBe(MAILBOXES_UNAVAILABLE)
+    expect(mailboxesFromListResult({ success: false, error: 'Could not search this mailbox — try again' })).toBe(MAILBOXES_UNAVAILABLE)
+    expect(mailboxesFromListResult({ success: false, status: 502, error: 'HTTP 502' })).toBe(MAILBOXES_UNAVAILABLE)
+    expect(mailboxesFromListResult(undefined)).toBe(MAILBOXES_UNAVAILABLE)
+    expect(mailboxesFromListResult(null)).toBe(MAILBOXES_UNAVAILABLE)
+  })
+
+  it('unavailable is not an array — nothing downstream may .map or .find it', () => {
+    expect(Array.isArray(MAILBOXES_UNAVAILABLE)).toBe(false)
+  })
+})
+
 describe('contactEmailFooter — says which path the send will take', () => {
+  // The footer takes the SAME inputs as the send (the modal passes all four);
+  // an account with no recipient is the company path, and reads as one.
+  const contact = { contactEmail: 'sarah@example.com', contactLocationId: STILL }
+
   it('names the address the member will hear from on the Mail path', () => {
-    expect(contactEmailFooter({ mailboxes: [box()], mailboxId: 'mb-1' })).toBe('hello@un1tdublin.com')
+    expect(contactEmailFooter({ mailboxes: [box()], mailboxId: 'mb-1', ...contact })).toBe('hello@un1tdublin.com')
   })
 
   it('falls back to the label when a mailbox has no address', () => {
-    expect(contactEmailFooter({ mailboxes: [box({ address: null })], mailboxId: 'mb-1' })).toBe('Front desk')
+    expect(contactEmailFooter({ mailboxes: [box({ address: null })], mailboxId: 'mb-1', ...contact })).toBe('Front desk')
   })
 
-  it('company wording while the list is unanswered, empty, or the id is stale', () => {
-    expect(contactEmailFooter({ mailboxes: null, mailboxId: null })).toBe(COMPANY_SENDER_FOOTER)
+  it('never names an address while the send would go company — an account but no contact address', () => {
+    expect(contactEmailFooter({ mailboxes: [box()], mailboxId: 'mb-1', contactEmail: null, contactLocationId: STILL })).toBe(COMPANY_SENDER_FOOTER)
+  })
+
+  it('company wording when the list is empty, the id is stale, or there was never anything to await', () => {
     expect(contactEmailFooter({ mailboxes: [], mailboxId: null })).toBe(COMPANY_SENDER_FOOTER)
     expect(contactEmailFooter({ mailboxes: [box()], mailboxId: 'mb-stale' })).toBe(COMPANY_SENDER_FOOTER)
+    // null with no contact studio/address: the effect never fires, so this is
+    // the permanent company path — not a spinner that never resolves.
+    expect(contactEmailFooter({ mailboxes: null, mailboxId: null })).toBe(COMPANY_SENDER_FOOTER)
+    expect(contactEmailFooter({ mailboxes: null, mailboxId: null, contactEmail: 'sarah@example.com' })).toBe(COMPANY_SENDER_FOOTER)
+  })
+
+  it('"Checking studio accounts…" while the list is asked for and unanswered — the Send button is disabled on this', () => {
+    expect(contactEmailFooter({
+      mailboxes: null, mailboxId: null, contactEmail: 'sarah@example.com', contactLocationId: STILL,
+    })).toBe(AWAITING_SENDER_FOOTER)
+    expect(AWAITING_SENDER_FOOTER).toBe('Checking studio accounts…')
+  })
+
+  it('names the failure when the list could not load, and says what will happen instead', () => {
+    expect(contactEmailFooter({
+      mailboxes: MAILBOXES_UNAVAILABLE, mailboxId: null, contactEmail: 'sarah@example.com', contactLocationId: STILL,
+    })).toBe(UNAVAILABLE_SENDER_FOOTER)
+    expect(UNAVAILABLE_SENDER_FOOTER).toBe('Couldn’t load studio accounts — will send from the company address')
   })
 
   it('footer and send agree on every input — the one claim this file exists to pin', () => {
     const cases = [
-      { mailboxes: null, mailboxId: null },
-      { mailboxes: [], mailboxId: null },
-      { mailboxes: [box()], mailboxId: 'mb-1' },
-      { mailboxes: [box()], mailboxId: 'mb-stale' },
+      { mailboxes: null, mailboxId: null, ...contact },
+      { mailboxes: undefined, mailboxId: null, ...contact },
+      { mailboxes: null, mailboxId: null, contactEmail: 'sarah@example.com', contactLocationId: null },
+      { mailboxes: MAILBOXES_UNAVAILABLE, mailboxId: null, ...contact },
+      { mailboxes: [], mailboxId: null, ...contact },
+      { mailboxes: [box()], mailboxId: 'mb-1', ...contact },
+      { mailboxes: [box()], mailboxId: 'mb-stale', ...contact },
+      { mailboxes: [box()], mailboxId: 'mb-1', contactEmail: null, contactLocationId: STILL },
     ]
     for (const c of cases) {
-      const send = resolveContactEmailSend({ ...c, contactEmail: 'sarah@example.com', contactLocationId: STILL })
+      const send = resolveContactEmailSend(c)
       const footer = contactEmailFooter(c)
-      expect(footer === COMPANY_SENDER_FOOTER).toBe(send.path === 'company')
+      if (send.path === 'mail') {
+        expect(footer).toBe('hello@un1tdublin.com')
+      } else if (send.path === 'awaiting') {
+        expect(footer).toBe(AWAITING_SENDER_FOOTER)
+      } else {
+        expect(send.path).toBe('company')
+        expect(footer).toBe(send.reason === 'unavailable' ? UNAVAILABLE_SENDER_FOOTER : COMPANY_SENDER_FOOTER)
+      }
     }
   })
 })
