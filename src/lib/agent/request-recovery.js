@@ -28,7 +28,7 @@ export const EXECUTING_KINDS = new Set([
 ])
 
 // CANCEL-FORM.5 — kinds that execute ONLY when the location opted in
-// (locations.glofox_auto_cancel_memberships, mig 584). The route decides per
+// (locations.glofox_auto_cancel_memberships, mig 585). The route decides per
 // request; when it does execute it stamps the same details.execution marker,
 // so recovery keys on the MARKER for these, never on the kind alone.
 export const CONDITIONAL_EXECUTING_KINDS = new Set(['cancellation'])

@@ -19,7 +19,7 @@ import { canMobile, canDashboard, CROSS_PLATFORM_DASHBOARD_KEYS } from '../../..
 import { registerForPushNotifications } from '../../../lib/push-register'
 import { resolveLayoutForUser } from '../../../lib/mobile-layout'
 import { getNeedsActionCount } from '../../../lib/whatsapp-api'
-import { getMailCount } from '../../../lib/email-api'
+import { getEstateMailCount } from '../../../lib/email-api'
 import { listTodaysRaces } from '../../../lib/races-api'
 import ImpersonateBanner from '../../../components/ImpersonateBanner'
 import PendingContractsBanner from '../../../components/PendingContractsBanner'
@@ -49,11 +49,16 @@ export default function TabsLayout() {
   //
   // The Email tab badge (EMAIL-BADGE-M.1) rides the cheap count route that
   // EMAIL-TICKET-CLEANUP.3 added for the web sidebar — tickets somebody
-  // wrote to us that nobody has answered yet, at the active location,
-  // counting only mailboxes this person can open. Same predicate as the
-  // queue's needs_reply view, so tapping the badge shows the rows it
-  // counted. Same 60s cadence and keep-last-count-on-failure posture as the
-  // Messages badge above it.
+  // wrote to us that nobody has answered yet, counting only mailboxes this
+  // person can open. MOBILE-MAILPARITY.1 — it counts the ESTATE (?scope=all,
+  // the same question the web sidebar asks since MAIL-BADGE.1), not the
+  // active studio: the Mail tab is the multi-location surface (tiles + All
+  // mode, MAIL-ALLLOC.1), so the badge counts exactly what the tab's All
+  // digest totals, and a Hatch needs-reply badges while the phone is parked
+  // on Stillorgan. Same 60s cadence and keep-last-count-on-failure posture
+  // as the Messages badge above it — and scope=all makes that posture
+  // load-bearing: one unanswerable studio 500s the whole sum rather than
+  // summing a confidently smaller number.
   const [needsActionCount, setNeedsActionCount] = useState(0)
   const [emailNeedsReplyCount, setEmailNeedsReplyCount] = useState(0)
   // RACE-TAB.1 — today's races at the active studio. Drives whether a
@@ -106,7 +111,8 @@ export default function TabsLayout() {
     if (!profile || !activeLocation) return
     // Only poll when the Email surface is reachable for this user — the
     // route itself answers 0 for an ineligible session, but not polling at
-    // all is cheaper than polling to learn nothing.
+    // all is cheaper than polling to learn nothing. (The tab this badge sits
+    // on is placed at the ACTIVE studio; the number on it is the estate's.)
     const { bar: barKeys, more: moreKeys } = resolveLayoutForUser(profile, activeLocation)
     if (!barKeys.includes('email') && !moreKeys.includes('email')) {
       setEmailNeedsReplyCount(0)
@@ -114,7 +120,7 @@ export default function TabsLayout() {
     }
     let cancelled = false
     async function poll() {
-      const res = await getMailCount(activeLocation.id)
+      const res = await getEstateMailCount()
       if (!cancelled && res?.success) setEmailNeedsReplyCount(res.data?.count || 0)
     }
     poll()

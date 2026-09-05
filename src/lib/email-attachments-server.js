@@ -757,6 +757,110 @@ export async function pruneMailboxAttachments(db, {
 }
 
 /**
+ * MAIL-SPAM.1 — free the bytes behind a set of messages that are about to be
+ * HARD-DELETED (the spam purge). Objects out of the bucket, the mailbox
+ * counter decremented by what was freed, and any forward elsewhere that
+ * shared one of these objects marked pruned so its chip reads "Removed to
+ * free space" instead of downloading a 404.
+ *
+ * Unlike pruneMailboxAttachments this does NOT mark the owner rows — they are
+ * CASCADE-deleted with their ticket moments later, and marking rows that are
+ * about to vanish is a write for nothing. The caller deletes the rows AFTER
+ * this returns; the rows are the only thing that names the objects, so the
+ * order is load-bearing.
+ *
+ * OWNERS ONLY free bytes (`forwarded_from_id IS NULL`, mig 501): a forward row
+ * inside the purged set shares another row's object and was never charged,
+ * so it neither removes an object nor decrements anything. If its OWNER is
+ * outside the purged set the object stays — that owner still points at it.
+ *
+ * Paged with .range() (a page of spam tickets can carry more attachment rows
+ * than one select cap). Never throws; a failed object removal is logged
+ * loudly and the counter is STILL decremented (rows and counter agree, which
+ * is what recalc would conclude; the leak is a cost line, not a correctness
+ * one).
+ *
+ * @param {object} db  service-role client
+ * @param {string[]} messageIds
+ * @returns {Promise<{ok: boolean, error?: string, removed: number, bytesFreed: number}>}
+ *   `removed` counts owner rows whose object was addressed.
+ */
+export async function purgeAttachmentsForMessages(db, messageIds) {
+  const ids = [...new Set((messageIds || []).filter(Boolean))]
+  const result = { ok: true, removed: 0, bytesFreed: 0 }
+  if (ids.length === 0) return result
+
+  const IN_CHUNK = 200
+  const PAGE = 1000
+  const owners = []
+  try {
+    for (let i = 0; i < ids.length; i += IN_CHUNK) {
+      const chunk = ids.slice(i, i + IN_CHUNK)
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await db.from('email_ticket_attachments')
+          .select('id, storage_path, size_bytes, location_id, mailbox_id, forwarded_from_id')
+          .in('message_id', chunk)
+          .not('storage_path', 'is', null)
+          .order('id', { ascending: true })
+          .range(from, from + PAGE - 1)
+        if (error) return { ...result, ok: false, error: error.message }
+        const page = data || []
+        for (const r of page) if (!r.forwarded_from_id) owners.push(r)
+        if (page.length < PAGE) break
+      }
+    }
+  } catch (err) {
+    return { ...result, ok: false, error: err?.message || 'attachment scan threw' }
+  }
+  if (owners.length === 0) return result
+
+  // Forwards ELSEWHERE that share these objects — marked before the bytes go,
+  // for the same reason pruneMailboxAttachments marks them: nothing may be
+  // left pointing at bytes that are already gone. No decrement (never charged).
+  await markForwardsOfPruned(db, owners.map(r => r.id))
+
+  // ── Remove the bytes ──────────────────────────────────────────────
+  const REMOVE_CHUNK = 100
+  const paths = owners.map(r => r.storage_path).filter(Boolean)
+  for (let i = 0; i < paths.length; i += REMOVE_CHUNK) {
+    const chunk = paths.slice(i, i + REMOVE_CHUNK)
+    try {
+      const { error: rmErr } = await db.storage.from(EMAIL_ATTACHMENT_BUCKET).remove(chunk)
+      if (rmErr) {
+        console.error(
+          '[email-attachments] SPAM PURGE LEFT OBJECTS BEHIND — their rows are about to be deleted, ' +
+          `so these objects are now unreferenced and still billable: ${chunk.join(', ')} —`, rmErr.message,
+        )
+      }
+    } catch (err) {
+      console.error('[email-attachments] spam purge object removal threw:', err?.message)
+    }
+  }
+  result.removed = owners.length
+
+  // ── Decrement, per (location, mailbox) bucket ─────────────────────
+  const byBucket = new Map()
+  for (const r of owners) {
+    const key = `${r.location_id}|${r.mailbox_id ?? ''}`
+    const cur = byBucket.get(key) || { locationId: r.location_id, mailboxId: r.mailbox_id ?? null, bytes: 0 }
+    cur.bytes += Number(r.size_bytes) || 0
+    byBucket.set(key, cur)
+  }
+  for (const b of byBucket.values()) {
+    if (b.bytes <= 0) continue
+    result.bytesFreed += b.bytes
+    const released = await addStorageBytes(db, { locationId: b.locationId, mailboxId: b.mailboxId, delta: -b.bytes })
+    if (!released.ok) {
+      console.error(
+        '[email-attachments] SPAM PURGE DID NOT DECREMENT THE COUNTER — the mailbox will read as ' +
+        `full for ${b.bytes} bytes it no longer holds (location ${b.locationId}, mailbox ${b.mailboxId}). Run Recalculate.`,
+      )
+    }
+  }
+  return result
+}
+
+/**
  * Mark every FORWARD of a just-pruned attachment as pruned too (EMAIL-FORWARD.1).
  *
  * A forwarded row shares the owner's object, so once those bytes are removed

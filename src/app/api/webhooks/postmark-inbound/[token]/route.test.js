@@ -54,7 +54,7 @@ vi.mock('@/lib/log', async () => {
   return { ...actual, logError: vi.fn((...args) => actual.logError(...args)) }
 })
 
-import { POST, maxDuration, _resetAuthRejectLatchForTests } from './route'
+import { POST, maxDuration, _resetAuthRejectLatchForTests, replayInboundDeadLetter } from './route'
 import { maybeNotifyInboundEmail } from '@/lib/email-inbound-push'
 import { logError } from '@/lib/log'
 import { createServerClient } from '@/lib/supabase'
@@ -180,6 +180,10 @@ function makeDb(state = {}) {
       case 'email_inbox_messages': return applyFilters(s.threadRows, b._filters)
       case 'email_tickets': return applyFilters(Object.values(s.tickets), b._filters)
       case 'email_ticket_attachments': return applyFilters(s.attachments, b._filters)
+      // MAIL-SPAM.1 — the per-location spam threshold. Absent by default (most
+      // studios have no company_settings row), so the route's code-side
+      // default (5.0) is what a bare fixture exercises.
+      case 'company_settings': return applyFilters(s.companySettings || [], b._filters)
       // The claim ledger, readable: the stale-claim classifier selects
       // received_at for this route's own (provider, event_id) pair.
       case 'webhook_events':
@@ -2338,5 +2342,338 @@ describe('MAILFIX-WEBHOOK.1 — auth-reject recording latch', () => {
     vi.setSystemTime(Date.now() + 31_000)
     await post(inbound(), 'junk')
     expect(insertsInto(db, 'error_events')).toHaveLength(3)
+  })
+})
+
+// ── MAIL-DEADLETTER.1 — operator replay of a dead-lettered inbound email ──
+// replayInboundDeadLetter(db, payload) re-runs THE SAME pipeline POST runs
+// (claim → classify → process → release), on the payload webhook_dead_letter
+// kept verbatim. Two things make it safe to press twice:
+//   • the dedupe claim is CLASSIFIED, not trusted — the original attempt
+//     answered 200 and kept its claim, so a replay always meets a held claim;
+//     it is stale by then (minutes to days old) and reprocesses, or the
+//     message row exists and the 23505 finish-up completes it idempotently;
+//   • in replay mode the pipeline REPORTS a dead-letter outcome instead of
+//     inserting a second morgue row — the row being replayed IS the record.
+describe('MAIL-DEADLETTER.1 — replayInboundDeadLetter', () => {
+  const CLAIM = 'inbound-email:pm-inbound-1'
+
+  function withLedgerDb(state) {
+    db = makeDb(state)
+    createServerClient.mockImplementation(() => db)
+    bindDedupeLedger(db)
+    return db
+  }
+
+  it('files a no_matching_mailbox payload once the mailbox exists — one ticket, one message, NO second morgue row', async () => {
+    // The primary use case: the row dead-lettered because accounts@hatch was
+    // not configured; the operator has since added it. The original 200 kept
+    // the dedupe claim, so the replay meets a stale one and reprocesses.
+    withLedgerDb()
+    holdClaim(db, CLAIM, 6 * 3600_000)
+
+    const out = await replayInboundDeadLetter(db, inbound())
+
+    expect(out).toMatchObject({ recorded: true, result: { ticket_id: 'new-ticket', mailbox_id: 'mb-hatch' } })
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(1)
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
+    expect(deadLetterWebhook).not.toHaveBeenCalled()
+    // A successful replay keeps its claim, like a successful POST: a stray
+    // re-delivery afterwards must still short-circuit.
+    expect(db._state.claims.has(CLAIM)).toBe(true)
+  })
+
+  it('reports recorded:false when the mailbox is STILL missing, and does not dead-letter a duplicate', async () => {
+    withLedgerDb({ mailboxes: [STILLORGAN] })
+    holdClaim(db, CLAIM, 6 * 3600_000)
+
+    const out = await replayInboundDeadLetter(db, inbound())
+
+    expect(out).toEqual({ recorded: false, reason: 'no_matching_mailbox' })
+    expect(db.inserts).toHaveLength(0)
+    expect(deadLetterWebhook).not.toHaveBeenCalled()
+  })
+
+  it('an unfixable payload (no sender) is a no-op with its reason, never a second row', async () => {
+    withLedgerDb()
+    holdClaim(db, CLAIM, 6 * 3600_000)
+    const out = await replayInboundDeadLetter(db, inbound({ From: '', FromFull: null }))
+    expect(out).toEqual({ recorded: false, reason: 'no_sender' })
+    expect(db.inserts).toHaveLength(0)
+    expect(deadLetterWebhook).not.toHaveBeenCalled()
+  })
+
+  it('a message that was ALREADY filed is reported already_filed — no duplicate ticket or message', async () => {
+    // The row describes a failure someone has since recovered from (a manual
+    // re-delivery from Postmark Activity, say). Nothing to file; the row can
+    // close as recorded, because the thing it exists to recover IS recorded.
+    const filedAt = new Date(Date.now() - 60_000).toISOString()
+    withLedgerDb({
+      threadRows: [{
+        id: 'msg-filed', ticket_id: 'T-open', location_id: 'loc-hatch',
+        postmark_message_id: 'pm-inbound-1', created_at: filedAt,
+      }],
+      tickets: {
+        // As the pipeline really files it: mailbox + requester stamped, so the
+        // stale-claim reprocess below resolves to APPEND via the subject
+        // fallback and never reaches the ticket insert. (A filed ticket that
+        // is closed/merged/renamed would take `create` and leave the orphan
+        // the route header already accepts for a Postmark re-delivery —
+        // pre-existing, not a replay behaviour.)
+        'T-open': {
+          id: 'T-open', location_id: 'loc-hatch', mailbox_id: 'mb-hatch',
+          requester_email: 'member@example.com', status: 'open', merged_into_id: null,
+          has_inbound: true, subject: 'Billing question', last_message_at: filedAt,
+        },
+      },
+    })
+
+    // Young claim → 'completed' verdict → deduped.
+    holdClaim(db, CLAIM, 5_000)
+    expect(await replayInboundDeadLetter(db, inbound())).toEqual({ recorded: true, result: { already_filed: true } })
+    // Stale claim → reprocess → 23505 on the unique index → finish-up → deduped.
+    holdClaim(db, CLAIM, 6 * 3600_000)
+    expect(await replayInboundDeadLetter(db, inbound())).toEqual({ recorded: true, result: { already_filed: true } })
+
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(0)
+    expect(db._state.threadRows.filter(r => r.postmark_message_id === 'pm-inbound-1')).toHaveLength(1)
+    // The finish-up judged the bump by state and found it done: no reopen of
+    // an already-current ticket on a replay of old mail.
+    expect(updatesTo(db, 'email_tickets').filter(u => u.payload.last_message_direction === 'inbound')).toHaveLength(0)
+  })
+
+  it('ticket exists but the message does not (died between the two inserts) → appends to that ticket; no second ticket', async () => {
+    // The orphan the route header accepts. Threading headers name no message
+    // of ours, but MAIL-REFINE.1's same-mailbox/same-sender/same-subject
+    // fallback finds the open orphan and the replay appends instead of
+    // forking. Exactly one message insert, zero ticket inserts.
+    withLedgerDb({
+      tickets: {
+        'T-orphan': {
+          id: 'T-orphan', location_id: 'loc-hatch', mailbox_id: 'mb-hatch',
+          requester_email: 'member@example.com', status: 'open', merged_into_id: null,
+          subject: 'Billing question', first_response_at: null, unread_count: 0,
+          last_message_at: '2026-08-01T00:00:00Z',
+        },
+      },
+    })
+    holdClaim(db, CLAIM, 6 * 3600_000)
+
+    const out = await replayInboundDeadLetter(db, inbound())
+
+    expect(out).toMatchObject({ recorded: true, result: { ticket_id: 'T-orphan' } })
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(0)
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
+    expect(insertsInto(db, 'email_inbox_messages')[0].payload.ticket_id).toBe('T-orphan')
+  })
+
+  it('a young in-flight claim is a no-op ("try again shortly"), not a failure, and the live owner keeps its claim', async () => {
+    withLedgerDb()
+    holdClaim(db, CLAIM, 5_000)
+    const out = await replayInboundDeadLetter(db, inbound())
+    expect(out).toEqual({ recorded: false, reason: 'claim_in_flight' })
+    expect(db.inserts).toHaveLength(0)
+    expect(db.deletes).toHaveLength(0)
+    expect(db._state.claims.has(CLAIM)).toBe(true)
+  })
+
+  it('a 5xx inside the pipeline THROWS (so the driver records a failed attempt) and gives the claim back', async () => {
+    withLedgerDb({ fail: { 'contacts:select': { message: 'db down' } } })
+    holdClaim(db, CLAIM, 6 * 3600_000)
+
+    await expect(replayInboundDeadLetter(db, inbound())).rejects.toThrow('contact_lookup_failed')
+
+    // Released, exactly as a POST 5xx releases: the next replay (or a
+    // Postmark re-delivery) genuinely re-processes.
+    expect(db._state.claims.has(CLAIM)).toBe(false)
+    // …and no dedupe_release_failed morgue row either — the row exists.
+    expect(deadLetterWebhook).not.toHaveBeenCalled()
+  })
+
+  it('a payload with no MessageID cannot be replayed (nothing to claim against)', async () => {
+    withLedgerDb()
+    const out = await replayInboundDeadLetter(db, { From: 'x@example.com' })
+    expect(out).toEqual({ recorded: false, reason: 'missing_message_id' })
+    expect(db.inserts).toHaveLength(0)
+  })
+
+  it('POST is unchanged: it still routes through the same pipeline (control)', async () => {
+    withLedgerDb()
+    const res = await post(inbound())
+    expect(res.status).toBe(200)
+    expect((await res.json()).ticket_id).toBe('new-ticket')
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MAIL-SPAM.1 — spam quarantine at ingest.
+//
+// Postmark's inbound payload carries SpamScore (SpamAssassin). Score ≥ the
+// location's threshold (default 5.0, company_settings.email_spam_threshold)
+// → the ticket is CREATED but flagged `is_spam`: no staff push, no unread
+// increment, and (by the list scope, tested elsewhere) no inbox/badge
+// presence. The score is stored on the row either way so the verdict is
+// auditable. 🔴 FAIL OPEN: a payload with no readable score is filed exactly
+// as before — a lost lead is worse than a spam ticket.
+// ═══════════════════════════════════════════════════════════════════════════
+describe('MAIL-SPAM.1 — spam quarantine at ingest', () => {
+  const HATCH_SETTINGS = (over = {}) => ({
+    location_id: 'loc-hatch', email_spam_filter_enabled: true, email_spam_threshold: 5, ...over,
+  })
+
+  it('score ≥ threshold: creates the ticket flagged spam with the score, and pings NOBODY', async () => {
+    const res = await post(inbound({ SpamScore: 7.2 }))
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json).toMatchObject({ success: true, ticket_id: 'new-ticket', quarantined: true })
+
+    const [ticket] = insertsInto(db, 'email_tickets')
+    expect(ticket.payload).toMatchObject({
+      status: 'open',
+      has_inbound: true,
+      is_spam: true,
+      spam_score: 7.2,
+      spam_verdict_source: 'ingest',
+    })
+    expect(typeof ticket.payload.spam_flagged_at).toBe('string')
+    // The message is still filed in full — quarantine, never delete.
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
+    // THE TWO BYPASSES: the unread rpc (the badge/unread path) and the push.
+    expect(db.rpcs.map(r => r.fn)).not.toContain('increment_email_ticket_unread')
+    expect(maybeNotifyInboundEmail).not.toHaveBeenCalled()
+  })
+
+  it('score exactly at the threshold is spam (≥, not >)', async () => {
+    await post(inbound({ SpamScore: 5 }))
+    expect(insertsInto(db, 'email_tickets')[0].payload.is_spam).toBe(true)
+  })
+
+  it('score < threshold: behaviour is unchanged — open ticket, unread bump, push — with the score kept for audit', async () => {
+    const res = await post(inbound({ SpamScore: 4.1 }))
+    const json = await res.json()
+    expect(json).toEqual({ success: true, ticket_id: 'new-ticket', mailbox_id: 'mb-hatch', matched_via: 'from_address' })
+    expect(json).not.toHaveProperty('quarantined')
+
+    const [ticket] = insertsInto(db, 'email_tickets')
+    expect(ticket.payload.is_spam).toBe(false)
+    expect(ticket.payload.spam_score).toBe(4.1)
+    expect(ticket.payload).not.toHaveProperty('spam_flagged_at')
+    expect(ticket.payload).not.toHaveProperty('spam_verdict_source')
+    expect(db.rpcs).toContainEqual({ fn: 'increment_email_ticket_unread', args: { p_ticket_id: 'new-ticket' } })
+    expect(maybeNotifyInboundEmail).toHaveBeenCalledTimes(1)
+  })
+
+  it('🔴 no score anywhere: NOT spam, and the insert payload is byte-for-byte what it was (fail open)', async () => {
+    const res = await post(inbound())
+    expect(await res.json()).toEqual({ success: true, ticket_id: 'new-ticket', mailbox_id: 'mb-hatch', matched_via: 'from_address' })
+    const [ticket] = insertsInto(db, 'email_tickets')
+    expect(ticket.payload).toEqual({
+      location_id: 'loc-hatch',
+      mailbox_id: 'mb-hatch',
+      contact_id: 'c-1',
+      requester_email: 'member@example.com',
+      requester_name: 'Ada Member',
+      has_inbound: true,
+      subject: 'Billing question',
+      status: 'open',
+      reopened_from: null,
+      last_message_at: expect.any(String),
+      last_message_direction: 'inbound',
+      last_message_preview: 'My direct debit bounced.',
+    })
+    expect(db.rpcs).toContainEqual({ fn: 'increment_email_ticket_unread', args: { p_ticket_id: 'new-ticket' } })
+    expect(maybeNotifyInboundEmail).toHaveBeenCalledTimes(1)
+  })
+
+  it('an unparseable SpamScore is treated as no score (fail open)', async () => {
+    await post(inbound({ SpamScore: 'n/a' }))
+    const [ticket] = insertsInto(db, 'email_tickets')
+    expect(ticket.payload).not.toHaveProperty('is_spam')
+    expect(ticket.payload).not.toHaveProperty('spam_score')
+    expect(maybeNotifyInboundEmail).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to the X-Spam-Status header when SpamScore is absent', async () => {
+    await post(inbound({
+      Headers: [
+        { Name: 'Message-ID', Value: '<inbound-1@mail.example.com>' },
+        { Name: 'X-Spam-Status', Value: 'Yes, score=8.9 required=5.0 tests=BAYES_99' },
+      ],
+    }))
+    const [ticket] = insertsInto(db, 'email_tickets')
+    expect(ticket.payload).toMatchObject({ is_spam: true, spam_score: 8.9 })
+    expect(maybeNotifyInboundEmail).not.toHaveBeenCalled()
+  })
+
+  it('respects the per-location threshold from company_settings', async () => {
+    db = makeDb({ companySettings: [HATCH_SETTINGS({ email_spam_threshold: 8 })] })
+    createServerClient.mockImplementation(() => db)
+    await post(inbound({ SpamScore: 6 }))
+    expect(insertsInto(db, 'email_tickets')[0].payload.is_spam).toBe(false)
+    expect(maybeNotifyInboundEmail).toHaveBeenCalledTimes(1)
+
+    db = makeDb({ companySettings: [HATCH_SETTINGS({ email_spam_threshold: 8 })] })
+    createServerClient.mockImplementation(() => db)
+    vi.mocked(maybeNotifyInboundEmail).mockClear()
+    await post(inbound({ MessageID: 'pm-inbound-9', SpamScore: 8.5 }))
+    expect(insertsInto(db, 'email_tickets')[0].payload.is_spam).toBe(true)
+    expect(maybeNotifyInboundEmail).not.toHaveBeenCalled()
+  })
+
+  it('another studio’s threshold does not apply here (defaults to 5.0 when this studio has no row)', async () => {
+    db = makeDb({ companySettings: [{ location_id: 'loc-stillorgan', email_spam_filter_enabled: true, email_spam_threshold: 9 }] })
+    createServerClient.mockImplementation(() => db)
+    await post(inbound({ SpamScore: 6 }))
+    expect(insertsInto(db, 'email_tickets')[0].payload.is_spam).toBe(true)
+  })
+
+  it('a disabled filter quarantines nothing', async () => {
+    db = makeDb({ companySettings: [HATCH_SETTINGS({ email_spam_filter_enabled: false })] })
+    createServerClient.mockImplementation(() => db)
+    await post(inbound({ SpamScore: 30 }))
+    const [ticket] = insertsInto(db, 'email_tickets')
+    expect(ticket.payload.is_spam).toBe(false)
+    expect(ticket.payload.spam_score).toBe(30)
+    expect(maybeNotifyInboundEmail).toHaveBeenCalledTimes(1)
+  })
+
+  it('a failed settings read falls back to the default threshold rather than 5xx-ing the email', async () => {
+    db = makeDb({ fail: { 'company_settings:select': { code: '42703', message: 'boom' } } })
+    createServerClient.mockImplementation(() => db)
+    const res = await post(inbound({ SpamScore: 6 }))
+    expect(res.status).toBe(200)
+    expect(insertsInto(db, 'email_tickets')[0].payload.is_spam).toBe(true)
+    // …and a low score with the same failure files normally.
+    db = makeDb({ fail: { 'company_settings:select': { code: '42703', message: 'boom' } } })
+    createServerClient.mockImplementation(() => db)
+    const res2 = await post(inbound({ MessageID: 'pm-inbound-10', SpamScore: 1 }))
+    expect(res2.status).toBe(200)
+    expect(insertsInto(db, 'email_tickets')[0].payload.is_spam).toBe(false)
+  })
+
+  it('a reply threading onto an already-QUARANTINED ticket stays quiet (no push, no unread)', async () => {
+    db = makeDb({
+      threadRows: [{ ticket_id: 'T-spam', created_at: '2026-08-06T08:00:00Z', location_id: 'loc-hatch', rfc_message_id: 'ours-1@mtasv.net' }],
+      tickets: { 'T-spam': { id: 'T-spam', location_id: 'loc-hatch', status: 'open', subject: 'Billing question', first_response_at: null, is_spam: true, unread_count: 0 } },
+    })
+    createServerClient.mockImplementation(() => db)
+    const res = await post(reply({ SpamScore: 1 }))
+    expect((await res.json()).ticket_id).toBe('T-spam')
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(0)
+    expect(insertsInto(db, 'email_inbox_messages')[0].payload.ticket_id).toBe('T-spam')
+    expect(db.rpcs.map(r => r.fn)).not.toContain('increment_email_ticket_unread')
+    expect(maybeNotifyInboundEmail).not.toHaveBeenCalled()
+  })
+
+  it('a high-scoring reply threading onto a LIVE ticket does not quarantine the live conversation', async () => {
+    db = makeDb({
+      threadRows: [{ ticket_id: 'T-open', created_at: '2026-08-06T08:00:00Z', location_id: 'loc-hatch', rfc_message_id: 'ours-1@mtasv.net' }],
+      tickets: { 'T-open': { id: 'T-open', location_id: 'loc-hatch', status: 'open', subject: 'Billing question', first_response_at: null, is_spam: false, unread_count: 0 } },
+    })
+    createServerClient.mockImplementation(() => db)
+    await post(reply({ SpamScore: 9 }))
+    expect(db._state.tickets['T-open'].is_spam).toBe(false)
+    expect(db.rpcs).toContainEqual({ fn: 'increment_email_ticket_unread', args: { p_ticket_id: 'T-open' } })
+    expect(maybeNotifyInboundEmail).toHaveBeenCalledTimes(1)
   })
 })

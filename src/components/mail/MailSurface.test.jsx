@@ -146,6 +146,20 @@ function stubNetwork({ conversations = [CONV_A, CONV_B], needsReplyCount = 1 } =
       })
     }
     if (u.includes('/seen')) return json({ success: true, data: { unread: 0, writeback_notice: null } })
+    // MAIL-SPAM.1 — the quarantine verb. Honoured like archive: a flagged row
+    // leaves the live list on the next read.
+    if (u.includes('/spam')) {
+      const id = u.split('/')[4]
+      const spam = !!(init?.body && JSON.parse(init.body).spam)
+      if (spam) archivedIds.add(id); else archivedIds.delete(id)
+      return json({
+        success: true,
+        data: {
+          conversation: { ...(conversations.find(c => c.id === id) || CONV_A), is_spam: spam, needs_reply: !spam },
+          notified: !spam,
+        },
+      })
+    }
     return json({ success: true, data: {} })
   }))
 }
@@ -273,6 +287,32 @@ describe('MailSurface — archiving clears the list', () => {
     await waitFor(() => expect(postsTo('/archive')).toHaveLength(1))
     expect(postsTo('/archive')[0].body).toEqual({ archived: true })
     expect(postsTo('/archive')[0].url).toBe('/api/email/mail/conv-a/archive')
+  })
+})
+
+// MAIL-SPAM.1 — the quarantine verb on the reading pane, wired to
+// POST /api/email/mail/{id}/spam with the STATE asked for. A row marked as
+// spam from the inbox leaves the list (it now belongs to the Spam view only)
+// and the operator lands on the next conversation, exactly as archive does.
+describe('MailSurface — mark as spam clears the list', () => {
+  it('posts { spam: true } to the spam route and removes the row', async () => {
+    renderSurface()
+    fireEvent.click(await screen.findByText('Membership freeze'))
+    await screen.findByText('Message on Membership freeze')
+
+    fireEvent.click(screen.getByRole('button', { name: /^Mark as spam$/ }))
+    await waitFor(() => expect(postsTo('/spam')).toHaveLength(1))
+    expect(postsTo('/spam')[0].url).toBe('/api/email/mail/conv-a/spam')
+    expect(postsTo('/spam')[0].body).toEqual({ spam: true })
+    await waitFor(() => expect(screen.queryByText('Membership freeze')).toBeNull())
+    await screen.findByText('Message on Class times')
+  })
+
+  it('the rail offers the Spam view, and it asks the route for view=spam', async () => {
+    renderSurface()
+    await screen.findByText('Membership freeze')
+    fireEvent.click(screen.getByRole('button', { name: /^Spam/ }))
+    await waitFor(() => expect(calls.some(c => c.url.includes('view=spam'))).toBe(true))
   })
 })
 

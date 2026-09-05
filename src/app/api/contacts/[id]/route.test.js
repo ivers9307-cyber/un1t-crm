@@ -24,6 +24,9 @@ vi.mock('@/lib/contact-merge', () => ({
     total_rows: 0, partial: false,
   })),
 }))
+vi.mock('@/lib/contact-mail-erasure', () => ({
+  redactMailForContact: vi.fn(async () => ({ ok: true, failures: [], tickets: 0, messages: 0, attachments: 0 })),
+}))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
 
 import { PUT, DELETE } from './route.js'
@@ -31,6 +34,7 @@ import { requireApiKeyOrManager, assertRowInOrg } from '@/lib/api-auth'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redactWhatsAppForContact, redactInBodyForContact, getContactImpact } from '@/lib/contact-merge'
+import { redactMailForContact } from '@/lib/contact-mail-erasure'
 
 function mockDb({ oldRow, updated } = {}) {
   const updateSingle = vi.fn(() =>
@@ -272,6 +276,7 @@ describe('DELETE /api/contacts/[id] — blocker check runs before any destructiv
   const noDestruction = () => {
     expect(redactWhatsAppForContact).not.toHaveBeenCalled()
     expect(redactInBodyForContact).not.toHaveBeenCalled()
+    expect(redactMailForContact).not.toHaveBeenCalled()
   }
 
   beforeEach(() => {
@@ -377,6 +382,49 @@ describe('DELETE /api/contacts/[id] — blocker check runs before any destructiv
     const delOrder = db.delete.mock.invocationCallOrder[0]
     expect(waOrder).toBeLessThan(inbodyOrder)
     expect(inbodyOrder).toBeLessThan(delOrder)
+  })
+
+  // MAIL-GDPR.1 — mail joins the scrub. The mail FKs are SET NULL, so the
+  // scrub can only find the rows while the contact row still exists: it MUST
+  // run before the DELETE, and a clean run keeps the response byte-identical.
+  it('scrubs mail BEFORE the delete, and a clean scrub leaves the response unchanged', async () => {
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+    const db = deleteDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await DELETE(new Request('http://localhost/api/contacts/c1', { method: 'DELETE' }), delProps)
+    expect(res.status).toBe(200)
+    expect(redactMailForContact).toHaveBeenCalledWith(db, 'c1')
+    expect(redactMailForContact.mock.invocationCallOrder[0]).toBeLessThan(db.delete.mock.invocationCallOrder[0])
+    expect(await res.json()).toEqual({ success: true })
+  })
+
+  it('a partial mail scrub is REPORTED in the response, not swallowed — and the delete still proceeds (WhatsApp doctrine)', async () => {
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+    const db = deleteDb()
+    createServerClient.mockReturnValue(db)
+    const failure = { table: 'email_inbox_messages', op: 'update', message: 'connection reset' }
+    redactMailForContact.mockResolvedValueOnce({ ok: false, failures: [failure], tickets: 1, messages: 3, attachments: 0 })
+
+    const res = await DELETE(new Request('http://localhost/api/contacts/c1', { method: 'DELETE' }), delProps)
+    expect(res.status).toBe(200)
+    expect(db.delete).toHaveBeenCalled()
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.data.scrub_warnings).toEqual([failure])
+  })
+
+  it('a mail scrub that THROWS is reported the same way and never blocks the erasure', async () => {
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+    const db = deleteDb()
+    createServerClient.mockReturnValue(db)
+    redactMailForContact.mockRejectedValueOnce(new Error('unexpected'))
+
+    const res = await DELETE(new Request('http://localhost/api/contacts/c1', { method: 'DELETE' }), delProps)
+    expect(res.status).toBe(200)
+    expect(db.delete).toHaveBeenCalled()
+    const body = await res.json()
+    expect(body.data.scrub_warnings).toEqual([expect.objectContaining({ table: 'mail', message: expect.stringMatching(/unexpected/) })])
   })
 
   it('master may delete a contact at any location', async () => {

@@ -276,7 +276,26 @@ export function scopeToVisibleMailboxes(query, { mailboxes, elevated }) {
  * `open` behind. Both are the operator finishing the job.
  */
 export function scopeToNeedsReply(query) {
-  return query.eq('status', 'open').eq('last_message_direction', 'inbound')
+  // MAIL-SPAM.1 — a QUARANTINED conversation never needs a reply, however
+  // open-with-an-inbound-last-message it looks. Part of the ONE definition
+  // rather than a separate scope so every consumer (list badge, nav badge,
+  // digest tile, home queue, needs_reply view) drops spam in the same edit.
+  return query.eq('status', 'open').eq('last_message_direction', 'inbound').eq('is_spam', false)
+}
+
+/**
+ * MAIL-SPAM.1 — the quarantine, as a scope. A quarantined ticket (mig 584
+ * `is_spam`) appears in EXACTLY ONE place, the `spam` view; every other view,
+ * count and search excludes it. Applied by applyView (so the digest and the
+ * scoped list agree) and by the list route's SEARCH branch, which bypasses
+ * applyView — a search from the inbox must not surface quarantined mail, and
+ * a search from the Spam view must show nothing else.
+ *
+ * Old mobile bundles never send `view=spam`, so every request they can make
+ * lands on the `is_spam = false` side by construction.
+ */
+export function scopeToSpamView(query, view) {
+  return view === 'spam' ? query.eq('is_spam', true) : query.eq('is_spam', false)
 }
 
 /**

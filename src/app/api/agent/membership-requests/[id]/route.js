@@ -74,7 +74,7 @@ export async function PATCH(request, { params }) {
   if (!v.ok) return v.response
 
   // CANCEL-FORM.5 — membership kinds read the location once: the auto-cancel
-  // toggle (a COLUMN, mig 584) and the operator's confirmation copy.
+  // toggle (a COLUMN, mig 585) and the operator's confirmation copy.
   const isMembershipKind = MEMBERSHIP_KINDS.has(row.kind)
   let locationRow = null
   if (isMembershipKind) {

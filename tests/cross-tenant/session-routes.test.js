@@ -50,6 +50,12 @@ vi.mock('@/lib/contact-merge', () => ({
     total_rows: 0, partial: false,
   })),
 }))
+// MAIL-GDPR.1 — the mail scrub runs on the DELETE path too; stubbed for the
+// same reason contact-merge is: this suite proves the tenant boundary, and the
+// scrub's own behaviour is pinned in src/lib/contact-mail-erasure.test.js.
+vi.mock('@/lib/contact-mail-erasure', () => ({
+  redactMailForContact: vi.fn(async () => ({ ok: true, failures: [], tickets: 0, messages: 0, attachments: 0 })),
+}))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/audience-filter', () => ({
   applyAudienceFilterAsync: vi.fn(async ({ query }) => ({ query })),

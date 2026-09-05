@@ -19,7 +19,8 @@
 // WHAT THIS SURFACE PUTS IN THOSE SLOTS is the whole visible difference:
 //   • statusChip — Archived, or Needs reply, or nothing. Not open/pending/
 //     solved/closed: three of those four are ceremony this surface drops.
-//   • controls   — Archive (the primary verb), plus Mark read while anything
+//   • controls   — Archive (the primary verb), Mark as spam / Not spam
+//                  (MAIL-SPAM.1), plus Mark read while anything
 //     on the conversation is unread. No four-state segmented control, no
 //     claim/release, no reassign picker, no merge.
 //   • emptyState — a conversation, not a ticket.
@@ -32,11 +33,11 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Archive, ArchiveRestore, Link2, Mail, MailOpen, X } from 'lucide-react'
+import { Archive, ArchiveRestore, Link2, Mail, MailOpen, ShieldAlert, ShieldCheck, X } from 'lucide-react'
 import { EmptyState, Modal } from '@/components/ui'
 import TicketThread from '@/components/tickets/TicketThread'
 import { requesterLabel } from '@/lib/ticket-display'
-import { isArchived, needsReply, isUnread, MAIL_SHORTCUTS } from './mail-display'
+import { isArchived, needsReply, isUnread, isSpam, MAIL_SHORTCUTS } from './mail-display'
 // MAIL-REFINE.1 (03) — relating conversations. All decisions are pure and live
 // in mail-relate.js; this file owns only the fetch lifecycle and the pixels.
 import {
@@ -62,6 +63,10 @@ export default function MailThread({
   onArchive,
   onMarkRead,
   onMarkUnread,
+  // MAIL-SPAM.1 — onSpam(true) quarantines, onSpam(false) releases ("Not
+  // spam"). Optional like the others: a mounter that never heard of the
+  // quarantine still renders, the button just does nothing.
+  onSpam,
   actionSaving = false,
   // ── MAIL-REFINE.1 (03) — the two things only the surface can do ──────
   // The nudge's "View" opens another conversation, and a completed merge (or
@@ -86,7 +91,11 @@ export default function MailThread({
   frameSize,
 }) {
   const archived = isArchived(conversation)
-  const waiting = needsReply(conversation)
+  const spam = isSpam(conversation)
+  // A quarantined conversation is never "waiting on us", whatever its status
+  // says — the server's isNeedsReply agrees, but a row from an older response
+  // may carry a stale needs_reply, so the chip judges the flag here too.
+  const waiting = needsReply(conversation) && !spam
   const unread = isUnread(conversation)
   const conversationId = conversation?.id
 
@@ -273,7 +282,13 @@ export default function MailThread({
       // handlers are not merely hidden — this surface has no way to express
       // them at all, which is what "dropping the lifecycle" has to mean.
       statusChip={
-        archived ? (
+        // MAIL-SPAM.1 — Spam wins over Archived: it is the reason the
+        // conversation is not in the inbox, and the thing Not spam undoes.
+        spam ? (
+          <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-medium text-red-700">
+            Spam
+          </span>
+        ) : archived ? (
           <span className="rounded-full bg-slate-500/10 px-2 py-0.5 text-[10px] font-medium text-slate-700">
             Archived
           </span>
@@ -286,9 +301,11 @@ export default function MailThread({
       controls={
         <MailControls
           archived={archived}
+          spam={spam}
           unread={unread}
           saving={actionSaving}
           onArchive={onArchive}
+          onSpam={onSpam}
           onMarkRead={onMarkRead}
           onMarkUnread={onMarkUnread}
         />
@@ -483,8 +500,12 @@ export default function MailThread({
  * The shortcut hint is rendered, not documented elsewhere: an undiscoverable
  * shortcut is the same as no shortcut.
  */
-function MailControls({ archived, unread, saving, onArchive, onMarkRead, onMarkUnread }) {
+function MailControls({ archived, spam, unread, saving, onArchive, onSpam, onMarkRead, onMarkUnread }) {
   const ArchiveIcon = archived ? ArchiveRestore : Archive
+  // MAIL-SPAM.1 — two states, one button, like archive. "Not spam" is the
+  // release: the conversation goes back to Inbox and the push/badge the
+  // quarantine withheld fire then. "Mark as spam" is the reverse, silently.
+  const SpamIcon = spam ? ShieldCheck : ShieldAlert
   return (
     <div className="mt-3 flex flex-wrap items-center gap-2">
       <button
@@ -495,6 +516,15 @@ function MailControls({ archived, unread, saving, onArchive, onMarkRead, onMarkU
       >
         <ArchiveIcon size={13} aria-hidden="true" />
         {archived ? 'Move back to inbox' : 'Archive'}
+      </button>
+      <button
+        type="button"
+        onClick={() => onSpam?.(!spam)}
+        disabled={saving}
+        className="inline-flex items-center gap-1.5 rounded-md border border-un1t-border px-2.5 py-1 text-xs text-un1t-subtle transition-colors hover:text-un1t-text disabled:opacity-50"
+      >
+        <SpamIcon size={13} aria-hidden="true" />
+        {spam ? 'Not spam' : 'Mark as spam'}
       </button>
       <button
         type="button"

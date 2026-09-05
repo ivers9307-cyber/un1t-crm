@@ -152,12 +152,22 @@ export function photoFileError(file) {
 export function richPreviewSrcDoc(payload) {
   const rendered = renderRichSignature({ ...payload, enabled: true })
   if (!rendered) return null
+  return previewSrcDocFromHtml(rendered.html)
+}
+
+/**
+ * MAIL-SIGDEFAULT.1 — the same email-foot shell around an ALREADY-resolved
+ * html block (resolveSendSignature's output — which may be the studio-only
+ * block, or the plain sign-off stacked over it). null for nothing.
+ */
+export function previewSrcDocFromHtml(html) {
+  if (!html) return null
   return (
     '<!doctype html><html><head><meta charset="utf-8"></head>' +
     '<body style="margin:0;padding:16px;background:#ffffff;color:#0f172a;' +
     "font-family:-apple-system,'Segoe UI',sans-serif;font-size:13px\">" +
     '<div style="color:#94a3b8">&hellip;the end of your email</div>' +
-    rendered.html +
+    html +
     '</body></html>'
   )
 }
