@@ -9,6 +9,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+// MAIL-DEADLETTER.2 — only WHEN the route calls the re-stamp matters here.
+vi.mock('@/lib/webhook-dead-letter-restamp', () => ({
+  restampOrphanInboundDeadLetters: vi.fn().mockResolvedValue({ ok: true, scanned: 0, stamped: 0 }),
+}))
 vi.mock('@/lib/auth', async () => {
   const actual = await vi.importActual('@/lib/auth')
   return { ...actual, getCurrentUser: vi.fn() }
@@ -17,6 +21,7 @@ vi.mock('@/lib/auth', async () => {
 import { PATCH } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { restampOrphanInboundDeadLetters } from '@/lib/webhook-dead-letter-restamp'
 import { makeDb, insertsInto, writesTo } from '@/app/api/email/tickets/_test-db'
 import { visibleMailboxes } from '@/lib/email-mailboxes'
 import {
@@ -231,5 +236,48 @@ describe('PATCH — surface is retired', () => {
   it('rejects a body that still tries to move an account between surfaces', async () => {
     const { res } = await patch({ surface: 'inbox' })
     expect(res.status).toBe(400)
+  })
+})
+
+// ── MAIL-DEADLETTER.2 — reactivation re-stamps orphan dead letters ───────────
+describe('PATCH — re-stamps orphan inbound dead-letter rows on REACTIVATION only (MAIL-DEADLETTER.2)', () => {
+  it('runs once on the inactive → active transition, naming the mailbox', async () => {
+    await patch(MB_STUDIO.id, { active: false })
+    expect(restampOrphanInboundDeadLetters).not.toHaveBeenCalled()
+    const { res } = await patch(MB_STUDIO.id, { active: true })
+    expect(res.status).toBe(200)
+    expect(restampOrphanInboundDeadLetters).toHaveBeenCalledTimes(1)
+    const [dbArg, ctx] = restampOrphanInboundDeadLetters.mock.calls[0]
+    expect(dbArg).toBe(db)
+    expect(ctx).toEqual({ reason: 'mailbox_reactivated', mailboxId: MB_STUDIO.id })
+  })
+
+  it('does NOT run on a rename, a default move, a deactivation, or a redundant active:true', async () => {
+    await patch(MB_STUDIO.id, { label: 'Front desk' })
+    await patch(MB_ACCOUNTS.id, { is_default: true })
+    await patch(MB_ACCOUNTS.id, { active: false })
+    // MB_STUDIO is still active here — nothing about who receives changed.
+    await patch(MB_STUDIO.id, { active: true })
+    expect(restampOrphanInboundDeadLetters).not.toHaveBeenCalled()
+  })
+
+  it('does NOT run when the reactivation is refused or fails', async () => {
+    await patch(MB_STUDIO.id, { active: false })
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    expect((await patch(MB_STUDIO.id, { active: true })).res.status).toBe(403)
+    getCurrentUser.mockResolvedValue(OWNER_A)
+    // 404 — a mailbox at another studio, and one that does not exist.
+    expect((await patch(MB_OTHER_LOCATION.id, { active: true })).res.status).toBe(404)
+    expect((await patch('no-such-mailbox', { active: true })).res.status).toBe(404)
+    expect(restampOrphanInboundDeadLetters).not.toHaveBeenCalled()
+  })
+
+  it('🔴 fail-open: a re-stamp that throws never turns the 200 into a 500', async () => {
+    await patch(MB_STUDIO.id, { active: false })
+    restampOrphanInboundDeadLetters.mockRejectedValueOnce(new Error('morgue on fire'))
+    const { res, body } = await patch(MB_STUDIO.id, { active: true })
+    expect(res.status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(rowFor(MB_STUDIO.id).active).toBe(true)
   })
 })

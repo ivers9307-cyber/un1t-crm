@@ -9,10 +9,12 @@
 // OWNER at the row's location (hasRoleAtLocation). A row with no location_id is
 // master-only — UNLESS it is an inbound email whose recipient address resolves
 // to a mailbox TODAY, in which case visibility follows where the mail WOULD
-// file (no_matching_mailbox rows are stamped NULL by design, DEADLETTER-LOC.1;
-// the operator configures the mailbox and the row still says NULL). Collection
-// routes cannot afford a per-row resolver, so they bound the QUERY to the
-// caller's owner locations instead, which excludes NULL rows outright.
+// file (no_matching_mailbox rows are stamped NULL by design, DEADLETTER-LOC.1).
+// Collection routes cannot afford a per-row resolver, so they bound the QUERY
+// to the caller's owner locations instead, which excludes NULL rows outright —
+// which is why MAIL-DEADLETTER.2 re-stamps orphan rows the moment a mailbox is
+// created or reactivated (src/lib/webhook-dead-letter-restamp.js): the
+// per-row resolver below still covers the window before that runs.
 //
 // This file lives beside the routes (the `_helpers.js` convention — see
 // src/app/api/email/tickets/_helpers.js) and is registered in

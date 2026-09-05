@@ -18,6 +18,11 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 // (un1tdublin.com, hatchstreetfitness.com) and a unit suite that quietly
 // depends on live DNS goes red the day a resolver hiccups in CI.
 vi.mock('node:dns/promises', () => ({ resolveMx: vi.fn() }))
+// MAIL-DEADLETTER.2 — the orphan re-stamp is its own lib with its own tests;
+// here only WHEN the route calls it matters.
+vi.mock('@/lib/webhook-dead-letter-restamp', () => ({
+  restampOrphanInboundDeadLetters: vi.fn().mockResolvedValue({ ok: true, scanned: 0, stamped: 0 }),
+}))
 vi.mock('@/lib/auth', async () => {
   const actual = await vi.importActual('@/lib/auth')
   return { ...actual, getCurrentUser: vi.fn() }
@@ -28,7 +33,8 @@ import { GET, POST } from './route'
 import { _resetMxCache } from '@/lib/mail/mailbox-reachability'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { makeDb, insertsInto, updatesTo, writesTo } from '@/app/api/email/tickets/_test-db'
+import { restampOrphanInboundDeadLetters } from '@/lib/webhook-dead-letter-restamp'
+import { makeDb, insertsInto, updatesTo, writesTo, failWrites } from '@/app/api/email/tickets/_test-db'
 import {
   LOC_A, LOC_B, MB_STUDIO, MB_ACCOUNTS, MB_OTHER_LOCATION,
   OWNER_A, OWNER_B, MANAGER_A, MASTER, COACH_A, adminState,
@@ -352,5 +358,57 @@ describe('GET — whether each address can actually receive', () => {
     expect(body.data.mailboxes.length).toBeGreaterThan(0)
     // Unknown, not "cannot receive": a DNS fault must never invent a fault.
     for (const m of body.data.mailboxes) expect(m.reachability?.notice ?? null).toBeNull()
+  })
+})
+
+// ── MAIL-DEADLETTER.2 — creating an account re-stamps the orphan dead letters ──
+//
+// Mail that arrived BEFORE the account existed was dead-lettered with no
+// location (no_matching_mailbox), and the org-scoped morgue hides NULL rows
+// from every owner. The create is the moment those rows become resolvable.
+describe('POST — re-stamps orphan inbound dead-letter rows (MAIL-DEADLETTER.2)', () => {
+  it('runs the re-stamp once, with the service client, AFTER a successful create', async () => {
+    const { res, body } = await post({ address: 'sales@un1tdublin.com', label: 'Sales' })
+    expect(res.status).toBe(201)
+    expect(restampOrphanInboundDeadLetters).toHaveBeenCalledTimes(1)
+    const [dbArg, ctx] = restampOrphanInboundDeadLetters.mock.calls[0]
+    expect(dbArg).toBe(db)
+    expect(ctx).toMatchObject({ reason: 'mailbox_created' })
+    // The mailbox id it names is the one the route answers with (null when
+    // the insert's returning row carries none — never undefined).
+    expect(ctx).toHaveProperty('mailboxId')
+    expect(ctx.mailboxId).toBe(body.data.mailbox?.id ?? null)
+  })
+
+  it('does NOT run when the create is refused — the gate, a clash, a bad body', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    expect((await post({ address: 'sales@un1tdublin.com', label: 'Sales' })).res.status).toBe(403)
+    getCurrentUser.mockResolvedValue(OWNER_A)
+    expect((await post({ address: MB_STUDIO.address, label: 'Dup' })).res.status).toBe(409)
+    expect((await post({ address: 'not-an-email', label: 'Bad' })).res.status).toBe(400)
+    expect(restampOrphanInboundDeadLetters).not.toHaveBeenCalled()
+  })
+
+  it('does NOT run when the insert itself fails', async () => {
+    failWrites(db, ['email_mailboxes'], ['insert'])
+    const { res } = await post({ address: 'sales@un1tdublin.com', label: 'Sales' })
+    expect(res.status).toBe(500)
+    expect(restampOrphanInboundDeadLetters).not.toHaveBeenCalled()
+  })
+
+  it('🔴 fail-open: a re-stamp that throws never turns the 201 into a 500', async () => {
+    restampOrphanInboundDeadLetters.mockRejectedValueOnce(new Error('morgue on fire'))
+    const { res, body } = await post({ address: 'sales@un1tdublin.com', label: 'Sales' })
+    expect(res.status).toBe(201)
+    expect(body.success).toBe(true)
+    expect(insertsInto(db, 'email_mailboxes')).toHaveLength(1)
+  })
+
+  it('a re-stamp that reports ok:false is not surfaced either — the create stands', async () => {
+    restampOrphanInboundDeadLetters.mockResolvedValueOnce({ ok: false, scanned: 2, stamped: 0, error: 'boom' })
+    const { res, body } = await post({ address: 'sales@un1tdublin.com', label: 'Sales' })
+    expect(res.status).toBe(201)
+    expect(body.success).toBe(true)
+    expect(body.error).toBeUndefined()
   })
 })
