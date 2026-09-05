@@ -45,7 +45,7 @@ function queueWorker(over = {}) {
 
 const BUCKET_PHOTO = 'https://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/signatures/u/p.jpg'
 
-const RICH = { enabled: true, name: 'Dean Nolan', title: 'Head Coach', phone: '087 111 2222', note: 'typed note', links: [] }
+const RICH = { enabled: true, name: 'Alex Example', title: 'Head Coach', phone: '087 111 2222', note: 'typed note', links: [] }
 
 const CONTEXTS = [
   {
@@ -377,10 +377,10 @@ describe('withEffectiveText — the server-rendered half (the mobile contract)',
     // THE LITERAL: name / title · studio / studio phone / studio link — and
     // no trace of the typed note or the person's own phone.
     expect(out[0].effective_text).toBe(
-      'Dean Nolan\nHead Coach · UN1T Stillorgan\n01 555 0001\nBook Stillorgan: https://un1t.ie/stillorgan'
+      'Alex Example\nHead Coach · UN1T Stillorgan\n01 555 0001\nBook Stillorgan: https://un1t.ie/stillorgan'
     )
     expect(out[1]).toMatchObject({ ...CONTEXTS[1], rich: true, has_photo: false, has_links: false })
-    expect(out[1].effective_text).toBe('Dean Nolan\nHead Coach · UN1T Hatch Street\n087 111 2222')
+    expect(out[1].effective_text).toBe('Alex Example\nHead Coach · UN1T Hatch Street\n087 111 2222')
   })
 
   it('a photo-only signature at a nameless studio: effective_text "" with rich:true — mobile shows the label, no text', () => {

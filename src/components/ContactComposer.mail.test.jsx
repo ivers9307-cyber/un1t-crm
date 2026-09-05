@@ -27,7 +27,7 @@ const LOCATED_MAILBOXES = MAILBOXES.map(m => ({ ...m, location_id: 'loc-hatch' }
 const RICH_PREFS = {
   landing_preference: 'auto',
   email_signature: '',
-  email_signature_rich: { enabled: true, name: 'Dean Nolan', title: 'Head Coach', phone: '087 111 2222', note: '', photo_url: null, links: [] },
+  email_signature_rich: { enabled: true, name: 'Alex Example', title: 'Head Coach', phone: '087 111 2222', note: '', photo_url: null, links: [] },
   active_location_id: 'loc-hatch',
   signature_contexts: [
     { location_id: 'loc-hatch', location_name: 'UN1T Hatch Street', studio_signature: { phone: '01 555 0002', links: [] }, has_mailbox: true },
@@ -81,7 +81,7 @@ describe('ContactComposer — signature hint', () => {
     await screen.findByRole('combobox')
     expect(await screen.findByText(/added automatically/i)).toBeTruthy()
     const pre = screen.getByText(/UN1T Hatch Street/, { selector: 'pre' })
-    expect(pre.textContent).toContain('Dean Nolan')
+    expect(pre.textContent).toContain('Alex Example')
     expect(pre.textContent).toContain('01 555 0002') // Hatch's card phone over the person's
     expect(pre.textContent).not.toContain('087 111 2222')
   })

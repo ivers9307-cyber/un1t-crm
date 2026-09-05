@@ -1471,7 +1471,7 @@ it('a rich signature rides the reply in both parts; disabled keeps plain byte-fo
   getCurrentUser.mockResolvedValue({
     ...COACH,
     email_signature: 'plain fallback',
-    email_signature_rich: { enabled: true, name: 'Dean Nolan', title: 'Head Coach' },
+    email_signature_rich: { enabled: true, name: 'Alex Example', title: 'Head Coach' },
   })
   setupDb(baseState({
     grants: [GRANT_STUDIO],
@@ -1481,8 +1481,8 @@ it('a rich signature rides the reply in both parts; disabled keeps plain byte-fo
   const res = await post(T_STUDIO.id, { text: 'Reply body' })
   expect(res.status).toBe(200)
   const sent = sendEmail.mock.calls[0][0]
-  expect(sent.textBody).toContain('-- \nDean Nolan')
+  expect(sent.textBody).toContain('-- \nAlex Example')
   expect(sent.textBody).not.toContain('plain fallback')
-  expect(sent.htmlBody).toContain('DEAN NOLAN'.length ? 'Dean Nolan' : '')
+  expect(sent.htmlBody).toContain('ALEX EXAMPLE'.length ? 'Alex Example' : '')
   expect(sent.htmlBody).toContain('border-top:3px solid #0f172a')
 })

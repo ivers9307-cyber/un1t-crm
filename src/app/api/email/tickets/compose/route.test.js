@@ -931,7 +931,7 @@ it('the sending studio supplies the signature line, phone and links', async () =
     email_signature_rich: {
       enabled: true, name: 'Richard Ivers', note: 'UN1T Dublin',
       phone: '+353 1 578 9401',
-      links: [{ label: 'personal', url: 'https://richardivers.com' }],
+      links: [{ label: 'personal', url: 'https://personal.example.test' }],
     },
   })
   setupDb(baseState({
@@ -950,5 +950,5 @@ it('the sending studio supplies the signature line, phone and links', async () =
   expect(sent.htmlBody).toContain('UN1T Hatch Street')
   expect(sent.htmlBody).toContain('(01) 574 1871')
   expect(sent.htmlBody).toContain('href="https://un1tdublin.com/welcome/hatch-street#start"')
-  expect(sent.htmlBody).not.toContain('richardivers.com')
+  expect(sent.htmlBody).not.toContain('personal.example.test')
 })

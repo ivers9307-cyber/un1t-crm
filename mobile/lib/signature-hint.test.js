@@ -88,8 +88,8 @@ describe('resolveSignatureHint — the three-value effective_text contract', () 
   })
 
   it('a plain string shows the separator block and no rich line', () => {
-    const hint = resolveSignatureHint([ctx({ effective_text: 'Dean' })], STILL)
-    expect(hint.body).toBe('-- \nDean')
+    const hint = resolveSignatureHint([ctx({ effective_text: 'Alex' })], STILL)
+    expect(hint.body).toBe('-- \nAlex')
     expect(hint.rich).toBe(false)
     expect(hint.suffix).toBeNull()
   })

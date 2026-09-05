@@ -33,15 +33,15 @@ import { HANDOFF_PREFIX, OPTIONS_PREFIX, SKIP_PREFIX } from './prompt'
 
 describe('normalisePhone / phoneMatchesAllowlist', () => {
   it('strips non-digits', () => {
-    expect(normalisePhone('+353 87 314 7675')).toBe('353873147675')
+    expect(normalisePhone('+353 87 000 0000')).toBe('353870000000')
     expect(normalisePhone(null)).toBe('')
   })
   it('matches with or without country/plus formatting', () => {
-    expect(phoneMatchesAllowlist('+353873147675', ['353873147675'])).toBe(true)
-    expect(phoneMatchesAllowlist('353873147675', ['+353 87 314 7675'])).toBe(true)
-    expect(phoneMatchesAllowlist('0873147675', ['+353873147675'])).toBe(true) // suffix match
+    expect(phoneMatchesAllowlist('+353870000000', ['353870000000'])).toBe(true)
+    expect(phoneMatchesAllowlist('353870000000', ['+353 87 000 0000'])).toBe(true)
+    expect(phoneMatchesAllowlist('0870000000', ['+353870000000'])).toBe(true) // suffix match
     expect(phoneMatchesAllowlist('353871111111', ['353872222222'])).toBe(false)
-    expect(phoneMatchesAllowlist('353873147675', [])).toBe(false)
+    expect(phoneMatchesAllowlist('353870000000', [])).toBe(false)
   })
 })
 

@@ -249,17 +249,17 @@ describe('verifyFailureHint', () => {
 })
 
 describe('pickVerifiedContact', () => {
-  const member = { id: 'm1', email: 'richard@richardivers.com', last_name: 'Ivers' }
-  const dupe = { id: 'd1', email: 'test@richardivers.com', last_name: 'Ivers' }
+  const member = { id: 'm1', email: 'taylor@example.test', last_name: 'Fixture' }
+  const dupe = { id: 'd1', email: 'test@example.test', last_name: 'Fixture' }
 
   it('LINKED: verifies against a sibling when the thread is bound to a different duplicate', () => {
     // Pool = the bound dupe (test@, no membership) + the real member (richard@).
     // Customer gives their real membership email → must resolve to the member.
-    expect(pickVerifiedContact([dupe, member], { email: 'richard@richardivers.com' }, { linked: true })).toEqual(member)
+    expect(pickVerifiedContact([dupe, member], { email: 'taylor@example.test' }, { linked: true })).toEqual(member)
   })
 
   it('LINKED: matches email case-insensitively across the pool', () => {
-    expect(pickVerifiedContact([dupe, member], { email: '  RICHARD@RICHARDIVERS.COM ' }, { linked: true })).toEqual(member)
+    expect(pickVerifiedContact([dupe, member], { email: '  TAYLOR@EXAMPLE.TEST ' }, { linked: true })).toEqual(member)
   })
 
   it('LINKED: no match when the email is on none of the sender\'s contacts', () => {
@@ -267,17 +267,17 @@ describe('pickVerifiedContact', () => {
   })
 
   it('LINKED: a single-contact pool behaves exactly like the old bound-only check', () => {
-    expect(pickVerifiedContact([member], { email: 'richard@richardivers.com' }, { linked: true })).toEqual(member)
+    expect(pickVerifiedContact([member], { email: 'taylor@example.test' }, { linked: true })).toEqual(member)
     expect(pickVerifiedContact([member], { email: 'someone@else.com' }, { linked: true })).toBeNull()
   })
 
   it('UNLINKED (email path): still requires email + surname, not email alone', () => {
-    expect(pickVerifiedContact([member], { email: 'richard@richardivers.com' }, { linked: false })).toBeNull()
-    expect(pickVerifiedContact([member], { email: 'richard@richardivers.com', last_name: 'Ivers' }, { linked: false })).toEqual(member)
+    expect(pickVerifiedContact([member], { email: 'taylor@example.test' }, { linked: false })).toBeNull()
+    expect(pickVerifiedContact([member], { email: 'taylor@example.test', last_name: 'Fixture' }, { linked: false })).toEqual(member)
   })
 
   it('UNLINKED: surname may come from the channel display name (nameHint)', () => {
-    expect(pickVerifiedContact([member], { email: 'richard@richardivers.com' }, { linked: false, nameHint: 'Richard Ivers' })).toEqual(member)
+    expect(pickVerifiedContact([member], { email: 'taylor@example.test' }, { linked: false, nameHint: 'Taylor Fixture' })).toEqual(member)
   })
 
   it('returns null on empty / non-array pool', () => {
@@ -316,10 +316,10 @@ function makeVerifyMockDb({ bound, siblings, byEmail = [], onUpdate, onIlike }) 
 }
 
 describe('executeAccountTool · verify_identity across duplicate contacts', () => {
-  const bound = { id: 'd1', email: 'test@richardivers.com', last_name: 'Ivers', wa_phone: '353873147675', phone: '0873147675' }
+  const bound = { id: 'd1', email: 'test@example.test', last_name: 'Fixture', wa_phone: '353870000000', phone: '0870000000' }
   const siblings = [
-    { id: 'd1', email: 'test@richardivers.com', last_name: 'Ivers' },
-    { id: 'm1', email: 'richard@richardivers.com', last_name: 'Ivers' },
+    { id: 'd1', email: 'test@example.test', last_name: 'Fixture' },
+    { id: 'm1', email: 'taylor@example.test', last_name: 'Fixture' },
   ]
 
   it('verifies the member and stamps the MEMBER contact, though the thread is bound to a membership-less dupe', async () => {
@@ -327,7 +327,7 @@ describe('executeAccountTool · verify_identity across duplicate contacts', () =
     const db = makeVerifyMockDb({ bound, siblings, onUpdate: (p) => { stamped = p } })
     const res = await executeAccountTool(
       'verify_identity',
-      { email: 'richard@richardivers.com', last_name: 'Ivers' },
+      { email: 'taylor@example.test', last_name: 'Fixture' },
       { db, conversationId: 'c1', conversationsTable: 'whatsapp_conversations', contactId: 'd1', locationId: 'loc1', channel: 'whatsapp' },
     )
     expect(res).toEqual({ verified: true })
@@ -339,7 +339,7 @@ describe('executeAccountTool · verify_identity across duplicate contacts', () =
     const db = makeVerifyMockDb({ bound, siblings, onUpdate: (p) => { stamped = p } })
     const res = await executeAccountTool(
       'verify_identity',
-      { email: 'attacker@evil.com', last_name: 'Ivers' },
+      { email: 'attacker@evil.com', last_name: 'Fixture' },
       { db, conversationId: 'c1', conversationsTable: 'whatsapp_conversations', contactId: 'd1', locationId: 'loc1', channel: 'whatsapp' },
     )
     expect(res.verified).toBe(false)

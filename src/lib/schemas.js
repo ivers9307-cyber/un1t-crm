@@ -37,8 +37,20 @@ export const email = z.string().email().max(320)
 // since trial leads sometimes type local numbers without country codes.
 export const phone = z.string().min(3).max(50)
 
-// HTTP(S) URL.
+// URL, ANY scheme — Zod 4's `.url()` only checks that `new URL()` parses, so
+// `javascript:` / `data:` / `ftp:` all pass. Five routes accept it today for
+// values that are never rendered as a src/href (webhook targets, message
+// links); each would need its own scheme argument, so this block is left as
+// it was. Anything the app renders into `<img src>`, `<link rel=icon>` or an
+// `href` takes `httpUrl` below.
 export const url = z.string().url().max(2000)
+
+// HYGIENE-PII.1 — URL pinned to http(s). MAILFIX-BRANDGATE.1 (#1586) noted
+// `logo_url`/`favicon_url` on the two branding PUTs validated with the
+// scheme-agnostic `.url()`, so `javascript:alert(1)` and `data:text/html,…`
+// were accepted and stored (own-studio only, low severity), then rendered.
+// Input validation only: existing rows are untouched.
+export const httpUrl = url.refine((u) => /^https?:\/\//i.test(u), 'Must be an http(s) URL')
 
 // Bare hostname like pay.example.com — no scheme, no port, no path.
 // Requires at least one dot (a public tenant domain, not a bare

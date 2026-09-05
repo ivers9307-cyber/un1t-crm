@@ -541,7 +541,7 @@ describe('messageSnippet — the collapsed line’s one-line body', () => {
 })
 
 describe('collapsedSenderLabel — who a collapsed line says wrote it', () => {
-  const TICKET = { requester_email: 'Caitlin.Thornton@flogas.ie', requester_name: 'Caitlin Thornton' }
+  const TICKET = { requester_email: 'Jordan.Sample@example.test', requester_name: 'Jordan Sample' }
 
   it('says You for our own replies — same word the row’s outbound marker uses', () => {
     expect(collapsedSenderLabel({ direction: 'outbound' }, TICKET)).toBe('You')
@@ -549,8 +549,8 @@ describe('collapsedSenderLabel — who a collapsed line says wrote it', () => {
 
   it('names the requester when the mail came from them, compared case-insensitively', () => {
     expect(collapsedSenderLabel(
-      { direction: 'inbound', from_email: 'caitlin.thornton@flogas.ie' }, TICKET
-    )).toBe('Caitlin Thornton')
+      { direction: 'inbound', from_email: 'jordan.sample@example.test' }, TICKET
+    )).toBe('Jordan Sample')
   })
 
   it('shows the raw address for anyone else — a different person must never wear the requester’s name', () => {
@@ -561,8 +561,8 @@ describe('collapsedSenderLabel — who a collapsed line says wrote it', () => {
 
   it('names a note’s author — notes are outbound rows but not replies', () => {
     expect(collapsedSenderLabel(
-      { direction: 'outbound', is_internal_note: true, author_name: 'Dean Kelly' }, TICKET
-    )).toBe('Dean Kelly')
+      { direction: 'outbound', is_internal_note: true, author_name: 'Alex Example' }, TICKET
+    )).toBe('Alex Example')
     expect(collapsedSenderLabel(
       { direction: 'outbound', is_internal_note: true }, TICKET
     )).toBe('Staff')

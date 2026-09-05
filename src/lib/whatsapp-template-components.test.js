@@ -14,7 +14,7 @@ const VIDEO_TEMPLATE = {
   ],
 }
 
-const contact = { first_name: 'Richard', name: 'Richard Ivers', wa_phone: '353873147675' }
+const contact = { first_name: 'Richard', name: 'Richard Ivers', wa_phone: '353870000000' }
 
 describe('buildTemplateComponents — media headers', () => {
   it('falls back to template.header_media_url when no override is passed (the #132012 regression)', () => {

@@ -353,8 +353,8 @@ describe('collapsedRowMeta', () => {
   })
 
   it('an outbound reply says Replied, by name when we have one', () => {
-    const m = msg('o1', { direction: 'outbound', author_name: 'Dean', created_at: '2026-08-24T09:00:00' })
-    expect(collapsedRowMeta(m, { now })).toEqual({ who: 'Dean', what: 'Replied', when: '24 Aug', tone: 'out' })
+    const m = msg('o1', { direction: 'outbound', author_name: 'Alex', created_at: '2026-08-24T09:00:00' })
+    expect(collapsedRowMeta(m, { now })).toEqual({ who: 'Alex', what: 'Replied', when: '24 Aug', tone: 'out' })
     expect(collapsedRowMeta(msg('o2', { direction: 'outbound' }), { now }).who).toBe('You')
   })
 

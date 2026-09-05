@@ -323,7 +323,7 @@ describe('slimShiftsForCache', () => {
     location_id: 'loc-still',
     locations: { id: 'loc-still', name: 'Stillorgan', address: '…', timezone: 'Europe/Dublin' },
     shift_templates: { name: 'Coach AM', start_time: '06:00:00', end_time: '14:00:00', role_label: 'Coach', colour: '#fff' },
-    profiles: { id: 'p1', full_name: 'Dean', email: 'dean@example.com', avatar_url: 'https://…' },
+    profiles: { id: 'p1', full_name: 'Alex', email: 'alex@example.com', avatar_url: 'https://…' },
     notes: 'a very long note '.repeat(20),
     status: 'confirmed',
   }

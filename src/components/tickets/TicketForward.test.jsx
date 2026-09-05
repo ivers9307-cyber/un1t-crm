@@ -11,7 +11,7 @@ import { render, cleanup, screen } from '@testing-library/react'
 import TicketForward from './TicketForward.jsx'
 
 const RICH = {
-  enabled: true, name: 'Dean Nolan', title: 'Head Coach',
+  enabled: true, name: 'Alex Example', title: 'Head Coach',
   phone: '087 111 2222', note: 'typed note', photo_url: null, links: [],
 }
 
@@ -60,7 +60,7 @@ describe('TicketForward — signature hint', () => {
 
     expect(await screen.findByText(/added automatically/i)).toBeTruthy()
     const pre = screen.getByText(/UN1T Stillorgan/, { selector: 'pre' })
-    expect(pre.textContent).toContain('Dean Nolan')
+    expect(pre.textContent).toContain('Alex Example')
     expect(pre.textContent).toContain('01 555 0001') // the studio's phone over the person's
     expect(pre.textContent).not.toContain('087 111 2222')
     expect(pre.textContent).not.toContain('typed note')

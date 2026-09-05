@@ -223,7 +223,7 @@ describe('effectiveRichSignature', () => {
   const PERSON = {
     enabled: true, name: 'Richard Ivers', note: 'UN1T Dublin',
     phone: '+353 1 578 9401',
-    links: [{ label: 'personal', url: 'https://richardivers.com' }],
+    links: [{ label: 'personal', url: 'https://personal.example.test' }],
   }
   const HATCH = {
     phone: '(01) 574 1871',

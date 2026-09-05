@@ -4,8 +4,8 @@ import { normalizeWaPhone, parseEchoMessages, parseSyncContacts, parseHistoryMes
 
 describe('normalizeWaPhone', () => {
   it('yields both + and no-+ forms, stripping non-digits', () => {
-    expect(normalizeWaPhone('+353 87 314 7675')).toEqual({ withPlus: '+353873147675', without: '353873147675' })
-    expect(normalizeWaPhone('353873147675')).toEqual({ withPlus: '+353873147675', without: '353873147675' })
+    expect(normalizeWaPhone('+353 87 000 0000')).toEqual({ withPlus: '+353870000000', without: '353870000000' })
+    expect(normalizeWaPhone('353870000000')).toEqual({ withPlus: '+353870000000', without: '353870000000' })
   })
   it('returns null for empty', () => {
     expect(normalizeWaPhone('')).toBeNull()
