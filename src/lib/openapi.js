@@ -3245,7 +3245,7 @@ registry.registerPath({
   tags: ['Admin'],
   security: [{ CookieAuth: [] }],
   summary: 'List captured webhook dead-letter rows (master/owner only)',
-  description: 'Newest 200 webhook_dead_letter rows (mig 315): events that 200\'d their provider but failed to process — unroutable/unparseable inbound email, exhausted postmark_webhook_queue rows (bounces, complaints, RFC-8058 one-click unsubscribes), sent-but-unfiled ticket mail, and glofox/inbody capture failures. Each row is annotated `replayable` (does the provider have a registered idempotent re-driver — see src/lib/webhook-replay.js). Filter with ?provider= and ?status= (pending|resolved|failed|discarded). Consumed by /admin/webhook-dead-letter.',
+  description: 'Newest 200 webhook_dead_letter rows (mig 315): events that 200\'d their provider but failed to process — unroutable/unparseable inbound email, exhausted postmark_webhook_queue rows (bounces, complaints, RFC-8058 one-click unsubscribes), sent-but-unfiled ticket mail, and glofox/inbody capture failures. Each row is annotated `replayable` (does SOME replay path exist for the provider — the registry\'s automatic re-drivers or the operator-only postmark_inbound replay; see src/lib/webhook-replay.js). Filter with ?provider= and ?status= (pending|resolved|failed|discarded). Consumed by /admin/webhook-dead-letter.',
   request: { query: z.object({ provider: z.string().optional(), status: z.enum(['pending', 'resolved', 'failed', 'discarded']).optional() }) },
   responses: {
     200: { description: 'Dead-letter rows, newest first' },
@@ -3259,13 +3259,14 @@ registry.registerPath({
   path: '/api/admin/webhook-dead-letter/{id}/replay',
   tags: ['Admin'],
   security: [{ CookieAuth: [] }],
-  summary: 'Manually replay one dead-letter row (master/owner only)',
-  description: 'Re-drives the captured payload through the provider\'s registered idempotent re-driver. Only registry providers (inbody, postmark ingest failures) are accepted — postmark_queue, postmark_inbound and email_ticket_* are deliberately NOT replayable (re-queueing an exhausted row resets its retry budget; replaying a sent email double-sends it) and answer 400. Pending/failed rows only.',
+  summary: 'Replay one dead-letter row (master, or owner at the row\'s location)',
+  description: 'Re-drives the captured payload. Registry providers (inbody, postmark ingest failures) run their idempotent re-driver; postmark_inbound (MAIL-DEADLETTER.1) re-runs THE inbound email pipeline on the stored payload — claim classification (EMAIL-DEDUPE-STALE.1) plus the unique postmark_message_id index make a second press a no-op, never a duplicate. Operator-only for inbound: never auto-replayed. postmark_queue and email_ticket_* stay deliberately unreplayable (an exhausted budget would reset; a sent email would double-send) and answer 400. The row is marked resolved ONLY when the re-driver recorded something; a clean run that filed nothing (mailbox still missing, no sender, claim in flight) answers 200 with `recorded:false` + `reason`, bumps attempts, writes the reason to the row\'s `error`, and leaves status untouched. Visibility: master, or owner at the row\'s location_id — for a NULL-location inbound row, the location its recipient address resolves to today; rows the caller cannot see answer 404. Pending/failed rows only.',
   request: { params: z.object({ id: z.string() }) },
   responses: {
-    200: { description: '{ success, status } — resolved on success' },
-    400: { description: 'Provider not auto-replayable, or row discarded', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'No such row', content: { 'application/json': { schema: ErrorResponse } } },
+    200: { description: '{ success, status, recorded, reason?, result?, error?, id, provider } — success mirrors "the row is now resolved"' },
+    400: { description: 'Provider not replayable, or row discarded', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such row, or not visible to the caller', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Row already resolved', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })

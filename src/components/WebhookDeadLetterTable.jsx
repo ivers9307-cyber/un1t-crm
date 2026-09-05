@@ -8,9 +8,13 @@
 // captures.
 //
 // SURFACING ONLY — no auto-processing lives here. Two actions, both explicit:
-//   • Replay: shown ONLY when the API says the row's provider has a
-//     registered idempotent re-driver (`replayable`). The email-family
-//     sources are deliberately not replayable — re-queueing an exhausted row
+//   • Replay: shown ONLY when the API says a replay path exists for the row's
+//     provider (`replayable`): the registry's automatic re-drivers, or — since
+//     MAIL-DEADLETTER.1 — the operator-only inbound-email replay, which
+//     re-runs the inbound pipeline on the stored payload. Fix the cause
+//     first (add the missing mailbox); a replay that files nothing leaves
+//     the row open and says why, inline and on the row. The other
+//     email-family sources stay unreplayable — re-queueing an exhausted row
 //     resets the retry budget that just ran out, and replaying a
 //     sent-but-unfiled email IS the double-send — so those rows only ever
 //     offer the human acknowledge path.
@@ -47,6 +51,38 @@ function matchesTab(row, tab) {
   return row.status === tab
 }
 
+/**
+ * MAIL-DEADLETTER.1 — one line per replay answer. `recorded:false` is a clean
+ * run that filed nothing: the row stays open on purpose, and the reason is
+ * the thing to act on. Keys are the inbound pipeline's own dead-letter codes.
+ */
+const REPLAY_REASON_HINTS = {
+  no_matching_mailbox: 'no active mailbox matches the recipient — add the mailbox under Settings → Email, then replay again',
+  no_sender: 'the payload carries no parseable From address; it cannot be filed — discard it',
+  claim_in_flight: 'another attempt on this message is still running — try again in a minute',
+  missing_message_id: 'the stored payload has no MessageID; it cannot be replayed',
+}
+
+export function replayOutcome(row, json) {
+  const id = row?.id
+  if (json?.success && json?.recorded) {
+    if (json.result?.already_filed) {
+      return { tone: 'ok', text: `Row ${id}: this message was already filed — nothing to replay, row resolved.` }
+    }
+    const t = json.result?.ticket_id
+    return { tone: 'ok', text: `Row ${id}: replayed and filed${t ? ` on ticket ${t}` : ''} — row resolved.` }
+  }
+  // `error` is judged BEFORE `recorded:false`: the route stamps recorded:false
+  // on every non-resolved answer, including a thrown re-driver, and only the
+  // error field tells a failure from a clean run that filed nothing.
+  if (json?.recorded === false && !json?.error) {
+    const reason = json.reason || 'no_op'
+    const hint = REPLAY_REASON_HINTS[reason]
+    return { tone: 'warn', text: `Row ${id}: replay ran but filed nothing (${reason})${hint ? ` — ${hint}` : ''}. The row stays open.` }
+  }
+  return { tone: 'error', text: `Row ${id}: replay failed${json?.error ? ` — ${json.error}` : ''}. Attempt recorded; the row stays open.` }
+}
+
 function ago(iso) {
   if (!iso) return '—'
   const secs = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000))
@@ -64,6 +100,10 @@ export default function WebhookDeadLetterTable() {
   const [provider, setProvider] = useState('')
   const [busyId, setBusyId] = useState(null)
   const [actionError, setActionError] = useState(null)
+  // MAIL-DEADLETTER.1 — the last replay's outcome, surfaced inline. A replay
+  // is the one action with three answers (filed / nothing to file / failed),
+  // and "nothing to file" is a 200 that must not read as success.
+  const [replayNotice, setReplayNotice] = useState(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -95,6 +135,7 @@ export default function WebhookDeadLetterTable() {
   async function act(row, path, body) {
     setBusyId(row.id)
     setActionError(null)
+    setReplayNotice(null)
     try {
       const res = await fetch(`/api/admin/webhook-dead-letter/${row.id}/${path}`, {
         method: 'POST',
@@ -102,7 +143,12 @@ export default function WebhookDeadLetterTable() {
         body: JSON.stringify(body || {}),
       })
       const json = await res.json()
-      if (!res.ok || json.success === false) throw new Error(json.error || `HTTP ${res.status}`)
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      if (path === 'replay') {
+        setReplayNotice(replayOutcome(row, json))
+      } else if (json.success === false) {
+        throw new Error(json.error || `HTTP ${res.status}`)
+      }
       await load()
     } catch (e) {
       setActionError(`Row ${row.id}: ${e.message || 'action failed'}`)
@@ -204,6 +250,16 @@ export default function WebhookDeadLetterTable() {
           <AlertCircle size={14} className="shrink-0" /> {actionError}
         </div>
       ) : null}
+      {replayNotice ? (
+        <div className={`flex items-center gap-2 text-sm rounded-lg px-3 py-2 mb-3 ${
+          replayNotice.tone === 'ok' ? 'text-green-700 bg-green-500/10'
+            : replayNotice.tone === 'warn' ? 'text-amber-700 bg-amber-500/10'
+              : 'text-red-700 bg-red-500/10'
+        }`}>
+          {replayNotice.tone === 'ok' ? <CheckCircle2 size={14} className="shrink-0" /> : <AlertCircle size={14} className="shrink-0" />}
+          {replayNotice.text}
+        </div>
+      ) : null}
 
       {/* List */}
       <div className="rounded-lg border border-un1t-border overflow-hidden">
@@ -253,12 +309,15 @@ export default function WebhookDeadLetterTable() {
                         type="button"
                         disabled={busy}
                         onClick={() => act(row, 'replay')}
+                        title={row.provider === 'postmark_inbound'
+                          ? 'Re-runs the inbound email pipeline on the stored message. Fix the cause first (e.g. add the missing mailbox); a replay that files nothing leaves the row open.'
+                          : 'Re-runs the provider\'s idempotent re-driver on the stored payload.'}
                         className="flex items-center gap-1 text-xs font-medium text-un1t-text border border-un1t-border rounded-lg px-2.5 py-1 hover:bg-un1t-border/30 disabled:opacity-50"
                       >
                         <RotateCcw size={12} /> Replay
                       </button>
                     ) : (
-                      <span className="text-[11px] text-un1t-muted">Not auto-replayable — handle by hand, then resolve.</span>
+                      <span className="text-[11px] text-un1t-muted">Not replayable — handle by hand, then resolve.</span>
                     )}
                     <button
                       type="button"

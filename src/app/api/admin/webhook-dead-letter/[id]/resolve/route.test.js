@@ -108,6 +108,16 @@ describe('POST /api/admin/webhook-dead-letter/[id]/resolve', () => {
     expect(res.status).toBe(404)
   })
 
+  it('reads the id off a PROMISE params — what Next 16 actually hands a route handler', async () => {
+    // MAIL-DEADLETTER.1 — `const { id } = params` on a Promise is undefined,
+    // so every Resolve/Discard click 400'd "Missing id" in production while
+    // this file, passing a plain object, stayed green. Both shapes must work.
+    const res = await POST(req({}), { params: Promise.resolve({ id: '7' }) })
+    expect(res.status).toBe(200)
+    expect(updates).toHaveLength(1)
+    expect(updates[0].id).toBe('7')
+  })
+
   it('owner passes, manager and anonymous do not', async () => {
     getCurrentUser.mockResolvedValue(OWNER)
     expect((await POST(req({}), { params: { id: '7' } })).status).toBe(200)

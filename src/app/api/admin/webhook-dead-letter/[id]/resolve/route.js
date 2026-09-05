@@ -38,7 +38,11 @@ export async function POST(request, { params }) {
     return NextResponse.json({ success: false, error: 'Master or owner only' }, { status: 403 })
   }
 
-  const { id } = params
+  // Next 16 hands route handlers a PROMISE for params. Reading `params.id`
+  // synchronously was `undefined`, so every Resolve/Discard click 400'd
+  // "Missing id" in production (MAIL-DEADLETTER.1). `await` also accepts a
+  // plain object, so direct callers are unaffected.
+  const { id } = await params
   if (!id) {
     return NextResponse.json({ success: false, error: 'Missing id' }, { status: 400 })
   }
