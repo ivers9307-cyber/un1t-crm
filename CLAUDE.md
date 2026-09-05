@@ -167,7 +167,7 @@ Full set in [`docs/architecture/REFERENCE.md`](docs/architecture/REFERENCE.md); 
 | [`docs/architecture/MOBILE.md`](docs/architecture/MOBILE.md) | The Expo/RN app in `mobile/` — setup, routing, feature flags, push, EAS deployment |
 | [`docs/LESSONS.md`](docs/LESSONS.md) | War stories behind the invariants + per-vendor specifics (+ archived Cowork-sandbox notes) |
 | [`docs/BACKLOG.md`](docs/BACKLOG.md) | Durable do-not-build decisions + design-doc pointers |
-| [`docs/CHANGELOG.md`](docs/CHANGELOG.md) | What shipped (numbered Done log) — add an entry per task |
+| [`docs/CHANGELOG.md`](docs/CHANGELOG.md) | What shipped (Done log, one row per PR keyed `#<PR>`; rows ≤633 keep their legacy serial) — add a row per PR under the table header; `merge=union` in `.gitattributes` keeps concurrent inserts conflict-free |
 
 Feature deep-dives also in `docs/`: `roster-v2.md`, `events.md`, `staff-attendance.md`, `invoices-queue-plan.md`, `whatsapp-setup.md`, `unifi-access-setup.md`, `EMAIL_DELIVERABILITY.md`, `PLATFORM_ROADMAP.md`, and the dated design docs (`*_DESIGN.md`, `*_2026-06.md`).
 
