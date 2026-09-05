@@ -1,5 +1,16 @@
-// GET /api/admin/webhook-dead-letter — master/owner-only list of captured
-// webhook events that 200'd the provider but failed to process.
+// GET /api/admin/webhook-dead-letter — list of captured webhook events that
+// 200'd the provider but failed to process.
+//
+// WHO SEES WHAT (MAIL-DEADLETTER.1 review fix). Master sees every row. Anyone
+// else sees ONLY rows at locations where they are OWNER — judged per location
+// via hasRoleAtLocation (deadLetterOwnerLocationIds in ./_helpers.js), never
+// `user.role`, which is the caller's ACTIVE-studio role and let any owner in
+// any org read every org's payloads (for postmark_inbound: the full email
+// body, headers and attachment metadata). The bound is applied IN THE QUERY
+// (`.in('location_id', …)`), so foreign rows never leave the database; and
+// because SQL's IN is never true for NULL, a row with no location_id is
+// invisible to a non-master (master triages those; the replay/resolve detail
+// routes still resolve a NULL inbound row to where its recipient routes today).
 //
 // Query params:
 //   provider?   Filter to a specific provider ('glofox', 'inbody', 'postmark', …).
@@ -23,6 +34,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { isManuallyReplayable } from '@/lib/webhook-replay'
+import { deadLetterOwnerLocationIds } from './_helpers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -35,8 +47,11 @@ export async function GET(request) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   }
-  // Master-or-owner only — mirrors the audit-log route auth pattern.
-  if (user.profileRole !== 'master' && user.role !== 'owner') {
+  // Master, or owner SOMEWHERE — judged per location, never by the active
+  // role. A collection route, so 403 gives nothing away; the bound below
+  // decides which rows that owner actually sees.
+  const ownerLocationIds = deadLetterOwnerLocationIds(user)
+  if (ownerLocationIds !== null && ownerLocationIds.length === 0) {
     return NextResponse.json({ success: false, error: 'Master or owner only' }, { status: 403 })
   }
 
@@ -59,6 +74,8 @@ export async function GET(request) {
     .order('received_at', { ascending: false })
     .limit(ROW_LIMIT)
 
+  // Non-master: bound to the caller's owner locations (excludes NULL rows).
+  if (ownerLocationIds !== null) query = query.in('location_id', ownerLocationIds)
   if (providerFilter) query = query.eq('provider', providerFilter)
   if (statusFilter) query = query.eq('status', statusFilter)
 

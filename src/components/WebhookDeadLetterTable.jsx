@@ -310,7 +310,7 @@ export default function WebhookDeadLetterTable() {
                         disabled={busy}
                         onClick={() => act(row, 'replay')}
                         title={row.provider === 'postmark_inbound'
-                          ? 'Re-runs the inbound email pipeline on the stored message. Fix the cause first (e.g. add the missing mailbox); a replay that files nothing leaves the row open.'
+                          ? 'Re-runs the inbound email pipeline on the stored message. Fix the cause first (e.g. add the missing mailbox); a replay that files nothing leaves the row open. A replayed message is filed as if it had just arrived, so staff get the new-mail push even for days-old mail.'
                           : 'Re-runs the provider\'s idempotent re-driver on the stored payload.'}
                         className="flex items-center gap-1 text-xs font-medium text-un1t-text border border-un1t-border rounded-lg px-2.5 py-1 hover:bg-un1t-border/30 disabled:opacity-50"
                       >

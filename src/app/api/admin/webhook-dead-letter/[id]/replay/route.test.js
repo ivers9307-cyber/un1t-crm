@@ -22,6 +22,13 @@
 //      "Missing id" in production. The old test passed a plain object and
 //      could not see it. Tests here hand the route a Promise.
 //
+//   4. THE ROW IS CLAIMED ATOMICALLY BEFORE IT IS RE-DRIVEN (review fix). Two
+//      operators — or two tabs — pressing Replay within a second both found
+//      the dedupe claim `stale` and both inserted a ticket (orphan ticket +
+//      double staff push). The route now takes a conditional UPDATE on
+//      last_attempt_at (NULL or older than the claim window) and judges the
+//      rows it touched: zero → 200 `claim_in_flight`, re-driver never runs.
+//
 // @/lib/auth is the REAL module (importActual) with only getCurrentUser
 // mocked, so hasRoleAtLocation's actual contract is what runs here. The
 // replay DRIVER (replayDeadLetter) is real too — resolve/not-resolve is the
@@ -75,11 +82,18 @@ function inboundRow(overrides = {}) {
 }
 
 // ── fake db ─────────────────────────────────────────────────────────────────
-// webhook_dead_letter: select().eq('id').single() → rowResult; update(p).eq()
-// is recorded. inbody_webhook_events: upsert recorded (the registry path).
+// webhook_dead_letter: select().eq('id').single() → rowResult; a bare
+// update(p).eq() (the driver's bookkeeping) is recorded in `updates`; the
+// route's atomic claim — update(p).eq('id').or(<window>).select('id') — is
+// recorded separately in `claims` and answers claimResult, so the two writes
+// can be asserted apart. `order` logs claim vs re-driver sequencing.
+// inbody_webhook_events: upsert recorded (the registry path).
 let rowResult
 let updates
 let upserts
+let claims
+let claimResult
+let order
 
 function makeDb() {
   const db = {}
@@ -90,10 +104,19 @@ function makeDb() {
     b.single = () => Promise.resolve(table === 'webhook_dead_letter' ? rowResult : { data: null, error: null })
     b.maybeSingle = b.single
     b.update = (payload) => ({
-      eq: (col, val) => {
-        updates.push({ table, payload, id: val })
-        return Promise.resolve({ error: null })
-      },
+      eq: (col, val) => ({
+        or: (expr) => ({
+          select: () => {
+            claims.push({ table, payload, id: val, expr })
+            order.push('claim')
+            return Promise.resolve(claimResult)
+          },
+        }),
+        then: (res, rej) => {
+          updates.push({ table, payload, id: val })
+          return Promise.resolve({ error: null }).then(res, rej)
+        },
+      }),
     })
     b.upsert = (payload, opts) => {
       upserts.push({ table, payload, opts })
@@ -117,11 +140,17 @@ beforeEach(() => {
   vi.clearAllMocks()
   updates = []
   upserts = []
+  claims = []
+  order = []
+  claimResult = { data: [{ id: 7 }], error: null }
   rowResult = { data: inboundRow(), error: null }
   db = makeDb()
   createServerClient.mockImplementation(() => db)
   getCurrentUser.mockResolvedValue(MASTER)
-  replayInboundDeadLetter.mockResolvedValue({ recorded: true, result: { ticket_id: 'T-1', mailbox_id: 'mb-1' } })
+  replayInboundDeadLetter.mockImplementation(async () => {
+    order.push('replay')
+    return { recorded: true, result: { ticket_id: 'T-1', mailbox_id: 'mb-1' } }
+  })
   bestEffortInboundLocation.mockResolvedValue(null)
 })
 
@@ -298,5 +327,82 @@ describe('row state + provider gates', () => {
   it('reads the id off the awaited params (a plain object still works for callers that pass one)', async () => {
     const res = await POST({ json: async () => ({}) }, { params: { id: '7' } })
     expect(res.status).toBe(200)
+  })
+})
+
+describe('the atomic replay claim — one operator re-drives a row at a time', () => {
+  it('claims the row BEFORE the re-driver runs: a conditional UPDATE on last_attempt_at bounded to this id and the claim window', async () => {
+    const res = await call()
+    expect(res.status).toBe(200)
+    expect(claims).toHaveLength(1)
+    expect(claims[0].table).toBe('webhook_dead_letter')
+    expect(claims[0].id).toBe('7')
+    expect(typeof claims[0].payload.last_attempt_at).toBe('string')
+    // NULL (never attempted) OR older than the window — the same shape the
+    // cron re-driver uses to skip rows still inside their backoff.
+    expect(claims[0].expr).toMatch(/^last_attempt_at\.is\.null,last_attempt_at\.lt\.\d{4}-\d{2}-\d{2}T/)
+    const floor = new Date(claims[0].expr.split('.lt.')[1]).getTime()
+    expect(Date.now() - floor).toBeGreaterThanOrEqual(60_000 - 5_000)
+    expect(Date.now() - floor).toBeLessThan(60_000 + 5_000)
+    expect(order).toEqual(['claim', 'replay'])
+  })
+
+  it('a second replay inside the window answers 200 claim_in_flight and NEVER runs the re-driver (no orphan ticket, no double push)', async () => {
+    claimResult = { data: [], error: null }
+    const res = await call()
+    const json = await res.json()
+    expect(res.status).toBe(200)
+    expect(json).toMatchObject({
+      success: false, recorded: false, reason: 'claim_in_flight', status: 'pending', id: 7, provider: 'postmark_inbound',
+    })
+    expect(json.error).toBeUndefined()
+    expect(replayInboundDeadLetter).not.toHaveBeenCalled()
+    // The first operator's run owns the row's bookkeeping; this one writes nothing.
+    expect(updates).toHaveLength(0)
+  })
+
+  it('judges the rows the claim TOUCHED, not merely the absence of an error (a zero-row UPDATE is not an error in PostgREST)', async () => {
+    claimResult = { data: null, error: null }
+    const json = await (await call()).json()
+    expect(json).toMatchObject({ recorded: false, reason: 'claim_in_flight' })
+    expect(replayInboundDeadLetter).not.toHaveBeenCalled()
+  })
+
+  it('a failed claim write is a 500 and the re-driver does not run — never replay on an unknown claim state', async () => {
+    claimResult = { data: null, error: { message: 'connection reset' } }
+    const res = await call()
+    expect(res.status).toBe(500)
+    expect(replayInboundDeadLetter).not.toHaveBeenCalled()
+    expect(updates).toHaveLength(0)
+  })
+
+  it('the claim is taken AFTER the visibility and state gates — an invisible, resolved or unreplayable row is never stamped', async () => {
+    getCurrentUser.mockResolvedValue(OWNER_B)
+    expect((await call()).status).toBe(404)
+    getCurrentUser.mockResolvedValue(MASTER)
+    rowResult = { data: inboundRow({ status: 'resolved' }), error: null }
+    expect((await call()).status).toBe(409)
+    rowResult = { data: inboundRow({ provider: 'glofox', payload: { any: 1 } }), error: null }
+    expect((await call()).status).toBe(400)
+    expect(claims).toHaveLength(0)
+  })
+
+  it('a registry provider (inbody) is claimed the same way', async () => {
+    rowResult = {
+      data: inboundRow({ provider: 'inbody', payload: { Account: 'acc', UserID: '9', TestDatetimes: '20240101120000' } }),
+      error: null,
+    }
+    claimResult = { data: [], error: null }
+    const json = await (await call()).json()
+    expect(json).toMatchObject({ recorded: false, reason: 'claim_in_flight' })
+    expect(upserts).toHaveLength(0)
+  })
+})
+
+describe('route config', () => {
+  it('pins maxDuration to 20s — the replay re-runs the inbound pipeline, so it must die before the 60s claim window can read it as stale', async () => {
+    const mod = await import('./route.js')
+    expect(mod.maxDuration).toBe(20)
+    expect(mod.runtime).toBe('nodejs')
   })
 })

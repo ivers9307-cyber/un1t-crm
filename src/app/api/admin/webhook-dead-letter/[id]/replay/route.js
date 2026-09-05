@@ -3,7 +3,8 @@
 // Operator replay of a single dead-letter row (MAIL-DEADLETTER.1 rewrote the
 // original registry-only trigger).
 //
-// WHO. Master, or OWNER AT THE LOCATION THE ROW BELONGS TO (hasRoleAtLocation —
+// WHO. Master, or OWNER AT THE LOCATION THE ROW BELONGS TO (hasRoleAtLocation,
+// via the shared ../../_helpers.js that the resolve route judges by too —
 // never `user.role`, which is the caller's role at whichever studio happens to
 // be ACTIVE and let an owner of studio B act on studio A's rows). A row the
 // caller cannot see answers 404, not 403, so ids cannot be enumerated (CLAUDE.md
@@ -22,6 +23,17 @@
 //     kept verbatim. Operator-only: see MANUAL_REPLAY_PROVIDERS for why it
 //     must never be auto-replayed.
 //
+// ONE OPERATOR AT A TIME (review fix). Before anything is re-driven the route
+// CLAIMS the row: a conditional UPDATE that stamps last_attempt_at only where
+// it is NULL or older than REPLAY_CLAIM_WINDOW_MS, judged by the rows it
+// touched (a zero-row UPDATE is not an error in PostgREST). Two operators — or
+// two tabs — pressing Replay within a second used to BOTH find the inbound
+// dedupe claim `stale` and both insert a ticket (orphan ticket + double staff
+// push); now the second answers 200 `{ recorded:false, reason:'claim_in_flight' }`
+// and runs nothing. The claim is taken AFTER the visibility/state gates so a
+// 404/409/400 never stamps the row. No new column: last_attempt_at is already
+// the attempt stamp every consumer of this table reads.
+//
 // OUTCOME ON THE ROW. replayDeadLetter stamps last_attempt_at (= the replay
 // time) and attempts++ on every run; `status: resolved` + resolved_at ONLY
 // when the re-driver recorded something; a clean run that recorded nothing
@@ -36,50 +48,34 @@
 // provider with no re-driver at all (glofox — action replay is not
 // idempotent) → 400.
 //
-// Everything this route reads or writes directly is webhook_dead_letter (a
-// system capture table — TABLE_EXCLUDE in check-location-scoping); the tenant
-// queries happen inside the re-drivers, on rows the guard above has already
-// judged.
+// Everything this route reads or writes directly is webhook_dead_letter — a
+// tenant table to check-location-scoping since the review fix (it used to sit
+// in TABLE_EXCLUDE on the false claim that only master-only tooling read it);
+// canReplayDeadLetter is the registered scoping helper. The tenant queries
+// inside the re-drivers run on rows the guard above has already judged.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, hasRoleAtLocation } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { isReplayable, isManuallyReplayable, replayDeadLetter } from '@/lib/webhook-replay'
-import {
-  replayInboundDeadLetter,
-  bestEffortInboundLocation,
-} from '@/app/api/webhooks/postmark-inbound/[token]/route'
+import { replayInboundDeadLetter } from '@/app/api/webhooks/postmark-inbound/[token]/route'
+// resolveDeadLetterLocation + canReplayDeadLetter moved to ../../_helpers.js
+// (review fix) so the resolve route judges visibility identically.
+import { resolveDeadLetterLocation, canReplayDeadLetter } from '../../_helpers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+// Same cap as the inbound route it re-runs: the function must be dead well
+// inside the 60s STALE_CLAIM_MS the inbound pipeline (and the claim window
+// below) treat as "the owner cannot still be running".
+export const maxDuration = 20
 
-/**
- * The location a dead-letter row belongs to, for the visibility check: the
- * stamped location_id, else — for inbound email — the location the payload's
- * recipient address resolves to TODAY (null when it still matches no active
- * mailbox, which is also the state in which nothing could replay it).
- * Exported for the guard's test.
- */
-export async function resolveDeadLetterLocation(db, row) {
-  if (row.location_id) return row.location_id
-  if (row.provider === 'postmark_inbound') {
-    return bestEffortInboundLocation(db, row.payload)
-  }
-  return null
-}
-
-/**
- * Master sees every row. Anyone else must be OWNER at the row's location, and
- * a row with no resolvable location is invisible to them. hasRoleAtLocation
- * returns false for a null location BEFORE its own master check, so master is
- * short-circuited here.
- */
-export function canReplayDeadLetter(user, locationId) {
-  if (!user) return false
-  if (user.profileRole === 'master') return true
-  if (!locationId) return false
-  return hasRoleAtLocation(user, locationId, ['owner'])
-}
+// A replay claim (last_attempt_at) younger than this belongs to a run that may
+// still be executing — mirrors the inbound route's STALE_CLAIM_MS (60s = 3×
+// maxDuration, with clock-skew margin). Deliberately a local constant: the
+// inbound module is mocked in this route's tests, so an imported value would
+// read `undefined` there.
+const REPLAY_CLAIM_WINDOW_MS = 60_000
 
 /** The re-driver for a provider, or null when nothing may replay it. */
 function resolveReplayer(provider) {
@@ -129,6 +125,30 @@ export async function POST(request, { params }) {
   const replayer = resolveReplayer(row.provider)
   if (replayer === null || !isManuallyReplayable(row.provider)) {
     return NextResponse.json({ success: false, error: 'provider not replayable' }, { status: 400 })
+  }
+
+  // Claim the row atomically BEFORE re-driving it. Judge the rows touched,
+  // never the absence of an error (BAREWRITE: a zero-row UPDATE resolves clean).
+  const claimFloor = new Date(Date.now() - REPLAY_CLAIM_WINDOW_MS).toISOString()
+  const { data: claimed, error: claimErr } = await db
+    .from('webhook_dead_letter')
+    .update({ last_attempt_at: new Date().toISOString() })
+    .eq('id', id)
+    .or(`last_attempt_at.is.null,last_attempt_at.lt.${claimFloor}`)
+    .select('id')
+  if (claimErr) {
+    // Unknown claim state — never replay on it; the operator can simply retry.
+    return NextResponse.json({ success: false, error: claimErr.message }, { status: 500 })
+  }
+  if (!claimed || claimed.length === 0) {
+    return NextResponse.json({
+      success: false,
+      status: row.status,
+      id: row.id,
+      provider: row.provider,
+      recorded: false,
+      reason: 'claim_in_flight',
+    })
   }
 
   const result = await replayDeadLetter(db, row, { replayer })
