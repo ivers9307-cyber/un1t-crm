@@ -18,10 +18,12 @@ vi.mock('@/lib/inbody-webhook', () => ({
 
 import {
   isReplayable,
+  isManuallyReplayable,
   replayDeadLetter,
   replayInbody,
   replayPostmark,
   REPLAYABLE_PROVIDERS,
+  MANUAL_REPLAY_PROVIDERS,
 } from './webhook-replay.js'
 import { parseInbodyNotification } from '@/lib/inbody-webhook'
 
@@ -272,5 +274,99 @@ describe('replayDeadLetter', () => {
     const [patch] = db._updateMock.mock.calls[0]
     // (0 || 1) + 1 = 2 — attempts=0 is treated as 1 before incrementing.
     expect(patch.attempts).toBe(2)
+  })
+})
+
+// ── MAIL-DEADLETTER.1 — operator-only replay + the "recorded nothing" outcome ─
+//
+// postmark_inbound rows are replayable ONLY by an operator, never by the cron
+// or the QStash worker: a `no_matching_mailbox` payload re-run every sweep
+// would dead-letter again on every tick and burn to 'failed' in 25 minutes,
+// hiding the row that needs a human to add the mailbox. So the provider is
+// absent from REPLAYABLE_PROVIDERS (the auto consumers' query filter) and
+// present in MANUAL_REPLAY_PROVIDERS; the driver takes an explicit re-driver.
+describe('MAIL-DEADLETTER.1 — manual replay providers', () => {
+  it('postmark_inbound is manually replayable but NOT auto-replayable', () => {
+    expect(MANUAL_REPLAY_PROVIDERS).toEqual(['postmark_inbound'])
+    expect(isManuallyReplayable('postmark_inbound')).toBe(true)
+    expect(isReplayable('postmark_inbound')).toBe(false)
+    expect(REPLAYABLE_PROVIDERS).not.toContain('postmark_inbound')
+  })
+
+  it('every auto-replayable provider is also manually replayable; glofox and unknowns are neither', () => {
+    expect(REPLAYABLE_PROVIDERS.every(isManuallyReplayable)).toBe(true)
+    expect(isManuallyReplayable('glofox')).toBe(false)
+    expect(isManuallyReplayable('postmark_queue')).toBe(false)
+    expect(isManuallyReplayable('toString')).toBe(false)
+  })
+})
+
+describe('MAIL-DEADLETTER.1 — replayDeadLetter with an explicit re-driver', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  const inboundRow = {
+    id: 'dead-9', provider: 'postmark_inbound',
+    payload: { MessageID: 'pm-9' }, status: 'pending', attempts: 1,
+  }
+
+  it('resolves the row when the re-driver reports it recorded something', async () => {
+    const db = makeDb()
+    const replayer = vi.fn().mockResolvedValue({ recorded: true, result: { ticket_id: 'T-1' } })
+    const result = await replayDeadLetter(db, inboundRow, { replayer })
+
+    expect(replayer).toHaveBeenCalledWith(db, inboundRow.payload)
+    expect(result).toEqual({ ok: true, status: 'resolved', recorded: true, result: { ticket_id: 'T-1' } })
+    const [patch] = db._updateMock.mock.calls[0]
+    expect(patch.status).toBe('resolved')
+    expect(patch.attempts).toBe(2)
+    expect(typeof patch.resolved_at).toBe('string')
+  })
+
+  it('does NOT resolve when the re-driver ran but recorded nothing — attempts + reason land on the row, status is untouched', async () => {
+    const db = makeDb()
+    const replayer = vi.fn().mockResolvedValue({ recorded: false, reason: 'no_matching_mailbox' })
+    const result = await replayDeadLetter(db, inboundRow, { replayer })
+
+    expect(result).toEqual({ ok: false, status: 'pending', recorded: false, reason: 'no_matching_mailbox' })
+    expect(db._updateMock).toHaveBeenCalledTimes(1)
+    const [patch] = db._updateMock.mock.calls[0]
+    expect(patch).not.toHaveProperty('status')
+    expect(patch).not.toHaveProperty('resolved_at')
+    expect(patch.attempts).toBe(2)
+    expect(typeof patch.last_attempt_at).toBe('string')
+    expect(patch.error).toBe('replay_no_op: no_matching_mailbox')
+  })
+
+  it('a recorded-nothing outcome never promotes to failed, however many times it is tried', async () => {
+    // Not a failure: the code ran fine and the payload is still unroutable.
+    // Promoting would misdescribe the row; the operator fixes the cause and
+    // tries again.
+    const db = makeDb()
+    const replayer = vi.fn().mockResolvedValue({ recorded: false, reason: 'no_sender' })
+    const result = await replayDeadLetter(db, { ...inboundRow, attempts: 40 }, { replayer, maxAttempts: 5 })
+    expect(result.status).toBe('pending')
+    const [patch] = db._updateMock.mock.calls[0]
+    expect(patch).not.toHaveProperty('status')
+  })
+
+  it('a thrown re-driver still takes the failure path (attempts++, error, maybe failed)', async () => {
+    const db = makeDb()
+    const replayer = vi.fn().mockRejectedValue(new Error('contact_lookup_failed'))
+    const result = await replayDeadLetter(db, inboundRow, { replayer, maxAttempts: 2 })
+    expect(result).toEqual({ ok: false, status: 'failed', error: 'contact_lookup_failed' })
+  })
+
+  it('without an explicit re-driver a manual-only provider is refused (the cron path cannot reach it)', async () => {
+    const db = makeDb()
+    const result = await replayDeadLetter(db, inboundRow)
+    expect(result.ok).toBe(false)
+    expect(db._updateMock).not.toHaveBeenCalled()
+  })
+
+  it('a legacy re-driver returning undefined still counts as recorded (inbody/postmark unchanged)', async () => {
+    const db = makeDb()
+    const replayer = vi.fn().mockResolvedValue(undefined)
+    const result = await replayDeadLetter(db, inboundRow, { replayer })
+    expect(result).toMatchObject({ ok: true, status: 'resolved' })
   })
 })

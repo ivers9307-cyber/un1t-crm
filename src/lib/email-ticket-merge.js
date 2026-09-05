@@ -35,6 +35,14 @@ export function canMerge(source, target) {
   // not tell A's rows from B's own.
   if (source.merged_into_id) return { ok: false, reason: 'source_already_merged' }
   if (target.merged_into_id) return { ok: false, reason: 'target_is_merged' }
+  // MAIL-SPAM.1 — never across the quarantine flag, in either direction. A
+  // live thread merged INTO a quarantined ticket becomes a tombstone pointing
+  // at spam: gone from Inbox and the count at once, and deleted with its
+  // target by the 30-day purge. Spam merged into a live thread would launder
+  // a quarantined conversation past the operator's release decision. Release
+  // (or mark) first so both sides agree, then merge. An absent flag is live —
+  // rows read before mig 584 carry none.
+  if ((source.is_spam === true) !== (target.is_spam === true)) return { ok: false, reason: 'spam_mismatch' }
   return { ok: true }
 }
 

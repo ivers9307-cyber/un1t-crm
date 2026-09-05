@@ -80,8 +80,6 @@ export const TABLE_EXCLUDE = {
     'Aggregate of usage_events — same master-only metering surface, cross-tenant by design.',
   tenant_heartbeats:
     'Per-tenant cron-health rows (SAAS4-O1) written by system code paths; read surface is master-only monitoring, cross-tenant by design.',
-  webhook_dead_letter:
-    'System capture table — rows are written by webhook error paths (location is metadata, not the read boundary) and only read by master-only ops tooling.',
   password_overrides_audit:
     'Security audit trail — written on master password-override, read only by master-only audit surfaces; location_id is context metadata.',
 }
@@ -168,6 +166,17 @@ const SCOPING_HELPERS = [
   // location (public callers pass restrictToLocation so a bare email can
   // never resolve a cross-location contact).
   'findOrCreateRaceContact(',
+  // src/app/api/admin/webhook-dead-letter/_helpers.js — the morgue's one
+  // visibility model (MAIL-DEADLETTER.1 review fix). canReplayDeadLetter is
+  // the fetch-by-pk-then-judge guard: master, else hasRoleAtLocation(user,
+  // <row.location_id or the inbound recipient's mailbox location>, ['owner']),
+  // 404 on miss. deadLetterOwnerLocationIds returns null for master and the
+  // caller's owner-location set otherwise, which the list + bulk-resolve
+  // routes bind with .in('location_id', …). webhook_dead_letter used to sit in
+  // TABLE_EXCLUDE on the claim that only master-only tooling read it — false:
+  // any active-role owner could list and resolve every org's rows.
+  'canReplayDeadLetter(',
+  'deadLetterOwnerLocationIds(',
 ]
 
 // Raw filter evidence anywhere in the file — covers the detached-builder
