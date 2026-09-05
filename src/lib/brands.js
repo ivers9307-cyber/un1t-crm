@@ -102,6 +102,12 @@ export const BRANDS = [
       // rewrote to /welcome. Trailing slash: the brand matcher is a raw
       // startsWith, and only /embed/* is meant to resolve.
       '/embed/',
+      // CANCEL-FORM.3 — the per-contact membership cancellation form
+      // (/cancel/<token>). Sent to members by email/WhatsApp; the operator may
+      // build the link on THIS host (settings public_base_url) so the member
+      // sees the studio's address, not the CRM's. Trailing slash: raw
+      // startsWith, only /cancel/* is meant to resolve.
+      '/cancel/',
       '/book/',         // public Calendly-style booking pages
       '/event/',        // public race / workshop / etc. signup pages
       // PUBPATH.1 — the checkout leg of the two above. RaceSignupWidget
