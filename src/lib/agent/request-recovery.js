@@ -17,15 +17,24 @@
 //
 // Pure — imported by the route (server) AND the requests page (client).
 
-// Kinds whose approval EXECUTES something in the same request. Pause and
-// cancellation are actioned manually in Glofox by staff, so there is no
-// execution window to crash inside.
+// Kinds whose approval ALWAYS executes something in the same request. Pause
+// is actioned manually in Glofox by staff (its API route rejects
+// impersonation), so there is no execution window to crash inside.
 export const EXECUTING_KINDS = new Set([
   'class_booking',
   'class_cancellation',
   'event_booking',
   'event_cancellation',
 ])
+
+// CANCEL-FORM.5 — kinds that execute ONLY when the location opted in
+// (locations.glofox_auto_cancel_memberships, mig 584). The route decides per
+// request; when it does execute it stamps the same details.execution marker,
+// so recovery keys on the MARKER for these, never on the kind alone.
+export const CONDITIONAL_EXECUTING_KINDS = new Set(['cancellation'])
+
+// Every kind whose 'failed' row may be re-approved (fix-&-retry lane).
+export const RETRYABLE_KINDS = new Set([...EXECUTING_KINDS, ...CONDITIONAL_EXECUTING_KINDS])
 
 // Generous relative to a Vercel function timeout: long enough that a slow but
 // live Glofox call is never treated as crashed, short enough that a stuck
@@ -39,7 +48,8 @@ export const EXECUTION_STALE_MS = 5 * 60_000
  */
 export function stuckExecutionStartedAt(row, nowMs = Date.now()) {
   if (!row || row.status !== 'approved') return null
-  if (!EXECUTING_KINDS.has(row.kind)) return null
+  if (!RETRYABLE_KINDS.has(row.kind)) return null
+  // A conditional kind that never executed carries no marker → never stuck.
   const exec = row.details?.execution
   if (!exec || exec.stage !== 'executing' || !exec.started_at) return null
   const t = Date.parse(exec.started_at)
@@ -67,7 +77,7 @@ export function isStuckExecuting(row, nowMs = Date.now()) {
 
 /** Can this row's failed execution be re-approved at all? Pure — the ROUTE's gate. */
 export function isRetryableFailure(row) {
-  return !!row && row.status === 'failed' && EXECUTING_KINDS.has(row.kind)
+  return !!row && row.status === 'failed' && RETRYABLE_KINDS.has(row.kind)
 }
 
 // How long after the decision a failed row keeps being OFFERED for retry in

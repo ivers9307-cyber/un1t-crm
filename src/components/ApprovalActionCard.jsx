@@ -65,6 +65,8 @@ export default function ApprovalActionCard({
     }
   }
 
+  const [notified, setNotified] = useState(null)
+
   async function decide(status) {
     if (busy) return
     setBusy(status)
@@ -85,6 +87,8 @@ export default function ApprovalActionCard({
         return
       }
       onDecided?.({ ...request, ...data.request })
+      // CANCEL-FORM.5 — whether the member heard about a pause/cancellation decision.
+      if (data.customer_notified) setNotified(data.customer_notified)
       fetchSuggestion() // fire-and-forget — never blocks the decision UX
       if (status === 'declined') {
         onPrefillComposer?.(buildDeclineDraft(request.kind, reason, ctx))
@@ -177,6 +181,13 @@ export default function ApprovalActionCard({
             {request.decision_note && <span>{request.decision_note}</span>}
             {request.details?.result?.message_code && status === 'failed' && (
               <span className="text-red-700"> ({request.details.result.message_code})</span>
+            )}
+            {notified && (
+              <span className={notified.sent ? ' text-green-700' : ' text-amber-700'}>
+                {notified.sent
+                  ? ` Member ${notified.channel === 'email' ? 'emailed' : 'messaged'}.`
+                  : notified.reason === 'not_applicable' || notified.reason === 'not_executed' ? '' : ' Member NOT told, please follow up.'}
+              </span>
             )}
           </div>
         )}

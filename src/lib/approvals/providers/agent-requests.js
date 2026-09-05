@@ -28,7 +28,7 @@
 
 import { viewerActiveLocationId } from '../registry'
 import { formatMoneyMinor } from '@/lib/money-format'
-import { EXECUTING_KINDS, retryOffered } from '@/lib/agent/request-recovery'
+import { retryOffered, RETRYABLE_KINDS } from '@/lib/agent/request-recovery'
 import { failureExplanation, accountSummaryLine, whyFlagged, accountMismatchWarning } from '@/lib/approvals/agent-request-why'
 
 // AGENT-FUNNEL-CREDITS.1 — the membership/credit fields the Glofox sync
@@ -60,7 +60,9 @@ export function agentRequestSubtitle(row) {
     const span = [d.start_date, d.end_date].filter(Boolean).join(' → ')
     return [span || null, d.reason].filter(Boolean).join(' · ') || 'Pause request'
   }
-  return d.reason || row?.customer_note || 'Cancellation request'
+  // CANCEL-FORM.5 — form-originated cancellations carry a structured end date.
+  const base = d.reason || row?.customer_note || 'Cancellation request'
+  return d.requested_end_date ? `${base} · ends ${d.requested_end_date}` : base
 }
 
 // Shared item shape for both queues (pending + failed-retryable).
@@ -69,7 +71,7 @@ function toItem(r) {
     id: r.id,
     title: `${KIND_LABELS[r.kind] || r.kind} — ${r.contact?.name || 'Customer'}`,
     subtitle: agentRequestSubtitle(r).slice(0, 160),
-    meta: 'via the customer agent',
+    meta: r.details?.source === 'cancellation_form' ? 'via the cancellation form' : 'via the customer agent',
     submittedAt: r.created_at,
     amount: r.details?.paid ? (r.details.amount_cents ?? null) : null,
     currency: r.details?.paid ? (r.details.currency || 'EUR') : null,
@@ -114,7 +116,7 @@ async function fetchRetryableFailed(db, activeId, { withContact = true } = {}) {
     .select(`id, kind, status, details, customer_note, created_at, decided_at, location_id, channel, conversation_id, retention_flagged${contactEmbed}`)
     .eq('location_id', activeId)
     .eq('status', 'failed')
-    .in('kind', [...EXECUTING_KINDS])
+    .in('kind', [...RETRYABLE_KINDS])
     .gte('decided_at', cutoff)
     .order('decided_at', { ascending: false })
     .limit(50)
