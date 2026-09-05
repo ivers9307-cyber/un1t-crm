@@ -4,36 +4,24 @@
 // Communications tab strip can show the same unread count on its Inbox
 // tab). Expects the { success, data: { count } } envelope; keeps the
 // last good count through network blips; refreshes on window focus.
+//
+// MAIL-PERF.1 — the clock no longer lives here. Every call used to own a
+// setInterval + focus listener, so the sidebar badge and the hub tab strip
+// each polled the same count URL on their own timer, hidden tab or not. The
+// hook now subscribes through poll-store.js: N readers of one URL share ONE
+// visibility-gated request per cadence, a late joiner is handed the last
+// good value at once, and a sign-out halts the store (see that file for the
+// module-state-survives-signOut trap it exists for). Same return contract —
+// a number, 0 while disabled.
 
 import { useEffect, useState } from 'react'
-
-// AUDIT-13.G — module-private. It was exported and never imported;
-// usePolledCount() below is the only reader. (Unrelated same-named
-// constants live in AcControlPanel.jsx and two mobile files.)
-const POLL_INTERVAL_MS = 60_000
+import { subscribePolledCount } from './poll-store'
 
 export function usePolledCount({ enabled, url }) {
   const [count, setCount] = useState(0)
   useEffect(() => {
-    if (!enabled) { setCount(0); return }
-    let cancelled = false
-    async function load() {
-      try {
-        const r = await fetch(url, { cache: 'no-store' })
-        if (!r.ok) return
-        const j = await r.json()
-        if (!cancelled && j?.success) setCount(j.data?.count || 0)
-      } catch { /* network blip — keep last good count */ }
-    }
-    load()
-    const id = setInterval(load, POLL_INTERVAL_MS)
-    const onFocus = () => load()
-    window.addEventListener('focus', onFocus)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-      window.removeEventListener('focus', onFocus)
-    }
+    if (!enabled) { setCount(0); return undefined }
+    return subscribePolledCount(url, (value) => setCount(value))
   }, [enabled, url])
   return count
 }

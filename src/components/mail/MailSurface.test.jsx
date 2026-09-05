@@ -1842,3 +1842,31 @@ describe('MailSurface — multi-location (MAIL-ALLLOC.1)', () => {
     expect(labels.some(l => l.startsWith('Stillorgan · Info'))).toBe(true)
   })
 })
+
+// MAIL-PERF.1 — the tile poll asks for counts only; the All-mode digest (which
+// renders sections) still asks for the full payload. The two are different
+// requests to the same route, so the URL is what proves which path ran.
+describe('MailSurface — the tile poll is counts=only (MAIL-PERF.1)', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+  })
+
+  it('a scoped studio fetches its tiles with ?counts=only', async () => {
+    window.localStorage.setItem('un1t.mail.scope.me-1', LOC_B)
+    stubMultiNetwork(defaultMultiState())
+    renderMulti()
+    await screen.findByText('Subject st-1')
+    await waitFor(() => expect(digestCalls().length).toBeGreaterThan(0))
+    expect(digestCalls().every(c => c.url.includes('counts=only'))).toBe(true)
+    // …and the tiles still carry the counts the lean digest answered with.
+    expect(screen.getByRole('button', { name: /Hatch Street.*3/s })).toBeTruthy()
+  })
+
+  it('All mode fetches the FULL digest — it renders the rows, so it must not ask for counts only', async () => {
+    stubMultiNetwork(defaultMultiState())
+    renderMulti()
+    await screen.findByText('Subject ha-1')
+    expect(digestCalls().length).toBeGreaterThan(0)
+    expect(digestCalls().some(c => c.url.includes('counts=only'))).toBe(false)
+  })
+})

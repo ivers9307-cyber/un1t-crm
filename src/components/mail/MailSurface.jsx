@@ -51,6 +51,7 @@ import {
 } from './mail-preferences'
 import { useActionQueue } from './use-action-queue'
 import { useDockSlot } from './use-dock-slot'
+import { useVisibleInterval } from './use-visible-interval'
 import {
   MAIL_SCOPE_ALL, isUuidShaped, readMailScope, writeMailScope, resolveMailScope,
   buildDigestSections, flattenSectionRows, resolveNeedsReplyTotal,
@@ -497,9 +498,17 @@ export default function MailSurface({ locationId, locationName, userId, location
 
   // Scoped multi-location callers still need tile counts once — fetched
   // quietly, feeding ONLY the digest/tiles, never the list on screen.
+  //
+  // MAIL-PERF.1 — `counts=only`: the tiles read location_id, name, unavailable
+  // and needs_reply_count and nothing else, so this poll asks the route to skip
+  // the row payload (five conversations + their per-row counts, per studio,
+  // every minute). The shape is otherwise the digest's — `locations` still
+  // carries every studio, so the scope-reconciliation effect above reads it
+  // unchanged; the empty `conversations` arrays are never rendered from this
+  // path (All-mode sections come from loadDigest's FULL fetch).
   const loadTileDigest = useCallback(async () => {
     try {
-      const res = await fetch('/api/email/mail/digest', { cache: 'no-store' })
+      const res = await fetch('/api/email/mail/digest?counts=only', { cache: 'no-store' })
       const body = await res.json()
       if (!body?.success) return
       applyDigest(body.data || null)
@@ -523,11 +532,12 @@ export default function MailSurface({ locationId, locationName, userId, location
   // freeze at mount value for the session — a stale number worn as a
   // confident one on the tile whose job is "where is work". Same 60s
   // cadence, quiet, list path untouched.
-  useEffect(() => {
-    if (!multi || !scopeReady || allMode) return undefined
-    const timer = setInterval(() => loadTileDigest(), POLL_MS)
-    return () => clearInterval(timer)
-  }, [multi, scopeReady, allMode, loadTileDigest])
+  //
+  // MAIL-PERF.1 — visibility-gated (use-visible-interval.js): a hidden tab
+  // stops the clock; coming back is one immediate refresh, then the cadence.
+  // Was a bare setInterval with no focus refresh; the tiles now refresh on a
+  // window focus too, which is cheap under counts=only.
+  useVisibleInterval(loadTileDigest, POLL_MS, { enabled: multi && scopeReady && !allMode })
 
   // ── MAIL-ALLLOC.1: All-mode search — a client-side fan-out ───────────
   //
@@ -584,16 +594,14 @@ export default function MailSurface({ locationId, locationName, userId, location
 
   useEffect(() => { if (scopeReady) refreshList() }, [refreshList, scopeReady])
 
-  useEffect(() => {
-    if (!scopeReady) return undefined
-    const timer = setInterval(() => refreshList(true), POLL_MS)
-    const onFocus = () => refreshList(true)
-    window.addEventListener('focus', onFocus)
-    return () => {
-      clearInterval(timer)
-      window.removeEventListener('focus', onFocus)
-    }
-  }, [refreshList, scopeReady])
+  // MAIL-PERF.1 — the list poll, visibility-gated. Was setInterval + a focus
+  // listener that ran hidden tab or not; the hook keeps the focus refresh and
+  // adds: hidden → no clock, visible again → immediate refresh then cadence.
+  // The callback travels through a ref, so a refreshList re-created on a
+  // scope/view change no longer resets the clock — the effect just above
+  // already refetches at that moment.
+  const pollList = useCallback(() => refreshList(true), [refreshList])
+  useVisibleInterval(pollList, POLL_MS, { enabled: scopeReady })
 
   // "Older" — a keyset cursor, appended. It deliberately does NOT touch
   // `listRequest`: a page-2 read is not a new scope, and stamping it as one
@@ -748,17 +756,15 @@ export default function MailSurface({ locationId, locationName, userId, location
   // An open conversation re-reads itself — fast while its newest message is
   // young enough that attachment rows may still be arriving, the list's own
   // 60s otherwise (EMAIL-ATTACH-RACE.1's cadence, shared).
+  //
+  // MAIL-PERF.1 — visibility-gated like the list (see pollList above). A
+  // thread switch no longer restarts the clock (the selectedId effect above
+  // loads the new thread at once); a change of cadence still does.
   const threadPollMs = threadRefreshMs(messages)
-  useEffect(() => {
-    if (!selectedId) return undefined
-    const timer = setInterval(() => loadThread(selectedId, { quiet: true }), threadPollMs)
-    const onFocus = () => loadThread(selectedId, { quiet: true })
-    window.addEventListener('focus', onFocus)
-    return () => {
-      clearInterval(timer)
-      window.removeEventListener('focus', onFocus)
-    }
-  }, [selectedId, threadPollMs, loadThread])
+  const pollThread = useCallback(() => {
+    if (selectedId) loadThread(selectedId, { quiet: true })
+  }, [selectedId, loadThread])
+  useVisibleInterval(pollThread, threadPollMs, { enabled: !!selectedId })
 
 
   // MAIL-DEEPLINK.1's reconciliation half — see the effect's own comment

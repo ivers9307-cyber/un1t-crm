@@ -27,7 +27,7 @@ import { GET } from './route'
 import { DIGEST_ROWS_PER_LOCATION } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { makeDb } from '../../tickets/_test-db'
+import { makeDb, selectsFrom } from '../../tickets/_test-db'
 import {
   LOC_A, LOC_B, T_STUDIO, T_ACCOUNTS, T_OTHER_LOCATION,
   COACH, MASTER, MULTI_LOCATION,
@@ -252,5 +252,95 @@ describe('GET /api/email/mail/digest — row stamps match the scoped list', () =
     expect(row.archived).toBe(false)
     expect(row.unread).toBe(true)
     expect(row.has_attachments).toBe(true)
+  })
+})
+
+// MAIL-PERF.1 — `counts=only`: the location-tile poll asks for tile facts and
+// nothing else. The claims: the default answer is untouched (no marker, rows
+// present); the counts-only answer keeps the field set but skips the row work
+// (one head-count per location, no rows query, no per-row counts pass); an
+// unavailable location is still reported and still nulls the total; anything
+// other than the one literal is a 400, not a silent full digest.
+describe('GET /api/email/mail/digest — counts=only', () => {
+  const state = () => mailState({
+    tickets: [
+      { ...T_STUDIO, status: 'open', last_message_direction: 'inbound' },
+      { ...T_OTHER_LOCATION, status: 'open', last_message_direction: 'inbound' },
+    ],
+    messages: [{
+      id: 'm-1', ticket_id: T_STUDIO.id, location_id: LOC_A,
+      direction: 'inbound', seen_at: null,
+    }],
+  })
+
+  it('the default payload carries rows and NO counts_only marker (byte-identical to before)', async () => {
+    setupDb(state())
+    const { body } = await digest()
+    expect(Object.keys(body.data).sort()).toEqual(['locations', 'needs_reply_total', 'partial'])
+    expect(body.data.locations[0].conversations).toHaveLength(1)
+    expect(body.data.locations[0].view_total).toBe(1)
+  })
+
+  it('answers the tile facts with the digest field set, rows empty, view_total null, stamped counts_only', async () => {
+    setupDb(state())
+    const { res, body } = await digest('?counts=only')
+    expect(res.status).toBe(200)
+    expect(body.data.counts_only).toBe(true)
+    expect(body.data.locations.map(l => l.location_id)).toEqual([LOC_A, LOC_B])
+    for (const l of body.data.locations) {
+      expect(Object.keys(l).sort()).toEqual(
+        ['conversations', 'location_id', 'name', 'needs_reply_count', 'unavailable', 'view_total']
+      )
+      expect(l.unavailable).toBe(false)
+      expect(l.needs_reply_count).toBe(1)
+      expect(l.view_total).toBeNull()
+      expect(l.conversations).toEqual([])
+    }
+    expect(body.data.needs_reply_total).toBe(2)
+  })
+
+  it('does the count work only — one head-count per location, no rows read, no per-row counts pass', async () => {
+    const full = setupDb(state())
+    await digest()
+    const fullTicketSelects = selectsFrom(full, 'email_tickets')
+    const fullMessageSelects = selectsFrom(full, 'email_inbox_messages')
+
+    const lean = setupDb(state())
+    await digest('?counts=only')
+    const leanTicketSelects = selectsFrom(lean, 'email_tickets')
+    // Two locations → exactly two selects, both head-only counts.
+    expect(leanTicketSelects).toHaveLength(2)
+    expect(leanTicketSelects.every(s => s.options?.head === true)).toBe(true)
+    expect(leanTicketSelects.length).toBeLessThan(fullTicketSelects.length)
+    // The per-row message-count pass never ran.
+    expect(fullMessageSelects.length).toBeGreaterThan(0)
+    expect(selectsFrom(lean, 'email_inbox_messages')).toHaveLength(0)
+  })
+
+  it('still reports a failed location and nulls the total', async () => {
+    setupDb(mailState({ errors: { email_mailboxes: { code: '08006', message: 'reset' } } }))
+    const { body } = await digest('?counts=only')
+    expect(body.data.partial).toBe(true)
+    expect(body.data.locations).toHaveLength(2)
+    for (const l of body.data.locations) {
+      expect(l.unavailable).toBe(true)
+      expect(l.needs_reply_count).toBeNull()
+      expect(l.conversations).toEqual([])
+    }
+    expect(body.data.needs_reply_total).toBeNull()
+  })
+
+  it('a counts value other than "only" is a 400, never a silent full digest', async () => {
+    setupDb(state())
+    expect((await digest('?counts=yes')).res.status).toBe(400)
+    expect((await digest('?counts=')).res.status).toBe(400)
+  })
+
+  it('composes with view — the view is validated and then irrelevant to the tile facts', async () => {
+    setupDb(state())
+    expect((await digest('?counts=only&view=solved')).res.status).toBe(400)
+    const { body } = await digest('?counts=only&view=archived')
+    expect(body.data.counts_only).toBe(true)
+    expect(body.data.locations[0].needs_reply_count).toBe(1)
   })
 })
