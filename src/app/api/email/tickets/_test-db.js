@@ -41,16 +41,20 @@ function splitTopLevel(expr) {
   return parts
 }
 
-// Minimal PostgREST `or=` evaluator — enough for `col.in.(a,b)`, `col.is.null`
-// and `col.eq.v`, which is all this surface generates.
+// Minimal PostgREST `or=` evaluator — enough for `col.in.(a,b)`, `col.is.null`,
+// `col.eq.v` and `col.neq.v`, which is all this surface generates.
+// WEBHOOK-RETENTION.1 added `neq`, and it is SQL's `<>`: a NULL value never
+// matches, which is exactly why the purge pairs it with `col.is.null` in the
+// same `.or()` — a fake that let NULL through `neq` would hide that trap.
 function orMatches(row, expr) {
   return splitTopLevel(expr).some(part => {
-    const m = part.trim().match(/^([a-z_]+)\.(in|is|eq)\.(.*)$/)
+    const m = part.trim().match(/^([a-z_]+)\.(in|is|eq|neq)\.(.*)$/)
     if (!m) return false
     const [, col, op, rawVal] = m
     const value = row[col] ?? null
     if (op === 'is') return rawVal === 'null' ? value === null : String(value) === rawVal
     if (op === 'eq') return String(value) === rawVal
+    if (op === 'neq') return value !== null && String(value) !== rawVal
     const list = rawVal.replace(/^\(/, '').replace(/\)$/, '')
       .split(',').map(v => v.trim().replace(/^"|"$/g, ''))
     return list.includes(value)
@@ -103,6 +107,10 @@ const TABLE_KEYS = {
   // EMAIL-ATTACH.1 — attachments and the per-mailbox storage counter.
   email_ticket_attachments: 'attachments',
   email_storage_usage: 'storageUsage',
+  // WEBHOOK-RETENTION.1 — the two webhook payload tables the retention purge
+  // cron deletes from (mig 315 / mig 158).
+  webhook_dead_letter: 'deadLetters',
+  postmark_webhook_queue: 'webhookQueue',
   // audit_events is DELIBERATELY ABSENT, same reasoning as email_conversations:
   // logAuditEvent() builds its own client (which the tests point at this fake),
   // so its inserts land on db.inserts — assertable — without polluting a read.
@@ -126,6 +134,8 @@ export function makeDb(state = {}) {
     locations: [], profileLocations: [], profiles: [], companySettings: [],
     // EMAIL-ATTACH.1
     attachments: [], storageUsage: [], objects: new Map(), storageErrors: {},
+    // WEBHOOK-RETENTION.1
+    deadLetters: [], webhookQueue: [],
     errors: {},
     ...state,
   }

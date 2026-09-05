@@ -256,6 +256,11 @@ const config = [
       // MAIL-GDPR.1 — contact erasure's mail scrub. Writes all three mail
       // tables + the storage counter; born clean, armed on arrival.
       'src/lib/contact-mail-erasure.js',
+      // WEBHOOK-RETENTION.1 — the 90-day purge of finished webhook payload
+      // rows (webhook_dead_letter, postmark_webhook_queue). A silently failed
+      // delete is a GDPR residue that reads as a clean run; born clean, armed
+      // on arrival.
+      'src/app/api/cron/purge-webhook-payloads/route.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },
