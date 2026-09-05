@@ -31,7 +31,7 @@ export async function GET() {
     ...(loc?.settings?.customer_agent || {}),
     // social_enabled lives top-level on locations.settings (sibling of customer_agent)
     social_enabled: loc?.settings?.social_enabled === true,
-    // CANCEL-FORM.2 — the Glofox auto-cancel toggle is its own column (mig 584).
+    // CANCEL-FORM.2 — the Glofox auto-cancel toggle is its own column (mig 585).
     glofox_auto_cancel: loc?.glofox_auto_cancel_memberships === true,
   }
 
