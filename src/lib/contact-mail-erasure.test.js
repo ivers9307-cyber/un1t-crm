@@ -185,7 +185,7 @@ describe('redactMailForContact — the WhatsApp doctrine, applied to mail', () =
 
     expect(out.ok).toBe(false)
     expect(out.failures).toEqual([
-      expect.objectContaining({ table: 'email_tickets', op: 'update', message: expect.stringMatching(/archive exploded/) }),
+      expect.objectContaining({ table: 'email_tickets', op: 'update:archive', message: expect.stringMatching(/archive exploded/) }),
     ])
     const t1 = db._state.tickets.find(t => t.id === 't1')
     expect(t1.status).toBe('open')
@@ -458,7 +458,7 @@ describe('redactMailForContact — the WhatsApp doctrine, applied to mail', () =
     seed(db, { tickets: [ticket('t1')] })
     db._state.errors.email_tickets = { message: 'timeout' }
     const out = await redactMailForContact(db, CONTACT)
-    expect(out.failures.filter(f => f.table === 'email_tickets').map(f => f.op).sort()).toEqual(['select', 'update', 'update'])
+    expect(out.failures.filter(f => f.table === 'email_tickets').map(f => f.op).sort()).toEqual(['select', 'update', 'update:archive'])
   })
 
   it('never throws on a database failure — the caller decides what a partial means', async () => {
