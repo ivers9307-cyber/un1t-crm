@@ -39,6 +39,12 @@ import {
 // and because the card is the one screen where the answer has to be present
 // the first time it renders.
 import { assessMailboxReachability } from '@/lib/mail/mailbox-reachability'
+// MAIL-DEADLETTER.2 — mail that arrived BEFORE this account existed was
+// dead-lettered with no location (no_matching_mailbox), which the org-scoped
+// morgue hides from every owner. Creating the account is the moment that row
+// becomes resolvable, so it is the moment it gets its stamp. Best-effort by
+// contract: the create's own outcome never depends on it.
+import { restampOrphanInboundDeadLetters } from '@/lib/webhook-dead-letter-restamp'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -187,6 +193,12 @@ export async function POST(request, props) {
     if (friendly) return NextResponse.json({ success: false, error: friendly }, { status: 409 })
     return NextResponse.json({ success: false, error: insertErr.message }, { status: 500 })
   }
+
+  // The lib never throws; the try is belt-and-braces so a 201 can never
+  // become a 500 over a tidy-up of somebody else's table.
+  try {
+    await restampOrphanInboundDeadLetters(db, { reason: 'mailbox_created', mailboxId: created?.id ?? null })
+  } catch { /* logged inside; the create stands */ }
 
   await logAuditEvent({
     category: 'mutation',

@@ -36,6 +36,10 @@ import {
   mailboxConstraintMessage,
   deactivationPatch,
 } from '@/lib/email-mailbox-admin'
+// MAIL-DEADLETTER.2 — reactivating an account makes it resolvable again for
+// any orphan inbound dead-letter row addressed to it; stamp those the same
+// way a create does. Best-effort, never the PATCH's outcome.
+import { restampOrphanInboundDeadLetters } from '@/lib/webhook-dead-letter-restamp'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -127,6 +131,15 @@ export async function PATCH(request, props) {
     const friendly = mailboxConstraintMessage(updateErr)
     if (friendly) return NextResponse.json({ success: false, error: friendly }, { status: 409 })
     return NextResponse.json({ success: false, error: updateErr.message }, { status: 500 })
+  }
+
+  // Only the inactive → active TRANSITION resolves new mail; a rename or a
+  // default move changes nothing about which address receives, and a
+  // redundant active:true on an already-active row is a no-op for the morgue.
+  if (body.active === true && before.active === false) {
+    try {
+      await restampOrphanInboundDeadLetters(db, { reason: 'mailbox_reactivated', mailboxId: params.mailboxId })
+    } catch { /* logged inside; the PATCH stands */ }
   }
 
   const after = await loadMailboxOr404(db, params.id, params.mailboxId)
