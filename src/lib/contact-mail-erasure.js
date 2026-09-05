@@ -61,8 +61,24 @@
 // X's text. Scrubbing it would mean writing to Y's row from X's erasure, which
 // this module does not do; the next message on Y's ticket overwrites it.
 //
+// ══ MAIL-GDPR.2 — THE REDACTED CONVERSATION IS ARCHIVED ═══════════════
+// GDPR.1 left `status` alone, and a redacted OPEN thread then sat in Inbox /
+// Needs reply under redacted@erased.invalid, where a staff reply bounced off
+// the reserved TLD. Decided 5 Sep 2026 (Richard): archive it as part of the
+// scrub. Archive on the Mail surface IS status='closed' — no second lifecycle
+// (mail/[id]/archive/route.js) — so the scrub writes the SAME fields that
+// route does: status, closed_at, updated_at, all mig 482. statusTimestamps()
+// keeps an existing closed_at and leaves solved_at as it was; a ticket that is
+// not `closed` carries closed_at NULL by that same helper, so filtering the
+// write to status <> 'closed' is that rule expressed as a WHERE clause — an
+// already-archived ticket's closed_at is never touched. The archive is a
+// SECOND statement because the redaction must reach closed tickets too. The
+// mailbox half of archiving (the IMAP move) is NOT mirrored: the provider's
+// copy of an erased person's mail is the operator's mailbox, outside this
+// module's remit, and the route itself does not pair un-archive either.
+//
 // Idempotent: a second run finds the sentinels already in place, no
-// attachments, and reports no failures.
+// attachments, every ticket already closed, and reports no failures.
 
 import { logError } from './log'
 import { EMAIL_ATTACHMENT_BUCKET } from './email-attachment-quota'
@@ -89,6 +105,17 @@ export const MAIL_TICKET_REDACTION = Object.freeze({
   // the usual content. text[] NOT NULL, so empty rather than null.
   excluded_participants: [],
 })
+
+/**
+ * MAIL-GDPR.2 — what archiving a ticket writes, mirrored from
+ * mail/[id]/archive/route.js (status + statusTimestamps('closed') + updated_at)
+ * for a row that is not already closed. solved_at is deliberately absent: the
+ * route keeps whatever is there, and not naming the column is how an UPDATE
+ * keeps it.
+ */
+export function mailTicketArchive(now = new Date().toISOString()) {
+  return { status: 'closed', closed_at: now, updated_at: now }
+}
 
 /**
  * The columns on email_inbox_messages that identify the person or carry what
@@ -237,10 +264,19 @@ export async function redactMailForContact(db, contactId) {
     if (error) fail('email_inbox_messages', 'update', error.message, { by: 'merged_from_ticket_id' })
   }
 
-  // ── 4. Tickets ─────────────────────────────────────────────────────
+  // ── 4. Tickets: redact every one, then archive the ones still live ──
+  // Two statements on purpose: the redaction reaches closed tickets too, the
+  // archive must not (an existing closed_at is history). Both by contact_id,
+  // both attempted even after a failed read — see the note on step 1.
   if (!ticketsKnownEmpty) {
     const { error } = await db.from('email_tickets').update(MAIL_TICKET_REDACTION).eq('contact_id', contactId)
-    if (error) fail('email_tickets', 'update', error.message)
+    if (error) fail('email_tickets', 'update', error.message, { step: 'redact' })
+
+    const { error: archiveError } = await db.from('email_tickets')
+      .update(mailTicketArchive())
+      .eq('contact_id', contactId)
+      .neq('status', 'closed')
+    if (archiveError) fail('email_tickets', 'update', archiveError.message, { step: 'archive' })
   }
 
   return {

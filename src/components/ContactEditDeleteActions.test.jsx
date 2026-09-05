@@ -52,6 +52,20 @@ describe('ContactEditDeleteActions — the impact preview never contradicts itse
     expect(screen.queryByText(/could not be counted/i)).toBeNull()
   })
 
+  // MAIL-GDPR.2 — redacted mail conversations are archived by the scrub; the
+  // "Will be redacted" footnote is the one place the single-delete dialog
+  // explains what redaction does, so it says so.
+  it('tells the operator the mail conversations are archived, under "Will be redacted"', async () => {
+    await openDialog(impactPayload({
+      total_rows: 2,
+      redact_on_delete: [
+        { table: 'email_tickets', column: 'contact_id', count: 2, label: 'email tickets (requester + subject redacted, thread preserved)' },
+      ],
+    }))
+    await waitFor(() => expect(screen.getByText(/will be redacted/i)).toBeTruthy())
+    expect(screen.getByText(/mail conversations are (also )?archived/i)).toBeTruthy()
+  })
+
   it('withholds "Safe to delete" when the preview is partial, even at zero rows', async () => {
     await openDialog(impactPayload({ total_rows: 0, partial: true }))
     await waitFor(() => expect(screen.getByText(/could not be counted/i)).toBeTruthy())
