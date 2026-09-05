@@ -385,6 +385,35 @@ describe('POST …/forward — the mail', () => {
     expect(htmlBody).toContain('href="https://instagram.com/un1t"')
   })
 
+  // MAIL-SIGDEFAULT.1 — the studio block goes out for everyone. A forward by
+  // a person who never opted in carries it, in the rich placement (below the
+  // forwarded block), resolved off the ticket's studio.
+  it('MAIL-SIGDEFAULT.1 — a NEW HIRE forwards with the studio block below the forward, in both parts', async () => {
+    getCurrentUser.mockResolvedValue({ ...COACH, email_signature: null, email_signature_rich: null })
+    setupDb(world({
+      locations: [{ id: T_STUDIO.location_id, name: 'UN1T Hatch Street' }],
+      companySettings: [{
+        location_id: T_STUDIO.location_id,
+        email_signature: { phone: '(01) 574 1871', links: [{ label: 'Book a class', url: 'https://un1tdublin.com/welcome/hatch-street#start' }] },
+      }],
+    }))
+    await post(T_STUDIO.id, GOOD)
+    const { textBody, htmlBody } = sentPayload()
+    expect(textBody).toContain('-- \nUN1T Hatch Street\n(01) 574 1871\nBook a class: https://un1tdublin.com/welcome/hatch-street#start')
+    expect(textBody.indexOf('UN1T Hatch Street')).toBeGreaterThan(textBody.indexOf('Forwarded message'))
+    expect(htmlBody).toContain('href="https://un1tdublin.com/welcome/hatch-street#start"')
+  })
+
+  it('MAIL-SIGDEFAULT.1 — a studio with NO card leaves a plain-only forward byte-for-byte: note-position sign-off, no block', async () => {
+    getCurrentUser.mockResolvedValue({ ...COACH, email_signature: 'Sarah\nUN1T Stillorgan', email_signature_rich: null })
+    setupDb(world({ locations: [{ id: T_STUDIO.location_id, name: 'UN1T Stillorgan' }], companySettings: [] }))
+    await post(T_STUDIO.id, GOOD)
+    const { textBody, htmlBody } = sentPayload()
+    expect(textBody).toContain('Sarah\nUN1T Stillorgan')
+    expect(textBody.indexOf('Sarah')).toBeLessThan(textBody.indexOf('Forwarded message'))
+    expect(htmlBody).not.toContain('border-top:3px solid #0f172a')
+  })
+
   // No threading headers: In-Reply-To pointing at the member's Message-ID would
   // file our forward inside a thread the recipient has never seen.
   it('carries no threading headers', async () => {

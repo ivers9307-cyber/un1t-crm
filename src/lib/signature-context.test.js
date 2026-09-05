@@ -294,34 +294,76 @@ describe('resolveSignatureHint — mirrors the send byte for byte', () => {
     ).toBeNull()
   })
 
-  it('the plain column does not depend on a studio — it shows for any location, or none', () => {
+  // MAIL-SIGDEFAULT.1 — the studio block goes out for EVERYONE at a studio
+  // that has configured one, so the plain column no longer stands alone
+  // anywhere the studio is unknown: THE RULE now covers it too.
+  it('the plain column at a location with NO context → null (the send WILL resolve a studio there, and may add its block)', () => {
     const prefs = { email_signature: 'Plain Sarah', email_signature_rich: { ...RICH, enabled: false }, signature_contexts: CONTEXTS }
-    expect(resolveSignatureHint(prefs, 'loc-elsewhere')).toEqual({ text: 'Plain Sarah', rich: false, hasPhoto: false, hasLinks: false })
-    expect(resolveSignatureHint(prefs, null)).toEqual({ text: 'Plain Sarah', rich: false, hasPhoto: false, hasLinks: false })
+    expect(resolveSignatureHint(prefs, 'loc-elsewhere')).toBeNull()
+    expect(resolveSignatureHint(prefs, null)).toBeNull()
   })
 
-  it('rich enabled but EMPTY falls through to the plain column — the send’s own gate on the RAW value', () => {
-    const hint = resolveSignatureHint(
-      {
-        email_signature: 'Plain Sarah',
-        email_signature_rich: { enabled: true, name: '', title: '', phone: '', note: '', photo_url: null, links: [] },
-        signature_contexts: CONTEXTS,
-      },
-      'loc-still'
-    )
-    expect(hint).toEqual({ text: 'Plain Sarah', rich: false, hasPhoto: false, hasLinks: false })
+  it('the plain column ALONE at a permitted studio with no card — today’s behaviour, untouched', () => {
+    const prefs = { email_signature: 'Plain Sarah', email_signature_rich: { ...RICH, enabled: false }, signature_contexts: CONTEXTS }
+    expect(resolveSignatureHint(prefs, 'loc-hatch')).toEqual({ text: 'Plain Sarah', rich: false, hasPhoto: false, hasLinks: false })
   })
 
-  it('nothing anywhere hides the hint entirely', () => {
+  it('rich enabled but EMPTY is "no personal part" — the send’s own gate on the RAW value; the studio block still goes out', () => {
+    const prefs = {
+      email_signature: 'Plain Sarah',
+      email_signature_rich: { enabled: true, name: '', title: '', phone: '', note: '', photo_url: null, links: [] },
+      signature_contexts: CONTEXTS,
+    }
+    // Stillorgan has a card: plain sign-off above the studio block.
+    expect(resolveSignatureHint(prefs, 'loc-still')).toEqual({
+      text: 'Plain Sarah\n\nUN1T Stillorgan\n01 555 0001\nBook Stillorgan: https://un1t.ie/stillorgan',
+      rich: true, hasPhoto: false, hasLinks: true,
+    })
+    // Hatch has none: the plain column alone, as before.
+    expect(resolveSignatureHint(prefs, 'loc-hatch')).toEqual({ text: 'Plain Sarah', rich: false, hasPhoto: false, hasLinks: false })
+  })
+
+  it('nothing personal anywhere at a card-less studio hides the hint entirely', () => {
     for (const plain of ['', '   \n ', null, undefined]) {
       expect(
         resolveSignatureHint(
           { email_signature: plain, email_signature_rich: null, signature_contexts: CONTEXTS },
-          'loc-still'
+          'loc-hatch'
         )
       ).toBeNull()
     }
     expect(resolveSignatureHint(null, 'loc-still')).toBeNull()
+  })
+
+  // ── MAIL-SIGDEFAULT.1 — default ON ──────────────────────────────────────
+  it('NOTHING personal (rich NULL, plain empty) at a configured studio → the studio block — the new-hire case', () => {
+    for (const plain of ['', null, undefined]) {
+      expect(
+        resolveSignatureHint({ email_signature: plain, email_signature_rich: null, signature_contexts: CONTEXTS }, 'loc-still')
+      ).toEqual({
+        text: 'UN1T Stillorgan\n01 555 0001\nBook Stillorgan: https://un1t.ie/stillorgan',
+        rich: true, hasPhoto: false, hasLinks: true,
+      })
+    }
+  })
+
+  it('personal DISABLED at a configured studio → the studio block; the disabled personal fields never show', () => {
+    const hint = resolveSignatureHint(
+      { email_signature: '', email_signature_rich: { ...RICH, enabled: false }, signature_contexts: CONTEXTS },
+      'loc-still'
+    )
+    expect(hint).toEqual({
+      text: 'UN1T Stillorgan\n01 555 0001\nBook Stillorgan: https://un1t.ie/stillorgan',
+      rich: true, hasPhoto: false, hasLinks: true,
+    })
+    expect(hint.text).not.toContain('Alex Example')
+    expect(hint.text).not.toContain('087 111 2222')
+  })
+
+  it('personal disabled at a studio with NO card and no plain column → null — hide still holds', () => {
+    expect(
+      resolveSignatureHint({ email_signature: '', email_signature_rich: { ...RICH, enabled: false }, signature_contexts: CONTEXTS }, 'loc-hatch')
+    ).toBeNull()
   })
 
   it('a PHOTO-ONLY signature with nothing on the studio line answers text "" with rich:true — an HTML-only block', () => {
@@ -391,22 +433,46 @@ describe('withEffectiveText — the server-rendered half (the mobile contract)',
     })
   })
 
-  it('null text and false flags when NOTHING would append', () => {
+  // MAIL-SIGDEFAULT.1 — a person with NOTHING of their own still carries the
+  // studio block wherever the studio has configured one. Mobile renders this
+  // verbatim; the three-value contract is unchanged (string / '' / null).
+  it('NOTHING personal: the studio block at a configured studio, null where the studio has no card', () => {
     const out = withEffectiveText(CONTEXTS, { email_signature: '', email_signature_rich: null })
-    for (const entry of out) {
-      expect(entry).toMatchObject({ effective_text: null, rich: false, has_photo: false, has_links: false })
-    }
+    expect(out[0]).toMatchObject({
+      ...CONTEXTS[0],
+      effective_text: 'UN1T Stillorgan\n01 555 0001\nBook Stillorgan: https://un1t.ie/stillorgan',
+      rich: true, has_photo: false, has_links: true,
+    })
+    expect(out[1]).toMatchObject({ ...CONTEXTS[1], effective_text: null, rich: false, has_photo: false, has_links: false })
   })
 
-  it('the plain column when the rich signature is off — same text at every studio', () => {
+  it('the plain column when the rich signature is off — ABOVE the studio block where there is one, alone where not', () => {
     const out = withEffectiveText(CONTEXTS, { email_signature: 'Plain Sarah', email_signature_rich: { ...RICH, enabled: false } })
-    for (const entry of out) {
-      expect(entry).toMatchObject({ effective_text: 'Plain Sarah', rich: false, has_photo: false, has_links: false })
+    expect(out[0]).toMatchObject({
+      effective_text: 'Plain Sarah\n\nUN1T Stillorgan\n01 555 0001\nBook Stillorgan: https://un1t.ie/stillorgan',
+      rich: true, has_photo: false, has_links: true,
+    })
+    expect(out[1]).toMatchObject({ effective_text: 'Plain Sarah', rich: false, has_photo: false, has_links: false })
+  })
+
+  it('the wire SHAPE is unchanged — the same eight keys per entry, whichever path won', () => {
+    const KEYS = ['location_id', 'location_name', 'studio_signature', 'has_mailbox', 'effective_text', 'rich', 'has_photo', 'has_links']
+    for (const profile of [
+      { email_signature: '', email_signature_rich: RICH },
+      { email_signature: '', email_signature_rich: null },
+      { email_signature: 'Plain Sarah', email_signature_rich: null },
+    ]) {
+      for (const entry of withEffectiveText(CONTEXTS, profile)) {
+        expect(Object.keys(entry).sort()).toEqual([...KEYS].sort())
+      }
     }
   })
 
-  it('never throws on a null profile or a non-array context', () => {
-    expect(withEffectiveText(CONTEXTS, null).map((e) => e.effective_text)).toEqual([null, null])
+  it('never throws on a null profile or a non-array context — a null profile is "nothing personal", so the studio block still resolves', () => {
+    expect(withEffectiveText(CONTEXTS, null).map((e) => e.effective_text)).toEqual([
+      'UN1T Stillorgan\n01 555 0001\nBook Stillorgan: https://un1t.ie/stillorgan',
+      null,
+    ])
     expect(withEffectiveText(null, { email_signature: 'x' })).toEqual([])
   })
 })
