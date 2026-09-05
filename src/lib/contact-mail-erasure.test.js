@@ -90,13 +90,107 @@ describe('redactMailForContact — the WhatsApp doctrine, applied to mail', () =
     expect(t1.requester_email).toBe(MAIL_REDACTED_EMAIL)
     expect(t1.requester_name).toBeNull()
     expect(t1.excluded_participants).toEqual([])
-    // Operator-side audit survives, exactly as the WhatsApp scrub keeps status + timestamps.
-    expect(t1.status).toBe('open')
+    // Operator-side audit survives, exactly as the WhatsApp scrub keeps timestamps.
     expect(t1.created_at).toBe('2026-08-01T10:00:00Z')
-    // Another person's ticket is untouched.
-    expect(db._state.tickets.find(t => t.id === 't2').requester_email).toBe('other@example.com')
+    // MAIL-GDPR.2 — the thread is filed away, not left open under a sentinel address.
+    expect(t1.status).toBe('closed')
+    // Another person's ticket is untouched — redaction AND archive. Drop the
+    // archive UPDATE's contact_id filter and this is the line that fails.
+    const t2 = db._state.tickets.find(t => t.id === 't2')
+    expect(t2.requester_email).toBe('other@example.com')
+    expect(t2.status).toBe('open')
+    expect(t2.closed_at ?? null).toBeNull()
     expect(out.failures).toEqual([])
     expect(out.tickets).toBe(1)
+  })
+
+  // ── MAIL-GDPR.2: the redacted conversation is ARCHIVED ────────────────
+  // A redacted ticket left `open` sat in Inbox / Needs reply showing
+  // redacted@erased.invalid, and a staff reply to it bounced. Archive on the
+  // Mail surface IS status='closed' plus the stamps statusTimestamps() writes
+  // (mail/[id]/archive/route.js); the scrub mirrors that write exactly, so an
+  // erased ticket is indistinguishable from any other archived one.
+
+  it('archives a redacted OPEN ticket with the same stamps the archive route writes', async () => {
+    seed(db, { tickets: [ticket('t1', { closed_at: null, solved_at: null, updated_at: '2026-08-01T10:00:00Z' })] })
+    const before = Date.now()
+
+    const out = await redactMailForContact(db, CONTACT)
+
+    const t1 = db._state.tickets.find(t => t.id === 't1')
+    expect(t1.status).toBe('closed')
+    expect(t1.closed_at).toEqual(expect.any(String))
+    expect(Date.parse(t1.closed_at)).toBeGreaterThanOrEqual(before)
+    expect(t1.updated_at).toBe(t1.closed_at)
+    // statusTimestamps('closed') keeps solved_at as it was — never invents one.
+    expect(t1.solved_at).toBeNull()
+    // Redaction and archive both landed on the one row.
+    expect(t1.requester_email).toBe(MAIL_REDACTED_EMAIL)
+    expect(out.failures).toEqual([])
+  })
+
+  it('a `solved` ticket is archived too and keeps its solved_at, like the route does', async () => {
+    seed(db, { tickets: [ticket('t1', { status: 'solved', solved_at: '2026-08-02T09:00:00Z', closed_at: null })] })
+    await redactMailForContact(db, CONTACT)
+    const t1 = db._state.tickets.find(t => t.id === 't1')
+    expect(t1.status).toBe('closed')
+    expect(t1.solved_at).toBe('2026-08-02T09:00:00Z')
+    expect(t1.closed_at).toEqual(expect.any(String))
+  })
+
+  it('an already-closed ticket keeps its original closed_at — history is not rewritten', async () => {
+    seed(db, {
+      tickets: [
+        ticket('t1', { status: 'closed', closed_at: '2026-08-03T08:00:00Z', updated_at: '2026-08-03T08:00:00Z' }),
+        ticket('t2'),
+      ],
+    })
+
+    const out = await redactMailForContact(db, CONTACT)
+
+    const t1 = db._state.tickets.find(t => t.id === 't1')
+    expect(t1.status).toBe('closed')
+    expect(t1.closed_at).toBe('2026-08-03T08:00:00Z')
+    expect(t1.updated_at).toBe('2026-08-03T08:00:00Z')
+    // It is still redacted — the archive filter narrows the ARCHIVE write only.
+    expect(t1.requester_email).toBe(MAIL_REDACTED_EMAIL)
+    // The open sibling is archived.
+    const t2 = db._state.tickets.find(t => t.id === 't2')
+    expect(t2.status).toBe('closed')
+    expect(t2.closed_at).toEqual(expect.any(String))
+    expect(out.failures).toEqual([])
+  })
+
+  it('a failed ARCHIVE write is a scrub warning, and the redaction + message passes still land', async () => {
+    seed(db, { tickets: [ticket('t1')], messages: [message('m1', 't1')] })
+    // Fail only the archive UPDATE (the one that writes status), leaving the
+    // redaction UPDATE on the same table alone — failWrites cannot tell them apart.
+    const realFrom = db.from
+    db.from = (table) => {
+      const b = realFrom(table)
+      if (table !== 'email_tickets') return b
+      const origUpdate = b.update
+      b.update = (payload) => {
+        origUpdate(payload)
+        if (payload.status === 'closed') {
+          const failure = { data: null, error: { code: 'XX000', message: 'archive exploded' } }
+          b.then = (res, rej) => Promise.resolve(failure).then(res, rej)
+        }
+        return b
+      }
+      return b
+    }
+
+    const out = await redactMailForContact(db, CONTACT)
+
+    expect(out.ok).toBe(false)
+    expect(out.failures).toEqual([
+      expect.objectContaining({ table: 'email_tickets', op: 'update:archive', message: expect.stringMatching(/archive exploded/) }),
+    ])
+    const t1 = db._state.tickets.find(t => t.id === 't1')
+    expect(t1.status).toBe('open')
+    expect(t1.requester_email).toBe(MAIL_REDACTED_EMAIL)
+    expect(db._state.messages[0].text_body).toBe(MAIL_REDACTED_BODY)
   })
 
   it('anonymises every message on the contact\'s tickets — including rows never stamped with contact_id', async () => {
@@ -357,13 +451,14 @@ describe('redactMailForContact — the WhatsApp doctrine, applied to mail', () =
   })
 
   it('a FAILED read still attempts the by-contact write — only a read that found nothing skips it', async () => {
-    // errors.<table> fails every operation on that table, so both the select and
-    // the update surface as failures: proof the update was attempted after the
-    // read failed, rather than skipped as if the read had returned zero rows.
+    // errors.<table> fails every operation on that table, so the select and
+    // both updates (redact, archive) surface as failures: proof the updates
+    // were attempted after the read failed, rather than skipped as if the read
+    // had returned zero rows.
     seed(db, { tickets: [ticket('t1')] })
     db._state.errors.email_tickets = { message: 'timeout' }
     const out = await redactMailForContact(db, CONTACT)
-    expect(out.failures.filter(f => f.table === 'email_tickets').map(f => f.op).sort()).toEqual(['select', 'update'])
+    expect(out.failures.filter(f => f.table === 'email_tickets').map(f => f.op).sort()).toEqual(['select', 'update', 'update:archive'])
   })
 
   it('never throws on a database failure — the caller decides what a partial means', async () => {

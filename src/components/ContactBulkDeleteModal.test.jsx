@@ -30,4 +30,19 @@ describe('ContactBulkDeleteModal — pre-confirm copy', () => {
     // The consent-bearing framing stays.
     expect(redacted.textContent).toMatch(/GDPR right-to-erasure/)
   })
+
+  // MAIL-GDPR.2 — the scrub now archives the redacted mail conversations, so
+  // the consent copy says so: an operator should not be surprised when a
+  // thread they were mid-reply on leaves Inbox.
+  it('says the mail conversations are also archived', () => {
+    render(
+      <ContactBulkDeleteModal
+        contacts={[{ id: 'c-1', name: 'Ada Member', email: 'ada@example.com' }]}
+        onClose={() => {}}
+        onDeleted={() => {}}
+      />
+    )
+    const redacted = screen.getByText('Will be redacted:').closest('div')
+    expect(redacted.textContent).toMatch(/mail conversations are (also )?archived/i)
+  })
 })
