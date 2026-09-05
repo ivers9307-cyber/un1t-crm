@@ -211,6 +211,7 @@
     { "path": "/api/cron/repeat-bounce-sweep", "schedule": "45 5 * * *" },
     { "path": "/api/cron/person-detect-scan", "schedule": "45 3 * * *" },
     { "path": "/api/cron/poll-imap-mailboxes", "schedule": "*/5 * * * *" },
-    { "path": "/api/cron/purge-spam-tickets", "schedule": "15 3 * * *" }
+    { "path": "/api/cron/purge-spam-tickets", "schedule": "15 3 * * *" },
+    { "path": "/api/cron/purge-webhook-payloads", "schedule": "45 3 * * *" }
   ]
 }
