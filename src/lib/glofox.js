@@ -1143,6 +1143,108 @@ export async function cancelBooking(creds, bookingId, userId) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// Membership cancellation (CANCEL-FORM.1)
+// ─────────────────────────────────────────────────────────────
+//
+// docs/LESSONS.md: POST /v3.0/memberships/{userMembershipId}/cancel is the
+// one membership WRITE Glofox documents. Facts that shape this client:
+//   - only `when: 'ON_DATE'` works (NOW / END_OF_CYCLE are spec-annotated
+//     "not supported yet");
+//   - the call is member-initiated, so it REQUIRES the
+//     x-glofox-impersonated-member-id header (the member's Glofox _id);
+//   - a malformed id makes Glofox's router answer WRONG_URL before the
+//     route resolves, which reads exactly like "no such endpoint" — so
+//     ids are shape-checked here and never sent malformed;
+//   - `userMembershipId` is the per-member membership INSTANCE id from
+//     GET /2.0/members/{id} → membership.user_membership_id, distinct from
+//     the catalog membershipId.
+// Pause has a live sibling route that REJECTS impersonation and has no
+// documented body — it is deliberately not automated.
+
+const GLOFOX_OBJECT_ID_RE = /^[0-9a-f]{24}$/i
+const ISO_DAY_RE = /^\d{4}-\d{2}-\d{2}$/
+
+// Form reason codes → Glofox's MembershipCancellationRequest.reason enum.
+// Codes with no Glofox equivalent map to '' (the spec allows the empty
+// string); the customer's own words travel on the request row instead.
+export const GLOFOX_CANCELLATION_REASONS = Object.freeze({
+  price: 'MEMBERSHIP_CANCELLATION_PRICE',
+  moving: 'MEMBERSHIP_CANCELLATION_MOVED',
+  not_using: 'MEMBERSHIP_CANCELLATION_NO_USAGE',
+  service: 'MEMBERSHIP_CANCELLATION_CUSTOMER_SERVICE',
+  schedule: 'MEMBERSHIP_CANCELLATION_EVENT_SCHEDULE',
+  change_membership: 'MEMBERSHIP_CANCELLATION_CHANGE_MEMBERSHIP',
+  injury_health: '',
+  other: '',
+})
+const GLOFOX_CANCELLATION_REASON_VALUES = new Set(Object.values(GLOFOX_CANCELLATION_REASONS))
+
+export function glofoxCancellationReason(code) {
+  return Object.prototype.hasOwnProperty.call(GLOFOX_CANCELLATION_REASONS, code)
+    ? GLOFOX_CANCELLATION_REASONS[code]
+    : ''
+}
+
+/**
+ * Resolve the per-member membership instance id the cancel endpoint
+ * addresses. Falls back on a live single-member GET because the bulk
+ * list sync never carried it (contacts.glofox_user_membership_id is only
+ * populated once the detail sync has touched the row).
+ * @returns {Promise<string|null>}
+ */
+export async function resolveUserMembershipId(creds, memberId) {
+  if (!creds || !memberId) return null
+  const { ok, member } = await fetchMemberResult(creds, memberId)
+  if (!ok || !member) return null
+  const id = member.membership && typeof member.membership === 'object'
+    ? member.membership.user_membership_id
+    : null
+  return typeof id === 'string' && id ? id : null
+}
+
+/**
+ * Cancel a member's membership ON a date. Never throws.
+ *
+ * @param {object} creds
+ * @param {{userMembershipId:string, memberId:string, localDate:string, reason?:string}} args
+ *   reason must be a value of GLOFOX_CANCELLATION_REASONS (default '').
+ * @returns {Promise<{ok:boolean, status:number, message_code:(string|null), local_planned_end_date:(string|null), body:any}>}
+ *   message_code is Glofox's own code (body.message_code, else body.message)
+ *   kept verbatim so the approval card can show it; INVALID_ARGS and
+ *   NETWORK_ERROR are ours.
+ */
+export async function cancelGlofoxMembership(creds, { userMembershipId, memberId, localDate, reason = '' } = {}) {
+  const invalid = !creds
+    || !GLOFOX_OBJECT_ID_RE.test(String(userMembershipId || ''))
+    || !GLOFOX_OBJECT_ID_RE.test(String(memberId || ''))
+    || !ISO_DAY_RE.test(String(localDate || ''))
+    || !GLOFOX_CANCELLATION_REASON_VALUES.has(reason)
+  if (invalid) {
+    return { ok: false, status: 400, message_code: 'INVALID_ARGS', local_planned_end_date: null, body: null }
+  }
+  try {
+    const r = await glofoxFetch(creds, `/v3.0/memberships/${userMembershipId}/cancel`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-glofox-impersonated-member-id': memberId,
+      },
+      body: JSON.stringify({ when: 'ON_DATE', local_date: localDate, reason }),
+    })
+    let body
+    try { body = await r.json() } catch { body = null }
+    const payload = body && typeof body === 'object' && body.data && typeof body.data === 'object' ? body.data : body
+    const plannedEnd = payload && typeof payload.local_planned_end_date === 'string' ? payload.local_planned_end_date : null
+    const messageCode = body && typeof body === 'object'
+      ? (typeof body.message_code === 'string' ? body.message_code : (typeof body.message === 'string' ? body.message : null))
+      : null
+    return { ok: r.ok, status: r.status, message_code: r.ok ? (messageCode ?? null) : messageCode, local_planned_end_date: r.ok ? plannedEnd : null, body }
+  } catch (e) {
+    return { ok: false, status: 0, message_code: 'NETWORK_ERROR', local_planned_end_date: null, body: { error: e?.message || 'network error' } }
+  }
+}
+
 /**
  * Fetch a Glofox member's interactions log via
  * /2.1/branches/{branchId}/leads/{userId}/interactions.
