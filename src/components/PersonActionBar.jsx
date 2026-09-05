@@ -19,13 +19,15 @@
 
 import { useRouter } from 'next/navigation'
 import { useState, useRef, useEffect } from 'react'
-import { MoreVertical, MessageSquare, CheckSquare, Repeat, Snowflake, RotateCcw } from 'lucide-react'
+import { MoreVertical, MessageSquare, CheckSquare, Repeat, Snowflake, RotateCcw, FileX } from 'lucide-react'
 import dynamic from 'next/dynamic'
 import { createBrowserClient } from '@/lib/supabase'
 
 // SequencePicker is heavy + only needed once the operator opens an
 // action — lazy-load it (mirrors the DealCard PERF.3 note).
 const SequencePicker = dynamic(() => import('./SequencePicker'), { ssr: false })
+// CANCEL-FORM.4 — same reason: only loaded once the operator opens it.
+const SendCancellationFormModal = dynamic(() => import('./SendCancellationFormModal'), { ssr: false })
 
 const ACTION_DEFS = {
   message: { label: 'Message', icon: MessageSquare },
@@ -34,6 +36,8 @@ const ACTION_DEFS = {
   // FUNNEL.4 — label/icon are dynamic (see renderColdItem); this entry just
   // keeps 'cold' a recognised action so callers can opt in via `actions`.
   cold: { label: 'Cold', icon: Snowflake },
+  // CANCEL-FORM.4 — staff send the member a single-use pause/cancel form link.
+  cancel_form: { label: 'Send cancellation form', icon: FileX },
 }
 
 export default function PersonActionBar({
@@ -48,7 +52,7 @@ export default function PersonActionBar({
 }) {
   const router = useRouter()
   const [menuOpen, setMenuOpen] = useState(false)
-  const [overlay, setOverlay] = useState(null) // 'task' | 'sequence' | null
+  const [overlay, setOverlay] = useState(null) // 'task' | 'sequence' | 'cancel_form' | null
   const [saving, setSaving] = useState(false)
   // Two refs — trigger + dropdown — so the outside-click handler skips
   // closing when the click lands in either (the DealCard v1 bug:
@@ -244,6 +248,17 @@ export default function PersonActionBar({
               </button>
             </div>
           </form>
+        </Overlay>
+      )}
+
+      {/* CANCEL-FORM.4 — send the cancellation form link */}
+      {overlay === 'cancel_form' && (
+        <Overlay onClose={() => setOverlay(null)}>
+          <SendCancellationFormModal
+            contactId={contactId}
+            onClose={() => setOverlay(null)}
+            onSent={() => router.refresh()}
+          />
         </Overlay>
       )}
 

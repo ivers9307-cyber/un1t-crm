@@ -33,6 +33,7 @@ import {
   buildBodyComponents,
 } from '@/lib/radar-outreach'
 import { manualTakeoverPatch } from '@/lib/agent/core'
+import { getOrCreateContactConversation } from '@/lib/whatsapp-conversations'
 
 export const runtime = 'nodejs'
 
@@ -82,53 +83,13 @@ export async function POST(request, props) {
   const guard = assertLocationAccessOr404(user, contact.location_id)
   if (guard) return guard
 
-  const phone = contact.wa_phone || contact.phone
-  if (!phone) {
-    return NextResponse.json({ success: false, error: 'Contact has no phone number on file' }, { status: 400 })
+  // CANCEL-FORM.4 — get-or-create moved to lib/whatsapp-conversations so the
+  // cancellation-form send opens the same thread this composer does.
+  const opened = await getOrCreateContactConversation(db, contact)
+  if (!opened.ok) {
+    return NextResponse.json({ success: false, error: opened.error }, { status: opened.status })
   }
-  // Meta wants the number without a leading '+'.
-  const waPhone = phone.startsWith('+') ? phone.slice(1) : phone
-
-  // ── Get-or-create the conversation ──────────────────────────────
-  let conversation = null
-  const { data: existing } = await db
-    .from('whatsapp_conversations')
-    .select('id, window_expires_at, location_id, agent_handed_off_at')
-    .eq('contact_id', contactId)
-    .order('last_message_at', { ascending: false, nullsFirst: false })
-    .limit(1)
-  conversation = existing?.[0] || null
-
-  if (!conversation) {
-    const { data: created, error: convErr } = await db
-      .from('whatsapp_conversations')
-      .insert({
-        location_id: contact.location_id,
-        contact_id: contactId,
-        wa_phone: waPhone,
-        status: 'active',
-      })
-      .select('id, window_expires_at, location_id, agent_handed_off_at')
-      .single()
-    if (created) {
-      conversation = created
-    } else {
-      // Unique-constraint race on wa_phone — adopt the existing row.
-      const { data: byPhone } = await db
-        .from('whatsapp_conversations')
-        .select('id, window_expires_at, location_id, agent_handed_off_at')
-        .eq('wa_phone', waPhone)
-        .eq('location_id', contact.location_id)
-        .limit(1)
-      conversation = byPhone?.[0] || null
-      if (conversation) {
-        await db.from('whatsapp_conversations').update({ contact_id: contactId }).eq('id', conversation.id)
-      }
-    }
-    if (!conversation) {
-      return NextResponse.json({ success: false, error: convErr?.message || 'Could not open a conversation' }, { status: 500 })
-    }
-  }
+  const { conversation, waPhone } = opened
 
   // ── Send ────────────────────────────────────────────────────────
   let result
