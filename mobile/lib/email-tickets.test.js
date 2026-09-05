@@ -112,9 +112,11 @@ describe('ticketSendOriginMeta (MAILBOX-COEXIST.1)', () => {
 })
 
 describe('mail status (RETIRE-TICKETS.1 — the lifecycle chips left with the queue)', () => {
-  it('chips Archived for solved AND closed — historic rows still carry solved', () => {
+  it('chips Archived for closed; a stampless legacy solved row is LIVE, as the server stamps it (MAIL-ARCH.4)', () => {
     expect(mailStatusChip({ status: 'closed' }).label).toBe('Archived')
-    expect(mailStatusChip({ status: 'solved' }).label).toBe('Archived')
+    expect(mailStatusChip({ status: 'solved', needs_reply: false })).toBeNull()
+    // On the wire the stamp decides — and it says the same thing.
+    expect(mailStatusChip({ status: 'solved', archived: true }).label).toBe('Archived')
   })
 
   it('chips Needs reply only when their word was last on an open conversation', () => {
@@ -146,12 +148,13 @@ describe('mail status (RETIRE-TICKETS.1 — the lifecycle chips left with the qu
       .toBeNull()
   })
 
-  // MAIL-ARCH.3 — `isArchivedStatus` is gone; the stampless solved||closed
-  // fallback lives in shared/mail-vocabulary's archivedOrStatus (tested there)
-  // and the chip reads it, so the fallback is pinned through the chip here.
-  it('with no stamp, a solved or closed row wears the Archived chip (the old-server fallback)', () => {
-    expect(mailStatusChip({ status: 'solved' })?.label).toBe('Archived')
+  // MAIL-ARCH.3 retired `isArchivedStatus`; MAIL-ARCH.4 retired its shared
+  // successor archivedOrStatus (the stampless solved||closed fallback for the
+  // deploy window). The chip reads shared's isArchived and nothing else, so
+  // the ONLY stampless row that wears the chip is `closed` — the word on disk.
+  it('with no stamp, only a closed row wears the Archived chip (isArchived is the one reading)', () => {
     expect(mailStatusChip({ status: 'closed' })?.label).toBe('Archived')
+    expect(mailStatusChip({ status: 'solved', needs_reply: false })).toBeNull()
     expect(mailStatusChip({ status: 'open', last_message_direction: 'outbound' })).toBeNull()
     expect(mailStatusChip({ status: 'pending' })).toBeNull()
   })
@@ -249,11 +252,16 @@ describe('ticketToInboxRow', () => {
     expect(ticketToInboxRow({ ...base, status: 'pending' }).resolved_at).toBeNull()
   })
 
-  it('maps solved/closed onto resolved_at so an archived ticket never reads as needing a reply', () => {
-    expect(ticketToInboxRow({ ...base, status: 'solved', solved_at: 'S' }).resolved_at).toBe('S')
+  it('maps an archived ticket onto resolved_at so it never reads as needing a reply', () => {
+    // Stamped archived: the timestamp follows the verdict, whatever the status.
+    expect(ticketToInboxRow({ ...base, status: 'solved', archived: true, solved_at: 'S' }).resolved_at).toBe('S')
     expect(ticketToInboxRow({ ...base, status: 'closed', closed_at: 'C' }).resolved_at).toBe('C')
-    // No stamp on disk still has to read as resolved, not as unresolved.
+    // No stamp: `closed` still reads as resolved, not as unresolved.
     expect(ticketToInboxRow({ ...base, status: 'closed', updated_at: 'U' }).resolved_at).toBe('U')
+    // MAIL-ARCH.4 — a stampless legacy `solved` is LIVE (the server's own
+    // reading), so it carries NO resolution time; the old solved||closed
+    // fallback that gave it one is gone.
+    expect(ticketToInboxRow({ ...base, status: 'solved', solved_at: 'S' }).resolved_at).toBeNull()
   })
 
   it('falls back to created_at when a ticket has no message yet', () => {
@@ -293,9 +301,11 @@ describe('ticketToInboxRow', () => {
     expect(row.archived).toBe(false)
   })
 
-  it('falls back to status only when the stamp is absent', () => {
-    expect(ticketToInboxRow({ ...base, status: 'solved' }).archived).toBe(true)
+  it('falls back to status only when the stamp is absent — and that fallback is `closed`, never `solved` (MAIL-ARCH.4)', () => {
+    expect(ticketToInboxRow({ ...base, status: 'closed' }).archived).toBe(true)
+    expect(ticketToInboxRow({ ...base, status: 'solved' }).archived).toBe(false)
     expect(ticketToInboxRow({ ...base, status: 'closed', archived: true }).archived).toBe(true)
+    expect(ticketToInboxRow({ ...base, status: 'solved', archived: true }).archived).toBe(true)
   })
 
   it('prefers the mail response\'s per-message unread count over the ticket-era column', () => {
@@ -1115,10 +1125,11 @@ describe('segCountLabel (the Needs reply count on the view strip)', () => {
 })
 
 describe('ticketToInboxRow.archived (the swipe verb reads it, so the row must carry it)', () => {
-  it('is true for the server flag and for archived statuses, false for live rows', () => {
+  it('is true for the server flag and for a stampless closed row, false for live rows (stampless solved is live — MAIL-ARCH.4)', () => {
     expect(ticketToInboxRow({ id: 't', archived: true, status: 'open' }).archived).toBe(true)
     expect(ticketToInboxRow({ id: 't', status: 'closed' }).archived).toBe(true)
-    expect(ticketToInboxRow({ id: 't', status: 'solved' }).archived).toBe(true)
+    expect(ticketToInboxRow({ id: 't', status: 'solved' }).archived).toBe(false)
+    expect(ticketToInboxRow({ id: 't', status: 'solved', archived: true }).archived).toBe(true)
     expect(ticketToInboxRow({ id: 't', status: 'open' }).archived).toBe(false)
     expect(ticketToInboxRow({ id: 't', status: 'pending' }).archived).toBe(false)
   })

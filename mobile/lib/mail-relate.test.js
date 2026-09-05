@@ -75,12 +75,15 @@ describe('relatedNudge', () => {
     expect(n.viewId).toBe('R-open-newer')
   })
 
-  it('legacy solved rows count as archived for the View target', () => {
+  it('a stampless legacy solved row is OPEN for the View target — the server calls it live (MAIL-ARCH.4)', () => {
+    // MAIL-ARCH.3 read this as archived through archivedOrStatus's
+    // solved||closed fallback; that fallback is deleted, and the one reading
+    // left (shared isArchived) agrees with the wire: `solved` is live.
     const n = relatedNudge({
       related: [REL({ id: 'R-solved', status: 'solved' }), REL({ id: 'R-live' })],
       open_count: 1,
     })
-    expect(n.viewId).toBe('R-live')
+    expect(n.viewId).toBe('R-solved')
   })
 
   it('viewId is null when the capped list holds no open row — banner may show, View may not', () => {
@@ -129,7 +132,7 @@ describe('mergePickerRows', () => {
   })
 
   it('says archived for archived rows, and singularises one message', () => {
-    const rows = mergePickerRows([REL({ status: 'solved', message_count: 1 })], now)
+    const rows = mergePickerRows([REL({ status: 'open', archived: true, message_count: 1 })], now)
     expect(rows[0].detail).toContain('1 message')
     expect(rows[0].detail).not.toContain('1 messages')
     expect(rows[0].detail).toContain('archived')
@@ -151,7 +154,7 @@ describe('mergePickerRows', () => {
     expect(rows[0].detail).toContain('archived')
   })
 
-  it('a STAMPLESS closed row is still archived — the fallback covers the old-server window', () => {
+  it('a STAMPLESS closed row is still archived — isArchived keeps the `closed` fallback for fixtures', () => {
     const rows = mergePickerRows([REL({ status: 'closed' })], now)
     expect(rows[0].archived).toBe(true)
     expect(rows[0].detail).toContain('archived')

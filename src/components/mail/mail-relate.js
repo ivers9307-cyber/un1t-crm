@@ -25,6 +25,10 @@
 //     the caller can refresh honestly (the ones that merged really did merge).
 
 import { relativeTime } from '@/lib/ticket-display'
+// MAIL-ARCH.4 — the related route stamps `archived` (MAIL-ARCH.3); read the
+// stamp through the shared vocabulary, never `status`, so a legacy `solved`
+// row the server calls LIVE is open here exactly as it is on the phone.
+import { isArchived } from './mail-vocabulary'
 
 /** The pinned related route for one conversation. */
 export function relatedUrl(conversationId) {
@@ -54,9 +58,18 @@ export function parseRelated(body) {
   }
 }
 
-/** Open on this surface means "not archived" — `closed` is the word on disk. */
+/**
+ * Open on this surface means "not archived". THE SERVER'S STAMP IS THE ANSWER:
+ * the related route stamps `archived` on every row (stampMailRow, MAIL-ARCH.3)
+ * and isArchived reads it, falling back to the `closed` status only for a
+ * stampless fixture — which is the same predicate the server used, so the two
+ * readings cannot disagree. Before MAIL-ARCH.4 this compared `status` directly;
+ * it happened to agree with the stamp on every row, but it was a second
+ * derivation of a fact the server had already decided, and the phone's twin of
+ * this line (mobile/lib/mail-relate.js) had drifted from it once.
+ */
 export function isOpenRelated(item) {
-  return !!item && item.status !== 'closed'
+  return !!item && !isArchived(item)
 }
 
 /**
@@ -97,7 +110,7 @@ export function candidateLine(item, now = Date.now()) {
   const parts = [item?.requester_name || 'Unknown sender']
   const count = item?.message_count
   if (Number.isFinite(count)) parts.push(`${count} message${count === 1 ? '' : 's'}`)
-  const verb = item?.status === 'closed' ? 'archived' : 'opened'
+  const verb = isArchived(item) ? 'archived' : 'opened'
   const when = relativeTime(item?.last_message_at, now)
   parts.push(when ? `${verb} ${when}` : verb)
   return parts.join(' · ')

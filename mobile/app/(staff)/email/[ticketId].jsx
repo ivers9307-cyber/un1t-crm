@@ -106,9 +106,9 @@ import {
   flatThreadPlan, flatMessageMeta, mergedInDividers,
 } from '../../../lib/email-tickets'
 // MAIL-ARCH.3 — the thread route stamps `archived` now; read the stamp, never
-// `status` (legacy `solved` is LIVE on the wire). The helper keeps the old
-// status reading only for a stampless row — see shared/mail-vocabulary.js.
-import { archivedOrStatus } from 'shared/mail-vocabulary'
+// `status` (legacy `solved` is LIVE on the wire). MAIL-ARCH.4 — the one
+// reading is shared's isArchived; see shared/mail-vocabulary.js.
+import { isArchived } from 'shared/mail-vocabulary'
 import {
   readReplyDraft, writeReplyDraft, clearReplyDraft, resolveDraftHydration,
   attachmentBudget, readyAttachmentRefs, admitPickedFile, composerSendState,
@@ -957,9 +957,9 @@ export default function EmailTicket() {
   // RETIRE-TICKETS.1 — assignment and the four-state lifecycle left with the
   // ticket queue. The two verbs of this surface, now riding the header:
 
-  // Archive / bring back. The response's ticket row is a bare status write —
-  // merge, never replace (the EMAIL-MOPUP.4 lesson: the enriched mailbox and
-  // contact fields must survive).
+  // Archive / bring back. The response's conversation row is stamped (MAIL-
+  // ARCH.2) but not enriched — no mailbox, no contact — so merge, never replace
+  // (the EMAIL-MOPUP.4 lesson: the enriched fields must survive).
   //
   // MAIL-ARCH.3 — `next` reads the server's `archived` stamp, not `status`.
   // Re-deriving from status read a legacy `solved` thread as archived while
@@ -968,7 +968,7 @@ export default function EmailTicket() {
   // thread-screen twin of the swipe-reopen bug #1618 killed on the list.
   async function toggleArchive() {
     if (savingAction) return
-    const next = !archivedOrStatus(ticket)
+    const next = !isArchived(ticket)
     setSavingAction(true)
     const res = await archiveConversation(ticketId, next, activeLocation?.id)
     setSavingAction(false)
@@ -1098,7 +1098,7 @@ export default function EmailTicket() {
   // knowing who wrote in reads as a bug.
   const name = ticket ? emailDisplayName(ticket) : 'Email'
   const chip = mailStatusChip(ticket)
-  const archived = archivedOrStatus(ticket)
+  const archived = isArchived(ticket)
 
   // The folded/unfolded plan (MAIL-REFINE.1 §02, flatThreadPlan in
   // lib/email-tickets.js): ONLY the newest opens by default; taps override
