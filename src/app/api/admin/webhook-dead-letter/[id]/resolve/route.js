@@ -1,5 +1,15 @@
 // POST /api/admin/webhook-dead-letter/[id]/resolve — the human acknowledge
-// path (DEADLETTER-UI.1). Master/owner only — mirrors the list + replay routes.
+// path (DEADLETTER-UI.1).
+//
+// WHO. Master, or OWNER AT THE ROW'S LOCATION — the same judgement the replay
+// route makes, through the same helpers (./_helpers.js), so the two actions
+// on a row can never disagree about who may take them. It used to gate on
+// `user.role === 'owner'` (the caller's ACTIVE-studio role) with no row check,
+// so an owner in org B could resolve org A's rows by walking the bigserial id.
+// A row the caller cannot see answers 404, not 403, and the visibility check
+// runs BEFORE the row-state answer (a 409 for an invisible row would confirm
+// the id exists). A NULL-location inbound row follows where its recipient
+// routes today; any other NULL row is master-only.
 //
 // Most email-family dead letters are DELIBERATELY not auto-replayable
 // (postmark_queue would reset an exhausted retry budget; email_ticket_* would
@@ -22,6 +32,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { resolveDeadLetterLocation, canReplayDeadLetter } from '../../_helpers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -33,12 +44,11 @@ export async function POST(request, { params }) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   }
-  // Master-or-owner only — mirrors the dead-letter list route.
-  if (user.profileRole !== 'master' && user.role !== 'owner') {
-    return NextResponse.json({ success: false, error: 'Master or owner only' }, { status: 403 })
-  }
-
-  const { id } = params
+  // Next 16 hands route handlers a PROMISE for params. Reading `params.id`
+  // synchronously was `undefined`, so every Resolve/Discard click 400'd
+  // "Missing id" in production (MAIL-DEADLETTER.1). `await` also accepts a
+  // plain object, so direct callers are unaffected.
+  const { id } = await params
   if (!id) {
     return NextResponse.json({ success: false, error: 'Missing id' }, { status: 400 })
   }
@@ -57,12 +67,19 @@ export async function POST(request, { params }) {
 
   const { data: row, error: fetchErr } = await db
     .from('webhook_dead_letter')
-    .select('id, status')
+    .select('id, status, provider, payload, location_id')
     .eq('id', id)
     .single()
   if (fetchErr || !row) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
+
+  // Visibility BEFORE any state answer — same order as the replay route.
+  const locationId = await resolveDeadLetterLocation(db, row)
+  if (!canReplayDeadLetter(user, locationId)) {
+    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
+
   if (row.status !== 'pending' && row.status !== 'failed') {
     return NextResponse.json({ success: false, error: `Row already ${row.status}` }, { status: 409 })
   }

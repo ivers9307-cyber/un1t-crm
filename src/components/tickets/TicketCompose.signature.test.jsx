@@ -87,9 +87,10 @@ describe('TicketCompose — signature preview', () => {
     expect(screen.getByText(/UN1T Stillorgan/)).toBeTruthy()
   })
 
-  it('shows nothing when the viewer has no signature — no stray "--" box', async () => {
+  it('shows nothing when the viewer has no signature AND the From studio has no card — no stray "--" box', async () => {
+    // MAIL-SIGDEFAULT.1 — Hatch has no studio card, so nothing at all appends.
     const read = stubPreferences({ email_signature: '' })
-    render(<TicketCompose mailboxes={[MAILBOX]} onClose={noop} onSent={noop} />)
+    render(<TicketCompose mailboxes={[{ ...HATCH_BOX, is_default: true }]} onClose={noop} onSent={noop} />)
 
     // Anchor on the payload having been consumed, then flush React — an
     // absence asserted before the fetch settles would pass vacuously.
@@ -97,6 +98,16 @@ describe('TicketCompose — signature preview', () => {
     await read
     await act(async () => {})
     expect(screen.queryByText(/added automatically/i)).toBeNull()
+  })
+
+  it('MAIL-SIGDEFAULT.1 — a viewer with NO signature of their own still sees the STUDIO block the From studio adds', async () => {
+    stubPreferences({ email_signature: '' })
+    render(<TicketCompose mailboxes={[MAILBOX]} onClose={noop} onSent={noop} />)
+
+    expect(await screen.findByText(/added automatically/i)).toBeTruthy()
+    const pre = document.querySelector('pre')
+    expect(pre.textContent).toBe('-- \nUN1T Stillorgan\n01 555 0001')
+    expect(pre.textContent).not.toContain('Alex Example')
   })
 
   it('APPEARS with the rich signature enabled and the plain column empty — the case the old hint hid', async () => {

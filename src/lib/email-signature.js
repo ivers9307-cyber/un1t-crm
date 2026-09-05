@@ -221,3 +221,118 @@ export function effectiveRichSignature(personRich, ctx) {
     links: locLinks.length ? locLinks : personRich.links,
   }
 }
+
+// ── MAIL-SIGDEFAULT.1 — the studio signature is on for everyone ──────────
+//
+// Audit finding (mail-arc 09-03): the studio card above was consumed ONLY
+// inside effectiveRichSignature, which is only reached through the person's
+// own `enabled` flag — so the studio's name/phone/links rendered for NOBODY
+// who had not personally opted in, new hires included. profiles.
+// email_signature_rich has no column default (mig 582): a fresh profile is
+// NULL, and NULL means "send unsigned". Operator decision: default ON, and
+// standard for every new user.
+//
+// FIXED IN CODE, NOT DATA. The two halves are decoupled right here:
+//   • the STUDIO block renders whenever the sending studio has configured one
+//     (a phone or at least one link on company_settings.email_signature);
+//   • the person's `enabled` flag governs only the PERSONAL part — name,
+//     title, photo, and their own phone/links as the studio's fallback.
+// Zero rows change, so it holds for existing and future users alike, and an
+// opted-in person's output is byte-identical to MAIL-SIG.1/2.
+//
+// resolveSendSignature is THE decision. The three send routes call it, and so
+// do the /account preview and the composers' hint (via resolveSignatureHint
+// in signature-context.js) — one function, so a preview and a send cannot
+// disagree (the whole point of MAILFIX-SIGTRUTH.1).
+
+/**
+ * The studio's own block, shaped as a rich signature the renderer already
+ * knows how to draw: no name, no photo — the studio line as the detail row,
+ * the studio's phone and links. Null when the studio has configured nothing
+ * (a studio NAME alone is not a configuration: a "UN1T Stillorgan" line on
+ * its own is not a signature anyone asked for).
+ *
+ * @param {{locationName?: string|null, locationSignature?: {phone?, links?}|null}|null} ctx
+ * @returns {object|null}
+ */
+export function studioRichSignature(ctx) {
+  const loc = ctx?.locationSignature || null
+  const links = Array.isArray(loc?.links) ? loc.links.filter(l => l?.url) : []
+  const phone = typeof loc?.phone === 'string' ? loc.phone.trim() : ''
+  if (!phone && links.length === 0) return null
+  return {
+    enabled: true,
+    name: '',
+    title: '',
+    photo_url: null,
+    note: ctx?.locationName || '',
+    phone,
+    links,
+  }
+}
+
+/**
+ * The plain-text column as an email-safe block for the html part — escaped,
+ * line breaks kept (pre-wrap), the same type ramp as the studio table below
+ * it. This is generated markup over ESCAPED text, so the mig-493 invariant
+ * (the user never authors HTML) survives intact.
+ */
+function plainSignOffHtml(plain) {
+  return `<div style="margin-top:18px;white-space:pre-wrap;font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:13px;line-height:1.5;color:#0f172a">${esc(plain)}</div>`
+}
+
+/**
+ * What a send from the studio described by `ctx` appends for `profile`, as
+ * the rich {text, html} block — or NULL when no html block goes out, in
+ * which case callers append the plain column exactly as before (which may
+ * itself be empty → nothing at all).
+ *
+ *   1. PERSONAL rich enabled + renderable → the MAIL-SIG.1/2 block, byte for
+ *      byte: renderRichSignature(effectiveRichSignature(rich, ctx)). The
+ *      plain column stays out of it, as it always has.
+ *   2. else the STUDIO block, when the studio has configured one — with the
+ *      plain column, when set, as the person's own sign-off ABOVE it. Kept
+ *      deliberately: a coach who typed "Sarah / Head Coach" and never opted
+ *      in must not lose her name the day the studio block switched on
+ *      (CLAUDE.md: removing a silent failure must never create a louder
+ *      one). Text = plain, blank line, studio lines; html = escaped plain
+ *      block, then the studio table.
+ *   3. else null.
+ *
+ * `hasPhoto`/`hasLinks` describe what the block CARRIES (the hint's suffix
+ * line) — the photo only when the renderer would embed it, the links off the
+ * EFFECTIVE list.
+ *
+ * Pure; never throws on a null profile or a null/blipped ctx.
+ *
+ * @param {{email_signature?: string|null, email_signature_rich?: object|null}|null} profile
+ * @param {{locationName?: string|null, locationSignature?: object|null}|null} ctx
+ * @returns {{text: string, html: string, hasPhoto: boolean, hasLinks: boolean}|null}
+ */
+export function resolveSendSignature(profile, ctx) {
+  const carries = (rich) => ({
+    hasPhoto: isAllowedSignaturePhotoUrl(rich?.photo_url),
+    hasLinks: (Array.isArray(rich?.links) ? rich.links : []).filter(l => l?.url).length > 0,
+  })
+
+  if (richSignatureFromProfile(profile)) {
+    const effective = effectiveRichSignature(profile.email_signature_rich, ctx)
+    const rendered = renderRichSignature(effective)
+    if (rendered) return { text: rendered.text, html: rendered.html, ...carries(effective) }
+  }
+
+  const studio = studioRichSignature(ctx)
+  if (studio) {
+    const rendered = renderRichSignature(studio)
+    if (rendered) {
+      const plain = normalizeSignature(profile?.email_signature)
+      return {
+        text: plain ? `${plain}\n\n${rendered.text}` : rendered.text,
+        html: (plain ? plainSignOffHtml(plain) : '') + rendered.html,
+        ...carries(studio),
+      }
+    }
+  }
+
+  return null
+}

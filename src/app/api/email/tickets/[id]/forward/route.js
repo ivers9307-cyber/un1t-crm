@@ -4,7 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { sendTicketEmail } from '@/lib/email-inbox-send'
-import { appendSignature, richSignatureFromProfile, renderRichSignature, effectiveRichSignature } from '@/lib/email-signature'
+import { appendSignature, resolveSendSignature } from '@/lib/email-signature'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 import { logAuditEvent } from '@/lib/audit'
 import { uuidLike, email as emailAddress } from '@/lib/schemas'
@@ -283,10 +283,13 @@ export async function POST(request, props) {
   // forward (Gmail's own placement) so the photo/link block never splits the
   // note from the forwarded content; the plain-text fallback keeps its old
   // in-note position byte-for-byte.
+  // MAIL-SIGDEFAULT.1 — resolveSendSignature is THE decision, shared with
+  // the /account preview and the composer hint: the personal rich block when
+  // enabled, else the STUDIO block wherever the studio has configured one
+  // (plain column above it, in the rich placement below the forward), else
+  // null → the plain in-note path below, unchanged.
   const sigCtx = await loadSignatureContext(db, ticket.location_id)
-  const richSig = richSignatureFromProfile(user)
-    ? renderRichSignature(effectiveRichSignature(user.email_signature_rich, sigCtx))
-    : null
+  const richSig = resolveSendSignature(user, sigCtx)
   const unsignedText = buildForwardText({ note, message: source })
   const outboundText = richSig
     ? appendSignature(unsignedText, richSig.text)

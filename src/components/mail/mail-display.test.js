@@ -17,7 +17,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   MAIL_VIEWS, DEFAULT_MAIL_VIEW, mailView, buildMailUrl,
-  isArchived, needsReply, isUnread, isTypingTarget, neighbourId,
+  isArchived, needsReply, isUnread, isSpam, isTypingTarget, neighbourId,
   DENSITIES, DEFAULT_DENSITY, readDensity, writeDensity, MAIL_DENSITY_KEY,
   readReplyDraft, writeReplyDraft, clearReplyDraft, clearAllReplyDrafts,
   REPLY_DRAFT_MAX_LENGTH, REPLY_DRAFT_TTL_MS, REPLY_DRAFT_MAX_ENTRIES, REPLY_DRAFT_PREFIX,
@@ -81,9 +81,29 @@ describe('unread', () => {
   })
 })
 
+describe('spam (MAIL-SPAM.1)', () => {
+  it('reads the server’s is_spam flag and defaults to live — a row from before the column reads as real mail', () => {
+    expect(isSpam({ is_spam: true })).toBe(true)
+    expect(isSpam({ is_spam: false })).toBe(false)
+    expect(isSpam({})).toBe(false)
+    expect(isSpam(null)).toBe(false)
+    // Truthiness is NOT the test: a stringly "false" from a stale cache is live.
+    expect(isSpam({ is_spam: 'true' })).toBe(false)
+  })
+
+  it('the spam view is last in the rail and carries its own empty copy', () => {
+    const spam = mailView('spam')
+    expect(spam.id).toBe('spam')
+    expect(spam.label).toBe('Spam')
+    expect(spam.emptyTitle).toBeTruthy()
+    expect(spam.emptyDescription).toMatch(/30 days/)
+    expect(buildMailUrl({ locationId: 'L', viewId: 'spam' })).toBe('/api/email/mail?location_id=L&view=spam')
+  })
+})
+
 describe('views', () => {
-  it('has four (MAIL-SENT.1 added Sent), and no assignment views', () => {
-    expect(MAIL_VIEWS.map(v => v.id)).toEqual(['inbox', 'needs_reply', 'sent', 'archived'])
+  it('has five (MAIL-SENT.1 added Sent, MAIL-SPAM.1 added Spam), and no assignment views', () => {
+    expect(MAIL_VIEWS.map(v => v.id)).toEqual(['inbox', 'needs_reply', 'sent', 'archived', 'spam'])
     expect(MAIL_VIEWS.map(v => v.id)).not.toContain('mine')
     expect(MAIL_VIEWS.map(v => v.id)).not.toContain('unassigned')
   })

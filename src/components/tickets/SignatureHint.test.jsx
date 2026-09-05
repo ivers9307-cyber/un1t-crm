@@ -138,18 +138,41 @@ describe('SignatureHint — the effective signature, per sending location', () =
     expect(document.body.textContent).not.toContain('Plain Sarah')
   })
 
-  it('falls back to the plain column when the rich signature is off — todayʼs behaviour, untouched', async () => {
+  it('the plain column ALONE when the rich signature is off at a studio with NO card — todayʼs behaviour, untouched', async () => {
     stubPreferences({ email_signature: 'Sarah\nUN1T', email_signature_rich: { ...RICH, enabled: false } })
-    render(<SignatureHint locationId="loc-still" />)
+    render(<SignatureHint locationId="loc-hatch" />)
 
     expect(await screen.findByText(/added automatically/i)).toBeTruthy()
     expect(document.querySelector('pre').textContent).toContain('Sarah\nUN1T')
     expect(screen.queryByText(/rich layout/i)).toBeNull()
   })
 
-  it('HIDES when nothing will be appended — no signature anywhere, no stray "--"', async () => {
-    const { read } = stubPreferences({ email_signature: '', email_signature_rich: null })
+  // ── MAIL-SIGDEFAULT.1 — the studio block goes out for everyone ─────────
+  it('rich OFF + a plain sign-off at a studio WITH a card: the plain text ABOVE the studio block, links named', async () => {
+    stubPreferences({ email_signature: 'Sarah\nHead Coach', email_signature_rich: { ...RICH, enabled: false } })
     render(<SignatureHint locationId="loc-still" />)
+
+    expect(await screen.findByText(/added automatically/i)).toBeTruthy()
+    const pre = document.querySelector('pre')
+    expect(pre.textContent).toBe('-- \nSarah\nHead Coach\n\nUN1T Stillorgan\n01 555 0001\nBook Stillorgan: https://un1t.ie/stillorgan')
+    expect(pre.textContent).not.toContain('Alex Example')
+    expect(screen.getByText('The email carries the rich layout — links included.')).toBeTruthy()
+  })
+
+  it('APPEARS for a person with NOTHING of their own at a studio with a card — the new-hire case', async () => {
+    stubPreferences({ email_signature: '', email_signature_rich: null })
+    render(<SignatureHint locationId="loc-still" />)
+
+    expect(await screen.findByText(/added automatically/i)).toBeTruthy()
+    expect(document.querySelector('pre').textContent).toBe(
+      '-- \nUN1T Stillorgan\n01 555 0001\nBook Stillorgan: https://un1t.ie/stillorgan'
+    )
+    expect(screen.getByText('The email carries the rich layout — links included.')).toBeTruthy()
+  })
+
+  it('HIDES when nothing will be appended — nothing personal, and the studio has no card', async () => {
+    const { read } = stubPreferences({ email_signature: '', email_signature_rich: null })
+    render(<SignatureHint locationId="loc-hatch" />)
     // Anchor on the payload having been consumed, then flush React — an
     // absence asserted before the fetch settles would pass vacuously.
     await settled(read)

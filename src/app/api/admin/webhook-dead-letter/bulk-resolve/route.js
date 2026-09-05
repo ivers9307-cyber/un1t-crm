@@ -22,10 +22,19 @@
 //
 // Only 'pending' and 'failed' rows are touched, matching the single-row route;
 // already-terminal rows are left alone rather than re-stamped.
+//
+// WHO (MAIL-DEADLETTER.1 review fix). Master is unbounded. Anyone else must be
+// OWNER somewhere (403 otherwise — a collection route, nothing to enumerate),
+// and the UPDATE is bounded to `.in('location_id', <their owner locations>)`
+// via deadLetterOwnerLocationIds — never `user.role`, the caller's ACTIVE-
+// studio role, which let an owner in org A acknowledge org B's unfiled mail in
+// one POST. SQL's IN is never true for NULL, so NULL-location rows are left
+// to master, matching the list route.
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { deadLetterOwnerLocationIds } from '../_helpers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -38,8 +47,10 @@ export async function POST(request) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   }
-  // Master-or-owner only — mirrors the list and single-row resolve routes.
-  if (user.profileRole !== 'master' && user.role !== 'owner') {
+  // Master, or owner at SOME location — judged per location, not by the
+  // active role. The bound below is what decides which rows the write reaches.
+  const ownerLocationIds = deadLetterOwnerLocationIds(user)
+  if (ownerLocationIds !== null && ownerLocationIds.length === 0) {
     return NextResponse.json({ success: false, error: 'Master or owner only' }, { status: 403 })
   }
 
@@ -62,12 +73,14 @@ export async function POST(request) {
 
   // resolved_at is stamped for both targets — it is what integration health
   // counts on (`resolved_at IS NULL`), same as the single-row route.
-  const { data, error } = await db
+  let write = db
     .from('webhook_dead_letter')
     .update({ status: target, resolved_at: new Date().toISOString() })
     .eq('provider', provider)
     .in('status', OPEN_STATUSES)
-    .select('id')
+  // Non-master: bound to the caller's owner locations (excludes NULL rows).
+  if (ownerLocationIds !== null) write = write.in('location_id', ownerLocationIds)
+  const { data, error } = await write.select('id')
 
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })
