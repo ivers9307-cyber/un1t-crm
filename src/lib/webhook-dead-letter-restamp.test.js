@@ -85,6 +85,10 @@ describe('the orphan read — exactly the rows mig 586 touched', () => {
     expect(has(read, 'is', 'location_id', null)).toBe(true)
     expect(has(read, 'in', 'status', ['pending', 'failed'])).toBe(true)
     expect(has(read, 'limit', RESTAMP_SCAN_LIMIT)).toBe(true)
+    // NEWEST FIRST — nothing purges the table, so oldest-first would let 500
+    // permanently-unresolvable strays starve the window and the row addressed
+    // to the account just created (always the newest) would never be read.
+    expect(has(read, 'order', 'id', { ascending: false })).toBe(true)
     expect(RESTAMP_STATUSES).toEqual(['pending', 'failed'])
   })
 
@@ -218,7 +222,8 @@ describe('the contract — never throws, never hides a failure', () => {
 
   it('a throw anywhere is caught and answered, never propagated', async () => {
     const db = makeDb({ orphans: [{ id: 1, payload: payloadTo('studio@example.test') }], mailboxes: [MB()], updateThrows: true })
-    await expect(restampOrphanInboundDeadLetters(db)).resolves.toEqual({ ok: false, scanned: 0, stamped: 0, error: 'update exploded' })
+    // `scanned` is honest even here: the read happened before the throw.
+    await expect(restampOrphanInboundDeadLetters(db)).resolves.toEqual({ ok: false, scanned: 1, stamped: 0, error: 'update exploded' })
     expect(logWarn).toHaveBeenCalledWith('webhook-dead-letter-restamp', 'threw', expect.anything())
   })
 

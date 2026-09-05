@@ -16,12 +16,22 @@
 //
 // WHAT IT DOES. Scans the NULL-location postmark_inbound rows that are still
 // pending/failed (resolved/discarded rows are history; the visibility model
-// already answers them from their own location_id), resolves each payload's
-// recipients against the ACTIVE mailboxes as they stand NOW with the very
-// resolver the capture path uses (recipientEmails → resolveMailboxByRecipient:
-// ToFull, then CcFull, then the display `To`, then OriginalRecipient; first
-// hit on an active mailbox wins), and stamps the location it finds. Rows that
-// still match nothing stay NULL — the fail-open default, never a guess.
+// already answers them from their own location_id), NEWEST FIRST, resolves
+// each payload's recipients against the ACTIVE mailboxes as they stand NOW
+// with the very resolver the capture path uses (recipientEmails →
+// resolveMailboxByRecipient: ToFull, then CcFull, then the display `To`, then
+// OriginalRecipient; first hit on an active mailbox wins), and stamps the
+// location it finds. Rows that still match nothing stay NULL — the fail-open
+// default, never a guess.
+//
+// This mirrors CAPTURE, which makes it a superset of mig 586: the migration
+// walked ToFull → CcFull → OriginalRecipient in SQL and deliberately skipped
+// the display `To` header and any address-shape check; recipientEmails parses
+// `To` as well and normalizeEmail trims and shape-checks both sides. The
+// capture path is the right reference — a row the replay route can already
+// resolve per row (resolveDeadLetterLocation → bestEffortInboundLocation, the
+// same two calls) must be a row this stamps, or the owner's GET and LIST would
+// disagree about what exists.
 //
 // It does NOT filter to the address that just changed: the set of orphans is
 // tiny (single digits live), the mailbox set is one bounded read, and running
@@ -42,8 +52,13 @@ import { logInfo, logWarn } from '@/lib/log'
 
 /**
  * Ceiling on orphan rows read per run. The live NULL set is single digits;
- * this is the 1k-row-cap discipline (CLAUDE.md), not an expectation. A run
- * that hits it stamps what it read and the next mailbox change reads again.
+ * this is the 1k-row-cap discipline (CLAUDE.md), not an expectation. The scan
+ * is NEWEST FIRST so the window can never be starved: nothing purges
+ * webhook_dead_letter, so permanently-unresolvable orphans (spam to the inbound
+ * domain that never matches anything) accumulate for ever — oldest-first, 500
+ * of those would fill the window and the mail addressed to the account just
+ * created, always the newest row, would never be read. Newest-first reads it
+ * every time; older strays are picked up as the window drains.
  */
 export const RESTAMP_SCAN_LIMIT = 500
 
@@ -63,6 +78,8 @@ export const RESTAMP_STATUSES = Object.freeze(['pending', 'failed'])
  */
 export async function restampOrphanInboundDeadLetters(db, { reason = 'mailbox_change', mailboxId = null } = {}) {
   const meta = { reason, mailboxId }
+  // Hoisted so a throw AFTER the read still reports how many rows it saw.
+  let scanned = 0
   try {
     const { data: rows, error: readErr } = await db
       .from('webhook_dead_letter')
@@ -70,14 +87,15 @@ export async function restampOrphanInboundDeadLetters(db, { reason = 'mailbox_ch
       .eq('provider', 'postmark_inbound')
       .is('location_id', null)
       .in('status', [...RESTAMP_STATUSES])
-      .order('id', { ascending: true })
+      .order('id', { ascending: false })
       .limit(RESTAMP_SCAN_LIMIT)
     if (readErr) {
       logWarn('webhook-dead-letter-restamp', 'orphan read failed', { ...meta, err: readErr })
       return { ok: false, scanned: 0, stamped: 0, error: readErr.message || String(readErr) }
     }
     const orphans = Array.isArray(rows) ? rows : []
-    if (orphans.length === 0) return { ok: true, scanned: 0, stamped: 0 }
+    scanned = orphans.length
+    if (scanned === 0) return { ok: true, scanned: 0, stamped: 0 }
 
     const { data: mailboxes, error: mbErr } = await db
       .from('email_mailboxes')
@@ -86,7 +104,7 @@ export async function restampOrphanInboundDeadLetters(db, { reason = 'mailbox_ch
       .limit(RESTAMP_MAILBOX_LIMIT)
     if (mbErr) {
       logWarn('webhook-dead-letter-restamp', 'mailbox read failed', { ...meta, err: mbErr })
-      return { ok: false, scanned: orphans.length, stamped: 0, error: mbErr.message || String(mbErr) }
+      return { ok: false, scanned, stamped: 0, error: mbErr.message || String(mbErr) }
     }
 
     // Group by the location each row resolves to, so the UPDATE is one
@@ -121,14 +139,14 @@ export async function restampOrphanInboundDeadLetters(db, { reason = 'mailbox_ch
 
     if (stamped > 0 || failed > 0) {
       logInfo('webhook-dead-letter-restamp', 'orphans re-stamped', {
-        ...meta, scanned: orphans.length, stamped, failedLocations: failed,
+        ...meta, scanned, stamped, failedLocations: failed,
       })
     }
     return failed > 0
-      ? { ok: false, scanned: orphans.length, stamped, error: `${failed} location update(s) failed` }
-      : { ok: true, scanned: orphans.length, stamped }
+      ? { ok: false, scanned, stamped, error: `${failed} location update(s) failed` }
+      : { ok: true, scanned, stamped }
   } catch (err) {
     logWarn('webhook-dead-letter-restamp', 'threw', { ...meta, err })
-    return { ok: false, scanned: 0, stamped: 0, error: String(err?.message || err) }
+    return { ok: false, scanned, stamped: 0, error: String(err?.message || err) }
   }
 }
