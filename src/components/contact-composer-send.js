@@ -55,11 +55,12 @@ export const NO_ACCESS_SENDER_FOOTER = 'You don’t have Mail access at this stu
  * anything else — a non-2xx, `success: false`, an unparseable body, no answer.
  *
  * What counts as "genuinely none" is ONLY a successful empty list. A refused
- * list (403: the caller lacks email_inbox at that studio) and a route 500 both
- * land here as "unavailable", which is honest for both: the list was not
- * obtained, the send goes company either way, and the footer says why.
+ * list (403: the caller lacks email_inbox at that studio) is MAILBOXES_FORBIDDEN
+ * since MAIL-403.1 — a state with its own footer; a route 500 or any other
+ * failure is "unavailable". The send goes company either way, and the footer
+ * says why in each case.
  *
- * @param {{ ok: boolean, json: object|null } | null | undefined} res
+ * @param {{ ok: boolean, status?: number, json: object|null } | null | undefined} res
  */
 export function mailboxesFromListResponse(res) {
   // 403 is judged BEFORE the generic failure: it is the one non-2xx that is a

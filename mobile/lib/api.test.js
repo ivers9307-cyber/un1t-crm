@@ -84,7 +84,9 @@ describe('api() transport tag', () => {
 
     const r = await api('/api/anything')
 
-    expect(r).toEqual({ success: false, error: 'Schedule not found' })
+    // MAIL-403.1 — the envelope passes through with ONE additive key, `status`,
+    // so a caller can tell a 403 from a 500 by reading a field.
+    expect(r).toEqual({ success: false, status: 404, error: 'Schedule not found' })
     expect('transport' in r).toBe(false)
   })
 
@@ -136,7 +138,30 @@ describe('api() transport tag', () => {
 
     const r = await api('/api/anything')
 
-    expect(r).toEqual({ success: false, error: 'Connect your Shelly account first', code: 'not_connected' })
+    expect(r).toEqual({ success: false, status: 409, error: 'Connect your Shelly account first', code: 'not_connected' })
+  })
+
+  it('MAIL-403.1 — a non-2xx failure envelope carries `status`; a body that already sends one keeps its own; a success envelope is untouched', async () => {
+    global.fetch = vi.fn(async () => ({
+      ok: false,
+      status: 403,
+      json: async () => ({ success: false, error: 'Forbidden — email inbox permission required' }),
+    }))
+    expect(await api('/api/anything')).toEqual({ success: false, status: 403, error: 'Forbidden — email inbox permission required' })
+
+    global.fetch = vi.fn(async () => ({
+      ok: false,
+      status: 500,
+      json: async () => ({ success: false, status: 'queued', error: 'later' }),
+    }))
+    expect((await api('/api/anything')).status).toBe('queued')
+
+    global.fetch = vi.fn(async () => ({
+      ok: false,
+      status: 429,
+      json: async () => ({ success: true, pending: true }),
+    }))
+    expect(await api('/api/anything')).toEqual({ success: true, pending: true })
   })
 })
 

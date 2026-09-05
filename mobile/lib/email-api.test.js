@@ -134,6 +134,17 @@ describe('listMail', () => {
     expect(api).not.toHaveBeenCalled()
   })
 
+  it('MAIL-403.1 — a failed list carries api()\'s `status` so the contact composer can tell a 403 from a fault', async () => {
+    api.mockResolvedValue({ success: false, status: 403, error: 'Forbidden — email inbox permission required' })
+    const forbidden = await listMail('loc-1', {})
+    expect(forbidden).toEqual({ success: false, status: 403, error: 'Forbidden — email inbox permission required' })
+
+    api.mockResolvedValue({ success: false, transport: true, error: 'Network error: timeout' })
+    const blip = await listMail('loc-1', {})
+    expect(blip.success).toBe(false)
+    expect(blip.status).toBeUndefined()
+  })
+
   // Audit C2 — the route forbids either count flag to render as "all read";
   // dropping them here is exactly how a failed read-state scan became a
   // fully-triaged-looking inbox on the phone.

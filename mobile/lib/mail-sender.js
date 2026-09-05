@@ -58,10 +58,10 @@ export const NO_ACCESS_SENDER_FOOTER = 'You don’t have Mail access at this stu
  *
  * What counts as "genuinely none" is ONLY a successful empty list. A refused
  * list (403: the caller lacks email_inbox at that studio) rides the same
- * {success:false,error} envelope as a route 500 and api() deliberately passes
- * that envelope through unchanged (no status field), so at this layer the two
- * cannot be told apart — both are "unavailable", which is honest for both:
- * the list was not obtained, the send goes company either way.
+ * {success:false,error} envelope as a route 500; since MAIL-403.1 api() adds
+ * `status` to that envelope and listMail passes it through, so the two ARE
+ * told apart here: 403 → MAILBOXES_FORBIDDEN (a state, its own footer), every
+ * other failure → MAILBOXES_UNAVAILABLE. The send goes company either way.
  */
 export function mailboxesFromListResult(res) {
   // 403 is judged BEFORE the generic failure: it is the one failure that is a
