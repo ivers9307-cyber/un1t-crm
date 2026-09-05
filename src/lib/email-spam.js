@@ -88,11 +88,29 @@ export function normalizeSpamSettings(raw) {
 
 // ─── the score ────────────────────────────────────────────────────
 
+/**
+ * What mig 584's `spam_score numeric(6,2)` can hold. A header is attacker
+ * text: `X-Spam-Score: 1e300` is a finite number that overflows the column
+ * (22003) → the ticket insert fails → 500 → Postmark retries the poison until
+ * exhausted (the EMAIL-INBOUND-POISON.1 shape). Every score is clamped here,
+ * once, before anything downstream can see it; the verdict is unaffected —
+ * anything past the clamp was already far past any threshold (0–20).
+ */
+export const SPAM_SCORE_MIN = -999
+export const SPAM_SCORE_MAX = 999
+
 function finiteOrNull(value) {
   if (value === null || value === undefined) return null
   if (typeof value === 'string' && value.trim() === '') return null
   const n = Number(value)
   return Number.isFinite(n) ? n : null
+}
+
+/** finiteOrNull, clamped to the column — the only shape a score may take. */
+function scoreOrNull(value) {
+  const n = finiteOrNull(value)
+  if (n === null) return null
+  return Math.min(Math.max(n, SPAM_SCORE_MIN), SPAM_SCORE_MAX)
 }
 
 /**
@@ -110,19 +128,19 @@ function finiteOrNull(value) {
 export function extractSpamScore(body) {
   if (!body || typeof body !== 'object') return null
 
-  const direct = finiteOrNull(body.SpamScore)
+  const direct = scoreOrNull(body.SpamScore)
   if (direct !== null) return direct
 
   const headers = Array.isArray(body.Headers) ? body.Headers : null
   if (!headers) return null
 
-  const scoreHeader = finiteOrNull(getHeader(headers, 'X-Spam-Score'))
+  const scoreHeader = scoreOrNull(getHeader(headers, 'X-Spam-Score'))
   if (scoreHeader !== null) return scoreHeader
 
   const status = getHeader(headers, 'X-Spam-Status')
   if (typeof status === 'string') {
     const m = status.match(/\bscore=(-?\d+(?:\.\d+)?)/i)
-    if (m) return finiteOrNull(m[1])
+    if (m) return scoreOrNull(m[1])
   }
   return null
 }
@@ -140,7 +158,9 @@ export function extractSpamScore(body) {
  */
 export function classifyInboundSpam({ score, settings }) {
   const { enabled, threshold } = normalizeSpamSettings(settings)
-  const n = finiteOrNull(score)
+  // Clamped here too: the webhook inserts THIS score, so a caller that skipped
+  // extractSpamScore still cannot hand the column something it cannot hold.
+  const n = scoreOrNull(score)
   // Fail open on every branch but the one that is unambiguously spam.
   const isSpam = enabled && n !== null && n >= threshold
   return { isSpam, score: n, threshold, enabled }

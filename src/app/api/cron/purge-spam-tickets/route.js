@@ -52,6 +52,16 @@ const SCAN_PAGE = 1000
  * night is a quarantine that never empties. A tombstone whose target is NOT
  * being purged is left alone (the merge machinery owns it).
  *
+ * THE RACE THE ONE-STATEMENT .or() CANNOT CLOSE: a target released (Not spam)
+ * between the candidate scan and the delete no longer matches its own half,
+ * but its tombstones still match theirs — the statement would delete the
+ * tombstones, leave the target, and merged_from_ticket_id on the target's
+ * moved messages would refuse it: 500, no heartbeat that night. So the
+ * targets' flags are RE-READ immediately before the statement and a released
+ * target is dropped from BOTH halves. The window that remains is the
+ * milliseconds between that re-read and the statement; a release inside it
+ * still 500s once and self-heals the next night.
+ *
  * PAGING: delete-as-you-go. Each iteration reads the OLDEST PURGE_PAGE_SIZE
  * candidates with .range(0, n-1) — after that page is deleted the next oldest
  * rows move into range 0, so the cursor never advances and never skips. A
@@ -173,22 +183,37 @@ export async function GET(request) {
     // ever delete a quarantined row (or the tombstone of one).
     let remaining = ticketIds
     if (tombstones.length > 0) {
-      const targets = [...new Set(tombstones.map(t => t.merged_into_id).filter(Boolean))]
-      const tombIds = tombstones.map(t => t.id)
-      // ONE statement for target + tombstone (the header's FK cycle). The
-      // .or() is the belt-and-braces in a form that admits both halves.
-      const { error: pairErr } = await db.from('email_tickets')
-        .delete()
-        .in('id', [...targets, ...tombIds])
-        .or(`is_spam.eq.true,merged_into_id.in.(${targets.join(',')})`)
-      if (pairErr) {
-        logError('cron.purge-spam-tickets', 'merged-ticket delete failed', { err: pairErr.message, page: pages })
-        return NextResponse.json({ success: false, error: pairErr.message }, { status: 500 })
+      const scannedTargets = [...new Set(tombstones.map(t => t.merged_into_id).filter(Boolean))]
+      // Re-read the targets' flags NOW (the header's race): a target released
+      // since the candidate scan leaves the statement with its tombstones and
+      // stays out of the plain delete below too — it is no longer spam.
+      const { data: stillSpam, error: recheckErr } = await db.from('email_tickets')
+        .select('id')
+        .in('id', scannedTargets)
+        .eq('is_spam', true)
+      if (recheckErr) {
+        logError('cron.purge-spam-tickets', 'merge-target re-check failed', { err: recheckErr.message, page: pages })
+        return NextResponse.json({ success: false, error: recheckErr.message }, { status: 500 })
       }
-      ticketsDeleted += targets.length
-      tombstonesDeleted += tombIds.length
-      const targetSet = new Set(targets)
-      remaining = ticketIds.filter(id => !targetSet.has(id))
+      const targetSet = new Set((stillSpam || []).map(t => t.id))
+      const targets = scannedTargets.filter(id => targetSet.has(id))
+      const tombIds = tombstones.filter(t => targetSet.has(t.merged_into_id)).map(t => t.id)
+      if (targets.length > 0) {
+        // ONE statement for target + tombstone (the header's FK cycle). The
+        // .or() is the belt-and-braces in a form that admits both halves.
+        const { error: pairErr } = await db.from('email_tickets')
+          .delete()
+          .in('id', [...targets, ...tombIds])
+          .or(`is_spam.eq.true,merged_into_id.in.(${targets.join(',')})`)
+        if (pairErr) {
+          logError('cron.purge-spam-tickets', 'merged-ticket delete failed', { err: pairErr.message, page: pages })
+          return NextResponse.json({ success: false, error: pairErr.message }, { status: 500 })
+        }
+        ticketsDeleted += targets.length
+        tombstonesDeleted += tombIds.length
+      }
+      const scannedSet = new Set(scannedTargets)
+      remaining = ticketIds.filter(id => !scannedSet.has(id))
     }
     if (remaining.length > 0) {
       const { error: delErr } = await db.from('email_tickets')

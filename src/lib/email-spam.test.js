@@ -57,6 +57,23 @@ describe('extractSpamScore — Postmark SpamScore first, headers as fallback', (
     })).toBe(1)
   })
 
+  // EMAIL-INBOUND-POISON.1 shape: mig 584 stores spam_score as numeric(6,2),
+  // so an attacker-supplied `X-Spam-Score: 1e300` would overflow (22003) the
+  // ticket insert → 500 → Postmark retries the poison until exhausted. The
+  // score is clamped to what the column can hold; the verdict is unchanged
+  // (anything past the clamp was already far past any threshold).
+  it('clamps an absurd score to what numeric(6,2) can hold, in both directions', () => {
+    expect(extractSpamScore({ SpamScore: 1e300 })).toBe(999)
+    expect(extractSpamScore({ SpamScore: -1e300 })).toBe(-999)
+    expect(extractSpamScore({ SpamScore: '1e300' })).toBe(999)
+    expect(extractSpamScore({ Headers: [{ Name: 'X-Spam-Score', Value: '1e300' }] })).toBe(999)
+    expect(extractSpamScore({ Headers: [{ Name: 'X-Spam-Status', Value: 'Yes, score=99999999 required=5.0' }] })).toBe(999)
+    // An ordinary score is untouched.
+    expect(extractSpamScore({ SpamScore: 4.7 })).toBe(4.7)
+    expect(extractSpamScore({ SpamScore: 999 })).toBe(999)
+    expect(extractSpamScore({ SpamScore: -999 })).toBe(-999)
+  })
+
   it('is null — never 0 — when nothing usable is there (fail open)', () => {
     expect(extractSpamScore({})).toBeNull()
     expect(extractSpamScore(null)).toBeNull()
@@ -124,6 +141,12 @@ describe('classifyInboundSpam', () => {
     expect(classifyInboundSpam({ score: 6, settings }).isSpam).toBe(false)
     expect(classifyInboundSpam({ score: 8, settings }).isSpam).toBe(true)
     expect(classifyInboundSpam({ score: 6, settings: {} }).isSpam).toBe(true) // default 5.0
+  })
+
+  it('clamps a score handed to it directly, so the insert payload can never overflow', () => {
+    expect(classifyInboundSpam({ score: 1e300, settings: null })).toMatchObject({ isSpam: true, score: 999 })
+    expect(classifyInboundSpam({ score: -1e300, settings: null })).toMatchObject({ isSpam: false, score: -999 })
+    expect(classifyInboundSpam({ score: 4.7, settings: null }).score).toBe(4.7)
   })
 
   it('a disabled filter quarantines nothing, whatever the score', () => {

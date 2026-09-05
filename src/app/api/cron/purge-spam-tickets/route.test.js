@@ -150,6 +150,105 @@ describe('what gets purged', () => {
     }
   })
 
+  // THE RACE THE .or() CANNOT CLOSE. An operator clicks Not spam on a merge
+  // target between the candidate scan and the delete: the target no longer
+  // matches its half (is_spam), its tombstones still match theirs
+  // (merged_into_id.in), so a one-statement delete would remove the
+  // tombstones and leave the target — and merged_from_ticket_id (mig 536, NO
+  // ACTION) on the target's moved messages refuses it, 500, no heartbeat that
+  // night. The route re-reads the targets' flags immediately before the
+  // statement and drops a released target from BOTH halves.
+  it('leaves a merge target AND its tombstones alone when the target is released mid-run', async () => {
+    setupDb({
+      tickets: [
+        spamTicket('t-target', 45),
+        { ...T_STUDIO, id: 't-tomb-1', is_spam: false, spam_flagged_at: null, merged_into_id: 't-target' },
+        spamTicket('t-plain', 40),
+      ],
+      messages: [
+        { id: 'msg-moved', ticket_id: 't-target', merged_from_ticket_id: 't-tomb-1', direction: 'inbound', created_at: daysAgo(45) },
+      ],
+    })
+    // Release the target the moment the tombstone scan has answered — after
+    // the candidate scan chose it, before anything is deleted.
+    const realFrom = db.from
+    db.from = (table) => {
+      const b = realFrom(table)
+      if (table === 'email_tickets') {
+        const origThen = b.then
+        b.then = (res, rej) => origThen((out) => {
+          if (b._filters.some(f => f[0] === 'in' && f[1] === 'merged_into_id')) {
+            const target = db._state.tickets.find(t => t.id === 't-target')
+            target.is_spam = false
+            target.spam_flagged_at = null
+          }
+          return res(out)
+        }, rej)
+      }
+      return b
+    }
+
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data).toMatchObject({ tickets_deleted: 1, merge_tombstones_deleted: 0 })
+    // The released target and its tombstone both survive; the plain row went.
+    expect(db._state.tickets.map(t => t.id).sort()).toEqual(['t-target', 't-tomb-1'])
+    // No delete ever NAMED the tombstone — the fake has no FKs, so surviving
+    // by accident of a filter would not prove the statement was safe.
+    for (const d of deletesFrom(db, 'email_tickets')) {
+      const named = d.filters.find(f => f[0] === 'in' && f[1] === 'id')?.[2] || []
+      expect(named).not.toContain('t-tomb-1')
+      expect(named).not.toContain('t-target')
+    }
+    expect(stampHeartbeat).toHaveBeenCalledTimes(1)
+  })
+
+  // The two-target shape: one target released mid-run, one still spam on the
+  // same page. The statement must still go for the live pair AND must not
+  // NAME the released target's tombstone — Postgres would let the .or() save
+  // that row, but the count would then report a tombstone that never went.
+  it('drops a released target’s tombstones from the statement while still purging the other target', async () => {
+    setupDb({
+      tickets: [
+        spamTicket('t-released-target', 45),
+        { ...T_STUDIO, id: 't-tomb-released', is_spam: false, spam_flagged_at: null, merged_into_id: 't-released-target' },
+        spamTicket('t-live-target', 44),
+        { ...T_STUDIO, id: 't-tomb-live', is_spam: false, spam_flagged_at: null, merged_into_id: 't-live-target' },
+      ],
+      messages: [
+        { id: 'msg-a', ticket_id: 't-released-target', merged_from_ticket_id: 't-tomb-released', direction: 'inbound', created_at: daysAgo(45) },
+        { id: 'msg-b', ticket_id: 't-live-target', merged_from_ticket_id: 't-tomb-live', direction: 'inbound', created_at: daysAgo(44) },
+      ],
+    })
+    const realFrom = db.from
+    db.from = (table) => {
+      const b = realFrom(table)
+      if (table === 'email_tickets') {
+        const origThen = b.then
+        b.then = (res, rej) => origThen((out) => {
+          if (b._filters.some(f => f[0] === 'in' && f[1] === 'merged_into_id')) {
+            const target = db._state.tickets.find(t => t.id === 't-released-target')
+            target.is_spam = false
+            target.spam_flagged_at = null
+          }
+          return res(out)
+        }, rej)
+      }
+      return b
+    }
+
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toMatchObject({ tickets_deleted: 1, merge_tombstones_deleted: 1 })
+    expect(db._state.tickets.map(t => t.id).sort()).toEqual(['t-released-target', 't-tomb-released'])
+    const pair = deletesFrom(db, 'email_tickets').find(d => d.filters.some(f => f[0] === 'or'))
+    expect(pair).toBeTruthy()
+    const named = pair.filters.find(f => f[0] === 'in' && f[1] === 'id')[2]
+    expect(named.sort()).toEqual(['t-live-target', 't-tomb-live'])
+    expect(pair.filters.find(f => f[0] === 'or')[1]).toBe('is_spam.eq.true,merged_into_id.in.(t-live-target)')
+  })
+
   it('removes attachment objects and releases the bytes BEFORE the rows go', async () => {
     const path = `${LOC_A}/${MB_STUDIO.id}/msg-1/0-invoice.pdf`
     setupDb({
