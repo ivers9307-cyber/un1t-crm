@@ -25,12 +25,14 @@ export async function GET() {
   const locationId = user.activeLocation?.id
   if (!locationId) return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
 
-  const { data: loc } = await db.from('locations').select('name, settings').eq('id', locationId).single()
+  const { data: loc } = await db.from('locations').select('name, settings, glofox_auto_cancel_memberships').eq('id', locationId).single()
   const settings = {
     ...DEFAULTS,
     ...(loc?.settings?.customer_agent || {}),
     // social_enabled lives top-level on locations.settings (sibling of customer_agent)
     social_enabled: loc?.settings?.social_enabled === true,
+    // CANCEL-FORM.2 — the Glofox auto-cancel toggle is its own column (mig 585).
+    glofox_auto_cancel: loc?.glofox_auto_cancel_memberships === true,
   }
 
   // AGENT-CHECKIN.2 — visibility for the First-class check-in card. The
@@ -100,6 +102,12 @@ export async function PUT(request) {
   // NOT nested inside customer_agent — written here so it's merged safely.
   settings.social_enabled = !!v.data.social_enabled
 
-  await db.from('locations').update({ settings }).eq('id', locationId).select('id').single()
+  // CANCEL-FORM.2 — glofox_auto_cancel_memberships is a COLUMN, written in the
+  // same UPDATE. Always written (false when omitted) so an old editor that
+  // never sends the key can't leave a stale true behind.
+  const { error } = await db.from('locations')
+    .update({ settings, glofox_auto_cancel_memberships: v.data.glofox_auto_cancel === true })
+    .eq('id', locationId).select('id').single()
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   return NextResponse.json({ success: true, settings: settings.customer_agent })
 }
