@@ -44,9 +44,22 @@
 // inbound webhook and backfilled by link-contact) AND by ticket_id ∈ the
 // contact's tickets, because an outbound reply filed before link-contact ran
 // carries contact_id NULL, and a message stamped with the contact can sit on a
-// ticket since re-linked to someone else. Attachments by message_id — they have
-// no contact column at all. Every read .range()-paginates with an explicit
-// .order(): a chatty member's thread exceeds the 1,000-row cap.
+// ticket since re-linked to someone else. AND by merged_from_ticket_id ∈ the
+// contact's tickets: the merge route (tickets/[id]/merge) moves a source
+// ticket's messages onto the target with { ticket_id: target,
+// merged_from_ticket_id: source } and never writes contact_id, while
+// link-contact's backfill is .eq('ticket_id', …) only — so a staff reply on
+// X's then-unlinked ticket, merged into Y's, sits on a ticket that is not X's
+// with no stamp, and only merged_from_ticket_id still says whose it was.
+// Attachments by message_id — they have no contact column at all. Every read
+// .range()-paginates with an explicit .order(): a chatty member's thread
+// exceeds the 1,000-row cap.
+//
+// ACCEPTED RESIDUE of that merge: mergedTicketFields() copies the NEWER
+// thread's last_message_preview onto the SURVIVING ticket, so if X's message
+// was the newest at merge time, Y's ticket row carries a one-line preview of
+// X's text. Scrubbing it would mean writing to Y's row from X's erasure, which
+// this module does not do; the next message on Y's ticket overwrites it.
 //
 // Idempotent: a second run finds the sentinels already in place, no
 // attachments, and reports no failures.
@@ -183,6 +196,14 @@ export async function redactMailForContact(db, contactId) {
       fail('email_inbox_messages', 'select', e.message, { by: 'ticket_id' })
     }
   }
+  for (const chunk of chunks(ticketIds, IN_CHUNK)) {
+    try {
+      const merged = await readAll(db, d => d.from('email_inbox_messages').select('id').in('merged_from_ticket_id', chunk))
+      for (const m of merged) messageIds.add(m.id)
+    } catch (e) {
+      fail('email_inbox_messages', 'select', e.message, { by: 'merged_from_ticket_id' })
+    }
+  }
   const messageIdList = [...messageIds]
 
   const attachments = []
@@ -200,9 +221,9 @@ export async function redactMailForContact(db, contactId) {
   // ── 2. Attachments: object → forwards → row → counter ──────────────
   const attach = await eraseAttachments(db, attachments, fail)
 
-  // ── 3. Messages: anonymise in place, by contact AND by ticket ──────
+  // ── 3. Messages: anonymise in place, by contact, by ticket, by merge ─
   // Zero-row UPDATEs are not errors in PostgREST (a re-run finds nothing), and
-  // the two passes overlap on purpose — the patch is idempotent.
+  // the three passes overlap on purpose — the patch is idempotent.
   if (!stampedKnownEmpty) {
     const { error } = await db.from('email_inbox_messages').update(MAIL_MESSAGE_REDACTION).eq('contact_id', contactId)
     if (error) fail('email_inbox_messages', 'update', error.message, { by: 'contact_id' })
@@ -210,6 +231,10 @@ export async function redactMailForContact(db, contactId) {
   for (const chunk of chunks(ticketIds, IN_CHUNK)) {
     const { error } = await db.from('email_inbox_messages').update(MAIL_MESSAGE_REDACTION).in('ticket_id', chunk)
     if (error) fail('email_inbox_messages', 'update', error.message, { by: 'ticket_id' })
+  }
+  for (const chunk of chunks(ticketIds, IN_CHUNK)) {
+    const { error } = await db.from('email_inbox_messages').update(MAIL_MESSAGE_REDACTION).in('merged_from_ticket_id', chunk)
+    if (error) fail('email_inbox_messages', 'update', error.message, { by: 'merged_from_ticket_id' })
   }
 
   // ── 4. Tickets ─────────────────────────────────────────────────────
@@ -270,20 +295,31 @@ async function eraseAttachments(db, attachments, fail) {
     if (removed) freedOwners.push(...batch)
   }
 
-  // Forwards outside this set that share a freed owner's bytes.
+  // Forwards outside this set that share a freed owner's bytes. An owner whose
+  // mark chunk FAILED is held back from the delete below: deleting it would
+  // fire mig 501's ON DELETE SET NULL on the outside forward, turning that
+  // forward into an "owner" (forwarded_from_id NULL, storage_path set) of an
+  // object that no longer exists — never charged, never prunable, a chip that
+  // 404s forever. Held back, the row stays findable; the next run's remove()
+  // reads the missing object as already gone and finishes the job.
   const freedOwnerIds = freedOwners.map(a => a.id)
   const inSet = new Set(attachments.map(a => a.id))
+  const markFailed = new Set()
   for (const chunk of chunks(freedOwnerIds, IN_CHUNK)) {
     const { error } = await db.from('email_ticket_attachments')
       .update({ storage_path: null, skipped_reason: 'pruned' })
       .in('forwarded_from_id', chunk)
       .not('storage_path', 'is', null)
-    if (error) fail('email_ticket_attachments', 'update', error.message, { step: 'mark_forwards' })
+    if (error) {
+      fail('email_ticket_attachments', 'update', error.message, { step: 'mark_forwards', owners: chunk.length })
+      for (const id of chunk) markFailed.add(id)
+    }
   }
 
   // Rows: freed owners + every forward/skipped row. An owner whose object
-  // could not be removed is deliberately NOT here.
-  const deletable = [...freedOwners, ...others.filter(a => inSet.has(a.id))]
+  // could not be removed, or whose forwards could not be marked, is
+  // deliberately NOT here.
+  const deletable = [...freedOwners.filter(a => !markFailed.has(a.id)), ...others.filter(a => inSet.has(a.id))]
   const deletedIds = new Set()
   for (const chunk of chunks(deletable.map(a => a.id), IN_CHUNK)) {
     const { data, error } = await db.from('email_ticket_attachments').delete().in('id', chunk).select('id')

@@ -14,7 +14,7 @@
 // asserted against state, not against a recorded call.
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
-import { makeDb, updatesTo, deletesFrom, objectKeys, seedObject, usageFor } from '@/app/api/email/tickets/_test-db'
+import { makeDb, updatesTo, deletesFrom, objectKeys, seedObject, usageFor, failWrites } from '@/app/api/email/tickets/_test-db'
 import {
   redactMailForContact,
   MAIL_REDACTED_EMAIL,
@@ -138,6 +138,35 @@ describe('redactMailForContact — the WhatsApp doctrine, applied to mail', () =
     expect(db._state.messages.find(x => x.id === 'm9').text_body).toBe(MAIL_REDACTED_BODY)
   })
 
+  it('also catches messages MERGED off the contact\'s ticket onto someone else\'s — found by neither contact_id nor ticket_id', async () => {
+    // The merge route moves messages with { ticket_id: target, merged_from_ticket_id: source }
+    // and never touches contact_id; a staff reply filed on a then-unlinked ticket
+    // carries contact_id NULL, and link-contact's backfill only looks at
+    // .eq('ticket_id', …). So X's message, merged into Y's ticket, is on a
+    // ticket that is not X's AND carries no stamp. Only merged_from_ticket_id
+    // still says whose it was.
+    seed(db, {
+      tickets: [ticket('t1'), ticket('tB', { contact_id: OTHER, requester_email: 'other@example.com' })],
+      messages: [
+        message('m2', 'tB', { contact_id: null, merged_from_ticket_id: 't1', text_body: 'my medical note' }),
+        // Y's own message on the surviving ticket — must survive untouched.
+        message('mY', 'tB', { contact_id: OTHER, from_email: 'other@example.com', text_body: 'theirs' }),
+      ],
+      attachments: [attachment('a2', 'm2')],
+      usage: [{ location_id: LOC, mailbox_id: MAILBOX, bytes_used: 1000 }],
+    })
+
+    const out = await redactMailForContact(db, CONTACT)
+
+    expect(db._state.messages.find(x => x.id === 'm2').text_body).toBe(MAIL_REDACTED_BODY)
+    expect(db._state.messages.find(x => x.id === 'mY').text_body).toBe('theirs')
+    // The attachment chain hangs off the message set, so it follows.
+    expect(db._state.attachments).toEqual([])
+    expect(usageFor(db, LOC, MAILBOX).bytes_used).toBe(0)
+    expect(out.messages).toBe(1)
+    expect(out.failures).toEqual([])
+  })
+
   it('removes attachment bytes from storage FIRST, then deletes the rows, then gives the bytes back', async () => {
     seed(db, {
       tickets: [ticket('t1')],
@@ -227,6 +256,78 @@ describe('redactMailForContact — the WhatsApp doctrine, applied to mail', () =
     expect(db._state.attachments[0]).toMatchObject({ storage_path: null, skipped_reason: 'pruned' })
     expect(usageFor(db, LOC, MAILBOX).bytes_used).toBe(0)
     expect(out).toMatchObject({ attachments_deleted: 2, bytes_freed: 1000, failures: [] })
+  })
+
+  // ── Review fixes: the three attachment failure paths that had no test ──
+
+  it('a failed mark-forwards UPDATE keeps the owner row — deleting it would fire mig 501\'s SET NULL and promote an outside forward to an owner of nothing', async () => {
+    seed(db, {
+      tickets: [ticket('t1')],
+      messages: [message('m1', 't1')],
+      attachments: [
+        attachment('a1', 'm1'),
+        // Forward on someone else's ticket, sharing a1's bytes.
+        attachment('aX', 'mOther', { storage_path: `${LOC}/m1/a1.pdf`, forwarded_from_id: 'a1' }),
+      ],
+      usage: [{ location_id: LOC, mailbox_id: MAILBOX, bytes_used: 1000 }],
+    })
+    failWrites(db, ['email_ticket_attachments'], ['update'])
+
+    const out = await redactMailForContact(db, CONTACT)
+
+    // The owner row stays for the next run; the forward still points at a live row.
+    expect(db._state.attachments.map(a => a.id).sort()).toEqual(['a1', 'aX'])
+    expect(db._state.attachments.find(a => a.id === 'aX')).toMatchObject({ forwarded_from_id: 'a1', storage_path: `${LOC}/m1/a1.pdf` })
+    // Nothing was deleted, so nothing is given back.
+    expect(usageFor(db, LOC, MAILBOX).bytes_used).toBe(1000)
+    expect(out.attachments_deleted).toBe(0)
+    expect(out.bytes_freed).toBe(0)
+    expect(out.failures).toEqual([
+      expect.objectContaining({ table: 'email_ticket_attachments', op: 'update' }),
+    ])
+    // The rest of the scrub still ran.
+    expect(db._state.messages[0].text_body).toBe(MAIL_REDACTED_BODY)
+  })
+
+  it('a failed counter decrement is REPORTED — the bytes and rows are gone, so the mailbox reads fuller than it is', async () => {
+    seed(db, {
+      tickets: [ticket('t1')],
+      messages: [message('m1', 't1')],
+      attachments: [attachment('a1', 'm1')],
+      usage: [{ location_id: LOC, mailbox_id: MAILBOX, bytes_used: 1000 }],
+    })
+    db._state.errors.add_email_storage_bytes = { message: 'rpc down' }
+
+    const out = await redactMailForContact(db, CONTACT)
+
+    expect(objectKeys(db)).toEqual([])
+    expect(db._state.attachments).toEqual([])
+    expect(usageFor(db, LOC, MAILBOX).bytes_used).toBe(1000)
+    expect(out.attachments_deleted).toBe(1)
+    expect(out.bytes_freed).toBe(0)
+    expect(out.failures).toEqual([
+      expect.objectContaining({ table: 'email_storage_usage', op: 'rpc', message: expect.stringMatching(/Recalculate/) }),
+    ])
+  })
+
+  it('a failed row DELETE is reported, and the counter is not decremented for rows that are still there', async () => {
+    seed(db, {
+      tickets: [ticket('t1')],
+      messages: [message('m1', 't1')],
+      attachments: [attachment('a1', 'm1')],
+      usage: [{ location_id: LOC, mailbox_id: MAILBOX, bytes_used: 1000 }],
+    })
+    failWrites(db, ['email_ticket_attachments'], ['delete'])
+
+    const out = await redactMailForContact(db, CONTACT)
+
+    expect(db._state.attachments).toHaveLength(1)
+    expect(usageFor(db, LOC, MAILBOX).bytes_used).toBe(1000)
+    expect(out.attachments_deleted).toBe(0)
+    expect(out.bytes_freed).toBe(0)
+    expect(out.failures).toEqual([
+      expect.objectContaining({ table: 'email_ticket_attachments', op: 'delete' }),
+    ])
   })
 
   it('a contact with no mail is a clean no-op — no writes at all', async () => {

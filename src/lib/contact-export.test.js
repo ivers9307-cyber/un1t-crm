@@ -213,6 +213,29 @@ describe('buildContactExport — mail section (MAIL-GDPR.1)', () => {
     expect(mail.truncated).toBe(false)
   })
 
+  it('includes a message MERGED off the contact\'s ticket onto someone else\'s — the third lookup, same as the scrub', async () => {
+    const { buildContactExport } = await import('./contact-export.js')
+    const db = mailDb({
+      email_tickets: [
+        { id: 't1', contact_id: 'c1', subject: 'Billing', status: 'closed', requester_email: 'a@x.ie', created_at: '2026-08-01T10:00:00Z' },
+        { id: 'tB', contact_id: 'someone-else', subject: 'Theirs', status: 'open', requester_email: 'z@x.ie', created_at: '2026-08-01T10:00:00Z' },
+      ],
+      email_inbox_messages: [
+        // Moved by the merge route: ticket_id is now tB, contact_id was never stamped.
+        { id: 'm4', ticket_id: 'tB', contact_id: null, merged_from_ticket_id: 't1', direction: 'inbound', from_email: 'a@x.ie', text_body: 'moved mail', created_at: '2026-08-03T10:00:00Z' },
+        // Their own message on the surviving ticket — not the requester's data.
+        { id: 'mB', ticket_id: 'tB', contact_id: 'someone-else', direction: 'inbound', text_body: 'not yours', created_at: '2026-08-01T10:00:00Z' },
+      ],
+      email_ticket_attachments: [
+        { id: 'a4', message_id: 'm4', filename: 'moved.pdf', mime_type: 'application/pdf', size_bytes: 10, skipped_reason: null, created_at: '2026-08-03T10:00:00Z' },
+      ],
+    })
+
+    const mail = (await buildContactExport(db, CONTACT)).sections.mail
+    expect(mail.messages.rows.map(m => m.id)).toEqual(['m4'])
+    expect(mail.attachments.rows.map(a => a.filename)).toEqual(['moved.pdf'])
+  })
+
   it('a contact with no mail gets an empty, honest section — not an error marker', async () => {
     const { buildContactExport } = await import('./contact-export.js')
     const bundle = await buildContactExport(mailDb({}), CONTACT)

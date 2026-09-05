@@ -442,14 +442,19 @@ export const usageFor = (db, locationId, mailboxId = null) =>
  * under test only exists because the reads succeeded and a write then failed.
  * The failed write is NOT recorded on db.inserts/db.updates (settle never
  * runs), so per-table assertions see exactly what the real DB kept.
+ *
+ * `ops` narrows WHICH writes fail (default insert + update, the original
+ * contract). MAIL-GDPR.1's attachment erasure runs an UPDATE (mark forwards)
+ * and a DELETE (rows) on the same table and must survive either failing
+ * alone, which neither the default nor `state.errors` can express.
  */
-export function failWrites(db, tables) {
+export function failWrites(db, tables, ops = ['insert', 'update']) {
   const realFrom = db.from
   db.from = (table) => {
     const b = realFrom(table)
     if (!tables.includes(table)) return b
     const failure = { data: null, error: { code: 'XX000', message: `${table} write exploded` } }
-    for (const op of ['insert', 'update']) {
+    for (const op of ops) {
       const orig = b[op]
       b[op] = (payload) => {
         orig(payload)

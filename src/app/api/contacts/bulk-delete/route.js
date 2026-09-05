@@ -16,7 +16,8 @@
 //       blocked: [{ id, name, reason }],     // FK violation (whatsapp_*) etc.
 //       forbidden: [{ id, name, reason }],   // wrong location
 //       missing: string[],                   // ids that didn't resolve
-//       scrub_warnings: [{ id, name, failures }] // MAIL-GDPR.1: partial mail scrub (deleted anyway)
+//       scrub_warnings?: [{ id, name, failures }] // MAIL-GDPR.1: partial mail scrub (deleted anyway).
+//                                            // Key ABSENT on a clean run, like the single route.
 //     }
 //   }
 //
@@ -72,7 +73,6 @@ export async function POST(request) {
     blocked: [],
     forbidden: [],
     missing: [],
-    scrub_warnings: [],
   }
 
   for (const id of uniqueIds) {
@@ -107,7 +107,7 @@ export async function POST(request) {
       mailScrub = { ok: false, failures: [{ table: 'mail', op: 'scrub', message: e?.message || String(e) }] }
     }
     if (mailScrub.failures.length > 0) {
-      result.scrub_warnings.push({ id, name: row.name, failures: mailScrub.failures })
+      (result.scrub_warnings ??= []).push({ id, name: row.name, failures: mailScrub.failures })
     }
     const { error } = await db.from('contacts').delete().eq('id', id)
     if (error) {

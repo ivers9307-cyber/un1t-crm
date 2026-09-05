@@ -75,8 +75,11 @@ async function fetchAllRowsIn(db, { table, select, inCol, values, orderCol }) {
 // webhook writes) UNION by ticket_id — an outbound staff reply filed before
 // link-contact backfilled the stamp carries contact_id NULL, and a message
 // stamped with the contact can sit on a ticket since re-linked to someone
-// else. Same two lookups the erasure scrub uses, so what is exported is what
-// would be erased. Attachments by message_id: FILENAMES ONLY — the WhatsApp
+// else — UNION by merged_from_ticket_id: the merge route moves a source
+// ticket's messages onto the target without ever writing contact_id, so a
+// merged-away message is on a ticket that is not the contact's and carries no
+// stamp. Same three lookups the erasure scrub uses, so what is exported is
+// what would be erased. Attachments by message_id: FILENAMES ONLY — the WhatsApp
 // section exports bodies but never media bytes, and this mirrors it. Two
 // columns are deliberately left out: bcc_emails (audit-only per mig 482,
 // "MUST NEVER be rendered in any member-visible context") and html_body
@@ -97,11 +100,19 @@ async function mailSection(db, contactId) {
     table: 'email_inbox_messages', select: MAIL_MESSAGE_COLUMNS,
     inCol: 'ticket_id', values: tickets.rows.map(t => t.id), orderCol: 'created_at',
   })
+  const merged = await fetchAllRowsIn(db, {
+    table: 'email_inbox_messages', select: MAIL_MESSAGE_COLUMNS,
+    inCol: 'merged_from_ticket_id', values: tickets.rows.map(t => t.id), orderCol: 'created_at',
+  })
   const messageById = new Map()
-  for (const m of [...stamped.rows, ...onTickets.rows]) messageById.set(m.id, m)
+  for (const m of [...stamped.rows, ...onTickets.rows, ...merged.rows]) messageById.set(m.id, m)
   const messageRows = [...messageById.values()]
     .sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')))
-  const messages = { count: messageRows.length, truncated: stamped.truncated || onTickets.truncated, rows: messageRows }
+  const messages = {
+    count: messageRows.length,
+    truncated: stamped.truncated || onTickets.truncated || merged.truncated,
+    rows: messageRows,
+  }
 
   const attachmentsRaw = await fetchAllRowsIn(db, {
     table: 'email_ticket_attachments', select: MAIL_ATTACHMENT_COLUMNS,

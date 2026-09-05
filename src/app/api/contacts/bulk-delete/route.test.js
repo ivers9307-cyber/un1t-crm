@@ -63,7 +63,10 @@ describe('POST /api/contacts/bulk-delete — mail scrub per contact', () => {
     expect(redactMailForContact).toHaveBeenCalledWith(db, C2)
     // Mail scrub runs before the row goes — the SET NULL FK makes it unfindable after.
     expect(redactMailForContact.mock.invocationCallOrder[0]).toBeLessThan(db.delete.mock.invocationCallOrder[0])
-    expect(data.scrub_warnings).toEqual([])
+    // Byte-identical to the pre-MAIL-GDPR.1 shape on a clean run — the key
+    // appears only when there is something to act on, as on the single route.
+    expect(data).not.toHaveProperty('scrub_warnings')
+    expect(Object.keys(data).sort()).toEqual(['blocked', 'deleted', 'forbidden', 'missing', 'requested'])
   })
 
   it('reports a partial mail scrub against the contact it belongs to, and still deletes', async () => {
