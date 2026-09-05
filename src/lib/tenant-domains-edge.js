@@ -80,7 +80,7 @@ export const DB_BRAND_DEFAULTS = Object.freeze({
   // legacy /race link for one can exist. Least privilege — add them to a
   // tenant's own brand override if that ever stops being true.
   // LATENT, not live: tenant_domains has zero rows today.
-  allowedPaths: Object.freeze(['/welcome', '/book/', '/event/', '/event-pay/', '/privacy', '/legal/', '/account-deletion', '/api/public/', '/api/webhooks/']),
+  allowedPaths: Object.freeze(['/welcome', '/book/', '/event/', '/event-pay/', '/privacy', '/legal/', '/account-deletion', '/cancel/', '/api/public/', '/api/webhooks/']),
   rootHandler: 'rewrite',
   rootRewriteTo: '/welcome',
   fallbackHandler: 'rewrite',

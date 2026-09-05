@@ -89,6 +89,10 @@ const COMPLIANCE_PATHS = [
     path: '/embed/event/summer-race',
     why: 'paste-anywhere signup iframe embedded by third-party sites',
   },
+  {
+    path: '/cancel/eyJsIjoieCJ9.c2ln',
+    why: 'CANCEL-FORM.3: per-contact membership cancellation form link sent by email/WhatsApp; must render without a session on every host, incl. the marketing host when the operator builds links there',
+  },
 ]
 
 // The embed's post-submit hop. RaceSignupWidget sends a PAID signup to a
