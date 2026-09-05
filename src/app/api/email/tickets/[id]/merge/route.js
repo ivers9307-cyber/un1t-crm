@@ -117,7 +117,9 @@ export async function POST(request, props) {
   const source = loadedSource.ticket
   const target = loadedTarget.ticket
 
-  // Same-ticket, cross-location and already-merged all refuse here, and all
+  // Same-ticket, cross-location, already-merged and across-the-spam-flag
+  // (MAIL-SPAM.1 — both rows arrive via loadTicketForUser's select('*'), so
+  // is_spam is on each) all refuse here, and all
   // refuse as 404: the caller has already been told both ids exist by getting
   // past the loads, but the reason a merge is ineligible is still not something
   // this surface owes them, and a distinct code would be a new oracle to keep

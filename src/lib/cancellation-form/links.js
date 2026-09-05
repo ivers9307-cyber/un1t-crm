@@ -1,4 +1,4 @@
-// CANCEL-FORM.3 — the issued-link ledger: cancellation_form_links (mig 584).
+// CANCEL-FORM.3 — the issued-link ledger: cancellation_form_links (mig 585).
 //
 // The URL token (token.js) carries only { link id, exp }. This module is the
 // map from a token to a person, and the single-use / revocation state:

@@ -236,6 +236,33 @@ describe('GET /api/me/preferences — signature_contexts', () => {
     ])
   })
 
+  // MAIL-SIGDEFAULT.1 — a person with nothing of their own at a studio WITH a
+  // card gets the studio block rendered; the GET's shape is untouched, so
+  // mobile (which renders effective_text verbatim) needs no change.
+  it('rich NULL + plain NULL at a studio with a card → effective_text is the STUDIO block, same wire shape', async () => {
+    getCurrentUser.mockResolvedValue(QUEUE_WORKER)
+    setupDb({ permissions: {}, email_signature: null, email_signature_rich: null })
+    answerEstate(db, {
+      mailboxes: [{ location_id: 'loc-still' }],
+      cards: [{ location_id: 'loc-still', email_signature: STILL_CARD }],
+    })
+    const body = await (await GET()).json()
+    expect(body.success).toBe(true)
+    // Top-level shape unchanged.
+    expect(Object.keys(body.data).sort()).toEqual(
+      ['active_location_id', 'email_signature', 'email_signature_rich', 'landing_preference', 'signature_contexts']
+    )
+    expect(body.data.email_signature).toBe('')
+    expect(body.data.email_signature_rich).toBeNull()
+    expect(body.data.signature_contexts).toEqual([
+      {
+        location_id: 'loc-still', location_name: 'UN1T Stillorgan', studio_signature: STILL_CARD, has_mailbox: true,
+        effective_text: 'UN1T Stillorgan\n01 555 0001\nBook: https://un1t.ie/book',
+        rich: true, has_photo: false, has_links: true,
+      },
+    ])
+  })
+
   it('a permitted studio with no mailbox is still an entry — has_mailbox:false, still rendered', async () => {
     getCurrentUser.mockResolvedValue(QUEUE_WORKER)
     setupDb({ permissions: {}, email_signature: '', email_signature_rich: RICH })

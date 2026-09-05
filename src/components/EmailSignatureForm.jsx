@@ -35,6 +35,14 @@ import { markSignatureUpdated } from '@/components/tickets/SignatureHint'
 // There is no mobile editor (an earlier comment here claimed the mobile app
 // edited the plain column — it never did); on a phone, this same page at
 // crm.repset.ie/account is the way to change either one.
+//
+// MAIL-SIGDEFAULT.1 — the STUDIO block (the sending studio's name, phone and
+// links, set on its Email settings card) now goes out on every send, opted
+// in or not. Everything on this card is the PERSON'S part: the plain text is
+// their own sign-off (it rides ABOVE the studio block), and the rich toggle
+// below adds name/role/photo. The live plain value is handed to the rich
+// editor so its preview can show the plain-over-studio send while the toggle
+// is off — the same resolver the send routes run.
 
 export default function EmailSignatureForm({ initialSignature = '', initialRich = null }) {
   const [signature, setSignature] = useState(initialSignature || '')
@@ -75,8 +83,10 @@ export default function EmailSignatureForm({ initialSignature = '', initialRich 
       <div className="px-5 pt-5 pb-3">
         <h2 className="text-base font-semibold text-un1t-text">Email signature</h2>
         <p className="text-xs text-un1t-subtle mt-1">
-          Added to the end of every email reply you send from the ticket inbox. Not added to internal
-          notes — those are never sent to anyone. Leave it empty and nothing is added.
+          Added to the end of every email you send from the inbox — never to internal notes, which
+          are never sent to anyone. Your studio’s signature block (its name, phone and links, set on
+          the studio’s Email settings) is added for everyone automatically. What you write here is
+          your own sign-off, added above it.
         </p>
       </div>
 
@@ -89,7 +99,10 @@ export default function EmailSignatureForm({ initialSignature = '', initialRich 
           rows={4}
           maxLength={MAX_SIGNATURE_LENGTH}
           disabled={saving}
-          placeholder={'Sarah Doyle\nUN1T Stillorgan\n01 234 5678'}
+          // Role-only, like the rich Title placeholder: the studio's name and
+          // phone follow the account you send from and are added underneath,
+          // so inviting them here would double them on a real send.
+          placeholder={'Sarah Doyle\nHead Coach'}
           className="w-full resize-none rounded-lg border border-un1t-border bg-un1t-bg px-3 py-2 text-sm text-un1t-text focus:border-un1t-accent focus:outline-none disabled:opacity-60"
         />
         <p className="mt-1.5 text-[11px] text-un1t-muted">
@@ -140,7 +153,7 @@ export default function EmailSignatureForm({ initialSignature = '', initialRich 
         </button>
       </div>
 
-      <RichSignatureEditor initialRich={initialRich} />
+      <RichSignatureEditor initialRich={initialRich} plainSignature={normalized} />
     </div>
   )
 }

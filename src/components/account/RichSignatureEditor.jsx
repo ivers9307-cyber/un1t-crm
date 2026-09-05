@@ -43,10 +43,18 @@
 //     composer left open in another tab refetches — the hint's own "Edit
 //     signature" link opens this page in a new tab, so that IS the flow.
 //
-// The toggle maps to email_signature_rich.enabled. Off, the plain-text
-// signature above this section is what goes out — this section then only
-// holds the drafted fields for later. (Both are edited HERE, at /account —
-// there is no mobile editor; this page works fine in a phone browser.)
+// The toggle maps to email_signature_rich.enabled — and since
+// MAIL-SIGDEFAULT.1 it governs ONLY the personal part of the signature
+// (name, title, photo, own phone/links as the studio's fallback). The STUDIO
+// block — the sending studio's name, phone and links off its Email settings
+// card — goes out on every send whether the toggle is on or off, so the
+// preview below renders in BOTH states through resolveSendSignature, the
+// exact function the send routes call: toggle off at a configured studio
+// shows the studio block with the plain-text sign-off above it; toggle off at
+// a studio with no card shows nothing here (the plain pane above already
+// shows that send). This section holds the drafted personal fields for
+// later while off. (Both are edited HERE, at /account — there is no mobile
+// editor; this page works fine in a phone browser.)
 //
 // photo_url is only ever set from POST /api/me/signature-photo's response —
 // /api/me/preferences refuses any other origin, so hand-typing a URL is not
@@ -58,7 +66,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Check, AlertCircle, Plus, X, Upload, ImageOff } from 'lucide-react'
 import { Button, Field } from '@/components/ui'
-import { renderRichSignature, effectiveRichSignature } from '@/lib/email-signature'
+import { resolveSendSignature } from '@/lib/email-signature'
 import { signatureContextFor, signatureStudiosToOffer } from '@/lib/signature-context'
 import { markSignatureUpdated } from '@/components/tickets/SignatureHint'
 import { compressImageForUpload, parseUploadResponse } from '@/lib/landing-media-upload'
@@ -71,7 +79,7 @@ import {
   buildRichPayload,
   payloadsEqual,
   photoFileError,
-  richPreviewSrcDoc,
+  previewSrcDocFromHtml,
 } from './rich-signature-draft'
 
 const inputClass =
@@ -82,7 +90,13 @@ const inputClass =
 // "unsaved change" on load — it is simply gone at the next save.
 const withoutNote = (p) => ({ ...p, note: '' })
 
-export default function RichSignatureEditor({ initialRich = null }) {
+/**
+ * @param {object|null} initialRich  the saved profiles.email_signature_rich
+ * @param {string} plainSignature  the LIVE, normalised plain-text column from
+ *        the textarea above (MAIL-SIGDEFAULT.1) — it rides above the studio
+ *        block at send when the toggle is off, so the preview needs it
+ */
+export default function RichSignatureEditor({ initialRich = null, plainSignature = '' }) {
   const [draft, setDraft] = useState(() => richDraftFromSaved(initialRich))
   const [savedPayload, setSavedPayload] = useState(() => withoutNote(buildRichPayload(richDraftFromSaved(initialRich))))
   const [saving, setSaving] = useState(false)
@@ -134,24 +148,30 @@ export default function RichSignatureEditor({ initialRich = null }) {
   // no studio. There is no truthful preview in that state (header).
   const unresolved = contextsLoaded && offeredStudios.length === 0
 
-  // THE PREVIEW IS THE SEND, RESOLVED. The NOTE is already stripped (payload
-  // above — the studio line replaces it at every send, so a stored note must
-  // never render here, on any path). Gate on the RAW draft first, exactly as
-  // the send gates on the raw saved value (richSignatureFromProfile): an
-  // enabled-but-empty rich signature falls back to the plain column at send,
-  // so an empty draft must not preview a studio-line-only block that would
-  // never go out. Then resolve the studio half with the send's own exported
-  // resolver — live typing re-runs this per keystroke, client-side. Nothing
-  // here renders until the context has SETTLED and RESOLVED (see below).
-  const previewPayload = { ...payload, enabled: true }
-  const rawRendered = draft.enabled && contextsLoaded && !unresolved
-    ? renderRichSignature(previewPayload)
+  // THE PREVIEW IS THE SEND, RESOLVED — through resolveSendSignature, the
+  // exact function the three send routes call (MAIL-SIGDEFAULT.1), over the
+  // LIVE draft and the LIVE plain column, in BOTH toggle states. The NOTE is
+  // already stripped (payload above — the studio line replaces it at every
+  // send, so a stored note must never render here, on any path). `payload`
+  // carries the draft's own `enabled`, so the resolver applies the send's own
+  // gate on the raw value: an enabled-but-empty draft is "no personal part"
+  // and previews the STUDIO block (with the plain sign-off above it) —
+  // precisely what would go out. Live typing re-runs this per keystroke,
+  // client-side. Nothing here renders until the context has SETTLED and
+  // RESOLVED (see below).
+  const resolved = contextsLoaded && !unresolved
+    ? resolveSendSignature(
+        { email_signature: plainSignature, email_signature_rich: payload },
+        signatureContextFor(contexts, previewLocationId)
+      )
     : null
-  const effectivePayload = rawRendered
-    ? effectiveRichSignature(previewPayload, signatureContextFor(contexts, previewLocationId))
-    : null
-  const srcDoc = effectivePayload ? richPreviewSrcDoc(effectivePayload) : null
-  const previewText = effectivePayload ? renderRichSignature(effectivePayload)?.text : null
+  const srcDoc = resolved ? previewSrcDocFromHtml(resolved.html) : null
+  const previewText = resolved ? resolved.text : null
+  // With the toggle ON the preview area always shows (placeholder, one-line
+  // unavailable, frame, or the fill-in hint). OFF, it shows only when a block
+  // actually resolves — the studio's — so a card-less studio adds no empty
+  // panel under a toggle the person left alone.
+  const showPreview = draft.enabled || Boolean(srcDoc)
 
   const set = (key) => (e) => {
     const value = e.target.value
@@ -240,11 +260,12 @@ export default function RichSignatureEditor({ initialRich = null }) {
           className="mt-0.5 h-4 w-4 rounded border-un1t-border accent-un1t-accent"
         />
         <span>
-          <span className="block text-sm font-medium text-un1t-text">Use the rich signature</span>
+          <span className="block text-sm font-medium text-un1t-text">Personal rich signature</span>
           <span className="block text-xs text-un1t-subtle mt-0.5">
-            Name, role, photo and links laid out like an email footer. While this is off — and
-            anywhere the rich version can’t be used — the plain-text signature above is what goes
-            out. Edit either one here, at crm.repset.ie/account — it works in a phone browser too.
+            Your name, role and photo laid out as an email footer, with the studio’s name, phone
+            and links underneath. While this is off the studio block still goes out on its own —
+            with your plain-text sign-off above it, if you’ve written one. Edit either one here,
+            at crm.repset.ie/account — it works in a phone browser too.
           </span>
         </span>
       </label>
@@ -375,9 +396,15 @@ export default function RichSignatureEditor({ initialRich = null }) {
             )}
           </div>
 
-          {/* Preview — the shared renderer inside a sandboxed iframe,
-              resolved for the SENDING studio (MAILFIX-SIGTRUTH.1). */}
-          <div>
+        </div>
+      )}
+
+      {/* Preview — the shared renderer inside a sandboxed iframe, resolved
+          for the SENDING studio (MAILFIX-SIGTRUTH.1) through the send's own
+          resolveSendSignature — in BOTH toggle states (MAIL-SIGDEFAULT.1):
+          off, it shows the studio block that goes out regardless. */}
+      {showPreview && (
+          <div className="mt-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-[10px] font-medium uppercase tracking-wider text-un1t-muted">
                 How it lands
@@ -449,7 +476,6 @@ export default function RichSignatureEditor({ initialRich = null }) {
               </p>
             )}
           </div>
-        </div>
       )}
 
       <div className="mt-4 flex items-center justify-between gap-3">

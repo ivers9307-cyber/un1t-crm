@@ -988,6 +988,60 @@ export default function MailSurface({ locationId, locationName, userId, location
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversations, selectedId, viewId, debouncedQuery, refreshList])
 
+  // ── Spam (MAIL-SPAM.1) ─────────────────────────────────────────────
+  //
+  // Mark as spam / Not spam — POST /api/email/mail/[id]/spam with the STATE
+  // asked for, the same shape as archive. The flag is orthogonal to the
+  // lifecycle, so this never touches status; the route decides what
+  // "release" owes (the push and the unread mirror the quarantine withheld).
+  //
+  // ROW MEMBERSHIP IS BY THE FLAG, EVEN MID-SEARCH. Unlike archive, where a
+  // search deliberately spans inbox and archive, the quarantine is applied to
+  // search results too (the route scopes is_spam whatever `q` says) — so a
+  // row whose flag no longer matches the view has left this list for real,
+  // and keeping it here would be the one thing the next refetch undoes.
+  const performSpam = useCallback(async (row, spam) => {
+    const id = row.id
+    setThreadError(null)
+    setWritebackNotice(null)
+    try {
+      const res = await fetch(`/api/email/mail/${encodeURIComponent(id)}/spam`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spam }),
+      })
+      const body = await res.json()
+      if (!mountedRef.current) return
+      if (!body?.success) {
+        setThreadError(body?.error || (spam ? 'Could not mark that as spam' : 'Could not release that'))
+        return
+      }
+      const updated = body.data?.conversation
+      const stillHere = viewId === 'spam' ? spam : !spam
+      if (stillHere) {
+        setConversations(prev => prev.map(c => (c.id === id ? { ...c, ...updated } : c)))
+        setConversation(prev => (prev?.id === id ? { ...prev, ...updated } : prev))
+      } else {
+        const ids = conversations.map(c => c.id)
+        const successor = selectedId === id
+          ? (neighbourId(ids, id, 1) || neighbourId(ids, id, -1))
+          : null
+        setConversations(prev => prev.filter(c => c.id !== id))
+        if (selectedId === id) {
+          const next = successor ? conversations.find(c => c.id === successor) : null
+          if (next) selectConversation(next)
+          else clearSelection({ keepNotice: true })
+        }
+      }
+      // Quietly, as archive does: the badge and the digest just changed.
+      if (mountedRef.current) await refreshList(true)
+    } catch {
+      if (!mountedRef.current) return
+      setThreadError('Could not reach the server — nothing was changed')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversations, selectedId, viewId, refreshList])
+
   // The defer verb. Paired with markUnseen() over IMAP by the route, so it
   // survives the poller's convergence — see the seen route's header.
   const performMarkUnread = useCallback(async (row) => {
@@ -1032,10 +1086,11 @@ export default function MailSurface({ locationId, locationName, userId, location
   // The perform* callbacks stay HERE because they close over
   // conversations/selectedId/view state — the hook's drain effect is keyed
   // on them so each queued item runs against the CURRENT render's state.
-  const { archive, markUnreadAction, markReadAction } = useActionQueue({
+  const { archive, markUnreadAction, markReadAction, spamAction } = useActionQueue({
     performArchive,
     performMarkUnread,
     performMarkRead,
+    performSpam,
     setActionSaving,
     setBusyId,
     mountedRef,
@@ -1633,6 +1688,7 @@ export default function MailSurface({ locationId, locationName, userId, location
             participantSaving={participantSaving}
             onForward={setForwarding}
             onArchive={(next) => archive(conversation, next)}
+            onSpam={(next) => spamAction(conversation, next)}
             onMarkRead={() => markReadAction(conversation)}
             onMarkUnread={() => markUnreadAction(conversation)}
             actionSaving={actionSaving}

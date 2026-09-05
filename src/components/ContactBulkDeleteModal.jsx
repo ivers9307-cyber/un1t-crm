@@ -9,13 +9,15 @@
 // the count" is too easy to guess in a slip).
 //
 // Response handling: the API returns a per-row breakdown
-// (deleted / blocked / forbidden / missing). The modal stays open
-// after the request so the operator can read the breakdown,
-// dismiss it themselves, then refresh the page list.
+// (deleted / blocked / forbidden / missing, plus MAIL-GDPR.1's
+// scrub_warnings — deleted, but some mail could not be anonymised).
+// The modal stays open after the request so the operator can read
+// the breakdown, dismiss it themselves, then refresh the page list.
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Loader2, AlertTriangle, Trash2, X, CheckCircle2 } from 'lucide-react'
+import { scrubIncompleteRows } from '@/lib/scrub-warnings'
 
 const CONFIRM_WORD = 'DELETE'
 
@@ -171,6 +173,16 @@ export default function ContactBulkDeleteModal({ contacts, onClose, onDeleted })
                 hint="Probably already deleted. No action needed."
                 rows={result.missing.map(id => ({ id, name: id, reason: 'Already gone' }))}
                 tone="muted"
+              />
+            )}
+            {/* MAIL-GDPR.1 — these ARE deleted (counted above); what failed is
+                a mail statement, so inbox rows still carry their details. */}
+            {result.scrub_warnings?.length > 0 && (
+              <Section
+                title={`Deleted, mail scrub incomplete (${result.scrub_warnings.length})`}
+                hint="Gone from the CRM, but some of their mail could not be anonymised and still carries their details. Fix the cause and re-check the inbox by hand; details are in the server log."
+                rows={scrubIncompleteRows(result.scrub_warnings)}
+                tone="amber"
               />
             )}
 

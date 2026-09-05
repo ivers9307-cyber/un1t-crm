@@ -344,6 +344,11 @@ export default function ContactDetail() {
           channel={composeChannel}
           contactId={id}
           contactName={contactDisplayName(contact)}
+          // MOBILE-MAILPARITY.1 — the Email action's Mail path (web
+          // PROFILE-MAIL.1): the contact's own studio and address, so the
+          // send goes out from a studio account there, not the company sender.
+          contactLocationId={contact.location_id || null}
+          contactEmail={contact.email || null}
           onClose={() => { setComposeChannel(null); load().catch(() => {}) }}
         />
       )}

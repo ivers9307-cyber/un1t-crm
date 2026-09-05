@@ -133,7 +133,9 @@ export function makeDb(state = {}) {
   // returns whole rows regardless (modelling PostgREST's projection would buy
   // nothing), so this is the only way a test can assert what actually goes on
   // the wire — e.g. that a route stopped naming a column that is being dropped.
-  const db = { inserts: [], updates: [], deletes: [], selects: [], _state: s }
+  // `ranges` records every .range() call per table so a test can prove a
+  // fan-out paged rather than relying on the 1,000-row cap it cannot see.
+  const db = { inserts: [], updates: [], deletes: [], selects: [], ranges: [], _state: s }
   let seq = 0
 
   function rowsFor(b) {
@@ -149,6 +151,13 @@ export function makeDb(state = {}) {
       })
     }
     if (typeof b._limit === 'number') rows = rows.slice(0, b._limit)
+    // MAIL-GDPR.1 / MAIL-SPAM.1 — .range(from, to) is inclusive on both ends,
+    // like PostgREST, and MODELLED rather than stubbed for the same reason the
+    // webhook fake models it: a fake that ignores paging cannot tell a paged
+    // read from an unpaged one, so a paginating reader is exercised page by
+    // page rather than handed everything on the first call. Applied AFTER
+    // order, as Postgres would.
+    if (b._range) rows = rows.slice(b._range[0], b._range[1] + 1)
     return rows
   }
 
@@ -233,7 +242,7 @@ export function makeDb(state = {}) {
   }
 
   db.from = (table) => {
-    const b = { _table: table, _op: 'select', _payload: null, _filters: [], _order: null, _limit: null }
+    const b = { _table: table, _op: 'select', _payload: null, _filters: [], _order: null, _limit: null, _range: null }
     const filter = (kind) => (...args) => { b._filters.push([kind, ...args]); return b }
     // supabase-js reads head/count from the FIRST .select() after .from() only
     // (CLAUDE.md) — a .select() chained after a filter silently ignores them.
@@ -259,6 +268,7 @@ export function makeDb(state = {}) {
     b.gte = filter('gte')
     b.order = (column, opts = {}) => { b._order = { column, ascending: opts.ascending !== false }; return b }
     b.limit = (n) => { b._limit = n; return b }
+    b.range = (from, to) => { b._range = [from, to]; db.ranges.push({ table, from, to }); return b }
     b.single = () => Promise.resolve(settle(b, 'single'))
     b.maybeSingle = () => Promise.resolve(settle(b, 'single'))
     // supabase-js builders are thenables, not Promises — mirror that exactly.
@@ -437,14 +447,19 @@ export const usageFor = (db, locationId, mailboxId = null) =>
  * under test only exists because the reads succeeded and a write then failed.
  * The failed write is NOT recorded on db.inserts/db.updates (settle never
  * runs), so per-table assertions see exactly what the real DB kept.
+ *
+ * `ops` narrows WHICH writes fail (default insert + update, the original
+ * contract). MAIL-GDPR.1's attachment erasure runs an UPDATE (mark forwards)
+ * and a DELETE (rows) on the same table and must survive either failing
+ * alone, which neither the default nor `state.errors` can express.
  */
-export function failWrites(db, tables) {
+export function failWrites(db, tables, ops = ['insert', 'update']) {
   const realFrom = db.from
   db.from = (table) => {
     const b = realFrom(table)
     if (!tables.includes(table)) return b
     const failure = { data: null, error: { code: 'XX000', message: `${table} write exploded` } }
-    for (const op of ['insert', 'update']) {
+    for (const op of ops) {
       const orig = b[op]
       b[op] = (payload) => {
         orig(payload)

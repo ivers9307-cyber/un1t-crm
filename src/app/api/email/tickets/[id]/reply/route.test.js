@@ -1486,3 +1486,79 @@ it('a rich signature rides the reply in both parts; disabled keeps plain byte-fo
   expect(sent.htmlBody).toContain('ALEX EXAMPLE'.length ? 'Alex Example' : '')
   expect(sent.htmlBody).toContain('border-top:3px solid #0f172a')
 })
+
+// ── MAIL-SIGDEFAULT.1 — the studio signature is on for everyone ─────────
+// The send resolves through the SAME function the /account preview and the
+// composers' hint run (resolveSendSignature), so these pin the send half of
+// "what you see is what sends" for a person who never opted in.
+describe('POST …/reply — the studio block goes out for everyone (MAIL-SIGDEFAULT.1)', () => {
+  const HATCH_CARD = {
+    phone: '(01) 574 1871',
+    links: [{ label: 'Book a class', url: 'https://un1tdublin.com/welcome/hatch-street#start' }],
+  }
+  const withCard = (extra = {}) => baseState({
+    grants: [GRANT_STUDIO],
+    tickets: [{ ...T_STUDIO }],
+    messages: [{ id: 'm-in', ticket_id: T_STUDIO.id, location_id: T_STUDIO.location_id, direction: 'inbound', from_email: T_STUDIO.requester_email, text_body: 'hi', created_at: '2026-08-06T09:00:00Z' }],
+    locations: [{ id: T_STUDIO.location_id, name: 'UN1T Hatch Street' }],
+    companySettings: [{ location_id: T_STUDIO.location_id, email_signature: HATCH_CARD }],
+    ...extra,
+  })
+
+  it('a NEW HIRE (rich NULL, plain NULL) signs with the studio block in BOTH parts', async () => {
+    getCurrentUser.mockResolvedValue({ ...COACH, email_signature: null, email_signature_rich: null })
+    setupDb(withCard())
+    const res = await post(T_STUDIO.id, { text: 'Reply body' })
+    expect(res.status).toBe(200)
+    const sent = sendEmail.mock.calls[0][0]
+    expect(sent.textBody).toBe(
+      'Reply body\n\n-- \nUN1T Hatch Street\n(01) 574 1871\nBook a class: https://un1tdublin.com/welcome/hatch-street#start'
+    )
+    expect(sent.htmlBody).toContain('border-top:3px solid #0f172a')
+    expect(sent.htmlBody).toContain('(01) 574 1871')
+    expect(sent.htmlBody).toContain('href="https://un1tdublin.com/welcome/hatch-street#start"')
+  })
+
+  it('personal rich DISABLED + a plain sign-off: the plain text rides ABOVE the studio block, nothing lost', async () => {
+    getCurrentUser.mockResolvedValue({
+      ...COACH,
+      email_signature: 'Sarah\nHead Coach',
+      email_signature_rich: { enabled: false, name: 'Nope' },
+    })
+    setupDb(withCard())
+    await post(T_STUDIO.id, { text: 'Reply body' })
+    const sent = sendEmail.mock.calls[0][0]
+    expect(sent.textBody).toBe(
+      'Reply body\n\n-- \nSarah\nHead Coach\n\nUN1T Hatch Street\n(01) 574 1871\nBook a class: https://un1tdublin.com/welcome/hatch-street#start'
+    )
+    expect(sent.htmlBody).toContain('Sarah')
+    expect(sent.htmlBody.indexOf('Sarah')).toBeLessThan(sent.htmlBody.indexOf('border-top:3px solid #0f172a'))
+    expect(sent.htmlBody).not.toContain('Nope')
+  })
+
+  it('a studio with NO card keeps the old behaviour byte-for-byte — nothing personal, nothing appended', async () => {
+    getCurrentUser.mockResolvedValue({ ...COACH, email_signature: null, email_signature_rich: null })
+    setupDb(withCard({ companySettings: [] }))
+    await post(T_STUDIO.id, { text: 'Reply body' })
+    const sent = sendEmail.mock.calls[0][0]
+    expect(sent.textBody).toBe('Reply body')
+    expect(sent.textBody).not.toContain('-- ')
+    expect(sent.htmlBody).not.toContain('border-top:3px solid #0f172a')
+  })
+
+  it('an OPTED-IN person is unchanged: the merged personal block, the plain column left out', async () => {
+    getCurrentUser.mockResolvedValue({
+      ...COACH,
+      email_signature: 'plain fallback',
+      email_signature_rich: { enabled: true, name: 'Alex Example', title: 'Head Coach', phone: '087 1', links: [] },
+    })
+    setupDb(withCard())
+    await post(T_STUDIO.id, { text: 'Reply body' })
+    const sent = sendEmail.mock.calls[0][0]
+    expect(sent.textBody).toBe(
+      'Reply body\n\n-- \nAlex Example\nHead Coach · UN1T Hatch Street\n(01) 574 1871\nBook a class: https://un1tdublin.com/welcome/hatch-street#start'
+    )
+    expect(sent.textBody).not.toContain('plain fallback')
+    expect(sent.htmlBody).toContain('Alex Example')
+  })
+})

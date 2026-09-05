@@ -55,8 +55,22 @@ export function isUnread(conversation) {
   return !!conversation?.unread
 }
 
-// The filter strip. THREE, not five: `unassigned` and `mine` are assignment
+/**
+ * Is this conversation quarantined as spam? (MAIL-SPAM.1, mig 584)
+ *
+ * `is_spam` is the server's flag, orthogonal to `status`: a quarantined
+ * conversation keeps whatever lifecycle state it has and is simply excluded
+ * from every view but Spam. `=== true`, not truthiness, so a row from before
+ * the column existed (or a fixture that never set it) reads as live — the
+ * same fail-open reading the server's isNeedsReply takes.
+ */
+export function isSpam(conversation) {
+  return conversation?.is_spam === true
+}
+
+// The filter strip. No `unassigned` and no `mine`: those are assignment
 // views, and assignment is the half of the ticket model this surface drops.
+// MAIL-SENT.1 added Sent; MAIL-SPAM.1 added Spam (the quarantine).
 //
 // Each view carries its own empty copy, because "nothing here" means three
 // completely different things — an inbox that is genuinely clear is good news,
@@ -93,6 +107,17 @@ export const MAIL_VIEWS = Object.freeze([
     hint: 'Filed away — replying brings a conversation back',
     emptyTitle: 'Nothing archived yet',
     emptyDescription: 'Archiving a conversation files it here. It is never deleted.',
+  },
+  {
+    // MAIL-SPAM.1 — the quarantine. Rows flagged is_spam at ingest (Postmark's
+    // SpamScore at or above the studio's threshold) or by an operator. The
+    // ONLY view that shows them; "Not spam" releases one back to Inbox. Kept
+    // 30 days from the flag, then purged.
+    id: 'spam',
+    label: 'Spam',
+    hint: 'Caught by the spam filter — Not spam releases a conversation to Inbox',
+    emptyTitle: 'No spam',
+    emptyDescription: 'Mail the filter catches waits here for 30 days in case it was real, then it is deleted. Nothing here counts towards the badge or pings anyone.',
   },
 ])
 

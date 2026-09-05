@@ -135,3 +135,127 @@ describe('buildContactExport — consent_log action vocabulary (DSAR-CONSENT.1)'
     expect(row).not.toHaveProperty('action_raw')
   })
 })
+
+// MAIL-GDPR.1 — the bundle omitted mail entirely. A subject access request
+// answered without the person's own email correspondence is an incomplete
+// answer, so the section is built from the same three tables the erasure
+// scrubs: tickets by contact_id, messages by contact_id ∪ ticket, attachments
+// by message. Filenames only — never bytes, mirroring the WhatsApp section
+// which exports bodies but not media.
+// Projects the SELECT list like PostgREST does, so "bcc never leaves the
+// database" is asserted against what the query names, not against a fake that
+// hands back whole rows.
+function mailDb(rowsByTable) {
+  function builder(table) {
+    const state = { table, from: 0, to: 0, eq: {}, in: null, columns: null }
+    const project = (r) => state.columns
+      ? Object.fromEntries(state.columns.map(c => [c, r[c]]).filter(([, v]) => v !== undefined))
+      : r
+    const b = {
+      select: (cols) => { state.columns = cols ? cols.split(',').map(c => c.trim()) : null; return b },
+      eq: (col, val) => { state.eq[col] = val; return b },
+      in: (col, vals) => { state.in = [col, vals]; return b },
+      order: () => b,
+      range: (from, to) => { state.from = from; state.to = to; return b },
+      then(resolve) {
+        let all = rowsByTable[table] || []
+        for (const [col, val] of Object.entries(state.eq)) all = all.filter(r => (r[col] ?? null) === val)
+        if (state.in) all = all.filter(r => state.in[1].includes(r[state.in[0]]))
+        resolve({ data: all.slice(state.from, state.to + 1).map(project), error: null })
+      },
+    }
+    return b
+  }
+  return { from: (table) => builder(table) }
+}
+
+describe('buildContactExport — mail section (MAIL-GDPR.1)', () => {
+  it('exports tickets, every message on them (including un-stamped ones), and attachment filenames', async () => {
+    const { buildContactExport } = await import('./contact-export.js')
+    const db = mailDb({
+      email_tickets: [
+        { id: 't1', contact_id: 'c1', subject: 'Billing', status: 'solved', requester_email: 'a@x.ie', requester_name: 'Alice M', created_at: '2026-08-01T10:00:00Z', last_message_at: '2026-08-02T10:00:00Z', solved_at: '2026-08-02T11:00:00Z', closed_at: null },
+        { id: 't9', contact_id: 'someone-else', subject: 'Nope', status: 'open', requester_email: 'z@x.ie', created_at: '2026-08-01T10:00:00Z' },
+      ],
+      email_inbox_messages: [
+        { id: 'm1', ticket_id: 't1', contact_id: 'c1', direction: 'inbound', from_email: 'a@x.ie', to_email: 'studio@un1t.ie', to_emails: ['studio@un1t.ie'], cc_emails: [], bcc_emails: ['secret@un1t.ie'], subject: 'Billing', text_body: 'Hi', html_body: '<p>Hi</p>', is_internal_note: false, sent_at: '2026-08-01T10:00:00Z', created_at: '2026-08-01T10:00:00Z' },
+        // Outbound staff reply filed before link-contact stamped contact_id.
+        { id: 'm2', ticket_id: 't1', contact_id: null, direction: 'outbound', from_email: 'coach@un1t.ie', to_email: 'a@x.ie', to_emails: ['a@x.ie'], cc_emails: [], bcc_emails: [], subject: 'Re: Billing', text_body: 'Sorted', html_body: null, is_internal_note: false, sent_at: '2026-08-02T10:00:00Z', created_at: '2026-08-02T10:00:00Z' },
+        // Stamped with contact_id but on a ticket that has since been re-linked.
+        { id: 'm3', ticket_id: 't7', contact_id: 'c1', direction: 'inbound', from_email: 'a@x.ie', to_email: 'studio@un1t.ie', to_emails: [], cc_emails: [], bcc_emails: [], subject: 'Old', text_body: 'Older mail', html_body: null, is_internal_note: false, sent_at: '2026-07-01T10:00:00Z', created_at: '2026-07-01T10:00:00Z' },
+        { id: 'm9', ticket_id: 't9', contact_id: 'someone-else', direction: 'inbound', text_body: 'not yours', created_at: '2026-08-01T10:00:00Z' },
+      ],
+      email_ticket_attachments: [
+        { id: 'a1', message_id: 'm1', filename: 'invoice.pdf', mime_type: 'application/pdf', size_bytes: 1000, skipped_reason: null, storage_path: 'loc/m1/0.pdf', created_at: '2026-08-01T10:00:00Z' },
+        { id: 'a9', message_id: 'm9', filename: 'theirs.pdf', mime_type: 'application/pdf', size_bytes: 1, skipped_reason: null, storage_path: 'loc/m9/0.pdf', created_at: '2026-08-01T10:00:00Z' },
+      ],
+    })
+
+    const bundle = await buildContactExport(db, CONTACT)
+    const mail = bundle.sections.mail
+
+    expect(mail.tickets.count).toBe(1)
+    expect(mail.tickets.rows[0]).toMatchObject({ id: 't1', subject: 'Billing', status: 'solved', requester_email: 'a@x.ie' })
+
+    expect(mail.messages.count).toBe(3)
+    expect(mail.messages.rows.map(m => m.id).sort()).toEqual(['m1', 'm2', 'm3'])
+    const m1 = mail.messages.rows.find(m => m.id === 'm1')
+    expect(m1).toMatchObject({ direction: 'inbound', from_email: 'a@x.ie', subject: 'Billing', text_body: 'Hi' })
+    // bcc is audit-only and MUST NEVER reach a member-visible context (mig 482);
+    // html_body is markup the inbox itself never renders.
+    expect(m1).not.toHaveProperty('bcc_emails')
+    expect(m1).not.toHaveProperty('html_body')
+
+    expect(mail.attachments.count).toBe(1)
+    expect(mail.attachments.rows[0]).toMatchObject({ message_id: 'm1', filename: 'invoice.pdf', mime_type: 'application/pdf', size_bytes: 1000 })
+    // Filenames, never the object key or bytes.
+    expect(mail.attachments.rows[0]).not.toHaveProperty('storage_path')
+    expect(mail.truncated).toBe(false)
+  })
+
+  it('includes a message MERGED off the contact\'s ticket onto someone else\'s — the third lookup, same as the scrub', async () => {
+    const { buildContactExport } = await import('./contact-export.js')
+    const db = mailDb({
+      email_tickets: [
+        { id: 't1', contact_id: 'c1', subject: 'Billing', status: 'closed', requester_email: 'a@x.ie', created_at: '2026-08-01T10:00:00Z' },
+        { id: 'tB', contact_id: 'someone-else', subject: 'Theirs', status: 'open', requester_email: 'z@x.ie', created_at: '2026-08-01T10:00:00Z' },
+      ],
+      email_inbox_messages: [
+        // Moved by the merge route: ticket_id is now tB, contact_id was never stamped.
+        { id: 'm4', ticket_id: 'tB', contact_id: null, merged_from_ticket_id: 't1', direction: 'inbound', from_email: 'a@x.ie', text_body: 'moved mail', created_at: '2026-08-03T10:00:00Z' },
+        // Their own message on the surviving ticket — not the requester's data.
+        { id: 'mB', ticket_id: 'tB', contact_id: 'someone-else', direction: 'inbound', text_body: 'not yours', created_at: '2026-08-01T10:00:00Z' },
+      ],
+      email_ticket_attachments: [
+        { id: 'a4', message_id: 'm4', filename: 'moved.pdf', mime_type: 'application/pdf', size_bytes: 10, skipped_reason: null, created_at: '2026-08-03T10:00:00Z' },
+      ],
+    })
+
+    const mail = (await buildContactExport(db, CONTACT)).sections.mail
+    expect(mail.messages.rows.map(m => m.id)).toEqual(['m4'])
+    expect(mail.attachments.rows.map(a => a.filename)).toEqual(['moved.pdf'])
+  })
+
+  it('a contact with no mail gets an empty, honest section — not an error marker', async () => {
+    const { buildContactExport } = await import('./contact-export.js')
+    const bundle = await buildContactExport(mailDb({}), CONTACT)
+    expect(bundle.sections.mail).toMatchObject({
+      tickets: { count: 0, rows: [] },
+      messages: { count: 0, rows: [] },
+      attachments: { count: 0, rows: [] },
+      truncated: false,
+    })
+  })
+
+  it('a mail read failure yields an explicit error marker, never a silent hole — same posture as the WhatsApp section', async () => {
+    const { buildContactExport } = await import('./contact-export.js')
+    const good = mailDb({})
+    const db = {
+      from: (table) => table === 'email_tickets'
+        ? { select: () => ({ eq: () => ({ order: () => ({ range: () => Promise.resolve({ data: null, error: { message: 'relation does not exist' } }) }) }) }) }
+        : good.from(table),
+    }
+    const bundle = await buildContactExport(db, CONTACT)
+    expect(bundle.sections.mail).toEqual({ error: 'unavailable' })
+  })
+})

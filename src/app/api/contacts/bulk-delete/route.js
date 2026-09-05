@@ -15,7 +15,9 @@
 //       deleted: number,
 //       blocked: [{ id, name, reason }],     // FK violation (whatsapp_*) etc.
 //       forbidden: [{ id, name, reason }],   // wrong location
-//       missing: string[]                    // ids that didn't resolve
+//       missing: string[],                   // ids that didn't resolve
+//       scrub_warnings?: [{ id, name, failures }] // MAIL-GDPR.1: partial mail scrub (deleted anyway).
+//                                            // Key ABSENT on a clean run, like the single route.
 //     }
 //   }
 //
@@ -31,6 +33,8 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { redactWhatsAppForContact, redactInBodyForContact } from '@/lib/contact-merge'
+import { redactMailForContact } from '@/lib/contact-mail-erasure'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -91,6 +95,20 @@ export async function POST(request) {
     // FK, so raw body-composition payloads + phone survive orphaned.
     // Hard-delete them before the contact row (must run pre-delete).
     await redactInBodyForContact(db, id)
+    // MAIL-GDPR.1: mail tickets/messages/attachments, same doctrine as the two
+    // above (anonymise in place, best-effort, the delete still runs). Its
+    // failures are reported per contact rather than swallowed — see the
+    // single-delete route for why a partial is never a refusal.
+    let mailScrub
+    try {
+      mailScrub = await redactMailForContact(db, id)
+    } catch (e) {
+      logError('contacts.bulk-delete', `mail scrub threw for ${id}`, { err: e })
+      mailScrub = { ok: false, failures: [{ table: 'mail', op: 'scrub', message: e?.message || String(e) }] }
+    }
+    if (mailScrub.failures.length > 0) {
+      (result.scrub_warnings ??= []).push({ id, name: row.name, failures: mailScrub.failures })
+    }
     const { error } = await db.from('contacts').delete().eq('id', id)
     if (error) {
       // After mig 094 there shouldn't be FK-blocked deletes, but

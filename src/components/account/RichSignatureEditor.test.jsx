@@ -126,7 +126,7 @@ afterEach(() => {
 })
 
 function enableToggle() {
-  fireEvent.click(screen.getByRole('checkbox', { name: /use the rich signature/i }))
+  fireEvent.click(screen.getByRole('checkbox', { name: /personal rich signature/i }))
 }
 
 describe('toggle off — the plain path is untouched', () => {
@@ -498,13 +498,79 @@ describe('effective preview', () => {
     expect(srcDoc).not.toContain('087 111 2222')
   })
 
-  it('an EMPTY enabled draft previews nothing — the send would fall back to the plain column, so no studio-only block', async () => {
+  // MAIL-SIGDEFAULT.1 — an empty personal draft is "no personal part", and
+  // the studio block goes out regardless: the preview says so.
+  it('an EMPTY enabled draft at a studio WITH a card previews the studio-only block — that IS what sends', async () => {
     mockFetchRoutes([], { contexts: [STILLORGAN_CTX], active: 'loc-still' })
+    const { container } = render(<EmailSignatureForm initialSignature="" initialRich={null} />)
+    enableToggle()
+    await screen.findByText(/follow the account you send from/i)
+    const srcDoc = (await findIframe(container)).getAttribute('srcdoc')
+    expect(srcDoc).toContain('UN1T Stillorgan')
+    expect(srcDoc).toContain('01 555 0001')
+    expect(screen.queryByText(/fill in a field/i)).toBeNull()
+  })
+
+  it('an EMPTY enabled draft at a studio with NO card previews nothing — the "fill in a field" hint', async () => {
+    mockFetchRoutes([], { contexts: [HATCH_CTX], active: 'loc-hatch' })
     render(<EmailSignatureForm initialSignature="" initialRich={null} />)
     enableToggle()
     await screen.findByText(/follow the account you send from/i)
     await screen.findByText(/fill in a field/i)
     expect(document.querySelector('iframe')).toBeNull()
+  })
+})
+
+// ── MAIL-SIGDEFAULT.1 — the studio signature is on for everyone ──────────
+describe('default-on studio block (MAIL-SIGDEFAULT.1)', () => {
+  it('toggle OFF at a studio WITH a card: the preview shows the studio block, with the plain sign-off above it', async () => {
+    mockFetchRoutes([], { contexts: [STILLORGAN_CTX], active: 'loc-still' })
+    const { container } = render(<EmailSignatureForm initialSignature={'Sarah\nHead Coach'} initialRich={null} />)
+    // Rich fields stay hidden — the toggle still governs the personal part…
+    expect(screen.queryByLabelText('Name')).toBeNull()
+    // …but the studio block previews anyway, because it sends anyway.
+    const srcDoc = (await findIframe(container)).getAttribute('srcdoc')
+    expect(srcDoc).toContain('UN1T Stillorgan')
+    expect(srcDoc).toContain('01 555 0001')
+    expect(srcDoc).toContain('href="https://un1t.ie/stillorgan"')
+    expect(srcDoc).toContain('Sarah')
+    expect(srcDoc.indexOf('Sarah')).toBeLessThan(srcDoc.indexOf('border-top:3px solid #0f172a'))
+    // Plain-text half: the EXACT text part the send appends (read off the
+    // node — the default text matcher collapses the blank line).
+    const pres = [...container.querySelectorAll('pre')].map((p) => p.textContent)
+    expect(pres).toContain('Sarah\nHead Coach\n\nUN1T Stillorgan\n01 555 0001\nBook Stillorgan: https://un1t.ie/stillorgan')
+  })
+
+  it('toggle OFF, live typing in the plain textarea updates the studio-block preview', async () => {
+    mockFetchRoutes([], { contexts: [STILLORGAN_CTX], active: 'loc-still' })
+    const { container } = render(<EmailSignatureForm initialSignature="" initialRich={null} />)
+    const before = (await findIframe(container)).getAttribute('srcdoc')
+    expect(before).not.toContain('Typed Live')
+    fireEvent.change(screen.getByLabelText('Email signature'), { target: { value: 'Typed Live' } })
+    await waitFor(() => expect(container.querySelector('iframe').getAttribute('srcdoc')).toContain('Typed Live'))
+  })
+
+  it('toggle OFF at a studio with NO card: no frame at all — the plain pane above already shows the plain-only send', async () => {
+    mockFetchRoutes([], { contexts: [HATCH_CTX], active: 'loc-hatch' })
+    const { container } = render(<EmailSignatureForm initialSignature="Sarah" initialRich={null} />)
+    await act(async () => {})
+    await waitFor(() => expect(callsMatching(isPrefsGet)).toHaveLength(1))
+    await act(async () => {})
+    expect(container.querySelector('iframe')).toBeNull()
+    expect(screen.queryByText(/resolving your studio/i)).toBeNull()
+  })
+
+  it('the copy says what the toggle controls now: the personal part — the studio block goes out either way', async () => {
+    mockFetchRoutes([], { contexts: [STILLORGAN_CTX], active: 'loc-still' })
+    const { container } = render(<EmailSignatureForm initialSignature="" initialRich={null} />)
+    await act(async () => {})
+    const text = container.textContent
+    // The card header: studio block for everyone, automatically.
+    expect(text).toMatch(/studio.s (signature )?block .*added .*automatically/i)
+    // The toggle: while off, the studio block STILL goes out.
+    expect(text).toMatch(/while this is off.*studio block still goes out/i)
+    // The old claim — that leaving the plain box empty adds nothing — is gone.
+    expect(text).not.toMatch(/leave it empty and nothing is added/i)
   })
 })
 

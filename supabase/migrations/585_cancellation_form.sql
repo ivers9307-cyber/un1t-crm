@@ -1,4 +1,10 @@
--- 584: CANCEL-FORM.1 — customer membership cancellation form.
+-- 585: CANCEL-FORM.1 — customer membership cancellation form.
+--
+-- NUMBERING: written and APPLIED to prod (5 Sep 2026, Supabase MCP) as
+-- '584_cancellation_form' — schema_migrations carries that name. Renumbered to
+-- 585 before merge because main had meanwhile landed 584_email_spam_quarantine
+-- (the parallel-branch duplicate-prefix pattern; see docs/LESSONS.md). Applied
+-- migrations are keyed by version timestamp, so the rename is cosmetic.
 --
 -- A staff-sent, per-contact, single-use link lets a member pause or cancel
 -- their membership from a public page. Submissions land in the existing
