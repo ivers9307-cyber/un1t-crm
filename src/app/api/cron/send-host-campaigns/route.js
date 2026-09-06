@@ -30,6 +30,9 @@
 // kill switch stops an in-flight campaign, not just new ones; unverified
 // campaigns stay 'sending' ('halted', resume here if re-verified) rather
 // than failing.
+//
+// HOST-METRICS.1 — the stale-claim sweep stamps failed_reason: 'stale_claim'
+// so the host can tell a crashed-consumer row apart from a gate refusal.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -104,7 +107,7 @@ async function sweepStaleClaims(db, campaignId) {
   const staleCutoff = new Date(Date.now() - CLAIM_STALE_MS).toISOString()
   const { data: swept } = await db
     .from('host_campaign_sends')
-    .update({ status: 'failed' })
+    .update({ status: 'failed', failed_reason: 'stale_claim' })
     .eq('campaign_id', campaignId)
     .eq('status', 'claimed')
     .lt('claimed_at', staleCutoff)

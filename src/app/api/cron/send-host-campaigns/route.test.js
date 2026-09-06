@@ -94,7 +94,7 @@ describe('GET /api/cron/send-host-campaigns', () => {
     expect(res.status).toBe(200)
 
     const sweep = statements.find((s) => s.table === 'host_campaign_sends')
-    expect(op(sweep, 'update').args[0]).toEqual({ status: 'failed' })
+    expect(op(sweep, 'update').args[0]).toEqual({ status: 'failed', failed_reason: 'stale_claim' })
     expect(hasEq(sweep, 'campaign_id', CAMPAIGN_A.id)).toBe(true)
     expect(hasEq(sweep, 'status', 'claimed')).toBe(true)
     expect(op(sweep, 'lt').args[0]).toBe('claimed_at') // only STALE claims — in-flight ones are live
