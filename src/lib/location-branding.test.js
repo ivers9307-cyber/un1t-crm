@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getLocationBranding } from './location-branding.js'
+import { getLocationBranding, getOrgBrandName } from './location-branding.js'
 
 // supabase-builder mock that dispatches by table name. Each query is
 // `from(table).select().eq().limit()` and resolves to results[table]
@@ -106,5 +106,53 @@ describe('getLocationBranding — companyNameConfigured', () => {
     }
     expect((await getLocationBranding(mockDb({}), null)).companyNameConfigured).toBe(false)
     expect((await getLocationBranding(null, 'loc1')).companyNameConfigured).toBe(false)
+  })
+})
+
+// HOST-CONSENT.1 — the org-level brand name for copy that speaks for the
+// whole organisation (the two-consent sentences on /h/[slug] and hosted-event
+// registration). Reads org_settings directly — never organizations.name,
+// which is the ops tenant label.
+function orgDb(rows) {
+  return {
+    from(table) {
+      if (table !== 'org_settings') throw new Error(`unexpected table ${table}`)
+      return this
+    },
+    select() { return this },
+    eq() { return this },
+    limit() { return Promise.resolve(rows) },
+  }
+}
+
+describe('getOrgBrandName', () => {
+  it('returns the operator-configured org brand name', async () => {
+    const db = orgDb({ data: [{ company_name: 'UN1T Dublin' }], error: null })
+    expect(await getOrgBrandName(db, 'org1')).toBe('UN1T Dublin')
+  })
+
+  it('falls back to UN1T when the org has not set a name', async () => {
+    const db = orgDb({ data: [{ company_name: '   ' }], error: null })
+    expect(await getOrgBrandName(db, 'org1')).toBe('UN1T')
+  })
+
+  it('falls back to UN1T when there is no row at all', async () => {
+    const db = orgDb({ data: [], error: null })
+    expect(await getOrgBrandName(db, 'org1')).toBe('UN1T')
+  })
+
+  it('falls back to UN1T on a query error', async () => {
+    const db = orgDb({ data: null, error: { message: 'boom' } })
+    expect(await getOrgBrandName(db, 'org1')).toBe('UN1T')
+  })
+
+  it('falls back to UN1T when db or organizationId is missing, without querying', async () => {
+    expect(await getOrgBrandName(null, 'org1')).toBe('UN1T')
+    expect(await getOrgBrandName(orgDb({ data: [], error: null }), null)).toBe('UN1T')
+  })
+
+  it('never throws — swallows a thrown query and falls back', async () => {
+    const db = { from() { throw new Error('boom') } }
+    expect(await getOrgBrandName(db, 'org1')).toBe('UN1T')
   })
 })

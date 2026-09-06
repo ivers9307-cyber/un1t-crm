@@ -75,6 +75,32 @@ export async function getLocationBranding(db, locationId) {
   }
 }
 
+/**
+ * HOST-CONSENT.1 — the ORGANISATION's customer-facing brand name, for copy
+ * that speaks for the whole org rather than one studio (the two-consent
+ * sentences on /h/[slug] and hosted-event registration). org_settings
+ * (mig 317) is operator-editable via /api/settings/org-branding; never
+ * organizations.name, which is the ops tenant label ("UN1T Group").
+ * Never throws; falls back to DEFAULT_COMPANY_NAME.
+ * @param {object} db
+ * @param {string|null} organizationId
+ * @returns {Promise<string>}
+ */
+export async function getOrgBrandName(db, organizationId) {
+  if (!db || !organizationId) return DEFAULT_COMPANY_NAME
+  try {
+    const { data, error } = await db
+      .from('org_settings')
+      .select('company_name')
+      .eq('organization_id', organizationId)
+      .limit(1)
+    const name = (!error && data && data[0]?.company_name || '').trim()
+    return name || DEFAULT_COMPANY_NAME
+  } catch {
+    return DEFAULT_COMPANY_NAME
+  }
+}
+
 // Resolve the org_settings row (mig 317) for the organisation that owns
 // `locationId`: location -> organization_id -> org_settings. Two cheap
 // indexed lookups, only reached when the location row leaves a field unset.

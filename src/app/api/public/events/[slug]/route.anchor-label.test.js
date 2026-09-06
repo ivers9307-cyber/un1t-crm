@@ -23,6 +23,10 @@ vi.mock('@/lib/rate-limit', () => ({
 const createServerClient = vi.fn()
 vi.mock('@/lib/supabase', () => ({ createServerClient: (...a) => createServerClient(...a) }))
 
+vi.mock('@/lib/location-branding', () => ({
+  getOrgBrandName: vi.fn().mockResolvedValue('UN1T Dublin'),
+}))
+
 import { GET } from './route.js'
 
 const ANCHOR = {
@@ -38,6 +42,7 @@ const STILLORGAN = {
   address: '1 Somewhere Road',
   timezone: 'Europe/Dublin',
   is_host_anchor: false,
+  organization_id: 'org-1',
 }
 
 function makeDb(race) {
@@ -46,6 +51,7 @@ function makeDb(race) {
       const b = {}
       for (const m of ['select', 'eq', 'order', 'limit']) b[m] = () => b
       b.single = async () => ({ data: race, error: null })
+      b.maybeSingle = async () => ({ data: null, error: null })
       b.insert = async () => ({ error: null })
       if (table === 'race_registrations') {
         b.limit = async () => ({ data: [], error: null })
@@ -121,5 +127,26 @@ describe('GET /api/public/events/[slug] — the anchor label never leaves the bu
     const body = await (await GET(req, props)).json()
 
     expect(body.data.locations).not.toHaveProperty('is_host_anchor')
+  })
+
+  // HOST-CONSENT.1 — the org brand name for the two-consent sentence comes
+  // from getOrgBrandName (operator-editable org_settings.company_name), not
+  // organizations.name. host_name/organization_name land on `data`, and
+  // organization_id + the raw host object never leave the response.
+  it('surfaces host_name + the operator-editable org brand, and strips organization_id/host', async () => {
+    createServerClient.mockImplementation(() =>
+      makeDb(makeRace({
+        location_id: 'LOC1',
+        host_id: 'H',
+        locations: { ...STILLORGAN },
+        host: { name: 'Pride Training Club' },
+      })))
+
+    const body = await (await GET(req, props)).json()
+
+    expect(body.data.host_name).toBe('Pride Training Club')
+    expect(body.data.organization_name).toBe('UN1T Dublin')
+    expect(body.data.locations).not.toHaveProperty('organization_id')
+    expect(body.data).not.toHaveProperty('host')
   })
 })

@@ -10,6 +10,7 @@ import { loadForMode } from '@/lib/event-signups'
 import { eventIsPublic } from '@/lib/host-events'
 import { isHostAnchorLocation, pickAudienceVenueName } from '@/lib/event-comms-location'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
+import { getOrgBrandName } from '@/lib/location-branding'
 
 export const runtime = 'nodejs'
 // Force-dynamic so wave / fee edits in the operator UI show up
@@ -149,11 +150,7 @@ export async function GET(request, props) {
   // HOST-CONSENT.1 — names for the two-consent copy on the register form.
   // organization_id is resolved here and stripped from the public payload.
   const { organization_id: _orgId, ...publicLocationSafe } = publicLocation || {}
-  let organizationName = null
-  if (publicLocation?.organization_id) {
-    const { data: org } = await db.from('organizations').select('name').eq('id', publicLocation.organization_id).maybeSingle()
-    organizationName = org?.name || null
-  }
+  const organizationName = await getOrgBrandName(db, publicLocation?.organization_id || null)
 
   return NextResponse.json({
     success: true,
