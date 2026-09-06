@@ -45,8 +45,11 @@ export async function GET(_request, props) {
   if (campaignErr) return NextResponse.json({ success: false, error: campaignErr.message }, { status: 500 })
   if (!campaign) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 
-  const { byCampaign } = await loadHostCampaignStats(db, session.host.id)
-  const stats = byCampaign.get(campaign.id) || ZERO_STATS
+  // Stats are NULL (not zeros) when the rpc fails: the page then says
+  // "counts unavailable" instead of rendering confident zeros beside a full
+  // recipient list (the unknown-count-never-renders-0 rule).
+  const { byCampaign, error: statsErr } = await loadHostCampaignStats(db, session.host.id)
+  const stats = statsErr ? null : (byCampaign.get(campaign.id) || ZERO_STATS)
 
   const recipients = []
   for (let from = 0; from < MAX_ROWS; from += PAGE) {

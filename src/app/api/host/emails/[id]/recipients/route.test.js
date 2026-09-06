@@ -165,16 +165,13 @@ describe('GET /api/host/emails/[id]/recipients', () => {
     })
   })
 
-  it('a stats rpc error still 200s with zero stats — never fails the page on a stats hiccup', async () => {
+  it('a stats rpc error still 200s with stats: null — counts unavailable, never confident zeros', async () => {
     const { db } = makeDb(routeFor({ pages: [[]], statsErr: { message: 'rpc broke' } }))
     createServerClient.mockReturnValue(db)
     const res = await GET(makeRequest(), props)
     const body = await res.json()
     expect(res.status).toBe(200)
-    expect(body.data.campaign.stats).toEqual({
-      queued: 0, sent: 0, delivered: 0, opened: 0, clicked: 0,
-      bounced: 0, complained: 0, unsubscribed: 0, failed: 0,
-    })
+    expect(body.data.campaign.stats).toBeNull()
   })
 
   it('selects every outcome column plus the joined contact, and paginates past 1000 rows', async () => {
