@@ -40,9 +40,14 @@
 //
 // `sent`/`failed` counts ride along on chunk_sent/drained for the cron's
 // run summary.
+//
+// HOST-METRICS.1 — every 'failed' row stamps failed_reason: the gate loop
+// writes emailabilityReason's verdict (no_host_consent | host_unsubscribed |
+// mailbox_blocked | no_email | no_administrative_consent), a thrown send
+// writes send_error, and a sent row stamps postmark_message_id.
 
 import { renderHostCampaignHtml } from './host-campaign-email.js'
-import { isEmailable } from './host-contact-list.js'
+import { emailabilityReason } from './host-contact-list.js'
 import { signHostUnsubToken } from './host-unsubscribe.js'
 import { sendEmail, applyMergeTags } from './postmark.js'
 import { getAppUrl } from './app-url.js'
@@ -174,18 +179,20 @@ async function runChunk(db, campaignId) {
     const suppressedIds = new Set((suppRows || []).map((r) => r.contact_id))
     const consentById = new Map((memberRows || []).map((m) => [m.contact_id, m.marketing_consent === true]))
     const sendable = []
-    const revokedIds = []
+    const revokedByReason = new Map() // reason → [send ids], insertion order preserved
     for (const row of claimed) {
-      const ok = isEmailable(contactById.get(row.contact_id) || null, suppressedIds.has(row.contact_id), {
+      const reason = emailabilityReason(contactById.get(row.contact_id) || null, suppressedIds.has(row.contact_id), {
         emailType: isMarketing ? 'marketing' : 'utility',
         hostConsent: consentById.get(row.contact_id) === true,
       })
-      if (ok) sendable.push(row)
-      else revokedIds.push(row.id)
+      if (reason === null) sendable.push(row)
+      else revokedByReason.set(reason, [...(revokedByReason.get(reason) || []), row.id])
     }
-    if (revokedIds.length) {
-      await db.from('host_campaign_sends').update({ status: 'failed' }).in('id', revokedIds)
-      failed += revokedIds.length
+    for (const [reason, ids] of revokedByReason) {
+      // HOST-METRICS.1 — the reason the gate refused, so the host can see it.
+      const { error } = await db.from('host_campaign_sends').update({ status: 'failed', failed_reason: reason }).in('id', ids)
+      if (error) logError('host-campaigns', 'failed-stamp write failed', { campaign_id: campaign.id, reason, count: ids.length, error: error.message })
+      failed += ids.length
     }
 
     const baseUrl = getAppUrl()
@@ -212,7 +219,7 @@ async function runChunk(db, campaignId) {
       }), tagContact, { unsubscribe_url: unsubscribeUrl })
       const mergedSubject = applyMergeTags(campaign.subject, tagContact) || campaign.subject
       try {
-        await sendEmail({
+        const result = await sendEmail({
           to: row.email,
           from,
           // HOST-EMAIL.5 — explicit Reply-To wins; the host login email stays the fallback.
@@ -232,15 +239,19 @@ async function runChunk(db, campaignId) {
           metadata: { host_campaign_id: campaign.id, host_id: host.id, contact_id: row.contact_id },
         })
         sent += 1
-        await db.from('host_campaign_sends')
-          .update({ status: 'sent', sent_at: new Date().toISOString() })
+        const { error: sentErr } = await db.from('host_campaign_sends')
+          .update({ status: 'sent', sent_at: new Date().toISOString(), postmark_message_id: result?.messageId || null })
           .eq('id', row.id)
+        if (sentErr) logError('host-campaigns', 'sent-stamp write failed', { campaign_id: campaign.id, send_id: row.id, error: sentErr.message })
       } catch (err) {
         failed += 1
         logError('host-campaigns', 'send failed', {
           campaign_id: campaign.id, send_id: row.id, error: err?.message || String(err),
         })
-        await db.from('host_campaign_sends').update({ status: 'failed' }).eq('id', row.id)
+        // HOST-METRICS.1 — 'send_error' distinguishes a Postmark/network
+        // failure from a gate-loop refusal (which stamps its own reason).
+        const { error: failErr } = await db.from('host_campaign_sends').update({ status: 'failed', failed_reason: 'send_error' }).eq('id', row.id)
+        if (failErr) logError('host-campaigns', 'failed-stamp write failed', { campaign_id: campaign.id, send_id: row.id, error: failErr.message })
       }
     }
 

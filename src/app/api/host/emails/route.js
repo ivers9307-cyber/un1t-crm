@@ -9,6 +9,7 @@ import { z } from 'zod'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { designJsonTooBig, assertAudienceEventOwned } from '@/lib/host-campaign-draft'
+import { loadHostCampaignStats, ZERO_STATS } from '@/lib/host-campaign-stats'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -41,7 +42,21 @@ export async function GET() {
     .order('created_at', { ascending: false })
     .limit(200)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-  return NextResponse.json({ success: true, data: data || [] })
+
+  // HOST-METRICS.1 — per-campaign send stats (host_campaign_stats(), mig
+  // 590). A stats hiccup never fails the list: on an rpc error the `stats`
+  // key is OMITTED entirely (not zeroed) so the UI's own fallback renders
+  // — a zeroed stats object would print "0 sent" for a campaign that
+  // genuinely sent mail. A campaign missing from the rpc result still
+  // gets ZERO_STATS (it really has none).
+  const { byCampaign, error: statsErr } = await loadHostCampaignStats(db, session.host.id)
+  const campaigns = statsErr
+    ? (data || [])
+    : (data || []).map((campaign) => ({
+        ...campaign,
+        stats: byCampaign.get(campaign.id) ?? ZERO_STATS,
+      }))
+  return NextResponse.json({ success: true, data: campaigns })
 }
 
 export async function POST(request) {

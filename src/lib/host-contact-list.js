@@ -68,6 +68,27 @@ export function eventTagFor(raceEvent) {
 }
 
 /**
+ * HOST-METRICS.1 — WHY a contact cannot be mailed, or null when they can.
+ * The single predicate behind isEmailable, so the queue can stamp
+ * host_campaign_sends.failed_reason with the same decision the gate makes.
+ * Reasons: 'no_email' | 'mailbox_blocked' | 'no_administrative_consent'
+ *        | 'host_unsubscribed' | 'no_host_consent'.
+ */
+export function emailabilityReason(contact, suppressed, { emailType = 'marketing', hostConsent = false } = {}) {
+  if (!contact || !contact.email) return 'no_email'
+  if (contact.email_suppressed_at) return 'mailbox_blocked'
+  if (emailType === 'utility') {
+    if (contact.email_administrative !== true) return 'no_administrative_consent'
+    if (['bounced', 'complained'].includes(contact.email_status ?? 'active')) return 'mailbox_blocked'
+    return null
+  }
+  if (suppressed) return 'host_unsubscribed'
+  if (hostConsent !== true) return 'no_host_consent'
+  if (BLOCKED_EMAIL_STATUSES.includes(contact.email_status ?? 'active')) return 'mailbox_blocked' // NULL = legacy 'active' (column default, mig 005)
+  return null
+}
+
+/**
  * Send-time emailability predicate — the SAME gate the send path uses.
  * Pure: the caller loads the contact flags, the per-host suppression set and
  * the host_contacts.marketing_consent value.
@@ -86,25 +107,16 @@ export function eventTagFor(raceEvent) {
  *
  * hostConsent defaults to false so a caller that forgets it fails closed.
  *
+ * HOST-METRICS.1 — wraps emailabilityReason: true iff the reason is null.
+ *
  * @param {object|null} contact  contacts row with email, email_administrative,
  *   email_status, email_suppressed_at
  * @param {boolean} suppressed   contact_id ∈ host_email_suppressions for this host
  * @param {{emailType?: 'marketing'|'utility', hostConsent?: boolean}} [opts]
  * @returns {boolean}
  */
-export function isEmailable(contact, suppressed, { emailType = 'marketing', hostConsent = false } = {}) {
-  if (!contact) return false
-  if (!contact.email) return false
-  if (contact.email_suppressed_at) return false
-  if (emailType === 'utility') {
-    if (contact.email_administrative !== true) return false
-    if (['bounced', 'complained'].includes(contact.email_status ?? 'active')) return false
-    return true
-  }
-  if (suppressed) return false
-  if (hostConsent !== true) return false
-  if (BLOCKED_EMAIL_STATUSES.includes(contact.email_status ?? 'active')) return false // NULL = legacy 'active' (column default, mig 005)
-  return true
+export function isEmailable(contact, suppressed, opts = {}) {
+  return emailabilityReason(contact, suppressed, opts) === null
 }
 
 /**

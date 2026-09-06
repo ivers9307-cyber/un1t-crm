@@ -14,11 +14,16 @@
 // user-facing, so they render inline verbatim. The unsubscribe footer is
 // injected server-side after sanitization — nothing here can omit it.
 //
+// HOST-METRICS.1 — a sent/sending row's subject links to its report
+// (HostEmailReport, at /host/emails/[id]) and the subline swaps in the
+// per-send stats once the list API reports them.
+//
 // Dark UN1T host-portal styling (bg-black page) — dark-surface chip recipe
 // `bg-<c>-500/15 text-<c>-300`; host paths are exempt from the light-theme
 // -700 chip rule.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
 
 /**
  * Request body for a test send. A blank or cancelled prompt yields {} so the
@@ -28,6 +33,19 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 export function buildTestSendBody(answer) {
   const trimmed = (answer || '').trim()
   return trimmed ? { to: trimmed } : {}
+}
+
+/**
+ * The list-row subline once a send has stats: "124 sent · 118 delivered ·
+ * 41 opened · 9 clicked". Returns null (not a string) when stats are
+ * absent — old rows, or a campaign predating HOST-METRICS.1 — so the caller
+ * falls back to the coarser sent/recipient_count line.
+ * @param {object|undefined} stats
+ */
+export function statsLine(stats) {
+  if (!stats) return null
+  const { sent = 0, delivered = 0, opened = 0, clicked = 0 } = stats
+  return `${sent} sent · ${delivered} delivered · ${opened} opened · ${clicked} clicked`
 }
 
 const STATUS_CHIP = {
@@ -471,7 +489,11 @@ export default function HostEmails() {
                 <li key={c.id} className="px-4 py-3 flex items-center justify-between gap-4">
                   <div className="min-w-0">
                     <p className="flex items-center gap-2 font-medium">
-                      <span className="truncate">{c.subject}</span>
+                      {c.status === 'draft' ? (
+                        <span className="truncate">{c.subject}</span>
+                      ) : (
+                        <Link href={`/host/emails/${c.id}`} className="truncate hover:underline">{c.subject}</Link>
+                      )}
                       <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${chip}`}>
                         {STATUS_LABEL[c.status] || c.status}
                       </span>
@@ -480,11 +502,16 @@ export default function HostEmails() {
                           Utility
                         </span>
                       )}
+                      {c.stats?.failed > 0 && (
+                        <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide bg-amber-500/15 text-amber-300">
+                          {c.stats.failed} failed
+                        </span>
+                      )}
                     </p>
                     <p className="text-xs text-white/45 mt-0.5">
                       {c.status === 'draft'
                         ? 'Not sent yet'
-                        : `${c.sent_count || 0}/${c.recipient_count ?? '—'} sent`}
+                        : (statsLine(c.stats) || `${c.sent_count || 0}/${c.recipient_count ?? '—'} sent`)}
                       {' · '}
                       {(c.sent_at || c.created_at || '').slice(0, 10) || '—'}
                     </p>

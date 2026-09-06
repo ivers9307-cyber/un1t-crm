@@ -120,7 +120,7 @@ function routeFor(cfg) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  sendEmail.mockResolvedValue({ MessageID: 'pm-1' })
+  sendEmail.mockResolvedValue({ messageId: 'pm-1' })
 })
 
 describe('BATCH_SIZE', () => {
@@ -263,7 +263,7 @@ describe('processHostCampaignChunk — claim and send', () => {
   })
 
   it('a per-row send error marks that row failed and the batch continues', async () => {
-    sendEmail.mockRejectedValueOnce(new Error('postmark 500')).mockResolvedValue({ MessageID: 'pm-2' })
+    sendEmail.mockRejectedValueOnce(new Error('postmark 500')).mockResolvedValue({ messageId: 'pm-2' })
     const { db, statements } = makeDb(routeFor(twoCandidates))
     const result = await processHostCampaignChunk(db, CAMPAIGN_ID)
     expect(result.status).toBe('chunk_sent')
@@ -408,5 +408,50 @@ describe('processHostCampaignChunk — HOST-CONSENT.1', () => {
     expect(q.ops.some((o) => o.method === 'eq' && o.args[0] === 'host_id' && o.args[1] === HOST_ID)).toBe(true)
     expect(q.ops.some((o) => o.method === 'in' && o.args[0] === 'contact_id')).toBe(true)
     expect(op(q, 'select').args[0]).toMatch(/marketing_consent/)
+  })
+})
+
+describe('processHostCampaignChunk — HOST-METRICS.1', () => {
+  const base = { candidates: [{ id: 's1' }], claimed: [{ id: 's1', contact_id: 'c1', email: 'a@x.ie' }], contacts: [emailableContact('c1', 'a@x.ie')], hostContacts: [{ contact_id: 'c1', marketing_consent: true }] }
+  it('stamps postmark_message_id on the sent row', async () => {
+    const { db, statements } = makeDb(routeFor(base))
+    await processHostCampaignChunk(db, CAMPAIGN_ID)
+    const sentUpd = statements.find((s) => s.table === 'host_campaign_sends' && op(s, 'update')?.args[0]?.status === 'sent')
+    expect(op(sentUpd, 'update').args[0]).toMatchObject({ postmark_message_id: 'pm-1' })
+  })
+  it('a consent-revoked row carries the gate reason', async () => {
+    const { db, statements } = makeDb(routeFor({ ...base, hostContacts: [{ contact_id: 'c1', marketing_consent: false }] }))
+    await processHostCampaignChunk(db, CAMPAIGN_ID)
+    const failed = statements.find((s) => s.table === 'host_campaign_sends' && op(s, 'update')?.args[0]?.status === 'failed')
+    expect(op(failed, 'update').args[0]).toEqual({ status: 'failed', failed_reason: 'no_host_consent' })
+    expect(op(failed, 'in').args).toEqual(['id', ['s1']])
+  })
+  it('a suppressed row reads host_unsubscribed', async () => {
+    const { db, statements } = makeDb(routeFor({ ...base, suppressions: [{ contact_id: 'c1' }] }))
+    await processHostCampaignChunk(db, CAMPAIGN_ID)
+    const failed = statements.find((s) => s.table === 'host_campaign_sends' && op(s, 'update')?.args[0]?.status === 'failed')
+    expect(op(failed, 'update').args[0].failed_reason).toBe('host_unsubscribed')
+  })
+  it('mixed reasons in one chunk → one update per reason', async () => {
+    const cfg = { ...base,
+      candidates: [{ id: 's1' }, { id: 's2' }, { id: 's3' }],
+      claimed: [{ id: 's1', contact_id: 'c1', email: 'a@x.ie' }, { id: 's2', contact_id: 'c2', email: 'b@x.ie' }, { id: 's3', contact_id: 'c3', email: 'c@x.ie' }],
+      contacts: [emailableContact('c1', 'a@x.ie'), { ...emailableContact('c2', 'b@x.ie'), email_status: 'bounced' }, emailableContact('c3', 'c@x.ie')],
+      hostContacts: [{ contact_id: 'c1', marketing_consent: false }, { contact_id: 'c2', marketing_consent: true }, { contact_id: 'c3', marketing_consent: true }],
+    }
+    const { db, statements } = makeDb(routeFor(cfg))
+    const r = await processHostCampaignChunk(db, CAMPAIGN_ID)
+    const failedUpdates = statements.filter((s) => s.table === 'host_campaign_sends' && op(s, 'update')?.args[0]?.status === 'failed')
+    expect(failedUpdates.map((s) => [op(s, 'update').args[0].failed_reason, op(s, 'in').args[1]])).toEqual([['no_host_consent', ['s1']], ['mailbox_blocked', ['s2']]])
+    expect(r.failed).toBe(2)
+    expect(sendEmail).toHaveBeenCalledTimes(1)
+  })
+  it('a thrown send writes send_error', async () => {
+    sendEmail.mockRejectedValueOnce(new Error('422 inactive recipient'))
+    const { db, statements } = makeDb(routeFor(base))
+    await processHostCampaignChunk(db, CAMPAIGN_ID)
+    const failed = statements.find((s) => s.table === 'host_campaign_sends' && op(s, 'update')?.args[0]?.status === 'failed')
+    expect(op(failed, 'update').args[0]).toEqual({ status: 'failed', failed_reason: 'send_error' })
+    expect(op(failed, 'eq').args).toEqual(['id', 's1'])
   })
 })

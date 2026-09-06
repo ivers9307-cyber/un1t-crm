@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildTestSendBody } from './HostEmails.jsx'
+import { buildTestSendBody, statsLine } from './HostEmails.jsx'
 
 // HOST-EMAIL.10 — the Test button prompts for an address and posts it to
 // /api/host/emails/[id]/send-test. Pure-function test only (the repo's host
@@ -30,5 +30,15 @@ describe('buildTestSendBody', () => {
 
   it('treats a null prompt (cancelled dialog) as blank rather than throwing', () => {
     expect(buildTestSendBody(null)).toEqual({})
+  })
+})
+
+describe('statsLine', () => {
+  it('joins the headline stats for the list-row subline', () => {
+    expect(statsLine({ sent: 124, delivered: 118, opened: 41, clicked: 9 })).toBe('124 sent · 118 delivered · 41 opened · 9 clicked')
+  })
+
+  it('returns null when there are no stats yet (old rows)', () => {
+    expect(statsLine(undefined)).toBe(null)
   })
 })

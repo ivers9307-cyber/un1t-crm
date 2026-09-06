@@ -1,6 +1,9 @@
 // HOST-CONSENT.1 — host-stream Postmark events land on HOST tables and never
 // on contacts.email_marketing. Identified by Metadata.host_campaign_id (every
 // host send stamps it), not by stream name — streams are per host.
+// HOST-METRICS.1 — the same events also land per-send tracking on
+// host_campaign_sends (resolved by campaign_id+contact_id), see the describe
+// block at the bottom.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./host-consent.js', () => ({ revokeHostConsent: vi.fn().mockResolvedValue({ ok: true, changed: true }) }))
@@ -10,25 +13,59 @@ import { revokeHostConsent } from './host-consent.js'
 
 const META = { host_campaign_id: 'hc-1', host_id: 'h-1', contact_id: 'c-1' }
 
-function stubDb({ failTable } = {}) {
+// stampChanged: whether a guarded update on host_campaign_sends reports it
+// matched a row (the ".select('id')" result stampOnce reads to derive
+// `changed`) — default true so `changed` is true unless a test says otherwise.
+// failUpdates: only UPDATEs on host_campaign_sends fail (selects still
+// succeed) — distinct from failTable, which fails both on the named table.
+function stubDb({ failTable, sendRow = null, stampChanged = true, failUpdates = false } = {}) {
   const contactUpdates = []
+  const sendSelects = []
+  const sendUpdates = []
+  const rpcCalls = []
   return {
     contactUpdates,
+    sendSelects,
+    sendUpdates,
+    rpcCalls,
     from: (table) => {
       const filters = []
+      let hasUpdate = false
+      let values
       const chain = {
-        update: (values) => { chain._values = values; return chain },
+        select: () => chain,
+        update: (v) => { values = v; hasUpdate = true; return chain },
         eq: (c, v) => { filters.push([c, v]); return chain },
         in: (c, v) => { filters.push(['in', c, v]); return chain },
-        then: (resolve, reject) => {
-          if (table === 'contacts') contactUpdates.push({ values: chain._values, filters })
+        is: (c, v) => { filters.push(['is', c, v]); return chain },
+        maybeSingle: () => {
+          if (table === 'host_campaign_sends') sendSelects.push({ filters })
           const result = table === failTable
             ? { data: null, error: { message: 'boom' } }
-            : { data: null, error: null }
+            : { data: sendRow, error: null }
+          return Promise.resolve(result)
+        },
+        then: (resolve, reject) => {
+          if (table === 'contacts') contactUpdates.push({ values, filters })
+          if (table === 'host_campaign_sends' && hasUpdate) sendUpdates.push({ values, filters })
+          let result
+          if (table === failTable) {
+            result = { data: null, error: { message: 'boom' } }
+          } else if (table === 'host_campaign_sends' && hasUpdate && failUpdates) {
+            result = { data: null, error: { message: 'update boom' } }
+          } else if (table === 'host_campaign_sends' && hasUpdate) {
+            result = { data: stampChanged ? [{ id: 'send-1' }] : [], error: null }
+          } else {
+            result = { data: null, error: null }
+          }
           return Promise.resolve(result).then(resolve, reject)
         },
       }
       return chain
+    },
+    rpc: (fn, args) => {
+      rpcCalls.push([fn, args])
+      return Promise.resolve({ error: null })
     },
   }
 }
@@ -80,7 +117,7 @@ describe('processHostCampaignEvent', () => {
     expect(revokeHostConsent).not.toHaveBeenCalled()
     expect(db.contactUpdates).toEqual([{ values: { email_status: 'active' }, filters: [['id', 'c-1'], ['in', 'email_status', ['bounced', 'complained']]] }])
   })
-  it.each(['Delivery', 'Open', 'Click'])('%s is acknowledged and parked for HOST-METRICS.1', async (t) => {
+  it.each(['Delivery', 'Open', 'Click'])('%s with no send row is acknowledged with no contact write', async (t) => {
     const db = stubDb()
     expect(await processHostCampaignEvent(db, { RecordType: t, MessageID: 'm', Metadata: META })).toEqual({ ok: true })
     expect(db.contactUpdates).toEqual([])
@@ -117,5 +154,122 @@ describe('processHostCampaignEvent', () => {
     expect(db.contactUpdates).toEqual([])
     expect(spy).toHaveBeenCalledTimes(1)
     spy.mockRestore()
+  })
+})
+
+describe('processHostCampaignEvent — send row outcomes (HOST-METRICS.1)', () => {
+  const ROW = { id: 'send-1', postmark_message_id: null }
+  const ev = (RecordType, extra = {}) => ({ RecordType, MessageID: 'pm-9', Metadata: META, ...extra })
+  it('resolves the row by (campaign_id, contact_id) and stamps the message id when null', async () => {
+    const db = stubDb({ sendRow: ROW })
+    await processHostCampaignEvent(db, ev('Delivery'))
+    const sel = db.sendSelects[0]
+    expect(sel.filters).toEqual(expect.arrayContaining([['campaign_id', 'hc-1'], ['contact_id', 'c-1']]))
+    expect(db.sendUpdates.some((u) => u.values.postmark_message_id === 'pm-9' && u.filters.some((f) => f[0] === 'is' && f[1] === 'postmark_message_id'))).toBe(true)
+  })
+  it('does not re-stamp a message id the row already has', async () => {
+    const db = stubDb({ sendRow: { id: 'send-1', postmark_message_id: 'pm-old' } })
+    await processHostCampaignEvent(db, ev('Delivery'))
+    expect(db.sendUpdates.some((u) => 'postmark_message_id' in u.values)).toBe(false)
+  })
+  it('Delivery stamps delivered_at guarded on null', async () => {
+    const db = stubDb({ sendRow: ROW })
+    await processHostCampaignEvent(db, ev('Delivery', { DeliveredAt: '2026-09-06T21:24:46Z' }))
+    const u = db.sendUpdates.find((u) => 'delivered_at' in u.values)
+    expect(u.values.delivered_at).toBe('2026-09-06T21:24:46Z')
+    expect(u.filters).toEqual(expect.arrayContaining([['id', 'send-1'], ['is', 'delivered_at', null]]))
+  })
+  it('Open stamps opened_at once and bumps open_count only on the first open (server is First Open Only)', async () => {
+    const db = stubDb({ sendRow: ROW })
+    await processHostCampaignEvent(db, ev('Open', { ReceivedAt: '2026-09-06T21:25:17Z' }))
+    expect(db.sendUpdates.find((u) => 'opened_at' in u.values).filters).toEqual(expect.arrayContaining([['is', 'opened_at', null]]))
+    expect(db.rpcCalls).toEqual([['bump_host_send_counter', { p_send_id: 'send-1', p_field: 'open_count' }]])
+  })
+  it('Open with a guarded update matching zero rows (queue replay after a stale-claim reclaim) does not bump', async () => {
+    const db = stubDb({ sendRow: ROW, stampChanged: false })
+    await processHostCampaignEvent(db, ev('Open', { ReceivedAt: '2026-09-06T21:25:17Z' }))
+    expect(db.rpcCalls).toEqual([])
+  })
+  it('a zero-GUID MessageID is not stamped as postmark_message_id', async () => {
+    const db = stubDb({ sendRow: ROW })
+    await processHostCampaignEvent(db, ev('Delivery', { MessageID: '00000000-0000-0000-0000-000000000000' }))
+    expect(db.sendUpdates.some((u) => 'postmark_message_id' in u.values)).toBe(false)
+  })
+  it('failUpdates: a Delivery stamp failure is reported not-ok', async () => {
+    // postmark_message_id already set so the failure isolates to the
+    // Delivery-specific delivered_at stamp, not the message-id stamp.
+    const db = stubDb({ sendRow: { id: 'send-1', postmark_message_id: 'pm-old' }, failUpdates: true })
+    const r = await processHostCampaignEvent(db, ev('Delivery'))
+    expect(r).toEqual({ ok: false, error: 'update boom' })
+  })
+  it('failUpdates: an Open stamp failure is reported not-ok and never reaches bump (pins bump-last)', async () => {
+    const db = stubDb({ sendRow: { id: 'send-1', postmark_message_id: 'pm-old' }, failUpdates: true })
+    const r = await processHostCampaignEvent(db, ev('Open'))
+    expect(r.ok).toBe(false)
+    expect(db.rpcCalls).toEqual([])
+  })
+  it('Click stamps clicked_at + opened_at (a click implies an open) and bumps click_count', async () => {
+    const db = stubDb({ sendRow: ROW })
+    await processHostCampaignEvent(db, ev('Click', { ReceivedAt: 't' }))
+    expect(db.sendUpdates.some((u) => 'clicked_at' in u.values)).toBe(true)
+    expect(db.sendUpdates.some((u) => 'opened_at' in u.values)).toBe(true)
+    expect(db.rpcCalls).toEqual([['bump_host_send_counter', { p_send_id: 'send-1', p_field: 'click_count' }]])
+  })
+  it('HardBounce stamps bounced_at + bounce_type on the row AND the shared mailbox fact', async () => {
+    const db = stubDb({ sendRow: ROW })
+    await processHostCampaignEvent(db, ev('Bounce', { Type: 'HardBounce', BouncedAt: 'b' }))
+    expect(db.sendUpdates.find((u) => 'bounced_at' in u.values).values).toEqual({ bounced_at: 'b', bounce_type: 'hard' })
+    expect(db.contactUpdates[0].values).toEqual({ email_status: 'bounced' })
+  })
+  it('SoftBounce stamps the row (soft) but not the contact', async () => {
+    const db = stubDb({ sendRow: ROW })
+    await processHostCampaignEvent(db, ev('Bounce', { Type: 'SoftBounce', BouncedAt: 'b' }))
+    expect(db.sendUpdates.find((u) => 'bounced_at' in u.values).values.bounce_type).toBe('soft')
+    expect(db.contactUpdates).toEqual([])
+  })
+  it('BadEmailAddress classifies as hard (bounceTypeFrom) but only a literal HardBounce marks the contact', async () => {
+    const db = stubDb({ sendRow: ROW })
+    await processHostCampaignEvent(db, ev('Bounce', { Type: 'BadEmailAddress', BouncedAt: 'b' }))
+    expect(db.sendUpdates.find((u) => 'bounced_at' in u.values).values.bounce_type).toBe('hard')
+    expect(db.contactUpdates).toEqual([])
+  })
+  it('an unrecognised bounce Type stamps transient, never hard', async () => {
+    const db = stubDb({ sendRow: ROW })
+    await processHostCampaignEvent(db, ev('Bounce', { Type: 'SomethingPostmarkAddsLater', BouncedAt: 'b' }))
+    expect(db.sendUpdates.find((u) => 'bounced_at' in u.values).values.bounce_type).toBe('transient')
+    expect(db.contactUpdates).toEqual([])
+  })
+  it('SpamComplaint stamps complained_at; SubscriptionChange stamps unsubscribed_at', async () => {
+    let db = stubDb({ sendRow: ROW })
+    await processHostCampaignEvent(db, ev('SpamComplaint', { BouncedAt: 'c' }))
+    expect(db.sendUpdates.some((u) => u.values.complained_at === 'c')).toBe(true)
+    db = stubDb({ sendRow: ROW })
+    await processHostCampaignEvent(db, ev('SubscriptionChange', { SuppressSending: true, ChangedAt: 'u' }))
+    expect(db.sendUpdates.some((u) => u.values.unsubscribed_at === 'u')).toBe(true)
+  })
+  it('no matching row (test send, deleted campaign) → acknowledged, nothing written to the row', async () => {
+    const db = stubDb({ sendRow: null })
+    expect(await processHostCampaignEvent(db, ev('Open'))).toEqual({ ok: true })
+    expect(db.sendUpdates).toEqual([])
+    expect(db.rpcCalls).toEqual([])
+  })
+  it('a HardBounce with no row still marks the mailbox', async () => {
+    const db = stubDb({ sendRow: null })
+    await processHostCampaignEvent(db, ev('Bounce', { Type: 'HardBounce' }))
+    expect(db.contactUpdates[0].values).toEqual({ email_status: 'bounced' })
+  })
+  it('a test-send event (no contact_id) never looks up a row', async () => {
+    const db = stubDb({ sendRow: ROW })
+    await processHostCampaignEvent(db, { RecordType: 'Open', MessageID: 'pm-t', Metadata: { host_campaign_id: 'hc-1', host_id: 'h-1', test_send: '1' } })
+    expect(db.sendSelects).toEqual([])
+  })
+  it('a failed row write is reported not-ok', async () => {
+    const db = stubDb({ sendRow: ROW, failTable: 'host_campaign_sends' })
+    expect((await processHostCampaignEvent(db, ev('Delivery'))).ok).toBe(false)
+  })
+  it('a missing timestamp falls back to now', async () => {
+    const db = stubDb({ sendRow: ROW })
+    await processHostCampaignEvent(db, ev('Delivery'))
+    expect(typeof db.sendUpdates.find((u) => 'delivered_at' in u.values).values.delivered_at).toBe('string')
   })
 })

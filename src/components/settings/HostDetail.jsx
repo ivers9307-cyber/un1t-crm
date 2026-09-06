@@ -220,6 +220,11 @@ function EmailSendingCard({ hostId, host }) {
   const [disabling, setDisabling] = useState(false)
   const [error, setError] = useState(null)
   const [copiedKey, setCopiedKey] = useState(null)
+  // HOST-METRICS.1 — Postmark backfill for host_campaign_sends (mig 590
+  // delivered/opened/clicked/bounced/unsubscribed columns). Preview (dry
+  // run) first; "Run backfill" only appears once a preview has come back,
+  // and confirms before writing.
+  const [backfill, setBackfill] = useState({ running: false, result: null, error: null })
 
   // The idempotent provision POST doubles as the state read for an
   // already-provisioned host — one call returns domain + records + flags.
@@ -307,6 +312,36 @@ function EmailSendingCard({ hostId, host }) {
       setError(e.message || 'Could not disable sending.')
     } finally {
       setDisabling(false)
+    }
+  }
+
+  async function postBackfill(dry) {
+    const res = await fetch(`/api/hosts/${hostId}/backfill-campaign-events?dry=${dry ? '1' : '0'}`, { method: 'POST' })
+    const j = await res.json().catch(() => ({}))
+    if (!res.ok || !j.success) throw new Error(j.error || `HTTP ${res.status}`)
+    return j.data
+  }
+
+  async function previewBackfill() {
+    if (backfill.running) return
+    setBackfill({ running: true, result: null, error: null })
+    try {
+      const result = await postBackfill(true)
+      setBackfill({ running: false, result, error: null })
+    } catch (e) {
+      setBackfill({ running: false, result: null, error: e.message || 'Preview failed.' })
+    }
+  }
+
+  async function runBackfill() {
+    if (backfill.running) return
+    if (!window.confirm("Fold Postmark delivery/open/click events for the last 45 days into this host's campaign reports?")) return
+    setBackfill((prev) => ({ ...prev, running: true, error: null }))
+    try {
+      const result = await postBackfill(false)
+      setBackfill({ running: false, result, error: null })
+    } catch (e) {
+      setBackfill((prev) => ({ ...prev, running: false, error: e.message || 'Backfill failed.' }))
     }
   }
 
@@ -411,7 +446,27 @@ function EmailSendingCard({ hostId, host }) {
                 Disable sending
               </Button>
             )}
+            <Button type="button" variant="secondary" size="sm" loading={backfill.running} onClick={previewBackfill}>
+              Backfill Postmark events (preview)
+            </Button>
+            {backfill.result && (
+              <Button type="button" variant="secondary" size="sm" loading={backfill.running} onClick={runBackfill}>
+                Run backfill
+              </Button>
+            )}
           </div>
+          {backfill.result && (
+            <p className="mt-2 text-xs text-un1t-muted">
+              Scanned {backfill.result.scanned} · matched {backfill.result.matched} · stamped {backfill.result.stamped} ·
+              {' '}updated {backfill.result.updated} · skipped {backfill.result.skipped} · errors {backfill.result.errors.length}
+              {backfill.result.dry ? ' (preview)' : ''}
+            </p>
+          )}
+          {backfill.error && (
+            <p className="mt-2 text-xs text-stage-lost flex items-center gap-1">
+              <AlertTriangle size={12} /> {backfill.error}
+            </p>
+          )}
           {state?.slug && (
             <p className="mt-3 text-xs text-un1t-muted">
               Mailing-list signup page: <code className="font-mono">/h/{state.slug}</code>

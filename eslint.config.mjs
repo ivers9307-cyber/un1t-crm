@@ -151,6 +151,7 @@ const config = [
       'src/lib/class-categories.js',
       'src/lib/contact-events.js',
       'src/lib/dashboard/business-rail.js',
+      'src/lib/host-campaign-backfill.js',
       'src/lib/race-register-solo.js',
       // no-utc-today deliberate-UTC-key sites (CSV filename / storage path):
       'src/app/api/admin/audit-log/route.js',
