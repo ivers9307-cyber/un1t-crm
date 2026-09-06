@@ -78,6 +78,9 @@ export default async function HostUnsubscribePage(props) {
     return <InvalidLink />
   }
 
+  // Pushed on every click, not only when the row flipped: the consent-drift
+  // cron reconciles the UN1T broadcast stream only, so a repeat click is the
+  // one retry a failed host-stream push gets.
   // Second refusal at Postmark on the host's own stream — best-effort.
   if (host.postmark_stream_id) {
     try {

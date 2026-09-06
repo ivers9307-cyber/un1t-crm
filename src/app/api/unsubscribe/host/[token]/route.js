@@ -22,6 +22,7 @@ import { revokeHostConsent } from '@/lib/host-consent'
 import { suppressAtPostmark } from '@/lib/postmark-suppressions'
 import { getClientIp, checkRateLimit, rateLimitResponse } from '@/lib/rate-limit'
 import { logError, logWarn } from '@/lib/log'
+import { getRequestOrigin } from '@/lib/app-url'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -61,6 +62,9 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Could not unsubscribe, please try again.' }, { status: 500 })
   }
 
+  // Pushed on every click, not only when the row flipped: the consent-drift
+  // cron reconciles the UN1T broadcast stream only, so a repeat click is the
+  // one retry a failed host-stream push gets.
   // Second, independent refusal at Postmark on the HOST's stream — best-effort.
   if (host.postmark_stream_id) {
     try {
@@ -75,4 +79,12 @@ export async function POST(request, props) {
   }
 
   return NextResponse.json({ success: true, data: { changed: result.changed } })
+}
+
+// A mail client that shows the List-Unsubscribe URL as a link sends a browser
+// GET. Hand it to the landing page, which does the same write and shows a
+// confirmation — never a 405 to a person trying to leave.
+export async function GET(request, props) {
+  const params = await props.params
+  return NextResponse.redirect(`${getRequestOrigin(request)}/unsubscribe/host/${encodeURIComponent(params.token)}`, 302)
 }

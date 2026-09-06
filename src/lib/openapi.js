@@ -303,7 +303,7 @@ registry.registerPath({
   path: '/api/unsubscribe/host/{token}',
   tags: ['Public'],
   summary: 'One-click unsubscribe from a host\'s marketing list (RFC 8058)',
-  description: 'Anonymous. `token` is the HMAC host-unsubscribe token from a host campaign footer (pins host + contact). Writes a per-host suppression only — UN1T marketing consent is untouched (HOST-CONSENT.1). Body ignored. A repeat click is a 200 no-op. Invalid tokens spend a per-IP budget.',
+  description: 'Anonymous. `token` is the HMAC host-unsubscribe token from a host campaign footer (pins host + contact). Writes a per-host suppression only — UN1T marketing consent is untouched (HOST-CONSENT.1). Body ignored. A repeat click is a 200 no-op. Invalid tokens spend a per-IP budget. A GET on this same path (a mail client rendering the List-Unsubscribe URL as a link) 302-redirects to the `/unsubscribe/host/{token}` landing page instead of 405ing, matching the sibling `/api/unsubscribe/{token}`.',
   request: { params: z.object({ token: z.string().min(1) }) },
   responses: {
     200: { description: 'Unsubscribed from the host (or already unsubscribed)' },

@@ -14,7 +14,7 @@ vi.mock('@/lib/rate-limit', () => ({
 }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
 
-import { POST } from './route.js'
+import { POST, GET } from './route.js'
 import { createServerClient } from '@/lib/supabase'
 import { verifyHostUnsubToken } from '@/lib/host-unsubscribe'
 import { revokeHostConsent } from '@/lib/host-consent'
@@ -50,6 +50,9 @@ describe('POST /api/unsubscribe/host/[token]', () => {
     expect(res.status).toBe(200)
     expect(revokeHostConsent).toHaveBeenCalledWith(expect.anything(), { hostId: 'h-1', contactId: 'c-1', source: 'host_one_click_unsubscribe', ipAddress: '5.5.5.5' })
     expect(suppressAtPostmark).toHaveBeenCalledWith('pat@x.ie', { stream: 'colm-events' })
+    // UNSUB-RL.1 — a VALID token is never rate-limited, only invalid ones
+    // spend the per-IP budget.
+    expect(checkRateLimit).not.toHaveBeenCalled()
   })
   it('skips the Postmark push when the host has no stream yet', async () => {
     verifyHostUnsubToken.mockReturnValue({ hostId: 'h-1', contactId: 'c-1' })
@@ -73,7 +76,15 @@ describe('POST /api/unsubscribe/host/[token]', () => {
     verifyHostUnsubToken.mockReturnValue({ hostId: 'h-1', contactId: 'c-1' })
     revokeHostConsent.mockResolvedValueOnce({ ok: true, changed: false })
     createServerClient.mockReturnValue(stubDb())
-    expect((await POST(req(), props)).status).toBe(200)
+    const res = await POST(req(), props)
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.changed).toBe(false)
+  })
+  it('404s when the host cannot be found', async () => {
+    verifyHostUnsubToken.mockReturnValue({ hostId: 'h-1', contactId: 'c-1' })
+    createServerClient.mockReturnValue(stubDb({ host: null }))
+    expect((await POST(req(), props)).status).toBe(404)
+    expect(revokeHostConsent).not.toHaveBeenCalled()
   })
   it('a failed write is a 500, never a false success', async () => {
     verifyHostUnsubToken.mockReturnValue({ hostId: 'h-1', contactId: 'c-1' })
@@ -81,5 +92,13 @@ describe('POST /api/unsubscribe/host/[token]', () => {
     createServerClient.mockReturnValue(stubDb())
     expect((await POST(req(), props)).status).toBe(500)
     expect(suppressAtPostmark).not.toHaveBeenCalled()
+  })
+})
+
+describe('GET /api/unsubscribe/host/[token]', () => {
+  it('redirects a browser GET to the landing page, which does the same write', async () => {
+    const res = await GET(new Request('http://localhost/api/unsubscribe/host/tok'), props)
+    expect(res.status).toBe(302)
+    expect(res.headers.get('Location')).toMatch(/\/unsubscribe\/host\/tok$/)
   })
 })
