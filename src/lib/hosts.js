@@ -12,7 +12,9 @@ export const HOST_COLS =
   // Sender identity (HOST-EMAIL.2, mig 400) — the HostDetail "Email sending"
   // card + /api/hosts/[id]/email-domain routes read these off loadHostForOrg.
   'sender_domain, sender_email, sender_name, sender_domain_verified, ' +
-  'postmark_domain_id, email_daily_send_cap, reply_to_email, slug'
+  'postmark_domain_id, email_daily_send_cap, reply_to_email, slug, ' +
+  // HOST-CONSENT.1 — the host's own Postmark Broadcasts stream (per-host suppression list).
+  'postmark_stream_id'
 
 /**
  * Load a host scoped to the caller's org. Returns null when the id is unknown

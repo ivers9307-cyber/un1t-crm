@@ -38,6 +38,11 @@ const PatchSchema = z.object({
   sender_email: z.string().trim().email().max(200).nullable().optional().or(z.literal('')),
   sender_name: z.string().trim().max(200).nullable().optional().or(z.literal('')),
   reply_to_email: z.string().trim().email().max(200).nullable().optional().or(z.literal('')),
+  // HOST-CONSENT.1 — Postmark Broadcasts stream id, created by hand in Postmark
+  // (Message Streams → Create → Broadcasts, unsubscribe handling Custom, then a
+  // webhook on that stream to /api/webhooks/postmark with all six events and
+  // the x-webhook-token header). Empty string clears it → sends fail closed.
+  postmark_stream_id: z.string().trim().regex(/^[a-z0-9][a-z0-9-]{0,63}$/).nullable().optional().or(z.literal('')),
 }).refine((o) => Object.keys(o).length > 0, { message: 'No fields to update' })
 
 export async function GET(_request, props) {
@@ -67,6 +72,7 @@ export async function PATCH(request, props) {
   if (v.data.sender_email !== undefined) updates.sender_email = v.data.sender_email || null
   if (v.data.sender_name !== undefined) updates.sender_name = v.data.sender_name || null
   if (v.data.reply_to_email !== undefined) updates.reply_to_email = v.data.reply_to_email || null
+  if (v.data.postmark_stream_id !== undefined) updates.postmark_stream_id = v.data.postmark_stream_id || null
 
   const { data, error } = await db
     .from('event_hosts')
