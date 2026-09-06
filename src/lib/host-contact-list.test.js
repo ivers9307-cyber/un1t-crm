@@ -409,17 +409,20 @@ describe('addEventAttendeesToHostList', () => {
 // fetchHostContactRows — membership join + suppression set → emailable rows.
 // ---------------------------------------------------------------------------
 function fakeRowsDb({ memberships = [], suppressions = [] } = {}) {
-  const calls = { hostFilters: [] }
+  const calls = { hostFilters: [], selects: [] }
   const pageBuilder = (table, rows) => ({
-    select: () => ({
-      eq: (col, val) => {
-        calls.hostFilters.push([table, col, val])
-        // Chainable order — the real query adds a unique-id tiebreaker
-        // after created_at (stable pagination across ties).
-        const chain = { order: () => chain, range: async () => ({ data: rows, error: null }) }
-        return chain
-      },
-    }),
+    select: (cols) => {
+      calls.selects.push([table, cols])
+      return {
+        eq: (col, val) => {
+          calls.hostFilters.push([table, col, val])
+          // Chainable order — the real query adds a unique-id tiebreaker
+          // after created_at (stable pagination across ties).
+          const chain = { order: () => chain, range: async () => ({ data: rows, error: null }) }
+          return chain
+        },
+      }
+    },
   })
   return {
     calls,
@@ -439,6 +442,7 @@ describe('fetchHostContactRows', () => {
     marketing_consent,
     contact,
   })
+  // email_marketing stays in the fixture on purpose: the host gate must IGNORE it (HOST-CONSENT.1).
   const goodContact = (id) => ({
     id, name: 'Pat', email: `${id}@x.ie`, email_marketing: true, email_status: 'active', email_suppressed_at: null,
   })
@@ -450,6 +454,15 @@ describe('fetchHostContactRows', () => {
       ['host_contacts', 'host_id', 'h1'],
       ['host_email_suppressions', 'host_id', 'h1'],
     ])
+  })
+
+  it('HOST-CONSENT.1 — selects host_contacts.marketing_consent and the disambiguated contact join', async () => {
+    const db = fakeRowsDb()
+    await fetchHostContactRows(db, 'h1')
+    const [, cols] = db.calls.selects.find(([t]) => t === 'host_contacts')
+    expect(cols).toMatch(/marketing_consent/)
+    expect(cols).toMatch(/contacts!contact_id/)
+    expect(cols).not.toMatch(/email_marketing/)
   })
 
   it('returns rows with emailable computed via isEmailable', async () => {

@@ -174,11 +174,13 @@ You&#39;re receiving this because you attended an event or joined the mailing li
 
 /**
  * Resolve the recipients a host campaign would reach RIGHT NOW: the host's
- * membership rows joined to live consent flags, gated by isEmailable (the
- * exact broadcast-path predicate + per-host suppression), deduped by
- * lowercased email (newest membership wins — memberships are ordered
- * created_at DESC). Both queries scope .eq('host_id', hostId): the caller is
- * responsible only for resolving hostId from getCurrentHost()/the campaign row.
+ * membership rows joined to the contact's mailbox facts, gated by isEmailable
+ * against HOST consent (host_contacts.marketing_consent, HOST-CONSENT.1) +
+ * per-host suppression + bounce/complaint/suppressed_at — NOT the UN1T
+ * broadcast predicate, deduped by lowercased email (newest membership wins —
+ * memberships are ordered created_at DESC). Both queries scope
+ * .eq('host_id', hostId): the caller is responsible only for resolving
+ * hostId from getCurrentHost()/the campaign row.
  *
  * @param {SupabaseClient} db  service-role client
  * @param {string} hostId

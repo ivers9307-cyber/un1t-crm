@@ -190,46 +190,52 @@ describe('renderHostCampaignHtml', () => {
 // host_contacts (joined contact) + host_email_suppressions rows.
 // ---------------------------------------------------------------------------
 function fakeRecipientsDb({ contactPages = [[]], suppressions = [] } = {}) {
-  const calls = { hostFilters: [], contactRanges: [] }
+  const calls = { hostFilters: [], contactRanges: [], selects: [] }
   let contactCall = 0
   return {
     calls,
     from(table) {
       if (table === 'host_contacts') {
         return {
-          select: () => ({
-            eq: (col, val) => {
-              calls.hostFilters.push([table, col, val])
-              let sourceFilter = col === 'source' ? val : null
-              const chain = {
-                eq: (col2, val2) => {
-                  calls.hostFilters.push([table, col2, val2])
-                  if (col2 === 'source') sourceFilter = val2
-                  return chain
-                },
-                order: () => chain,
-                range: async (from, to) => {
-                  calls.contactRanges.push({ from, to })
-                  let page = contactPages[contactCall] || []
-                  contactCall++
-                  if (sourceFilter) page = page.filter((r) => r.source === sourceFilter)
-                  return { data: page, error: null }
-                },
-              }
-              return chain
-            },
-          }),
+          select: (cols) => {
+            calls.selects.push([table, cols])
+            return {
+              eq: (col, val) => {
+                calls.hostFilters.push([table, col, val])
+                let sourceFilter = col === 'source' ? val : null
+                const chain = {
+                  eq: (col2, val2) => {
+                    calls.hostFilters.push([table, col2, val2])
+                    if (col2 === 'source') sourceFilter = val2
+                    return chain
+                  },
+                  order: () => chain,
+                  range: async (from, to) => {
+                    calls.contactRanges.push({ from, to })
+                    let page = contactPages[contactCall] || []
+                    contactCall++
+                    if (sourceFilter) page = page.filter((r) => r.source === sourceFilter)
+                    return { data: page, error: null }
+                  },
+                }
+                return chain
+              },
+            }
+          },
         }
       }
       if (table === 'host_email_suppressions') {
         return {
-          select: () => ({
-            eq: (col, val) => {
-              calls.hostFilters.push([table, col, val])
-              const chain = { order: () => chain, range: async () => ({ data: suppressions, error: null }) }
-              return chain
-            },
-          }),
+          select: (cols) => {
+            calls.selects.push([table, cols])
+            return {
+              eq: (col, val) => {
+                calls.hostFilters.push([table, col, val])
+                const chain = { order: () => chain, range: async () => ({ data: suppressions, error: null }) }
+                return chain
+              },
+            }
+          },
         }
       }
       throw new Error('unexpected table ' + table)
@@ -238,6 +244,7 @@ function fakeRecipientsDb({ contactPages = [[]], suppressions = [] } = {}) {
 }
 
 const member = (contactId, contact, marketing_consent = true) => ({ contact_id: contactId, marketing_consent, contact })
+// email_marketing stays in the fixture on purpose: the host gate must IGNORE it (HOST-CONSENT.1).
 const goodContact = (id, email) => ({
   id, email, email_marketing: true, email_status: 'active', email_suppressed_at: null,
 })
@@ -250,6 +257,15 @@ describe('resolveHostRecipients', () => {
       ['host_email_suppressions', 'host_id', 'h1'],
       ['host_contacts', 'host_id', 'h1'],
     ])
+  })
+
+  it('HOST-CONSENT.1 — selects host_contacts.marketing_consent and never contacts.email_marketing', async () => {
+    const db = fakeRecipientsDb()
+    await resolveHostRecipients(db, 'h1')
+    const [, cols] = db.calls.selects.find(([t]) => t === 'host_contacts')
+    expect(cols).toMatch(/marketing_consent/)
+    expect(cols).toMatch(/contacts!contact_id/)
+    expect(cols).not.toMatch(/email_marketing/)
   })
 
   it('returns {contact_id, email} for emailable contacts only', async () => {
