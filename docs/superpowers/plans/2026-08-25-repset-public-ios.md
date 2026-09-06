@@ -69,6 +69,7 @@ cd ~/code/un1t-crm && git fetch origin main && git checkout -B repset-ios origin
 cd mobile && npm ci
 npx eas-cli credentials        # iOS → production → set up for ie.repset.app
 npx eas-cli build --platform ios --profile production
+export EXPO_APPLE_ID=<your Apple ID>   # eas.json carries no appleId (EAS-SECRET.1); unset → the CLI prompts
 npx eas-cli submit --platform ios --latest
 ```
 `eas credentials` mints the provisioning profile + distribution cert reuse

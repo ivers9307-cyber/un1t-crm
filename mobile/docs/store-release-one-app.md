@@ -466,11 +466,16 @@ force-uninstalls anything.
 - **iOS submit** (Richard runs this — agent tooling is blocked from
   eas submit):
   ```
+  export EXPO_APPLE_ID=<your Apple ID>   # or keep it in your shell profile / an EAS env var
   cd mobile && npx eas-cli submit --platform ios --id 82c246e7-f488-42fc-b1cb-bcc399a62ea5
   ```
   Substitute the id for a newer build if one was cut. `eas.json` already
   carries ascAppId `6770890839` / team `535XMCT5PY`, so submit needs no
-  extra flags.
+  extra flags — but it deliberately carries **no `appleId`** (EAS-SECRET.1:
+  the repo is public). The CLI reads `EXPO_APPLE_ID` instead ("Your Apple ID
+  username (you can also set the `EXPO_APPLE_ID` env variable)" — eas.json
+  schema); with neither set it prompts for the address. Never paste it back
+  into `eas.json` — `tests/fixture-pii.test.js` fails on it.
 - **Release train:** TestFlight (internal — staff, immediate) → external
   TestFlight group ("Repset Members Beta": a handful of friendly members,
   needs Beta App Review, usually <24h) → attach the build to the 2.3.0 ASC

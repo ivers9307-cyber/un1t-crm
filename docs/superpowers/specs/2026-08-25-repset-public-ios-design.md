@@ -87,7 +87,9 @@ to its record, so the public app needs a new bundle ID.
    one) and reference it in the notes. Full app review will exercise the
    merged staff+member app; notes must explain both surfaces.
 6. Build + submit: `eas build --platform ios --profile production` then
-   `eas submit --platform ios --latest` (ascAppId updated first).
+   `eas submit --platform ios --latest` (ascAppId updated first; export
+   `EXPO_APPLE_ID=<your Apple ID>` first too — `eas.json` carries no
+   `appleId` since EAS-SECRET.1, and without the env var the CLI prompts).
 
 ### Telemetry for the migration
 
