@@ -37,7 +37,7 @@ async function insertLog(db, rows) {
   const { error } = await db.from('consent_log').insert(rows)
   // The consent decision is already durable in host_contacts /
   // host_email_suppressions; a lost audit row is logged, never thrown.
-  if (error) logError('host-consent', 'consent_log insert failed', { error: error.message, rows: rows.length })
+  if (error) logError('host-consent', 'consent_log insert failed', { error: error.message, rows: rows.length, hostId: rows[0]?.host_id, contactIds: rows.map((r) => r.contact_id) })
 }
 
 /**
@@ -46,6 +46,7 @@ async function insertLog(db, rows) {
  * @returns {Promise<{ok:boolean, changed:boolean, error?:string}>}
  */
 export async function grantHostConsent(db, { hostId, contactId, source, ipAddress = null }) {
+  // Requires an existing host_contacts row; changed:false also means "no membership".
   const { data, error } = await db
     .from('host_contacts')
     .update({
@@ -66,6 +67,7 @@ export async function grantHostConsent(db, { hostId, contactId, source, ipAddres
 /**
  * Attendee-sync variant: one UPDATE for many contacts, one log row per
  * contact that actually flipped. Caller chunks to ≤500 ids.
+ * @param {{hostId:string, contactIds:string[], source:'event_form'|'mailing_list_form'|'host_resubscribe'}} args
  * @returns {Promise<{ok:boolean, changed:number, error?:string}>}
  */
 export async function grantHostConsentBulk(db, { hostId, contactIds, source }) {
@@ -117,6 +119,7 @@ export async function resubscribeHost(db, { hostId, contactId, ipAddress = null 
     .select('id')
   if (error) return { ok: false, unsuppressed: false, changed: false, error: error.message }
   const unsuppressed = (data || []).length > 0
+  // Not atomic. A failed grant leaves the row unsuppressed with consent=false, which is NOT mailable (deliverability needs both), and a retry is idempotent.
   const grant = await grantHostConsent(db, { hostId, contactId, source: 'host_resubscribe', ipAddress })
   if (!grant.ok) return { ok: false, unsuppressed, changed: false, error: grant.error }
   return { ok: true, unsuppressed, changed: grant.changed }
