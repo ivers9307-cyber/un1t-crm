@@ -4,7 +4,7 @@
 
 **Goal:** Host marketing email becomes its own consent domain: consent lives on the host membership row, revocation stays per host, each host sends on its own Postmark stream, and a UN1T unsubscribe never touches the host consent or vice versa.
 
-**Architecture:** One migration (587) adds the consent columns, the per-host stream id, and a `race_registrations.marketing_consent` column. A new `src/lib/host-consent.js` owns every grant/revoke write (host_contacts + consent_log). The send gate `isEmailable` gains a `hostConsent` input and stops reading `contacts.email_marketing`. The queue sends marketing on the host's Postmark stream via `sendEmail`'s existing `postmarkStream` option (internal stream stays `'broadcast'`, which is what attaches the one-click headers and tracking). Host-stream webhook events are identified by metadata and routed to a new `src/lib/host-campaign-webhooks.js` before the CRM switch.
+**Architecture:** One migration (588) adds the consent columns, the per-host stream id, and a `race_registrations.marketing_consent` column. A new `src/lib/host-consent.js` owns every grant/revoke write (host_contacts + consent_log). The send gate `isEmailable` gains a `hostConsent` input and stops reading `contacts.email_marketing`. The queue sends marketing on the host's Postmark stream via `sendEmail`'s existing `postmarkStream` option (internal stream stays `'broadcast'`, which is what attaches the one-click headers and tracking). Host-stream webhook events are identified by metadata and routed to a new `src/lib/host-campaign-webhooks.js` before the CRM switch.
 
 **Tech Stack:** Next.js 16 App Router, Supabase (service-role client, migrations applied via Supabase MCP), Postmark, vitest, zod.
 
@@ -24,7 +24,7 @@ npm test && npm run lint && npm run check:mobile-parity && npm run check:mobile-
 
 | File | Responsibility |
 |---|---|
-| `supabase/migrations/587_host_consent_domain.sql` | Create: consent columns on `host_contacts`, `consent_log.host_id` + channel vocabulary, `event_hosts.postmark_stream_id`, `race_registrations.marketing_consent`, backfill |
+| `supabase/migrations/588_host_consent_domain.sql` | Create: consent columns on `host_contacts`, `consent_log.host_id` + channel vocabulary, `event_hosts.postmark_stream_id`, `race_registrations.marketing_consent`, backfill |
 | `src/lib/host-contact-list.js` | Modify: `isEmailable` takes `hostConsent`; `fetchHostContactRows` and `addEventAttendeesToHostList` read/write consent |
 | `src/lib/host-campaign-email.js` | Modify: `resolveHostRecipients` passes `hostConsent` |
 | `src/lib/host-consent.js` | Create: grant / bulk grant / revoke / resubscribe writes |
@@ -43,10 +43,10 @@ npm test && npm run lint && npm run check:mobile-parity && npm run check:mobile-
 
 ---
 
-### Task 1: Migration 587
+### Task 1: Migration 588
 
 **Files:**
-- Create: `supabase/migrations/587_host_consent_domain.sql`
+- Create: `supabase/migrations/588_host_consent_domain.sql`
 
 - [ ] **Step 1: Write the migration**
 
@@ -117,12 +117,12 @@ comment on column host_contacts.marketing_consent is
 comment on column event_hosts.postmark_stream_id is
   'HOST-CONSENT.1 — the host''s own Postmark Broadcasts stream id (e.g. colm-events). NULL = marketing sending not set up; send route 409s.';
 comment on column race_registrations.marketing_consent is
-  'HOST-CONSENT.1 — the register form checkbox as submitted. NULL = pre-587 row.';
+  'HOST-CONSENT.1 — the register form checkbox as submitted. NULL = pre-588 row.';
 ```
 
 - [ ] **Step 2: Apply to the un1t-crm Supabase project via MCP**
 
-Use `apply_migration` on project `iyvtbjjxdggiadzwwvdj` with name `587_host_consent_domain` and the file's content. Then `get_advisors` type `security`. Expected: no new ERROR-level findings (the three tables already have RLS enabled with no policies, service-role only).
+Use `apply_migration` on project `iyvtbjjxdggiadzwwvdj` with name `588_host_consent_domain` and the file's content. Then `get_advisors` type `security`. Expected: no new ERROR-level findings (the three tables already have RLS enabled with no policies, service-role only).
 
 - [ ] **Step 3: Verify the backfill against live numbers**
 
@@ -141,8 +141,8 @@ Expected on 6 Sep data: `consented` + `not_consented` = 179, and `not_consented`
 - [ ] **Step 4: Commit**
 
 ```bash
-git add supabase/migrations/587_host_consent_domain.sql
-git commit -m "HOST-CONSENT.1 — mig 587: host_contacts consent, consent_log.host_id, event_hosts.postmark_stream_id, race_registrations.marketing_consent"
+git add supabase/migrations/588_host_consent_domain.sql
+git commit -m "HOST-CONSENT.1 — mig 588: host_contacts consent, consent_log.host_id, event_hosts.postmark_stream_id, race_registrations.marketing_consent"
 ```
 
 ---
@@ -689,7 +689,7 @@ The existing fake for these tests is `fakeListDb(...)` at `src/lib/host-contact-
     // membership for all four
     const upsert = statements.find((s) => s.table === 'host_contacts' && op(s, 'upsert'))
     expect(op(upsert, 'upsert').args[0].map((r) => r.contact_id).sort()).toEqual(['cap-1', 'cap-2', 'cap-3', 'mate-1'])
-    // consent for cap-1 only (pre-587 NULL rows and unticked boxes grant nothing)
+    // consent for cap-1 only (pre-588 NULL rows and unticked boxes grant nothing)
     const grant = statements.find((s) => s.table === 'host_contacts' && op(s, 'update'))
     expect(op(grant, 'in').args).toEqual(['contact_id', ['cap-1']])
     expect(op(grant, 'update').args[0]).toMatchObject({ marketing_consent: true, marketing_consent_source: 'event_form' })
@@ -727,7 +727,7 @@ In `addEventAttendeesToHostList`, change the registrations select and collect co
       }
       // HOST-CONSENT.1 — only the registrant of record saw the checkbox.
       // Team-mates get membership (utility mail) but no marketing consent.
-      // NULL = pre-587 registration: grants nothing (the backfill covered
+      // NULL = pre-588 registration: grants nothing (the backfill covered
       // those memberships once; anything later must come from a real tick).
       if (reg?.contact_id && reg.marketing_consent === true) consentingIds.add(reg.contact_id)
     }
@@ -1856,7 +1856,7 @@ git commit -m "HOST-CONSENT.1 — both forms state the two consents; public even
 Insert directly under `|---|------|-------|`:
 
 ```
-| #<PR> | HOST-CONSENT.1 — host marketing is its own consent domain | mig 587. Host consent on `host_contacts` (backfilled), `consent_log.host_id`, per-host Postmark stream (`event_hosts.postmark_stream_id`, Colm = `colm-events`), `race_registrations.marketing_consent`. Gate no longer reads `contacts.email_marketing`; UN1T ↔ host opt-outs never cross. Real sends now carry List-Unsubscribe + a one-click POST route. Host-stream webhooks land on host tables. Send route 409s without a stream. Spec `docs/superpowers/specs/2026-09-06-host-consent-domain-design.md`. |
+| #<PR> | HOST-CONSENT.1 — host marketing is its own consent domain | mig 588. Host consent on `host_contacts` (backfilled), `consent_log.host_id`, per-host Postmark stream (`event_hosts.postmark_stream_id`, Colm = `colm-events`), `race_registrations.marketing_consent`. Gate no longer reads `contacts.email_marketing`; UN1T ↔ host opt-outs never cross. Real sends now carry List-Unsubscribe + a one-click POST route. Host-stream webhooks land on host tables. Send route 409s without a stream. Spec `docs/superpowers/specs/2026-09-06-host-consent-domain-design.md`. |
 ```
 
 Fill `#<PR>` after `gh pr create` returns the number (a second commit is fine; never edit a pushed row).
@@ -1872,7 +1872,7 @@ git push -u origin HEAD
 gh pr create --base main --title "HOST-CONSENT.1 — host marketing as its own consent domain" --body-file - <<'EOF'
 Spec: docs/superpowers/specs/2026-09-06-host-consent-domain-design.md
 
-- mig 587 (APPLIED to prod before merge): host consent columns + backfill, consent_log.host_id + channel vocabulary, event_hosts.postmark_stream_id, race_registrations.marketing_consent
+- mig 588 (APPLIED to prod before merge): host consent columns + backfill, consent_log.host_id + channel vocabulary, event_hosts.postmark_stream_id, race_registrations.marketing_consent
 - isEmailable gates marketing on host_contacts.marketing_consent (fails closed), never contacts.email_marketing
 - src/lib/host-consent.js: the one writer (grant / bulk / revoke / resubscribe)
 - signup + hosted-event registration grant BOTH consents; forms say so

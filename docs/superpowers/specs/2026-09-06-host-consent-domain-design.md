@@ -24,7 +24,7 @@ Measured 6 Sep against the only live host (179 contacts): 47 are on Postmark's `
 
 ## Design
 
-### 1. Data (mig 587)
+### 1. Data (mig 588)
 
 ```sql
 alter table host_contacts
@@ -35,7 +35,7 @@ alter table host_contacts
 
 alter table consent_log add column host_id uuid references event_hosts(id) on delete cascade;
 alter table event_hosts add column postmark_stream_id text;          -- section 5
-alter table race_registrations add column marketing_consent boolean; -- section 2, null = pre-587 row
+alter table race_registrations add column marketing_consent boolean; -- section 2, null = pre-588 row
 -- channel 'host_email_marketing' rows carry host_id; all existing rows stay host_id null.
 
 -- Backfill: every existing membership was created by a signup or a confirmed
@@ -55,7 +55,7 @@ where not exists (select 1 from host_email_suppressions s
 | Path | Host consent | UN1T consent (unchanged) |
 |---|---|---|
 | `POST /api/public/host-list/[slug]/subscribe` | `true`, source `mailing_list_form`, `consent_log` row channel `host_email_marketing` with `host_id` | `applyFormMarketingConsent` as today |
-| Hosted-event registration, `marketing_consent !== false` | `true`, source `event_form`, logged as above. The register route persists the checkbox on a new `race_registrations.marketing_consent boolean` (mig 587; today the value is applied and discarded), and `addEventAttendeesToHostList` reads it when the registration is confirmed, so consent lands with the membership row and unpaid bookings never become host contacts | as today |
+| Hosted-event registration, `marketing_consent !== false` | `true`, source `event_form`, logged as above. The register route persists the checkbox on a new `race_registrations.marketing_consent boolean` (mig 588; today the value is applied and discarded), and `addEventAttendeesToHostList` reads it when the registration is confirmed, so consent lands with the membership row and unpaid bookings never become host contacts | as today |
 | Hosted-event registration, checkbox unticked | membership row still created, consent stays `false` (utility mail to attendees is unaffected: it gates on `email_administrative`) | as today (`consent=false`) |
 | Internal events (`host_id` null) | no change; no host row | as today |
 
@@ -83,7 +83,7 @@ Shared on purpose: hard bounces and spam complaints (`email_status`) and the rep
 
 Richard created the first stream on 6 Sep as `colm-events` (type Broadcasts) for Pride Training Club, so the stream is **per host**, not shared. Each host's suppression list is then isolated from UN1T's and from every other host's. Postmark allows 10 streams per server by default, which covers the foreseeable host count; the limit is raised on request.
 
-- `event_hosts.postmark_stream_id text` (mig 587, nullable). Set by an admin on Settings → Hosts → host, in the existing "Email sending" card, after creating the stream in Postmark. Exposed to the portal only as a boolean "marketing sending ready" flag, never the raw id.
+- `event_hosts.postmark_stream_id text` (mig 588, nullable). Set by an admin on Settings → Hosts → host, in the existing "Email sending" card, after creating the stream in Postmark. Exposed to the portal only as a boolean "marketing sending ready" flag, never the raw id.
 - Creating the stream and its webhook stays a manual Postmark step per host, documented on the card: Message Streams → Create → Broadcasts, unsubscribe handling Custom; then on that stream add a webhook to `https://crm.un1tdublin.com/api/webhooks/postmark` with Delivery, Bounce, SpamComplaint, Open, Click and SubscriptionChange, carrying the `x-webhook-token` header the route verifies. No API automation in this slice.
 - `host-campaign-queue.js` sends marketing with the internal `stream: 'broadcast'` (which is what turns tracking on and attaches the `List-Unsubscribe` / `List-Unsubscribe-Post` headers) and the host's id on the wire via `sendEmail`'s existing `postmarkStream` option (EMAIL-OUTBOUND-SERVER.1), and **passes `unsubscribeUrl`**. No new `sendEmail` option is needed. Utility stays on `outbound`.
 - Fail closed: the send route refuses a marketing send with a clear 409 ("Marketing sending is not set up for this host yet") when `postmark_stream_id` is null. A Postmark error for a missing stream marks each send failed as today, so a mis-typed id cannot half-send silently, and the failure reason is kept for the metrics work.
@@ -127,7 +127,7 @@ Live: after deploy, one test send and one real marketing send from the host port
 ### 10. Rollout order
 
 1. Stream `colm-events` exists (verified 6 Sep, empty suppression list). Richard still has to add its webhook (section 5).
-2. Apply mig 587 via Supabase MCP (forward-only).
+2. Apply mig 588 via Supabase MCP (forward-only).
 3. Merge the code PR (one PR: gate, grant/revoke, stream column + admin field, headers, processor, copy, tests).
 4. Set `postmark_stream_id = 'colm-events'` on the Pride Training Club host row from Settings → Hosts.
 5. Live verification above. Until step 4 is done the send route fails closed with the 409, so merging before the stream is attached is safe.
