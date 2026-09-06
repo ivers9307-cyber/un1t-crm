@@ -12,9 +12,10 @@
 // send path, not the composer").
 //
 // Recipient resolution happens AT SEND TIME (never stored): host_contacts
-// membership joined to the exact consent flags isEmailable reads (the same
-// predicate the portal Contacts page shows), minus host_email_suppressions,
-// deduped by lowercased email. Pure/DB-shaped only — no Postmark here.
+// membership joined to host consent (host_contacts.marketing_consent — the
+// same predicate the portal Contacts page shows), minus
+// host_email_suppressions, deduped by lowercased email. Pure/DB-shaped
+// only — no Postmark here.
 
 import { isEmailable } from './host-contact-list'
 
@@ -235,8 +236,8 @@ export async function resolveHostRecipients(db, hostId, { audienceEventId = null
     let query = db
       .from('host_contacts')
       .select(`
-        contact_id,
-        contact:contacts!contact_id ( id, email, email_marketing, email_administrative, email_status, email_suppressed_at )
+        contact_id, marketing_consent,
+        contact:contacts!contact_id ( id, email, email_administrative, email_status, email_suppressed_at )
       `)
       .eq('host_id', hostId)
     if (mailingListOnly) query = query.eq('source', 'mailing_list')
@@ -248,7 +249,7 @@ export async function resolveHostRecipients(db, hostId, { audienceEventId = null
     for (const row of data || []) {
       if (allowedContactIds && !allowedContactIds.has(row.contact_id)) continue
       const contact = row.contact || null
-      if (!isEmailable(contact, suppressed.has(row.contact_id), { emailType })) continue
+      if (!isEmailable(contact, suppressed.has(row.contact_id), { emailType, hostConsent: row.marketing_consent === true })) continue
       const key = String(contact.email).trim().toLowerCase()
       if (seenEmails.has(key)) continue
       seenEmails.add(key)

@@ -432,10 +432,11 @@ function fakeRowsDb({ memberships = [], suppressions = [] } = {}) {
 }
 
 describe('fetchHostContactRows', () => {
-  const membership = (contactId, contact, source = 'event') => ({
+  const membership = (contactId, contact, source = 'event', marketing_consent = true) => ({
     contact_id: contactId,
     source,
     created_at: '2026-07-01T10:00:00Z',
+    marketing_consent,
     contact,
   })
   const goodContact = (id) => ({
@@ -459,12 +460,23 @@ describe('fetchHostContactRows', () => {
       ],
     })
     const rows = await fetchHostContactRows(db, 'h1')
-    // HOST-CONSENT.1 — fetchHostContactRows does not pass hostConsent yet
-    // (that's Task 3), so isEmailable's fail-closed default now makes c1
-    // not emailable even though the old UN1T email_marketing flag is true.
     expect(rows).toEqual([
-      { contact_id: 'c1', name: 'Pat', email: 'c1@x.ie', source: 'event', created_at: '2026-07-01T10:00:00Z', emailable: false },
-      { contact_id: 'c2', name: 'Pat', email: 'c2@x.ie', source: 'mailing_list', created_at: '2026-07-01T10:00:00Z', emailable: false },
+      { contact_id: 'c1', name: 'Pat', email: 'c1@x.ie', source: 'event', created_at: '2026-07-01T10:00:00Z', marketing_consent: true, emailable: true },
+      { contact_id: 'c2', name: 'Pat', email: 'c2@x.ie', source: 'mailing_list', created_at: '2026-07-01T10:00:00Z', marketing_consent: true, emailable: true },
+    ])
+  })
+
+  it('HOST-CONSENT.1 — emailable follows host consent, not contacts.email_marketing', async () => {
+    const db = fakeRowsDb({
+      memberships: [
+        membership('c1', { ...goodContact('c1'), email_marketing: false }, 'event', true),
+        membership('c2', goodContact('c2'), 'event', false),
+      ],
+    })
+    const rows = await fetchHostContactRows(db, 'h1')
+    expect(rows.map((r) => [r.contact_id, r.emailable, r.marketing_consent])).toEqual([
+      ['c1', true, true],
+      ['c2', false, false],
     ])
   })
 

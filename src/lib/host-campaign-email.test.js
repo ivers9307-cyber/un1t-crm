@@ -237,7 +237,7 @@ function fakeRecipientsDb({ contactPages = [[]], suppressions = [] } = {}) {
   }
 }
 
-const member = (contactId, contact) => ({ contact_id: contactId, contact })
+const member = (contactId, contact, marketing_consent = true) => ({ contact_id: contactId, marketing_consent, contact })
 const goodContact = (id, email) => ({
   id, email, email_marketing: true, email_status: 'active', email_suppressed_at: null,
 })
@@ -256,9 +256,19 @@ describe('resolveHostRecipients', () => {
     const db = fakeRecipientsDb({
       contactPages: [[
         member('c1', goodContact('c1', 'a@x.ie')),
-        member('c2', { ...goodContact('c2', 'b@x.ie'), email_marketing: false }),
+        member('c2', goodContact('c2', 'b@x.ie'), false),
         member('c3', { ...goodContact('c3', 'c@x.ie'), email_status: 'bounced' }),
         member('c4', null), // broken join — tolerated, skipped
+      ]],
+    })
+    expect(await resolveHostRecipients(db, 'h1')).toEqual([{ contact_id: 'c1', email: 'a@x.ie' }])
+  })
+
+  it('HOST-CONSENT.1 — includes a UN1T-opted-out contact who consented to the host, excludes one who did not', async () => {
+    const db = fakeRecipientsDb({
+      contactPages: [[
+        member('c1', { ...goodContact('c1', 'a@x.ie'), email_marketing: false }, true),
+        member('c2', goodContact('c2', 'b@x.ie'), false),
       ]],
     })
     expect(await resolveHostRecipients(db, 'h1')).toEqual([{ contact_id: 'c1', email: 'a@x.ie' }])
@@ -362,6 +372,7 @@ describe('resolveHostRecipients — per-event audience', () => {
               return {
                 data: hostContacts.map((id) => ({
                   contact_id: id,
+                  marketing_consent: true,
                   contact: { id, email: `${id}@x.com`, email_marketing: true, email_status: 'active', email_suppressed_at: null },
                 })),
                 error: null,

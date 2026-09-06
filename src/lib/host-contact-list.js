@@ -286,7 +286,8 @@ export async function addEventAttendeesToHostList(db, raceEventId) {
  * @param {SupabaseClient} db  service-role client
  * @param {string} hostId
  * @returns {Promise<Array<{contact_id:string, name:string, email:string,
- *   source:string, created_at:string, emailable:boolean}>>}
+ *   source:string, created_at:string, marketing_consent:boolean,
+ *   emailable:boolean}>>}
  */
 export async function fetchHostContactRows(db, hostId) {
   const memberships = []
@@ -294,8 +295,8 @@ export async function fetchHostContactRows(db, hostId) {
     const { data, error } = await db
       .from('host_contacts')
       .select(`
-        contact_id, source, created_at,
-        contact:contacts!contact_id ( id, name, email, email_marketing, email_status, email_suppressed_at )
+        contact_id, source, created_at, marketing_consent,
+        contact:contacts!contact_id ( id, name, email, email_status, email_suppressed_at )
       `)
       .eq('host_id', hostId)
       .order('created_at', { ascending: false })
@@ -327,7 +328,8 @@ export async function fetchHostContactRows(db, hostId) {
       email: contact?.email || '',
       source: m.source,
       created_at: m.created_at,
-      emailable: isEmailable(contact, suppressedIds.has(m.contact_id)),
+      marketing_consent: m.marketing_consent === true,
+      emailable: isEmailable(contact, suppressedIds.has(m.contact_id), { hostConsent: m.marketing_consent === true }),
     }
   })
 }
