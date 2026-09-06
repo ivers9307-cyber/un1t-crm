@@ -40,38 +40,39 @@
 // with trigger 'schedule' — the SAME gates and enqueue as Send now; the
 // CAS scheduled→sending inside it is the lock, so two overlapping ticks
 // launch once. Runs BEFORE the 'sending' pass so a just-launched campaign
-// gets its first chunk in this tick (the QStash kick also fires).
-// Refusal mapping (launchDueCampaigns):
-//   - a gate reason (LAUNCH_GATE_REASONS: sender_not_verified, no_stream,
-//     daily_cap, no_recipients) OR a thrown launch (a code bug, mapped to
-//     'launch_failed' — must not retry forever silently) → CAS the row
-//     scheduled→draft with scheduled_for: null and schedule_error set to
-//     the reason; pushed to summary.refused.
-//   - db_error / resolve_failed (transient, pre-CAS) → the row is left
-//     'scheduled' for the next tick to retry; pushed to summary.errors,
-//     no update statement.
-//   - enqueue_failed (post-CAS — the row is already 'sending') → left as
-//     is, the sending pass below drains what landed; pushed to
-//     summary.errors, no update statement.
-//   - cas_lost / not_found → silent skip: another sweep won the CAS, or
-//     the row vanished between the due pick and the launch.
+// gets its first chunk in this tick (the QStash kick also fires). See
+// launchDueCampaigns's own comment below for the full, authoritative
+// refusal mapping.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { processHostCampaignChunk } from '@/lib/host-campaign-queue'
 import { launchHostCampaign, LAUNCH_GATE_REASONS } from '@/lib/host-campaign-launch'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { logError, logInfo } from '@/lib/log'
+import { logError, logWarn, logInfo } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+// The launch pass (launchDueCampaigns) runs BEFORE the sending drain and
+// the heartbeat, all in one invocation — give it Vercel's Pro ceiling
+// rather than the framework default, same as every comparable cron
+// (e.g. process-contact-imports).
+export const maxDuration = 300
 
 const MAX_CAMPAIGNS_PER_TICK = 5
 const CLAIM_STALE_MS = 15 * 60_000  // claimed-but-unresolved rows older than this → failed
 const MAX_DUE_PER_TICK = 10
-// Reasons that leave the campaign untouched (pre-CAS gate refusals) — a
-// thrown launch is folded into this same back-to-draft path as 'launch_failed'.
-const SCHEDULE_GATE_REASONS = new Set(LAUNCH_GATE_REASONS)
+// A db_error/resolve_failed refusal leaves the row 'scheduled' for retry
+// (see launchDueCampaigns) — unbounded per tick, but bounded in time: once
+// the row has been due for longer than this, treat it as launch_failed
+// instead so a bug inside the resolver/CAS can't retry forever silently.
+const STALE_SCHEDULE_MS = 60 * 60_000  // 1h, ~30 ticks at the 2-minute cadence
+
+// Reasons that CAS the row back to draft (see launchDueCampaigns's comment
+// for the full mapping) — built from the lib's own gate list; 'launch_failed'
+// (a thrown launch, or a transient refusal gone stale) is folded in at the
+// call site rather than added here, since it isn't a lib-defined gate.
+const BACK_TO_DRAFT_REASONS = new Set(LAUNCH_GATE_REASONS)
 
 function unauthorized() {
   return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
@@ -148,13 +149,43 @@ async function sweepStaleClaims(db, campaignId) {
   }
 }
 
-// HOST-SCHEDULE.1 — fire due scheduled campaigns (see header for the
-// refusal mapping). Never throws: every failure lands in summary.refused
-// or summary.errors and the sending pass + heartbeat still run.
+// HOST-SCHEDULE.1 — fire due scheduled campaigns. Never throws: every
+// failure lands in summary.refused or summary.errors and the sending pass
+// + heartbeat still run.
+//
+// Refusal mapping — THE authoritative version (the file header above and
+// this file's tests just point here, they don't restate it):
+//   - A gate reason (LAUNCH_GATE_REASONS: sender_not_verified, no_stream,
+//     daily_cap, no_recipients) OR a thrown launch (a code bug, mapped to
+//     'launch_failed') → CAS the row scheduled→draft with scheduled_for:
+//     null and schedule_error set to the reason; pushed to summary.refused
+//     on a clean 1-row write. daily_cap/no_recipients are the host's own
+//     state, so they log at logWarn; every other reason here (including
+//     launch_failed) is a real failure and logs at logError.
+//   - db_error / resolve_failed: no write landed for either, so the row is
+//     STILL 'scheduled' and the next tick retries it — unbounded per tick,
+//     but bounded in time by STALE_SCHEDULE_MS: once the row has been due
+//     for longer than that, treat it as launch_failed instead (back to
+//     draft, as above) so a bug inside the resolver or the CAS update
+//     itself can't retry forever silently. Below the threshold, pushed to
+//     summary.errors with no update statement.
+//   - enqueue_failed (post-CAS — the row is already 'sending') → left as
+//     is, the sending pass below drains what landed; pushed to
+//     summary.errors, no update statement.
+//   - cas_lost / not_found → silent skip: another sweep already won the
+//     CAS, or the row vanished between the due pick and the launch
+//     (not_found also covers a missing event_hosts row — unreachable in
+//     practice, since deleting a host cascades to its campaigns too).
+//
+// The back-to-draft write itself is CAS'd (`.eq('status','scheduled')`)
+// with `.select('id')`: a write error goes to summary.errors (never
+// summary.refused) and logs; 0 rows back (the host was unscheduled
+// meanwhile, or a concurrent tick's CAS already won) is a silent skip,
+// same as cas_lost — only a clean 1-row write is a real refusal.
 async function launchDueCampaigns(db, summary) {
   const { data: due, error: dueErr } = await db
     .from('host_campaigns')
-    .select('id, host_id')
+    .select('id, host_id, scheduled_for')
     .eq('status', 'scheduled')
     .lte('scheduled_for', new Date().toISOString())
     .order('scheduled_for', { ascending: true })
@@ -178,35 +209,54 @@ async function launchDueCampaigns(db, summary) {
       continue
     }
 
-    // cas_lost: another sweep won the race. not_found: the row vanished
-    // between the due pick and the launch. Either way — silent skip.
+    // cas_lost: another sweep won the race. not_found: the row (or its
+    // event_hosts parent) vanished between the due pick and the launch.
+    // Either way — silent skip.
     if (result.reason === 'cas_lost' || result.reason === 'not_found') continue
 
     // enqueue_failed is post-CAS — the campaign is already 'sending' and
-    // the sending pass below drains whatever landed. db_error /
-    // resolve_failed are transient pre-CAS reads — leave the row
-    // 'scheduled' so the next tick retries. Neither gets an update
-    // statement; both are deferred into summary.errors.
-    if (result.reason === 'enqueue_failed' || result.reason === 'db_error' || result.reason === 'resolve_failed') {
+    // the sending pass below drains whatever landed. Deferred, not retried
+    // as a launch.
+    if (result.reason === 'enqueue_failed') {
       summary.errors.push({ campaign_id: c.id, error: result.error })
       logError('host-campaigns', 'scheduled launch deferred', { campaign_id: c.id, reason: result.reason, error: result.error })
       continue
     }
 
-    // A gate refusal, or a thrown launch collapsed to 'launch_failed' —
-    // CAS the row back to draft with the reason so the host can see why
-    // and retry manually. A code bug must not retry forever silently.
-    const code = SCHEDULE_GATE_REASONS.has(result.reason) ? result.reason : 'launch_failed'
-    const { error: backErr } = await db
+    // db_error / resolve_failed: no write landed, so the row is still
+    // 'scheduled' — leave it for the next tick UNLESS it's been due for
+    // longer than STALE_SCHEDULE_MS, in which case fall through to the
+    // back-to-draft path as launch_failed rather than retry forever.
+    if (result.reason === 'db_error' || result.reason === 'resolve_failed') {
+      const scheduledAtMs = c.scheduled_for ? new Date(c.scheduled_for).getTime() : NaN
+      const isStale = Number.isFinite(scheduledAtMs) && (Date.now() - scheduledAtMs) > STALE_SCHEDULE_MS
+      if (!isStale) {
+        summary.errors.push({ campaign_id: c.id, error: result.error })
+        logError('host-campaigns', 'scheduled launch deferred', { campaign_id: c.id, reason: result.reason, error: result.error })
+        continue
+      }
+      result = { ...result, reason: 'launch_failed' }
+    }
+
+    // A gate refusal, a thrown launch, or a transient refusal gone stale —
+    // all collapse to the back-to-draft path. CAS the row back to draft
+    // with the reason so the host can see why and retry manually.
+    const code = BACK_TO_DRAFT_REASONS.has(result.reason) ? result.reason : 'launch_failed'
+    const { data: backRows, error: backErr } = await db
       .from('host_campaigns')
       .update({ status: 'draft', scheduled_for: null, schedule_error: code })
       .eq('id', c.id)
       .eq('status', 'scheduled')
+      .select('id')
     if (backErr) {
       summary.errors.push({ campaign_id: c.id, error: backErr.message })
       logError('host-campaigns', 'scheduled refusal write failed', { campaign_id: c.id, error: backErr.message })
+      continue
     }
+    if (!backRows || backRows.length === 0) continue // cas lost meanwhile — silent skip, same as cas_lost
+
     summary.refused.push({ campaign_id: c.id, reason: code })
-    logError('host-campaigns', 'scheduled launch refused', { campaign_id: c.id, reason: code, error: result.error })
+    const log = code === 'daily_cap' || code === 'no_recipients' ? logWarn : logError
+    log('host-campaigns', 'scheduled launch refused', { campaign_id: c.id, reason: code, error: result.error })
   }
 }

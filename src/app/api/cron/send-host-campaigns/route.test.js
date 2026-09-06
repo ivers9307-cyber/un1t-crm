@@ -13,7 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(() => Promise.resolve()) }))
-vi.mock('@/lib/log', () => ({ logError: vi.fn(), logInfo: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/lib/host-campaign-queue', () => ({
   processHostCampaignChunk: vi.fn(),
 }))
@@ -25,6 +25,7 @@ vi.mock('@/lib/host-campaign-launch', () => ({
 import { GET } from './route.js'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { logError, logWarn } from '@/lib/log'
 import { processHostCampaignChunk } from '@/lib/host-campaign-queue'
 import { launchHostCampaign } from '@/lib/host-campaign-launch'
 
@@ -59,8 +60,12 @@ const hasEq = (state, col, val) => state.ops.some((o) => o.method === 'eq' && o.
 function routeFor(cfg = {}) {
   return (state) => {
     if (state.table === 'host_campaigns') {
-      if (hasEq(state, 'status', 'scheduled') && op(state, 'select')) return { data: cfg.due ?? [], error: cfg.dueErr ?? null }
+      // The back-to-draft write ALSO carries eq('status','scheduled') now
+      // that it has a .select() too — check for the update op FIRST, then
+      // the scheduled-status select (the due pick), then fall through to
+      // the sending pick.
       if (op(state, 'update')) return { data: cfg.backRows ?? [{ id: 'x' }], error: cfg.backErr ?? null }
+      if (hasEq(state, 'status', 'scheduled') && op(state, 'select')) return { data: cfg.due ?? [], error: cfg.dueErr ?? null }
       return { data: cfg.campaigns ?? [], error: cfg.pickErr ?? null }
     }
     if (state.table === 'host_campaign_sends') return { data: cfg.swept ?? [], error: null } // stale sweep
@@ -123,7 +128,12 @@ describe('GET /api/cron/send-host-campaigns', () => {
     const json = await res.json()
     expect(json).toMatchObject({ ok: true, campaigns: 2, sent: 53, failed: 1, finalised: 1, errors: [] })
 
-    const pick = statements.find((s) => s.table === 'host_campaigns' && hasEq(s, 'status', 'sending'))
+    // Positional, not selector-narrowed: [0] is the due pick (no due rows
+    // here, no refusals, so no back-to-draft write either), [1] is the
+    // sending pick — asserting status='sending' on it is meaningful only
+    // because we didn't select for that status to find it.
+    const hostCampaignsStatements = statements.filter((s) => s.table === 'host_campaigns')
+    const pick = hostCampaignsStatements[1]
     expect(hasEq(pick, 'status', 'sending')).toBe(true)
     expect(op(pick, 'limit').args[0]).toBe(5)
     expect(op(pick, 'order').args[0]).toBe('created_at')
@@ -155,15 +165,9 @@ describe('GET /api/cron/send-host-campaigns', () => {
 })
 
 // HOST-SCHEDULE.1 — due scheduled campaigns are launched at the top of the
-// tick (before the 'sending' pass, so a just-launched campaign gets its
-// first chunk in the same tick) through the SAME launchHostCampaign the
-// send route uses. A gate refusal (or a thrown launch) CAS-returns the row
-// to draft with schedule_error set; a transient failure (db_error,
-// resolve_failed) or a post-CAS enqueue_failed leaves the row 'scheduled'/
-// 'sending' respectively for the next tick to retry and lands in
-// summary.errors instead; cas_lost/not_found are silent (another sweep won,
-// or the row vanished). Nothing here ever blocks the sending pass or the
-// heartbeat.
+// tick, before the 'sending' pass, through the SAME launchHostCampaign the
+// send route uses. See launchDueCampaigns's own comment in route.js for the
+// full, authoritative refusal mapping.
 describe('GET /api/cron/send-host-campaigns — scheduled launches', () => {
   const DUE_1 = { id: 'd0000000-0000-0000-0000-0000000000d1', host_id: 'h1' }
   const DUE_2 = { id: 'd0000000-0000-0000-0000-0000000000d2', host_id: 'h2' }
@@ -207,7 +211,51 @@ describe('GET /api/cron/send-host-campaigns — scheduled launches', () => {
     expect(op(back, 'update').args[0]).toEqual({ status: 'draft', scheduled_for: null, schedule_error: 'daily_cap' })
     expect(hasEq(back, 'id', DUE_1.id)).toBe(true)
     expect(hasEq(back, 'status', 'scheduled')).toBe(true)
+    expect(op(back, 'select').args[0]).toBe('id')
     expect(processHostCampaignChunk).toHaveBeenCalledWith(db, CAMPAIGN_A.id)
+  })
+
+  it('daily_cap and no_recipients are the host\'s own state — logWarn, not logError', async () => {
+    const { db } = makeDb(routeFor({ due: [DUE_1] }))
+    createServerClient.mockReturnValue(db)
+    launchHostCampaign.mockResolvedValue({ ok: false, reason: 'no_recipients', status: 409, error: 'No emailable contacts.' })
+
+    await GET(req())
+    expect(logWarn).toHaveBeenCalledWith('host-campaigns', 'scheduled launch refused', expect.objectContaining({ reason: 'no_recipients' }))
+    expect(logError).not.toHaveBeenCalledWith('host-campaigns', 'scheduled launch refused', expect.anything())
+  })
+
+  it('sender_not_verified is a real failure — logError, not logWarn', async () => {
+    const { db } = makeDb(routeFor({ due: [DUE_1] }))
+    createServerClient.mockReturnValue(db)
+    launchHostCampaign.mockResolvedValue({ ok: false, reason: 'sender_not_verified', status: 409, error: 'not verified' })
+
+    await GET(req())
+    expect(logError).toHaveBeenCalledWith('host-campaigns', 'scheduled launch refused', expect.objectContaining({ reason: 'sender_not_verified' }))
+    expect(logWarn).not.toHaveBeenCalled()
+  })
+
+  it('a back-to-draft write error lands in errors, not refused', async () => {
+    const { db, statements } = makeDb(routeFor({ due: [DUE_1], backErr: { message: 'write boom' } }))
+    createServerClient.mockReturnValue(db)
+    launchHostCampaign.mockResolvedValue({ ok: false, reason: 'daily_cap', status: 409, error: 'Daily send limit reached.' })
+
+    const body = await (await GET(req())).json()
+    expect(body.refused).toEqual([])
+    expect(body.errors).toEqual([{ campaign_id: DUE_1.id, error: 'write boom' }])
+    expect(logError).toHaveBeenCalledWith('host-campaigns', 'scheduled refusal write failed', { campaign_id: DUE_1.id, error: 'write boom' })
+    const back = statements.find((s) => s.table === 'host_campaigns' && op(s, 'update'))
+    expect(op(back, 'select').args[0]).toBe('id')
+  })
+
+  it('a back-to-draft write matching 0 rows (cas lost meanwhile) is a silent skip — neither errors nor refused', async () => {
+    const { db } = makeDb(routeFor({ due: [DUE_1], backRows: [] }))
+    createServerClient.mockReturnValue(db)
+    launchHostCampaign.mockResolvedValue({ ok: false, reason: 'daily_cap', status: 409, error: 'Daily send limit reached.' })
+
+    const body = await (await GET(req())).json()
+    expect(body.refused).toEqual([])
+    expect(body.errors).toEqual([])
   })
 
   it('a transient failure (db_error) is deferred for retry, not sent back to draft; cas_lost is silent', async () => {
@@ -220,6 +268,34 @@ describe('GET /api/cron/send-host-campaigns — scheduled launches', () => {
     const body = await (await GET(req())).json()
     expect(body.refused).toEqual([])
     expect(body.errors).toEqual([{ campaign_id: DUE_1.id, error: 'boom' }])
+    const backs = statements.filter((s) => s.table === 'host_campaigns' && op(s, 'update'))
+    expect(backs).toHaveLength(0)
+  })
+
+  it('a stale resolve_failed (scheduled_for over an hour ago) is treated as launch_failed and sent back to draft', async () => {
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60_000).toISOString()
+    const staleDue = { ...DUE_1, scheduled_for: twoHoursAgo }
+    const { db, statements } = makeDb(routeFor({ due: [staleDue] }))
+    createServerClient.mockReturnValue(db)
+    launchHostCampaign.mockResolvedValue({ ok: false, reason: 'resolve_failed', status: 500, error: 'resolver exploded' })
+
+    const body = await (await GET(req())).json()
+    expect(body.refused).toEqual([{ campaign_id: DUE_1.id, reason: 'launch_failed' }])
+    expect(body.errors).toEqual([])
+    const back = statements.find((s) => s.table === 'host_campaigns' && op(s, 'update'))
+    expect(op(back, 'update').args[0]).toEqual({ status: 'draft', scheduled_for: null, schedule_error: 'launch_failed' })
+  })
+
+  it('a fresh resolve_failed (scheduled_for a minute ago) is still deferred, not sent back to draft', async () => {
+    const oneMinuteAgo = new Date(Date.now() - 60_000).toISOString()
+    const freshDue = { ...DUE_1, scheduled_for: oneMinuteAgo }
+    const { db, statements } = makeDb(routeFor({ due: [freshDue] }))
+    createServerClient.mockReturnValue(db)
+    launchHostCampaign.mockResolvedValue({ ok: false, reason: 'resolve_failed', status: 500, error: 'resolver exploded' })
+
+    const body = await (await GET(req())).json()
+    expect(body.refused).toEqual([])
+    expect(body.errors).toEqual([{ campaign_id: DUE_1.id, error: 'resolver exploded' }])
     const backs = statements.filter((s) => s.table === 'host_campaigns' && op(s, 'update'))
     expect(backs).toHaveLength(0)
   })
