@@ -446,27 +446,7 @@ function EmailSendingCard({ hostId, host }) {
                 Disable sending
               </Button>
             )}
-            <Button type="button" variant="secondary" size="sm" loading={backfill.running} onClick={previewBackfill}>
-              Backfill Postmark events (preview)
-            </Button>
-            {backfill.result && (
-              <Button type="button" variant="secondary" size="sm" loading={backfill.running} onClick={runBackfill}>
-                Run backfill
-              </Button>
-            )}
           </div>
-          {backfill.result && (
-            <p className="mt-2 text-xs text-un1t-muted">
-              Scanned {backfill.result.scanned} · matched {backfill.result.matched} · stamped {backfill.result.stamped} ·
-              {' '}updated {backfill.result.updated} · skipped {backfill.result.skipped} · errors {backfill.result.errors.length}
-              {backfill.result.dry ? ' (preview)' : ''}
-            </p>
-          )}
-          {backfill.error && (
-            <p className="mt-2 text-xs text-stage-lost flex items-center gap-1">
-              <AlertTriangle size={12} /> {backfill.error}
-            </p>
-          )}
           {state?.slug && (
             <p className="mt-3 text-xs text-un1t-muted">
               Mailing-list signup page: <code className="font-mono">/h/{state.slug}</code>
@@ -474,6 +454,39 @@ function EmailSendingCard({ hostId, host }) {
           )}
         </>
       )}
+
+      {/* HOST-METRICS.1 — Postmark backfill lives OUTSIDE the provisioned branch:
+          its precondition is the host's campaigns, not a provisioned sending
+          domain (the first host sends from an un1tdublin.com address and was
+          never provisioned, which is exactly where the button was missing). */}
+      <div className="mt-6 border-t border-un1t-border pt-4">
+        <p className="text-sm font-medium text-un1t-text">Campaign outcomes</p>
+        <p className="mt-1 text-xs text-un1t-subtle">
+          Fold Postmark delivery, open, click, bounce and unsubscribe events for the last 45 days into this host&apos;s email reports. Preview first; the live run is idempotent.
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button type="button" variant="secondary" size="sm" loading={backfill.running} onClick={previewBackfill}>
+            Backfill Postmark events (preview)
+          </Button>
+          {backfill.result && (
+            <Button type="button" variant="secondary" size="sm" loading={backfill.running} onClick={runBackfill}>
+              Run backfill
+            </Button>
+          )}
+        </div>
+        {backfill.result && (
+          <p className="mt-2 text-xs text-un1t-muted">
+            Scanned {backfill.result.scanned} · matched {backfill.result.matched} · stamped {backfill.result.stamped} ·
+            {' '}updated {backfill.result.updated} · skipped {backfill.result.skipped} · errors {backfill.result.errors.length}
+            {backfill.result.dry ? ' (preview)' : ''}
+          </p>
+        )}
+        {backfill.error && (
+          <p className="mt-2 text-xs text-stage-lost flex items-center gap-1">
+            <AlertTriangle size={12} /> {backfill.error}
+          </p>
+        )}
+      </div>
 
       {error && (
         <p className="mt-3 text-xs text-stage-lost flex items-center gap-1">
