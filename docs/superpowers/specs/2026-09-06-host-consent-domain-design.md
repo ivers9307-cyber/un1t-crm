@@ -4,7 +4,7 @@
 
 ## Decision
 
-A signup or booking with a third-party host grants **two independent consents**: one to the host's list and one to UN1T's marketing. The form says so. From then on the two flags live and die independently: a UN1T unsubscribe never touches the host consent, and a host unsubscribe never touches UN1T's. Host marketing email sends on its **own Postmark message stream**, so Postmark's suppression list for UN1T marketing can no longer refuse a host's mail.
+A signup or booking with a third-party host grants **two independent consents**: one to the host's list and one to UN1T's marketing. The form says so. From then on the two flags live and die independently: a UN1T unsubscribe never touches the host consent, and a host unsubscribe never touches UN1T's. Each host's marketing email sends on its **own Postmark message stream**, so Postmark's suppression list for UN1T marketing, or for another host, can no longer refuse a host's mail.
 
 ## Why
 
@@ -18,9 +18,9 @@ Measured 6 Sep against the only live host (179 contacts): 47 are on Postmark's `
 
 ## Scope
 
-**In:** host-scoped consent on `host_contacts`; grant and revoke paths; the send gate; a dedicated `host-broadcast` Postmark stream; routing host-stream Bounce, SpamComplaint and SubscriptionChange webhooks to host tables; one-click `List-Unsubscribe` on real host sends (missing today, test sends have it); consent copy on both forms; backfill.
+**In:** host-scoped consent on `host_contacts`; grant and revoke paths; the send gate; a dedicated Postmark stream per host; routing host-stream Bounce, SpamComplaint and SubscriptionChange webhooks to host tables; one-click `List-Unsubscribe` on real host sends (missing today, test sends have it); consent copy on both forms; backfill.
 
-**Out (separate specs):** delivery/open/click metrics for host campaigns (HOST-METRICS.1 — this spec lands the stream and the event-identification helper it needs); a host-facing view of who is unsubscribed and why; per-host streams; lifting the stale Customer-origin suppressions on `broadcast` (data task, Richard's call).
+**Out (separate specs):** delivery/open/click metrics for host campaigns (HOST-METRICS.1 — this spec lands the stream and the event-identification helper it needs); a host-facing view of who is unsubscribed and why; API automation of stream + webhook creation per host; lifting the stale Customer-origin suppressions on `broadcast` (data task, Richard's call).
 
 ## Design
 
@@ -34,6 +34,8 @@ alter table host_contacts
     check (marketing_consent_source in ('mailing_list_form','event_form','backfill_2026_09','host_resubscribe'));
 
 alter table consent_log add column host_id uuid references event_hosts(id) on delete cascade;
+alter table event_hosts add column postmark_stream_id text;          -- section 5
+alter table race_registrations add column marketing_consent boolean; -- section 2, null = pre-587 row
 -- channel 'host_email_marketing' rows carry host_id; all existing rows stay host_id null.
 
 -- Backfill: every existing membership was created by a signup or a confirmed
@@ -57,11 +59,11 @@ where not exists (select 1 from host_email_suppressions s
 | Hosted-event registration, checkbox unticked | membership row still created, consent stays `false` (utility mail to attendees is unaffected: it gates on `email_administrative`) | as today (`consent=false`) |
 | Internal events (`host_id` null) | no change; no host row | as today |
 
-Re-signup at `/h/[slug]` by a contact in `host_email_suppressions` is a **host resubscribe**: delete the suppression row, set consent true with source `host_resubscribe`, log it, and lift only a `ManualSuppression` for that address on the host stream via `unsuppressAtPostmark(email, { stream: HOST_MARKETING_STREAM })`. Mirrors PMSUPP.1's rule that only our own suppressions are ever lifted.
+Re-signup at `/h/[slug]` by a contact in `host_email_suppressions` is a **host resubscribe**: delete the suppression row, set consent true with source `host_resubscribe`, log it, and lift only a `ManualSuppression` for that address on the host stream via `unsuppressAtPostmark(email, { stream: host.postmark_stream_id })`. Mirrors PMSUPP.1's rule that only our own suppressions are ever lifted.
 
 ### 3. Revoke paths
 
-- **Host unsubscribe page** `/unsubscribe/host/[token]` (exists): writes `host_email_suppressions` as today, plus a `consent_log` opt-out row with `host_id`, plus best-effort `suppressAtPostmark(email, { stream: HOST_MARKETING_STREAM })`. Never touches `contacts.email_marketing`.
+- **Host unsubscribe page** `/unsubscribe/host/[token]` (exists): writes `host_email_suppressions` as today, plus a `consent_log` opt-out row with `host_id`, plus best-effort `suppressAtPostmark(email, { stream: host.postmark_stream_id })`. Never touches `contacts.email_marketing`.
 - **New `POST /api/unsubscribe/host/[token]`**: the one-click target. Same body as the page's write path, idempotent, rate-limited like `/api/unsubscribe/[token]`. Required because `toListUnsubscribeUrl` rewrites `/unsubscribe/` to `/api/unsubscribe/` and that path 404s today.
 - **Postmark `SubscriptionChange` with `SuppressSending=true` on the host stream**: write `host_email_suppressions` for `(metadata.host_id, metadata.contact_id)` and log it. Never writes `contacts.email_marketing`.
 - **UN1T unsubscribe / preference centre / drift check**: no code change; they never wrote host tables and still do not. A regression test pins that a UN1T opt-out leaves `host_contacts.marketing_consent` untouched, and that a host opt-out leaves `contacts.email_marketing` untouched.
@@ -77,17 +79,20 @@ The three callers stay in step by construction: `resolveHostRecipients` (send), 
 
 Shared on purpose: hard bounces and spam complaints (`email_status`) and the repeat-bounce stamp (`email_suppressed_at`). They describe the mailbox, not the relationship.
 
-### 5. Postmark stream
+### 5. Postmark stream — one per host
 
-- Stream id `host-broadcast`, type Broadcasts, created once by Richard in Postmark (Message Streams → Create → Broadcasts) with webhooks for Delivery, Bounce, SpamComplaint, Open, Click and SubscriptionChange pointed at `https://crm.un1tdublin.com/api/webhooks/postmark`. Open and link tracking on, first-open only, matching the server.
-- Code reads `POSTMARK_HOST_STREAM` (no default, deliberately: an unset value must not silently fall back to `broadcast`) and exports `HOST_MARKETING_STREAM` from `src/lib/postmark.js` beside `MARKETING_STREAM`.
-- `host-campaign-queue.js` sends marketing with `stream: HOST_MARKETING_STREAM` and **passes `unsubscribeUrl`**. `sendEmail` attaches the `List-Unsubscribe` / `List-Unsubscribe-Post` headers when the internal stream is `broadcast` **or** the host stream. Utility stays on `outbound`.
-- Fail closed: the send route refuses a marketing send with a clear 409 if `POSTMARK_HOST_STREAM` is unset or Postmark answers that the stream does not exist on the first message of a campaign. The queue already marks individual sends failed on error, so a missing stream cannot half-send.
-- The consent drift check and `marketing-consent.js` resubscribe lift keep targeting `broadcast` only. Host-stream reconciliation is a follow-up if drift ever appears there.
+Richard created the first stream on 6 Sep as `colm-event` (type Broadcasts) for Pride Training Club, so the stream is **per host**, not shared. Each host's suppression list is then isolated from UN1T's and from every other host's. Postmark allows 10 streams per server by default, which covers the foreseeable host count; the limit is raised on request.
+
+- `event_hosts.postmark_stream_id text` (mig 587, nullable). Set by an admin on Settings → Hosts → host, in the existing "Email sending" card, after creating the stream in Postmark. Exposed to the portal only as a boolean "marketing sending ready" flag, never the raw id.
+- Creating the stream and its webhook stays a manual Postmark step per host, documented on the card: Message Streams → Create → Broadcasts, unsubscribe handling Custom; then on that stream add a webhook to `https://crm.un1tdublin.com/api/webhooks/postmark` with Delivery, Bounce, SpamComplaint, Open, Click and SubscriptionChange, carrying the `x-webhook-token` header the route verifies. No API automation in this slice.
+- `host-campaign-queue.js` sends marketing with `stream: host.postmark_stream_id` and **passes `unsubscribeUrl`**. `sendEmail` attaches the `List-Unsubscribe` / `List-Unsubscribe-Post` headers when the caller marks the send as marketing (a new `marketing: true` option, which the CRM broadcast path also sets), instead of keying on the literal stream name. Utility stays on `outbound`.
+- Fail closed: the send route refuses a marketing send with a clear 409 ("Marketing sending is not set up for this host yet") when `postmark_stream_id` is null. A Postmark error for a missing stream marks each send failed as today, so a mis-typed id cannot half-send silently, and the failure reason is kept for the metrics work.
+- The consent drift check and `marketing-consent.js` resubscribe lift keep targeting `broadcast` only. Per-host stream reconciliation is a follow-up if drift ever appears there.
+- The host unsubscribe and resubscribe paths in sections 2 and 3 pass `{ stream: host.postmark_stream_id }` and skip the Postmark call when it is null.
 
 ### 6. Webhook processor
 
-Add `isHostStreamEvent(body)` to `src/lib/postmark-webhook-processor.js`: true when `body.MessageStream === HOST_MARKETING_STREAM` or `body.Metadata.host_campaign_id` is present. For those events:
+Add `isHostCampaignEvent(body)` to `src/lib/postmark-webhook-processor.js`: true when `body.Metadata.host_campaign_id` is present (every host send stamps it today, together with `host_id` and `contact_id`). Stream ids are per host, so the metadata is the identifier, not the stream name. For those events:
 
 - **Bounce (hard)** → `contacts.email_status = 'bounced'` by `metadata.contact_id` (shared fact, as CRM sends already do).
 - **SpamComplaint** → `email_status = 'complained'` and a `host_email_suppressions` row.
@@ -113,18 +118,19 @@ The host-editable copy fields from mig 460 (headline, blurb, button, success) ar
 
 ### 9. Testing
 
-Unit: `isEmailable` truth table (consent false, suppressed, bounced, UN1T-opted-out-but-host-consented → mailable); backfill SQL against a fixture with suppression rows; `isHostStreamEvent`; processor branches for Bounce, SpamComplaint, SubscriptionChange on the host stream write host tables and never `contacts.email_marketing`; queue passes the host stream and `unsubscribeUrl`; `sendEmail` attaches one-click headers for the host stream; `POST /api/unsubscribe/host/[token]` idempotent + rate-limited; subscribe route grants both consents and logs the host one with `host_id`; register route grants host consent only for hosted events.
+Unit: `isEmailable` truth table (consent false, suppressed, bounced, UN1T-opted-out-but-host-consented → mailable); backfill SQL against a fixture with suppression rows; `isHostCampaignEvent`; processor branches for Bounce, SpamComplaint, SubscriptionChange on the host stream write host tables and never `contacts.email_marketing`; queue passes `host.postmark_stream_id` and `unsubscribeUrl`, and 409s when it is null; `sendEmail` attaches one-click headers for marketing sends on any stream; `POST /api/unsubscribe/host/[token]` idempotent + rate-limited; subscribe route grants both consents and logs the host one with `host_id`; register route grants host consent only for hosted events.
 
 Regression pins (the point of the change): UN1T opt-out leaves host consent; host opt-out leaves `email_marketing`; internal events byte-identical.
 
-Live: after deploy, one test send and one real marketing send from the host portal; confirm in Postmark the message is on `host-broadcast`, carries `List-Unsubscribe`, and that a Gmail one-click unsubscribe lands as a `host_email_suppressions` row within a minute.
+Live: after deploy, one test send and one real marketing send from the host portal; confirm in Postmark the message is on `colm-event`, carries `List-Unsubscribe`, and that a Gmail one-click unsubscribe lands as a `host_email_suppressions` row within a minute.
 
 ### 10. Rollout order
 
-1. Richard creates the stream + webhooks in Postmark and sets `POSTMARK_HOST_STREAM` in Vercel.
+1. Stream `colm-event` exists (verified 6 Sep, empty suppression list). Richard still has to add its webhook (section 5).
 2. Apply mig 587 via Supabase MCP (forward-only).
-3. Merge the code PR (one PR: gate, grant/revoke, stream, headers, processor, copy, tests).
-4. Live verification above. Until step 1 is done the send route fails closed with the 409, so merging before the stream exists is safe.
+3. Merge the code PR (one PR: gate, grant/revoke, stream column + admin field, headers, processor, copy, tests).
+4. Set `postmark_stream_id = 'colm-event'` on the Pride Training Club host row from Settings → Hosts.
+5. Live verification above. Until step 4 is done the send route fails closed with the 409, so merging before the stream is attached is safe.
 
 ## Open follow-ups (not blocking)
 
