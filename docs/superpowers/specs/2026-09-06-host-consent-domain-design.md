@@ -81,7 +81,7 @@ Shared on purpose: hard bounces and spam complaints (`email_status`) and the rep
 
 ### 5. Postmark stream — one per host
 
-Richard created the first stream on 6 Sep as `colm-event` (type Broadcasts) for Pride Training Club, so the stream is **per host**, not shared. Each host's suppression list is then isolated from UN1T's and from every other host's. Postmark allows 10 streams per server by default, which covers the foreseeable host count; the limit is raised on request.
+Richard created the first stream on 6 Sep as `colm-events` (type Broadcasts) for Pride Training Club, so the stream is **per host**, not shared. Each host's suppression list is then isolated from UN1T's and from every other host's. Postmark allows 10 streams per server by default, which covers the foreseeable host count; the limit is raised on request.
 
 - `event_hosts.postmark_stream_id text` (mig 587, nullable). Set by an admin on Settings → Hosts → host, in the existing "Email sending" card, after creating the stream in Postmark. Exposed to the portal only as a boolean "marketing sending ready" flag, never the raw id.
 - Creating the stream and its webhook stays a manual Postmark step per host, documented on the card: Message Streams → Create → Broadcasts, unsubscribe handling Custom; then on that stream add a webhook to `https://crm.un1tdublin.com/api/webhooks/postmark` with Delivery, Bounce, SpamComplaint, Open, Click and SubscriptionChange, carrying the `x-webhook-token` header the route verifies. No API automation in this slice.
@@ -122,14 +122,14 @@ Unit: `isEmailable` truth table (consent false, suppressed, bounced, UN1T-opted-
 
 Regression pins (the point of the change): UN1T opt-out leaves host consent; host opt-out leaves `email_marketing`; internal events byte-identical.
 
-Live: after deploy, one test send and one real marketing send from the host portal; confirm in Postmark the message is on `colm-event`, carries `List-Unsubscribe`, and that a Gmail one-click unsubscribe lands as a `host_email_suppressions` row within a minute.
+Live: after deploy, one test send and one real marketing send from the host portal; confirm in Postmark the message is on `colm-events`, carries `List-Unsubscribe`, and that a Gmail one-click unsubscribe lands as a `host_email_suppressions` row within a minute.
 
 ### 10. Rollout order
 
-1. Stream `colm-event` exists (verified 6 Sep, empty suppression list). Richard still has to add its webhook (section 5).
+1. Stream `colm-events` exists (verified 6 Sep, empty suppression list). Richard still has to add its webhook (section 5).
 2. Apply mig 587 via Supabase MCP (forward-only).
 3. Merge the code PR (one PR: gate, grant/revoke, stream column + admin field, headers, processor, copy, tests).
-4. Set `postmark_stream_id = 'colm-event'` on the Pride Training Club host row from Settings → Hosts.
+4. Set `postmark_stream_id = 'colm-events'` on the Pride Training Club host row from Settings → Hosts.
 5. Live verification above. Until step 4 is done the send route fails closed with the 409, so merging before the stream is attached is safe.
 
 ## Open follow-ups (not blocking)
