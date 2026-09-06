@@ -61,6 +61,12 @@ updates:
       - dependency-name: 'react-native'
       - dependency-name: 'react-native-*'
       - dependency-name: '@react-native-*'
+      # Scoped native modules the shapes above miss: HealthKit ships Swift
+      # under ios/ + a config plugin, so a bump is a native change, not an
+      # OTA — Dependabot PR #1566 (2026-08-31) proposed 14.0.2→14.1.0 inside
+      # the routine group because '@kingstinct/…' matches no pattern.
+      - dependency-name: '@kingstinct/react-native-healthkit'
+      - dependency-name: '@*/react-native-*'
       - dependency-name: 'react'
       - dependency-name: 'react-dom'
       - dependency-name: 'nativewind'
