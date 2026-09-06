@@ -7206,6 +7206,76 @@ const HostSendTestBody = z.object({
   to: z.string().email().optional(),
 }).openapi('HostSendTestBody')
 
+const HostCampaignStats = z.object({
+  queued: z.number().int(),
+  sent: z.number().int(),
+  delivered: z.number().int(),
+  opened: z.number().int(),
+  clicked: z.number().int(),
+  bounced: z.number().int(),
+  complained: z.number().int(),
+  unsubscribed: z.number().int(),
+  failed: z.number().int(),
+}).openapi('HostCampaignStats')
+
+const HostCampaignRecipient = z.object({
+  contact_id: uuidLike,
+  name: z.string(),
+  email: z.string(),
+  outcome: z.enum(['queued', 'sent', 'delivered', 'opened', 'clicked', 'bounced', 'complained', 'unsubscribed', 'failed']),
+  outcome_at: z.string().nullable(),
+  failure_copy: z.string().nullable(),
+  sent_at: z.string().nullable(),
+  delivered_at: z.string().nullable(),
+  opened_at: z.string().nullable(),
+  open_count: z.number().int().nullable(),
+  clicked_at: z.string().nullable(),
+  click_count: z.number().int().nullable(),
+  bounced_at: z.string().nullable(),
+  bounce_type: z.string().nullable(),
+  complained_at: z.string().nullable(),
+  unsubscribed_at: z.string().nullable(),
+  failed_reason: z.string().nullable(),
+}).openapi('HostCampaignRecipient')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/host/emails/{id}/recipients',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "The report page's data for one host campaign (HOST-METRICS.1)",
+  description:
+    "Host session; the campaign must belong to the session host (404 otherwise, so ids stay un-enumerable). Returns the campaign (with its host_campaign_stats() counts, mig 590) and every host_campaign_sends row for it, each carrying a DERIVED outcome (host-campaign-outcome.js: precedence over the raw timestamps, so a late Delivery event can never regress a recorded Open) plus its outcome_at and, for a failed row, host-facing failure_copy. `failed_reason`/postmark ids are the queue's own bookkeeping — the response omits postmark_message_id (provider ids stay server-side) but keeps failed_reason since failure_copy is derived from it. A stats-rpc hiccup never fails this route: stats default to all-zero rather than 500ing the page.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: {
+      description: 'Campaign + recipients',
+      content: {
+        'application/json': {
+          schema: SuccessResponse(z.object({
+            campaign: z.object({
+              id: uuidLike,
+              subject: z.string(),
+              status: z.string(),
+              email_type: z.string(),
+              audience_kind: z.string(),
+              audience_event_id: uuidLike.nullable(),
+              sent_at: z.string().nullable(),
+              created_at: z.string(),
+              recipient_count: z.number().int().nullable(),
+              sent_count: z.number().int().nullable(),
+              stats: HostCampaignStats,
+            }).passthrough(),
+            recipients: z.array(HostCampaignRecipient),
+          }).openapi('HostCampaignRecipientsResponse')),
+        },
+      },
+    },
+    401: { description: 'Unauthorized — no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or not this host\'s campaign', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/host/emails/{id}/send-test',
