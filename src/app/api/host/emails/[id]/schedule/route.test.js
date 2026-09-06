@@ -147,6 +147,30 @@ describe('POST /api/host/emails/[id]/schedule', () => {
     expect(inOp.args[1]).toEqual(['draft', 'scheduled'])
   })
 
+  it('reschedules an already scheduled campaign through the same CAS (Change time)', async () => {
+    const when = IN_30_MIN()
+    const { db, statements } = makeDb(routeFor({ campaign: { id: CAMPAIGN_ID, status: 'scheduled', email_type: 'marketing' }, echo: when }))
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ scheduled_for: when }), props)
+    expect(res.status).toBe(200)
+    const cas = statements.find((s) => s.table === 'host_campaigns' && op(s, 'update'))
+    expect(op(cas, 'update').args[0]).toEqual({ status: 'scheduled', scheduled_for: when, schedule_error: null })
+  })
+
+  it('never evaluates the daily cap or the recipient list at schedule time (both are fire-time gates)', async () => {
+    const { db, statements } = makeDb(routeFor())
+    createServerClient.mockReturnValue(db)
+    expect((await POST(req({ scheduled_for: IN_30_MIN() }), props)).status).toBe(200)
+    // Exactly: campaign read, host read, CAS update. No head-count query, no
+    // host_campaign_sends / host_contacts touch, no resolver.
+    expect(statements.map((s) => `${s.table}:${s.ops[0].method}`)).toEqual([
+      'host_campaigns:select',
+      'event_hosts:select',
+      'host_campaigns:update',
+    ])
+    expect(statements.some((s) => s.ops.some((o) => o.method === 'select' && o.args[1]?.head))).toBe(false)
+  })
+
   it('409s when the CAS matches no row (it fired or was sent meanwhile)', async () => {
     const { db } = makeDb(routeFor({ casRows: [] }))
     createServerClient.mockReturnValue(db)
