@@ -101,11 +101,11 @@ export async function backfillHostCampaignEvents(db, { hostId, dry = true, fromD
 
   // 1. Which campaigns belong to this host — scopes every message match
   // below so a stray Metadata collision can never touch another host's rows.
+  // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- a host has a handful of campaigns (daily cap 2); 1000 is a ceiling, not a page
   const { data: campaignRows, error: campaignsError } = await db
     .from('host_campaigns')
     .select('id')
     .eq('host_id', hostId)
-    // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- a host has a handful of campaigns (daily cap 2); 1000 is a ceiling, not a page
     .limit(1000)
   if (campaignsError) {
     logError('host-campaign-backfill', 'failed to load host campaigns', { hostId, error: campaignsError })
