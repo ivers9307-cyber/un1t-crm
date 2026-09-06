@@ -10,9 +10,11 @@
 // double-sends a recipient.
 //
 // One call = one chunk: re-verify the sender, CAS-claim ≤BATCH_SIZE
-// pending rows for THIS campaign, re-check consent per claimed row, send
-// via the Postmark BROADCAST stream from the host's verified sender,
-// stamp sent/failed per row, refresh sent_count, finalise if drained.
+// pending rows for THIS campaign, re-check HOST consent (host_contacts.
+// marketing_consent) + per-host suppression + mailbox facts per claimed
+// row, send via the host's OWN Postmark stream (event_hosts.
+// postmark_stream_id) from the host's verified sender, stamp sent/failed
+// per row, refresh sent_count, finalise if drained.
 //
 // Return contract (what the worker's chaining decision keys on):
 //   chunk_sent — this chunk ran; `remaining` = pending rows left. May be
@@ -83,7 +85,7 @@ async function runChunk(db, campaignId) {
   // sender_domain_verified stops an in-flight campaign mid-drain.
   const { data: host, error: hostErr } = await db
     .from('event_hosts')
-    .select('id, name, email, sender_email, sender_name, sender_domain_verified, reply_to_email')
+    .select('id, name, email, sender_email, sender_name, sender_domain_verified, reply_to_email, postmark_stream_id')
     .eq('id', campaign.host_id)
     .maybeSingle()
   if (hostErr) throw new Error(`host load failed: ${hostErr.message}`)
@@ -98,6 +100,17 @@ async function runChunk(db, campaignId) {
     // Kill switch: leave the campaign 'sending' but send nothing. It
     // resumes via the cron sweeper if UN1T re-verifies the domain.
     logError('host-campaigns', 'sender not verified — campaign paused', {
+      campaign_id: campaign.id, host_id: host.id,
+    })
+    return { status: 'halted', sent: 0, failed: 0 }
+  }
+
+  // HOST-CONSENT.1 — marketing rides the host's OWN Postmark stream. No
+  // stream = not set up; halt exactly like the kill switch (resumes on the
+  // next sweep once an admin fills postmark_stream_id). Utility is unaffected.
+  const isMarketing = campaign.email_type !== 'utility'
+  if (isMarketing && !host.postmark_stream_id) {
+    logError('host-campaigns', 'host has no postmark_stream_id — marketing campaign paused', {
       campaign_id: campaign.id, host_id: host.id,
     })
     return { status: 'halted', sent: 0, failed: 0 }
@@ -132,14 +145,16 @@ async function runChunk(db, campaignId) {
   if (claimed.length > 0) {
     // Send-time consent re-check (comms invariant; mirrors campaign-sender's
     // post-claim consentOk): rows were enqueued with consent, but a contact
-    // can unsubscribe — globally OR via the per-host footer link — while the
-    // queue drains. Re-gate every claimed row against live flags before any
-    // send. Suppressed-since rows go terminal 'failed' (never sent, never
-    // retried — the status check constraint has no 'cancelled').
+    // can revoke HOST consent (host_contacts.marketing_consent) or unsubscribe
+    // via the per-host footer link while the queue drains — the mailbox facts
+    // (bounced/complained, email_suppressed_at) still block too. Re-gate every
+    // claimed row against live flags before any send. Suppressed-since rows go
+    // terminal 'failed' (never sent, never retried — the status check
+    // constraint has no 'cancelled').
     const contactIds = claimed.map((r) => r.contact_id)
     const { data: contactRows, error: contactErr } = await db
       .from('contacts')
-      .select('id, email, first_name, last_name, name, email_marketing, email_administrative, email_status, email_suppressed_at')
+      .select('id, email, first_name, last_name, name, email_administrative, email_status, email_suppressed_at')
       .in('id', contactIds)
     if (contactErr) throw new Error(`consent re-check failed: ${contactErr.message}`)
     const { data: suppRows, error: suppErr } = await db
@@ -148,12 +163,23 @@ async function runChunk(db, campaignId) {
       .eq('host_id', campaign.host_id)
       .in('contact_id', contactIds)
     if (suppErr) throw new Error(`suppression re-check failed: ${suppErr.message}`)
+    // HOST-CONSENT.1 — the host's consent, off the membership row.
+    const { data: memberRows, error: memberErr } = await db
+      .from('host_contacts')
+      .select('contact_id, marketing_consent')
+      .eq('host_id', campaign.host_id)
+      .in('contact_id', contactIds)
+    if (memberErr) throw new Error(`host consent re-check failed: ${memberErr.message}`)
     const contactById = new Map((contactRows || []).map((c) => [c.id, c]))
     const suppressedIds = new Set((suppRows || []).map((r) => r.contact_id))
+    const consentById = new Map((memberRows || []).map((m) => [m.contact_id, m.marketing_consent === true]))
     const sendable = []
     const revokedIds = []
     for (const row of claimed) {
-      const ok = isEmailable(contactById.get(row.contact_id) || null, suppressedIds.has(row.contact_id), { emailType: campaign.email_type === 'utility' ? 'utility' : 'marketing' })
+      const ok = isEmailable(contactById.get(row.contact_id) || null, suppressedIds.has(row.contact_id), {
+        emailType: isMarketing ? 'marketing' : 'utility',
+        hostConsent: consentById.get(row.contact_id) === true,
+      })
       if (ok) sendable.push(row)
       else revokedIds.push(row.id)
     }
@@ -193,8 +219,15 @@ async function runChunk(db, campaignId) {
           replyTo: host.reply_to_email || host.email || undefined,
           subject: mergedSubject,
           htmlBody,
-          // HOST-EMAIL.6 — utility rides the transactional stream.
-          stream: campaign.email_type === 'utility' ? 'outbound' : 'broadcast',
+          // HOST-CONSENT.1 — utility rides the transactional stream. Marketing
+          // keeps the INTERNAL 'broadcast' vocabulary (tracking on, one-click
+          // headers attached) while the wire MessageStream is the host's own
+          // stream, so Postmark's UN1T suppression list can never refuse it.
+          stream: isMarketing ? 'broadcast' : 'outbound',
+          postmarkStream: isMarketing ? host.postmark_stream_id : undefined,
+          // The same URL the footer carries → List-Unsubscribe / One-Click.
+          // Real sends omitted this until HOST-CONSENT.1 (only the test send had it).
+          unsubscribeUrl: isMarketing ? unsubscribeUrl : undefined,
           tag: 'host-campaign',
           metadata: { host_campaign_id: campaign.id, host_id: host.id, contact_id: row.contact_id },
         })
