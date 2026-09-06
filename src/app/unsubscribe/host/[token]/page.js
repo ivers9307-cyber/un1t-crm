@@ -4,15 +4,19 @@
 // subpath rides it) and AppShell PUBLIC_PATHS carries '/unsubscribe'.
 //
 // Server component — the token is the capability, the GET does the work:
-// verify the HMAC → load the host name → upsert host_email_suppressions
-// (insert-once; re-clicking the link is a no-op) → confirmation copy.
-// Suppression is PER-HOST: the contact's UN1T marketing preferences and
-// other hosts' lists are deliberately untouched, and the copy says so.
-// Anything invalid (bad signature, unknown host, deleted contact) gets one
-// generic invalid-link page — no detail to probe.
+// verify the HMAC → load the host name → revoke via revokeHostConsent
+// (host_email_suppressions insert-once + a consent_log opt_out row;
+// re-clicking the link is a no-op) → push a Postmark suppression on the
+// host's own stream → confirmation copy. Suppression is PER-HOST: the
+// contact's UN1T marketing preferences and other hosts' lists are
+// deliberately untouched, and the copy says so. Anything invalid (bad
+// signature, unknown host, deleted contact) gets one generic invalid-link
+// page — no detail to probe.
 
 import { verifyHostUnsubToken } from '@/lib/host-unsubscribe'
 import { createServerClient } from '@/lib/supabase'
+import { revokeHostConsent } from '@/lib/host-consent'
+import { suppressAtPostmark } from '@/lib/postmark-suppressions'
 import { logError } from '@/lib/log'
 
 export const dynamic = 'force-dynamic'
@@ -57,22 +61,31 @@ export default async function HostUnsubscribePage(props) {
   const db = createServerClient()
   const { data: host } = await db
     .from('event_hosts')
-    .select('id, name')
+    .select('id, name, postmark_stream_id')
     .eq('id', ids.hostId)
     .maybeSingle()
   if (!host) return <InvalidLink />
 
-  const { error } = await db
-    .from('host_email_suppressions')
-    .upsert(
-      { host_id: ids.hostId, contact_id: ids.contactId },
-      { onConflict: 'host_id,contact_id', ignoreDuplicates: true },
-    )
-  if (error) {
+  // HOST-CONSENT.1 — the ONE writer of a host opt-out. Per-host by design:
+  // UN1T marketing preferences and other hosts' lists are untouched.
+  const result = await revokeHostConsent(db, {
+    hostId: host.id, contactId: ids.contactId, source: 'host_unsubscribe_page',
+  })
+  if (!result.ok) {
     // FK failure (deleted contact) or transient DB error — either way the
     // suppression wasn't recorded, so don't claim it was.
-    logError('host-unsubscribe', 'suppression upsert failed', { err: error })
+    logError('host-unsubscribe', 'suppression write failed', { err: result.error })
     return <InvalidLink />
+  }
+
+  // Second refusal at Postmark on the host's own stream — best-effort.
+  if (host.postmark_stream_id) {
+    try {
+      const { data: contact } = await db.from('contacts').select('email').eq('id', ids.contactId).maybeSingle()
+      if (contact?.email) await suppressAtPostmark(contact.email, { stream: host.postmark_stream_id })
+    } catch (e) {
+      logError('host-unsubscribe', 'Postmark host-stream suppress threw', { err: e?.message || String(e) })
+    }
   }
 
   return (

@@ -299,6 +299,20 @@ registry.registerPath({
 })
 
 registry.registerPath({
+  method: 'post',
+  path: '/api/unsubscribe/host/{token}',
+  tags: ['Public'],
+  summary: 'One-click unsubscribe from a host\'s marketing list (RFC 8058)',
+  description: 'Anonymous. `token` is the HMAC host-unsubscribe token from a host campaign footer (pins host + contact). Writes a per-host suppression only — UN1T marketing consent is untouched (HOST-CONSENT.1). Body ignored. A repeat click is a 200 no-op. Invalid tokens spend a per-IP budget.',
+  request: { params: z.object({ token: z.string().min(1) }) },
+  responses: {
+    200: { description: 'Unsubscribed from the host (or already unsubscribed)' },
+    404: { description: 'Invalid token', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
   method: 'get',
   path: '/api/preferences/{token}',
   tags: ['Public'],
