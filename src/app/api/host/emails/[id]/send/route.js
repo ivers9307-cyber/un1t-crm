@@ -3,6 +3,7 @@
 //
 //   1. getCurrentHost() + own campaign (.eq('host_id')) → 404 (no enumeration).
 //   2. sender_domain_verified (the UN1T kill switch) → 409 with guidance.
+//   2b. postmark_stream_id for a marketing send (HOST-CONSENT.1) → 409.
 //   3. Daily campaign cap — campaigns already sending/sent today (UTC) vs
 //      event_hosts.email_daily_send_cap → 409.
 //   4. Recipients resolved AT SEND TIME (consent + per-host suppression);
@@ -50,13 +51,21 @@ export async function POST(_request, props) {
   // from a broken From header.
   const { data: host } = await db
     .from('event_hosts')
-    .select('id, sender_domain_verified, sender_email, sender_name, email_daily_send_cap')
+    .select('id, sender_domain_verified, sender_email, sender_name, email_daily_send_cap, postmark_stream_id')
     .eq('id', session.host.id)
     .maybeSingle()
   if (!host) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   if (!host.sender_domain_verified || !host.sender_email) {
     return NextResponse.json(
       { success: false, error: 'Sending is not enabled — ask UN1T to verify your sending domain.' },
+      { status: 409 },
+    )
+  }
+
+  // HOST-CONSENT.1 — marketing needs the host's own Postmark stream.
+  if (campaign.email_type !== 'utility' && !host.postmark_stream_id) {
+    return NextResponse.json(
+      { success: false, error: 'Marketing sending is not set up for this host yet — ask UN1T to attach your Postmark stream.' },
       { status: 409 },
     )
   }
