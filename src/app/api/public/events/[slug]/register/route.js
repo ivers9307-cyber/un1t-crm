@@ -233,6 +233,8 @@ export async function POST(request, props) {
     const { data: reg, error: regErr } = await db.from('race_registrations').insert({
       race_event_id: race.id, team_id: teamId, contact_id: contactId,
       status: 'confirmed', wave_id: null, team_composition: 'all_non_members',
+      // HOST-CONSENT.1 — persisted so the attendee sync can grant HOST consent.
+      marketing_consent: body.marketing_consent !== false,
     }).select('id, registered_at').single()
     if (regErr) {
       return NextResponse.json({ success: false, error: 'Could not capture your details. Please try again.' }, { status: 500 })
@@ -633,6 +635,9 @@ export async function POST(request, props) {
       team_composition: pricing.team_composition,
       promo_code_id: appliedPromo?.id || null,
       promo_discount_cents: appliedPromo ? promoDiscountCents : null,
+      // HOST-CONSENT.1 — persisted so the attendee sync can grant HOST consent
+      // when the registration confirms (immediately for free, on payment for paid).
+      marketing_consent: body.marketing_consent !== false,
     })
     .select('id, registered_at, wave_id, contact_id')
     .single()
