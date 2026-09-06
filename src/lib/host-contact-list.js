@@ -3,21 +3,17 @@
 // A host's list = people who took part in THAT host's events (source='event')
 // + their mailing-list signups (source='mailing_list', PR-B) — and ONLY those
 // people. Membership is deliberately broad (rows are added regardless of
-// consent); EMAILABILITY is a send-time predicate — isEmailable below — that
-// mirrors the broadcast send path's exact marketing gate:
+// consent); EMAILABILITY is a send-time predicate — isEmailable below.
 //
-//   postmark.js buildAudienceQuery (marketing):
-//     .eq('email_marketing', true)
-//     .not('email_status', 'in', '("bounced","complained")')
-//     .is('email_suppressed_at', null)        // EMAIL-HYGIENE.1, mig 395
-//   campaign-sender.js consentOk (post-claim re-check):
-//     email_marketing === true && !['bounced','complained'].includes(email_status)
-//
-// An unsubscribe flips email_marketing to false (denormalised from
-// contact_preferences, mig 155) — blocked here. It no longer stamps
-// email_status: mig 492 retired 'unsubscribed' (reputation-only column).
-// On top of the global gate, PR-B's per-host unsubscribe
-// (host_email_suppressions) is passed in as `suppressed`.
+// HOST-CONSENT.1 — host marketing email is its OWN consent domain: the
+// marketing gate is host_contacts.marketing_consent (mig 588), passed in as
+// `opts.hostConsent`, NOT contacts.email_marketing (the UN1T-wide flag) — a
+// UN1T unsubscribe is not a host opt-out. On top of that, PR-B's per-host
+// unsubscribe (host_email_suppressions) is passed in as `suppressed`, and
+// the shared mailbox facts (bounced/complained email_status,
+// email_suppressed_at) still block, same as the UN1T broadcast send path
+// (postmark.js buildAudienceQuery / campaign-sender.js consentOk) — those
+// describe the mailbox, not which consent domain granted the send.
 //
 // Tables (mig 400): host_contacts (UNIQUE(host_id, contact_id)),
 // host_email_suppressions (UNIQUE(host_id, contact_id)). Service-role only.
@@ -70,24 +66,31 @@ export function eventTagFor(raceEvent) {
 }
 
 /**
- * Send-time emailability predicate — the SAME gate PR-C's send path uses.
- * Pure: the caller loads the contact flags + the per-host suppression set.
+ * Send-time emailability predicate — the SAME gate the send path uses.
+ * Pure: the caller loads the contact flags, the per-host suppression set and
+ * the host_contacts.marketing_consent value.
  *
- * HOST-EMAIL.6 — two consent families (the CRM's own split):
- *   marketing (default)  email_marketing === true; the per-host unsubscribe
- *                        blocks too ('unsubscribed' email_status is retired,
- *                        mig 492 — a real opt-out is email_marketing=false).
+ * HOST-CONSENT.1 — host marketing is its own consent domain:
+ *   marketing (default)  opts.hostConsent === true (host_contacts.marketing_consent),
+ *                        no host_email_suppressions row, and the mailbox facts
+ *                        below. It does NOT read contacts.email_marketing any
+ *                        more — a UN1T opt-out is not a host opt-out.
  *   utility              operational messages to attendees (time change,
  *                        instructions) — email_administrative === true;
  *                        marketing opt-outs do NOT block it, deliverability
  *                        blocks (bounced / complained / suppressed_at) do.
- * @param {object|null} contact  contacts row with email, email_marketing,
- *   email_administrative, email_status, email_suppressed_at
+ * Shared on purpose: email_status bounced/complained and the repeat-bounce
+ * stamp email_suppressed_at describe the MAILBOX, not the relationship.
+ *
+ * hostConsent defaults to false so a caller that forgets it fails closed.
+ *
+ * @param {object|null} contact  contacts row with email, email_administrative,
+ *   email_status, email_suppressed_at
  * @param {boolean} suppressed   contact_id ∈ host_email_suppressions for this host
- * @param {{emailType?: 'marketing'|'utility'}} [opts]
+ * @param {{emailType?: 'marketing'|'utility', hostConsent?: boolean}} [opts]
  * @returns {boolean}
  */
-export function isEmailable(contact, suppressed, { emailType = 'marketing' } = {}) {
+export function isEmailable(contact, suppressed, { emailType = 'marketing', hostConsent = false } = {}) {
   if (!contact) return false
   if (!contact.email) return false
   if (contact.email_suppressed_at) return false
@@ -97,7 +100,7 @@ export function isEmailable(contact, suppressed, { emailType = 'marketing' } = {
     return true
   }
   if (suppressed) return false
-  if (contact.email_marketing !== true) return false
+  if (hostConsent !== true) return false
   if (BLOCKED_EMAIL_STATUSES.includes(contact.email_status ?? 'active')) return false // NULL = legacy 'active' (column default, mig 005)
   return true
 }

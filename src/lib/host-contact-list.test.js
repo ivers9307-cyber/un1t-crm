@@ -44,45 +44,70 @@ describe('eventTagFor', () => {
 })
 
 describe('isEmailable', () => {
-  // Mirrors the broadcast send path's exact marketing gate:
-  //   postmark.js buildAudienceQuery — email_marketing = true,
+  // HOST-CONSENT.1 — the marketing gate is host_contacts.marketing_consent
+  // (opts.hostConsent), passed in by the caller, not contacts.email_marketing:
+  //   no host_email_suppressions row, hostConsent === true,
   //   email_status NOT IN ('bounced','complained'), email_suppressed_at IS NULL
-  //   campaign-sender.js consentOk — email_marketing === true &&
-  //   !['bounced','complained'].includes(email_status)
-  //   (an unsubscribe flips email_marketing to false — mig 492 retired the
-  //   email_status='unsubscribed' stamp; the column is reputation-only)
+  // email_marketing stays on the fixture (later tasks drop it from selects)
+  // but no longer participates in the predicate — see the nested describe
+  // below for the tests proving that.
   const good = { email: 'a@b.ie', email_marketing: true, email_status: 'active', email_suppressed_at: null }
 
   it('is true for a consented contact with an email and clean flags', () => {
-    expect(isEmailable(good, false)).toBe(true)
+    expect(isEmailable(good, false, { hostConsent: true })).toBe(true)
   })
   it('is false without an email address', () => {
-    expect(isEmailable({ ...good, email: null }, false)).toBe(false)
-    expect(isEmailable({ ...good, email: '' }, false)).toBe(false)
+    expect(isEmailable({ ...good, email: null }, false, { hostConsent: true })).toBe(false)
+    expect(isEmailable({ ...good, email: '' }, false, { hostConsent: true })).toBe(false)
   })
-  it('is false without marketing consent (email_marketing !== true)', () => {
-    expect(isEmailable({ ...good, email_marketing: false }, false)).toBe(false)
-    expect(isEmailable({ ...good, email_marketing: null }, false)).toBe(false)
-    expect(isEmailable({ ...good, email_marketing: undefined }, false)).toBe(false)
+  it('is false without host consent (hostConsent !== true)', () => {
+    expect(isEmailable(good, false, { hostConsent: false })).toBe(false)
   })
   it('is false when bounced / complained', () => {
-    expect(isEmailable({ ...good, email_status: 'bounced' }, false)).toBe(false)
-    expect(isEmailable({ ...good, email_status: 'complained' }, false)).toBe(false)
+    expect(isEmailable({ ...good, email_status: 'bounced' }, false, { hostConsent: true })).toBe(false)
+    expect(isEmailable({ ...good, email_status: 'complained' }, false, { hostConsent: true })).toBe(false)
   })
-  it('tolerates a missing/other email_status — incl. retired unsubscribed (mig 492: real opt-outs carry email_marketing=false)', () => {
-    expect(isEmailable({ ...good, email_status: null }, false)).toBe(true)
-    expect(isEmailable({ ...good, email_status: undefined }, false)).toBe(true)
-    expect(isEmailable({ ...good, email_status: 'unsubscribed' }, false)).toBe(true)
+  it('tolerates a missing/other email_status — incl. retired unsubscribed (mig 492)', () => {
+    expect(isEmailable({ ...good, email_status: null }, false, { hostConsent: true })).toBe(true)
+    expect(isEmailable({ ...good, email_status: undefined }, false, { hostConsent: true })).toBe(true)
+    expect(isEmailable({ ...good, email_status: 'unsubscribed' }, false, { hostConsent: true })).toBe(true)
   })
   it('is false when inactivity-suppressed (email_suppressed_at set, mig 395)', () => {
-    expect(isEmailable({ ...good, email_suppressed_at: '2026-01-01T00:00:00Z' }, false)).toBe(false)
+    expect(isEmailable({ ...good, email_suppressed_at: '2026-01-01T00:00:00Z' }, false, { hostConsent: true })).toBe(false)
   })
   it('is false when per-host suppressed', () => {
-    expect(isEmailable(good, true)).toBe(false)
+    expect(isEmailable(good, true, { hostConsent: true })).toBe(false)
   })
   it('is false for a missing contact (defensive)', () => {
-    expect(isEmailable(null, false)).toBe(false)
-    expect(isEmailable(undefined, false)).toBe(false)
+    expect(isEmailable(null, false, { hostConsent: true })).toBe(false)
+    expect(isEmailable(undefined, false, { hostConsent: true })).toBe(false)
+  })
+
+  describe('HOST-CONSENT.1 — host consent replaces the UN1T flag for marketing', () => {
+    const optedOutOfUn1t = { ...good, email_marketing: false }
+
+    it('is TRUE for a contact opted out of UN1T marketing but consented to the host', () => {
+      expect(isEmailable(optedOutOfUn1t, false, { hostConsent: true })).toBe(true)
+    })
+    it('is FALSE when host consent is false, even with UN1T consent true', () => {
+      expect(isEmailable(good, false, { hostConsent: false })).toBe(false)
+    })
+    it('fails CLOSED when hostConsent is omitted', () => {
+      expect(isEmailable(good, false)).toBe(false)
+      expect(isEmailable(good, false, {})).toBe(false)
+    })
+    it('still blocks a per-host suppression with host consent true', () => {
+      expect(isEmailable(good, true, { hostConsent: true })).toBe(false)
+    })
+    it('still blocks mailbox facts with host consent true', () => {
+      expect(isEmailable({ ...good, email_status: 'bounced' }, false, { hostConsent: true })).toBe(false)
+      expect(isEmailable({ ...good, email_status: 'complained' }, false, { hostConsent: true })).toBe(false)
+      expect(isEmailable({ ...good, email_suppressed_at: '2026-08-11T05:45:14Z' }, false, { hostConsent: true })).toBe(false)
+    })
+    it('utility ignores hostConsent entirely (administrative consent + mailbox facts only)', () => {
+      const admin = { ...good, email_administrative: true, email_marketing: false }
+      expect(isEmailable(admin, true, { emailType: 'utility', hostConsent: false })).toBe(true)
+    })
   })
 })
 
@@ -436,8 +461,11 @@ describe('fetchHostContactRows', () => {
       ],
     })
     const rows = await fetchHostContactRows(db, 'h1')
+    // HOST-CONSENT.1 — fetchHostContactRows does not pass hostConsent yet
+    // (that's Task 3), so isEmailable's fail-closed default now makes c1
+    // not emailable even though the old UN1T email_marketing flag is true.
     expect(rows).toEqual([
-      { contact_id: 'c1', name: 'Pat', email: 'c1@x.ie', source: 'event', created_at: '2026-07-01T10:00:00Z', emailable: true },
+      { contact_id: 'c1', name: 'Pat', email: 'c1@x.ie', source: 'event', created_at: '2026-07-01T10:00:00Z', emailable: false },
       { contact_id: 'c2', name: 'Pat', email: 'c2@x.ie', source: 'mailing_list', created_at: '2026-07-01T10:00:00Z', emailable: false },
     ])
   })
@@ -472,9 +500,9 @@ describe('isEmailable — utility emails', () => {
     expect(isEmailable({ ...base, email_status: 'complained' }, false, { emailType: 'utility' })).toBe(false)
     expect(isEmailable({ ...base, email_suppressed_at: '2026-01-01' }, false, { emailType: 'utility' })).toBe(false)
   })
-  it('marketing gate is unchanged by default', () => {
-    expect(isEmailable(base, false)).toBe(false)
-    expect(isEmailable({ ...base, email_marketing: true }, false)).toBe(true)
-    expect(isEmailable({ ...base, email_marketing: true }, true)).toBe(false)
+  it('HOST-CONSENT.1 — marketing gate now runs on hostConsent, independent of email_marketing', () => {
+    expect(isEmailable(base, false)).toBe(false) // no hostConsent → fails closed
+    expect(isEmailable(base, false, { hostConsent: true })).toBe(true) // host consent, despite email_marketing:false
+    expect(isEmailable(base, true, { hostConsent: true })).toBe(false) // per-host suppression still blocks
   })
 })
