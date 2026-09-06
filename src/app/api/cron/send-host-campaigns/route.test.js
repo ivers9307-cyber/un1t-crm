@@ -13,15 +13,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(() => Promise.resolve()) }))
-vi.mock('@/lib/log', () => ({ logError: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logError: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/lib/host-campaign-queue', () => ({
   processHostCampaignChunk: vi.fn(),
+}))
+vi.mock('@/lib/host-campaign-launch', () => ({
+  launchHostCampaign: vi.fn(),
+  LAUNCH_GATE_REASONS: Object.freeze(['sender_not_verified', 'no_stream', 'daily_cap', 'no_recipients']),
 }))
 
 import { GET } from './route.js'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { processHostCampaignChunk } from '@/lib/host-campaign-queue'
+import { launchHostCampaign } from '@/lib/host-campaign-launch'
 
 const CAMPAIGN_A = { id: 'a0000000-0000-0000-0000-0000000000a1', host_id: 'h1', status: 'sending' }
 const CAMPAIGN_B = { id: 'a0000000-0000-0000-0000-0000000000a2', host_id: 'h1', status: 'sending' }
@@ -53,7 +58,11 @@ const hasEq = (state, col, val) => state.ops.some((o) => o.method === 'eq' && o.
 
 function routeFor(cfg = {}) {
   return (state) => {
-    if (state.table === 'host_campaigns') return { data: cfg.campaigns ?? [], error: cfg.pickErr ?? null }
+    if (state.table === 'host_campaigns') {
+      if (hasEq(state, 'status', 'scheduled') && op(state, 'select')) return { data: cfg.due ?? [], error: cfg.dueErr ?? null }
+      if (op(state, 'update')) return { data: cfg.backRows ?? [{ id: 'x' }], error: cfg.backErr ?? null }
+      return { data: cfg.campaigns ?? [], error: cfg.pickErr ?? null }
+    }
     if (state.table === 'host_campaign_sends') return { data: cfg.swept ?? [], error: null } // stale sweep
     return {}
   }
@@ -67,6 +76,7 @@ beforeEach(() => {
   process.env.CRON_SECRET = 'test-secret'
   vi.clearAllMocks()
   processHostCampaignChunk.mockResolvedValue({ status: 'chunk_sent', remaining: 3, sent: 2, failed: 0 })
+  launchHostCampaign.mockResolvedValue({ ok: true, recipientCount: 5 })
 })
 
 describe('GET /api/cron/send-host-campaigns', () => {
@@ -113,7 +123,7 @@ describe('GET /api/cron/send-host-campaigns', () => {
     const json = await res.json()
     expect(json).toMatchObject({ ok: true, campaigns: 2, sent: 53, failed: 1, finalised: 1, errors: [] })
 
-    const pick = statements.find((s) => s.table === 'host_campaigns')
+    const pick = statements.find((s) => s.table === 'host_campaigns' && hasEq(s, 'status', 'sending'))
     expect(hasEq(pick, 'status', 'sending')).toBe(true)
     expect(op(pick, 'limit').args[0]).toBe(5)
     expect(op(pick, 'order').args[0]).toBe('created_at')
@@ -141,5 +151,111 @@ describe('GET /api/cron/send-host-campaigns', () => {
     const res = await GET(req())
     expect(res.status).toBe(500)
     expect(stampHeartbeat).toHaveBeenCalledWith('send-host-campaigns')
+  })
+})
+
+// HOST-SCHEDULE.1 — due scheduled campaigns are launched at the top of the
+// tick (before the 'sending' pass, so a just-launched campaign gets its
+// first chunk in the same tick) through the SAME launchHostCampaign the
+// send route uses. A gate refusal (or a thrown launch) CAS-returns the row
+// to draft with schedule_error set; a transient failure (db_error,
+// resolve_failed) or a post-CAS enqueue_failed leaves the row 'scheduled'/
+// 'sending' respectively for the next tick to retry and lands in
+// summary.errors instead; cas_lost/not_found are silent (another sweep won,
+// or the row vanished). Nothing here ever blocks the sending pass or the
+// heartbeat.
+describe('GET /api/cron/send-host-campaigns — scheduled launches', () => {
+  const DUE_1 = { id: 'd0000000-0000-0000-0000-0000000000d1', host_id: 'h1' }
+  const DUE_2 = { id: 'd0000000-0000-0000-0000-0000000000d2', host_id: 'h2' }
+
+  it('picks due scheduled rows (scheduled_for <= now, ordered, ≤10) and launches each with trigger schedule, before the sending pass', async () => {
+    const { db, statements } = makeDb(routeFor({ due: [DUE_1, DUE_2], campaigns: [CAMPAIGN_A] }))
+    createServerClient.mockReturnValue(db)
+    const order = []
+    launchHostCampaign.mockImplementation(async () => { order.push('launch'); return { ok: true, recipientCount: 5 } })
+    processHostCampaignChunk.mockImplementation(async () => { order.push('chunk'); return { status: 'drained', sent: 1, failed: 0 } })
+
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.launched).toBe(2)
+    expect(body.refused).toEqual([])
+
+    const pick = statements.find((s) => s.table === 'host_campaigns' && hasEq(s, 'status', 'scheduled'))
+    expect(op(pick, 'lte').args[0]).toBe('scheduled_for')
+    expect(op(pick, 'order').args[0]).toBe('scheduled_for')
+    expect(op(pick, 'limit').args[0]).toBe(10)
+
+    expect(launchHostCampaign).toHaveBeenNthCalledWith(1, db, { campaignId: DUE_1.id, hostId: 'h1', trigger: 'schedule' })
+    expect(launchHostCampaign).toHaveBeenNthCalledWith(2, db, { campaignId: DUE_2.id, hostId: 'h2', trigger: 'schedule' })
+    expect(order).toEqual(['launch', 'launch', 'chunk'])
+    expect(stampHeartbeat).toHaveBeenCalledWith('send-host-campaigns')
+  })
+
+  it('a refused launch goes back to draft with the reason (CAS on scheduled) and the tick carries on', async () => {
+    const { db, statements } = makeDb(routeFor({ due: [DUE_1], campaigns: [CAMPAIGN_A] }))
+    createServerClient.mockReturnValue(db)
+    launchHostCampaign.mockResolvedValue({ ok: false, reason: 'daily_cap', status: 409, error: 'Daily send limit reached.' })
+
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.launched).toBe(0)
+    expect(body.refused).toEqual([{ campaign_id: DUE_1.id, reason: 'daily_cap' }])
+
+    const back = statements.find((s) => s.table === 'host_campaigns' && op(s, 'update'))
+    expect(op(back, 'update').args[0]).toEqual({ status: 'draft', scheduled_for: null, schedule_error: 'daily_cap' })
+    expect(hasEq(back, 'id', DUE_1.id)).toBe(true)
+    expect(hasEq(back, 'status', 'scheduled')).toBe(true)
+    expect(processHostCampaignChunk).toHaveBeenCalledWith(db, CAMPAIGN_A.id)
+  })
+
+  it('a transient failure (db_error) is deferred for retry, not sent back to draft; cas_lost is silent', async () => {
+    const { db, statements } = makeDb(routeFor({ due: [DUE_1, DUE_2] }))
+    createServerClient.mockReturnValue(db)
+    launchHostCampaign
+      .mockResolvedValueOnce({ ok: false, reason: 'db_error', status: 500, error: 'boom' })
+      .mockResolvedValueOnce({ ok: false, reason: 'cas_lost', status: 409, error: 'This email has already been sent.' })
+
+    const body = await (await GET(req())).json()
+    expect(body.refused).toEqual([])
+    expect(body.errors).toEqual([{ campaign_id: DUE_1.id, error: 'boom' }])
+    const backs = statements.filter((s) => s.table === 'host_campaigns' && op(s, 'update'))
+    expect(backs).toHaveLength(0)
+  })
+
+  it('a post-CAS enqueue_failed leaves the row sending and is deferred to errors, not sent back to draft', async () => {
+    const { db, statements } = makeDb(routeFor({ due: [DUE_1] }))
+    createServerClient.mockReturnValue(db)
+    launchHostCampaign.mockResolvedValue({ ok: false, reason: 'enqueue_failed', status: 500, error: 'Queueing failed: boom' })
+
+    const body = await (await GET(req())).json()
+    expect(body.refused).toEqual([])
+    expect(body.errors).toEqual([{ campaign_id: DUE_1.id, error: 'Queueing failed: boom' }])
+    const backs = statements.filter((s) => s.table === 'host_campaigns' && op(s, 'update'))
+    expect(backs).toHaveLength(0)
+  })
+
+  it('a thrown launch is a launch_failed, never a 500 tick', async () => {
+    const { db, statements } = makeDb(routeFor({ due: [DUE_1] }))
+    createServerClient.mockReturnValue(db)
+    launchHostCampaign.mockRejectedValue(new Error('exploded'))
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect((await res.json()).refused).toEqual([{ campaign_id: DUE_1.id, reason: 'launch_failed' }])
+    const back = statements.find((s) => s.table === 'host_campaigns' && op(s, 'update'))
+    expect(op(back, 'update').args[0]).toEqual({ status: 'draft', scheduled_for: null, schedule_error: 'launch_failed' })
+    expect(stampHeartbeat).toHaveBeenCalled()
+  })
+
+  it('a failed due pick is logged into errors and the sending pass still runs', async () => {
+    const { db } = makeDb(routeFor({ dueErr: { message: 'pick broke' }, campaigns: [CAMPAIGN_A] }))
+    createServerClient.mockReturnValue(db)
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.errors).toEqual([{ stage: 'due_pick', error: 'pick broke' }])
+    expect(launchHostCampaign).not.toHaveBeenCalled()
+    expect(processHostCampaignChunk).toHaveBeenCalledWith(db, CAMPAIGN_A.id)
   })
 })

@@ -33,18 +33,45 @@
 //
 // HOST-METRICS.1 — the stale-claim sweep stamps failed_reason: 'stale_claim'
 // so the host can tell a crashed-consumer row apart from a gate refusal.
+//
+// HOST-SCHEDULE.1 — the cron ALSO fires scheduled campaigns: at the top of
+// every tick it picks ≤10 rows with status='scheduled' and scheduled_for
+// <= now() (idx_host_campaigns_due, mig 592) and calls launchHostCampaign
+// with trigger 'schedule' — the SAME gates and enqueue as Send now; the
+// CAS scheduled→sending inside it is the lock, so two overlapping ticks
+// launch once. Runs BEFORE the 'sending' pass so a just-launched campaign
+// gets its first chunk in this tick (the QStash kick also fires).
+// Refusal mapping (launchDueCampaigns):
+//   - a gate reason (LAUNCH_GATE_REASONS: sender_not_verified, no_stream,
+//     daily_cap, no_recipients) OR a thrown launch (a code bug, mapped to
+//     'launch_failed' — must not retry forever silently) → CAS the row
+//     scheduled→draft with scheduled_for: null and schedule_error set to
+//     the reason; pushed to summary.refused.
+//   - db_error / resolve_failed (transient, pre-CAS) → the row is left
+//     'scheduled' for the next tick to retry; pushed to summary.errors,
+//     no update statement.
+//   - enqueue_failed (post-CAS — the row is already 'sending') → left as
+//     is, the sending pass below drains what landed; pushed to
+//     summary.errors, no update statement.
+//   - cas_lost / not_found → silent skip: another sweep won the CAS, or
+//     the row vanished between the due pick and the launch.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { processHostCampaignChunk } from '@/lib/host-campaign-queue'
+import { launchHostCampaign, LAUNCH_GATE_REASONS } from '@/lib/host-campaign-launch'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { logError } from '@/lib/log'
+import { logError, logInfo } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const MAX_CAMPAIGNS_PER_TICK = 5
 const CLAIM_STALE_MS = 15 * 60_000  // claimed-but-unresolved rows older than this → failed
+const MAX_DUE_PER_TICK = 10
+// Reasons that leave the campaign untouched (pre-CAS gate refusals) — a
+// thrown launch is folded into this same back-to-draft path as 'launch_failed'.
+const SCHEDULE_GATE_REASONS = new Set(LAUNCH_GATE_REASONS)
 
 function unauthorized() {
   return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
@@ -60,7 +87,9 @@ export async function GET(request) {
   if (got !== `Bearer ${expected}`) return unauthorized()
 
   const db = createServerClient()
-  const summary = { campaigns: 0, sent: 0, failed: 0, finalised: 0, errors: [] }
+  const summary = { launched: 0, refused: [], campaigns: 0, sent: 0, failed: 0, finalised: 0, errors: [] }
+
+  await launchDueCampaigns(db, summary)
 
   const { data: campaigns, error: pickErr } = await db
     .from('host_campaigns')
@@ -116,5 +145,68 @@ async function sweepStaleClaims(db, campaignId) {
     logError('host-campaigns', 'stale claimed rows swept to failed', {
       campaign_id: campaignId, count: swept.length,
     })
+  }
+}
+
+// HOST-SCHEDULE.1 — fire due scheduled campaigns (see header for the
+// refusal mapping). Never throws: every failure lands in summary.refused
+// or summary.errors and the sending pass + heartbeat still run.
+async function launchDueCampaigns(db, summary) {
+  const { data: due, error: dueErr } = await db
+    .from('host_campaigns')
+    .select('id, host_id')
+    .eq('status', 'scheduled')
+    .lte('scheduled_for', new Date().toISOString())
+    .order('scheduled_for', { ascending: true })
+    .limit(MAX_DUE_PER_TICK)
+  if (dueErr) {
+    logError('host-campaigns', 'due pick failed', { error: dueErr.message })
+    summary.errors.push({ stage: 'due_pick', error: dueErr.message })
+    return
+  }
+
+  for (const c of due || []) {
+    let result
+    try {
+      result = await launchHostCampaign(db, { campaignId: c.id, hostId: c.host_id, trigger: 'schedule' })
+    } catch (err) {
+      result = { ok: false, reason: 'launch_failed', error: err?.message || String(err) }
+    }
+    if (result.ok) {
+      summary.launched += 1
+      logInfo('host-campaigns', 'scheduled campaign launched', { campaign_id: c.id, recipient_count: result.recipientCount })
+      continue
+    }
+
+    // cas_lost: another sweep won the race. not_found: the row vanished
+    // between the due pick and the launch. Either way — silent skip.
+    if (result.reason === 'cas_lost' || result.reason === 'not_found') continue
+
+    // enqueue_failed is post-CAS — the campaign is already 'sending' and
+    // the sending pass below drains whatever landed. db_error /
+    // resolve_failed are transient pre-CAS reads — leave the row
+    // 'scheduled' so the next tick retries. Neither gets an update
+    // statement; both are deferred into summary.errors.
+    if (result.reason === 'enqueue_failed' || result.reason === 'db_error' || result.reason === 'resolve_failed') {
+      summary.errors.push({ campaign_id: c.id, error: result.error })
+      logError('host-campaigns', 'scheduled launch deferred', { campaign_id: c.id, reason: result.reason, error: result.error })
+      continue
+    }
+
+    // A gate refusal, or a thrown launch collapsed to 'launch_failed' —
+    // CAS the row back to draft with the reason so the host can see why
+    // and retry manually. A code bug must not retry forever silently.
+    const code = SCHEDULE_GATE_REASONS.has(result.reason) ? result.reason : 'launch_failed'
+    const { error: backErr } = await db
+      .from('host_campaigns')
+      .update({ status: 'draft', scheduled_for: null, schedule_error: code })
+      .eq('id', c.id)
+      .eq('status', 'scheduled')
+    if (backErr) {
+      summary.errors.push({ campaign_id: c.id, error: backErr.message })
+      logError('host-campaigns', 'scheduled refusal write failed', { campaign_id: c.id, error: backErr.message })
+    }
+    summary.refused.push({ campaign_id: c.id, reason: code })
+    logError('host-campaigns', 'scheduled launch refused', { campaign_id: c.id, reason: code, error: result.error })
   }
 }
