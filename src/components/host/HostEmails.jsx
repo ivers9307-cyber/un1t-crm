@@ -23,6 +23,7 @@
 // -700 chip rule.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
 
 /**
  * Request body for a test send. A blank or cancelled prompt yields {} so the
@@ -491,7 +492,7 @@ export default function HostEmails() {
                       {c.status === 'draft' ? (
                         <span className="truncate">{c.subject}</span>
                       ) : (
-                        <a href={`/host/emails/${c.id}`} className="truncate hover:underline">{c.subject}</a>
+                        <Link href={`/host/emails/${c.id}`} className="truncate hover:underline">{c.subject}</Link>
                       )}
                       <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${chip}`}>
                         {STATUS_LABEL[c.status] || c.status}

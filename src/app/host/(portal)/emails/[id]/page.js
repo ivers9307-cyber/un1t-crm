@@ -18,10 +18,10 @@ export default async function HostEmailReportPage(props) {
 
   return (
     <div>
-      {/* @next/next/no-html-link-for-pages flags a raw <a> to /host/emails —
-          it resolves against the app router here, unlike the "inert on this
-          app-router repo" note in CLAUDE.md (which was probed against a
-          route that doesn't exist). Link keeps the same markup/behaviour. */}
+      {/* next/link rather than <a>: @next/next/no-html-link-for-pages scans
+          src/app in this plugin version and matches /host/emails against
+          this [id] route's regex (empty capture), so a raw
+          <a href="/host/emails"> errors. See CLAUDE.md. */}
       <Link href="/host/emails" className="text-xs text-white/45 hover:text-white">← Back to emails</Link>
 
       <HostEmailReport campaignId={params.id} />
