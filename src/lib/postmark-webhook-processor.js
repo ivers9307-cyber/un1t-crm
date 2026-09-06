@@ -14,6 +14,7 @@
 
 import { applyMarketingPreferencesBulk } from './marketing-consent.js'
 import { findBcaSubmissionByMessageId, recordBcaPostmarkEvent } from './bca-events.js'
+import { isHostCampaignEvent, processHostCampaignEvent } from './host-campaign-webhooks.js'
 import { recordTicketMessageDelivery } from './email-delivery-status.js'
 import { escapeLikePattern } from './like-escape.js'
 import {
@@ -180,6 +181,14 @@ export async function processPostmarkEvent(db, body) {
     // for a deleted submission. Fall through to no-op rather than
     // erroring (the dedup gate has already done its job).
     return { ok: true }
+  }
+
+  // HOST-CONSENT.1 — host campaign mail rides per-host Postmark streams and
+  // writes no email_sends row, so nothing below could ever resolve it. Route
+  // by the metadata the host queue stamps and return; the CRM switch is for
+  // CRM sends only.
+  if (isHostCampaignEvent(body)) {
+    return processHostCampaignEvent(db, body)
   }
 
   // EMAIL-DELIVERY.1 — stamp the outcome onto the OUTBOUND TICKET MESSAGE, if
