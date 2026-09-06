@@ -70,7 +70,7 @@ describe('grantHostConsent', () => {
   it('reports a failed write instead of swallowing it', async () => {
     const { db } = makeDb(() => ({ data: null, error: { message: 'boom' } }))
     const r = await grantHostConsent(db, { hostId: H, contactId: C, source: 'event_form' })
-    expect(r).toEqual({ ok: false, changed: false, error: 'boom' })
+    expect(r).toEqual({ ok: false, changed: false, error: 'boom', code: null })
   })
 })
 
@@ -140,7 +140,7 @@ describe('revokeHostConsent', () => {
       return { data: null, error: null }
     })
     const r = await revokeHostConsent(db, { hostId: H, contactId: C, source: 'host_unsubscribe_page' })
-    expect(r).toEqual({ ok: false, changed: true, error: 'boom' })
+    expect(r).toEqual({ ok: false, changed: true, error: 'boom', code: null })
     expect(statements.some((s) => s.table === 'consent_log')).toBe(false)
   })
   it('never touches contacts.email_marketing', async () => {
@@ -150,7 +150,11 @@ describe('revokeHostConsent', () => {
   })
   it('reports a failed suppression write instead of claiming success', async () => {
     const { db } = makeDb(() => ({ data: null, error: { message: 'boom' } }))
-    expect(await revokeHostConsent(db, { hostId: H, contactId: C, source: 'host_unsubscribe_page' })).toEqual({ ok: false, changed: false, error: 'boom' })
+    expect(await revokeHostConsent(db, { hostId: H, contactId: C, source: 'host_unsubscribe_page' })).toEqual({ ok: false, changed: false, error: 'boom', code: null })
+  })
+  it('a suppression FK violation (contact erased) surfaces its Postgres code', async () => {
+    const { db } = makeDb(() => ({ data: null, error: { message: 'fk', code: '23503' } }))
+    expect(await revokeHostConsent(db, { hostId: H, contactId: C, source: 'host_one_click_unsubscribe' })).toEqual({ ok: false, changed: false, error: 'fk', code: '23503' })
   })
 })
 
@@ -171,7 +175,7 @@ describe('resubscribeHost', () => {
   })
   it('a failed delete is reported and nothing is granted', async () => {
     const { db, statements } = makeDb(() => ({ data: null, error: { message: 'boom' } }))
-    expect(await resubscribeHost(db, { hostId: H, contactId: C })).toEqual({ ok: false, unsuppressed: false, changed: false, error: 'boom' })
+    expect(await resubscribeHost(db, { hostId: H, contactId: C })).toEqual({ ok: false, unsuppressed: false, changed: false, error: 'boom', code: null })
     expect(statements.some((s) => s.table === 'host_contacts')).toBe(false)
   })
   it('a failed grant after a successful delete is reported with unsuppressed:true (not mailable: consent still false)', async () => {

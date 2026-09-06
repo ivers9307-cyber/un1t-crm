@@ -44,7 +44,7 @@ async function insertLog(db, rows) {
 /**
  * @param {import('@supabase/supabase-js').SupabaseClient} db service-role
  * @param {{hostId:string, contactId:string, source:'mailing_list_form'|'event_form'|'host_resubscribe', ipAddress?:string|null}} args
- * @returns {Promise<{ok:boolean, changed:boolean, error?:string}>}
+ * @returns {Promise<{ok:boolean, changed:boolean, error?:string, code?: string|null}>} code is the Postgres SQLSTATE when the driver supplied one; 23503 = FK violation = the contact no longer exists.
  */
 export async function grantHostConsent(db, { hostId, contactId, source, ipAddress = null }) {
   // Requires an existing host_contacts row; changed:false also means "no membership".
@@ -59,7 +59,7 @@ export async function grantHostConsent(db, { hostId, contactId, source, ipAddres
     .eq('contact_id', contactId)
     .eq('marketing_consent', false)
     .select('contact_id')
-  if (error) return { ok: false, changed: false, error: error.message }
+  if (error) return { ok: false, changed: false, error: error.message, code: error.code ?? null }
   const changed = (data || []).length > 0
   if (changed) await insertLog(db, [logRow({ contactId, hostId, action: 'opt_in', source, ipAddress })])
   return { ok: true, changed }
@@ -85,7 +85,7 @@ export async function grantHostConsentBulk(db, { hostId, contactIds, source }) {
     .in('contact_id', ids)
     .eq('marketing_consent', false)
     .select('contact_id')
-  if (error) return { ok: false, changed: 0, error: error.message }
+  if (error) return { ok: false, changed: 0, error: error.message, code: error.code ?? null }
   const flipped = (data || []).map((r) => r.contact_id)
   await insertLog(db, flipped.map((contactId) => logRow({ contactId, hostId, action: 'opt_in', source, ipAddress: null })))
   return { ok: true, changed: flipped.length }
@@ -93,14 +93,14 @@ export async function grantHostConsentBulk(db, { hostId, contactIds, source }) {
 
 /**
  * @param {{hostId:string, contactId:string, source:'host_unsubscribe_page'|'host_one_click_unsubscribe'|'postmark_one_click_unsubscribe'|'postmark_spam_complaint', ipAddress?:string|null}} args
- * @returns {Promise<{ok:boolean, changed:boolean, error?:string}>}
+ * @returns {Promise<{ok:boolean, changed:boolean, error?:string, code?: string|null}>} code is the Postgres SQLSTATE when the driver supplied one; 23503 = FK violation = the contact no longer exists.
  */
 export async function revokeHostConsent(db, { hostId, contactId, source, ipAddress = null }) {
   const { data: supRows, error: supError } = await db
     .from('host_email_suppressions')
     .upsert({ host_id: hostId, contact_id: contactId }, { onConflict: 'host_id,contact_id', ignoreDuplicates: true })
     .select('id')
-  if (supError) return { ok: false, changed: false, error: supError.message }
+  if (supError) return { ok: false, changed: false, error: supError.message, code: supError.code ?? null }
   // ignoreDuplicates returns zero rows when the pair already existed.
   const suppressed = (supRows || []).length > 0
 
@@ -114,7 +114,7 @@ export async function revokeHostConsent(db, { hostId, contactId, source, ipAddre
     .eq('contact_id', contactId)
     .eq('marketing_consent', true)
     .select('contact_id')
-  if (consentError) return { ok: false, changed: suppressed, error: consentError.message }
+  if (consentError) return { ok: false, changed: suppressed, error: consentError.message, code: consentError.code ?? null }
   const unconsented = (consentRows || []).length > 0
 
   const changed = suppressed || unconsented
@@ -133,7 +133,7 @@ export async function resubscribeHost(db, { hostId, contactId, ipAddress = null 
     .eq('host_id', hostId)
     .eq('contact_id', contactId)
     .select('id')
-  if (error) return { ok: false, unsuppressed: false, changed: false, error: error.message }
+  if (error) return { ok: false, unsuppressed: false, changed: false, error: error.message, code: error.code ?? null }
   const unsuppressed = (data || []).length > 0
   // Not atomic. A failed grant leaves the row unsuppressed with consent=false, which is NOT mailable (deliverability needs both), and a retry is idempotent.
   const grant = await grantHostConsent(db, { hostId, contactId, source: 'host_resubscribe', ipAddress })

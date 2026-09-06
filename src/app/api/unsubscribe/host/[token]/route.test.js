@@ -88,9 +88,16 @@ describe('POST /api/unsubscribe/host/[token]', () => {
   })
   it('a failed write is a 500, never a false success', async () => {
     verifyHostUnsubToken.mockReturnValue({ hostId: 'h-1', contactId: 'c-1' })
-    revokeHostConsent.mockResolvedValueOnce({ ok: false, changed: false, error: 'boom' })
+    revokeHostConsent.mockResolvedValueOnce({ ok: false, changed: false, error: 'boom', code: null })
     createServerClient.mockReturnValue(stubDb())
     expect((await POST(req(), props)).status).toBe(500)
+    expect(suppressAtPostmark).not.toHaveBeenCalled()
+  })
+  it('a token for an erased contact (FK 23503) is a 404, not a 500', async () => {
+    verifyHostUnsubToken.mockReturnValue({ hostId: 'h-1', contactId: 'c-1' })
+    revokeHostConsent.mockResolvedValueOnce({ ok: false, changed: false, error: 'fk', code: '23503' })
+    createServerClient.mockReturnValue(stubDb())
+    expect((await POST(req(), props)).status).toBe(404)
     expect(suppressAtPostmark).not.toHaveBeenCalled()
   })
 })

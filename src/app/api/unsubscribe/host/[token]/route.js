@@ -57,6 +57,12 @@ export async function POST(request, props) {
     hostId: host.id, contactId: ids.contactId, source: 'host_one_click_unsubscribe', ipAddress: ip,
   })
   if (!result.ok) {
+    if (result.code === '23503') {
+      // FK violation: the contact was erased since the mail went out. There is
+      // nobody left to unsubscribe — answer like any other dead token so the
+      // provider stops retrying.
+      return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 404 })
+    }
     // The person pressed the button; do not report success on a failed write.
     logError('host-unsubscribe', 'one-click revoke failed', { err: result.error, host_id: host.id })
     return NextResponse.json({ success: false, error: 'Could not unsubscribe, please try again.' }, { status: 500 })
