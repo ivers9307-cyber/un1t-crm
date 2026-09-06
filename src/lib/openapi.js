@@ -7264,6 +7264,8 @@ registry.registerPath({
               created_at: z.string(),
               recipient_count: z.number().int().nullable(),
               sent_count: z.number().int().nullable(),
+              scheduled_for: z.string().nullable().optional(),
+              schedule_error: z.string().nullable().optional(),
               stats: HostCampaignStats.nullable(),
             }).passthrough(),
             recipients: z.array(HostCampaignRecipient),
@@ -7323,6 +7325,42 @@ registry.registerPath({
     404: { description: 'Not found, or not this host\'s campaign', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Sending is not enabled for this host (sender domain unverified)', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Postmark rejected the send', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+const HostScheduleBody = z.object({
+  scheduled_for: z.string().describe('ISO instant (UTC or offset). Must be at least 15 minutes ahead and within 90 days.'),
+}).openapi('HostScheduleBody')
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/host/emails/{id}/schedule',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Schedule (or reschedule) a host campaign for a later send (HOST-SCHEDULE.1)',
+  description: "Host session; the campaign must belong to the session host (404 otherwise, so ids stay un-enumerable). Marks a draft or an already scheduled campaign as `scheduled` for the given UTC instant (the portal converts from Europe/Dublin); the send-host-campaigns sweeper cron launches it within about two minutes of that time through the SAME launch function as Send now, re-running every gate then. Early feedback only here: sender domain verified, and a Postmark stream for a marketing campaign. The daily cap and the recipient list are NOT checked at schedule time; a fire-time refusal returns the campaign to draft with `schedule_error` set. Clears any earlier `schedule_error`. A sending/sent campaign 409s.",
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: HostScheduleBody } } } },
+  responses: {
+    200: { description: 'The scheduled campaign row', content: { 'application/json': { schema: SuccessResponse(z.object({ id: uuidLike, status: z.string(), scheduled_for: z.string().nullable(), schedule_error: z.string().nullable() }).passthrough()) } } },
+    400: { description: 'Malformed body, or the time is under 15 minutes ahead or over 90 days ahead', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized — no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or not this host\'s campaign', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Already sent or sending; sender domain unverified; no stream for a marketing campaign', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/host/emails/{id}/unschedule',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Cancel a scheduled host campaign back to draft (HOST-SCHEDULE.1)',
+  description: 'Host session. Compare-and-set scheduled → draft with `scheduled_for` cleared. 409 when the campaign is no longer scheduled (it already fired, or was never scheduled).',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'The campaign row, now a draft', content: { 'application/json': { schema: SuccessResponse(z.object({ id: uuidLike, status: z.string(), scheduled_for: z.string().nullable() }).passthrough()) } } },
+    401: { description: 'Unauthorized — no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'No longer scheduled', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
