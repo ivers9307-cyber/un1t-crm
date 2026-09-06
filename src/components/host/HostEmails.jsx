@@ -24,6 +24,9 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
+import {
+  nextQuarterHour, isoToDublinInputs, dublinLocalToIso, dublinScheduleLabel, scheduleErrorCopy, TIME_OPTIONS,
+} from '@/lib/host-schedule-time'
 
 /**
  * Request body for a test send. A blank or cancelled prompt yields {} so the
@@ -48,8 +51,35 @@ export function statsLine(stats) {
   return `${sent} sent · ${delivered} delivered · ${opened} opened · ${clicked} clicked`
 }
 
+/**
+ * The list row's one-line status, per campaign state (HOST-SCHEDULE.1):
+ * a scheduled row shows its Dublin fire time; a draft the sweeper refused
+ * shows the reason in plain words; anything sent keeps the stats line.
+ * @param {object} c  campaign row from GET /api/host/emails
+ */
+export function rowSubline(c) {
+  if (c.status === 'scheduled') return `Scheduled for ${dublinScheduleLabel(c.scheduled_for)}`
+  if (c.status === 'draft') {
+    return c.schedule_error
+      ? `Not sent. ${scheduleErrorCopy(c.schedule_error)}. Schedule it again or send it now.`
+      : 'Not sent yet'
+  }
+  return statsLine(c.stats) || `${c.sent_count || 0}/${c.recipient_count ?? '—'} sent`
+}
+
+/**
+ * What the schedule panel opens on: the row's own time when rescheduling,
+ * else the next quarter hour at least 15 minutes out.
+ * @param {object} c
+ * @param {number} [nowMs=Date.now()]
+ */
+export function schedulePanelDefaults(c, nowMs = Date.now()) {
+  return (c?.scheduled_for && isoToDublinInputs(c.scheduled_for)) || nextQuarterHour(nowMs)
+}
+
 const STATUS_CHIP = {
   draft: 'bg-white/10 text-white/70',
+  scheduled: 'bg-sky-500/15 text-sky-300',
   sending: 'bg-amber-500/15 text-amber-300',
   sent: 'bg-emerald-500/15 text-emerald-300',
   failed: 'bg-red-500/15 text-red-300',
@@ -57,6 +87,7 @@ const STATUS_CHIP = {
 
 const STATUS_LABEL = {
   draft: 'Draft',
+  scheduled: 'Scheduled',
   sending: 'Sending',
   sent: 'Sent',
   failed: 'Failed',
@@ -80,6 +111,10 @@ export default function HostEmails() {
   const [testingId, setTestingId] = useState(null)
   const [lastTestEmail, setLastTestEmail] = useState('')
   const [loadingDraftId, setLoadingDraftId] = useState(null)
+  const [schedulingId, setSchedulingId] = useState(null) // row whose schedule panel is open
+  const [scheduleDate, setScheduleDate] = useState('')
+  const [scheduleTime, setScheduleTime] = useState('')
+  const [scheduleBusy, setScheduleBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const editorInited = useRef(false)
@@ -322,6 +357,73 @@ export default function HostEmails() {
     }
   }
 
+  // HOST-SCHEDULE.1 — schedule panel + scheduled-row actions.
+  function openSchedule(c) {
+    setError('')
+    setNotice('')
+    const d = schedulePanelDefaults(c)
+    setScheduleDate(d.date)
+    setScheduleTime(d.time)
+    setSchedulingId(c.id)
+  }
+
+  async function confirmSchedule(id) {
+    const iso = dublinLocalToIso(scheduleDate, scheduleTime)
+    if (!iso) { setError('Pick a valid date and time.'); return }
+    setError('')
+    setNotice('')
+    setScheduleBusy(true)
+    try {
+      const res = await fetch(`/api/host/emails/${id}/schedule`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scheduled_for: iso }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.success) {
+        setError(json.error || 'Could not schedule the email.')
+        return
+      }
+      setSchedulingId(null)
+      setNotice(`Scheduled for ${dublinScheduleLabel(json.data?.scheduled_for || iso)}.`)
+      await load()
+    } catch {
+      setError('Could not schedule the email.')
+    } finally {
+      setScheduleBusy(false)
+    }
+  }
+
+  // Returns true when the row is a draft again (so callers can chain).
+  async function unschedule(id) {
+    setError('')
+    setNotice('')
+    try {
+      const res = await fetch(`/api/host/emails/${id}/unschedule`, { method: 'POST' })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.success) {
+        setError(json.error || 'Could not cancel the schedule.')
+        await load() // a 409 means it already fired: show the real state
+        return false
+      }
+      await load()
+      return true
+    } catch {
+      setError('Could not cancel the schedule.')
+      return false
+    }
+  }
+
+  async function cancelSchedule(id) {
+    if (!window.confirm('Cancel this scheduled send? The email goes back to your drafts.')) return
+    if (await unschedule(id)) setNotice('Schedule cancelled.')
+  }
+
+  async function editScheduled(id) {
+    if (!window.confirm('Editing cancels the scheduled send. You can schedule it again after saving.')) return
+    if (await unschedule(id)) await editDraft(id)
+  }
+
   const input =
     'w-full rounded-lg border border-white/15 bg-white/[0.04] px-3 py-2 text-sm text-white ' +
     'placeholder:text-white/30 focus:outline-none focus:border-white/40'
@@ -486,62 +588,145 @@ export default function HostEmails() {
             {campaigns.map((c) => {
               const chip = STATUS_CHIP[c.status] || 'bg-white/10 text-white/70'
               return (
-                <li key={c.id} className="px-4 py-3 flex items-center justify-between gap-4">
-                  <div className="min-w-0">
-                    <p className="flex items-center gap-2 font-medium">
-                      {c.status === 'draft' ? (
-                        <span className="truncate">{c.subject}</span>
-                      ) : (
-                        <Link href={`/host/emails/${c.id}`} className="truncate hover:underline">{c.subject}</Link>
-                      )}
-                      <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${chip}`}>
-                        {STATUS_LABEL[c.status] || c.status}
-                      </span>
-                      {c.email_type === 'utility' && (
-                        <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide bg-sky-500/15 text-sky-300">
-                          Utility
+                <li key={c.id} className="px-4 py-3">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="flex items-center gap-2 font-medium">
+                        {c.status === 'draft' || c.status === 'scheduled' ? (
+                          <span className="truncate">{c.subject}</span>
+                        ) : (
+                          <Link href={`/host/emails/${c.id}`} className="truncate hover:underline">{c.subject}</Link>
+                        )}
+                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${chip}`}>
+                          {STATUS_LABEL[c.status] || c.status}
                         </span>
-                      )}
-                      {c.stats?.failed > 0 && (
-                        <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide bg-amber-500/15 text-amber-300">
-                          {c.stats.failed} failed
-                        </span>
-                      )}
-                    </p>
-                    <p className="text-xs text-white/45 mt-0.5">
-                      {c.status === 'draft'
-                        ? 'Not sent yet'
-                        : (statsLine(c.stats) || `${c.sent_count || 0}/${c.recipient_count ?? '—'} sent`)}
-                      {' · '}
-                      {(c.sent_at || c.created_at || '').slice(0, 10) || '—'}
-                    </p>
+                        {c.status === 'draft' && c.schedule_error && (
+                          <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide bg-amber-500/15 text-amber-300">
+                            Not sent
+                          </span>
+                        )}
+                        {c.email_type === 'utility' && (
+                          <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide bg-sky-500/15 text-sky-300">
+                            Utility
+                          </span>
+                        )}
+                        {c.stats?.failed > 0 && (
+                          <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide bg-amber-500/15 text-amber-300">
+                            {c.stats.failed} failed
+                          </span>
+                        )}
+                      </p>
+                      <p className="text-xs text-white/45 mt-0.5">
+                        {rowSubline(c)}
+                        {c.status !== 'scheduled' && (
+                          <>
+                            {' · '}
+                            {(c.sent_at || c.created_at || '').slice(0, 10) || '—'}
+                          </>
+                        )}
+                      </p>
+                    </div>
+                    {c.status === 'draft' && (
+                      <div className="shrink-0 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => editDraft(c.id)}
+                          disabled={loadingDraftId === c.id}
+                          className="rounded-lg border border-white/20 text-white/80 text-xs font-semibold px-3 py-1.5 hover:text-white hover:border-white/40 disabled:opacity-50"
+                        >
+                          {loadingDraftId === c.id ? 'Opening…' : 'Edit'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => sendTest(c.id)}
+                          disabled={testingId === c.id}
+                          className="rounded-lg border border-white/20 text-white/80 text-xs font-semibold px-3 py-1.5 hover:text-white hover:border-white/40 disabled:opacity-50"
+                        >
+                          {testingId === c.id ? 'Sending…' : 'Test'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => (schedulingId === c.id ? setSchedulingId(null) : openSchedule(c))}
+                          className="rounded-lg border border-white/20 text-white/80 text-xs font-semibold px-3 py-1.5 hover:text-white hover:border-white/40"
+                        >
+                          Schedule
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => send(c.id, c.audience_kind === 'mailing_list' ? '__mailing_list__' : (c.audience_event_id || ''), c.email_type)}
+                          disabled={sendingId === c.id}
+                          className="rounded-lg bg-white text-black text-xs font-semibold px-3 py-1.5 hover:bg-white/90 disabled:opacity-50"
+                        >
+                          {sendingId === c.id ? 'Sending…' : 'Send'}
+                        </button>
+                      </div>
+                    )}
+                    {c.status === 'scheduled' && (
+                      <div className="shrink-0 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => (schedulingId === c.id ? setSchedulingId(null) : openSchedule(c))}
+                          className="rounded-lg border border-white/20 text-white/80 text-xs font-semibold px-3 py-1.5 hover:text-white hover:border-white/40"
+                        >
+                          Change time
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => editScheduled(c.id)}
+                          disabled={loadingDraftId === c.id}
+                          className="rounded-lg border border-white/20 text-white/80 text-xs font-semibold px-3 py-1.5 hover:text-white hover:border-white/40 disabled:opacity-50"
+                        >
+                          {loadingDraftId === c.id ? 'Opening…' : 'Edit'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => cancelSchedule(c.id)}
+                          className="rounded-lg border border-red-400/40 text-red-300 text-xs font-semibold px-3 py-1.5 hover:border-red-300"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  {c.status === 'draft' && (
-                    <div className="shrink-0 flex items-center gap-2">
+                  {schedulingId === c.id && (
+                    <div className="mt-3 rounded-lg border border-white/10 bg-white/[0.03] p-3 flex flex-wrap items-end gap-3">
+                      <label className="block text-xs text-white/60">
+                        Date
+                        <input
+                          type="date"
+                          value={scheduleDate}
+                          onChange={(e) => setScheduleDate(e.target.value)}
+                          className={`${input} mt-1 w-auto`}
+                        />
+                      </label>
+                      <label className="block text-xs text-white/60">
+                        Time (Dublin)
+                        <select
+                          value={scheduleTime}
+                          onChange={(e) => setScheduleTime(e.target.value)}
+                          className={`${input} mt-1 w-auto`}
+                        >
+                          {TIME_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
+                        </select>
+                      </label>
                       <button
                         type="button"
-                        onClick={() => editDraft(c.id)}
-                        disabled={loadingDraftId === c.id}
-                        className="rounded-lg border border-white/20 text-white/80 text-xs font-semibold px-3 py-1.5 hover:text-white hover:border-white/40 disabled:opacity-50"
+                        onClick={() => confirmSchedule(c.id)}
+                        disabled={scheduleBusy}
+                        className="rounded-lg bg-white text-black text-xs font-semibold px-3 py-2 hover:bg-white/90 disabled:opacity-50"
                       >
-                        {loadingDraftId === c.id ? 'Opening…' : 'Edit'}
+                        {scheduleBusy ? 'Saving…' : 'Confirm'}
                       </button>
                       <button
                         type="button"
-                        onClick={() => sendTest(c.id)}
-                        disabled={testingId === c.id}
-                        className="rounded-lg border border-white/20 text-white/80 text-xs font-semibold px-3 py-1.5 hover:text-white hover:border-white/40 disabled:opacity-50"
+                        onClick={() => setSchedulingId(null)}
+                        className="text-xs text-white/60 hover:text-white px-2 py-2"
                       >
-                        {testingId === c.id ? 'Sending…' : 'Test'}
+                        Close
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => send(c.id, c.audience_kind === 'mailing_list' ? '__mailing_list__' : (c.audience_event_id || ''), c.email_type)}
-                        disabled={sendingId === c.id}
-                        className="rounded-lg bg-white text-black text-xs font-semibold px-3 py-1.5 hover:bg-white/90 disabled:opacity-50"
-                      >
-                        {sendingId === c.id ? 'Sending…' : 'Send'}
-                      </button>
+                      <p className="basis-full text-[11px] text-white/40 mt-1">
+                        Sends within two minutes of this time. Every check (sender, list, daily limit) runs again then.
+                      </p>
                     </div>
                   )}
                 </li>
