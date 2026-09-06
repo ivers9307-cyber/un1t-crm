@@ -204,6 +204,12 @@ export default function HostEmailReport({ campaignId }) {
         <p className="text-white/55 text-sm mt-1 flex items-center gap-2 flex-wrap">
           {whenStr && <span>{whenStr}</span>}
           {whenStr && <span>·</span>}
+          {campaign?.scheduled_for && formatWhen(campaign.scheduled_for) && (
+            <>
+              <span>Scheduled for {formatWhen(campaign.scheduled_for)}</span>
+              <span>·</span>
+            </>
+          )}
           <span>{AUDIENCE_LABEL[campaign?.audience_kind] || 'All contacts'}</span>
           {campaign?.email_type === 'utility' && (
             <span className="rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide bg-sky-500/15 text-sky-300">

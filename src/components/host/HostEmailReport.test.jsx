@@ -131,6 +131,47 @@ describe('HostEmailReport (render)', () => {
     expect(screen.queryByText('Nothing delivered yet. If this persists, contact UN1T.')).toBeNull()
   })
 
+  it('scheduled_for renders "Scheduled for", and its absence renders nothing of the kind', async () => {
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        data: {
+          campaign: {
+            id: 'c1',
+            subject: 'Race day info',
+            status: 'scheduled',
+            audience_kind: 'all',
+            sent_at: null,
+            scheduled_for: '2026-09-10T09:00:00Z',
+            stats: null,
+          },
+          recipients: [],
+        },
+      }),
+    })
+    const { unmount } = render(<HostEmailReport campaignId="c1" />)
+    expect(await screen.findByText(/Scheduled for/)).toBeTruthy()
+    unmount()
+    cleanup()
+
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        data: {
+          campaign: { id: 'c1', subject: 'Race day info', status: 'sent', audience_kind: 'all', sent_at: '2026-09-01T09:00:00Z', stats: null },
+          recipients: [],
+        },
+      }),
+    })
+    render(<HostEmailReport campaignId="c1" />)
+    await screen.findByText('Counts are unavailable right now. The recipient list below is still complete.')
+    expect(screen.queryByText(/Scheduled for/)).toBeNull()
+  })
+
   it('sent >1h ago with zero delivered shows the stale-delivery note', async () => {
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
     mockFetchOnce({
