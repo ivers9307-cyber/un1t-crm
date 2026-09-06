@@ -1757,6 +1757,8 @@ Update the `key` on the `<SenderDefaultsCard>` mount (line ~1054) to include `ho
 - [ ] **Step 3: Lint and the hosts route tests**
 
 Run: `npx vitest run 'src/app/api/hosts' src/lib/hosts.test.js && npx eslint src/components/settings/HostDetail.jsx 'src/app/api/hosts/[id]/route.js' src/lib/hosts.js`
+
+> Execution note: at the time this step ran there were no tests under `src/app/api/hosts`, so the vitest half verified only `hosts.test.js`. The review fix commit `f6d2604a` added `src/app/api/hosts/[id]/route.test.js` (PATCH schema through the real handler, 8 cases), which is what the command exercises now.
 Expected: PASS, no lint errors.
 
 - [ ] **Step 4: Commit**

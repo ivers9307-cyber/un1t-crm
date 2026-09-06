@@ -48,7 +48,7 @@ where not exists (select 1 from host_email_suppressions s
                   where s.host_id = hc.host_id and s.contact_id = hc.contact_id);
 ```
 
-`host_email_suppressions` stays the revocation record (unchanged). Consent true + no suppression row = mailable by this host, subject to mailbox facts.
+`host_email_suppressions` stays the revocation record. **As built:** a revoke ALSO sets `host_contacts.marketing_consent = false`, so consent and suppression stay in step and a later resubscribe (delete the row, then grant) flips a real value and pairs every `opt_out` with an `opt_in`. Consent true + no suppression row = mailable by this host, subject to mailbox facts. A ticked box on a NEW event registration never re-opens a prior host unsubscribe; only a re-signup on `/h/[slug]` does.
 
 ### 2. Grant paths
 
@@ -70,12 +70,12 @@ Re-signup at `/h/[slug]` by a contact in `host_email_suppressions` is a **host r
 
 ### 4. Send gate
 
-`isEmailable(contact, hostMembership, { emailType })` in `src/lib/host-contact-list.js`:
+`isEmailable(contact, suppressed, { emailType, hostConsent })` in `src/lib/host-contact-list.js` (as built: the membership's `marketing_consent` is passed as the boolean `hostConsent`, defaulting to false, rather than the whole row — a pure predicate cannot then be handed a row from the wrong host):
 
 - marketing: `email` present, `email_suppressed_at` null, `email_status` not bounced/complained, **`hostMembership.marketing_consent === true`**, no `host_email_suppressions` row. It no longer reads `contacts.email_marketing`.
 - utility: unchanged (`email_administrative`, bounce/complaint facts).
 
-The three callers stay in step by construction: `resolveHostRecipients` (send), `/api/host/emails/audiences` (composer counts) and `fetchHostContactRows` (Contacts page badge) all pass the membership row, which they already load. `fetchHostContactRows` adds the new columns to its select.
+The three callers stay in step by construction: `resolveHostRecipients` (enqueue), the queue's per-row re-check in `host-campaign-queue.js` (send), and `fetchHostContactRows` (Contacts page badge) all read `host_contacts.marketing_consent` and pass it as `hostConsent`. (`/api/host/emails/audiences` only counts memberships and never gated on consent, on main or here.)
 
 Shared on purpose: hard bounces and spam complaints (`email_status`) and the repeat-bounce stamp (`email_suppressed_at`). They describe the mailbox, not the relationship.
 
@@ -83,7 +83,7 @@ Shared on purpose: hard bounces and spam complaints (`email_status`) and the rep
 
 Richard created the first stream on 6 Sep as `colm-events` (type Broadcasts) for Pride Training Club, so the stream is **per host**, not shared. Each host's suppression list is then isolated from UN1T's and from every other host's. Postmark allows 10 streams per server by default, which covers the foreseeable host count; the limit is raised on request.
 
-- `event_hosts.postmark_stream_id text` (mig 588, nullable). Set by an admin on Settings → Hosts → host, in the existing "Email sending" card, after creating the stream in Postmark. Exposed to the portal only as a boolean "marketing sending ready" flag, never the raw id.
+- `event_hosts.postmark_stream_id text` (mig 588, nullable). Set by an admin on Settings → Hosts → host, in the "Sender defaults" card, after creating the stream in Postmark. Never exposed to the portal (`HOST_PORTAL_COLS` excludes it). **Deviation (as built):** no separate "marketing sending ready" flag was added; the host learns the stream is missing from the 409 on a test send or real send, whose message says what to ask UN1T for. A portal badge is a follow-up. Mig 589 adds a CHECK rejecting the shared ids `broadcast`/`outbound`/`inbound`, mirrored by the zod refine on PATCH /api/hosts/[id].
 - Creating the stream and its webhook stays a manual Postmark step per host, documented on the card: Message Streams → Create → Broadcasts, unsubscribe handling Custom; then on that stream add a webhook to `https://crm.un1tdublin.com/api/webhooks/postmark` with Delivery, Bounce, SpamComplaint, Open, Click and SubscriptionChange, carrying the `x-webhook-token` header the route verifies. No API automation in this slice.
 - `host-campaign-queue.js` sends marketing with the internal `stream: 'broadcast'` (which is what turns tracking on and attaches the `List-Unsubscribe` / `List-Unsubscribe-Post` headers) and the host's id on the wire via `sendEmail`'s existing `postmarkStream` option (EMAIL-OUTBOUND-SERVER.1), and **passes `unsubscribeUrl`**. No new `sendEmail` option is needed. Utility stays on `outbound`.
 - Fail closed: the send route refuses a marketing send with a clear 409 ("Marketing sending is not set up for this host yet") when `postmark_stream_id` is null. A Postmark error for a missing stream marks each send failed as today, so a mis-typed id cannot half-send silently, and the failure reason is kept for the metrics work.

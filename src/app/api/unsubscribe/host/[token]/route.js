@@ -88,8 +88,12 @@ export async function POST(request, props) {
 }
 
 // A mail client that shows the List-Unsubscribe URL as a link sends a browser
-// GET. Hand it to the landing page, which does the same write and shows a
-// confirmation — never a 405 to a person trying to leave.
+// GET. Hand it to the landing page rather than 405 a person trying to leave.
+// NOTE: unlike the CRM sibling (which redirects to a non-destructive
+// preference centre), /unsubscribe/host/[token] performs the unsubscribe ON
+// the GET itself — the same property the footer link has always had, so a
+// link scanner that follows either one opts the person out. A confirm step on
+// that page is a follow-up and must cover both entry points.
 export async function GET(request, props) {
   const params = await props.params
   return NextResponse.redirect(`${getRequestOrigin(request)}/unsubscribe/host/${encodeURIComponent(params.token)}`, 302)
