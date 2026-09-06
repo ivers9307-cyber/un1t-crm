@@ -24,13 +24,12 @@ import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateScheduledFor } from '@/lib/host-schedule-time'
 import { LAUNCH_MESSAGES } from '@/lib/host-campaign-launch'
+import { HOST_CAMPAIGN_LIST_COLUMNS } from '@/lib/host-campaign-draft'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const Body = z.object({ scheduled_for: z.string().min(1) })
-
-const CAMPAIGN_COLUMNS = 'id, subject, status, audience_kind, audience_event_id, email_type, recipient_count, sent_count, created_at, sent_at, scheduled_for, schedule_error'
 
 export async function POST(request, props) {
   const params = await props.params
@@ -46,22 +45,24 @@ export async function POST(request, props) {
 
   const db = createServerClient()
 
-  const { data: campaign } = await db
+  const { data: campaign, error: campaignReadErr } = await db
     .from('host_campaigns')
     .select('id, status, email_type')
     .eq('id', params.id)
     .eq('host_id', session.host.id)
     .maybeSingle()
+  if (campaignReadErr) return NextResponse.json({ success: false, error: campaignReadErr.message }, { status: 500 })
   if (!campaign) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   if (campaign.status !== 'draft' && campaign.status !== 'scheduled') {
     return NextResponse.json({ success: false, error: LAUNCH_MESSAGES.cas_lost }, { status: 409 })
   }
 
-  const { data: host } = await db
+  const { data: host, error: hostReadErr } = await db
     .from('event_hosts')
     .select('id, sender_domain_verified, sender_email, postmark_stream_id')
     .eq('id', session.host.id)
     .maybeSingle()
+  if (hostReadErr) return NextResponse.json({ success: false, error: hostReadErr.message }, { status: 500 })
   if (!host) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   if (!host.sender_domain_verified || !host.sender_email) {
     return NextResponse.json({ success: false, error: LAUNCH_MESSAGES.sender_not_verified }, { status: 409 })
@@ -78,7 +79,7 @@ export async function POST(request, props) {
     .eq('id', params.id)
     .eq('host_id', session.host.id)
     .in('status', ['draft', 'scheduled'])
-    .select(CAMPAIGN_COLUMNS)
+    .select(HOST_CAMPAIGN_LIST_COLUMNS)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   if (!rows || rows.length === 0) {
     return NextResponse.json({ success: false, error: LAUNCH_MESSAGES.cas_lost }, { status: 409 })

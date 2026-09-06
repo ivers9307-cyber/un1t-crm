@@ -8,7 +8,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
-import { designJsonTooBig, assertAudienceEventOwned } from '@/lib/host-campaign-draft'
+import { designJsonTooBig, assertAudienceEventOwned, HOST_CAMPAIGN_LIST_COLUMNS } from '@/lib/host-campaign-draft'
 import { loadHostCampaignStats, ZERO_STATS } from '@/lib/host-campaign-stats'
 
 export const runtime = 'nodejs'
@@ -37,7 +37,7 @@ export async function GET() {
   const db = createServerClient()
   const { data, error } = await db
     .from('host_campaigns')
-    .select('id, subject, status, audience_kind, audience_event_id, email_type, recipient_count, sent_count, created_at, sent_at, scheduled_for, schedule_error')
+    .select(HOST_CAMPAIGN_LIST_COLUMNS)
     .eq('host_id', session.host.id)
     .order('created_at', { ascending: false })
     .limit(200)
@@ -98,7 +98,7 @@ export async function POST(request) {
       body_html: parsed.data.body,
       status: 'draft',
     })
-    .select('id, subject, status, audience_kind, audience_event_id, email_type, recipient_count, sent_count, created_at, sent_at, scheduled_for, schedule_error')
+    .select(HOST_CAMPAIGN_LIST_COLUMNS)
     .single()
   if (error || !campaign) {
     return NextResponse.json({ success: false, error: error?.message || 'Create failed' }, { status: 500 })

@@ -48,10 +48,16 @@ function routeFor(cfg = {}) {
   return (state) => {
     const first = state.ops[0]
     if (state.table === 'host_campaigns') {
-      if (first.method === 'select') return { data: cfg.campaign === undefined ? { id: CAMPAIGN_ID, status: 'draft', email_type: 'marketing' } : cfg.campaign, error: null }
+      if (first.method === 'select') {
+        if (cfg.campaignReadErr) return { data: null, error: cfg.campaignReadErr }
+        return { data: cfg.campaign === undefined ? { id: CAMPAIGN_ID, status: 'draft', email_type: 'marketing' } : cfg.campaign, error: null }
+      }
       if (first.method === 'update') return { data: cfg.casRows ?? [{ id: CAMPAIGN_ID, status: 'scheduled', scheduled_for: cfg.echo ?? null, schedule_error: null }], error: cfg.updateErr ?? null }
     }
-    if (state.table === 'event_hosts') return { data: cfg.host === undefined ? HOST_ROW : cfg.host, error: null }
+    if (state.table === 'event_hosts') {
+      if (cfg.hostReadErr) return { data: null, error: cfg.hostReadErr }
+      return { data: cfg.host === undefined ? HOST_ROW : cfg.host, error: null }
+    }
     return {}
   }
 }
@@ -80,18 +86,56 @@ describe('POST /api/host/emails/[id]/schedule', () => {
     expect(statements).toHaveLength(0)
   })
 
-  it('400s on invalid JSON, a missing field, a non-date, too soon, too far', async () => {
+  it('400s on invalid JSON', async () => {
     const { db } = makeDb(routeFor())
     createServerClient.mockReturnValue(db)
     expect((await POST(req('{nope'), props)).status).toBe(400)
+  })
+
+  it('400s on a missing field', async () => {
+    const { db } = makeDb(routeFor())
+    createServerClient.mockReturnValue(db)
     expect((await POST(req({}), props)).status).toBe(400)
+  })
+
+  it('400s on a non-date', async () => {
+    const { db } = makeDb(routeFor())
+    createServerClient.mockReturnValue(db)
     expect((await POST(req({ scheduled_for: 'tomorrow' }), props)).status).toBe(400)
+  })
+
+  it('400s too soon, with the window message', async () => {
+    const { db } = makeDb(routeFor())
+    createServerClient.mockReturnValue(db)
     const soon = await POST(req({ scheduled_for: new Date(Date.now() + 5 * 60_000).toISOString() }), props)
     expect(soon.status).toBe(400)
     expect((await soon.json()).error).toBe('Pick a time at least 15 minutes from now.')
+  })
+
+  it('400s too far, with the window message', async () => {
+    const { db } = makeDb(routeFor())
+    createServerClient.mockReturnValue(db)
     const far = await POST(req({ scheduled_for: new Date(Date.now() + 91 * 24 * 3600_000).toISOString() }), props)
     expect(far.status).toBe(400)
     expect((await far.json()).error).toBe('Pick a time within the next 90 days.')
+  })
+
+  it('500s with the db message when the campaign read fails, and never writes', async () => {
+    const { db, statements } = makeDb(routeFor({ campaignReadErr: { message: 'kaboom' } }))
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ scheduled_for: IN_30_MIN() }), props)
+    expect(res.status).toBe(500)
+    expect((await res.json()).error).toBe('kaboom')
+    expect(statements.some((s) => op(s, 'update'))).toBe(false)
+  })
+
+  it('500s with the db message when the host read fails, and never writes', async () => {
+    const { db, statements } = makeDb(routeFor({ hostReadErr: { message: 'kaboom' } }))
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ scheduled_for: IN_30_MIN() }), props)
+    expect(res.status).toBe(500)
+    expect((await res.json()).error).toBe('kaboom')
+    expect(statements.some((s) => op(s, 'update'))).toBe(false)
   })
 
   it("404s another host's campaign (tenancy via .eq('host_id'))", async () => {

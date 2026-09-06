@@ -79,5 +79,6 @@ describe('POST /api/host/emails/[id]/unschedule', () => {
     createServerClient.mockReturnValue(db)
     const res = await POST(req(), props)
     expect(res.status).toBe(500)
+    expect((await res.json()).error).toBe('kaboom')
   })
 })
