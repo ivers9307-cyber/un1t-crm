@@ -12,9 +12,10 @@
 // send path, not the composer").
 //
 // Recipient resolution happens AT SEND TIME (never stored): host_contacts
-// membership joined to the exact consent flags isEmailable reads (the same
-// predicate the portal Contacts page shows), minus host_email_suppressions,
-// deduped by lowercased email. Pure/DB-shaped only — no Postmark here.
+// membership joined to host consent (host_contacts.marketing_consent — the
+// same predicate the portal Contacts page shows), minus
+// host_email_suppressions, deduped by lowercased email. Pure/DB-shaped
+// only — no Postmark here.
 
 import { isEmailable } from './host-contact-list'
 
@@ -173,11 +174,13 @@ You&#39;re receiving this because you attended an event or joined the mailing li
 
 /**
  * Resolve the recipients a host campaign would reach RIGHT NOW: the host's
- * membership rows joined to live consent flags, gated by isEmailable (the
- * exact broadcast-path predicate + per-host suppression), deduped by
- * lowercased email (newest membership wins — memberships are ordered
- * created_at DESC). Both queries scope .eq('host_id', hostId): the caller is
- * responsible only for resolving hostId from getCurrentHost()/the campaign row.
+ * membership rows joined to the contact's mailbox facts, gated by isEmailable
+ * against HOST consent (host_contacts.marketing_consent, HOST-CONSENT.1) +
+ * per-host suppression + bounce/complaint/suppressed_at — NOT the UN1T
+ * broadcast predicate, deduped by lowercased email (newest membership wins —
+ * memberships are ordered created_at DESC). Both queries scope
+ * .eq('host_id', hostId): the caller is responsible only for resolving
+ * hostId from getCurrentHost()/the campaign row.
  *
  * @param {SupabaseClient} db  service-role client
  * @param {string} hostId
@@ -235,8 +238,8 @@ export async function resolveHostRecipients(db, hostId, { audienceEventId = null
     let query = db
       .from('host_contacts')
       .select(`
-        contact_id,
-        contact:contacts!contact_id ( id, email, email_marketing, email_administrative, email_status, email_suppressed_at )
+        contact_id, marketing_consent,
+        contact:contacts!contact_id ( id, email, email_administrative, email_status, email_suppressed_at )
       `)
       .eq('host_id', hostId)
     if (mailingListOnly) query = query.eq('source', 'mailing_list')
@@ -248,7 +251,7 @@ export async function resolveHostRecipients(db, hostId, { audienceEventId = null
     for (const row of data || []) {
       if (allowedContactIds && !allowedContactIds.has(row.contact_id)) continue
       const contact = row.contact || null
-      if (!isEmailable(contact, suppressed.has(row.contact_id), { emailType })) continue
+      if (!isEmailable(contact, suppressed.has(row.contact_id), { emailType, hostConsent: row.marketing_consent === true })) continue
       const key = String(contact.email).trim().toLowerCase()
       if (seenEmails.has(key)) continue
       seenEmails.add(key)

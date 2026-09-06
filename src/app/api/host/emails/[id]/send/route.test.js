@@ -37,6 +37,7 @@ const HOST_ROW = {
   sender_email: 'news@runners.ie',
   sender_name: 'Dublin Runners CC',
   email_daily_send_cap: 2,
+  postmark_stream_id: 'colm-events',
 }
 
 // ── chainable fake ─────────────────────────────────────────────────
@@ -232,5 +233,27 @@ describe('POST /api/host/emails/[id]/send — audience_kind → resolveHostRecip
       mailingListOnly: false,
       emailType: 'marketing',
     })
+  })
+})
+
+describe('POST /api/host/emails/[id]/send — HOST-CONSENT.1 stream gate', () => {
+  it('409s a marketing send when the host has no postmark_stream_id and publishes nothing', async () => {
+    const { db } = makeDb(routeFor({ host: { ...HOST_ROW, postmark_stream_id: null }, campaign: { id: CAMPAIGN_ID, status: 'draft', email_type: 'marketing' } }))
+    createServerClient.mockReturnValue(db)
+    const res = await POST(makeRequest(), props)
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/not set up/i)
+    expect(publishQueuePush).not.toHaveBeenCalled()
+  })
+  it('treats a campaign with no email_type as marketing (legacy rows) and gates it too', async () => {
+    const { db } = makeDb(routeFor({ host: { ...HOST_ROW, postmark_stream_id: null }, campaign: { id: CAMPAIGN_ID, status: 'draft' } }))
+    createServerClient.mockReturnValue(db)
+    expect((await POST(makeRequest(), props)).status).toBe(409)
+  })
+  it('lets a UTILITY send through without a stream', async () => {
+    const { db } = makeDb(routeFor({ host: { ...HOST_ROW, postmark_stream_id: null }, campaign: { id: CAMPAIGN_ID, status: 'draft', email_type: 'utility' } }))
+    createServerClient.mockReturnValue(db)
+    const res = await POST(makeRequest(), props)
+    expect(res.status).toBe(200)
   })
 })

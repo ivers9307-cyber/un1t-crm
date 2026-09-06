@@ -41,6 +41,7 @@ const HOST_ROW = {
   sender_email: 'ptc@un1tdublin.com',
   sender_name: 'Colm',
   reply_to_email: 'studio@un1t.com',
+  postmark_stream_id: 'colm-events',
 }
 
 const CAMPAIGN_ROW = {
@@ -176,6 +177,40 @@ describe('POST /api/host/emails/[id]/send-test', () => {
     createServerClient.mockReturnValue(made.db)
     await post()
     expect(sendEmail.mock.calls[0][0].stream).toBe('outbound')
+  })
+
+  // HOST-CONSENT.1 — a test send must exercise the SAME wire stream the real
+  // send does (host-campaign-queue.js), so a host missing that setup finds
+  // out from a harmless test, not from a real campaign send.
+  describe('HOST-CONSENT.1 stream gate', () => {
+    it('a marketing test send passes the host stream through to Postmark', async () => {
+      await post()
+      const arg = sendEmail.mock.calls[0][0]
+      expect(arg.stream).toBe('broadcast')
+      expect(arg.postmarkStream).toBe('colm-events')
+    })
+
+    it('409s a marketing test send when the host has no postmark_stream_id, and sends nothing', async () => {
+      const made = makeDb({ host: { ...HOST_ROW, postmark_stream_id: null } })
+      createServerClient.mockReturnValue(made.db)
+      const res = await post()
+      expect(res.status).toBe(409)
+      expect((await res.json()).error).toMatch(/not set up/i)
+      expect(sendEmail).not.toHaveBeenCalled()
+    })
+
+    it('a utility test send rides outbound with no postmarkStream, even with no host stream set up', async () => {
+      const made = makeDb({
+        host: { ...HOST_ROW, postmark_stream_id: null },
+        campaign: { ...CAMPAIGN_ROW, email_type: 'utility' },
+      })
+      createServerClient.mockReturnValue(made.db)
+      const res = await post()
+      expect(res.status).toBe(200)
+      const arg = sendEmail.mock.calls[0][0]
+      expect(arg.stream).toBe('outbound')
+      expect(arg.postmarkStream).toBeUndefined()
+    })
   })
 
   it('renders through the host renderer so the unsubscribe footer is present', async () => {

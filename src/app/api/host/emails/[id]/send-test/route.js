@@ -22,8 +22,11 @@
 //     daily-cap consumption. A test must never move the campaign's state.
 //
 // Everything else is deliberately identical to host-campaign-queue.js so the
-// test reproduces the delivered email: same renderer, same From/Reply-To, and
-// the same stream split (utility rides 'outbound', marketing 'broadcast').
+// test reproduces the delivered email: same renderer, same From/Reply-To, the
+// same stream split (utility rides 'outbound', marketing 'broadcast'), and —
+// since HOST-CONSENT.1 — the same wire MessageStream (host.postmark_stream_id
+// on a marketing send), gated the same way the real send route gates it, so a
+// host missing that stream setup finds out from a test, not a real send.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -69,7 +72,7 @@ export async function POST(request, props) {
   // them here, exactly as the real send route does.
   const { data: host } = await db
     .from('event_hosts')
-    .select('id, name, email, sender_domain_verified, sender_email, sender_name, reply_to_email')
+    .select('id, name, email, sender_domain_verified, sender_email, sender_name, reply_to_email, postmark_stream_id')
     .eq('id', session.host.id)
     .maybeSingle()
   if (!host) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
@@ -79,6 +82,15 @@ export async function POST(request, props) {
   if (!host.sender_domain_verified || !host.sender_email) {
     return NextResponse.json(
       { success: false, error: 'Sending is not enabled — ask UN1T to verify your sending domain.' },
+      { status: 409 },
+    )
+  }
+
+  // HOST-CONSENT.1 — a test send must exercise the SAME stream the real send
+  // uses, so a missing stream fails here first, not on the real send.
+  if (campaign.email_type !== 'utility' && !host.postmark_stream_id) {
+    return NextResponse.json(
+      { success: false, error: 'Marketing sending is not set up for this host yet — ask UN1T to attach your Postmark stream.' },
       { status: 409 },
     )
   }
@@ -136,7 +148,9 @@ export async function POST(request, props) {
       replyTo: host.reply_to_email || host.email || undefined,
       subject,
       htmlBody,
+      // HOST-CONSENT.1 — same wire stream as the real send (host-campaign-queue.js).
       stream: campaign.email_type === 'utility' ? 'outbound' : 'broadcast',
+      postmarkStream: campaign.email_type === 'utility' ? undefined : host.postmark_stream_id,
       tag: 'host-campaign-test',
       metadata: { host_campaign_id: campaign.id, host_id: host.id, test_send: '1' },
       unsubscribeUrl,

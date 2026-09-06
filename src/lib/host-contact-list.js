@@ -3,26 +3,23 @@
 // A host's list = people who took part in THAT host's events (source='event')
 // + their mailing-list signups (source='mailing_list', PR-B) — and ONLY those
 // people. Membership is deliberately broad (rows are added regardless of
-// consent); EMAILABILITY is a send-time predicate — isEmailable below — that
-// mirrors the broadcast send path's exact marketing gate:
+// consent); EMAILABILITY is a send-time predicate — isEmailable below.
 //
-//   postmark.js buildAudienceQuery (marketing):
-//     .eq('email_marketing', true)
-//     .not('email_status', 'in', '("bounced","complained")')
-//     .is('email_suppressed_at', null)        // EMAIL-HYGIENE.1, mig 395
-//   campaign-sender.js consentOk (post-claim re-check):
-//     email_marketing === true && !['bounced','complained'].includes(email_status)
-//
-// An unsubscribe flips email_marketing to false (denormalised from
-// contact_preferences, mig 155) — blocked here. It no longer stamps
-// email_status: mig 492 retired 'unsubscribed' (reputation-only column).
-// On top of the global gate, PR-B's per-host unsubscribe
-// (host_email_suppressions) is passed in as `suppressed`.
+// HOST-CONSENT.1 — host marketing email is its OWN consent domain: the
+// marketing gate is host_contacts.marketing_consent (mig 588), passed in as
+// `opts.hostConsent`, NOT contacts.email_marketing (the UN1T-wide flag) — a
+// UN1T unsubscribe is not a host opt-out. On top of that, PR-B's per-host
+// unsubscribe (host_email_suppressions) is passed in as `suppressed`, and
+// the shared mailbox facts (bounced/complained email_status,
+// email_suppressed_at) still block, same as the UN1T broadcast send path
+// (postmark.js buildAudienceQuery / campaign-sender.js consentOk) — those
+// describe the mailbox, not which consent domain granted the send.
 //
 // Tables (mig 400): host_contacts (UNIQUE(host_id, contact_id)),
 // host_email_suppressions (UNIQUE(host_id, contact_id)). Service-role only.
 
 import { writeContactTag } from '@/lib/contact-tags'
+import { grantHostConsentBulk } from '@/lib/host-consent'
 import { logWarn } from '@/lib/log'
 
 const PAGE = 1000        // the supabase-js 1k select cap — always .range()-paginate
@@ -30,8 +27,9 @@ const UPSERT_CHUNK = 500 // rows per host_contacts upsert statement
 
 // email_status values that block a marketing send — exactly what
 // buildAudienceQuery filters. 'unsubscribed' is retired (mig 492, CHECK in
-// mig 501): a real opt-out carries email_marketing=false, which the consent
-// gate above already blocks.
+// mig 501): a real opt-out from a HOST list is hostConsent=false or a
+// host_email_suppressions row, both blocked by the marketing branch of
+// isEmailable below — email_status stays reputation-only.
 const BLOCKED_EMAIL_STATUSES = ['bounced', 'complained']
 
 // Shared normalisation for both host and event tags: lowercase, collapse
@@ -70,24 +68,31 @@ export function eventTagFor(raceEvent) {
 }
 
 /**
- * Send-time emailability predicate — the SAME gate PR-C's send path uses.
- * Pure: the caller loads the contact flags + the per-host suppression set.
+ * Send-time emailability predicate — the SAME gate the send path uses.
+ * Pure: the caller loads the contact flags, the per-host suppression set and
+ * the host_contacts.marketing_consent value.
  *
- * HOST-EMAIL.6 — two consent families (the CRM's own split):
- *   marketing (default)  email_marketing === true; the per-host unsubscribe
- *                        blocks too ('unsubscribed' email_status is retired,
- *                        mig 492 — a real opt-out is email_marketing=false).
+ * HOST-CONSENT.1 — host marketing is its own consent domain:
+ *   marketing (default)  opts.hostConsent === true (host_contacts.marketing_consent),
+ *                        no host_email_suppressions row, and the mailbox facts
+ *                        below. It does NOT read contacts.email_marketing any
+ *                        more — a UN1T opt-out is not a host opt-out.
  *   utility              operational messages to attendees (time change,
  *                        instructions) — email_administrative === true;
  *                        marketing opt-outs do NOT block it, deliverability
  *                        blocks (bounced / complained / suppressed_at) do.
- * @param {object|null} contact  contacts row with email, email_marketing,
- *   email_administrative, email_status, email_suppressed_at
+ * Shared on purpose: email_status bounced/complained and the repeat-bounce
+ * stamp email_suppressed_at describe the MAILBOX, not the relationship.
+ *
+ * hostConsent defaults to false so a caller that forgets it fails closed.
+ *
+ * @param {object|null} contact  contacts row with email, email_administrative,
+ *   email_status, email_suppressed_at
  * @param {boolean} suppressed   contact_id ∈ host_email_suppressions for this host
- * @param {{emailType?: 'marketing'|'utility'}} [opts]
+ * @param {{emailType?: 'marketing'|'utility', hostConsent?: boolean}} [opts]
  * @returns {boolean}
  */
-export function isEmailable(contact, suppressed, { emailType = 'marketing' } = {}) {
+export function isEmailable(contact, suppressed, { emailType = 'marketing', hostConsent = false } = {}) {
   if (!contact) return false
   if (!contact.email) return false
   if (contact.email_suppressed_at) return false
@@ -97,7 +102,7 @@ export function isEmailable(contact, suppressed, { emailType = 'marketing' } = {
     return true
   }
   if (suppressed) return false
-  if (contact.email_marketing !== true) return false
+  if (hostConsent !== true) return false
   if (BLOCKED_EMAIL_STATUSES.includes(contact.email_status ?? 'active')) return false // NULL = legacy 'active' (column default, mig 005)
   return true
 }
@@ -131,6 +136,17 @@ export function isEmailable(contact, suppressed, { emailType = 'marketing' } = {
  * affect the payment/registration response. Errors THROW for those catchers
  * (race/registrations/host_contacts loads only — tagging never throws).
  *
+ * HOST-CONSENT.1 — host marketing consent (host_contacts.marketing_consent)
+ * is granted ONLY to the registrant of record whose own
+ * race_registrations.marketing_consent is true (the checkbox only the
+ * captain saw); team-mates get membership but never marketing consent, and
+ * a NULL grants nothing — a pre-588 row, or a staff manual-add
+ * (`/api/events/[id]/teams`) where nobody was shown the checkbox. A
+ * contact already in host_email_suppressions for this host is also
+ * skipped: a ticked box on a new registration does not re-open a prior
+ * host unsubscribe (only a re-signup on /h/[slug], via resubscribeHost,
+ * does).
+ *
  * @param {SupabaseClient} db  service-role client
  * @param {string} raceEventId
  * @returns {Promise<number>} deduped contact count upserted (0 for no-op)
@@ -148,10 +164,11 @@ export async function addEventAttendeesToHostList(db, raceEventId) {
   // fetchEventAttendees' query shape (attendee-export.js) trimmed to the
   // contact ids, range-paginated past the 1k cap.
   const contactIds = new Set()
+  const consentingIds = new Set()
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await db
       .from('race_registrations')
-      .select('id, teams:team_id ( team_members ( contact_id ) )')
+      .select('id, contact_id, marketing_consent, teams:team_id ( team_members ( contact_id ) )')
       .eq('race_event_id', raceEventId)
       .eq('status', 'confirmed')
       .order('registered_at', { ascending: true })
@@ -163,6 +180,11 @@ export async function addEventAttendeesToHostList(db, raceEventId) {
       for (const m of members) {
         if (m?.contact_id) contactIds.add(m.contact_id)
       }
+      // HOST-CONSENT.1 — only the registrant of record saw the checkbox.
+      // Team-mates get membership (utility mail) but no marketing consent.
+      // NULL = pre-588 registration: grants nothing (the backfill covered
+      // those memberships once; anything later must come from a real tick).
+      if (reg?.contact_id && reg.marketing_consent === true) consentingIds.add(reg.contact_id)
     }
     if (!data || data.length < PAGE) break
   }
@@ -180,6 +202,34 @@ export async function addEventAttendeesToHostList(db, raceEventId) {
       .from('host_contacts')
       .upsert(chunk, { onConflict: 'host_id,contact_id', ignoreDuplicates: true })
     if (error) throw new Error(`host contact list: upsert failed: ${error.message}`)
+  }
+
+  // HOST-CONSENT.1 — a ticked box on a NEW registration does not re-open a
+  // prior host unsubscribe (only a re-signup on /h/[slug] does, via
+  // resubscribeHost). Skipping them keeps the audit trail honest: no
+  // opt_in row for someone still suppressed.
+  if (consentingIds.size > 0) {
+    const { data: suppRows, error: suppErr } = await db
+      .from('host_email_suppressions')
+      .select('contact_id')
+      .eq('host_id', race.host_id)
+      .in('contact_id', [...consentingIds])
+    if (suppErr) throw new Error(`host contact list: suppressions query failed: ${suppErr.message}`)
+    for (const row of suppRows || []) consentingIds.delete(row.contact_id)
+  }
+
+  // HOST-CONSENT.1 — grant host consent to the registrants who ticked the
+  // box. Best-effort like tagging: membership is already durable. Wrapped in
+  // try/catch so a transport throw (not just an { ok:false } result) cannot
+  // abort the tagging block below.
+  const consenting = [...consentingIds]
+  try {
+    for (let i = 0; i < consenting.length; i += UPSERT_CHUNK) {
+      const r = await grantHostConsentBulk(db, { hostId: race.host_id, contactIds: consenting.slice(i, i + UPSERT_CHUNK), source: 'event_form' })
+      if (!r.ok) logWarn('host-contact-list', 'host consent grant failed', { race_event_id: raceEventId, error: r.error })
+    }
+  } catch (err) {
+    logWarn('host-contact-list', 'host consent grant threw', { race_event_id: raceEventId, err: err?.message || String(err) })
   }
 
   // HOST-MASTER.5 — tag each attendee to the host + this event, in BOTH tag
@@ -282,7 +332,8 @@ export async function addEventAttendeesToHostList(db, raceEventId) {
  * @param {SupabaseClient} db  service-role client
  * @param {string} hostId
  * @returns {Promise<Array<{contact_id:string, name:string, email:string,
- *   source:string, created_at:string, emailable:boolean}>>}
+ *   source:string, created_at:string, marketing_consent:boolean,
+ *   emailable:boolean}>>}
  */
 export async function fetchHostContactRows(db, hostId) {
   const memberships = []
@@ -290,8 +341,8 @@ export async function fetchHostContactRows(db, hostId) {
     const { data, error } = await db
       .from('host_contacts')
       .select(`
-        contact_id, source, created_at,
-        contact:contacts!contact_id ( id, name, email, email_marketing, email_status, email_suppressed_at )
+        contact_id, source, created_at, marketing_consent,
+        contact:contacts!contact_id ( id, name, email, email_status, email_suppressed_at )
       `)
       .eq('host_id', hostId)
       .order('created_at', { ascending: false })
@@ -323,7 +374,8 @@ export async function fetchHostContactRows(db, hostId) {
       email: contact?.email || '',
       source: m.source,
       created_at: m.created_at,
-      emailable: isEmailable(contact, suppressedIds.has(m.contact_id)),
+      marketing_consent: m.marketing_consent === true,
+      emailable: isEmailable(contact, suppressedIds.has(m.contact_id), { hostConsent: m.marketing_consent === true }),
     }
   })
 }

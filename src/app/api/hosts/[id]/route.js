@@ -16,6 +16,12 @@ import { HOST_COLS, loadHostForOrg } from '@/lib/hosts'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
+// HOST-CONSENT.1 — Postmark's own reserved/default stream ids. All three
+// match the stream-id shape regex below, so without this an operator typing
+// "broadcast" would silently put the host back on UN1T's shared marketing
+// stream — the exact coupling mig 588 removes.
+const RESERVED_POSTMARK_STREAMS = new Set(['broadcast', 'outbound', 'inbound'])
+
 async function gate() {
   const user = await getCurrentUser()
   if (!user) return { error: NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 }) }
@@ -38,6 +44,13 @@ const PatchSchema = z.object({
   sender_email: z.string().trim().email().max(200).nullable().optional().or(z.literal('')),
   sender_name: z.string().trim().max(200).nullable().optional().or(z.literal('')),
   reply_to_email: z.string().trim().email().max(200).nullable().optional().or(z.literal('')),
+  // HOST-CONSENT.1 — Postmark Broadcasts stream id, created by hand in Postmark
+  // (Message Streams → Create → Broadcasts, unsubscribe handling Custom, then a
+  // webhook on that stream to /api/webhooks/postmark with all six events and
+  // the x-webhook-token header). Empty string clears it → sends fail closed.
+  postmark_stream_id: z.string().trim().regex(/^[a-z0-9][a-z0-9-]{0,63}$/)
+    .refine((s) => !RESERVED_POSTMARK_STREAMS.has(s), { message: "That is UN1T's shared Postmark stream — enter the host's own stream id" })
+    .nullable().optional().or(z.literal('')),
 }).refine((o) => Object.keys(o).length > 0, { message: 'No fields to update' })
 
 export async function GET(_request, props) {
@@ -67,6 +80,7 @@ export async function PATCH(request, props) {
   if (v.data.sender_email !== undefined) updates.sender_email = v.data.sender_email || null
   if (v.data.sender_name !== undefined) updates.sender_name = v.data.sender_name || null
   if (v.data.reply_to_email !== undefined) updates.reply_to_email = v.data.reply_to_email || null
+  if (v.data.postmark_stream_id !== undefined) updates.postmark_stream_id = v.data.postmark_stream_id || null
 
   const { data, error } = await db
     .from('event_hosts')

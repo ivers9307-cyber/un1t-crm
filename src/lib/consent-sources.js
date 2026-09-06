@@ -93,6 +93,13 @@ export const CONSENT_SOURCE_CATEGORY = Object.freeze({
   admin_panel:                    VOLUNTARY,
   manual:                         VOLUNTARY,
 
+  // HOST-CONSENT.1 — a host's own mailing list, per-host, never touching
+  // UN1T marketing consent. See src/lib/host-consent.js.
+  mailing_list_form:              VOLUNTARY, // host /h/[slug] signup
+  host_resubscribe:               VOLUNTARY, // re-signup after a host unsubscribe
+  host_unsubscribe_page:          VOLUNTARY, // host footer link landing page
+  host_one_click_unsubscribe:     VOLUNTARY, // RFC 8058 POST on host mail
+
   // ── deliverability: the address failed ────────────────────────────
   postmark_hard_bounce:           DELIVERABILITY,
   postmark_spam_complaint:        DELIVERABILITY,

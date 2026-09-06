@@ -17,6 +17,16 @@
 // contacts.tags text[] (import-style append-if-missing) AND contact_tags
 // (writeContactTag: idempotent + fires tag_added sequences).
 //
+// HOST-CONSENT.1 — the signup grants BOTH consents, and they never cross:
+// the UN1T marketing consent above (contact_preferences / email_status, as
+// before) AND the host's OWN list consent (host_contacts.marketing_consent,
+// its own consent_log channel — see src/lib/host-consent.js). If this
+// contact previously unsubscribed from THIS host (a row in
+// host_email_suppressions), signing up again is a re-subscribe: the
+// suppression is dropped, host consent is re-granted (source
+// 'host_resubscribe'), and only OUR OWN ManualSuppression is lifted on the
+// host's Postmark stream (never a bounce or complaint suppression).
+//
 // ENUMERATION: once the slug resolves and the body validates, the response
 // is ALWAYS { success: true } — a duplicate signup, an existing contact, or
 // an internal write failure all look identical from outside (failures are
@@ -32,6 +42,8 @@ import { ensureAnchorLocation, resolveMasterLocationId } from '@/lib/host-events
 import { hostTagFor } from '@/lib/host-contact-list'
 import { writeContactTag } from '@/lib/contact-tags'
 import { applyFormMarketingConsent } from '@/lib/marketing-consent'
+import { grantHostConsent, resubscribeHost } from '@/lib/host-consent'
+import { unsuppressAtPostmark } from '@/lib/postmark-suppressions'
 import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -62,7 +74,7 @@ export async function POST(request, props) {
   // while the sending domain's DNS is pending) — only the slug must exist.
   const { data: host } = await db
     .from('event_hosts')
-    .select('id, name, slug, organization_id, anchor_location_id')
+    .select('id, name, slug, organization_id, anchor_location_id, postmark_stream_id')
     .eq('slug', params.slug)
     .maybeSingle()
   if (!host) {
@@ -120,6 +132,33 @@ export async function POST(request, props) {
       )
     if (memberErr) {
       logError('host-list-subscribe', 'host_contacts upsert failed', { err: memberErr })
+    } else {
+      // HOST-CONSENT.1 — the HOST consent, independent of the UN1T one above.
+      // A contact who previously unsubscribed from THIS host and signs up
+      // again is resubscribing: drop the suppression, grant, and lift only
+      // our own ManualSuppression on the host's Postmark stream (never a
+      // bounce or complaint — unsuppressAtPostmark reads the reason first).
+      const { data: existingSup, error: supErr } = await db
+        .from('host_email_suppressions')
+        .select('id')
+        .eq('host_id', host.id)
+        .eq('contact_id', contactId)
+        .maybeSingle()
+      if (supErr) logError('host-list-subscribe', 'suppression lookup failed — resubscribe may be recorded as a plain signup', { err: supErr, host_id: host.id, contact_id: contactId })
+      const consentResult = existingSup
+        ? await resubscribeHost(db, { hostId: host.id, contactId, ipAddress: ip })
+        : await grantHostConsent(db, { hostId: host.id, contactId, source: 'mailing_list_form', ipAddress: ip })
+      if (!consentResult.ok) {
+        logError('host-list-subscribe', 'host consent write failed', { err: consentResult.error, host_id: host.id, contact_id: contactId })
+      }
+      if (existingSup && consentResult.ok && host.postmark_stream_id) {
+        try {
+          const lift = await unsuppressAtPostmark(email, { stream: host.postmark_stream_id })
+          if (lift?.failed?.length) logWarn('host-list-subscribe', 'Postmark host-stream lift failed', { message: lift.failed[0]?.message })
+        } catch (e) {
+          logWarn('host-list-subscribe', 'Postmark host-stream lift threw', { err: e?.message || String(e) })
+        }
+      }
     }
 
     // Host tag in BOTH systems (memory: the two tag systems are separate —

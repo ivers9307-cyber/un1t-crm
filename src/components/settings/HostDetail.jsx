@@ -106,6 +106,7 @@ function SenderDefaultsCard({ hostId, host, applyHost }) {
   const [senderEmail, setSenderEmail] = useState(host?.sender_email || '')
   const [senderName, setSenderName] = useState(host?.sender_name || '')
   const [replyTo, setReplyTo] = useState(host?.reply_to_email || '')
+  const [streamId, setStreamId] = useState(host?.postmark_stream_id || '')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState(null)
@@ -124,10 +125,11 @@ function SenderDefaultsCard({ hostId, host, applyHost }) {
           sender_email: senderEmail.trim() || null,
           sender_name: senderName.trim() || null,
           reply_to_email: replyTo.trim() || null,
+          postmark_stream_id: streamId.trim() || null,
         }),
       })
       const j = await res.json().catch(() => ({}))
-      if (!res.ok || !j.success) throw new Error(j.error || `HTTP ${res.status}`)
+      if (!res.ok || !j.success) throw new Error(j.issues?.[0]?.message || j.error || `HTTP ${res.status}`)
       applyHost(j.data)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
@@ -172,6 +174,19 @@ function SenderDefaultsCard({ hostId, host, applyHost }) {
           />
           <p className="text-xs text-un1t-subtle mt-1">
             Where replies to campaign emails land. Leave blank to use the host&apos;s login email{host?.email ? ` (${host.email})` : ''}.
+          </p>
+        </Field>
+        <Field label="Postmark marketing stream">
+          <input
+            type="text"
+            value={streamId}
+            onChange={(e) => setStreamId(e.target.value)}
+            maxLength={64}
+            placeholder="colm-events"
+            className="w-full border border-un1t-border rounded-md px-3 py-2 text-sm font-mono"
+          />
+          <p className="text-xs text-un1t-subtle mt-1">
+            The host&apos;s own Postmark Broadcasts stream ID. Create it in Postmark (Message Streams → Create → Broadcasts, unsubscribe handling Custom), add a webhook on that stream to <code>/api/webhooks/postmark</code> with all six events and the <code>x-webhook-token</code> header, then paste the ID here. Marketing sends are blocked until this is set; utility emails are unaffected. It must be the host&apos;s own stream, never UN1T&apos;s shared <code>broadcast</code> stream.
           </p>
         </Field>
         <p className="text-xs text-un1t-subtle">
@@ -1051,7 +1066,7 @@ export default function HostDetail({ hostId }) {
 
       {/* Sender defaults (HOST-EMAIL.5) — from-address, sender name, reply-to. */}
       <SenderDefaultsCard
-        key={`sender-${host.sender_email || ''}-${host.reply_to_email || ''}`}
+        key={`sender-${host.sender_email || ''}-${host.reply_to_email || ''}-${host.postmark_stream_id || ''}`}
         hostId={hostId}
         host={host}
         applyHost={applyHost}

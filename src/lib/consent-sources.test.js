@@ -161,7 +161,12 @@ function walk(dir, out = []) {
 // A `source: '<literal>'` sitting within ~700 characters after something that
 // writes consent. The \b before `source` keeps `lead_source:` and `utm_source:`
 // out, since `_` is a word character.
-const CONSENT_CONTEXT = /(?:consent_log|applyMarketingPreferences(?:Bulk)?|applyFormMarketingConsent)[\s\S]{0,700}/g
+//
+// HOST-CONSENT.1 — revokeHostConsent/grantHostConsent[Bulk]/resubscribeHost
+// (src/lib/host-consent.js) are consent_log writers one call removed: a
+// caller passes `source:` straight through to them, so a caller file never
+// mentions `consent_log` itself and was invisible to this scan.
+const CONSENT_CONTEXT = /(?:consent_log|applyMarketingPreferences(?:Bulk)?|applyFormMarketingConsent|revokeHostConsent|grantHostConsent(?:Bulk)?|resubscribeHost)[\s\S]{0,700}/g
 const SOURCE_LITERAL = /\bsource:\s*['"]([a-z0-9_]+)['"]/g
 
 function consentSourceLiterals() {
@@ -208,23 +213,44 @@ describe('consent sources written beside a consent write in src/', () => {
 // also covers the applyMarketingPreferences* helpers, which are not
 // consent_log writers themselves.
 
-const CONSENT_LOG_WRITERS = walk(SRC).filter((f) =>
-  /\.from\(\s*['"]consent_log['"]\s*\)[\s\S]{0,400}?\.(insert|upsert)\(/.test(readFileSync(f, 'utf8')))
+// HOST-CONSENT.1 — a file that calls revokeHostConsent/grantHostConsent[Bulk]/
+// resubscribeHost never touches `consent_log` itself (host-consent.js does,
+// one call away), so it was invisible to the `.from('consent_log')` pattern
+// below. Widened rather than replaced: both patterns are real writers.
+const DIRECT_CONSENT_LOG_INSERT = /\.from\(\s*['"]consent_log['"]\s*\)[\s\S]{0,400}?\.(insert|upsert)\(/
+const HOST_CONSENT_CALL = /\b(?:revokeHostConsent|grantHostConsentBulk|grantHostConsent|resubscribeHost)\(/
+const CONSENT_LOG_WRITERS = walk(SRC).filter((f) => {
+  const content = readFileSync(f, 'utf8')
+  return DIRECT_CONSENT_LOG_INSERT.test(content) || HOST_CONSENT_CALL.test(content)
+})
+
+// A direct writer is scanned whole-file, as before (unchanged behaviour for
+// the pre-existing 6). A host-helper CALLER is scanned only inside that
+// call's own argument list — not the whole file — because a caller can
+// legitimately carry an unrelated `source:` field nothing to do with consent
+// (host-contact-list.js tags a host_contacts row `source: 'event'`; a
+// whole-file scan there would misread it as an unregistered consent source).
+const FULL_FILE_SOURCE_LITERAL = /\bsource:\s*['"]([a-zA-Z0-9_]+)['"]/g
+const HOST_CONSENT_CALL_SOURCE = /\b(?:revokeHostConsent|grantHostConsentBulk|grantHostConsent|resubscribeHost)\([\s\S]{0,300}?\bsource:\s*['"]([a-zA-Z0-9_]+)['"]/g
 
 describe('every consent_log insert in src/ writes a registered source', () => {
   it('finds the writers (the scan is not silently matching nothing)', () => {
-    // 6 today. A refactor may legitimately move writes behind a helper and
-    // shrink this, but it must never reach zero unnoticed — that would turn
-    // the assertion below into a green no-op, which is the failure mode this
-    // whole file exists to prevent.
+    // 13 today (6 direct consent_log inserts, plus 7 files reaching it one
+    // call away through a host-consent.js helper). A refactor may
+    // legitimately move writes behind a helper and shrink this, but it must
+    // never reach zero unnoticed — that would turn the assertion below into
+    // a green no-op, which is the failure mode this whole file exists to
+    // prevent.
     expect(CONSENT_LOG_WRITERS.length).toBeGreaterThan(0)
   })
 
   it.each(CONSENT_LOG_WRITERS.map((f) => [path.relative(SRC, f), f]))(
     '%s names only registered sources',
     (_rel, file) => {
-      const literals = [...readFileSync(file, 'utf8').matchAll(/\bsource:\s*['"]([a-zA-Z0-9_]+)['"]/g)]
-        .map((m) => m[1])
+      const content = readFileSync(file, 'utf8')
+      const literals = DIRECT_CONSENT_LOG_INSERT.test(content)
+        ? [...content.matchAll(FULL_FILE_SOURCE_LITERAL)].map((m) => m[1])
+        : [...content.matchAll(HOST_CONSENT_CALL_SOURCE)].map((m) => m[1])
       const unmapped = [...new Set(literals)].filter((s) => categoriseConsentSource(s) === 'unknown')
       expect(unmapped).toEqual([])
     },

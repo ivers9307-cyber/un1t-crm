@@ -74,7 +74,7 @@ const CAMPAIGN = {
 const HOST = {
   id: HOST_ID, name: 'Dublin Runners', email: 'club@runners.ie',
   sender_email: 'news@runners.ie', sender_name: 'Dublin Runners CC',
-  sender_domain_verified: true,
+  sender_domain_verified: true, postmark_stream_id: 'colm-events',
 }
 const emailableContact = (id, email) => ({
   id, email, email_marketing: true, email_status: 'active', email_suppressed_at: null,
@@ -100,6 +100,7 @@ function routeFor(cfg) {
     }
     if (state.table === 'contacts') return { data: cfg.contacts ?? [], error: cfg.contactsErr ?? null }
     if (state.table === 'host_email_suppressions') return { data: cfg.suppressions ?? [], error: null }
+    if (state.table === 'host_contacts') return { data: cfg.hostContacts ?? [], error: cfg.hostContactsErr ?? null }
     if (state.table === 'host_campaign_sends') {
       if (first.method === 'select' && first.args[1]?.head) {
         const statusEq = state.ops.find((o) => o.method === 'eq' && o.args[0] === 'status')
@@ -191,6 +192,10 @@ describe('processHostCampaignChunk — claim and send', () => {
       { id: 's2', contact_id: 'c2', email: 'b@x.ie' },
     ],
     contacts: [emailableContact('c1', 'a@x.ie'), emailableContact('c2', 'b@x.ie')],
+    hostContacts: [
+      { contact_id: 'c1', marketing_consent: true },
+      { contact_id: 'c2', marketing_consent: true },
+    ],
     pendingLeft: 5, claimedLeft: 0, sentCount: 2,
   }
 
@@ -231,10 +236,13 @@ describe('processHostCampaignChunk — claim and send', () => {
     expect(op(refresh, 'update').args[0]).toEqual({ sent_count: 2 })
   })
 
-  it('terminally fails consent-revoked rows without sending them', async () => {
+  it('terminally fails host-consent-revoked rows without sending them', async () => {
     const { db, statements } = makeDb(routeFor({
       ...twoCandidates,
-      contacts: [emailableContact('c1', 'a@x.ie'), { ...emailableContact('c2', 'b@x.ie'), email_marketing: false }],
+      hostContacts: [
+        { contact_id: 'c1', marketing_consent: true },
+        { contact_id: 'c2', marketing_consent: false },
+      ],
     }))
     const result = await processHostCampaignChunk(db, CAMPAIGN_ID)
     expect(result.sent).toBe(1)
@@ -334,5 +342,71 @@ describe('processHostCampaignChunk — finalisation', () => {
     const result = await processHostCampaignChunk(db, CAMPAIGN_ID)
     expect(result.status).toBe('failed')
     expect(statements.some((s) => s.table === 'host_campaigns' && op(s, 'update'))).toBe(false)
+  })
+})
+
+describe('processHostCampaignChunk — HOST-CONSENT.1', () => {
+  const claimedRows = [{ id: 's1', contact_id: 'c1', email: 'a@x.ie' }]
+  const base = {
+    candidates: [{ id: 's1' }], claimed: claimedRows,
+    contacts: [emailableContact('c1', 'a@x.ie')],
+    hostContacts: [{ contact_id: 'c1', marketing_consent: true }],
+  }
+
+  it('sends marketing on the HOST stream (postmarkStream) with the internal broadcast stream and the unsubscribe URL', async () => {
+    const { db } = makeDb(routeFor(base))
+    await processHostCampaignChunk(db, CAMPAIGN_ID)
+    expect(sendEmail).toHaveBeenCalledTimes(1)
+    const call = sendEmail.mock.calls[0][0]
+    expect(call.stream).toBe('broadcast')
+    expect(call.postmarkStream).toBe('colm-events')
+    expect(call.unsubscribeUrl).toBe('https://crm.test/unsubscribe/host/tok')
+    expect(call.metadata).toMatchObject({ host_campaign_id: CAMPAIGN_ID, host_id: HOST_ID, contact_id: 'c1' })
+  })
+
+  it('utility stays on outbound with no postmarkStream and no unsubscribe header URL', async () => {
+    const { db } = makeDb(routeFor({ ...base, campaign: { ...CAMPAIGN, email_type: 'utility' }, contacts: [{ ...emailableContact('c1', 'a@x.ie'), email_administrative: true }] }))
+    await processHostCampaignChunk(db, CAMPAIGN_ID)
+    const call = sendEmail.mock.calls[0][0]
+    expect(call.stream).toBe('outbound')
+    expect(call.postmarkStream).toBeUndefined()
+    expect(call.unsubscribeUrl).toBeUndefined()
+  })
+
+  it('halts a marketing campaign when the host has no stream (nothing sent, nothing finalised)', async () => {
+    const { db, statements } = makeDb(routeFor({ ...base, host: { ...HOST, postmark_stream_id: null } }))
+    const r = await processHostCampaignChunk(db, CAMPAIGN_ID)
+    expect(r).toEqual({ status: 'halted', sent: 0, failed: 0 })
+    expect(sendEmail).not.toHaveBeenCalled()
+    expect(statements.some((s) => s.table === 'host_campaign_sends')).toBe(false)
+  })
+
+  it('a utility campaign still sends when the host has no stream', async () => {
+    const { db } = makeDb(routeFor({ ...base, host: { ...HOST, postmark_stream_id: null }, campaign: { ...CAMPAIGN, email_type: 'utility' }, contacts: [{ ...emailableContact('c1', 'a@x.ie'), email_administrative: true }] }))
+    await processHostCampaignChunk(db, CAMPAIGN_ID)
+    expect(sendEmail).toHaveBeenCalledTimes(1)
+  })
+
+  it('marks a claimed row failed when host consent is false, even with UN1T consent true', async () => {
+    const { db, statements } = makeDb(routeFor({ ...base, hostContacts: [{ contact_id: 'c1', marketing_consent: false }] }))
+    await processHostCampaignChunk(db, CAMPAIGN_ID)
+    expect(sendEmail).not.toHaveBeenCalled()
+    const failed = statements.find((s) => s.table === 'host_campaign_sends' && op(s, 'update')?.args[0]?.status === 'failed')
+    expect(failed).toBeTruthy()
+  })
+
+  it('sends to a contact opted OUT of UN1T marketing but consented to the host', async () => {
+    const { db } = makeDb(routeFor({ ...base, contacts: [{ ...emailableContact('c1', 'a@x.ie'), email_marketing: false }] }))
+    await processHostCampaignChunk(db, CAMPAIGN_ID)
+    expect(sendEmail).toHaveBeenCalledTimes(1)
+  })
+
+  it('scopes the host consent re-check to the campaign host and the claimed contacts', async () => {
+    const { db, statements } = makeDb(routeFor(base))
+    await processHostCampaignChunk(db, CAMPAIGN_ID)
+    const q = statements.find((s) => s.table === 'host_contacts')
+    expect(q.ops.some((o) => o.method === 'eq' && o.args[0] === 'host_id' && o.args[1] === HOST_ID)).toBe(true)
+    expect(q.ops.some((o) => o.method === 'in' && o.args[0] === 'contact_id')).toBe(true)
+    expect(op(q, 'select').args[0]).toMatch(/marketing_consent/)
   })
 })

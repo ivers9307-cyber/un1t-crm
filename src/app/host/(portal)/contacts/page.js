@@ -1,6 +1,6 @@
 // Host contacts (HOST-EMAIL.1) — the host's OWN list: event participants
 // (+ mailing-list signups from PR-B), with each contact's send-time
-// emailability (marketing consent + bounce/complaint/unsubscribe flags +
+// emailability (host consent + bounce/complaint/unsubscribe flags +
 // per-host suppression). Server-rendered + scoped: getCurrentHost() →
 // fetchHostContactRows scopes every query to session.host.id. Read-only;
 // Export CSV mirrors the roster page's export button.

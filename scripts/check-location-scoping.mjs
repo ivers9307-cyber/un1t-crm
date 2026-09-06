@@ -244,6 +244,14 @@ export const EXEMPT = {
     race_events:
       'Master/owner-gated one-off admin backfill that walks EVERY hosted event to link host contacts at each host\'s anchor location — hosted-events hosts are a platform-level surface, and the route returns counts only (no tenant rows).',
   },
+  'src/app/api/unsubscribe/host/[token]/route.js': {
+    contacts:
+      'HOST-CONSENT.1 — RFC 8058 one-click target for host marketing mail. The contacts row is reached ONLY via the HMAC host-unsubscribe token (src/lib/host-unsubscribe.js) that names exactly one (host, contact) pair; the capability IS the scoping, the same argument as /api/unsubscribe/[token]. The query reads a single email column to push the Postmark suppression on the host\'s own stream and returns nothing about the contact.',
+  },
+  'src/app/unsubscribe/host/[token]/page.js': {
+    contacts:
+      'HOST-CONSENT.1 — per-host unsubscribe landing page (server component). Same HMAC host-unsubscribe token capability as the one-click route above names exactly one (host, contact) pair; the single-column email read only feeds the best-effort Postmark suppression push and nothing from the row is rendered.',
+  },
   'src/app/api/public/start-prefill/route.js': {
     contacts:
       'STARTPREFILL.1 — public booking-form prefill. The contacts row is reached ONLY via an HMAC-signed, time-limited capability token that names exactly one contact id (src/lib/start-prefill-token.js); there is no session and therefore no tenant to scope to, so the capability IS the scoping — the same argument as /api/unsubscribe/[token] and hr-emails above. Verified in src/lib/start-prefill-token.test.js: a forged, tampered, expired, expiry-less or wrong-secret token all resolve to null before this query is reached. The response is narrowed to the four fields the booking form has inputs for, and every failure returns an identical 404 so token validity cannot be probed.',

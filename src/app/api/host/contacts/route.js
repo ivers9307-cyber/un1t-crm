@@ -1,7 +1,7 @@
 // GET /api/host/contacts
 //
 // The host's OWN contact list (HOST-EMAIL.1): host_contacts membership joined
-// to the contact's identity + the exact broadcast consent flags, with
+// to the contact's identity + host consent (host_contacts.marketing_consent) + mailbox flags, with
 // `emailable` computed via isEmailable — the same predicate PR-C's send path
 // uses, so what this shows is exactly who a campaign would reach.
 // Tenancy: getCurrentHost() → fetchHostContactRows scopes every query

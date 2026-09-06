@@ -12,6 +12,7 @@ import { notFound } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
 import HostListSignup from '@/components/HostListSignup'
 import { poppinsBody as poppins } from '@/fonts/poppins'
+import { getOrgBrandName } from '@/lib/location-branding'
 
 // Same brand-font setup as /event/[slug] — self-hosted Poppins scoped to
 // this public subtree via the `--font-body` variable.
@@ -42,16 +43,19 @@ export default async function HostMailingListPage(props) {
   const db = createServerClient()
   const { data: host } = await db
     .from('event_hosts')
-    .select('id, name, slug, list_headline, list_blurb, list_button_label, list_success_message')
+    .select('id, name, slug, organization_id, list_headline, list_blurb, list_button_label, list_success_message')
     .eq('slug', params.slug)
     .maybeSingle()
   if (!host) notFound()
+
+  const orgName = await getOrgBrandName(db, host.organization_id)
 
   return (
     <div className={`${poppins.variable} font-body flex min-h-screen items-center justify-center bg-black px-4 py-16 text-white`}>
       <HostListSignup
         slug={host.slug}
         hostName={host.name}
+        orgName={orgName}
         headline={host.list_headline}
         blurb={host.list_blurb}
         buttonLabel={host.list_button_label}

@@ -92,6 +92,8 @@ const EXEMPT = {
     'Spec read for any logged-in user — the middleware session gate is the auth (no tenant data; champ-app JWTs reading the spec is acceptable).',
   'src/app/api/unsubscribe/[token]/route.js':
     'Capability-token URL (per-contact unsubscribe token) + rate-limited — public by design, RFC 8058 one-click target.',
+  'src/app/api/unsubscribe/host/[token]/route.js':
+    'Capability-token URL (HMAC per-host, per-contact token, host-unsubscribe.js) + per-IP budget on invalid tokens — public by design, RFC 8058 one-click target for host emails (HOST-CONSENT.1).',
   'src/app/api/preferences/[token]/route.js':
     'Capability-token URL (per-contact preference token) + rate-limited — public by design.',
   'src/app/api/preferences/hr-emails/route.js':

@@ -1006,7 +1006,8 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                   Defaulted on; the registration is the legitimate-
                   interest service relationship that qualifies under
                   PECR / GDPR soft opt-in. Operator-side helper
-                  excludes ClassPass contacts regardless. */}
+                  excludes ClassPass contacts regardless.
+                  HOST-CONSENT.1 — hosted events name both lists. */}
               <label className="flex items-start gap-2.5 text-[12px] text-white/55 cursor-pointer select-none">
                 <input
                   type="checkbox"
@@ -1015,8 +1016,16 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                   className="mt-0.5 shrink-0 accent-white"
                 />
                 <span>
-                  Yes, send me UN1T promotional updates and offers via email, SMS or WhatsApp.
-                  You can unsubscribe at any time. Event-related notifications are sent regardless.
+                  {race.host_name ? (
+                    <>
+                      Yes, send me emails from {race.host_name} about their events, and promotional updates from {race.organization_name || 'the studio'} via email, SMS or WhatsApp. You can leave either list at any time. Event-related notifications are sent regardless.
+                    </>
+                  ) : (
+                    <>
+                      Yes, send me UN1T promotional updates and offers via email, SMS or WhatsApp.
+                      You can unsubscribe at any time. Event-related notifications are sent regardless.
+                    </>
+                  )}
                 </span>
               </label>
 

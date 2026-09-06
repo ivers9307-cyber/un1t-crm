@@ -17,9 +17,14 @@ vi.mock('./bca-events.js', () => ({
   findBcaSubmissionByMessageId: vi.fn(),
   recordBcaPostmarkEvent: vi.fn(),
 }))
+vi.mock('./host-campaign-webhooks.js', () => ({
+  isHostCampaignEvent: vi.fn(() => false),
+  processHostCampaignEvent: vi.fn(async () => ({ ok: true })),
+}))
 
 import { processPostmarkEvent } from './postmark-webhook-processor.js'
 import { applyMarketingPreferencesBulk } from './marketing-consent.js'
+import { isHostCampaignEvent, processHostCampaignEvent } from './host-campaign-webhooks.js'
 
 function stubDb({ send, rpcCalls }) {
   return {
@@ -1275,5 +1280,17 @@ describe('processPostmarkEvent — raced consent events (POSTMARK-RACE.1)', () =
     })
 
     expect(r).toEqual({ ok: true })
+  })
+})
+
+describe('processPostmarkEvent — HOST-CONSENT.1 routing', () => {
+  it('hands a host campaign event to processHostCampaignEvent and never reaches the CRM branches', async () => {
+    isHostCampaignEvent.mockReturnValueOnce(true)
+    const rpcCalls = []
+    const db = stubDb({ send: null, rpcCalls })
+    const r = await processPostmarkEvent(db, { RecordType: 'SubscriptionChange', MessageID: 'pm-h', SuppressSending: true, Metadata: { host_campaign_id: 'hc-1', host_id: 'h-1', contact_id: 'c-1' } })
+    expect(r).toEqual({ ok: true })
+    expect(processHostCampaignEvent).toHaveBeenCalledTimes(1)
+    expect(applyMarketingPreferencesBulk).not.toHaveBeenCalled()
   })
 })

@@ -44,45 +44,68 @@ describe('eventTagFor', () => {
 })
 
 describe('isEmailable', () => {
-  // Mirrors the broadcast send path's exact marketing gate:
-  //   postmark.js buildAudienceQuery — email_marketing = true,
+  // HOST-CONSENT.1 — the marketing gate is host_contacts.marketing_consent
+  // (opts.hostConsent), passed in by the caller, not contacts.email_marketing:
+  //   no host_email_suppressions row, hostConsent === true,
   //   email_status NOT IN ('bounced','complained'), email_suppressed_at IS NULL
-  //   campaign-sender.js consentOk — email_marketing === true &&
-  //   !['bounced','complained'].includes(email_status)
-  //   (an unsubscribe flips email_marketing to false — mig 492 retired the
-  //   email_status='unsubscribed' stamp; the column is reputation-only)
+  // email_marketing stays on the fixture (later tasks drop it from selects)
+  // but no longer participates in the predicate — see the nested describe
+  // below for the tests proving that.
   const good = { email: 'a@b.ie', email_marketing: true, email_status: 'active', email_suppressed_at: null }
 
   it('is true for a consented contact with an email and clean flags', () => {
-    expect(isEmailable(good, false)).toBe(true)
+    expect(isEmailable(good, false, { hostConsent: true })).toBe(true)
   })
   it('is false without an email address', () => {
-    expect(isEmailable({ ...good, email: null }, false)).toBe(false)
-    expect(isEmailable({ ...good, email: '' }, false)).toBe(false)
-  })
-  it('is false without marketing consent (email_marketing !== true)', () => {
-    expect(isEmailable({ ...good, email_marketing: false }, false)).toBe(false)
-    expect(isEmailable({ ...good, email_marketing: null }, false)).toBe(false)
-    expect(isEmailable({ ...good, email_marketing: undefined }, false)).toBe(false)
+    expect(isEmailable({ ...good, email: null }, false, { hostConsent: true })).toBe(false)
+    expect(isEmailable({ ...good, email: '' }, false, { hostConsent: true })).toBe(false)
   })
   it('is false when bounced / complained', () => {
-    expect(isEmailable({ ...good, email_status: 'bounced' }, false)).toBe(false)
-    expect(isEmailable({ ...good, email_status: 'complained' }, false)).toBe(false)
+    expect(isEmailable({ ...good, email_status: 'bounced' }, false, { hostConsent: true })).toBe(false)
+    expect(isEmailable({ ...good, email_status: 'complained' }, false, { hostConsent: true })).toBe(false)
   })
-  it('tolerates a missing/other email_status — incl. retired unsubscribed (mig 492: real opt-outs carry email_marketing=false)', () => {
-    expect(isEmailable({ ...good, email_status: null }, false)).toBe(true)
-    expect(isEmailable({ ...good, email_status: undefined }, false)).toBe(true)
-    expect(isEmailable({ ...good, email_status: 'unsubscribed' }, false)).toBe(true)
+  it('tolerates a missing/other email_status — incl. retired unsubscribed (mig 492)', () => {
+    expect(isEmailable({ ...good, email_status: null }, false, { hostConsent: true })).toBe(true)
+    expect(isEmailable({ ...good, email_status: undefined }, false, { hostConsent: true })).toBe(true)
+    expect(isEmailable({ ...good, email_status: 'unsubscribed' }, false, { hostConsent: true })).toBe(true)
   })
   it('is false when inactivity-suppressed (email_suppressed_at set, mig 395)', () => {
-    expect(isEmailable({ ...good, email_suppressed_at: '2026-01-01T00:00:00Z' }, false)).toBe(false)
+    expect(isEmailable({ ...good, email_suppressed_at: '2026-01-01T00:00:00Z' }, false, { hostConsent: true })).toBe(false)
   })
   it('is false when per-host suppressed', () => {
-    expect(isEmailable(good, true)).toBe(false)
+    expect(isEmailable(good, true, { hostConsent: true })).toBe(false)
   })
   it('is false for a missing contact (defensive)', () => {
-    expect(isEmailable(null, false)).toBe(false)
-    expect(isEmailable(undefined, false)).toBe(false)
+    expect(isEmailable(null, false, { hostConsent: true })).toBe(false)
+    expect(isEmailable(undefined, false, { hostConsent: true })).toBe(false)
+  })
+
+  describe('HOST-CONSENT.1 — host consent replaces the UN1T flag for marketing', () => {
+    const optedOutOfUn1t = { ...good, email_marketing: false }
+
+    it('is TRUE for a contact opted out of UN1T marketing but consented to the host', () => {
+      expect(isEmailable(optedOutOfUn1t, false, { hostConsent: true })).toBe(true)
+    })
+    it('is FALSE when host consent is false, even with UN1T consent true', () => {
+      expect(isEmailable(good, false, { hostConsent: false })).toBe(false)
+      expect(isEmailable(good, false, { hostConsent: null })).toBe(false)
+    })
+    it('fails CLOSED when hostConsent is omitted', () => {
+      expect(isEmailable(good, false)).toBe(false)
+      expect(isEmailable(good, false, {})).toBe(false)
+    })
+    it('still blocks a per-host suppression with host consent true', () => {
+      expect(isEmailable(good, true, { hostConsent: true })).toBe(false)
+    })
+    it('still blocks mailbox facts with host consent true', () => {
+      expect(isEmailable({ ...good, email_status: 'bounced' }, false, { hostConsent: true })).toBe(false)
+      expect(isEmailable({ ...good, email_status: 'complained' }, false, { hostConsent: true })).toBe(false)
+      expect(isEmailable({ ...good, email_suppressed_at: '2026-08-11T05:45:14Z' }, false, { hostConsent: true })).toBe(false)
+    })
+    it('utility ignores hostConsent entirely (administrative consent + mailbox facts only)', () => {
+      const admin = { ...good, email_administrative: true, email_marketing: false }
+      expect(isEmailable(admin, true, { emailType: 'utility', hostConsent: false })).toBe(true)
+    })
   })
 })
 
@@ -181,6 +204,62 @@ const reg = (contactIds) => ({
   id: 'r-' + contactIds.join('-'),
   teams: { team_members: contactIds.map((c) => ({ contact_id: c })) },
 })
+
+// ---------------------------------------------------------------------------
+// HOST-CONSENT.1 — fakeListDb only models select/upsert on host_contacts, not
+// the `update` grantHostConsentBulk issues. makeRecorder is a generic
+// chainable statement recorder (used ONLY by the two HOST-CONSENT.1 tests
+// below) so the real host-consent.js module can run unmocked against it and
+// the update statement it issues is visible for assertions.
+// ---------------------------------------------------------------------------
+function makeRecorder(route) {
+  const statements = []
+  const db = {
+    from(table) {
+      const state = { table, ops: [] }
+      statements.push(state)
+      const b = new Proxy({}, {
+        get(_, method) {
+          if (method === 'then') {
+            const p = Promise.resolve(route(state) ?? { data: null, error: null })
+            return p.then.bind(p)
+          }
+          return (...args) => { state.ops.push({ method, args }); return b }
+        },
+      })
+      return b
+    },
+  }
+  return { db, statements }
+}
+const opOf = (s, m) => s.ops.find((o) => o.method === m)
+
+function fakeSyncDb(cfg) {
+  return makeRecorder((state) => {
+    const { table, ops } = state
+    if (table === 'race_events') return { data: cfg.race, error: null }
+    if (table === 'race_registrations') return { data: cfg.registrations, error: null }
+    if (table === 'event_hosts') return { data: { id: 'h1', slug: 'run', name: 'Run' }, error: null }
+    if (table === 'contacts') {
+      const hasSelect = ops.some((o) => o.method === 'select')
+      return hasSelect ? { data: [], error: null } : { data: null, error: null }
+    }
+    if (table === 'host_contacts') {
+      const updateOp = ops.find((o) => o.method === 'update')
+      if (updateOp) {
+        if (cfg.throwOnHostContactsUpdate && ops[0]?.method === 'update') {
+          throw new Error('host_contacts update boom')
+        }
+        const inOp = ops.find((o) => o.method === 'in')
+        const ids = inOp ? inOp.args[1] : []
+        return { data: ids.map((id) => ({ contact_id: id })), error: null }
+      }
+      return { data: [], error: null }
+    }
+    if (table === 'host_email_suppressions') return { data: cfg.suppressions ?? [], error: null }
+    return { data: [], error: null }
+  })
+}
 
 describe('addEventAttendeesToHostList', () => {
   it('returns 0 and never upserts when the race does not exist', async () => {
@@ -380,23 +459,79 @@ describe('addEventAttendeesToHostList', () => {
       expect(writeContactTag).toHaveBeenCalledWith(db, { contactId: 'c1', locationId: 'loc1', tag: 'event:pride-run' })
     })
   })
+
+  it('HOST-CONSENT.1 — grants host consent to registrants who ticked the box, not to their team-mates', async () => {
+    const { db, statements } = fakeSyncDb({
+      race: { id: 'r1', host_id: 'h1', slug: 'run', name: 'Run' },
+      registrations: [
+        { id: 'reg-1', contact_id: 'cap-1', marketing_consent: true,  teams: { team_members: [{ contact_id: 'cap-1' }, { contact_id: 'mate-1' }] } },
+        { id: 'reg-2', contact_id: 'cap-2', marketing_consent: false, teams: { team_members: [{ contact_id: 'cap-2' }] } },
+        { id: 'reg-3', contact_id: 'cap-3', marketing_consent: null,  teams: { team_members: [{ contact_id: 'cap-3' }] } },
+      ],
+    })
+    await addEventAttendeesToHostList(db, 'r1')
+    // membership for all four
+    const upsert = statements.find((s) => s.table === 'host_contacts' && opOf(s, 'upsert'))
+    expect(opOf(upsert, 'upsert').args[0].map((r) => r.contact_id).sort()).toEqual(['cap-1', 'cap-2', 'cap-3', 'mate-1'])
+    // consent for cap-1 only (pre-588 NULL rows and unticked boxes grant nothing)
+    const grant = statements.find((s) => s.table === 'host_contacts' && opOf(s, 'update'))
+    expect(opOf(grant, 'in').args).toEqual(['contact_id', ['cap-1']])
+    expect(opOf(grant, 'update').args[0]).toMatchObject({ marketing_consent: true, marketing_consent_source: 'event_form' })
+  })
+
+  it('HOST-CONSENT.1 — a ticked box does not re-open a prior host unsubscribe (no opt_in for a suppressed contact)', async () => {
+    const { db, statements } = fakeSyncDb({
+      race: { id: 'r1', host_id: 'h1', slug: 'run', name: 'Run' },
+      registrations: [
+        { id: 'reg-1', contact_id: 'cap-1', marketing_consent: true, teams: { team_members: [{ contact_id: 'cap-1' }] } },
+        { id: 'reg-2', contact_id: 'cap-2', marketing_consent: true, teams: { team_members: [{ contact_id: 'cap-2' }] } },
+      ],
+      suppressions: [{ contact_id: 'cap-1' }],
+    })
+    await addEventAttendeesToHostList(db, 'r1')
+    const grant = statements.find((s) => s.table === 'host_contacts' && opOf(s, 'update'))
+    expect(opOf(grant, 'in').args).toEqual(['contact_id', ['cap-2']])
+    const supQ = statements.find((s) => s.table === 'host_email_suppressions')
+    expect(supQ.ops.some((o) => o.method === 'eq' && o.args[0] === 'host_id' && o.args[1] === 'h1')).toBe(true)
+  })
+
+  it('HOST-CONSENT.1 — a throwing grant does not abort the sync (tagging still runs)', async () => {
+    const { db, statements } = fakeSyncDb({
+      race: { id: 'r1', host_id: 'h1', slug: 'run', name: 'Run' },
+      registrations: [{ id: 'reg-1', contact_id: 'cap-1', marketing_consent: true, teams: { team_members: [{ contact_id: 'cap-1' }] } }],
+      throwOnHostContactsUpdate: true,
+    })
+    const n = await addEventAttendeesToHostList(db, 'r1')
+    expect(n).toBe(1)
+    expect(statements.some((s) => s.table === 'contacts')).toBe(true) // tagging block ran
+  })
+
+  it('HOST-CONSENT.1 — the registrations select carries contact_id and marketing_consent', async () => {
+    const { db, statements } = fakeSyncDb({ race: { id: 'r1', host_id: 'h1', slug: 'run', name: 'Run' }, registrations: [] })
+    await addEventAttendeesToHostList(db, 'r1')
+    const regs = statements.find((s) => s.table === 'race_registrations')
+    expect(opOf(regs, 'select').args[0]).toMatch(/contact_id, marketing_consent/)
+  })
 })
 
 // ---------------------------------------------------------------------------
 // fetchHostContactRows — membership join + suppression set → emailable rows.
 // ---------------------------------------------------------------------------
 function fakeRowsDb({ memberships = [], suppressions = [] } = {}) {
-  const calls = { hostFilters: [] }
+  const calls = { hostFilters: [], selects: [] }
   const pageBuilder = (table, rows) => ({
-    select: () => ({
-      eq: (col, val) => {
-        calls.hostFilters.push([table, col, val])
-        // Chainable order — the real query adds a unique-id tiebreaker
-        // after created_at (stable pagination across ties).
-        const chain = { order: () => chain, range: async () => ({ data: rows, error: null }) }
-        return chain
-      },
-    }),
+    select: (cols) => {
+      calls.selects.push([table, cols])
+      return {
+        eq: (col, val) => {
+          calls.hostFilters.push([table, col, val])
+          // Chainable order — the real query adds a unique-id tiebreaker
+          // after created_at (stable pagination across ties).
+          const chain = { order: () => chain, range: async () => ({ data: rows, error: null }) }
+          return chain
+        },
+      }
+    },
   })
   return {
     calls,
@@ -409,12 +544,14 @@ function fakeRowsDb({ memberships = [], suppressions = [] } = {}) {
 }
 
 describe('fetchHostContactRows', () => {
-  const membership = (contactId, contact, source = 'event') => ({
+  const membership = (contactId, contact, source = 'event', marketing_consent = true) => ({
     contact_id: contactId,
     source,
     created_at: '2026-07-01T10:00:00Z',
+    marketing_consent,
     contact,
   })
+  // email_marketing stays in the fixture on purpose: the host gate must IGNORE it (HOST-CONSENT.1).
   const goodContact = (id) => ({
     id, name: 'Pat', email: `${id}@x.ie`, email_marketing: true, email_status: 'active', email_suppressed_at: null,
   })
@@ -428,6 +565,15 @@ describe('fetchHostContactRows', () => {
     ])
   })
 
+  it('HOST-CONSENT.1 — selects host_contacts.marketing_consent and the disambiguated contact join', async () => {
+    const db = fakeRowsDb()
+    await fetchHostContactRows(db, 'h1')
+    const [, cols] = db.calls.selects.find(([t]) => t === 'host_contacts')
+    expect(cols).toMatch(/marketing_consent/)
+    expect(cols).toMatch(/contacts!contact_id/)
+    expect(cols).not.toMatch(/email_marketing/)
+  })
+
   it('returns rows with emailable computed via isEmailable', async () => {
     const db = fakeRowsDb({
       memberships: [
@@ -437,8 +583,22 @@ describe('fetchHostContactRows', () => {
     })
     const rows = await fetchHostContactRows(db, 'h1')
     expect(rows).toEqual([
-      { contact_id: 'c1', name: 'Pat', email: 'c1@x.ie', source: 'event', created_at: '2026-07-01T10:00:00Z', emailable: true },
-      { contact_id: 'c2', name: 'Pat', email: 'c2@x.ie', source: 'mailing_list', created_at: '2026-07-01T10:00:00Z', emailable: false },
+      { contact_id: 'c1', name: 'Pat', email: 'c1@x.ie', source: 'event', created_at: '2026-07-01T10:00:00Z', marketing_consent: true, emailable: true },
+      { contact_id: 'c2', name: 'Pat', email: 'c2@x.ie', source: 'mailing_list', created_at: '2026-07-01T10:00:00Z', marketing_consent: true, emailable: true },
+    ])
+  })
+
+  it('HOST-CONSENT.1 — emailable follows host consent, not contacts.email_marketing', async () => {
+    const db = fakeRowsDb({
+      memberships: [
+        membership('c1', { ...goodContact('c1'), email_marketing: false }, 'event', true),
+        membership('c2', goodContact('c2'), 'event', false),
+      ],
+    })
+    const rows = await fetchHostContactRows(db, 'h1')
+    expect(rows.map((r) => [r.contact_id, r.emailable, r.marketing_consent])).toEqual([
+      ['c1', true, true],
+      ['c2', false, false],
     ])
   })
 
@@ -472,9 +632,9 @@ describe('isEmailable — utility emails', () => {
     expect(isEmailable({ ...base, email_status: 'complained' }, false, { emailType: 'utility' })).toBe(false)
     expect(isEmailable({ ...base, email_suppressed_at: '2026-01-01' }, false, { emailType: 'utility' })).toBe(false)
   })
-  it('marketing gate is unchanged by default', () => {
-    expect(isEmailable(base, false)).toBe(false)
-    expect(isEmailable({ ...base, email_marketing: true }, false)).toBe(true)
-    expect(isEmailable({ ...base, email_marketing: true }, true)).toBe(false)
+  it('HOST-CONSENT.1 — marketing gate now runs on hostConsent, independent of email_marketing', () => {
+    expect(isEmailable(base, false)).toBe(false) // no hostConsent → fails closed
+    expect(isEmailable(base, false, { hostConsent: true })).toBe(true) // host consent, despite email_marketing:false
+    expect(isEmailable(base, true, { hostConsent: true })).toBe(false) // per-host suppression still blocks
   })
 })
