@@ -71,4 +71,7 @@ describe('schedulePanelDefaults', () => {
   it('defaults a draft to the next quarter hour at least 15 minutes out', () => {
     expect(schedulePanelDefaults({ scheduled_for: null }, Date.parse('2026-09-07T10:03:00Z'))).toEqual({ date: '2026-09-07', time: '11:30' })
   })
+  it('falls back to the next quarter hour when scheduled_for is garbage', () => {
+    expect(schedulePanelDefaults({ scheduled_for: 'nope' }, Date.parse('2026-09-07T10:03:00Z'))).toEqual({ date: '2026-09-07', time: '11:30' })
+  })
 })

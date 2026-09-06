@@ -115,6 +115,7 @@ export default function HostEmails() {
   const [scheduleDate, setScheduleDate] = useState('')
   const [scheduleTime, setScheduleTime] = useState('')
   const [scheduleBusy, setScheduleBusy] = useState(false)
+  const [schedulingBusyId, setSchedulingBusyId] = useState(null) // row whose Cancel/Edit/Change-time is mid-request
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const editorInited = useRef(false)
@@ -368,10 +369,10 @@ export default function HostEmails() {
   }
 
   async function confirmSchedule(id) {
-    const iso = dublinLocalToIso(scheduleDate, scheduleTime)
-    if (!iso) { setError('Pick a valid date and time.'); return }
     setError('')
     setNotice('')
+    const iso = dublinLocalToIso(scheduleDate, scheduleTime)
+    if (!iso) { setError('Pick a valid date and time.'); return }
     setScheduleBusy(true)
     try {
       const res = await fetch(`/api/host/emails/${id}/schedule`, {
@@ -416,17 +417,35 @@ export default function HostEmails() {
 
   async function cancelSchedule(id) {
     if (!window.confirm('Cancel this scheduled send? The email goes back to your drafts.')) return
-    if (await unschedule(id)) setNotice('Schedule cancelled.')
+    setSchedulingId(null)
+    setSchedulingBusyId(id)
+    try {
+      if (await unschedule(id)) setNotice('Schedule cancelled.')
+    } finally {
+      setSchedulingBusyId(null)
+    }
   }
 
   async function editScheduled(id) {
     if (!window.confirm('Editing cancels the scheduled send. You can schedule it again after saving.')) return
-    if (await unschedule(id)) await editDraft(id)
+    setSchedulingId(null)
+    setSchedulingBusyId(id)
+    try {
+      if (await unschedule(id)) await editDraft(id)
+    } finally {
+      setSchedulingBusyId(null)
+    }
   }
 
-  const input =
-    'w-full rounded-lg border border-white/15 bg-white/[0.04] px-3 py-2 text-sm text-white ' +
+  const inputBase =
+    'rounded-lg border border-white/15 bg-white/[0.04] px-3 py-2 text-sm text-white ' +
     'placeholder:text-white/30 focus:outline-none focus:border-white/40'
+  const input = `w-full ${inputBase}`
+  const btnSecondary =
+    'rounded-lg border border-white/20 text-white/80 text-xs font-semibold px-3 py-1.5 ' +
+    'hover:text-white hover:border-white/40 disabled:opacity-50'
+  const btnPrimary =
+    'rounded-lg bg-white text-black text-xs font-semibold px-3 py-1.5 hover:bg-white/90 disabled:opacity-50'
 
   return (
     <div>
@@ -632,7 +651,7 @@ export default function HostEmails() {
                           type="button"
                           onClick={() => editDraft(c.id)}
                           disabled={loadingDraftId === c.id}
-                          className="rounded-lg border border-white/20 text-white/80 text-xs font-semibold px-3 py-1.5 hover:text-white hover:border-white/40 disabled:opacity-50"
+                          className={btnSecondary}
                         >
                           {loadingDraftId === c.id ? 'Opening…' : 'Edit'}
                         </button>
@@ -640,14 +659,16 @@ export default function HostEmails() {
                           type="button"
                           onClick={() => sendTest(c.id)}
                           disabled={testingId === c.id}
-                          className="rounded-lg border border-white/20 text-white/80 text-xs font-semibold px-3 py-1.5 hover:text-white hover:border-white/40 disabled:opacity-50"
+                          className={btnSecondary}
                         >
                           {testingId === c.id ? 'Sending…' : 'Test'}
                         </button>
                         <button
                           type="button"
                           onClick={() => (schedulingId === c.id ? setSchedulingId(null) : openSchedule(c))}
-                          className="rounded-lg border border-white/20 text-white/80 text-xs font-semibold px-3 py-1.5 hover:text-white hover:border-white/40"
+                          aria-expanded={schedulingId === c.id}
+                          aria-controls={`schedule-panel-${c.id}`}
+                          className={btnSecondary}
                         >
                           Schedule
                         </button>
@@ -655,7 +676,7 @@ export default function HostEmails() {
                           type="button"
                           onClick={() => send(c.id, c.audience_kind === 'mailing_list' ? '__mailing_list__' : (c.audience_event_id || ''), c.email_type)}
                           disabled={sendingId === c.id}
-                          className="rounded-lg bg-white text-black text-xs font-semibold px-3 py-1.5 hover:bg-white/90 disabled:opacity-50"
+                          className={btnPrimary}
                         >
                           {sendingId === c.id ? 'Sending…' : 'Send'}
                         </button>
@@ -666,37 +687,45 @@ export default function HostEmails() {
                         <button
                           type="button"
                           onClick={() => (schedulingId === c.id ? setSchedulingId(null) : openSchedule(c))}
-                          className="rounded-lg border border-white/20 text-white/80 text-xs font-semibold px-3 py-1.5 hover:text-white hover:border-white/40"
+                          disabled={schedulingBusyId === c.id}
+                          aria-expanded={schedulingId === c.id}
+                          aria-controls={`schedule-panel-${c.id}`}
+                          className={btnSecondary}
                         >
                           Change time
                         </button>
                         <button
                           type="button"
                           onClick={() => editScheduled(c.id)}
-                          disabled={loadingDraftId === c.id}
-                          className="rounded-lg border border-white/20 text-white/80 text-xs font-semibold px-3 py-1.5 hover:text-white hover:border-white/40 disabled:opacity-50"
+                          disabled={loadingDraftId === c.id || schedulingBusyId === c.id}
+                          className={btnSecondary}
                         >
-                          {loadingDraftId === c.id ? 'Opening…' : 'Edit'}
+                          {schedulingBusyId === c.id || loadingDraftId === c.id ? 'Opening…' : 'Edit'}
                         </button>
                         <button
                           type="button"
                           onClick={() => cancelSchedule(c.id)}
-                          className="rounded-lg border border-red-400/40 text-red-300 text-xs font-semibold px-3 py-1.5 hover:border-red-300"
+                          disabled={schedulingBusyId === c.id}
+                          className="rounded-lg border border-red-400/40 text-red-300 text-xs font-semibold px-3 py-1.5 hover:border-red-300 disabled:opacity-50"
                         >
-                          Cancel
+                          {schedulingBusyId === c.id ? 'Cancelling…' : 'Cancel'}
                         </button>
                       </div>
                     )}
                   </div>
-                  {schedulingId === c.id && (
-                    <div className="mt-3 rounded-lg border border-white/10 bg-white/[0.03] p-3 flex flex-wrap items-end gap-3">
+                  {schedulingId === c.id && (c.status === 'draft' || c.status === 'scheduled') && (
+                    <div
+                      id={`schedule-panel-${c.id}`}
+                      className="mt-3 rounded-lg border border-white/10 bg-white/[0.03] p-3 flex flex-wrap items-end gap-3"
+                    >
                       <label className="block text-xs text-white/60">
                         Date
                         <input
                           type="date"
                           value={scheduleDate}
+                          min={isoToDublinInputs(Date.now()).date}
                           onChange={(e) => setScheduleDate(e.target.value)}
-                          className={`${input} mt-1 w-auto`}
+                          className={`${inputBase} mt-1`}
                         />
                       </label>
                       <label className="block text-xs text-white/60">
@@ -704,7 +733,7 @@ export default function HostEmails() {
                         <select
                           value={scheduleTime}
                           onChange={(e) => setScheduleTime(e.target.value)}
-                          className={`${input} mt-1 w-auto`}
+                          className={`${inputBase} mt-1`}
                         >
                           {TIME_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
                         </select>
@@ -713,7 +742,7 @@ export default function HostEmails() {
                         type="button"
                         onClick={() => confirmSchedule(c.id)}
                         disabled={scheduleBusy}
-                        className="rounded-lg bg-white text-black text-xs font-semibold px-3 py-2 hover:bg-white/90 disabled:opacity-50"
+                        className={btnPrimary}
                       >
                         {scheduleBusy ? 'Saving…' : 'Confirm'}
                       </button>
@@ -725,7 +754,7 @@ export default function HostEmails() {
                         Close
                       </button>
                       <p className="basis-full text-[11px] text-white/40 mt-1">
-                        Sends within two minutes of this time. Every check (sender, list, daily limit) runs again then.
+                        Starts sending within a few minutes of this time. Every check (sender, list, daily limit) runs again then.
                       </p>
                     </div>
                   )}
