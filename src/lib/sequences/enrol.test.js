@@ -12,7 +12,7 @@
 //   5. the parent-counter RPC is fired post-insert
 //   6. RPC failures don't propagate (best-effort accounting)
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 
@@ -449,7 +449,13 @@ describe('ENROLDEDUP.1 — the write is idempotent, not all-or-nothing', () => {
 })
 
 describe('allowReenrol — re-activate a terminal enrolment (DUNNING.2)', () => {
+  // enrol.js measures the cooldown against the REAL clock, so every fixture
+  // timestamp below is only "inside" or "outside" the 14-day window relative
+  // to this pinned instant. Left unpinned, the "inside" case went red on
+  // 2026-09-06 — 14 days after NOW_ISO — with main otherwise green.
   const NOW_ISO = '2026-08-23T12:00:00.000Z'
+  beforeEach(() => { vi.useFakeTimers({ now: new Date(NOW_ISO), toFake: ['Date'] }) })
+  afterEach(() => { vi.useRealTimers() })
   const old = (over = {}) => ({
     id: 'enr-a', contact_id: 'a', status: 'completed', source_type: 'invoice_past_due', source_ref: 'inv-old',
     last_processed_at: '2026-07-01T00:00:00.000Z', created_at: '2026-06-24T00:00:00.000Z',
