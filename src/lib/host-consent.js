@@ -18,6 +18,7 @@
 // rather than throws) and returns {ok, changed} so a caller can judge it.
 
 import { logError } from './log.js'
+import { CONSENT_ACTIONS } from './consent-actions.js'
 
 export const HOST_CONSENT_CHANNEL = 'host_email_marketing'
 
@@ -61,7 +62,7 @@ export async function grantHostConsent(db, { hostId, contactId, source, ipAddres
     .select('contact_id')
   if (error) return { ok: false, changed: false, error: error.message, code: error.code ?? null }
   const changed = (data || []).length > 0
-  if (changed) await insertLog(db, [logRow({ contactId, hostId, action: 'opt_in', source, ipAddress })])
+  if (changed) await insertLog(db, [logRow({ contactId, hostId, action: CONSENT_ACTIONS.OPT_IN, source, ipAddress })])
   return { ok: true, changed }
 }
 
@@ -87,7 +88,7 @@ export async function grantHostConsentBulk(db, { hostId, contactIds, source }) {
     .select('contact_id')
   if (error) return { ok: false, changed: 0, error: error.message, code: error.code ?? null }
   const flipped = (data || []).map((r) => r.contact_id)
-  await insertLog(db, flipped.map((contactId) => logRow({ contactId, hostId, action: 'opt_in', source, ipAddress: null })))
+  await insertLog(db, flipped.map((contactId) => logRow({ contactId, hostId, action: CONSENT_ACTIONS.OPT_IN, source, ipAddress: null })))
   return { ok: true, changed: flipped.length }
 }
 
@@ -118,7 +119,7 @@ export async function revokeHostConsent(db, { hostId, contactId, source, ipAddre
   const unconsented = (consentRows || []).length > 0
 
   const changed = suppressed || unconsented
-  if (changed) await insertLog(db, [logRow({ contactId, hostId, action: 'opt_out', source, ipAddress })])
+  if (changed) await insertLog(db, [logRow({ contactId, hostId, action: CONSENT_ACTIONS.OPT_OUT, source, ipAddress })])
   return { ok: true, changed }
 }
 
