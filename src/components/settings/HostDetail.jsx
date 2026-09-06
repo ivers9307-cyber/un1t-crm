@@ -129,7 +129,7 @@ function SenderDefaultsCard({ hostId, host, applyHost }) {
         }),
       })
       const j = await res.json().catch(() => ({}))
-      if (!res.ok || !j.success) throw new Error(j.error || `HTTP ${res.status}`)
+      if (!res.ok || !j.success) throw new Error(j.issues?.[0]?.message || j.error || `HTTP ${res.status}`)
       applyHost(j.data)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
@@ -186,7 +186,7 @@ function SenderDefaultsCard({ hostId, host, applyHost }) {
             className="w-full border border-un1t-border rounded-md px-3 py-2 text-sm font-mono"
           />
           <p className="text-xs text-un1t-subtle mt-1">
-            The host&apos;s own Postmark Broadcasts stream ID. Create it in Postmark (Message Streams → Create → Broadcasts, unsubscribe handling Custom), add a webhook on that stream to <code>/api/webhooks/postmark</code> with all six events and the <code>x-webhook-token</code> header, then paste the ID here. Marketing sends are blocked until this is set; utility emails are unaffected.
+            The host&apos;s own Postmark Broadcasts stream ID. Create it in Postmark (Message Streams → Create → Broadcasts, unsubscribe handling Custom), add a webhook on that stream to <code>/api/webhooks/postmark</code> with all six events and the <code>x-webhook-token</code> header, then paste the ID here. Marketing sends are blocked until this is set; utility emails are unaffected. It must be the host&apos;s own stream, never UN1T&apos;s shared <code>broadcast</code> stream.
           </p>
         </Field>
         <p className="text-xs text-un1t-subtle">
