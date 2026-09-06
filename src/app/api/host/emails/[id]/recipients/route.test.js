@@ -197,8 +197,9 @@ describe('GET /api/host/emails/[id]/recipients', () => {
 
     const selectArg = op(sendStatements[0], 'select').args[0]
     expect(selectArg).toContain('contact:contacts!contact_id')
+    expect(selectArg).not.toContain('postmark_message_id')
     for (const col of [
-      'postmark_message_id', 'delivered_at', 'opened_at', 'open_count',
+      'delivered_at', 'opened_at', 'open_count',
       'clicked_at', 'click_count', 'bounced_at', 'bounce_type',
       'complained_at', 'unsubscribed_at', 'failed_reason',
     ]) {
@@ -206,7 +207,7 @@ describe('GET /api/host/emails/[id]/recipients', () => {
     }
   })
 
-  it('orders by sent_at desc (nulls last) then email', async () => {
+  it('orders by sent_at desc (nulls last), then email, then id as a final tiebreak', async () => {
     const { db, statements } = makeDb(routeFor({ pages: [[]] }))
     createServerClient.mockReturnValue(db)
     await GET(makeRequest(), props)
@@ -214,5 +215,6 @@ describe('GET /api/host/emails/[id]/recipients', () => {
     const orderCalls = sendStatement.ops.filter((o) => o.method === 'order')
     expect(orderCalls[0].args).toEqual(['sent_at', { ascending: false, nullsFirst: false }])
     expect(orderCalls[1].args[0]).toBe('email')
+    expect(orderCalls[2].args).toEqual(['id', { ascending: true }])
   })
 })

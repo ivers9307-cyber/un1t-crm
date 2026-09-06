@@ -44,13 +44,18 @@ export async function GET() {
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
   // HOST-METRICS.1 — per-campaign send stats (host_campaign_stats(), mig
-  // 590). A stats hiccup never fails the list: missing rows default to
-  // ZERO_STATS (see loadHostCampaignStats).
-  const { byCampaign } = await loadHostCampaignStats(db, session.host.id)
-  const campaigns = (data || []).map((campaign) => ({
-    ...campaign,
-    stats: byCampaign.get(campaign.id) || ZERO_STATS,
-  }))
+  // 590). A stats hiccup never fails the list: on an rpc error the `stats`
+  // key is OMITTED entirely (not zeroed) so the UI's own fallback renders
+  // — a zeroed stats object would print "0 sent" for a campaign that
+  // genuinely sent mail. A campaign missing from the rpc result still
+  // gets ZERO_STATS (it really has none).
+  const { byCampaign, error: statsErr } = await loadHostCampaignStats(db, session.host.id)
+  const campaigns = statsErr
+    ? (data || [])
+    : (data || []).map((campaign) => ({
+        ...campaign,
+        stats: byCampaign.get(campaign.id) ?? ZERO_STATS,
+      }))
   return NextResponse.json({ success: true, data: campaigns })
 }
 

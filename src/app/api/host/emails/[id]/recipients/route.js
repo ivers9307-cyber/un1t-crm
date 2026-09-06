@@ -14,11 +14,13 @@ export const dynamic = 'force-dynamic'
 
 // 1k-row cap discipline: page explicitly rather than trusting a default limit.
 const PAGE = 1000
+// Hard ceiling on the pagination loop — a runaway/misbehaving query can never
+// spin past this many rows.
+const MAX_ROWS = 20000
 
-// postmark_message_id is read to derive nothing here but is DELIBERATELY not
-// forwarded to the client — provider ids stay server-side.
+// postmark_message_id is never read here — provider ids stay server-side.
 const SEND_COLUMNS =
-  'id, contact_id, email, status, claimed_at, sent_at, postmark_message_id, ' +
+  'id, contact_id, email, status, claimed_at, sent_at, ' +
   'delivered_at, opened_at, open_count, clicked_at, click_count, bounced_at, ' +
   'bounce_type, complained_at, unsubscribed_at, failed_reason, ' +
   'contact:contacts!contact_id ( name, first_name, last_name )'
@@ -47,13 +49,14 @@ export async function GET(_request, props) {
   const stats = byCampaign.get(campaign.id) || ZERO_STATS
 
   const recipients = []
-  for (let from = 0; ; from += PAGE) {
+  for (let from = 0; from < MAX_ROWS; from += PAGE) {
     const { data: page, error } = await db
       .from('host_campaign_sends')
       .select(SEND_COLUMNS)
       .eq('campaign_id', campaign.id)
       .order('sent_at', { ascending: false, nullsFirst: false })
       .order('email', { ascending: true })
+      .order('id', { ascending: true })
       .range(from, from + PAGE - 1)
     if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
