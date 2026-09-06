@@ -85,12 +85,16 @@ Postmark's Open event carries `FirstOpen`; we ignore it and use our own null gua
 
 ### 6. Backfill (one-off, kept as a repair tool)
 
-`POST /api/admin/backfill-host-campaign-events` (master/owner, org-scoped to the caller's hosts, dry-run unless `?dry=0`), plus a "Backfill Postmark events" button with a result summary on Settings → Hosts → host → the Email sending card. It:
+`POST /api/hosts/[id]/backfill-campaign-events` (Manager+, org-scoped via `loadHostForOrg` — the earlier "admin route, master/owner" wording above was superseded: the button lives on the host's own Settings card, which managers operate, not a separate admin surface), dry-run unless `?dry=0`, plus a "Backfill Postmark events" button with a result summary on Settings → Hosts → host → the Email sending card. It:
 
 1. Pages `GET https://api.postmarkapp.com/messages/outbound?tag=host-campaign&count=500&offset=N&fromdate=&todate=` for the last 45 days (Postmark's retention), reading each message's `Metadata.host_campaign_id` / `contact_id` / `MessageID`.
 2. For each matching send row with a null `postmark_message_id`, stamps it.
-3. Calls `GET /messages/outbound/{MessageID}/details` and folds `MessageEvents` into the row with the same guarded writes as section 3 (Delivered → `delivered_at`, Opened → `opened_at` + count, LinkClicked → `clicked_at` + count, Bounced → `bounced_at`/type, SubscriptionChanged → `unsubscribed_at`).
-4. Sequential with a short pause; ~380 detail calls take under a minute. Returns `{ scanned, stamped, updated, skipped, errors }`.
+3. Calls `GET /messages/outbound/{MessageID}/details` and folds `MessageEvents` into the row with the same guarded writes as section 3 (Delivered → `delivered_at`, Opened → `opened_at` + count, LinkClicked → `clicked_at` + count, Bounced → `bounced_at` + type from the bounce-log pass below, SubscriptionChanged → `unsubscribed_at`).
+4. Sequential with a short pause; ~380 detail calls take under a minute. Returns `{ scanned, stamped, updated, skipped, errors }`, where `errors` is an array of per-step failures (`{ message_id?, stage?, error }`), not a count.
+
+**Bounce-log pass:** before paging messages, a separate pass pages `GET /bounces?tag=host-campaign&fromdate=&todate=` for the same window into a `MessageID -> bounce` map. The message-details timeline's own `Bounced` event carries no bounce type, and a spam complaint never appears in the timeline at all — both facts live only in the bounce log, keyed back onto a message by `MessageID`. So the bounce log, not the timeline, is the source of both the hard/soft/transient bounce TYPE and of spam complaints; a `Bounced` timeline event with no bounce-log match reads `bounce_type: 'transient'` (unknown), never defaulting to hard.
+
+`open_count` from this backfill (and from the webhook) is a 0/1 flag, not a true count: the Postmark server (CRM.UN1T) has "First Open Only" on, so Postmark exposes at most one Open per message either way. `click_count` has no such limit and is a real count.
 
 Idempotent by construction (every write is guarded), so running it twice is safe. The Postmark client helpers move out of `postmark-suppressions.js` into a small `postmark-messages.js` (token via `resolvePostmarkToken`, same header builder). **Deadline:** the 31 July sends leave Postmark's retention around 14 September; the backfill runs the day this merges.
 

@@ -20,6 +20,9 @@ describe('statTiles', () => {
     expect(statTiles({ ...stats, delivered: 0, opened: 0 })[2].sub).toBe('0% of delivered')
     expect(statTiles(undefined).map((x) => x.value)).toEqual([0, 0, 0, 0, 0, 0, 0])
   })
+  it('clamps a rate at 100% when opened outcounts delivered (a click/open racing a later delivered_at recount)', () => {
+    expect(statTiles({ ...stats, delivered: 10, opened: 14 })[2].sub).toBe('100% of delivered')
+  })
 })
 describe('filterRecipients', () => {
   // Every row carries the raw columns the recipients API sends. `outcome`

@@ -227,6 +227,18 @@ describe('processHostCampaignEvent — send row outcomes (HOST-METRICS.1)', () =
     expect(db.sendUpdates.find((u) => 'bounced_at' in u.values).values.bounce_type).toBe('soft')
     expect(db.contactUpdates).toEqual([])
   })
+  it('BadEmailAddress classifies as hard (bounceTypeFrom) but only a literal HardBounce marks the contact', async () => {
+    const db = stubDb({ sendRow: ROW })
+    await processHostCampaignEvent(db, ev('Bounce', { Type: 'BadEmailAddress', BouncedAt: 'b' }))
+    expect(db.sendUpdates.find((u) => 'bounced_at' in u.values).values.bounce_type).toBe('hard')
+    expect(db.contactUpdates).toEqual([])
+  })
+  it('an unrecognised bounce Type stamps transient, never hard', async () => {
+    const db = stubDb({ sendRow: ROW })
+    await processHostCampaignEvent(db, ev('Bounce', { Type: 'SomethingPostmarkAddsLater', BouncedAt: 'b' }))
+    expect(db.sendUpdates.find((u) => 'bounced_at' in u.values).values.bounce_type).toBe('transient')
+    expect(db.contactUpdates).toEqual([])
+  })
   it('SpamComplaint stamps complained_at; SubscriptionChange stamps unsubscribed_at', async () => {
     let db = stubDb({ sendRow: ROW })
     await processHostCampaignEvent(db, ev('SpamComplaint', { BouncedAt: 'c' }))

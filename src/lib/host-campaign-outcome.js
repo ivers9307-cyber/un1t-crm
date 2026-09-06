@@ -13,6 +13,24 @@
 
 export const OUTCOMES = Object.freeze(['failed', 'bounced', 'complained', 'unsubscribed', 'clicked', 'opened', 'delivered', 'sent', 'queued'])
 
+const HARD_BOUNCE_TYPES = new Set(['HardBounce', 'BadEmailAddress', 'Blocked', 'ManuallyDeactivated', 'Unsubscribe'])
+const SOFT_BOUNCE_TYPES = new Set(['SoftBounce', 'DnsError', 'Transient', 'SMTPApiError', 'AutoResponder', 'DMARCPolicy', 'TemplateRenderingFailed'])
+
+/**
+ * Postmark's bounce `Type` string -> our hard/soft/transient bucket. Shared
+ * by the webhook (Bounce case) and the backfill (bounce-log fold) so the two
+ * paths can never classify the same Postmark type differently. Anything not
+ * in either set — including an undefined/null type, e.g. no bounce-log match
+ * at all — reads as 'transient' (unknown), never defaults to 'hard'.
+ * @param {string|null|undefined} postmarkType
+ * @returns {'hard'|'soft'|'transient'}
+ */
+export function bounceTypeFrom(postmarkType) {
+  if (HARD_BOUNCE_TYPES.has(postmarkType)) return 'hard'
+  if (SOFT_BOUNCE_TYPES.has(postmarkType)) return 'soft'
+  return 'transient'
+}
+
 export function deriveOutcome(row) {
   if (!row) return 'queued'
   if (row.status === 'failed') return 'failed'

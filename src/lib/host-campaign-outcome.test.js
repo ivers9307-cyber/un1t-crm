@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { deriveOutcome, outcomeAt, OUTCOMES, FAILURE_COPY, failureCopy } from './host-campaign-outcome.js'
+import { deriveOutcome, outcomeAt, OUTCOMES, FAILURE_COPY, failureCopy, bounceTypeFrom } from './host-campaign-outcome.js'
 
 const base = { status: 'sent', sent_at: '2026-09-04T10:58:14Z', delivered_at: null, opened_at: null, clicked_at: null, bounced_at: null, complained_at: null, unsubscribed_at: null, failed_reason: null }
 
@@ -41,5 +41,23 @@ describe('failure copy', () => {
   it('unknown reason falls back', () => expect(failureCopy('wat')).toBe('Could not be sent'))
   it('OUTCOMES lists the nine outcomes in display order', () => {
     expect(OUTCOMES).toEqual(['failed', 'bounced', 'complained', 'unsubscribed', 'clicked', 'opened', 'delivered', 'sent', 'queued'])
+  })
+})
+
+describe('bounceTypeFrom — shared Postmark type classification', () => {
+  it('classifies every hard type', () => {
+    for (const t of ['HardBounce', 'BadEmailAddress', 'Blocked', 'ManuallyDeactivated', 'Unsubscribe']) {
+      expect(bounceTypeFrom(t)).toBe('hard')
+    }
+  })
+  it('classifies every soft type', () => {
+    for (const t of ['SoftBounce', 'DnsError', 'Transient', 'SMTPApiError', 'AutoResponder', 'DMARCPolicy', 'TemplateRenderingFailed']) {
+      expect(bounceTypeFrom(t)).toBe('soft')
+    }
+  })
+  it('unknown, undefined, or null falls back to transient', () => {
+    expect(bounceTypeFrom('SomeNewPostmarkType')).toBe('transient')
+    expect(bounceTypeFrom(undefined)).toBe('transient')
+    expect(bounceTypeFrom(null)).toBe('transient')
   })
 })

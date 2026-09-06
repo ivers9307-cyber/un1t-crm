@@ -63,7 +63,7 @@ export function formatWhen(iso) {
 export function statTiles(stats) {
   const s = stats || {}
   const delivered = s.delivered || 0
-  const rate = (n) => (delivered > 0 ? Math.round(((n || 0) / delivered) * 100) : 0)
+  const rate = (n) => (delivered > 0 ? Math.min(100, Math.round(((n || 0) / delivered) * 100)) : 0)
   return [
     { key: 'sent', label: 'Sent', value: s.sent || 0 },
     { key: 'delivered', label: 'Delivered', value: delivered },

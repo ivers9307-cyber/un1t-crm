@@ -7245,7 +7245,7 @@ registry.registerPath({
   security: [{ CookieAuth: [] }],
   summary: "The report page's data for one host campaign (HOST-METRICS.1)",
   description:
-    "Host session; the campaign must belong to the session host (404 otherwise, so ids stay un-enumerable). Returns the campaign (with its host_campaign_stats() counts, mig 590) and every host_campaign_sends row for it, each carrying a DERIVED outcome (host-campaign-outcome.js: precedence over the raw timestamps, so a late Delivery event can never regress a recorded Open) plus its outcome_at and, for a failed row, host-facing failure_copy. `failed_reason`/postmark ids are the queue's own bookkeeping — the response omits postmark_message_id (provider ids stay server-side) but keeps failed_reason since failure_copy is derived from it. A stats-rpc hiccup never fails this route: stats default to all-zero rather than 500ing the page.",
+    "Host session; the campaign must belong to the session host (404 otherwise, so ids stay un-enumerable). Returns the campaign (with its host_campaign_stats() counts, mig 590) and every host_campaign_sends row for it, each carrying a DERIVED outcome (host-campaign-outcome.js: precedence over the raw timestamps, so a late Delivery event can never regress a recorded Open) plus its outcome_at and, for a failed row, host-facing failure_copy. `failed_reason`/postmark ids are the queue's own bookkeeping — the response omits postmark_message_id (provider ids stay server-side) but keeps failed_reason since failure_copy is derived from it. A stats-rpc hiccup never fails this route: `stats` is null when the stats function is unavailable, and the page shows counts as unavailable rather than zeros.",
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: {
@@ -7264,7 +7264,7 @@ registry.registerPath({
               created_at: z.string(),
               recipient_count: z.number().int().nullable(),
               sent_count: z.number().int().nullable(),
-              stats: HostCampaignStats,
+              stats: HostCampaignStats.nullable(),
             }).passthrough(),
             recipients: z.array(HostCampaignRecipient),
           }).openapi('HostCampaignRecipientsResponse')),
@@ -7283,7 +7283,7 @@ registry.registerPath({
   security: [{ CookieAuth: [] }],
   summary: 'Backfill host campaign outcomes from Postmark (Manager+, org-scoped)',
   description:
-    "Manager+ session; the host must belong to the caller's active organization (404 otherwise, so ids stay un-enumerable). Asks Postmark's Messages API for this host's outbound activity over the last 45 days (its full retention window) and applies any Delivery/Open/Click/Bounce/SpamComplaint/SubscriptionChange events onto the matching host_campaign_sends rows — for sends that predate the mig 590 columns, or whose webhook events were missed. Dry-run by default (counts only, writes nothing); pass ?dry=0 to persist. Runnable from Settings → Hosts.",
+    "Manager+ session; the host must belong to the caller's active organization (404 otherwise, so ids stay un-enumerable). Asks Postmark's Messages API for this host's outbound activity over the last 45 days (its full retention window) and applies any Delivery/Open/Click/Bounce/SpamComplaint/SubscriptionChange events onto the matching host_campaign_sends rows — for sends that predate the mig 590 columns, or whose webhook events were missed. Dry-run by default (counts only, writes nothing); pass ?dry=0 to persist. Runnable from Settings → Hosts. `errors` is per-item, not a count — the run collects one entry per failed step ({ message_id?, stage?, error }) and continues rather than aborting.",
   request: { params: z.object({ id: uuidLike }), query: z.object({ dry: z.string().optional().describe("Pass '0' to persist; any other value (or omitted) stays dry-run.") }) },
   responses: {
     200: {
@@ -7297,7 +7297,7 @@ registry.registerPath({
             stamped: z.number().int(),
             updated: z.number().int(),
             skipped: z.number().int(),
-            errors: z.number().int(),
+            errors: z.array(z.object({}).passthrough()).describe('One entry per failed step: { message_id?, stage?, error }. Non-fatal — collected while the run continues.'),
           }).openapi('HostCampaignBackfillSummary')),
         },
       },

@@ -77,7 +77,7 @@ describe('foldMessageEvents', () => {
       { Type: 'Bounced', ReceivedAt: 'b1', Details: { BounceID: '1' } },
       { Type: 'SubscriptionChanged', ReceivedAt: 'u1', Details: { SuppressSending: 'True' } },
     ]
-    expect(foldMessageEvents(events)).toEqual({ delivered_at: 'd1', opened_at: 'o1', open_count: 2, clicked_at: 'c1', click_count: 1, bounced_at: 'b1', bounce_type: 'hard', unsubscribed_at: 'u1' })
+    expect(foldMessageEvents(events)).toEqual({ delivered_at: 'd1', opened_at: 'o1', open_count: 2, clicked_at: 'c1', click_count: 1, bounced_at: 'b1', bounce_type: 'transient', unsubscribed_at: 'u1' })
   })
 
   it('a transient event is ignored; SubscriptionChanged without SuppressSending is ignored', () => {
@@ -96,8 +96,9 @@ describe('foldMessageEvents', () => {
     expect(patch.bounce_type).toBeUndefined()
   })
 
-  it('no bounce-log match defaults to hard', () => {
-    expect(foldMessageEvents([{ Type: 'Bounced', ReceivedAt: 'b' }]).bounce_type).toBe('hard')
+  it('no bounce-log match reads transient (unknown), never hard', () => {
+    expect(foldMessageEvents([{ Type: 'Bounced', ReceivedAt: 'b' }]).bounce_type).toBe('transient')
+    expect(foldMessageEvents([{ Type: 'Bounced', ReceivedAt: 'b' }], null).bounce_type).toBe('transient')
   })
 
   it('empty / non-array → {}', () => {

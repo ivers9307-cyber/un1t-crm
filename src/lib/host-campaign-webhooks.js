@@ -45,6 +45,7 @@
 // = leave the queue row unprocessed so it retries (bounded by MAX_ATTEMPTS).
 
 import { revokeHostConsent } from './host-consent.js'
+import { bounceTypeFrom } from './host-campaign-outcome.js'
 
 export function isHostCampaignEvent(body) {
   const id = body?.Metadata?.host_campaign_id
@@ -139,7 +140,7 @@ export async function processHostCampaignEvent(db, body) {
 
   switch (body.RecordType) {
     case 'Bounce': {
-      const type = body.Type === 'HardBounce' ? 'hard' : body.Type === 'SoftBounce' ? 'soft' : 'transient'
+      const type = bounceTypeFrom(body.Type)
       if (row) {
         const bounceErr = await stampBounce(db, row.id, at(body.BouncedAt), type)
         if (bounceErr) return { ok: false, error: bounceErr }

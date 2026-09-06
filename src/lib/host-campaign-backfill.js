@@ -33,6 +33,7 @@
 // DEFAULT IS A DRY RUN — the admin route only writes on an explicit ?dry=0.
 
 import { listOutboundMessages, getOutboundMessageDetails, listBounces } from './postmark-messages.js'
+import { bounceTypeFrom } from './host-campaign-outcome.js'
 import { logError, logWarn } from './log.js'
 
 const PAGE = 500
@@ -89,8 +90,9 @@ function applyGuardedPatch(row, patch) {
  * @param {{type: 'hard'|'soft'|'transient'|'complaint', at: string}|null} [bounce]
  *   This message's bounce-log match, if any (see listBounces / the
  *   module header's BOUNCE-LOG PASS note). The timeline's own Bounced event
- *   carries no type, so classification comes from here; without a match we
- *   default to hard. A complaint is not a bounce in our model — it sets
+ *   carries no type, so classification comes from here; without a match the
+ *   type is unknown, i.e. bounceTypeFrom(undefined) = 'transient' (never
+ *   defaults to hard). A complaint is not a bounce in our model — it sets
  *   complained_at instead of bounced_at (precedence complained > bounced).
  * @returns {object}
  */
@@ -118,11 +120,12 @@ export function foldMessageEvents(events, bounce = null) {
         if (bounce?.type === 'complaint') {
           if (!patch.complained_at) patch.complained_at = bounce.at
         } else if (!patch.bounced_at) {
-          // The timeline carries no type; without a bounce-log match we
-          // default to hard. This is NOT the same default the webhook uses
-          // for a missing HardBounce type — it's stated here, not inherited.
+          // The timeline carries no type; bounce.type here is already the
+          // bounce-log map's own bounceTypeFrom(b.Type) result (hard/soft/
+          // transient) when there's a match. Without a match, the type is
+          // unknown — bounceTypeFrom(undefined) = 'transient', never hard.
           patch.bounced_at = event.ReceivedAt
-          patch.bounce_type = ['hard', 'soft', 'transient'].includes(bounce?.type) ? bounce.type : 'hard'
+          patch.bounce_type = bounce ? bounce.type : bounceTypeFrom(undefined)
         }
         break
       case 'SubscriptionChanged':
@@ -201,7 +204,8 @@ export async function backfillHostCampaignEvents(db, { hostId, dry = true, fromD
   // 3. Page through Postmark's bounce log for this window — hard/soft
   // bounces and spam complaints (see the module header's BOUNCE-LOG PASS
   // note). A failure here is non-fatal: it's collected and the run
-  // continues with timeline folding only (bounce types default to hard).
+  // continues with timeline folding only (bounce types then read transient
+  // — unknown — never hard, since there's no bounce-log match to classify).
   const bounceByMessage = new Map()
   let bounceScanned = 0
   let bounceOffset = 0
@@ -215,11 +219,9 @@ export async function backfillHostCampaignEvents(db, { hostId, dry = true, fromD
     bounceScanned += bounces.length
     for (const b of bounces) {
       if (!b?.MessageID) continue
-      const type =
-        b.Type === 'SpamComplaint' ? 'complaint' :
-        b.Type === 'HardBounce' ? 'hard' :
-        b.Type === 'SoftBounce' ? 'soft' :
-        'transient'
+      // SpamComplaint is handled here, before bounceTypeFrom — that shared
+      // classifier only knows hard/soft/transient, not 'complaint'.
+      const type = b.Type === 'SpamComplaint' ? 'complaint' : bounceTypeFrom(b.Type)
       bounceByMessage.set(b.MessageID, { type, at: b.BouncedAt })
     }
     if (bounces.length < PAGE || bounceScanned >= bounceTotal) break
