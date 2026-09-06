@@ -7,12 +7,21 @@
 // folds delivery/open/click/bounce/unsubscribe events into the mig-590
 // columns.
 //
+// BOUNCE-LOG PASS: before paging messages, this pages Postmark's bounce log
+// (listBounces, same module) for the same window into a MessageID -> bounce
+// map. The message-details timeline's Bounced event carries no bounce type,
+// and spam complaints never appear in the timeline at all — both live only
+// in the bounce log, so hard/soft/complaint classification comes from there,
+// matched back onto a message by MessageID. A bounce-log failure is
+// collected as an error but does not abort the run: timeline folding still
+// works, bounce types just default (see foldMessageEvents below).
+//
 // WHY THIS EXISTS: those columns were added after real sends had already gone
 // out, so their history lives only in Postmark, not in our own send records.
-// Postmark retains outbound message history for 45 DAYS — the earliest real
-// host-campaign sends (31 Jul 2026) fall out of that window around
-// 14 Sep 2026, so this backfill must run (or be re-run) before then or that
-// tail is lost forever.
+// Postmark retains outbound message history AND the bounce log for 45 DAYS —
+// the earliest real host-campaign sends (31 Jul 2026) fall out of that
+// window around 14 Sep 2026, so this backfill (both passes) must run (or be
+// re-run) before then or that tail is lost forever.
 //
 // IDEMPOTENT: every write is a null-guarded or zero-guarded conditional
 // update — a repeat run against messages already folded touches nothing.
@@ -23,12 +32,52 @@
 //
 // DEFAULT IS A DRY RUN — the admin route only writes on an explicit ?dry=0.
 
-import { listOutboundMessages, getOutboundMessageDetails } from './postmark-messages.js'
+import { listOutboundMessages, getOutboundMessageDetails, listBounces } from './postmark-messages.js'
 import { logError, logWarn } from './log.js'
 
 const PAGE = 500
 const PAUSE_MS = 40
 const TAG = 'host-campaign'
+
+const TIMESTAMP_KEYS = ['delivered_at', 'opened_at', 'clicked_at', 'bounced_at', 'complained_at', 'unsubscribed_at']
+const COUNT_KEYS = ['open_count', 'click_count']
+
+/**
+ * Would applying `patch` onto `row` actually change anything, per the same
+ * null/zero guards the live writes use? Pure — used to make dry-run's
+ * `updated` count honest (matching what a live run would actually write)
+ * and, mutated in, to avoid double-counting a resend of the same row within
+ * one run.
+ *
+ * @param {object} row
+ * @param {object} patch
+ * @returns {boolean}
+ */
+function wouldChangeRow(row, patch) {
+  for (const key of TIMESTAMP_KEYS) {
+    if (key in patch && row[key] == null) return true
+  }
+  for (const key of COUNT_KEYS) {
+    if (key in patch && row[key] === 0 && patch[key] > 0) return true
+  }
+  return false
+}
+
+/**
+ * Mutate `row` in place with whichever `patch` keys would actually change it
+ * (the same guard as wouldChangeRow). Used in dry mode, where nothing is
+ * written to the DB, so a second message matching the same row (a resend)
+ * within one run is still judged against the post-fold state instead of
+ * being counted again.
+ */
+function applyGuardedPatch(row, patch) {
+  for (const key of TIMESTAMP_KEYS) {
+    if (key in patch && row[key] == null) row[key] = patch[key]
+  }
+  for (const key of COUNT_KEYS) {
+    if (key in patch && row[key] === 0 && patch[key] > 0) row[key] = patch[key]
+  }
+}
 
 /**
  * Fold one message's Postmark event history into a host_campaign_sends
@@ -37,9 +86,15 @@ const TAG = 'host-campaign'
  * independently without re-deriving "did this event type occur".
  *
  * @param {Array<{Type: string, ReceivedAt: string, Details?: object}>} events
+ * @param {{type: 'hard'|'soft'|'transient'|'complaint', at: string}|null} [bounce]
+ *   This message's bounce-log match, if any (see listBounces / the
+ *   module header's BOUNCE-LOG PASS note). The timeline's own Bounced event
+ *   carries no type, so classification comes from here; without a match we
+ *   default to hard. A complaint is not a bounce in our model — it sets
+ *   complained_at instead of bounced_at (precedence complained > bounced).
  * @returns {object}
  */
-export function foldMessageEvents(events) {
+export function foldMessageEvents(events, bounce = null) {
   const patch = {}
   if (!Array.isArray(events)) return patch
 
@@ -60,12 +115,14 @@ export function foldMessageEvents(events) {
         clickCount += 1
         break
       case 'Bounced':
-        if (!patch.bounced_at) {
+        if (bounce?.type === 'complaint') {
+          if (!patch.complained_at) patch.complained_at = bounce.at
+        } else if (!patch.bounced_at) {
+          // The timeline carries no type; without a bounce-log match we
+          // default to hard. This is NOT the same default the webhook uses
+          // for a missing HardBounce type — it's stated here, not inherited.
           patch.bounced_at = event.ReceivedAt
-          patch.bounce_type =
-            event.Details?.Type === 'SoftBounce' ? 'soft' :
-            event.Details?.Type === 'Transient' ? 'transient' :
-            'hard'
+          patch.bounce_type = ['hard', 'soft', 'transient'].includes(bounce?.type) ? bounce.type : 'hard'
         }
         break
       case 'SubscriptionChanged':
@@ -117,13 +174,15 @@ export async function backfillHostCampaignEvents(db, { hostId, dry = true, fromD
 
   // 2. Every send row across those campaigns, keyed by campaign+contact —
   // that pair is what Postmark's own Metadata carries back on each message.
+  // The widened column list is what makes `updated` honest below: whether a
+  // patch would actually change anything is judged against this snapshot.
   const rowsByKey = new Map()
   for (const campaignId of campaignIds) {
     let from = 0
     for (;;) {
       const { data, error } = await db
         .from('host_campaign_sends')
-        .select('id, campaign_id, contact_id, postmark_message_id, open_count, click_count')
+        .select('id, campaign_id, contact_id, postmark_message_id, delivered_at, opened_at, clicked_at, bounced_at, complained_at, unsubscribed_at, open_count, click_count')
         .eq('campaign_id', campaignId)
         .order('id')
         .range(from, from + PAGE - 1)
@@ -139,7 +198,35 @@ export async function backfillHostCampaignEvents(db, { hostId, dry = true, fromD
     }
   }
 
-  // 3. Page through Postmark's outbound history for this window and fold
+  // 3. Page through Postmark's bounce log for this window — hard/soft
+  // bounces and spam complaints (see the module header's BOUNCE-LOG PASS
+  // note). A failure here is non-fatal: it's collected and the run
+  // continues with timeline folding only (bounce types default to hard).
+  const bounceByMessage = new Map()
+  let bounceScanned = 0
+  let bounceOffset = 0
+  for (;;) {
+    const { total: bounceTotal, bounces, error: bouncesError } = await listBounces({ tag: TAG, fromDate, toDate, count: PAGE, offset: bounceOffset })
+    if (bouncesError) {
+      logError('host-campaign-backfill', 'Postmark bounce list failed', { hostId, error: bouncesError })
+      summary.errors.push({ stage: 'bounces', error: bouncesError })
+      break
+    }
+    bounceScanned += bounces.length
+    for (const b of bounces) {
+      if (!b?.MessageID) continue
+      const type =
+        b.Type === 'SpamComplaint' ? 'complaint' :
+        b.Type === 'HardBounce' ? 'hard' :
+        b.Type === 'SoftBounce' ? 'soft' :
+        'transient'
+      bounceByMessage.set(b.MessageID, { type, at: b.BouncedAt })
+    }
+    if (bounces.length < PAGE || bounceScanned >= bounceTotal) break
+    bounceOffset += PAGE
+  }
+
+  // 4. Page through Postmark's outbound history for this window and fold
   // each real host-campaign message onto the row it matches.
   let offset = 0
   for (;;) {
@@ -183,6 +270,14 @@ export async function backfillHostCampaignEvents(db, { hostId, dry = true, fromD
         }
       }
 
+      // Nothing left to learn: every timestamp column this backfill can set
+      // is already set, so no patch derived from the details call could
+      // ever change this row. Skip the (rate-limited) details call outright.
+      const nothingLeftToLearn =
+        row.postmark_message_id && row.delivered_at && row.opened_at && row.clicked_at &&
+        (row.bounced_at || row.complained_at || row.unsubscribed_at)
+      if (nothingLeftToLearn) continue
+
       const { details, error: detailsError } = await getOutboundMessageDetails(message.MessageID)
       if (detailsError) {
         summary.errors.push({ message_id: message.MessageID, error: detailsError })
@@ -190,32 +285,42 @@ export async function backfillHostCampaignEvents(db, { hostId, dry = true, fromD
         continue
       }
 
-      const patch = foldMessageEvents(details?.MessageEvents)
+      const patch = foldMessageEvents(details?.MessageEvents, bounceByMessage.get(message.MessageID) ?? null)
       if (Object.keys(patch).length === 0) {
         await sleep(PAUSE_MS)
         continue
       }
-      summary.updated += 1
 
-      if (!dry) {
+      if (dry) {
+        if (wouldChangeRow(row, patch)) {
+          summary.updated += 1
+          applyGuardedPatch(row, patch) // so a resend within this run isn't double-counted
+        }
+      } else {
+        let anyWritten = false
         for (const [k, v] of Object.entries(patch)) {
           if (k === 'open_count' || k === 'click_count') {
             if (row[k] > 0) continue // already counted — never re-count
-            const { error: writeErr } = await db
-              .from('host_campaign_sends').update({ [k]: v }).eq('id', row.id).eq(k, 0)
+            const { data, error: writeErr } = await db
+              .from('host_campaign_sends').update({ [k]: v }).eq('id', row.id).eq(k, 0).select('id')
             if (writeErr) {
               logWarn('host-campaign-backfill', `failed to write ${k}`, { row_id: row.id, error: writeErr })
               summary.errors.push({ message_id: message.MessageID, error: writeErr })
+              continue
             }
+            if (data?.length) { row[k] = v; anyWritten = true }
             continue
           }
-          const { error: writeErr } = await db
-            .from('host_campaign_sends').update({ [k]: v }).eq('id', row.id).is(k, null)
+          const { data, error: writeErr } = await db
+            .from('host_campaign_sends').update({ [k]: v }).eq('id', row.id).is(k, null).select('id')
           if (writeErr) {
             logWarn('host-campaign-backfill', `failed to write ${k}`, { row_id: row.id, error: writeErr })
             summary.errors.push({ message_id: message.MessageID, error: writeErr })
+            continue
           }
+          if (data?.length) { row[k] = v; anyWritten = true }
         }
+        if (anyWritten) summary.updated += 1
       }
 
       await sleep(PAUSE_MS)

@@ -20,6 +20,9 @@ import { backfillHostCampaignEvents } from '@/lib/host-campaign-backfill'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+// Up to 372 details calls at a ~40ms pause each, plus Postmark latency per
+// call, comfortably exceeds Vercel's default function timeout.
+export const maxDuration = 300
 
 const RETENTION_DAYS = 45
 

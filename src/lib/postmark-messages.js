@@ -20,6 +20,16 @@
 //            → { MessageID, MessageEvents: [{ Type: 'Delivered' | 'Opened' |
 //                'LinkClicked' | 'Bounced' | 'SubscriptionChanged' |
 //                'Transient', ReceivedAt, Details }], … }
+//
+// BOUNCE LOG (https://postmarkapp.com/developer/api/bounce-api), separate
+// from the messages API above and read via listBounces(): the message-
+// details timeline's Bounced event carries no bounce type (Details is just
+// { Summary, BounceID }), and spam complaints never appear in the timeline
+// at all. Both live only here, matched back onto a message by MessageID.
+//   list     GET /bounces?count=&offset=&tag=&fromdate=&todate=
+//            → { TotalCount, Bounces: [{ ID, Type: 'HardBounce' |
+//                'SoftBounce' | 'Transient' | 'SpamComplaint' | …, TypeCode,
+//                MessageID, Email, BouncedAt, Inactive, … }] }
 
 import { resolvePostmarkToken } from './postmark-token'
 
@@ -89,6 +99,55 @@ export async function listOutboundMessages({ tag, fromDate, toDate, count = 500,
     const error = errMessage(err)
     console.error(`[postmark-messages] list threw: ${error}`)
     return { total: 0, messages: [], error }
+  }
+}
+
+/**
+ * List bounce-log records (hard/soft bounces, transient failures, spam
+ * complaints) — the source of truth for bounce type and complaints, neither
+ * of which the message-details timeline carries (see BOUNCE LOG note above).
+ *
+ * @param {{tag?: string, fromDate?: string, toDate?: string, count?: number, offset?: number}} [opts]
+ * @returns {Promise<{total: number, bounces: Array<Object>, error: string|null}>}
+ *   Never throws.
+ */
+export async function listBounces({ tag, fromDate, toDate, count = 500, offset = 0 } = {}) {
+  const headers = postmarkHeaders()
+  if (!headers) {
+    console.error('[postmark-messages] no Postmark server token configured — cannot list bounces')
+    return { total: 0, bounces: [], error: 'Postmark API token not configured' }
+  }
+
+  const params = new URLSearchParams()
+  params.set('count', String(count))
+  params.set('offset', String(offset))
+  if (tag !== undefined && tag !== null) params.set('tag', tag)
+  if (fromDate !== undefined && fromDate !== null) params.set('fromdate', fromDate)
+  if (toDate !== undefined && toDate !== null) params.set('todate', toDate)
+  const url = `${POSTMARK_API_URL}/bounces?${params.toString()}`
+
+  try {
+    const response = await fetch(url, { method: 'GET', headers })
+    const payload = await response.json().catch(() => null)
+    if (!response.ok) {
+      const error = payload?.Message || `Postmark bounces list failed (HTTP ${response.status})`
+      console.error(`[postmark-messages] bounces list failed: ${error}`)
+      return { total: 0, bounces: [], error }
+    }
+    if (!payload || typeof payload !== 'object') {
+      const error = 'Postmark returned an unreadable response'
+      console.error(`[postmark-messages] bounces list failed: ${error}`)
+      return { total: 0, bounces: [], error }
+    }
+    return {
+      total: Number(payload?.TotalCount) || 0,
+      bounces: Array.isArray(payload?.Bounces) ? payload.Bounces : [],
+      error: null,
+    }
+  } catch (err) {
+    const error = errMessage(err)
+    console.error(`[postmark-messages] bounces list threw: ${error}`)
+    return { total: 0, bounces: [], error }
   }
 }
 

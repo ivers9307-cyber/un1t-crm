@@ -20,10 +20,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('./postmark-messages.js', () => ({
   listOutboundMessages: vi.fn(),
   getOutboundMessageDetails: vi.fn(),
+  listBounces: vi.fn(),
 }))
 vi.mock('./log.js', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
-import { listOutboundMessages, getOutboundMessageDetails } from './postmark-messages.js'
+import { listOutboundMessages, getOutboundMessageDetails, listBounces } from './postmark-messages.js'
 import { foldMessageEvents, backfillHostCampaignEvents } from './host-campaign-backfill.js'
 
 // ── chainable fake, modeled on host-campaign-queue.test.js ──────────
@@ -79,10 +80,24 @@ describe('foldMessageEvents', () => {
     expect(foldMessageEvents(events)).toEqual({ delivered_at: 'd1', opened_at: 'o1', open_count: 2, clicked_at: 'c1', click_count: 1, bounced_at: 'b1', bounce_type: 'hard', unsubscribed_at: 'u1' })
   })
 
-  it('a soft bounce reads soft; a transient event is ignored; SubscriptionChanged without SuppressSending is ignored', () => {
-    expect(foldMessageEvents([{ Type: 'Bounced', ReceivedAt: 'b', Details: { Type: 'SoftBounce' } }]).bounce_type).toBe('soft')
+  it('a transient event is ignored; SubscriptionChanged without SuppressSending is ignored', () => {
     expect(foldMessageEvents([{ Type: 'Transient', ReceivedAt: 't' }])).toEqual({})
     expect(foldMessageEvents([{ Type: 'SubscriptionChanged', ReceivedAt: 'u', Details: { SuppressSending: 'False' } }])).toEqual({})
+  })
+
+  it('a bounce-log SoftBounce match reads soft', () => {
+    expect(foldMessageEvents([{ Type: 'Bounced', ReceivedAt: 'b' }], { type: 'soft', at: 'b-at' }).bounce_type).toBe('soft')
+  })
+
+  it('a bounce-log SpamComplaint match sets complained_at, not bounced_at', () => {
+    const patch = foldMessageEvents([{ Type: 'Bounced', ReceivedAt: 'b' }], { type: 'complaint', at: 'c-at' })
+    expect(patch.complained_at).toBe('c-at')
+    expect(patch.bounced_at).toBeUndefined()
+    expect(patch.bounce_type).toBeUndefined()
+  })
+
+  it('no bounce-log match defaults to hard', () => {
+    expect(foldMessageEvents([{ Type: 'Bounced', ReceivedAt: 'b' }]).bounce_type).toBe('hard')
   })
 
   it('empty / non-array → {}', () => {
@@ -93,11 +108,17 @@ describe('foldMessageEvents', () => {
 
 describe('backfillHostCampaignEvents', () => {
   const msg = (id, campaign = 'hc-1', contact = 'c-1', tag = 'host-campaign') => ({ MessageID: id, Tag: tag, Metadata: { host_campaign_id: campaign, host_id: 'h-1', contact_id: contact } })
-  const row = (id, campaign = 'hc-1', contact = 'c-1', extra = {}) => ({ id, campaign_id: campaign, contact_id: contact, postmark_message_id: null, open_count: 0, click_count: 0, ...extra })
+  const row = (id, campaign = 'hc-1', contact = 'c-1', extra = {}) => ({
+    id, campaign_id: campaign, contact_id: contact, postmark_message_id: null,
+    delivered_at: null, opened_at: null, clicked_at: null,
+    bounced_at: null, complained_at: null, unsubscribed_at: null,
+    open_count: 0, click_count: 0, ...extra,
+  })
 
   beforeEach(() => {
     vi.clearAllMocks()
     getOutboundMessageDetails.mockResolvedValue({ details: { MessageEvents: [{ Type: 'Delivered', ReceivedAt: 'd' }, { Type: 'Opened', ReceivedAt: 'o' }] }, error: null })
+    listBounces.mockResolvedValue({ total: 0, bounces: [], error: null })
   })
 
   it('dry run: counts what it would do, writes nothing', async () => {
@@ -161,5 +182,32 @@ describe('backfillHostCampaignEvents', () => {
     const r2 = await backfillHostCampaignEvents(db, { hostId: 'h-1', dry: true, sleep: async () => {} })
     expect(r2.errors[0].error).toMatch(/token/)
     expect(r2.scanned).toBe(0)
+  })
+
+  it('a row with nothing left to learn skips the details call entirely (re-run case)', async () => {
+    listOutboundMessages.mockResolvedValueOnce({ total: 1, messages: [msg('m1')], error: null })
+    const fullyLearnedRow = row('s1', 'hc-1', 'c-1', {
+      postmark_message_id: 'm1', delivered_at: 'd', opened_at: 'o', clicked_at: 'c', bounced_at: 'b',
+    })
+    const { db } = makeDb(routeFor({ rows: [fullyLearnedRow] }))
+    const r = await backfillHostCampaignEvents(db, { hostId: 'h-1', dry: false, sleep: async () => {} })
+    expect(r).toMatchObject({ matched: 1, stamped: 0, updated: 0 })
+    expect(getOutboundMessageDetails).not.toHaveBeenCalled()
+  })
+
+  it('updated only counts a message whose guarded write actually returned a row', async () => {
+    listOutboundMessages.mockResolvedValueOnce({ total: 1, messages: [msg('m1')], error: null })
+    const alreadyStampedRow = row('s1', 'hc-1', 'c-1', { postmark_message_id: 'm1' })
+    const { db } = makeDb((state) => {
+      if (state.table === 'host_campaigns') return { data: [{ id: 'hc-1' }], error: null }
+      if (state.table === 'host_campaign_sends') {
+        const first = state.ops[0]
+        if (first?.method === 'update') return { data: [], error: null }
+        return { data: [alreadyStampedRow], error: null }
+      }
+      return {}
+    })
+    const r = await backfillHostCampaignEvents(db, { hostId: 'h-1', dry: false, sleep: async () => {} })
+    expect(r).toMatchObject({ matched: 1, stamped: 0, updated: 0 })
   })
 })
