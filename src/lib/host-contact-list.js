@@ -140,7 +140,12 @@ export function isEmailable(contact, suppressed, { emailType = 'marketing', host
  * is granted ONLY to the registrant of record whose own
  * race_registrations.marketing_consent is true (the checkbox only the
  * captain saw); team-mates get membership but never marketing consent, and
- * a NULL (pre-588 registration) grants nothing.
+ * a NULL grants nothing — a pre-588 row, or a staff manual-add
+ * (`/api/events/[id]/teams`) where nobody was shown the checkbox. A
+ * contact already in host_email_suppressions for this host is also
+ * skipped: a ticked box on a new registration does not re-open a prior
+ * host unsubscribe (only a re-signup on /h/[slug], via resubscribeHost,
+ * does).
  *
  * @param {SupabaseClient} db  service-role client
  * @param {string} raceEventId
@@ -199,12 +204,32 @@ export async function addEventAttendeesToHostList(db, raceEventId) {
     if (error) throw new Error(`host contact list: upsert failed: ${error.message}`)
   }
 
+  // HOST-CONSENT.1 — a ticked box on a NEW registration does not re-open a
+  // prior host unsubscribe (only a re-signup on /h/[slug] does, via
+  // resubscribeHost). Skipping them keeps the audit trail honest: no
+  // opt_in row for someone still suppressed.
+  if (consentingIds.size > 0) {
+    const { data: suppRows, error: suppErr } = await db
+      .from('host_email_suppressions')
+      .select('contact_id')
+      .eq('host_id', race.host_id)
+      .in('contact_id', [...consentingIds])
+    if (suppErr) throw new Error(`host contact list: suppressions query failed: ${suppErr.message}`)
+    for (const row of suppRows || []) consentingIds.delete(row.contact_id)
+  }
+
   // HOST-CONSENT.1 — grant host consent to the registrants who ticked the
-  // box. Best-effort like tagging: membership is already durable.
+  // box. Best-effort like tagging: membership is already durable. Wrapped in
+  // try/catch so a transport throw (not just an { ok:false } result) cannot
+  // abort the tagging block below.
   const consenting = [...consentingIds]
-  for (let i = 0; i < consenting.length; i += UPSERT_CHUNK) {
-    const r = await grantHostConsentBulk(db, { hostId: race.host_id, contactIds: consenting.slice(i, i + UPSERT_CHUNK), source: 'event_form' })
-    if (!r.ok) logWarn('host-contact-list', 'host consent grant failed', { race_event_id: raceEventId, error: r.error })
+  try {
+    for (let i = 0; i < consenting.length; i += UPSERT_CHUNK) {
+      const r = await grantHostConsentBulk(db, { hostId: race.host_id, contactIds: consenting.slice(i, i + UPSERT_CHUNK), source: 'event_form' })
+      if (!r.ok) logWarn('host-contact-list', 'host consent grant failed', { race_event_id: raceEventId, error: r.error })
+    }
+  } catch (err) {
+    logWarn('host-contact-list', 'host consent grant threw', { race_event_id: raceEventId, err: err?.message || String(err) })
   }
 
   // HOST-MASTER.5 — tag each attendee to the host + this event, in BOTH tag

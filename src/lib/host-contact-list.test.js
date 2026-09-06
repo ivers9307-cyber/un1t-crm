@@ -247,12 +247,16 @@ function fakeSyncDb(cfg) {
     if (table === 'host_contacts') {
       const updateOp = ops.find((o) => o.method === 'update')
       if (updateOp) {
+        if (cfg.throwOnHostContactsUpdate && ops[0]?.method === 'update') {
+          throw new Error('host_contacts update boom')
+        }
         const inOp = ops.find((o) => o.method === 'in')
         const ids = inOp ? inOp.args[1] : []
         return { data: ids.map((id) => ({ contact_id: id })), error: null }
       }
       return { data: [], error: null }
     }
+    if (table === 'host_email_suppressions') return { data: cfg.suppressions ?? [], error: null }
     return { data: [], error: null }
   })
 }
@@ -473,6 +477,33 @@ describe('addEventAttendeesToHostList', () => {
     const grant = statements.find((s) => s.table === 'host_contacts' && opOf(s, 'update'))
     expect(opOf(grant, 'in').args).toEqual(['contact_id', ['cap-1']])
     expect(opOf(grant, 'update').args[0]).toMatchObject({ marketing_consent: true, marketing_consent_source: 'event_form' })
+  })
+
+  it('HOST-CONSENT.1 — a ticked box does not re-open a prior host unsubscribe (no opt_in for a suppressed contact)', async () => {
+    const { db, statements } = fakeSyncDb({
+      race: { id: 'r1', host_id: 'h1', slug: 'run', name: 'Run' },
+      registrations: [
+        { id: 'reg-1', contact_id: 'cap-1', marketing_consent: true, teams: { team_members: [{ contact_id: 'cap-1' }] } },
+        { id: 'reg-2', contact_id: 'cap-2', marketing_consent: true, teams: { team_members: [{ contact_id: 'cap-2' }] } },
+      ],
+      suppressions: [{ contact_id: 'cap-1' }],
+    })
+    await addEventAttendeesToHostList(db, 'r1')
+    const grant = statements.find((s) => s.table === 'host_contacts' && opOf(s, 'update'))
+    expect(opOf(grant, 'in').args).toEqual(['contact_id', ['cap-2']])
+    const supQ = statements.find((s) => s.table === 'host_email_suppressions')
+    expect(supQ.ops.some((o) => o.method === 'eq' && o.args[0] === 'host_id' && o.args[1] === 'h1')).toBe(true)
+  })
+
+  it('HOST-CONSENT.1 — a throwing grant does not abort the sync (tagging still runs)', async () => {
+    const { db, statements } = fakeSyncDb({
+      race: { id: 'r1', host_id: 'h1', slug: 'run', name: 'Run' },
+      registrations: [{ id: 'reg-1', contact_id: 'cap-1', marketing_consent: true, teams: { team_members: [{ contact_id: 'cap-1' }] } }],
+      throwOnHostContactsUpdate: true,
+    })
+    const n = await addEventAttendeesToHostList(db, 'r1')
+    expect(n).toBe(1)
+    expect(statements.some((s) => s.table === 'contacts')).toBe(true) // tagging block ran
   })
 
   it('HOST-CONSENT.1 — the registrations select carries contact_id and marketing_consent', async () => {
