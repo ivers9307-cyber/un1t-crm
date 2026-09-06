@@ -11,6 +11,10 @@
 // on-page wording. Inline success (no redirect); the API always answers
 // { success: true } once the host resolves, so "done" here means "recorded
 // or already on the list" — indistinguishable by design.
+//
+// HOST-CONSENT.1 — the footer names TWO independent consents: the host's
+// own list (this form) and the studio's (UN1T / orgName) marketing. Both
+// are granted by joining; either can be left independently.
 
 import { useState } from 'react'
 
@@ -18,7 +22,7 @@ const INPUT_CLASS =
   'w-full rounded-lg border border-white/15 bg-white/5 px-4 py-3 text-sm text-white ' +
   'placeholder:text-white/40 focus:outline-none focus:border-white/40'
 
-export default function HostListSignup({ slug, hostName, headline, blurb, buttonLabel, successMessage }) {
+export default function HostListSignup({ slug, hostName, orgName, headline, blurb, buttonLabel, successMessage }) {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -113,7 +117,7 @@ export default function HostListSignup({ slug, hostName, headline, blurb, button
       {error && <p className="mt-3 text-center text-sm text-red-400">{error}</p>}
 
       <p className="mt-6 text-center text-xs text-white/40">
-        By joining you agree to receive emails about {hostName}&apos;s events &amp; other events and promotions at UN1T Dublin.
+        By joining you agree to receive emails from {hostName} about their events, and from {orgName || 'the studio'} about events and promotions. You can leave either list at any time.
       </p>
     </div>
   )

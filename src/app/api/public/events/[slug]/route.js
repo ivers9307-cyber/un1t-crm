@@ -41,7 +41,8 @@ export async function GET(request, props) {
       members_only, payment_currency,
       hero_image_url, accent_hex, active, status,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
-      locations:location_id ( id, name, address, timezone, is_host_anchor )
+      locations:location_id ( id, name, address, timezone, is_host_anchor, organization_id ),
+      host:event_hosts!host_id ( name )
     `)
     .eq('slug', params.slug)
     .eq('active', true)
@@ -123,7 +124,7 @@ export async function GET(request, props) {
   // too (defensive; the field is supposed to be deprecated but it
   // could still be on existing rows).
    
-  const { capacity: _omit, ...racePublic } = data
+  const { capacity: _omit, host: _host, ...racePublic } = data
 
   // EVENT-COPY.1 — NEVER let the ops-only anchor label leave this endpoint.
   //
@@ -145,17 +146,28 @@ export async function GET(request, props) {
     ? (({ is_host_anchor: _flag, ...loc }) => (isAnchor ? { ...loc, name: null, address: null } : loc))(racePublic.locations)
     : racePublic.locations
 
+  // HOST-CONSENT.1 — names for the two-consent copy on the register form.
+  // organization_id is resolved here and stripped from the public payload.
+  const { organization_id: _orgId, ...publicLocationSafe } = publicLocation || {}
+  let organizationName = null
+  if (publicLocation?.organization_id) {
+    const { data: org } = await db.from('organizations').select('name').eq('id', publicLocation.organization_id).maybeSingle()
+    organizationName = org?.name || null
+  }
+
   return NextResponse.json({
     success: true,
     data: {
       ...racePublic,
-      locations: publicLocation,
+      locations: publicLocation ? publicLocationSafe : publicLocation,
       venue_name: pickAudienceVenueName({
         venueName: racePublic.venue_name,
         eventLocation: racePublic.locations,
       }) || null,
       waves: publicWaves,
       registration_state,
+      host_name: data.host?.name || null,
+      organization_name: organizationName,
     },
   })
 }
