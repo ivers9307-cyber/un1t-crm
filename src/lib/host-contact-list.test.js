@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   hostTagFor,
   isEmailable,
+  emailabilityReason,
   addEventAttendeesToHostList,
   fetchHostContactRows,
   eventTagFor,
@@ -106,6 +107,30 @@ describe('isEmailable', () => {
       const admin = { ...good, email_administrative: true, email_marketing: false }
       expect(isEmailable(admin, true, { emailType: 'utility', hostConsent: false })).toBe(true)
     })
+  })
+})
+
+describe('emailabilityReason (HOST-METRICS.1)', () => {
+  const good = { email: 'a@b.ie', email_status: 'active', email_suppressed_at: null }
+  it('null when mailable', () => expect(emailabilityReason(good, false, { hostConsent: true })).toBeNull())
+  it('no_email', () => expect(emailabilityReason({ ...good, email: null }, false, { hostConsent: true })).toBe('no_email'))
+  it('null contact → no_email', () => expect(emailabilityReason(null, false, { hostConsent: true })).toBe('no_email'))
+  it('mailbox_blocked for the repeat-bounce stamp, bounced and complained', () => {
+    expect(emailabilityReason({ ...good, email_suppressed_at: '2026-08-11T05:45:14Z' }, false, { hostConsent: true })).toBe('mailbox_blocked')
+    expect(emailabilityReason({ ...good, email_status: 'bounced' }, false, { hostConsent: true })).toBe('mailbox_blocked')
+    expect(emailabilityReason({ ...good, email_status: 'complained' }, false, { hostConsent: true })).toBe('mailbox_blocked')
+  })
+  it('host_unsubscribed beats no_host_consent (a revoke sets both)', () => {
+    expect(emailabilityReason(good, true, { hostConsent: false })).toBe('host_unsubscribed')
+  })
+  it('no_host_consent', () => expect(emailabilityReason(good, false, { hostConsent: false })).toBe('no_host_consent'))
+  it('utility: no_administrative_consent, and hostConsent/suppressed ignored', () => {
+    expect(emailabilityReason({ ...good, email_administrative: false }, true, { emailType: 'utility' })).toBe('no_administrative_consent')
+    expect(emailabilityReason({ ...good, email_administrative: true }, true, { emailType: 'utility', hostConsent: false })).toBeNull()
+  })
+  it('isEmailable is exactly reason === null', () => {
+    expect(isEmailable(good, false, { hostConsent: true })).toBe(true)
+    expect(isEmailable(good, true, { hostConsent: true })).toBe(false)
   })
 })
 
