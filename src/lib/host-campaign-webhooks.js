@@ -10,7 +10,8 @@
 // What lands where:
 //   Bounce (hard)        contacts.email_status = 'bounced'   — a MAILBOX fact, shared
 //   SpamComplaint        email_status = 'complained' + host suppression
-//   SubscriptionChange   host suppression (SuppressSending) — NEVER contacts.email_marketing
+//   SubscriptionChange   host suppression (SuppressSending) — NEVER contacts.email_marketing;
+//                        reactivation resets email_status only
 //   Delivery/Open/Click  acknowledged, parked for HOST-METRICS.1
 //
 // Contract mirrors processPostmarkEvent: {ok:true} = processed, {ok:false,error}
@@ -55,7 +56,19 @@ export async function processHostCampaignEvent(db, body) {
       // Reactivation (SuppressSending=false) is an operator clearing a
       // suppression at Postmark. Consent is restored only by the person, via
       // a re-signup — same rule as the CRM branch (COMMSFIX.C.7).
-      if (!body.SuppressSending) return { ok: true }
+      if (!body.SuppressSending) {
+        // Reactivation: Postmark (or an operator) cleared the suppression, so
+        // the mailbox demonstrably works again. Reset the shared mailbox fact
+        // this branch wrote; consent is NOT restored (only the person can, via
+        // a re-signup). email_suppressed_at is the CRM repeat-bounce stamp and
+        // stays the CRM branch's business.
+        const { error } = await db.from('contacts')
+          .update({ email_status: 'active' })
+          .eq('id', contactId)
+          .in('email_status', ['bounced', 'complained'])
+        if (error) return { ok: false, error: error.message }
+        return { ok: true }
+      }
       const r = await revokeHostConsent(db, { hostId, contactId, source: 'postmark_one_click_unsubscribe' })
       if (!r.ok) return { ok: false, error: r.error }
       return { ok: true }
