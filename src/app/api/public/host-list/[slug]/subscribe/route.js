@@ -144,14 +144,14 @@ export async function POST(request, props) {
         .eq('host_id', host.id)
         .eq('contact_id', contactId)
         .maybeSingle()
-      if (supErr) logWarn('host-list-subscribe', 'suppression lookup failed', { err: supErr })
+      if (supErr) logError('host-list-subscribe', 'suppression lookup failed — resubscribe may be recorded as a plain signup', { err: supErr, host_id: host.id, contact_id: contactId })
       const consentResult = existingSup
         ? await resubscribeHost(db, { hostId: host.id, contactId, ipAddress: ip })
         : await grantHostConsent(db, { hostId: host.id, contactId, source: 'mailing_list_form', ipAddress: ip })
       if (!consentResult.ok) {
-        logError('host-list-subscribe', 'host consent write failed', { err: consentResult.error, host_id: host.id })
+        logError('host-list-subscribe', 'host consent write failed', { err: consentResult.error, host_id: host.id, contact_id: contactId })
       }
-      if (existingSup && host.postmark_stream_id) {
+      if (existingSup && consentResult.ok && host.postmark_stream_id) {
         try {
           const lift = await unsuppressAtPostmark(email, { stream: host.postmark_stream_id })
           if (lift?.failed?.length) logWarn('host-list-subscribe', 'Postmark host-stream lift failed', { message: lift.failed[0]?.message })

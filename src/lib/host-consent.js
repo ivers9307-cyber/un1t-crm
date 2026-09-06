@@ -4,7 +4,8 @@
 // docs/superpowers/specs/2026-09-06-host-consent-domain-design.md).
 //   grant   → host_contacts.marketing_consent = true (+ when/source), one
 //             consent_log row, channel 'host_email_marketing', host_id set.
-//   revoke  → host_email_suppressions row (insert-once), one opt_out row.
+//   revoke  → host_email_suppressions row (insert-once) AND
+//             marketing_consent=false, one opt_out row.
 //   resub   → delete the suppression row, then grant (source host_resubscribe).
 // None of these touch contacts.email_marketing / contact_preferences —
 // that is the UN1T domain and the whole point is that the two never cross.
@@ -95,13 +96,28 @@ export async function grantHostConsentBulk(db, { hostId, contactIds, source }) {
  * @returns {Promise<{ok:boolean, changed:boolean, error?:string}>}
  */
 export async function revokeHostConsent(db, { hostId, contactId, source, ipAddress = null }) {
-  const { data, error } = await db
+  const { data: supRows, error: supError } = await db
     .from('host_email_suppressions')
     .upsert({ host_id: hostId, contact_id: contactId }, { onConflict: 'host_id,contact_id', ignoreDuplicates: true })
     .select('id')
-  if (error) return { ok: false, changed: false, error: error.message }
+  if (supError) return { ok: false, changed: false, error: supError.message }
   // ignoreDuplicates returns zero rows when the pair already existed.
-  const changed = (data || []).length > 0
+  const suppressed = (supRows || []).length > 0
+
+  // Keep consent in step with the suppression so a later resubscribe flips a
+  // real value (grantHostConsent is scoped to marketing_consent = false) and
+  // the audit trail pairs every opt_out with the opt_in that ends it.
+  const { data: consentRows, error: consentError } = await db
+    .from('host_contacts')
+    .update({ marketing_consent: false })
+    .eq('host_id', hostId)
+    .eq('contact_id', contactId)
+    .eq('marketing_consent', true)
+    .select('contact_id')
+  if (consentError) return { ok: false, changed: suppressed, error: consentError.message }
+  const unconsented = (consentRows || []).length > 0
+
+  const changed = suppressed || unconsented
   if (changed) await insertLog(db, [logRow({ contactId, hostId, action: 'opt_out', source, ipAddress })])
   return { ok: true, changed }
 }

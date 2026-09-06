@@ -98,9 +98,10 @@ describe('grantHostConsentBulk', () => {
 })
 
 describe('revokeHostConsent', () => {
-  it('upserts the suppression row (insert-once) and logs opt_out', async () => {
+  it('upserts the suppression row (insert-once), flips consent false, and logs opt_out', async () => {
     const { db, statements } = makeDb((s) => {
       if (s.table === 'host_email_suppressions') return { data: [{ id: 's-1' }], error: null }
+      if (s.table === 'host_contacts') return { data: [{ contact_id: C }], error: null }
       return { data: null, error: null }
     })
     const r = await revokeHostConsent(db, { hostId: H, contactId: C, source: 'host_unsubscribe_page', ipAddress: '9.9.9.9' })
@@ -110,12 +111,36 @@ describe('revokeHostConsent', () => {
       { host_id: H, contact_id: C },
       { onConflict: 'host_id,contact_id', ignoreDuplicates: true },
     ])
+    const upd = statements.find((s) => s.table === 'host_contacts')
+    expect(op(upd, 'update').args[0]).toEqual({ marketing_consent: false })
+    expect(hasEq(upd, 'host_id', H) && hasEq(upd, 'contact_id', C) && hasEq(upd, 'marketing_consent', true)).toBe(true)
     const log = statements.find((s) => s.table === 'consent_log')
     expect(op(log, 'insert').args[0][0]).toMatchObject({ contact_id: C, channel: HOST_CONSENT_CHANNEL, action: 'opt_out', source: 'host_unsubscribe_page', host_id: H })
   })
   it('already suppressed → ok, changed false, no log row', async () => {
     const { db, statements } = makeDb(() => ({ data: [], error: null }))
     expect(await revokeHostConsent(db, { hostId: H, contactId: C, source: 'postmark_one_click_unsubscribe' })).toEqual({ ok: true, changed: false })
+    expect(statements.some((s) => s.table === 'consent_log')).toBe(false)
+  })
+  it('already suppressed but consent still true (legacy) → flips consent, changed true, one opt_out row', async () => {
+    const { db, statements } = makeDb((s) => {
+      if (s.table === 'host_email_suppressions') return { data: [], error: null }
+      if (s.table === 'host_contacts') return { data: [{ contact_id: C }], error: null }
+      return { data: null, error: null }
+    })
+    const r = await revokeHostConsent(db, { hostId: H, contactId: C, source: 'host_unsubscribe_page' })
+    expect(r).toEqual({ ok: true, changed: true })
+    const log = statements.find((s) => s.table === 'consent_log')
+    expect(op(log, 'insert').args[0]).toHaveLength(1)
+  })
+  it('a failed consent flip is reported', async () => {
+    const { db, statements } = makeDb((s) => {
+      if (s.table === 'host_email_suppressions') return { data: [{ id: 's-1' }], error: null }
+      if (s.table === 'host_contacts') return { data: null, error: { message: 'boom' } }
+      return { data: null, error: null }
+    })
+    const r = await revokeHostConsent(db, { hostId: H, contactId: C, source: 'host_unsubscribe_page' })
+    expect(r).toEqual({ ok: false, changed: true, error: 'boom' })
     expect(statements.some((s) => s.table === 'consent_log')).toBe(false)
   })
   it('never touches contacts.email_marketing', async () => {
