@@ -26,8 +26,9 @@ const UPSERT_CHUNK = 500 // rows per host_contacts upsert statement
 
 // email_status values that block a marketing send — exactly what
 // buildAudienceQuery filters. 'unsubscribed' is retired (mig 492, CHECK in
-// mig 501): a real opt-out carries email_marketing=false, which the consent
-// gate above already blocks.
+// mig 501): a real opt-out from a HOST list is hostConsent=false or a
+// host_email_suppressions row, both blocked by the marketing branch of
+// isEmailable below — email_status stays reputation-only.
 const BLOCKED_EMAIL_STATUSES = ['bounced', 'complained']
 
 // Shared normalisation for both host and event tags: lowercase, collapse

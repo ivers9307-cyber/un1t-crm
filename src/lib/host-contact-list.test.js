@@ -60,9 +60,6 @@ describe('isEmailable', () => {
     expect(isEmailable({ ...good, email: null }, false, { hostConsent: true })).toBe(false)
     expect(isEmailable({ ...good, email: '' }, false, { hostConsent: true })).toBe(false)
   })
-  it('is false without host consent (hostConsent !== true)', () => {
-    expect(isEmailable(good, false, { hostConsent: false })).toBe(false)
-  })
   it('is false when bounced / complained', () => {
     expect(isEmailable({ ...good, email_status: 'bounced' }, false, { hostConsent: true })).toBe(false)
     expect(isEmailable({ ...good, email_status: 'complained' }, false, { hostConsent: true })).toBe(false)
@@ -91,6 +88,7 @@ describe('isEmailable', () => {
     })
     it('is FALSE when host consent is false, even with UN1T consent true', () => {
       expect(isEmailable(good, false, { hostConsent: false })).toBe(false)
+      expect(isEmailable(good, false, { hostConsent: null })).toBe(false)
     })
     it('fails CLOSED when hostConsent is omitted', () => {
       expect(isEmailable(good, false)).toBe(false)
