@@ -7278,6 +7278,38 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
+  path: '/api/hosts/{id}/backfill-campaign-events',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Backfill host campaign outcomes from Postmark (Manager+, org-scoped)',
+  description:
+    "Manager+ session; the host must belong to the caller's active organization (404 otherwise, so ids stay un-enumerable). Asks Postmark's Messages API for this host's outbound activity over the last 45 days (its full retention window) and applies any Delivery/Open/Click/Bounce/SpamComplaint/SubscriptionChange events onto the matching host_campaign_sends rows — for sends that predate the mig 590 columns, or whose webhook events were missed. Dry-run by default (counts only, writes nothing); pass ?dry=0 to persist. Runnable from Settings → Hosts.",
+  request: { params: z.object({ id: uuidLike }), query: z.object({ dry: z.string().optional().describe("Pass '0' to persist; any other value (or omitted) stays dry-run.") }) },
+  responses: {
+    200: {
+      description: 'Backfill summary',
+      content: {
+        'application/json': {
+          schema: SuccessResponse(z.object({
+            dry: z.boolean(),
+            scanned: z.number().int(),
+            matched: z.number().int(),
+            stamped: z.number().int(),
+            updated: z.number().int(),
+            skipped: z.number().int(),
+            errors: z.number().int(),
+          }).openapi('HostCampaignBackfillSummary')),
+        },
+      },
+    },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — manager+ required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Host not found (or not in your organization)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
   path: '/api/host/emails/{id}/send-test',
   tags: ['Host Portal'],
   security: [{ CookieAuth: [] }],

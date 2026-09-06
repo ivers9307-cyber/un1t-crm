@@ -3,8 +3,13 @@
 // `status` is the QUEUE state (pending|claimed|sent|failed). Everything Postmark
 // tells us afterwards lands as timestamps, and the outcome is DERIVED here by
 // precedence so a late Delivery can never regress an Open (the POSTMARK-RACE.2
-// lesson on email_sends.status). host_campaign_stats() in mig 590 counts with
-// the same precedence — keep the two in step.
+// lesson on email_sends.status). host_campaign_stats() (migs 590/591) is a
+// cumulative FUNNEL (an opened row also counts as delivered; a clicked row
+// also counts as opened), while deriveOutcome is EXCLUSIVE (one label per row,
+// unsubscribed beats clicked). They share only the failed / bounced /
+// complained exclusions. UI filters must use the funnel predicates (opened_at
+// set and not bounced/complained), never outcome equality, or the tile and
+// the list disagree.
 
 export const OUTCOMES = Object.freeze(['failed', 'bounced', 'complained', 'unsubscribed', 'clicked', 'opened', 'delivered', 'sent', 'queued'])
 
@@ -24,6 +29,7 @@ export function deriveOutcome(row) {
 /** The timestamp the derived outcome refers to, or null (queued). */
 export function outcomeAt(row) {
   switch (deriveOutcome(row)) {
+    // claim time is the closest thing to a failure time; there is no failed_at
     case 'failed': return row.claimed_at || row.sent_at || null
     case 'bounced': return row.bounced_at
     case 'complained': return row.complained_at

@@ -33,6 +33,10 @@ describe('listOutboundMessages', () => {
     expect((await listOutboundMessages({ tag: 'x' })).error).toMatch(/token/i)
     expect(fetch).not.toHaveBeenCalled()
   })
+  it('an ok response whose body cannot be parsed is returned as error, never thrown', async () => {
+    fetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => { throw new Error('bad json') } })
+    expect(await listOutboundMessages({ tag: 'x' })).toEqual({ total: 0, messages: [], error: 'Postmark returned an unreadable response' })
+  })
 })
 describe('getOutboundMessageDetails', () => {
   it('GETs /messages/outbound/{id}/details and returns the payload', async () => {
@@ -52,5 +56,9 @@ describe('getOutboundMessageDetails', () => {
   it('a thrown fetch is returned as error', async () => {
     fetch.mockRejectedValueOnce(new Error('net'))
     expect(await getOutboundMessageDetails('m1')).toEqual({ details: null, error: 'net' })
+  })
+  it('an ok response whose body cannot be parsed is returned as error, never thrown', async () => {
+    fetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => { throw new Error('bad json') } })
+    expect(await getOutboundMessageDetails('m1')).toEqual({ details: null, error: 'Postmark returned an unreadable response' })
   })
 })

@@ -75,6 +75,11 @@ export async function listOutboundMessages({ tag, fromDate, toDate, count = 500,
       console.error(`[postmark-messages] list failed: ${error}`)
       return { total: 0, messages: [], error }
     }
+    if (!payload || typeof payload !== 'object') {
+      const error = 'Postmark returned an unreadable response'
+      console.error(`[postmark-messages] list failed: ${error}`)
+      return { total: 0, messages: [], error }
+    }
     return {
       total: Number(payload?.TotalCount) || 0,
       messages: Array.isArray(payload?.Messages) ? payload.Messages : [],
@@ -108,6 +113,11 @@ export async function getOutboundMessageDetails(messageId) {
     const payload = await response.json().catch(() => null)
     if (!response.ok) {
       const error = payload?.Message || `Postmark message details failed (HTTP ${response.status})`
+      console.error(`[postmark-messages] details failed for ${messageId}: ${error}`)
+      return { details: null, error }
+    }
+    if (!payload || typeof payload !== 'object') {
+      const error = 'Postmark returned an unreadable response'
       console.error(`[postmark-messages] details failed for ${messageId}: ${error}`)
       return { details: null, error }
     }

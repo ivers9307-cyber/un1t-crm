@@ -36,9 +36,9 @@ alter table host_campaign_sends
 create index idx_host_campaign_sends_message on host_campaign_sends (postmark_message_id) where postmark_message_id is not null;
 ```
 
-`status` stays the QUEUE state (`pending | claimed | sent | failed`). The displayed **outcome** is derived, in this order of precedence: `failed` → `bounced` → `complained` → `unsubscribed` → `clicked` → `opened` → `delivered` → `sent` → `queued`. Deriving it means a late-arriving Delivery after an Open can never regress a row (the POSTMARK-RACE.2 lesson on `email_sends.status`).
+`status` stays the QUEUE state (`pending | claimed | sent | failed`). The displayed **outcome** is derived, in this order of precedence: `failed` → `bounced` → `complained` → `unsubscribed` → `clicked` → `opened` → `delivered` → `sent` → `queued`. Deriving it means a late-arriving Delivery after an Open can never regress a row (the POSTMARK-RACE.2 lesson on `email_sends.status`). The stats function is a cumulative funnel; the derived outcome is exclusive. UI filters use the funnel predicates so tiles and lists agree (mig 591 guards bounced/complained/unsubscribed on status='sent' so they reconcile with failed).
 
-`failed_reason` vocabulary (free text column, values fixed in code): `no_host_consent`, `host_unsubscribed`, `mailbox_blocked` (bounced / complained / repeat-bounce stamp), `no_email`, `send_error` (Postmark rejected the call; the message is logged, not stored), `stale_claim` (the sweeper's 15-minute reaper).
+`failed_reason` vocabulary (free text column, values fixed in code): `no_host_consent`, `host_unsubscribed`, `mailbox_blocked` (bounced / complained / repeat-bounce stamp), `no_email`, `no_administrative_consent`, `send_error` (Postmark rejected the call; the message is logged, not stored), `stale_claim` (the sweeper's 15-minute reaper).
 
 Two SQL functions, `security invoker`, executable by `service_role` only (revoke from `authenticated` and `anon` so the advisor stays clean):
 
