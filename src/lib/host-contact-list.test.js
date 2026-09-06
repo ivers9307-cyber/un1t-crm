@@ -205,6 +205,58 @@ const reg = (contactIds) => ({
   teams: { team_members: contactIds.map((c) => ({ contact_id: c })) },
 })
 
+// ---------------------------------------------------------------------------
+// HOST-CONSENT.1 — fakeListDb only models select/upsert on host_contacts, not
+// the `update` grantHostConsentBulk issues. makeRecorder is a generic
+// chainable statement recorder (used ONLY by the two HOST-CONSENT.1 tests
+// below) so the real host-consent.js module can run unmocked against it and
+// the update statement it issues is visible for assertions.
+// ---------------------------------------------------------------------------
+function makeRecorder(route) {
+  const statements = []
+  const db = {
+    from(table) {
+      const state = { table, ops: [] }
+      statements.push(state)
+      const b = new Proxy({}, {
+        get(_, method) {
+          if (method === 'then') {
+            const p = Promise.resolve(route(state) ?? { data: null, error: null })
+            return p.then.bind(p)
+          }
+          return (...args) => { state.ops.push({ method, args }); return b }
+        },
+      })
+      return b
+    },
+  }
+  return { db, statements }
+}
+const opOf = (s, m) => s.ops.find((o) => o.method === m)
+
+function fakeSyncDb(cfg) {
+  return makeRecorder((state) => {
+    const { table, ops } = state
+    if (table === 'race_events') return { data: cfg.race, error: null }
+    if (table === 'race_registrations') return { data: cfg.registrations, error: null }
+    if (table === 'event_hosts') return { data: { id: 'h1', slug: 'run', name: 'Run' }, error: null }
+    if (table === 'contacts') {
+      const hasSelect = ops.some((o) => o.method === 'select')
+      return hasSelect ? { data: [], error: null } : { data: null, error: null }
+    }
+    if (table === 'host_contacts') {
+      const updateOp = ops.find((o) => o.method === 'update')
+      if (updateOp) {
+        const inOp = ops.find((o) => o.method === 'in')
+        const ids = inOp ? inOp.args[1] : []
+        return { data: ids.map((id) => ({ contact_id: id })), error: null }
+      }
+      return { data: [], error: null }
+    }
+    return { data: [], error: null }
+  })
+}
+
 describe('addEventAttendeesToHostList', () => {
   it('returns 0 and never upserts when the race does not exist', async () => {
     const db = fakeListDb({ race: null })
@@ -402,6 +454,32 @@ describe('addEventAttendeesToHostList', () => {
       expect(writeContactTag).toHaveBeenCalledWith(db, { contactId: 'c1', locationId: 'loc1', tag: 'host:acme' })
       expect(writeContactTag).toHaveBeenCalledWith(db, { contactId: 'c1', locationId: 'loc1', tag: 'event:pride-run' })
     })
+  })
+
+  it('HOST-CONSENT.1 — grants host consent to registrants who ticked the box, not to their team-mates', async () => {
+    const { db, statements } = fakeSyncDb({
+      race: { id: 'r1', host_id: 'h1', slug: 'run', name: 'Run' },
+      registrations: [
+        { id: 'reg-1', contact_id: 'cap-1', marketing_consent: true,  teams: { team_members: [{ contact_id: 'cap-1' }, { contact_id: 'mate-1' }] } },
+        { id: 'reg-2', contact_id: 'cap-2', marketing_consent: false, teams: { team_members: [{ contact_id: 'cap-2' }] } },
+        { id: 'reg-3', contact_id: 'cap-3', marketing_consent: null,  teams: { team_members: [{ contact_id: 'cap-3' }] } },
+      ],
+    })
+    await addEventAttendeesToHostList(db, 'r1')
+    // membership for all four
+    const upsert = statements.find((s) => s.table === 'host_contacts' && opOf(s, 'upsert'))
+    expect(opOf(upsert, 'upsert').args[0].map((r) => r.contact_id).sort()).toEqual(['cap-1', 'cap-2', 'cap-3', 'mate-1'])
+    // consent for cap-1 only (pre-588 NULL rows and unticked boxes grant nothing)
+    const grant = statements.find((s) => s.table === 'host_contacts' && opOf(s, 'update'))
+    expect(opOf(grant, 'in').args).toEqual(['contact_id', ['cap-1']])
+    expect(opOf(grant, 'update').args[0]).toMatchObject({ marketing_consent: true, marketing_consent_source: 'event_form' })
+  })
+
+  it('HOST-CONSENT.1 — the registrations select carries contact_id and marketing_consent', async () => {
+    const { db, statements } = fakeSyncDb({ race: { id: 'r1', host_id: 'h1', slug: 'run', name: 'Run' }, registrations: [] })
+    await addEventAttendeesToHostList(db, 'r1')
+    const regs = statements.find((s) => s.table === 'race_registrations')
+    expect(opOf(regs, 'select').args[0]).toMatch(/contact_id, marketing_consent/)
   })
 })
 

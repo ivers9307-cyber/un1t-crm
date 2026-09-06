@@ -19,6 +19,7 @@
 // host_email_suppressions (UNIQUE(host_id, contact_id)). Service-role only.
 
 import { writeContactTag } from '@/lib/contact-tags'
+import { grantHostConsentBulk } from '@/lib/host-consent'
 import { logWarn } from '@/lib/log'
 
 const PAGE = 1000        // the supabase-js 1k select cap — always .range()-paginate
@@ -135,6 +136,12 @@ export function isEmailable(contact, suppressed, { emailType = 'marketing', host
  * affect the payment/registration response. Errors THROW for those catchers
  * (race/registrations/host_contacts loads only — tagging never throws).
  *
+ * HOST-CONSENT.1 — host marketing consent (host_contacts.marketing_consent)
+ * is granted ONLY to the registrant of record whose own
+ * race_registrations.marketing_consent is true (the checkbox only the
+ * captain saw); team-mates get membership but never marketing consent, and
+ * a NULL (pre-588 registration) grants nothing.
+ *
  * @param {SupabaseClient} db  service-role client
  * @param {string} raceEventId
  * @returns {Promise<number>} deduped contact count upserted (0 for no-op)
@@ -152,10 +159,11 @@ export async function addEventAttendeesToHostList(db, raceEventId) {
   // fetchEventAttendees' query shape (attendee-export.js) trimmed to the
   // contact ids, range-paginated past the 1k cap.
   const contactIds = new Set()
+  const consentingIds = new Set()
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await db
       .from('race_registrations')
-      .select('id, teams:team_id ( team_members ( contact_id ) )')
+      .select('id, contact_id, marketing_consent, teams:team_id ( team_members ( contact_id ) )')
       .eq('race_event_id', raceEventId)
       .eq('status', 'confirmed')
       .order('registered_at', { ascending: true })
@@ -167,6 +175,11 @@ export async function addEventAttendeesToHostList(db, raceEventId) {
       for (const m of members) {
         if (m?.contact_id) contactIds.add(m.contact_id)
       }
+      // HOST-CONSENT.1 — only the registrant of record saw the checkbox.
+      // Team-mates get membership (utility mail) but no marketing consent.
+      // NULL = pre-588 registration: grants nothing (the backfill covered
+      // those memberships once; anything later must come from a real tick).
+      if (reg?.contact_id && reg.marketing_consent === true) consentingIds.add(reg.contact_id)
     }
     if (!data || data.length < PAGE) break
   }
@@ -184,6 +197,14 @@ export async function addEventAttendeesToHostList(db, raceEventId) {
       .from('host_contacts')
       .upsert(chunk, { onConflict: 'host_id,contact_id', ignoreDuplicates: true })
     if (error) throw new Error(`host contact list: upsert failed: ${error.message}`)
+  }
+
+  // HOST-CONSENT.1 — grant host consent to the registrants who ticked the
+  // box. Best-effort like tagging: membership is already durable.
+  const consenting = [...consentingIds]
+  for (let i = 0; i < consenting.length; i += UPSERT_CHUNK) {
+    const r = await grantHostConsentBulk(db, { hostId: race.host_id, contactIds: consenting.slice(i, i + UPSERT_CHUNK), source: 'event_form' })
+    if (!r.ok) logWarn('host-contact-list', 'host consent grant failed', { race_event_id: raceEventId, error: r.error })
   }
 
   // HOST-MASTER.5 — tag each attendee to the host + this event, in BOTH tag
