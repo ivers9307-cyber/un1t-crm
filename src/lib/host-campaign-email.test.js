@@ -574,3 +574,83 @@ describe('sanitizeCampaignHtml — styles and viewport (HOST-EMAILS.2)', () => {
     expect(html).toContain('https://x/u')
   })
 })
+
+// ---------------------------------------------------------------------------
+// Security review fixes — pins the two real defects found in the
+// just-landed HOST-EMAILS.2 sanitizer:
+//   1. dropOnAttrBoundary dropped a WHITESPACE boundary, which is
+//      structural when the removed on* attribute abuts the next token
+//      (no space between them) — merging attribute names/values together
+//      and, worst case, hiding a `href` from the URL scheme check.
+//   2. the placeholder scheme was forgeable via a nested prefix
+//      (`@@UN1T@@UN1T__STYLE_0@@` reconstitutes after ONE `.split().join()`
+//      pass), letting a host duplicate/relocate style content or the
+//      viewport meta, or inject `<style>` text inside an open tag.
+// ---------------------------------------------------------------------------
+describe('sanitizeCampaignHtml — on* boundary + placeholder-forgery regressions (security review)', () => {
+  it('an on* attribute directly abutting the NEXT attribute (no whitespace) does not eat it', () => {
+    // Was: dropOnAttrBoundary swallowed the whitespace boundary, merging
+    // `<a onclick="1"href="...">` into `<ahref="...">` — the href attribute
+    // vanished as such, so URL_ATTR's scheme check never saw it and the
+    // javascript: URL survived verbatim.
+    const out = sanitizeCampaignHtml('<a onclick="1"href="javascript:alert(1)">click</a>')
+    expect(out).not.toMatch(/onclick/i)
+    expect(out).not.toMatch(/javascript:/i)
+    expect(out).toContain('<a href="#">click</a>')
+  })
+
+  it('an on* attribute directly abutting a following src (no whitespace) keeps the image', () => {
+    // Was: <imgsrc=…> — the image silently lost its src attribute entirely.
+    const out = sanitizeCampaignHtml('<img onclick="track()"src="https://cdn/hero.png" alt="Hero">')
+    expect(out).not.toMatch(/onclick/i)
+    expect(out).toContain('src="https://cdn/hero.png"')
+    expect(out).toContain('alt="Hero"')
+  })
+
+  it('two adjacent on* attributes (quoted then bare, no space between) both go cleanly', () => {
+    // Was: <img src=xonerror=alert(1)> — dropOnAttrBoundary ate the space
+    // ahead of the bare attribute too, splicing "x" and "onerror" together.
+    const out = sanitizeCampaignHtml('<img src=x onclick="1"onerror=alert(1)>')
+    expect(out).not.toContain('onerror')
+    expect(out).not.toContain('onclick')
+    expect(out).toContain('<img src=x')
+  })
+
+  it('a nested-prefix forgery around a style placeholder token cannot duplicate the style block', () => {
+    // @@UN1T@@UN1T__STYLE_0@@ reconstitutes into a live "@@UN1T_STYLE_0@@"
+    // token after exactly one split/join pass — the fixed-point strip (and
+    // the per-call nonce) must reduce it to inert text instead.
+    const out = sanitizeCampaignHtml('<style>.real{color:red}</style><p>@@UN1T@@UN1T__STYLE_0@@</p>')
+    expect((out.match(/<style>/g) || []).length).toBe(1)
+    expect(out).not.toContain('@@UN1T_')
+  })
+
+  it('a nested-prefix forgery around a viewport placeholder token cannot relocate the viewport meta into the body', () => {
+    const out = sanitizeCampaignHtml('<p>@@UN1T@@UN1T__VIEWPORT@@</p><meta name="viewport" content="x">')
+    expect(out).not.toContain('@@UN1T_')
+    expect(out).toContain('<meta name="viewport" content="width=device-width, initial-scale=1">')
+    // the canonical meta must land OUTSIDE the <p>, not be spliced into it
+    expect(out).not.toMatch(/<p>[^]*?<meta[^]*?<\/p>/)
+    expect(out.indexOf('<meta')).toBeGreaterThan(out.indexOf('</p>'))
+  })
+
+  it('a triple-nested prefix forgery is still reduced to a fixed point with no live token left', () => {
+    const out = sanitizeCampaignHtml('@@UN1T@@UN1T@@UN1T___STYLE_0@@')
+    expect(out).not.toContain('@@UN1T_')
+  })
+
+  it('a forged placeholder token sitting inside an open tag cannot resurrect a <style> tag there', () => {
+    const out = sanitizeCampaignHtml('<a href="https://ok" @@UN1T@@UN1T__STYLE_0@@>hi</a><style>.a{}</style>')
+    expect(out).not.toContain('@@UN1T_')
+    expect(out).not.toMatch(/<a[^>]*<style/)
+  })
+
+  it('two separate sanitizeCampaignHtml calls use independent (non-colliding) placeholder nonces', () => {
+    // Not a shared/global token — two renders can run concurrently without
+    // one call's forged input ever matching another call's live placeholder.
+    const a = sanitizeCampaignHtml('<style>.a{color:red}</style><p>hi</p>')
+    const b = sanitizeCampaignHtml('<style>.b{color:blue}</style><p>bye</p>')
+    expect(a).toContain('<style>.a{color:red}</style>')
+    expect(b).toContain('<style>.b{color:blue}</style>')
+  })
+})
