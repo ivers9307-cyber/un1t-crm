@@ -1797,3 +1797,77 @@ Ask Richard for the go-ahead, then from production Mail reply "smoke after MAIL-
 **Placeholders.** Task 10 step 1's last test and Task 11 step 1's third test name the harness helper to look up rather than a made-up one; both say exactly what to assert. Task 12's fixture names are flagged as "read the file". Everything else is concrete.
 
 **Consistency.** `splitQuotedText` (Tasks 1, 12, 13), `selectReplyAnchor`/`replyThreadingHeaders`/`replyReferences`/`anchorMessageId`/`buildReplyText`/`buildReplyHtml` (Tasks 2, 10), `splitQuotedHtml`/`emailHtmlDocuments` (Tasks 3, 11), `html_quoted_document` (Tasks 11, 12), `loadConversationForUser`/`conversationNotFound`/`conversationMergedAway` (Tasks 7, 9, 10), `buildReplyHeaders({ rfcMessageId, referencesHeader, inReplyTo })` (Task 4; no longer called by the reply route after Task 10, kept for the compose/other callers).
+
+---
+
+## Audit amendments (Wave 0, Fable, 2026-09-07) — these OVERRIDE the task text above
+
+Every subagent for Tasks 5–13 reads its task section AND the amendment block for its task below. Where they disagree, the amendment wins.
+
+### Task 5 amendments
+- `src/lib/mail/sent-lane.js:89` imports `'../email-tickets'` (relative). After the move they are siblings: rewrite to `'./conversation'`. Add `src/lib/mail/sent-lane.js` to the allow-list.
+- `src/app/api/email/tickets/_helpers.test.js:2` and `src/lib/email-html.test.js`, `src/components/tickets/AttachmentPreview.security.test.js` are NOT Task 5's; leave them.
+
+### Task 6 amendments
+- Three on-disk path pins that are not imports; update them (add to allow-list): `src/lib/email-html.test.js:738` (`'src/components/tickets/TicketThread.jsx'` → `'src/components/mail/ConversationThread.jsx'`), `src/components/tickets/AttachmentPreview.security.test.js:30-31` (both `read(...)` paths → `src/components/mail/...`; the file itself moves to `src/components/mail/AttachmentPreview.security.test.js`), `eslint.guardrails.config.mjs:95` (`'src/components/tickets/**'` → `'src/components/mail/**'`).
+- Copy strings to rewrite in this task's files (beyond the table): `src/components/mail/EmailMailboxesCard.jsx:282-300`, `src/components/mail/MailboxConnectionSection.jsx:522` if they exist under `src/components` (grep `-i ticket` in `src/components` and rewrite user-visible sentences only; leave comments about the retired queue).
+- DOM ids `ticket-composer`, `ticket-compose-*`, `ticket-forward-*`, `ticket-reply-recipients` → `conversation-composer`, `conversation-compose-*`, `conversation-forward-*`, `conversation-reply-recipients`, AND update the tests that assert them: `src/components/mail/MailSurface.test.jsx:362,558`, `ReplyBox.pill.test.jsx:69` (post-move names), plus any `getByLabelText`/`querySelector('#ticket-...')` found by `grep -rn "ticket-" src/components`.
+- Wire keys are NOT renamed: `data.ticket` in `MailSurface.jsx:729` and `ComposeForm.jsx:145` keep reading `ticket` from the API response (the server keeps emitting it; see Task 9).
+
+### Task 7 amendments (replace Steps 1 and 3; extend 4 and 5)
+- **Do NOT move `_test-db.js` or `_test-fixtures.js`.** `src/app/api/email/mail/_test-fixtures.js` already exists, and ~25 tests outside the tickets tree import `tickets/_test-db` / `tickets/_test-fixtures`. They stay at `src/app/api/email/tickets/_test-db.js` and `_test-fixtures.js` (the directory survives as the shim directory). Moved test files fix their relative depth: from `mail/[id]/reply/route.test.js` the imports become `'../../../tickets/_test-db'` and `'../../../tickets/_test-fixtures'`; from `mail/compose/route.test.js` they become `'../../tickets/_test-db'`; from `mail/[id]/route.test.js` `'../../tickets/_test-db'`; etc. Verify each with `node -e` or by running the test.
+- `_helpers.js` → `_conversation.js` move stands; `_helpers.test.js` → `mail/_conversation.test.js` and its `'./_helpers'` import → `'./_conversation'`.
+- **Step 3 sed is wrong: do NOT run it.** The four sibling routes (`mail/[id]/archive|seen|spam|related`) and `mail/digest`, `mail/count`, `mail/route.js` import the MAIL tree's own `_helpers.js` via `'../../_helpers'`/`'../_helpers'`; those must not change. The attachments routes import `attachments/_helpers.js` via `'../_helpers'`; unchanged. Instead, rewrite BY HAND (read each import line):
+  - Moved routes under `mail/[id]/<x>/route.js`: `'../../_helpers'` (which meant `tickets/_helpers`) → `'../../_conversation'`. Moved `mail/[id]/route.js`: `'../_helpers'` → `'../_conversation'`. Moved `mail/compose/route.js`: `'../_helpers'` → `'../_conversation'`. Moved `mail/[id]/attachments/_helpers.js` and the two attachment routes: their import of the tickets helper (`'../../_helpers'` / `'../../../_helpers'`) → same depth, name `_conversation`.
+  - `src/app/api/email/mail/[id]/spam/route.js:7` and `[id]/related/route.js:34`: `'../../../tickets/_helpers'` → `'../../_conversation'`.
+  - `src/app/api/email/mail/_helpers.js:27-30`: `'../tickets/_helpers'` → `'./_conversation'` (and rename the re-exported `loadTicketForUser`/`ticketNotFound` to the new names on line 34).
+  - `src/app/api/email/attachments/upload-sign/route.js:60`: `'../../tickets/_helpers'` → `'../../mail/_conversation'`.
+  - `src/lib/home-queue.js:64` and `src/lib/home-queue.test.js:23,40`: `'@/app/api/email/tickets/_helpers'` → `'@/app/api/email/mail/_conversation'`.
+  - `src/app/api/webhooks/postmark-inbound/[token]/route.js:211`: same rewrite.
+  - Add all of these files to Task 7's allow-list.
+- Attachment shims must also re-export the segment config: `export { GET, runtime, dynamic } from '@/app/api/email/mail/[id]/attachments/[attachmentId]/route'` (and `/preview/route`). Check each moved route for `export const runtime` / `dynamic` / `maxDuration` and re-export every one from its shim.
+- `src/lib/email-forward.test.js:168,180` read `src/app/api/email/tickets/[id]/forward/route.js` from disk and assert on its source; repoint both to `src/app/api/email/mail/[id]/forward/route.js`. Add to allow-list.
+- Gate scripts (add to allow-list, edit exactly):
+  - `scripts/check-route-guards.mjs:129` — add `'src/app/api/email/mail'` beside `'src/app/api/email/tickets'` in `INBOX_ROUTE_PREFIXES`. `:186-187` — add `'loadConversationForUser('` to `INBOX_PERMISSION_GUARDS` (keep the old name too until the sweep). Shims: add the string `"from '@/app/api/email/mail/"` to BOTH `SESSION_GUARDS` and `INBOX_PERMISSION_GUARDS` with a comment `// MAIL-RENAME.1 — a one-line shim inherits the guard of the handler it re-exports; deleted in the shim sweep.` Run `npm run check:route-guards` at the end of the task (this one check is allowed for Task 7).
+  - `scripts/check-location-scoping.mjs:115` — add `'loadConversationForUser('` beside `'loadTicketForUser('` in `SCOPING_HELPERS`. Run `npm run check:location-scoping` at the end (allowed for Task 7).
+- Shim identity test: also assert `runtime`/`dynamic` identity for the two attachment shims.
+
+### Task 8 amendments
+- `tests/mail-vocabulary-agreement.test.js:16` imports `'../mobile/lib/email-tickets.js'` and `:202` reads `mobile/app/(staff)/email/[ticketId].jsx` by path. Update both to the new names. Add the file to the allow-list. Its `:200-206` regex asserting `isArchived(ticket)` appears exactly twice stays as is in this task (Task 9 handles it if the variable is renamed).
+- `mobile/lib/email-api.js:194` reads `res.data?.ticket` — the wire key stays `ticket` (see Task 9). Rename only the function names the task lists.
+
+### Task 9 amendments (replace Steps 2–3 entirely)
+The blanket per-identifier sweep is withdrawn. It would have rewritten a second product (event ticketing under `src/components/host/**`, `src/components/settings/HostDetail.jsx`, `HostsManager.jsx`, `src/app/host/**`, `src/app/api/host/**`, `src/app/api/public/events/**`, `src/lib/event-hosts.js`, `host-revenue.js`, `host-onboarding-email.js`, `settings-tree.js`, `src/app/legal/subprocessors/page.js`, `ticket_price_cents`, `perTicket`, `ticketing`), wire keys, reason codes and persisted names. Replace with a SCOPED, ALLOWLISTED rename:
+
+**Scope (only these paths):** `src/app/api/email/mail/**`, `src/app/api/email/tickets/**` (shims + `_test-db.js`/`_test-fixtures.js`), `src/components/mail/**`, `src/lib/mail/**`, `src/lib/email-forward.js`, `src/lib/email-inbox-send.js`, `src/lib/email-mailbox-admin.js`, `src/lib/home-queue.js`, `src/lib/notifications-registry.js`, `src/lib/command-palette.js`, `mobile/lib/mail-*.js`, `mobile/lib/email-api.js`, `mobile/app/(staff)/email/**`, `mobile/components/ContactComposeModal.jsx`, `shared/permissions.js`, `tests/mail-vocabulary-agreement.test.js`, `tests/comms-ia-labels.test.js`, and the test twins of each.
+
+**Identifiers to rename (whole word, within scope only):** build the census with `grep -rhoE "\b[A-Za-z_]*[Tt]icket[A-Za-z_]*\b" <scope paths> | sort | uniq -c | sort -rn`, then rename every identifier that is a JS function, variable, prop, parameter, component or export name, applying `Ticket`→`Conversation`, `ticket`→`conversation`, `tickets`→`conversations` (`ticketMessageKind`→`conversationMessageKind`, `ticketId`→`conversationId`, `loadAttachmentForTicket`→`loadAttachmentForConversation`, `TICKET_VIEW_TABS`→`CONVERSATION_VIEW_TABS`, `ticketToInboxRow`→`conversationToInboxRow`, the local `ticket` variables in routes and components, etc.). One sed per identifier over the files that contain it, then re-run the census.
+
+**NEVER rename (exact tokens/strings):**
+- DB: `email_tickets`, `ticket_id`, `merged_from_ticket_id`, `merged_into_id`, `email_ticket_deny_*`, `email_ticket_select`, `increment_email_ticket_unread`, any `.select('… ticket_id …')` column string, `MB_TICKETS` fixture, `T_*` fixtures.
+- Test DB: the `_test-db.js` table map (`email_tickets: 'tickets'`), `db._state.tickets`, and every test's `tickets: [...]` seed key — these mirror the table name; leave all of them.
+- Wire keys read by the shipped phone bundle and web: response `data.ticket`, `data.ticket_id`, request body `ticket_id`, `mailbox_id` unchanged; home-queue `counts: { approvals, tickets, inbox }`; `?ticket_id=` query params. Grep `\.ticket\b|ticket_id|counts\.tickets|tickets:` at each hit and leave every wire use.
+- Persisted/reported names: audit actions `email_ticket.merged|unmerged|recipients_added|forwarded|composed`, audit target `email_ticket/${id}`, Postmark tags `ticket-reply|ticket-compose|ticket-forward`, dead-letter/sent-lane reason codes `ticket_lookup_failed|ticket_bump_failed|ticket_insert_failed`, merge refusal codes `missing_ticket|same_ticket`, OpenAPI component schema names `EmailTicket*`, log tags `cron.purge-spam-tickets`, `tickets/reply` etc. (log tags MAY be renamed to `mail/reply` etc. — do so, it is log-only — but not the others).
+- Task ids in comments: `EMAIL-TICKET*`, `RETIRE-TICKETS.1`, `TICKET.X`.
+- `tests/strip-comments.test.js` sample text.
+- Command-palette id `'email-tickets'` (`src/lib/command-palette.js:36`) → rename to `'email-mail'` ONLY together with `tests/comms-ia-labels.test.js:40`.
+
+**After the sweep:** update `tests/mail-vocabulary-agreement.test.js:200-206` so its regex matches the renamed variable (`isArchived\(conversation\)` twice) if the mobile screen's `ticket` variable was renamed. Run `npx vitest run tests src/app/api/email src/components/mail src/lib/mail mobile/lib` and `npm run check:route-guards`, `npm run check:location-scoping`, `npm run check:mobile-imports`, `npm run check:mobile-lint`, `npm run lint` (all allowed for Task 9).
+
+**Step 4 copy list (add to the table):** reply route "No recipient address for this ticket" → "No sender address for this conversation"; `"This ticket has no recipients left — restore one to reply."` → `"This conversation has no recipients left — restore one to reply."`; link-contact:60, merge route :149/179/237/242/336/376/394, compose :395/456, forward :393, `_conversation.js:361`, `email-forward.js:317,390`, `email-inbox-send.js:181`, `email-mailbox-admin.js:147`, `notifications-registry.js:118` ("Email tickets" → "Inbound email"), `conversation-display.js:196,281`, mobile screen "Failed to load ticket" → "Failed to load conversation" and the two other user-visible strings at the old :1217/:1395, `mail-conversations.js` (old email-tickets :378). Rewrite the sentence; keep the meaning.
+
+**Step 5 (OpenAPI) convention:** there is no `deprecated: true` anywhere in `src/lib/openapi.js`. Follow the existing retired-route shape: for each old `/api/email/tickets/...` path add an entry whose `summary` starts `'DEPRECATED SHIM — use <new path>'` and whose description is one sentence naming MAIL-RENAME.1 and the shim sweep. There is no `/api/cron/purge-spam-tickets` path entry; update only the prose at ~:4002.
+
+### Task 10 amendments
+- `lastInbound` references to replace: `:270` (destructure), `:282-284` (error branch), `:339` (subject), `:341-342` (`buildReplyHeaders` args), `:546` (`in_reply_to` on the filed insert), `:580` (`in_reply_to` in the unfiled breadcrumb). Comment block `:258-259` ("threading is explicitly out of scope") is superseded; rewrite it. Line numbers are pre-move; grep `lastInbound` after the move.
+- The last test ("500s BEFORE sending when the anchor lookup fails"): `_test-db.js` has no select-failure function. Build the db with the `errors` option instead: `makeDb({ ...baseState(), errors: { email_inbox_messages: { code: 'XX000', message: 'boom' } } })` (see `_test-db.js:20-27,178`), then `post(...)` and assert `res.status === 500` and `sendEmail` not called. The anchor read runs before any insert, so the assertion holds.
+- Test imports are `'../../../tickets/_test-db'` and `'../../../tickets/_test-fixtures'` after Task 7 (fixtures did not move).
+- Postmark tag `'ticket-reply'` and audit action `email_ticket.recipients_added` are unchanged (persisted names).
+
+### Task 12 amendments
+- The plan's "no jsdom" claim is wrong for this file: `ConversationThread.flat.test.jsx` (old `TicketThread.flat.test.jsx`) starts with `// @vitest-environment jsdom` and uses `@testing-library/react`. Write the three tests with `render`, `screen`, `fireEvent` and ADD a fourth that clicks the pill and asserts the quoted text appears and the button reads "Hide quoted text". Use the file's existing render helper and fixture builders (read its first 80 lines). Browser verification in Task 14 still stands (jsdom cannot see layout).
+- `src/components/mail/mail-vocabulary.test.js` does not exist: create it with the one test in the task (node environment is fine, it is pure).
+- `src/lib/email-html.test.js:738-745` reads `ConversationThread.jsx` and asserts exactly one `sandbox="…"` literal in the file: `QuotedText` must render the quoted HTML through the existing `<EmailFrame>` (as the task says) and must not add a second `<iframe>` literal.
+
+### Task 13 amendments
+- `tests/mail-vocabulary-agreement.test.js:200-206` asserts a regex over the mobile screen's source; after your edit run `npx vitest run tests/mail-vocabulary-agreement.test.js` too and, if it fails only because of the variable name, report it (Task 9 owns that regex) rather than editing the test.
