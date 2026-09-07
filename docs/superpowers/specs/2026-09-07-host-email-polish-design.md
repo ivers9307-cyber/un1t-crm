@@ -1,6 +1,6 @@
 # Host email polish — HOST-EMAILS.2
 
-**Date:** 2026-09-07 · **Owner decision:** Richard, 7 Sep 2026 ("Do 1,2,4,5,6,8,9"; sanitizer option 1) · **Status:** design, awaiting review · **Builds on:** HOST-CONSENT.1 (#1632), HOST-METRICS.1 (#1633), HOST-SCHEDULE.1 (#1635), HOST-RESEND.1 (#1638)
+**Date:** 2026-09-07 · **Owner decision:** Richard, 7 Sep 2026 ("Do 1,2,4,5,6,8,9"; sanitizer option 1) · **Status:** implemented on branch `host-email-polish` (plan `docs/superpowers/plans/2026-09-07-host-email-polish.md`) · **Builds on:** HOST-CONSENT.1 (#1632), HOST-METRICS.1 (#1633), HOST-SCHEDULE.1 (#1635), HOST-RESEND.1 (#1638)
 
 ## Decision
 
@@ -63,6 +63,7 @@ Mirrors the CRM's child-campaign model (PR #1299) but manual, from the report pa
 
 - `sanitizeCampaignHtml` (`src/lib/host-campaign-email.js`) keeps `<style>` blocks, scrubbing their CSS with the CRM's existing `scrubCss` in `src/lib/email-html.js` (exported for this; it already drops `@import`, `expression()` and remote `url()` references, which are the two things CSS can do to a reader). It also keeps `<meta name="viewport" …>`. Everything else on the strip list stays stripped: `script`, `iframe`, `object`, `embed`, `form`, `link`, other `meta`, `svg`, `math`, `on*` handlers, unsafe URL schemes. The fixed-point loop is unchanged.
 - The shell path (a body that is not a full document) leaves `<style>` where it sits; mail clients honour it in the body.
+- **As built (after three security review rounds).** The sanitizer's invariant is: every deletion happens inside one outer fixed point (strip active content, then drop any placeholder stranded inside an open tag by a quote-aware scan, repeat until nothing changes, at most 20 rounds), and restoration only inserts (a `<style>` around a `scrubCss` result, which contains no `<` or `>`, or the one canonical viewport meta). A document that does not converge, or that ends with more than one viewport placeholder or any surviving nonce token, is dropped to an empty body with a warning (fail closed). Placeholders carry a per-call random nonce. Also stripped: `base` (re-bases every relative URL) and `plaintext`/`textarea`/`noscript`/`noembed`/`xmp`/`template` (any of which would swallow the injected footer); `poster`/`formaction`/`background` are scheme-checked like `href`/`src`; inline `style=` values are scrubbed. Known fidelity limit inherited from the CRM's scrubber: `scrubCss` removes `>` from CSS, so a child combinator (`.a > .b`) becomes a descendant selector. A `<style>` that lands inside an open tag, a quoted attribute or a comment is dropped rather than restored.
 - `POST /api/host/emails/preview` (host session; `{ subject, body_html }`, same size caps as create): renders through `renderHostCampaignHtml` with the sample merge values and the inert unsubscribe token the test send uses, returns `{ html }`. Nothing is stored.
 - Composer: a "Preview as sent" button beside Save (design mode exports first). It opens a modal with a sandboxed iframe (`sandbox` with no permissions, `srcdoc`) and a Mobile (375px) / Desktop (700px) toggle. This is the first time a host sees what recipients get without sending a test.
 
