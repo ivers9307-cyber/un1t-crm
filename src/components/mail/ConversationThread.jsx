@@ -56,7 +56,7 @@ import Link from 'next/link'
 import {
   ArrowLeft, Lock, AlertCircle, MailCheck, ImageOff, Maximize2, Minimize2,
   ShieldAlert, Download, FileWarning, Check, MailX, ShieldX, Forward, UserPlus,
-  ExternalLink, Paperclip,
+  ExternalLink, Paperclip, ChevronDown,
 } from 'lucide-react'
 import { Loading } from '@/components/ui'
 import { formatBytes, SKIPPED_REASON_LABEL } from '@/lib/email-attachment-quota'
@@ -209,6 +209,24 @@ export default function ConversationThread({
   // here). Same undefined/null/node contract as the other slots; the conversation
   // chrome never had anything in this position, so undefined renders nothing.
   banner,
+  // MAIL-READER.1 (05) — the same two slots again, in the ONE-LINE shape the
+  // folded header has room for. Reading mode replaces the whole header block
+  // with a single line, so the caller's three icon actions and its full nudge
+  // chip do not fit — and this file must not learn how to shrink either, for
+  // the same reason it does not know what the full ones contain.
+  //
+  //   compactControls — the ONE action worth keeping in front of an operator
+  //                     who is writing (Mail passes Archive, which on that
+  //                     surface IS the work). Everything else is one caret
+  //                     press away.
+  //   compactBanner   — the nudge as a count, e.g. "1 other". Same chip, same
+  //                     role="status"; its actions live in its title and on
+  //                     the unfolded header.
+  //
+  // Absent, the folded line simply renders neither — a caller that never
+  // passes them still gets reading mode, just without those two pieces.
+  compactControls,
+  compactBanner,
   emptyState,   // with no selection: the caller's own empty state
   // Forwarded verbatim to the composer — the one sentence in there written in
   // the conversation lifecycle's vocabulary. See ReplyBox.jsx.
@@ -284,6 +302,70 @@ export default function ConversationThread({
     setLinkContactError(null)
   }, [conversationId])
 
+  // ── MAIL-READER.1 (05) — READING MODE ──────────────────────────────────
+  //
+  // Richard chose this over "scroll only" and "fold on demand". When the
+  // composer is expanded AND the operator focuses it, the header folds to one
+  // line: subject, sender, the nudge as a count, Archive, and a caret. The
+  // card is 78vh; a header the operator has stopped reading is the cheapest
+  // thing on it to spend.
+  //
+  // NOTHING MOVES THAT THE OPERATOR DID NOT ACT ON. That is the whole rule,
+  // and it is why the state lives HERE rather than in the composer: the three
+  // exits (the composer collapsing, the caret, scrolling the thread back to
+  // the top) are facts about three different children, and only their common
+  // parent can hold them all.
+  //
+  //   • `reading`          — is the header folded right now.
+  //   • `manuallyUnfolded` — the operator pressed the caret, so a focus must
+  //     NOT re-fold it. It sticks until the composer collapses back to the
+  //     pill, which is the one event that means "I am done writing". Without
+  //     it, the caret would be a no-op: unfolding puts focus nowhere near the
+  //     textarea, but the very next click into it would fold it straight back
+  //     and read as the header refusing to stay open.
+  //
+  // Reset on conversation switch alongside every other piece of per-conversation
+  // state above — a fold belongs to the thread it was made on.
+  const [reading, setReading] = useState(false)
+  const [manuallyUnfolded, setManuallyUnfolded] = useState(false)
+  useEffect(() => {
+    setReading(false)
+    setManuallyUnfolded(false)
+  }, [conversationId])
+
+  // Focusing the composer is what enters reading mode. It arrives from
+  // ReplyBox's textarea, so it already means "expanded" — a collapsed pill has
+  // no textarea to focus. Expanding ALONE does not fold: clicking Reply and
+  // then reading on is not writing.
+  function handleComposerFocus() {
+    if (!manuallyUnfolded) setReading(true)
+  }
+
+  // The composer collapsing back to the pill ends reading mode AND clears the
+  // manual unfold: the next time the operator opens the composer and focuses
+  // it, they get the fold again.
+  function handleComposerCollapsedChange(collapsed) {
+    if (collapsed) {
+      setReading(false)
+      setManuallyUnfolded(false)
+    }
+  }
+
+  // The caret. Unfolds, and says so stickily.
+  function unfoldHeader() {
+    setReading(false)
+    setManuallyUnfolded(true)
+  }
+
+  // Scrolling the thread back to its top unfolds too — going back to the start
+  // of the correspondence is reading, not writing. Only while folded, and only
+  // at exactly the top: a scroll event anywhere else is the operator moving
+  // through the thread with the composer focused, which is the state this mode
+  // exists for.
+  function handleThreadScroll(e) {
+    if (reading && e.currentTarget.scrollTop === 0) setReading(false)
+  }
+
   async function handleLinkContact() {
     if (!conversationId || linkingContact) return
     setLinkingContact(true)
@@ -337,7 +419,49 @@ export default function ConversationThread({
 
   return (
     <>
-      {/* Header */}
+      {/* MAIL-READER.1 (05) — the header, folded. ONE line where the full
+          block is four bands: subject, who it is with, the nudge as a count,
+          the caller's one kept action, and the caret back.
+
+          It is the same <div> region, not a live region and not a new
+          landmark: the fold is a layout change the operator just caused by
+          clicking into the composer, and announcing it would talk over the
+          thing they clicked into. Nothing here takes focus either — the caret
+          is focusable but never focused, because folding must not pull the
+          caret out from under a keystroke aimed at the textarea.
+
+          NO <h2>. The subject is still the first thing on the line, but a
+          heading that appears and disappears as the operator types is a
+          document outline that changes shape mid-sentence; the full header
+          owns the heading and this line is a status strip. */}
+      {reading ? (
+        <div className="flex items-center gap-2 border-b border-un1t-border px-4 py-1.5">
+          <span className="min-w-0 truncate text-xs font-semibold text-un1t-text">
+            {conversation?.subject || '(no subject)'}
+          </span>
+          {/* The same name and address the full header shows, so folding
+              cannot change WHO the operator believes they are writing to —
+              the one thing EMAIL-PARTICIPANTS.8 exists to keep true. */}
+          <span className="min-w-0 shrink-[2] truncate text-[11px] text-un1t-subtle">
+            {' · '}{name}
+            {conversation?.requester_email && <>{' · '}{conversation.requester_email}</>}
+          </span>
+          {compactBanner}
+          <span className="ml-auto flex shrink-0 items-center gap-1">
+            {compactControls}
+            <button
+              type="button"
+              onClick={unfoldHeader}
+              aria-label="Show details"
+              aria-expanded="false"
+              title="Show details"
+              className="grid h-6 w-6 shrink-0 place-items-center rounded-md border border-un1t-border text-un1t-subtle transition-colors hover:text-un1t-text"
+            >
+              <ChevronDown size={15} aria-hidden="true" />
+            </button>
+          </span>
+        </div>
+      ) : (
       <div className="border-b border-un1t-border px-4 py-3">
         <div className="flex items-start gap-3">
           <button
@@ -441,6 +565,7 @@ export default function ConversationThread({
           <div className="ml-auto shrink-0">{controls}</div>
         </div>
       </div>
+      )}
 
       {/* Thread — MAIL-REFINE.1 (02): flat full-width messages separated by
           hairlines, not chat bubbles. Each message owns its padding and its
@@ -450,7 +575,7 @@ export default function ConversationThread({
           card's height. Without it a flex item's automatic minimum size is its
           content, so a composer that had grown would push the thread out of the
           card rather than be capped by its own max-h. */}
-      <div className="min-h-0 flex-1 overflow-y-auto bg-un1t-bg">
+      <div className="min-h-0 flex-1 overflow-y-auto bg-un1t-bg" onScroll={handleThreadScroll}>
         {loading && messages.length === 0 ? (
           <Loading label="Loading thread…" />
         ) : messages.length === 0 ? (
@@ -567,6 +692,9 @@ export default function ConversationThread({
           participantSaving={participantSaving}
           sending={sending}
           archivedHint={archivedHint}
+          reading={reading}
+          onComposerFocus={handleComposerFocus}
+          onCollapsedChange={handleComposerCollapsedChange}
         />
       )}
     </>

@@ -130,6 +130,25 @@ export default function ReplyBox({
   // `key={conversationId}` remount ConversationThread already does — the same remount
   // that is TICKET-COMPOSER-LEAK.1's guard, which this must never weaken.
   startCollapsed = false,
+  // MAIL-READER.1 (05) — READING MODE. The parent (ConversationThread) owns
+  // it; this box only reports the two events that drive it and reads back the
+  // one thing that changes here.
+  //
+  // `reading` widens the cap from 40% to 46% of the card: with the header
+  // folded to a single line the thread and the draft are meant to share what
+  // is left roughly half and half. It is a CLASS, not a measurement — jsdom
+  // has no layout engine, so the recipe is all a test can pin (a recorded
+  // trap: a green suite once shipped a toggle that did nothing).
+  reading = false,
+  // Fired from the textarea's own focus. The parent folds the header on it,
+  // which is why it is the TEXTAREA and not the form: clicking Attach or a
+  // recipient chip is not the operator settling in to write.
+  onComposerFocus,
+  // Fired whenever `collapsed` changes — INCLUDING the draft hydration's
+  // auto-expand, which is a real expansion the parent must see. Reported from
+  // an effect rather than from each setter so there is exactly one place that
+  // can ever disagree with the state.
+  onCollapsedChange,
 }) {
   const [mode, setMode] = useState('reply')
   const [text, setText] = useState('')
@@ -265,6 +284,17 @@ export default function ReplyBox({
     writeReplyDraft(draftScope, { text, mode })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId, viewerId, text, mode])
+
+  // MAIL-READER.1 (05) — tell the parent which shape this box is in. Declared
+  // LAST on purpose: the draft effects above are order-sensitive (latestRef
+  // before hydration, hydration before write-through) and this one must never
+  // be inserted among them. Deps are `collapsed` alone — the callback is an
+  // inline arrow in the parent, so depending on its identity would re-fire
+  // this on every parent render.
+  useEffect(() => {
+    onCollapsedChange?.(collapsed)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- report state changes only
+  }, [collapsed])
 
   const isNote = mode === 'note'
   // The reply route 400s without a requester address. Say so up front rather
@@ -456,7 +486,9 @@ export default function ReplyBox({
       // `shrink-0` keeps the flex layout from squeezing it instead of the
       // thread — the thread carries `flex-1 min-h-0` and is the part that is
       // supposed to absorb the height.
-      className={`shrink-0 max-h-[40%] overflow-y-auto border-t px-4 py-3 ${isNote ? 'border-amber-500/40 bg-amber-500/10' : 'border-un1t-border bg-un1t-bg'}`}
+      // MAIL-READER.1 (05) — 46% while the header is folded: reading mode
+      // trades a header the operator has stopped reading for draft room.
+      className={`shrink-0 ${reading ? 'max-h-[46%]' : 'max-h-[40%]'} overflow-y-auto border-t px-4 py-3 ${isNote ? 'border-amber-500/40 bg-amber-500/10' : 'border-un1t-border bg-un1t-bg'}`}
     >
       {/* Mode switch. type="button" on both — a bare <button> inside a <form>
           defaults to submit and would fire the send (CLAUDE.md). */}
@@ -574,6 +606,10 @@ export default function ReplyBox({
         ref={textareaRef}
         value={text}
         onChange={(e) => setText(e.target.value)}
+        // MAIL-READER.1 (05) — the operator settling in to write is what
+        // enters reading mode. Nothing here folds anything; the parent owns
+        // that decision and may refuse it (a manual unfold sticks).
+        onFocus={() => onComposerFocus?.()}
         // Four rows, not three: with the signature box and the recipient
         // sentence gone the words are what the composer is FOR, and the form's
         // own cap plus its scroll is what keeps that from eating the thread.

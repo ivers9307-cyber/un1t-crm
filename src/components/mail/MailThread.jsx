@@ -310,6 +310,39 @@ export default function MailThread({
           onMarkUnread={onMarkUnread}
         />
       }
+      // MAIL-READER.1 (05) — reading mode folds the header to one line, and
+      // ONE action survives the fold. On this surface that is Archive: it is
+      // the verb the whole trial is about, and it is the only one an operator
+      // mid-reply plausibly reaches for. Spam, Mark read and the shortcut
+      // cheat sheet are a caret press away. Same component, same two-state
+      // label, same handler as the full row — declared once here rather than
+      // reached into MailControls, because a second Archive button that could
+      // ever say something different is worse than a repeated three lines.
+      compactControls={
+        <IconAction
+          label={archived ? 'Move back to inbox' : 'Archive'}
+          icon={archived ? ArchiveRestore : Archive}
+          disabled={actionSaving}
+          onClick={() => onArchive?.(!archived)}
+          tone="primary"
+        />
+      }
+      // The same nudge, counted. The folded line has room for a fact, not for
+      // a sentence and two buttons — so the chip keeps its blue, its
+      // role="status" and its full wording in the `title`, and its two actions
+      // stay one caret press away on the unfolded header. It never renders at
+      // the same time as `banner`: the header is folded or it is not.
+      compactBanner={
+        nudge && (
+          <span
+            role="status"
+            title={`${nudge.name} has ${nudge.label}`}
+            className="shrink-0 rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] text-blue-700"
+          >
+            {nudge.count} other
+          </span>
+        )
+      }
       banner={
         // MAIL-REFINE.1 (03) — the related-conversations nudge. Rendered only
         // when the related endpoint reported ≥1 OPEN conversation for this
