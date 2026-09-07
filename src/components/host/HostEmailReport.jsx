@@ -31,7 +31,8 @@
 // recipe used across the portal).
 
 import { useEffect, useState } from 'react'
-import { dublinScheduleLabel } from '@/lib/host-schedule-time'
+import { useRouter } from 'next/navigation'
+import { dublinScheduleLabel, scheduleErrorCopy } from '@/lib/host-schedule-time'
 
 const AUDIENCE_LABEL = {
   all: 'All contacts',
@@ -182,16 +183,52 @@ export function resendConfirmCopy(missedCount) {
   return `Send this email again to ${who}? Anyone who already got it will not be emailed twice.`
 }
 
+/**
+ * Header button label for the "email who didn't open" reminder.
+ * @param {number} count
+ */
+export function reminderLabel(count) {
+  return `Send a reminder to ${count} who didn't open`
+}
+
+/**
+ * The window.confirm copy behind the reminder button. Under 24h since the
+ * original send, adds a note that opens are still trickling in — a
+ * reminder that soon can reach people who simply haven't got to it yet.
+ * @param {number} count
+ * @param {string|null|undefined} sentAt
+ * @param {number} [nowMs]
+ */
+export function reminderConfirmCopy(count, sentAt, nowMs = Date.now()) {
+  const base = `Create a reminder draft for the ${count} people who didn't open this email? You can edit it before sending.`
+  const sentMs = sentAt ? Date.parse(sentAt) : NaN
+  const young = Number.isFinite(sentMs) && nowMs - sentMs < 24 * 3600 * 1000
+  return young ? `${base} Opens keep arriving for a day or two. A reminder this soon reaches people who may simply not have got to it yet.` : base
+}
+
+/**
+ * The "Paused. <reason>. Ask UN1T." line for a sending campaign the
+ * scheduler has stalled on. Empty string when there is no reason (the
+ * normal "still sending" case).
+ * @param {string|null|undefined} reason
+ */
+export function pausedCopy(reason) {
+  return reason ? `Paused. ${scheduleErrorCopy(reason)}. Ask UN1T.` : ''
+}
+
 const HOUR_MS = 60 * 60 * 1000
 
 export default function HostEmailReport({ campaignId }) {
   const [state, setState] = useState('loading') // 'loading' | 'error' | 'not_found' | 'ready'
   const [campaign, setCampaign] = useState(null)
   const [recipients, setRecipients] = useState([])
+  const [links, setLinks] = useState([])
   const [filter, setFilter] = useState('all')
   const [reloadKey, setReloadKey] = useState(0)
   const [resending, setResending] = useState(false)
+  const [reminding, setReminding] = useState(false)
   const [actionError, setActionError] = useState('')
+  const router = useRouter()
 
   useEffect(() => {
     let cancelled = false
@@ -206,6 +243,7 @@ export default function HostEmailReport({ campaignId }) {
         if (!res.ok || !json.success) { setState('error'); return }
         setCampaign(json.data?.campaign || null)
         setRecipients(Array.isArray(json.data?.recipients) ? json.data.recipients : [])
+        setLinks(json.data?.links || [])
         setState('ready')
       } catch {
         if (!cancelled) setState('error')
@@ -237,6 +275,26 @@ export default function HostEmailReport({ campaignId }) {
     }
   }
 
+  async function createReminder() {
+    if (!campaign) return
+    if (!window.confirm(reminderConfirmCopy(campaign.non_openers_count, campaign.sent_at))) return
+    setReminding(true)
+    setActionError('')
+    try {
+      const res = await fetch(`/api/host/emails/${campaignId}/reminder-draft`, { method: 'POST' })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.success) {
+        setActionError(json.error || 'Could not create the reminder.')
+        return
+      }
+      router.push('/host/emails?notice=reminder')
+    } catch {
+      setActionError('Could not create the reminder.')
+    } finally {
+      setReminding(false)
+    }
+  }
+
   if (state === 'loading') return <p className="text-white/40 text-sm mt-6">Loading…</p>
   if (state === 'not_found') return <p className="text-white/50 text-sm mt-6">This email was not found.</p>
   if (state === 'error') return <p className="text-white/50 text-sm mt-6">Could not load this email.</p>
@@ -257,6 +315,7 @@ export default function HostEmailReport({ campaignId }) {
     AUDIENCE_LABEL[campaign?.audience_kind] || 'All contacts',
   ].filter(Boolean)
   const canResend = campaign?.status === 'sent' && campaign?.missed_count !== 0
+  const canRemind = campaign?.status === 'sent' && Number(campaign?.non_openers_count) > 0
   const staleNoDelivery = hasStats
     && campaign?.status === 'sent'
     && (campaign.stats.delivered || 0) === 0
@@ -268,16 +327,28 @@ export default function HostEmailReport({ campaignId }) {
       <div className="mt-3">
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <h1 className="text-2xl font-bold">{campaign?.subject || ''}</h1>
-          {canResend && (
-            <button
-              type="button"
-              onClick={resendMissed}
-              disabled={resending}
-              className="shrink-0 rounded-full bg-white text-black px-3 py-1.5 text-xs font-medium disabled:opacity-50"
-            >
-              {resending ? 'Queueing…' : resendLabel(campaign.missed_count)}
-            </button>
-          )}
+          <div className="flex items-center gap-2 shrink-0">
+            {canResend && (
+              <button
+                type="button"
+                onClick={resendMissed}
+                disabled={resending}
+                className="shrink-0 rounded-full bg-white text-black px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+              >
+                {resending ? 'Queueing…' : resendLabel(campaign.missed_count)}
+              </button>
+            )}
+            {canRemind && (
+              <button
+                type="button"
+                onClick={createReminder}
+                disabled={reminding}
+                className="shrink-0 rounded-full border border-white/25 text-white px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+              >
+                {reminding ? 'Creating…' : reminderLabel(campaign.non_openers_count)}
+              </button>
+            )}
+          </div>
         </div>
         {actionError && <p className="text-red-300 text-xs mt-2">{actionError}</p>}
         <p className="text-white/55 text-sm mt-1 flex items-center gap-2 flex-wrap">
@@ -289,7 +360,9 @@ export default function HostEmailReport({ campaignId }) {
           )}
         </p>
         {campaign?.status === 'sending' && (
-          <p className="text-amber-300 text-xs mt-2">Still sending, numbers update as it goes.</p>
+          <p className="text-amber-300 text-xs mt-2">
+            {campaign.paused_reason ? pausedCopy(campaign.paused_reason) : 'Still sending, numbers update as it goes.'}
+          </p>
         )}
         {staleNoDelivery && (
           <p className="text-red-300 text-xs mt-2">Nothing delivered yet. If this persists, contact UN1T.</p>
@@ -310,6 +383,33 @@ export default function HostEmailReport({ campaignId }) {
         <p className="mt-6 text-white/50 text-sm">
           Counts are unavailable right now. The recipient list below is still complete.
         </p>
+      )}
+
+      {links.length > 0 && (
+        <section className="mt-6">
+          <h2 className="text-xs uppercase tracking-[0.15em] text-white/45 mb-2">Links</h2>
+          <div className="rounded-xl border border-white/10 overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs uppercase tracking-wide text-white/40 border-b border-white/10">
+                  <th className="px-3 py-2 font-medium">Link</th>
+                  <th className="px-3 py-2 font-medium text-right">Clicks</th>
+                  <th className="px-3 py-2 font-medium text-right">People</th>
+                </tr>
+              </thead>
+              <tbody>
+                {links.map((l) => (
+                  <tr key={l.url} className="border-b border-white/5 last:border-0">
+                    <td className="px-3 py-2 max-w-[28rem] truncate text-white/80" title={l.url}>{l.is_unsubscribe ? 'Unsubscribe link' : l.url}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{l.clicks}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{l.people}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-[11px] text-white/35 mt-1">Security scanners open every link within seconds of delivery, so counts include them.</p>
+        </section>
       )}
 
       <div className="mt-6 flex items-center gap-2 flex-wrap">

@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent } from '@testing-library/react'
-import HostEmailReport, { statTiles, filterRecipients, FILTERS, outcomeChipClass, formatWhen, resendLabel, resendConfirmCopy } from './HostEmailReport.jsx'
+import HostEmailReport, {
+  statTiles, filterRecipients, FILTERS, outcomeChipClass, formatWhen,
+  resendLabel, resendConfirmCopy, reminderLabel, reminderConfirmCopy, pausedCopy,
+} from './HostEmailReport.jsx'
+
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }))
 
 afterEach(() => {
   cleanup()
@@ -59,6 +64,23 @@ describe('chip + date', () => {
   // en-IE abbreviates September as "Sept" (4 letters) while every other
   // month is 3 — \w{3,4} covers both instead of overfitting to Sept.
   it('formatWhen is short and null-safe', () => { expect(formatWhen(null)).toBe(''); expect(formatWhen('2026-09-04T10:58:14Z')).toMatch(/^\d{1,2} \w{3,4}, \d{2}:\d{2}$/) })
+})
+
+describe('reminder + paused helpers (HOST-EMAILS.2)', () => {
+  it('reminderLabel', () => {
+    expect(reminderLabel(12)).toBe("Send a reminder to 12 who didn't open")
+    expect(reminderLabel(1)).toBe("Send a reminder to 1 who didn't open")
+  })
+  it('reminderConfirmCopy warns under 24h', () => {
+    const now = Date.parse('2026-09-07T12:00:00Z')
+    expect(reminderConfirmCopy(12, '2026-09-07T10:00:00Z', now)).toContain('Opens keep arriving for a day or two.')
+    expect(reminderConfirmCopy(12, '2026-09-05T10:00:00Z', now)).not.toContain('Opens keep arriving')
+    expect(reminderConfirmCopy(12, '2026-09-05T10:00:00Z', now)).toBe("Create a reminder draft for the 12 people who didn't open this email? You can edit it before sending.")
+  })
+  it('pausedCopy', () => {
+    expect(pausedCopy('sender_not_verified')).toBe('Paused. Sending is not enabled yet. Ask UN1T.')
+    expect(pausedCopy(null)).toBe('')
+  })
 })
 
 describe('HostEmailReport (render)', () => {
@@ -205,6 +227,96 @@ describe('HostEmailReport (render)', () => {
     })
     render(<HostEmailReport campaignId="c1" />)
     expect(await screen.findByText('Nothing delivered yet. If this persists, contact UN1T.')).toBeTruthy()
+  })
+
+  it('a paused sending campaign shows the paused line instead of "Still sending"', async () => {
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        data: {
+          campaign: { id: 'c1', subject: 'Race day info', status: 'sending', audience_kind: 'all', sent_at: null, paused_reason: 'no_stream', stats: null },
+          recipients: [],
+        },
+      }),
+    })
+    render(<HostEmailReport campaignId="c1" />)
+    expect(await screen.findByText(pausedCopy('no_stream'))).toBeTruthy()
+    expect(screen.queryByText('Still sending, numbers update as it goes.')).toBeNull()
+  })
+
+  it('links render clicks and people per url with the unsubscribe link labelled', async () => {
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        data: {
+          campaign: { id: 'c1', subject: 'Race day info', status: 'sent', audience_kind: 'all', sent_at: '2026-09-01T09:00:00Z', stats: null },
+          recipients: [],
+          links: [
+            { url: 'https://a', clicks: 3, people: 2, is_unsubscribe: false },
+            { url: 'https://x/unsubscribe/host/t', clicks: 5, people: 5, is_unsubscribe: true },
+          ],
+        },
+      }),
+    })
+    render(<HostEmailReport campaignId="c1" />)
+    expect(await screen.findByText('https://a')).toBeTruthy()
+    expect(screen.getByText('Unsubscribe link')).toBeTruthy()
+    expect(screen.queryByText('https://x/unsubscribe/host/t')).toBeNull()
+    expect(screen.getAllByText('3').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('2').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('5').length).toBeGreaterThan(0)
+  })
+
+  it('sent campaign with non_openers_count shows the reminder button; 0 or null hides it', async () => {
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        data: {
+          campaign: { id: 'c1', subject: 'Race day info', status: 'sent', audience_kind: 'all', sent_at: '2026-09-01T09:00:00Z', non_openers_count: 12, stats: null },
+          recipients: [],
+        },
+      }),
+    })
+    render(<HostEmailReport campaignId="c1" />)
+    expect(await screen.findByText("Send a reminder to 12 who didn't open")).toBeTruthy()
+    cleanup()
+
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        data: {
+          campaign: { id: 'c1', subject: 'Race day info', status: 'sent', audience_kind: 'all', sent_at: '2026-09-01T09:00:00Z', non_openers_count: 0, stats: null },
+          recipients: [],
+        },
+      }),
+    })
+    render(<HostEmailReport campaignId="c1" />)
+    await screen.findByText('Counts are unavailable right now. The recipient list below is still complete.')
+    expect(screen.queryByText(/Send a reminder/)).toBeNull()
+    cleanup()
+
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        data: {
+          campaign: { id: 'c1', subject: 'Race day info', status: 'sent', audience_kind: 'all', sent_at: '2026-09-01T09:00:00Z', non_openers_count: null, stats: null },
+          recipients: [],
+        },
+      }),
+    })
+    render(<HostEmailReport campaignId="c1" />)
+    await screen.findByText('Counts are unavailable right now. The recipient list below is still complete.')
+    expect(screen.queryByText(/Send a reminder/)).toBeNull()
   })
 })
 
