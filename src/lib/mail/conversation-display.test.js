@@ -474,7 +474,7 @@ describe('messageEnvelope', () => {
 
   // EMAIL-PARTICIPANTS.12 — a NON-EMPTY array of nothing is still nothing.
   // Four readers of to_emails must agree about this row, and this one could
-  // not be asserted while it lived in TicketThread.jsx.
+  // not be asserted while it lived in ConversationThread.jsx.
   it('takes the scalar fallback for a to_emails array holding nothing usable', () => {
     const [line] = messageEnvelope({ to_emails: [null], to_email: 'ada@x.com' })
     expect(line.addresses).toEqual(['ada@x.com'])

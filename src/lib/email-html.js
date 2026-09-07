@@ -79,7 +79,7 @@ export const BLOCKED_CSS_URL_PREFIX = 'x-un1t-blocked:'
 // the FINISHED document string:
 //   ` data-original-src="`  →  ` src="`     (the <img> case)
 //   `x-un1t-blocked:`       →  ``           (the CSS url() case)
-// TicketThread.jsx performs exactly these. They are safe because of the
+// ConversationThread.jsx performs exactly these. They are safe because of the
 // guarantee above — every parked value was proven http(s) here and escaped by
 // sanitize-html — and because Layer 1 means even a botched swap cannot execute
 // anything. In a text node the literal string would simply stay a text node
