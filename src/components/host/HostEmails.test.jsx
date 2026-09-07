@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  buildTestSendBody, statsLine, rowSubline, schedulePanelDefaults, audienceSummary, sendConfirmCopy,
+  buildTestSendBody, statsLine, rowSubline, schedulePanelDefaults, audienceSummary, sendConfirmCopy, rowActions,
 } from './HostEmails.jsx'
 
 // HOST-EMAIL.10 — the Test button prompts for an address and posts it to
@@ -97,6 +97,27 @@ describe('audienceSummary', () => {
   })
   it('is empty for ordinary audiences (the select shows those)', () => {
     expect(audienceSummary({ audience_kind: 'all' }, byId)).toBe('')
+  })
+})
+
+describe('rowActions', () => {
+  it('a sending row offers neither action', () => {
+    expect(rowActions('sending')).toEqual({ duplicate: false, delete: false })
+  })
+  it('a draft offers both', () => {
+    expect(rowActions('draft')).toEqual({ duplicate: true, delete: true })
+  })
+  it('a scheduled row offers both', () => {
+    expect(rowActions('scheduled')).toEqual({ duplicate: true, delete: true })
+  })
+  it('a sent row offers duplicate only', () => {
+    expect(rowActions('sent')).toEqual({ duplicate: true, delete: false })
+  })
+  it('a failed row offers duplicate only', () => {
+    expect(rowActions('failed')).toEqual({ duplicate: true, delete: false })
+  })
+  it('an unknown status offers duplicate only (falls into the default branch)', () => {
+    expect(rowActions('bogus')).toEqual({ duplicate: true, delete: false })
   })
 })
 

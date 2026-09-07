@@ -93,6 +93,19 @@ export function schedulePanelDefaults(c, nowMs = Date.now()) {
   return (c?.scheduled_for && isoToDublinInputs(c.scheduled_for)) || nextQuarterHour(nowMs)
 }
 
+/**
+ * Which row actions a campaign's status permits: a `sending` row is mid-send
+ * and offers neither; `draft`/`scheduled` rows (still editable) offer both;
+ * anything else (`sent`, `failed`) offers Duplicate only — there's no draft
+ * left to delete.
+ * @param {string} status
+ */
+export function rowActions(status) {
+  if (status === 'sending') return { duplicate: false, delete: false }
+  if (status === 'draft' || status === 'scheduled') return { duplicate: true, delete: true }
+  return { duplicate: true, delete: false }
+}
+
 const STATUS_CHIP = {
   draft: 'bg-white/10 text-white/70',
   scheduled: 'bg-sky-500/15 text-sky-300',
@@ -141,6 +154,7 @@ export default function HostEmails() {
   const pendingDesignRef = useRef(null)
   const [designerNotice, setDesignerNotice] = useState('') // '' | 'loading' | 'failed'
   const [designDropped, setDesignDropped] = useState(false)
+  const [hasDesign, setHasDesign] = useState(false) // does the draft being edited actually carry a design_json?
   const [preview, setPreview] = useState(null) // { html, width } or null
   const [previewBusy, setPreviewBusy] = useState(false)
   const [rowBusyId, setRowBusyId] = useState(null) // delete/duplicate in flight
@@ -252,6 +266,7 @@ export default function HostEmails() {
     pendingDesignRef.current = null
     setDesignerNotice('')
     setDesignDropped(false)
+    setHasDesign(false)
     setAudienceCampaignId(null)
     if (editorInited.current && window.unlayer) {
       try {
@@ -269,6 +284,7 @@ export default function HostEmails() {
     pendingDesignRef.current = null
     setDesignerNotice('')
     setDesignDropped(true)
+    setHasDesign(false)
     setMode('text')
   }
 
@@ -290,6 +306,7 @@ export default function HostEmails() {
       setEmailType(c.email_type === 'utility' ? 'utility' : 'marketing')
       setAudienceCampaignId(c.audience_kind === 'non_openers' ? c.audience_campaign_id || null : null)
       setDesignDropped(false)
+      setHasDesign(Boolean(c.design_json))
       if (c.design_json) {
         // HOST-EMAILS.2 — a designed draft ALWAYS opens in design mode. If the
         // designer is not up yet the design waits in pendingDesignRef and
@@ -635,10 +652,17 @@ export default function HostEmails() {
             <div>
               <label htmlFor="host-email-audience" className="block text-xs text-white/50 mb-1">Send to</label>
               {audienceCampaignId ? (
-                <p id="host-email-audience" className={`${input} text-white/70`}>
-                  {audienceSummary({ audience_kind: 'non_openers', audience_campaign_id: audienceCampaignId }, campaignsById)}
-                  <span className="block text-[11px] text-white/40 mt-0.5">Resolved when you send: anyone who has opened since then is left out. Duplicate this email to pick a different audience.</span>
-                </p>
+                <>
+                  <input
+                    type="text"
+                    id="host-email-audience"
+                    readOnly
+                    value={audienceSummary({ audience_kind: 'non_openers', audience_campaign_id: audienceCampaignId }, campaignsById)}
+                    aria-describedby="host-email-audience-note"
+                    className={input}
+                  />
+                  <p id="host-email-audience-note" className="text-[11px] text-white/40 mt-0.5">Resolved when you send: anyone who has opened since then is left out. Duplicate this email to pick a different audience.</p>
+                </>
               ) : (
                 <select
                   id="host-email-audience"
@@ -698,7 +722,7 @@ export default function HostEmails() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => ((pendingDesignRef.current || (editingId && mode === 'design' && !designDropped)) ? dropDesign() : setMode('text'))}
+                  onClick={() => ((pendingDesignRef.current || (hasDesign && mode === 'design' && !designDropped)) ? dropDesign() : setMode('text'))}
                   className={`rounded px-2 py-0.5 ${mode === 'text' ? 'bg-white/15 text-white' : 'text-white/45 hover:text-white'}`}
                 >
                   Plain text
@@ -764,6 +788,7 @@ export default function HostEmails() {
           <ul className="divide-y divide-white/10 rounded-xl border border-white/10 overflow-hidden">
             {campaigns.map((c) => {
               const chip = STATUS_CHIP[c.status] || 'bg-white/10 text-white/70'
+              const actions = rowActions(c.status)
               return (
                 <li key={c.id} className="px-4 py-3">
                   <div className="flex items-center justify-between gap-4">
@@ -874,17 +899,19 @@ export default function HostEmails() {
                           </button>
                         </div>
                       )}
-                      {c.status !== 'sending' && (
+                      {(actions.duplicate || actions.delete) && (
                         <div className="shrink-0 flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => duplicateCampaign(c)}
-                            disabled={rowBusyId === c.id}
-                            className="text-xs text-white/50 hover:text-white disabled:opacity-50"
-                          >
-                            Duplicate
-                          </button>
-                          {(c.status === 'draft' || c.status === 'scheduled') && (
+                          {actions.duplicate && (
+                            <button
+                              type="button"
+                              onClick={() => duplicateCampaign(c)}
+                              disabled={rowBusyId === c.id}
+                              className="text-xs text-white/50 hover:text-white disabled:opacity-50"
+                            >
+                              Duplicate
+                            </button>
+                          )}
+                          {actions.delete && (
                             <button
                               type="button"
                               onClick={() => deleteCampaign(c)}
