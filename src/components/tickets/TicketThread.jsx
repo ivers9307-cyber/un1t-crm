@@ -75,7 +75,7 @@ import {
   canForwardMessage,
   forwardedMarker,
   sendOriginMeta,
-} from '@/lib/ticket-display'
+} from '@/lib/mail/conversation-display'
 // MAIL-REFINE.1 (02) — the flat-thread helpers live beside the rest of the
 // Mail vocabulary. Pure module (no 'use client', no DOM) so this import adds
 // no weight; the layering is fine because Mail is the only surface that
@@ -93,7 +93,7 @@ import {
   readBodyExpanded,
   writeBodyExpanded,
 } from '@/components/mail/mail-preferences'
-import { joinPointsByMessage } from '@/lib/email-tickets'
+import { joinPointsByMessage } from '@/lib/mail/conversation'
 // EMAIL-CONTACT-CHIP.1 — the house funnel/off-funnel taxonomy (FUNNEL.1),
 // reused ONLY for the chip's colour/intent grouping. There is no single
 // canonical slug→label lib in this codebase for the TEXT (three independent

@@ -30,7 +30,7 @@ import {
   NO_MAILBOX_EMPTY,
   relativeTime,
   messageTimestamp,
-} from './ticket-display'
+} from './conversation-display'
 
 // The route whitelists exactly these and 400s on anything else.
 const WIRE_WHITELIST = ['unassigned', 'mine', 'needs_reply', 'closed']

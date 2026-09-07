@@ -24,7 +24,7 @@
 //     stops at the first failure, and reports exactly which ids succeeded so
 //     the caller can refresh honestly (the ones that merged really did merge).
 
-import { relativeTime } from '@/lib/ticket-display'
+import { relativeTime } from '@/lib/mail/conversation-display'
 // MAIL-ARCH.4 — the related route stamps `archived` (MAIL-ARCH.3); read the
 // stamp through the shared vocabulary, never `status`, so a legacy `solved`
 // row the server calls LIVE is open here exactly as it is on the phone.

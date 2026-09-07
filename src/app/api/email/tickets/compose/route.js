@@ -7,7 +7,7 @@ import { uuidLike, email as emailAddress } from '@/lib/schemas'
 import { sendTicketEmail, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
 import { appendSignature, resolveSendSignature } from '@/lib/email-signature'
 import { normalizeEmail, pickContact, inboundPreview } from '@/lib/email-inbox'
-import { ticketSubject } from '@/lib/email-tickets'
+import { ticketSubject } from '@/lib/mail/conversation'
 import { escapeLikePattern } from '@/lib/like-escape'
 import { logAuditEvent } from '@/lib/audit'
 import {

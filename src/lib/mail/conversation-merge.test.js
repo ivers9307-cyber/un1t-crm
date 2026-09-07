@@ -5,7 +5,7 @@
 // so a rule deleted here is a rule deleted everywhere.
 
 import { describe, it, expect } from 'vitest'
-import { canMerge, mergedTicketFields, ticketFieldsFromMessages } from './email-ticket-merge'
+import { canMerge, mergedTicketFields, ticketFieldsFromMessages } from './conversation-merge'
 
 const T = (over = {}) => ({
   id: 'a', location_id: 'loc-1', merged_into_id: null,

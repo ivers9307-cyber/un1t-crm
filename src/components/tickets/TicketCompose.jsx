@@ -33,7 +33,7 @@
 import { useState } from 'react'
 import { AlertCircle } from 'lucide-react'
 import { Modal, Button, Field } from '@/components/ui'
-import { mailboxLabel } from '@/lib/ticket-display'
+import { mailboxLabel } from '@/lib/mail/conversation-display'
 import RecipientEditor, { EMPTY_RECIPIENTS } from './RecipientEditor'
 import AttachmentPicker, { readyDrafts, hasPendingUploads } from './AttachmentPicker'
 import SignatureHint from './SignatureHint'

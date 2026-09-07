@@ -14,7 +14,7 @@
 // today's UI without any of these decisions ever running. Keeping them apart
 // keeps that promise auditable.
 
-import { mailboxLabel } from '@/lib/ticket-display'
+import { mailboxLabel } from '@/lib/mail/conversation-display'
 
 /* ── scope ───────────────────────────────────────────────────────────── */
 

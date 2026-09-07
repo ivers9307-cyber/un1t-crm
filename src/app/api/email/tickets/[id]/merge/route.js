@@ -40,7 +40,7 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { logAuditEvent } from '@/lib/audit'
-import { canMerge, mergedTicketFields, ticketFieldsFromMessages } from '@/lib/email-ticket-merge'
+import { canMerge, mergedTicketFields, ticketFieldsFromMessages } from '@/lib/mail/conversation-merge'
 import { loadTicketForUser, ticketNotFound, PARTICIPANT_SCAN_LIMIT } from '../../_helpers'
 
 // uuidLike, NOT z.string().uuid(): Stillorgan's seeded ids carry a version

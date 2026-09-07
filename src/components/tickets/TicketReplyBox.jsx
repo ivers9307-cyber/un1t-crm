@@ -74,7 +74,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Send, Lock, Users, AlertCircle, RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui'
-import { isArchivedStatus, statusMeta, replyActionLabel } from '@/lib/ticket-display'
+import { isArchivedStatus, statusMeta, replyActionLabel } from '@/lib/mail/conversation-display'
 // The cap the reply route refuses on, imported rather than typed into the
 // sentence below: the route interpolates this same constant into its 400, and
 // two hand-written 25s are two places to forget when it moves.

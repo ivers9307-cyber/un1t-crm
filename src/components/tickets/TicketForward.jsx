@@ -47,7 +47,7 @@ import { useState } from 'react'
 import { AlertCircle, Forward, Lock, FileWarning } from 'lucide-react'
 import { Modal, Button, Field } from '@/components/ui'
 import { formatBytes, SKIPPED_REASON_LABEL } from '@/lib/email-attachment-quota'
-import { messageTimestamp } from '@/lib/ticket-display'
+import { messageTimestamp } from '@/lib/mail/conversation-display'
 import {
   forwardSubject,
   forwardableAttachments,

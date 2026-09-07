@@ -86,7 +86,7 @@ import {
   truncateHtmlBody,
 } from '../email-inbox'
 import { inboundAddresses } from '../email-recipients'
-import { pickThreadedTicket, shouldStampFirstResponse } from '../email-tickets'
+import { pickThreadedTicket, shouldStampFirstResponse } from './conversation'
 import { logError, logWarn } from '../log'
 
 /**

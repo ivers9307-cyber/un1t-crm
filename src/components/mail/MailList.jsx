@@ -41,7 +41,7 @@
 
 import { Inbox, Search, Archive, ArchiveRestore, Mail, MailOpen, Paperclip, AlertCircle } from 'lucide-react'
 import { EmptyState, Loading } from '@/components/ui'
-import { requesterLabel, relativeTime } from '@/lib/ticket-display'
+import { requesterLabel, relativeTime } from '@/lib/mail/conversation-display'
 import { isArchived, needsReply, isUnread, mailboxShortTag } from './mail-vocabulary'
 import { DEFAULT_DENSITY } from './mail-preferences'
 

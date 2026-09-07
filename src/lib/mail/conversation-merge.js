@@ -19,7 +19,7 @@
 // email-inbox.js is pure too (its own header says so), so importing the preview
 // rule keeps this file's no-DB/no-clock promise while leaving ONE definition of
 // what a queue preview looks like.
-import { inboundPreview } from './email-inbox'
+import { inboundPreview } from '@/lib/email-inbox'
 
 /**
  * May `source` be folded into `target`?

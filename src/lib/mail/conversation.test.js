@@ -9,7 +9,7 @@ import {
   ticketSubject,
   pickThreadedTicket,
   joinPointsByMessage,
-} from './email-tickets'
+} from './conversation'
 
 describe('resolveTicketAction', () => {
   it('creates a fresh ticket when nothing threaded', () => {
@@ -309,7 +309,7 @@ describe('joinPointsByMessage', () => {
 // from the same sender are one conversation whose reply chain broke. The key
 // must be forgiving about reply-prefix noise and strict about everything
 // else — a false match files a stranger topic into the wrong thread.
-import { normalizedSubjectKey } from './email-tickets'
+import { normalizedSubjectKey } from './conversation'
 
 describe('normalizedSubjectKey', () => {
   it('lowercases, trims and collapses whitespace', () => {
