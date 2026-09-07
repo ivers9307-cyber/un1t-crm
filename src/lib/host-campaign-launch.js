@@ -24,14 +24,14 @@
 // Returns { ok:true, recipientCount } or { ok:false, reason, status, error }
 // where `status` is the HTTP status the send route has always answered
 // with and `error` its user-facing message. Reason codes:
-//   - Gate refusals (pre-CAS, campaign left untouched): not_found,
-//     sender_not_verified, no_stream, daily_cap, no_recipients, db_error
-//     (a transient read failure on the campaign/host/cap reads).
-//   - Post-CAS failures (campaign is already 'sending' by the time these
-//     fire): db_error (the CAS update itself errored), cas_lost (0 rows —
-//     someone else won the race), enqueue_failed (a chunk upsert failed —
-//     nothing is published and the sweeper cron drains what landed),
-//     resolve_failed (the recipient resolver threw; this one is pre-CAS).
+//   - Refusals with NO write landed (campaign left untouched): not_found,
+//     sender_not_verified, no_stream, daily_cap, no_recipients,
+//     resolve_failed (the recipient resolver threw), db_error (a read
+//     failed, or the CAS update itself errored: an errored UPDATE commits
+//     nothing), cas_lost (the CAS matched 0 rows: someone else won).
+//   - Post-CAS failure (campaign is already 'sending'): enqueue_failed (a
+//     chunk upsert failed; nothing is published and the sweeper cron
+//     drains what landed).
 
 import { resolveHostRecipients } from '@/lib/host-campaign-email'
 import { publishQueuePush, HOST_CAMPAIGNS_WORKER_PATH } from '@/lib/qstash'
