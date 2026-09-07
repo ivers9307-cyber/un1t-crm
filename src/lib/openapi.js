@@ -7245,11 +7245,11 @@ registry.registerPath({
   security: [{ CookieAuth: [] }],
   summary: "The report page's data for one host campaign (HOST-METRICS.1)",
   description:
-    "Host session; the campaign must belong to the session host (404 otherwise, so ids stay un-enumerable). Returns the campaign (with its host_campaign_stats() counts, mig 590) and every host_campaign_sends row for it, each carrying a DERIVED outcome (host-campaign-outcome.js: precedence over the raw timestamps, so a late Delivery event can never regress a recorded Open) plus its outcome_at and, for a failed row, host-facing failure_copy. `failed_reason`/postmark ids are the queue's own bookkeeping — the response omits postmark_message_id (provider ids stay server-side) but keeps failed_reason since failure_copy is derived from it. A stats-rpc hiccup never fails this route: `stats` is null when the stats function is unavailable, and the page shows counts as unavailable rather than zeros.",
+    "Host session; the campaign must belong to the session host (404 otherwise, so ids stay un-enumerable). Returns the campaign (with its host_campaign_stats() counts, mig 590) and every host_campaign_sends row for it, each carrying a DERIVED outcome (host-campaign-outcome.js: precedence over the raw timestamps, so a late Delivery event can never regress a recorded Open) plus its outcome_at and, for a failed row, host-facing failure_copy. `failed_reason`/postmark ids are the queue's own bookkeeping — the response omits postmark_message_id (provider ids stay server-side) but keeps failed_reason since failure_copy is derived from it. A stats-rpc hiccup never fails this route: `stats` is null when the stats function is unavailable, and the page shows counts as unavailable rather than zeros. HOST-EMAILS.2 — `paused_reason` (a `sending` campaign the queue has halted, from the same hostSendBlockReason predicate as the list route), `non_openers_count` (how many a reminder draft would reach right now, resolveHostRecipients with `nonOpenersOf`, null on a resolver failure, both null for a non-`sent` campaign), and top-level `links` (one row per clicked URL from host_campaign_clicks, mig 594, aggregated with a per-person count, sorted by clicks descending with the unsubscribe link always last).",
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: {
-      description: 'Campaign + recipients',
+      description: 'Campaign + recipients + link clicks',
       content: {
         'application/json': {
           schema: SuccessResponse(z.object({
@@ -7267,8 +7267,16 @@ registry.registerPath({
               scheduled_for: z.string().nullable().optional(),
               schedule_error: z.string().nullable().optional(),
               stats: HostCampaignStats.nullable(),
+              paused_reason: z.string().nullable().optional(),
+              non_openers_count: z.number().int().nullable().optional(),
             }).passthrough(),
             recipients: z.array(HostCampaignRecipient),
+            links: z.array(z.object({
+              url: z.string(),
+              clicks: z.number().int(),
+              people: z.number().int(),
+              is_unsubscribe: z.boolean(),
+            })),
           }).openapi('HostCampaignRecipientsResponse')),
         },
       },
@@ -7378,6 +7386,93 @@ registry.registerPath({
     404: { description: 'Not found, or not this host\'s campaign', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Not a sent campaign; sender domain unverified; no stream for a marketing campaign; daily cap; nobody missed ("Everyone who can be emailed already received this."); already being resent', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'A read failed, the recipient diff failed, or the enqueue failed part-way (the sweeper drains what landed)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+const HostCampaignListRow = z.object({
+  id: uuidLike,
+  subject: z.string(),
+  status: z.string(),
+  audience_kind: z.string(),
+  audience_event_id: uuidLike.nullable(),
+  audience_campaign_id: uuidLike.nullable().optional(),
+  email_type: z.string(),
+  recipient_count: z.number().int().nullable(),
+  sent_count: z.number().int().nullable(),
+  created_at: z.string(),
+  sent_at: z.string().nullable(),
+  scheduled_for: z.string().nullable().optional(),
+  schedule_error: z.string().nullable().optional(),
+}).openapi('HostCampaignListRow')
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/host/emails/{id}',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Delete a draft or scheduled host campaign (HOST-EMAILS.2)',
+  description: "Host session; the campaign must belong to the session host (404 otherwise, so ids stay un-enumerable). Compare-and-set delete: only a `draft` or `scheduled` row goes. A `sent`/`sending` campaign 409s — its send rows and clicks are the record of what actually went out, and mig 594's host_campaigns_block_sent_delete trigger refuses it at the database too, so this can never be bypassed by a stale read.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Deleted', content: { 'application/json': { schema: SuccessResponse(z.object({ id: uuidLike })) } } },
+    401: { description: 'Unauthorized — no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: "Sent emails can't be deleted. They are the record of what went out.", content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Database error', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/host/emails/{id}/duplicate',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Duplicate a host campaign as a new draft (HOST-EMAILS.2)',
+  description: "Host session; the source campaign must belong to the session host (404 otherwise) and may be of any status — duplicating a sent campaign is the common case. Creates a new `draft` copying subject (prefixed \"Copy of \", capped at 200 chars — copySubject), body, design, audience and email type. Never copies the schedule, counts or timestamps.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'The new draft row', content: { 'application/json': { schema: SuccessResponse(HostCampaignListRow) } } },
+    401: { description: 'Unauthorized — no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or not this host\'s campaign', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Database error', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/host/emails/{id}/reminder-draft',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Create a reminder draft targeting a sent campaign\'s non-openers (HOST-EMAILS.2)',
+  description: "Host session; the parent campaign must belong to the session host (404 otherwise) and must be `sent` (409 otherwise — a reminder for a draft or scheduled email makes no sense before anyone has seen it). Creates a new `draft` copying the parent's body, design and email type, with subject \"Reminder: <parent subject>\" (copySubject) and `audience_kind` `non_openers` pointing at the parent via `audience_campaign_id` — resolved at send time to contacts who were delivered the parent but never opened or clicked it (resolveHostRecipients).",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'The new draft row', content: { 'application/json': { schema: SuccessResponse(HostCampaignListRow) } } },
+    401: { description: 'Unauthorized — no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or not this host\'s campaign', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Only a sent email can have a reminder.', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Database error', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+const HostEmailPreviewBody = z.object({
+  subject: z.string().max(200).optional(),
+  body_html: z.string().min(1).max(300000),
+}).openapi('HostEmailPreviewBody')
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/host/emails/preview',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Render a faithful preview of a host campaign body (HOST-EMAILS.2)',
+  description: "Host session. Renders through the SAME renderHostCampaignHtml the queue and the test send use — so the sanitizer (strips <style>/<meta>/<script>) and the injected unsubscribe footer are both exercised, unlike the composer's own raw-body live preview. Merge tags render against sample values ('Sample Recipient'), and the unsubscribe link is the same inert placeholder token send-test uses. Stores nothing; not scoped to an existing campaign id.",
+  request: { body: { content: { 'application/json': { schema: HostEmailPreviewBody } } } },
+  responses: {
+    200: { description: 'Rendered HTML', content: { 'application/json': { schema: SuccessResponse(z.object({ html: z.string() })) } } },
+    400: { description: 'Invalid JSON, or an empty/over-length body', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized — no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Host not found', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Database error', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

@@ -7,7 +7,7 @@
 // handlers) and reused by the emails list route (GET + POST) and the
 // schedule/unschedule routes, so a column added to one response is added
 // to all of them.
-export const HOST_CAMPAIGN_LIST_COLUMNS = 'id, subject, status, audience_kind, audience_event_id, email_type, recipient_count, sent_count, created_at, sent_at, scheduled_for, schedule_error'
+export const HOST_CAMPAIGN_LIST_COLUMNS = 'id, subject, status, audience_kind, audience_event_id, audience_campaign_id, email_type, recipient_count, sent_count, created_at, sent_at, scheduled_for, schedule_error'
 
 // The design document is host-authored JSON we store verbatim — cap its
 // serialized size so a hostile client can't balloon the row.
@@ -27,4 +27,9 @@ export async function assertAudienceEventOwned(db, hostId, audienceEventId) {
     .eq('host_id', hostId)
     .maybeSingle()
   return data ? null : 'Event not found'
+}
+
+/** HOST-EMAILS.2 — subject for a copied/reminder draft, capped at the column's 200. */
+export function copySubject(subject, prefix = 'Copy of ') {
+  return (prefix + (subject || '')).slice(0, 200)
 }

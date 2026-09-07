@@ -10,6 +10,7 @@ import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { designJsonTooBig, assertAudienceEventOwned, HOST_CAMPAIGN_LIST_COLUMNS } from '@/lib/host-campaign-draft'
 import { loadHostCampaignStats, ZERO_STATS } from '@/lib/host-campaign-stats'
+import { hostSendBlockReason } from '@/lib/host-campaign-launch'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -43,6 +44,15 @@ export async function GET() {
     .limit(200)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
+  // HOST-EMAILS.2 — a 'sending' campaign the queue has halted is PAUSED;
+  // say so instead of "Sending" forever. One host read for the whole list.
+  const { data: hostRow, error: hostErr } = await db
+    .from('event_hosts')
+    .select('sender_domain_verified, sender_email, postmark_stream_id')
+    .eq('id', session.host.id)
+    .maybeSingle()
+  if (hostErr) return NextResponse.json({ success: false, error: hostErr.message }, { status: 500 })
+
   // HOST-METRICS.1 — per-campaign send stats (host_campaign_stats(), mig
   // 590). A stats hiccup never fails the list: on an rpc error the `stats`
   // key is OMITTED entirely (not zeroed) so the UI's own fallback renders
@@ -50,12 +60,11 @@ export async function GET() {
   // genuinely sent mail. A campaign missing from the rpc result still
   // gets ZERO_STATS (it really has none).
   const { byCampaign, error: statsErr } = await loadHostCampaignStats(db, session.host.id)
-  const campaigns = statsErr
-    ? (data || [])
-    : (data || []).map((campaign) => ({
-        ...campaign,
-        stats: byCampaign.get(campaign.id) ?? ZERO_STATS,
-      }))
+  const campaigns = (data || []).map((campaign) => ({
+    ...campaign,
+    ...(statsErr ? {} : { stats: byCampaign.get(campaign.id) ?? ZERO_STATS }),
+    paused_reason: campaign.status === 'sending' ? hostSendBlockReason(hostRow, campaign) : null,
+  }))
   return NextResponse.json({ success: true, data: campaigns })
 }
 
